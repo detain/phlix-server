@@ -16,7 +16,6 @@ use Phlix\Plugins\Scrobbler\Trakt\DbTraktOAuthStateStore;
 use Phlix\Plugins\Scrobbler\Trakt\InvalidOAuthStateException;
 use Phlix\Plugins\Scrobbler\Trakt\SessionTraktOAuthStateStore;
 use Phlix\Plugins\Scrobbler\Trakt\SodiumTokenCipher;
-use Phlix\Plugins\Scrobbler\Trakt\TokenCipher;
 use Phlix\Plugins\Scrobbler\Trakt\TraktApi;
 use Phlix\Plugins\Scrobbler\Trakt\TraktOAuthStateStore;
 use Phlix\Plugins\Scrobbler\Trakt\TraktSettings;
@@ -36,7 +35,7 @@ use Workerman\MySQL\Connection;
  * in the plugin settings.
  *
  * @package Phlix\Server\Http\Controllers
- * @since 0.14.0
+ * @since   0.14.0
  */
 final class TraktOAuthController
 {
@@ -45,7 +44,9 @@ final class TraktOAuthController
     private ?string $configFile;
     private ?SettingsRepository $settings;
     private ?PluginRepository $plugins;
-    /** @var mixed */
+    /**
+     * @var mixed 
+     */
     private $cipher = null;
 
     /**
@@ -66,26 +67,45 @@ final class TraktOAuthController
     ];
 
     /**
-     * @param LoggerInterface|null $logger Optional PSR-3 logger
-     * @param TraktOAuthStateStore|null $stateStore Server-side store for the
-     *     per-request CSRF `state` + PKCE `code_verifier`. Defaults to a
-     *     `$_SESSION`-backed implementation matching prior behaviour.
-     * @param string|null $configFile Absolute path to the Trakt operator-creds
-     *     config file. Defaults to {@see self::configPath()} (the real
-     *     config/scrobblers/trakt.php); overridable so the config-loading and
-     *     "not configured" paths are unit-testable without a project-root file.
-     * @param SettingsRepository|null $settings When supplied, operator
-     *     credentials saved in the admin Settings page (server_settings table)
-     *     take precedence over the environment/file config.
-     * @param Connection|null $db Workerman MySQL connection. When supplied,
-     *     the DB-backed {@see DbTraktOAuthStateStore} is used instead of the
-     *     `$_SESSION`-backed store to avoid race conditions in Workerman.
-     * @param PluginRepository|null $plugins Repository for reading/writing
-     *     plugin settings (used to persist OAuth tokens).
-     * @param string|null $tokenEncryptionKey 32-byte key for encrypting OAuth
-     *     tokens at rest. When null or invalid, tokens are stored as plaintext
-     *     (not recommended for production). Set via `token_encryption_key` in
-     *     config/scrobblers/trakt.php or TRAKT_TOKEN_ENCRYPTION_KEY env var.
+     * @param LoggerInterface|null      $logger             Optional PSR-3 logger
+     * @param TraktOAuthStateStore|null $stateStore         Server-side store for the
+     *                                                      per-request CSRF `state`
+     *                                                      + PKCE `code_verifier`.
+     *                                                      Defaults to a
+     *                                                      `$_SESSION`-backed
+     *                                                      implementation matching
+     *                                                      prior behaviour.
+     * @param string|null               $configFile         Absolute path to the Trakt operator-creds
+     *                                                      config file. Defaults to {@see
+     *                                                      self::configPath()} (the real
+     *                                                      config/scrobblers/trakt.php); overridable
+     *                                                      so the config-loading and "not
+     *                                                      configured" paths are unit-testable
+     *                                                      without a project-root file.
+     * @param SettingsRepository|null   $settings           When supplied, operator
+     *                                                      credentials saved in
+     *                                                      the admin Settings page
+     *                                                      (server_settings table)
+     *                                                      take precedence over
+     *                                                      the environment/file
+     *                                                      config.
+     * @param Connection|null           $db                 Workerman MySQL connection. When supplied,
+     *                                                      the DB-backed {@see
+     *                                                      DbTraktOAuthStateStore} is used instead of
+     *                                                      the `$_SESSION`-backed store to avoid race
+     *                                                      conditions in Workerman.
+     * @param PluginRepository|null     $plugins            Repository for reading/writing
+     *                                                      plugin settings (used to
+     *                                                      persist OAuth tokens).
+     * @param string|null               $tokenEncryptionKey 32-byte key for encrypting OAuth
+     *                                                      tokens at rest. When null or
+     *                                                      invalid, tokens are stored as
+     *                                                      plaintext (not recommended for
+     *                                                      production). Set via
+     *                                                      `token_encryption_key` in
+     *                                                      config/scrobblers/trakt.php or
+     *                                                      TRAKT_TOKEN_ENCRYPTION_KEY env
+     *                                                      var.
      */
     public function __construct(
         ?LoggerInterface $logger = null,
@@ -104,7 +124,8 @@ final class TraktOAuthController
         // Initialize token cipher if available (plugin may not be installed).
         // Degrades to storing plaintext tokens when cipher is unavailable.
         if ($tokenEncryptionKey !== null
-            && class_exists(\Phlix\Plugins\Scrobbler\Trakt\SodiumTokenCipher::class)) {
+            && class_exists(\Phlix\Plugins\Scrobbler\Trakt\SodiumTokenCipher::class)
+        ) {
             $this->cipher = \Phlix\Plugins\Scrobbler\Trakt\SodiumTokenCipher::fromConfig($tokenEncryptionKey);
         } else {
             $this->cipher = null;
@@ -124,7 +145,7 @@ final class TraktOAuthController
      *
      * GET /api/v1/oauth/trakt
      *
-     * @param Request $request
+     * @param Request               $request
      * @param array<string, string> $params
      *
      * @return Response
@@ -167,7 +188,7 @@ final class TraktOAuthController
      *
      * GET /api/v1/oauth/trakt/callback
      *
-     * @param Request $request
+     * @param Request               $request
      * @param array<string, string> $params
      *
      * @return Response
@@ -192,9 +213,11 @@ final class TraktOAuthController
         try {
             $codeVerifier = $this->consumeState($state);
         } catch (InvalidOAuthStateException $e) {
-            $this->logger?->warning('Trakt OAuth state validation failed', [
+            $this->logger?->warning(
+                'Trakt OAuth state validation failed', [
                 'reason' => $e->getMessage(),
-            ]);
+                ]
+            );
             return $this->redirect('/app/admin/services?trakt=error');
         }
 
@@ -256,15 +279,19 @@ final class TraktOAuthController
                 );
             }
 
-            $this->logger?->info('Trakt OAuth success', [
+            $this->logger?->info(
+                'Trakt OAuth success', [
                 'username' => $username,
-            ]);
+                ]
+            );
 
             return $this->redirect('/app/admin/services?trakt=connected');
         } catch (\Exception $e) {
-            $this->logger?->warning('Trakt OAuth token exchange failed', [
+            $this->logger?->warning(
+                'Trakt OAuth token exchange failed', [
                 'error' => $e->getMessage(),
-            ]);
+                ]
+            );
             return $this->redirect('/app/admin/services?trakt=error');
         }
     }
@@ -330,12 +357,16 @@ final class TraktOAuthController
 
         try {
             $plugin = $this->plugins->findByName(self::TRAKT_PLUGIN_NAME);
-            /** @var array<string, mixed> */
+            /**
+ * @var array<string, mixed> 
+*/
             return $plugin->settings;
         } catch (\Exception $e) {
-            $this->logger?->error('Failed to load Trakt settings array', [
+            $this->logger?->error(
+                'Failed to load Trakt settings array', [
                 'error' => $e->getMessage(),
-            ]);
+                ]
+            );
             return [];
         }
     }
@@ -351,10 +382,14 @@ final class TraktOAuthController
 
         $config = [];
         if (is_file($configFile)) {
-            /** @var mixed $loaded */
+            /**
+ * @var mixed $loaded 
+*/
             $loaded = include $configFile;
             if (is_array($loaded)) {
-                /** @var array<string, mixed> $config */
+                /**
+ * @var array<string, mixed> $config 
+*/
                 $config = $loaded;
             }
         }
@@ -459,7 +494,7 @@ HTML;
      *
      * Checks whether OAuth tokens are present via TraktSettings repository.
      *
-     * @param Request $request
+     * @param Request               $request
      * @param array<string, string> $params
      *
      * @return Response
@@ -486,27 +521,31 @@ HTML;
                 $connected = $currentSettings->hasTokens();
                 $username = $connected ? $currentSettings->username : null;
             } catch (\Exception $e) {
-                $this->logger?->warning('Failed to load Trakt settings', [
+                $this->logger?->warning(
+                    'Failed to load Trakt settings', [
                     'error' => $e->getMessage(),
-                ]);
+                    ]
+                );
                 $connected = false;
             }
         }
 
-        return (new Response())->json([
+        return (new Response())->json(
+            [
             // True only when the operator has supplied app credentials — the SPA
             // uses this to show a "register an app" hint instead of a Connect
             // button that would dead-end on the not-configured page.
             'configured' => $configured,
             'connected'  => $connected,
             'username'   => $username,
-        ]);
+            ]
+        );
     }
 
     /**
      * `POST /api/v1/admin/services/trakt/disconnect` — clear stored tokens.
      *
-     * @param Request $request
+     * @param Request               $request
      * @param array<string, string> $params
      *
      * @return Response
@@ -533,14 +572,18 @@ HTML;
 
                 $this->plugins->updateSettings(self::TRAKT_PLUGIN_NAME, $clearedSettings);
             } catch (\Exception $e) {
-                $this->logger?->warning('Failed to clear Trakt tokens on disconnect', [
+                $this->logger?->warning(
+                    'Failed to clear Trakt tokens on disconnect', [
                     'error' => $e->getMessage(),
-                ]);
+                    ]
+                );
             }
         }
 
-        return (new Response())->json([
+        return (new Response())->json(
+            [
             'message' => 'Disconnected',
-        ]);
+            ]
+        );
     }
 }

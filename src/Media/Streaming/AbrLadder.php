@@ -303,7 +303,6 @@ final class AbrLadder
             $sh !== null && $sh > 0 && $sw !== null && $sw > 0
             && $source->isH264() && $source->isAac()
             && $sh <= $maxHeight && $sw <= $maxWidth
-            && $this->sourceBitrateFitsProfile($source, $maxBitrate)
         ) {
             $height = self::evenFloor((float) $sh);
             $width = self::evenFloor((float) $sw);
@@ -313,7 +312,9 @@ final class AbrLadder
             $audioBitrate = ($source->audioBitrate !== null && $source->audioBitrate > 0)
                 ? $source->audioBitrate
                 : Rendition::AUDIO_BANDWIDTH;
-            $bandwidth = min($videoBitrate + $audioBitrate, $maxBitrate);
+            // For stream copy, bandwidth is the actual source bitrate without
+            // profile cap (no transcode = profile constraints don't apply).
+            $bandwidth = $videoBitrate + $audioBitrate;
 
             return new Rendition(
                 id: 'original',
@@ -371,22 +372,6 @@ final class AbrLadder
             isOriginal: true,
             isCopy: false,
         );
-    }
-
-    /**
-     * Whether the source's total (video + audio) bitrate fits the profile cap.
-     * Unknown source bitrate is treated optimistically as a fit.
-     */
-    private function sourceBitrateFitsProfile(SourceProfile $source, int $maxBitrate): bool
-    {
-        if ($source->videoBitrate === null || $source->videoBitrate <= 0) {
-            return true;
-        }
-        $audio = ($source->audioBitrate !== null && $source->audioBitrate > 0)
-            ? $source->audioBitrate
-            : Rendition::AUDIO_BANDWIDTH;
-
-        return ($source->videoBitrate + $audio) <= $maxBitrate;
     }
 
     /**

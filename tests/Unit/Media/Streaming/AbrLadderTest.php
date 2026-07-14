@@ -465,11 +465,11 @@ final class AbrLadderTest extends TestCase
             'generic', false, 'Original (1080p)', 1920, 1080, 8_688_000, $codec1080,
         ];
 
-        // 12 Mbps source over web's 10 Mbps cap: vb clamps to the profile video
-        // ceiling floor((10M-128k)/1.07) = 9,226,168 → bandwidth hits the 10M cap.
-        yield 'h264+aac over bitrate cap on web -> transcode original at cap' => [
+        // 12 Mbps source over web's 10 Mbps cap: copy original is still valid
+        // since stream copy bypasses the profile bitrate cap (no transcode).
+        yield 'h264+aac over bitrate cap on web -> copy original (bypasses cap)' => [
             new SourceProfile(1920, 1080, 'h264', 12_000_000, 'aac', 192_000),
-            'web', false, 'Original (1080p)', 1920, 1080, 10_000_000, $codec1080,
+            'web', true, 'Original (1080p)', 1920, 1080, 12_192_000, $codec1080,
         ];
 
         yield 'same 12Mbps source fits generic -> copy' => [

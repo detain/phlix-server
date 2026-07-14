@@ -182,4 +182,72 @@ final class FfmpegRunnerToneMappingTest extends TestCase
         // The tone-mapping curve/mode is preserved.
         $this->assertStringContainsString('tonemapping=hable', $filter);
     }
+
+    /**
+     * SV-1.1(a): the persisted-columns entry point
+     * {@see FfmpegRunner::resolveToneMapFilterFromColorMeta()} produces the SAME
+     * filter STRING as the probe entry point
+     * {@see FfmpegRunner::resolveToneMapFilterFromProbe()} for equivalent color
+     * metadata — because the latter now just runs extractColorMetadata() and
+     * delegates to the former. This byte-identity is what lets sub-step (a)
+     * source the tone-map filter from the scan columns without changing the
+     * emitted `-vf` graph vs the live-probe path.
+     */
+    public function testResolveToneMapFilterFromColorMetaMatchesProbeEntryPoint(): void
+    {
+        $runner = $this->runner();
+
+        // HDR10 color metadata (extractColorMetadata()-shaped).
+        $hdrColorMeta = [
+            'color_space' => 'bt2020nc',
+            'color_transfer' => 'smpte2084',
+            'color_primaries' => 'bt2020',
+            'max_luminance' => 1000.0,
+            'avg_luminance' => 200.0,
+        ];
+        // The probe ffprobe would return for the SAME source.
+        $hdrProbe = [
+            'streams' => [
+                [
+                    'codec_type' => 'video',
+                    'color_space' => 'bt2020nc',
+                    'color_transfer' => 'smpte2084',
+                    'color_primaries' => 'bt2020',
+                ],
+            ],
+        ];
+
+        $fromColorMeta = $runner->resolveToneMapFilterFromColorMeta($hdrColorMeta, 'libx264');
+        $fromProbe = $runner->resolveToneMapFilterFromProbe($hdrProbe, 'libx264');
+
+        // HDR → the canonical zscale graph, and the two entry points agree.
+        $this->assertSame(
+            'zscale=t=linear:npl=100,format=gbrpf32le,'
+                . 'zscale=p=bt709,tonemap=hable:desat=0,'
+                . 'zscale=t=bt709:m=bt709:r=tv,format=yuv420p',
+            $fromColorMeta
+        );
+        $this->assertSame($fromProbe, $fromColorMeta);
+    }
+
+    /**
+     * SV-1.1(a): SDR color metadata (bt709 transfer) is not HDR, so the
+     * column-sourced resolver returns null — identical to feeding
+     * resolveToneMapFilterFromProbe() an SDR probe — and null color metadata
+     * (unpopulated columns) also returns null.
+     */
+    public function testResolveToneMapFilterFromColorMetaReturnsNullForSdrAndNull(): void
+    {
+        $runner = $this->runner();
+
+        $this->assertNull($runner->resolveToneMapFilterFromColorMeta([
+            'color_space' => 'bt709',
+            'color_transfer' => 'bt709',
+            'color_primaries' => 'bt709',
+            'max_luminance' => 1000.0,
+            'avg_luminance' => 200.0,
+        ], 'libx264'));
+
+        $this->assertNull($runner->resolveToneMapFilterFromColorMeta(null, 'libx264'));
+    }
 }

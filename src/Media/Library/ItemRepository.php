@@ -1373,6 +1373,86 @@ class ItemRepository
     }
 
     /**
+     * Returns the persisted VIDEO-stream color metadata for a media item, shaped
+     * to match {@see \Phlix\Media\Transcoding\FfmpegRunner::extractColorMetadata()}.
+     *
+     * SV-1.1(a): migration 073 added `color_space`/`color_transfer`/
+     * `color_primaries`/`max_luminance`/`avg_luminance` to `media_streams` and the
+     * scanner WRITES them for video streams ({@see \Phlix\Media\Library\MediaScanner}
+     * → {@see self::addStream()}). This is the READ that makes them load-bearing:
+     * {@see \Phlix\Media\Transcoding\TranscodeManager::computeHlsParams()} sources
+     * the HDR tone-map decision from these columns instead of the live ffprobe, so
+     * a scanned item's decision contributes ZERO probes (it does NOT remove the
+     * single subtitle/audio probe at job creation — that is a separate follow-up).
+     *
+     * The returned array is a drop-in for `extractColorMetadata()`'s output: the
+     * SAME keys, and the SAME per-field defaults `extractColorMetadata()` applies
+     * when a value is absent (`bt2020nc`/`bt709`/`bt2020`/`1000.0`/`200.0`), so the
+     * HDR decision and the resolved tone-map filter are byte-identical to the
+     * probe-derived path for the same file.
+     *
+     * Returns null — signalling the caller to fall back to a live probe — when the
+     * item has no video stream row OR the row's color columns are all unpopulated
+     * (a pre-073 / un-rescanned row, or a scan where ffprobe reported no color
+     * information). The first video stream (lowest `stream_index`) is chosen, which
+     * matches `extractColorMetadata()`'s first-video-stream selection.
+     *
+     * @param string $mediaItemId The media item's unique identifier
+     *
+     * @return array{
+     *     color_space: string,
+     *     color_transfer: string,
+     *     color_primaries: string,
+     *     max_luminance: float,
+     *     avg_luminance: float
+     * }|null Color metadata drop-in, or null when unpopulated (fall back to probe).
+     */
+    public function getVideoStreamColorMetadata(string $mediaItemId): ?array
+    {
+        $result = $this->db->query(
+            "SELECT color_space, color_transfer, color_primaries, max_luminance, avg_luminance
+             FROM media_streams
+             WHERE media_item_id = ? AND stream_type = 'video'
+             ORDER BY stream_index
+             LIMIT 1",
+            [$mediaItemId]
+        );
+
+        if (!is_array($result) || $result === []) {
+            return null;
+        }
+        $row = $result[0] ?? null;
+        if (!is_array($row)) {
+            return null;
+        }
+
+        $colorSpace = is_string($row['color_space'] ?? null) && $row['color_space'] !== ''
+            ? (string) $row['color_space'] : null;
+        $colorTransfer = is_string($row['color_transfer'] ?? null) && $row['color_transfer'] !== ''
+            ? (string) $row['color_transfer'] : null;
+        $colorPrimaries = is_string($row['color_primaries'] ?? null) && $row['color_primaries'] !== ''
+            ? (string) $row['color_primaries'] : null;
+
+        // Pre-073 / un-rescanned / ffprobe reported no color info: NONE of the
+        // color columns are populated → the HDR decision cannot be sourced here,
+        // so signal a live-probe fallback rather than returning misleading
+        // defaults (which would look SDR and wash out genuine HDR content).
+        if ($colorSpace === null && $colorTransfer === null && $colorPrimaries === null) {
+            return null;
+        }
+
+        // Mirror extractColorMetadata()'s per-field defaults so a populated row
+        // with an individually-missing column yields the identical decision/filter.
+        return [
+            'color_space' => $colorSpace ?? 'bt2020nc',
+            'color_transfer' => $colorTransfer ?? 'bt709',
+            'color_primaries' => $colorPrimaries ?? 'bt2020',
+            'max_luminance' => is_numeric($row['max_luminance'] ?? null) ? (float) $row['max_luminance'] : 1000.0,
+            'avg_luminance' => is_numeric($row['avg_luminance'] ?? null) ? (float) $row['avg_luminance'] : 200.0,
+        ];
+    }
+
+    /**
      * Adds a stream to a media item.
      *
      * @param string $itemId The media item's unique identifier

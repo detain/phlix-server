@@ -1616,6 +1616,114 @@ class ItemRepositoryTest extends TestCase
         $this->assertEquals('video', $result[0]['stream_type']);
     }
 
+    /**
+     * SV-1.1(a): the persisted media_streams color columns (migration 073) are
+     * READ into an extractColorMetadata()-shaped array so the HDR tone-map
+     * decision can be sourced from the scan instead of a live probe. DECIMAL
+     * columns arrive from the driver as strings — assert they are cast to float.
+     */
+    public function testGetVideoStreamColorMetadataReturnsPersistedColorForVideoStream(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->expects($this->once())
+            ->method('query')
+            ->with(
+                $this->logicalAnd(
+                    $this->stringContains('FROM media_streams'),
+                    $this->stringContains("stream_type = 'video'"),
+                    $this->stringContains('color_transfer')
+                ),
+                ['movie-1']
+            )
+            ->willReturn([
+                [
+                    'color_space' => 'bt2020nc',
+                    'color_transfer' => 'smpte2084',
+                    'color_primaries' => 'bt2020',
+                    'max_luminance' => '1000.00',
+                    'avg_luminance' => '200.00',
+                ],
+            ]);
+
+        $repo = new ItemRepository($db);
+
+        $this->assertSame([
+            'color_space' => 'bt2020nc',
+            'color_transfer' => 'smpte2084',
+            'color_primaries' => 'bt2020',
+            'max_luminance' => 1000.0,
+            'avg_luminance' => 200.0,
+        ], $repo->getVideoStreamColorMetadata('movie-1'));
+    }
+
+    /**
+     * SV-1.1(a) byte-identity: a populated row (color_transfer present) with
+     * individually-NULL space/primaries/luminance must fill the SAME per-field
+     * defaults FfmpegRunner::extractColorMetadata() applies, so the decision +
+     * resolved tone-map filter are identical to the probe-derived path.
+     */
+    public function testGetVideoStreamColorMetadataDefaultsMissingColumnsLikeExtractColorMetadata(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturn([
+            [
+                'color_space' => null,
+                'color_transfer' => 'arib-std-b67',
+                'color_primaries' => null,
+                'max_luminance' => null,
+                'avg_luminance' => null,
+            ],
+        ]);
+
+        $repo = new ItemRepository($db);
+
+        $this->assertSame([
+            'color_space' => 'bt2020nc',
+            'color_transfer' => 'arib-std-b67',
+            'color_primaries' => 'bt2020',
+            'max_luminance' => 1000.0,
+            'avg_luminance' => 200.0,
+        ], $repo->getVideoStreamColorMetadata('movie-1'));
+    }
+
+    /**
+     * SV-1.1(a): no video-stream row → null, so the caller falls back to a live
+     * probe (unscanned item / audio-only media).
+     */
+    public function testGetVideoStreamColorMetadataReturnsNullWhenNoVideoStreamRow(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturn([]);
+
+        $repo = new ItemRepository($db);
+
+        $this->assertNull($repo->getVideoStreamColorMetadata('movie-1'));
+    }
+
+    /**
+     * SV-1.1(a): a pre-073 / un-rescanned video-stream row whose color columns are
+     * ALL NULL must return null (NOT misleading SDR-looking defaults) so the
+     * caller falls back to the live probe — otherwise genuine HDR content whose
+     * columns were never populated would be washed out.
+     */
+    public function testGetVideoStreamColorMetadataReturnsNullForPre073UnpopulatedRow(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturn([
+            [
+                'color_space' => null,
+                'color_transfer' => null,
+                'color_primaries' => null,
+                'max_luminance' => null,
+                'avg_luminance' => null,
+            ],
+        ]);
+
+        $repo = new ItemRepository($db);
+
+        $this->assertNull($repo->getVideoStreamColorMetadata('movie-1'));
+    }
+
     public function testAddStreamInsertsStream(): void
     {
         $db = $this->createMock(Connection::class);

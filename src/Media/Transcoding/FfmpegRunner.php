@@ -516,11 +516,44 @@ class FfmpegRunner
      */
     public function resolveToneMapFilterFromProbe(?array $probe, string $codec): ?string
     {
-        if ($probe === null) {
+        return $this->resolveToneMapFilterFromColorMeta(
+            $probe === null ? null : $this->extractColorMetadata($probe),
+            $codec
+        );
+    }
+
+    /**
+     * Resolves the HDR tone-map filter STRING from ALREADY-KNOWN color metadata —
+     * without probing.
+     *
+     * This is the color-metadata core that {@see resolveToneMapFilterFromProbe()}
+     * delegates to (that method just runs {@see extractColorMetadata()} first).
+     * SV-1.1(a) calls it directly with the metadata sourced from the persisted
+     * `media_streams` color columns
+     * ({@see \Phlix\Media\Library\ItemRepository::getVideoStreamColorMetadata()}),
+     * so a scanned item's tone-map filter is resolved with ZERO probe involvement.
+     * Because the filter graph is decided by {@see isHdrColorMeta()} + config +
+     * codec — NOT by the specific color values (both {@see buildZscaleToneMapFilter()}
+     * and {@see buildLibplaceboToneMapFilter()} ignore them) — the string this
+     * returns for column-sourced metadata is byte-identical to the probe-derived
+     * string for the same file.
+     *
+     * @param array<string, mixed>|null $colorMeta Color metadata as returned by
+     *                                             {@see extractColorMetadata()} /
+     *                                             {@see \Phlix\Media\Library\ItemRepository::getVideoStreamColorMetadata()},
+     *                                             or null.
+     * @param string                     $codec    Video codec being used for encoding.
+     *
+     * @return string|null FFmpeg video filter chain for tone mapping, or null if
+     *                     not needed / not HDR / metadata unavailable.
+     *
+     * @since SV-1.1(a)
+     */
+    public function resolveToneMapFilterFromColorMeta(?array $colorMeta, string $codec): ?string
+    {
+        if ($colorMeta === null) {
             return null;
         }
-
-        $colorMeta = $this->extractColorMetadata($probe);
         if (!$this->isHdrColorMeta($colorMeta)) {
             return null;
         }

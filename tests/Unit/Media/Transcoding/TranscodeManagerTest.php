@@ -44,13 +44,17 @@ class TranscodeManagerTest extends TestCase
      * @param array<string, mixed> $mediaRow     Row returned for the media_items lookup ([] = not found).
      * @param array<string, mixed> $jobRow       Row returned for the narrowed `... FROM transcode_jobs WHERE id = ?` lookup.
      * @param array<int, array{0: string, 1: array<int, mixed>}> $captured Receives [sql, params] of every call.
+     * @param array<string, mixed> $colorRow SV-1.1(a) row returned for the persisted
+     *                                        media_streams video-stream color lookup
+     *                                        ([] = none → decision falls back to the probe).
      */
     private function mockDb(
         array $reuseRow,
         int $runningCount,
         array $mediaRow,
         array $jobRow,
-        array &$captured
+        array &$captured,
+        array $colorRow = []
     ): Connection {
         $db = $this->createMock(Connection::class);
         $db->method('query')->willReturnCallback(
@@ -62,6 +66,7 @@ class TranscodeManagerTest extends TestCase
                 $runningCount,
                 $mediaRow,
                 $jobRow,
+                $colorRow,
                 &$captured
             ) {
                 $captured[] = [$sql, $params ?? []];
@@ -70,6 +75,12 @@ class TranscodeManagerTest extends TestCase
                 }
                 if (str_contains($sql, 'COUNT(*)')) {
                     return [['c' => $runningCount]];
+                }
+                // SV-1.1(a): the persisted video-stream color lookup. Checked before
+                // the media_items branch — 'media_streams' does not contain the
+                // 'media_items' substring, but order it explicitly for clarity.
+                if (str_contains($sql, 'FROM media_streams') && str_contains($sql, "stream_type = 'video'")) {
+                    return $colorRow === [] ? [] : [$colorRow];
                 }
                 if (str_contains($sql, 'FROM media_items')) {
                     return $mediaRow === [] ? [] : [$mediaRow];
@@ -372,6 +383,155 @@ class TranscodeManagerTest extends TestCase
         $p = $this->capturedJobInsert($captured)['segment_params'];
         $this->assertArrayNotHasKey('require_hdr_tone_map', $p);
         $this->assertArrayNotHasKey('tone_map_filter', $p);
+    }
+
+    /**
+     * The canonical zscale HDR→SDR graph, reused across the SV-1.1(a) tests as the
+     * tone_map_filter value so an assertion doubles as a byte-identity check.
+     */
+    private const CANON_TONE_MAP =
+        'zscale=t=linear:npl=100,format=gbrpf32le,'
+        . 'zscale=p=bt709,tonemap=hable:desat=0,'
+        . 'zscale=t=bt709:m=bt709:r=tv,format=yuv420p';
+
+    /**
+     * HDR10 color columns as the scanner persists them (migration 073) on the
+     * video-stream row — DECIMAL luminance arrives from the driver as strings.
+     *
+     * @return array<string, mixed>
+     */
+    private function hdrColorRow(): array
+    {
+        return [
+            'color_space' => 'bt2020nc',
+            'color_transfer' => 'smpte2084',
+            'color_primaries' => 'bt2020',
+            'max_luminance' => '1000.00',
+            'avg_luminance' => '200.00',
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function hevc4kProbe(): array
+    {
+        return [
+            'streams' => [
+                ['codec_type' => 'video', 'codec_name' => 'hevc', 'width' => 3840, 'height' => 2160],
+                ['codec_type' => 'audio', 'codec_name' => 'aac', 'channels' => 2],
+            ],
+            'format' => ['duration' => '600.0'],
+        ];
+    }
+
+    /**
+     * SV-1.1(a) core: when the persisted media_streams color columns (migration
+     * 073) are present for the item, the HDR tone-map decision is sourced from
+     * THEM — the live probe's color is NEVER consulted (extractColorMetadata is
+     * never called) — and the tone_map_filter is resolved from the SAME
+     * column-sourced metadata (byte-identical to the probe path, with the final
+     * codec libx264). Mutation sense: red if computeHlsParams still reads the
+     * probe's color when columns are present.
+     */
+    public function testEnsureHlsJobSourcesHdrDecisionFromPersistedColorColumns(): void
+    {
+        $captured = [];
+        $db = $this->mockDb([], 0, ['path' => '/m.mkv'], [], $captured, $this->hdrColorRow());
+
+        $ff = $this->createMock(FfmpegRunner::class);
+        $ff->method('probe')->willReturn($this->hevc4kProbe());
+        // Column-sourced decision → the probe's color metadata is NEVER extracted.
+        $ff->expects($this->never())->method('extractColorMetadata');
+        // Filter resolved from the SAME column metadata (0 probes), NOT the probe.
+        $ff->expects($this->never())->method('resolveToneMapFilterFromProbe');
+        $ff->expects($this->once())
+            ->method('resolveToneMapFilterFromColorMeta')
+            ->with(
+                [
+                    'color_space' => 'bt2020nc',
+                    'color_transfer' => 'smpte2084',
+                    'color_primaries' => 'bt2020',
+                    'max_luminance' => 1000.0,
+                    'avg_luminance' => 200.0,
+                ],
+                'libx264'
+            )
+            ->willReturn(self::CANON_TONE_MAP);
+
+        // Not via manager() — that stubs extractColorMetadata (asserted never here).
+        $manager = new TranscodeManager($db, $ff, $this->segmentDir, null, 6);
+        $manager->ensureHlsJob('media-1', 'web');
+
+        $p = $this->capturedJobInsert($captured)['segment_params'];
+        $this->assertTrue($p['require_hdr_tone_map']);
+        $this->assertSame(self::CANON_TONE_MAP, $p['tone_map_filter']);
+    }
+
+    /**
+     * SV-1.1(a) fallback: with NO persisted color columns (pre-073 / un-rescanned /
+     * audio-only), the HDR decision + filter come from the live probe exactly as
+     * before sub-step (a) — resolveToneMapFilterFromColorMeta is NEVER called.
+     * Mutation sense: red if the column path is taken when columns are absent.
+     */
+    public function testEnsureHlsJobFallsBackToProbeColorWhenColumnsAbsent(): void
+    {
+        $captured = [];
+        // Default mockDb colorRow = [] → getVideoStreamColorMetadata returns null.
+        $db = $this->mockDb([], 0, ['path' => '/m.mkv'], [], $captured);
+
+        $ff = $this->createMock(FfmpegRunner::class);
+        $ff->method('probe')->willReturn($this->hevc4kProbe());
+        // The pre-(a) path: HDR is derived from the probe's color metadata.
+        $ff->method('extractColorMetadata')->willReturn([
+            'color_space' => 'bt2020nc',
+            'color_transfer' => 'smpte2084',
+            'color_primaries' => 'bt2020',
+            'max_luminance' => 1000.0,
+            'avg_luminance' => 200.0,
+        ]);
+        $ff->expects($this->never())->method('resolveToneMapFilterFromColorMeta');
+        $ff->expects($this->once())
+            ->method('resolveToneMapFilterFromProbe')
+            ->with($this->anything(), 'libx264')
+            ->willReturn(self::CANON_TONE_MAP);
+
+        $manager = new TranscodeManager($db, $ff, $this->segmentDir, null, 6);
+        $manager->ensureHlsJob('media-1', 'web');
+
+        $p = $this->capturedJobInsert($captured)['segment_params'];
+        $this->assertTrue($p['require_hdr_tone_map']);
+        $this->assertSame(self::CANON_TONE_MAP, $p['tone_map_filter']);
+    }
+
+    /**
+     * SV-1.1(a) HONEST probe-count framing: sourcing the HDR decision from the
+     * columns adds ZERO probes/extractColorMetadata calls FOR THE DECISION. The
+     * single probe() at job creation still runs (embedded subtitle/audio stream
+     * detection needs the live stream list), so the observable probe count stays
+     * at exactly 1 — reaching a true 0 requires persisting subtitle/audio
+     * descriptors (a separate follow-up, out of scope for sub-step (a)). This
+     * asserts probe() is called exactly once and extractColorMetadata never.
+     */
+    public function testEnsureHlsJobHdrDecisionFromColumnsAddsZeroProbes(): void
+    {
+        $captured = [];
+        $db = $this->mockDb([], 0, ['path' => '/m.mkv'], [], $captured, $this->hdrColorRow());
+
+        $ff = $this->createMock(FfmpegRunner::class);
+        // Exactly ONE probe — the subtitle/audio-detection probe at job creation.
+        $ff->expects($this->once())->method('probe')->willReturn($this->hevc4kProbe());
+        // ZERO probes contributed by the HDR decision: the probe's color is never
+        // extracted; the decision is entirely column-sourced.
+        $ff->expects($this->never())->method('extractColorMetadata');
+        $ff->method('resolveToneMapFilterFromColorMeta')->willReturn(self::CANON_TONE_MAP);
+
+        $manager = new TranscodeManager($db, $ff, $this->segmentDir, null, 6);
+        $manager->ensureHlsJob('media-1', 'web');
+
+        $p = $this->capturedJobInsert($captured)['segment_params'];
+        $this->assertTrue($p['require_hdr_tone_map']);
+        $this->assertSame(self::CANON_TONE_MAP, $p['tone_map_filter']);
     }
 
     public function testEnsureHlsJobEncodesHevcAndDownscales4kForWeb(): void

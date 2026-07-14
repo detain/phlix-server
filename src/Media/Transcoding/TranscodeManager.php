@@ -13,6 +13,7 @@ namespace Phlix\Media\Transcoding;
 
 use Phlix\Common\Uuid;
 use Phlix\Common\Util\RowMap;
+use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Streaming\AbrLadder;
 use Phlix\Media\Streaming\Rendition;
 use Phlix\Media\Streaming\SourceProfile;
@@ -456,12 +457,21 @@ class TranscodeManager
             ? $rawSubtitleBurnInIndex
             : null;
         $forceSubtitleBurnIn = ($options['force_subtitle_burn_in'] ?? false) === true;
+        // SV-1.1(a): source the HDR tone-map decision from the persisted
+        // media_streams color columns (migration 073) for scanned items, so the
+        // decision (and the resolved tone_map_filter) contributes ZERO probes.
+        // Null for pre-073 / un-rescanned rows → computeHlsParams() falls back to
+        // extractColorMetadata($probe). This does NOT remove the probe() at :420
+        // above — that is still required for embedded subtitle/audio detection, so
+        // the observable probe count per job stays at exactly 1.
+        $persistedColorMeta = $this->persistedVideoColorMetadata($mediaItemId);
         $segParams = $this->computeSegmentParams(
             $probe,
             $profileName,
             $clientCapabilities,
             $subtitleBurnInIndex,
-            $forceSubtitleBurnIn
+            $forceSubtitleBurnIn,
+            $persistedColorMeta
         );
         $segSeconds = $this->segmentSeconds;
 
@@ -1974,6 +1984,10 @@ class TranscodeManager
      *                                                                    {@see \Phlix\Media\Streaming\StreamManager::getSubtitleBurnInConfig()};
      *                                                                    not yet consumed by the
      *                                                                    encode path itself).
+     * @param array<string, mixed>|null             $persistedColorMeta SV-1.1(a) persisted video-stream
+     *                                                                   color metadata (migration 073),
+     *                                                                   or null to derive HDR from the
+     *                                                                   live probe.
      *
      * @return array<string, mixed> Parameters for {@see FfmpegRunner::buildSegmentCommand()}.
      */
@@ -1982,9 +1996,10 @@ class TranscodeManager
         string $profileName,
         ?\Phlix\Media\Streaming\ClientCapabilities $clientCapabilities = null,
         ?int $subtitleBurnInIndex = null,
-        bool $forceSubtitleBurnIn = false
+        bool $forceSubtitleBurnIn = false,
+        ?array $persistedColorMeta = null
     ): array {
-        $params = $this->computeHlsParams($probe, $profileName, $clientCapabilities);
+        $params = $this->computeHlsParams($probe, $profileName, $clientCapabilities, $persistedColorMeta);
 
         if (($params['video_codec'] ?? null) === 'copy') {
             $params['video_codec'] = 'libx264';
@@ -2012,7 +2027,15 @@ class TranscodeManager
         // through and the builders fall back to the legacy per-segment path.
         if (($params['require_hdr_tone_map'] ?? false) === true) {
             $videoCodec = FfmpegRunner::paramString($params, 'video_codec') ?? 'libx264';
-            $toneMapFilter = $this->ffmpeg->resolveToneMapFilterFromProbe($probe, $videoCodec);
+            // SV-1.1(a): when the decision was sourced from the persisted columns,
+            // resolve the filter STRING from the SAME column-sourced color metadata
+            // (0 probes) — byte-identical to the probe-derived string for the same
+            // file, since the graph is decided by isHdr + config + codec, not by the
+            // specific color values. Otherwise (pre-073 / un-rescanned) resolve from
+            // the in-hand probe exactly as sub-step (b) did.
+            $toneMapFilter = $persistedColorMeta !== null
+                ? $this->ffmpeg->resolveToneMapFilterFromColorMeta($persistedColorMeta, $videoCodec)
+                : $this->ffmpeg->resolveToneMapFilterFromProbe($probe, $videoCodec);
             if (is_string($toneMapFilter) && $toneMapFilter !== '') {
                 $params['tone_map_filter'] = $toneMapFilter;
             }
@@ -2610,11 +2633,16 @@ class TranscodeManager
      *                                                                                  When provided and the source audio codec
      *                                                                                  is not supported by the client, audio
      *                                                                                  will be transcoded to AAC.
+     * @param array<string, mixed>|null                             $persistedColorMeta SV-1.1(a) persisted
+     *                                                                                   video-stream color metadata
+     *                                                                                   (migration 073); when non-null the HDR
+     *                                                                                   decision is sourced from it (0 probes)
+     *                                                                                   instead of extractColorMetadata($probe).
      *
      * @return array<string, mixed> Parameters for {@see FfmpegRunner::buildHlsCommand()}
      *                              plus variant_width/height/bandwidth descriptors.
      */
-    private function computeHlsParams(array $probe, string $profileName, ?\Phlix\Media\Streaming\ClientCapabilities $clientCapabilities = null): array
+    private function computeHlsParams(array $probe, string $profileName, ?\Phlix\Media\Streaming\ClientCapabilities $clientCapabilities = null, ?array $persistedColorMeta = null): array
     {
         $video = $this->firstStreamOfType($probe, 'video');
         $audio = $this->firstStreamOfType($probe, 'audio');
@@ -2644,15 +2672,20 @@ class TranscodeManager
             'playlist_type' => 'vod',
         ];
 
-        // P6: Pre-determine HDR tone-mapping need from probe color metadata.
-        // When the scan (migration 073+) stored bt2020c/eotf/color_primaries,
-        // the probe carries them and this fires: buildSegmentCommand then skips
-        // the needsToneMapping() call entirely (saves one probe per segment).
-        // For pre-073 items the probe is live but lacks color columns, so
-        // buildSegmentCommand falls back to needsToneMapping() — which is O(1)
-        // due to FfmpegRunner::probe() memoisation by path+mtime, so at most
-        // ONE ffprobe per file per worker lifetime even in that case.
-        $colorMeta = $this->ffmpeg->extractColorMetadata($probe);
+        // SV-1.1(a): Pre-determine HDR tone-mapping need from the persisted
+        // media_streams color columns (migration 073) when they are available for
+        // this scanned item — so the decision contributes ZERO probes and is
+        // correct even on the tolerated probe-failure path (where $probe is empty).
+        // The persisted metadata is a byte-identical drop-in for
+        // extractColorMetadata()'s output (same keys, same per-field defaults), so
+        // the require_hdr_tone_map decision — and the tone_map_filter resolved from
+        // it in computeSegmentParams() — match the probe-derived path exactly.
+        // For pre-073 / un-rescanned items the columns are unpopulated
+        // ($persistedColorMeta === null) and this falls back to the in-hand probe.
+        // NOTE: this sources the HDR *decision* from columns; it does NOT remove the
+        // single probe() at ensureHlsJob() (still needed for subtitle/audio stream
+        // detection), so the observable probe count per job stays at exactly 1.
+        $colorMeta = $persistedColorMeta ?? $this->ffmpeg->extractColorMetadata($probe);
         $isHdr = in_array($colorMeta['color_transfer'], ['smpte2084', 'arib-std-b67'], true);
         $isBt2020 = $colorMeta['color_primaries'] === 'bt2020'
             || $colorMeta['color_space'] === 'bt2020nc'
@@ -3506,6 +3539,26 @@ class TranscodeManager
         $result = $this->db->query("SELECT * FROM media_items WHERE id = ?", [$itemId]);
         $rows = RowMap::listFromMixed($result);
         return $rows[0] ?? null;
+    }
+
+    /**
+     * SV-1.1(a): reads a scanned item's persisted VIDEO-stream color metadata
+     * (migration 073) so {@see computeHlsParams()} can source the HDR tone-map
+     * decision from the scan instead of the live ffprobe.
+     *
+     * Returns null for pre-073 / un-rescanned items (unpopulated color columns),
+     * whereupon the decision falls back to {@see FfmpegRunner::extractColorMetadata()}.
+     * The {@see ItemRepository} is built from the shared Connection here rather than
+     * injected — no constructor/DI change, so this loads identically under
+     * public/index.php and start.php.
+     *
+     * @param string $mediaItemId Media item identifier
+     *
+     * @return array<string, mixed>|null extractColorMetadata()-shaped color metadata, or null.
+     */
+    private function persistedVideoColorMetadata(string $mediaItemId): ?array
+    {
+        return (new ItemRepository($this->db))->getVideoStreamColorMetadata($mediaItemId);
     }
 
     /**

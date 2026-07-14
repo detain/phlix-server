@@ -8,10 +8,14 @@ use PHPUnit\Framework\TestCase;
 use Phlix\Media\Transcoding\FfmpegRunner;
 
 /**
- * End-to-end exercise of the HLS pipeline against a REAL ffmpeg binary: it
- * generates a short clip, runs a detached HLS transcode, and asserts that valid
- * segments + playlist (with ENDLIST) are produced. Skipped when ffmpeg/ffprobe
- * are not installed so the suite stays green on minimal CI images.
+ * End-to-end exercise of the transcode pipeline against a REAL ffmpeg binary: it
+ * generates a short clip, probes its codecs, and runs a detached CMAF transcode,
+ * asserting that a valid DASH manifest + HLS master/media playlists and fMP4
+ * segments are produced from a single encode. Skipped when ffmpeg/ffprobe are not
+ * installed so the suite stays green on minimal CI images.
+ *
+ * (The former whole-file HLS cases were removed with FfmpegRunner::startHlsTranscode
+ * in SV-4.13 — see the note above testDetachedCmafTranscodeProducesBothDashAndHls.)
  */
 class FfmpegHlsTranscodeTest extends TestCase
 {
@@ -61,75 +65,15 @@ class FfmpegHlsTranscodeTest extends TestCase
         $this->assertContains('aac', $codecs);
     }
 
-    public function testDetachedHlsTranscodeProducesSegmentsAndPlaylist(): void
-    {
-        $clip = "{$this->dir}/in.mkv";
-        $this->makeClip($clip);
-
-        $out = "{$this->dir}/job";
-        mkdir($out, 0755, true);
-
-        // Force an encode (libx264) with a short segment length so the 4s clip
-        // splits into multiple keyframe-aligned segments.
-        $pid = $this->runner->startHlsTranscode($clip, $out, [
-            'video_codec' => 'libx264',
-            'preset' => 'ultrafast',
-            'crf' => 28,
-            'audio_codec' => 'aac',
-            'audio_bitrate' => '96k',
-            'segment_seconds' => 1,
-        ]);
-        $this->assertGreaterThan(0, $pid);
-
-        $deadline = microtime(true) + 30.0;
-        while (microtime(true) < $deadline) {
-            if (file_exists("{$out}/.complete") || file_exists("{$out}/.failed")) {
-                break;
-            }
-            usleep(200000);
-        }
-
-        $log = is_file("{$out}/ffmpeg.log") ? (string) file_get_contents("{$out}/ffmpeg.log") : '';
-        $this->assertFileDoesNotExist("{$out}/.failed", "ffmpeg failed: {$log}");
-        $this->assertFileExists("{$out}/.complete");
-
-        $this->assertFileExists("{$out}/stream_0.m3u8");
-        $playlist = (string) file_get_contents("{$out}/stream_0.m3u8");
-        $this->assertStringContainsString('#EXTM3U', $playlist);
-        $this->assertStringContainsString('#EXT-X-ENDLIST', $playlist);
-
-        $segments = glob("{$out}/segment_0_*.ts") ?: [];
-        $this->assertGreaterThanOrEqual(1, count($segments));
-        foreach ($segments as $seg) {
-            $this->assertGreaterThan(0, (int) filesize($seg), 'segment is empty');
-        }
-    }
-
-    public function testRemuxCopyPathProducesPlayableHls(): void
-    {
-        $clip = "{$this->dir}/in.mp4";
-        $this->makeClip($clip);
-
-        $out = "{$this->dir}/remux";
-        mkdir($out, 0755, true);
-
-        $pid = $this->runner->startHlsTranscode($clip, $out, [
-            'video_codec' => 'copy',
-            'audio_codec' => 'copy',
-            'segment_seconds' => 2,
-        ]);
-        $this->assertGreaterThan(0, $pid);
-
-        $deadline = microtime(true) + 20.0;
-        while (microtime(true) < $deadline && !file_exists("{$out}/.complete") && !file_exists("{$out}/.failed")) {
-            usleep(200000);
-        }
-
-        $log = is_file("{$out}/ffmpeg.log") ? (string) file_get_contents("{$out}/ffmpeg.log") : '';
-        $this->assertFileExists("{$out}/.complete", "remux failed: {$log}");
-        $this->assertFileExists("{$out}/stream_0.m3u8");
-        $this->assertGreaterThanOrEqual(1, count(glob("{$out}/segment_0_*.ts") ?: []));
-    }
+    // NOTE (SV-4.2 test hygiene): the two whole-file HLS integration cases that
+    // lived here — testDetachedHlsTranscodeProducesSegmentsAndPlaylist and
+    // testRemuxCopyPathProducesPlayableHls — exercised
+    // FfmpegRunner::startHlsTranscode(), which was removed as dead code by commit
+    // 015ea7a7 (SV-4.13: "Remove superseded whole-file command builders"). The
+    // whole-file HLS path was superseded by the on-demand per-segment encode path
+    // (buildSegmentCommand/startSegmentEncode, covered by the unit suite) and the
+    // CMAF path below. Those two cases could no longer resolve the method (fatal
+    // "Call to undefined method") so they were removed rather than left erroring.
 
     public function testDetachedCmafTranscodeProducesBothDashAndHls(): void
     {

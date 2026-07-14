@@ -11,11 +11,13 @@ declare(strict_types=1);
 
 namespace Phlix\Server\Http\Controllers\Admin;
 
+use Phlix\Common\Version;
 use Phlix\Hub\HubClient;
 use Phlix\Hub\RelayConsumer;
 use Phlix\Hub\SubdomainClient;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
+use Phlix\Shared\Hub\HeartbeatDto;
 use Psr\Container\ContainerInterface;
 use Throwable;
 
@@ -42,10 +44,10 @@ final class HealthController
      * @param ContainerInterface|null $container PSR-11 container (optional for testing).
      * @param string                  $configDir Config directory for JSON state files.
      */
-    public function __construct(?ContainerInterface $container = null, string $configDir = 'config')
+    public function __construct(?ContainerInterface $container = null, string $configDir = '')
     {
         $this->container = $container;
-        $this->configDir = $configDir;
+        $this->configDir = $configDir !== '' ? $configDir : dirname(__DIR__, 4) . '/config';
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -160,10 +162,20 @@ final class HealthController
             $tempClient = new \Phlix\Hub\HttpClient($enrollment->hubBaseUrl, $enrollment->enrollmentJwt);
 
             try {
-                $payload = [
-                    'serverId' => $enrollment->serverId,
-                    'timestamp' => time(),
-                ];
+                // Build from HeartbeatDto so the wire payload uses the camelCase
+                // keys the hub parses with HeartbeatDto::fromPayload();
+                $requestTimeStart = $_SERVER['REQUEST_TIME_START'] ?? null;
+                $uptimeStart = is_int($requestTimeStart) ? $requestTimeStart : time();
+                $payload = (new HeartbeatDto(
+                    serverId: $enrollment->serverId,
+                    version: Version::STRING,
+                    timestamp: time(),
+                    uptimeSeconds: time() - $uptimeStart,
+                    activeSessions: 0,
+                    activeTranscodes: 0,
+                    hostnameCandidates: [],
+                    libraries: [],
+                ))->toPayload();
                 $response = $tempClient->post("/api/v1/servers/{$enrollment->serverId}/heartbeat", $payload);
                 $end = hrtime(true);
 

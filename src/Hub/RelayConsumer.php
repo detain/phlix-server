@@ -625,8 +625,10 @@ final class RelayConsumer
         ]);
 
         $this->logger->debug('RelayConsumer::openHubConnection() creating new AsyncTcpConnection');
-        $connection = new AsyncTcpConnection($wsUrl, $context);
+        $wsUrlForConnection = str_replace('wss://', 'ws://', $wsUrl);
+        $connection = new AsyncTcpConnection($wsUrlForConnection, $context);
         $connection->protocol = \Workerman\Protocols\Websocket::class;
+        $connection->transport = 'ssl';
         $this->logger->debug('RelayConsumer::openHubConnection() AsyncTcpConnection created', [
             'connection_class' => get_class($connection),
             'connection_id' => spl_object_id($connection),

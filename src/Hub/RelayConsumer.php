@@ -435,6 +435,11 @@ final class RelayConsumer
      */
     private function connect(): void
     {
+        // Prevent concurrent connect attempts
+        if ($this->state === self::STATE_HANDSHAKING || $this->state === self::STATE_ACTIVE) {
+            return;
+        }
+
         // Defensive: never orphan a prior connection. If connect() races a
         // still-open socket (e.g. a reconnect fires before the previous close
         // hook nulled it), detach its callbacks first — so its close hook does

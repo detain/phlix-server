@@ -61,7 +61,7 @@ class FfmpegRunner
     private ?HwaccelProfileFactory $hwaccelProfileFactory = null;
 
     /** @var bool Whether hardware acceleration has been probed */
-    private bool $hwaccelProbed = false;
+    private static bool $hwaccelProbed = false;
 
     /** @var array<string, HardwareAccelerator>|null Cached hardware accelerators */
     private ?array $hardwareAccelerators = null;
@@ -1357,7 +1357,7 @@ class FfmpegRunner
      */
     public function probeHardwareAcceleration(?HwaccelRegistry $registry = null): array
     {
-        if ($this->hwaccelProbed) {
+        if (self::$hwaccelProbed) {
             return $this->hwaccelRegistry?->getAll() ?? [];
         }
 
@@ -1376,7 +1376,7 @@ class FfmpegRunner
             'preferred' => $preferredAccelerator,
         ]);
 
-        $this->hwaccelProbed = true;
+        self::$hwaccelProbed = true;
 
         return $capabilities;
     }
@@ -1956,7 +1956,7 @@ class FfmpegRunner
         float $duration,
         array $params
     ): ?string {
-        if (!$this->hwaccelProbed) {
+        if (!self::$hwaccelProbed) {
             $this->probeHardwareAcceleration();
         }
 

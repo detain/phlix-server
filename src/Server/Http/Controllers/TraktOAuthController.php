@@ -147,9 +147,9 @@ final class TraktOAuthController
      */
     public function callback(Request $request, array $params): Response
     {
-        $code = $params['code'] ?? '';
-        $state = $params['state'] ?? '';
-        $error = $params['error'] ?? '';
+        $code = $request->queryString('code') ?? '';
+        $state = $request->queryString('state') ?? '';
+        $error = $request->queryString('error') ?? '';
 
         if ($error !== '') {
             $this->logger?->warning('Trakt OAuth error', ['error' => $error]);

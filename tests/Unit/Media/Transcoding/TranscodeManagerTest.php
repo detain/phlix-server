@@ -2236,6 +2236,165 @@ class TranscodeManagerTest extends TestCase
         $this->assertSame([7777], $registry->pidsFor($final), "B's PID tracking preserved (still cancellable)");
     }
 
+    public function testReconcileSupersedeReleasesRegistryOnCompletedSoLauncherFinallyDoesNotOrphan(): void
+    {
+        // SV-4.2 (F1 leak-regression): A launches gen=1 (registers its PID + cancel
+        // group), parks in its poll loop, and ffmpeg publishes $final while A sleeps.
+        // A CONCURRENT request B runs reconcileInFlightSegments(), which — seeing the
+        // published final and NO live .part-* — clears A's completed reservation with
+        // NO kill. That supersedes A's generation, so when A wakes its gen-gated
+        // finally is a no-op. Pre-fix, reconcile released nothing, so A's registry
+        // entry (dead PID + temp + cancel-group link) was ORPHANED (a resident-memory
+        // leak in the long-running worker). The fix makes reconcile perform A's own
+        // completed-case release, so the entry is drained exactly once (reconcile
+        // releases; A's superseded finally no-ops — no double release).
+        $dir = $this->segmentDir . '/f1-reconcile-complete';
+        mkdir($dir, 0755, true);
+        $input = $dir . '/in.mkv';
+        file_put_contents($input, 'x');
+        $captured = [];
+        $db = $this->mockDb([], 0, [], $this->onDemandJobRow($dir, $input), $captured);
+        $ff = $this->createMock(FfmpegRunner::class);
+        $manager = $this->segManager($db, $ff);
+
+        $final = "{$dir}/seg-00004.ts";
+        $signalled = [];
+        $registry = $this->wiredRegistry($manager, $signalled);
+
+        // Forward the manager's release call to the real registry so the leak is
+        // observable at the registry level (no orphaned PID/tmp/group).
+        $releaseCalls = 0;
+        $ff->method('releaseSegmentProcess')->willReturnCallback(
+            function (string $key) use ($registry, &$releaseCalls): void {
+                $releaseCalls++;
+                $registry->release($key);
+            }
+        );
+        // Completed branch must use the plain release, never the wait-timeout one.
+        $ff->expects($this->never())->method('releaseSegmentProcessAfterWaitTimeout');
+
+        $ff->expects($this->once())->method('startSegmentEncode')->willReturnCallback(
+            function () use ($manager, $registry, $final): int {
+                // A is now mid-encode: track its detached PID + cancel group + temp.
+                $registry->register($final, 4242, 'chan-A', $final . '.part-deadbeef');
+                // ffmpeg renames its .part-* → $final (publishes) while A sleeps; only
+                // the final now exists on disk (no live .part-* remains for $final).
+                file_put_contents($final, 'x');
+                // Concurrent request B reconciles: reset the throttle A's own
+                // produceSegment reconcile stamped so B's pass re-globs and runs.
+                $this->setPrivate($manager, 'lastInFlightReconcileMs', null);
+                $this->callPrivate($manager, 'reconcileInFlightSegments');
+                return 4242; // A's PID (its encode already published)
+            }
+        );
+
+        $path = $manager->ensureSegment('seg-job', null, 4);
+
+        $this->assertSame($final, $path, 'A observes the published segment');
+        $this->assertSame([], $this->inFlightSet($manager), 'reconcile cleared A completed reservation');
+        $this->assertSame(1, $releaseCalls, 'exactly ONE release (reconcile); A stale finally no-ops (no double release)');
+        $this->assertSame(0, $registry->registeredKeyCount(), 'F1 fix: reconcile released A registry entry — no orphaned PID');
+        $this->assertSame([], $registry->pidsFor($final), 'no orphaned PID left under $final');
+        $this->assertSame(0, $registry->registeredGroupCount(), 'A cancel-group link torn down (no orphaned group)');
+        $this->assertSame([], $signalled, 'reconcile-release is NOT a kill — the (dead) PID was never signalled');
+    }
+
+    public function testReconcileSupersedeAudioReleasesRegistryOnCompletedSoLauncherFinallyDoesNotOrphan(): void
+    {
+        // F1 leak-regression parity for the AUDIO launcher (produceAudioSegment): its
+        // reconcile at the top of the request + its gen-gated finally behave exactly
+        // like the video path, so a reconcile-supersede must likewise release the
+        // audio launcher's registry entry rather than orphan it.
+        $dir = $this->segmentDir . '/f1-reconcile-audio';
+        mkdir($dir, 0755, true);
+        $input = $dir . '/in.mkv';
+        file_put_contents($input, 'x');
+        $captured = [];
+        $db = $this->mockDb([], 0, [], $this->multiAudioJobRow($dir, $input), $captured);
+        $ff = $this->createMock(FfmpegRunner::class);
+        $this->stubColorMetadata($ff);
+        $manager = new TranscodeManager($db, $ff, $this->segmentDir, null, 6);
+
+        $final = "{$dir}/seg-a1-00001.ts";
+        $signalled = [];
+        $registry = $this->wiredRegistry($manager, $signalled);
+
+        $releaseCalls = 0;
+        $ff->method('releaseSegmentProcess')->willReturnCallback(
+            function (string $key) use ($registry, &$releaseCalls): void {
+                $releaseCalls++;
+                $registry->release($key);
+            }
+        );
+        $ff->expects($this->never())->method('releaseSegmentProcessAfterWaitTimeout');
+
+        $ff->expects($this->once())->method('startSegmentEncode')->willReturnCallback(
+            function () use ($manager, $registry, $final): int {
+                $registry->register($final, 4343, 'chan-Aa', $final . '.part-feedface');
+                file_put_contents($final, 'audio');
+                $this->setPrivate($manager, 'lastInFlightReconcileMs', null);
+                $this->callPrivate($manager, 'reconcileInFlightSegments');
+                return 4343;
+            }
+        );
+
+        $path = $manager->ensureSegment('seg-job', null, 1, 'a1');
+
+        $this->assertSame($final, $path, 'the audio launcher observes the published segment');
+        $this->assertSame([], $this->inFlightSet($manager), 'reconcile cleared the audio launcher completed reservation');
+        $this->assertSame(1, $releaseCalls, 'exactly ONE release (reconcile); the audio finally no-ops');
+        $this->assertSame(0, $registry->registeredKeyCount(), 'F1 fix: audio launcher registry entry released — no orphan');
+        $this->assertSame([], $registry->pidsFor($final), 'no orphaned audio PID left under $final');
+        $this->assertSame(0, $registry->registeredGroupCount(), 'audio cancel-group link torn down');
+        $this->assertSame([], $signalled, 'reconcile-release never signals the PID');
+    }
+
+    public function testReconcileSupersedeReleasesRegistryOnStaleBranchViaWaitTimeout(): void
+    {
+        // The STALE branch (encode died without publishing: no final, no live
+        // .part-*, past the grace window) also clears the reservation with NO kill.
+        // Pre-fix it left the launcher's registry entry orphaned; the fix mirrors the
+        // launcher's non-is_file case — releaseSegmentProcessAfterWaitTimeout — which
+        // drops the entry and cleans the dead encode's own temp (never signalling).
+        $db = $this->createMock(Connection::class);
+        $ff = $this->createMock(FfmpegRunner::class);
+        $manager = $this->segManager($db, $ff);
+
+        $jobDir = "{$this->segmentDir}/f1-reconcile-stale";
+        mkdir($jobDir, 0755, true);
+        $final = "{$jobDir}/seg-v720p-00002.ts"; // no final + no .part-* on disk → stale
+
+        $signalled = [];
+        $registry = $this->wiredRegistry($manager, $signalled);
+        $registry->register($final, 5150, 'chan-S', $final . '.part-cafef00d');
+
+        $waitReleases = [];
+        $ff->method('releaseSegmentProcessAfterWaitTimeout')->willReturnCallback(
+            function (string $key) use ($registry, &$waitReleases): void {
+                $waitReleases[] = $key;
+                $registry->releaseAfterWaitTimeout($key);
+            }
+        );
+        // Stale branch must use the wait-timeout release, never the plain one.
+        $ff->expects($this->never())->method('releaseSegmentProcess');
+
+        $now = (int) (hrtime(true) / 1_000_000);
+        $grace = (new \ReflectionClassConstant(TranscodeManager::class, 'SEGMENT_INFLIGHT_STALE_GRACE_MS'))
+            ->getValue();
+        $this->assertIsInt($grace);
+        // Reservation launched well before the grace window → reconcile treats it stale.
+        $this->setPrivate($manager, 'segmentEncodesInFlight', [$final => ['at' => $now - $grace - 1000, 'gen' => 1]]);
+
+        $this->callPrivate($manager, 'reconcileInFlightSegments');
+
+        $this->assertSame([], $this->inFlightSet($manager), 'stale reservation cleared');
+        $this->assertSame([$final], $waitReleases, 'reconcile performed the wait-timeout release for the stale entry');
+        $this->assertSame(0, $registry->registeredKeyCount(), 'F1 fix: stale-branch registry entry released — no orphan');
+        $this->assertSame([], $registry->pidsFor($final), 'no orphaned PID under the stale $final');
+        $this->assertSame(0, $registry->registeredGroupCount(), 'stale entry cancel-group link torn down');
+        $this->assertSame([], $signalled, 'wait-timeout release never signals the PID');
+    }
+
     public function testAudioSegmentReservationIsGenerationStampedAndClears(): void
     {
         // F1 covers BOTH paths: the audio launcher (produceAudioSegment) also stamps

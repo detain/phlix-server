@@ -1025,8 +1025,13 @@ class TranscodeManager
                 // finally must be a complete no-op — otherwise it would clobber the
                 // fresh launcher's reservation AND drop its registry registration
                 // (re-opening the SV-4.1 double-encode race + losing the fresh
-                // launcher's cancel tracking). The kill already dropped OUR registry
-                // entry and cleaned OUR temp, so a no-op here leaks nothing.
+                // launcher's cancel tracking). Our generation is superseded by one of
+                // two paths, and BOTH already released OUR registry entry, so a no-op
+                // here leaks nothing: (a) a disconnect-kill reaped this encode (dropped
+                // our entry + cleaned our temp) and a fresher launcher then re-reserved
+                // $final; or (b) reconcileInFlightSegments() cleared our completed/stale
+                // reservation with NO kill and performed the matching registry release
+                // itself (releaseSegmentProcess / releaseSegmentProcessAfterWaitTimeout).
                 if (($this->segmentEncodesInFlight[$final]['gen'] ?? null) === $myGen) {
                     unset($this->segmentEncodesInFlight[$final]);
                     // SV-4.2 ([S-F23]): stop tracking the encode WE launched so the
@@ -1618,6 +1623,20 @@ class TranscodeManager
             }
             if (is_file($final)) {
                 unset($this->segmentEncodesInFlight[$final]); // completed
+                // SV-4.2 (reconcile-supersede — F1 leak regression fix): the
+                // launcher's gen-gated `finally` releases the registry ONLY while it
+                // still owns $final's generation. Clearing the reservation here
+                // supersedes that generation, so the launcher's `finally` becomes a
+                // no-op and would otherwise NEVER release its registry entry — leaving
+                // an orphaned dead PID / temp / group link (a resident-memory leak in
+                // the long-running worker). Perform the launcher's own completed-case
+                // release here so exactly ONE release still happens. Safe: this branch
+                // only fires when no live `.part-*` for $final is in the snapshot, so a
+                // fresher launcher mid-encode (which has a live temp) already hit the
+                // `continue` above — we can only ever release the stale/completed
+                // launcher's own entry, never a fresher one's. release()/drop() are
+                // idempotent, so the launcher's now-superseded `finally` is harmless.
+                $this->ffmpeg->releaseSegmentProcess($final);
                 continue;
             }
             // SV-4.2-disconnect F1: the reservation entry is now
@@ -1625,6 +1644,13 @@ class TranscodeManager
             $launchedAtMs = $entry['at'];
             if (($now - $launchedAtMs) > self::SEGMENT_INFLIGHT_STALE_GRACE_MS) {
                 unset($this->segmentEncodesInFlight[$final]); // died without cleanup
+                // SV-4.2 (reconcile-supersede — F1 leak regression fix): same
+                // rationale as the completed branch. Clearing this stale reservation
+                // supersedes the launcher's generation and no-ops its `finally`, so
+                // perform the wait-timeout release here — mirroring the launcher's
+                // non-`is_file` branch (stop tracking + clean the dead encode's
+                // orphaned `.part-*` only if it is actually dead).
+                $this->ffmpeg->releaseSegmentProcessAfterWaitTimeout($final);
             }
         }
     }

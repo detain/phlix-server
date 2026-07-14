@@ -123,7 +123,7 @@ class TranscodeManager
      * In-worker set of on-demand segment encodes THIS worker launched and believes
      * are still running, keyed by the absolute final segment path
      * (`.../{jobId}/seg-v{variant}-NNNNN.ts`, which embeds the (jobId, variant,
-     * index) tuple) → the monotonic launch time in milliseconds.
+     * index) tuple) → `{at: monotonic launch-ms, gen: generation-token}`.
      *
      * Backs the memory-based per-segment DEDUP check
      * ({@see segmentEncodeInFlight()}) so a client retry of a slow segment (the
@@ -139,9 +139,31 @@ class TranscodeManager
      * {@see reconcileInFlightSegments()}. Because the path carries the variant
      * prefix, accounting is naturally per (jobId, variant).
      *
-     * @var array<string, int>
+     * SV-4.2-disconnect F1: each entry carries a unique `gen` ({@see $reservationSeq})
+     * so the launcher's `finally` compare-and-clears (clears the reservation +
+     * releases the registry ONLY while it still owns the current generation), and a
+     * disconnect-kill invalidates the reservation via
+     * {@see invalidateReservation()} so the next requester re-launches instead of
+     * deduping onto the killed encode.
+     *
+     * @var array<string, array{at: int, gen: int}>
      */
     private array $segmentEncodesInFlight = [];
+
+    /**
+     * Monotonic per-worker counter minting a unique GENERATION token for each
+     * segment-encode reservation (SV-4.2-disconnect F1). Stored in each
+     * {@see $segmentEncodesInFlight} entry's `gen`, so a launcher can prove (via
+     * compare-and-clear) that it still owns `$final` before its `finally` clears
+     * the reservation and releases the registry. This stops a STALE launcher —
+     * whose encode was reaped by a disconnect-kill and whose coroutine `finally`
+     * only fires later, on its own poll-timeout — from clobbering a FRESHER
+     * launcher's reservation and registry registration for the same segment path
+     * (which would re-open the SV-4.1 double-encode race and cross-clobber the
+     * registry). A bare launch-ms marker is NOT a safe token (ms resolution can
+     * tie between two launchers); this counter cannot tie.
+     */
+    private int $reservationSeq = 0;
 
     /**
      * SV-4.2-disconnect (landmine guard): per-segment waiter ref-count, keyed by
@@ -878,13 +900,19 @@ class TranscodeManager
         // finally block rolls it back via $overCap (below).
         $reserved = false;
         $overCap = false;
+        $myGen = 0;
         if (!$this->segmentEncodeInFlight($final)) {
             // Record the launch in-worker BEFORE the yieldable glob. The add and the
             // dedup check above run with no coroutine yield between them, so this
             // worker's own view is atomic. A sibling worker's view is eventually-
             // consistent (bounded by reconcileInFlightSegments's 1s window), which is
             // acceptable: a missed dedup merely costs one redundant duplicate encode.
-            $this->segmentEncodesInFlight[$final] = $this->monotonicMs();
+            // SV-4.2-disconnect F1: stamp a unique generation token so the finally
+            // below can compare-and-clear (a stale launcher whose encode was reaped
+            // by a disconnect-kill must not clobber a fresher launcher's reservation
+            // for the same $final).
+            $myGen = ++$this->reservationSeq;
+            $this->segmentEncodesInFlight[$final] = ['at' => $this->monotonicMs(), 'gen' => $myGen];
             $reserved = true;
 
             // Global ceiling: bound total concurrent encodes so a burst of cold seeks
@@ -900,10 +928,11 @@ class TranscodeManager
             // (after the dedup check found no in-flight encode for this segment).
             if ($this->countInFlightSegmentEncodes() >= $this->maxConcurrentSegments) {
                 $overCap = true;
-                // Roll back the reservation immediately — the finally below would do it
-                // anyway, but being explicit here makes the intent clear and keeps the
-                // finally handling simple.
-                unset($this->segmentEncodesInFlight[$final]);
+                // Roll back the reservation immediately — the finally below never
+                // runs on this throw (it precedes the try), so the rollback must
+                // happen here. Compare-and-clear on our own generation so it stays
+                // correct even in the (guaranteed-safe here) event of concurrency.
+                $this->clearReservationIfMine($final, $myGen);
                 throw new SegmentBusyException(
                     'Segment encode capacity reached (' . $this->maxConcurrentSegments . ' in flight)'
                 );
@@ -977,24 +1006,35 @@ class TranscodeManager
             // net for the dedup-only snapshot (the rare case this finally never runs,
             // e.g. a hard coroutine kill).
             if ($launched) {
-                unset($this->segmentEncodesInFlight[$final]);
-                // SV-4.2 ([S-F23]): stop tracking the encode WE launched so the
-                // registry never leaks. This is a WAIT RELEASE, not a cancel — a
-                // single request's poll wait timing out is NOT abandonment, so we
-                // must NOT kill a still-running encode: a slow-but-wanted software
-                // 4K/HEVC transcode has to finish and publish for the retrying
-                // requester (the on-demand-seek design). `timeout <n>` is the
-                // backstop for a genuinely stuck encode; genuine abandonment
-                // (client cancel / disconnect) kills promptly via
-                // RelayConsumer::onHttpCancel. `is_file($final)` true means the
-                // encode already renamed + exited → plain release; false means the
-                // poll gave up → release-and-clean-temp-only-if-the-encode-is-dead
-                // (a live encode + its live `.part-*` are left untouched;
-                // finding #1/#2).
-                if (is_file($final)) {
-                    $this->ffmpeg->releaseSegmentProcess($final);
-                } else {
-                    $this->ffmpeg->releaseSegmentProcessAfterWaitTimeout($final);
+                // SV-4.2-disconnect F1 (compare-and-clear): clear OUR reservation +
+                // release the registry ONLY while we still own the current
+                // generation for $final. If a disconnect-kill reaped this encode and
+                // a FRESHER launcher then re-reserved $final, this (now stale)
+                // finally must be a complete no-op — otherwise it would clobber the
+                // fresh launcher's reservation AND drop its registry registration
+                // (re-opening the SV-4.1 double-encode race + losing the fresh
+                // launcher's cancel tracking). The kill already dropped OUR registry
+                // entry and cleaned OUR temp, so a no-op here leaks nothing.
+                if (($this->segmentEncodesInFlight[$final]['gen'] ?? null) === $myGen) {
+                    unset($this->segmentEncodesInFlight[$final]);
+                    // SV-4.2 ([S-F23]): stop tracking the encode WE launched so the
+                    // registry never leaks. This is a WAIT RELEASE, not a cancel — a
+                    // single request's poll wait timing out is NOT abandonment, so we
+                    // must NOT kill a still-running encode: a slow-but-wanted software
+                    // 4K/HEVC transcode has to finish and publish for the retrying
+                    // requester (the on-demand-seek design). `timeout <n>` is the
+                    // backstop for a genuinely stuck encode; genuine abandonment
+                    // (client cancel / disconnect) kills promptly via
+                    // RelayConsumer::onHttpCancel. `is_file($final)` true means the
+                    // encode already renamed + exited → plain release; false means the
+                    // poll gave up → release-and-clean-temp-only-if-the-encode-is-dead
+                    // (a live encode + its live `.part-*` are left untouched;
+                    // finding #1/#2).
+                    if (is_file($final)) {
+                        $this->ffmpeg->releaseSegmentProcess($final);
+                    } else {
+                        $this->ffmpeg->releaseSegmentProcessAfterWaitTimeout($final);
+                    }
                 }
             }
         }
@@ -1127,13 +1167,16 @@ class TranscodeManager
         // race. See produceSegment() for the full explanation.
         $reserved = false;
         $overCap = false;
+        $myGen = 0;
         if (!$this->segmentEncodeInFlight($final)) {
-            $this->segmentEncodesInFlight[$final] = $this->monotonicMs();
+            // SV-4.2-disconnect F1: generation-stamped reservation (see produceSegment).
+            $myGen = ++$this->reservationSeq;
+            $this->segmentEncodesInFlight[$final] = ['at' => $this->monotonicMs(), 'gen' => $myGen];
             $reserved = true;
 
             if ($this->countInFlightSegmentEncodes() >= $this->maxConcurrentSegments) {
                 $overCap = true;
-                unset($this->segmentEncodesInFlight[$final]);
+                $this->clearReservationIfMine($final, $myGen);
                 throw new SegmentBusyException(
                     'Segment encode capacity reached (' . $this->maxConcurrentSegments . ' in flight)'
                 );
@@ -1185,18 +1228,25 @@ class TranscodeManager
             // the map returns to 0 with no leak.
             $this->decrementSegmentWaiter($final);
             if ($launched) {
-                unset($this->segmentEncodesInFlight[$final]);
-                // SV-4.2 ([S-F23]): WAIT RELEASE, not cancel — see the identical
-                // block in the multi-variant path above. Do NOT kill a still-running
-                // encode on a poll wait-timeout (a slow-but-wanted encode must
-                // publish for the retrying requester); only stop tracking it and, if
-                // it already died without publishing, clean the orphaned `.part-*`
-                // temp. Genuine abandonment kills via RelayConsumer::onHttpCancel;
-                // `timeout <n>` is the stuck-encode backstop (findings #1/#2).
-                if (is_file($final)) {
-                    $this->ffmpeg->releaseSegmentProcess($final);
-                } else {
-                    $this->ffmpeg->releaseSegmentProcessAfterWaitTimeout($final);
+                // SV-4.2-disconnect F1 (compare-and-clear): only clear + release
+                // while we still own the current generation for $final — see the
+                // identical block in produceSegment() for the full rationale (a
+                // reaped-and-superseded launcher's late finally must not clobber a
+                // fresher launcher's reservation/registry).
+                if (($this->segmentEncodesInFlight[$final]['gen'] ?? null) === $myGen) {
+                    unset($this->segmentEncodesInFlight[$final]);
+                    // SV-4.2 ([S-F23]): WAIT RELEASE, not cancel — see the identical
+                    // block in the multi-variant path above. Do NOT kill a still-running
+                    // encode on a poll wait-timeout (a slow-but-wanted encode must
+                    // publish for the retrying requester); only stop tracking it and, if
+                    // it already died without publishing, clean the orphaned `.part-*`
+                    // temp. Genuine abandonment kills via RelayConsumer::onHttpCancel;
+                    // `timeout <n>` is the stuck-encode backstop (findings #1/#2).
+                    if (is_file($final)) {
+                        $this->ffmpeg->releaseSegmentProcess($final);
+                    } else {
+                        $this->ffmpeg->releaseSegmentProcessAfterWaitTimeout($final);
+                    }
                 }
             }
         }
@@ -1264,6 +1314,46 @@ class TranscodeManager
         } else {
             unset($this->segmentWaiters[$final]);
         }
+    }
+
+    /**
+     * Clear the dedup reservation for `$final` ONLY if it still carries the given
+     * generation token (SV-4.2-disconnect F1 compare-and-clear). A no-op when a
+     * newer launcher already re-reserved `$final` (a different `gen`) or the
+     * reservation is already gone.
+     *
+     * @param string $final Final segment path.
+     * @param int    $gen   The launcher's own generation token.
+     */
+    private function clearReservationIfMine(string $final, int $gen): void
+    {
+        if (($this->segmentEncodesInFlight[$final]['gen'] ?? null) === $gen) {
+            unset($this->segmentEncodesInFlight[$final]);
+        }
+    }
+
+    /**
+     * Invalidate the dedup reservation for a segment whose in-flight encode was
+     * just REAPED by {@see SegmentProcessRegistry::kill()} (SV-4.2-disconnect F1).
+     *
+     * Wired as the registry's reap callback ({@see SegmentProcessRegistry::setReapCallback()}).
+     * Clears BOTH the in-worker reservation and the ≤1s-stale cross-worker
+     * snapshot entry for `$final` so the very next requester (the common
+     * disconnect-then-reconnect / second-device case) re-launches a fresh encode
+     * instead of deduping onto the killed corpse — which would otherwise 404 until
+     * the reservation self-heals via the reaped launcher's own poll-timeout
+     * `finally` or {@see reconcileInFlightSegments()} (up to ~5s). The registry
+     * invokes this only on a GENUINE reap (never on the waiter-aware defer, where
+     * the encode is still wanted) and BEFORE its terminate yield, so it can only
+     * ever clear the reaped launcher's reservation; a fresher re-launch's
+     * reservation is created afterwards and its generation-guarded `finally`
+     * protects it from the reaped launcher.
+     *
+     * @param string $final Final segment path (the reaped registry cancel key).
+     */
+    public function invalidateReservation(string $final): void
+    {
+        unset($this->segmentEncodesInFlight[$final], $this->globalInFlightSnapshot[$final]);
     }
 
     /**
@@ -1504,7 +1594,7 @@ class TranscodeManager
         }
         $this->globalInFlightSnapshot = $snapshot;
 
-        foreach ($this->segmentEncodesInFlight as $final => $launchedAtMs) {
+        foreach ($this->segmentEncodesInFlight as $final => $entry) {
             if (isset($snapshot[$final])) {
                 continue; // a live `.part-*` → still encoding, keep counting it
             }
@@ -1512,6 +1602,9 @@ class TranscodeManager
                 unset($this->segmentEncodesInFlight[$final]); // completed
                 continue;
             }
+            // SV-4.2-disconnect F1: the reservation entry is now
+            // `{at: launch-ms, gen: token}`; the stale check reads the launch ms.
+            $launchedAtMs = $entry['at'];
             if (($now - $launchedAtMs) > self::SEGMENT_INFLIGHT_STALE_GRACE_MS) {
                 unset($this->segmentEncodesInFlight[$final]); // died without cleanup
             }

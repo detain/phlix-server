@@ -168,6 +168,18 @@ final class TranscodeServicesProvider implements ServiceProviderInterface
                     $registry->setWaiterGuard(
                         static fn (string $key): bool => $manager->hasOtherWaiter($key)
                     );
+                    // SV-4.2-disconnect F1: on a genuine (non-deferred) reap the
+                    // registry must invalidate the manager's dedup reservation for
+                    // the reaped segment, so the next requester re-launches instead
+                    // of deduping onto the killed encode (a transient 404 otherwise).
+                    // Same singleton, so this covers BOTH the relay killGroup path
+                    // and the direct-LAN onClose path with one wiring; both video and
+                    // audio segments flow through the same kill().
+                    $registry->setReapCallback(
+                        static function (string $key) use ($manager): void {
+                            $manager->invalidateReservation($key);
+                        }
+                    );
 
                     return $manager;
                 }

@@ -10,6 +10,7 @@ use Phlix\Media\Streaming\AbrLadder;
 use Phlix\Media\Streaming\SourceProfile;
 use Phlix\Media\Transcoding\FfmpegRunner;
 use Phlix\Media\Transcoding\SegmentBusyException;
+use Phlix\Media\Transcoding\SegmentProcessRegistry;
 use Phlix\Media\Transcoding\TranscodeManager;
 use ReflectionMethod;
 use Workerman\MySQL\Connection;
@@ -2089,6 +2090,245 @@ class TranscodeManagerTest extends TestCase
         $this->assertSame(0, $manager->waiterCount($final), 'audio path also returns the count to 0 — no leak');
     }
 
+    // -------------------------------------------------------------------------
+    // SV-4.2-disconnect F1: invalidate the dedup reservation on a genuine reap so
+    // the next requester re-launches instead of deduping onto the killed encode.
+    // The registry's reap callback + waiter guard are wired to the manager exactly
+    // as TranscodeServicesProvider does in production (not a fake guard).
+    // -------------------------------------------------------------------------
+
+    /**
+     * Build a real per-worker registry with a spy signal sender and wire it to the
+     * manager the SAME way TranscodeServicesProvider does (waiter guard + reap
+     * callback), so a real kill() defers on a live piggybacker and invalidates the
+     * dedup reservation on a genuine reap.
+     *
+     * @param array<int, int> $signalled Filled with each PID the registry signals.
+     */
+    private function wiredRegistry(TranscodeManager $manager, array &$signalled): SegmentProcessRegistry
+    {
+        $signalled = [];
+        $registry = new SegmentProcessRegistry(
+            null,
+            static function (int $pid, int $signal) use (&$signalled): void {
+                $signalled[] = $pid;
+            },
+            static fn (int $pid): bool => false, // dead immediately → no SIGKILL escalation
+            0.01,
+            static function (string $tmp): void {
+                // no-op temp cleaner (never touch the filesystem in tests)
+            },
+        );
+        $registry->setWaiterGuard(static fn (string $key): bool => $manager->hasOtherWaiter($key));
+        $registry->setReapCallback(static function (string $key) use ($manager): void {
+            $manager->invalidateReservation($key);
+        });
+
+        return $registry;
+    }
+
+    public function testReapInvalidatesReservationSoNextRequesterRelaunches(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $ff = $this->createMock(FfmpegRunner::class);
+        $manager = $this->segManager($db, $ff);
+
+        $final = "{$this->segmentDir}/job/seg-v720p-00005.ts";
+        $now = (int) (hrtime(true) / 1_000_000);
+        // A launcher reserved + is mid-encode (generation-stamped reservation).
+        $this->setPrivate($manager, 'segmentEncodesInFlight', [$final => ['at' => $now, 'gen' => 1]]);
+        $this->assertTrue(
+            $this->callPrivate($manager, 'segmentEncodeInFlight', $final),
+            'a fresh requester would dedup onto the in-flight encode'
+        );
+
+        $signalled = [];
+        $registry = $this->wiredRegistry($manager, $signalled);
+        $registry->register($final, 4242); // the launcher's tracked PID
+
+        // Genuine abandonment (no other waiter) → signal + reap + invalidate.
+        $killed = $registry->kill($final);
+
+        $this->assertSame(1, $killed);
+        $this->assertSame([4242], $signalled, 'the abandoned encode was signalled');
+        $this->assertFalse(
+            $this->callPrivate($manager, 'segmentEncodeInFlight', $final),
+            'F1: the reservation is invalidated on reap, so the NEXT requester re-launches (no dedup-onto-corpse 404)'
+        );
+        $this->assertSame([], $this->inFlightSet($manager), 'no stale reservation left behind');
+    }
+
+    public function testDeferredKillDoesNotInvalidateReservation(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $ff = $this->createMock(FfmpegRunner::class);
+        $manager = $this->segManager($db, $ff);
+
+        $final = "{$this->segmentDir}/job/seg-v720p-00006.ts";
+        $now = (int) (hrtime(true) / 1_000_000);
+        $this->setPrivate($manager, 'segmentEncodesInFlight', [$final => ['at' => $now, 'gen' => 1]]);
+        // TWO waiters (launcher + piggyback) → hasOtherWaiter() true → kill defers.
+        $this->setPrivate($manager, 'segmentWaiters', [$final => 2]);
+
+        $signalled = [];
+        $registry = $this->wiredRegistry($manager, $signalled);
+        $registry->register($final, 4242);
+
+        $killed = $registry->kill($final);
+
+        $this->assertSame(0, $killed, 'deferred: nothing signalled while a piggybacker waits');
+        $this->assertSame([], $signalled);
+        $this->assertTrue(
+            $this->callPrivate($manager, 'segmentEncodeInFlight', $final),
+            'F1: a DEFERRED kill must NOT invalidate — the encode is still wanted and keeps publishing'
+        );
+        $this->assertSame([4242], $registry->pidsFor($final), 'the deferred encode stays tracked for the remaining waiter');
+    }
+
+    public function testStaleLauncherFinallyDoesNotClobberFreshReservation(): void
+    {
+        // A launches gen=1 and is mid-encode. A disconnects → its encode is reaped
+        // (reservation invalidated). A fresh launcher B re-reserves the same $final
+        // (gen=2) and registers its own encode. When A's still-parked coroutine
+        // times out, its finally must be a NO-OP (gen mismatch) — it must NOT clear
+        // B's reservation nor release B's registry registration, which would re-open
+        // the SV-4.1 double-encode race + drop B's cancel tracking.
+        $dir = $this->segmentDir . '/f1-noclobber';
+        mkdir($dir, 0755, true);
+        $input = $dir . '/in.mkv';
+        file_put_contents($input, 'x');
+        $captured = [];
+        $db = $this->mockDb([], 0, [], $this->onDemandJobRow($dir, $input), $captured);
+        $ff = $this->createMock(FfmpegRunner::class);
+        // 50ms wait ceiling so A's poll times out quickly after the supersede.
+        $manager = $this->segManager($db, $ff, null, null, null, 50);
+
+        $final = "{$dir}/seg-00004.ts";
+        $signalled = [];
+        $registry = $this->wiredRegistry($manager, $signalled);
+
+        // A (this call) launches; inside the launch we model A being reaped mid-poll
+        // and B superseding the reservation with a fresh generation + its own PID.
+        $ff->expects($this->once())->method('startSegmentEncode')->willReturnCallback(
+            function () use ($manager, $registry, $final): int {
+                $registry->register($final, 4242);   // A's PID, now mid-encode
+                $registry->kill($final);             // disconnect reaps A + invalidates gen=1
+                // B re-launches the same segment: fresh reservation (gen=2) + PID.
+                $now = (int) (hrtime(true) / 1_000_000);
+                $this->setPrivate($manager, 'segmentEncodesInFlight', [$final => ['at' => $now, 'gen' => 2]]);
+                $registry->register($final, 7777);
+                return 4242; // A's encode never publishes (it was killed)
+            }
+        );
+        // A's finally must NOT release the registry for $final (gen mismatch), so B's
+        // PID stays tracked and the mock's release methods are never called by A.
+        $ff->expects($this->never())->method('releaseSegmentProcess');
+        $ff->expects($this->never())->method('releaseSegmentProcessAfterWaitTimeout');
+
+        $path = $manager->ensureSegment('seg-job', null, 4);
+
+        $this->assertNull($path, 'A never published (its encode was reaped)');
+        $this->assertSame(
+            2,
+            $this->inFlightSet($manager)[$final]['gen'] ?? null,
+            'F1 no-clobber: A stale finally must not clear B fresh reservation'
+        );
+        $this->assertSame([7777], $registry->pidsFor($final), "B's PID tracking preserved (still cancellable)");
+    }
+
+    public function testAudioSegmentReservationIsGenerationStampedAndClears(): void
+    {
+        // F1 covers BOTH paths: the audio launcher (produceAudioSegment) also stamps
+        // a generation token and its finally compare-and-clears on completion.
+        $dir = $this->segmentDir . '/f1-audio';
+        mkdir($dir, 0755, true);
+        $input = $dir . '/in.mkv';
+        file_put_contents($input, 'x');
+        $captured = [];
+        $db = $this->mockDb([], 0, [], $this->multiAudioJobRow($dir, $input), $captured);
+
+        $final = "{$dir}/seg-a1-00001.ts";
+        $observedGen = null;
+        /** @var TranscodeManager|null $manager (assigned below; captured by-ref) */
+        $manager = null;
+        $ff = $this->createMock(FfmpegRunner::class);
+        $this->stubColorMetadata($ff);
+        $ff->expects($this->once())->method('startSegmentEncode')->willReturnCallback(
+            function (string $in, string $out) use (&$observedGen, &$manager, $final): int {
+                assert($manager instanceof TranscodeManager);
+                $observedGen = $this->inFlightSet($manager)[$final]['gen'] ?? null;
+                file_put_contents($out, 'audio');
+                return 1;
+            }
+        );
+
+        $manager = new TranscodeManager($db, $ff, $this->segmentDir, null, 6);
+        $path = $manager->ensureSegment('seg-job', null, 1, 'a1');
+
+        $this->assertSame($final, $path);
+        $this->assertIsInt($observedGen, 'F1: the audio path also stamps a generation token on its reservation');
+        $this->assertSame([], $this->inFlightSet($manager), 'audio reservation cleared on completion (gen match)');
+    }
+
+    public function testRelayKillGroupAlsoInvalidatesReservation(): void
+    {
+        // Relay parity: RelayConsumer::onHttpCancel reaps via killGroup(channelId),
+        // which flows through the SAME kill() → so invalidate-on-reap fires for the
+        // relay transport too (one shared registry callback covers both transports).
+        $db = $this->createMock(Connection::class);
+        $ff = $this->createMock(FfmpegRunner::class);
+        $manager = $this->segManager($db, $ff);
+
+        $final = "{$this->segmentDir}/job/seg-v720p-00009.ts";
+        $now = (int) (hrtime(true) / 1_000_000);
+        $this->setPrivate($manager, 'segmentEncodesInFlight', [$final => ['at' => $now, 'gen' => 1]]);
+
+        $signalled = [];
+        $registry = $this->wiredRegistry($manager, $signalled);
+        $registry->register($final, 4242, 'chan-7'); // grouped under a relay channel id
+
+        $killed = $registry->killGroup('chan-7');
+
+        $this->assertSame(1, $killed);
+        $this->assertSame([4242], $signalled);
+        $this->assertFalse(
+            $this->callPrivate($manager, 'segmentEncodeInFlight', $final),
+            'F1 relay parity: killGroup (onHttpCancel path) also invalidates the reservation'
+        );
+    }
+
+    public function testGenerationStampedReservationStillDedupsWhenNotKilled(): void
+    {
+        // SV-4.1 intact: with the new generation-stamped reservation shape, a
+        // concurrent requester for a segment already reserved (and NOT killed) still
+        // dedups — startSegmentEncode is never called a second time and the pre-
+        // existing reservation is not clobbered by the piggyback's finally.
+        $dir = $this->segmentDir . '/f1-dedup';
+        mkdir($dir, 0755, true);
+        $input = $dir . '/in.mkv';
+        file_put_contents($input, 'x');
+        $captured = [];
+        $db = $this->mockDb([], 0, [], $this->onDemandJobRow($dir, $input), $captured);
+        $ff = $this->createMock(FfmpegRunner::class);
+        $ff->expects($this->never())->method('startSegmentEncode');
+        $manager = $this->segManager($db, $ff, null, null, null, 50);
+
+        $final = "{$dir}/seg-00007.ts";
+        $now = (int) (hrtime(true) / 1_000_000);
+        // An encode is already reserved in-worker (gen-stamped) but NOT killed.
+        $this->setPrivate($manager, 'segmentEncodesInFlight', [$final => ['at' => $now, 'gen' => 1]]);
+
+        $this->assertNull(
+            $manager->ensureSegment('seg-job', null, 7),
+            'poll times out but no duplicate encode is launched'
+        );
+        $this->assertSame(
+            1,
+            $this->inFlightSet($manager)[$final]['gen'] ?? null,
+            'dedup: reservation preserved, no clobber by a piggyback'
+        );
+    }
+
     public function testEnsureSegmentResolvesCopyOriginalVariant(): void
     {
         // The copy "original" (H.264 + AAC source) resolves to a genuine -c copy
@@ -2761,13 +3001,14 @@ class TranscodeManagerTest extends TestCase
     /**
      * Reads the private in-worker in-flight set.
      *
-     * @return array<string, int> final segment path → monotonic launch ms
+     * @return array<string, array{at: int, gen: int}> final segment path →
+     *         {at: monotonic launch ms, gen: generation token}
      */
     private function inFlightSet(TranscodeManager $m): array
     {
         $p = new \ReflectionProperty(TranscodeManager::class, 'segmentEncodesInFlight');
         $p->setAccessible(true);
-        /** @var array<string, int> $value */
+        /** @var array<string, array{at: int, gen: int}> $value */
         $value = $p->getValue($m);
 
         return $value;
@@ -2907,7 +3148,10 @@ class TranscodeManagerTest extends TestCase
         $a = "{$this->segmentDir}/jobA/seg-v720p-00000.ts";
         $b = "{$this->segmentDir}/jobA/seg-v480p-00000.ts"; // same job, different variant
         $c = "{$this->segmentDir}/jobB/seg-v720p-00000.ts"; // different job, untracked
-        $this->setPrivate($manager, 'segmentEncodesInFlight', [$a => 10, $b => 20]);
+        $this->setPrivate($manager, 'segmentEncodesInFlight', [
+            $a => ['at' => 10, 'gen' => 1],
+            $b => ['at' => 20, 'gen' => 2],
+        ]);
 
         $this->assertTrue($this->callPrivate($manager, 'segmentEncodeInFlight', $a));
         $this->assertTrue($this->callPrivate($manager, 'segmentEncodeInFlight', $b)); // isolated key
@@ -2938,8 +3182,8 @@ class TranscodeManagerTest extends TestCase
 
         $now = (int) (hrtime(true) / 1_000_000);
         $this->setPrivate($manager, 'segmentEncodesInFlight', [
-            "{$this->segmentDir}/x/seg-00000.ts" => $now,
-            "{$this->segmentDir}/y/seg-00000.ts" => $now,
+            "{$this->segmentDir}/x/seg-00000.ts" => ['at' => $now, 'gen' => 1],
+            "{$this->segmentDir}/y/seg-00000.ts" => ['at' => $now, 'gen' => 2],
         ]);
 
         // No SegmentBusyException: the live glob sees zero real `.part-*` files, so
@@ -2997,9 +3241,9 @@ class TranscodeManagerTest extends TestCase
             ->getValue();
         $this->assertIsInt($grace);
         $this->setPrivate($manager, 'segmentEncodesInFlight', [
-            $live => $now,
-            $done => $now,
-            $dead => $now - $grace - 1000, // past the grace window
+            $live => ['at' => $now, 'gen' => 1],
+            $done => ['at' => $now, 'gen' => 2],
+            $dead => ['at' => $now - $grace - 1000, 'gen' => 3], // past the grace window
         ]);
 
         $this->callPrivate($manager, 'reconcileInFlightSegments');

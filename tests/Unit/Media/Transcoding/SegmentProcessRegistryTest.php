@@ -367,6 +367,58 @@ final class SegmentProcessRegistryTest extends TestCase
         $this->assertSame(0, $registry->registeredGroupCount());
     }
 
+    // -------------------------------------------------------------------------
+    // SV-4.2-disconnect F1: the reap callback (invalidate the owner's dedup
+    // reservation) fires ONLY on a genuine reap — never on the waiter-aware defer,
+    // and never when there is nothing to signal.
+    // -------------------------------------------------------------------------
+
+    public function test_kill_invokes_reap_callback_on_genuine_reap(): void
+    {
+        $reaped = [];
+        $registry = $this->registry(static fn (int $pid): bool => false);
+        $registry->setReapCallback(static function (string $key) use (&$reaped): void {
+            $reaped[] = $key;
+        });
+        $registry->register('/tmp/hls/job/seg-00001.ts', 4242, null, '/tmp/hls/job/seg-00001.ts.part-aaa');
+
+        $registry->kill('/tmp/hls/job/seg-00001.ts');
+
+        $this->assertSame(['/tmp/hls/job/seg-00001.ts'], $reaped, 'a genuine reap invalidates the reservation');
+        $this->assertSame([['pid' => 4242, 'signal' => SIGTERM]], $this->signals);
+    }
+
+    public function test_kill_does_not_invoke_reap_callback_when_deferred(): void
+    {
+        // A piggybacker is still waiting → the kill defers → the encode is still
+        // wanted, so the reservation MUST NOT be invalidated.
+        $reaped = [];
+        $registry = $this->registry(static fn (int $pid): bool => false);
+        $registry->setWaiterGuard(static fn (string $key): bool => true);
+        $registry->setReapCallback(static function (string $key) use (&$reaped): void {
+            $reaped[] = $key;
+        });
+        $registry->register('/tmp/hls/job/seg-00001.ts', 4242, null, '/tmp/hls/job/seg-00001.ts.part-aaa');
+
+        $this->assertSame(0, $registry->kill('/tmp/hls/job/seg-00001.ts'));
+        $this->assertSame([], $reaped, 'a DEFERRED kill must not invalidate the still-wanted reservation');
+        $this->assertSame([], $this->signals);
+    }
+
+    public function test_kill_does_not_invoke_reap_callback_when_no_pids(): void
+    {
+        // Nothing tracked under the key → no reap happens → no invalidation (avoids
+        // clobbering an unrelated fresh reservation on a stray/duplicate kill).
+        $reaped = [];
+        $registry = $this->registry(static fn (int $pid): bool => false);
+        $registry->setReapCallback(static function (string $key) use (&$reaped): void {
+            $reaped[] = $key;
+        });
+
+        $this->assertSame(0, $registry->kill('/tmp/hls/job/never-registered.ts'));
+        $this->assertSame([], $reaped);
+    }
+
     public function test_kill_with_default_cleaner_removes_only_own_temp_not_sibling(): void
     {
         $dir = sys_get_temp_dir() . '/phlix-sv42-' . bin2hex(random_bytes(4));

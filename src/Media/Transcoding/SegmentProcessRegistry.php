@@ -161,6 +161,29 @@ final class SegmentProcessRegistry
     private $hasOtherWaiter = null;
 
     /**
+     * Optional reap callback: fn(string $key): void (SV-4.2-disconnect F1). When
+     * set, {@see kill()} invokes it on the SIGNALLED branch ONLY — after the
+     * waiter-guard defer check has passed and a genuine reap (PIDs to signal) is
+     * about to happen — so the owner ({@see TranscodeManager}) can invalidate its
+     * dedup RESERVATION for the reaped segment. Without this, a requester arriving
+     * just after a disconnect-kill would dedup onto the killed-never-to-publish
+     * encode and 404 until the reservation self-heals (up to ~5s). It is fired
+     * BEFORE the coroutine-yielding SIGTERM→SIGKILL wait so a requester that
+     * re-launches during the grace period re-reserves a FRESH slot rather than
+     * having its reservation cleared out from under it. NOT fired on the deferred
+     * branch (the encode is still wanted by a piggybacker and keeps publishing).
+     *
+     * Wired at container-build time from the {@see TranscodeManager} per-worker
+     * singleton ({@see \Phlix\Media\Transcoding\TranscodeManager::invalidateReservation()})
+     * via {@see setReapCallback()} — the mirror of the waiter-guard wiring. Null
+     * (the default) means "no reap callback" (every direct-construct caller,
+     * including the unit tests, runs without one).
+     *
+     * @var (callable(string): void)|null
+     */
+    private $onReap = null;
+
+    /**
      * Seconds to wait for graceful SIGTERM exit before escalating to SIGKILL.
      * Deliberately short: segment encodes are small and disposable.
      */
@@ -197,6 +220,20 @@ final class SegmentProcessRegistry
     public function setWaiterGuard(?callable $hasOtherWaiter): void
     {
         $this->hasOtherWaiter = $hasOtherWaiter;
+    }
+
+    /**
+     * Wire the reap callback invoked by {@see kill()} on a genuine (non-deferred)
+     * reap (SV-4.2-disconnect F1). See {@see $onReap} for the full rationale.
+     * Passing null clears it.
+     *
+     * @param (callable(string): void)|null $onReap fn($key): void — invalidate the
+     *        owner's dedup reservation for a reaped segment so the next requester
+     *        re-launches instead of deduping onto the killed encode.
+     */
+    public function setReapCallback(?callable $onReap): void
+    {
+        $this->onReap = $onReap;
     }
 
     /**
@@ -316,6 +353,19 @@ final class SegmentProcessRegistry
         $this->drop($key);
         if ($pids === []) {
             return 0;
+        }
+
+        // SV-4.2-disconnect F1: this is a genuine reap (past the waiter-guard defer
+        // and there are PIDs to signal). Invalidate the owner's dedup reservation
+        // for $key BEFORE the coroutine-yielding SIGTERM→SIGKILL wait below, so a
+        // requester that arrives for the same segment re-launches a FRESH encode
+        // instead of deduping onto the corpse we are about to signal (which would
+        // 404 it until the ~5s stale-reconcile). Running before any yield means it
+        // can only clear the reservation of the launcher being reaped here — a
+        // fresher re-launch's reservation is created afterwards and its own
+        // generation-guarded finally protects it from this reaped launcher.
+        if ($this->onReap !== null) {
+            ($this->onReap)($key);
         }
 
         $this->logger->debug('SegmentProcessRegistry: killing abandoned segment encode(s)', [

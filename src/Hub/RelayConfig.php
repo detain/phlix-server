@@ -151,7 +151,7 @@ final class RelayConfig
     {
         $hubRelayWsUrl = $this->hubRelayWsUrl;
 
-        if ($hubRelayWsUrl === '' && $hubBaseUrl !== '') {
+        if ($hubBaseUrl !== '') {
             $parts = parse_url($hubBaseUrl);
             if (is_array($parts) && isset($parts['host']) && is_string($parts['host'])) {
                 $scheme = (isset($parts['scheme']) && $parts['scheme'] === 'https') ? 'wss' : 'ws';

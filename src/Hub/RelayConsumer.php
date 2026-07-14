@@ -625,6 +625,7 @@ final class RelayConsumer
 
         $this->logger->debug('RelayConsumer::openHubConnection() creating new AsyncTcpConnection');
         $connection = new AsyncTcpConnection($wsUrl, $context);
+        $connection->protocol = \Workerman\Protocols\Websocket::class;
         $this->logger->debug('RelayConsumer::openHubConnection() AsyncTcpConnection created', [
             'connection_class' => get_class($connection),
             'connection_id' => spl_object_id($connection),

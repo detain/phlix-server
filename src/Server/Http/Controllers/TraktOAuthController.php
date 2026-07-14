@@ -15,6 +15,8 @@ use Phlix\Plugins\Scrobbler\Trakt\HttpClient;
 use Phlix\Plugins\Scrobbler\Trakt\DbTraktOAuthStateStore;
 use Phlix\Plugins\Scrobbler\Trakt\InvalidOAuthStateException;
 use Phlix\Plugins\Scrobbler\Trakt\SessionTraktOAuthStateStore;
+use Phlix\Plugins\Scrobbler\Trakt\SodiumTokenCipher;
+use Phlix\Plugins\Scrobbler\Trakt\TokenCipher;
 use Phlix\Plugins\Scrobbler\Trakt\TraktApi;
 use Phlix\Plugins\Scrobbler\Trakt\TraktOAuthStateStore;
 use Phlix\Plugins\Scrobbler\Trakt\TraktSettings;
@@ -43,6 +45,8 @@ final class TraktOAuthController
     private ?string $configFile;
     private ?SettingsRepository $settings;
     private ?PluginRepository $plugins;
+    /** @var mixed */
+    private $cipher = null;
 
     /**
      * Plugin manifest name for the Trakt plugin.
@@ -78,6 +82,10 @@ final class TraktOAuthController
      *     `$_SESSION`-backed store to avoid race conditions in Workerman.
      * @param PluginRepository|null $plugins Repository for reading/writing
      *     plugin settings (used to persist OAuth tokens).
+     * @param string|null $tokenEncryptionKey 32-byte key for encrypting OAuth
+     *     tokens at rest. When null or invalid, tokens are stored as plaintext
+     *     (not recommended for production). Set via `token_encryption_key` in
+     *     config/scrobblers/trakt.php or TRAKT_TOKEN_ENCRYPTION_KEY env var.
      */
     public function __construct(
         ?LoggerInterface $logger = null,
@@ -86,11 +94,21 @@ final class TraktOAuthController
         ?SettingsRepository $settings = null,
         ?Connection $db = null,
         ?PluginRepository $plugins = null,
+        ?string $tokenEncryptionKey = null,
     ) {
         $this->logger = $logger;
         $this->configFile = $configFile;
         $this->settings = $settings;
         $this->plugins = $plugins;
+
+        // Initialize token cipher if available (plugin may not be installed).
+        // Degrades to storing plaintext tokens when cipher is unavailable.
+        if ($tokenEncryptionKey !== null
+            && class_exists(\Phlix\Plugins\Scrobbler\Trakt\SodiumTokenCipher::class)) {
+            $this->cipher = \Phlix\Plugins\Scrobbler\Trakt\SodiumTokenCipher::fromConfig($tokenEncryptionKey);
+        } else {
+            $this->cipher = null;
+        }
 
         if ($stateStore !== null) {
             $this->stateStore = $stateStore;
@@ -210,19 +228,32 @@ final class TraktOAuthController
                 $username = is_string($userProfile['username'] ?? null) ? $userProfile['username'] : '';
             }
 
-            // Persist tokens and username via PluginRepository
+            // Persist tokens and username via PluginRepository.
+            // Tokens are encrypted via toStorageArray($cipher) before storage,
+            // matching how TraktPlugin stores rotated tokens.
             if ($this->plugins !== null && $accessToken !== '') {
                 $currentSettings = $this->loadTraktSettingsArray();
-                $settings = [
-                    'access_token' => $accessToken,
-                    'refresh_token' => $refreshToken,
-                    'expires_at' => $expiresAt,
-                    'username' => $username,
-                    'sync_enabled' => $currentSettings['sync_enabled'] ?? true,
-                    'sync_interval_minutes' => $currentSettings['sync_interval_minutes'] ?? 30,
-                    'scrobble_enabled' => $currentSettings['scrobble_enabled'] ?? true,
-                ];
-                $this->plugins->updateSettings(self::TRAKT_PLUGIN_NAME, $settings);
+
+                $settingsObj = new TraktSettings(
+                    accessToken: $accessToken,
+                    refreshToken: $refreshToken,
+                    expiresAt: $expiresAt,
+                    username: $username,
+                    syncEnabled: is_bool($currentSettings['sync_enabled'] ?? null)
+                        ? $currentSettings['sync_enabled']
+                        : true,
+                    syncIntervalMinutes: is_int($currentSettings['sync_interval_minutes'] ?? null)
+                        ? $currentSettings['sync_interval_minutes']
+                        : 30,
+                    scrobbleEnabled: is_bool($currentSettings['scrobble_enabled'] ?? null)
+                        ? $currentSettings['scrobble_enabled']
+                        : true,
+                );
+
+                $this->plugins->updateSettings(
+                    self::TRAKT_PLUGIN_NAME,
+                    $settingsObj->toStorageArray($this->cipher)
+                );
             }
 
             $this->logger?->info('Trakt OAuth success', [
@@ -302,7 +333,7 @@ final class TraktOAuthController
             /** @var array<string, mixed> */
             return $plugin->settings;
         } catch (\Exception $e) {
-            $this->logger?->warning('Failed to load Trakt settings array', [
+            $this->logger?->error('Failed to load Trakt settings array', [
                 'error' => $e->getMessage(),
             ]);
             return [];

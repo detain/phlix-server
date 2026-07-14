@@ -21,7 +21,7 @@ use PHPUnit\Framework\TestCase;
  */
 final class TraktOAuthControllerTest extends TestCase
 {
-    public function test_callback_with_wrong_state_returns_403(): void
+    public function test_callback_with_wrong_state_returns_error_redirect(): void
     {
         $store = new FakeTraktOAuthStateStore();
         $store->put('expected-state', 'verifier-xyz');
@@ -33,10 +33,11 @@ final class TraktOAuthControllerTest extends TestCase
             'state' => 'spoofed-state',
         ]);
 
-        self::assertSame(403, $response->statusCode);
+        self::assertSame(302, $response->statusCode);
+        self::assertStringContainsString('trakt=error', $response->headers['Location'] ?? '');
     }
 
-    public function test_callback_after_state_already_consumed_returns_403(): void
+    public function test_callback_after_state_already_consumed_returns_error_redirect(): void
     {
         $store = new FakeTraktOAuthStateStore();
         $store->put('one-shot-state', 'verifier-xyz');
@@ -56,10 +57,11 @@ final class TraktOAuthControllerTest extends TestCase
             'state' => 'one-shot-state',
         ]);
 
-        self::assertSame(403, $replay->statusCode);
+        self::assertSame(302, $replay->statusCode);
+        self::assertStringContainsString('trakt=error', $replay->headers['Location'] ?? '');
     }
 
-    public function test_callback_without_state_returns_400(): void
+    public function test_callback_without_state_returns_error_redirect(): void
     {
         $store = new FakeTraktOAuthStateStore();
 
@@ -70,7 +72,8 @@ final class TraktOAuthControllerTest extends TestCase
             'state' => '',
         ]);
 
-        self::assertSame(400, $response->statusCode);
+        self::assertSame(302, $response->statusCode);
+        self::assertStringContainsString('trakt=error', $response->headers['Location'] ?? '');
     }
 
     /**

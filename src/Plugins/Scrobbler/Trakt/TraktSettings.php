@@ -86,6 +86,46 @@ final class TraktSettings
     }
 
     /**
+     * Convert settings to the AT-REST storage array (tokens encrypted).
+     *
+     * Identical to {@see toArray()} except the `access_token`
+     * and `refresh_token` fields are encrypted with the supplied
+     * cipher when provided, so the OAuth credentials never land in
+     * `plugins.settings_json` as plaintext.
+     *
+     * Graceful degrade: when no cipher is supplied the tokens
+     * are stored as-is.
+     *
+     * @param mixed $cipher Optional encryptor (must be null or implement TokenCipher)
+     *
+     * @return array<string, mixed>
+     *
+     * @since 1.4c
+     */
+    public function toStorageArray(mixed $cipher = null): array
+    {
+        $data = $this->toArray();
+
+        if ($cipher === null) {
+            return $data;
+        }
+
+        // Only encrypt if the cipher is a valid TokenCipher instance.
+        // This allows the method to accept mixed values while degrading
+        // gracefully when passed an invalid cipher.
+        if (is_object($cipher) && method_exists($cipher, 'encrypt')) {
+            if ($this->accessToken !== null) {
+                $data['access_token'] = $cipher->encrypt($this->accessToken);
+            }
+            if ($this->refreshToken !== null) {
+                $data['refresh_token'] = $cipher->encrypt($this->refreshToken);
+            }
+        }
+
+        return $data;
+    }
+
+    /**
      * Whether the OAuth tokens are present and potentially valid.
      *
      * Note: This does not validate token expiration. Use isTokenExpired()

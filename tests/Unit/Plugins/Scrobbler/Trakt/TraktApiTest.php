@@ -4,10 +4,9 @@ declare(strict_types=1);
 
 namespace Phlix\Tests\Unit\Plugins\Scrobbler\Trakt;
 
-use Phlix\Plugins\Scrobbler\Trakt\HttpClient;
-use Phlix\Plugins\Scrobbler\Trakt\HttpClientInterface;
 use Phlix\Plugins\Scrobbler\Trakt\TraktApi;
 use Phlix\Plugins\Scrobbler\Trakt\TraktApiException;
+use Phlix\Plugins\Scrobbler\Trakt\TraktRateLimitException;
 use PHPUnit\Framework\TestCase;
 use Psr\Log\NullLogger;
 
@@ -203,88 +202,169 @@ final class TraktApiTest extends TestCase
             fclose($externalHolder);
         }
     }
-}
-
-final class MockHttpClient implements HttpClientInterface
-{
-    public string $lastMethod = '';
-    public string $lastUrl = '';
-    /** @var array<string, mixed> */
-    public array $lastData = [];
-    /** @var array<string, mixed> */
-    public array $lastHeaders = [];
-    public int $postCallCount = 0;
-
-    /** @var array<int, array<array-key, mixed>> */
-    private array $responses;
-    private int $responseIndex = 0;
-
-    /** @var array<int, array<string, string>> Response headers parallel to $responses. */
-    private array $headerResponses;
 
     /**
-     * @param array<int, array<array-key, mixed>> $responses Queue of responses to return
-     * @param array<int, array<string, string>> $headerResponses Response headers
-     *   parallel to $responses (indexed the same); missing entries default to [].
+     * SV-3.6e regression guard for the HIGH cumulative-review finding #1.
+     *
+     * Trakt's API v2 REJECTS (403) any data-API request that does not carry BOTH
+     * `trakt-api-key: <clientId>` and `trakt-api-version: 2`. The pull sync's
+     * getWatchedHistory() call MUST send them (plus an `Authorization: Bearer`
+     * when a token is set). This asserts the OUTGOING request headers captured by
+     * the mock client.
+     *
+     * Mutation reasoning: reverting the fix — i.e. dropping the `trakt-api-key`
+     * and/or `trakt-api-version` pair from TraktApi::apiHeaders() (or bypassing
+     * the shared builder at this call site, as the code did before the fix) —
+     * removes those keys from $http->lastHeaders, so these assertSame() lines go
+     * red. This is the test the review said would have caught the AC-blocking bug.
      */
-    public function __construct(array $responses = [], array $headerResponses = [])
+    public function testGetWatchedHistorySendsMandatoryApiHeaders(): void
     {
-        $this->responses = $responses;
-        $this->headerResponses = $headerResponses;
-    }
+        $http = new MockHttpClient([[['id' => 1]]], [['x-pagination-page-count' => '1']]);
+        $api = new TraktApi($http, self::CLIENT_ID, self::CLIENT_SECRET, new NullLogger());
 
-    public function get(string $url, array $params = [], array $headers = []): array
-    {
-        $this->lastMethod = 'GET';
-        $this->lastUrl = $url;
-        $this->lastHeaders = $headers;
+        $api->getWatchedHistory('testuser', 1, 100, 'access-token');
 
-        if (!empty($params)) {
-            $this->lastUrl .= '?' . http_build_query($params);
-        }
-
-        return $this->getNextResponse();
-    }
-
-    public function getWithHeaders(string $url, array $params = [], array $headers = []): array
-    {
-        $this->lastMethod = 'GET';
-        $this->lastUrl = $url;
-        $this->lastHeaders = $headers;
-
-        if (!empty($params)) {
-            $this->lastUrl .= '?' . http_build_query($params);
-        }
-
-        $index = $this->responseIndex;
-        $body = $this->getNextResponse();
-
-        return [
-            'body' => $body,
-            'headers' => $this->headerResponses[$index] ?? [],
-        ];
-    }
-
-    public function post(string $url, array $data = [], array $headers = []): array
-    {
-        $this->lastMethod = 'POST';
-        $this->lastUrl = $url;
-        $this->lastData = $data;
-        $this->lastHeaders = $headers;
-        ++$this->postCallCount;
-
-        return $this->getNextResponse();
+        $this->assertSame('test-client-id', $http->lastHeaders['trakt-api-key'] ?? null);
+        $this->assertSame('2', $http->lastHeaders['trakt-api-version'] ?? null);
+        $this->assertSame('Bearer access-token', $http->lastHeaders['Authorization'] ?? null);
     }
 
     /**
-     * @return array<array-key, mixed>
+     * SV-3.6e regression guard for finding #1 on the resume-position endpoint.
+     *
+     * getPlaybackProgress() routes through the same shared apiHeaders() builder
+     * (via HttpClient::get()), so it too must carry both mandatory headers + the
+     * Bearer token. Same mutation reasoning as the watched-history case above.
      */
-    private function getNextResponse(): array
+    public function testGetPlaybackProgressSendsMandatoryApiHeaders(): void
     {
-        if ($this->responseIndex >= count($this->responses)) {
-            return [];
-        }
+        $http = new MockHttpClient([[]]);
+        $api = new TraktApi($http, self::CLIENT_ID, self::CLIENT_SECRET, new NullLogger());
 
-        return $this->responses[$this->responseIndex++];
+        $api->getPlaybackProgress('access-token');
+
+        $this->assertSame('GET', $http->lastMethod);
+        $this->assertStringContainsString('/sync/playback', $http->lastUrl);
+        $this->assertSame('test-client-id', $http->lastHeaders['trakt-api-key'] ?? null);
+        $this->assertSame('2', $http->lastHeaders['trakt-api-version'] ?? null);
+        $this->assertSame('Bearer access-token', $http->lastHeaders['Authorization'] ?? null);
+    }
+
+    /**
+     * The mandatory api-key/version pair is sent even without an OAuth token, and
+     * no empty `Authorization: Bearer ` header is emitted for an empty token.
+     */
+    public function testApiHeadersOmitAuthorizationWhenTokenEmpty(): void
+    {
+        $http = new MockHttpClient([[]]);
+        $api = new TraktApi($http, self::CLIENT_ID, self::CLIENT_SECRET, new NullLogger());
+
+        $api->getPlaybackProgress('');
+
+        $this->assertSame('test-client-id', $http->lastHeaders['trakt-api-key'] ?? null);
+        $this->assertSame('2', $http->lastHeaders['trakt-api-version'] ?? null);
+        $this->assertArrayNotHasKey('Authorization', $http->lastHeaders);
+    }
+
+    /**
+     * Defense-in-depth: apiHeaders() throws (never sends an empty `trakt-api-key`)
+     * when the client id is not configured. Unreachable in production, but the
+     * guard must fail fast rather than send a request Trakt would 403.
+     */
+    public function testApiCallThrowsWhenClientIdNotConfigured(): void
+    {
+        $http = new MockHttpClient([[]]);
+        $api = new TraktApi($http, '', self::CLIENT_SECRET, new NullLogger());
+
+        $this->expectException(TraktApiException::class);
+        $this->expectExceptionMessage('client_id not configured');
+
+        $api->getPlaybackProgress('access-token');
+    }
+
+    /**
+     * SV-3.6e rate-limit backoff (requirement #9) for watched history.
+     *
+     * A 429 (TraktRateLimitException) on the first attempt must be caught by the
+     * SV-3.5 retry loop, backed off (coroutine-safe \Co\sleep in production,
+     * usleep fallback here), and retried — eventually succeeding. Proves the
+     * retry actually happens: the second queued response (the real page) is what
+     * is returned.
+     */
+    public function testGetWatchedHistoryRetriesAfterRateLimitThenSucceeds(): void
+    {
+        $items = [['id' => 42, 'title' => 'Rate Limited Then OK']];
+        $http = new MockHttpClient(
+            [new TraktRateLimitException('Rate limit exceeded', 1), $items],
+            [[], ['x-pagination-page-count' => '1']]
+        );
+        $api = new TraktApi($http, self::CLIENT_ID, self::CLIENT_SECRET, new NullLogger());
+
+        $result = $api->getWatchedHistory('testuser', 1, 100, 'access-token');
+
+        $this->assertSame($items, $result['items']);
+        $this->assertSame(1, $result['pageCount']);
+    }
+
+    /**
+     * SV-3.6e rate-limit backoff (requirement #9) for the resume-position feed.
+     *
+     * Same retry/backoff contract as getWatchedHistory: a first-attempt 429 is
+     * retried and the subsequent success is returned.
+     */
+    public function testGetPlaybackProgressRetriesAfterRateLimitThenSucceeds(): void
+    {
+        $playback = [['progress' => 50.0, 'movie' => ['ids' => ['tmdb' => 7]]]];
+        $http = new MockHttpClient([new TraktRateLimitException('Rate limit exceeded', 1), $playback]);
+        $api = new TraktApi($http, self::CLIENT_ID, self::CLIENT_SECRET, new NullLogger());
+
+        $result = $api->getPlaybackProgress('access-token');
+
+        $this->assertSame($playback, $result);
+    }
+
+    /**
+     * A non-rate-limit API error is re-thrown immediately (not retried) — the
+     * retry loop only backs off for 429s. Guards the {@see TraktApiException}
+     * catch arm that bypasses backoff.
+     */
+    public function testGetWatchedHistoryDoesNotRetryNonRateLimitError(): void
+    {
+        $http = new MockHttpClient([new TraktApiException('Server error', 500)]);
+        $api = new TraktApi($http, self::CLIENT_ID, self::CLIENT_SECRET, new NullLogger());
+
+        $this->expectException(TraktApiException::class);
+        $this->expectExceptionMessage('Server error');
+
+        $api->getWatchedHistory('testuser', 1, 100, 'access-token');
+    }
+
+    /**
+     * A `type` filter narrows the playback endpoint to `/sync/playback/{type}`.
+     */
+    public function testGetPlaybackProgressWithTypeFilterHitsTypedEndpoint(): void
+    {
+        $http = new MockHttpClient([[]]);
+        $api = new TraktApi($http, self::CLIENT_ID, self::CLIENT_SECRET, new NullLogger());
+
+        $api->getPlaybackProgress('access-token', 'movies');
+
+        $this->assertStringContainsString('/sync/playback/movies', $http->lastUrl);
+    }
+
+    /**
+     * The playback feed also re-throws a non-rate-limit API error immediately
+     * (no backoff) — mirrors the getWatchedHistory contract.
+     */
+    public function testGetPlaybackProgressDoesNotRetryNonRateLimitError(): void
+    {
+        $http = new MockHttpClient([new TraktApiException('Server error', 500)]);
+        $api = new TraktApi($http, self::CLIENT_ID, self::CLIENT_SECRET, new NullLogger());
+
+        $this->expectException(TraktApiException::class);
+        $this->expectExceptionMessage('Server error');
+
+        $api->getPlaybackProgress('access-token');
     }
 }

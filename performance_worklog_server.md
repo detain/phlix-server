@@ -6202,3 +6202,133 @@ the later Test agent (3.6e) — I only kept the existing Trakt suite green, adde
 - `phpcs --standard=PSR12 src/Plugins/Scrobbler/Trakt/` → **0 ERRORS** (4 pre-existing line-length
   WARNINGs only: TraktApi:408/722, TraktPlugin:470, TraktHistorySync:420 — none introduced here).
 - `phpunit --filter Trakt --no-coverage` → **OK (64 tests, 133 assertions)**.
+
+## Reviewer (cumulative, confirming re-review of fix `23fbc4c5`) — 2026-07-13
+
+Focused re-review of the Fixer's `23fbc4c5` against findings #1/#3/#4. READ-ONLY; verified via
+`git show 23fbc4c5` + reading the shipped code.
+
+- **#1 (HIGH) — RESOLVED.** New shared `TraktApi::apiHeaders(?string $bearer = null)` emits
+  `trakt-api-key: <clientId>` + `trakt-api-version: 2` (+ optional Bearer). Grep of `$this->http->` in
+  `TraktApi.php` confirms exactly two `/oauth/token` posts (104/140, correctly NOT routed) and all four
+  data-API sites — `scrobble()` (363), `getWatchedHistory()` (410), `getPlaybackProgress()` (525),
+  `addToHistory()` (631) — now go through `apiHeaders()`. `HttpClient::requestWithHeaders` merges these
+  over its base headers, so both mandatory headers are on every data-API request. No data-API call site
+  bypasses the builder.
+- **Regression (push path) — none.** For `scrobble`/`addToHistory` the change is strictly additive: the
+  previous `['Authorization' => 'Bearer '.$token]` becomes `{trakt-api-key, trakt-api-version,
+  Authorization: Bearer <token>}`. No header dropped. The only behavior delta is that an EMPTY access
+  token now omits `Authorization` instead of sending a meaningless `Bearer ` — an improvement, and such
+  a call never authenticated anyway (not a working path).
+- **Empty-clientId throw — safe.** `apiHeaders()` throws `TraktApiException` on `clientId === ''`.
+  Unreachable in prod (`TraktPlugin::initApi()` only builds the client when client_id+secret are both
+  non-empty; the OAuth controller constructs `TraktApi` only for the excluded `/oauth` path). If it ever
+  fired, every call site is covered by an existing `TraktApiException` catch: `getWatchedHistory`/
+  `getPlaybackProgress` are invoked inside the reconcilers' try/catch; `scrobble` re-throws into
+  `onPlaybackStarted/Stopped`'s catch; `addToHistory` propagates to `syncPhlixToTrakt`'s catch — and the
+  timer callback has a final `\Throwable` backstop. No uncaught escape can kill the worker or the timer.
+- **#4 /oauth exclusion + token refresh — correct.** `exchangeCode`/`refreshAccessToken` (and
+  `refreshAfterAuthFailure`, which delegates to the latter) still post client_id/secret in the body with
+  no api-key header, per Trakt's OAuth contract. Unchanged.
+- **#3 (LOW) — RESOLVED.** `reconcileWatchedPage` now derives `$knownDuration = $durationTicks > 0 ?
+  $durationTicks : null` and passes `$knownDuration ?? 0` (position) / `$knownDuration` (duration). An
+  unknown duration → `null` → `updateProgress`'s `COALESCE(?, duration_ticks)` preserves the stored
+  duration (matching `markCompleted`); a present runtime still yields the 100% shape. No clobber.
+- **#4 (INFO) — RESOLVED.** `start.php` arm condition now ANDs `$traktMasterEnabled =
+  ($installedTrakt->settings['enabled'] ?? false) === true` — the same master flag each tick's
+  `isConfigured()` requires — alongside the catalog column, sync_enabled, and interval>0, so a
+  master-off account no longer arms a perpetually-no-op timer. Debug log updated. The pre-existing
+  "arm once at onWorkerStart" limitation is documented, correctly left unfixed.
+- **Cleanliness:** diff is type-sound on inspection (`apiHeaders` `array<string,string>`; `int|null`
+  duration matches `updateProgress`'s `?int`; bool arm gate). Fixer reports phpstan L9 [OK], phpcs 0
+  errors, phpunit --filter Trakt 64/64.
+- **#2 (MEDIUM, test gap)** correctly deferred to the Test step (3.6e) — no new tests added here.
+
+NO FINDINGS.
+
+## TestEngineer — SV-3.6e (tests for Trakt PULL sync) — 2026-07-13
+
+Built out the reconciliation / header / pagination / backoff tests the opencode run skipped and the
+cumulative review flagged as the AC-critical gap (finding #2). Tested the FINAL shipped shape at HEAD
+`23fbc4c5` (review = NO FINDINGS). **41 new Trakt tests** added (suite 64 → 105); all green.
+
+**Files (absolute):**
+- `tests/Unit/Plugins/Scrobbler/Trakt/TraktApiTest.php` — +9 tests (headers + 429 backoff + type-filter);
+  extended `MockHttpClient` to throw queued `\Throwable`s so the retry loops are exercisable.
+- `tests/Unit/Plugins/Scrobbler/Trakt/MockHttpClient.php` — **NEW**: extracted the `MockHttpClient`
+  double out of `TraktApiTest.php` into its own PSR-4-autoloaded file (fixes the pre-existing phpcs
+  "each class in a file by itself" error in the file I edited + makes it robustly autoloadable, no
+  longer reliant on `TraktApiTest.php` load order). It already captured `lastHeaders` (req #1 needs no
+  new capture); the only extension is the throwable queue for 429 simulation.
+- `tests/Unit/Plugins/Scrobbler/Trakt/TraktHistorySyncReconcileTest.php` — **NEW**: 29 reconciliation
+  tests (mocked `TraktApi` + `WatchHistory` + `Connection`; deterministic id via the
+  `_resolved_media_item_id` seam, one test using the real JSON_EXTRACT lookup path).
+- `tests/Unit/Plugins/Scrobbler/Trakt/HttpClientTest.php` — **NEW**: 3 non-network guard tests
+  (empty-URL rejection on get/getWithHeaders/post). The real transport is network I/O and — matching the
+  repo's own idiom for the sibling de-blocked clients (`Hub\HttpClient`, `MetadataHttpClient`, whose
+  tests do NOT spin a live server) — is exercised via `MockHttpClient` at the caller level, not directly.
+
+**9 required-coverage items → tests:**
+1. Outgoing headers (regression guard for HIGH finding #1): `testGetWatchedHistorySendsMandatoryApiHeaders`,
+   `testGetPlaybackProgressSendsMandatoryApiHeaders`, `testApiHeadersOmitAuthorizationWhenTokenEmpty`,
+   `testApiCallThrowsWhenClientIdNotConfigured`. Mutation reasoning documented in the docblocks: dropping
+   `trakt-api-key`/`trakt-api-version` from `apiHeaders()` (the pre-fix shape) flips the `assertSame`s red.
+2. Reconcile watched→completed: `testWatchedHistoryReconcilesToCompletedWithNullDuration`,
+   `testWatchedHistoryWithRuntimeUsesFullDuration`, `testMediaItemResolvedViaDatabaseExternalId`,
+   `testMediaItemResolvedViaSecondIdTypeAfterMiss`.
+3. Reconcile playback/resume (pos ≈ dur·pct/100, PAUSED, not 100%): `testPlaybackProgressWritesResumePosition`,
+   `testPlaybackUsesScannedMetadataDuration`, `testResumeWrittenWhenLocalTimestampUnparseable`.
+4. Last-write-wins skip (older Trakt event): `testOlderTraktWatchIsSkipped`,
+   `testPlaybackSkipsNonArrayUnresolvedAndOlderEntries`.
+5. Never-downgrade-completed: `testCompletedItemNotDowngradedByPlayback`,
+   `testWatchedSkippedWhenLocallyAtCompletionThreshold`.
+6. No-known-duration skip: `testPlaybackSkippedWhenNoDurationKnown`,
+   `testResumeSkippedWhenNoLocalTimestampAndMetadataMiss`, `testResumeSkippedWhenMetadataRowMalformed`.
+7. Duration COALESCE null (assert `null`, not `0`, bound on completed path): asserted via
+   `$this->identicalTo(null)` (strict — `0 !== null`) in `testWatchedHistoryReconcilesToCompletedWithNullDuration`,
+   `testMediaItemResolvedViaDatabaseExternalId`, `testPlaybackFetchFailureIsIsolated`.
+8. Pagination (pages 2..N, short-page/reported-count/cap termination, per-page-failure preserves writes):
+   `testPaginationFetchesAllReportedPages`, `testPaginationStopsAtReportedPageCountEvenIfPagesFull`,
+   `testReportedPageCountAboveCapIsTruncated`, `testPageFetchFailurePreservesEarlierWrites`.
+9. Rate-limit 429 backoff (retry happens → succeeds; non-429 not retried): `testGetWatchedHistoryRetriesAfterRateLimitThenSucceeds`,
+   `testGetPlaybackProgressRetriesAfterRateLimitThenSucceeds`, `testGetWatchedHistoryDoesNotRetryNonRateLimitError`,
+   `testGetPlaybackProgressDoesNotRetryNonRateLimitError`.
+
+**Verification (verbatim):**
+- `./vendor/bin/phpunit --filter Trakt --no-coverage` → **OK (105 tests, 230 assertions)** (was 64/133).
+- `./vendor/bin/phpstan analyse -c phpstan.neon.dist --level=9 --memory-limit=512M --no-progress` (src) →
+  **[OK] No errors**. phpstan L9 on the 4 test files explicitly → **[OK] No errors** (tests are outside
+  `phpstan.neon.dist paths: [src]`, so run explicitly).
+- `./vendor/bin/phpcs --standard=PSR12 tests/Unit/Plugins/Scrobbler/Trakt/{TraktApiTest,TraktHistorySyncReconcileTest,HttpClientTest,MockHttpClient}.php`
+  → **0 errors, 0 warnings** on all four of my files. (The full-dir command still reports PRE-EXISTING
+  `test_snake_case` method-name errors in `TraktOAuthStateStoreTest.php` (5) and
+  `DbTraktOAuthStateStoreTest.php` (17) — untouched OAuth-state-store files, unrelated to SV-3.6e, present
+  at HEAD before this step; left as-is to avoid unrelated churn. `src/Plugins/Scrobbler/Trakt/` = 0 errors,
+  only the pre-existing line-length warnings.)
+
+**Coverage of the changed files (pcov, filtered to `src/Plugins/Scrobbler/Trakt`):**
+- `TraktHistorySync.php`: **97.9%** of the SV-3.6-changed method lines (235/240); whole-file 84.9%
+  (the rest is the untouched push path `syncPhlixToTrakt`/`buildMediaItem`).
+- `TraktApi.php`: **89.2%** of the changed method lines (83/93) — **95.4%** excluding 6 genuinely
+  unreachable post-loop defensive `return`/`throw` guards; whole-file 61.6% (rest = untouched
+  OAuth/scrobble/addToHistory push path).
+- `HttpClient.php`: whole-file 7.4% — transport is live network I/O, per-idiom not unit-tested (see above);
+  the 3 guard tests cover the reachable non-network branch.
+
+**Genuinely-untestable branches in this sandbox (with reason):**
+- `TraktApi::getWatchedHistory`:452 / `getPlaybackProgress`:562 and `TraktHistorySync::sleepBetweenPages`:308 —
+  the `\Co\sleep(...)` coroutine branch. `function_exists('\Co\sleep')` is **false** in the PHPUnit process
+  (Swoole loaded but no coroutine/short-name), so only the `usleep` fallback runs; the coroutine branch is
+  only reachable inside a real Swoole coroutine (the resident-worker Timer), which the tests deliberately
+  do not require.
+- `TraktApi::getWatchedHistory`:458 / `getPlaybackProgress`:568 — the give-up `throw $e` after 5 exhausted
+  429 retries. Each requires ~31–62 s of real backoff sleep (1+2+4+8+16 s + jitter, constants are private),
+  prohibitive for a unit test; the retry-then-succeed path (req #9) proves the loop mechanics.
+- `TraktHistorySync::reconcileWatchedHistory`:205-208 — the `page >= MAX_HISTORY_PAGES(=200)` warn block;
+  reaching it needs 200 FULL 100-item pages + 199×250 ms inter-page sleeps (~50 s+), prohibitive. The
+  reported-page-count / short-page / cap-truncation termination branches ARE covered
+  (`testPaginationStopsAtReportedPageCountEvenIfPagesFull`, `testReportedPageCountAboveCapIsTruncated`).
+- 6 post-loop defensive `return`/`throw` lines in the two API methods are unreachable dead code (the
+  `for` loop always returns on success or throws on the last attempt).
+
+No production bug found — the shipped SV-3.6 shape behaves correctly against every case tested. GREEN.

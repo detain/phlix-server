@@ -6897,3 +6897,139 @@ material deviation):
   OK (406 tests, 1632 assertions). Per file: TranscodeManagerTest 100, SegmentProcessRegistryTest 25,
   HttpHandlerDirectCancelHookTest 11, TranscodeServicesProviderTest 3, RelayConsumerTest 50.
 - Commits: F1 `41ee8b3a` (pushed), F2–F7 `<second-hash>` (pushed). Origin master synced.
+
+## Reviewer (confirming re-review of reconcile-leak fix `074fe5dc`) — 2026-07-13
+
+Loop-closing re-review of the F1 leak-regression fix (`reconcileInFlightSegments()` now releases the
+registry entry in both reservation-clearing branches). READ-ONLY. Verified adversarially against all
+7 checkpoints.
+
+**NO FINDINGS**
+
+Verification detail (why the leak is cleanly closed with no regression):
+1. **Leak closed / mirrors launcher `finally` exactly.** Completed branch (`is_file($final)` true,
+   :1639) → `releaseSegmentProcess` (plain release); stale branch (non-`is_file`, past grace, :1653)
+   → `releaseSegmentProcessAfterWaitTimeout`. Byte-equivalent to the launcher's own gen-gated finally
+   (:1050-1054: `is_file` true→plain, false→wait-timeout) and to pre-F1 registry-release behavior.
+2. **Exactly one release, no double-signal.** After reconcile unsets the reservation, the launcher's
+   gen-gated finally reads `['gen'] ?? null === $myGen` → `null === $myGen` → no-op. Even under a
+   hypothetical overlap, `release()`/`releaseAfterWaitTimeout()` both funnel to the idempotent
+   `drop()` (unset of absent keys + group array_filter); neither ever calls the signalSender, so no
+   double-kill is possible.
+3. **No new clobber of a fresher launcher.** Both branches are gated by
+   `isset($snapshot[$final]) → continue` (:1621). Curated Swoole hook mask
+   (`SwooleRuntime::SAFE_HOOK_NAMES`) EXCLUDES `SWOOLE_HOOK_FILE`, so `glob()`/`is_file()` are blocking
+   syscalls that do NOT yield → the reconcile loop is atomic within the coroutine. No launcher finally
+   or fresher launcher can interleave between the frozen glob snapshot (:1618) and the per-entry
+   release, so the registry key `$final` can only ever hold the stale/completed launcher's own entry.
+   A fresher launcher would require the stale reservation to have already cleared (impossible without
+   a mid-loop yield, since a live `.part-*` → `continue`). The only theoretical yield path (operator
+   sets an explicit `coroutine.hook_flags` that re-enables file IO) violates a pre-existing,
+   codebase-wide no-yield-in-reconcile assumption that the pre-existing reconcile-unset and
+   `produceSegment`'s poll-loop `is_file` already depend on — NOT a regression introduced by this fix.
+4. **Stale-branch release cannot kill a live encode.** `releaseAfterWaitTimeout()` (:307-330) never
+   signals; it drops tracking and, only when `!$anyAlive`, cleans the launcher's OWN corpse temp
+   (scoped — not the `{$final}.part-*` family). The stale branch is only reached when no live
+   `.part-*` is in the snapshot (a slow/live encode's live temp → `continue`), so nothing wanted by a
+   fresher requester is ever reached or killed.
+5. **Audio parity.** `reconcileInFlightSegments()` is shared — it iterates `$segmentEncodesInFlight`
+   populated by BOTH `produceSegment` (:915) and `produceAudioSegment` (:1191), registry keyed on
+   `$final` in both. Dedicated audio test present.
+6. **Test mutation-sense.** The 3 new tests assert registry-level drain
+   (`registeredKeyCount()===0`, `pidsFor($final)===[]`, `registeredGroupCount()===0`) — NOT merely
+   reservation-clear (`inFlightSet`) — plus exactly-one-release (`$releaseCalls===1` /
+   `$waitReleases===[$final]`) and no-signal (`$signalled===[]`). They cover completed-video,
+   completed-audio, and stale branches, and each enforces branch-correct release-method selection via
+   `expects($this->never())` on the sibling method. Reverting the two added release calls makes the
+   `$releaseCalls`/`registeredKeyCount`/`pidsFor`/`registeredGroupCount` asserts fail → RED. The
+   fresher-launcher case is correctly untested (unreachable under the runtime; see #3).
+7. **No new issue.** PHPStan L9 `[OK] No errors`; phpcs PSR-12 0 errors (10 pre-existing >120-char
+   WARNINGS only, none on the added lines 1624-1654; verified all added lines ≤120 chars). Full
+   `TranscodeManagerTest` 103 tests / 527 assertions green (the 3 new + 100 prior, no regression); the
+   3 filtered reconcile-supersede tests pass (24 assertions). Coroutine-safety preserved — the added
+   releases are synchronous (`drop()` is pure array work), introducing no new yield.
+
+Non-blocking process note (not a code finding, does NOT require a Fixer loop): neither the prior
+confirming re-review's Medium finding nor the Fixer's `074fe5dc` fix was appended to this worklog; the
+commit message for `074fe5dc` is the only record of the fix rationale. Worklog hygiene only — the code
+and tests are complete and correct.
+
+Verdict: **NO FINDINGS** — the F1 reconcile-supersede leak is cleanly closed with no regression. Loop closed.
+
+## Test — SV-4.2-disconnect — 2026-07-13
+
+Owed full-suite verification across the 5 SV-4.2 commits (`07fc71b4` → `495912c1` → `41ee8b3a` →
+`5ed0e15c` → `074fe5dc`), plus real coverage on the changed files and the pre-existing broken
+`FfmpegHlsTranscodeTest`. Verification at HEAD `074fe5dc` (+ the two test commits below). DB not
+reachable on :3306 here — irrelevant: the Unit suite mocks the DB per convention and ran fully.
+
+### 1. Full Unit suite (`./vendor/bin/phpunit --testsuite Unit`)
+
+REAL output (final, after adding the test in §2):
+
+    Tests: 5316, Assertions: 40710, Skipped: 5.   (exit 0 — OK)
+
+vs perf-10 baseline `5240 / 0 fail / 0 err / 11 skip`: test count +76 (SV-4.2 additions + 1 new test
+below), **0 failures, 0 errors**, skips 11→5 (fewer — environment-conditional skips, NOT a regression;
+no red introduced). First run before my test add was `5315 / 40705 / 0F / 0E / 5S`; adding the F4
+test took it to 5316. No NEW failure/error vs baseline — clean across all 5 SV-4.2 commits.
+
+- **PHPStan L9** (`analyze -c phpstan.neon.dist`, 645 files): `[OK] No errors`.
+- **phpcs PSR-12** on the 5 changed src files: 0 ERRORS; 10 WARNINGS, ALL >120-char line-length and
+  ALL in `TranscodeManager.php` at lines 452/514/1976/1977/2086/2250/2524/2525/2531/3281 — `git blame`
+  confirms every one traces to a PRE-EXISTING commit (SV-3.3 `4dd9f7f0`, security #48 `52eadfde`,
+  multi-audio `858f4942`, 10-bit HEVC `175a46a0`, P3+B1 `42d9b7c4`) — NONE from the SV-4.2 commits.
+
+### 2. Coverage on the SV-4.2 changed files (pcov, full Unit suite scoped to the 5 files)
+
+Whole-file line coverage (aggregate, dominated by pre-existing code in these large files):
+
+    TranscodeServicesProvider   96.20% (76/79)
+    RelayConsumer               67.76% (414/611)
+    SegmentProcessRegistry      77.50% (93/120)   → 100% on kill() after §2 fix
+    TranscodeManager            86.46% (958/1108)
+    HttpHandler                 55.22% (312/565)
+
+Per-SV-4.2-method line coverage (clover, the surfaces named in the step) — ALL 100% after the fix:
+
+    SegmentProcessRegistry: register 8/8, release 1/1, releaseAfterWaitTimeout 10/10,
+      registeredKeyCount/registeredGroupCount/pidsFor 1/1, drop 12/12,
+      kill() waiter-guard 30/30 (was 24/30 — see below)
+    TranscodeManager: clearReservationIfMine 2/2, invalidateReservation 1/1,
+      reconcileInFlightSegments (incl. reconcile-release fix) 24/24
+    HttpHandler: armDirectCancelHook 7/7, disarmDirectCancelHook 4/4,
+      onClose arm site 2/2, disarm finally 1/1
+
+**Gap found + closed:** `SegmentProcessRegistry::kill()` had 6 uncovered lines (362, 367–371) — the
+**F4 fail-safe catch** (waiter-guard throws → swallow → proceed to reap) added by fix commit
+`5ed0e15c`. Added a focused test `test_kill_proceeds_to_reap_when_waiter_guard_throws` (guard throws
+`RuntimeException` → asserts SIGTERM signalled, orphan `.part` cleaned, reap callback fires, no leak).
+Re-ran: those 6 lines now cnt≥1 → kill() 100%. SegmentProcessRegistryTest 25→26 tests, green.
+
+### 3. FfmpegHlsTranscodeTest (pre-existing broken Integration test — resolved)
+
+Symptom: 2 of its 4 methods errored `Call to undefined method FfmpegRunner::startHlsTranscode()`.
+Root cause: `startHlsTranscode()` (+ `buildTranscodeCommand`/`buildHlsCommand`/`buildHwaccelCommand`/
+`buildTranscodeCommandWithProfile` + private `buildHwaccelInputFlags`) was removed as DEAD CODE by
+commit `015ea7a7` (SV-4.13 "Remove superseded whole-file command builders"). The whole-file HLS path
+was superseded by the on-demand per-segment encode path (`buildSegmentCommand`/`startSegmentEncode`,
+unit-covered) and the CMAF path. Decision: the 2 methods
+(`testDetachedHlsTranscodeProducesSegmentsAndPlaylist`, `testRemuxCopyPathProducesPlayableHls`)
+exercised a NON-EXISTENT method → **obsolete**; removed them (with an in-file note pointing to
+`015ea7a7`), leaving the 2 still-valid cases (`testProbeReadsCodecsFromGeneratedClip`,
+`testDetachedCmafTranscodeProducesBothDashAndHls` — `probe()`/`startCmafTranscode()` both still exist).
+File now: `OK (2 tests, 25 assertions)` — no longer erroring. phpcs on the file: clean (exit 0).
+
+### Durable-state notes
+- `074fe5dc` closed the F1 reconcile-leak REGRESSION (registry entry now released in both
+  reservation-clearing branches of `reconcileInFlightSegments()`); the confirming re-review recorded
+  just above this entry was **NO FINDINGS**. Loop closed.
+- phpcs `--standard=PSR12` snake_case "camel caps" method-name errors in SegmentProcessRegistryTest are
+  a file-wide PRE-EXISTING convention (all 26 `test_*` methods) and are NOT gated (the phpcs command
+  targets `src/` only). The added test follows that same convention.
+
+### Commits
+- `6c7e1c5f` — `SV-4.2 tests: cover kill() F4 fail-safe (throwing waiter guard proceeds to reap)`
+- `af31abc9` — `SV-4.2 tests: drop obsolete FfmpegHlsTranscodeTest whole-file HLS cases (startHlsTranscode removed in SV-4.13 015ea7a7)`
+
+**GREEN.**

@@ -194,6 +194,10 @@ final class HubServicesProvider implements ServiceProviderInterface
                     $enrollment = $hubClient->loadEnrollment();
                     $serverId = $enrollment !== null ? $enrollment->serverId : '';
 
+                    if ($enrollment !== null && $enrollment->hubBaseUrl !== '') {
+                        $config = $config->withAutoEnable($enrollment->hubBaseUrl);
+                    }
+
                     return new RelayConsumer(
                         $config,
                         $hubClient,

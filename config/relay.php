@@ -3,8 +3,9 @@
 /**
  * Relay tunnel configuration.
  *
- * For servers co-located with the hub, use 127.0.0.1 to avoid hairpin NAT issues.
- * For remote servers, use the hub's public hostname with wss:// protocol.
+ * The hub_relay_ws_url is normally derived from the enrollment's hub_base_url
+ * at start time via RelayConfig::withAutoEnable(). Set it here only for
+ * unusual deployment scenarios that cannot be handled by enrollment.
  *
  * @package Phlix\Config
  * @since 0.12.0
@@ -19,9 +20,9 @@ return [
 
     // Hub server-tunnel WS endpoint (Phlix\Hub\Relay\RelayWorker, default :8802).
     // The enrollment JWT is sent in the JSON HELLO body, not as an auth header.
-    // Use ws://127.0.0.1:8802 if hub and server are co-located (avoids hairpin NAT).
-    // Use wss://hub.phlix.interserver.net:8802 for remote servers.
-    'hub_relay_ws_url' => 'ws://127.0.0.1:8802',
+    // When empty, the URL is derived from the enrollment's hub_base_url via
+    // RelayConfig::withAutoEnable() at RelayConsumer start time.
+    'hub_relay_ws_url' => '',
 
     // This server's own local HTTP listener that relayed client bytes are piped to.
     'local_http_address' => '127.0.0.1:8096',

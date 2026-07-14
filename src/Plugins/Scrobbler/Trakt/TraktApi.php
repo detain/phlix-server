@@ -658,6 +658,38 @@ class TraktApi
     }
 
     /**
+     * Get the authenticated user's profile (for retrieving username after OAuth).
+     *
+     * @param string $accessToken OAuth access token
+     *
+     * @return array<string, mixed>|null User profile array or null on failure
+     *
+     * @since 0.14.0
+     */
+    public function getMe(string $accessToken): ?array
+    {
+        try {
+            /** @var array<string, mixed> $response */
+            $response = $this->http->get(
+                self::BASE_URL . '/users/me',
+                [],
+                $this->apiHeaders($accessToken)
+            );
+
+            return [
+                'username' => is_string($response['username'] ?? null) ? $response['username'] : '',
+                'name' => is_string($response['name'] ?? null) ? $response['name'] : '',
+                'joined_at' => is_string($response['joined_at'] ?? null) ? $response['joined_at'] : '',
+            ];
+        } catch (TraktApiException $e) {
+            $this->logger->warning('Trakt getMe failed', [
+                'error' => $e->getMessage(),
+            ]);
+            return null;
+        }
+    }
+
+    /**
      * Compute jittered exponential backoff delay for retry attempt $attempt.
      *
      * Delay = min(RETRY_BASE_DELAY_MS * 2^attempt, RETRY_MAX_DELAY_MS) + jitter.

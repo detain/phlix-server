@@ -18,6 +18,7 @@ use Phlix\Plugins\Scrobbler\Trakt\SessionTraktOAuthStateStore;
 use Phlix\Plugins\Scrobbler\Trakt\TraktApi;
 use Phlix\Plugins\Scrobbler\Trakt\TraktOAuthStateStore;
 use Phlix\Plugins\Scrobbler\Trakt\TraktSettings;
+use Phlix\Plugins\Repository\PluginRepository;
 use Phlix\Admin\SettingsRepository;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
@@ -41,6 +42,12 @@ final class TraktOAuthController
     private TraktOAuthStateStore $stateStore;
     private ?string $configFile;
     private ?SettingsRepository $settings;
+    private ?PluginRepository $plugins;
+
+    /**
+     * Plugin manifest name for the Trakt plugin.
+     */
+    private const TRAKT_PLUGIN_NAME = 'phlix-plugin-trakt';
 
     /**
      * Maps the dotted server-settings keys to the local config keys they
@@ -69,6 +76,8 @@ final class TraktOAuthController
      * @param Connection|null $db Workerman MySQL connection. When supplied,
      *     the DB-backed {@see DbTraktOAuthStateStore} is used instead of the
      *     `$_SESSION`-backed store to avoid race conditions in Workerman.
+     * @param PluginRepository|null $plugins Repository for reading/writing
+     *     plugin settings (used to persist OAuth tokens).
      */
     public function __construct(
         ?LoggerInterface $logger = null,
@@ -76,10 +85,12 @@ final class TraktOAuthController
         ?string $configFile = null,
         ?SettingsRepository $settings = null,
         ?Connection $db = null,
+        ?PluginRepository $plugins = null,
     ) {
         $this->logger = $logger;
         $this->configFile = $configFile;
         $this->settings = $settings;
+        $this->plugins = $plugins;
 
         if ($stateStore !== null) {
             $this->stateStore = $stateStore;
@@ -153,11 +164,11 @@ final class TraktOAuthController
 
         if ($error !== '') {
             $this->logger?->warning('Trakt OAuth error', ['error' => $error]);
-            return $this->errorResponse('OAuth error: ' . $error);
+            return $this->redirect('/app/admin/services?trakt=error');
         }
 
         if ($code === '' || $state === '') {
-            return $this->errorResponse('Missing code or state parameter');
+            return $this->redirect('/app/admin/services?trakt=error');
         }
 
         try {
@@ -166,12 +177,7 @@ final class TraktOAuthController
             $this->logger?->warning('Trakt OAuth state validation failed', [
                 'reason' => $e->getMessage(),
             ]);
-            return (new Response())
-                ->status(403)
-                ->json([
-                    'success' => false,
-                    'error' => 'Invalid state parameter - possible CSRF',
-                ]);
+            return $this->redirect('/app/admin/services?trakt=error');
         }
 
         $config = $this->loadConfig();
@@ -183,7 +189,7 @@ final class TraktOAuthController
             : 'https://localhost/api/v1/oauth/trakt/callback';
 
         if ($clientId === '' || $clientSecret === '') {
-            return $this->errorResponse('Trakt plugin not configured');
+            return $this->redirect('/app/admin/services?trakt=error');
         }
 
         try {
@@ -194,24 +200,41 @@ final class TraktOAuthController
             $expiresIn = is_numeric($expiresInRaw) ? (int) $expiresInRaw : 0;
             $expiresAt = time() + $expiresIn;
 
+            $accessToken = is_string($tokens['access_token'] ?? null) ? $tokens['access_token'] : '';
+            $refreshToken = is_string($tokens['refresh_token'] ?? null) ? $tokens['refresh_token'] : '';
+
+            // Fetch username from Trakt /users/me endpoint
+            $username = '';
+            $userProfile = $api->getMe($accessToken);
+            if ($userProfile !== null) {
+                $username = is_string($userProfile['username'] ?? null) ? $userProfile['username'] : '';
+            }
+
+            // Persist tokens and username via PluginRepository
+            if ($this->plugins !== null && $accessToken !== '') {
+                $currentSettings = $this->loadTraktSettingsArray();
+                $settings = [
+                    'access_token' => $accessToken,
+                    'refresh_token' => $refreshToken,
+                    'expires_at' => $expiresAt,
+                    'username' => $username,
+                    'sync_enabled' => $currentSettings['sync_enabled'] ?? true,
+                    'sync_interval_minutes' => $currentSettings['sync_interval_minutes'] ?? 30,
+                    'scrobble_enabled' => $currentSettings['scrobble_enabled'] ?? true,
+                ];
+                $this->plugins->updateSettings(self::TRAKT_PLUGIN_NAME, $settings);
+            }
+
             $this->logger?->info('Trakt OAuth success', [
-                'username' => $params['username'] ?? 'unknown',
+                'username' => $username,
             ]);
 
-            return (new Response())
-                ->status(200)
-                ->json([
-                    'success' => true,
-                    'message' => 'Trakt authentication successful',
-                    'access_token' => $tokens['access_token'],
-                    'refresh_token' => $tokens['refresh_token'],
-                    'expires_at' => $expiresAt,
-                ]);
+            return $this->redirect('/app/admin/services?trakt=connected');
         } catch (\Exception $e) {
             $this->logger?->warning('Trakt OAuth token exchange failed', [
                 'error' => $e->getMessage(),
             ]);
-            return $this->errorResponse('Token exchange failed: ' . $e->getMessage());
+            return $this->redirect('/app/admin/services?trakt=error');
         }
     }
 
@@ -233,20 +256,57 @@ final class TraktOAuthController
     }
 
     /**
-     * Build an error JSON response.
+     * Build a 302 redirect to the given location.
      *
-     * @param string $message Error message
+     * @param string $location Redirect target URL
      *
      * @return Response
      */
-    private function errorResponse(string $message): Response
+    private function redirect(string $location): Response
     {
-        return (new Response())
-            ->status(400)
-            ->json([
-                'success' => false,
-                'error' => $message,
+        return (new Response())->status(302)->header('Location', $location);
+    }
+
+    /**
+     * Load current Trakt settings from the plugins table.
+     *
+     * @return TraktSettings
+     *
+     * @throws \RuntimeException When plugin is not installed or settings cannot be loaded
+     */
+    private function loadTraktSettings(): TraktSettings
+    {
+        if ($this->plugins === null) {
+            return new TraktSettings();
+        }
+
+        $plugin = $this->plugins->findByName('phlix-plugin-trakt');
+        $settingsArray = $plugin->settings;
+
+        return TraktSettings::fromArray($settingsArray);
+    }
+
+    /**
+     * Load current Trakt settings as an array from the plugins table.
+     *
+     * @return array<string, mixed>
+     */
+    private function loadTraktSettingsArray(): array
+    {
+        if ($this->plugins === null) {
+            return [];
+        }
+
+        try {
+            $plugin = $this->plugins->findByName(self::TRAKT_PLUGIN_NAME);
+            /** @var array<string, mixed> */
+            return $plugin->settings;
+        } catch (\Exception $e) {
+            $this->logger?->warning('Failed to load Trakt settings array', [
+                'error' => $e->getMessage(),
             ]);
+            return [];
+        }
     }
 
     /**
@@ -366,7 +426,7 @@ HTML;
     /**
      * `GET /api/v1/admin/services/trakt/status` — JSON status for the SPA.
      *
-     * Checks whether OAuth tokens are present in the config file.
+     * Checks whether OAuth tokens are present via TraktSettings repository.
      *
      * @param Request $request
      * @param array<string, string> $params
@@ -379,22 +439,36 @@ HTML;
     {
         $config = $this->loadConfig();
 
-        $accessToken = is_string($config['access_token'] ?? null) ? $config['access_token'] : null;
-        $refreshToken = is_string($config['refresh_token'] ?? null) ? $config['refresh_token'] : null;
-        $username = is_string($config['username'] ?? null) ? $config['username'] : null;
-
         $clientId = is_string($config['client_id'] ?? null) ? $config['client_id'] : '';
         $clientSecret = is_string($config['client_secret'] ?? null) ? $config['client_secret'] : '';
 
-        $connected = $accessToken !== null && $refreshToken !== null;
+        $configured = $clientId !== '' && $clientSecret !== '';
+
+        // Read tokens and username from TraktSettings repository
+        $connected = false;
+        $username = null;
+
+        if ($this->plugins !== null && $configured) {
+            // Load current settings to check token presence
+            try {
+                $currentSettings = $this->loadTraktSettings();
+                $connected = $currentSettings->hasTokens();
+                $username = $connected ? $currentSettings->username : null;
+            } catch (\Exception $e) {
+                $this->logger?->warning('Failed to load Trakt settings', [
+                    'error' => $e->getMessage(),
+                ]);
+                $connected = false;
+            }
+        }
 
         return (new Response())->json([
             // True only when the operator has supplied app credentials — the SPA
             // uses this to show a "register an app" hint instead of a Connect
             // button that would dead-end on the not-configured page.
-            'configured' => $clientId !== '' && $clientSecret !== '',
+            'configured' => $configured,
             'connected'  => $connected,
-            'username'   => $connected ? $username : null,
+            'username'   => $username,
         ]);
     }
 
@@ -410,13 +484,30 @@ HTML;
      */
     public function disconnect(Request $request, array $params): Response
     {
-        // Per-user OAuth tokens live in the plugins settings store
-        // ({@see \Phlix\Plugins\Scrobbler\Trakt\TraktSettings}), NOT in
-        // config/scrobblers/trakt.php — that file now holds only the operator's
-        // app credentials and is environment-driven, so the previous behaviour
-        // (var_export-ing it back to disk) would freeze the env values into
-        // static literals and clobber the operator's configuration. Tokens are
-        // cleared where they are stored; this endpoint reports success.
+        if ($this->plugins !== null) {
+            try {
+                // Load current settings to preserve sync/scrobble preferences
+                $currentSettings = $this->loadTraktSettingsArray();
+
+                // Clear only the OAuth tokens, preserve user preferences
+                $clearedSettings = [
+                    'access_token' => null,
+                    'refresh_token' => null,
+                    'expires_at' => null,
+                    'username' => '',
+                    'sync_enabled' => $currentSettings['sync_enabled'] ?? true,
+                    'sync_interval_minutes' => $currentSettings['sync_interval_minutes'] ?? 30,
+                    'scrobble_enabled' => $currentSettings['scrobble_enabled'] ?? true,
+                ];
+
+                $this->plugins->updateSettings(self::TRAKT_PLUGIN_NAME, $clearedSettings);
+            } catch (\Exception $e) {
+                $this->logger?->warning('Failed to clear Trakt tokens on disconnect', [
+                    'error' => $e->getMessage(),
+                ]);
+            }
+        }
+
         return (new Response())->json([
             'message' => 'Disconnected',
         ]);

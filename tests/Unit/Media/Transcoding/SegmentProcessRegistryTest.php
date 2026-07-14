@@ -321,6 +321,44 @@ final class SegmentProcessRegistryTest extends TestCase
         $this->assertSame(0, $registry->registeredKeyCount());
     }
 
+    public function test_kill_proceeds_to_reap_when_waiter_guard_throws(): void
+    {
+        // SV-4.2-disconnect F4 fail-safe: a throwing waiter guard must NEVER
+        // strand a PID. The guard exception is swallowed (treated as "no other
+        // waiter") so the kill still signals + reaps — a lost kill (an orphaned
+        // ffmpeg burning CPU) is strictly worse than a rare 404 for a hypothetical
+        // piggybacker the guard could not confirm.
+        $reaped = [];
+        $registry = $this->registry(static fn (int $pid): bool => false);
+        $registry->setWaiterGuard(static function (string $key): bool {
+            throw new \RuntimeException('waiter guard blew up');
+        });
+        $registry->setReapCallback(static function (string $key) use (&$reaped): void {
+            $reaped[] = $key;
+        });
+        $registry->register('/tmp/hls/job/seg-00001.ts', 4242, null, '/tmp/hls/job/seg-00001.ts.part-aaa');
+
+        $killed = $registry->kill('/tmp/hls/job/seg-00001.ts');
+
+        $this->assertSame(1, $killed, 'a throwing guard must not strand the PID — proceed to reap');
+        $this->assertSame(
+            [['pid' => 4242, 'signal' => SIGTERM]],
+            $this->signals,
+            'the encode is signalled despite the guard throwing',
+        );
+        $this->assertSame(
+            ['/tmp/hls/job/seg-00001.ts.part-aaa'],
+            $this->cleaned,
+            'the orphaned temp is cleaned on the fail-safe reap',
+        );
+        $this->assertSame(
+            ['/tmp/hls/job/seg-00001.ts'],
+            $reaped,
+            'the reap callback fires — a fail-safe reap is a GENUINE reap',
+        );
+        $this->assertSame(0, $registry->registeredKeyCount(), 'reaped — no leak');
+    }
+
     public function test_kill_group_defers_when_a_second_channel_still_waits(): void
     {
         // Relay-path regression: channel A launched the encode (group 'A' owns the

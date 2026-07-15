@@ -10,7 +10,7 @@ use Phlix\Common\Container\Providers\MediaServicesProvider;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Metadata\TitleSuffixStripper;
 use Phlix\Media\Markers\Detection\MarkerCandidateRepository;
-use Phlix\Media\Markers\ChapterService;
+use Phlix\Media\Markers\MarkerService;
 use Phlix\Media\Markers\PlaybackMarkerService;
 use Phlix\Media\Metadata\MetadataManager;
 use Phlix\Media\Metadata\Resolution\PriorityConfig;

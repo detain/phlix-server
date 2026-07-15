@@ -11,7 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Server\Http\Controllers;
 
-use Phlix\Media\Markers\ChapterService;
+use Phlix\Media\Markers\MarkerService;
 use Phlix\Media\Markers\SkipButtonSpec;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;

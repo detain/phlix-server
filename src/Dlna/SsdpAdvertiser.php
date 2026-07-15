@@ -12,7 +12,6 @@ declare(strict_types=1);
 namespace Phlix\Dlna;
 
 use Exception;
-use Phlix\Common\Logger\StructuredLogger;
 use Workerman\Worker;
 
 /**
@@ -36,6 +35,9 @@ class SsdpAdvertiser extends Worker
     /** Broadcast interval in seconds */
     public const BROADCAST_INTERVAL_SECONDS = 30;
 
+    /** Unique Service Name for this server */
+    public const USN = 'uuid:PHLIXSERVER';
+
     /** Notification subtype: alive */
     public const NTS_ALIVE = 'ssdp:alive';
 
@@ -44,12 +46,6 @@ class SsdpAdvertiser extends Worker
 
     /** @var string|null IP address to advertise in LOCATION header */
     private ?string $ipAddress;
-
-    /** @var string Server ID used in USN */
-    private string $serverId;
-
-    /** @var StructuredLogger|null Optional logger */
-    private ?StructuredLogger $logger = null;
 
     /** @var int Port to advertise in LOCATION header */
     private int $port;
@@ -63,25 +59,17 @@ class SsdpAdvertiser extends Worker
     /**
      * Create a new SsdpAdvertiser.
      *
-     * @param string $serverId Server ID used in USN (typically the UDN)
      * @param string|null $ipAddress IP address for LOCATION header (auto-detected if null)
      * @param int $port Port for LOCATION header
-     * @param StructuredLogger|null $logger Optional logger
      *
      * @since 0.12.0
      */
-    public function __construct(
-        string $serverId,
-        ?string $ipAddress = null,
-        int $port = 8080,
-        ?StructuredLogger $logger = null
-    ) {
+    public function __construct(?string $ipAddress = null, int $port = 8080)
+    {
         parent::__construct();
 
-        $this->serverId = $serverId;
         $this->ipAddress = $ipAddress;
         $this->port = $port;
-        $this->logger = $logger;
 
         $this->onWorkerStart = function (SsdpAdvertiser $worker): void {
             $this->socket = $this->createUdpSocket();
@@ -176,8 +164,6 @@ class SsdpAdvertiser extends Worker
         $ipAddress = $this->getIpAddress();
         $location = sprintf('http://%s:%d/dlna/description.xml', $ipAddress, $this->port);
 
-        $usn = 'uuid:' . $this->serverId;
-
         $message = sprintf(
             "NOTIFY * HTTP/1.1\r\n" .
             "HOST: %s:%d\r\n" .
@@ -188,10 +174,10 @@ class SsdpAdvertiser extends Worker
             "\r\n",
             self::SSDP_MULTICAST_ADDRESS,
             self::SSDP_PORT,
-            $usn,
+            self::USN,
             $nts,
             $location,
-            $usn
+            self::USN
         );
 
         $this->sendUdpMessage($message);
@@ -242,12 +228,6 @@ class SsdpAdvertiser extends Worker
         );
 
         if ($socket === false) {
-            $this->logger?->error('SsdpAdvertiser: Failed to create UDP socket for SSDP multicast', [
-                'errno' => $errno,
-                'errstr' => $errstr,
-                'address' => self::SSDP_MULTICAST_ADDRESS,
-                'port' => self::SSDP_PORT,
-            ]);
             return null;
         }
 
@@ -306,6 +286,6 @@ class SsdpAdvertiser extends Worker
      */
     public function getUsn(): string
     {
-        return 'uuid:' . $this->serverId;
+        return self::USN;
     }
 }

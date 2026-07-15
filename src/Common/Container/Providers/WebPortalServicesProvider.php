@@ -30,7 +30,7 @@ use Phlix\Media\Music\MusicLibraryScanner;
 use Phlix\Media\Music\MusicLibraryService;
 use Phlix\Media\Transcoding\FfmpegRunner;
 use Phlix\Media\Transcoding\TranscodeManager;
-use Phlix\Media\Markers\ChapterService;
+use Phlix\Media\Markers\MarkerService;
 use Phlix\Media\Markers\PlaybackMarkerService;
 use Phlix\Media\RecommendationService;
 use Phlix\Media\SimilarityService;

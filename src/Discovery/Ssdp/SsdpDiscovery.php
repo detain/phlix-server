@@ -102,7 +102,7 @@ class SsdpDiscovery
     {
         $usn = "uuid:phlix-server-{$serverId}::urn:schemas-upnp-org:device:MediaServer:1";
         $nt = 'urn:schemas-upnp-org:device:MediaServer:1';
-        $location = sprintf('%s:%d', rtrim($baseUrl, '/'), $port);
+        $location = rtrim($baseUrl, '/') . ':' . $port;
 
         $this->socket->announce($nt, $location, $usn);
 

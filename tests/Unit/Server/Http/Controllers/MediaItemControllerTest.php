@@ -9,7 +9,7 @@ use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Markers\ChapterMarker;
 use Phlix\Media\Markers\Detection\MarkerCandidateRepository;
 use Phlix\Media\Markers\IntroMarker;
-use Phlix\Media\Markers\ChapterService;
+use Phlix\Media\Markers\MarkerService;
 use Phlix\Media\Markers\MarkerSet;
 use Phlix\Media\Markers\OutroMarker;
 use Phlix\Media\Markers\SkipButtonSpec;

@@ -7,7 +7,7 @@ namespace Phlix\Tests\Unit\Server\Http\Controllers;
 use PHPUnit\Framework\TestCase;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Markers\Detection\MarkerCandidateRepository;
-use Phlix\Media\Markers\ChapterService;
+use Phlix\Media\Markers\MarkerService;
 use Phlix\Server\Http\Controllers\MarkerController;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;

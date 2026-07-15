@@ -11,7 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Server\Http\Controllers;
 
-use Phlix\Media\Markers\ChapterService;
+use Phlix\Media\Markers\MarkerService;
 use Phlix\Media\Markers\MarkerSet;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
@@ -151,56 +151,5 @@ class MarkerController
             'show_id' => $showId,
             'episodes' => array_values($episodeMarkers),
         ]);
-    }
-
-    /**
-     * GET /api/v1/markers/thumbnails/{path}
-     *
-     * Serves a marker thumbnail file from the filesystem.
-     * The path is URL-encoded and stored as thumbnail_path in media_markers.
-     *
-     * @param Request         $req    The HTTP request
-     * @param array<string, string> $params Route params with 'path' key
-     *
-     * @return Response 200 with the thumbnail file, 404 if not found
-     *
-     * @since 0.12.0
-     */
-    public function getMarkerThumbnail(Request $req, array $params): Response
-    {
-        $path = $params['path'] ?? '';
-
-        if ($path === '') {
-            return (new Response())->status(400)->json(['error' => 'Thumbnail path is required']);
-        }
-
-        // Decode the URL-encoded path
-        $thumbnailPath = urldecode($path);
-
-        // Security: ensure the path is a valid file
-        if (!is_file($thumbnailPath)) {
-            return (new Response())->status(404)->json([
-                'error' => 'Not Found',
-                'message' => 'Marker thumbnail file not found',
-            ]);
-        }
-
-        // ETag + Last-Modified for browser caching
-        $fileSize = (int) @filesize($thumbnailPath);
-        $lastModified = @filemtime($thumbnailPath);
-        $etag = $lastModified !== false ? md5($thumbnailPath . $lastModified) : null;
-
-        $response = (new Response())
-            ->header('Content-Type', 'image/jpeg')
-            ->header('Content-Length', (string) $fileSize);
-
-        if ($etag !== null) {
-            $response = $response->header('ETag', '"' . $etag . '"');
-        }
-        if ($lastModified !== false) {
-            $response = $response->header('Last-Modified', gmdate('D, d M Y H:i:s', $lastModified) . ' GMT');
-        }
-
-        return $response->withFile($thumbnailPath);
     }
 }

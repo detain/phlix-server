@@ -70,21 +70,21 @@ class CdsServer
     {
         $this->logger?->info('CdsServer: Starting');
 
-        // Announce via both SSDP and mDNS if discovery is available
-        // announcePhlixServer() handles both protocols in one call
+        // Announce via SSDP if discovery is available
         if ($this->discoveryManager !== null) {
-            $this->announcePhlixServer();
+            $this->announceViaSsdp();
+            $this->announceViaMdns();
         }
     }
 
     /**
-     * Announce this CDS server via SSDP and mDNS.
+     * Announce this CDS server via SSDP multicast.
      *
      * @return void
      *
      * @since 0.12.0
      */
-    private function announcePhlixServer(): void
+    private function announceViaSsdp(): void
     {
         $device = $this->dlnaServer->getServerDevice();
         $baseUrl = $this->dlnaServer->getBaseUrl();
@@ -98,9 +98,37 @@ class CdsServer
             $port
         );
 
-        $this->logger?->debug('CdsServer: Announcing via SSDP and mDNS', [
+        $this->logger?->debug('CdsServer: Announcing via SSDP', [
             'udn' => $device->getUdn(),
             'location' => $device->getUrl('/description.xml'),
+        ]);
+    }
+
+    /**
+     * Announce this CDS server via mDNS.
+     *
+     * @return void
+     *
+     * @since 0.12.0
+     */
+    private function announceViaMdns(): void
+    {
+        $device = $this->dlnaServer->getServerDevice();
+        $baseUrl = $this->dlnaServer->getBaseUrl();
+        $port = $this->dlnaServer->getPort();
+        $serverId = $device->getUdn();
+
+        // P10: DiscoveryManager::announcePhlixServer announces via both SSDP and mDNS.
+        // For mDNS-only, we call MdnsDiscovery directly if available via discoveryManager.
+        $this->discoveryManager?->announcePhlixServer(
+            $serverId,
+            $device->getFriendlyName(),
+            $baseUrl,
+            $port
+        );
+
+        $this->logger?->debug('CdsServer: Announcing via mDNS', [
+            'name' => $device->getFriendlyName(),
         ]);
     }
 

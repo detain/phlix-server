@@ -27,7 +27,7 @@ use Phlix\Media\Library\MediaItemShaper;
 use Phlix\Media\Library\StreamProbeBackfill;
 use Phlix\Media\Library\StreamTrackShaper;
 use Phlix\Media\MarkerType;
-use Phlix\Media\Markers\ChapterService;
+use Phlix\Media\Markers\MarkerService;
 use Phlix\Media\Markers\PlaybackMarkerService;
 use Phlix\Media\SimilarityService;
 use Phlix\Session\SessionManager;

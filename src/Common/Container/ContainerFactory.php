@@ -15,7 +15,6 @@ use DI\ContainerBuilder;
 use Phlix\Common\Container\Providers\AdminServicesProvider;
 use Phlix\Common\Container\Providers\AuthServicesProvider;
 use Phlix\Common\Container\Providers\CoreServicesProvider;
-use Phlix\Common\Container\Providers\DiscoveryServicesProvider;
 use Phlix\Common\Container\Providers\EventServicesProvider;
 use Phlix\Common\Container\Providers\HubServicesProvider;
 use Phlix\Common\Container\Providers\LiveTvServicesProvider;
@@ -121,7 +120,6 @@ final class ContainerFactory
     {
         return [
             new CoreServicesProvider(),
-            new DiscoveryServicesProvider(),
             new EventServicesProvider(),
             new AuthServicesProvider(),
             new HubServicesProvider(),

@@ -30,7 +30,7 @@ use Phlix\Media\Markers\Detection\MarkerCandidateStore;
 use Phlix\Media\Markers\Fingerprinting\ChromaPrintFactory;
 use Phlix\Media\Markers\Fingerprinting\ChromaPrintInterface;
 use Phlix\Media\Markers\Fingerprinting\FingerprintRepository;
-use Phlix\Media\Markers\ChapterService;
+use Phlix\Media\Markers\MarkerService;
 use Phlix\Media\Markers\PlaybackMarkerService;
 use Phlix\Media\Metadata\Imdb\ImdbLookup;
 use Phlix\Media\Metadata\FuzzyMatcher;

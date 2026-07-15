@@ -8,7 +8,7 @@ use Phlix\Auth\AuthManager;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Library\LibraryManager;
 use Phlix\Media\Markers\Detection\MarkerCandidateRepository;
-use Phlix\Media\Markers\ChapterService;
+use Phlix\Media\Markers\MarkerService;
 use Phlix\Media\Markers\PlaybackMarkerService;
 use Phlix\Media\Markers\SkipButtonSpec;
 use Phlix\Media\Playback\GaplessPlaybackManager;

@@ -26,7 +26,7 @@ require_once __DIR__ . '/bootstrap_env.php';
 use Phlix\Common\Database\ConnectionPool;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Markers\ChapterMarkerService;
-use Phlix\Media\Markers\ChapterService;
+use Phlix\Media\Markers\MarkerService;
 use Phlix\Media\Markers\Detection\MarkerCandidateRepository;
 use Phlix\Media\Transcoding\FfmpegRunner;
 

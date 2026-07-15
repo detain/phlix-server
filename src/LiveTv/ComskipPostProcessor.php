@@ -12,7 +12,7 @@ declare(strict_types=1);
 namespace Phlix\LiveTv;
 
 use Phlix\Media\Markers\ChapterMarker;
-use Phlix\Media\Markers\ChapterService;
+use Phlix\Media\Markers\MarkerService;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
 

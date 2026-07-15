@@ -2921,6 +2921,7 @@ class Application
             );
             // SV-0.1: share the single merged hwaccel config source with all runners.
             $ffmpegRunner->setConfig(\Phlix\Config\HwAccelConfig::get());
+            $ffmpegRunner->probeHardwareAcceleration();
             $gaplessManager = new \Phlix\Media\Playback\GaplessPlaybackManager(null, $ffmpegRunner);
             $trickplayController = $this->getTrickplayController();
             $chapterMarkerService = new \Phlix\Media\MarkerService($db);
@@ -2953,6 +2954,7 @@ class Application
         );
         // SV-0.1: share the single merged hwaccel config source with all runners.
         $ffmpeg->setConfig(\Phlix\Config\HwAccelConfig::get());
+        $ffmpeg->probeHardwareAcceleration();
         $extractor = new \Phlix\Media\Transcoding\Subtitles\SubtitleExtractor();
 
         if ($this->container === null) {

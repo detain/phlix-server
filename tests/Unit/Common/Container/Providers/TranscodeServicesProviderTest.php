@@ -30,7 +30,6 @@ final class TranscodeServicesProviderTest extends TestCase
         parent::setUp();
         HwaccelRegistry::reset();
         HwAccelConfig::reset();
-        FfmpegRunner::resetHwaccelProbed();
     }
 
     protected function tearDown(): void

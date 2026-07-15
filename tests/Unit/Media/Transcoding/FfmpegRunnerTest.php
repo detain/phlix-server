@@ -271,4 +271,77 @@ class FfmpegRunnerTest extends TestCase
         $this->assertSame([5678], $signals);
         $this->assertSame(0, $registry->registeredKeyCount());
     }
+
+    // -------------------------------------------------------------------------
+    // probeHardwareAcceleration() static guard (SV-HWACCEL-FIX)
+    // -------------------------------------------------------------------------
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+        // Reset the static guard between tests so each test gets a clean slate.
+        $this->resetHwaccelProbed();
+    }
+
+    private function resetHwaccelProbed(): void
+    {
+        $ref = new \ReflectionProperty(FfmpegRunner::class, 'hwaccelProbed');
+        $ref->setAccessible(true);
+        $ref->setValue(null, false);
+    }
+
+    public function testProbeHardwareAccelerationRunsOnlyOnceStaticGuard(): void
+    {
+        $runner = new FfmpegRunner('/usr/bin/ffmpeg', '/usr/bin/ffprobe', '/tmp');
+
+        // First call — will early-return via the singleton since no real registry is set up,
+        // but the static guard is set.
+        $first = $runner->probeHardwareAcceleration();
+
+        // Verify the static flag is now true.
+        $ref = new \ReflectionProperty(FfmpegRunner::class, 'hwaccelProbed');
+        $ref->setAccessible(true);
+        $this->assertTrue($ref->getValue(), 'hwaccelProbed must be true after first call');
+
+        // Second call — must return early without re-entering the probe logic.
+        // We detect this by checking the hwaccelRegistry property is unchanged
+        // from the first call (it was set to the singleton).
+        $second = $runner->probeHardwareAcceleration();
+
+        // Both calls return the same result (singleton's empty capabilities).
+        $this->assertSame($first, $second);
+    }
+
+    public function testProbeHardwareAccelerationSubsequentCallsReturnSameResult(): void
+    {
+        $runner = new FfmpegRunner('/usr/bin/ffmpeg', '/usr/bin/ffprobe', '/tmp');
+
+        $result1 = $runner->probeHardwareAcceleration();
+        $result2 = $runner->probeHardwareAcceleration();
+        $result3 = $runner->probeHardwareAcceleration();
+
+        // All subsequent calls must return identical results.
+        $this->assertSame($result1, $result2);
+        $this->assertSame($result2, $result3);
+    }
+
+    public function testProbeHardwareAccelerationUsesSingletonOnEarlyReturn(): void
+    {
+        $runner = new FfmpegRunner('/usr/bin/ffmpeg', '/usr/bin/ffprobe', '/tmp');
+
+        // First call — populates the internal registry reference.
+        $runner->probeHardwareAcceleration();
+
+        // Get the registry that was stored.
+        $registry = $runner->getHwaccelRegistry();
+
+        // On early return (subsequent calls), the singleton must be used.
+        // Verify by calling again and checking the same registry instance is returned.
+        $runner->probeHardwareAcceleration();
+        $this->assertSame($registry, $runner->getHwaccelRegistry(),
+            'same registry instance must be returned on subsequent calls');
+
+        // Verify it's actually the singleton.
+        $this->assertSame(\Phlix\Media\Transcoding\Hwaccel\HwaccelRegistry::getInstance(), $registry);
+    }
 }

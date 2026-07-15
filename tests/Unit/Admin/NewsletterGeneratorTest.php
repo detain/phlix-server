@@ -11,6 +11,9 @@ use Phlix\Admin\NewsletterGenerator;
 use Phlix\Media\Library\LibraryManager;
 use Phlix\Media\Library\MediaScanner;
 use Phlix\Media\Library\FolderWatcher;
+use Phlix\Media\Music\MusicLibraryService;
+use Phlix\Media\Music\MusicLibraryScanner;
+use Phlix\Media\Transcoding\FfmpegRunner;
 use Phlix\Stats\StatsCollector;
 use Workerman\MySQL\Connection;
 
@@ -31,10 +34,13 @@ class NewsletterGeneratorTest extends TestCase
     {
         $this->db = $this->createMock(Connection::class);
         $this->stats = new StatsCollector($this->db);
+        $musicScanner = new MusicLibraryScanner($this->db, new FfmpegRunner());
+        $musicLibraryService = new MusicLibraryService($this->db, $musicScanner);
         $this->library = new LibraryManager(
             $this->db,
             new MediaScanner($this->db, new \Phlix\Media\Library\ItemRepository($this->db)),
-            new FolderWatcher()
+            new FolderWatcher(),
+            $musicLibraryService
         );
         $this->templateDir = sys_get_temp_dir() . '/phlix_newsletter_test_templates';
         if (!is_dir($this->templateDir)) {

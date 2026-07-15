@@ -6,6 +6,8 @@ use PHPUnit\Framework\TestCase;
 use Phlix\Media\Library\LibraryManager;
 use Phlix\Media\Library\MediaScanner;
 use Phlix\Media\Library\FolderWatcher;
+use Phlix\Media\Music\MusicLibraryService;
+use Phlix\Media\Music\MusicLibraryScanner;
 use Phlix\Common\Logger\LoggerFactory;
 use Workerman\MySQL\Connection;
 
@@ -18,6 +20,7 @@ class LibraryManagerCacheTest extends TestCase
 {
     private MediaScanner $scanner;
     private FolderWatcher $watcher;
+    private MusicLibraryService $musicLibraryService;
     private int $queryCount = 0;
 
     protected function setUp(): void
@@ -30,6 +33,8 @@ class LibraryManagerCacheTest extends TestCase
 
         $this->scanner = $this->createMock(MediaScanner::class);
         $this->watcher = $this->createMock(FolderWatcher::class);
+        $musicScanner = $this->createMock(MusicLibraryScanner::class);
+        $this->musicLibraryService = $this->createMock(MusicLibraryService::class);
 
         // Track query count for assertions
         $this->queryCount = 0;
@@ -64,7 +69,7 @@ class LibraryManagerCacheTest extends TestCase
     {
         // First call should populate cache
         $db = $this->mockDbWithQueryTracking();
-        $manager = new LibraryManager($db, $this->scanner, $this->watcher);
+        $manager = new LibraryManager($db, $this->scanner, $this->watcher, $this->musicLibraryService);
 
         $result1 = $manager->getAllLibraries();
         $this->assertNotEmpty($result1);
@@ -85,7 +90,7 @@ class LibraryManagerCacheTest extends TestCase
     public function testGetAllLibrariesReturnsCachedDataOnHit(): void
     {
         $db = $this->mockDbWithQueryTracking();
-        $manager = new LibraryManager($db, $this->scanner, $this->watcher);
+        $manager = new LibraryManager($db, $this->scanner, $this->watcher, $this->musicLibraryService);
 
         // First call - cache miss, DB query executed
         $result1 = $manager->getAllLibraries();
@@ -101,7 +106,7 @@ class LibraryManagerCacheTest extends TestCase
     public function testGetAllLibrariesQueriesDbOnCacheMiss(): void
     {
         $db = $this->mockDbWithQueryTracking();
-        $manager = new LibraryManager($db, $this->scanner, $this->watcher);
+        $manager = new LibraryManager($db, $this->scanner, $this->watcher, $this->musicLibraryService);
 
         // First call should query DB
         $manager->getAllLibraries();
@@ -117,7 +122,7 @@ class LibraryManagerCacheTest extends TestCase
         $db = $this->createMock(Connection::class);
         $db->method('query')->willReturn([]);
 
-        $manager = new LibraryManager($db, $this->scanner, $this->watcher);
+        $manager = new LibraryManager($db, $this->scanner, $this->watcher, $this->musicLibraryService);
 
         $result = $manager->getAllLibraries();
 
@@ -151,7 +156,7 @@ class LibraryManagerCacheTest extends TestCase
 
         $watcher = $this->createMock(FolderWatcher::class);
 
-        $manager = new LibraryManager($db, $this->scanner, $watcher);
+        $manager = new LibraryManager($db, $this->scanner, $watcher, $this->musicLibraryService);
 
         // First call populates cache
         $manager->getAllLibraries();
@@ -189,7 +194,7 @@ class LibraryManagerCacheTest extends TestCase
             return true;
         });
 
-        $manager = new LibraryManager($db, $this->scanner, $this->watcher);
+        $manager = new LibraryManager($db, $this->scanner, $this->watcher, $this->musicLibraryService);
 
         // First call populates cache
         $manager->getAllLibraries();
@@ -227,7 +232,7 @@ class LibraryManagerCacheTest extends TestCase
             return true;
         });
 
-        $manager = new LibraryManager($db, $this->scanner, $this->watcher);
+        $manager = new LibraryManager($db, $this->scanner, $this->watcher, $this->musicLibraryService);
 
         // First call populates cache
         $manager->getAllLibraries();
@@ -263,7 +268,7 @@ class LibraryManagerCacheTest extends TestCase
             ],
         ]);
 
-        $manager = new LibraryManager($db, $this->scanner, $this->watcher);
+        $manager = new LibraryManager($db, $this->scanner, $this->watcher, $this->musicLibraryService);
 
         $result = $manager->getAllLibraries();
 
@@ -313,7 +318,7 @@ class LibraryManagerCacheTest extends TestCase
             ];
         });
 
-        $manager = new LibraryManager($db, $this->scanner, $this->watcher);
+        $manager = new LibraryManager($db, $this->scanner, $this->watcher, $this->musicLibraryService);
 
         // getAllLibraries uses cache
         $manager->getAllLibraries();
@@ -337,7 +342,7 @@ class LibraryManagerCacheTest extends TestCase
     public function testMultipleInstancesShareCache(): void
     {
         $db = $this->mockDbWithQueryTracking();
-        $manager1 = new LibraryManager($db, $this->scanner, $this->watcher);
+        $manager1 = new LibraryManager($db, $this->scanner, $this->watcher, $this->musicLibraryService);
 
         // First instance populates cache
         $manager1->getAllLibraries();
@@ -350,7 +355,7 @@ class LibraryManagerCacheTest extends TestCase
             $this->fail('Second instance should use cached data, not query DB');
         });
 
-        $manager2 = new LibraryManager($db2, $this->scanner, $this->watcher);
+        $manager2 = new LibraryManager($db2, $this->scanner, $this->watcher, $this->musicLibraryService);
         $manager2->getAllLibraries(); // Should use cache from manager1
 
         $this->assertEquals($queriesAfterFirst, $this->queryCount);
@@ -377,7 +382,7 @@ class LibraryManagerCacheTest extends TestCase
             return true;
         });
 
-        $manager = new LibraryManager($db, $this->scanner, $this->watcher);
+        $manager = new LibraryManager($db, $this->scanner, $this->watcher, $this->musicLibraryService);
 
         // Populate cache
         $manager->getAllLibraries();

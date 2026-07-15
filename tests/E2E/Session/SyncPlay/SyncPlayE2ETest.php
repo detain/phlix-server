@@ -60,11 +60,12 @@ class SyncPlayE2ETest extends TestCase
 
         // Track sent messages
         $sentMessages = [];
-        $mock->method('send')->willReturnCallback(function ($data) use (&$sentMessages) {
+        $mock->method('send')->willReturnCallback(function ($data) use (&$sentMessages): bool {
             if (is_string($data)) {
                 $data = json_decode($data, true);
             }
             $sentMessages[] = $data;
+            return true;
         });
         $mock->method('sendFlat')->willReturnCallback(function ($type, $payload) use (&$sentMessages) {
             $sentMessages[] = array_merge(['type' => $type], $payload, ['timestamp' => time()]);

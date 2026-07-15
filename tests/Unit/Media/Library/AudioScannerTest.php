@@ -535,4 +535,170 @@ class AudioScannerTest extends TestCase
             fclose($handle);
         }
     }
+
+    // -------------------------------------------------------------------------
+    // findCoverArtFile() — scans a directory for cover art (SV-COVERART-FIX)
+    // -------------------------------------------------------------------------
+
+    /**
+     * Invokes the private findCoverArtFile method via reflection.
+     *
+     * @param string $directoryPath Directory to search for cover art
+     * @return string|null Path to cover art file, or null if not found
+     */
+    private function invokeFindCoverArtFile(string $directoryPath): ?string
+    {
+        $method = new \ReflectionMethod(AudioScanner::class, 'findCoverArtFile');
+        $method->setAccessible(true);
+
+        // Create a SplFileInfo for a dummy file in the directory
+        // SplFileInfo can wrap a path to a non-existent file
+        $dummyFilePath = $directoryPath . '/.dummy';
+        $fileInfo = new \SplFileInfo($dummyFilePath);
+
+        return $method->invoke($this->scanner, $fileInfo);
+    }
+
+    public function testFindCoverArtFileReturnsCoverJpg(): void
+    {
+        $tempDir = sys_get_temp_dir() . '/phlix_cover_' . uniqid();
+        mkdir($tempDir, 0755, true);
+        file_put_contents($tempDir . '/cover.jpg', "\xFF\xD8\xFF\xE0");
+
+        $result = $this->invokeFindCoverArtFile($tempDir);
+
+        $this->assertSame($tempDir . '/cover.jpg', $result);
+
+        unlink($tempDir . '/cover.jpg');
+        rmdir($tempDir);
+    }
+
+    public function testFindCoverArtFileReturnsCoverPng(): void
+    {
+        $tempDir = sys_get_temp_dir() . '/phlix_cover_' . uniqid();
+        mkdir($tempDir, 0755, true);
+        file_put_contents($tempDir . '/cover.png', "\x89PNG\r\n\x1A\n");
+
+        $result = $this->invokeFindCoverArtFile($tempDir);
+
+        $this->assertSame($tempDir . '/cover.png', $result);
+
+        unlink($tempDir . '/cover.png');
+        rmdir($tempDir);
+    }
+
+    public function testFindCoverArtFileReturnsFolderJpg(): void
+    {
+        $tempDir = sys_get_temp_dir() . '/phlix_cover_' . uniqid();
+        mkdir($tempDir, 0755, true);
+        file_put_contents($tempDir . '/folder.jpg', "\xFF\xD8\xFF\xE0");
+
+        $result = $this->invokeFindCoverArtFile($tempDir);
+
+        $this->assertSame($tempDir . '/folder.jpg', $result);
+
+        unlink($tempDir . '/folder.jpg');
+        rmdir($tempDir);
+    }
+
+    public function testFindCoverArtFileReturnsFolderPng(): void
+    {
+        $tempDir = sys_get_temp_dir() . '/phlix_cover_' . uniqid();
+        mkdir($tempDir, 0755, true);
+        file_put_contents($tempDir . '/folder.png', "\x89PNG\r\n\x1A\n");
+
+        $result = $this->invokeFindCoverArtFile($tempDir);
+
+        $this->assertSame($tempDir . '/folder.png', $result);
+
+        unlink($tempDir . '/folder.png');
+        rmdir($tempDir);
+    }
+
+    public function testFindCoverArtFilePrefersCoverOverFolder(): void
+    {
+        // When both cover.jpg and folder.jpg exist, cover.jpg takes precedence.
+        $tempDir = sys_get_temp_dir() . '/phlix_cover_' . uniqid();
+        mkdir($tempDir, 0755, true);
+        file_put_contents($tempDir . '/cover.jpg', "\xFF\xD8\xFF\xE0");
+        file_put_contents($tempDir . '/folder.jpg', "\xFF\xD8\xFF\xE0");
+
+        $result = $this->invokeFindCoverArtFile($tempDir);
+
+        $this->assertSame($tempDir . '/cover.jpg', $result);
+
+        unlink($tempDir . '/cover.jpg');
+        unlink($tempDir . '/folder.jpg');
+        rmdir($tempDir);
+    }
+
+    public function testFindCoverArtFileReturnsNullWhenNoCoverArtExists(): void
+    {
+        $tempDir = sys_get_temp_dir() . '/phlix_cover_' . uniqid();
+        mkdir($tempDir, 0755, true);
+        // Only a non-image file present.
+        file_put_contents($tempDir . '/track.mp3', 'fake mp3');
+
+        $result = $this->invokeFindCoverArtFile($tempDir);
+
+        $this->assertNull($result);
+
+        unlink($tempDir . '/track.mp3');
+        rmdir($tempDir);
+    }
+
+    public function testFindCoverArtFileReturnsNullForNonExistentDirectory(): void
+    {
+        $result = $this->invokeFindCoverArtFile('/non/existent/directory/path');
+
+        $this->assertNull($result);
+    }
+
+    public function testFindCoverArtFileIsCaseSensitive(): void
+    {
+        // Covers must be lowercase; Cover.jpg / FOLDER.JPG must NOT match.
+        $tempDir = sys_get_temp_dir() . '/phlix_cover_' . uniqid();
+        mkdir($tempDir, 0755, true);
+        file_put_contents($tempDir . '/Cover.jpg', "\xFF\xD8\xFF\xE0");  // wrong case
+        file_put_contents($tempDir . '/FOLDER.jpg', "\xFF\xD8\xFF\xE0"); // wrong case
+        file_put_contents($tempDir . '/track.mp3', 'fake mp3');
+
+        $result = $this->invokeFindCoverArtFile($tempDir);
+
+        $this->assertNull($result, 'case-insensitive names must not be matched');
+
+        unlink($tempDir . '/Cover.jpg');
+        unlink($tempDir . '/FOLDER.jpg');
+        unlink($tempDir . '/track.mp3');
+        rmdir($tempDir);
+    }
+
+    public function testFindCoverArtFileReturnsNullForEmptyDirectory(): void
+    {
+        $tempDir = sys_get_temp_dir() . '/phlix_cover_' . uniqid();
+        mkdir($tempDir, 0755, true);
+
+        $result = $this->invokeFindCoverArtFile($tempDir);
+
+        $this->assertNull($result);
+
+        rmdir($tempDir);
+    }
+
+    public function testFindCoverArtFilePrioritizesJpgOverPng(): void
+    {
+        // When both cover.jpg and cover.png exist, .jpg takes precedence.
+        $tempDir = sys_get_temp_dir() . '/phlix_cover_' . uniqid();
+        mkdir($tempDir, 0755, true);
+        file_put_contents($tempDir . '/cover.jpg', "\xFF\xD8\xFF\xE0");
+        file_put_contents($tempDir . '/cover.png', "\x89PNG\r\n\x1A\n");
+
+        $result = $this->invokeFindCoverArtFile($tempDir);
+
+        $this->assertSame($tempDir . '/cover.jpg', $result);
+
+        unlink($tempDir . '/cover.jpg');
+        unlink($tempDir . '/cover.png');
+        rmdir($tempDir);
+    }
 }

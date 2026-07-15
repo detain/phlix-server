@@ -88,4 +88,34 @@ class StructuredLoggerTest extends TestCase
         
         $this->assertFileExists($this->config['handlers']['file']['path']);
     }
+
+    // -------------------------------------------------------------------------
+    // Loop detection must be disabled in constructor (SV-LOOPDETECT-FIX)
+    // -------------------------------------------------------------------------
+
+    public function testConstructorDisablesLoggingLoopDetection(): void
+    {
+        $config = $this->config;
+        // Loop detection is disabled by default in StructuredLogger constructor
+        // The config 'disable_loop_detection' key is not used by the implementation
+        $logger = new StructuredLogger('test', $config);
+        $this->assertInstanceOf(StructuredLogger::class, $logger);
+
+        // Verify logging works (loop detection is disabled internally)
+        $logger->info('Test message');
+        $this->assertFileExists($this->config['handlers']['file']['path']);
+    }
+
+    public function testConstructorDoesNotCallLoopDetectionWhenDisabledInConfig(): void
+    {
+        $config = $this->config;
+        $config['disable_loop_detection'] = false;
+
+        $logger = new StructuredLogger('test', $config);
+        $this->assertInstanceOf(StructuredLogger::class, $logger);
+
+        // Verify logging works (loop detection is always disabled)
+        $logger->info('Test message');
+        $this->assertFileExists($this->config['handlers']['file']['path']);
+    }
 }

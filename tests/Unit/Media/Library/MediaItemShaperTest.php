@@ -703,4 +703,180 @@ final class MediaItemShaperTest extends TestCase
         $this->assertSame('mkv', $this->rows($shaped, 'files')[2]['container']);
         $this->assertNull($this->rows($shaped, 'files')[3]['container']);
     }
+
+    // -------------------------------------------------------------------------
+    // nonemptyString() helper (private static) — tested via reflection
+    // -------------------------------------------------------------------------
+
+    public function testNonemptyStringReturnsNullForEmptyString(): void
+    {
+        $result = $this->invokeNonemptyString('');
+        $this->assertNull($result);
+    }
+
+    public function testNonemptyStringReturnsNullForWhitespaceOnlyString(): void
+    {
+        $result = $this->invokeNonemptyString('   ');
+        $this->assertNull($result);
+    }
+
+    public function testNonemptyStringReturnsNullForTabWhitespace(): void
+    {
+        $result = $this->invokeNonemptyString("\t\n  ");
+        $this->assertNull($result);
+    }
+
+    public function testNonemptyStringReturnsOriginalStringForNonEmptyStrings(): void
+    {
+        $this->assertSame('hello', $this->invokeNonemptyString('hello'));
+        $this->assertSame('  trimmed  ', $this->invokeNonemptyString('  trimmed  '));
+        $this->assertSame('a', $this->invokeNonemptyString('a'));
+        $this->assertSame('0', $this->invokeNonemptyString('0'));
+    }
+
+    public function testNonemptyStringReturnsNullForNullInput(): void
+    {
+        $result = $this->invokeNonemptyString(null);
+        $this->assertNull($result);
+    }
+
+    public function testNonemptyStringReturnsNullForNonStringTypes(): void
+    {
+        $this->assertNull($this->invokeNonemptyString(42));
+        $this->assertNull($this->invokeNonemptyString(0));
+        $this->assertNull($this->invokeNonemptyString(false));
+        $this->assertNull($this->invokeNonemptyString(['array']));
+    }
+
+    /**
+     * Invokes the private static nonemptyString() method via reflection.
+     */
+    private function invokeNonemptyString(mixed $value): ?string
+    {
+        $ref = new \ReflectionMethod(MediaItemShaper::class, 'nonemptyString');
+        $ref->setAccessible(true);
+        /** @var string|null */
+        return $ref->invoke(null, $value);
+    }
+
+    // -------------------------------------------------------------------------
+    // poster_url fallback chain (SV-FIX: AniList blank cover fallback)
+    // -------------------------------------------------------------------------
+
+    /**
+     * poster_url takes precedence over cover_image_large.
+     */
+    public function testShapePosterUrlPrecedenceOverCoverImageLarge(): void
+    {
+        $shaped = MediaItemShaper::shape([
+            'id' => 'm',
+            'name' => 'T',
+            'type' => 'movie',
+            'metadata' => [
+                'poster_url' => 'https://poster.jpg',
+                'cover_image_large' => 'https://large.jpg',
+            ],
+        ]);
+
+        $this->assertSame('https://poster.jpg', $shaped['poster_url']);
+    }
+
+    /**
+     * cover_image_large is used when poster_url is empty string (AniList case).
+     */
+    public function testShapePosterUrlFallsBackToCoverImageLargeWhenPosterUrlIsBlank(): void
+    {
+        $shaped = MediaItemShaper::shape([
+            'id' => 'm',
+            'name' => 'T',
+            'type' => 'movie',
+            'metadata' => [
+                'poster_url' => '',  // blank — should fall through
+                'cover_image_large' => 'https://large.jpg',
+            ],
+        ]);
+
+        $this->assertSame('https://large.jpg', $shaped['poster_url']);
+    }
+
+    /**
+     * cover_image_extralarge is the final fallback for cover_image_large.
+     */
+    public function testShapePosterUrlFallsBackToCoverImageExtralarge(): void
+    {
+        $shaped = MediaItemShaper::shape([
+            'id' => 'm',
+            'name' => 'T',
+            'type' => 'movie',
+            'metadata' => [
+                'cover_image_extralarge' => 'https://extralarge.jpg',
+            ],
+        ]);
+
+        $this->assertSame('https://extralarge.jpg', $shaped['poster_url']);
+    }
+
+    /**
+     * Whitespace-only poster_url falls through to cover_image_large.
+     */
+    public function testShapePosterUrlFallsBackWhenPosterUrlIsWhitespaceOnly(): void
+    {
+        $shaped = MediaItemShaper::shape([
+            'id' => 'm',
+            'name' => 'T',
+            'type' => 'movie',
+            'metadata' => [
+                'poster_url' => '   ',
+                'cover_image_large' => 'https://large.jpg',
+            ],
+        ]);
+
+        $this->assertSame('https://large.jpg', $shaped['poster_url']);
+    }
+
+    /**
+     * All null yields null poster_url.
+     */
+    public function testShapePosterUrlReturnsNullWhenAllSourcesAreEmpty(): void
+    {
+        $shaped = MediaItemShaper::shape([
+            'id' => 'm',
+            'name' => 'T',
+            'type' => 'movie',
+            'metadata' => [
+                'poster_url' => '',
+                'cover_image_large' => '',
+                'cover_image_extralarge' => '',
+            ],
+        ]);
+
+        $this->assertNull($shaped['poster_url']);
+    }
+
+    /**
+     * Full chain: poster_url > cover_image_large > cover_image_extralarge > null.
+     */
+    public function testShapePosterUrlFullFallbackChain(): void
+    {
+        // poster_url wins
+        $a = MediaItemShaper::shape([
+            'id' => 'm', 'name' => 'T', 'type' => 'movie',
+            'metadata' => ['poster_url' => 'p.jpg', 'cover_image_large' => 'l.jpg', 'cover_image_extralarge' => 'e.jpg'],
+        ]);
+        $this->assertSame('p.jpg', $a['poster_url']);
+
+        // cover_image_large wins when poster_url is blank
+        $b = MediaItemShaper::shape([
+            'id' => 'm', 'name' => 'T', 'type' => 'movie',
+            'metadata' => ['poster_url' => '', 'cover_image_large' => 'l.jpg', 'cover_image_extralarge' => 'e.jpg'],
+        ]);
+        $this->assertSame('l.jpg', $b['poster_url']);
+
+        // cover_image_extralarge wins when both above are blank
+        $c = MediaItemShaper::shape([
+            'id' => 'm', 'name' => 'T', 'type' => 'movie',
+            'metadata' => ['poster_url' => '', 'cover_image_large' => '', 'cover_image_extralarge' => 'e.jpg'],
+        ]);
+        $this->assertSame('e.jpg', $c['poster_url']);
+    }
 }

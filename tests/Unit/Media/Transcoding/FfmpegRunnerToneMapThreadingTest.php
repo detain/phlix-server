@@ -42,7 +42,6 @@ final class FfmpegRunnerToneMapThreadingTest extends TestCase
     {
         parent::setUp();
         HwaccelRegistry::reset();
-        FfmpegRunner::resetHwaccelProbed();
     }
 
     protected function tearDown(): void

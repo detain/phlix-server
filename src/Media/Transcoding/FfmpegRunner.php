@@ -1363,7 +1363,7 @@ class FfmpegRunner
     public function probeHardwareAcceleration(?HwaccelRegistry $registry = null): array
     {
         if (self::$hwaccelProbed) {
-            return $this->hwaccelRegistry?->getAll() ?? [];
+            return HwaccelRegistry::getInstance()->getAll();
         }
 
         $this->hwaccelRegistry = $registry ?? HwaccelRegistry::getInstance();

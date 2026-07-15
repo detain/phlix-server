@@ -238,6 +238,81 @@ class RelayConsumerTest extends TestCase
         $this->assertFalse($opened[1]->closed, 'the replacement connection must stay open');
     }
 
+    /**
+     * SV-RELAYNULLCONN: connect() must not throw when the factory or the underlying
+     * AsyncTcpConnection factory returns null — it must close any prior connection
+     * and leave the consumer disconnected rather than crashing.
+     */
+    public function test_connect_does_not_throw_when_factory_returns_null(): void
+    {
+        $opened = [];
+        $consumer = new RelayConsumer(
+            new RelayConfig(
+                enabled: true,
+                hubRelayWsUrl: 'ws://hub.example.com:8802',
+                localHttpAddress: '127.0.0.1:8096',
+            ),
+            $this->createMockHubClient(),
+            new StructuredLogger('relay', []),
+            'server-uuid-null',
+            hubConnectionFactory: static function (string $url) use (&$opened): ?AsyncTcpConnection {
+                $opened[] = $url;
+                return null; // simulate connection failure
+            },
+            localConnectionFactory: static fn (string $url): AsyncTcpConnection
+                => new FakeRelayConnection($url),
+        );
+
+        $connect = new \ReflectionMethod(RelayConsumer::class, 'connect');
+        $connect->setAccessible(true);
+
+        // Must not throw — should close prior connection and remain disconnected.
+        $connect->invoke($consumer);
+
+        $this->assertCount(1, $opened);
+        $this->assertFalse($consumer->isConnected(), 'consumer must remain disconnected when factory returns null');
+    }
+
+    /**
+     * connect() called twice: first with a real connection (succeeds), second
+     * with null (must close the first, not leak it, and remain disconnected).
+     */
+    public function test_connect_closes_prior_connection_when_reconnect_factory_returns_null(): void
+    {
+        $opened = [];
+        $consumer = new RelayConsumer(
+            new RelayConfig(
+                enabled: true,
+                hubRelayWsUrl: 'ws://hub.example.com:8802',
+                localHttpAddress: '127.0.0.1:8096',
+            ),
+            $this->createMockHubClient(),
+            new StructuredLogger('relay', []),
+            'server-uuid-null2',
+            hubConnectionFactory: static function (string $url) use (&$opened): ?AsyncTcpConnection {
+                $connection = count($opened) === 1 ? new FakeRelayConnection($url) : null;
+                $opened[] = $connection;
+                return $connection;
+            },
+            localConnectionFactory: static fn (string $url): AsyncTcpConnection
+                => new FakeRelayConnection($url),
+        );
+
+        $connect = new \ReflectionMethod(RelayConsumer::class, 'connect');
+        $connect->setAccessible(true);
+
+        $connect->invoke($consumer); // First: opens connection
+        $this->assertCount(1, $opened);
+        $this->assertTrue($consumer->isConnected(), 'consumer should be connected after first connect');
+
+        $connect->invoke($consumer); // Second: factory returns null, prior must be closed
+        $this->assertCount(2, $opened);
+        $this->assertFalse($consumer->isConnected(),
+            'consumer must be disconnected when reconnect factory returns null');
+        // The prior hub connection must have been closed, not leaked.
+        $this->assertTrue($opened[0]->closed, 'the prior hub connection must be closed when reconnect returns null');
+    }
+
     public function test_hello_is_sent_on_connect(): void
     {
         $consumer = $this->createConsumer();

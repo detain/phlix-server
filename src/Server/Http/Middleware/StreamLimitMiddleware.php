@@ -91,9 +91,6 @@ final class StreamLimitMiddleware
             ]);
         }
 
-        // Store profileId in context for downstream use
-        RequestContext::setProfileId($profileId);
-
         // Extract device and session from the request
         $deviceId = $this->getDeviceId($request);
         $sessionId = $this->getSessionId($request);

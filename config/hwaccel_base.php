@@ -19,7 +19,7 @@ return [
      * Enable hardware acceleration probing.
      * When false, only software encoding will be used.
      */
-    'enabled' => false,
+    'enabled' => true,
 
     /**
      * Prefer hardware acceleration over software encoding when available.

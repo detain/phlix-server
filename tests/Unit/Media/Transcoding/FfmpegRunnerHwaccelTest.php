@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace Phlix\Tests\Unit\Media\Transcoding;
 
-use Phlix\Config\HwAccelConfig;
 use Phlix\Media\Transcoding\FfmpegRunner;
 use Phlix\Media\Transcoding\Hwaccel\HwaccelCapability;
 use Phlix\Media\Transcoding\Hwaccel\HwaccelRegistry;
@@ -25,15 +24,11 @@ final class FfmpegRunnerHwaccelTest extends TestCase
     {
         parent::setUp();
         HwaccelRegistry::reset();
-        HwAccelConfig::reset();
-        FfmpegRunner::resetHwaccelProbed();
     }
 
     protected function tearDown(): void
     {
         HwaccelRegistry::reset();
-        HwAccelConfig::reset();
-        FfmpegRunner::resetHwaccelProbed();
         parent::tearDown();
     }
 

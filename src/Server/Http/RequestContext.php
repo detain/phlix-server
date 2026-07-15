@@ -210,7 +210,7 @@ final class RequestContext
     public static function hasProfileId(): bool
     {
         $value = Context::get(self::KEY_PROFILE_ID);
-        return is_string($value) && $value !== '';
+        return is_int($value);
     }
 
     /**

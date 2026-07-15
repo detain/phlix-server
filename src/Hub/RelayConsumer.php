@@ -465,6 +465,7 @@ final class RelayConsumer
         // racing reconnect can replace the stale socket cleanly.
         if ($this->state === self::STATE_HANDSHAKING && $this->connection === null) {
             $this->logger->debug('RelayConsumer::connect() early return - HANDSHAKING and connection is null');
+            $this->state = self::STATE_DISCONNECTED;
             return;
         }
 
@@ -567,14 +568,18 @@ final class RelayConsumer
         };
 
         $this->logger->debug('RelayConsumer::connect() calling $connection->connect()', [
-            'connection_id' => spl_object_id($this->connection),
-            'connection_status_before_connect' => $this->connection->getStatus(),
+            'connection_id' => $this->connection !== null ? spl_object_id($this->connection) : null,
+            'connection_status_before_connect' => $this->connection !== null ? $this->connection->getStatus() : null,
         ]);
         try {
+            if ($this->connection === null) {
+                $this->logger->warning('RelayConsumer::connect() connection was closed during setup');
+                return;
+            }
             $this->connection->connect();
             $this->logger->debug('RelayConsumer::connect() $connection->connect() returned', [
-                'connection_id' => spl_object_id($this->connection),
-                'connection_status_after_connect' => $this->connection->getStatus(),
+                'connection_id' => $this->connection !== null ? spl_object_id($this->connection) : null,
+                'connection_status_after_connect' => $this->connection !== null ? $this->connection->getStatus() : null,
             ]);
         } catch (Throwable $e) {
             $this->logger->error('RelayConsumer::connect() $connection->connect() threw exception', [

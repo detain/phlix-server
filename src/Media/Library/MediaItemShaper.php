@@ -63,7 +63,10 @@ final class MediaItemShaper
             ? $metadata['rating']
             : null;
 
-        $posterUrl = $metadata['poster_url'] ?? null;
+        $posterUrl = self::nonemptyString($metadata['poster_url'] ?? null)
+            ?? self::nonemptyString($metadata['cover_image_large'] ?? null)
+            ?? self::nonemptyString($metadata['cover_image_extralarge'] ?? null)
+            ?? null;
 
         // Use stored poster_srcset if available (from ArtworkStorage cache, SV-3.4),
         // otherwise generate from poster_url (TMDB srcset or null for non-TMDB posters).
@@ -365,6 +368,20 @@ final class MediaItemShaper
             return (string) $value;
         }
         return null;
+    }
+
+    /**
+     * Filter a value to a non-empty string, or null.
+     *
+     * Unlike the null-coalescing operator (??), this also rejects empty strings,
+     * so AniList cover_image_large: "" falls through to the next fallback.
+     *
+     * @param mixed $value Raw value.
+     * @return string|null Trimmed non-empty string, or null.
+     */
+    private static function nonemptyString(mixed $value): ?string
+    {
+        return is_string($value) && trim($value) !== '' ? $value : null;
     }
 
     /**

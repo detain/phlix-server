@@ -61,6 +61,15 @@ class StructuredLogger implements LoggerInterface
         $this->channel = $channel;
         $this->config = $config;
         $this->logger = new Logger($channel);
+        // Monolog's infinite-loop guard tracks recursion depth per PHP Fiber, but
+        // Swoole coroutines are NOT Fibers — so it falls back to a single shared
+        // counter on this (container-singleton) logger. Under SWOOLE_HOOK_ALL a
+        // handler's file write yields the coroutine mid-addRecord, letting a
+        // concurrent coroutine re-enter the same logger instance; the shared
+        // counter then reaches 3 and Monolog falsely "detects an infinite logging
+        // loop" and DROPS the record. No handler or processor here emits its own
+        // log, so there is no real cycle to detect — disable the guard.
+        $this->logger->useLoggingLoopDetection(false);
 
         $this->setupHandlers();
         $this->setupProcessors();

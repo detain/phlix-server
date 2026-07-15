@@ -213,13 +213,16 @@ class MediaItemController
         $userId = $request->userId ?? '';
         $playbackPrefs = $this->gaplessManager->getPreferences($userId);
 
+        // Build the quality ladder preview (url => null for each rung).
+        $qualityLadder = $this->buildQualityLadder($item, $request);
+
         return (new Response())->json([
             'item_id' => $itemId,
             'intro_marker' => $introMarker,
             'outro_marker' => $outroMarker,
             'chapters' => $chapters,
             'skip_button_spec' => $skipSpec->toArray(),
-            'quality_ladder' => $this->buildQualityLadder($item, $request),
+            'quality_ladder' => $qualityLadder,
             'audio_tracks' => $audioTracks,
             'subtitle_tracks' => $subtitleTracks,
             'crossfade' => [

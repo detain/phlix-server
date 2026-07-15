@@ -195,7 +195,7 @@ class SeriesMetadataResolver
             $episodes[$number] = [
                 'episode_title' => MetadataValue::asNullableString($ep['name'] ?? null),
                 'overview' => MetadataValue::asNullableString($ep['overview'] ?? null),
-                'poster_url' => $this->imageUrl($ep['still_path'] ?? null),
+                'poster_url' => null,  // Episodes don't have posters; fall through to season/series poster
                 'air_date' => MetadataValue::asNullableString($ep['air_date'] ?? null),
                 'runtime' => (($r = MetadataValue::asInt($ep['runtime'] ?? null)) > 0) ? $r : null,
                 'vote_average' => $vote > 0.0 ? $vote : null,

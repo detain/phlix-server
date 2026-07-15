@@ -218,6 +218,12 @@ class AudioScanner extends MediaScanner
         $metadata['file_size'] = $file->getSize();
         $metadata['file_mtime'] = $file->getMTime();
 
+        // Look for cover art files in the same directory as the audio file
+        $coverArt = $this->findCoverArtFile($file);
+        if ($coverArt !== null) {
+            $metadata['cover_art'] = $coverArt;
+        }
+
         return $metadata;
     }
 
@@ -259,6 +265,42 @@ class AudioScanner extends MediaScanner
             return (float) $value;
         }
         return 0.0;
+    }
+
+    /**
+     * Finds a cover art file in the same directory as the audio file.
+     *
+     * Checks for common cover art filenames in order of preference.
+     *
+     * @param \SplFileInfo $file Audio file info
+     * @return string|null Path to cover art file, or null if not found
+     */
+    private function findCoverArtFile(\SplFileInfo $file): ?string
+    {
+        $directory = $file->getPath();
+        if ($directory === '') {
+            return null;
+        }
+
+        $coverFiles = [
+            'cover.jpg',
+            'cover.png',
+            'folder.jpg',
+            'folder.png',
+            'album.jpg',
+            'album.png',
+            'front.jpg',
+            'front.png',
+        ];
+
+        foreach ($coverFiles as $filename) {
+            $path = $directory . DIRECTORY_SEPARATOR . $filename;
+            if (file_exists($path) && is_readable($path)) {
+                return $path;
+            }
+        }
+
+        return null;
     }
 
     /**

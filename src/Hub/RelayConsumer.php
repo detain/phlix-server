@@ -163,6 +163,15 @@ final class RelayConsumer
     /** @var \DateTimeImmutable|null Timestamp of the last tunnel disconnect. */
     private ?\DateTimeImmutable $lastDisconnectTime = null;
 
+    /** @var int Nanoseconds from hrtime(true) when the session started. */
+    private int $sessionStartTime = 0;
+
+    /** @var string|null Hub-assigned relay session id (from HELLO_ACK). */
+    private ?string $relaySessionId = null;
+
+    /** @var bool Whether the session-end log has already been emitted. */
+    private bool $sessionEndLogged = false;
+
     /** @var string Buffered incoming binary data awaiting frame boundaries. */
     private string $recvBuffer = '';
 
@@ -714,9 +723,12 @@ final class RelayConsumer
 
         $this->state = self::STATE_ACTIVE;
         $this->reconnectAttempts = 0;
+        $this->sessionStartTime = hrtime(true);
+        $this->relaySessionId = is_string($ack['relay_session_id'] ?? null) ? $ack['relay_session_id'] : null;
+        $this->sessionEndLogged = false;
 
         $this->logger->info('RelayConsumer: tunnel active', [
-            'relay_session_id' => is_string($ack['relay_session_id'] ?? null) ? $ack['relay_session_id'] : null,
+            'relay_session_id' => $this->relaySessionId,
             'tunnel_id' => is_string($ack['tunnel_id'] ?? null) ? $ack['tunnel_id'] : null,
         ]);
 
@@ -1683,9 +1695,11 @@ final class RelayConsumer
     private function onDisconnectedFrame(RelayFrame $frame): void
     {
         $payload = $this->decodeJsonPayload($frame->payload);
+        $reason = is_string($payload['reason'] ?? null) ? $payload['reason'] : 'unknown';
         $this->logger->info('RelayConsumer: hub sent DISCONNECTED', [
-            'reason' => is_string($payload['reason'] ?? null) ? $payload['reason'] : null,
+            'reason' => $reason,
         ]);
+        $this->logSessionEnd($reason);
         $this->closeTunnel();
     }
 
@@ -1971,6 +1985,35 @@ final class RelayConsumer
     }
 
     /**
+     * Log the relay session end with duration and reason.
+     *
+     * Guard clause: silently no-ops if the session was never started or if the
+     * session-end log has already been emitted (e.g. onDisconnectedFrame called
+     * closeTunnel which triggered handleDisconnect).
+     *
+     * @param string $reason Disconnect reason string.
+     *
+     * @return void
+     */
+    private function logSessionEnd(string $reason): void
+    {
+        if ($this->sessionStartTime === 0 || $this->sessionEndLogged) {
+            return;
+        }
+
+        $durationNs = hrtime(true) - $this->sessionStartTime;
+        $durationSeconds = $durationNs / 1_000_000_000.0;
+
+        $this->logger->info('Relay session ended', [
+            'relay_session_id' => $this->relaySessionId,
+            'session_duration_seconds' => $durationSeconds,
+            'disconnect_reason' => $reason,
+        ]);
+
+        $this->sessionEndLogged = true;
+    }
+
+    /**
      * Handle tunnel disconnection: clean up and schedule a reconnect.
      *
      * @return void
@@ -1979,6 +2022,9 @@ final class RelayConsumer
      */
     private function handleDisconnect(): void
     {
+        // Log unexpected connection close (not initiated by hub DISCONNECTED frame).
+        $this->logSessionEnd('connection_closed');
+
         $this->state = self::STATE_DISCONNECTED;
         $this->lastDisconnectTime = new \DateTimeImmutable();
         $this->connection = null;

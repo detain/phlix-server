@@ -32,6 +32,7 @@ final class FfmpegRunnerSubtitleBurnInTest extends TestCase
     {
         parent::setUp();
         HwaccelRegistry::reset();
+        FfmpegRunner::resetHwaccelProbed();
         $this->vttPath = tempnam(sys_get_temp_dir(), 'phlix_sub_') . '.vtt';
         file_put_contents($this->vttPath, "WEBVTT\n\n00:00:00.000 --> 00:00:02.000\nHello\n");
     }

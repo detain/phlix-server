@@ -1023,6 +1023,22 @@ final class HttpHandler
             );
         }
 
+        // P5: Enforce access schedule (parental controls time windows).
+        // Mirrors AccessScheduleMiddleware's check but inlined here because
+        // the direct-play route bypasses the router middleware pipeline.
+        /** @var \Phlix\Access\AccessScheduleService $accessScheduleService */
+        $accessScheduleService = $this->container->get(\Phlix\Access\AccessScheduleService::class);
+        if (!$accessScheduleService->isAccessAllowed($profileId)) {
+            return new WorkermanResponse(
+                403,
+                ['Content-Type' => 'application/json; charset=utf-8'],
+                json_encode([
+                    'error' => 'AccessScheduled',
+                    'message' => 'Access denied during scheduled window',
+                ], JSON_THROW_ON_ERROR),
+            );
+        }
+
         $deviceId = $this->getStreamDeviceId($wr);
         $sessionId = $this->getStreamSessionId($wr);
         if ($sessionId === null || $deviceId === null) {

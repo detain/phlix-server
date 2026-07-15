@@ -2543,7 +2543,7 @@ class FfmpegRunner
             $x = $col * ($thumbW + $margin + $padding);
             $y = $row * ($thumbH + $margin + $padding);
             $time = $i * $interval;
-            $timeline[] = ['time' => $time, 'x' => $x, 'y' => $y];
+            $timeline[] = ['seconds' => $time, 'frame' => $i];
         }
 
         $json = json_encode($timeline, JSON_THROW_ON_ERROR);
@@ -2615,7 +2615,23 @@ class FfmpegRunner
     }
 
     /**
-     * Returns the preferred accelerator name from configuration.
+     * Resets the static hwaccel probed flag — for use in unit-test setUp()
+     * to ensure each test starts with a clean probe state and does not inherit
+     * a `$hwaccelProbed = true` flag from a prior test's execution path.
+     *
+     * @return void
+     *
+     * @internal Not for use in production code.
+     *
+     * @since SV-0.1
+     */
+    public static function resetHwaccelProbed(): void
+    {
+        self::$hwaccelProbed = false;
+    }
+
+    /**
+     * Gets the preferred accelerator name from configuration.
      *
      * @return string|null
      *

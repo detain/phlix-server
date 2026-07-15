@@ -15,6 +15,7 @@ use Phlix\Common\Logger\LogChannels;
 use Phlix\Common\Logger\StructuredLogger;
 use Phlix\Common\Uuid;
 use Phlix\Media\Library\Dto\LibraryRow;
+use Phlix\Media\Music\MusicLibraryService;
 use Phlix\Media\Music\MusicLibraryType;
 use Phlix\Media\Music\BookLibraryType;
 use Phlix\Media\Music\AudiobookLibraryType;
@@ -56,6 +57,9 @@ class LibraryManager
     /** @var ThemeMediaRepository|null Repository for theme media caching */
     private ?ThemeMediaRepository $themeMediaRepository = null;
 
+    /** @var MusicLibraryService Service for music library scanning */
+    private MusicLibraryService $musicLibraryService;
+
     /** @var array<int, array<string, mixed>>|null Cached libraries list */
     private static ?array $cachedLibraries = null;
 
@@ -71,17 +75,20 @@ class LibraryManager
      * @param Connection $db Database connection for library persistence
      * @param MediaScanner $scanner Scanner for discovering media files in directories
      * @param FolderWatcher $watcher Watcher for detecting filesystem changes
+     * @param MusicLibraryService $musicLibraryService Service for music library scanning
      * @param StructuredLogger|null $logger Optional custom logger, creates default if not provided
      */
     public function __construct(
         Connection $db,
         MediaScanner $scanner,
         FolderWatcher $watcher,
+        MusicLibraryService $musicLibraryService,
         ?StructuredLogger $logger = null
     ) {
         $this->db = $db;
         $this->scanner = $scanner;
         $this->watcher = $watcher;
+        $this->musicLibraryService = $musicLibraryService;
         $this->logger = $logger ?? $this->createDefaultLogger();
     }
 
@@ -413,7 +420,7 @@ class LibraryManager
     }
 
     /**
-     * Scans a music library using AudioScanner for tag harvesting.
+     * Scans a music library using MusicLibraryService for tag harvesting.
      *
      * @param string $libraryId The library's unique identifier
      * @param LibraryRow $library The library data
@@ -421,19 +428,16 @@ class LibraryManager
      */
     private function scanMusicLibrary(string $libraryId, LibraryRow $library): void
     {
-        // Music scanning is handled by MusicLibraryManager which uses
-        // AudioScanner for ID3/MP4 tag harvesting. This requires
+        // Music scanning is handled by MusicLibraryService which uses
+        // MusicLibraryScanner for ID3/MP4 tag harvesting. This requires
         // a different scan approach than video libraries.
-        //
-        // For now, fall back to basic scanning. The AudioScanner
-        // will handle tag harvesting when available.
         foreach ($library->paths as $path) {
             if (!is_dir($path)) {
                 $this->logger->warning('Music library path does not exist', ['path' => $path]);
                 continue;
             }
-            // Use audio type for scanner
-            $this->scanner->scan($libraryId, $path, 'audio');
+            // Use MusicLibraryService for music scanning
+            $this->musicLibraryService->scanDirectory($path);
         }
 
         $this->logger->info('Music library scan complete', ['library_id' => $libraryId]);

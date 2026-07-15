@@ -564,12 +564,18 @@ class WebPortalRouter
             $isAdmin
         );
 
-        // Mint a signed direct-play URL. The player's `<video src>` can't attach
-        // a Bearer header, and `/media/{id}/stream` is no longer world-readable,
-        // so this now-gated detail endpoint hands the player a short-lived
-        // `?exp&sig` token that the stream handler verifies.
-        if ($itemId !== '') {
-            $shaped['stream_url'] = \Phlix\Auth\SignedUrl::fromEnv()->mint('/media/' . $itemId . '/stream');
+        // Mint a signed direct-play URL only when the user has an active profile.
+        // The player's `<video src>` can't attach a Bearer header, and
+        // `/media/{id}/stream` is no longer world-readable, so this now-gated
+        // detail endpoint hands the player a short-lived `?exp&sig` token that
+        // the stream handler verifies. Users without a profile must not receive
+        // a stream_url — they have no streaming rights.
+        if ($itemId !== '' && $request->userId !== '') {
+            $hasProfile = $this->profileManager !== null
+                && $this->profileManager->getActiveProfile($request->userId) !== null;
+            if ($hasProfile) {
+                $shaped['stream_url'] = \Phlix\Auth\SignedUrl::fromEnv()->mint('/media/' . $itemId . '/stream');
+            }
         }
 
         // Per-user favorite/rating block (E10). ADD-ONLY — never disturb existing

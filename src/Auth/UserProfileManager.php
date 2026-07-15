@@ -339,6 +339,10 @@ class UserProfileManager
 
         $id = $this->generateUuid();
         $isAdmin = $data['is_admin'] ?? false;
+        // The first profile for a user auto-becomes active (per docblock contract).
+        // is_active = true only if: explicitly set, OR it's the user's first profile.
+        $isFirstProfile = UserRow::int($countRow, 'count', 0) === 0;
+        $isActive = $data['is_active'] ?? $isFirstProfile;
 
         $this->db->query(
             "INSERT INTO user_profiles (id, user_id, name, avatar_url, is_active, is_admin)
@@ -348,7 +352,7 @@ class UserProfileManager
                 $userId,
                 $name,
                 $data['avatar_url'] ?? null,
-                $data['is_active'] ?? false,
+                $isActive,
                 $isAdmin,
             ]
         );

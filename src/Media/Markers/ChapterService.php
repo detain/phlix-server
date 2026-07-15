@@ -16,14 +16,14 @@ use Phlix\Media\Markers\Detection\MarkerCandidateRepository;
 use Phlix\Media\Markers\Detection\StoredMarkers;
 
 /**
- * Service for managing marker data on media items.
+ * Service for managing chapter markers and intro/outro detection data.
  *
  * Reads markers from the formal marker columns (populated by promoteCandidates)
  * and falls back to metadata_json candidates when formal columns are empty.
  *
  * @since 0.12.0
  */
-class MarkerService
+class ChapterService
 {
     /**
      * @param ItemRepository            $item_repo      Item repository for database access

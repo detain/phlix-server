@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace Phlix\Tests\Unit\Media\Markers;
 
 use PHPUnit\Framework\TestCase;
-use Phlix\Media\Markers\MarkerService;
+use Phlix\Media\Markers\ChapterService;
 use Phlix\Media\Markers\PlaybackMarkerService;
 use Phlix\Media\Markers\MarkerSet;
 use Phlix\Media\Markers\IntroMarker;

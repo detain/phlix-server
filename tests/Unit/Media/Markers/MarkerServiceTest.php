@@ -11,7 +11,7 @@ use Phlix\Media\Markers\Detection\IntroDetectionResult;
 use Phlix\Media\Markers\Detection\MarkerCandidateRepository;
 use Phlix\Media\Markers\Detection\OutroMarkerCandidate;
 use Phlix\Media\Markers\Detection\StoredMarkers;
-use Phlix\Media\Markers\MarkerService;
+use Phlix\Media\Markers\ChapterService;
 use Phlix\Media\Markers\MarkerSet;
 use PHPUnit\Framework\MockObject\MockObject;
 use Workerman\MySQL\Connection;

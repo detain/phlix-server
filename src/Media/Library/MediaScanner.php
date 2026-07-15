@@ -21,7 +21,7 @@ use Phlix\Media\Extras\TrailerFinder;
 use Phlix\Media\MarkerService;
 use Phlix\Media\MarkerType;
 use Phlix\Media\Markers\ChapterMarkerService;
-use Phlix\Media\Markers\MarkerService as MarkersMarkerService;
+use Phlix\Media\Markers\ChapterService as MarkersMarkerService;
 use Phlix\Media\Markers\Detection\MarkerCandidateRepository;
 use Phlix\Media\MediaAsset\MediaAssetJob;
 use Phlix\Media\MediaAsset\MediaAssetJobStore;

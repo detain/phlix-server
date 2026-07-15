@@ -2917,7 +2917,7 @@ class Application
             );
             $itemRepository = new \Phlix\Media\Library\ItemRepository($db);
             $markerCandidateRepository = new \Phlix\Media\Markers\Detection\MarkerCandidateRepository($itemRepository);
-            $markerService = new \Phlix\Media\Markers\MarkerService($itemRepository, $markerCandidateRepository);
+            $markerService = new \Phlix\Media\Markers\ChapterService($itemRepository, $markerCandidateRepository);
             $ffmpegConfig = $this->loadFfmpegConfig();
             $ffmpegRunner = new \Phlix\Media\Transcoding\FfmpegRunner(
                 $this->configString($ffmpegConfig, 'ffmpeg_path', '/usr/bin/ffmpeg'),
@@ -2934,7 +2934,7 @@ $chapterMarkerService = new \Phlix\Media\MarkerService($db);
         /** @var \Phlix\Media\Library\ItemRepository */
         $itemRepository = $this->container->get(\Phlix\Media\Library\ItemRepository::class);
         $markerCandidateRepository = new \Phlix\Media\Markers\Detection\MarkerCandidateRepository($itemRepository);
-        $markerService = new \Phlix\Media\Markers\MarkerService($itemRepository, $markerCandidateRepository);
+        $markerService = new \Phlix\Media\Markers\ChapterService($itemRepository, $markerCandidateRepository);
         /** @var \Phlix\Media\Playback\GaplessPlaybackManager */
         $gaplessManager = $this->container->get(\Phlix\Media\Playback\GaplessPlaybackManager::class);
         $trickplayController = $this->getTrickplayController();
@@ -3092,7 +3092,7 @@ $chapterMarkerService = new \Phlix\Media\MarkerService($db);
             );
             $itemRepository = new \Phlix\Media\Library\ItemRepository($db);
             $markerCandidateRepository = new \Phlix\Media\Markers\Detection\MarkerCandidateRepository($itemRepository);
-            $markerService = new \Phlix\Media\Markers\MarkerService($itemRepository, $markerCandidateRepository);
+            $markerService = new \Phlix\Media\Markers\ChapterService($itemRepository, $markerCandidateRepository);
             return new \Phlix\Server\Http\Controllers\MarkerController($markerService);
         }
 
@@ -3193,7 +3193,7 @@ $chapterMarkerService = new \Phlix\Media\MarkerService($db);
             $playbackController = new \Phlix\Session\PlaybackController($db, $sessionManager);
             $itemRepository = new \Phlix\Media\Library\ItemRepository($db);
             $markerCandidateRepository = new \Phlix\Media\Markers\Detection\MarkerCandidateRepository($itemRepository);
-            $markerService = new \Phlix\Media\Markers\MarkerService($itemRepository, $markerCandidateRepository);
+            $markerService = new \Phlix\Media\Markers\ChapterService($itemRepository, $markerCandidateRepository);
             return new \Phlix\Server\Http\Controllers\SessionController(
                 $sessionManager,
                 $playbackController,
@@ -3208,7 +3208,7 @@ $chapterMarkerService = new \Phlix\Media\MarkerService($db);
         /** @var \Phlix\Media\Library\ItemRepository */
         $itemRepository = $this->container->get(\Phlix\Media\Library\ItemRepository::class);
         $markerCandidateRepository = new \Phlix\Media\Markers\Detection\MarkerCandidateRepository($itemRepository);
-        $markerService = new \Phlix\Media\Markers\MarkerService($itemRepository, $markerCandidateRepository);
+        $markerService = new \Phlix\Media\Markers\ChapterService($itemRepository, $markerCandidateRepository);
         return new \Phlix\Server\Http\Controllers\SessionController(
             $sessionManager,
             $playbackController,

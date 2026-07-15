@@ -7,7 +7,7 @@ use Phlix\LiveTv\ComskipRunner;
 use Phlix\LiveTv\ComskipEdlParser;
 use Phlix\LiveTv\ComskipPostProcessor;
 use Phlix\Media\Markers\ChapterMarker;
-use Phlix\Media\Markers\MarkerService;
+use Phlix\Media\Markers\ChapterService;
 use Phlix\Media\Markers\MarkerSet;
 use PHPUnit\Framework\MockObject\MockObject;
 use Psr\Log\NullLogger;

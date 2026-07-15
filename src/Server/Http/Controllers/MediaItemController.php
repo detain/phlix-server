@@ -17,14 +17,14 @@ use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Library\MediaItemShaper;
 use Phlix\Media\Library\StreamProbeBackfill;
 use Phlix\Media\Library\StreamTrackShaper;
-use Phlix\Media\Markers\MarkerService;
+use Phlix\Media\MarkerService;
+use Phlix\Media\Markers\ChapterService;
 use Phlix\Media\Markers\SkipButtonSpec;
 use Phlix\Media\Playback\GaplessPlaybackManager;
 use Phlix\Media\Streaming\AbrLadder;
 use Phlix\Media\Streaming\Rendition;
 use Phlix\Media\Streaming\SourceProfile;
 use Phlix\Media\Streaming\Trickplay\TrickplayController;
-use Phlix\Media\MarkerService as ChapterMarkerService;
 use Phlix\Media\MarkerType;
 
 class MediaItemController
@@ -33,7 +33,7 @@ class MediaItemController
     private MarkerService $markerService;
     private GaplessPlaybackManager $gaplessManager;
     private TrickplayController $trickplayController;
-    private ChapterMarkerService $chapterMarkerService;
+    private ChapterService $chapterService;
 
     /**
      * Lazy one-shot stream backfill for pre-071 items (see getPlaybackInfo()).
@@ -46,7 +46,7 @@ class MediaItemController
         MarkerService $markerService,
         GaplessPlaybackManager $gaplessManager,
         TrickplayController $trickplayController,
-        ChapterMarkerService $chapterMarkerService,
+        ChapterService $chapterService,
         ?StreamProbeBackfill $streamBackfill = null
     ) {
         $this->itemRepository = $itemRepository;

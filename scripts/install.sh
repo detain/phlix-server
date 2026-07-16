@@ -1261,23 +1261,37 @@ phlix_check_disabled_functions
 log "Ensuring Swoole + php-uv extensions are installed"
 phlix_install_swoole_uv
 
-# Xdebug — install and configure for trace debugging
+# Xdebug — install and configure
+# Default is OFF; set XDEBUG_MODE env var to enable (e.g., XDEBUG_MODE=develop,trace)
 log "Installing and configuring Xdebug"
 mkdir -p /tmp/xdebug
 XDEBUG_INI="$(phlix_php_confd_dir)/zz-xdebug.ini"
 cat > "$XDEBUG_INI" <<'XDEBUG_EOF'
-xdebug.mode = trace
+; Default mode is OFF - use XDEBUG_MODE env var to enable
+; Options: off, develop, trace, debug (can combine with comma: "develop,trace")
+xdebug.mode = ${XDEBUG_MODE:-off}
 xdebug.start_with_request = trigger
-# Use XDEBUG_TRIGGER env var to set a secure random trigger value in production.
-# Example: XDEBUG_TRIGGER=$(openssl rand -hex 16) php -d xdebug.trigger_value="$XDEBUG_TRIGGER" start.php
-# Defaults to "devdebug" when XDEBUG_TRIGGER is not set.
 xdebug.trigger_value = "${XDEBUG_TRIGGER:-devdebug}"
 xdebug.trace_output_dir = /tmp/xdebug
 xdebug.max_nesting_level = 512
 xdebug.collect_assignments = 1
 xdebug.collect_return_value = 1
 XDEBUG_EOF
-info "Xdebug installed: mode=trace, trigger_value=\${XDEBUG_TRIGGER:-devdebug}, trace_output_dir=/tmp/xdebug"
+info "Xdebug installed: mode=\${XDEBUG_MODE:-off}, trigger_value=\${XDEBUG_TRIGGER:-devdebug}"
+
+# Xdebug toggle helpers — call these to enable/disable xdebug at runtime
+# Usage: source /path/to/install.sh && phlix_xdebug_enable
+phlix_xdebug_enable() {
+    export XDEBUG_MODE="develop,trace"
+    sed -i 's/^xdebug\.mode = .*/xdebug.mode = develop,trace/' "$XDEBUG_INI" 2>/dev/null || true
+    info "Xdebug enabled: mode=develop,trace"
+}
+
+phlix_xdebug_disable() {
+    export XDEBUG_MODE="off"
+    sed -i 's/^xdebug\.mode = .*/xdebug.mode = off/' "$XDEBUG_INI" 2>/dev/null || true
+    info "Xdebug disabled"
+}
 
 # ---------------------------------------------------------------------------
 # 2. Service user + directories

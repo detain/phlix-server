@@ -1362,6 +1362,10 @@ class FfmpegRunner
      */
     public function probeHardwareAcceleration(?HwaccelRegistry $registry = null): array
     {
+        $this->logger->debug('probeHardwareAcceleration called', [
+            'already_probed' => self::$hwaccelProbed,
+            'caller' => debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 3)[2] ?? null,
+        ]);
         if (self::$hwaccelProbed) {
             return HwaccelRegistry::getInstance()->getAll();
         }

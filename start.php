@@ -214,7 +214,7 @@ $httpWorker->onWorkerStart = static function (Worker $w) use ($config, $publicRo
         implode(',', $hwSummary['vendors'] ?? ['none']),
         $hwSummary['chosen_vendor'] ?? 'none',
         $w->id ?? '?'
-    ), $hwSummary);
+    ));
 
     LoggerFactory::get(LogChannels::STREAMING)->info(
         'Hardware acceleration probed at worker start',

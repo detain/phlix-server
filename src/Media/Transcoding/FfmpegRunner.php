@@ -1366,13 +1366,6 @@ class FfmpegRunner
             return HwaccelRegistry::getInstance()->getAll();
         }
 
-        $this->logger->error(sprintf(
-            '[HWACCEL_DEBUG][%s][PID:%d][TRACE:%s] probeHardwareAcceleration EXECUTING (first time in this process)',
-            $timestamp,
-            $pid,
-            $traceId
-        ));
-
         $this->hwaccelRegistry = $registry ?? HwaccelRegistry::getInstance();
         $capabilities = $this->hwaccelRegistry->getAll();
 
@@ -1386,21 +1379,9 @@ class FfmpegRunner
         $this->logger->info('Hardware acceleration probed', [
             'vendors' => array_keys($capabilities),
             'preferred' => $preferredAccelerator,
-            'trace_id' => $traceId,
-            'pid' => $pid,
-            'timestamp' => $timestamp,
         ]);
 
         self::$hwaccelProbed = true;
-
-        $this->logger->error(sprintf(
-            '[HWACCEL_DEBUG][%s][PID:%d][TRACE:%s] probeHardwareAcceleration COMPLETE | vendors=%s | preferred=%s',
-            $timestamp,
-            $pid,
-            $traceId,
-            implode(',', array_keys($capabilities)),
-            $preferredAccelerator ?? 'none'
-        ));
 
         return $capabilities;
     }

@@ -95,31 +95,12 @@ final class TranscodeServicesProvider implements ServiceProviderInterface
 
             FfmpegRunner::class => factory(
                 static function (ContainerInterface $c) use ($ffmpegPath, $ffprobePath, $transcodeDir): FfmpegRunner {
-                    // MASSIVE DEBUG: Trace FfmpegRunner factory invocation
-                    $traceId = substr(md5((string)mt_rand() . microtime(true)), 0, 12);
-                    $timestamp = date('Y-m-d H:i:s.v');
-                    $pid = getmypid();
-                    $backtrace = debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 10);
-                    $callerChain = implode("\n  <- ", array_map(
-                        fn($f) => sprintf('%s:%d %s%s%s()',
-                            basename($f['file'] ?? '??'),
-                            $f['line'] ?? 0,
-                            $f['class'] ?? '',
-                            $f['type'] ?? '::',
-                            $f['function'] ?? '??'
-                        ),
-                        array_slice($backtrace, 1, 8)
-                    ));
+                    // Static cache: only instantiate once per worker process.
+                    static $runner = null;
 
-                    $factoryLogger = $c->get('logger.media');
-                    $factoryLogger->error(sprintf(
-                        "[HWACCEL_DEBUG][%s][PID:%d][TRACE:%s] TranscodeServicesProvider: FfmpegRunner factory ENTER | ffmpegPath=%s | callers:\n  %s",
-                        $timestamp,
-                        $pid,
-                        $traceId,
-                        $ffmpegPath,
-                        $callerChain
-                    ));
+                    if ($runner !== null) {
+                        return $runner;
+                    }
 
                     /** @var \Psr\Log\LoggerInterface $logger */
                     $logger = $c->get('logger.media');
@@ -129,13 +110,6 @@ final class TranscodeServicesProvider implements ServiceProviderInterface
                     // vendor_priority, etc.) with transcoding.php settings
                     // (tone_mapping_mode, preferred_accelerator, etc.).
                     $mergedConfig = \Phlix\Config\HwAccelConfig::get();
-
-                    $factoryLogger->error(sprintf(
-                        '[HWACCEL_DEBUG][%s][PID:%d][TRACE:%s] TranscodeServicesProvider: Creating FfmpegRunner instance',
-                        $timestamp,
-                        $pid,
-                        $traceId
-                    ));
 
                     $runner = new FfmpegRunner($ffmpegPath, $ffprobePath, $transcodeDir, $logger);
                     $runner->setConfig($mergedConfig);
@@ -150,16 +124,7 @@ final class TranscodeServicesProvider implements ServiceProviderInterface
                     // the result on the runner. This avoids per-request probing (which
                     // uses shell_exec/Coroutine\System::exec).
                     // The probe respects vendor_priority from the merged config.
-
-                    $factoryLogger->error(sprintf(
-                        '[HWACCEL_DEBUG][%s][PID:%d][TRACE:%s] TranscodeServicesProvider: Calling probeHardwareAcceleration()',
-                        $timestamp,
-                        $pid,
-                        $traceId
-                    ));
-
-                    // HWACCEL_FIX: removed from factory - Application::onWorkerStart handles per-worker init
-                    // $runner->probeHardwareAcceleration();
+                    $runner->probeHardwareAcceleration();
 
                     return $runner;
                 }

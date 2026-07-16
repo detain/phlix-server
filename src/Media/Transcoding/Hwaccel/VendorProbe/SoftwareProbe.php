@@ -12,6 +12,7 @@ declare(strict_types=1);
 namespace Phlix\Media\Transcoding\Hwaccel\VendorProbe;
 
 use Phlix\Media\Transcoding\Hwaccel\HwaccelCapability;
+use Phlix\Media\Transcoding\Hwaccel\ShellTimeout;
 use Phlix\Media\Transcoding\Hwaccel\VendorProbeInterface;
 use Psr\Log\LoggerInterface;
 
@@ -98,7 +99,8 @@ class SoftwareProbe implements VendorProbeInterface
      */
     private function getEncoders(string $ffmpeg_path): array
     {
-        $output = shell_exec(sprintf('%s -encoders 2>/dev/null | grep -E "libx264|libx265|libvpx"', escapeshellarg($ffmpeg_path)));
+        $cmd = sprintf('%s -encoders 2>/dev/null | grep -E "libx264|libx265|libvpx"', escapeshellarg($ffmpeg_path));
+        $output = ShellTimeout::ffmpegProbe($cmd);
         $encoders = [];
 
         if (is_string($output) && preg_match_all('/(libx264|libx265|libvpx|libvpx-vp9)\s/', $output, $matches)) {

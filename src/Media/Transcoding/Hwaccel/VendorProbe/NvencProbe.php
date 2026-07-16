@@ -13,6 +13,7 @@ namespace Phlix\Media\Transcoding\Hwaccel\VendorProbe;
 
 use Phlix\Media\Transcoding\Hwaccel\HwaccelCapability;
 use Phlix\Media\Transcoding\Hwaccel\HwaccelEncodeFailedException;
+use Phlix\Media\Transcoding\Hwaccel\ShellTimeout;
 use Phlix\Media\Transcoding\Hwaccel\VendorProbeInterface;
 use Psr\Log\LoggerInterface;
 
@@ -39,7 +40,7 @@ class NvencProbe implements VendorProbeInterface
             return false;
         }
 
-        $output = shell_exec('nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null');
+        $output = ShellTimeout::gpuTool('nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null');
 
         return is_string($output) && trim($output) !== '';
     }
@@ -113,7 +114,8 @@ class NvencProbe implements VendorProbeInterface
      */
     private function getEncoders(string $ffmpeg_path): array
     {
-        $output = shell_exec(sprintf('%s -encoders 2>/dev/null | grep nvenc', escapeshellarg($ffmpeg_path)));
+        $cmd = sprintf('%s -encoders 2>/dev/null | grep nvenc', escapeshellarg($ffmpeg_path));
+        $output = ShellTimeout::ffmpegProbe($cmd);
         $encoders = [];
 
         if (is_string($output) && preg_match_all('/([\w]+_nvenc)\s/', $output, $matches)) {
@@ -128,7 +130,8 @@ class NvencProbe implements VendorProbeInterface
      */
     private function getDecoders(string $ffmpeg_path): array
     {
-        $output = shell_exec(sprintf('%s -decoders 2>/dev/null | grep cuvid', escapeshellarg($ffmpeg_path)));
+        $cmd = sprintf('%s -decoders 2>/dev/null | grep cuvid', escapeshellarg($ffmpeg_path));
+        $output = ShellTimeout::ffmpegProbe($cmd);
         $decoders = [];
 
         if (is_string($output) && preg_match_all('/([\w]+_cuvid)\s/', $output, $matches)) {
@@ -163,10 +166,11 @@ class NvencProbe implements VendorProbeInterface
 
     private function checkHdrToneMapping(string $ffmpeg_path): bool
     {
-        $output = shell_exec(sprintf(
+        $cmd = sprintf(
             '%s -help 2>&1 | grep -i "tonemap" || true',
             escapeshellarg($ffmpeg_path)
-        ));
+        );
+        $output = ShellTimeout::ffmpegProbe($cmd);
 
         return is_string($output) && str_contains(strtolower($output), 'tonemap');
     }

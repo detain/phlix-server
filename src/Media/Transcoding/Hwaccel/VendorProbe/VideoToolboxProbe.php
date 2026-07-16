@@ -12,6 +12,7 @@ declare(strict_types=1);
 namespace Phlix\Media\Transcoding\Hwaccel\VendorProbe;
 
 use Phlix\Media\Transcoding\Hwaccel\HwaccelCapability;
+use Phlix\Media\Transcoding\Hwaccel\ShellTimeout;
 use Phlix\Media\Transcoding\Hwaccel\VendorProbeInterface;
 use Psr\Log\LoggerInterface;
 
@@ -37,7 +38,7 @@ class VideoToolboxProbe implements VendorProbeInterface
             return false;
         }
 
-        $output = shell_exec('system_profiler SPDisplaysDataType 2>/dev/null | grep -i "Intel\|Apple\|AMD\|NVIDIA" || true');
+        $output = ShellTimeout::gpuTool('system_profiler SPDisplaysDataType 2>/dev/null | grep -i "Intel\\|Apple\\|AMD\\|NVIDIA" || true');
 
         return is_string($output) && trim($output) !== '';
     }
@@ -109,7 +110,8 @@ class VideoToolboxProbe implements VendorProbeInterface
      */
     private function getEncoders(string $ffmpeg_path): array
     {
-        $output = shell_exec(sprintf('%s -encoders 2>/dev/null | grep videotoolbox', escapeshellarg($ffmpeg_path)));
+        $cmd = sprintf('%s -encoders 2>/dev/null | grep videotoolbox', escapeshellarg($ffmpeg_path));
+        $output = ShellTimeout::ffmpegProbe($cmd);
         $encoders = [];
 
         if (is_string($output) && preg_match_all('/([\w]+_videotoolbox)\s/', $output, $matches)) {

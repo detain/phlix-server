@@ -12,6 +12,7 @@ declare(strict_types=1);
 namespace Phlix\Media\Transcoding\Hwaccel\VendorProbe;
 
 use Phlix\Media\Transcoding\Hwaccel\HwaccelCapability;
+use Phlix\Media\Transcoding\Hwaccel\ShellTimeout;
 use Phlix\Media\Transcoding\Hwaccel\VendorProbeInterface;
 use Psr\Log\LoggerInterface;
 
@@ -37,7 +38,7 @@ class AmfProbe implements VendorProbeInterface
             return false;
         }
 
-        $output = shell_exec('vainfo 2>/dev/null | grep -i "AMD\|Radeon" || true');
+        $output = ShellTimeout::gpuTool('vainfo 2>/dev/null | grep -i "AMD\\|Radeon" || true');
 
         return is_string($output) && trim($output) !== '';
     }
@@ -109,7 +110,8 @@ class AmfProbe implements VendorProbeInterface
      */
     private function getEncoders(string $ffmpeg_path): array
     {
-        $output = shell_exec(sprintf('%s -encoders 2>/dev/null | grep amf', escapeshellarg($ffmpeg_path)));
+        $cmd = sprintf('%s -encoders 2>/dev/null | grep amf', escapeshellarg($ffmpeg_path));
+        $output = ShellTimeout::ffmpegProbe($cmd);
         $encoders = [];
 
         if (is_string($output) && preg_match_all('/([\w]+_amf)\s/', $output, $matches)) {

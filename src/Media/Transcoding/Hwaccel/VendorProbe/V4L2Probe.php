@@ -12,6 +12,7 @@ declare(strict_types=1);
 namespace Phlix\Media\Transcoding\Hwaccel\VendorProbe;
 
 use Phlix\Media\Transcoding\Hwaccel\HwaccelCapability;
+use Phlix\Media\Transcoding\Hwaccel\ShellTimeout;
 use Phlix\Media\Transcoding\Hwaccel\VendorProbeInterface;
 use Psr\Log\LoggerInterface;
 
@@ -40,7 +41,7 @@ class V4L2Probe implements VendorProbeInterface
             }
         }
 
-        $output = shell_exec('v4l2-ctl --list-devices 2>/dev/null || true');
+        $output = ShellTimeout::gpuTool('v4l2-ctl --list-devices 2>/dev/null || true');
 
         return is_string($output) && trim($output) !== '';
     }
@@ -112,7 +113,8 @@ class V4L2Probe implements VendorProbeInterface
      */
     private function getEncoders(string $ffmpeg_path): array
     {
-        $output = shell_exec(sprintf('%s -encoders 2>/dev/null | grep v4l2m2m', escapeshellarg($ffmpeg_path)));
+        $cmd = sprintf('%s -encoders 2>/dev/null | grep v4l2m2m', escapeshellarg($ffmpeg_path));
+        $output = ShellTimeout::ffmpegProbe($cmd);
         $encoders = [];
 
         if (is_string($output) && preg_match_all('/([\w]+_v4l2m2m)\s/', $output, $matches)) {

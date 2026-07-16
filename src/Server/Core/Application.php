@@ -2086,6 +2086,8 @@ class Application
                 array_merge($newsletterConfig, ['template_dir' => $templateDir])
             );
 
+            $musicScanner = new \Phlix\Media\Music\MusicLibraryScanner($db, new \Phlix\Media\Transcoding\FfmpegRunner());
+            $musicLibraryService = new \Phlix\Media\Music\MusicLibraryService($db, $musicScanner);
             $generator = new \Phlix\Admin\NewsletterGenerator(
                 new \Phlix\Stats\StatsCollector($db),
                 new \Phlix\Media\Library\LibraryManager(
@@ -2094,7 +2096,8 @@ class Application
                         $db,
                         new \Phlix\Media\Library\ItemRepository($db),
                     ),
-                    new \Phlix\Media\Library\FolderWatcher()
+                    new \Phlix\Media\Library\FolderWatcher(),
+                    $musicLibraryService
                 ),
                 $db,
                 $templateDir,
@@ -3239,13 +3242,16 @@ class Application
                 'password'
             );
             $itemRepository = new \Phlix\Media\Library\ItemRepository($db);
+            $musicScanner = new \Phlix\Media\Music\MusicLibraryScanner($db, new \Phlix\Media\Transcoding\FfmpegRunner());
+            $musicLibraryService = new \Phlix\Media\Music\MusicLibraryService($db, $musicScanner);
             $libraryManager = new \Phlix\Media\Library\LibraryManager(
                 $db,
                 new \Phlix\Media\Library\MediaScanner(
                     $db,
                     $itemRepository
                 ),
-                new \Phlix\Media\Library\FolderWatcher()
+                new \Phlix\Media\Library\FolderWatcher(),
+                $musicLibraryService
             );
             $scanJobs = new \Phlix\Media\Library\ScanJobRepository($db);
             return new \Phlix\Server\Http\Controllers\LibraryController($libraryManager, $scanJobs, $itemRepository);
@@ -3286,13 +3292,16 @@ class Application
             );
             $themeMediaRepository = new \Phlix\Theming\ThemeMediaRepository($db);
             $themeMediaFinder = new \Phlix\Theming\ThemeMediaFinder();
+            $musicScanner = new \Phlix\Media\Music\MusicLibraryScanner($db, new \Phlix\Media\Transcoding\FfmpegRunner());
+            $musicLibraryService = new \Phlix\Media\Music\MusicLibraryService($db, $musicScanner);
             $libraryManager = new \Phlix\Media\Library\LibraryManager(
                 $db,
                 new \Phlix\Media\Library\MediaScanner(
                     $db,
                     new \Phlix\Media\Library\ItemRepository($db)
                 ),
-                new \Phlix\Media\Library\FolderWatcher()
+                new \Phlix\Media\Library\FolderWatcher(),
+                $musicLibraryService
             );
             return new \Phlix\Server\Http\Controllers\ThemeMediaController(
                 $themeMediaRepository,
@@ -3546,13 +3555,16 @@ class Application
     {
         $db = $this->createDatabaseConnection();
         $itemRepo = new \Phlix\Media\Library\ItemRepository($db);
+        $musicScanner = new \Phlix\Media\Music\MusicLibraryScanner($db, new \Phlix\Media\Transcoding\FfmpegRunner());
+        $musicLibraryService = new \Phlix\Media\Music\MusicLibraryService($db, $musicScanner);
         $libraryManager = new \Phlix\Media\Library\LibraryManager(
             $db,
             new \Phlix\Media\Library\MediaScanner(
                 $db,
                 $itemRepo
             ),
-            new \Phlix\Media\Library\FolderWatcher()
+            new \Phlix\Media\Library\FolderWatcher(),
+            $musicLibraryService
         );
         $sessionManager = new \Phlix\Session\SessionManager($db);
         $audioScanner = new \Phlix\Media\Library\AudioScanner($db, $itemRepo);
@@ -3582,13 +3594,16 @@ class Application
     {
         $db = $this->createDatabaseConnection();
         $itemRepo = new \Phlix\Media\Library\ItemRepository($db);
+        $musicScanner = new \Phlix\Media\Music\MusicLibraryScanner($db, new \Phlix\Media\Transcoding\FfmpegRunner());
+        $musicLibraryService = new \Phlix\Media\Music\MusicLibraryService($db, $musicScanner);
         $libraryManager = new \Phlix\Media\Library\LibraryManager(
             $db,
             new \Phlix\Media\Library\MediaScanner(
                 $db,
                 $itemRepo
             ),
-            new \Phlix\Media\Library\FolderWatcher()
+            new \Phlix\Media\Library\FolderWatcher(),
+            $musicLibraryService
         );
         $opdsBuilder = new \Phlix\Media\Metadata\OpdsFeedBuilder($itemRepo, 'http://localhost:8080');
 

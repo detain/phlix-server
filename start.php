@@ -177,14 +177,52 @@ $httpWorker->onWorkerStart = static function (Worker $w) use ($config, $publicRo
     // probe is idempotent (guarded by $hwaccelProbed) so this explicit call is
     // safe and merely guarantees it happened at boot. It runs OUTSIDE any
     // coroutine here, so the probe's blocking exec cannot stall the event loop.
+
+    // MASSIVE DEBUG: Trace worker startup and FfmpegRunner resolution
+    $workerTraceId = substr(md5((string)mt_rand() . microtime(true)), 0, 12);
+    $workerTimestamp = date('Y-m-d H:i:s.v');
+    $workerPid = getmypid();
+    error_log(sprintf(
+        '[HWACCEL_DEBUG][%s][PID:%d][TRACE:%s] start.php: Worker initializing | workerId=%s | host=%s',
+        $workerTimestamp,
+        $workerPid,
+        $workerTraceId,
+        $w->id ?? '?',
+        gethostname()
+    ));
+
     /** @var \Phlix\Media\Transcoding\FfmpegRunner $ffmpegRunner */
     $ffmpegRunner = $container->get(\Phlix\Media\Transcoding\FfmpegRunner::class);
+
+    error_log(sprintf(
+        '[HWACCEL_DEBUG][%s][PID:%d][TRACE:%s] start.php: FfmpegRunner resolved from container | workerId=%s',
+        $workerTimestamp,
+        $workerPid,
+        $workerTraceId,
+        $w->id ?? '?'
+    ));
+
     // SV-0.1: The container's FfmpegRunner factory already calls probeHardwareAcceleration()
     // (guarded by $hwaccelProbed to ensure idempotence), so the explicit probe call is
     // redundant. The runner is ready to use; log the summary for visibility.
+    $hwSummary = $ffmpegRunner->getHardwareAccelerationSummary();
+    error_log(sprintf(
+        '[HWACCEL_DEBUG][%s][PID:%d][TRACE:%s] start.php: Hardware acceleration summary | vendors=%s | chosen=%s | workerId=%s',
+        $workerTimestamp,
+        $workerPid,
+        $workerTraceId,
+        implode(',', $hwSummary['vendors'] ?? ['none']),
+        $hwSummary['chosen_vendor'] ?? 'none',
+        $w->id ?? '?'
+    ), $hwSummary);
+
     LoggerFactory::get(LogChannels::STREAMING)->info(
         'Hardware acceleration probed at worker start',
-        $ffmpegRunner->getHardwareAccelerationSummary(),
+        array_merge($hwSummary, [
+            'trace_id' => $workerTraceId,
+            'worker_id' => $w->id ?? '?',
+            'pid' => $workerPid,
+        ]),
     );
 
     // SV-3.1e: DVR boot recovery. resumeActiveRecordings() reconciles

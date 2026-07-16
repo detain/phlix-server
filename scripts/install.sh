@@ -1227,7 +1227,7 @@ apt-get install -y ca-certificates curl git unzip openssl >/dev/null
 # Distro PHP; Ubuntu 24.04 ships PHP 8.3 by default. ffmpeg is required for
 # transcoding; mysql-server for the database; haproxy for the reverse proxy.
 apt-get install -y \
-  php-cli php-mysql php-mbstring php-curl php-xml php-bcmath php-gd php-zip \
+  php-cli php-mysql php-mbstring php-curl php-xml php-bcmath php-gd php-zip php-xdebug \
   mysql-server ffmpeg >/dev/null
 if [ "$SKIP_HAPROXY" = "yes" ]; then
   info "Skipping HAProxy install (--no-proxy)."
@@ -1260,6 +1260,24 @@ phlix_check_disabled_functions
 # (docker/Dockerfile.base). Idempotent: skipped if already loaded.
 log "Ensuring Swoole + php-uv extensions are installed"
 phlix_install_swoole_uv
+
+# Xdebug — install and configure for trace debugging
+log "Installing and configuring Xdebug"
+mkdir -p /tmp/xdebug
+XDEBUG_INI="$(phlix_php_confd_dir)/zz-xdebug.ini"
+cat > "$XDEBUG_INI" <<'XDEBUG_EOF'
+xdebug.mode = trace
+xdebug.start_with_request = trigger
+# Use XDEBUG_TRIGGER env var to set a secure random trigger value in production.
+# Example: XDEBUG_TRIGGER=$(openssl rand -hex 16) php -d xdebug.trigger_value="$XDEBUG_TRIGGER" start.php
+# Defaults to "devdebug" when XDEBUG_TRIGGER is not set.
+xdebug.trigger_value = "${XDEBUG_TRIGGER:-devdebug}"
+xdebug.trace_output_dir = /tmp/xdebug
+xdebug.max_nesting_level = 512
+xdebug.collect_assignments = 1
+xdebug.collect_return_value = 1
+XDEBUG_EOF
+info "Xdebug installed: mode=trace, trigger_value=\${XDEBUG_TRIGGER:-devdebug}, trace_output_dir=/tmp/xdebug"
 
 # ---------------------------------------------------------------------------
 # 2. Service user + directories

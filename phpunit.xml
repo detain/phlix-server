@@ -37,7 +37,6 @@
     </include>
     <exclude>
       <directory suffix=".php">src/vendor</directory>
-      <file>src/Server/Core/Application.php</file>
     </exclude>
   </source>
 </phpunit>

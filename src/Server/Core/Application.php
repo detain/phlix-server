@@ -2958,8 +2958,8 @@ class Application
             ? $this->container->get(\Phlix\Media\Transcoding\FfmpegRunner::class)
             : new \Phlix\Media\Transcoding\FfmpegRunner(
                 $this->configString($this->loadFfmpegConfig(), 'ffmpeg_path', '/usr/bin/ffmpeg'),
-                $this->configString($this->loadFfmpegConfig(), 'ffprobe_path', '/usr/bin/ffprobe'),
-              );
+                $this->configString($this->loadFfmpegConfig(), 'ffprobe_path', '/usr/bin/ffprobe')
+            );
         // SV-0.1: when using the container singleton, probe is called by the factory.
         // When falling back to direct creation (no container), skip the explicit call
         // since setConfig() already merges the hwaccel settings. The probe is guarded

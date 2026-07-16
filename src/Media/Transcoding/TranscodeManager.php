@@ -3684,7 +3684,8 @@ class TranscodeManager
                 if (is_array($decodedTracks)) {
                     $audioTracks = [];
                     foreach ($decodedTracks as $track) {
-                        if (is_array($track)
+                        if (
+                            is_array($track)
                             && array_key_exists('index', $track)
                             && array_key_exists('stream_index', $track)
                             && array_key_exists('language', $track)

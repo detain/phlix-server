@@ -1362,53 +1362,7 @@ class FfmpegRunner
      */
     public function probeHardwareAcceleration(?HwaccelRegistry $registry = null): array
     {
-        // MASSIVE DEBUG: Trace every call to probeHardwareAcceleration
-        $traceId = substr(md5((string)mt_rand() . microtime(true)), 0, 12);
-        $timestamp = date('Y-m-d H:i:s.v');
-        $pid = getmypid();
-        $backtrace = debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 8);
-
-        $callerInfo = [];
-        foreach (array_slice($backtrace, 1, 5) as $i => $frame) {
-            $callerInfo[] = sprintf(
-                '#%d %s%s%s() at %s:%d',
-                $i,
-                isset($frame['class']) ? $frame['class'] . ($frame['type'] ?? '::') : '',
-                $frame['function'] ?? 'unknown',
-                isset($frame['args']) ? '(' . count($frame['args']) . ' args)' : '()',
-                $frame['file'] ?? 'unknown',
-                $frame['line'] ?? 0
-            );
-        }
-
-        $this->logger->error(sprintf(
-            '[HWACCEL_DEBUG][%s][PID:%d][TRACE:%s] probeHardwareAcceleration called | already_probed=%s | callers=%s',
-            $timestamp,
-            $pid,
-            $traceId,
-            self::$hwaccelProbed ? 'YES' : 'NO',
-            implode(' <- ', array_map(fn($f) => basename($f['file'] ?? '??') . ':' . ($f['line'] ?? '?'), array_slice($backtrace, 1, 4)))
-        ), [
-            'trace_id' => $traceId,
-            'timestamp' => $timestamp,
-            'pid' => $pid,
-            'already_probed' => self::$hwaccelProbed,
-            'backtrace_count' => count($backtrace),
-            'caller_chain' => $callerInfo,
-            'backtrace_full' => array_map(fn($f) => [
-                'file' => basename($f['file'] ?? 'unknown'),
-                'line' => $f['line'] ?? 0,
-                'function' => ($f['class'] ?? '') . ($f['type'] ?? '::') . ($f['function'] ?? 'unknown'),
-            ], array_slice($backtrace, 1, 10)),
-        ]);
-
         if (self::$hwaccelProbed) {
-            $this->logger->error(sprintf(
-                '[HWACCEL_DEBUG][%s][PID:%d][TRACE:%s] probeHardwareAcceleration SKIPPED (already probed)',
-                $timestamp,
-                $pid,
-                $traceId
-            ));
             return HwaccelRegistry::getInstance()->getAll();
         }
 

@@ -158,15 +158,8 @@ final class TranscodeServicesProvider implements ServiceProviderInterface
                         $traceId
                     ));
 
-                    $probeResult = $runner->probeHardwareAcceleration();
-
-                    $factoryLogger->error(sprintf(
-                        '[HWACCEL_DEBUG][%s][PID:%d][TRACE:%s] TranscodeServicesProvider: probeHardwareAcceleration returned | vendors=%s',
-                        $timestamp,
-                        $pid,
-                        $traceId,
-                        implode(',', array_keys($probeResult))
-                    ));
+                    // HWACCEL_FIX: removed from factory - Application::onWorkerStart handles per-worker init
+                    // $runner->probeHardwareAcceleration();
 
                     return $runner;
                 }

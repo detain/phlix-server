@@ -154,10 +154,7 @@ final class SimilarityWorker
      */
     public function start(int $pollSeconds): void
     {
-        $this->logger->info('SimilarityWorker: starting supervised loop', [
-            'poll_interval' => $pollSeconds,
-            'max_concurrent' => $this->maxConcurrent,
-        ]);
+        $this->logger->info('[DEBUG] ' . date('Y-m-d H:i:s.v') . ' SimilarityWorker::start [poll_interval=' . $pollSeconds . '] [max_concurrent=' . $this->maxConcurrent . ']');
 
         Timer::add($pollSeconds, fn (): bool => $this->runOnce() > 0);
     }
@@ -173,6 +170,9 @@ final class SimilarityWorker
      */
     private function processConcurrently(array $jobs): int
     {
+        $this->logger->debug('[DEBUG] ' . date('Y-m-d H:i:s.v') . ' SimilarityWorker::processConcurrently Starting batch [count=' . count($jobs) . ']');
+        $startTime = hrtime(true);
+
         $processed = 0;
         $semaphore = new \Swoole\Coroutine\Channel(max(1, $this->maxConcurrent));
         $done = new \Swoole\Coroutine\Channel(count($jobs));
@@ -195,6 +195,9 @@ final class SimilarityWorker
             $done->pop();
         }
 
+        $durationMs = (hrtime(true) - $startTime) / 1_000_000.0;
+        $this->logger->debug('[DEBUG] ' . date('Y-m-d H:i:s.v') . ' SimilarityWorker::processConcurrently Completed batch [count=' . count($jobs) . '] [processed=' . $processed . '] [duration=' . round($durationMs, 2) . 'ms]');
+
         return $processed;
     }
 
@@ -207,12 +210,18 @@ final class SimilarityWorker
      */
     private function processSequentially(array $jobs): int
     {
+        $this->logger->debug('[DEBUG] ' . date('Y-m-d H:i:s.v') . ' SimilarityWorker::processSequentially Starting batch [count=' . count($jobs) . ']');
+        $startTime = hrtime(true);
+
         $processed = 0;
 
         foreach ($jobs as $job) {
             $this->processOneJob($job);
             $processed++;
         }
+
+        $durationMs = (hrtime(true) - $startTime) / 1_000_000.0;
+        $this->logger->debug('[DEBUG] ' . date('Y-m-d H:i:s.v') . ' SimilarityWorker::processSequentially Completed batch [count=' . count($jobs) . '] [processed=' . $processed . '] [duration=' . round($durationMs, 2) . 'ms]');
 
         return $processed;
     }
@@ -224,19 +233,17 @@ final class SimilarityWorker
      */
     private function processOneJob(SimilarityJob $job): void
     {
-        $this->logger->debug('SimilarityWorker: processing job', [
-            'item_id' => $job->itemId,
-            'library_id' => $job->libraryId,
-        ]);
+        $this->logger->debug('[DEBUG] ' . date('Y-m-d H:i:s.v') . ' SimilarityWorker::processOneJob Starting [itemId=' . $job->itemId . '] [libraryId=' . $job->libraryId . ']');
+        $startTime = hrtime(true);
 
         try {
             $this->service->computeSimilarForItem($job->itemId, $job->libraryId);
             $this->store->complete($job->itemId);
+            $durationMs = (hrtime(true) - $startTime) / 1_000_000.0;
+            $this->logger->debug('[DEBUG] ' . date('Y-m-d H:i:s.v') . ' SimilarityWorker::processOneJob Completed [itemId=' . $job->itemId . '] [duration=' . round($durationMs, 2) . 'ms]');
         } catch (\Throwable $e) {
-            $this->logger->error('SimilarityWorker: job failed', [
-                'item_id' => $job->itemId,
-                'error' => $e->getMessage(),
-            ]);
+            $durationMs = (hrtime(true) - $startTime) / 1_000_000.0;
+            $this->logger->error('[DEBUG] ' . date('Y-m-d H:i:s.v') . ' SimilarityWorker::processOneJob FAILED [itemId=' . $job->itemId . '] [duration=' . round($durationMs, 2) . 'ms] [error=' . $e->getMessage() . ']');
             // Mark complete anyway so we don't spin forever on a failing item.
             $this->store->complete($job->itemId);
         }

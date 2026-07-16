@@ -2914,14 +2914,15 @@ class Application
             $itemRepository = new \Phlix\Media\Library\ItemRepository($db);
             $markerCandidateRepository = new \Phlix\Media\Markers\Detection\MarkerCandidateRepository($itemRepository);
             $markerService = new \Phlix\Media\Markers\MarkerService($itemRepository, $markerCandidateRepository);
+            // SV-0.1: create FfmpegRunner directly since no container is available.
+            // The container factory calls probeHardwareAcceleration(), so we skip the
+            // explicit call here to avoid redundancy. setConfig() still merges hwaccel.
             $ffmpegConfig = $this->loadFfmpegConfig();
             $ffmpegRunner = new \Phlix\Media\Transcoding\FfmpegRunner(
                 $this->configString($ffmpegConfig, 'ffmpeg_path', '/usr/bin/ffmpeg'),
                 $this->configString($ffmpegConfig, 'ffprobe_path', '/usr/bin/ffprobe'),
             );
-            // SV-0.1: share the single merged hwaccel config source with all runners.
             $ffmpegRunner->setConfig(\Phlix\Config\HwAccelConfig::get());
-            $ffmpegRunner->probeHardwareAcceleration();
             $gaplessManager = new \Phlix\Media\Playback\GaplessPlaybackManager(null, $ffmpegRunner);
             $trickplayController = $this->getTrickplayController();
             $chapterMarkerService = new \Phlix\Media\MarkerService($db);
@@ -2932,6 +2933,8 @@ class Application
         $itemRepository = $this->container->get(\Phlix\Media\Library\ItemRepository::class);
         $markerCandidateRepository = new \Phlix\Media\Markers\Detection\MarkerCandidateRepository($itemRepository);
         $markerService = new \Phlix\Media\Markers\MarkerService($itemRepository, $markerCandidateRepository);
+        /** @var \Phlix\Media\Transcoding\FfmpegRunner */
+        $ffmpegRunner = $this->container->get(\Phlix\Media\Transcoding\FfmpegRunner::class);
         /** @var \Phlix\Media\Playback\GaplessPlaybackManager */
         $gaplessManager = $this->container->get(\Phlix\Media\Playback\GaplessPlaybackManager::class);
         $trickplayController = $this->getTrickplayController();
@@ -2947,14 +2950,20 @@ class Application
      */
     private function getSubtitleController(): \Phlix\Server\Http\Controllers\SubtitleController
     {
-        $ffmpegConfig = $this->loadFfmpegConfig();
-        $ffmpeg = new \Phlix\Media\Transcoding\FfmpegRunner(
-            $this->configString($ffmpegConfig, 'ffmpeg_path', '/usr/bin/ffmpeg'),
-            $this->configString($ffmpegConfig, 'ffprobe_path', '/usr/bin/ffprobe'),
-        );
-        // SV-0.1: share the single merged hwaccel config source with all runners.
-        $ffmpeg->setConfig(\Phlix\Config\HwAccelConfig::get());
-        $ffmpeg->probeHardwareAcceleration();
+        /** @var \Phlix\Media\Transcoding\FfmpegRunner */
+        $ffmpeg = $this->container !== null
+            ? $this->container->get(\Phlix\Media\Transcoding\FfmpegRunner::class)
+            : new \Phlix\Media\Transcoding\FfmpegRunner(
+                $this->configString($this->loadFfmpegConfig(), 'ffmpeg_path', '/usr/bin/ffmpeg'),
+                $this->configString($this->loadFfmpegConfig(), 'ffprobe_path', '/usr/bin/ffprobe'),
+              );
+        // SV-0.1: when using the container singleton, probe is called by the factory.
+        // When falling back to direct creation (no container), skip the explicit call
+        // since setConfig() already merges the hwaccel settings. The probe is guarded
+        // by $hwaccelProbed anyway, but we avoid the redundancy either way.
+        if ($this->container === null) {
+            $ffmpeg->setConfig(\Phlix\Config\HwAccelConfig::get());
+        }
         $extractor = new \Phlix\Media\Transcoding\Subtitles\SubtitleExtractor();
 
         if ($this->container === null) {

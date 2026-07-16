@@ -76,9 +76,8 @@ class BackgroundDetectorWorker
             return false;
         }
 
-        $this->logger->info('BackgroundDetectorWorker: processing show', [
-            'show_id' => $showId,
-        ]);
+        $this->logger->info('[DEBUG] ' . date('Y-m-d H:i:s.v') . ' BackgroundDetectorWorker::runOnce Starting [showId=' . $showId . ']');
+        $startTime = hrtime(true);
 
         try {
             $result = $this->job->detectForShow($showId);
@@ -94,17 +93,13 @@ class BackgroundDetectorWorker
 
             $this->store->completeShow($showId);
 
-            $this->logger->info('BackgroundDetectorWorker: completed processing', [
-                'show_id' => $showId,
-                'episodes_processed' => count($result->episodes_processed),
-            ]);
+            $durationMs = (hrtime(true) - $startTime) / 1_000_000.0;
+            $this->logger->info('[DEBUG] ' . date('Y-m-d H:i:s.v') . ' BackgroundDetectorWorker::runOnce Completed [showId=' . $showId . '] [duration=' . round($durationMs, 2) . 'ms] [episodes=' . count($result->episodes_processed) . ']');
 
             return true;
         } catch (\Throwable $e) {
-            $this->logger->error('BackgroundDetectorWorker: failed to process show', [
-                'show_id' => $showId,
-                'error' => $e->getMessage(),
-            ]);
+            $durationMs = (hrtime(true) - $startTime) / 1_000_000.0;
+            $this->logger->error('[DEBUG] ' . date('Y-m-d H:i:s.v') . ' BackgroundDetectorWorker::runOnce FAILED [showId=' . $showId . '] [duration=' . round($durationMs, 2) . 'ms] [error=' . $e->getMessage() . ']');
 
             $this->store->completeShow($showId);
 

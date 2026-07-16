@@ -107,6 +107,8 @@ $authManager = $container->get(AuthManager::class);
  * - Body content
  */
 $request = Request::fromGlobals();
+$requestUid = substr(md5((string)($request->userId ?? '') . $request->path . (string)microtime(true)), 0, 16);
+error_log('[DEBUG] ' . date('Y-m-d H:i:s.v') . ' public/index.php START ' . $request->method . ' ' . $request->path . ' [uid=' . $requestUid . '] [userId=' . ($request->userId ?? 'anonymous') . ']');
 
 /**
  * C6/B4: Shared request authentication.
@@ -187,8 +189,10 @@ $router = new Router();
 AdminRoutes::register($router, $container);
 
 if (str_starts_with($path, '/api/v1/admin/')) {
+    error_log('[DEBUG] ' . date('Y-m-d H:i:s.v') . ' public/index.php dispatching admin route [uid=' . $requestUid . ']');
     /** @var \Phlix\Server\Http\Response $response */
     $response = $router->dispatch($request);
+    error_log('[DEBUG] ' . date('Y-m-d H:i:s.v') . ' public/index.php admin route completed [uid=' . $requestUid . '] [status=' . $response->statusCode . ']');
     $cors->decorate($request, $response)->send();
 } elseif (str_starts_with($path, '/api/')) {
     /**
@@ -210,7 +214,9 @@ if (str_starts_with($path, '/api/v1/admin/')) {
      */
     /** @var WebPortalRouter $webPortalRouter */
     $webPortalRouter = $container->get(WebPortalRouter::class);
+    error_log('[DEBUG] ' . date('Y-m-d H:i:s.v') . ' public/index.php dispatching WebPortalRouter [uid=' . $requestUid . ']');
     $response = $webPortalRouter->dispatch($request);
+    error_log('[DEBUG] ' . date('Y-m-d H:i:s.v') . ' public/index.php WebPortalRouter completed [uid=' . $requestUid . '] [status=' . $response->statusCode . ']');
     $cors->decorate($request, $response)->send();
 } else {
     /**

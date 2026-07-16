@@ -179,7 +179,9 @@ $httpWorker->onWorkerStart = static function (Worker $w) use ($config, $publicRo
     // coroutine here, so the probe's blocking exec cannot stall the event loop.
     /** @var \Phlix\Media\Transcoding\FfmpegRunner $ffmpegRunner */
     $ffmpegRunner = $container->get(\Phlix\Media\Transcoding\FfmpegRunner::class);
-    $ffmpegRunner->probeHardwareAcceleration();
+    // SV-0.1: The container's FfmpegRunner factory already calls probeHardwareAcceleration()
+    // (guarded by $hwaccelProbed to ensure idempotence), so the explicit probe call is
+    // redundant. The runner is ready to use; log the summary for visibility.
     LoggerFactory::get(LogChannels::STREAMING)->info(
         'Hardware acceleration probed at worker start',
         $ffmpegRunner->getHardwareAccelerationSummary(),

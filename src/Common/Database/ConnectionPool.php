@@ -68,6 +68,8 @@ class ConnectionPool
             $passStr = is_scalar($password) ? (string)$password : '';
             $dbStr = is_scalar($database) ? (string)$database : '';
 
+            error_log("[DEBUG] " . date('Y-m-d H:i:s.v') . " ConnectionPool::getConnection Creating NEW connection [name={$name}] [host={$hostStr}] [pool_enabled=" . ($poolEnabled ? 'true' : 'false') . "]");
+
             if ($poolEnabled) {
                 // Coroutine connection pool: each coroutine leases its own
                 // connection for true intra-worker DB parallelism. OFF unless
@@ -82,6 +84,7 @@ class ConnectionPool
                     $poolSize,
                     $charset
                 );
+                error_log("[DEBUG] " . date('Y-m-d H:i:s.v') . " ConnectionPool::getConnection Created PooledMySQLConnection [name={$name}] [pool_size={$poolSize}]");
             } else {
                 // Default: the single PhlixMySQLConnection subclass — re-keys
                 // positional bind arrays (workerman/mysql v1.0.9 bindMore() bug
@@ -98,6 +101,7 @@ class ConnectionPool
                     $dbStr,
                     $charset
                 );
+                error_log("[DEBUG] " . date('Y-m-d H:i:s.v') . " ConnectionPool::getConnection Created PhlixMySQLConnection [name={$name}]");
             }
         }
         return self::$connections[$name];

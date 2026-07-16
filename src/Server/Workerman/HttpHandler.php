@@ -125,8 +125,17 @@ final class HttpHandler
         // path, including an early return before the hook is armed.
         $armedOnClose = null;
 
+        // [DEBUG] Log incoming request - request uid will be generated after Request creation
+        $requestUid = sprintf('%08x', mt_rand(0, 0xffffffff));
+        $httpLogger = LoggerFactory::get(LogChannels::HTTP);
+        $httpLogger->debug("[DEBUG] " . date('Y-m-d H:i:s.v') . " HttpHandler.__invoke START {$wr->method()} {$wr->path()} [uid={$requestUid}]");
+
         try {
             $request = Request::fromWorkerman($wr, $connection);
+
+            // Update uid with more entropy now that we have request context
+            $requestUid = substr(md5((string)($request->userId ?? '') . $wr->path() . (string)microtime(true)), 0, 16);
+            $httpLogger->debug("[DEBUG] " . date('Y-m-d H:i:s.v') . " HttpHandler.__invoke Request parsed [uid={$requestUid}] [userId={$request->userId}]");
 
             // CORS: answer a credentialed preflight for an allowlisted origin
             // before any dispatch (shared seam with public/index.php). With an
@@ -136,6 +145,7 @@ final class HttpHandler
             $preflight = $cors->preflightResponse($request);
             if ($preflight !== null) {
                 $responseStatus = $preflight->statusCode;
+                $httpLogger->debug("[DEBUG] " . date('Y-m-d H:i:s.v') . " HttpHandler.__invoke CORS preflight [uid={$requestUid}]");
                 $connection->send($preflight->toWorkermanResponse());
                 return;
             }
@@ -143,6 +153,7 @@ final class HttpHandler
             $static = $this->serveStatic($wr);
             if ($static !== null) {
                 $responseStatus = $static->getStatusCode();
+                $httpLogger->debug("[DEBUG] " . date('Y-m-d H:i:s.v') . " HttpHandler.__invoke Static file served [uid={$requestUid}]");
                 $connection->send($static);
                 return;
             }
@@ -228,7 +239,9 @@ final class HttpHandler
             //    Its constructor wires ThemeMiddleware into the middleware
             //    chain, so HTML responses produced by routes here already
             //    have `{$theme_css|raw}` / `{$theme_js|raw}` substituted.
+            $httpLogger->debug("[DEBUG] " . date('Y-m-d H:i:s.v') . " HttpHandler.__invoke Application::dispatch [uid={$requestUid}]");
             $appResponse = $this->application->dispatch($request);
+            $httpLogger->debug("[DEBUG] " . date('Y-m-d H:i:s.v') . " HttpHandler.__invoke Application::dispatch done [uid={$requestUid}] [status={$appResponse->statusCode}]");
             if ($appResponse->statusCode !== 404) {
                 $responseStatus = $appResponse->statusCode;
                 $decorated = $cors->decorate($request, $appResponse);
@@ -251,7 +264,9 @@ final class HttpHandler
             if (str_starts_with($request->path, '/api/')) {
                 /** @var WebPortalRouter $webPortalRouter */
                 $webPortalRouter = $this->container->get(WebPortalRouter::class);
+                $httpLogger->debug("[DEBUG] " . date('Y-m-d H:i:s.v') . " HttpHandler.__invoke WebPortalRouter::dispatch [uid={$requestUid}]");
                 $apiResponse = $webPortalRouter->dispatch($request);
+                $httpLogger->debug("[DEBUG] " . date('Y-m-d H:i:s.v') . " HttpHandler.__invoke WebPortalRouter::dispatch done [uid={$requestUid}] [status={$apiResponse->statusCode}]");
                 $responseStatus = $apiResponse->statusCode;
                 $decorated = $cors->decorate($request, $apiResponse);
                 $decorated = $securityHeaders->decorate($decorated);
@@ -265,9 +280,11 @@ final class HttpHandler
             //    /books, /audiobooks, /photo). These aren't in
             //    Application's router so we have to dispatch and apply
             //    ThemeMiddleware ourselves.
+            $httpLogger->debug("[DEBUG] " . date('Y-m-d H:i:s.v') . " HttpHandler.__invoke page rendering (ThemeMiddleware) [uid={$requestUid}]");
             /** @var ThemeMiddleware $theme */
             $theme = $this->container->get(ThemeMiddleware::class);
             $response = $theme->onHttpRequest($request, fn (Request $req): Response => $this->dispatch($req));
+            $httpLogger->debug("[DEBUG] " . date('Y-m-d H:i:s.v') . " HttpHandler.__invoke page rendering done [uid={$requestUid}] [status={$response->statusCode}]");
             $responseStatus = $response->statusCode;
             $decorated = $cors->decorate($request, $response);
             $decorated = $securityHeaders->decorate($decorated);
@@ -300,6 +317,10 @@ final class HttpHandler
             // cannot fire a stale killGroup for an already-gone encode, AND a
             // pipelined sibling request's live hook is never clobbered.
             $this->disarmDirectCancelHook($connection, $armedOnClose);
+
+            // [DEBUG] Log request completion with duration
+            $durationMs = (hrtime(true) - $startTime) / 1_000_000.0;
+            $httpLogger->debug("[DEBUG] " . date('Y-m-d H:i:s.v') . " HttpHandler.__invoke END {$wr->method()} {$wr->path()} [uid={$requestUid}] [status={$responseStatus}] [duration=" . round($durationMs, 2) . "ms]");
 
             // Record on EVERY path — success, early return, or exception. Uses the
             // always-defined Workerman request ($wr) for method/route so a throw in

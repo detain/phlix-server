@@ -148,4 +148,94 @@ class ImdbLookupTest extends TestCase
         $lookup = new ImdbLookup($db);
         $this->assertNull($lookup->getByImdbId(''));
     }
+
+    public function testLookupByAkaResolvesViaAlternateTitleWithYearWindow(): void
+    {
+        $captured = [];
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(
+            function (string $sql, array $params) use (&$captured): array {
+                $captured['sql'] = $sql;
+                $captured['params'] = $params;
+                // The on-disk German title resolves to the canonical Matrix tconst.
+                return [[
+                    'tconst' => 'tt0133093',
+                    'primary_title' => 'The Matrix',
+                    'start_year' => 1999,
+                    'genres' => 'Action,Sci-Fi',
+                    'average_rating' => '8.7',
+                    'num_votes' => '1900000',
+                    'runtime_minutes' => 136,
+                ]];
+            }
+        );
+
+        $lookup = new ImdbLookup($db);
+        $result = $lookup->lookupByAka('Matrix - Die Vollendung', 1999);
+
+        $this->assertNotNull($result);
+        $this->assertSame('tt0133093', $result['imdb_id']);
+        $this->assertSame('The Matrix', $result['title']);
+        $this->assertSame(1999, $result['year']);
+
+        // Joins akas → titles, exact normalized aka + year window + exact-year tiebreak.
+        $sql = $captured['sql'];
+        $this->assertIsString($sql);
+        $this->assertStringContainsString('imdb_title_akas', $sql);
+        $this->assertStringContainsString('INNER JOIN imdb_titles', $sql);
+        $this->assertStringContainsString('a.normalized_title = ?', $sql);
+        $this->assertStringContainsString('BETWEEN ? AND ?', $sql);
+        $this->assertSame(['matrix die vollendung', 1998, 2000, 1999], $captured['params']);
+    }
+
+    public function testLookupByAkaWithoutYearOrdersByVotes(): void
+    {
+        $captured = [];
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(
+            function (string $sql, array $params) use (&$captured): array {
+                $captured['sql'] = $sql;
+                $captured['params'] = $params;
+                return [[
+                    'tconst' => 'tt0000005',
+                    'primary_title' => 'A Quiet Place',
+                    'start_year' => 2018,
+                    'genres' => 'Horror',
+                    'average_rating' => '7.5',
+                    'num_votes' => '500000',
+                    'runtime_minutes' => 90,
+                ]];
+            }
+        );
+
+        $lookup = new ImdbLookup($db);
+        $result = $lookup->lookupByAka('Un Lugar Tranquilo', null);
+
+        $this->assertNotNull($result);
+        $this->assertSame('tt0000005', $result['imdb_id']);
+        $this->assertSame(['un lugar tranquilo'], $captured['params']);
+        $sql = $captured['sql'];
+        $this->assertIsString($sql);
+        $this->assertStringContainsString('ORDER BY t.num_votes DESC', $sql);
+        $this->assertStringNotContainsString('BETWEEN', $sql);
+    }
+
+    public function testLookupByAkaReturnsNullWhenNoAkaMatches(): void
+    {
+        // A non-matching title must NOT resolve (no false positives).
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturn([]);
+
+        $lookup = new ImdbLookup($db);
+        $this->assertNull($lookup->lookupByAka('Some Unrelated Title', 2001));
+    }
+
+    public function testLookupByAkaReturnsNullForEmptyNormalizedTitle(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->expects($this->never())->method('query');
+
+        $lookup = new ImdbLookup($db);
+        $this->assertNull($lookup->lookupByAka('   ', 2001));
+    }
 }

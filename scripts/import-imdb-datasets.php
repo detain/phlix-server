@@ -63,3 +63,4 @@ $result = $importer->import($redownload);
 echo "Done.\n";
 echo "  Titles upserted: " . $result['titles'] . "\n";
 echo "  Ratings loaded:  " . $result['ratings'] . "\n";
+echo "  Akas upserted:   " . $result['akas'] . "\n";

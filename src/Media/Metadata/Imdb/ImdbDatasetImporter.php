@@ -19,12 +19,16 @@ use Workerman\MySQL\Connection;
 /**
  * Imports IMDb's free daily datasets into the local `imdb_titles` table.
  *
- * The importer downloads `title.basics.tsv.gz` and `title.ratings.tsv.gz` to a
- * configurable cache directory (with retry/back-off), loads the smaller ratings
- * file into an in-memory map, then streams the (much larger) basics file line by
- * line — filtering to the configured movie `titleType`s, joining the matching
- * rating, and UPSERTing rows into `imdb_titles` in multi-row batches
- * (`INSERT ... ON DUPLICATE KEY UPDATE`, ~500 rows per statement).
+ * The importer downloads `title.basics.tsv.gz`, `title.ratings.tsv.gz` and
+ * (optionally) `title.akas.tsv.gz` to a configurable cache directory (with
+ * retry/back-off), loads the smaller ratings file into an in-memory map, then
+ * streams the (much larger) basics file line by line — filtering to the
+ * configured movie `titleType`s, joining the matching rating, and UPSERTing rows
+ * into `imdb_titles` in multi-row batches (`INSERT ... ON DUPLICATE KEY UPDATE`,
+ * ~500 rows per statement). It finally streams the (largest) akas file, keeping
+ * only alternate/localized titles for the imported movie tconsts (dropping pure
+ * primaryTitle duplicates), and UPSERTs those into `imdb_title_akas` to widen
+ * offline title matching.
  *
  * Streaming (gzgets) rather than slurping keeps memory bounded — the basics
  * dataset is hundreds of MB uncompressed — which matters under Workerman's
@@ -51,6 +55,9 @@ class ImdbDatasetImporter
     /** @var int Columns written per row (keep in sync with the INSERT below). */
     private const COLUMNS_PER_ROW = 10;
 
+    /** @var int Columns written per akas row (keep in sync with the akas INSERT). */
+    private const AKAS_COLUMNS_PER_ROW = 7;
+
     /** @var Connection Async MySQL connection used for all UPSERTs. */
     private Connection $db;
 
@@ -59,6 +66,9 @@ class ImdbDatasetImporter
 
     /** @var string Source URL for title.ratings.tsv.gz. */
     private string $ratingsUrl;
+
+    /** @var string Source URL for title.akas.tsv.gz. */
+    private string $akasUrl;
 
     /** @var string Directory the gz datasets are downloaded to / read from. */
     private string $cacheDir;
@@ -81,7 +91,7 @@ class ImdbDatasetImporter
     /**
      * @param Connection           $db         Async MySQL connection.
      * @param array<string, mixed> $config     The `config/imdb.php` array
-     *                                          (basics_url, ratings_url,
+     *                                          (basics_url, ratings_url, akas_url,
      *                                          cache_dir, title_types).
      *
      * @since 0.21.0
@@ -92,11 +102,13 @@ class ImdbDatasetImporter
 
         $basicsUrl = $config['basics_url'] ?? '';
         $ratingsUrl = $config['ratings_url'] ?? '';
+        $akasUrl = $config['akas_url'] ?? '';
         $cacheDir = $config['cache_dir'] ?? '';
         $titleTypes = $config['title_types'] ?? ['movie', 'tvMovie'];
 
         $this->basicsUrl = is_string($basicsUrl) ? $basicsUrl : '';
         $this->ratingsUrl = is_string($ratingsUrl) ? $ratingsUrl : '';
+        $this->akasUrl = is_string($akasUrl) ? $akasUrl : '';
         $this->cacheDir = rtrim(is_string($cacheDir) ? $cacheDir : '', '/');
 
         $types = [];
@@ -131,8 +143,8 @@ class ImdbDatasetImporter
      *
      * @param bool $forceDownload Re-download even if the cached files exist.
      *
-     * @return array{titles: int, ratings: int} Count of upserted titles and of
-     *                                           ratings loaded into the join map.
+     * @return array{titles: int, ratings: int, akas: int} Count of upserted
+     *     titles, of ratings loaded into the join map, and of akas rows upserted.
      *
      * @throws RuntimeException When the cache dir is unusable or a download fails.
      *
@@ -150,6 +162,7 @@ class ImdbDatasetImporter
 
         $basicsPath = $this->cacheDir . '/title.basics.tsv.gz';
         $ratingsPath = $this->cacheDir . '/title.ratings.tsv.gz';
+        $akasPath = $this->cacheDir . '/title.akas.tsv.gz';
 
         if ($forceDownload || !is_file($basicsPath)) {
             $this->fetch($this->basicsUrl, $basicsPath);
@@ -157,8 +170,12 @@ class ImdbDatasetImporter
         if ($forceDownload || !is_file($ratingsPath)) {
             $this->fetch($this->ratingsUrl, $ratingsPath);
         }
+        // akas is optional: only fetch it when a URL is configured.
+        if ($this->akasUrl !== '' && ($forceDownload || !is_file($akasPath))) {
+            $this->fetch($this->akasUrl, $akasPath);
+        }
 
-        return $this->importFromFiles($basicsPath, $ratingsPath);
+        return $this->importFromFiles($basicsPath, $ratingsPath, is_file($akasPath) ? $akasPath : null);
     }
 
     /**
@@ -167,16 +184,22 @@ class ImdbDatasetImporter
      * This is the seam unit tests use: write tiny fixture `.tsv.gz` files (via
      * `gzencode`) and pass their paths here.
      *
-     * @param string $basicsPath  Path to a gzipped title.basics TSV.
-     * @param string $ratingsPath Path to a gzipped title.ratings TSV.
+     * @param string      $basicsPath  Path to a gzipped title.basics TSV.
+     * @param string      $ratingsPath Path to a gzipped title.ratings TSV.
+     * @param string|null $akasPath    Optional path to a gzipped title.akas TSV.
+     *                                 When provided, alternate/localized titles
+     *                                 for the kept movie tconsts are imported into
+     *                                 `imdb_title_akas`; when null (or the file is
+     *                                 missing) the akas step is skipped and its
+     *                                 count is 0.
      *
-     * @return array{titles: int, ratings: int}
+     * @return array{titles: int, ratings: int, akas: int}
      *
      * @throws RuntimeException When a source file is missing or unreadable.
      *
      * @since 0.21.0
      */
-    public function importFromFiles(string $basicsPath, string $ratingsPath): array
+    public function importFromFiles(string $basicsPath, string $ratingsPath, ?string $akasPath = null): array
     {
         if (!is_file($basicsPath)) {
             throw new RuntimeException("IMDb basics file not found: {$basicsPath}");
@@ -186,16 +209,31 @@ class ImdbDatasetImporter
         }
 
         $ratingsMap = $this->loadRatings($ratingsPath);
-        $titlesUpserted = $this->streamBasics($basicsPath, $ratingsMap);
+
+        // Streaming basics both UPSERTs `imdb_titles` and collects the kept
+        // movie tconsts (→ their normalized primaryTitle) so the akas pass can
+        // bound itself to those titles and skip pure primary-title duplicates.
+        $knownTitles = [];
+        $titlesUpserted = $this->streamBasics($basicsPath, $ratingsMap, $knownTitles);
+
+        $akasUpserted = 0;
+        if ($akasPath !== null) {
+            if (!is_file($akasPath)) {
+                throw new RuntimeException("IMDb akas file not found: {$akasPath}");
+            }
+            $akasUpserted = $this->streamAkas($akasPath, $knownTitles);
+        }
 
         $this->logger()->info('IMDb dataset import complete', [
             'titles' => $titlesUpserted,
             'ratings' => count($ratingsMap),
+            'akas' => $akasUpserted,
         ]);
 
         return [
             'titles' => $titlesUpserted,
             'ratings' => count($ratingsMap),
+            'akas' => $akasUpserted,
         ];
     }
 
@@ -287,12 +325,15 @@ class ImdbDatasetImporter
      * Stream `title.basics.tsv.gz`, filter to movie types, join ratings, and
      * UPSERT in batches.
      *
-     * @param string                                                             $path       Gzipped basics TSV.
-     * @param array<string, array{rating: float|null, votes: int|null}>          $ratingsMap Ratings join map.
+     * @param string                                                    $path        Gzipped basics TSV.
+     * @param array<string, array{rating: float|null, votes: int|null}> $ratingsMap  Ratings join map.
+     * @param array<string, string>                                     $knownTitles OUT: filled with
+     *     `tconst => normalized primaryTitle` for every kept row, so the akas pass
+     *     can bound itself to imported movies and skip pure primary-title dupes.
      *
      * @return int Number of rows upserted.
      */
-    private function streamBasics(string $path, array $ratingsMap): int
+    private function streamBasics(string $path, array $ratingsMap, array &$knownTitles): int
     {
         $gz = gzopen($path, 'rb');
         if ($gz === false) {
@@ -351,11 +392,14 @@ class ImdbDatasetImporter
 
             $rating = $ratingsMap[$tconst] ?? ['rating' => null, 'votes' => null];
 
+            $normalizedPrimary = mb_substr(self::normalizeTitle($primaryTitle), 0, 255);
+            $knownTitles[$tconst] = $normalizedPrimary;
+
             $batch[] = [
                 $tconst,
                 mb_substr($primaryTitle, 0, 512),
                 ($originalTitle === '' || $originalTitle === '\\N') ? null : mb_substr($originalTitle, 0, 512),
-                mb_substr(self::normalizeTitle($primaryTitle), 0, 255),
+                $normalizedPrimary,
                 mb_substr($titleType, 0, 20),
                 ($startYearRaw === '' || $startYearRaw === '\\N') ? null : (int) $startYearRaw,
                 ($genresRaw === '' || $genresRaw === '\\N') ? null : mb_substr($genresRaw, 0, 255),
@@ -378,6 +422,155 @@ class ImdbDatasetImporter
 
         gzclose($gz);
         return $upserted;
+    }
+
+    /**
+     * Stream `title.akas.tsv.gz`, keep the useful subset, and UPSERT in batches.
+     *
+     * The akas dataset covers ALL title types and is the largest of the three, so
+     * it is streamed line-by-line (never slurped). Two documented filters keep the
+     * stored rows bounded and useful:
+     *   1. Only akas whose `titleId` is one of the imported movie tconsts (present
+     *      in `$knownTitles`) are kept — akas for series/episodes/shorts dropped.
+     *   2. Rows whose normalized aka equals the title's normalized primaryTitle are
+     *      skipped (pure duplicates add no matching value); region/language
+     *      variants are kept.
+     *
+     * Columns parsed: titleId, ordering, title, region, language, isOriginalTitle
+     * (types/attributes are ignored — not useful for title matching).
+     *
+     * @param string                $path        Gzipped akas TSV.
+     * @param array<string, string> $knownTitles `tconst => normalized primaryTitle`
+     *                                           for the imported movies.
+     *
+     * @return int Number of akas rows upserted.
+     */
+    private function streamAkas(string $path, array $knownTitles): int
+    {
+        $gz = gzopen($path, 'rb');
+        if ($gz === false) {
+            throw new RuntimeException("Unable to open IMDb akas file: {$path}");
+        }
+
+        $headerLine = gzgets($gz);
+        if ($headerLine === false) {
+            gzclose($gz);
+            return 0;
+        }
+        $header = array_flip(explode("\t", trim($headerLine)));
+
+        $idx = [
+            'titleId' => $header['titleId'] ?? null,
+            'ordering' => $header['ordering'] ?? null,
+            'title' => $header['title'] ?? null,
+            'region' => $header['region'] ?? null,
+            'language' => $header['language'] ?? null,
+            'isOriginalTitle' => $header['isOriginalTitle'] ?? null,
+        ];
+
+        if ($idx['titleId'] === null || $idx['ordering'] === null || $idx['title'] === null) {
+            gzclose($gz);
+            return 0;
+        }
+
+        $batch = [];
+        $upserted = 0;
+
+        while (($line = gzgets($gz)) !== false) {
+            $line = rtrim($line, "\r\n");
+            if ($line === '') {
+                continue;
+            }
+            $fields = explode("\t", $line);
+
+            $tconst = $fields[$idx['titleId']] ?? '';
+            // Filter 1: only akas for the movie tconsts we imported.
+            if ($tconst === '' || !isset($knownTitles[$tconst])) {
+                continue;
+            }
+
+            $title = $fields[$idx['title']] ?? '';
+            if ($title === '' || $title === '\\N') {
+                continue;
+            }
+
+            $normalized = mb_substr(self::normalizeTitle($title), 0, 255);
+            if ($normalized === '') {
+                continue;
+            }
+            // Filter 2: skip pure duplicates of the primaryTitle.
+            if ($normalized === $knownTitles[$tconst]) {
+                continue;
+            }
+
+            $orderingRaw = $fields[$idx['ordering']] ?? '';
+            $ordering = ($orderingRaw === '' || $orderingRaw === '\\N') ? 0 : (int) $orderingRaw;
+
+            $regionRaw = $idx['region'] !== null ? ($fields[$idx['region']] ?? '') : '';
+            $languageRaw = $idx['language'] !== null ? ($fields[$idx['language']] ?? '') : '';
+            $isOriginalRaw = $idx['isOriginalTitle'] !== null ? ($fields[$idx['isOriginalTitle']] ?? '') : '';
+
+            $batch[] = [
+                $tconst,
+                $ordering,
+                mb_substr($title, 0, 512),
+                $normalized,
+                ($regionRaw === '' || $regionRaw === '\\N') ? null : mb_substr($regionRaw, 0, 8),
+                ($languageRaw === '' || $languageRaw === '\\N') ? null : mb_substr($languageRaw, 0, 8),
+                $isOriginalRaw === '1' ? 1 : 0,
+            ];
+
+            if (count($batch) >= self::BATCH_SIZE) {
+                $this->upsertAkasBatch($batch);
+                $upserted += count($batch);
+                $batch = [];
+            }
+        }
+
+        if ($batch !== []) {
+            $this->upsertAkasBatch($batch);
+            $upserted += count($batch);
+        }
+
+        gzclose($gz);
+        return $upserted;
+    }
+
+    /**
+     * UPSERT one batch of akas rows with a single multi-row
+     * INSERT ... ON DUPLICATE KEY UPDATE statement.
+     *
+     * @param list<array{0: string, 1: int, 2: string, 3: string, 4: string|null, 5: string|null, 6: int}> $rows
+     */
+    private function upsertAkasBatch(array $rows): void
+    {
+        if ($rows === []) {
+            return;
+        }
+
+        $placeholders = implode(
+            ', ',
+            array_fill(0, count($rows), '(' . implode(', ', array_fill(0, self::AKAS_COLUMNS_PER_ROW, '?')) . ')')
+        );
+
+        $params = [];
+        foreach ($rows as $row) {
+            foreach ($row as $value) {
+                $params[] = $value;
+            }
+        }
+
+        $sql = 'INSERT INTO imdb_title_akas '
+            . '(tconst, ordering, title, normalized_title, region, language, is_original_title) VALUES '
+            . $placeholders
+            . ' ON DUPLICATE KEY UPDATE '
+            . 'title = VALUES(title), '
+            . 'normalized_title = VALUES(normalized_title), '
+            . 'region = VALUES(region), '
+            . 'language = VALUES(language), '
+            . 'is_original_title = VALUES(is_original_title)';
+
+        $this->db->query($sql, $params);
     }
 
     /**

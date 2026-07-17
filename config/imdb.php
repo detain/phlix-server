@@ -41,6 +41,14 @@ return [
     /** IMDb title.ratings dataset (gzipped TSV). */
     'ratings_url' => 'https://datasets.imdbws.com/title.ratings.tsv.gz',
 
+    /**
+     * IMDb title.akas dataset (gzipped TSV) — alternate / localized titles used
+     * to widen metadata matching for files whose on-disk title differs from the
+     * canonical primaryTitle (foreign titles, transliterations, alternate
+     * spellings). See {@see \Phlix\Media\Metadata\Imdb\ImdbDatasetImporter}.
+     */
+    'akas_url' => 'https://datasets.imdbws.com/title.akas.tsv.gz',
+
     /** Directory the gzipped datasets are downloaded to / read from. */
     'cache_dir' => rtrim($cacheDir, '/'),
 

@@ -354,6 +354,13 @@ class MovieMetadataResolver
     /**
      * Offline IMDb title lookup, tolerating errors (e.g. missing local table).
      *
+     * Happy path is unchanged: a primary-title match wins. Only when the primary
+     * lookup MISSES does this fall back to a conservative exact alternate-title
+     * (aka) match, so files whose on-disk title differs from the canonical
+     * primaryTitle (foreign titles, transliterations, alternate spellings) can
+     * still resolve. The aka fallback is exact-normalized (year-constrained when
+     * known) to avoid false positives.
+     *
      * @param string   $title Movie title.
      * @param int|null $year  Optional year.
      *
@@ -362,7 +369,21 @@ class MovieMetadataResolver
     private function safeImdbLookup(string $title, ?int $year): ?array
     {
         try {
-            return $this->imdb->lookup($title, $year);
+            $match = $this->imdb->lookup($title, $year);
+            if ($match !== null) {
+                return $match;
+            }
+
+            // Fallback: match via an alternate/localized aka title.
+            $aka = $this->imdb->lookupByAka($title, $year);
+            if ($aka !== null) {
+                $this->logger->debug('MovieMetadataResolver: resolved via IMDb aka fallback', [
+                    'title' => $title,
+                    'year' => $year,
+                    'imdb_id' => $aka['imdb_id'] ?? null,
+                ]);
+            }
+            return $aka;
         } catch (Throwable $e) {
             $this->logger->warning('IMDb lookup failed', [
                 'title' => $title,

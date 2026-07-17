@@ -33,6 +33,13 @@ SERVICE_NAME="phlix-server"
 DATA_ROOT="/var/phlix"
 LOG_DIR="/var/log/phlix"
 RUN_DIR="/var/run/phlix"
+# Local artwork cache root (config/artwork.php: ARTWORK_STORAGE_PATH, historic
+# default /var/artwork). Honour an operator override in the env file so this
+# path — which MUST be a systemd ReadWritePath, else ProtectSystem=strict makes
+# it read-only and the scanner fails with "mkdir(): Read-only file system" —
+# tracks wherever the cache actually lives.
+ARTWORK_DIR="$(grep -m1 -E '^ARTWORK_STORAGE_PATH=' "$ENV_FILE" 2>/dev/null | cut -d= -f2- || true)"
+[ -n "$ARTWORK_DIR" ] || ARTWORK_DIR="/var/artwork"
 
 DB_HOST="127.0.0.1"
 DB_PORT="3306"
@@ -1055,11 +1062,13 @@ do_update() {
   # /var/www/phlix/var. These must EXIST before the service starts (systemd
   # binds ReadWritePaths at start), so create them here, ahead of the chown.
   mkdir -p "$INSTALL_PATH/.logs" "$LOG_DIR" "$RUN_DIR" \
-    "$INSTALL_PATH/var/plugins" "$INSTALL_PATH/var/themes" "$INSTALL_PATH/var/cache"
+    "$INSTALL_PATH/var/plugins" "$INSTALL_PATH/var/themes" "$INSTALL_PATH/var/cache" \
+    "$ARTWORK_DIR"
   # Restore ownership the install was running with.
   if [ "$repo_owner" != "root" ] && id -u "$repo_owner" >/dev/null 2>&1; then
     chown -R "$repo_owner:$repo_owner" "$INSTALL_PATH"
     chown -R "$repo_owner:$repo_owner" "$LOG_DIR" "$RUN_DIR" 2>/dev/null || true
+    chown "$repo_owner:$repo_owner" "$ARTWORK_DIR" 2>/dev/null || true
   fi
 
   # 4. Apply migrations. run-migrations.php currently has no tracking table
@@ -1112,6 +1121,27 @@ do_update() {
             for (i=1;i<=n;i++) if (a[i]==p) f=1 } END { exit f?0:1 }' "$SERVICE_FILE"; then
     log "Adding $INSTALL_PATH/config to systemd ReadWritePaths (hub pairing key/state writes)"
     sed -i "s|^\(ReadWritePaths=.*\)\$|\1 $INSTALL_PATH/config|" "$SERVICE_FILE"
+    systemctl daemon-reload >/dev/null 2>&1 || true
+  fi
+
+  # 4g. One-off migration: ensure the local artwork cache root is in
+  # ReadWritePaths. The scanner downloads TMDB posters into $ARTWORK_DIR
+  # (config/artwork.php's ARTWORK_STORAGE_PATH, default /var/artwork), but
+  # ProtectSystem=strict keeps it read-only unless listed, so mkdir fails with
+  # "Read-only file system". Worse, because nothing ever caches, every scan
+  # re-downloads every poster via blocking cURL across the concurrent matcher —
+  # eventually tripping Swoole's "all coroutines are asleep - deadlock" abort.
+  # The path must EXIST before it is added (a missing ReadWritePath fails the
+  # unit at 226/NAMESPACE), so create + chown it first. Idempotent.
+  mkdir -p "$ARTWORK_DIR" 2>/dev/null || true
+  chown "$SERVICE_USER:$SERVICE_USER" "$ARTWORK_DIR" 2>/dev/null || true
+  if [ -f "$SERVICE_FILE" ] \
+     && grep -q '^ReadWritePaths=' "$SERVICE_FILE" 2>/dev/null \
+     && ! awk -v p="$ARTWORK_DIR" '
+          /^ReadWritePaths=/ { s=$0; sub(/^ReadWritePaths=/,"",s); n=split(s,a,/[[:space:]]+/);
+            for (i=1;i<=n;i++) if (a[i]==p) f=1 } END { exit f?0:1 }' "$SERVICE_FILE"; then
+    log "Adding $ARTWORK_DIR to systemd ReadWritePaths (local artwork cache writes)"
+    sed -i "s|^\(ReadWritePaths=.*\)\$|\1 $ARTWORK_DIR|" "$SERVICE_FILE"
     systemctl daemon-reload >/dev/null 2>&1 || true
   fi
 
@@ -1335,9 +1365,13 @@ log "Installing PHP dependencies"
 ( cd "$INSTALL_PATH" && COMPOSER_ALLOW_SUPERUSER=1 composer install --no-dev --optimize-autoloader --no-interaction )
 # var/{plugins,themes,cache} are runtime-writable (plugin installs + theme
 # extraction); create them up front so they exist for the unit's ReadWritePaths.
+# The artwork cache root must likewise exist before start: a ReadWritePath that
+# does not exist makes systemd fail the unit at 226/NAMESPACE.
 mkdir -p "$INSTALL_PATH/.logs" "$INSTALL_PATH/templates_c" \
-  "$INSTALL_PATH/var/plugins" "$INSTALL_PATH/var/themes" "$INSTALL_PATH/var/cache"
+  "$INSTALL_PATH/var/plugins" "$INSTALL_PATH/var/themes" "$INSTALL_PATH/var/cache" \
+  "$ARTWORK_DIR"
 chown -R "$SERVICE_USER:$SERVICE_USER" "$INSTALL_PATH"
+chown -R "$SERVICE_USER:$SERVICE_USER" "$ARTWORK_DIR" 2>/dev/null || true
 
 # ---------------------------------------------------------------------------
 # 4. Database
@@ -1468,7 +1502,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=${DATA_ROOT} ${LOG_DIR} ${RUN_DIR} ${INSTALL_PATH}/.logs ${INSTALL_PATH}/templates_c ${INSTALL_PATH}/var
+ReadWritePaths=${DATA_ROOT} ${LOG_DIR} ${RUN_DIR} ${INSTALL_PATH}/.logs ${INSTALL_PATH}/templates_c ${INSTALL_PATH}/var ${ARTWORK_DIR}
 RestrictNamespaces=true
 LockPersonality=true
 RemoveIPC=true

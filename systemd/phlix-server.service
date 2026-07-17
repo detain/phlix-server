@@ -38,9 +38,14 @@ ProtectSystem=strict
 ProtectHome=true
 # Writable paths: /var/phlix (data), /var/log/phlix (logs),
 # /var/run/phlix (pid_file in config/server.php), the install dir's
-# .logs/ + templates_c/ (stdout log + Smarty compile cache), and var/
-# (runtime plugin installs in var/plugins + ui-theme extraction in var/themes).
-ReadWritePaths=/var/phlix /var/log/phlix /var/run/phlix /var/www/phlix/.logs /var/www/phlix/templates_c /var/www/phlix/var
+# .logs/ + templates_c/ (stdout log + Smarty compile cache), var/
+# (runtime plugin installs in var/plugins + ui-theme extraction in var/themes),
+# and /var/artwork (local TMDB poster cache — config/artwork.php's
+# ARTWORK_STORAGE_PATH default). Without /var/artwork the scanner fails with
+# "mkdir(): Read-only file system" and, because nothing ever caches, re-downloads
+# every poster on every scan — flooding the concurrent matcher with blocking
+# cURL until Swoole aborts with "all coroutines are asleep - deadlock".
+ReadWritePaths=/var/phlix /var/log/phlix /var/run/phlix /var/www/phlix/.logs /var/www/phlix/templates_c /var/www/phlix/var /var/artwork
 RestrictNamespaces=true
 LockPersonality=true
 RemoveIPC=true

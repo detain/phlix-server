@@ -169,6 +169,24 @@ class LibraryMetadataMatcher
     private ?ArtworkStorage $artworkStorage;
 
     /**
+     * Scan-scoped map of TMDB poster path => the local artwork override fields
+     * ({@see cacheArtworkLocally()} produces `poster_url` / `poster_srcset` /
+     * `poster_path`) generated the FIRST time that path was downloaded this run.
+     *
+     * Seasons and episodes inherit the series poster, so the same TMDB image
+     * recurs across every child of a series. Without this map each child
+     * re-downloads and re-resizes the identical bytes into its own per-item
+     * directory — measured at ~15x redundant work on a real TV library and the
+     * dominant scan cost. Later items that inherit a path reuse the first item's
+     * local URLs (the bytes are identical), so the image is fetched + resized
+     * once and no duplicate storage is written. Reset per {@see matchLibrary()}
+     * run so URLs never point across libraries and memory stays bounded.
+     *
+     * @var array<string, array<string, mixed>>
+     */
+    private array $artworkPathCache = [];
+
+    /**
      * The image types (M5) enabled for the CURRENT match run/item, used to gate
      * the flat `poster_url` / `backdrop_url` metadata keys in
      * {@see persistMetadata()}. `null` means "do not filter" (back-compat: no
@@ -330,6 +348,11 @@ class LibraryMetadataMatcher
         // be loaded — persistMetadata() then filters nothing, exactly as before.
         $this->activeImageTypes = $this->enabledImageTypesFor($libraryRow);
 
+        // Fresh per-run artwork dedup map (see property docblock): inherited
+        // series posters recur across every season/episode, so cache the first
+        // download's local URLs and reuse them instead of re-fetching.
+        $this->artworkPathCache = [];
+
         // Progress denominator: the count of top-level items (movies + series)
         // the flat pass visits. Reported via $onProgress so the worker can stamp
         // it onto the job row and the UI can render a percentage.
@@ -385,6 +408,10 @@ class LibraryMetadataMatcher
         // interactive applyMatch on an item from a different library) never
         // inherits this run's selection.
         $this->activeImageTypes = null;
+
+        // Release the per-run artwork dedup map so its URLs never leak into a
+        // later run for a different library and its memory is reclaimed.
+        $this->artworkPathCache = [];
 
         return ['matched' => $matched, 'processed' => $processed];
     }
@@ -616,12 +643,24 @@ class LibraryMetadataMatcher
         $tmdb = $this->requireTmdb();
         $tmdbId = trim($tmdbId);
         if ($itemId === '' || $tmdbId === '') {
-            return ['item_id' => $itemId, 'mode' => $type, 'tmdb_id' => $tmdbId, 'matched' => false, 'children_enriched' => 0];
+            return [
+                'item_id' => $itemId,
+                'mode' => $type,
+                'tmdb_id' => $tmdbId,
+                'matched' => false,
+                'children_enriched' => 0,
+            ];
         }
 
         $item = $this->items->findById($itemId);
         if ($item === null) {
-            return ['item_id' => $itemId, 'mode' => $type, 'tmdb_id' => $tmdbId, 'matched' => false, 'children_enriched' => 0];
+            return [
+                'item_id' => $itemId,
+                'mode' => $type,
+                'tmdb_id' => $tmdbId,
+                'matched' => false,
+                'children_enriched' => 0,
+            ];
         }
 
         // Apply the item's library's image-type selection (M5) for the duration
@@ -1257,7 +1296,10 @@ class LibraryMetadataMatcher
                 $seasonData = $this->cachedSeason($tmdbId, $this->intMeta($childMeta, 'season'), $seasonCache);
                 $this->persistMetadata(
                     $childId,
-                    array_merge($childMeta, $this->seasonPatch($seasonData, $seriesPoster, $seriesBackdrop, $seriesOverview))
+                    array_merge(
+                        $childMeta,
+                        $this->seasonPatch($seasonData, $seriesPoster, $seriesBackdrop, $seriesOverview)
+                    )
                 );
                 $enriched++;
                 foreach ($this->items->findByParent($childId) as $episode) {
@@ -1459,14 +1501,18 @@ class LibraryMetadataMatcher
         ?string $seriesOverview
     ): array {
         $patch = [];
-        $poster = ($seasonData !== null ? $this->stringOrNull($seasonData['poster_url'] ?? null) : null) ?? $seriesPoster;
+        $poster = ($seasonData !== null
+            ? $this->stringOrNull($seasonData['poster_url'] ?? null)
+            : null) ?? $seriesPoster;
         if ($poster !== null) {
             $patch['poster_url'] = $poster;
         }
         if ($seriesBackdrop !== null) {
             $patch['backdrop_url'] = $seriesBackdrop;
         }
-        $overview = ($seasonData !== null ? $this->stringOrNull($seasonData['overview'] ?? null) : null) ?? $seriesOverview;
+        $overview = ($seasonData !== null
+            ? $this->stringOrNull($seasonData['overview'] ?? null)
+            : null) ?? $seriesOverview;
         if ($overview !== null) {
             $patch['overview'] = $overview;
         }
@@ -1627,6 +1673,17 @@ class LibraryMetadataMatcher
         // Store the raw TMDB path for future reference (reconstruct URL if needed)
         $merged['poster_path'] = $posterPath;
 
+        // Dedup: seasons/episodes inherit the series poster, so the SAME TMDB
+        // path recurs across every child of a series. If it was already
+        // downloaded this run, splice the first item's local URLs onto this one
+        // instead of re-fetching + re-resizing the identical bytes (the dominant
+        // scan cost). The reused item points at the first item's cached variants
+        // — correct because the bytes are identical, and it writes no duplicate.
+        $cached = $this->artworkPathCache[$posterPath] ?? null;
+        if ($cached !== null) {
+            return array_merge($merged, $cached);
+        }
+
         // Download and cache the artwork (idempotent - skips if already cached)
         try {
             $variants = $this->artworkStorage->downloadAndStore($id, $posterPath);
@@ -1635,10 +1692,14 @@ class LibraryMetadataMatcher
                 return $merged;
             }
 
+            // Collect the local URL overrides so we can both apply them here and
+            // remember them for every later item that inherits this poster path.
+            $overrides = ['poster_path' => $posterPath];
+
             // Build local srcset from the cached variants
             $localSrcset = $this->artworkStorage->srcset($id);
             if ($localSrcset !== null) {
-                $merged['poster_srcset'] = $localSrcset;
+                $overrides['poster_srcset'] = $localSrcset;
             }
 
             // Update poster_url to point to local server (use w500 size as default)
@@ -1647,9 +1708,14 @@ class LibraryMetadataMatcher
                 // Sign the URL for access
                 $signedUrl = $this->artworkStorage->url($id, 'w500', $localPath);
                 if ($signedUrl !== null) {
-                    $merged['poster_url'] = $signedUrl;
+                    $overrides['poster_url'] = $signedUrl;
                 }
             }
+
+            // Remember this path's local URLs for the rest of the scan.
+            $this->artworkPathCache[$posterPath] = $overrides;
+
+            $merged = array_merge($merged, $overrides);
         } catch (\Throwable $e) {
             // Artwork caching is best-effort - log and continue
             $this->logger->warning('Failed to cache artwork locally', [

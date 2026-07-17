@@ -134,8 +134,14 @@ final class SeriesMetadataResolverTest extends TestCase
             'poster_path' => '/s1.jpg',
             'overview' => 'Season one.',
             'episodes' => [
-                ['episode_number' => 1, 'name' => '12:00 A.M.', 'overview' => 'O1', 'still_path' => '/e1.jpg', 'air_date' => '2001-11-06', 'runtime' => 44],
-                ['episode_number' => 2, 'name' => '1:00 A.M.', 'overview' => '', 'still_path' => null, 'air_date' => '', 'runtime' => 0],
+                [
+                    'episode_number' => 1, 'name' => '12:00 A.M.', 'overview' => 'O1',
+                    'still_path' => '/e1.jpg', 'air_date' => '2001-11-06', 'runtime' => 44,
+                ],
+                [
+                    'episode_number' => 2, 'name' => '1:00 A.M.', 'overview' => '',
+                    'still_path' => null, 'air_date' => '', 'runtime' => 0,
+                ],
             ],
         ]);
 
@@ -143,7 +149,11 @@ final class SeriesMetadataResolverTest extends TestCase
 
         $this->assertSame('https://image.tmdb.org/t/p/w500/s1.jpg', $season['poster_url']);
         $this->assertSame('12:00 A.M.', $season['episodes'][1]['episode_title']);
-        $this->assertSame('https://image.tmdb.org/t/p/w500/e1.jpg', $season['episodes'][1]['poster_url']);
+        // Episodes deliberately carry no poster of their own: they fall through
+        // to the season/series poster in enrichEpisode(), so poster_url is null
+        // even when TMDB supplies a still_path (avoids treating a landscape
+        // still as a portrait poster).
+        $this->assertNull($season['episodes'][1]['poster_url']);
         $this->assertSame(44, $season['episodes'][1]['runtime']);
         // Episode 2: empty/zero fields normalize to null.
         $this->assertNull($season['episodes'][2]['poster_url']);
@@ -167,7 +177,10 @@ final class SeriesMetadataResolverTest extends TestCase
                     'runtime' => 44,
                     'vote_average' => 7.8,
                     'cast' => [
-                        ['name' => 'Kiefer Sutherland', 'role' => 'Jack Bauer', 'profile_url' => 'https://i/w185/k.jpg'],
+                        [
+                            'name' => 'Kiefer Sutherland', 'role' => 'Jack Bauer',
+                            'profile_url' => 'https://i/w185/k.jpg',
+                        ],
                         ['name' => '', 'role' => 'X', 'profile_url' => null], // nameless dropped
                     ],
                     'crew' => [

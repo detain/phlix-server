@@ -127,4 +127,78 @@ class LibraryMetadataMatcherArtworkTest extends TestCase
         $this->assertSame(self::TMDB_POSTER, $meta['poster_url']);
         $this->assertArrayNotHasKey('poster_srcset', $meta);
     }
+
+    /**
+     * Per-scan dedup: two items that resolve to the SAME TMDB poster path must
+     * trigger exactly ONE download + resize. The second item reuses the first's
+     * local URLs instead of re-fetching the identical bytes into a second
+     * directory. This is the fix for the ~15x redundant artwork work seen when
+     * every season/episode inherits its series poster (the dominant scan cost).
+     */
+    public function testDuplicatePosterPathDownloadsOnceAndReusesLocalUrls(): void
+    {
+        $items = $this->createMock(ItemRepository::class);
+        $items->method('getByLibrary')->willReturnOnConsecutiveCalls(
+            [
+                ['id' => 'm1', 'type' => 'movie', 'name' => 'First', 'metadata' => []],
+                ['id' => 'm2', 'type' => 'movie', 'name' => 'Second', 'metadata' => []],
+            ],
+            []
+        );
+
+        $updates = [];
+        $items->method('update')->willReturnCallback(
+            static function (string $id, array $data) use (&$updates): void {
+                $updates[$id] = is_array($data['metadata_json'] ?? null) ? $data['metadata_json'] : [];
+            }
+        );
+
+        $resolver = $this->createMock(MovieMetadataResolver::class);
+        $resolver->method('resolve')->willReturn([
+            'external_ids' => ['tmdb' => '603'],
+            'poster_url' => self::TMDB_POSTER,
+            'sources' => ['tmdb'],
+        ]);
+
+        $localSrcset = '/api/v1/artwork/m1?size=w185 185w, /api/v1/artwork/m1?size=w500 500w';
+        $signedLocalUrl = '/api/v1/artwork/m1?size=w500&sig=abc123';
+
+        $artwork = $this->createMock(ArtworkStorage::class);
+        // The dedup contract: exactly ONE download for the shared poster path,
+        // for the first (owning) item — m2 must NOT re-download.
+        $artwork->expects($this->once())
+            ->method('downloadAndStore')
+            ->with('m1', '/poster.jpg')
+            ->willReturn(['w185', 'w342', 'w500', 'w780', 'original']);
+        $artwork->method('srcset')->willReturn($localSrcset);
+        $artwork->method('relativePath')->willReturn('/api/v1/artwork/m1?size=w500');
+        $artwork->method('url')->willReturn($signedLocalUrl);
+
+        // Positional ctor mirrors runMovieMatch(): …, artworkStorage last.
+        $matcher = new LibraryMetadataMatcher(
+            $items,
+            $resolver,
+            null,
+            $this->createMock(StructuredLogger::class),
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            $artwork
+        );
+        $matcher->matchLibrary('lib-1');
+
+        // Both items end up with the SAME local URLs (m2 reuses m1's variants).
+        $this->assertSame($signedLocalUrl, $updates['m1']['poster_url'] ?? null);
+        $this->assertSame($signedLocalUrl, $updates['m2']['poster_url'] ?? null);
+        $this->assertSame($localSrcset, $updates['m2']['poster_srcset'] ?? null);
+        $this->assertSame('/poster.jpg', $updates['m2']['poster_path'] ?? null);
+        // The reused URL never falls back to the TMDB CDN.
+        $this->assertStringNotContainsString(
+            'image.tmdb.org',
+            (string) ($updates['m2']['poster_url'] ?? ''),
+        );
+    }
 }

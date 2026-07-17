@@ -66,6 +66,7 @@ final class SourceRecord
         'poster_url',
         'backdrop_url',
         'genres',
+        'tags',
         'year',
         'runtime',
         'official_rating',
@@ -173,6 +174,15 @@ final class SourceRecord
     public function genres(): ?array
     {
         $value = $this->fields['genres'] ?? null;
+        return $this->stringListOrNull($value);
+    }
+
+    /**
+     * @return list<string>|null
+     */
+    public function tags(): ?array
+    {
+        $value = $this->fields['tags'] ?? null;
         return $this->stringListOrNull($value);
     }
 

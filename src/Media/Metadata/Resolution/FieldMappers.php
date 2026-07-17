@@ -73,6 +73,7 @@ final class FieldMappers
         $b->tmdbImage('poster_url', $raw['poster_url'] ?? null, $raw['poster_path'] ?? null);
         $b->tmdbImage('backdrop_url', $raw['backdrop_url'] ?? null, $raw['backdrop_path'] ?? null);
         $b->stringList('genres', $raw['genres'] ?? null);
+        $b->stringList('tags', $raw['tags'] ?? null);
         $b->int('year', $raw['year'] ?? null);
 
         $runtime = self::ticksToMinutes($raw['runtime_ticks'] ?? null);

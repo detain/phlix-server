@@ -61,6 +61,7 @@ final class SourceRecordTest extends TestCase
         $this->assertNull($record->posterUrl());
         $this->assertNull($record->backdropUrl());
         $this->assertNull($record->genres());
+        $this->assertNull($record->tags());
         $this->assertNull($record->year());
         $this->assertNull($record->runtime());
         $this->assertNull($record->officialRating());
@@ -83,6 +84,7 @@ final class SourceRecordTest extends TestCase
             'poster_url' => 'https://image.tmdb.org/t/p/w500/poster.jpg',
             'backdrop_url' => 'https://image.tmdb.org/t/p/w500/back.jpg',
             'genres' => ['Action', 'Science Fiction'],
+            'tags' => ['dystopia', 'artificial intelligence'],
             'year' => 1999,
             'runtime' => 136,
             'official_rating' => 'R',
@@ -102,6 +104,7 @@ final class SourceRecordTest extends TestCase
         $this->assertSame('https://image.tmdb.org/t/p/w500/poster.jpg', $record->posterUrl());
         $this->assertSame('https://image.tmdb.org/t/p/w500/back.jpg', $record->backdropUrl());
         $this->assertSame(['Action', 'Science Fiction'], $record->genres());
+        $this->assertSame(['dystopia', 'artificial intelligence'], $record->tags());
         $this->assertSame(1999, $record->year());
         $this->assertSame(136, $record->runtime());
         $this->assertSame('R', $record->officialRating());
@@ -139,6 +142,7 @@ final class SourceRecordTest extends TestCase
             'poster_url',
             'backdrop_url',
             'genres',
+            'tags',
             'year',
             'runtime',
             'official_rating',

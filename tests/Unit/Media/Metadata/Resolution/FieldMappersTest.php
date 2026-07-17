@@ -6,6 +6,7 @@ namespace Phlix\Tests\Unit\Media\Metadata\Resolution;
 
 use PHPUnit\Framework\TestCase;
 use Phlix\Media\Metadata\Resolution\FieldMappers;
+use Phlix\Media\Metadata\Resolution\SourceRecord;
 
 /**
  * Unit tests for {@see FieldMappers}: per-provider raw→canonical normalization.
@@ -41,6 +42,7 @@ final class FieldMappersTest extends TestCase
             'year' => '1999',
             'runtime_ticks' => 136 * 600000000,
             'genres' => ['Action', 'Science Fiction'],
+            'tags' => ['dystopia', 'artificial intelligence'],
             'studio' => 'Warner Bros.',
             'imdb_id' => 'tt0133093',
             'tmdb_id' => '603',
@@ -64,6 +66,7 @@ final class FieldMappersTest extends TestCase
         $this->assertSame('https://image.tmdb.org/t/p/w500/poster.jpg', $record->posterUrl());
         $this->assertSame('https://image.tmdb.org/t/p/w500/back.jpg', $record->backdropUrl());
         $this->assertSame(['Action', 'Science Fiction'], $record->genres());
+        $this->assertSame(['dystopia', 'artificial intelligence'], $record->tags());
         $this->assertSame(1999, $record->year());
         // ticks → minutes
         $this->assertSame(136, $record->runtime());
@@ -80,6 +83,38 @@ final class FieldMappersTest extends TestCase
         // imdb_rating/imdb_votes are not TMDB-supplied → absent.
         $this->assertFalse($record->has('imdb_rating'));
         $this->assertFalse($record->has('imdb_votes'));
+    }
+
+    public function testTagsIsCanonicalAndRoundTripsThroughFromTmdb(): void
+    {
+        // `tags` must be part of the fixed canonical vocabulary.
+        $this->assertContains('tags', SourceRecord::CANONICAL_FIELDS);
+
+        // De-duplicated, non-empty tags survive the TMDB → canonical mapping.
+        $record = FieldMappers::fromTmdb([
+            'name' => 'Movie',
+            'tags' => ['dystopia', 'dystopia', 'ai', ''],
+        ]);
+
+        $this->assertTrue($record->has('tags'));
+        $this->assertSame(['dystopia', 'ai'], $record->tags());
+    }
+
+    public function testFromTmdbWithoutTagsLeavesTagsAbsent(): void
+    {
+        $record = FieldMappers::fromTmdb(['name' => 'Movie']);
+
+        $this->assertFalse($record->has('tags'), 'missing tags stays absent (never null-filled)');
+        $this->assertNull($record->tags());
+    }
+
+    public function testFromImdbAndTvdbDoNotSupplyTags(): void
+    {
+        $imdb = FieldMappers::fromImdb(['title' => 'Movie', 'imdb_id' => 'tt1']);
+        $tvdb = FieldMappers::fromTvdb(['name' => 'Show', 'tvdb_id' => '1']);
+
+        $this->assertFalse($imdb->has('tags'), 'IMDb does not supply tags');
+        $this->assertFalse($tvdb->has('tags'), 'TVDB does not supply tags');
     }
 
     public function testFromTmdbTvUsesOfficialRatingAndRuntimeFallback(): void

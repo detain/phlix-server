@@ -305,6 +305,23 @@ class LibraryMetadataMatcher
     }
 
     /**
+     * Toggle force-refresh mode for the next {@see self::matchLibrary()} run.
+     *
+     * When true, {@see self::matchLibrary()} re-processes items that already have
+     * metadata (`metadata_refreshed_at IS NOT NULL`) instead of skipping them, and
+     * {@see self::countMatchable()} counts ALL top-level items (not just unmatched)
+     * so the reported progress percentage stays correct. Used by the
+     * `metadata_refresh` scan-job type (see {@see \Phlix\Media\Library\LibraryScanWorker})
+     * to expose a force re-match through the same async job pipeline as `metadata`.
+     *
+     * @param bool $forceRefresh Whether to re-process already-matched items.
+     */
+    public function setForceRefresh(bool $forceRefresh): void
+    {
+        $this->forceRefresh = $forceRefresh;
+    }
+
+    /**
      * Match metadata for every movie in a library.
      *
      * Pages through {@see ItemRepository::getByLibrary()} in fixed batches. For
@@ -504,7 +521,16 @@ class LibraryMetadataMatcher
     private function countMatchable(string $libraryId): int
     {
         try {
-            $result = $this->items->query(['topLevel' => true, 'limit' => 1], $libraryId);
+            // Mirror the in-batch skip in matchBatchConcurrently(): when NOT
+            // forcing a refresh, already-matched items (metadata_refreshed_at IS
+            // NOT NULL) are skipped, so they must be excluded from the progress
+            // denominator too — otherwise the percentage never reaches 100%. When
+            // forcing, EVERY top-level item is re-processed, so count them all.
+            $params = ['topLevel' => true, 'limit' => 1];
+            if (!$this->forceRefresh) {
+                $params['match'] = 'unmatched';
+            }
+            $result = $this->items->query($params, $libraryId);
             $total = $result['total'] ?? 0;
             if (is_int($total)) {
                 return $total;

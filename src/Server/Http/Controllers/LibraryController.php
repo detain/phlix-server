@@ -649,6 +649,42 @@ class LibraryController
     }
 
     /**
+     * Enqueue a FORCED background metadata re-match for a library.
+     *
+     * Mirrors {@see self::matchMetadata()} but enqueues a `metadata_refresh` job,
+     * which the async {@see \Phlix\Media\Library\LibraryScanWorker} runs with
+     * force-refresh enabled — re-fetching metadata for items that were ALREADY
+     * matched (e.g. to backfill newly added fields like per-episode stills). A
+     * plain `metadata` job skips already-matched items; this endpoint is the
+     * additional force option, not a replacement.
+     *
+     * @param array<string, string> $params Route params; `id` is the library UUID.
+     *
+     * @return Response `202` `{ job_id, status:"queued", message }` · `404`
+     *                  library-missing · `401`/`403` auth.
+     */
+    public function refreshMetadata(Request $request, array $params): Response
+    {
+        $authResponse = $this->requireAdmin($request);
+        if ($authResponse !== null) {
+            return $authResponse;
+        }
+
+        $library = $this->libraryManager->getLibrary($params['id']);
+        if (!$library) {
+            return (new Response())->status(404)->json(['error' => 'Library not found']);
+        }
+
+        $jobId = $this->scanJobs->enqueue($params['id'], 'metadata_refresh');
+
+        return (new Response())->status(202)->json([
+            'job_id' => $jobId,
+            'status' => 'queued',
+            'message' => 'Metadata refresh queued',
+        ]);
+    }
+
+    /**
      * Return the latest scan job for a library (Step 1.1b).
      *
      * Powers `GET /api/v1/libraries/{id}/scan-status`. Admin-gated

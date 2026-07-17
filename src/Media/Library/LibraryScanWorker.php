@@ -30,7 +30,9 @@ use Workerman\Timer;
  * oldest `queued` row and flips it to `running`; the worker then dispatches on
  * `type` — the existing {@see LibraryManager::scanLibrary()} /
  * {@see LibraryManager::rescanLibrary()} for `scan`/`rescan`, or
- * {@see LibraryMetadataMatcher::matchLibrary()} for a `metadata` job — and
+ * {@see LibraryMetadataMatcher::matchLibrary()} for a `metadata` /
+ * `metadata_refresh` job (the latter forcing a re-match of already-matched
+ * items via {@see LibraryMetadataMatcher::setForceRefresh()}) — and
  * records the outcome via {@see ScanJobRepository::markCompleted()} (success) or
  * {@see ScanJobRepository::markFailed()} (on any `\Throwable`).
  *
@@ -142,7 +144,15 @@ class LibraryScanWorker
         $startTime = hrtime(true);
 
         try {
-            if ($type === 'metadata') {
+            if ($type === 'metadata' || $type === 'metadata_refresh') {
+                // `metadata_refresh` forces a re-match of already-matched items
+                // (metadata_refreshed_at IS NOT NULL), so users can backfill newly
+                // added metadata fields (e.g. per-episode stills); a plain
+                // `metadata` job keeps the skip-already-matched behaviour. Both set
+                // the flag explicitly so a reused matcher instance never inherits a
+                // stale mode from a previous job.
+                $this->metadataMatcher->setForceRefresh($type === 'metadata_refresh');
+
                 // Stream progress onto the job row so the UI can show a percentage
                 // (items_updated / items_found) while the match runs.
                 $this->metadataMatcher->matchLibrary(

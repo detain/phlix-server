@@ -329,4 +329,56 @@ class LibraryScanWorkerTest extends TestCase
 
         $this->assertTrue($worker->runOnce());
     }
+
+    /**
+     * runOnce() with a plain `metadata` job disables force refresh on the matcher
+     * (skip-already-matched behaviour is preserved).
+     */
+    public function testRunOnceMetadataJobDisablesForceRefresh(): void
+    {
+        $jobs = $this->createMock(ScanJobRepository::class);
+        $jobs->expects($this->once())
+            ->method('claimNext')
+            ->willReturn(['id' => 'job-8', 'library_id' => 'lib-8', 'type' => 'metadata']);
+        $jobs->expects($this->once())->method('markCompleted')->with('job-8');
+
+        $libraries = $this->createMock(LibraryManager::class);
+
+        $matcher = $this->createMock(LibraryMetadataMatcher::class);
+        $matcher->expects($this->once())->method('setForceRefresh')->with(false);
+        $matcher->expects($this->once())->method('matchLibrary')->with('lib-8')
+            ->willReturn(['matched' => 0, 'processed' => 0]);
+
+        $worker = new LibraryScanWorker($jobs, $libraries, $matcher, $this->makeLogger());
+
+        $this->assertTrue($worker->runOnce());
+    }
+
+    /**
+     * runOnce() with a `metadata_refresh` job ENABLES force refresh on the matcher
+     * (so already-matched items are re-processed) and then runs the same
+     * matchLibrary() path — NOT the scan engine.
+     */
+    public function testRunOnceMetadataRefreshJobEnablesForceRefresh(): void
+    {
+        $jobs = $this->createMock(ScanJobRepository::class);
+        $jobs->expects($this->once())
+            ->method('claimNext')
+            ->willReturn(['id' => 'job-r', 'library_id' => 'lib-r', 'type' => 'metadata_refresh']);
+        $jobs->expects($this->once())->method('markCompleted')->with('job-r');
+        $jobs->expects($this->never())->method('markFailed');
+
+        $libraries = $this->createMock(LibraryManager::class);
+        $libraries->expects($this->never())->method('scanLibrary');
+        $libraries->expects($this->never())->method('rescanLibrary');
+
+        $matcher = $this->createMock(LibraryMetadataMatcher::class);
+        $matcher->expects($this->once())->method('setForceRefresh')->with(true);
+        $matcher->expects($this->once())->method('matchLibrary')->with('lib-r')
+            ->willReturn(['matched' => 7, 'processed' => 7]);
+
+        $worker = new LibraryScanWorker($jobs, $libraries, $matcher, $this->makeLogger());
+
+        $this->assertTrue($worker->runOnce());
+    }
 }

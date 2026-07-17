@@ -1464,6 +1464,11 @@ class Application
         // literal path, so it cannot shadow / be shadowed by the {id} routes.
         $this->router->post('/api/v1/libraries/{id}/match-metadata', [$libraryController, 'matchMetadata']);
 
+        // Force metadata re-match (metadata_refresh job): re-fetches metadata even
+        // for already-matched items, unlike match-metadata which skips them. Same
+        // 3-segment literal shape, so no shadowing with the {id} routes.
+        $this->router->post('/api/v1/libraries/{id}/refresh-metadata', [$libraryController, 'refreshMetadata']);
+
         // Theme media routes
         $this->router->get('/api/v1/libraries/{id}/theme-media', [$themeMediaController, 'getThemeMedia']);
         $this->router->post('/api/v1/libraries/{id}/theme-media/scan', [$themeMediaController, 'scanThemeMedia']);

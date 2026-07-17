@@ -66,6 +66,21 @@ final class ScanJobRepositoryTest extends TestCase
         $this->assertNotSame('', $repo->enqueue('lib-1', 'rescan'));
     }
 
+    public function testEnqueueAcceptsMetadataRefreshType(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->expects($this->once())
+            ->method('query')
+            ->with(
+                $this->stringContains('INSERT INTO library_scan_jobs'),
+                $this->callback(static fn (array $p): bool => $p[2] === 'metadata_refresh'),
+            )
+            ->willReturn('x');
+
+        $repo = new ScanJobRepository($db);
+        $this->assertNotSame('', $repo->enqueue('lib-1', 'metadata_refresh'));
+    }
+
     public function testEnqueueRejectsInvalidType(): void
     {
         $db = $this->createMock(Connection::class);

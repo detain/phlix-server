@@ -36,6 +36,7 @@ class MovieMetadataResolverTest extends TestCase
             'year' => 1999,
             'runtime_ticks' => 136 * 600000000,
             'genres' => ['Action', 'Science Fiction'],
+            'tags' => ['dystopia', 'artificial intelligence'],
             'poster_path' => '/poster.jpg',
             'backdrop_path' => '/backdrop.jpg',
             'imdb_id' => 'tt0133093',
@@ -95,6 +96,46 @@ class MovieMetadataResolverTest extends TestCase
         $this->assertSame(8.7, $result['imdb_rating']);
         $this->assertSame(1900000, $result['imdb_votes']);
         $this->assertSame(['tmdb', 'imdb'], $result['sources']);
+    }
+
+    public function testResolvedMovieCarriesTmdbTagsEndToEnd(): void
+    {
+        $tmdb = $this->createMock(TmdbProvider::class);
+        $imdb = $this->createMock(ImdbLookup::class);
+
+        $tmdb->method('findByImdbId')
+            ->willReturn(['id' => '603', 'title' => 'The Matrix', 'overview' => '', 'year' => 1999]);
+        $tmdb->method('getDetails')->willReturn($this->tmdbDetails([
+            'tags' => ['dystopia', 'artificial intelligence', 'kung fu'],
+        ]));
+        $imdb->method('getByImdbId')->willReturn($this->imdbRow());
+
+        $resolver = new MovieMetadataResolver($tmdb, $imdb);
+        $result = $resolver->resolve('The Matrix', 1999, ['imdb' => 'tt0133093']);
+
+        $this->assertNotNull($result);
+        // tags flow from TMDB through the canonical field pipeline into the merged result.
+        $this->assertSame(['dystopia', 'artificial intelligence', 'kung fu'], $result['tags']);
+    }
+
+    public function testResolvedMovieWithoutTmdbTagsOmitsTags(): void
+    {
+        $tmdb = $this->createMock(TmdbProvider::class);
+        $imdb = $this->createMock(ImdbLookup::class);
+
+        // TMDB details carry no tags; IMDb never supplies tags.
+        $details = $this->tmdbDetails();
+        unset($details['tags']);
+        $tmdb->method('findByImdbId')
+            ->willReturn(['id' => '603', 'title' => 'The Matrix', 'overview' => '', 'year' => 1999]);
+        $tmdb->method('getDetails')->willReturn($details);
+        $imdb->method('getByImdbId')->willReturn($this->imdbRow());
+
+        $resolver = new MovieMetadataResolver($tmdb, $imdb);
+        $result = $resolver->resolve('The Matrix', 1999, ['imdb' => 'tt0133093']);
+
+        $this->assertNotNull($result);
+        $this->assertArrayNotHasKey('tags', $result, 'no source supplied tags → key omitted');
     }
 
     public function testTitleSearchPathExtractsImdbIdFromTmdbDetails(): void

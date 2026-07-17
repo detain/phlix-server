@@ -118,6 +118,7 @@ final class PriorityFieldResolver
      */
     private const LIST_FIELDS = [
         'genres',
+        'tags',
         'actors',
         'cast',
         'crew',

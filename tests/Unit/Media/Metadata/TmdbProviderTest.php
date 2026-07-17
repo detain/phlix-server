@@ -316,6 +316,41 @@ class TmdbProviderTest extends TestCase
         $this->assertSame('Warner Bros.', $details['studio']);
     }
 
+    public function testGetDetailsExposesTagsFromKeywordsForMovie(): void
+    {
+        $http = $this->createMock(MetadataHttpClient::class);
+        $http->method('get')->willReturn([
+            'id' => 603,
+            'title' => 'The Matrix',
+            'release_date' => '1999-03-30',
+            // TMDB movie nests keywords under keywords.keywords[] (TV uses results[]).
+            'keywords' => ['keywords' => [
+                ['id' => 1, 'name' => 'dystopia'],
+                ['id' => 2, 'name' => 'artificial intelligence'],
+                ['id' => 1, 'name' => 'dystopia'], // dup name → de-duped
+                ['id' => 3, 'name' => ''], // blank → dropped
+            ]],
+        ]);
+
+        $details = (new TmdbProvider('k', $http))->getDetails('603');
+
+        $this->assertSame(['dystopia', 'artificial intelligence'], $details['tags']);
+    }
+
+    public function testGetDetailsRequestsKeywordsForMovie(): void
+    {
+        $http = $this->createMock(MetadataHttpClient::class);
+        $http->expects($this->once())
+            ->method('get')
+            ->with('/movie/603', $this->callback(static function (array $p): bool {
+                $append = is_string($p['append_to_response'] ?? null) ? $p['append_to_response'] : '';
+                return str_contains($append, 'keywords');
+            }))
+            ->willReturn(['id' => 603, 'title' => 'The Matrix']);
+
+        (new TmdbProvider('k', $http))->getDetails('603');
+    }
+
     public function testGetTvDetailsAppendsProductionCompanies(): void
     {
         $http = $this->createMock(MetadataHttpClient::class);

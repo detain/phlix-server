@@ -247,7 +247,7 @@ class TmdbProvider implements MetadataProviderInterface
 
         $response = $this->http->get("/movie/{$externalId}", [
             'language' => $language,
-            'append_to_response' => 'credits,genres,production_companies,external_ids',
+            'append_to_response' => 'credits,genres,production_companies,external_ids,keywords',
         ]);
 
         if ($response === null) {
@@ -1048,6 +1048,11 @@ class TmdbProvider implements MetadataProviderInterface
 
         $companies = $this->buildProductionCompanies($studios);
 
+        // Movie-level tags. TMDB movie `keywords` are nested under
+        // `keywords.keywords[]` (TV uses `keywords.results[]`); each is
+        // `{id, name}`. extractKeywords() handles both shapes, mirroring TV.
+        $tags = $this->extractKeywords($data['keywords'] ?? null);
+
         return [
             'name' => MetadataValue::asString(
                 $data['title'] ?? ($data['name'] ?? null)
@@ -1062,6 +1067,7 @@ class TmdbProvider implements MetadataProviderInterface
             'year' => $year,
             'runtime_ticks' => $runtime * 600000000, // Convert minutes to ticks
             'genres' => $genreNames,
+            'tags' => $tags,
             'studio' => $studio,
             'tagline' => MetadataValue::asString($data['tagline'] ?? null),
             'budget' => MetadataValue::asInt($data['budget'] ?? null),

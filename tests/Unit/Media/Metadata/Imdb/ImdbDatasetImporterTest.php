@@ -22,6 +22,7 @@ class ImdbDatasetImporterTest extends TestCase
     private string $tmpDir;
     private string $basicsPath;
     private string $ratingsPath;
+    private string $akasPath;
 
     protected function setUp(): void
     {
@@ -50,16 +51,30 @@ class ImdbDatasetImporterTest extends TestCase
         $ratings .= "tt0000005\t7.5\t500000\n";
         $ratings .= "tt0903747\t9.5\t2000000\n";
 
+        $akas = implode("\t", [
+            'titleId', 'ordering', 'title', 'region', 'language', 'types', 'attributes', 'isOriginalTitle',
+        ]) . "\n";
+        // Alternate title for The Matrix (kept: normalized differs from primary).
+        $akas .= "tt0133093\t1\tMatrix - Die Vollendung\tDE\tde\timdbDisplay\t\\N\t0\n";
+        // Duplicate of the primary title (normalized == 'matrix') — skipped.
+        $akas .= "tt0133093\t2\tThe Matrix\tUS\ten\t\\N\t\\N\t1\n";
+        // Localized title for A Quiet Place (kept).
+        $akas .= "tt0000005\t1\tUn Lugar Tranquilo\tES\tes\t\\N\t\\N\t0\n";
+        // aka for a tvSeries never imported into imdb_titles — skipped (bounding).
+        $akas .= "tt0903747\t1\tBreaking Bad ES\tES\tes\t\\N\t\\N\t0\n";
+
         $this->basicsPath = $this->tmpDir . '/title.basics.tsv.gz';
         $this->ratingsPath = $this->tmpDir . '/title.ratings.tsv.gz';
+        $this->akasPath = $this->tmpDir . '/title.akas.tsv.gz';
 
         file_put_contents($this->basicsPath, (string) gzencode($basics));
         file_put_contents($this->ratingsPath, (string) gzencode($ratings));
+        file_put_contents($this->akasPath, (string) gzencode($akas));
     }
 
     protected function tearDown(): void
     {
-        foreach ([$this->basicsPath, $this->ratingsPath] as $f) {
+        foreach ([$this->basicsPath, $this->ratingsPath, $this->akasPath] as $f) {
             if (is_file($f)) {
                 unlink($f);
             }
@@ -94,6 +109,7 @@ class ImdbDatasetImporterTest extends TestCase
         return new ImdbDatasetImporter($db, [
             'basics_url' => 'https://example.test/basics',
             'ratings_url' => 'https://example.test/ratings',
+            'akas_url' => 'https://example.test/akas',
             'cache_dir' => $this->tmpDir,
             'title_types' => ['movie', 'tvMovie'],
         ]);
@@ -166,6 +182,7 @@ class ImdbDatasetImporterTest extends TestCase
         $importer = new ImdbDatasetImporter($db, [
             'basics_url' => 'https://example.test/basics',
             'ratings_url' => 'https://example.test/ratings',
+            'akas_url' => 'https://example.test/akas',
             'cache_dir' => $cacheDir,
             'title_types' => ['movie', 'tvMovie'],
         ]);
@@ -174,7 +191,13 @@ class ImdbDatasetImporterTest extends TestCase
         $importer->setDownloader(function (string $url, string $dest) use (&$downloadCalls): bool {
             $downloadCalls[] = $url;
             // Copy the matching fixture into the (different) cache path.
-            $src = str_contains($url, 'basics') ? $this->basicsPath : $this->ratingsPath;
+            if (str_contains($url, 'basics')) {
+                $src = $this->basicsPath;
+            } elseif (str_contains($url, 'akas')) {
+                $src = $this->akasPath;
+            } else {
+                $src = $this->ratingsPath;
+            }
             copy($src, $dest);
             return true;
         });
@@ -182,7 +205,8 @@ class ImdbDatasetImporterTest extends TestCase
         $result = $importer->import(true);
 
         $this->assertSame(3, $result['titles']);
-        $this->assertCount(2, $downloadCalls);
+        $this->assertSame(2, $result['akas']);
+        $this->assertCount(3, $downloadCalls);
 
         // Cleanup.
         foreach (glob($cacheDir . '/*') ?: [] as $f) {
@@ -191,5 +215,56 @@ class ImdbDatasetImporterTest extends TestCase
         if (is_dir($cacheDir)) {
             rmdir($cacheDir);
         }
+    }
+
+    public function testImportFromFilesLoadsAkasBoundedAndDedupedAgainstPrimary(): void
+    {
+        $captured = [];
+        $importer = $this->makeImporter($captured);
+
+        $result = $importer->importFromFiles($this->basicsPath, $this->ratingsPath, $this->akasPath);
+
+        // 3 movie titles (as before) + 2 kept akas rows.
+        // Kept: tt0133093 'Matrix - Die Vollendung', tt0000005 'Un Lugar Tranquilo'.
+        // Skipped: tt0133093 'The Matrix' (dup of primary), tt0903747 (not imported).
+        $this->assertSame(3, $result['titles']);
+        $this->assertSame(3, $result['ratings']);
+        $this->assertSame(2, $result['akas']);
+
+        // Two batched statements: one for imdb_titles, one for imdb_title_akas.
+        $this->assertCount(2, $captured);
+        $this->assertStringContainsString('INSERT INTO imdb_titles', $captured[0]['sql']);
+        $this->assertStringContainsString('INSERT INTO imdb_title_akas', $captured[1]['sql']);
+        $this->assertStringContainsString('ON DUPLICATE KEY UPDATE', $captured[1]['sql']);
+
+        // 2 kept akas rows * 7 columns of params.
+        $akasParams = $captured[1]['params'];
+        $this->assertCount(14, $akasParams);
+
+        // First kept aka = tt0133093 / 'Matrix - Die Vollendung' (region DE).
+        $this->assertSame('tt0133093', $akasParams[0]);          // tconst
+        $this->assertSame(1, $akasParams[1]);                    // ordering
+        $this->assertSame('Matrix - Die Vollendung', $akasParams[2]); // title
+        $this->assertSame('matrix die vollendung', $akasParams[3]);   // normalized_title
+        $this->assertSame('DE', $akasParams[4]);                 // region
+        $this->assertSame('de', $akasParams[5]);                 // language
+        $this->assertSame(0, $akasParams[6]);                    // is_original_title
+
+        // Second kept aka = tt0000005 / 'Un Lugar Tranquilo'.
+        $this->assertSame('tt0000005', $akasParams[7]);
+        $this->assertSame('un lugar tranquilo', $akasParams[10]);
+    }
+
+    public function testImportFromFilesWithoutAkasPathSkipsAkas(): void
+    {
+        $captured = [];
+        $importer = $this->makeImporter($captured);
+
+        $result = $importer->importFromFiles($this->basicsPath, $this->ratingsPath);
+
+        $this->assertSame(3, $result['titles']);
+        $this->assertSame(0, $result['akas']);
+        // Only the imdb_titles upsert — no akas statement.
+        $this->assertCount(1, $captured);
     }
 }

@@ -105,6 +105,74 @@ class ImdbLookup
     }
 
     /**
+     * FALLBACK lookup: resolve a title via an alternate/localized aka.
+     *
+     * Used only when the primary {@see self::lookup()} misses (the on-disk title
+     * differs from the canonical primaryTitle — foreign titles, transliterations,
+     * alternate spellings). Deliberately CONSERVATIVE to avoid false positives:
+     * it matches only on an EXACT normalized aka title in `imdb_title_akas`,
+     * joined back to `imdb_titles` for the full payload. When a year is supplied
+     * candidates are constrained to a +/- 1 year window (with the exact year
+     * preferred); the most-voted title wins ties.
+     *
+     * @param string   $title Raw (un-normalized) title as seen on disk.
+     * @param int|null $year  Optional release year; matched +/- 1 year.
+     *
+     * @return array{
+     *     imdb_id: string,
+     *     title: string,
+     *     year: int|null,
+     *     genres: list<string>,
+     *     average_rating: float|null,
+     *     num_votes: int|null,
+     *     runtime_minutes: int|null
+     * }|null The best candidate, or null when no aka matches.
+     *
+     * @since 0.22.0
+     */
+    public function lookupByAka(string $title, ?int $year): ?array
+    {
+        $normalized = self::normalizeTitle($title);
+        if ($normalized === '') {
+            return null;
+        }
+
+        $select = 'SELECT t.tconst, t.primary_title, t.start_year, t.genres, '
+            . 't.average_rating, t.num_votes, t.runtime_minutes '
+            . 'FROM imdb_title_akas a '
+            . 'INNER JOIN imdb_titles t ON t.tconst = a.tconst '
+            . 'WHERE a.normalized_title = ? ';
+
+        if ($year !== null) {
+            $rows = $this->db->query(
+                $select
+                . 'AND t.start_year BETWEEN ? AND ? '
+                . 'ORDER BY (t.start_year = ?) DESC, t.num_votes DESC '
+                . 'LIMIT 1',
+                [$normalized, $year - 1, $year + 1, $year]
+            );
+        } else {
+            $rows = $this->db->query(
+                $select
+                . 'ORDER BY t.num_votes DESC '
+                . 'LIMIT 1',
+                [$normalized]
+            );
+        }
+
+        if (!is_array($rows) || $rows === []) {
+            return null;
+        }
+
+        $row = $rows[0];
+        if (!is_array($row)) {
+            return null;
+        }
+
+        return $this->mapRow($row);
+    }
+
+    /**
      * Fetch a single title by IMDb id (`tconst`).
      *
      * @param string $tconst IMDb id, e.g. `tt0133093`.

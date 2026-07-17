@@ -174,6 +174,51 @@ class MovieMetadataResolverTest extends TestCase
         $this->assertNull($result);
     }
 
+    public function testAkaFallbackResolvesWhenPrimaryLookupMisses(): void
+    {
+        $tmdb = $this->createMock(TmdbProvider::class);
+        $imdb = $this->createMock(ImdbLookup::class);
+
+        // Primary title lookup misses (the on-disk title is a foreign aka)…
+        $imdb->expects($this->once())
+            ->method('lookup')
+            ->with('Matrix - Die Vollendung', 1999)
+            ->willReturn(null);
+        // …but the aka fallback resolves it to the canonical Matrix tconst.
+        $imdb->expects($this->once())
+            ->method('lookupByAka')
+            ->with('Matrix - Die Vollendung', 1999)
+            ->willReturn($this->imdbRow());
+
+        // TMDB has no key and throws everywhere → imdb-only result.
+        $tmdb->method('search')->willThrowException(new RuntimeException('no api key'));
+
+        $resolver = new MovieMetadataResolver($tmdb, $imdb);
+        $result = $resolver->resolve('Matrix - Die Vollendung', 1999);
+
+        $this->assertNotNull($result);
+        $this->assertIsArray($result['external_ids']);
+        $this->assertSame('tt0133093', $result['external_ids']['imdb']);
+        $this->assertSame(['imdb'], $result['sources']);
+        $this->assertSame('The Matrix', $result['title']);
+    }
+
+    public function testAkaFallbackMissYieldsNoFalsePositive(): void
+    {
+        $tmdb = $this->createMock(TmdbProvider::class);
+        $imdb = $this->createMock(ImdbLookup::class);
+
+        // Neither primary nor aka lookup match, and TMDB finds nothing → null.
+        $imdb->expects($this->once())->method('lookup')->willReturn(null);
+        $imdb->expects($this->once())->method('lookupByAka')->willReturn(null);
+        $tmdb->method('search')->willReturn([]);
+
+        $resolver = new MovieMetadataResolver($tmdb, $imdb);
+        $result = $resolver->resolve('Totally Unknown Title', 2099);
+
+        $this->assertNull($result);
+    }
+
     public function testMergePrecedenceTmdbOverviewWinsImdbRatingPresent(): void
     {
         $tmdb = $this->createMock(TmdbProvider::class);

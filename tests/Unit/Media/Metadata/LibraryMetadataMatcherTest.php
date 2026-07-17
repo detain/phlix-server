@@ -829,4 +829,113 @@ class LibraryMetadataMatcherTest extends TestCase
 
         $this->assertSame(['matched' => 1, 'processed' => 1], $matcher->matchLibrary('lib-1'));
     }
+
+    /**
+     * By default (no force refresh) an item that already has metadata
+     * (metadata_refreshed_at IS NOT NULL) is skipped: the resolver is never
+     * called and nothing is persisted.
+     */
+    public function testDefaultSkipsAlreadyMatchedItems(): void
+    {
+        $items = $this->createMock(ItemRepository::class);
+        $items->method('getByLibrary')->willReturnOnConsecutiveCalls(
+            [[
+                'id' => 'm1',
+                'type' => 'movie',
+                'name' => 'The Matrix',
+                'metadata' => [],
+                'metadata_refreshed_at' => '2026-01-01 00:00:00',
+            ]],
+            [],
+        );
+
+        $resolver = $this->createMock(MovieMetadataResolver::class);
+        $resolver->expects($this->never())->method('resolve');
+        $items->expects($this->never())->method('update');
+
+        $matcher = new LibraryMetadataMatcher($items, $resolver, null, $this->makeLogger());
+
+        $this->assertSame(['matched' => 0, 'processed' => 0], $matcher->matchLibrary('lib-1'));
+    }
+
+    /**
+     * With force refresh enabled (via {@see LibraryMetadataMatcher::setForceRefresh()})
+     * an already-matched item (metadata_refreshed_at IS NOT NULL) IS re-processed:
+     * the resolver runs and the match is persisted. This is what the
+     * `metadata_refresh` scan-job type exposes through the pipeline.
+     */
+    public function testForceRefreshReprocessesAlreadyMatchedItems(): void
+    {
+        $items = $this->createMock(ItemRepository::class);
+        $items->method('getByLibrary')->willReturnOnConsecutiveCalls(
+            [[
+                'id' => 'm1',
+                'type' => 'movie',
+                'name' => 'The Matrix',
+                'metadata' => ['year' => 1999],
+                'metadata_refreshed_at' => '2026-01-01 00:00:00',
+            ]],
+            [],
+        );
+
+        $resolver = $this->createMock(MovieMetadataResolver::class);
+        $resolver->expects($this->once())
+            ->method('resolve')
+            ->with('The Matrix', 1999, [])
+            ->willReturn(['external_ids' => ['tmdb' => '603'], 'sources' => ['tmdb']]);
+
+        $items->expects($this->once())->method('update');
+
+        $matcher = new LibraryMetadataMatcher($items, $resolver, null, $this->makeLogger());
+        $matcher->setForceRefresh(true);
+
+        $this->assertSame(['matched' => 1, 'processed' => 1], $matcher->matchLibrary('lib-1'));
+    }
+
+    /**
+     * countMatchable() (the progress denominator) respects the force-refresh flag:
+     * a non-force run counts only UNMATCHED top-level items (so the percentage can
+     * reach 100%), while a forced run counts ALL top-level items (everything is
+     * re-processed).
+     */
+    public function testCountMatchableRespectsForceRefresh(): void
+    {
+        // --- non-force: query filtered to match=unmatched ---
+        $capturedDefault = null;
+        $itemsDefault = $this->createMock(ItemRepository::class);
+        $itemsDefault->method('getByLibrary')->willReturn([]);
+        $itemsDefault->method('query')->willReturnCallback(
+            function (array $params) use (&$capturedDefault): array {
+                $capturedDefault = $params;
+                return ['items' => [], 'total' => 2, 'limit' => 1, 'offset' => 0];
+            },
+        );
+
+        $resolver = $this->createMock(MovieMetadataResolver::class);
+        $matcher = new LibraryMetadataMatcher($itemsDefault, $resolver, null, $this->makeLogger());
+        $matcher->matchLibrary('lib-1');
+
+        $this->assertIsArray($capturedDefault);
+        $this->assertSame(true, $capturedDefault['topLevel'] ?? null);
+        $this->assertSame('unmatched', $capturedDefault['match'] ?? null);
+
+        // --- force: query counts every top-level item (no match filter) ---
+        $capturedForce = null;
+        $itemsForce = $this->createMock(ItemRepository::class);
+        $itemsForce->method('getByLibrary')->willReturn([]);
+        $itemsForce->method('query')->willReturnCallback(
+            function (array $params) use (&$capturedForce): array {
+                $capturedForce = $params;
+                return ['items' => [], 'total' => 5, 'limit' => 1, 'offset' => 0];
+            },
+        );
+
+        $matcherForce = new LibraryMetadataMatcher($itemsForce, $resolver, null, $this->makeLogger());
+        $matcherForce->setForceRefresh(true);
+        $matcherForce->matchLibrary('lib-1');
+
+        $this->assertIsArray($capturedForce);
+        $this->assertSame(true, $capturedForce['topLevel'] ?? null);
+        $this->assertArrayNotHasKey('match', $capturedForce);
+    }
 }

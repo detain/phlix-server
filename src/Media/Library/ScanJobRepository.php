@@ -50,12 +50,14 @@ class ScanJobRepository
      *
      * `metadata` reuses the same async job queue + status infrastructure as
      * `scan`/`rescan` so the admin UI's scan-status badge/polling shows progress
-     * for a background metadata match unchanged. The column is a string, so this
-     * allowlist is the only place the set of accepted types is enforced.
+     * for a background metadata match unchanged. `metadata_refresh` behaves like
+     * `metadata` but forces a re-match of already-matched items (migration 081
+     * widens the ENUM to admit it). The column is an ENUM, so this allowlist is
+     * the application-level guard mirroring the accepted set of DB values.
      *
      * @var list<string>
      */
-    private const ALLOWED_TYPES = ['scan', 'rescan', 'metadata'];
+    private const ALLOWED_TYPES = ['scan', 'rescan', 'metadata', 'metadata_refresh'];
 
     /**
      * Counter columns that {@see self::updateProgress()} and
@@ -92,12 +94,15 @@ class ScanJobRepository
      * Enqueue a new scan job for a library in the `queued` state.
      *
      * @param string $libraryId Target library UUID.
-     * @param string $type      Job type, one of `scan` (incremental) or
-     *                          `rescan` (purge + rescan).
+     * @param string $type      Job type: `scan` (incremental), `rescan`
+     *                          (non-destructive rescan + prune-removed),
+     *                          `metadata` (background match, skip already-matched)
+     *                          or `metadata_refresh` (force re-match everything).
      *
      * @return string The newly generated job UUID.
      *
-     * @throws InvalidArgumentException When `$type` is not `scan` or `rescan`.
+     * @throws InvalidArgumentException When `$type` is not one of
+     *                                  {@see self::ALLOWED_TYPES}.
      *
      * @since 1.1a
      */

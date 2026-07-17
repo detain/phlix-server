@@ -519,14 +519,28 @@ class LibraryManager
     }
 
     /**
-     * Clears a library's existing items and rescans it from the filesystem.
+     * Non-destructively rescans a library from the filesystem.
      *
-     * Deletes every `media_items` row for the library, then delegates to
-     * {@see self::scanLibrary()} to re-import from disk. `scanLibrary()` derives
-     * the configured paths from the library row and routes music / photo / book /
-     * audiobook libraries to their specialised scanners, so a single base rescan
-     * correctly refreshes every library type (including a streamed per-file
-     * progress percentage when `$onProgress` is supplied).
+     * **This method used to `DELETE FROM media_items WHERE library_id = ?` before
+     * rescanning — which cascaded through the `ON DELETE CASCADE` foreign keys on
+     * `user_item_data` (watch progress, favorites, ratings, watched status) and
+     * the watch-history / continue-watching tables, PERMANENTLY erasing every
+     * user's data (and all fetched TMDB metadata) for the library on every
+     * rescan.** It no longer deletes first.
+     *
+     * Instead it:
+     *  1. re-scans from disk exactly like {@see self::scanLibrary()} — the scanner
+     *     upserts by path (race-safe `path_hash` unique index), so a file that
+     *     still exists updates its EXISTING row IN PLACE, keeping the same UUID
+     *     and therefore every `user_item_data` / watch row that references it; then
+     *  2. prunes ONLY the items whose source file no longer exists on disk (so
+     *     genuinely-removed media is cleaned up), plus any series/season container
+     *     left empty by that pruning — see {@see self::pruneRemovedItems()}.
+     *
+     * `scanLibrary()` derives the configured paths from the library row and routes
+     * music / photo / book / audiobook libraries to their specialised scanners, so
+     * a single base rescan correctly refreshes every library type (including a
+     * streamed per-file progress percentage when `$onProgress` is supplied).
      *
      * The `$paths` argument is accepted only for signature compatibility with the
      * media-specific subclass managers ({@see AudiobookLibraryManager},
@@ -546,19 +560,136 @@ class LibraryManager
         unset($paths);
         $startTime = microtime(true);
 
-        // Clear the library's existing items, then rescan from the filesystem.
-        $this->db->query("DELETE FROM media_items WHERE library_id = ?", [$libraryId]);
+        // Item count BEFORE the scan, so added/updated can be derived as deltas.
+        $before = $this->countLibraryItems($libraryId);
+
+        // NON-DESTRUCTIVE rescan: re-scan from the filesystem WITHOUT deleting
+        // first. Surviving files keep their existing rows (and UUIDs) via the
+        // scanner's upsert-by-path, so all cascading user data is preserved.
         $this->scanLibrary($libraryId, $onProgress);
 
-        $imported = $this->countLibraryItems($libraryId);
+        // Prune only items whose source file is gone from disk, plus any now-empty
+        // series/season containers.
+        $removed = $this->pruneRemovedItems($libraryId);
+
+        $after = $this->countLibraryItems($libraryId);
+
+        // Items that existed before and were not pruned were re-scanned in place
+        // (updated); the remainder of the new total are brand-new additions.
+        $survivors = max(0, $before - $removed);
 
         $result = new ScanResult();
-        $result->scanned = $imported;
-        $result->added = $imported;
-        $result->updated = 0;
+        $result->scanned = $after;
+        $result->added = max(0, $after - $survivors);
+        $result->updated = min($survivors, $after);
+        $result->removed = $removed;
         $result->durationMs = (int) ((microtime(true) - $startTime) * 1000);
 
         return $result;
+    }
+
+    /**
+     * Prunes items whose source file no longer exists on disk, then removes any
+     * series/season containers left empty by that pruning.
+     *
+     * Leaf items (movies, episodes, tracks, books, …) carry a real filesystem
+     * `path`; a synthetic container row (`series`/`season`) is addressed by a
+     * `series:`/`season:` synthetic path (see {@see SeriesContainerNaming}) and is
+     * NEVER checked against the filesystem — it is pruned in phase 2 only once it
+     * has no remaining children, so a fully-removed show does not leave orphan
+     * season/series shells behind.
+     *
+     * @param string $libraryId The library's unique identifier
+     * @return int Total number of rows pruned (leaves + empty containers)
+     */
+    private function pruneRemovedItems(string $libraryId): int
+    {
+        $rows = $this->db->query(
+            "SELECT id, path FROM media_items WHERE library_id = ?",
+            [$libraryId],
+        );
+        if (!is_array($rows)) {
+            return 0;
+        }
+
+        $removed = 0;
+
+        // Phase 1: prune leaf items whose real source file is gone from disk.
+        foreach ($rows as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            $id = is_string($row['id'] ?? null) ? $row['id'] : null;
+            $path = is_string($row['path'] ?? null) ? $row['path'] : '';
+            if ($id === null || $path === '') {
+                continue;
+            }
+            if ($this->isSyntheticContainerPath($path)) {
+                continue;
+            }
+            if (!file_exists($path)) {
+                $this->db->query("DELETE FROM media_items WHERE id = ?", [$id]);
+                $removed++;
+            }
+        }
+
+        // Phase 2: prune now-empty containers — seasons first (their parent
+        // series may become childless afterwards), then series.
+        $removed += $this->pruneEmptyContainers($libraryId);
+
+        return $removed;
+    }
+
+    /**
+     * Removes series/season container rows that no longer have any children,
+     * seasons before series so a series emptied by season pruning is also cleaned
+     * up in the same pass (the hierarchy is at most series → season → episode).
+     *
+     * @param string $libraryId The library's unique identifier
+     * @return int Number of empty container rows removed
+     */
+    private function pruneEmptyContainers(string $libraryId): int
+    {
+        $removed = 0;
+
+        foreach (['season', 'series'] as $containerType) {
+            $childless = $this->db->query(
+                "SELECT c.id FROM media_items c"
+                . " WHERE c.library_id = ? AND c.type = ?"
+                . " AND NOT EXISTS ("
+                . "     SELECT 1 FROM media_items ch WHERE ch.parent_id = c.id"
+                . " )",
+                [$libraryId, $containerType],
+            );
+            if (!is_array($childless)) {
+                continue;
+            }
+            foreach ($childless as $row) {
+                if (!is_array($row)) {
+                    continue;
+                }
+                $id = is_string($row['id'] ?? null) ? $row['id'] : null;
+                if ($id === null) {
+                    continue;
+                }
+                $this->db->query("DELETE FROM media_items WHERE id = ?", [$id]);
+                $removed++;
+            }
+        }
+
+        return $removed;
+    }
+
+    /**
+     * Whether a `media_items.path` is a synthetic series/season container address
+     * ({@see SeriesContainerNaming::seriesPath()} / `seasonPath()`) rather than a
+     * real filesystem path, so container rows are never file-existence checked.
+     *
+     * @param string $path The stored path column value.
+     */
+    private function isSyntheticContainerPath(string $path): bool
+    {
+        return str_starts_with($path, 'series:') || str_starts_with($path, 'season:');
     }
 
     /**

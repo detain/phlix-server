@@ -1,0 +1,2 @@
+import{o as e,x as t}from"./runtime-core.esm-bundler-BsKpGOEM.js";function n(e){return typeof e==`string`?e:e?.value??``}function r(){let r=t(`apiBase`,``);return e(()=>n(r))}function i(){let r=t(`mediaApiBase`,void 0),i=t(`apiBase`,``);return e(()=>n(r)||n(i))}function a(){let r=t(`mediaDirectBase`,void 0);return e(()=>n(r))}export{i as n,r,a as t};
+//# sourceMappingURL=useApiBase-CV_r-Kk4-Iik3zkce.js.map

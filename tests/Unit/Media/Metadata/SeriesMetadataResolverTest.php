@@ -149,14 +149,15 @@ final class SeriesMetadataResolverTest extends TestCase
 
         $this->assertSame('https://image.tmdb.org/t/p/w500/s1.jpg', $season['poster_url']);
         $this->assertSame('12:00 A.M.', $season['episodes'][1]['episode_title']);
-        // Episodes deliberately carry no poster of their own: they fall through
-        // to the season/series poster in enrichEpisode(), so poster_url is null
-        // even when TMDB supplies a still_path (avoids treating a landscape
-        // still as a portrait poster).
-        $this->assertNull($season['episodes'][1]['poster_url']);
+        // Episodes carry their own still (from TMDB still_path) as poster_url +
+        // still_url; enrichEpisode() falls through to the season/series poster
+        // only when the episode has no still.
+        $this->assertSame('https://image.tmdb.org/t/p/w500/e1.jpg', $season['episodes'][1]['poster_url']);
+        $this->assertSame('https://image.tmdb.org/t/p/w500/e1.jpg', $season['episodes'][1]['still_url']);
         $this->assertSame(44, $season['episodes'][1]['runtime']);
-        // Episode 2: empty/zero fields normalize to null.
+        // Episode 2: empty/zero fields normalize to null (no still → no image).
         $this->assertNull($season['episodes'][2]['poster_url']);
+        $this->assertNull($season['episodes'][2]['still_url']);
         $this->assertNull($season['episodes'][2]['overview']);
         $this->assertNull($season['episodes'][2]['runtime']);
     }

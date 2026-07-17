@@ -192,10 +192,16 @@ class SeriesMetadataResolver
         foreach ($season['episodes'] ?? [] as $ep) {
             $number = MetadataValue::asInt($ep['episode_number'] ?? null);
             $vote = MetadataValue::asFloat($ep['vote_average'] ?? null);
+            // Each episode's own still (a landscape frame). Used as the episode
+            // image; when TMDB has no still this is null and enrichEpisode()
+            // falls through to the season/series poster. Distinct stills have
+            // distinct paths, so the artwork dedup downloads each exactly once.
+            $stillUrl = $this->imageUrl(MetadataValue::asNullableString($ep['still_path'] ?? null));
             $episodes[$number] = [
                 'episode_title' => MetadataValue::asNullableString($ep['name'] ?? null),
                 'overview' => MetadataValue::asNullableString($ep['overview'] ?? null),
-                'poster_url' => null,  // Episodes don't have posters; fall through to season/series poster
+                'poster_url' => $stillUrl,
+                'still_url' => $stillUrl,
                 'air_date' => MetadataValue::asNullableString($ep['air_date'] ?? null),
                 'runtime' => (($r = MetadataValue::asInt($ep['runtime'] ?? null)) > 0) ? $r : null,
                 'vote_average' => $vote > 0.0 ? $vote : null,

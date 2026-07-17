@@ -1387,6 +1387,14 @@ class LibraryMetadataMatcher
             $patch['poster_url'] = $poster;
         }
 
+        // Preserve the episode's own still separately (a landscape frame) so a
+        // client can show it distinctly from the portrait poster. Present only
+        // when TMDB supplied a still for this episode.
+        $still = $this->stringOrNull($info['still_url'] ?? null);
+        if ($still !== null) {
+            $patch['still_url'] = $still;
+        }
+
         // Episode-level cast/crew (season regulars + guest stars / episode crew).
         $cast = $this->peopleList($info['cast'] ?? null);
         if ($cast !== []) {

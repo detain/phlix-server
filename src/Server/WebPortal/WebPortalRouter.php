@@ -41,6 +41,7 @@ use Phlix\Common\Logger\AuditLogger;
 use Phlix\Media\UserItemDataRepository;
 use Phlix\Media\Metadata\TmdbProvider;
 use Phlix\Media\Playback\PlaybackPreferences;
+use Phlix\Media\Streaming\ClientCapabilities;
 use Phlix\Server\Http\Controllers\MediaUserDataController;
 use Phlix\Server\Http\Controllers\MediaPosterController;
 use Phlix\Server\Http\Controllers\MediaRatingsController;
@@ -1207,7 +1208,9 @@ class WebPortalRouter
      * and direct play capabilities. This is used by the player
      * to initialize playback.
      *
-     * @param Request $request The HTTP request (unused)
+     * @param Request $request The HTTP request; the parental filter is resolved
+     *        from it and, for SV-3.3, the optional `X-Phlix-Client-Capabilities`
+     *        header gates the `direct_play` verdict.
      * @param array<string, string> $params Route parameters including 'id'
      *
      * @return Response JSON response with playback_info object or 404 error
@@ -1268,6 +1271,25 @@ class WebPortalRouter
         $audioTracks = StreamTrackShaper::audioTracks($streams);
         $subtitleTracks = StreamTrackShaper::subtitleTracks($streams, $itemId);
 
+        // SV-3.3(2A): capability-gated direct-play. When the client declares its
+        // decoder capabilities via X-Phlix-Client-Capabilities and cannot decode
+        // the source's default audio codec (e.g. E-AC-3), report direct_play=false
+        // so the player transcodes instead of receiving silent audio. An
+        // absent/empty header preserves the historical always-true verdict
+        // (backward compat). This gates on the SAME first-/default-audio-stream
+        // predicate the transcode path uses (TranscodeManager::computeHlsParams()
+        // → ClientCapabilities::supportsCodec()) so this verdict and the actual
+        // transcode decision agree on what "playable" means.
+        $clientCapabilities = ClientCapabilities::fromJson(
+            $request->getHeader('X-Phlix-Client-Capabilities')
+        );
+        $directPlay = true;
+        if ($clientCapabilities->hasExplicitCapabilities()) {
+            $directPlay = $clientCapabilities->supportsCodec(
+                self::defaultAudioCodec($audioTracks)
+            );
+        }
+
         // Build playback info
         $playbackInfo = [
             'id' => $item['id'],
@@ -1278,7 +1300,7 @@ class WebPortalRouter
                     'id' => 'default',
                     'container' => 'mkv',
                     'path' => $item['path'],
-                    'direct_play' => true,
+                    'direct_play' => $directPlay,
                 ],
             ],
             'markers' => $skipSpec->toArray(),
@@ -1287,6 +1309,33 @@ class WebPortalRouter
         ];
 
         return (new Response())->json(['playback_info' => $playbackInfo]);
+    }
+
+    /**
+     * Returns the codec of the item's default audio track (else the first), or
+     * '' when the item has no audio streams.
+     *
+     * This is the codec the SV-3.3 direct-play verdict is gated on. It mirrors
+     * the first-audio-stream predicate the transcode path uses
+     * ({@see \Phlix\Media\Transcoding\TranscodeManager::computeHlsParams()} →
+     * {@see ClientCapabilities::supportsCodec()}) so playback-info and the actual
+     * transcode decision stay consistent. StreamTrackShaper guarantees exactly
+     * one `default` track when any exist; the first-track fallback is defensive.
+     *
+     * @param list<array<string, mixed>> $audioTracks Shaped audio tracks from
+     *        {@see StreamTrackShaper::audioTracks()} (each has `codec` + `default`).
+     */
+    private static function defaultAudioCodec(array $audioTracks): string
+    {
+        foreach ($audioTracks as $track) {
+            if (($track['default'] ?? false) === true) {
+                return is_string($track['codec'] ?? null) ? (string) $track['codec'] : '';
+            }
+        }
+
+        $first = $audioTracks[0]['codec'] ?? null;
+
+        return is_string($first) ? (string) $first : '';
     }
 
     /**

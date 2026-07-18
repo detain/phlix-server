@@ -7342,3 +7342,26 @@ lives — without spawning ffmpeg, publishing the segment so `produceSegment`'s 
   the injection landmine). Full Unit **5755/41945/0 fail/0 err/5 skip** (baseline 5735 + 20 new);
   phpstan L9 `[OK] No errors`; phpcs PSR-12 0/0 on changed src. **2A/2B still pending** (the
   `direct_play` capability gate — NOT in scope for 1B).
+
+## SV-3.3(2A) — capability-gated direct_play in playback-info (2026-07-18)
+- [x] DONE (2A). `WebPortalRouter::getPlaybackInfo()` (`src/Server/WebPortal/WebPortalRouter.php`) —
+  the ONLY surface emitting a real direct-play verdict — was hardcoded `'direct_play' => true`. Now it
+  parses `X-Phlix-Client-Capabilities` via the SHARED `ClientCapabilities::fromJson()` (same idiom as
+  `TranscodeController`) and, when `hasExplicitCapabilities()`, sets `direct_play =
+  supportsCodec($defaultAudioCodec)`; absent/empty header → still `true` (backward compat preserved
+  exactly). Default codec = new private `defaultAudioCodec()` helper (default-disposition track, else
+  first, from `StreamTrackShaper::audioTracks`) — keys on the SAME first/default audio stream the
+  transcode path's `TranscodeManager::computeHlsParams()` gates on, so playback-info and the transcode
+  decision agree (no "direct-play OK then silent audio"). Docblock `$request` "(unused)" note fixed.
+  **2B verdict: NOT NEEDED / skipped.** `direct_play`/`directPlay` is consumed by ZERO clients —
+  grep of phlix-ui/src, phlix-contracts, phlix-shared and every native client (roku/mobile/tizen/
+  windows/console) source finds no reader; the SPA PlayerPage hits `/playback-info` (MediaItemController)
+  only for markers/chapters/audio-tracks and streams from `/media/:id/stream` regardless. Adding a
+  `direct_play` field to `MediaItemController::getPlaybackInfo` would be dead code → gold-plating,
+  omitted. Tests (capability path had ZERO): +11 `ClientCapabilitiesTest` (fromJson null/empty/invalid/
+  non-object → empty; case-normalise; explicit true/false; explicit-overrides-default; widely-supported
+  default-allow; unknown default-deny; hasExplicitCapabilities) and +8
+  `WebPortalRouterPlaybackCapabilityTest` (eac3 + `{"eac3":false}`→false; eac3 + `{"eac3":true}`→true;
+  no header→true; empty header→true; aac source + `{"eac3":false}`→true; aac + `{"aac":false}`→false;
+  default-track-not-first gating). Full Unit **5774/42011/0 fail/0 err/5 skip** (baseline 5755 + 19 new);
+  phpstan L9 `[OK] No errors`; phpcs PSR-12 0/0 on changed src.

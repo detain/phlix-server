@@ -7497,3 +7497,125 @@ Verified:
    byte-identical-when-disabled holds across all FOUR re-encode builders. Ran the 3 affected
    test files: **37/37 pass (128 assertions)**. phpstan L9 `[OK] No errors`; phpcs PSR-12 clean
    on `FfmpegRunner.php`, `WebPortalRouter.php`, `config/ffmpeg.php`.
+
+## Reviewer (cumulative) — 2026-07-18
+
+Cumulative integration review of SV-4.15 (commits b343c3e0, 603ca375, 9d46eb47,
+4d7b31a1, de990be6, 80e9f893, aaf6b688). Verdict: the DB backend, central 429
+mapping, DI wiring, and WS no-throw seam are correct, but the **IP source that
+every IP-keyed surface depends on is client-spoofable in the shipped deployment**,
+which defeats the feature's headline goal. Findings:
+
+1. **HIGH — IP-keyed limiters (register / refresh / jwks / webauthn IP-fallback)
+   are trivially bypassable via a forged `X-Forwarded-For` header.**
+   `Request::getClientIp()` (`src/Server/Http/Request.php:379-388`) returns
+   `trim(explode(',', $xff)[0])` — the LEFTMOST XFF entry. The shipped reverse
+   proxy sets `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;`
+   (`reverse-proxy/nginx/phlix.conf:72,88,113,127,149,177`), i.e. it APPENDS the
+   real connecting IP to whatever XFF the client sent, leaving the client-forged
+   value leftmost. (The WS HAProxy front is worse still:
+   `http-request set-header X-Forwarded-For %[hdr(x-forwarded-for)]` in
+   `deploy/haproxy.cfg` copies the client header verbatim.) An attacker who sends
+   `X-Forwarded-For: <random>` on every request gets a fresh bucket each time, so
+   `register:<ip>` (`AuthController.php:131`), `refresh:<ip>`
+   (`AuthController.php:274`), `jwks:<ip>` (`HubJwksController.php:93`), and the
+   WebAuthn IP fallback (`WebAuthnController.php:97`) never trip. This nullifies
+   exactly the DB-backed "TRUE-global" register/refresh limiters that migration
+   085 + `DbRateLimiter` exist to provide — the feature is ineffective as shipped.
+   Why it matters: the whole point of SV-4.15 is brute-force / enumeration
+   throttling; a single header defeats it.
+   Fix: derive the key from a TRUSTED source, not the leftmost XFF — e.g. prefer
+   the proxy-set `X-Real-IP` (nginx sets it to `$remote_addr`, overwriting any
+   client value: `phlix.conf:71,87,...`), OR parse XFF right-to-left past known
+   trusted-proxy hops, OR use `$request->remoteIp` when the proxy overwrites XFF.
+   Whatever is chosen must be a trusted-proxy-aware value; document the proxy
+   contract it depends on.
+   Amplifying consequences of the same spoofable key:
+   (a) `DbRateLimiter` has NO hard row cap — `sweepExpired()`
+   (`src/Common/RateLimit/DbRateLimiter.php:220-228`) only deletes rows whose
+   `reset_at <= now`. A flood of distinct (spoofed) keys inserts rows that do not
+   expire until the full window elapses, so `rate_limit_buckets` grows to
+   ~(unique-keys × window) with nothing reclaimable in the first window — a
+   disk/row-growth DoS the in-memory `RateLimiter` is immune to (it has `$cap` +
+   eviction). Once IP keys are un-spoofable (per the fix) this is bounded by real
+   client count and matches the `login_rate_limit` precedent; until then it is
+   attacker-amplified.
+   (b) `rate_key` is `VARCHAR(191)` PK (migration 085); a forged XFF whose first
+   segment exceeds ~183 chars produces an over-length key → under
+   `STRICT_TRANS_TABLES` the `hit()` INSERT throws "Data too long", which is NOT a
+   `RateLimitException`, so it falls through to the generic HTTP 500 — a cheap
+   error-injection vector on register/refresh. Clamp/validate the derived IP.
+
+2. **MEDIUM — WS-connect limiter collapses all clients into ONE shared bucket
+   behind the shipped proxies (self-DoS / over-block).**
+   `onWebSocketConnect()` keys on `$connection->getRemoteIp()`
+   (`src/Server/WebSocket/WebSocketServer.php:400-401`) — the TCP peer. The
+   shipped deployment proxies the `:8097` worker (HAProxy `ws-external` →
+   `127.0.0.1:8097` in `deploy/haproxy.cfg`; nginx `location /ws` →
+   `phlix_backend` in `phlix.conf:106-119`) with NO PROXY-protocol, and the worker
+   (`websocket://0.0.0.0:8097`, `start.php:479`) does not parse PROXY-protocol, so
+   `getRemoteIp()` is the proxy's loopback address for EVERY client. With
+   `ws_connect` max=30/60s, the 30th WebSocket handshake server-wide trips the
+   limit and rejects ALL subsequent connections for the window — a functional
+   availability regression, and the per-IP intent is lost (there is effectively no
+   per-client throttle at all). Note this is the mirror of Finding 1: WS correctly
+   uses the unspoofable TCP peer but, being behind a loopback proxy, that peer is
+   useless; HTTP uses the spoofable header. Both need a single, correct,
+   trusted-proxy-aware client-IP derivation. Fix: enable PROXY-protocol on the WS
+   listener + proxies, or derive the WS client IP from the trusted XFF/X-Real-IP
+   the upgrade request carries (consistent with the Finding-1 fix); verify against
+   the shipped proxy config before shipping.
+
+3. **LOW — WebAuthn per-username keying does not throttle horizontal
+   enumeration.** `webauthn_start` / `webauthn_finish` key on the submitted
+   username (IP only when username is absent — `WebAuthnController.php:90-97,
+   171-177, 206-212`). A spray attack (one attempt each across many usernames from
+   one source) hits a fresh bucket per username and is never throttled. This
+   protects a single account from being hammered but not the enumeration sweep the
+   surface is otherwise meant to blunt. Consider an additional IP-scoped (composite
+   `ip:username` or per-IP) limiter once a trusted IP source exists (Finding 1).
+
+4. **LOW — the Workerman 429 path skips response decoration.** In
+   `HttpHandler::__invoke` the `catch (RateLimitException $e)`
+   (`src/Server/Workerman/HttpHandler.php:303-313`) sends
+   `Application::rateLimitResponse($e)->toWorkermanResponse()` directly, bypassing
+   the `$cors->decorate()`, `$securityHeaders->decorate()`, and
+   `compressResponse()` applied on every other branch. A cross-origin XHR that hits
+   the limit therefore gets a 429 with no CORS/security headers (the browser may
+   not surface the `Retry-After`). Minor consistency gap; route the 429 through the
+   same decoration path.
+
+Confirmed CORRECT (no action):
+- `DbRateLimiter::hit()` upsert window logic is right: `attempts = IF(reset_at<=now,1,attempts+1)`,
+  `reset_at = IF(reset_at<=now,new,keep)`; both IF conditions read the pre-update `reset_at`
+  (MySQL only substitutes updated values for columns already assigned earlier in the SET list,
+  and `reset_at` is only assigned once). The post-upsert re-SELECT can only over-count under a
+  race, never under-count. `sweepExpired` binds `LIMIT` as a native `int` const (CLEANUP_BATCH_SIZE),
+  avoiding the `LIMIT '100'` 1064 quoting hazard; all placeholders are positional `?` (no hub `:param`
+  leakage — a test asserts this). Migration 085 schema is sane (VARCHAR(191) utf8mb4-safe PK,
+  `idx_reset_at`, IF NOT EXISTS idempotent).
+- Central 429 (c) is uniform and non-swallowing: `Application::dispatch()` has NO try/catch, so a
+  controller throw propagates to the single `HttpHandler` catch; `Application::handleException()`
+  and `public/index.php`'s `set_exception_handler` map the same `rateLimitResponse()` envelope
+  (429 + `Retry-After` + `code=rate_limited`). This also fixes the latent login-limiter 500-on-trip.
+- Per-surface wiring hits BEFORE the work on every surface and throws on `limited` (HTTP) or
+  inline-rejects (WS); keys are distinct per surface. DI binds each optional limiter EXPLICITLY to
+  its `RateLimitProfiles` id (dodging PHP-DI's optional-param skip); JWKS profile registered in
+  AuthServicesProvider resolves into HubServicesProvider (single merged container). Degraded
+  no-container fallbacks pass null → no-op.
+- WS seam (h) is safe: inline reject before the auth gate, never throws out of the hook (would
+  `stopAll()` the count=1 worker), plain TCP close before the 101 upgrade is the correct idiom,
+  and the `start.php` injection is best-effort try/catch (a resolve failure leaves the listener
+  working, unthrottled, not crashed).
+- In-memory `RateLimiter` is resident-safe: bounded `$cap` map with expired-sweep + soonest-expiry
+  eviction, instance field (no static/global), no coroutine yield mid-mutation.
+- Tests are genuine (real over-limit transitions at `>= max`, window restart, per-key isolation,
+  positional-param assertion, DI-wiring assertions), not decorative.
+
+Out of scope / pre-existing (noted, not counted): the `login` limiter keys on
+`AuthManager::getClientIp()` = `$_SERVER['REMOTE_ADDR']` (`AuthManager.php:365-369`), which is not
+reliably per-request under resident Workerman workers — unchanged by SV-4.15, which only newly maps
+its trip to 429.
+
+Findings: 4 (1 HIGH, 1 MEDIUM, 2 LOW). Priorities #1 (XFF spoofing) and #2 (WS
+shared bucket) block the feature being effective in the shipped deployment.

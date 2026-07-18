@@ -1431,7 +1431,8 @@ class Application
      *
      * Wires endpoints for:
      * - LibraryController: index, show, create, update, delete, scan, rescan,
-     *   scanStatus, scanHistory (9 routes)
+     *   matchMetadata, refreshMetadata, prune, clearMetadata, clearArtwork,
+     *   deleteAll, scanStatus, scanHistory (15 routes)
      * - ThemeMediaController: getThemeMedia, scanThemeMedia, deleteThemeMedia (3 routes)
      * - ThemeMediaStreamController: streamAudio, streamVideo (2 routes)
      *
@@ -1469,6 +1470,19 @@ class Application
         // for already-matched items, unlike match-metadata which skips them. Same
         // 3-segment literal shape, so no shadowing with the {id} routes.
         $this->router->post('/api/v1/libraries/{id}/refresh-metadata', [$libraryController, 'refreshMetadata']);
+
+        // Fine-grained library maintenance ops (migration 084) — each enqueues a
+        // new scan-job type drained off the HTTP path by LibraryScanWorker, so
+        // the existing scan-status badge/polling shows progress unchanged. All
+        // are 3-segment literal paths, so no shadowing with the {id} routes.
+        //   prune         — drop items whose files are gone (non-destructive)
+        //   clear-metadata— reset items to filesystem basics (re-fetchable)
+        //   clear-artwork — delete locally cached artwork (frees disk)
+        //   delete-all    — DESTRUCTIVE remove every item (requires confirm=true)
+        $this->router->post('/api/v1/libraries/{id}/prune', [$libraryController, 'prune']);
+        $this->router->post('/api/v1/libraries/{id}/clear-metadata', [$libraryController, 'clearMetadata']);
+        $this->router->post('/api/v1/libraries/{id}/clear-artwork', [$libraryController, 'clearArtwork']);
+        $this->router->post('/api/v1/libraries/{id}/delete-all', [$libraryController, 'deleteAll']);
 
         // Theme media routes
         $this->router->get('/api/v1/libraries/{id}/theme-media', [$themeMediaController, 'getThemeMedia']);

@@ -106,7 +106,8 @@ class ApplicationFactoryMethodsTest extends TestCase
                     ItemRepository::class => $itemRepo,
                     // AdminMiddleware is final and cannot be doubled; build a real
                     // instance with mocked collaborators instead.
-                    \Phlix\Server\Http\Middleware\AdminMiddleware::class => new \Phlix\Server\Http\Middleware\AdminMiddleware(
+                    \Phlix\Server\Http\Middleware\AdminMiddleware::class =>
+                    new \Phlix\Server\Http\Middleware\AdminMiddleware(
                         $this->createMock(UserRepository::class),
                         $this->createMock(AuditLogger::class),
                     ),
@@ -143,14 +144,19 @@ class ApplicationFactoryMethodsTest extends TestCase
         $libraryManager = $this->createMock(LibraryManager::class);
 
         $this->container->method('get')
-            ->willReturnCallback(function (string $class) use ($themeMediaRepository, $themeMediaFinder, $libraryManager): object {
+            ->willReturnCallback(function (string $class) use (
+                $themeMediaRepository,
+                $themeMediaFinder,
+                $libraryManager
+            ): object {
                 return match ($class) {
                     ThemeMediaRepository::class => $themeMediaRepository,
                     ThemeMediaFinder::class => $themeMediaFinder,
                     LibraryManager::class => $libraryManager,
                     // AdminMiddleware is final and cannot be doubled; build a real
                     // instance with mocked collaborators instead.
-                    \Phlix\Server\Http\Middleware\AdminMiddleware::class => new \Phlix\Server\Http\Middleware\AdminMiddleware(
+                    \Phlix\Server\Http\Middleware\AdminMiddleware::class =>
+                    new \Phlix\Server\Http\Middleware\AdminMiddleware(
                         $this->createMock(UserRepository::class),
                         $this->createMock(AuditLogger::class),
                     ),
@@ -193,8 +199,8 @@ class ApplicationFactoryMethodsTest extends TestCase
         // - MusicController(musicManager, libraryManager, sessionManager)
 
         // Since we can't easily mock the internal creation without a real DB,
-        // this test documents the expected behavior
-        $this->assertTrue(true, 'MusicController factory creates correct dependency chain');
+        // this test documents the expected behavior (no runtime assertion).
+        $this->expectNotToPerformAssertions();
     }
 
     /**
@@ -215,8 +221,8 @@ class ApplicationFactoryMethodsTest extends TestCase
         // - OpdsFeedBuilder(itemRepo, baseUrl)
         // - BookController(itemRepo, libraryManager, opdsBuilder)
 
-        // This test documents the expected behavior
-        $this->assertTrue(true, 'BookController factory creates correct dependency chain');
+        // This test documents the expected behavior (no runtime assertion).
+        $this->expectNotToPerformAssertions();
     }
 
     /**
@@ -237,7 +243,14 @@ class ApplicationFactoryMethodsTest extends TestCase
         $constructor = $ref->getConstructor();
 
         $this->assertNotNull($constructor);
-        $this->assertCount(5, $constructor->getParameters(), 'LibraryManager should have 5 parameters (4 required + 1 optional)');
+        // 4 required (db, scanner, watcher, musicLibraryService) + 3 optional
+        // (logger, itemRepository, artworkStorage — the latter two wire the
+        // fine-grained maintenance ops, migration 084).
+        $this->assertCount(
+            7,
+            $constructor->getParameters(),
+            'LibraryManager should have 7 parameters (4 required + 3 optional)',
+        );
 
         // Verify the 4th parameter is MusicLibraryService
         $params = $constructor->getParameters();

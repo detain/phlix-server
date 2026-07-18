@@ -52,12 +52,28 @@ class ScanJobRepository
      * `scan`/`rescan` so the admin UI's scan-status badge/polling shows progress
      * for a background metadata match unchanged. `metadata_refresh` behaves like
      * `metadata` but forces a re-match of already-matched items (migration 081
-     * widens the ENUM to admit it). The column is an ENUM, so this allowlist is
-     * the application-level guard mirroring the accepted set of DB values.
+     * widens the ENUM to admit it).
+     *
+     * The four fine-grained maintenance ops — `prune` (drop items whose files are
+     * gone), `clear_metadata` (reset items to filesystem basics), `clear_artwork`
+     * (delete locally cached artwork), and the destructive `delete_all` (remove
+     * every item) — reuse the SAME queue and are admitted by migration 084.
+     *
+     * The column is an ENUM, so this allowlist is the application-level guard
+     * mirroring the accepted set of DB values.
      *
      * @var list<string>
      */
-    private const ALLOWED_TYPES = ['scan', 'rescan', 'metadata', 'metadata_refresh'];
+    private const ALLOWED_TYPES = [
+        'scan',
+        'rescan',
+        'metadata',
+        'metadata_refresh',
+        'prune',
+        'clear_metadata',
+        'clear_artwork',
+        'delete_all',
+    ];
 
     /**
      * Counter columns that {@see self::updateProgress()} and
@@ -96,8 +112,12 @@ class ScanJobRepository
      * @param string $libraryId Target library UUID.
      * @param string $type      Job type: `scan` (incremental), `rescan`
      *                          (non-destructive rescan + prune-removed),
-     *                          `metadata` (background match, skip already-matched)
-     *                          or `metadata_refresh` (force re-match everything).
+     *                          `metadata` (background match, skip already-matched),
+     *                          `metadata_refresh` (force re-match everything),
+     *                          `prune` (drop items whose files are gone),
+     *                          `clear_metadata` (reset items to filesystem basics),
+     *                          `clear_artwork` (delete locally cached artwork) or
+     *                          `delete_all` (destructive: remove every item).
      *
      * @return string The newly generated job UUID.
      *

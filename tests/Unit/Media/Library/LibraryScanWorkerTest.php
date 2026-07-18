@@ -355,6 +355,150 @@ class LibraryScanWorkerTest extends TestCase
     }
 
     /**
+     * runOnce() with a `prune` job runs pruneLibrary (NOT scan/rescan), records
+     * the removed count on the job row, and marks completed.
+     */
+    public function testRunOnceProcessesPruneJob(): void
+    {
+        $jobs = $this->createMock(ScanJobRepository::class);
+        $jobs->expects($this->once())
+            ->method('claimNext')
+            ->willReturn(['id' => 'job-p', 'library_id' => 'lib-p', 'type' => 'prune']);
+        $jobs->expects($this->once())->method('markCompleted')->with('job-p');
+        $jobs->expects($this->never())->method('markFailed');
+        $jobs->expects($this->once())
+            ->method('updateProgress')
+            ->with('job-p', ['items_removed' => 4]);
+
+        $libraries = $this->createMock(LibraryManager::class);
+        $libraries->expects($this->once())->method('pruneLibrary')->with('lib-p')->willReturn(4);
+        $libraries->expects($this->never())->method('scanLibrary');
+        $libraries->expects($this->never())->method('rescanLibrary');
+
+        $worker = new LibraryScanWorker($jobs, $libraries, $this->makeUnusedMatcher(), $this->makeLogger());
+
+        $this->assertTrue($worker->runOnce());
+    }
+
+    /**
+     * runOnce() with a `clear_metadata` job runs clearMetadata and forwards its
+     * (processed, total) progress onto the job row, then marks completed.
+     */
+    public function testRunOnceProcessesClearMetadataJob(): void
+    {
+        $jobs = $this->createMock(ScanJobRepository::class);
+        $jobs->expects($this->once())
+            ->method('claimNext')
+            ->willReturn(['id' => 'job-cm', 'library_id' => 'lib-cm', 'type' => 'clear_metadata']);
+        $jobs->expects($this->once())->method('markCompleted')->with('job-cm');
+        $jobs->expects($this->never())->method('markFailed');
+        $jobs->expects($this->once())
+            ->method('updateProgress')
+            ->with('job-cm', ['items_found' => 8, 'items_updated' => 3]);
+
+        $libraries = $this->createMock(LibraryManager::class);
+        $libraries->expects($this->never())->method('scanLibrary');
+        $libraries->expects($this->never())->method('rescanLibrary');
+        $libraries->expects($this->once())
+            ->method('clearMetadata')
+            ->with('lib-cm', $this->isType('callable'))
+            ->willReturnCallback(static function (string $lib, ?callable $onProgress = null): int {
+                if ($onProgress !== null) {
+                    $onProgress(3, 8);
+                }
+                return 8;
+            });
+
+        $worker = new LibraryScanWorker($jobs, $libraries, $this->makeUnusedMatcher(), $this->makeLogger());
+
+        $this->assertTrue($worker->runOnce());
+    }
+
+    /**
+     * runOnce() with a `clear_artwork` job runs clearArtwork and forwards its
+     * (processed, total) progress onto the job row, then marks completed.
+     */
+    public function testRunOnceProcessesClearArtworkJob(): void
+    {
+        $jobs = $this->createMock(ScanJobRepository::class);
+        $jobs->expects($this->once())
+            ->method('claimNext')
+            ->willReturn(['id' => 'job-ca', 'library_id' => 'lib-ca', 'type' => 'clear_artwork']);
+        $jobs->expects($this->once())->method('markCompleted')->with('job-ca');
+        $jobs->expects($this->never())->method('markFailed');
+        $jobs->expects($this->once())
+            ->method('updateProgress')
+            ->with('job-ca', ['items_found' => 5, 'items_updated' => 5]);
+
+        $libraries = $this->createMock(LibraryManager::class);
+        $libraries->expects($this->never())->method('scanLibrary');
+        $libraries->expects($this->never())->method('rescanLibrary');
+        $libraries->expects($this->once())
+            ->method('clearArtwork')
+            ->with('lib-ca', $this->isType('callable'))
+            ->willReturnCallback(static function (string $lib, ?callable $onProgress = null): int {
+                if ($onProgress !== null) {
+                    $onProgress(5, 5);
+                }
+                return 5;
+            });
+
+        $worker = new LibraryScanWorker($jobs, $libraries, $this->makeUnusedMatcher(), $this->makeLogger());
+
+        $this->assertTrue($worker->runOnce());
+    }
+
+    /**
+     * runOnce() with a `delete_all` job runs deleteAllItems (destructive), records
+     * the removed count on the job row, and marks completed.
+     */
+    public function testRunOnceProcessesDeleteAllJob(): void
+    {
+        $jobs = $this->createMock(ScanJobRepository::class);
+        $jobs->expects($this->once())
+            ->method('claimNext')
+            ->willReturn(['id' => 'job-da', 'library_id' => 'lib-da', 'type' => 'delete_all']);
+        $jobs->expects($this->once())->method('markCompleted')->with('job-da');
+        $jobs->expects($this->never())->method('markFailed');
+        $jobs->expects($this->once())
+            ->method('updateProgress')
+            ->with('job-da', ['items_removed' => 12]);
+
+        $libraries = $this->createMock(LibraryManager::class);
+        $libraries->expects($this->once())->method('deleteAllItems')->with('lib-da')->willReturn(12);
+        $libraries->expects($this->never())->method('scanLibrary');
+        $libraries->expects($this->never())->method('rescanLibrary');
+
+        $worker = new LibraryScanWorker($jobs, $libraries, $this->makeUnusedMatcher(), $this->makeLogger());
+
+        $this->assertTrue($worker->runOnce());
+    }
+
+    /**
+     * runOnce() where a maintenance op throws: marks the job failed, does NOT
+     * mark completed, still returns true (a job was processed — it failed).
+     */
+    public function testRunOnceMarksFailedWhenMaintenanceOpThrows(): void
+    {
+        $jobs = $this->createMock(ScanJobRepository::class);
+        $jobs->expects($this->once())
+            ->method('claimNext')
+            ->willReturn(['id' => 'job-x', 'library_id' => 'lib-x', 'type' => 'delete_all']);
+        $jobs->expects($this->never())->method('markCompleted');
+        $jobs->expects($this->once())->method('markFailed')->with('job-x', 'kaboom');
+
+        $libraries = $this->createMock(LibraryManager::class);
+        $libraries->expects($this->once())
+            ->method('deleteAllItems')
+            ->with('lib-x')
+            ->willThrowException(new RuntimeException('kaboom'));
+
+        $worker = new LibraryScanWorker($jobs, $libraries, $this->makeUnusedMatcher(), $this->makeLogger());
+
+        $this->assertTrue($worker->runOnce());
+    }
+
+    /**
      * runOnce() with a `metadata_refresh` job ENABLES force refresh on the matcher
      * (so already-matched items are re-processed) and then runs the same
      * matchLibrary() path — NOT the scan engine.

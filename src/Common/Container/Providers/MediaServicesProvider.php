@@ -324,7 +324,13 @@ final class MediaServicesProvider implements ServiceProviderInterface
                 ),
 
             LibraryManager::class => autowire()
-                ->constructorParameter('logger', get('logger.media')),
+                ->constructorParameter('logger', get('logger.media'))
+                // Named because PHP-DI skips defaulted optional ctor params
+                // during autowiring — WITHOUT these the fine-grained maintenance
+                // ops (clear_metadata / clear_artwork / delete_all) would have a
+                // null ItemRepository/ArtworkStorage and throw at runtime.
+                ->constructorParameter('itemRepository', get(ItemRepository::class))
+                ->constructorParameter('artworkStorage', get(ArtworkStorage::class)),
 
             // Scan-job data layer (Step 1.1a). Its only ctor dependency is the
             // Workerman MySQL Connection, already resolvable in this provider.

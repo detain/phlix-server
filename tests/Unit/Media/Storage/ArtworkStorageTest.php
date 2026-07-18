@@ -467,6 +467,71 @@ final class ArtworkStorageTest extends TestCase
         return $bytes;
     }
 
+    /**
+     * deleteItemArtwork() removes every cached file (JPEG variants AND the
+     * transparency-safe logo.png) plus the item directory itself, freeing disk.
+     */
+    public function testDeleteItemArtworkRemovesEntireItemDirectory(): void
+    {
+        $storage = new ArtworkStorage($this->tmpDir);
+
+        $itemId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+        $itemDir = rtrim($this->tmpDir, '/') . '/' . $itemId;
+        self::assertTrue(mkdir($itemDir, 0755, true));
+        file_put_contents($itemDir . '/w185.jpg', 'x');
+        file_put_contents($itemDir . '/original.jpg', 'x');
+        file_put_contents($itemDir . '/logo.png', 'x');
+
+        self::assertDirectoryExists($itemDir);
+
+        $storage->deleteItemArtwork($itemId);
+
+        self::assertDirectoryDoesNotExist($itemDir);
+    }
+
+    /**
+     * deleteItemArtwork() is idempotent: a missing item directory is a no-op
+     * (never throws).
+     */
+    public function testDeleteItemArtworkIsNoOpWhenNothingCached(): void
+    {
+        $storage = new ArtworkStorage($this->tmpDir);
+
+        // Never created — must not throw.
+        $storage->deleteItemArtwork('11111111-2222-3333-4444-555555555555');
+
+        self::assertDirectoryExists($this->tmpDir);
+        $this->addToAssertionCount(1);
+    }
+
+    /**
+     * deleteItemArtwork() jails the path through the same sanitised itemDir()
+     * logic: a traversal-laden id is REJECTED before any filesystem call, so it
+     * can never escape the artwork root.
+     */
+    public function testDeleteItemArtworkRejectsPathTraversalId(): void
+    {
+        $storage = new ArtworkStorage($this->tmpDir);
+
+        // A sentinel directory OUTSIDE the artwork root that a traversal id would
+        // target if the path were not jailed.
+        $outside = rtrim($this->tmpDir, '/') . '_outside';
+        self::assertTrue(mkdir($outside, 0755, true));
+        file_put_contents($outside . '/keep.txt', 'x');
+
+        try {
+            $storage->deleteItemArtwork('../' . basename($outside));
+            self::fail('Expected InvalidArgumentException for a traversal item id');
+        } catch (\InvalidArgumentException $e) {
+            self::assertStringContainsString('Invalid item ID', $e->getMessage());
+        }
+
+        // The outside directory is completely untouched.
+        self::assertFileExists($outside . '/keep.txt');
+
+        $this->removeDirectory($outside);
+    }
+
     private function removeDirectory(string $dir): void
     {
         if (! is_dir($dir)) {

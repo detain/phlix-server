@@ -1014,6 +1014,313 @@ class LibraryControllerTest extends TestCase
         $this->assertSame(401, $response->statusCode);
     }
 
+    // ---------------------------------------------------------------------
+    // Fine-grained maintenance endpoints (migration 084).
+    // ---------------------------------------------------------------------
+
+    /**
+     * Happy path: prune() enqueues a `prune` job and returns 202.
+     */
+    public function testPruneReturns202AndEnqueuesPruneJob(): void
+    {
+        $libraryManager = $this->createMock(LibraryManager::class);
+        $libraryManager->expects($this->once())
+            ->method('getLibrary')
+            ->with('lib-1')
+            ->willReturn(['id' => 'lib-1', 'name' => 'Movies', 'type' => 'video']);
+        $libraryManager->expects($this->never())->method('pruneLibrary');
+
+        $scanJobs = $this->createMock(ScanJobRepository::class);
+        $scanJobs->expects($this->once())
+            ->method('enqueue')
+            ->with('lib-1', 'prune')
+            ->willReturn('job-p');
+
+        $controller = new LibraryController($libraryManager, $scanJobs);
+
+        $request = new Request();
+        $request->userId = 'admin-1';
+
+        $response = $controller->prune($request, ['id' => 'lib-1']);
+
+        $this->assertSame(202, $response->statusCode);
+        /** @var array<string, mixed> $body */
+        $body = json_decode($response->body, true);
+        $this->assertIsArray($body);
+        $this->assertSame('job-p', $body['job_id']);
+        $this->assertSame('queued', $body['status']);
+        $this->assertSame('Library prune queued', $body['message']);
+    }
+
+    public function testPruneReturns404WhenLibraryNotFound(): void
+    {
+        $libraryManager = $this->createMock(LibraryManager::class);
+        $libraryManager->expects($this->once())->method('getLibrary')->with('x')->willReturn(null);
+
+        $scanJobs = $this->createMock(ScanJobRepository::class);
+        $scanJobs->expects($this->never())->method('enqueue');
+
+        $controller = new LibraryController($libraryManager, $scanJobs);
+        $request = new Request();
+        $request->userId = 'admin-1';
+
+        $this->assertSame(404, $controller->prune($request, ['id' => 'x'])->statusCode);
+    }
+
+    public function testPruneReturns401WhenUnauthenticated(): void
+    {
+        $libraryManager = $this->createMock(LibraryManager::class);
+        $libraryManager->expects($this->never())->method('getLibrary');
+
+        $scanJobs = $this->createMock(ScanJobRepository::class);
+        $scanJobs->expects($this->never())->method('enqueue');
+
+        $controller = new LibraryController($libraryManager, $scanJobs);
+        $request = new Request();
+
+        $this->assertSame(401, $controller->prune($request, ['id' => 'lib-1'])->statusCode);
+    }
+
+    /**
+     * Happy path: clearMetadata() enqueues a `clear_metadata` job and returns 202.
+     */
+    public function testClearMetadataReturns202AndEnqueuesJob(): void
+    {
+        $libraryManager = $this->createMock(LibraryManager::class);
+        $libraryManager->expects($this->once())
+            ->method('getLibrary')
+            ->with('lib-1')
+            ->willReturn(['id' => 'lib-1', 'name' => 'Movies', 'type' => 'video']);
+
+        $scanJobs = $this->createMock(ScanJobRepository::class);
+        $scanJobs->expects($this->once())
+            ->method('enqueue')
+            ->with('lib-1', 'clear_metadata')
+            ->willReturn('job-cm');
+
+        $controller = new LibraryController($libraryManager, $scanJobs);
+        $request = new Request();
+        $request->userId = 'admin-1';
+
+        $response = $controller->clearMetadata($request, ['id' => 'lib-1']);
+
+        $this->assertSame(202, $response->statusCode);
+        /** @var array<string, mixed> $body */
+        $body = json_decode($response->body, true);
+        $this->assertIsArray($body);
+        $this->assertSame('job-cm', $body['job_id']);
+        $this->assertSame('Metadata clear queued', $body['message']);
+    }
+
+    public function testClearMetadataReturns404WhenLibraryNotFound(): void
+    {
+        $libraryManager = $this->createMock(LibraryManager::class);
+        $libraryManager->expects($this->once())->method('getLibrary')->with('x')->willReturn(null);
+
+        $scanJobs = $this->createMock(ScanJobRepository::class);
+        $scanJobs->expects($this->never())->method('enqueue');
+
+        $controller = new LibraryController($libraryManager, $scanJobs);
+        $request = new Request();
+        $request->userId = 'admin-1';
+
+        $this->assertSame(404, $controller->clearMetadata($request, ['id' => 'x'])->statusCode);
+    }
+
+    public function testClearMetadataReturns401WhenUnauthenticated(): void
+    {
+        $libraryManager = $this->createMock(LibraryManager::class);
+        $libraryManager->expects($this->never())->method('getLibrary');
+
+        $scanJobs = $this->createMock(ScanJobRepository::class);
+        $scanJobs->expects($this->never())->method('enqueue');
+
+        $controller = new LibraryController($libraryManager, $scanJobs);
+        $request = new Request();
+
+        $this->assertSame(401, $controller->clearMetadata($request, ['id' => 'lib-1'])->statusCode);
+    }
+
+    /**
+     * Happy path: clearArtwork() enqueues a `clear_artwork` job and returns 202.
+     */
+    public function testClearArtworkReturns202AndEnqueuesJob(): void
+    {
+        $libraryManager = $this->createMock(LibraryManager::class);
+        $libraryManager->expects($this->once())
+            ->method('getLibrary')
+            ->with('lib-1')
+            ->willReturn(['id' => 'lib-1', 'name' => 'Movies', 'type' => 'video']);
+
+        $scanJobs = $this->createMock(ScanJobRepository::class);
+        $scanJobs->expects($this->once())
+            ->method('enqueue')
+            ->with('lib-1', 'clear_artwork')
+            ->willReturn('job-ca');
+
+        $controller = new LibraryController($libraryManager, $scanJobs);
+        $request = new Request();
+        $request->userId = 'admin-1';
+
+        $response = $controller->clearArtwork($request, ['id' => 'lib-1']);
+
+        $this->assertSame(202, $response->statusCode);
+        /** @var array<string, mixed> $body */
+        $body = json_decode($response->body, true);
+        $this->assertIsArray($body);
+        $this->assertSame('job-ca', $body['job_id']);
+        $this->assertSame('Artwork clear queued', $body['message']);
+    }
+
+    public function testClearArtworkReturns404WhenLibraryNotFound(): void
+    {
+        $libraryManager = $this->createMock(LibraryManager::class);
+        $libraryManager->expects($this->once())->method('getLibrary')->with('x')->willReturn(null);
+
+        $scanJobs = $this->createMock(ScanJobRepository::class);
+        $scanJobs->expects($this->never())->method('enqueue');
+
+        $controller = new LibraryController($libraryManager, $scanJobs);
+        $request = new Request();
+        $request->userId = 'admin-1';
+
+        $this->assertSame(404, $controller->clearArtwork($request, ['id' => 'x'])->statusCode);
+    }
+
+    public function testClearArtworkReturns401WhenUnauthenticated(): void
+    {
+        $libraryManager = $this->createMock(LibraryManager::class);
+        $libraryManager->expects($this->never())->method('getLibrary');
+
+        $scanJobs = $this->createMock(ScanJobRepository::class);
+        $scanJobs->expects($this->never())->method('enqueue');
+
+        $controller = new LibraryController($libraryManager, $scanJobs);
+        $request = new Request();
+
+        $this->assertSame(401, $controller->clearArtwork($request, ['id' => 'lib-1'])->statusCode);
+    }
+
+    /**
+     * Destructive delete_all: WITHOUT a confirm flag the endpoint returns 400 and
+     * does NOT enqueue anything.
+     */
+    public function testDeleteAllReturns400WithoutConfirmation(): void
+    {
+        $libraryManager = $this->createMock(LibraryManager::class);
+        $libraryManager->expects($this->once())
+            ->method('getLibrary')
+            ->with('lib-1')
+            ->willReturn(['id' => 'lib-1', 'name' => 'Movies', 'type' => 'video']);
+
+        $scanJobs = $this->createMock(ScanJobRepository::class);
+        $scanJobs->expects($this->never())->method('enqueue');
+
+        $controller = new LibraryController($libraryManager, $scanJobs);
+        $request = new Request();
+        $request->userId = 'admin-1';
+        // No confirm flag.
+
+        $response = $controller->deleteAll($request, ['id' => 'lib-1']);
+
+        $this->assertSame(400, $response->statusCode);
+        /** @var array<string, mixed> $body */
+        $body = json_decode($response->body, true);
+        $this->assertIsArray($body);
+        $this->assertSame('library.delete_all.confirm_required', $body['code']);
+    }
+
+    /**
+     * Destructive delete_all: WITH confirm=true (body) the endpoint enqueues a
+     * `delete_all` job and returns 202.
+     */
+    public function testDeleteAllReturns202WithConfirmationInBody(): void
+    {
+        $libraryManager = $this->createMock(LibraryManager::class);
+        $libraryManager->expects($this->once())
+            ->method('getLibrary')
+            ->with('lib-1')
+            ->willReturn(['id' => 'lib-1', 'name' => 'Movies', 'type' => 'video']);
+
+        $scanJobs = $this->createMock(ScanJobRepository::class);
+        $scanJobs->expects($this->once())
+            ->method('enqueue')
+            ->with('lib-1', 'delete_all')
+            ->willReturn('job-da');
+
+        $controller = new LibraryController($libraryManager, $scanJobs);
+        $request = new Request();
+        $request->userId = 'admin-1';
+        $request->body = ['confirm' => true];
+
+        $response = $controller->deleteAll($request, ['id' => 'lib-1']);
+
+        $this->assertSame(202, $response->statusCode);
+        /** @var array<string, mixed> $body */
+        $body = json_decode($response->body, true);
+        $this->assertIsArray($body);
+        $this->assertSame('job-da', $body['job_id']);
+        $this->assertSame('queued', $body['status']);
+    }
+
+    /**
+     * delete_all also accepts the confirmation via the query string (confirm=1).
+     */
+    public function testDeleteAllReturns202WithConfirmationInQuery(): void
+    {
+        $libraryManager = $this->createMock(LibraryManager::class);
+        $libraryManager->expects($this->once())
+            ->method('getLibrary')
+            ->with('lib-1')
+            ->willReturn(['id' => 'lib-1', 'name' => 'Movies', 'type' => 'video']);
+
+        $scanJobs = $this->createMock(ScanJobRepository::class);
+        $scanJobs->expects($this->once())
+            ->method('enqueue')
+            ->with('lib-1', 'delete_all')
+            ->willReturn('job-da2');
+
+        $controller = new LibraryController($libraryManager, $scanJobs);
+        $request = new Request();
+        $request->userId = 'admin-1';
+        $request->query = ['confirm' => '1'];
+
+        $response = $controller->deleteAll($request, ['id' => 'lib-1']);
+
+        $this->assertSame(202, $response->statusCode);
+    }
+
+    public function testDeleteAllReturns404WhenLibraryNotFound(): void
+    {
+        $libraryManager = $this->createMock(LibraryManager::class);
+        $libraryManager->expects($this->once())->method('getLibrary')->with('x')->willReturn(null);
+
+        $scanJobs = $this->createMock(ScanJobRepository::class);
+        $scanJobs->expects($this->never())->method('enqueue');
+
+        $controller = new LibraryController($libraryManager, $scanJobs);
+        $request = new Request();
+        $request->userId = 'admin-1';
+        $request->body = ['confirm' => true];
+
+        $this->assertSame(404, $controller->deleteAll($request, ['id' => 'x'])->statusCode);
+    }
+
+    public function testDeleteAllReturns401WhenUnauthenticated(): void
+    {
+        $libraryManager = $this->createMock(LibraryManager::class);
+        $libraryManager->expects($this->never())->method('getLibrary');
+
+        $scanJobs = $this->createMock(ScanJobRepository::class);
+        $scanJobs->expects($this->never())->method('enqueue');
+
+        $controller = new LibraryController($libraryManager, $scanJobs);
+        $request = new Request();
+        $request->body = ['confirm' => true];
+
+        $this->assertSame(401, $controller->deleteAll($request, ['id' => 'lib-1'])->statusCode);
+    }
+
     /**
      * Happy path: scanStatus() returns 200 with the latest job row (1.1b).
      */

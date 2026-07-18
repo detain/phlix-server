@@ -19,6 +19,7 @@ use Phlix\Media\Music\MusicLibraryService;
 use Phlix\Media\Music\MusicLibraryType;
 use Phlix\Media\Music\BookLibraryType;
 use Phlix\Media\Music\AudiobookLibraryType;
+use Phlix\Media\Storage\ArtworkStorage;
 use Phlix\Theming\ThemeMediaFinder;
 use Phlix\Theming\ThemeMediaRepository;
 use Workerman\MySQL\Connection;
@@ -60,6 +61,110 @@ class LibraryManager
     /** @var MusicLibraryService Service for music library scanning */
     private MusicLibraryService $musicLibraryService;
 
+    /**
+     * @var ItemRepository|null Item persistence used by the fine-grained
+     * maintenance ops (`clear_metadata` / `clear_artwork` / `delete_all`).
+     * Optional/nullable for back-compat with callers (and unit tests)
+     * constructed before this dependency existed; the ops that need it throw a
+     * clear {@see \RuntimeException} when it is absent rather than silently no-op.
+     */
+    private ?ItemRepository $itemRepository;
+
+    /**
+     * @var ArtworkStorage|null Local artwork cache used by the `clear_artwork`
+     * maintenance op to delete each item's cached images. Optional/nullable for
+     * back-compat; {@see self::clearArtwork()} throws when it is absent.
+     */
+    private ?ArtworkStorage $artworkStorage;
+
+    /**
+     * Provider-fetched `metadata_json` keys that {@see self::clearMetadata()}
+     * STRIPS, resetting an item to its filesystem-derived basics so a later
+     * `metadata` / `metadata_refresh` job can re-fetch cleanly.
+     *
+     * This is a DENYLIST on purpose: it is more conservative than an allowlist
+     * because any key NOT listed here (e.g. a future provider field, or a
+     * filesystem/user-derived key we did not anticipate) is PRESERVED. The keys
+     * below are the ones written by the metadata resolvers / matcher — every
+     * {@see \Phlix\Media\Metadata\Resolution\SourceRecord::CANONICAL_FIELDS}
+     * value plus the extra provider keys the TMDB/TVDB/IMDb resolvers emit
+     * (still images, votes, ids, dates, provider-supplied titles, theme audio).
+     *
+     * DELIBERATELY PRESERVED (filesystem / probe / user derived, so NOT listed):
+     *   - `name` / `title` — filename-parsed display title
+     *   - `year`, `season`, `episode`, `part` — parsed from the filename
+     *   - `canonical_key` — filesystem-derived dedup key
+     *   - `source` — technical ffprobe summary (width/height/codecs)
+     *   - `duration_seconds`, `streams` — technical probe output
+     *
+     * @var list<string>
+     */
+    private const PROVIDER_METADATA_KEYS = [
+        // Artwork / media URLs (local copies are dropped by clear_artwork; the
+        // remote/derived URLs are metadata text dropped here).
+        'poster_url',
+        'poster_path',
+        'poster_srcset',
+        'backdrop_url',
+        'backdrop_path',
+        'logo_url',
+        'logo_path',
+        'still_url',
+        'still_path',
+        // Trailers.
+        'trailer_url',
+        'trailer_key',
+        'trailer_site',
+        // Descriptive text.
+        'overview',
+        'tagline',
+        'homepage',
+        // People / companies.
+        'cast',
+        'crew',
+        'actors',
+        'director',
+        'production_companies',
+        'studio',
+        'networks',
+        // Taxonomy.
+        'genres',
+        'tags',
+        // Ratings / certifications.
+        'official_rating',
+        'rating',
+        'content_rating',
+        'certification',
+        // Votes / popularity.
+        'vote_average',
+        'vote_count',
+        'imdb_rating',
+        'imdb_votes',
+        'popularity',
+        // Provider-sourced runtime (the probe duration lives under the preserved
+        // `duration_seconds` key instead).
+        'runtime',
+        // External identifiers.
+        'tmdb_id',
+        'imdb_id',
+        'tvdb_id',
+        'external_ids',
+        // Provider dates.
+        'release_date',
+        'first_air_date',
+        'air_date',
+        // Provider-supplied alternate titles.
+        'original_title',
+        'original_name',
+        // Series-level provider counts / status.
+        'status',
+        'number_of_seasons',
+        'number_of_episodes',
+        'spoken_languages',
+        // Theme audio resolved at match time.
+        'theme_audio_url',
+    ];
+
     /** @var array<int, array<string, mixed>>|null Cached libraries list */
     private static ?array $cachedLibraries = null;
 
@@ -70,6 +175,13 @@ class LibraryManager
     private const LIBRARIES_CACHE_TTL = 60;
 
     /**
+     * Page size for the item-by-item maintenance ops (`clear_metadata` /
+     * `clear_artwork`), so a large library is processed in bounded batches rather
+     * than loaded whole into a resident-memory worker.
+     */
+    private const MAINTENANCE_PAGE_SIZE = 500;
+
+    /**
      * Constructor for LibraryManager.
      *
      * @param Connection $db Database connection for library persistence
@@ -77,19 +189,28 @@ class LibraryManager
      * @param FolderWatcher $watcher Watcher for detecting filesystem changes
      * @param MusicLibraryService $musicLibraryService Service for music library scanning
      * @param StructuredLogger|null $logger Optional custom logger, creates default if not provided
+     * @param ItemRepository|null $itemRepository Optional item persistence for the
+     *     fine-grained maintenance ops (clear_metadata / clear_artwork /
+     *     delete_all). Nullable for back-compat; those ops throw when it is absent.
+     * @param ArtworkStorage|null $artworkStorage Optional local artwork cache for
+     *     the clear_artwork op. Nullable for back-compat.
      */
     public function __construct(
         Connection $db,
         MediaScanner $scanner,
         FolderWatcher $watcher,
         MusicLibraryService $musicLibraryService,
-        ?StructuredLogger $logger = null
+        ?StructuredLogger $logger = null,
+        ?ItemRepository $itemRepository = null,
+        ?ArtworkStorage $artworkStorage = null
     ) {
         $this->db = $db;
         $this->scanner = $scanner;
         $this->watcher = $watcher;
         $this->musicLibraryService = $musicLibraryService;
         $this->logger = $logger ?? $this->createDefaultLogger();
+        $this->itemRepository = $itemRepository;
+        $this->artworkStorage = $artworkStorage;
     }
 
     /**
@@ -595,6 +716,294 @@ class LibraryManager
         $result->durationMs = (int) ((microtime(true) - $startTime) * 1000);
 
         return $result;
+    }
+
+    /**
+     * Prune ONLY the items whose source file is gone from disk (plus any
+     * now-empty series/season containers), WITHOUT a full rescan.
+     *
+     * This is the non-destructive `prune` maintenance op. It reuses the exact
+     * same {@see self::pruneRemovedItems()} pass rescan runs — with every
+     * data-loss safety guard intact (stat-cache clear, accessible-root
+     * computation, most-specific-root attribution, and the per-root presence
+     * guard that refuses to bulk-delete a root with zero present items). Nothing
+     * is scanned or re-fetched; this is purely the cleanup half of a rescan.
+     *
+     * @param string $libraryId The library's unique identifier.
+     * @return int Total number of rows pruned (gone leaves + emptied containers).
+     * @throws \InvalidArgumentException If the library does not exist.
+     */
+    public function pruneLibrary(string $libraryId): int
+    {
+        $library = $this->fetchLibraryRow($libraryId);
+        if ($library === null) {
+            throw new \InvalidArgumentException("Library not found: $libraryId");
+        }
+
+        // Delegate to the shared prune pass with the library's configured roots so
+        // the per-root presence guard can verify storage is actually mounted
+        // before deleting anything — identical safety to the rescan path.
+        $removed = $this->pruneRemovedItems($libraryId, $library->paths);
+
+        $this->logger->info('Library prune complete', [
+            'library_id' => $libraryId,
+            'removed' => $removed,
+        ]);
+
+        return $removed;
+    }
+
+    /**
+     * Reset every item in a library to its filesystem-derived basics, so a later
+     * `metadata` / `metadata_refresh` job can re-fetch cleanly (the
+     * `clear_metadata` maintenance op).
+     *
+     * For each item this:
+     *  1. strips the provider-fetched keys ({@see self::PROVIDER_METADATA_KEYS} —
+     *     poster/backdrop/logo urls, trailers, overview, cast/crew, genres/tags,
+     *     ratings/votes, still_url, external ids, provider dates/titles, …) from
+     *     `metadata_json`, PRESERVING the filesystem/probe/user-derived keys
+     *     (name/title/year/season/episode/canonical_key/source/duration/streams);
+     *  2. NULLs the `metadata_refreshed_at` column so the item is treated as
+     *     un-matched again; and
+     *  3. clears the materialized `content_rating` column — done automatically by
+     *     {@see ItemRepository::update()}, which re-derives that column from the
+     *     (now rating-free) blob whenever `metadata_json` is written.
+     *
+     * The item ROWS themselves — their `path`, filename-derived title, type, and
+     * series/season parent hierarchy — are preserved, as is ALL `user_item_data`
+     * and watch history (no rows are deleted; the update never cascades). Genre
+     * join-table rows are re-synced by {@see ItemRepository::update()} to match
+     * the (now empty) genre set, keeping the derived index consistent.
+     *
+     * Iterates in bounded pages so a large library does not load every row into a
+     * resident-memory worker at once. Ordering is stable (no title/sort_title is
+     * touched and no rows are removed), so OFFSET paging is safe here.
+     *
+     * @param string        $libraryId  The library's unique identifier.
+     * @param callable|null $onProgress Optional `(processed, total)` progress sink.
+     * @return int Number of items reset.
+     * @throws \RuntimeException          If no {@see ItemRepository} was injected.
+     * @throws \InvalidArgumentException  If the library does not exist.
+     */
+    public function clearMetadata(string $libraryId, ?callable $onProgress = null): int
+    {
+        if ($this->itemRepository === null) {
+            throw new \RuntimeException('clearMetadata requires an ItemRepository dependency');
+        }
+
+        $library = $this->fetchLibraryRow($libraryId);
+        if ($library === null) {
+            throw new \InvalidArgumentException("Library not found: $libraryId");
+        }
+
+        $total = $this->countLibraryItems($libraryId);
+        $processed = 0;
+        $offset = 0;
+
+        while (true) {
+            $items = $this->itemRepository->getByLibrary($libraryId, self::MAINTENANCE_PAGE_SIZE, $offset);
+            if ($items === []) {
+                break;
+            }
+
+            foreach ($items as $item) {
+                $id = is_string($item['id'] ?? null) ? $item['id'] : '';
+                if ($id === '') {
+                    continue;
+                }
+
+                $metadata = is_array($item['metadata'] ?? null) ? $item['metadata'] : [];
+                $stripped = self::stripProviderMetadata($metadata);
+
+                // Writing metadata_json re-derives content_rating (now NULL, no
+                // rating survives the strip) and re-syncs the genre join table;
+                // metadata_refreshed_at is explicitly NULLed so the item counts
+                // as un-matched for the next metadata job.
+                $this->itemRepository->update($id, [
+                    'metadata_json' => $stripped,
+                    'metadata_refreshed_at' => null,
+                ]);
+
+                $processed++;
+                if ($onProgress !== null) {
+                    $onProgress($processed, $total);
+                }
+            }
+
+            if (count($items) < self::MAINTENANCE_PAGE_SIZE) {
+                break;
+            }
+            $offset += self::MAINTENANCE_PAGE_SIZE;
+        }
+
+        $this->logger->info('Library metadata cleared', [
+            'library_id' => $libraryId,
+            'items' => $processed,
+        ]);
+
+        return $processed;
+    }
+
+    /**
+     * Delete the locally cached artwork for every item in a library, freeing disk
+     * (the `clear_artwork` maintenance op). The next metadata match re-downloads
+     * whatever artwork it needs.
+     *
+     * For each item this removes the item's artwork directory via
+     * {@see ArtworkStorage::deleteItemArtwork()} (which jails the path through the
+     * same sanitised `itemDir()` logic — no traversal) and, when an item's
+     * `poster_url` / `logo_url` points at the LOCAL served artwork endpoint
+     * (`/api/v1/artwork/…`), NULLs just those two keys so they re-derive on the
+     * next match. Remote provider URLs and all other metadata text are left
+     * untouched, and NO user data or watch history is affected.
+     *
+     * @param string        $libraryId  The library's unique identifier.
+     * @param callable|null $onProgress Optional `(processed, total)` progress sink.
+     * @return int Number of items whose artwork cache was cleared.
+     * @throws \RuntimeException          If no {@see ArtworkStorage} was injected.
+     * @throws \InvalidArgumentException  If the library does not exist.
+     */
+    public function clearArtwork(string $libraryId, ?callable $onProgress = null): int
+    {
+        if ($this->artworkStorage === null) {
+            throw new \RuntimeException('clearArtwork requires an ArtworkStorage dependency');
+        }
+        if ($this->itemRepository === null) {
+            throw new \RuntimeException('clearArtwork requires an ItemRepository dependency');
+        }
+
+        $library = $this->fetchLibraryRow($libraryId);
+        if ($library === null) {
+            throw new \InvalidArgumentException("Library not found: $libraryId");
+        }
+
+        $total = $this->countLibraryItems($libraryId);
+        $processed = 0;
+        $offset = 0;
+
+        while (true) {
+            $items = $this->itemRepository->getByLibrary($libraryId, self::MAINTENANCE_PAGE_SIZE, $offset);
+            if ($items === []) {
+                break;
+            }
+
+            foreach ($items as $item) {
+                $id = is_string($item['id'] ?? null) ? $item['id'] : '';
+                if ($id === '') {
+                    continue;
+                }
+
+                // Remove the on-disk cache (path-jailed inside ArtworkStorage).
+                $this->artworkStorage->deleteItemArtwork($id);
+
+                // NULL only LOCAL poster/logo URLs so they re-derive on re-match;
+                // remote URLs and every other metadata key are left untouched.
+                $metadata = is_array($item['metadata'] ?? null) ? $item['metadata'] : [];
+                $updated = self::clearLocalArtworkUrls($metadata);
+                if ($updated !== null) {
+                    $this->itemRepository->update($id, ['metadata_json' => $updated]);
+                }
+
+                $processed++;
+                if ($onProgress !== null) {
+                    $onProgress($processed, $total);
+                }
+            }
+
+            if (count($items) < self::MAINTENANCE_PAGE_SIZE) {
+                break;
+            }
+            $offset += self::MAINTENANCE_PAGE_SIZE;
+        }
+
+        $this->logger->info('Library artwork cleared', [
+            'library_id' => $libraryId,
+            'items' => $processed,
+        ]);
+
+        return $processed;
+    }
+
+    /**
+     * DESTRUCTIVE: remove EVERY item in a library (the `delete_all` maintenance
+     * op, i.e. the old rescan behaviour extracted into an explicit operation).
+     *
+     * Runs `DELETE FROM media_items WHERE library_id = ?`, which cascades through
+     * the `ON DELETE CASCADE` foreign keys on `user_item_data` (watch progress,
+     * favorites, ratings) and the watch-history tables — that cascade is the
+     * INTENDED, explicit meaning of this op. It is deliberately gated behind an
+     * explicit confirmation at the controller layer; the library ROW itself is
+     * kept (only its items are removed), so a subsequent scan re-populates it.
+     *
+     * Delegates to {@see ItemRepository::deleteByLibrary()} when the repository
+     * is wired (so the genre-facet cache + stats change are recorded), falling
+     * back to a direct parameterised DELETE otherwise.
+     *
+     * @param string $libraryId The library's unique identifier.
+     * @return int Number of items that existed (and were therefore deleted).
+     * @throws \InvalidArgumentException If the library does not exist.
+     */
+    public function deleteAllItems(string $libraryId): int
+    {
+        $library = $this->fetchLibraryRow($libraryId);
+        if ($library === null) {
+            throw new \InvalidArgumentException("Library not found: $libraryId");
+        }
+
+        $count = $this->countLibraryItems($libraryId);
+
+        if ($this->itemRepository !== null) {
+            $this->itemRepository->deleteByLibrary($libraryId);
+        } else {
+            $this->db->query("DELETE FROM media_items WHERE library_id = ?", [$libraryId]);
+        }
+
+        $this->logger->warning('Library items deleted (delete_all)', [
+            'library_id' => $libraryId,
+            'removed' => $count,
+        ]);
+
+        return $count;
+    }
+
+    /**
+     * Strip the provider-fetched keys ({@see self::PROVIDER_METADATA_KEYS}) from a
+     * decoded `metadata_json` array, preserving every other (filesystem / probe /
+     * user-derived, or simply unrecognised) key.
+     *
+     * @param array<string, mixed> $metadata Decoded metadata_json.
+     * @return array<string, mixed> The metadata with provider keys removed.
+     */
+    private static function stripProviderMetadata(array $metadata): array
+    {
+        foreach (self::PROVIDER_METADATA_KEYS as $key) {
+            unset($metadata[$key]);
+        }
+
+        return $metadata;
+    }
+
+    /**
+     * NULL out `poster_url` / `logo_url` when (and only when) they reference the
+     * LOCAL served-artwork endpoint, so they re-derive after the cache is dropped.
+     *
+     * @param array<string, mixed> $metadata Decoded metadata_json.
+     * @return array<string, mixed>|null The mutated metadata when a local URL was
+     *     cleared, or null when nothing changed (so the caller can skip the write).
+     */
+    private static function clearLocalArtworkUrls(array $metadata): ?array
+    {
+        $changed = false;
+        foreach (['poster_url', 'logo_url'] as $key) {
+            $value = $metadata[$key] ?? null;
+            if (is_string($value) && str_contains($value, '/api/v1/artwork/')) {
+                unset($metadata[$key]);
+                $changed = true;
+            }
+        }
+
+        return $changed ? $metadata : null;
     }
 
     /**

@@ -32,7 +32,11 @@ use Workerman\Timer;
  * {@see LibraryManager::rescanLibrary()} for `scan`/`rescan`, or
  * {@see LibraryMetadataMatcher::matchLibrary()} for a `metadata` /
  * `metadata_refresh` job (the latter forcing a re-match of already-matched
- * items via {@see LibraryMetadataMatcher::setForceRefresh()}) — and
+ * items via {@see LibraryMetadataMatcher::setForceRefresh()}), or one of the
+ * fine-grained maintenance ops — {@see LibraryManager::pruneLibrary()} (`prune`),
+ * {@see LibraryManager::clearMetadata()} (`clear_metadata`),
+ * {@see LibraryManager::clearArtwork()} (`clear_artwork`) or
+ * {@see LibraryManager::deleteAllItems()} (`delete_all`) — and
  * records the outcome via {@see ScanJobRepository::markCompleted()} (success) or
  * {@see ScanJobRepository::markFailed()} (on any `\Throwable`).
  *
@@ -171,6 +175,41 @@ class LibraryScanWorker
                 // worker only forwards the progress sink; the empty $paths arg is
                 // for signature parity with the media-specific subclass managers.
                 $this->libraries->rescanLibrary($libraryId, [], $this->scanProgressSink($jobId));
+            } elseif ($type === 'prune') {
+                // Non-destructive: run ONLY the prune pass (per-root presence
+                // guards intact). Record the removed count on the job row so the
+                // final markCompleted() below preserves it.
+                $removed = $this->libraries->pruneLibrary($libraryId);
+                $this->jobs->updateProgress($jobId, ['items_removed' => $removed]);
+            } elseif ($type === 'clear_metadata') {
+                // Reset each item to filesystem basics; stream processed/total as
+                // items_updated/items_found so the UI shows a percentage.
+                $this->libraries->clearMetadata(
+                    $libraryId,
+                    function (int $processed, int $total) use ($jobId): void {
+                        $this->jobs->updateProgress($jobId, [
+                            'items_found'   => $total,
+                            'items_updated' => $processed,
+                        ]);
+                    },
+                );
+            } elseif ($type === 'clear_artwork') {
+                // Delete each item's locally cached artwork; stream progress the
+                // same shape as clear_metadata.
+                $this->libraries->clearArtwork(
+                    $libraryId,
+                    function (int $processed, int $total) use ($jobId): void {
+                        $this->jobs->updateProgress($jobId, [
+                            'items_found'   => $total,
+                            'items_updated' => $processed,
+                        ]);
+                    },
+                );
+            } elseif ($type === 'delete_all') {
+                // Destructive: remove every item in the library (cascades user
+                // data). The controller gates this behind an explicit confirm.
+                $removed = $this->libraries->deleteAllItems($libraryId);
+                $this->jobs->updateProgress($jobId, ['items_removed' => $removed]);
             } else {
                 $this->libraries->scanLibrary($libraryId, $this->scanProgressSink($jobId));
             }

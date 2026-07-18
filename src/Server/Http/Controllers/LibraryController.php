@@ -685,6 +685,159 @@ class LibraryController
     }
 
     /**
+     * Enqueue a non-destructive prune for a library (`prune` job).
+     *
+     * Runs ONLY {@see \Phlix\Media\Library\LibraryManager::pruneRemovedItems()}
+     * (via {@see \Phlix\Media\Library\LibraryManager::pruneLibrary()}) off the
+     * HTTP path — dropping items whose source file is gone, with every per-root
+     * presence safety guard intact — WITHOUT a full rescan. Mirrors
+     * {@see self::scan()}; returns `202`.
+     *
+     * @param array<string, string> $params Route params; `id` is the library UUID.
+     *
+     * @return Response `202` `{ job_id, status:"queued", message }` · `404`
+     *                  library-missing · `401`/`403` auth.
+     */
+    public function prune(Request $request, array $params): Response
+    {
+        $authResponse = $this->requireAdmin($request);
+        if ($authResponse !== null) {
+            return $authResponse;
+        }
+
+        $library = $this->libraryManager->getLibrary($params['id']);
+        if (!$library) {
+            return (new Response())->status(404)->json(['error' => 'Library not found']);
+        }
+
+        $jobId = $this->scanJobs->enqueue($params['id'], 'prune');
+
+        return (new Response())->status(202)->json([
+            'job_id' => $jobId,
+            'status' => 'queued',
+            'message' => 'Library prune queued',
+        ]);
+    }
+
+    /**
+     * Enqueue a metadata reset for a library (`clear_metadata` job).
+     *
+     * Resets every item to its filesystem-derived basics (NULLs
+     * `metadata_refreshed_at`, strips provider-fetched `metadata_json` fields and
+     * clears the materialized `content_rating`) while PRESERVING item rows, their
+     * path/filename-derived title/type/hierarchy, and all user data / watch
+     * history — so a later `metadata` / `metadata_refresh` job re-fetches cleanly.
+     * Mirrors {@see self::scan()}; returns `202`.
+     *
+     * @param array<string, string> $params Route params; `id` is the library UUID.
+     *
+     * @return Response `202` `{ job_id, status:"queued", message }` · `404`
+     *                  library-missing · `401`/`403` auth.
+     */
+    public function clearMetadata(Request $request, array $params): Response
+    {
+        $authResponse = $this->requireAdmin($request);
+        if ($authResponse !== null) {
+            return $authResponse;
+        }
+
+        $library = $this->libraryManager->getLibrary($params['id']);
+        if (!$library) {
+            return (new Response())->status(404)->json(['error' => 'Library not found']);
+        }
+
+        $jobId = $this->scanJobs->enqueue($params['id'], 'clear_metadata');
+
+        return (new Response())->status(202)->json([
+            'job_id' => $jobId,
+            'status' => 'queued',
+            'message' => 'Metadata clear queued',
+        ]);
+    }
+
+    /**
+     * Enqueue an artwork-cache purge for a library (`clear_artwork` job).
+     *
+     * Deletes the locally cached artwork for the library's items (freeing disk;
+     * the next match re-downloads), leaving user data AND metadata text
+     * untouched. Mirrors {@see self::scan()}; returns `202`.
+     *
+     * @param array<string, string> $params Route params; `id` is the library UUID.
+     *
+     * @return Response `202` `{ job_id, status:"queued", message }` · `404`
+     *                  library-missing · `401`/`403` auth.
+     */
+    public function clearArtwork(Request $request, array $params): Response
+    {
+        $authResponse = $this->requireAdmin($request);
+        if ($authResponse !== null) {
+            return $authResponse;
+        }
+
+        $library = $this->libraryManager->getLibrary($params['id']);
+        if (!$library) {
+            return (new Response())->status(404)->json(['error' => 'Library not found']);
+        }
+
+        $jobId = $this->scanJobs->enqueue($params['id'], 'clear_artwork');
+
+        return (new Response())->status(202)->json([
+            'job_id' => $jobId,
+            'status' => 'queued',
+            'message' => 'Artwork clear queued',
+        ]);
+    }
+
+    /**
+     * Enqueue a DESTRUCTIVE full item wipe for a library (`delete_all` job).
+     *
+     * Removes EVERY item in the library (`DELETE FROM media_items WHERE
+     * library_id = ?`), which cascades through the `ON DELETE CASCADE` foreign
+     * keys into `user_item_data` (watch progress, favorites, ratings) and the
+     * watch-history tables — that cascade is the intended, explicit meaning of
+     * this op. Because it is irreversible, this endpoint REQUIRES an explicit
+     * `confirm` flag (body or query, truthy) and returns `400` without it; the
+     * library row itself is kept (only its items are removed).
+     *
+     * @param array<string, string> $params Route params; `id` is the library UUID.
+     *
+     * @return Response `202` `{ job_id, status:"queued", message }` · `400`
+     *                  confirmation-missing · `404` library-missing · `401`/`403` auth.
+     */
+    public function deleteAll(Request $request, array $params): Response
+    {
+        $authResponse = $this->requireAdmin($request);
+        if ($authResponse !== null) {
+            return $authResponse;
+        }
+
+        $library = $this->libraryManager->getLibrary($params['id']);
+        if (!$library) {
+            return (new Response())->status(404)->json(['error' => 'Library not found']);
+        }
+
+        // Destructive: require an explicit confirmation (body OR query) so a
+        // stray/mis-fired request can never wipe a library. Accept the same
+        // truthy tokens as every other boolean flag on this controller.
+        $confirm = $this->toBool($request->input('confirm', $request->queryString('confirm')));
+        if (!$confirm) {
+            return (new Response())->status(400)->json([
+                'error' => 'Destructive operation requires explicit confirmation',
+                'code' => 'library.delete_all.confirm_required',
+                'hint' => 'Resend with confirm=true to delete every item in this library.',
+            ]);
+        }
+
+        $jobId = $this->scanJobs->enqueue($params['id'], 'delete_all');
+
+        return (new Response())->status(202)->json([
+            'job_id' => $jobId,
+            'status' => 'queued',
+            'message' => 'Delete-all items queued (destructive)',
+        ]);
+    }
+
+    /**
      * Return the latest scan job for a library (Step 1.1b).
      *
      * Powers `GET /api/v1/libraries/{id}/scan-status`. Admin-gated

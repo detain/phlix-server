@@ -81,6 +81,40 @@ final class ScanJobRepositoryTest extends TestCase
         $this->assertNotSame('', $repo->enqueue('lib-1', 'metadata_refresh'));
     }
 
+    /**
+     * The four fine-grained maintenance job types (migration 084) are accepted
+     * by enqueue() and forwarded as the third INSERT parameter.
+     *
+     * @dataProvider maintenanceTypeProvider
+     */
+    public function testEnqueueAcceptsMaintenanceTypes(string $type): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->expects($this->once())
+            ->method('query')
+            ->with(
+                $this->stringContains('INSERT INTO library_scan_jobs'),
+                $this->callback(static fn (array $p): bool => $p[2] === $type),
+            )
+            ->willReturn('x');
+
+        $repo = new ScanJobRepository($db);
+        $this->assertNotSame('', $repo->enqueue('lib-1', $type));
+    }
+
+    /**
+     * @return list<array{0:string}>
+     */
+    public static function maintenanceTypeProvider(): array
+    {
+        return [
+            ['prune'],
+            ['clear_metadata'],
+            ['clear_artwork'],
+            ['delete_all'],
+        ];
+    }
+
     public function testEnqueueRejectsInvalidType(): void
     {
         $db = $this->createMock(Connection::class);

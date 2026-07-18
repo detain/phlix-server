@@ -317,6 +317,32 @@ class ArtworkStorage
      */
     public function delete(string $itemId): void
     {
+        $this->deleteItemArtwork($itemId);
+    }
+
+    /**
+     * Delete the entire locally-cached artwork directory for a media item.
+     *
+     * Removes every file the item's artwork directory holds — the JPEG size
+     * variants (`w185`/`w342`/…/`original.jpg`) AND the transparency-safe
+     * `logo.png` — and then the (now-empty) directory itself, freeing disk. The
+     * next metadata match re-downloads whatever it needs.
+     *
+     * Path safety: the directory is resolved through {@see self::itemDir()}, which
+     * strips any character outside `[a-zA-Z0-9\-]` and REJECTS an id that does not
+     * survive that sanitisation unchanged (throwing
+     * {@see \InvalidArgumentException}). A traversal sequence such as
+     * `../../etc` therefore never resolves to a path outside the artwork root —
+     * it is refused before any filesystem call. This is the SAME sanitised path
+     * logic every other read/write on this class uses.
+     *
+     * Idempotent: a missing directory is a no-op. Touches ONLY the artwork cache
+     * — never the item's DB row, its metadata text, or any user data.
+     *
+     * @param string $itemId Media item UUID.
+     */
+    public function deleteItemArtwork(string $itemId): void
+    {
         $itemDir = $this->itemDir($itemId);
         if (!is_dir($itemDir)) {
             return;

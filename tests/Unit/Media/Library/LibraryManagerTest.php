@@ -10,8 +10,11 @@ use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Library\ScanResult;
 use Phlix\Media\Music\MusicLibraryService;
 use Phlix\Media\Music\MusicLibraryScanner;
+use Phlix\Media\Storage\ArtworkStorage;
 use Phlix\Common\Logger\LoggerFactory;
 use Workerman\MySQL\Connection;
+use InvalidArgumentException;
+use RuntimeException;
 
 class LibraryManagerTest extends TestCase
 {
@@ -490,6 +493,364 @@ class LibraryManagerTest extends TestCase
 
         @unlink($presentA);
         @rmdir($rootA);
+    }
+
+    // ---------------------------------------------------------------------
+    // Fine-grained maintenance ops (migration 084): prune / clear_metadata /
+    // clear_artwork / delete_all.
+    // ---------------------------------------------------------------------
+
+    /**
+     * clear_metadata: NULLs metadata_refreshed_at and STRIPS every provider field
+     * from metadata_json, while PRESERVING the filesystem-derived keys (title,
+     * year, canonical_key, source, duration_seconds) and never deleting the item
+     * row (no DELETE on media_items → user_item_data / watch history untouched).
+     */
+    public function testClearMetadataStripsProviderFieldsAndPreservesBasics(): void
+    {
+        $queries = [];
+        $db = $this->makeDb($queries, [
+            'library_row' => [
+                'id' => 'lib-1',
+                'name' => 'Movies',
+                'type' => 'video',
+                'paths' => json_encode(['/media']),
+                'options' => json_encode([]),
+            ],
+            'count_before' => 2,
+        ]);
+
+        $items = $this->createMock(ItemRepository::class);
+        $items->method('getByLibrary')->willReturnCallback(
+            static function (string $lib, int $limit, int $offset): array {
+                if ($offset !== 0) {
+                    return [];
+                }
+                return [
+                    [
+                        'id' => 'i1',
+                        'path' => '/media/a.mkv',
+                        'metadata' => [
+                            'title' => 'A Movie',
+                            'year' => 2020,
+                            'canonical_key' => 'a-movie-2020',
+                            'source' => ['width' => 1920, 'height' => 1080],
+                            'duration_seconds' => 7200,
+                            'overview' => 'provider synopsis',
+                            'poster_url' => 'https://image.tmdb.org/p.jpg',
+                            'genres' => ['Action'],
+                            'official_rating' => 'PG-13',
+                            'cast' => ['Somebody'],
+                            'vote_average' => 7.5,
+                            'still_url' => 'https://image.tmdb.org/s.jpg',
+                        ],
+                    ],
+                    [
+                        'id' => 'i2',
+                        'path' => '/media/b.mkv',
+                        'metadata' => ['title' => 'B', 'backdrop_url' => 'https://x/b.jpg'],
+                    ],
+                ];
+            },
+        );
+
+        $captured = [];
+        $items->method('update')->willReturnCallback(
+            static function (string $id, array $data) use (&$captured): void {
+                $captured[$id] = $data;
+            },
+        );
+        // No item rows are ever deleted by clear_metadata.
+        $items->expects($this->never())->method('delete');
+        $items->expects($this->never())->method('deleteByLibrary');
+
+        $manager = $this->makeManager($db, $items, null);
+
+        $this->assertSame(2, $manager->clearMetadata('lib-1'));
+
+        // No library-wide media_items DELETE was issued (user data preserved).
+        foreach ($this->deletes($queries) as [$sql]) {
+            $this->assertStringNotContainsString('media_items', $sql);
+        }
+
+        $this->assertArrayHasKey('i1', $captured);
+        $meta = $captured['i1']['metadata_json'];
+        $this->assertIsArray($meta);
+
+        // Provider fields stripped.
+        foreach (['overview', 'poster_url', 'genres', 'official_rating', 'cast', 'vote_average', 'still_url'] as $k) {
+            $this->assertArrayNotHasKey($k, $meta, "provider key {$k} should be stripped");
+        }
+        // Filesystem/probe-derived basics preserved.
+        $this->assertSame('A Movie', $meta['title']);
+        $this->assertSame(2020, $meta['year']);
+        $this->assertSame('a-movie-2020', $meta['canonical_key']);
+        $this->assertArrayHasKey('source', $meta);
+        $this->assertSame(7200, $meta['duration_seconds']);
+        // path is never part of the update payload (row identity preserved).
+        $this->assertArrayNotHasKey('path', $captured['i1']);
+        // metadata_refreshed_at explicitly NULLed.
+        $this->assertArrayHasKey('metadata_refreshed_at', $captured['i1']);
+        $this->assertNull($captured['i1']['metadata_refreshed_at']);
+    }
+
+    /**
+     * clear_metadata throws (so the job is marked failed) when no ItemRepository
+     * dependency was injected.
+     */
+    public function testClearMetadataThrowsWithoutItemRepository(): void
+    {
+        $queries = [];
+        $db = $this->makeDb($queries, []);
+        $manager = $this->makeManager($db, null, null);
+
+        $this->expectException(RuntimeException::class);
+        $manager->clearMetadata('lib-1');
+    }
+
+    /**
+     * clear_metadata throws InvalidArgumentException for a missing library.
+     */
+    public function testClearMetadataThrowsForMissingLibrary(): void
+    {
+        $queries = [];
+        $db = $this->makeDb($queries, ['library_row' => null]);
+        $items = $this->createMock(ItemRepository::class);
+        $manager = $this->makeManager($db, $items, null);
+
+        $this->expectException(InvalidArgumentException::class);
+        $manager->clearMetadata('missing');
+    }
+
+    /**
+     * clear_artwork: calls ArtworkStorage::deleteItemArtwork() for every item,
+     * NULLs ONLY local (/api/v1/artwork/…) poster/logo URLs so they re-derive,
+     * and leaves remote URLs + all other metadata text untouched.
+     */
+    public function testClearArtworkDeletesCachedArtworkAndClearsLocalUrls(): void
+    {
+        $queries = [];
+        $db = $this->makeDb($queries, [
+            'library_row' => [
+                'id' => 'lib-1',
+                'name' => 'Movies',
+                'type' => 'video',
+                'paths' => json_encode(['/media']),
+                'options' => json_encode([]),
+            ],
+            'count_before' => 2,
+        ]);
+
+        $items = $this->createMock(ItemRepository::class);
+        $items->method('getByLibrary')->willReturnCallback(
+            static function (string $lib, int $limit, int $offset): array {
+                if ($offset !== 0) {
+                    return [];
+                }
+                return [
+                    [
+                        'id' => 'i1',
+                        'path' => '/media/a.mkv',
+                        'metadata' => [
+                            'title' => 'A',
+                            'overview' => 'keep me',
+                            'poster_url' => '/api/v1/artwork/i1?size=w500',
+                            'logo_url' => '/api/v1/artwork/i1?size=logo',
+                        ],
+                    ],
+                    [
+                        'id' => 'i2',
+                        'path' => '/media/b.mkv',
+                        'metadata' => ['title' => 'B', 'poster_url' => 'https://image.tmdb.org/x.jpg'],
+                    ],
+                ];
+            },
+        );
+
+        $captured = [];
+        $items->method('update')->willReturnCallback(
+            static function (string $id, array $data) use (&$captured): void {
+                $captured[$id] = $data;
+            },
+        );
+
+        $deleted = [];
+        $artwork = $this->createMock(ArtworkStorage::class);
+        $artwork->method('deleteItemArtwork')->willReturnCallback(
+            static function (string $id) use (&$deleted): void {
+                $deleted[] = $id;
+            },
+        );
+
+        $manager = $this->makeManager($db, $items, $artwork);
+
+        $this->assertSame(2, $manager->clearArtwork('lib-1'));
+
+        // Every item's on-disk artwork cache is dropped.
+        $this->assertSame(['i1', 'i2'], $deleted);
+
+        // i1 had LOCAL poster/logo URLs → they were cleared, metadata text kept.
+        $this->assertArrayHasKey('i1', $captured);
+        $meta = $captured['i1']['metadata_json'];
+        $this->assertIsArray($meta);
+        $this->assertArrayNotHasKey('poster_url', $meta);
+        $this->assertArrayNotHasKey('logo_url', $meta);
+        $this->assertSame('keep me', $meta['overview'], 'metadata text must be preserved');
+        $this->assertSame('A', $meta['title']);
+
+        // i2 had only a REMOTE poster URL → nothing to clear → no update issued.
+        $this->assertArrayNotHasKey('i2', $captured);
+    }
+
+    /**
+     * clear_artwork throws when no ArtworkStorage dependency was injected.
+     */
+    public function testClearArtworkThrowsWithoutArtworkStorage(): void
+    {
+        $queries = [];
+        $db = $this->makeDb($queries, []);
+        $items = $this->createMock(ItemRepository::class);
+        $manager = $this->makeManager($db, $items, null);
+
+        $this->expectException(RuntimeException::class);
+        $manager->clearArtwork('lib-1');
+    }
+
+    /**
+     * prune reuses the shared pruneRemovedItems() pass: with an ACCESSIBLE root
+     * that has a present file, an item whose file is gone IS pruned and the
+     * present one is kept (guards intact).
+     */
+    public function testPruneLibraryDropsGoneItemsWhenRootAccessible(): void
+    {
+        $root = sys_get_temp_dir() . '/phlix_prune_' . uniqid();
+        mkdir($root);
+        $present = $root . '/present.mkv';
+        touch($present);
+        $gone = $root . '/gone.mkv'; // never created
+
+        $queries = [];
+        $db = $this->makeDb($queries, [
+            'library_row' => [
+                'id' => 'lib-1',
+                'name' => 'Movies',
+                'type' => 'video',
+                'paths' => json_encode([$root]),
+                'options' => json_encode([]),
+            ],
+            'prune_rows' => [
+                ['id' => 'keep', 'path' => $present],
+                ['id' => 'drop', 'path' => $gone],
+            ],
+        ]);
+
+        $manager = $this->makeManager($db, null, null);
+        $removed = $manager->pruneLibrary('lib-1');
+
+        $deletes = $this->deletes($queries);
+        $this->assertContains(['DELETE FROM media_items WHERE id = ?', ['drop']], $deletes);
+        $this->assertNotContains(['DELETE FROM media_items WHERE id = ?', ['keep']], $deletes);
+        $this->assertSame(1, $removed);
+
+        @unlink($present);
+        @rmdir($root);
+    }
+
+    /**
+     * prune honours the safety guard: when NO configured root is accessible, it
+     * refuses to delete anything (0 removed, no DELETE issued).
+     */
+    public function testPruneLibrarySkipsWhenNoRootAccessible(): void
+    {
+        $queries = [];
+        $db = $this->makeDb($queries, [
+            'library_row' => [
+                'id' => 'lib-1',
+                'name' => 'Movies',
+                'type' => 'video',
+                'paths' => json_encode(['/nonexistent/root']),
+                'options' => json_encode([]),
+            ],
+            'prune_rows' => [
+                ['id' => 'a', 'path' => '/nonexistent/root/a.mkv'],
+            ],
+        ]);
+
+        $manager = $this->makeManager($db, null, null);
+        $this->assertSame(0, $manager->pruneLibrary('lib-1'));
+        $this->assertSame([], $this->deletes($queries));
+    }
+
+    /**
+     * delete_all delegates to ItemRepository::deleteByLibrary() (so genre/stats
+     * caches are invalidated) and returns the pre-delete item count.
+     */
+    public function testDeleteAllItemsDelegatesToRepositoryAndReturnsCount(): void
+    {
+        $queries = [];
+        $db = $this->makeDb($queries, [
+            'library_row' => [
+                'id' => 'lib-1',
+                'name' => 'Movies',
+                'type' => 'video',
+                'paths' => json_encode(['/media']),
+                'options' => json_encode([]),
+            ],
+            'count_before' => 7,
+        ]);
+
+        $items = $this->createMock(ItemRepository::class);
+        $items->expects($this->once())->method('deleteByLibrary')->with('lib-1');
+
+        $manager = $this->makeManager($db, $items, null);
+        $this->assertSame(7, $manager->deleteAllItems('lib-1'));
+    }
+
+    /**
+     * delete_all falls back to a direct parameterised DELETE when no
+     * ItemRepository is wired.
+     */
+    public function testDeleteAllItemsFallsBackToDirectDelete(): void
+    {
+        $queries = [];
+        $db = $this->makeDb($queries, [
+            'library_row' => [
+                'id' => 'lib-1',
+                'name' => 'Movies',
+                'type' => 'video',
+                'paths' => json_encode(['/media']),
+                'options' => json_encode([]),
+            ],
+            'count_before' => 3,
+        ]);
+
+        $manager = $this->makeManager($db, null, null);
+        $this->assertSame(3, $manager->deleteAllItems('lib-1'));
+
+        $this->assertContains(
+            ['DELETE FROM media_items WHERE library_id = ?', ['lib-1']],
+            $this->deletes($queries),
+        );
+    }
+
+    /**
+     * Build a LibraryManager with mocked scanner/watcher/music-service and the
+     * optional item/artwork deps under test.
+     */
+    private function makeManager(
+        Connection $db,
+        ?ItemRepository $items,
+        ?ArtworkStorage $artwork
+    ): LibraryManager {
+        return new LibraryManager(
+            $db,
+            $this->createMock(MediaScanner::class),
+            $this->createMock(FolderWatcher::class),
+            $this->createMock(MusicLibraryService::class),
+            null,
+            $items,
+            $artwork,
+        );
     }
 
     /**

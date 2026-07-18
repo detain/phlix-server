@@ -768,4 +768,111 @@ class TmdbProviderTest extends TestCase
         $this->assertCount(1, $trailers);
         $this->assertSame('https://www.youtube.com/watch?v=ABC', $trailers[0]['url']);
     }
+
+    public function testGetDetailsPrefersPngLogoOverSvg(): void
+    {
+        $http = $this->createMock(MetadataHttpClient::class);
+        $http->method('get')->willReturn([
+            'id' => 603,
+            'title' => 'The Matrix',
+            'images' => ['logos' => [
+                // Highest vote, but SVG — must lose to the PNG for the raster cache.
+                ['file_path' => '/vector.svg', 'iso_639_1' => 'en', 'vote_average' => 9.0],
+                ['file_path' => '/raster.png', 'iso_639_1' => 'en', 'vote_average' => 5.0],
+            ]],
+        ]);
+
+        $details = (new TmdbProvider('k', $http))->getDetails('603');
+
+        $this->assertSame('/raster.png', $details['logo_path']);
+        $this->assertSame('https://image.tmdb.org/t/p/original/raster.png', $details['logo_url']);
+    }
+
+    public function testGetDetailsPrefersEnglishLogoThenNullLanguage(): void
+    {
+        $http = $this->createMock(MetadataHttpClient::class);
+        $http->method('get')->willReturn([
+            'id' => 603,
+            'title' => 'The Matrix',
+            'images' => ['logos' => [
+                ['file_path' => '/fr.png', 'iso_639_1' => 'fr', 'vote_average' => 9.0],
+                ['file_path' => '/neutral.png', 'iso_639_1' => null, 'vote_average' => 8.0],
+                ['file_path' => '/en.png', 'iso_639_1' => 'en', 'vote_average' => 1.0],
+            ]],
+        ]);
+
+        $details = (new TmdbProvider('k', $http))->getDetails('603');
+
+        // English wins outright despite the lowest vote.
+        $this->assertSame('/en.png', $details['logo_path']);
+    }
+
+    public function testGetDetailsBreaksLogoTieByVoteAverage(): void
+    {
+        $http = $this->createMock(MetadataHttpClient::class);
+        $http->method('get')->willReturn([
+            'id' => 603,
+            'title' => 'The Matrix',
+            'images' => ['logos' => [
+                ['file_path' => '/low.png', 'iso_639_1' => 'en', 'vote_average' => 3.2],
+                ['file_path' => '/high.png', 'iso_639_1' => 'en', 'vote_average' => 7.7],
+            ]],
+        ]);
+
+        $details = (new TmdbProvider('k', $http))->getDetails('603');
+
+        $this->assertSame('/high.png', $details['logo_path']);
+    }
+
+    public function testGetDetailsSvgOnlyLogoExposesUrlWithoutPngPreference(): void
+    {
+        $http = $this->createMock(MetadataHttpClient::class);
+        $http->method('get')->willReturn([
+            'id' => 603,
+            'title' => 'The Matrix',
+            'images' => ['logos' => [
+                ['file_path' => '/only.svg', 'iso_639_1' => 'en', 'vote_average' => 6.0],
+            ]],
+        ]);
+
+        $details = (new TmdbProvider('k', $http))->getDetails('603');
+
+        // With no PNG, the SVG URL is still surfaced (local raster caching is then
+        // skipped downstream because the path is not a .png).
+        $this->assertSame('/only.svg', $details['logo_path']);
+        $this->assertSame('https://image.tmdb.org/t/p/original/only.svg', $details['logo_url']);
+    }
+
+    public function testGetDetailsWithoutLogosLeavesLogoFieldsAbsent(): void
+    {
+        $http = $this->createMock(MetadataHttpClient::class);
+        $http->method('get')->willReturn([
+            'id' => 603,
+            'title' => 'The Matrix',
+            'images' => ['logos' => []],
+        ]);
+
+        $details = (new TmdbProvider('k', $http))->getDetails('603');
+
+        $this->assertArrayNotHasKey('logo_path', $details);
+        $this->assertArrayNotHasKey('logo_url', $details);
+    }
+
+    public function testGetTvDetailsSelectsPngLogo(): void
+    {
+        $http = $this->createMock(MetadataHttpClient::class);
+        $http->method('get')->willReturn([
+            'id' => 1399,
+            'name' => 'Game of Thrones',
+            'first_air_date' => '2011-04-17',
+            'images' => ['logos' => [
+                ['file_path' => '/got.png', 'iso_639_1' => 'en', 'vote_average' => 8.0],
+            ]],
+        ]);
+
+        $details = (new TmdbProvider('k', $http))->getTvDetails('1399');
+
+        $this->assertSame('/got.png', $details['logo_path']);
+        $this->assertSame('https://image.tmdb.org/t/p/original/got.png', $details['logo_url']);
+    }
 }

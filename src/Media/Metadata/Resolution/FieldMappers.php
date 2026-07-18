@@ -96,6 +96,10 @@ final class FieldMappers
         $b->string('trailer_key', $raw['trailer_key'] ?? null);
         $b->string('trailer_site', $raw['trailer_site'] ?? null);
 
+        // Title-logo URL (from TMDB `append_to_response=images`). Absent when the
+        // item has no usable logo so the field stays absent rather than empty.
+        $b->string('logo_url', $raw['logo_url'] ?? null);
+
         $b->externalIds(self::mergeIds($raw, ['tmdb' => $raw['tmdb_id'] ?? null, 'imdb' => $raw['imdb_id'] ?? null]));
 
         return $b->build();
@@ -277,6 +281,10 @@ final class FieldMappers
         $b->string('trailer_url', self::safeHttpUrl($raw['trailer_url'] ?? null));
         $b->string('trailer_key', self::safeYoutubeKey($raw['trailer_key'] ?? null));
         $b->string('trailer_site', $raw['trailer_site'] ?? null);
+        // Title-logo URL from untrusted plugin/pre-shaped input is rendered as an
+        // <img src>/CSS background on the client, so require an http(s) scheme
+        // (drops `javascript:` and other schemes) — mirrors the trailer_url guard.
+        $b->string('logo_url', self::safeHttpUrl($raw['logo_url'] ?? null));
         $b->externalIds(self::stringMap($raw['external_ids'] ?? null));
 
         return $b->build();

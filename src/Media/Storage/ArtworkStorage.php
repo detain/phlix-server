@@ -47,6 +47,17 @@ class ArtworkStorage
     /** Original size variant name. */
     public const ORIGINAL = 'original';
 
+    /**
+     * Pseudo-size the title-logo cache is served under (`?size=logo`). Distinct
+     * from the `w###`/`original` poster variants — the logo is stored as a real
+     * PNG (see {@see self::LOGO_FILENAME}) so its alpha channel survives, never
+     * routed through the JPEG re-encode pipeline the poster variants use.
+     */
+    public const LOGO_SIZE = 'logo';
+
+    /** On-disk filename of the cached, transparency-preserving title logo. */
+    public const LOGO_FILENAME = 'logo.png';
+
     /** JPEG quality for re-encoded variants. */
     public const JPEG_QUALITY = 85;
 
@@ -138,14 +149,121 @@ class ArtworkStorage
     }
 
     /**
+     * Download a title logo from TMDB and cache it locally as a transparency-safe
+     * PNG (Phase C hero-overlay art).
+     *
+     * Unlike {@see downloadAndStore()}, this NEVER routes the image through the
+     * JPEG re-encode pipeline (which would flatten the alpha channel at 85%
+     * quality). The downloaded bytes are validated as a real PNG (same
+     * {@see getimagesize()} + {@see finfo_file()} MIME + MAX_DIMENSION guards the
+     * poster path uses) and then stored VERBATIM as `logo.png`, so the original
+     * transparency is preserved byte-for-byte.
+     *
+     * A non-PNG source (e.g. an SVG that slipped through, or a JPEG logo) is
+     * rejected — the logo cache only ever holds true PNGs. The download uses the
+     * SAME async/blocking seam as the poster path ({@see downloadToTemp()}), so it
+     * respects the Workerman/Swoole coroutine + EventLoopTls rules.
+     *
+     * Idempotent: returns the existing cached path without re-downloading when the
+     * logo is already stored.
+     *
+     * @param string $itemId   Media item UUID.
+     * @param string $logoPath TMDB logo path (e.g. '/abc123.png').
+     * @return string|null     Full path to the stored `logo.png`, or null when the
+     *                         source was not a usable PNG (caller keeps the remote URL).
+     * @throws \InvalidArgumentException if the logo path is invalid.
+     * @throws \RuntimeException        if the download itself fails.
+     */
+    public function downloadAndStoreLogo(string $itemId, string $logoPath): ?string
+    {
+        if ($logoPath === '' || $logoPath === '/') {
+            throw new \InvalidArgumentException('Logo path cannot be empty');
+        }
+
+        // Idempotent — skip the network fetch when already cached.
+        $existing = $this->logoFilePath($itemId);
+        if ($existing !== null) {
+            return $existing;
+        }
+
+        $originalUrl = $this->buildTmdbUrl($logoPath, self::ORIGINAL);
+        $tmpPath = $this->downloadToTemp($originalUrl);
+
+        try {
+            // Full image validation (dimension cap, real MIME, forbidden-mime guard).
+            $this->validateImageFile($tmpPath);
+
+            // The transparency-safe cache only accepts a genuine PNG — a non-PNG
+            // (e.g. an SVG rasterization miss, or a JPEG) is rejected so the alpha
+            // channel promise holds and the JPEG pipeline is never involved.
+            /** @var array{0: int, 1: int, 2: int}|false $imageInfo */
+            $imageInfo = @getimagesize($tmpPath);
+            if ($imageInfo === false || $imageInfo[2] !== IMAGETYPE_PNG) {
+                return null;
+            }
+
+            $this->ensureItemDirExists($itemId);
+
+            return $this->storeLogoPng($itemId, $tmpPath);
+        } finally {
+            if (is_file($tmpPath)) {
+                unlink($tmpPath);
+            }
+        }
+    }
+
+    /**
+     * Store a validated PNG as the item's `logo.png`, VERBATIM (no re-encode).
+     *
+     * Writing the original bytes preserves the alpha channel exactly. The atomic
+     * temp-then-rename writer ({@see atomicWriteVariant()}) is reused so a
+     * concurrent reader never observes a truncated file.
+     *
+     * @param string $itemId  Media item UUID.
+     * @param string $tmpPath Path to the validated PNG temp file.
+     * @return string|null    Full path to the stored logo, or null on I/O failure.
+     */
+    private function storeLogoPng(string $itemId, string $tmpPath): ?string
+    {
+        $bytes = file_get_contents($tmpPath);
+        if ($bytes === false || $bytes === '') {
+            return null;
+        }
+
+        $logoFile = $this->itemDir($itemId) . self::LOGO_FILENAME;
+        if (!$this->atomicWriteVariant($logoFile, $bytes)) {
+            return null;
+        }
+
+        return $logoFile;
+    }
+
+    /**
+     * Full path to the cached title logo for an item, or null when not cached.
+     *
+     * @param string $itemId Media item UUID.
+     */
+    public function logoFilePath(string $itemId): ?string
+    {
+        $path = $this->itemDir($itemId) . self::LOGO_FILENAME;
+        return is_file($path) ? $path : null;
+    }
+
+    /**
      * Get the path to a specific variant for an item.
      *
      * @param string $itemId Media item UUID
-     * @param string $size   Size variant (e.g., 'w185', 'w342', 'w500', 'w780', 'original')
+     * @param string $size   Size variant (e.g., 'w185', 'w342', 'w500', 'w780', 'original', 'logo')
      * @return string|null  Full path to the variant or null if not found
      */
     public function variantPath(string $itemId, string $size): ?string
     {
+        // The title logo lives in its own PNG file (transparency-safe), NOT the
+        // JPEG variant naming scheme.
+        if ($size === self::LOGO_SIZE) {
+            return $this->logoFilePath($itemId);
+        }
+
         $path = $this->itemDir($itemId) . $size . '.jpg';
         return is_file($path) ? $path : null;
     }

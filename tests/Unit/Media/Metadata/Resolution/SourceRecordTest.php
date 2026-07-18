@@ -158,7 +158,21 @@ final class SourceRecordTest extends TestCase
             'trailer_url',
             'trailer_key',
             'trailer_site',
+            'logo_url',
         ];
         $this->assertSame($expected, SourceRecord::CANONICAL_FIELDS);
+    }
+
+    public function testLogoUrlAccessorRoundTrips(): void
+    {
+        $record = new SourceRecord('tmdb', [
+            'logo_url' => 'https://image.tmdb.org/t/p/original/logo.png',
+        ]);
+        $this->assertTrue($record->has('logo_url'));
+        $this->assertSame('https://image.tmdb.org/t/p/original/logo.png', $record->logoUrl());
+
+        $absent = new SourceRecord('tmdb', ['title' => 'x']);
+        $this->assertFalse($absent->has('logo_url'));
+        $this->assertNull($absent->logoUrl());
     }
 }

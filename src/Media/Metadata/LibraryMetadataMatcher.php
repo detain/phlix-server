@@ -187,6 +187,18 @@ class LibraryMetadataMatcher
     private array $artworkPathCache = [];
 
     /**
+     * Scan-scoped map of TMDB logo path => the local logo override field
+     * ({@see cacheLogoLocally()} produces a signed local `logo_url`) generated the
+     * FIRST time that path was downloaded this run. Series children inherit the
+     * series title logo, so the same TMDB path recurs across a series — this
+     * mirrors {@see $artworkPathCache} to avoid re-downloading identical bytes.
+     * Reset per {@see matchLibrary()} run so URLs never leak across libraries.
+     *
+     * @var array<string, array<string, mixed>>
+     */
+    private array $logoPathCache = [];
+
+    /**
      * The image types (M5) enabled for the CURRENT match run/item, used to gate
      * the flat `poster_url` / `backdrop_url` metadata keys in
      * {@see persistMetadata()}. `null` means "do not filter" (back-compat: no
@@ -369,6 +381,7 @@ class LibraryMetadataMatcher
         // series posters recur across every season/episode, so cache the first
         // download's local URLs and reuse them instead of re-fetching.
         $this->artworkPathCache = [];
+        $this->logoPathCache = [];
 
         // Progress denominator: the count of top-level items (movies + series)
         // the flat pass visits. Reported via $onProgress so the worker can stamp
@@ -429,6 +442,7 @@ class LibraryMetadataMatcher
         // Release the per-run artwork dedup map so its URLs never leak into a
         // later run for a different library and its memory is reclaimed.
         $this->artworkPathCache = [];
+        $this->logoPathCache = [];
 
         return ['matched' => $matched, 'processed' => $processed];
     }
@@ -1055,17 +1069,18 @@ class LibraryMetadataMatcher
     }
 
     /**
-     * Copy the primary-trailer passthrough fields from raw TMDB `$details`
-     * (as produced by getDetails/getTvDetails) into a formatted metadata
-     * `$result`, only when present and non-empty. Shared by the movie and
-     * series apply-match formatters so both mirror the batch-scan output.
+     * Copy the primary-trailer AND title-logo passthrough fields from raw TMDB
+     * `$details` (as produced by getDetails/getTvDetails) into a formatted
+     * metadata `$result`, only when present and non-empty. Shared by the movie and
+     * series apply-match formatters so both mirror the batch-scan output (the
+     * local logo caching then happens in persistMetadata → cacheLogoLocally).
      *
      * @param array<string, mixed> $details Raw TMDB details.
      * @param array<string, mixed> $result  Formatted result to augment (by reference).
      */
     private function copyTrailerFields(array $details, array &$result): void
     {
-        foreach (['trailer_url', 'trailer_key', 'trailer_site'] as $field) {
+        foreach (['trailer_url', 'trailer_key', 'trailer_site', 'logo_url'] as $field) {
             $value = MetadataValue::asNullableString($details[$field] ?? null);
             if ($value !== null) {
                 $result[$field] = $value;
@@ -1702,6 +1717,10 @@ class LibraryMetadataMatcher
         // SV-3.4: Download and cache TMDB poster locally for offline/LAN installs
         $merged = $this->cacheArtworkLocally($id, $merged);
 
+        // Phase C: cache the TMDB title logo as a transparency-safe local PNG and
+        // rewrite `logo_url` to the local served URL (independent of the poster).
+        $merged = $this->cacheLogoLocally($id, $merged);
+
         $this->items->update($id, [
             'metadata_json' => $merged,
             'metadata_refreshed_at' => date('Y-m-d H:i:s'),
@@ -1812,6 +1831,94 @@ class LibraryMetadataMatcher
         // TMDB URL pattern: https://image.tmdb.org/t/p/{size}/{filename}
         // We want to extract just the filename portion (e.g., "/abc.jpg")
         if (preg_match('#^https?://image\.tmdb\.org/t/p/[^/]+(/[^/]+)$#', $posterUrl, $matches) !== 1) {
+            return null;
+        }
+
+        return $matches[1];
+    }
+
+    /**
+     * Download and cache the TMDB title logo locally as a transparency-safe PNG,
+     * rewriting `logo_url` to the local served URL.
+     *
+     * Only TMDB **PNG** logos are localized: an SVG (or non-TMDB) `logo_url` is
+     * left pointing at its original remote URL — the JPEG variant pipeline is
+     * never involved and SVGs are never rasterized. When the download exists but
+     * is not a usable PNG, {@see ArtworkStorage::downloadAndStoreLogo()} returns
+     * null and the original `logo_url` is kept. Best-effort: any failure is logged
+     * and the metadata is returned unchanged.
+     *
+     * @param string               $id     Media item UUID.
+     * @param array<string, mixed> $merged Current merged metadata.
+     * @return array<string, mixed> Metadata with a localized `logo_url` (or unchanged).
+     */
+    private function cacheLogoLocally(string $id, array $merged): array
+    {
+        if ($this->artworkStorage === null) {
+            return $merged;
+        }
+
+        $logoUrl = $merged['logo_url'] ?? null;
+        if (!is_string($logoUrl) || $logoUrl === '') {
+            return $merged;
+        }
+
+        // Only a TMDB PNG logo is cached; an SVG/non-TMDB URL is left as-is.
+        $logoPath = $this->extractTmdbLogoPath($logoUrl);
+        if ($logoPath === null) {
+            return $merged;
+        }
+
+        // Dedup across the scan run (series children inherit the series logo).
+        $cached = $this->logoPathCache[$logoPath] ?? null;
+        if ($cached !== null) {
+            return array_merge($merged, $cached);
+        }
+
+        try {
+            $stored = $this->artworkStorage->downloadAndStoreLogo($id, $logoPath);
+            if ($stored === null) {
+                // Not a usable PNG — keep the original remote logo_url.
+                return $merged;
+            }
+
+            $overrides = [];
+            $relative = $this->artworkStorage->relativePath($id, ArtworkStorage::LOGO_SIZE);
+            if ($relative !== null) {
+                $signedUrl = $this->artworkStorage->url($id, ArtworkStorage::LOGO_SIZE, $relative);
+                if ($signedUrl !== null) {
+                    $overrides['logo_url'] = $signedUrl;
+                }
+            }
+
+            if ($overrides !== []) {
+                $this->logoPathCache[$logoPath] = $overrides;
+                $merged = array_merge($merged, $overrides);
+            }
+        } catch (\Throwable $e) {
+            $this->logger->warning('Failed to cache logo locally', [
+                'item_id'   => $id,
+                'logo_path' => $logoPath,
+                'error'     => $e->getMessage(),
+            ]);
+        }
+
+        return $merged;
+    }
+
+    /**
+     * Extract the TMDB logo path from a full logo URL, but ONLY for PNG logos.
+     *
+     * TMDB logo URLs look like: https://image.tmdb.org/t/p/original/abc.png
+     * A non-PNG (e.g. `.svg`) or non-TMDB URL returns null so it is never routed
+     * through the local raster cache.
+     *
+     * @param string $logoUrl Full TMDB logo URL.
+     * @return string|null The `/abc.png` path, or null when not a TMDB PNG URL.
+     */
+    private function extractTmdbLogoPath(string $logoUrl): ?string
+    {
+        if (preg_match('#^https?://image\.tmdb\.org/t/p/[^/]+(/[^/]+\.png)$#i', $logoUrl, $matches) !== 1) {
             return null;
         }
 

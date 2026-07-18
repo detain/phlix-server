@@ -323,6 +323,32 @@ final class MediaItemShaperTest extends TestCase
         $this->assertArrayNotHasKey('trailer_url', $shaped);
     }
 
+    public function testShapeDetailExposesLogoUrlWhenPresent(): void
+    {
+        $shaped = MediaItemShaper::shapeDetail([
+            'id' => 'm',
+            'name' => 'The Matrix',
+            'type' => 'movie',
+            'metadata' => [
+                'logo_url' => '/api/v1/artwork/m?size=logo&exp=1&sig=abc',
+            ],
+        ], []);
+
+        $this->assertSame('/api/v1/artwork/m?size=logo&exp=1&sig=abc', $shaped['logo_url']);
+    }
+
+    public function testShapeDetailLogoUrlNullWhenAbsent(): void
+    {
+        $shaped = MediaItemShaper::shapeDetail([
+            'id' => 'm',
+            'name' => 'No Logo',
+            'type' => 'movie',
+            'metadata' => [],
+        ], []);
+
+        $this->assertNull($shaped['logo_url']);
+    }
+
     public function testShapeDetailExposesNormalizedCastCrewCompaniesAndStudio(): void
     {
         $shaped = MediaItemShaper::shapeDetail([

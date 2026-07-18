@@ -224,6 +224,12 @@ final class MediaItemShaper
         $merged['trailer_key'] = self::nonemptyString($metadata['trailer_key'] ?? null);
         $merged['trailer_site'] = self::nonemptyString($metadata['trailer_site'] ?? null);
 
+        // Title logo — detail-only, so a client can overlay the transparent title
+        // treatment on the hero backdrop. Captured at scan time from TMDB `images`
+        // and cached locally as a transparency-safe PNG (served at `?size=logo`).
+        // Absent/empty → null (never a broken URL).
+        $merged['logo_url'] = self::nonemptyString($metadata['logo_url'] ?? null);
+
         // Curated external provider-id map ({tmdb, imdb, tvdb, anidb, …}) so the
         // SPA can render "view on TMDB/IMDb/…" links. Detail-only. Assembled from
         // `metadata_json.external_ids` merged with any top-level `*_id` keys; only

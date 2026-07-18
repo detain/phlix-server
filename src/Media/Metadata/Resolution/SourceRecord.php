@@ -35,7 +35,7 @@ namespace Phlix\Media\Metadata\Resolution;
  *   runtime (minutes, int), official_rating, imdb_rating (float),
  *   imdb_votes (int), actors (string[]), director, cast[], crew[],
  *   production_companies[], studio, external_ids ({} map),
- *   trailer_url, trailer_key, trailer_site.
+ *   trailer_url, trailer_key, trailer_site, logo_url.
  *
  * This class performs NO I/O and holds NO mutable state — it is a pure value
  * object safe to construct per request under Workerman's resident memory model.
@@ -83,6 +83,7 @@ final class SourceRecord
         'trailer_url',
         'trailer_key',
         'trailer_site',
+        'logo_url',
     ];
 
     /**
@@ -284,6 +285,13 @@ final class SourceRecord
     public function trailerSite(): ?string
     {
         $value = $this->fields['trailer_site'] ?? null;
+        return is_string($value) ? $value : null;
+    }
+
+    /** Title-logo URL (transparent art for hero overlays; a TMDB or local URL). */
+    public function logoUrl(): ?string
+    {
+        $value = $this->fields['logo_url'] ?? null;
         return is_string($value) ? $value : null;
     }
 

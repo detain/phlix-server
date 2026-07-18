@@ -304,6 +304,42 @@ class LibraryMetadataMatcherApplyTest extends TestCase
         $this->assertSame('YouTube', $meta['trailer_site']);
     }
 
+    public function testApplyMatchMovieCarriesLogoUrl(): void
+    {
+        $items = $this->createMock(ItemRepository::class);
+        $items->method('findById')->with('m1')->willReturn([
+            'id' => 'm1',
+            'type' => 'movie',
+            'name' => 'Old Name',
+            'metadata' => [],
+        ]);
+
+        $tmdb = $this->configuredTmdb();
+        $tmdb->method('getDetails')->with('603')->willReturn([
+            'name' => 'The Matrix',
+            'logo_url' => 'https://image.tmdb.org/t/p/original/logo.png',
+        ]);
+
+        $captured = null;
+        $items->expects($this->once())->method('update')->with(
+            'm1',
+            $this->callback(function (mixed $data) use (&$captured): bool {
+                $captured = $data;
+                return is_array($data);
+            }),
+        );
+
+        // No ArtworkStorage wired → logo_url is carried through verbatim (the raw
+        // TMDB URL), not localized. The local-cache rewrite is covered separately.
+        $matcher = $this->makeMatcher($items, $tmdb);
+        $matcher->applyMatch('m1', '603', 'movie');
+
+        $this->assertIsArray($captured);
+        /** @var array<string, mixed> $meta */
+        $meta = $captured['metadata_json'];
+        $this->assertSame('https://image.tmdb.org/t/p/original/logo.png', $meta['logo_url']);
+    }
+
     public function testApplyMatchUnknownItemReturnsNotMatched(): void
     {
         $items = $this->createMock(ItemRepository::class);

@@ -147,6 +147,57 @@ final class FieldMappersTest extends TestCase
         $this->assertNull($record->trailerSite());
     }
 
+    public function testLogoUrlIsCanonicalAndRoundTripsThroughFromTmdb(): void
+    {
+        $this->assertContains('logo_url', SourceRecord::CANONICAL_FIELDS);
+
+        $record = FieldMappers::fromTmdb([
+            'name' => 'The Matrix',
+            'logo_url' => 'https://image.tmdb.org/t/p/original/logo.png',
+        ]);
+
+        $this->assertSame('https://image.tmdb.org/t/p/original/logo.png', $record->logoUrl());
+    }
+
+    public function testFromTmdbWithoutLogoLeavesLogoFieldAbsent(): void
+    {
+        $record = FieldMappers::fromTmdb(['name' => 'Movie']);
+
+        $this->assertFalse($record->has('logo_url'), 'missing logo stays absent');
+        $this->assertNull($record->logoUrl());
+    }
+
+    public function testFromImdbAndTvdbDoNotSupplyLogo(): void
+    {
+        $imdb = FieldMappers::fromImdb(['title' => 'Movie', 'imdb_id' => 'tt1']);
+        $tvdb = FieldMappers::fromTvdb(['name' => 'Show', 'tvdb_id' => '1']);
+
+        $this->assertFalse($imdb->has('logo_url'), 'IMDb does not supply a logo');
+        $this->assertFalse($tvdb->has('logo_url'), 'TVDB does not supply a logo');
+    }
+
+    public function testFromGenericKeepsValidLogoUrl(): void
+    {
+        $record = FieldMappers::fromGeneric('plugin', [
+            'title' => 'Movie',
+            'logo_url' => 'https://cdn.example.com/logo.png',
+        ]);
+
+        $this->assertSame('https://cdn.example.com/logo.png', $record->logoUrl());
+    }
+
+    public function testFromGenericDropsNonHttpLogoUrl(): void
+    {
+        $record = FieldMappers::fromGeneric('plugin', [
+            'title' => 'Movie',
+            // A javascript: (non-http) URL must never reach the client render path.
+            'logo_url' => 'javascript:alert(document.cookie)',
+        ]);
+
+        $this->assertFalse($record->has('logo_url'), 'javascript: logo url is dropped');
+        $this->assertNull($record->logoUrl());
+    }
+
     public function testFromImdbAndTvdbDoNotSupplyTrailer(): void
     {
         $imdb = FieldMappers::fromImdb(['title' => 'Movie', 'imdb_id' => 'tt1']);

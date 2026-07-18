@@ -264,6 +264,114 @@ final class ArtworkStorageTest extends TestCase
     }
 
     /**
+     * The title-logo cache must store a REAL PNG (transparency preserved) and
+     * must NOT route the image through the JPEG re-encode pipeline. The stored
+     * bytes are identical to the validated source PNG (verbatim), the on-disk file
+     * is a PNG per getimagesize(), and the alpha channel survives.
+     */
+    public function testDownloadAndStoreLogoStoresVerbatimTransparentPng(): void
+    {
+        if (! \extension_loaded('swoole')) {
+            self::markTestSkipped('Swoole extension required for the async coroutine path');
+        }
+
+        $png = $this->makeTransparentPngBytes(300, 120);
+
+        $storage = new TestableArtworkStorage($this->tmpDir);
+        $storage->forceBlocking = false;
+        $storage->fakeClient = $this->makeFakeClient(function (string $url, array $options) use ($png): void {
+            self::invokeCallback($options['success'] ?? null, new HttpResponse(200, [], $png));
+        });
+
+        /** @var array{result: ?string, error: \Throwable|null} $out */
+        $out = ['result' => null, 'error' => null];
+
+        \Swoole\Coroutine\run(function () use ($storage, &$out): void {
+            try {
+                $out['result'] = $storage->downloadAndStoreLogo('item-logo', '/logo.png');
+            } catch (\Throwable $e) {
+                $out['error'] = $e;
+            }
+        });
+
+        self::assertNull($out['error'], 'Logo store must not throw on a valid PNG');
+        $stored = $out['result'];
+        self::assertIsString($stored);
+        self::assertFileExists($this->tmpDir . '/item-logo/logo.png');
+
+        // Stored bytes are the source bytes VERBATIM (no JPEG re-encode).
+        self::assertSame($png, file_get_contents($stored));
+
+        // On disk it is a genuine PNG.
+        $info = getimagesize($stored);
+        self::assertIsArray($info);
+        self::assertSame(IMAGETYPE_PNG, $info[2]);
+
+        // The alpha channel survived (a JPEG re-encode would have flattened it).
+        $img = imagecreatefrompng($stored);
+        self::assertNotFalse($img);
+        imagesavealpha($img, true);
+        $rgba = imagecolorat($img, 0, 0);
+        $alpha = ($rgba >> 24) & 0x7F;
+        imagedestroy($img);
+        self::assertSame(127, $alpha, 'Top-left pixel must remain fully transparent');
+    }
+
+    /**
+     * A non-PNG source (e.g. a JPEG logo) is rejected — the transparency-safe
+     * logo cache only ever holds true PNGs, so downloadAndStoreLogo returns null
+     * and writes nothing.
+     */
+    public function testDownloadAndStoreLogoRejectsNonPngSource(): void
+    {
+        if (! \extension_loaded('swoole')) {
+            self::markTestSkipped('Swoole extension required for the async coroutine path');
+        }
+
+        $jpeg = $this->makeJpegBytes(300, 120);
+
+        $storage = new TestableArtworkStorage($this->tmpDir);
+        $storage->forceBlocking = false;
+        $storage->fakeClient = $this->makeFakeClient(function (string $url, array $options) use ($jpeg): void {
+            self::invokeCallback($options['success'] ?? null, new HttpResponse(200, [], $jpeg));
+        });
+
+        /** @var array{result: ?string, error: \Throwable|null} $out */
+        $out = ['result' => 'unset', 'error' => null];
+
+        \Swoole\Coroutine\run(function () use ($storage, &$out): void {
+            try {
+                $out['result'] = $storage->downloadAndStoreLogo('item-jpeg-logo', '/logo.png');
+            } catch (\Throwable $e) {
+                $out['error'] = $e;
+            }
+        });
+
+        self::assertNull($out['error']);
+        self::assertNull($out['result'], 'A JPEG source must be rejected (null)');
+        self::assertFileDoesNotExist($this->tmpDir . '/item-jpeg-logo/logo.png');
+    }
+
+    /**
+     * variantPath('…', 'logo') resolves the transparency-safe logo.png, while the
+     * poster variants keep their JPEG naming scheme untouched.
+     */
+    public function testVariantPathResolvesLogoSize(): void
+    {
+        $storage = new TestableArtworkStorage($this->tmpDir);
+
+        $itemDir = $this->tmpDir . '/item-vp/';
+        mkdir($itemDir, 0755, true);
+        file_put_contents($itemDir . 'logo.png', 'PNGBYTES');
+        file_put_contents($itemDir . 'w185.jpg', 'JPEG');
+
+        self::assertSame($itemDir . 'logo.png', $storage->variantPath('item-vp', ArtworkStorage::LOGO_SIZE));
+        self::assertSame($itemDir . 'w185.jpg', $storage->variantPath('item-vp', 'w185'));
+        // A missing logo yields null (not a logo.jpg lookup).
+        self::assertNull($storage->variantPath('item-none', ArtworkStorage::LOGO_SIZE));
+    }
+
+    /**
      * Build a fake Workerman HTTP client whose request() resolves the given
      * handler synchronously (no network, no event loop).
      *
@@ -321,6 +429,35 @@ final class ArtworkStorageTest extends TestCase
 
         ob_start();
         imagejpeg($img, null, 85);
+        $bytes = ob_get_clean();
+        imagedestroy($img);
+
+        self::assertIsString($bytes);
+        self::assertNotSame('', $bytes);
+
+        return $bytes;
+    }
+
+    /**
+     * Generate a PNG with a fully-transparent top-left pixel via GD, so a test can
+     * assert the alpha channel survives the logo cache.
+     *
+     * @param int<1, max> $width
+     * @param int<1, max> $height
+     */
+    private function makeTransparentPngBytes(int $width, int $height): string
+    {
+        $img = imagecreatetruecolor($width, $height);
+        self::assertNotFalse($img);
+        imagealphablending($img, false);
+        imagesavealpha($img, true);
+
+        $transparent = imagecolorallocatealpha($img, 0, 0, 0, 127);
+        self::assertNotFalse($transparent);
+        imagefilledrectangle($img, 0, 0, $width - 1, $height - 1, $transparent);
+
+        ob_start();
+        imagepng($img);
         $bytes = ob_get_clean();
         imagedestroy($img);
 

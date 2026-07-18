@@ -869,7 +869,9 @@ final class HttpHandler
         }
 
         $headers = [
-            'Content-Type'  => 'image/jpeg',
+            // The title logo (`size=logo`) is a transparency-preserving PNG; the
+            // poster variants are JPEG.
+            'Content-Type'  => $size === ArtworkStorage::LOGO_SIZE ? 'image/png' : 'image/jpeg',
             'Cache-Control' => 'public, max-age=31536000, immutable',
         ];
         if ($etag !== '') {
@@ -889,7 +891,8 @@ final class HttpHandler
      */
     private function isValidArtworkSize(string $size): bool
     {
-        if ($size === 'original') {
+        // 'original' and the transparency-safe title logo ('logo') are both valid.
+        if ($size === 'original' || $size === ArtworkStorage::LOGO_SIZE) {
             return true;
         }
 

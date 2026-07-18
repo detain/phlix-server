@@ -72,7 +72,7 @@ class ArtworkController
         }
 
         // Serve with cache headers
-        $mime = $this->mimeType();
+        $mime = $this->mimeType($size);
         $resp = (new Response())->status(200)
             ->header('Content-Type', $mime)
             ->header('Cache-Control', self::CACHE_CONTROL)
@@ -151,8 +151,9 @@ class ArtworkController
      */
     private function isValidSize(string $size): bool
     {
-        // Accept w### sizes (w185, w342, w500, w780) and 'original'
-        if ($size === 'original') {
+        // Accept w### sizes (w185, w342, w500, w780), 'original', and 'logo'
+        // (the transparency-safe title-logo PNG).
+        if ($size === 'original' || $size === ArtworkStorage::LOGO_SIZE) {
             return true;
         }
 
@@ -167,11 +168,12 @@ class ArtworkController
     }
 
     /**
-     * Get MIME type for artwork responses.
+     * Get MIME type for an artwork response. Poster variants are JPEG; the title
+     * logo (`size=logo`) is a transparency-preserving PNG.
      */
-    private function mimeType(): string
+    private function mimeType(string $size): string
     {
-        return 'image/jpeg';
+        return $size === ArtworkStorage::LOGO_SIZE ? 'image/png' : 'image/jpeg';
     }
 
     /**

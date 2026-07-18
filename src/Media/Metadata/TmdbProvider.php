@@ -245,9 +245,14 @@ class TmdbProvider implements MetadataProviderInterface
     {
         $language = MetadataValue::asString($options['language'] ?? null, 'en-US');
 
+        $append = 'credits,genres,production_companies,external_ids,keywords,release_dates,videos,images';
         $response = $this->http->get("/movie/{$externalId}", [
             'language' => $language,
-            'append_to_response' => 'credits,genres,production_companies,external_ids,keywords,release_dates,videos',
+            'append_to_response' => $append,
+            // Title logos are language-tagged; ask for English plus the
+            // language-neutral (`null`) set so `images.logos[]` comes back with
+            // usable PNG candidates for the hero overlay (Phase C).
+            'include_image_language' => 'en,null',
         ]);
 
         if ($response === null) {
@@ -452,10 +457,13 @@ class TmdbProvider implements MetadataProviderInterface
      */
     public function getTvDetails(string $externalId, array $options = []): array
     {
-        $append = 'genres,external_ids,content_ratings,aggregate_credits,production_companies,keywords,videos';
+        $append = 'genres,external_ids,content_ratings,aggregate_credits,production_companies,keywords,videos,images';
         $response = $this->http->get("/tv/{$externalId}", [
             'language' => MetadataValue::asString($options['language'] ?? null, 'en-US'),
             'append_to_response' => $append,
+            // See getDetails(): pull English + language-neutral logos so the
+            // series carries a title logo for the hero overlay (Phase C).
+            'include_image_language' => 'en,null',
         ]);
         if ($response === null) {
             $this->logger->debug('TmdbProvider: getTvDetails miss', [
@@ -700,7 +708,12 @@ class TmdbProvider implements MetadataProviderInterface
         // resolver/shaper leave the field absent rather than a broken URL.
         $trailer = $this->extractPrimaryTrailer($data['videos'] ?? null);
 
-        return array_merge($trailer ?? [], [
+        // Title logo (append_to_response=images). Null when the series has no
+        // usable logo; the logo_* keys are then omitted so the resolver/shaper
+        // leave the field absent rather than a broken URL.
+        $logo = $this->selectLogo($data['images'] ?? null);
+
+        return array_merge($trailer ?? [], $logo ?? [], [
             'name' => MetadataValue::asString($data['name'] ?? ($data['original_name'] ?? null)),
             'original_name' => MetadataValue::asString($data['original_name'] ?? null),
             'overview' => MetadataValue::asString($data['overview'] ?? null),
@@ -1107,7 +1120,12 @@ class TmdbProvider implements MetadataProviderInterface
         // canonical resolver/shaper leave the field absent rather than a broken URL.
         $trailer = $this->extractPrimaryTrailer($data['videos'] ?? null);
 
-        return array_merge($trailer ?? [], [
+        // Title logo (append_to_response=images). Null when the movie has no usable
+        // logo; the logo_* keys are then omitted so the canonical resolver/shaper
+        // leave the field absent rather than a broken URL.
+        $logo = $this->selectLogo($data['images'] ?? null);
+
+        return array_merge($trailer ?? [], $logo ?? [], [
             'name' => MetadataValue::asString(
                 $data['title'] ?? ($data['name'] ?? null)
             ),
@@ -1397,5 +1415,90 @@ class TmdbProvider implements MetadataProviderInterface
             'trailer_site' => $chosen['site_label'],
             'trailer_url' => 'https://www.youtube.com/watch?v=' . $chosen['key'],
         ];
+    }
+
+    /**
+     * Pick the single PRIMARY title logo from a TMDB `images` block (as delivered
+     * by `append_to_response=images&include_image_language=en,null` on movie/TV
+     * details).
+     *
+     * A title logo is transparent art (the styled title treatment) a client can
+     * overlay on the hero backdrop. For a raster, transparency-safe LOCAL cache we
+     * PREFER a PNG `file_path` (TMDB logos may be `.svg` or `.png`): when any PNG
+     * candidate exists the pool is restricted to PNGs; otherwise the SVG pool is
+     * used and its URL is still surfaced (the caller exposes the TMDB SVG URL but
+     * does NOT rasterize it locally). Within the pool, an `en` logo wins over a
+     * language-neutral (`null`) one, which wins over any other language; ties break
+     * on the highest `vote_average`.
+     *
+     * Returns the fields captured onto item metadata (`logo_path` = the raw TMDB
+     * path, `logo_url` = the full `/original` URL), or null when the item has no
+     * usable logo (the caller then omits the keys — never a broken/empty URL).
+     *
+     * @param mixed $images Raw `images` payload.
+     * @return array{logo_path: string, logo_url: string}|null
+     */
+    private function selectLogo(mixed $images): ?array
+    {
+        $block = MetadataValue::asAssoc($images);
+        $logos = MetadataValue::asAssocList($block['logos'] ?? null);
+        if ($logos === []) {
+            return null;
+        }
+
+        $candidates = [];
+        foreach ($logos as $logo) {
+            $path = MetadataValue::asString($logo['file_path'] ?? null);
+            if ($path === '') {
+                continue;
+            }
+            $candidates[] = [
+                'path' => $path,
+                'is_png' => preg_match('/\.png$/i', $path) === 1,
+                'lang' => MetadataValue::asNullableString($logo['iso_639_1'] ?? null),
+                'vote' => MetadataValue::asFloat($logo['vote_average'] ?? null),
+            ];
+        }
+        if ($candidates === []) {
+            return null;
+        }
+
+        // Prefer PNG (raster, transparency-safe local cache). Restrict the pool to
+        // PNGs when any exist; fall back to the full (SVG) pool otherwise.
+        $pngs = array_values(array_filter($candidates, static fn(array $c): bool => $c['is_png']));
+        $pool = $pngs !== [] ? $pngs : $candidates;
+
+        usort($pool, function (array $a, array $b): int {
+            $rank = $this->logoLanguageRank($a['lang']) <=> $this->logoLanguageRank($b['lang']);
+            if ($rank !== 0) {
+                return $rank;
+            }
+            return $b['vote'] <=> $a['vote'];
+        });
+
+        $chosen = $pool[0];
+
+        return [
+            'logo_path' => $chosen['path'],
+            'logo_url' => $this->imageBaseUrl . '/original' . $chosen['path'],
+        ];
+    }
+
+    /**
+     * Language-preference rank for logo selection: `en` (0) beats a
+     * language-neutral (`null`/empty) logo (1), which beats any other language (2).
+     * Lower is preferred.
+     *
+     * @param string|null $lang TMDB `iso_639_1` of the logo (null = language-neutral).
+     */
+    private function logoLanguageRank(?string $lang): int
+    {
+        if ($lang === 'en') {
+            return 0;
+        }
+        if ($lang === null || $lang === '') {
+            return 1;
+        }
+        return 2;
     }
 }

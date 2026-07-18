@@ -10,9 +10,8 @@ use Phlix\Media\Transcoding\FfmpegRunner;
 /**
  * SV-3.3 loudness normalization: unit-covers {@see FfmpegRunner::buildLoudnormFilter()}
  * and its wiring into the audio RE-ENCODE branch of
- * {@see FfmpegRunner::buildSegmentCommand()} (video+audio segments),
- * {@see FfmpegRunner::buildAudioSegmentCommand()} (multi-audio audio-only segments)
- * and {@see FfmpegRunner::buildGaplessSegmentCommand()} (gapless concat segments).
+ * {@see FfmpegRunner::buildSegmentCommand()} (video+audio segments)
+ * and {@see FfmpegRunner::buildAudioSegmentCommand()} (multi-audio audio-only segments).
  * The hardware-accelerated builder ({@see FfmpegRunner::buildHwaccelSegmentCommand()})
  * is covered alongside its other command wiring in
  * {@see \Phlix\Tests\Unit\Media\Transcoding\FfmpegRunnerHwaccelTest}.
@@ -176,48 +175,6 @@ class FfmpegRunnerLoudnormTest extends TestCase
             'audio_codec' => 'aac',
             'audio_bitrate' => '128k',
             'audio_stream_index' => 1,
-        ]);
-
-        $this->assertStringNotContainsString('-af', $cmd);
-        $this->assertStringNotContainsString('loudnorm', $cmd);
-    }
-
-    // ---- buildGaplessSegmentCommand() integration (gapless concat) -------
-
-    public function testGaplessSegmentCommandEmitsLoudnormOnAudioReencode(): void
-    {
-        // Finding 3: the gapless builder is a zero-caller path today but is kept
-        // uniform with the other re-encode builders — it emits -af loudnorm too.
-        $cmd = $this->runner()->buildGaplessSegmentCommand('/in.mkv', '/out/seg-00002.ts', 12.0, 6.0, [
-            'video_codec' => 'libx264',
-            'audio_codec' => 'aac',
-            'audio_bitrate' => '128k',
-            'loudnorm' => ['I' => -16, 'LRA' => 11, 'TP' => -1.5],
-        ]);
-
-        $this->assertStringContainsString('-af "loudnorm=I=-16:LRA=11:TP=-1.5"', $cmd);
-        // Gapless marker still present (no decoder flush frames).
-        $this->assertStringContainsString('-no_dtk', $cmd);
-    }
-
-    public function testGaplessSegmentCommandCannotFilterCopiedAudio(): void
-    {
-        $cmd = $this->runner()->buildGaplessSegmentCommand('/in.mkv', '/out/seg-00002.ts', 12.0, 6.0, [
-            'video_codec' => 'copy',
-            'audio_codec' => 'copy',
-            'loudnorm' => ['I' => -16, 'LRA' => 11, 'TP' => -1.5],
-        ]);
-
-        $this->assertStringContainsString('-c:a copy', $cmd);
-        $this->assertStringNotContainsString('-af', $cmd);
-    }
-
-    public function testGaplessSegmentCommandOmitsLoudnormWhenTargetAbsent(): void
-    {
-        $cmd = $this->runner()->buildGaplessSegmentCommand('/in.mkv', '/out/seg-00002.ts', 12.0, 6.0, [
-            'video_codec' => 'libx264',
-            'audio_codec' => 'aac',
-            'audio_bitrate' => '128k',
         ]);
 
         $this->assertStringNotContainsString('-af', $cmd);

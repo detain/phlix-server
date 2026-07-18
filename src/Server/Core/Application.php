@@ -2989,16 +2989,7 @@ class Application
             $itemRepository = new \Phlix\Media\Library\ItemRepository($db);
             $markerCandidateRepository = new \Phlix\Media\Markers\Detection\MarkerCandidateRepository($itemRepository);
             $markerService = new \Phlix\Media\Markers\MarkerService($itemRepository, $markerCandidateRepository);
-            // SV-0.1: create FfmpegRunner directly since no container is available.
-            // The container factory calls probeHardwareAcceleration(), so we skip the
-            // explicit call here to avoid redundancy. setConfig() still merges hwaccel.
-            $ffmpegConfig = $this->loadFfmpegConfig();
-            $ffmpegRunner = new \Phlix\Media\Transcoding\FfmpegRunner(
-                $this->configString($ffmpegConfig, 'ffmpeg_path', '/usr/bin/ffmpeg'),
-                $this->configString($ffmpegConfig, 'ffprobe_path', '/usr/bin/ffprobe'),
-            );
-            $ffmpegRunner->setConfig(\Phlix\Config\HwAccelConfig::get());
-            $gaplessManager = new \Phlix\Media\Playback\GaplessPlaybackManager(null, $ffmpegRunner);
+            $gaplessManager = new \Phlix\Media\Playback\GaplessPlaybackManager(null);
             $trickplayController = $this->getTrickplayController();
             $chapterMarkerService = new \Phlix\Media\MarkerService($db);
             return new \Phlix\Server\Http\Controllers\MediaItemController(
@@ -3014,8 +3005,6 @@ class Application
         $itemRepository = $this->container->get(\Phlix\Media\Library\ItemRepository::class);
         $markerCandidateRepository = new \Phlix\Media\Markers\Detection\MarkerCandidateRepository($itemRepository);
         $markerService = new \Phlix\Media\Markers\MarkerService($itemRepository, $markerCandidateRepository);
-        /** @var \Phlix\Media\Transcoding\FfmpegRunner */
-        $ffmpegRunner = $this->container->get(\Phlix\Media\Transcoding\FfmpegRunner::class);
         /** @var \Phlix\Media\Playback\GaplessPlaybackManager */
         $gaplessManager = $this->container->get(\Phlix\Media\Playback\GaplessPlaybackManager::class);
         $trickplayController = $this->getTrickplayController();

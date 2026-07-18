@@ -14,8 +14,9 @@ namespace Phlix\Media\Playback;
 /**
  * Playback preferences DTO encapsulating gapless playback and crossfade settings.
  *
- * This immutable value object carries the user's crossfade preferences as
- * propagated from the client through the API and into the GaplessPlayer.
+ * This immutable value object carries the user's crossfade preferences. The
+ * server surfaces these values (via {@see GaplessPlaybackManager::getPreferences()})
+ * so the client-side gapless/crossfade player can honor them.
  *
  * @author Phlix Development Team
  * @version 1.0.0

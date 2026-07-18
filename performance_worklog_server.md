@@ -7779,3 +7779,69 @@ per-client throttle / PROXY-protocol — noted honestly in the worklog, not clai
   `#RATE_LIMIT_<SURFACE>_MAX/_WINDOW` for register/refresh/webauthn_start/webauthn_finish/jwks/ws_connect.
 Verified: `bash -n` clean; heredoc + backfill rendered/tested for both TRUSTED_PROXIES cases and run
 twice (no duplicate lines). Hub install.sh untouched (audit confirmed no change needed).
+
+---
+
+## Implementer — 2026-07-18 — §6 removal Run B: dead server gapless/crossfade subsystem (user-approved Tier 1 + Tier 2)
+
+Gapless + crossfade are implemented 100% client-side (phlix-ui `useMusicPlayer.ts`; UI-3.6 + SV-3.2).
+The server gapless subsystem was confirmed dead. Re-confirmed ZERO callers for every item via
+`git grep` across `src/` + `tests/` + `start.php` + `public/index.php` + `config/` (incl. `::class`/
+string/`{@see}` refs) BEFORE deleting. No live caller was found for any item.
+
+Removed:
+1. `FfmpegRunner::buildGaplessSegmentCommand()` + its docblock (was ~:2795-2893). No private helper
+   became orphaned (it used only shared `self::seconds/paramString/paramInt/browserSafeVideoFlags` +
+   `$this->buildLoudnormFilter`, all still used by the live builders). The FfmpegRunner class-docblock
+   has no `@see` to it (only the ffmpeg.org URL) — nothing to change there; the `{@see …buildGaplessSegmentCommand()}`
+   ref actually lived at `FfmpegRunnerLoudnormTest.php:15` and was updated. Removed its 3 unit tests
+   (`testGaplessSegmentCommand{EmitsLoudnormOnAudioReencode,CannotFilterCopiedAudio,OmitsLoudnormWhenTargetAbsent}`)
+   + their section comment; KEPT the `buildSegmentCommand`/`buildAudioSegmentCommand`/`buildLoudnormFilter`
+   loudnorm tests (live paths).
+2. Deleted `src/Media/Transcoding/GaplessTranscoder.php` (whole file; 0 callers).
+3. Deleted `src/Media/Transcoding/CrossfadeGenerator.php` (whole file; only inbound ref was a `@see`
+   in GaplessTranscoder, also deleted, + the trimmed GaplessPlaybackManager).
+4. Deleted `src/Media/Playback/GaplessPlayer.php` (whole file; 0 callers after the manager trim).
+
+Trimmed (class KEPT — `getPreferences()` is LIVE, called by `MediaItemController:280`):
+5. `src/Media/Playback/GaplessPlaybackManager.php` — removed `getPlayer()`, `getCrossfadeGenerator()`,
+   `buildCrossfadeCommand()`, `isCrossfadeEnabled()`, `isGaplessEnabled()`, `clearPlayer()` (all
+   re-confirmed zero external callers — the `isCrossfadeEnabled` grep hits were `PlaybackPreferences::isCrossfadeEnabled()`,
+   a different live class). Removed the now-unused `$players`/`$crossfadeGenerator`/`$ffmpegRunner`
+   fields + `CrossfadeGenerator`/`FfmpegRunner` imports. Constructor is now `__construct(?UserRepository)`.
+   KEPT `getPreferences()`, its `$preferencesCache`, and `clearCache()`. Updated the class docblock.
+
+DI cleanup (DUAL-ENTRYPOINT — both entrypoints route controller construction through `Application.php`
++ the `MediaServicesProvider` container; neither `start.php` nor `public/index.php` constructs the
+manager directly, confirmed by grep):
+6. `MediaServicesProvider.php:673` — dropped the `ffmpegRunner` `->constructorParameter(...)` (kept
+   `userRepository`; kept the `FfmpegRunner` import — still used at lines 304/584).
+   `Application.php` no-container branch (~:3001) — `new GaplessPlaybackManager(null)`; removed the
+   now-dead `FfmpegRunner` creation (`loadFfmpegConfig`/`new FfmpegRunner`/`setConfig`) that fed only
+   this manager (`loadFfmpegConfig` still used elsewhere in the class). Container branch — removed the
+   now-dead `$ffmpegRunner = $this->container->get(FfmpegRunner::class)` fetch (unused; manager is
+   resolved from the container).
+   The 3 mock-based tests (`MediaItemControllerTest`, `MediaItemControllerParentalTest`,
+   `PlaybackInfoTracksParityTest`) use `createMock(GaplessPlaybackManager::class)` (no real ctor) —
+   stay valid, no change. No `GaplessPlaybackManagerTest` / `GaplessPlayerTest` / `CrossfadeGeneratorTest`
+   / `GaplessTranscoderTest` files exist.
+
+Also: `PlaybackPreferences.php` docblock prose "into the GaplessPlayer" reworded to reference the kept
+`GaplessPlaybackManager::getPreferences()` (GaplessPlayer deleted).
+
+Verification: `phpstan analyze -c phpstan.neon.dist` → No errors (660 files). Targeted
+`phpunit --filter 'Gapless|Crossfade|FfmpegRunnerLoudnorm|MediaItemController|PlaybackInfoTracksParity'`
+→ OK (43 tests, 229 assertions). `phpcs --standard=PSR12` on all 6 changed files → exit 0 (no violations).
+Final grep for `buildGaplessSegmentCommand|GaplessTranscoder|CrossfadeGenerator|GaplessPlayer\b|getCrossfadeGenerator|buildCrossfadeCommand`
+across `src/` + `tests/` + entrypoints + `config/` → ZERO hits. `GaplessPlaybackManager` (class kept)
+still referenced legitimately by the provider/Application/MediaItemController/3 mock tests. The only
+whole-repo hits for the deleted symbols are historical notes in THIS worklog (documentary, left as-is).
+
+Git: per the Implementer CARDINAL RULES (Phase Coordinator owns the git cycle — no push/merge from the
+implementer), the tree is left STAGED, not committed/pushed. Files: M
+`src/Common/Container/Providers/MediaServicesProvider.php`, M `src/Media/Playback/GaplessPlaybackManager.php`,
+M `src/Media/Playback/PlaybackPreferences.php`, M `src/Media/Transcoding/FfmpegRunner.php`, M
+`src/Server/Core/Application.php`, M `tests/Unit/Media/Transcoding/FfmpegRunnerLoudnormTest.php`, D
+`src/Media/Playback/GaplessPlayer.php`, D `src/Media/Transcoding/CrossfadeGenerator.php`, D
+`src/Media/Transcoding/GaplessTranscoder.php` (+ this worklog).
+Suggested commit message: `transcode/music: SV-6 remove dead server gapless subsystem (client-side impl superseded it)`.

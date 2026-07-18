@@ -669,10 +669,9 @@ final class MediaServicesProvider implements ServiceProviderInterface
             \Phlix\Media\RecommendationService::class => autowire()
                 ->constructorParameter('similarityService', get(\Phlix\Media\SimilarityService::class)),
 
-            // P7: gapless playback and crossfade manager
+            // P7: resolves per-user gapless/crossfade playback preferences
             GaplessPlaybackManager::class => autowire()
-                ->constructorParameter('userRepository', get(\Phlix\Auth\UserRepository::class))
-                ->constructorParameter('ffmpegRunner', get(FfmpegRunner::class)),
+                ->constructorParameter('userRepository', get(\Phlix\Auth\UserRepository::class)),
 
             // P4-S3: TMDB box-set collection sync
             CollectionService::class => autowire()

@@ -378,6 +378,34 @@ return [
 ];
 ```
 
+### Environment variables
+
+Most operators only set `DB_PASSWORD` and `JWT_SECRET`; the following knobs cover
+the streaming and auth-hardening features and all have safe defaults.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `HLS_MIN_DISK_SPACE_BYTES` | `524288000` (500 MiB) | Free-space floor for the HLS segment-cache directory (`config/server.php` → `hls.min_disk_space_bytes`). When free space drops below this, the server sweeps the cache and returns `503` with `Retry-After: 3` instead of failing an encode with `ENOSPC`. |
+| `RATE_LIMIT_<SURFACE>_MAX` | per-surface default | Max attempts per window for an auth surface before it rate-limits. `<SURFACE>` is one of `REGISTER`, `REFRESH`, `WEBAUTHN_START`, `WEBAUTHN_FINISH`, `JWKS`, `WS_CONNECT` (defaults: register 5, refresh 30, webauthn_start/finish 10, jwks 120, ws_connect 30). See `config/server.php` → `rate_limit`. |
+| `RATE_LIMIT_<SURFACE>_WINDOW` | per-surface default | Window length in seconds for the matching surface (defaults: register 600, refresh 60, webauthn_start/finish 60, jwks 60, ws_connect 60). |
+| `TRUSTED_PROXIES` | loopback only (`127.0.0.1`, `::1`) | Comma-separated IP/CIDR list of reverse-proxy hops. Used to derive the **real** client IP from `X-Forwarded-For`/`X-Real-IP` for rate-limit keys. **This must reflect your nginx/HAProxy hops** — if a non-loopback proxy fronts the server and is not listed here, IP-keyed limits will bucket every request under the proxy address (or trust a client-forged header). The stock install fronts Phlix over loopback, so the default is correct there. |
+
+> **Rate limiting.** The auth surfaces above (`register` / `refresh` / WebAuthn
+> `start`+`finish` / public JWKS / WS-connect on `:8097`) are rate-limited.
+> HTTP surfaces reply `429 Too Many Requests` + `Retry-After` with body
+> `{"error":"Too Many Requests","code":"rate_limited"}`; WS-connect rejects the
+> handshake. `login` keeps its own DB-backed IP limiter (migration 074).
+
+> **Loudness normalization.** `config/ffmpeg.php` → `loudness` (disabled by
+> default) applies an EBU R128 `loudnorm` filter to **re-encoded** audio when
+> enabled. Copy-audio rungs (the `original` variant) and direct-play sessions
+> are not normalized — you cannot filter a copied (non-decoded) stream.
+
+> **Migration required on deploy.** SV-4.15 adds
+> `migrations/085_rate_limit_buckets.sql` (the shared DB-backed rate-limit bucket
+> table). Run `php bin/phlix migrate` (or `php scripts/run-migrations.php`) after
+> pulling — migrations are idempotent, so re-running is safe.
+
 ## API Reference
 
 ### HTTP Endpoints
@@ -412,6 +440,18 @@ return [
 | DELETE | `/api/v1/admin/users/{id}` | Delete a user — admin-only |
 | POST | `/api/v1/admin/users/{id}/set-admin` | Promote or demote a user — admin-only |
 | POST | `/api/v1/admin/users/{id}/reset-password` | Reset a user's password (returns new password) — admin-only |
+
+**Rate limiting.** `POST /auth/register`, `POST /auth/refresh`, the WebAuthn
+login `start`/`finish` endpoints, and the public JWKS endpoint reply
+`429 Too Many Requests` + `Retry-After` (body
+`{"error":"Too Many Requests","code":"rate_limited"}`) when a caller exceeds the
+per-surface limit. Tune via `RATE_LIMIT_*` (see [Environment variables](#environment-variables)).
+
+**Client capability negotiation.** Send an `X-Phlix-Client-Capabilities` request
+header (a JSON codec-support map, e.g. `{"eac3":false}`) on playback-info
+requests. When present, the `direct_play` verdict is set from whether the client
+can decode the item's audio codec; absent/empty header keeps the previous
+always-`true` behavior.
 
 ### WebSocket Events
 

@@ -95,7 +95,7 @@
 - [x] SV-4.4  WebhookDispatcher backoff + connect-timeout ✅ RE-COMPLETED 2026-07-13: the `410ffce0` reference above is stale/nonexistent audit-trail (that commit does not exist in this repo's history — same rot pattern as the SV-4.10/SV-0.8 stale-hash incidents). Fresh audit found genuinely PARTIAL: `WebhookDispatcher::dispatchAsync`'s jittered-backoff+one-shot-timer was correct but had ZERO callers (dead); `WebhookHttpClient` had no connect-timeout at all; the live admin "test webhook" path (`WebhookDispatcher::sendToWebhook`, S-F10's literal original target) duplicated a fresh blocking cURL call with immediate (zero-delay) retries; the REAL production event-driven delivery path (`WebhookService`/`WebhookEventSubscriber`) already had DB-persisted retry + a genuinely one-shot Timer, but its fixed 30s/300s/1800s schedule had NO jitter at all (a real thundering-herd risk). Fixed `7f434d03`: connect-timeout added to `WebhookHttpClient` (curl + async client, both config-driven); `sendToWebhook` now delegates through a new `postWithHeaders()` (same wire format, no breaking change to registered webhook receivers) + jittered backoff between sync retry attempts; `WebhookDeliveryRecord` gained a jittered `calculateNextRetryDelaySeconds()` (+/-20%) used by `WebhookService::handleFailedDelivery` for BOTH the persisted `next_retry_at` and the retry Timer (single source of truth, can't drift). Dead `dispatchAsync` left in place per §0.1 (not deleted) — flagged below as a candidate for the §6 removal-confirmation queue, not actioned without user sign-off. New tests directly inspect Workerman's own internal timer bookkeeping (not just source review) to prove the retry timer is genuinely one-shot. 82/82 Webhook-filtered tests + full Unit 5152/5152 (8 skip) green, phpstan/phpcs clean. See Implementer entry below for full detail. **DONE.**
 - [x] SV-4.5  Roku/MusicBrainz blocking-I/O → coroutine/async ✅ (commit 410ffce0)
 - [x] SV-4.6  original copy variant handling ✅ (commit 088bb99c)
-- [ ] SV-4.7  WS auth enforcement
+- [x] SV-4.7  WS auth enforcement ✅ (commit fecd0ab5; reviewed NO FINDINGS; on-box verified on :8097 — token-less rejected / valid JWT accepted)
 - [x] SV-4.8  Router static-path fast map + DI for string handlers ✅ (commit c8f94c04)
 - [x] SV-4.9  Migration ledger + document rewrite-class migrations ✅ (commit c8f94c04)
 - [x] SV-4.10 Provider-priority config single source of truth ✅ RE-COMPLETED 2026-07-13 — the `c8f94c04` reference above is stale audit-trail from the original opencode pass (that commit does not touch any SV-4.10 file); the 2026-07-12 Claude Code re-audit at line ~2575 below correctly found the provider-priority half NOT-DONE (hrtime half was genuinely done). Real fix: see the "Implementer — SV-4.10" entry near the end of this file for the actual commit hash + full verification.
@@ -7648,3 +7648,116 @@ CORS + `Retry-After` headers through the real nginx front; (b) on-box verify WS-
 per real client behind HAProxy — the true fix for `getRemoteIp()` uselessness there is PROXY-protocol on
 :8097 (currently we rely on the trusted XFF/X-Real-IP the HAProxy front injects; enabling PROXY-protocol
 would also fix `getRemoteIp()` and the S2 metrics `remote_ip`).
+
+## Reviewer (cumulative, confirming re-review of SV-4.15 Fixer commits `679b3717`+`148dd5b0`+`5ec926f5`) — 2026-07-18
+
+READ-ONLY re-review of the security Fixer's resolution of cumulative findings 1-4. Verified the
+`TrustedProxyResolver`, `Request::getTrustedClientIp()`, the WS-connect keying, and the 429
+decoration against the ACTUAL shipped topology (nginx `$proxy_add_x_forwarded_for` APPENDS
+`$remote_addr` rightmost — `phlix.conf:72,88,113,127,149,177`; HAProxy `option forwardfor` appends
+the real source rightmost — `haproxy.cfg:78`; both fronts reach Phlix over a loopback peer). Confirmed
+Workerman's `parseHeaders()` comma-joins duplicate `X-Forwarded-For` lines (real client stays
+rightmost), so the two-line HAProxy case is handled identically to the single comma-joined nginx case.
+
+**Verdict: NO FINDINGS.** The HIGH bypass is genuinely closed and the resolver's fallback is never
+attacker-controllable in the shipped topology.
+
+Adversarial cases reasoned through against the real topology — all safe:
+1. XFF filled entirely with forged values (many hops) → nginx appends the real client rightmost; the
+   right-to-left walk returns it on the FIRST iteration; forged values sit left and are never reached.
+2. Forged entries disguised as loopback/trusted IPs → still left of the appended real client; the walk
+   stops at the first untrusted-from-the-right = the real client. An attacker cannot place any value to
+   the RIGHT of nginx/HAProxy's appended `$remote_addr` (it is always concatenated last).
+3. ALL entries trusted (attacker floods XFF with loopback) → walk finds no untrusted hop → falls to
+   `X-Real-IP` (nginx overwrites via `set_header`, unspoofable) → else the loopback PEER. The fallback
+   is a FIXED safe value (`127.0.0.1`), collapsing such attackers into ONE bucket (more restrictive,
+   not a bypass) — never an attacker-chosen value. In the real topology this branch is unreachable
+   because the appended real client is a public (untrusted) IP.
+4. Empty/whitespace XFF, empty inter-comma entries, non-IP tokens → empty entries `continue`d, a non-IP
+   token `break`s the walk (stops trusting further-left client data); rightmost appended real client
+   (always a valid IP) is returned before any break can fire. Falls through safely to X-Real-IP/peer.
+5. `X-Real-IP` on the HAProxy path is client-spoofable (HAProxy doesn't overwrite it), but it is
+   UNREACHABLE there: `option forwardfor` always appends the real external client as an untrusted
+   rightmost XFF hop, so the walk returns before the X-Real-IP fallback is consulted.
+
+Point-by-point on the review bar:
+- **CIDR matcher (`ipMatches`):** correct. `127.0.0.1 ∈ 127.0.0.0/8`, `::1 ∈ ::1/128`, non-loopback
+  excluded, family-mismatch (4 vs 16 bytes) → false, malformed bits (`ctype_digit`) → false, `bits=0`
+  → true, mask precedence `(0xFF << (8-r)) & 0xFF` correct (`<<`/`-` bind tighter than `&`). 13 data
+  cases in `TrustedProxyResolverTest::cidrCases` cover the boundaries.
+- **Default trusted set (loopback only):** correct for this loopback-proxy deployment. RFC1918
+  correctly EXCLUDED (adding it would skip a LAN client as a "proxy" and re-expose the forged hop — the
+  class docblock explains this). The real client never legitimately appears as loopback externally.
+- **Key-length/overflow:** `resolve()` always returns a `filter_var`-validated IP (≤45) or a
+  `substr(...,0,45)` peer fallback — max fragment 45 chars; longest key `ws_connect:` (11) + 45 = 56 «
+  191. Proven by `testOversizedForwardedValueCannotOverflowKey` (5000-char XFF → `register:127.0.0.1`)
+  and `testMalformedOrOversizedValueCannotOverflow`.
+- **WS keying (F2):** `upgradeHeader()` reads the lowercase header via Workerman `Request::header()`
+  and coerces non-string → null defensively; peer (HAProxy loopback) is trusted so the walk reaches the
+  real client; resolver is cached per-worker (immutable config, no request state); `resolve()` has no
+  throw path and the hook still rejects via remove+close+return, never throwing out of
+  `onWebSocketConnect`. `testDistinctRealClientsBehindLoopbackProxyGetDistinctBuckets` +
+  `testLoopbackProxyDerivesClientFromForwardedFor` prove distinct real clients get distinct buckets and
+  the forged leftmost is ignored. nginx `/ws` (`phlix.conf:106-119`) also appends rightmost + sets
+  `X-Real-IP`, so both WS fronts are covered.
+- **No collateral:** raw `getClientIp()` body is unchanged (docblock-only edit) and has ZERO remaining
+  security callers in `src/`/`public/`/`start.php` (grep clean; `AuthManager::getClientIp()` is a
+  separate `$_SERVER` method, the pre-existing out-of-scope item). Only the rate-limit keys switched to
+  `getTrustedClientIp()`.
+- **F4 429 decoration:** `$request` is declared `null` before the try and assigned at the top of the
+  try; the `catch (RateLimitException)` CORS-decorates only under `$request instanceof Request` (no NPE
+  if a throw beat the assignment), then applies `SecurityHeaders` + `compressResponse` (a no-op on the
+  ~48-byte 429 body, below `GZIP_MIN_BYTES` — harmless) and sends exactly once; `$responseStatus=429`
+  is set for the finally log. `testRateLimited429CarriesCorsAndSecurityHeaders` asserts the allowlisted
+  Origin echo (never `*`) + `nosniff` on the 429. No other branch regressed.
+- **F3 (WebAuthn horizontal enumeration):** documented accepted tradeoff in `limitIdentifier()`; IP
+  fallback now uses the trusted IP. Consistent with the finding's LOW disposition.
+
+Static/tests: the 7 SV-4.15 test files run GREEN (57 tests / 158 assertions); `php -l` clean;
+phpstan L9 `[OK] No errors` on all four changed src files (`TrustedProxyResolver`, `Request`,
+`WebSocketServer`, `HttpHandler`).
+
+Non-blocking notes (NOT findings, no Fixer loop): (a) a LOCAL attacker already connecting over the
+loopback peer could get a trusted rightmost hop skipped and spoof the bucket key — the inherent,
+documented loopback-trust tradeoff, well outside the rate-limiter threat model and unchanged by this
+fix; (b) the HTTP path builds a fresh `TrustedProxyResolver` (one `getenv`) per request vs the WS
+path's per-worker cache — a micro-inefficiency, not a defect (no static/global accumulation). The
+Fixer's OWED on-box items (real-nginx 429 CORS echo, HAProxy WS per-client throttle / PROXY-protocol)
+remain infra verification for orchestrator sign-off and are not code findings.
+
+NO FINDINGS.
+
+## Scribe — 2026-07-18
+
+Documentation sweep for this session's shipped work (PHP 8.5 cleanup, Logs prefix, SV-1.9 ENOSPC
+config, SV-3.3 loudness + capability negotiation, SV-4.15 per-surface auth rate limiting) + SV-4.7
+status bookkeeping. Docs/comments only; no behavioral code changed. Files updated:
+
+- `/home/sites/phlix/phlix-server/CHANGELOG.md` — `[Unreleased]` gains Security (SV-4.15 rate limiting,
+  429+Retry-After, `rate_limit`/`trusted_proxies` config, migration 085, login 500→429 fix), Added
+  (SV-3.3 loudness + `X-Phlix-Client-Capabilities`; SV-1.9 `hls.min_disk_space_bytes`), Fixed (PHP 8.5
+  `curl_close`/`imagedestroy` no-op removal; Logs `[LEVEL] datetime` prefix drop; Router HEAD fallback),
+  and Changed (SV-0.6/0.7/1.8/1.9/4.8/4.12 test hardening).
+- `/home/sites/phlix/phlix-server/README.md` — new "Environment variables" table under Configuration
+  (`HLS_MIN_DISK_SPACE_BYTES`, `RATE_LIMIT_<SURFACE>_MAX/_WINDOW`, `TRUSTED_PROXIES`) + rate-limit/
+  loudness/migration-085 notes; API Reference note on 429 rate limiting + `X-Phlix-Client-Capabilities`.
+- `/home/sites/phlix/phlix-server/performance_worklog_server.md` — SV-4.7 Progress flipped `[ ]`→`[x]`
+  (done fecd0ab5, reviewed NO FINDINGS, on-box verified :8097).
+- `/home/sites/phlix/phlix-docs/docs/reference/env-vars.md` — new "Auth rate limiting (SV-4.15)" +
+  "HLS / segment cache" sections.
+- `/home/sites/phlix/phlix-docs/docs/reference/config-files.md` — `hls.min_disk_space_bytes`; new
+  "Rate limiting (SV-4.15)" (server.php) + "Loudness normalization (SV-3.3)" (ffmpeg.php) subsections.
+- `/home/sites/phlix/phlix-docs/docs/security/hardening.md` — new §11 "Auth rate limiting (built-in)"
+  + `TRUSTED_PROXIES`/`RATE_LIMIT_*` rows in the quick-reference table.
+- `/home/sites/phlix/phlix-docs/docs/advanced/reverse-proxy.md` — corrected stale `TRUSTED_PROXY`→
+  `TRUSTED_PROXIES` env name; added the rate-limit client-IP keying requirement.
+- `/home/sites/phlix/phlix-docs/docs/player/player-quality-audio.md` — new "Client Capability
+  Negotiation" + "Loudness Normalization" sections.
+- `/home/sites/phlix/phlix-docs/docs/reference/api.md` — 429 note under Auth Endpoints;
+  `X-Phlix-Client-Capabilities` note under Transcoding Endpoints.
+
+Also (non-repo, no commit): `/home/sites/phlix/performance_plan.md` SV-4.7 corrected from NOT-DONE to
+DONE in §2 spec bullet + the two perf-2 resume-state notes + the perf-3 on-box-verify note.
+
+Owed on-box items remain infra verification (not docs): real-nginx 429 CORS echo, HAProxy WS
+per-client throttle / PROXY-protocol — noted honestly in the worklog, not claimed as done.

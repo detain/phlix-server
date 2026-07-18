@@ -7,14 +7,29 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
-### Fixed
+### Security
 
-- **Plugin-safe `LoggerInterface` binding fix.** Added `LoggerInterface::class` as an alias to `StructuredLogger::class` in `CoreServicesProvider` so plugins that request `Psr\Log\LoggerInterface` from the container resolve correctly instead of failing to autowire.
+- **SV-4.15 — per-surface auth rate limiting.** The previously-unlimited auth surfaces are now rate-limited: `register`, `refresh`, WebAuthn login `start`+`finish`, the public JWKS endpoint (`/.well-known/jwks.json`), and WS-connect on `:8097` (only `login` had a limiter before). HTTP surfaces reply **`429 Too Many Requests`** with a `Retry-After` header and body `{"error":"Too Many Requests","code":"rate_limited"}`; WS-connect rejects the handshake in-place (no throw out of the connect hook). Also **fixes a latent bug** where the existing DB-backed `login` limiter tripped with a **500** (uncaught `RateLimitException`) instead of a **429** — both dispatch entrypoints and `public/index.php` now map `RateLimitException` centrally. New operator config: a `rate_limit` block in `config/server.php` with per-surface env overrides `RATE_LIMIT_<SURFACE>_MAX` / `RATE_LIMIT_<SURFACE>_WINDOW`; a `trusted_proxies` setting (env `TRUSTED_PROXIES`, comma-separated IP/CIDR, default loopback-only) used to derive the real client IP from `X-Forwarded-For`/`X-Real-IP` for limiter keys — **it must list your reverse-proxy hops (nginx/HAProxy) or IP-keyed limits will bucket every request under the proxy address**; and a new migration **`085_rate_limit_buckets.sql`** (the shared DB-backed bucket table for the credential-enumeration surfaces — **run migrations on deploy**). Register/refresh/WebAuthn are DB-backed (true-global across all HTTP workers); JWKS and WS-connect are worker-local in-memory (JWKS is cache-frontable; the `:8097` WS worker runs `count=1` so per-worker == global there). `login` keeps its own IP-keyed DB-backed store (migration 074), untouched.
 
 ### Added
 
+- **SV-3.3 — loudness normalization + client capability negotiation.**
+  - `config/ffmpeg.php` gains a `loudness` block (`enabled` defaults to **false**) that, when enabled, applies an EBU R128 `loudnorm` audio filter (`I`/`LRA`/`TP`) to **re-encoded** audio on every segment-assembly path (software, hwaccel, and audio-only). **Copy-audio rungs** (e.g. the `original` variant, `-c:a copy`) and **direct-play sessions bypass loudness normalization by design** — you cannot filter a stream that is copied rather than decoded (documented in the config block).
+  - The `X-Phlix-Client-Capabilities` request header (a JSON codec-support map, e.g. `{"eac3":false}`) is now honored on the `/playback-info` `direct_play` verdict: a client that declares it cannot decode the item's audio codec is steered to transcode instead of direct play. Absent/empty/invalid header → `direct_play` stays `true` (backward compatible). The verdict keys on the same first (lowest-`stream_index`) audio stream the transcode copy-vs-encode decision uses, so the two agree.
+- **SV-1.9 — configurable segment-cache disk-space threshold.** New `hls.min_disk_space_bytes` config key (env `HLS_MIN_DISK_SPACE_BYTES`, default **500 MiB**). When free space on the segment-cache directory falls below the threshold, the server sweeps the cache and returns **`503`** with `Retry-After: 3` instead of failing an encode with `ENOSPC`.
 - **Plugin test credentials endpoint.** New `testCredentials` endpoint in `PluginAdminController` allows the admin UI to verify whether plugin credentials (e.g. API keys) are valid before saving them.
 - **Plugin `redirect_url` support.** `PluginLoader` now reads and validates the optional `redirect_url` field from plugin manifests, enabling OAuth-style callback URLs in first-party plugins.
+
+### Fixed
+
+- **PHP 8.5 compatibility — removed deprecated no-op `curl_close()` / `imagedestroy()` calls.** Both have been no-ops since PHP 8.0 and emit `E_DEPRECATED` under PHP 8.5, which surfaced as fatal log-write failures during TV-series metadata matching (16 `curl_close()` sites across 13 files; 19 `imagedestroy()` sites in `ArtworkStorage`/`AvatarStorage`/`PhotoController`). Behavior is unchanged — the calls did nothing. (`finfo_close()` was already removed previously.)
+- **Admin Logs page — removed a redundant `[LEVEL] <datetime>` prefix** that ~37 Monolog call sites (across 6 worker/handler files) hand-built into their message strings. Monolog's `LineFormatter` already emits `[<iso8601>] <channel>.<LEVEL>: <message>`, so the hand-built prefix doubled the level and timestamp on every rendered line; each record is now a single, clean level/timestamp. (`error_log()` sites are untouched — there the prefix is the only metadata.) The client-side Logs renderer overhaul ships in `@phlix/ui` v0.82.0.
+- **Router `HEAD` fallback for static-only `GET` routes.** A `HEAD` request now correctly falls back to a purely-static `GET` route even when no parametric `GET` routes are registered (previously the fallback could 404 or warn on a null iteration).
+- **Plugin-safe `LoggerInterface` binding fix.** Added `LoggerInterface::class` as an alias to `StructuredLogger::class` in `CoreServicesProvider` so plugins that request `Psr\Log\LoggerInterface` from the container resolve correctly instead of failing to autowire.
+
+### Changed
+
+- **Test-coverage hardening.** Added missing behavioral tests across SV-0.6 (TMDB collections UUID handling), SV-0.7 (marker/intro-detection worker supervision), SV-1.8 (CSRF Origin exact-match), SV-1.9 (ENOSPC guard), SV-4.8 (Router static-map fast path + DI string-handler resolution), and SV-4.12 (stale-job reaper glob), plus the SV-3.3 and SV-4.15 features above — closing "green-but-untested" gaps found during re-audit. No behavior change beyond the fixes listed above.
 
 ## [SV-0.2] — 2026-07-10
 

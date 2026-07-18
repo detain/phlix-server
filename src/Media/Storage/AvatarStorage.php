@@ -363,7 +363,9 @@ class AvatarStorage
         }
 
         $raw = finfo_file($finfo, $path);
-        finfo_close($finfo);
+        // No finfo_close(): the finfo object is freed automatically by GC, and
+        // finfo_close() is a deprecated no-op as of PHP 8.5 (its E_DEPRECATED
+        // would otherwise be escalated by the error handler and abort the caller).
 
         if ($raw === false) {
             return null;

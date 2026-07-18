@@ -308,12 +308,9 @@ $httpWorker->onWorkerStart = static function (Worker $w) use ($config, $publicRo
     //
     // The tick resolves a FRESH entry instance each fire via
     // PluginLoader::getEntryInstance() (which applies the DB-persisted settings so
-    // runtime enable/token changes are picked up). This PULL timer is deliberately
-    // INDEPENDENT of the boot-time PUSH-listener attach (bootstrapEnabled(), wired
-    // below): bootstrapEnabled() enables the plugin so its PlaybackStarted/Stopped
-    // scrobble listeners fire on playback; this timer only reconciles Trakt→Phlix
-    // watch history on a cadence. getEntryInstance() NEVER subscribes event listeners,
-    // so the two paths never double-attach (see the seam note on the bootstrap block).
+    // runtime enable/token changes are picked up) — the resident server does not
+    // bootstrapEnabled() plugins at boot, so we cannot rely on a live enabled
+    // instance existing in this worker process.
     if ((int) $w->id === 0) {
         try {
             /** @var \Phlix\Plugins\PluginLoader $pluginLoader */
@@ -400,45 +397,6 @@ $httpWorker->onWorkerStart = static function (Worker $w) use ($config, $publicRo
                 ['error' => $e->getMessage()],
             );
         }
-    }
-
-    // item5c3: Re-attach every persisted-as-enabled plugin's event listeners to THIS
-    // worker's dispatcher at boot. The PSR-14 ListenerRegistry (and its Tukio provider)
-    // is built PER-WORKER inside ContainerFactory::create() above, so a freshly-forked
-    // worker starts with ZERO plugin listeners — after a server restart an enabled
-    // generic-listener plugin (e.g. the Trakt / Last.fm PUSH scrobblers) would never
-    // re-subscribe until an admin toggled it in the single worker that happened to serve
-    // that toggle request. PluginLoader::bootstrapEnabled() iterates the enabled plugins
-    // and enable()s each — idempotently: enable() guards on its per-process
-    // entryInstances map and ListenerRegistry::subscribe() rejects exact duplicates — so
-    // PUSH scrobbling (and any generic listener plugin) works again across restarts.
-    //
-    // NOT worker-0-gated (unlike the DVR/Trakt-pull TIMERS above, which must fire once
-    // server-wide): PlaybackStarted/PlaybackStopped are dispatched by whichever HTTP
-    // worker serves the playback request, and each worker owns its own dispatcher, so the
-    // listeners MUST be attached in EVERY HTTP worker. This runs OUTSIDE any per-request
-    // coroutine here at worker start; a plugin onEnable() that blocks costs a bounded
-    // one-time delay before this worker serves traffic. bootstrapEnabled() already
-    // isolates each plugin in its own try/catch (a broken plugin is logged and skipped);
-    // the whole call is additionally guarded so a catastrophic failure (e.g. the DB read
-    // for the enabled list) can never stop the worker from serving.
-    //
-    // Trakt seam: the SV-3.6a pull-sync timer (worker-0 block above) resolves a FRESH
-    // entry instance via getEntryInstance() and never subscribes event listeners, so it
-    // does NOT double-attach with the PUSH listeners wired here — periodic PULL vs
-    // event-driven PUSH are orthogonal. NOT mirrored in public/index.php: the single-shot
-    // CGI/FPM path builds a throwaway container per request and would pay enable()'s
-    // onEnable()+audit cost on EVERY request with no restart-persistence benefit — this
-    // is resident-only boot wiring, exactly like the timers above.
-    try {
-        /** @var \Phlix\Plugins\PluginLoader $bootPluginLoader */
-        $bootPluginLoader = $container->get(\Phlix\Plugins\PluginLoader::class);
-        $bootPluginLoader->bootstrapEnabled();
-    } catch (\Throwable $e) {
-        LoggerFactory::get(LogChannels::PLUGINS)->error(
-            'Plugin bootstrapEnabled() at HTTP worker start failed',
-            ['worker_id' => $w->id ?? '?', 'error' => $e->getMessage()],
-        );
     }
 
     /** @var MetricsCollector $metricsCollector */
@@ -739,23 +697,6 @@ try {
         $relayConnectionPool = $container->get(ConnectionPool::class);
         $relayApplication = new Application($container, $config, $relayConnectionPool);
         $relayDispatcher = new \Phlix\Hub\RelayRequestDispatcher($relayApplication, $container);
-
-        // item5c3: relay-routed (remote-access) playback dispatches PlaybackStarted/
-        // Stopped through THIS relay fork's Application → PlaybackController, using this
-        // fork's own per-worker dispatcher. Re-attach enabled plugins' listeners here too
-        // so remote playback scrobbles across restarts, mirroring the HTTP worker attach.
-        // Same idempotency + guarding as the HTTP worker; a plugin failure must never stop
-        // the relay tunnel from establishing.
-        try {
-            /** @var \Phlix\Plugins\PluginLoader $relayPluginLoader */
-            $relayPluginLoader = $container->get(\Phlix\Plugins\PluginLoader::class);
-            $relayPluginLoader->bootstrapEnabled();
-        } catch (\Throwable $e) {
-            $logger->error(
-                'Plugin bootstrapEnabled() at relay worker start failed',
-                ['error' => $e->getMessage()],
-            );
-        }
 
         $consumer = new \Phlix\Hub\RelayConsumer(
             $relayConfig,

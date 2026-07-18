@@ -74,19 +74,6 @@ $config['web_portal']         = array_merge(
 $container = ContainerFactory::create($config);
 
 // ---------------------------------------------------------------------------
-// item5c3 (dual-entrypoint note): unlike the resident Workerman daemon
-// (start.php), this single-shot CGI/FPM path deliberately does NOT call
-// PluginLoader::bootstrapEnabled(). Re-attaching every enabled plugin's event
-// listeners here would re-run each enable() (onEnable() + an audit log line +
-// an idempotent DB write) on EVERY request, since this process builds a
-// throwaway container, handles one request, then exits. There is no
-// "listeners lost across a restart" problem to solve in a per-request model,
-// and the resident daemon is the production path — so plugin event-listener
-// re-attach is resident-only boot wiring, exactly like the DVR/hub/Trakt boot
-// wiring that start.php likewise does not mirror here.
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
 // SV-4.15(c): central RateLimitException -> 429 mapping for the CGI/FPM
 // dispatch path.
 //

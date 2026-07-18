@@ -951,40 +951,6 @@ final class PluginLoaderTest extends TestCase
 
         $this->makeLoader()->bootstrapEnabled();
     }
-
-    public function test_bootstrapEnabled_attaches_each_listener_exactly_once_and_is_idempotent(): void
-    {
-        // Pins the item5c3 seam: bootstrapEnabled() runs once per worker at boot, and
-        // calling it more than once (or alongside another re-attach path) must NEVER
-        // double-subscribe a plugin's event listeners — otherwise a single
-        // PlaybackStarted would fire the Trakt/Last.fm scrobble handler twice
-        // (duplicate scrobbles). The second boot pass must short-circuit on the
-        // per-process entryInstances guard.
-        $manifest = $this->manifest();
-        $plugin = new FakeLifecyclePlugin();
-        $installed = $this->makeInstalled($manifest, enabled: true);
-
-        $this->expect($this->repository, 'listEnabled')->andReturn([$installed]);
-        $this->expect($this->repository, 'findByName')->andReturn($installed);
-        // enable() proceeds only once: the second pass bails on the entryInstances
-        // guard BEFORE instantiating (container->get) or re-persisting (setEnabled).
-        $this->expect($this->container, 'get')->once()->andReturn($plugin);
-        $this->expect($this->repository, 'setEnabled')->once()->with('phlix-plugin-fixture', true);
-
-        $loader = $this->makeLoader();
-        $loader->bootstrapEnabled();
-        $loader->bootstrapEnabled(); // second boot pass — must not re-attach.
-
-        self::assertSame(1, $plugin->onEnableCount, 'onEnable() must run exactly once.');
-
-        // Dispatch through the REAL ListenerRegistry: exactly one listener must be
-        // attached, so the handler fires exactly once.
-        $event = new PlaybackStarted('sess', 'user', 'item', 'dev', 0);
-        foreach ($this->listenerRegistry->provider()->getListenersForEvent($event) as $listener) {
-            $listener($event);
-        }
-        self::assertSame(1, $plugin->fired, 'Listener must fire exactly once (no double-attach).');
-    }
 }
 
 /**

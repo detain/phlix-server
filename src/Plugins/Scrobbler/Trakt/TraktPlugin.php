@@ -146,17 +146,15 @@ final class TraktPlugin implements LifecycleInterface
      * method adds NO reconciliation logic of its own (resume positions and
      * pagination live inside the sync, sub-steps 3.6c/3.6d).
      *
-     * The resident server DOES re-attach enabled plugins at boot via
-     * {@see PluginLoader::bootstrapEnabled()} (item5c3), but the SV-3.6a PULL Timer
-     * is deliberately independent of that PUSH-listener attach: it resolves a fresh
-     * entry instance each tick via {@see PluginLoader::getEntryInstance()} — which
-     * applies the persisted settings (so runtime enable/token changes are picked up)
-     * but does NOT call {@see self::onEnable()} or subscribe any listeners. This
-     * method therefore wires its runtime collaborators itself (idempotently) when
-     * they are missing; `onEnable()` only resolves container services + builds the
-     * API client (no I/O, no listener subscriptions — those happen in
-     * {@see PluginLoader::enable()}), so it is safe to call here on the sync cadence,
-     * and it never double-attaches the scrobble listeners wired at boot.
+     * The resident server does not call {@see PluginLoader::bootstrapEnabled()}
+     * at boot, so the Timer resolves a fresh entry instance each tick via
+     * {@see PluginLoader::getEntryInstance()} — which applies the persisted
+     * settings (so runtime enable/token changes are picked up) but does NOT call
+     * {@see self::onEnable()}. This method therefore wires its runtime
+     * collaborators itself (idempotently) when they are missing; `onEnable()` only
+     * resolves container services + builds the API client (no I/O, no listener
+     * subscriptions — that happens in {@see PluginLoader::enable()}), so it is
+     * safe to call here on the sync cadence.
      *
      * @param ContainerInterface $container Host container for collaborator lookup.
      * @param string $profileId Profile to reconcile history into. Defaults to the

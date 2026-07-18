@@ -46,14 +46,12 @@ use function DI\factory;
  *    the above with the {@see ListenerRegistry} (from
  *    {@see EventServicesProvider}) and the host container itself.
  *
- * The loader is _registered_ here but NOT auto-enabled from this provider —
- * some bootstrap paths (CLI migrations, unit tests) don't want plugins to come
- * up, so auto-enable is left to the caller. The canonical call site is the
- * resident Workerman entrypoint `start.php`, which calls
- * {@see PluginLoader::bootstrapEnabled()} in EACH worker's `onWorkerStart` (the
- * HTTP workers and the relay tunnel worker) because the {@see ListenerRegistry}
- * is a per-worker container singleton. The single-shot CGI path
- * (`public/index.php`) deliberately does NOT call it.
+ * The loader is _registered_ here but NOT auto-enabled — calling
+ * {@see PluginLoader::bootstrapEnabled()} is the operator's choice
+ * because some bootstrap paths (CLI migrations, unit tests) don't want
+ * plugins to come up. The server bootstrap in
+ * `src/Server/Core/Application.php` (future commit) is the canonical
+ * call site.
  *
  * @internal Phlix-internal service provider.
  *

@@ -118,6 +118,47 @@ class MovieMetadataResolverTest extends TestCase
         $this->assertSame(['dystopia', 'artificial intelligence', 'kung fu'], $result['tags']);
     }
 
+    public function testResolvedMovieCarriesTmdbTrailerEndToEnd(): void
+    {
+        $tmdb = $this->createMock(TmdbProvider::class);
+        $imdb = $this->createMock(ImdbLookup::class);
+
+        $tmdb->method('findByImdbId')
+            ->willReturn(['id' => '603', 'title' => 'The Matrix', 'overview' => '', 'year' => 1999]);
+        $tmdb->method('getDetails')->willReturn($this->tmdbDetails([
+            'trailer_url' => 'https://www.youtube.com/watch?v=KEY1',
+            'trailer_key' => 'KEY1',
+            'trailer_site' => 'YouTube',
+        ]));
+        $imdb->method('getByImdbId')->willReturn($this->imdbRow());
+
+        $resolver = new MovieMetadataResolver($tmdb, $imdb);
+        $result = $resolver->resolve('The Matrix', 1999, ['imdb' => 'tt0133093']);
+
+        $this->assertNotNull($result);
+        // trailer flows from TMDB through the canonical field pipeline into the merge.
+        $this->assertSame('https://www.youtube.com/watch?v=KEY1', $result['trailer_url']);
+        $this->assertSame('KEY1', $result['trailer_key']);
+        $this->assertSame('YouTube', $result['trailer_site']);
+    }
+
+    public function testResolvedMovieWithoutTmdbTrailerOmitsTrailer(): void
+    {
+        $tmdb = $this->createMock(TmdbProvider::class);
+        $imdb = $this->createMock(ImdbLookup::class);
+
+        $tmdb->method('findByImdbId')
+            ->willReturn(['id' => '603', 'title' => 'The Matrix', 'overview' => '', 'year' => 1999]);
+        $tmdb->method('getDetails')->willReturn($this->tmdbDetails());
+        $imdb->method('getByImdbId')->willReturn($this->imdbRow());
+
+        $resolver = new MovieMetadataResolver($tmdb, $imdb);
+        $result = $resolver->resolve('The Matrix', 1999, ['imdb' => 'tt0133093']);
+
+        $this->assertNotNull($result);
+        $this->assertArrayNotHasKey('trailer_url', $result, 'no source supplied a trailer → key omitted');
+    }
+
     public function testResolvedMovieWithoutTmdbTagsOmitsTags(): void
     {
         $tmdb = $this->createMock(TmdbProvider::class);

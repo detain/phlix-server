@@ -34,7 +34,8 @@ namespace Phlix\Media\Metadata\Resolution;
  *   title, overview, poster_url, backdrop_url, genres (string[]), year (int),
  *   runtime (minutes, int), official_rating, imdb_rating (float),
  *   imdb_votes (int), actors (string[]), director, cast[], crew[],
- *   production_companies[], studio, external_ids ({} map).
+ *   production_companies[], studio, external_ids ({} map),
+ *   trailer_url, trailer_key, trailer_site.
  *
  * This class performs NO I/O and holds NO mutable state — it is a pure value
  * object safe to construct per request under Workerman's resident memory model.
@@ -79,6 +80,9 @@ final class SourceRecord
         'production_companies',
         'studio',
         'external_ids',
+        'trailer_url',
+        'trailer_key',
+        'trailer_site',
     ];
 
     /**
@@ -259,6 +263,27 @@ final class SourceRecord
     public function studio(): ?string
     {
         $value = $this->fields['studio'] ?? null;
+        return is_string($value) ? $value : null;
+    }
+
+    /** Primary trailer URL (e.g. `https://www.youtube.com/watch?v=KEY`). */
+    public function trailerUrl(): ?string
+    {
+        $value = $this->fields['trailer_url'] ?? null;
+        return is_string($value) ? $value : null;
+    }
+
+    /** Primary trailer provider key (e.g. the YouTube video id). */
+    public function trailerKey(): ?string
+    {
+        $value = $this->fields['trailer_key'] ?? null;
+        return is_string($value) ? $value : null;
+    }
+
+    /** Primary trailer provider/site label (e.g. `YouTube`). */
+    public function trailerSite(): ?string
+    {
+        $value = $this->fields['trailer_site'] ?? null;
         return is_string($value) ? $value : null;
     }
 

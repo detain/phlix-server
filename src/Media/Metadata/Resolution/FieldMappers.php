@@ -90,6 +90,12 @@ final class FieldMappers
         $b->objectList('production_companies', $raw['production_companies'] ?? null);
         $b->string('studio', $raw['studio'] ?? null);
 
+        // Primary trailer (from TMDB `append_to_response=videos`). Absent keys stay
+        // absent so an item with no usable trailer carries no trailer_* field.
+        $b->string('trailer_url', $raw['trailer_url'] ?? null);
+        $b->string('trailer_key', $raw['trailer_key'] ?? null);
+        $b->string('trailer_site', $raw['trailer_site'] ?? null);
+
         $b->externalIds(self::mergeIds($raw, ['tmdb' => $raw['tmdb_id'] ?? null, 'imdb' => $raw['imdb_id'] ?? null]));
 
         return $b->build();
@@ -264,6 +270,9 @@ final class FieldMappers
         $b->objectList('crew', $raw['crew'] ?? null);
         $b->objectList('production_companies', $raw['production_companies'] ?? null);
         $b->string('studio', $raw['studio'] ?? null);
+        $b->string('trailer_url', $raw['trailer_url'] ?? null);
+        $b->string('trailer_key', $raw['trailer_key'] ?? null);
+        $b->string('trailer_site', $raw['trailer_site'] ?? null);
         $b->externalIds(self::stringMap($raw['external_ids'] ?? null));
 
         return $b->build();

@@ -247,7 +247,7 @@ class TmdbProvider implements MetadataProviderInterface
 
         $response = $this->http->get("/movie/{$externalId}", [
             'language' => $language,
-            'append_to_response' => 'credits,genres,production_companies,external_ids,keywords,release_dates',
+            'append_to_response' => 'credits,genres,production_companies,external_ids,keywords,release_dates,videos',
         ]);
 
         if ($response === null) {
@@ -452,7 +452,7 @@ class TmdbProvider implements MetadataProviderInterface
      */
     public function getTvDetails(string $externalId, array $options = []): array
     {
-        $append = 'genres,external_ids,content_ratings,aggregate_credits,production_companies,keywords';
+        $append = 'genres,external_ids,content_ratings,aggregate_credits,production_companies,keywords,videos';
         $response = $this->http->get("/tv/{$externalId}", [
             'language' => MetadataValue::asString($options['language'] ?? null, 'en-US'),
             'append_to_response' => $append,
@@ -695,7 +695,12 @@ class TmdbProvider implements MetadataProviderInterface
         // the series record and are inherited by its episodes.
         $tags = $this->extractKeywords($data['keywords'] ?? null);
 
-        return [
+        // Primary trailer (append_to_response=videos). Null when the series has no
+        // usable YouTube trailer/teaser; the trailer_* keys are then omitted so the
+        // resolver/shaper leave the field absent rather than a broken URL.
+        $trailer = $this->extractPrimaryTrailer($data['videos'] ?? null);
+
+        return array_merge($trailer ?? [], [
             'name' => MetadataValue::asString($data['name'] ?? ($data['original_name'] ?? null)),
             'original_name' => MetadataValue::asString($data['original_name'] ?? null),
             'overview' => MetadataValue::asString($data['overview'] ?? null),
@@ -715,7 +720,7 @@ class TmdbProvider implements MetadataProviderInterface
             'poster_path' => MetadataValue::asNullableString($data['poster_path'] ?? null),
             'backdrop_path' => MetadataValue::asNullableString($data['backdrop_path'] ?? null),
             'number_of_seasons' => MetadataValue::asInt($data['number_of_seasons'] ?? null),
-        ];
+        ]);
     }
 
     /**
@@ -1097,7 +1102,12 @@ class TmdbProvider implements MetadataProviderInterface
         // `{id, name}`. extractKeywords() handles both shapes, mirroring TV.
         $tags = $this->extractKeywords($data['keywords'] ?? null);
 
-        return [
+        // Primary trailer (append_to_response=videos). Null when the movie has no
+        // usable YouTube trailer/teaser; the trailer_* keys are then omitted so the
+        // canonical resolver/shaper leave the field absent rather than a broken URL.
+        $trailer = $this->extractPrimaryTrailer($data['videos'] ?? null);
+
+        return array_merge($trailer ?? [], [
             'name' => MetadataValue::asString(
                 $data['title'] ?? ($data['name'] ?? null)
             ),
@@ -1125,7 +1135,7 @@ class TmdbProvider implements MetadataProviderInterface
             'crew' => $crewObjects,
             'production_companies' => $companies,
             'director' => $this->findDirector($crew),
-        ];
+        ]);
     }
 
     /**
@@ -1270,43 +1280,114 @@ class TmdbProvider implements MetadataProviderInterface
 
         $trailers = [];
         foreach ($response['results'] as $video) {
-            if (!is_array($video)) {
-                continue;
+            $entry = $this->normalizeVideoEntry($video);
+            if ($entry === null) {
+                continue; // Skip non-YouTube / non-trailer-or-teaser videos
             }
-
-            // Only include trailers (type=Trailer) and teasers (type=Teaser)
-            $typeRaw = $video['type'] ?? '';
-            if (!is_string($typeRaw)) {
-                continue;
-            }
-            $type = strtolower($typeRaw);
-            if ($type !== 'trailer' && $type !== 'teaser') {
-                continue;
-            }
-
-            // Build YouTube URL from site and key
-            $siteRaw = $video['site'] ?? '';
-            $site = is_string($siteRaw) ? strtolower($siteRaw) : '';
-            $videoKeyRaw = $video['key'] ?? '';
-            $videoKey = is_string($videoKeyRaw) ? $videoKeyRaw : '';
-
-            if ($site !== 'youtube' || $videoKey === '') {
-                continue; // Skip non-YouTube trailers
-            }
-
-            $url = 'https://www.youtube.com/watch?v=' . $videoKey;
-
-            $nameRaw = $video['name'] ?? $type;
-            $name = is_string($nameRaw) ? $nameRaw : $type;
 
             $trailers[] = [
-                'title' => ucfirst($type) . ' (' . $name . ')',
-                'url' => $url,
+                'title' => ucfirst($entry['type']) . ' (' . $entry['name'] . ')',
+                'url' => 'https://www.youtube.com/watch?v=' . $entry['key'],
                 'duration' => 0, // TMDB doesn't provide duration
                 'quality' => 0, // Unknown until played
             ];
         }
 
         return $trailers;
+    }
+
+    /**
+     * Normalize a single raw TMDB `videos.results[]` entry to a compact shape,
+     * or null when it is not a usable YouTube trailer/teaser.
+     *
+     * Shared by {@see self::getTrailers()} (the on-demand extras list) and
+     * {@see self::extractPrimaryTrailer()} (the single scan-time trailer captured
+     * onto movie/series metadata) so the YouTube/type parsing stays identical.
+     *
+     * @param mixed $video Raw video entry (any type; non-arrays are rejected).
+     * @return array{type: string, site_label: string, key: string, name: string, official: bool}|null
+     */
+    private function normalizeVideoEntry(mixed $video): ?array
+    {
+        if (!is_array($video)) {
+            return null;
+        }
+
+        // Only trailers (type=Trailer) and teasers (type=Teaser) are usable.
+        $typeRaw = $video['type'] ?? '';
+        $type = is_string($typeRaw) ? strtolower($typeRaw) : '';
+        if ($type !== 'trailer' && $type !== 'teaser') {
+            return null;
+        }
+
+        // YouTube only (the URL scheme the player understands).
+        $siteRaw = $video['site'] ?? '';
+        if (!is_string($siteRaw) || strtolower($siteRaw) !== 'youtube') {
+            return null;
+        }
+
+        $keyRaw = $video['key'] ?? '';
+        $key = is_string($keyRaw) ? $keyRaw : '';
+        if ($key === '') {
+            return null; // No key → no playable URL.
+        }
+
+        $nameRaw = $video['name'] ?? $type;
+        $name = is_string($nameRaw) ? $nameRaw : $type;
+
+        return [
+            'type' => $type,
+            'site_label' => 'YouTube',
+            'key' => $key,
+            'name' => $name,
+            'official' => ($video['official'] ?? false) === true,
+        ];
+    }
+
+    /**
+     * Pick the single PRIMARY trailer from a TMDB `videos` block (as delivered by
+     * `append_to_response=videos` on movie/TV details).
+     *
+     * Preference order: an official YouTube Trailer → any YouTube Trailer → any
+     * YouTube Teaser → none. Returns the fields captured onto item metadata so a
+     * client can render a "Play Trailer" button, or null when the item has no
+     * usable video (the caller then omits the keys — never a broken/empty URL).
+     *
+     * @param mixed $videos Raw `videos` payload.
+     * @return array{trailer_key: string, trailer_site: string, trailer_url: string}|null
+     */
+    private function extractPrimaryTrailer(mixed $videos): ?array
+    {
+        $block = MetadataValue::asAssoc($videos);
+        $results = MetadataValue::asAssocList($block['results'] ?? null);
+
+        $officialTrailer = null;
+        $anyTrailer = null;
+        $anyTeaser = null;
+        foreach ($results as $video) {
+            $entry = $this->normalizeVideoEntry($video);
+            if ($entry === null) {
+                continue;
+            }
+            if ($entry['type'] === 'trailer') {
+                if ($entry['official'] && $officialTrailer === null) {
+                    $officialTrailer = $entry;
+                }
+                $anyTrailer ??= $entry;
+            } else { // teaser
+                $anyTeaser ??= $entry;
+            }
+        }
+
+        $chosen = $officialTrailer ?? $anyTrailer ?? $anyTeaser;
+        if ($chosen === null) {
+            return null;
+        }
+
+        return [
+            'trailer_key' => $chosen['key'],
+            'trailer_site' => $chosen['site_label'],
+            'trailer_url' => 'https://www.youtube.com/watch?v=' . $chosen['key'],
+        ];
     }
 }

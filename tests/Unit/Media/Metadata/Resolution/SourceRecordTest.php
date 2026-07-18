@@ -155,6 +155,9 @@ final class SourceRecordTest extends TestCase
             'production_companies',
             'studio',
             'external_ids',
+            'trailer_url',
+            'trailer_key',
+            'trailer_site',
         ];
         $this->assertSame($expected, SourceRecord::CANONICAL_FIELDS);
     }

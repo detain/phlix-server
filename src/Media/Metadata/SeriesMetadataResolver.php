@@ -162,6 +162,7 @@ class SeriesMetadataResolver
      *         episode_title: string|null,
      *         overview: string|null,
      *         poster_url: string|null,
+     *         still_url: string|null,
      *         air_date: string|null,
      *         runtime: int|null,
      *         vote_average: float|null,

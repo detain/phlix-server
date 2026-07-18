@@ -593,4 +593,145 @@ class TmdbProviderTest extends TestCase
             $merged,
         );
     }
+
+    public function testGetDetailsRequestsVideosForMovie(): void
+    {
+        $http = $this->createMock(MetadataHttpClient::class);
+        $http->expects($this->once())
+            ->method('get')
+            ->with('/movie/603', $this->callback(static function (array $p): bool {
+                $append = is_string($p['append_to_response'] ?? null) ? $p['append_to_response'] : '';
+                return str_contains($append, 'videos');
+            }))
+            ->willReturn(['id' => 603, 'title' => 'The Matrix']);
+
+        (new TmdbProvider('k', $http))->getDetails('603');
+    }
+
+    public function testGetDetailsPrefersOfficialYouTubeTrailerForMovie(): void
+    {
+        $http = $this->createMock(MetadataHttpClient::class);
+        $http->method('get')->willReturn([
+            'id' => 603,
+            'title' => 'The Matrix',
+            'release_date' => '1999-03-30',
+            'videos' => ['results' => [
+                // A teaser and a non-official trailer precede the official trailer;
+                // the official YouTube Trailer must still win.
+                ['site' => 'YouTube', 'type' => 'Teaser', 'key' => 'TEASER1', 'official' => true],
+                ['site' => 'YouTube', 'type' => 'Trailer', 'key' => 'UNOFFICIAL', 'official' => false],
+                ['site' => 'Vimeo', 'type' => 'Trailer', 'key' => 'VIMEOKEY', 'official' => true],
+                ['site' => 'YouTube', 'type' => 'Trailer', 'key' => 'OFFICIAL1', 'official' => true],
+            ]],
+        ]);
+
+        $details = (new TmdbProvider('k', $http))->getDetails('603');
+
+        $this->assertSame('OFFICIAL1', $details['trailer_key']);
+        $this->assertSame('YouTube', $details['trailer_site']);
+        $this->assertSame('https://www.youtube.com/watch?v=OFFICIAL1', $details['trailer_url']);
+    }
+
+    public function testGetDetailsFallsBackToTeaserWhenNoTrailerForMovie(): void
+    {
+        $http = $this->createMock(MetadataHttpClient::class);
+        $http->method('get')->willReturn([
+            'id' => 603,
+            'title' => 'The Matrix',
+            'videos' => ['results' => [
+                ['site' => 'YouTube', 'type' => 'Teaser', 'key' => 'TEASERKEY', 'official' => false],
+            ]],
+        ]);
+
+        $details = (new TmdbProvider('k', $http))->getDetails('603');
+
+        $this->assertSame('https://www.youtube.com/watch?v=TEASERKEY', $details['trailer_url']);
+    }
+
+    public function testGetDetailsOmitsTrailerWhenNoUsableVideoForMovie(): void
+    {
+        $http = $this->createMock(MetadataHttpClient::class);
+        $http->method('get')->willReturn([
+            'id' => 603,
+            'title' => 'The Matrix',
+            'videos' => ['results' => [
+                // Non-YouTube trailer and a YouTube featurette → neither is usable.
+                ['site' => 'Vimeo', 'type' => 'Trailer', 'key' => 'VIMEO'],
+                ['site' => 'YouTube', 'type' => 'Featurette', 'key' => 'FEAT'],
+            ]],
+        ]);
+
+        $details = (new TmdbProvider('k', $http))->getDetails('603');
+
+        $this->assertArrayNotHasKey('trailer_url', $details);
+        $this->assertArrayNotHasKey('trailer_key', $details);
+        $this->assertArrayNotHasKey('trailer_site', $details);
+    }
+
+    public function testGetTvDetailsRequestsVideos(): void
+    {
+        $http = $this->createMock(MetadataHttpClient::class);
+        $http->expects($this->once())
+            ->method('get')
+            ->with('/tv/1668', $this->callback(static function (array $p): bool {
+                $append = is_string($p['append_to_response'] ?? null) ? $p['append_to_response'] : '';
+                return str_contains($append, 'videos');
+            }))
+            ->willReturn(['id' => 1668, 'name' => '24']);
+
+        (new TmdbProvider('k', $http))->getTvDetails('1668');
+    }
+
+    public function testGetTvDetailsPrefersOfficialYouTubeTrailer(): void
+    {
+        $http = $this->createMock(MetadataHttpClient::class);
+        $http->method('get')->willReturn([
+            'id' => 1668,
+            'name' => '24',
+            'first_air_date' => '2001-11-06',
+            'videos' => ['results' => [
+                ['site' => 'YouTube', 'type' => 'Teaser', 'key' => 'TZ', 'official' => true],
+                ['site' => 'YouTube', 'type' => 'Trailer', 'key' => 'TVOFFICIAL', 'official' => true],
+            ]],
+        ]);
+
+        $details = (new TmdbProvider('k', $http))->getTvDetails('1668');
+
+        $this->assertSame('TVOFFICIAL', $details['trailer_key']);
+        $this->assertSame('YouTube', $details['trailer_site']);
+        $this->assertSame('https://www.youtube.com/watch?v=TVOFFICIAL', $details['trailer_url']);
+    }
+
+    public function testGetTvDetailsOmitsTrailerWhenNoVideos(): void
+    {
+        $http = $this->createMock(MetadataHttpClient::class);
+        $http->method('get')->willReturn([
+            'id' => 1668,
+            'name' => '24',
+            'first_air_date' => '2001-11-06',
+        ]);
+
+        $details = (new TmdbProvider('k', $http))->getTvDetails('1668');
+
+        $this->assertArrayNotHasKey('trailer_url', $details);
+    }
+
+    public function testGetTrailersStillParsesYouTubeTrailersAndTeasers(): void
+    {
+        $http = $this->createMock(MetadataHttpClient::class);
+        $http->method('get')->willReturn(['results' => [
+            ['site' => 'YouTube', 'type' => 'Trailer', 'key' => 'ABC', 'name' => 'Main Trailer'],
+            ['site' => 'YouTube', 'type' => 'Teaser', 'key' => 'DEF', 'name' => 'Teaser'],
+            ['site' => 'Vimeo', 'type' => 'Trailer', 'key' => 'ZZZ', 'name' => 'Skip'],
+            ['site' => 'YouTube', 'type' => 'Featurette', 'key' => 'GHI', 'name' => 'Skip'],
+        ]]);
+
+        $trailers = (new TmdbProvider('k', $http))->getTrailers('603');
+
+        $this->assertCount(2, $trailers);
+        $this->assertSame('Trailer (Main Trailer)', $trailers[0]['title']);
+        $this->assertSame('https://www.youtube.com/watch?v=ABC', $trailers[0]['url']);
+        $this->assertSame('Teaser (Teaser)', $trailers[1]['title']);
+        $this->assertSame('https://www.youtube.com/watch?v=DEF', $trailers[1]['url']);
+    }
 }

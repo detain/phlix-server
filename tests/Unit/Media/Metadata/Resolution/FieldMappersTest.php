@@ -117,6 +117,45 @@ final class FieldMappersTest extends TestCase
         $this->assertFalse($tvdb->has('tags'), 'TVDB does not supply tags');
     }
 
+    public function testTrailerFieldsAreCanonicalAndRoundTripThroughFromTmdb(): void
+    {
+        // The trailer fields must be part of the fixed canonical vocabulary so the
+        // resolver forwards them for movies.
+        $this->assertContains('trailer_url', SourceRecord::CANONICAL_FIELDS);
+        $this->assertContains('trailer_key', SourceRecord::CANONICAL_FIELDS);
+        $this->assertContains('trailer_site', SourceRecord::CANONICAL_FIELDS);
+
+        $record = FieldMappers::fromTmdb([
+            'name' => 'The Matrix',
+            'trailer_url' => 'https://www.youtube.com/watch?v=KEY1',
+            'trailer_key' => 'KEY1',
+            'trailer_site' => 'YouTube',
+        ]);
+
+        $this->assertSame('https://www.youtube.com/watch?v=KEY1', $record->trailerUrl());
+        $this->assertSame('KEY1', $record->trailerKey());
+        $this->assertSame('YouTube', $record->trailerSite());
+    }
+
+    public function testFromTmdbWithoutTrailerLeavesTrailerFieldsAbsent(): void
+    {
+        $record = FieldMappers::fromTmdb(['name' => 'Movie']);
+
+        $this->assertFalse($record->has('trailer_url'), 'missing trailer stays absent');
+        $this->assertNull($record->trailerUrl());
+        $this->assertNull($record->trailerKey());
+        $this->assertNull($record->trailerSite());
+    }
+
+    public function testFromImdbAndTvdbDoNotSupplyTrailer(): void
+    {
+        $imdb = FieldMappers::fromImdb(['title' => 'Movie', 'imdb_id' => 'tt1']);
+        $tvdb = FieldMappers::fromTvdb(['name' => 'Show', 'tvdb_id' => '1']);
+
+        $this->assertFalse($imdb->has('trailer_url'), 'IMDb does not supply a trailer');
+        $this->assertFalse($tvdb->has('trailer_url'), 'TVDB does not supply a trailer');
+    }
+
     public function testFromTmdbTvUsesOfficialRatingAndRuntimeFallback(): void
     {
         // Shape from TmdbProvider::formatTvDetails(): official_rating present,

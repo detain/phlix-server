@@ -279,6 +279,50 @@ final class MediaItemShaperTest extends TestCase
         $this->assertSame($streams, $shaped['streams']);
     }
 
+    public function testShapeDetailExposesTrailerFieldsWhenPresent(): void
+    {
+        $shaped = MediaItemShaper::shapeDetail([
+            'id' => 'm',
+            'name' => 'The Matrix',
+            'type' => 'movie',
+            'metadata' => [
+                'trailer_url' => 'https://www.youtube.com/watch?v=KEY1',
+                'trailer_key' => 'KEY1',
+                'trailer_site' => 'YouTube',
+            ],
+        ], []);
+
+        $this->assertSame('https://www.youtube.com/watch?v=KEY1', $shaped['trailer_url']);
+        $this->assertSame('KEY1', $shaped['trailer_key']);
+        $this->assertSame('YouTube', $shaped['trailer_site']);
+    }
+
+    public function testShapeDetailTrailerFieldsNullWhenAbsent(): void
+    {
+        $shaped = MediaItemShaper::shapeDetail([
+            'id' => 'm',
+            'name' => 'No Trailer',
+            'type' => 'movie',
+            'metadata' => [],
+        ], []);
+
+        $this->assertNull($shaped['trailer_url']);
+        $this->assertNull($shaped['trailer_key']);
+        $this->assertNull($shaped['trailer_site']);
+    }
+
+    public function testShapeListShapeOmitsTrailerFields(): void
+    {
+        $shaped = MediaItemShaper::shape([
+            'id' => 'm',
+            'name' => 'The Matrix',
+            'type' => 'movie',
+            'metadata' => ['trailer_url' => 'https://www.youtube.com/watch?v=KEY1'],
+        ]);
+
+        $this->assertArrayNotHasKey('trailer_url', $shaped);
+    }
+
     public function testShapeDetailExposesNormalizedCastCrewCompaniesAndStudio(): void
     {
         $shaped = MediaItemShaper::shapeDetail([

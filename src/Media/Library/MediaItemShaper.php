@@ -216,6 +216,14 @@ final class MediaItemShaper
             ? $metadata['theme_audio_url']
             : null;
 
+        // Primary trailer — detail-only, so a client can render a "Play Trailer"
+        // button. Captured at scan time from TMDB `videos` (movie via the canonical
+        // pipeline, series via SeriesMetadataResolver). Absent/empty → null (never a
+        // broken URL); trailer_key/trailer_site are surfaced when present.
+        $merged['trailer_url'] = self::nonemptyString($metadata['trailer_url'] ?? null);
+        $merged['trailer_key'] = self::nonemptyString($metadata['trailer_key'] ?? null);
+        $merged['trailer_site'] = self::nonemptyString($metadata['trailer_site'] ?? null);
+
         // Curated external provider-id map ({tmdb, imdb, tvdb, anidb, …}) so the
         // SPA can render "view on TMDB/IMDb/…" links. Detail-only. Assembled from
         // `metadata_json.external_ids` merged with any top-level `*_id` keys; only

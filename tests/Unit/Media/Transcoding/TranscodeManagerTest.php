@@ -851,6 +851,134 @@ class TranscodeManagerTest extends TestCase
         }
     }
 
+    /**
+     * SV-4.12 (load-bearing): a wedged-age 'running' job whose dir contains ONLY
+     * an on-demand `seg-*.ts` file — no legacy CMAF `chunk-*.m4s` — must NOT be
+     * reaped. The reaper globs BOTH `chunk-*.m4s` and `seg-*.ts`; deleting the
+     * `seg-*.ts` glob arm would leave the rest of the suite green, so this test
+     * pins that arm: the current on-demand production path writes `seg-*.ts`,
+     * and such a job is alive (producing output), not wedged.
+     */
+    public function testReapStaleRunningJobsKeepsJobWithOnDemandTsSegments(): void
+    {
+        $jobDir = $this->segmentDir . '/ts-segments-job';
+        mkdir($jobDir, 0755, true);
+        // A finalized on-demand HLS segment — matches glob("$dir/seg-*.ts").
+        file_put_contents("{$jobDir}/seg-v720p-00000.ts", 'fake-ts-segment-data');
+        $captured = [];
+        $db = $this->createMock(Connection::class);
+        // 90s ago — well past the 60s SEGMENT_PRODUCTION_TIMEOUT window.
+        $startedAt = date('Y-m-d H:i:s', strtotime('-90 seconds'));
+        $db->method('query')->willReturnCallback(
+            function (string $sql, ?array $params = null) use (&$captured, $jobDir, $startedAt) {
+                $captured[] = [$sql, $params ?? []];
+                if (str_contains($sql, "WHERE status = 'running'") && str_contains($sql, 'SELECT id')) {
+                    return [[
+                        'id' => 'ts-seg-1',
+                        'hls_dir' => $jobDir,
+                        'output_path' => '',
+                        'started_at' => $startedAt,
+                    ]];
+                }
+                return [];
+            }
+        );
+        $ff = $this->createMock(FfmpegRunner::class);
+
+        $reaped = $this->manager($db, $ff)->reapStaleRunningJobs();
+
+        $this->assertSame(0, $reaped, 'job with on-demand seg-*.ts output must not be reaped even if old');
+        foreach ($captured as [$sql]) {
+            $this->assertStringNotContainsString("SET status = 'failed'", $sql);
+        }
+    }
+
+    /**
+     * SV-4.12 (glob precision): a wedged-age 'running' job whose dir contains
+     * ONLY in-flight `seg-*.ts.part-*` temp files — no finalized `seg-*.ts`, no
+     * `chunk-*.m4s` — MUST be reaped. Partial temp writes are not produced
+     * segments; the `seg-*.ts` glob must not match `.part-*` suffixes, so the
+     * job still looks wedged and is failed. Guards the glob against widening to
+     * `seg-*.ts*`.
+     */
+    public function testReapStaleRunningJobsReapsJobWithOnlyPartTempSegments(): void
+    {
+        $jobDir = $this->segmentDir . '/part-temp-job';
+        mkdir($jobDir, 0755, true);
+        // Only an in-flight temp file (mirrors the `seg-*.ts.part-*` write path).
+        // glob("$dir/seg-*.ts") must NOT match this — its name ends in `.part-...`.
+        file_put_contents("{$jobDir}/seg-v720p-00000.ts.part-a1b2c3", 'partial-write-data');
+        $captured = [];
+        $db = $this->createMock(Connection::class);
+        $startedAt = date('Y-m-d H:i:s', strtotime('-90 seconds'));
+        $db->method('query')->willReturnCallback(
+            function (string $sql, ?array $params = null) use (&$captured, $jobDir, $startedAt) {
+                $captured[] = [$sql, $params ?? []];
+                if (str_contains($sql, "WHERE status = 'running'") && str_contains($sql, 'SELECT id')) {
+                    return [[
+                        'id' => 'part-only-1',
+                        'hls_dir' => $jobDir,
+                        'output_path' => '',
+                        'started_at' => $startedAt,
+                    ]];
+                }
+                return [];
+            }
+        );
+        $ff = $this->createMock(FfmpegRunner::class);
+
+        $reaped = $this->manager($db, $ff)->reapStaleRunningJobs();
+
+        $this->assertSame(1, $reaped, 'a dir with only .part-* temps has produced no segment → must be reaped');
+        $failUpdate = null;
+        foreach ($captured as [$sql, $params]) {
+            if (str_contains($sql, "SET status = 'failed'") && ($params[1] ?? null) === 'part-only-1') {
+                $failUpdate = $params;
+                break;
+            }
+        }
+        $this->assertNotNull($failUpdate, 'part-only job must be marked failed');
+        $this->assertStringContainsString('no segment produced within', (string) $failUpdate[0]);
+    }
+
+    /**
+     * SV-4.12 (array_merge of both arms): a wedged-age 'running' job whose dir
+     * contains BOTH a legacy `chunk-*.m4s` and an on-demand `seg-*.ts` is kept —
+     * locking that the reaper merges both glob arms rather than replacing one.
+     */
+    public function testReapStaleRunningJobsKeepsJobWithBothCmafAndTsSegments(): void
+    {
+        $jobDir = $this->segmentDir . '/mixed-segments-job';
+        mkdir($jobDir, 0755, true);
+        file_put_contents("{$jobDir}/chunk-0-00001.m4s", 'fake-cmaf-data');
+        file_put_contents("{$jobDir}/seg-v720p-00000.ts", 'fake-ts-data');
+        $captured = [];
+        $db = $this->createMock(Connection::class);
+        $startedAt = date('Y-m-d H:i:s', strtotime('-90 seconds'));
+        $db->method('query')->willReturnCallback(
+            function (string $sql, ?array $params = null) use (&$captured, $jobDir, $startedAt) {
+                $captured[] = [$sql, $params ?? []];
+                if (str_contains($sql, "WHERE status = 'running'") && str_contains($sql, 'SELECT id')) {
+                    return [[
+                        'id' => 'mixed-1',
+                        'hls_dir' => $jobDir,
+                        'output_path' => '',
+                        'started_at' => $startedAt,
+                    ]];
+                }
+                return [];
+            }
+        );
+        $ff = $this->createMock(FfmpegRunner::class);
+
+        $reaped = $this->manager($db, $ff)->reapStaleRunningJobs();
+
+        $this->assertSame(0, $reaped, 'job with both CMAF and TS output must not be reaped');
+        foreach ($captured as [$sql]) {
+            $this->assertStringNotContainsString("SET status = 'failed'", $sql);
+        }
+    }
+
     public function testEnsureHlsJobReEncodes10BitH264InsteadOfCopying(): void
     {
         // A 10-bit (High 10) H.264 stream copies cleanly but won't decode in the

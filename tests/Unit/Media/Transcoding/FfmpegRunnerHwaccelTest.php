@@ -358,4 +358,144 @@ final class FfmpegRunnerHwaccelTest extends TestCase
         $this->assertSame('nvenc', $summary['chosen_vendor']);
         $this->assertSame('h264_nvenc', $summary['chosen_encoder']);
     }
+
+    /**
+     * SV-3.3 (Finding 1): the hwaccel builder is a fourth audio-re-encode path
+     * and must emit loudness normalization identically to the software builders.
+     * With hwaccel enabled + preferred and a genuine audio RE-ENCODE, the built
+     * command carries `-af "loudnorm=…"`. loudnorm is an AUDIO filter and must be
+     * independent of the video `-vf` filter chain.
+     */
+    public function test_hwaccel_segment_emits_loudnorm_on_audio_reencode(): void
+    {
+        $registry = $this->seedRegistry(['nvenc' => $this->nvencCapability()]);
+
+        $runner = new FfmpegRunner('/usr/bin/ffmpeg', '/usr/bin/ffprobe', '/tmp');
+        $runner->setConfig(['enabled' => true, 'prefer_hardware' => true]);
+        $runner->probeHardwareAcceleration($registry);
+
+        $cmd = $runner->buildHwaccelSegmentCommand(
+            '/input.mkv',
+            '/tmp/out.ts',
+            12.0,
+            6.0,
+            [
+                'video_codec' => 'libx264',
+                'audio_codec' => 'aac',
+                'audio_bitrate' => '128k',
+                'loudnorm' => ['I' => -16, 'LRA' => 11, 'TP' => -1.5],
+            ],
+        );
+
+        $this->assertNotNull($cmd);
+        // Hardware video encoder is chosen …
+        $this->assertStringContainsString('-c:v h264_nvenc', $cmd);
+        // … audio is genuinely re-encoded to AAC …
+        $this->assertStringContainsString('-c:a aac', $cmd);
+        // … and the loudnorm AUDIO filter is applied via -af (not -vf).
+        $this->assertStringContainsString('-af "loudnorm=I=-16:LRA=11:TP=-1.5"', $cmd);
+    }
+
+    /**
+     * SV-3.3 (Finding 1): loudnorm is only valid on a genuine encode, so a
+     * `-c:a copy` hwaccel segment must NOT emit any `-af loudnorm` even when a
+     * loudness target is configured (you cannot filter a copied stream).
+     */
+    public function test_hwaccel_segment_omits_loudnorm_when_audio_copied(): void
+    {
+        $registry = $this->seedRegistry(['nvenc' => $this->nvencCapability()]);
+
+        $runner = new FfmpegRunner('/usr/bin/ffmpeg', '/usr/bin/ffprobe', '/tmp');
+        $runner->setConfig(['enabled' => true, 'prefer_hardware' => true]);
+        $runner->probeHardwareAcceleration($registry);
+
+        $cmd = $runner->buildHwaccelSegmentCommand(
+            '/input.mkv',
+            '/tmp/out.ts',
+            12.0,
+            6.0,
+            [
+                'video_codec' => 'libx264',
+                'audio_codec' => 'copy',
+                'loudnorm' => ['I' => -16, 'LRA' => 11, 'TP' => -1.5],
+            ],
+        );
+
+        $this->assertNotNull($cmd);
+        $this->assertStringContainsString('-c:a copy', $cmd);
+        $this->assertStringNotContainsString('-af', $cmd);
+        $this->assertStringNotContainsString('loudnorm', $cmd);
+    }
+
+    /**
+     * SV-3.3 (Finding 1): the audio `-af loudnorm` filter must coexist with a
+     * video `-vf` filter chain (here a software downscale `scale=`) without
+     * collision — audio filters (`-af`) and video filters (`-vf`) are independent
+     * ffmpeg filter graphs. Proves the loudnorm emission did not get folded into
+     * the video filter chain.
+     */
+    public function test_hwaccel_segment_loudnorm_coexists_with_video_filter(): void
+    {
+        $registry = $this->seedRegistry(['nvenc' => $this->nvencCapability()]);
+
+        $runner = new FfmpegRunner('/usr/bin/ffmpeg', '/usr/bin/ffprobe', '/tmp');
+        $runner->setConfig(['enabled' => true, 'prefer_hardware' => true]);
+        $runner->probeHardwareAcceleration($registry);
+
+        $cmd = $runner->buildHwaccelSegmentCommand(
+            '/input.mkv',
+            '/tmp/out.ts',
+            12.0,
+            6.0,
+            [
+                'video_codec' => 'libx264',
+                'width' => 1280,
+                'height' => 720,
+                'audio_codec' => 'aac',
+                'audio_bitrate' => '128k',
+                'loudnorm' => ['I' => -23, 'LRA' => 7, 'TP' => -2],
+            ],
+        );
+
+        $this->assertNotNull($cmd);
+        // A video filter chain is present …
+        $this->assertStringContainsString('-vf "', $cmd);
+        $this->assertStringContainsString('scale=1280:720', $cmd);
+        // … and the loudnorm target lives on the separate audio filter flag.
+        $this->assertStringContainsString('-af "loudnorm=I=-23:LRA=7:TP=-2"', $cmd);
+        // loudnorm must NOT have leaked into the video (-vf) filter chain.
+        $this->assertDoesNotMatchRegularExpression('/-vf "[^"]*loudnorm/', $cmd);
+    }
+
+    /**
+     * SV-3.3 (Finding 1): with a loudness target set but hwaccel PREFERRED, the
+     * hwaccel path (not the software path) must still normalize. Regression guard
+     * proving the GPU box does not silently skip loudnorm on inline-audio video
+     * segments.
+     */
+    public function test_hwaccel_preferred_path_still_normalizes_loudness(): void
+    {
+        $registry = $this->seedRegistry(['nvenc' => $this->nvencCapability()]);
+
+        $runner = new FfmpegRunner('/usr/bin/ffmpeg', '/usr/bin/ffprobe', '/tmp');
+        // hwaccel enabled + preferred → startSegmentEncode picks the hwaccel builder.
+        $runner->setConfig(['enabled' => true, 'prefer_hardware' => true]);
+        $runner->probeHardwareAcceleration($registry);
+
+        $cmd = $runner->buildHwaccelSegmentCommand(
+            '/input.mkv',
+            '/tmp/out.ts',
+            0.0,
+            6.0,
+            [
+                'video_codec' => 'libx264',
+                'audio_codec' => 'aac',
+                'loudnorm' => ['I' => -16],
+            ],
+        );
+
+        $this->assertNotNull($cmd);
+        $this->assertStringContainsString('-c:v h264_nvenc', $cmd);
+        $this->assertStringContainsString('-af "loudnorm=I=-16"', $cmd);
+    }
 }

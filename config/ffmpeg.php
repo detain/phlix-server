@@ -69,6 +69,12 @@ return [
      *   - Streaming (Netflix-style): I=-27, LRA=2.0, TP=-2.0
      *
      * Set to null to disable, or an array with 'I', 'LRA', 'TP' keys to enable.
+     *
+     * OPERATOR NOTE: loudnorm applies ONLY to RE-ENCODED audio. Any rung that
+     * copies the source audio stream (`-c:a copy`, e.g. the `original` variant)
+     * and every direct-play session bypass loudness normalization BY DESIGN —
+     * you cannot apply an audio filter to a copied (non-decoded) stream. To
+     * normalize such content it must be transcoded (audio re-encode), not copied.
      */
     'loudness' => [
         'enabled' => false,

@@ -2176,6 +2176,19 @@ class FfmpegRunner
                 if ($audioChannels !== null && $audioChannels > 0) {
                     $cmd .= ' -ac ' . $audioChannels;
                 }
+
+                // SV-3.3: loudness normalization (ebur128/loudnorm filter). This
+                // mirrors the software builders (buildSegmentCommand /
+                // buildAudioSegmentCommand) so a GPU-preferred inline-audio segment
+                // is normalized identically to the software path. loudnorm is an
+                // AUDIO filter (`-af`), fully independent of the video `-vf` filter
+                // chain (tone-map/scale/hwupload) assembled above — the two never
+                // collide. Emitted ONLY on the re-encode branch; a `-c:a copy`
+                // stream cannot be filtered.
+                $loudnormFilter = $this->buildLoudnormFilter($params);
+                if ($loudnormFilter !== null) {
+                    $cmd .= ' -af "' . $loudnormFilter . '"';
+                }
             }
         }
 
@@ -2876,6 +2889,15 @@ class FfmpegRunner
             $audioChannels = self::paramInt($params, 'audio_channels');
             if ($audioChannels !== null && $audioChannels > 0) {
                 $cmd .= ' -ac ' . $audioChannels;
+            }
+
+            // SV-3.3: loudness normalization (ebur128/loudnorm filter), mirroring
+            // the other re-encode builders so every re-encode segment-assembly path
+            // behaves uniformly. Re-encode branch only — a `-c:a copy` stream cannot
+            // be filtered.
+            $loudnormFilter = $this->buildLoudnormFilter($params);
+            if ($loudnormFilter !== null) {
+                $cmd .= ' -af "' . $loudnormFilter . '"';
             }
         }
 

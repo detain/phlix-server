@@ -3716,6 +3716,314 @@ class TranscodeManagerTest extends TestCase
         $this->assertSame('aac', $captParams['audio_codec']);
     }
 
+    // ---- SV-3.3(1B): loudness normalization reaches all three param-assembly sites ----
+
+    /**
+     * The canonical enabled loudness target the provider (SV-3.3(1A)) would thread
+     * into the ctor: single-pass EBU R128 I/LRA/TP.
+     *
+     * @return array{I: float, LRA: float, TP: float}
+     */
+    private function loudnormTarget(): array
+    {
+        return ['I' => -16.0, 'LRA' => 11.0, 'TP' => -1.5];
+    }
+
+    /**
+     * Builds a manager with the SV-3.3(1A) loudness target threaded as ctor arg 14
+     * (the position sub-step 1A added it at, after $minDiskSpaceBytes).
+     *
+     * @param FfmpegRunner&MockObject $ff
+     * @param array<string, float>|null $loudnorm
+     */
+    private function loudnormManager(Connection $db, FfmpegRunner $ff, ?array $loudnorm): TranscodeManager
+    {
+        $this->stubColorMetadata($ff);
+        return new TranscodeManager(
+            $db,
+            $ff,
+            $this->segmentDir,
+            null,
+            6,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            5000,
+            null,
+            $loudnorm
+        );
+    }
+
+    /**
+     * A single-audio ffprobe (one video + one AAC stream) — a job that muxes audio
+     * into the video segments (no shared audio group), so its computeSegmentParams
+     * base params (site 1) and its ABR video rungs (site 2) both carry the audio.
+     *
+     * @return array<string, mixed>
+     */
+    private function singleAudioProbe(): array
+    {
+        return [
+            'streams' => [
+                ['index' => 0, 'codec_type' => 'video', 'codec_name' => 'h264', 'width' => 1280, 'height' => 720],
+                ['index' => 1, 'codec_type' => 'audio', 'codec_name' => 'aac', 'channels' => 2],
+            ],
+            'format' => ['duration' => '25.0'],
+        ];
+    }
+
+    /**
+     * SITE 1 (computeSegmentParams): with loudness ENABLED, the target is threaded
+     * into the base params that ensureHlsJob() persists to `segment_params` — the
+     * exact column the LEGACY single-variant ensureSegment() path reads straight
+     * back. Feeding that persisted array into the real FfmpegRunner proves the
+     * command gains `-af "loudnorm=…"` on the audio re-encode.
+     */
+    public function testComputeSegmentParamsPersistsLoudnormTargetWhenEnabled(): void
+    {
+        $captured = [];
+        $db = $this->mockDb([], 0, ['path' => '/m.mkv'], [], $captured);
+        $ff = $this->createMock(FfmpegRunner::class);
+        $ff->method('probe')->willReturn($this->singleAudioProbe());
+
+        $this->loudnormManager($db, $ff, $this->loudnormTarget())->ensureHlsJob('media-1', 'web');
+
+        $seg = $this->capturedJobInsert($captured)['segment_params'];
+        $this->assertArrayHasKey('loudnorm', $seg);
+        $this->assertIsArray($seg['loudnorm']);
+        $this->assertEqualsWithDelta(-16.0, $seg['loudnorm']['I'], 0.001);
+        $this->assertEqualsWithDelta(11.0, $seg['loudnorm']['LRA'], 0.001);
+        $this->assertEqualsWithDelta(-1.5, $seg['loudnorm']['TP'], 0.001);
+
+        // The persisted params (what the legacy path forwards verbatim) drive a real
+        // `-af "loudnorm=…"` on the video+audio segment command.
+        $cmd = (new ToneMapThreadingSpyRunner(null, false))
+            ->buildSegmentCommand('/in.mkv', '/out/seg-00000.ts', 0.0, 6.0, $seg);
+        $this->assertStringContainsString('-af "loudnorm=I=-16:LRA=11:TP=-1.5"', $cmd);
+    }
+
+    /**
+     * SITE 1 disabled: with loudness OFF (null — the shipped default), no `loudnorm`
+     * key is added to the persisted params, so the produced command is byte-clean of
+     * any `-af loudnorm` (byte-identical to pre-SV-3.3).
+     */
+    public function testComputeSegmentParamsOmitsLoudnormWhenDisabled(): void
+    {
+        $captured = [];
+        $db = $this->mockDb([], 0, ['path' => '/m.mkv'], [], $captured);
+        $ff = $this->createMock(FfmpegRunner::class);
+        $ff->method('probe')->willReturn($this->singleAudioProbe());
+
+        $this->loudnormManager($db, $ff, null)->ensureHlsJob('media-1', 'web');
+
+        $seg = $this->capturedJobInsert($captured)['segment_params'];
+        $this->assertArrayNotHasKey('loudnorm', $seg);
+
+        $cmd = (new ToneMapThreadingSpyRunner(null, false))
+            ->buildSegmentCommand('/in.mkv', '/out/seg-00000.ts', 0.0, 6.0, $seg);
+        $this->assertStringNotContainsString('loudnorm', $cmd);
+    }
+
+    /**
+     * SITE 1 legacy read path: a legacy single-variant job (no `variants`) whose
+     * persisted `segment_params` carries the loudnorm target (as computeSegmentParams
+     * wrote it) forwards that target through ensureSegment() → startSegmentEncode(),
+     * and the real builder emits `-af "loudnorm=…"`.
+     */
+    public function testEnsureSegmentLegacyPathForwardsPersistedLoudnorm(): void
+    {
+        $dir = $this->segmentDir . '/ln-legacy';
+        mkdir($dir, 0755, true);
+        $input = $dir . '/in.mkv';
+        file_put_contents($input, 'x');
+        $jobRow = [
+            'id' => 'seg-job',
+            'hls_dir' => $dir,
+            'input_path' => $input,
+            'status' => 'completed',
+            'duration_seconds' => 60,
+            'segment_seconds' => 6,
+            'segment_params' => json_encode([
+                'video_codec' => 'libx264',
+                'audio_codec' => 'aac',
+                'loudnorm' => $this->loudnormTarget(),
+            ]),
+        ];
+        $captured = [];
+        $db = $this->mockDb([], 0, [], $jobRow, $captured);
+        $ff = $this->createMock(FfmpegRunner::class);
+        $captParams = null;
+        $ff->expects($this->once())->method('startSegmentEncode')->willReturnCallback(
+            function (string $in, string $out, float $s, float $l, array $params) use (&$captParams): int {
+                $captParams = $params;
+                file_put_contents($out, 'encoded');
+                return 1;
+            }
+        );
+
+        $this->manager($db, $ff)->ensureSegment('seg-job', null, 2);
+
+        $this->assertNotNull($captParams);
+        $this->assertArrayHasKey('loudnorm', $captParams);
+        $cmd = (new ToneMapThreadingSpyRunner(null, false))
+            ->buildSegmentCommand($input, "{$dir}/seg-00002.ts", 12.0, 6.0, $captParams);
+        $this->assertStringContainsString('-af "loudnorm=I=-16:LRA=11:TP=-1.5"', $cmd);
+    }
+
+    /**
+     * SITE 2 (ABR per-rendition): segmentParamsForRendition() rebuilds params fresh
+     * per-rung and carries NO loudnorm target; the applyLoudnorm() merge-back in the
+     * multi-variant branch is what threads it. On a SINGLE-audio job the video rung
+     * muxes audio, so the target reaches the real segment command's audio re-encode.
+     */
+    public function testEnsureSegmentAbrRenditionThreadsLoudnormWhenEnabled(): void
+    {
+        $dir = $this->segmentDir . '/ln-abr';
+        mkdir($dir, 0755, true);
+        $input = $dir . '/in.mkv';
+        file_put_contents($input, 'x');
+        $ladderJson = (string) json_encode(
+            (new AbrLadder())->build(
+                new SourceProfile(width: 1920, height: 1080, videoCodec: 'h264', videoBitrate: 6000000, audioCodec: 'aac'),
+                'web'
+            )->toArray()
+        );
+        $captured = [];
+        $db = $this->mockDb([], 0, [], $this->multiVariantJobRow($dir, $input, $ladderJson), $captured);
+        $ff = $this->createMock(FfmpegRunner::class);
+        $captParams = null;
+        $ff->expects($this->once())->method('startSegmentEncode')->willReturnCallback(
+            function (string $in, string $out, float $s, float $l, array $params) use (&$captParams): int {
+                $captParams = $params;
+                file_put_contents($out, 'encoded');
+                return 1;
+            }
+        );
+
+        $this->loudnormManager($db, $ff, $this->loudnormTarget())->ensureSegment('seg-job', '480p', 2);
+
+        $this->assertNotNull($captParams);
+        $this->assertSame($this->loudnormTarget(), $captParams['loudnorm'] ?? null);
+        $this->assertArrayNotHasKey('video_only', $captParams, 'single-audio rung muxes audio');
+        $cmd = (new ToneMapThreadingSpyRunner(null, false))
+            ->buildSegmentCommand($input, "{$dir}/seg-v480p-00002.ts", 12.0, 6.0, $captParams);
+        $this->assertStringContainsString('-af "loudnorm=I=-16:LRA=11:TP=-1.5"', $cmd);
+    }
+
+    /**
+     * SITE 2 disabled: the ABR rendition carries no loudnorm key and its command is
+     * byte-clean of `-af loudnorm`.
+     */
+    public function testEnsureSegmentAbrRenditionOmitsLoudnormWhenDisabled(): void
+    {
+        $dir = $this->segmentDir . '/ln-abr-off';
+        mkdir($dir, 0755, true);
+        $input = $dir . '/in.mkv';
+        file_put_contents($input, 'x');
+        $ladderJson = (string) json_encode(
+            (new AbrLadder())->build(
+                new SourceProfile(width: 1920, height: 1080, videoCodec: 'h264', videoBitrate: 6000000, audioCodec: 'aac'),
+                'web'
+            )->toArray()
+        );
+        $captured = [];
+        $db = $this->mockDb([], 0, [], $this->multiVariantJobRow($dir, $input, $ladderJson), $captured);
+        $ff = $this->createMock(FfmpegRunner::class);
+        $captParams = null;
+        $ff->expects($this->once())->method('startSegmentEncode')->willReturnCallback(
+            function (string $in, string $out, float $s, float $l, array $params) use (&$captParams): int {
+                $captParams = $params;
+                file_put_contents($out, 'encoded');
+                return 1;
+            }
+        );
+
+        $this->loudnormManager($db, $ff, null)->ensureSegment('seg-job', '480p', 2);
+
+        $this->assertNotNull($captParams);
+        $this->assertArrayNotHasKey('loudnorm', $captParams);
+        $cmd = (new ToneMapThreadingSpyRunner(null, false))
+            ->buildSegmentCommand($input, "{$dir}/seg-v480p-00002.ts", 12.0, 6.0, $captParams);
+        $this->assertStringNotContainsString('loudnorm', $cmd);
+    }
+
+    /**
+     * SITE 3 (multi-audio audio-only): produceAudioSegment() builds a fresh
+     * $segParams that never reads segment_params, so applyLoudnorm() there is the
+     * ONLY way the target reaches a multi-audio job's normalized sound (its video
+     * segments are `-an`). The real buildAudioSegmentCommand() emits `-af loudnorm`.
+     */
+    public function testProduceAudioSegmentThreadsLoudnormWhenEnabled(): void
+    {
+        $dir = $this->segmentDir . '/ln-audioonly';
+        mkdir($dir, 0755, true);
+        $input = $dir . '/in.mkv';
+        file_put_contents($input, 'x');
+        $captured = [];
+        $db = $this->mockDb([], 0, [], $this->multiAudioJobRow($dir, $input), $captured);
+        $ff = $this->createMock(FfmpegRunner::class);
+        $captParams = null;
+        $ff->expects($this->once())->method('startSegmentEncode')->willReturnCallback(
+            function (string $in, string $out, float $s, float $l, array $params) use (&$captParams): int {
+                $captParams = $params;
+                file_put_contents($out, 'audio');
+                return 1;
+            }
+        );
+
+        $path = $this->loudnormManager($db, $ff, $this->loudnormTarget())
+            ->ensureSegment('seg-job', null, 1, 'a1');
+
+        $this->assertSame("{$dir}/seg-a1-00001.ts", $path);
+        $this->assertNotNull($captParams);
+        $this->assertTrue($captParams['audio_only']);
+        $this->assertSame($this->loudnormTarget(), $captParams['loudnorm'] ?? null);
+        $cmd = $this->runner()->buildAudioSegmentCommand($input, "{$dir}/seg-a1-00001.ts", 6.0, 6.0, $captParams);
+        $this->assertStringContainsString('-af "loudnorm=I=-16:LRA=11:TP=-1.5"', $cmd);
+    }
+
+    /**
+     * SITE 3 disabled: the audio-only segment params carry no loudnorm key and the
+     * command is byte-clean of `-af loudnorm`.
+     */
+    public function testProduceAudioSegmentOmitsLoudnormWhenDisabled(): void
+    {
+        $dir = $this->segmentDir . '/ln-audioonly-off';
+        mkdir($dir, 0755, true);
+        $input = $dir . '/in.mkv';
+        file_put_contents($input, 'x');
+        $captured = [];
+        $db = $this->mockDb([], 0, [], $this->multiAudioJobRow($dir, $input), $captured);
+        $ff = $this->createMock(FfmpegRunner::class);
+        $captParams = null;
+        $ff->expects($this->once())->method('startSegmentEncode')->willReturnCallback(
+            function (string $in, string $out, float $s, float $l, array $params) use (&$captParams): int {
+                $captParams = $params;
+                file_put_contents($out, 'audio');
+                return 1;
+            }
+        );
+
+        $this->loudnormManager($db, $ff, null)->ensureSegment('seg-job', null, 1, 'a1');
+
+        $this->assertNotNull($captParams);
+        $this->assertArrayNotHasKey('loudnorm', $captParams);
+        $cmd = $this->runner()->buildAudioSegmentCommand($input, "{$dir}/seg-a1-00001.ts", 6.0, 6.0, $captParams);
+        $this->assertStringNotContainsString('loudnorm', $cmd);
+    }
+
+    /**
+     * A plain real FfmpegRunner for asserting on produced audio-only commands
+     * (buildAudioSegmentCommand never spawns a probe, so no spy is needed here).
+     */
+    private function runner(): FfmpegRunner
+    {
+        return new FfmpegRunner('/usr/bin/ffmpeg', '/usr/bin/ffprobe', '/tmp');
+    }
+
     public function testEnsureHlsJobReuseKeyCarriesFormatVersion(): void
     {
         // The reuse key embeds a format version so every job persisted before the

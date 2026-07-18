@@ -7320,3 +7320,25 @@ lives — without spawning ffmpeg, publishing the segment so `produceSegment`'s 
   buildAudioSegmentCommand) actually receives targets. Files: `src/Media/Transcoding/TranscodeManager.php`,
   `src/Common/Container/Providers/TranscodeServicesProvider.php`,
   `tests/Unit/Common/Container/Providers/TranscodeServicesProviderTest.php`.
+
+## SV-3.3(1B) — populate loudnorm params at all three segment-assembly sites (2026-07-18)
+- [x] DONE — Added private helper `TranscodeManager::applyLoudnorm(array $segParams): array` (mirrors
+  `applyToneMap`/`applySubtitleBurnIn`; adds `$segParams['loudnorm'] = $this->loudnormParams` only when
+  the 1A-threaded property is non-null → disabled stays byte-identical). Wired at ALL THREE sites:
+  (1) `computeSegmentParams()` right after the copy→aac audio upgrade — its output persists to
+  `segment_params`, which the LEGACY single-variant `ensureSegment()` reads straight back;
+  (2) the ABR multi-variant branch of `ensureSegment()` after `applySubtitleBurnIn` (segmentParams are
+  rebuilt fresh per-rung by `segmentParamsForRendition()`, so the merge-back is load-bearing for
+  single-audio ABR video segments — real playback path); (3) `produceAudioSegment()`'s fresh
+  `$segParams` (multi-audio audio-only segments — the ONLY place normalization can land since a
+  multi-audio job's video segments are `-an`). `FfmpegRunner::buildLoudnormFilter()` + its
+  buildSegmentCommand/buildAudioSegmentCommand wiring were already present from the earlier SV-3.3 code
+  drop — 1B only populated the params. Tests (were ZERO): +13 `FfmpegRunnerLoudnormTest` (filter units:
+  null when absent/non-array/missing-I/non-numeric-I; single-pass I / I:LRA:TP / measured 2nd-pass
+  strings; copy-audio stays unfiltered; both command builders emit/omit `-af loudnorm`) and +7
+  `TranscodeManagerTest` (all three sites: enabled → captured params carry `loudnorm` AND the real
+  builder emits `-af "loudnorm=I=-16:LRA=11:TP=-1.5"`; disabled → no key, command byte-clean — using a
+  single-audio fixture for the ABR video rung and a **multi-audio** fixture for the audio-only path per
+  the injection landmine). Full Unit **5755/41945/0 fail/0 err/5 skip** (baseline 5735 + 20 new);
+  phpstan L9 `[OK] No errors`; phpcs PSR-12 0/0 on changed src. **2A/2B still pending** (the
+  `direct_play` capability gate — NOT in scope for 1B).

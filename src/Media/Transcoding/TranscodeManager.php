@@ -798,6 +798,13 @@ class TranscodeManager
             // base segment_params — resolve+merge it back in here so every rendition
             // of a multi-variant job honours the same job-wide burn-in toggle.
             $segParams = $this->applySubtitleBurnIn($row, $segParams);
+            // SV-3.3(1B): segmentParamsForRendition() likewise rebuilds params fresh
+            // per-rendition and carries NO loudnorm target — merge the configured one
+            // back in (parallel to applyToneMap/applySubtitleBurnIn above) so every
+            // ABR video segment's audio re-encode is loudness-normalized. Inert when
+            // unconfigured; also inert on a video_only (-an) rung, where the audio-only
+            // renditions carry the normalized sound instead.
+            $segParams = $this->applyLoudnorm($segParams);
             return $this->produceSegment($jobId, $row, $variant, $index, $segParams);
         }
 
@@ -940,6 +947,49 @@ class TranscodeManager
         }
 
         $segParams['subtitle_burn_in'] = ['path' => $vttPath, 'format' => 'vtt'];
+
+        return $segParams;
+    }
+
+    /**
+     * Merges the configured loudness-normalization target (SV-3.3(1B)) into a
+     * per-segment `$segParams` array so {@see FfmpegRunner::buildLoudnormFilter()}
+     * — already wired into {@see FfmpegRunner::buildSegmentCommand()} and
+     * {@see FfmpegRunner::buildAudioSegmentCommand()} — receives an
+     * `-af "loudnorm=…"` target on the audio RE-ENCODE branch.
+     *
+     * Reads the ctor-threaded {@see self::$loudnormParams} (SV-3.3(1A): the
+     * `config/ffmpeg.php` `loudness` block, validated+normalised once by
+     * {@see \Phlix\Common\Container\Providers\TranscodeServicesProvider}). It is
+     * null (loudness disabled/unconfigured — the shipped default) unless an
+     * operator opts in, in which case NO key is added and every produced command
+     * is byte-identical to pre-SV-3.3.
+     *
+     * Called at ALL THREE param-assembly sites — {@see computeSegmentParams()}
+     * (the base assembler persisted to `segment_params`, read back by the legacy
+     * single-variant {@see ensureSegment()} path), the ABR per-rendition video
+     * branch in {@see ensureSegment()} (which rebuilds `$segParams` fresh via
+     * {@see segmentParamsForRendition()} and so carries NO loudnorm target), and
+     * the multi-audio audio-only path in {@see produceAudioSegment()} (a fresh
+     * `$segParams` that never reads `segment_params`) — because injecting at only
+     * one site would silently miss the others (the SV-3.3 landmine).
+     *
+     * The filter can only apply on a REAL audio encode — a `-c:a copy` stream
+     * cannot be filtered — so it is inherently inert on copy/`original` audio and
+     * on `-an` video-only (audio-group) segments; that is correct, the audio-only
+     * renditions carry the normalized sound in a multi-audio job.
+     *
+     * @param array<string, mixed> $segParams Segment params to augment.
+     *
+     * @return array<string, mixed> `$segParams`, with `loudnorm` added when configured.
+     *
+     * @since SV-3.3(1B)
+     */
+    private function applyLoudnorm(array $segParams): array
+    {
+        if ($this->loudnormParams !== null) {
+            $segParams['loudnorm'] = $this->loudnormParams;
+        }
 
         return $segParams;
     }
@@ -1303,6 +1353,12 @@ class TranscodeManager
             'audio_bitrate' => '128k',
             'audio_stream_index' => $audioStreamIndex,
         ];
+        // SV-3.3(1B): in a multi-audio job the video segments are `-an`, so loudness
+        // normalization can ONLY happen on this audio-only path — this $segParams is
+        // built fresh here and never reads segment_params, so the target must be
+        // merged in directly. buildAudioSegmentCommand always re-encodes to AAC, so
+        // the filter always applies when configured. Inert (null) by default.
+        $segParams = $this->applyLoudnorm($segParams);
 
         // Refresh the dedup snapshot (same as produceSegment).
         $this->reconcileInFlightSegments();
@@ -2063,6 +2119,14 @@ class TranscodeManager
             $params['audio_codec'] = 'aac';
             $params['audio_bitrate'] = is_string($params['audio_bitrate'] ?? null) ? $params['audio_bitrate'] : '128k';
         }
+
+        // SV-3.3(1B): thread the configured loudness-normalization target (if any)
+        // into the base params. This array is persisted verbatim to segment_params
+        // and read straight back by the LEGACY single-variant ensureSegment() path,
+        // so populating it here is what puts `-af "loudnorm=…"` on that path's audio
+        // re-encode (the copy→aac upgrade above guarantees a real encode to filter).
+        // Inert (null) by default → byte-identical to pre-SV-3.3.
+        $params = $this->applyLoudnorm($params);
 
         // SV-1.1(b): when computeHlsParams() flagged this item as needing HDR
         // tone-mapping, resolve the tone-map filter STRING once — here, from the

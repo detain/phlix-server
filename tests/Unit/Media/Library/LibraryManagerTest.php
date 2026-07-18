@@ -97,7 +97,11 @@ class LibraryManagerTest extends TestCase
      */
     public function testRescanPrunesItemsWhoseSourceFileIsGone(): void
     {
-        $survivingPath = tempnam(sys_get_temp_dir(), 'phlix_rescan_keep_');
+        // An accessible library root so the storage-availability guard permits
+        // pruning (the surviving file lives inside it).
+        $rootDir = sys_get_temp_dir() . '/phlix_rescan_root_' . uniqid();
+        mkdir($rootDir, 0755, true);
+        $survivingPath = tempnam($rootDir, 'phlix_rescan_keep_');
         $this->assertIsString($survivingPath);
         $gonePath = '/nonexistent/path/removed-file.mkv';
 
@@ -107,7 +111,7 @@ class LibraryManagerTest extends TestCase
                 'id' => 'lib-1',
                 'name' => 'Movies',
                 'type' => 'video',
-                'paths' => json_encode(['/nonexistent/library/path']),
+                'paths' => json_encode([$rootDir]),
                 'options' => json_encode([]),
             ],
             'prune_rows' => [
@@ -141,6 +145,7 @@ class LibraryManagerTest extends TestCase
         $this->assertSame(1, $result->removed);
 
         @unlink($survivingPath);
+        @rmdir($rootDir);
     }
 
     /**
@@ -149,13 +154,18 @@ class LibraryManagerTest extends TestCase
      */
     public function testRescanPrunesEmptyContainers(): void
     {
+        // An accessible library root so the storage-availability guard permits
+        // pruning of the now-empty containers.
+        $rootDir = sys_get_temp_dir() . '/phlix_rescan_root_' . uniqid();
+        mkdir($rootDir, 0755, true);
+
         $queries = [];
         $db = $this->makeDb($queries, [
             'library_row' => [
                 'id' => 'lib-1',
                 'name' => 'Shows',
                 'type' => 'series',
-                'paths' => json_encode(['/nonexistent/library/path']),
+                'paths' => json_encode([$rootDir]),
                 'options' => json_encode([]),
             ],
             'prune_rows' => [],
@@ -179,6 +189,103 @@ class LibraryManagerTest extends TestCase
 
         // Two empty containers pruned.
         $this->assertSame(2, $result->removed);
+
+        @rmdir($rootDir);
+    }
+
+    /**
+     * CRITICAL data-loss guard: when the library's storage is temporarily
+     * unavailable (unmounted NAS/SMB/USB, autofs not triggered, misconfigured
+     * path) the configured root is not a directory, the scan finds ZERO files,
+     * and an unguarded prune would see file_exists()===false for EVERY item and
+     * DELETE the whole library — cascading into user_item_data / watch-history.
+     * The guard must SKIP pruning entirely: no deletes issued, items + user data
+     * intact, ScanResult.removed == 0.
+     */
+    public function testRescanSkipsPruneWhenLibraryRootIsUnavailable(): void
+    {
+        $queries = [];
+        $db = $this->makeDb($queries, [
+            'library_row' => [
+                'id' => 'lib-1',
+                'name' => 'Movies',
+                'type' => 'video',
+                // Root is not a directory — storage unavailable / unmounted.
+                'paths' => json_encode(['/nonexistent/unmounted/library/path']),
+                'options' => json_encode([]),
+            ],
+            // DB still holds items — a naive prune would delete them all.
+            'prune_rows' => [
+                ['id' => 'keep-1', 'path' => '/nonexistent/unmounted/library/path/a.mkv'],
+                ['id' => 'keep-2', 'path' => '/nonexistent/unmounted/library/path/b.mkv'],
+            ],
+            'count_before' => 2,
+            'count_after' => 2,
+        ]);
+
+        $scanner = $this->createMock(MediaScanner::class);
+        $watcher = $this->createMock(FolderWatcher::class);
+        $musicLibraryService = $this->createMock(MusicLibraryService::class);
+
+        $manager = new LibraryManager($db, $scanner, $watcher, $musicLibraryService);
+
+        $result = $manager->rescanLibrary('lib-1');
+
+        // NO deletes at all — neither library-wide nor per-item leaf deletes.
+        $deletes = $this->deletes($queries);
+        $this->assertSame([], $deletes, 'unavailable storage must issue no DELETE');
+        foreach ($queries as [$sql, $sqlParams]) {
+            $this->assertStringNotContainsString(
+                'DELETE FROM media_items WHERE library_id',
+                $sql,
+            );
+        }
+
+        // Nothing pruned — user data preserved.
+        $this->assertSame(0, $result->removed);
+    }
+
+    /**
+     * Defensive guard: even if a configured root path happens to resolve to a
+     * directory, if the walk finds ZERO accessible leaf files while the DB still
+     * holds leaf items, the media is effectively unavailable — pruning is skipped
+     * rather than wiping the whole library.
+     */
+    public function testRescanSkipsPruneWhenNoLeafFileIsAccessible(): void
+    {
+        // Root exists (empty dir) but none of the DB items' files are present.
+        $rootDir = sys_get_temp_dir() . '/phlix_rescan_root_' . uniqid();
+        mkdir($rootDir, 0755, true);
+
+        $queries = [];
+        $db = $this->makeDb($queries, [
+            'library_row' => [
+                'id' => 'lib-1',
+                'name' => 'Movies',
+                'type' => 'video',
+                'paths' => json_encode([$rootDir]),
+                'options' => json_encode([]),
+            ],
+            'prune_rows' => [
+                ['id' => 'gone-1', 'path' => $rootDir . '/gone-a.mkv'],
+                ['id' => 'gone-2', 'path' => $rootDir . '/gone-b.mkv'],
+            ],
+            'count_before' => 2,
+            'count_after' => 2,
+        ]);
+
+        $scanner = $this->createMock(MediaScanner::class);
+        $watcher = $this->createMock(FolderWatcher::class);
+        $musicLibraryService = $this->createMock(MusicLibraryService::class);
+
+        $manager = new LibraryManager($db, $scanner, $watcher, $musicLibraryService);
+
+        $result = $manager->rescanLibrary('lib-1');
+
+        $this->assertSame([], $this->deletes($queries), 'no accessible file → no DELETE');
+        $this->assertSame(0, $result->removed);
+
+        @rmdir($rootDir);
     }
 
     /**

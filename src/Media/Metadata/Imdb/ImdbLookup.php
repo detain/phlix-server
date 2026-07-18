@@ -113,7 +113,10 @@ class ImdbLookup
      * it matches only on an EXACT normalized aka title in `imdb_title_akas`,
      * joined back to `imdb_titles` for the full payload. When a year is supplied
      * candidates are constrained to a +/- 1 year window (with the exact year
-     * preferred); the most-voted title wins ties.
+     * preferred) and the most-voted title wins ties. When NO year is supplied
+     * there is nothing to disambiguate colliding akas, so the fallback resolves
+     * ONLY when a single distinct `tconst` matches — if more than one distinct
+     * title shares the normalized aka it returns null (ambiguous → no guess).
      *
      * @param string   $title Raw (un-normalized) title as seen on disk.
      * @param int|null $year  Optional release year; matched +/- 1 year.
@@ -144,6 +147,8 @@ class ImdbLookup
             . 'WHERE a.normalized_title = ? ';
 
         if ($year !== null) {
+            // Year already disambiguates colliding akas — keep the most-voted
+            // title within the +/- 1 year window.
             $rows = $this->db->query(
                 $select
                 . 'AND t.start_year BETWEEN ? AND ? '
@@ -151,16 +156,38 @@ class ImdbLookup
                 . 'LIMIT 1',
                 [$normalized, $year - 1, $year + 1, $year]
             );
-        } else {
-            $rows = $this->db->query(
-                $select
-                . 'ORDER BY t.num_votes DESC '
-                . 'LIMIT 1',
-                [$normalized]
-            );
+
+            if (!is_array($rows) || $rows === []) {
+                return null;
+            }
+            $row = $rows[0];
+            if (!is_array($row)) {
+                return null;
+            }
+            return $this->mapRow($row);
         }
 
+        // YEARLESS branch: with no year to disambiguate, an alternate/localized
+        // aka can collide across unrelated films. Rather than silently picking
+        // the most-voted match (a likely false positive), fetch up to two
+        // DISTINCT candidate titles: if more than one distinct tconst matches
+        // the exact normalized aka we treat it as ambiguous and return null.
+        // Only a single unambiguous match resolves.
+        $rows = $this->db->query(
+            $select
+            . 'GROUP BY t.tconst, t.primary_title, t.start_year, t.genres, '
+            . 't.average_rating, t.num_votes, t.runtime_minutes '
+            . 'ORDER BY t.num_votes DESC '
+            . 'LIMIT 2',
+            [$normalized]
+        );
+
         if (!is_array($rows) || $rows === []) {
+            return null;
+        }
+
+        // More than one distinct tconst → ambiguous, refuse to guess.
+        if (count($rows) > 1) {
             return null;
         }
 

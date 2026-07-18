@@ -238,4 +238,80 @@ class ImdbLookupTest extends TestCase
         $lookup = new ImdbLookup($db);
         $this->assertNull($lookup->lookupByAka('   ', 2001));
     }
+
+    /**
+     * Yearless aka collision: when more than one DISTINCT tconst shares the exact
+     * normalized aka there is nothing to disambiguate, so the fallback must refuse
+     * to guess (return null) rather than silently pick the most-voted title.
+     */
+    public function testLookupByAkaYearlessReturnsNullWhenMultipleDistinctTconstsMatch(): void
+    {
+        $captured = [];
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(
+            function (string $sql, array $params) use (&$captured): array {
+                $captured['sql'] = $sql;
+                $captured['params'] = $params;
+                // Two unrelated films share the localized aka "Crash".
+                return [
+                    [
+                        'tconst' => 'tt0375679',
+                        'primary_title' => 'Crash',
+                        'start_year' => 2004,
+                        'genres' => 'Drama',
+                        'average_rating' => '7.7',
+                        'num_votes' => '460000',
+                        'runtime_minutes' => 112,
+                    ],
+                    [
+                        'tconst' => 'tt0113277',
+                        'primary_title' => 'Crash',
+                        'start_year' => 1996,
+                        'genres' => 'Drama',
+                        'average_rating' => '6.4',
+                        'num_votes' => '30000',
+                        'runtime_minutes' => 100,
+                    ],
+                ];
+            }
+        );
+
+        $lookup = new ImdbLookup($db);
+        $result = $lookup->lookupByAka('Crash', null);
+
+        $this->assertNull($result);
+        // The yearless branch fetches up to two distinct candidates to detect
+        // ambiguity (GROUP BY tconst, LIMIT 2) — still no year window.
+        $sql = $captured['sql'];
+        $this->assertIsString($sql);
+        $this->assertStringContainsString('GROUP BY t.tconst', $sql);
+        $this->assertStringContainsString('LIMIT 2', $sql);
+        $this->assertStringNotContainsString('BETWEEN', $sql);
+        $this->assertSame(['crash'], $captured['params']);
+    }
+
+    /**
+     * Yearless aka matching exactly ONE distinct tconst resolves normally.
+     */
+    public function testLookupByAkaYearlessResolvesWhenExactlyOneDistinctTconst(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturn([[
+            'tconst' => 'tt0000005',
+            'primary_title' => 'A Quiet Place',
+            'start_year' => 2018,
+            'genres' => 'Horror',
+            'average_rating' => '7.5',
+            'num_votes' => '500000',
+            'runtime_minutes' => 90,
+        ]]);
+
+        $lookup = new ImdbLookup($db);
+        $result = $lookup->lookupByAka('Un Lugar Tranquilo', null);
+
+        $this->assertNotNull($result);
+        $this->assertSame('tt0000005', $result['imdb_id']);
+        $this->assertSame('A Quiet Place', $result['title']);
+        $this->assertSame(2018, $result['year']);
+    }
 }

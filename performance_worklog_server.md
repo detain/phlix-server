@@ -7761,3 +7761,21 @@ DONE in §2 spec bullet + the two perf-2 resume-state notes + the perf-3 on-box-
 
 Owed on-box items remain infra verification (not docs): real-nginx 429 CORS echo, HAProxy WS
 per-client throttle / PROXY-protocol — noted honestly in the worklog, not claimed as done.
+
+## install.sh env (2026-07-18) — TRUSTED_PROXIES + DB_* keys + optional tunables
+
+`scripts/install.sh` env-file management updated (fresh heredoc + `--update` backfill), idempotent:
+- SV-4.15 `TRUSTED_PROXIES`: documented commented block in the fresh heredoc (uncommented only when the
+  `--no-proxy` interactive prompt supplies a non-loopback proxy IP/CIDR; non-interactive `--no-proxy`
+  warns); `--update` appends the commented guidance block only when no `TRUSTED_PROXIES=` line (commented
+  or not) exists (grep-guarded, preserves operator value). No forced default (matches the code's
+  loopback-only default `127.0.0.0/8,::1/128`).
+- DB_* alias bug fix: heredoc now emits the keys `config/database.php` actually reads
+  (`DB_HOST/DB_PORT/DB_NAME/DB_USER` alongside `DB_PASSWORD`), keeping the `PHLIX_DATABASE_*` aliases
+  (uninstaller reads them). `--update` backfills each `DB_*` from the recorded `PHLIX_DATABASE_*` via
+  `phlix_ensure_env_key` (no-op when operator already set it) — fixes custom `--db-*` installs silently
+  hitting the default DB.
+- Optional tunables (commented, documentary only): `#HLS_MIN_DISK_SPACE_BYTES=524288000` +
+  `#RATE_LIMIT_<SURFACE>_MAX/_WINDOW` for register/refresh/webauthn_start/webauthn_finish/jwks/ws_connect.
+Verified: `bash -n` clean; heredoc + backfill rendered/tested for both TRUSTED_PROXIES cases and run
+twice (no duplicate lines). Hub install.sh untouched (audit confirmed no change needed).

@@ -132,4 +132,75 @@ final class WsMetricsRemoteIpTest extends TestCase
             'no metrics row until the WS handshake resolves the real client IP',
         );
     }
+
+    /**
+     * A bare-TCP peer that reaches onConnect but NEVER completes the WS handshake
+     * (HAProxy :8097 health checks, port scanners, aborted handshakes) must not
+     * produce ANY metrics row — neither from the touchActiveConnections() timer nor
+     * from onClose's final touch. Before the 882a8f06-fix, touching a never-opened
+     * id made MetricsRegistry::touchConnection()'s !isset fallback fabricate a
+     * phantom `kind=http` / `remote_ip=null` row under the WS worker's worker_id.
+     */
+    public function testNeverUpgradedConnectionCreatesNoPhantomMetricsRow(): void
+    {
+        $registry = new MetricsRegistry();
+        $server = $this->makeServerWithMetrics($registry);
+
+        // onConnect (TCP-accept) pools the connection; the WS handshake
+        // (onWebSocketConnect) never fires, so no metrics record is opened.
+        $conn = $this->mockTcpConnection('127.0.0.1');
+        $server->onConnect($conn);
+
+        // A touch-timer tick must SKIP the never-upgraded connection entirely.
+        $server->touchActiveConnections();
+        self::assertCount(
+            0,
+            $registry->snapshotConnections(),
+            'touch timer must not fabricate a metrics row for a never-upgraded connection',
+        );
+
+        // onClose must likewise NOT touch (no phantom kind=http row on disconnect).
+        $server->onClose($conn);
+        self::assertCount(
+            0,
+            $registry->snapshotConnections(),
+            'onClose must not fabricate a phantom kind=http row for a never-upgraded connection',
+        );
+    }
+
+    /**
+     * The normal (upgraded) path is unchanged: the connection is opened at the
+     * handshake, the touch timer records its cumulative byte counts, and onClose
+     * leaves a FINAL touch in place (the row survives close for the next flush to
+     * persist — it is deliberately not closeConnection()'d).
+     */
+    public function testUpgradedConnectionIsTouchedByTimerThenFinalTouchedOnClose(): void
+    {
+        $registry = new MetricsRegistry();
+        $server = $this->makeServerWithMetrics($registry);
+
+        $conn = $this->mockTcpConnection('203.0.113.50');
+        // Cumulative byte counters Workerman maintains on the TCP connection.
+        $conn->bytesRead = 1234;
+        $conn->bytesWritten = 5678;
+
+        $server->onConnect($conn);
+        $server->onWebSocketConnect($conn, $this->makeRequest());
+        self::assertCount(1, $registry->snapshotConnections(), 'handshake opens exactly one row');
+
+        // Timer tick touches the opened connection with its cumulative counts.
+        $server->touchActiveConnections();
+        $record = array_values($registry->snapshotConnections())[0];
+        self::assertSame('websocket', $record['kind']);
+        self::assertSame(1234, $record['bytes_in'], 'timer touch records cumulative bytesRead');
+        self::assertSame(5678, $record['bytes_out'], 'timer touch records cumulative bytesWritten');
+
+        // Close records a final touch WITHOUT deleting the row.
+        $server->onClose($conn);
+        self::assertCount(
+            1,
+            $registry->snapshotConnections(),
+            'onClose records a final touch for an opened connection, it does not delete the row',
+        );
+    }
 }

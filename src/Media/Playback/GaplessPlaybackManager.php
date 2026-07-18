@@ -92,20 +92,4 @@ class GaplessPlaybackManager
         $this->preferencesCache[$userId] = $prefs;
         return $prefs;
     }
-
-    /**
-     * Clear the preferences cache (e.g., when settings are updated).
-     *
-     * @param string|null $userId User UUID to clear, or null to clear all
-     *
-     * @return void
-     */
-    public function clearCache(?string $userId = null): void
-    {
-        if ($userId === null) {
-            $this->preferencesCache = [];
-        } else {
-            unset($this->preferencesCache[$userId]);
-        }
-    }
 }

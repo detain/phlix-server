@@ -365,10 +365,23 @@ class WebSocketServerTest extends TestCase
         $server->setMetricsCollector($collector);
 
         $tcp = $this->createMock(TcpConnection::class);
+        $tcp->method('getRemoteIp')->willReturn('127.0.0.1');
         $tcp->bytesRead = 1234;
         $tcp->bytesWritten = 5678;
-        $wsConnection = new Connection($tcp);
-        ConnectionPool::getInstance()->add($wsConnection);
+
+        // Drive the real lifecycle: onConnect pools the connection at TCP-accept,
+        // then onWebSocketConnect opens its S2 metrics record at the WS handshake.
+        // Only opened/upgraded connections are touched by the timer — a bare-TCP
+        // peer that never upgrades is intentionally skipped (no phantom kind=http
+        // row; see WsMetricsRemoteIpTest::testNeverUpgraded...).
+        $server->onConnect($tcp);
+        $server->onWebSocketConnect(
+            $tcp,
+            new \Workerman\Protocols\Http\Request("GET / HTTP/1.1\r\nHost: localhost\r\n\r\n"),
+        );
+
+        $wsConnection = ConnectionPool::getInstance()->getByObjectId($tcp);
+        self::assertInstanceOf(Connection::class, $wsConnection);
 
         // Between flushes the touch timer calls this; the live connection's current
         // cumulative bytes must land in the registry (previously stayed a zero row

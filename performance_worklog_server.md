@@ -7845,3 +7845,142 @@ M `src/Media/Playback/PlaybackPreferences.php`, M `src/Media/Transcoding/FfmpegR
 `src/Media/Playback/GaplessPlayer.php`, D `src/Media/Transcoding/CrossfadeGenerator.php`, D
 `src/Media/Transcoding/GaplessTranscoder.php` (+ this worklog).
 Suggested commit message: `transcode/music: SV-6 remove dead server gapless subsystem (client-side impl superseded it)`.
+
+---
+
+## Reviewer (cumulative) — 2026-07-18
+
+Seam/cumulative review of commit range `d21dc123..2c68da14` (§6 removals Run A `190445c7` +
+gapless removal `d781d155` + item5a `7e8854b8` + item5+ `882a8f06` + item5b `cac8c878` +
+item5c3 `f645edbc` + pin bump `2c68da14`). Focus: integration between the pieces and regressions
+the per-piece reviews could not see.
+
+Verified clean (no findings): Run A removals — zero dangling refs to `killSegmentProcess`,
+`HwaccelCommandBuilder`/`createCommandBuilder`, `dispatchAsync`/`sendToWebhookWithBackoff`,
+`ArtworkController`, `RequestContext::clearUserId/hasProfileId/clearProfileId`; kept
+`WebhookDispatcher::computeBackoffDelayMs`/`getHttpClient`/`BACKOFF_*_DELAY_MS` still have live
+callers (`dispatch()`→`sendToWebhook()`:284/317); test substitutions `clearUserId()`→`setUserId(null)`
+are behavior-preserving. Gapless DI (`d781d155`) — EVERY construction site consistent: no-container
+branch `Application.php:2992 new GaplessPlaybackManager(null)`, container branch `:3009 ->get(...)`,
+`MediaServicesProvider:673` dropped the `ffmpegRunner` param, tests use `createMock` (no ctor);
+`MediaItemController` never took `FfmpegRunner`, so the removed `$ffmpegRunner` fetch was genuinely
+unused; `getPreferences()` is self-contained (only `$userRepository`/`$preferencesCache`); the
+`FfmpegRunner` import in the provider is still used at 304/584. Logger routing (`cac8c878`) — app.log
+(`file`) and error.log (`error`) have no `channels`/`env` gate → still attach to EVERY channel (no
+coverage loss); events.log correctly scoped to EVENTS + gated on `PHLIX_DEBUG_EVENTS`; plugins.log
+scoped to PLUGINS; `handlerEnvEnabled()` truthiness (`1/true/yes/on`, `getenv===false`→false) is
+byte-identical to `EventDispatcherFactory::debugEnabled()`; `$this->channel` is the exact string
+`LoggerFactory::get()` was keyed with, and the per-channel cache means no cross-channel handler bleed;
+no record now routes nowhere (file handler catches all). item5c3 (`f645edbc`, HIGHEST SCRUTINY) —
+SEAM CONFIRMED SAFE: each `onWorkerStart` builds its OWN `ContainerFactory::create()` container, and
+`OrderedListenerProvider` is a per-container singleton shared by both `ListenerRegistry` and the PSR-14
+dispatcher (`EventServicesProvider:94-123`), so bootstrap-attached listeners genuinely receive
+dispatched events; `bootstrapEnabled()` is idempotent per-process via the `entryInstances[$name]`
+guard in `enable()` (short-circuits BEFORE `container->get`/`subscribe`/`setEnabled`); the SV-3.6a
+pull timer uses `getEntryInstance()` which builds a FRESH instance and NEVER calls `onEnable()`/
+`subscribe()` (`PluginLoader.php:704`), so it is orthogonal — no double-attach; `TraktPlugin::onEnable()`
+does NO listener subscription and NO network I/O (only container fetches + `initApi()` client build),
+so per-worker boot cost is bounded; HTTP and relay workers are SEPARATE processes with SEPARATE
+dispatchers and a given playback request is served by exactly one of them, so no same-event double-fire
+across workers; `index.php` correctly skipped (throwaway per-request container); the new test dispatches
+a real `PlaybackStarted` through the real provider after a double `bootstrapEnabled()` and proves
+exactly-once. Pin bump `2c68da14` trivial/correct.
+
+### Findings
+
+1. **[Medium] `src/Server/WebSocket/WebSocketServer.php` onClose:543-549 + touchActiveConnections:566-578
+   (regression introduced by `882a8f06`, surfacing via `src/Stats/Metrics/MetricsRegistry.php:270-284`).**
+   Moving `openConnection()` out of `onConnect()` and into `onWebSocketConnect()` leaves a lifecycle
+   gap for TCP connections that fire `onConnect` (which still adds the wrapper to the pool at :340)
+   but never complete the WebSocket handshake — bare-TCP health checks (HAProxy fronts :8097 per the
+   commit's own note), port scanners, and aborted/failed handshakes. For those, `onWebSocketConnect`
+   (and thus `openConnection`) never runs, but `onClose()` still fires with the wrapper present and
+   calls `$this->metrics->touchConnection(...)`; likewise the periodic `touchActiveConnections()` timer
+   (armed every ~`intdiv(flush,2)`≈2s in `start.php:602-608`) touches every pooled-but-not-yet-opened
+   connection. `MetricsRegistry::touchConnection()` has an `!isset($this->connections[$id])` fallback
+   that INVENTS a row with `kind => 'http'` and `remote_ip => null` (:274-283). Net effect: every
+   non-upgraded connection to the WS port now produces a phantom row mislabeled `http` with a null IP,
+   flushed to `metrics_connections` under the WS worker's namespaced `worker_id` (10000+) — corrupting
+   the http-vs-websocket breakdown and injecting null-IP rows. BEFORE this commit, `onConnect` always
+   opened a correctly-kinded `websocket` record, so this class of phantom row did not exist. Why it
+   matters: it is exactly the "is there now a window where a connection isn't tracked / is mistracked?"
+   seam gap; the new `WsMetricsRemoteIpTest::testOnConnectAloneDoesNotRecordConnection` stops at
+   `onConnect` and never exercises the subsequent `onClose`/touch path, so the regression is unverified.
+   Suggested fix: have the WS server only touch connections it actually opened — e.g. track opened IDs
+   (or an "upgraded" flag on the `Connection` wrapper) and skip `touchConnection()` in both `onClose()`
+   and `touchActiveConnections()` for connections that never reached `onWebSocketConnect`; do NOT
+   broaden `MetricsRegistry::touchConnection()`'s `!isset` fallback removal, since that branch is
+   intentionally relied on by the HTTP dispatch path (touch-before-open).
+
+2. **[Low] `src/Media/Playback/GaplessPlaybackManager.php:103-110` — `clearCache()` retained with zero
+   callers (`d781d155`).** The gapless removal commit trimmed the class to `getPreferences()` +
+   `clearCache()`, but `clearCache()` has no caller anywhere in `src/` or `tests/` (the many
+   `clearCache` grep hits belong to unrelated classes: GuideManager, HlsSegmentPrefetcher,
+   MetadataHttpClient, UserRepository, etc.). It is pre-existing dead code that a dead-code-removal
+   commit chose to keep. Why it matters: minor completeness gap for a §6 cleanup; harmless at runtime
+   and defensible as a cache-management companion to `$preferencesCache`, so this is informational —
+   either drop it, or leave it deliberately with a note.
+
+No other integration/seam/boot-safety issues found across the range.
+
+---
+
+## Fixer — 2026-07-18 (cumulative findings 1 & 2)
+
+Both cumulative-review findings fixed, tests added, verified, committed.
+
+### Finding 1 [Medium] — WS metrics phantom-row for never-upgraded connections — FIXED
+`M src/Server/WebSocket/WebSocketServer.php`.
+- Added a per-worker `private array $openedConnectionIds = []` (`array<string, true>`), bounded by live
+  connections (added on open, removed on close/reject — mirrors the ConnectionPool lifecycle; instance
+  property, not static/global).
+- `onWebSocketConnect()`: after the existing `$this->metrics->openConnection(...)` call (inside the
+  `if ($this->metrics !== null)` block) the id is recorded: `$this->openedConnectionIds[$id] = true`.
+  This is the ONLY place an id is marked opened, so bare-TCP peers that never reach the handshake are
+  never marked.
+- Both reject paths in `onWebSocketConnect()` (SV-4.15(h) rate-limit trip AND the auth-fail reject)
+  `unset($this->openedConnectionIds[$id])` right after their existing `connections->remove($id)` — the
+  pool wrapper is gone so `onClose` can't reap the tracking entry, so we drop it there to keep the set
+  bounded.
+- `onClose()`: the final `touchConnection()` is now gated on
+  `$this->metrics !== null && isset($this->openedConnectionIds[$id])`, and the id is `unset()` afterward
+  regardless. A never-upgraded pooled connection (wrapper still present) is thus NOT touched → no phantom
+  `kind=http`/`remote_ip=null` row. (`onClose` deliberately does NOT call `closeConnection()` — that
+  behavior is preserved.)
+- `touchActiveConnections()` timer: `continue`s past any pooled connection whose id is not in
+  `openedConnectionIds`, so the ~2s timer never fabricates a phantom row for a not-yet/never-upgraded
+  connection.
+- Did NOT touch `MetricsRegistry::touchConnection()`'s `!isset` fallback (relied on by the HTTP
+  touch-before-open path), nor the rate-limiter/connection-pool lifecycle — only the metrics calls are
+  gated. `MetricsCollector::closeConnection()` is never invoked from `WebSocketServer`, so there was no
+  `closeConnection` call to guard (onClose only touches).
+- Normal path verified intact: an upgraded connection still opens with the resolved client IP, is touched
+  by the timer (cumulative bytes land in the registry), and records a final touch on close without
+  deleting the row.
+
+### Finding 2 [Low] — dead `GaplessPlaybackManager::clearCache()` — REMOVED
+`M src/Media/Playback/GaplessPlaybackManager.php`. Re-confirmed zero callers with
+`git grep -n 'clearCache' src/ tests/` — the only `GaplessPlaybackManager` hit was the definition
+itself (line 103); every other hit belongs to an unrelated class (UserRepository, GuideManager,
+HlsSegmentPrefetcher, LibraryManager, MetadataHttpClient, HwaccelProbe, LdapConnection). Removed the
+method; kept `getPreferences()` and the `$preferencesCache` field (still read+written inside
+`getPreferences()`).
+
+### Tests
+- `M tests/Unit/Server/WebSocket/WsMetricsRemoteIpTest.php`: added
+  `testNeverUpgradedConnectionCreatesNoPhantomMetricsRow` (onConnect → touch-timer tick → onClose, all
+  assert `snapshotConnections()` stays empty — no phantom row) and
+  `testUpgradedConnectionIsTouchedByTimerThenFinalTouchedOnClose` (normal path: open → timer records
+  1234/5678 cumulative bytes → onClose leaves the row). Existing upgraded-path assertions kept green.
+- `M tests/Unit/Server/WebSocket/WebSocketServerTest.php`: `testTouchActiveConnectionsRecordsLiveConnectionBytes`
+  updated to drive the real lifecycle (onConnect + onWebSocketConnect) before the timer tick, since the
+  timer now only touches connections it actually opened (the old test added a bare wrapper directly to
+  the pool — exactly the never-upgraded case now correctly skipped).
+
+### Verification
+- `./vendor/bin/phpstan analyze -c phpstan.neon.dist` → `[OK] No errors` (660 files).
+- `./vendor/bin/phpunit --filter 'WebSocket|WsMetrics|WsConnect|Metrics|Gapless|MediaItemController|PlaybackInfoTracksParity'`
+  → 178 tests OK (2 pre-existing skips), incl. the new never-upgraded + normal-path tests.
+- `./vendor/bin/phpcs --standard=PSR12` on all 4 changed files → 0 violations.
+- `php -l` clean on both changed src files. No `start.php`/DI/ctor change (instance property only) → no
+  dual-entrypoint mirroring required.

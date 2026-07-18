@@ -95,6 +95,30 @@ class WebSocketServer
     private ?TrustedProxyResolver $trustedProxyResolver = null;
 
     /**
+     * Connection IDs for which an S2 metrics record was actually OPENED — i.e.
+     * the WebSocket handshake completed and {@see onWebSocketConnect()} called
+     * {@see MetricsCollector::openConnection()} with the resolved client IP.
+     *
+     * {@see onConnect()} fires at TCP-accept for EVERY socket, including bare-TCP
+     * peers that never upgrade to WebSocket (HAProxy `:8097` health checks, port
+     * scanners, aborted handshakes). Those are pooled but get NO metrics record.
+     * {@see onClose()} and the {@see touchActiveConnections()} timer must
+     * therefore gate their `touchConnection()` calls on membership here: touching
+     * a never-opened id would make {@see MetricsRegistry::touchConnection()}'s
+     * `!isset` fallback INVENT a phantom `kind => 'http'`, `remote_ip => null`
+     * row under this WS worker's namespaced `worker_id` — the regression from
+     * commit 882a8f06, which moved the open from {@see onConnect()} (always ran)
+     * to {@see onWebSocketConnect()} (only after upgrade).
+     *
+     * Bounded by live connections: an id is added when its record is opened and
+     * removed on close/reject, mirroring the {@see ConnectionPool} lifecycle — no
+     * unbounded growth in the resident worker.
+     *
+     * @var array<string, true>
+     */
+    private array $openedConnectionIds = [];
+
+    /**
      * Creates a new WebSocket server instance.
      *
      * @param array<string, mixed> $config Server configuration with 'host' and 'port' keys
@@ -425,6 +449,10 @@ class WebSocketServer
                 null,
                 null,
             );
+            // Mark this id as having a real metrics record so onClose() and the
+            // touchActiveConnections() timer will touch it — and so bare-TCP
+            // peers that never reach here are NOT touched (no phantom row).
+            $this->openedConnectionIds[$wsConnection->getId()] = true;
         }
 
         // SV-4.15(h): per-IP connect throttle, enforced BEFORE the auth gate so
@@ -447,6 +475,9 @@ class WebSocketServer
                     ['client_ip' => $clientIp, 'reset_at' => $state->resetAt],
                 );
                 $this->connections->remove($wsConnection->getId());
+                // Reject: the pool wrapper is gone so onClose can't reap the
+                // opened-id tracking entry — drop it here to keep the set bounded.
+                unset($this->openedConnectionIds[$wsConnection->getId()]);
                 $connection->close();
                 return;
             }
@@ -463,6 +494,8 @@ class WebSocketServer
         if (!$this->authMiddleware->authenticateConnection($wsConnection, $token)) {
             // Secret configured + missing/invalid token: reject the handshake.
             $this->connections->remove($wsConnection->getId());
+            // As above: reap the opened-id tracking entry on the reject path.
+            unset($this->openedConnectionIds[$wsConnection->getId()]);
             $connection->close();
         }
     }
@@ -532,21 +565,32 @@ class WebSocketServer
                 ], [$wsConnection->getId()]);
             }
 
-            // S2 metrics: record the FINAL cumulative byte counts. We deliberately
-            // do NOT closeConnection() here — that unset the registry row before the
-            // next flush could persist it, so a WebSocket's bytes never reached
-            // metrics_connections. Leaving the final touch in place lets the coming
-            // flush write the real totals; the flush service then TTL-prunes the now
-            // idle row (its last_seen_at ages past connection_ttl) from the registry
-            // AND the table, so it drops out of the live panel ~ttl seconds after
-            // close without leaking worker memory.
-            if ($this->metrics !== null) {
+            // S2 metrics: record the FINAL cumulative byte counts — but ONLY for a
+            // connection whose metrics record was actually OPENED at the WS
+            // handshake ({@see onWebSocketConnect()}). A bare-TCP peer that never
+            // upgraded (HAProxy :8097 health check, port scanner, aborted
+            // handshake) was pooled by onConnect() but never opened as a metrics
+            // row; touching it here would make MetricsRegistry::touchConnection()'s
+            // !isset fallback INVENT a phantom kind=http / remote_ip=null row under
+            // this WS worker's namespaced worker_id (regression from 882a8f06).
+            //
+            // For an OPENED connection we deliberately do NOT closeConnection() —
+            // that unset the registry row before the next flush could persist it, so
+            // a WebSocket's bytes never reached metrics_connections. Leaving the
+            // final touch in place lets the coming flush write the real totals; the
+            // flush service then TTL-prunes the now idle row (its last_seen_at ages
+            // past connection_ttl) from the registry AND the table, so it drops out
+            // of the live panel ~ttl seconds after close without leaking worker
+            // memory.
+            $connectionId = $wsConnection->getId();
+            if ($this->metrics !== null && isset($this->openedConnectionIds[$connectionId])) {
                 $this->metrics->touchConnection(
-                    $wsConnection->getId(),
+                    $connectionId,
                     $connection->bytesRead,
                     $connection->bytesWritten,
                 );
             }
+            unset($this->openedConnectionIds[$connectionId]);
         }
     }
 
@@ -570,6 +614,12 @@ class WebSocketServer
         }
         foreach ($this->connections->all() as $wsConnection) {
             if (!$wsConnection instanceof Connection) {
+                continue;
+            }
+            // Skip connections that never upgraded to WebSocket (no metrics record
+            // was opened): touching them would fabricate a phantom kind=http row via
+            // MetricsRegistry::touchConnection()'s !isset fallback (882a8f06 regression).
+            if (!isset($this->openedConnectionIds[$wsConnection->getId()])) {
                 continue;
             }
             $tcp = $wsConnection->getConnection();

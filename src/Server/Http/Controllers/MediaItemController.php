@@ -15,6 +15,7 @@ use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Library\MediaItemShaper;
+use Phlix\Media\Library\RatingGate;
 use Phlix\Media\Library\StreamProbeBackfill;
 use Phlix\Media\Library\StreamTrackShaper;
 use Phlix\Media\Markers\MarkerService;
@@ -41,13 +42,20 @@ class MediaItemController
      */
     private ?StreamProbeBackfill $streamBackfill;
 
+    /**
+     * Shared parental-control access gate. Null in legacy/no-container contexts,
+     * in which case every gate check is a strict no-op (owner-safe).
+     */
+    private ?RatingGate $ratingGate;
+
     public function __construct(
         ItemRepository $itemRepository,
         MarkerService $markerService,
         GaplessPlaybackManager $gaplessManager,
         TrickplayController $trickplayController,
         ChapterMarkerService $chapterMarkerService,
-        ?StreamProbeBackfill $streamBackfill = null
+        ?StreamProbeBackfill $streamBackfill = null,
+        ?RatingGate $ratingGate = null
     ) {
         $this->itemRepository = $itemRepository;
         $this->markerService = $markerService;
@@ -55,6 +63,23 @@ class MediaItemController
         $this->trickplayController = $trickplayController;
         $this->chapterMarkerService = $chapterMarkerService;
         $this->streamBackfill = $streamBackfill;
+        $this->ratingGate = $ratingGate;
+    }
+
+    /**
+     * Resolve the active profile's parental cap for the current request, or null
+     * (the permissive no-op) when the gate is unwired, the request is
+     * unauthenticated, or the profile/account is not capped (owner-safe).
+     *
+     * @return array{allowedRatings: list<string>, allowUnrated: bool}|null
+     */
+    private function resolveRatingFilter(Request $request): ?array
+    {
+        if ($this->ratingGate === null) {
+            return null;
+        }
+
+        return $this->ratingGate->resolveFilterForUser($request->userId ?? '');
     }
 
     /**
@@ -67,14 +92,30 @@ class MediaItemController
         $limit = $request->queryInt('limit', 100);
         $offset = $request->queryInt('offset', 0);
 
+        $filter = $this->resolveRatingFilter($request);
+
         if ($libraryId) {
             if ($type !== null) {
-                $items = $this->itemRepository->getByType($libraryId, $type, $limit, $offset);
+                $items = $this->itemRepository->getByType(
+                    $libraryId,
+                    $type,
+                    $limit,
+                    $offset,
+                    $filter['allowedRatings'] ?? null,
+                    $filter['allowUnrated'] ?? true
+                );
             } else {
                 $items = $this->itemRepository->getByLibrary($libraryId, $limit, $offset);
             }
         } else {
             $items = $this->itemRepository->searchFuzzy($request->queryString('q', '') ?? '', $limit);
+        }
+
+        // Parental cap: drop over-cap items (by effective rating) for a capped
+        // active profile. No-op for the owner / un-capped profile. getByType
+        // already caps in SQL; this also covers getByLibrary + fuzzy search.
+        if ($filter !== null && $this->ratingGate !== null) {
+            $items = $this->ratingGate->filterItems($items, $filter, 'id');
         }
 
         return (new Response())->json(['items' => $items]);
@@ -88,6 +129,14 @@ class MediaItemController
         $item = $this->itemRepository->findById($params['id']);
 
         if (!$item) {
+            return (new Response())->status(404)->json(['error' => 'Item not found']);
+        }
+
+        // Parental cap: a capped profile requesting an over-cap item (by
+        // effective rating) gets a 404 so no detail — and no signed stream_url —
+        // is disclosed. No-op for the owner / un-capped profile.
+        $filter = $this->resolveRatingFilter($request);
+        if ($filter !== null && $this->ratingGate !== null && !$this->ratingGate->isAllowed($item, $filter)) {
             return (new Response())->status(404)->json(['error' => 'Item not found']);
         }
 
@@ -112,6 +161,15 @@ class MediaItemController
     public function children(Request $request, array $params): Response
     {
         $children = $this->itemRepository->findByParent($params['id']);
+
+        // Parental cap: drop over-cap children (by EFFECTIVE rating, so episodes
+        // inherit the series rating — a drill-down of an allowed series keeps its
+        // episodes, an over-cap series' episodes are hidden). No-op for the owner.
+        $filter = $this->resolveRatingFilter($request);
+        if ($filter !== null && $this->ratingGate !== null) {
+            $children = $this->ratingGate->filterItems($children, $filter, 'id');
+        }
+
         return (new Response())->json(['items' => $children]);
     }
 
@@ -172,6 +230,14 @@ class MediaItemController
         $item = $this->itemRepository->findById($params['id']);
 
         if (!$item) {
+            return (new Response())->status(404)->json(['error' => 'Item not found']);
+        }
+
+        // Parental cap: an over-cap item (by effective rating) is 404 here too, so
+        // a capped profile never gets markers/tracks/signed subtitle URLs. No-op
+        // for the owner / un-capped profile.
+        $filter = $this->resolveRatingFilter($request);
+        if ($filter !== null && $this->ratingGate !== null && !$this->ratingGate->isAllowed($item, $filter)) {
             return (new Response())->status(404)->json(['error' => 'Item not found']);
         }
 
@@ -537,6 +603,14 @@ class MediaItemController
         $item = $this->itemRepository->findById($params['id']);
 
         if (!$item) {
+            return (new Response())->status(404)->json(['error' => 'Item not found']);
+        }
+
+        // Parental cap: never mint a signed download/stream URL for an over-cap
+        // item (by effective rating) when a capped profile is active — 404 so no
+        // URL is disclosed. No-op for the owner / un-capped profile.
+        $filter = $this->resolveRatingFilter($request);
+        if ($filter !== null && $this->ratingGate !== null && !$this->ratingGate->isAllowed($item, $filter)) {
             return (new Response())->status(404)->json(['error' => 'Item not found']);
         }
 

@@ -474,4 +474,118 @@ class UserProfileManagerTest extends TestCase
 
         $this->assertCount(7, $allowed);
     }
+
+    /**
+     * Wire the mock DB for getActiveRatingFilter(): the first query
+     * (user_profiles JOIN) resolves the active profile, the second
+     * (profile_settings) resolves its cap. Either can be forced empty.
+     *
+     * @param array<string, mixed>|null $profileRow  Active-profile row, or null.
+     * @param array<string, mixed>|null $settingsRow profile_settings row, or null.
+     */
+    private function wireRatingFilterDb(?array $profileRow, ?array $settingsRow): void
+    {
+        $this->db->method('query')->willReturnCallback(
+            function (string $sql) use ($profileRow, $settingsRow) {
+                if (str_contains($sql, 'FROM profile_settings')) {
+                    return $settingsRow === null ? [] : [$settingsRow];
+                }
+                // getActiveProfile()'s user_profiles JOIN query.
+                return $profileRow === null ? [] : [$profileRow];
+            }
+        );
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function activeProfileRow(bool $isAdmin = false): array
+    {
+        return [
+            'id' => 'profile-1',
+            'user_id' => 'user-1',
+            'name' => 'Kid',
+            'avatar_url' => null,
+            'is_active' => true,
+            'is_admin' => $isAdmin,
+            'created_at' => '2024-01-01 00:00:00',
+            'updated_at' => '2024-01-01 00:00:00',
+            'content_rating' => 'PG-13',
+        ];
+    }
+
+    public function testGetActiveRatingFilterReturnsNullWhenNoActiveProfile(): void
+    {
+        // No active profile → permissive (owner/no-profile default).
+        $this->wireRatingFilterDb(null, null);
+
+        $this->assertNull($this->manager->getActiveRatingFilter('user-1'));
+    }
+
+    public function testGetActiveRatingFilterReturnsNullForAdminProfile(): void
+    {
+        // The account owner / admin profile must never be rating-filtered.
+        $this->wireRatingFilterDb($this->activeProfileRow(true), [
+            'content_rating' => 'PG-13',
+            'allow_unrated' => 0,
+        ]);
+
+        $this->assertNull($this->manager->getActiveRatingFilter('user-1'));
+    }
+
+    public function testGetActiveRatingFilterReturnsNullWhenNoSettingsRow(): void
+    {
+        // Active non-admin profile but no parental-controls row → no cap.
+        $this->wireRatingFilterDb($this->activeProfileRow(false), null);
+
+        $this->assertNull($this->manager->getActiveRatingFilter('user-1'));
+    }
+
+    public function testGetActiveRatingFilterReturnsNullForMostPermissiveCap(): void
+    {
+        // A cap of UNRATED (max rank) allows everything → treated as no filter.
+        $this->wireRatingFilterDb($this->activeProfileRow(false), [
+            'content_rating' => 'UNRATED',
+            'allow_unrated' => 1,
+        ]);
+
+        $this->assertNull($this->manager->getActiveRatingFilter('user-1'));
+    }
+
+    public function testGetActiveRatingFilterBuildsPg13AllowListInterleavingTv(): void
+    {
+        // A PG-13 cap allows TV-14 (same rank) and everything below; excludes
+        // R/TV-MA and above, and never lists the UNRATED string.
+        $this->wireRatingFilterDb($this->activeProfileRow(false), [
+            'content_rating' => 'PG-13',
+            'allow_unrated' => 1,
+        ]);
+
+        $filter = $this->manager->getActiveRatingFilter('user-1');
+
+        $this->assertIsArray($filter);
+        $this->assertTrue($filter['allowUnrated']);
+        foreach (['G', 'TV-Y', 'TV-G', 'TV-Y7', 'PG', 'TV-PG', 'PG-13', 'TV-14'] as $rating) {
+            $this->assertContains($rating, $filter['allowedRatings']);
+        }
+        foreach (['R', 'TV-MA', 'NC-17', 'X', 'UNRATED'] as $rating) {
+            $this->assertNotContains($rating, $filter['allowedRatings']);
+        }
+    }
+
+    public function testGetActiveRatingFilterHonorsAllowUnratedFalse(): void
+    {
+        $this->wireRatingFilterDb($this->activeProfileRow(false), [
+            'content_rating' => 'PG',
+            'allow_unrated' => 0,
+        ]);
+
+        $filter = $this->manager->getActiveRatingFilter('user-1');
+
+        $this->assertIsArray($filter);
+        $this->assertFalse($filter['allowUnrated']);
+        $this->assertContains('PG', $filter['allowedRatings']);
+        $this->assertContains('TV-PG', $filter['allowedRatings']);
+        $this->assertNotContains('PG-13', $filter['allowedRatings']);
+    }
 }

@@ -608,22 +608,36 @@ class LibraryManager
      * has no remaining children, so a fully-removed show does not leave orphan
      * season/series shells behind.
      *
-     * Pruning is scoped PER-ITEM-ROOT so a library with multiple roots — some
-     * mounted, some not (e.g. a present `/mnt/local` alongside an unmounted
-     * `/mnt/nas`) — is handled safely. Because a leaf is pruned when
-     * {@see file_exists()} returns false, an unavailable root would otherwise
-     * make EVERY item under it look "removed" and delete them — cascading through
-     * `ON DELETE CASCADE` into `user_item_data` (watch progress, favorites,
-     * ratings) and the watch-history tables. To prevent that:
-     *  - if NONE of the configured root paths is currently a readable directory,
-     *    pruning is skipped entirely (0 removed, nothing deleted); and
-     *  - otherwise each leaf is only ever deleted when the specific root it lives
-     *    under IS currently accessible AND its file is genuinely gone. A leaf
-     *    whose owning root is unavailable is always kept — its storage is simply
-     *    unreachable right now, not removed.
-     * A legitimately-emptied library whose root IS accessible therefore correctly
-     * prunes all of its now-gone items, while an unmounted root never triggers a
-     * cascade delete.
+     * Pruning is data-loss-safe by design (mirroring mature media servers, which
+     * never bulk-delete a folder that merely looks empty). A leaf is a prune
+     * candidate only when {@see file_exists()} is false — but that same signal
+     * fires for BOTH "the file was genuinely deleted" AND "the whole storage
+     * volume is unreachable right now" (an unmounted NAS/SMB/USB share, whose
+     * mountpoint DIRECTORY usually persists as an empty dir so `is_dir()` still
+     * returns true and cannot distinguish the two). Deleting on that ambiguous
+     * signal would cascade through the `ON DELETE CASCADE` foreign keys into
+     * `user_item_data` (watch progress, favorites, ratings) and the watch-history
+     * tables. The algorithm therefore:
+     *  1. clears stat caches so is_dir()/file_exists()/realpath() reflect current
+     *     on-disk state (a long-lived worker can hold stale stats across rescans);
+     *  2. computes ACCESSIBLE roots (configured roots where {@see is_dir()} holds)
+     *     — if NONE, pruning is skipped entirely (0 removed);
+     *  3. attributes each leaf to its owning root by the MOST-SPECIFIC (longest)
+     *     matching accessible-root prefix, so nested roots (`/mnt` plus an
+     *     unmounted `/mnt/nas`) attribute items under `/mnt/nas` to that child
+     *     root — not to the accessible `/mnt` parent. A leaf matching no
+     *     accessible prefix has unavailable storage and is always kept;
+     *  4. applies the PER-ROOT PRESENCE GUARD: a root's gone items are pruned only
+     *     if that root has AT LEAST ONE currently-present item. A root with ZERO
+     *     present items is skipped entirely — it is indistinguishable between an
+     *     unmounted-mountpoint leftover and a legitimately-emptied folder, and we
+     *     refuse to bulk-delete either.
+     *
+     * IMPORTANT intended tradeoff: a library (or root) that has been legitimately
+     * fully emptied on disk will RETAIN its last items across a rescan — they are
+     * never pruned here. Intentional full clears are performed by the separate,
+     * explicit "delete all items" operation, NOT by rescan. This is the safe
+     * price of never cascade-erasing user data on an ambiguous unmount.
      *
      * @param string        $libraryId The library's unique identifier
      * @param array<string> $rootPaths The library's configured root paths
@@ -636,36 +650,42 @@ class LibraryManager
         // the current on-disk state (e.g. a root that has since been mounted).
         clearstatcache(true);
 
-        // Compute the set of ACCESSIBLE roots. For each configured root that is
-        // currently a readable directory, keep normalized prefixes (both the
-        // realpath and the raw configured path, each with a trailing directory
-        // separator) so a present file's resolved path OR a now-missing file's
+        // Map normalized ACCESSIBLE-root prefix => canonical root key. For each
+        // configured root that is currently a readable directory, register both
+        // the raw configured path and its realpath (each with a trailing
+        // separator), so a present file's resolved path OR a now-missing file's
         // raw stored path can be matched — and so "/mnt/foo" never matches
-        // "/mnt/foobar".
+        // "/mnt/foobar". Both prefixes resolve to the SAME canonical root key so
+        // per-root tallying is consistent regardless of which one matched.
         $sep = DIRECTORY_SEPARATOR;
-        $accessiblePrefixes = [];
+        $prefixToRoot = [];
         foreach ($rootPaths as $root) {
             if (!is_string($root) || $root === '' || !is_dir($root)) {
                 continue;
             }
-            $accessiblePrefixes[rtrim($root, $sep) . $sep] = true;
+            $rootKey = rtrim($root, $sep) . $sep;
+            $prefixToRoot[$rootKey] = $rootKey;
             $real = realpath($root);
             if (is_string($real)) {
-                $accessiblePrefixes[rtrim($real, $sep) . $sep] = true;
+                $prefixToRoot[rtrim($real, $sep) . $sep] = $rootKey;
             }
         }
 
         // Guard: refuse to prune when no configured root is currently present and
         // readable — the storage is likely unmounted/unavailable, and deleting
         // every item would cascade-erase all user watch data.
-        if ($accessiblePrefixes === []) {
+        if ($prefixToRoot === []) {
             $this->logger->warning(
                 'Skipping prune — no library root is currently accessible; refusing to delete items',
                 ['library_id' => $libraryId, 'paths' => $rootPaths],
             );
             return 0;
         }
-        $prefixes = array_keys($accessiblePrefixes);
+
+        // Match the MOST-SPECIFIC (longest) prefix first so a leaf under a nested
+        // root is attributed to that child root, not its accessible parent.
+        $prefixes = array_keys($prefixToRoot);
+        usort($prefixes, static fn(string $a, string $b): int => strlen($b) <=> strlen($a));
 
         $rows = $this->db->query(
             "SELECT id, path FROM media_items WHERE library_id = ?",
@@ -675,8 +695,10 @@ class LibraryManager
             return 0;
         }
 
-        // Build the leaf-pruning plan WITHOUT deleting yet.
-        $toDelete = [];
+        // Attribute each leaf to its owning accessible root and tally present vs
+        // gone per root, WITHOUT deleting yet.
+        /** @var array<string, array{present:int, gone:list<string>}> $perRoot */
+        $perRoot = [];
         foreach ($rows as $row) {
             if (!is_array($row)) {
                 continue;
@@ -690,43 +712,75 @@ class LibraryManager
                 continue;
             }
 
-            // Which configured root owns this leaf? Resolve the item's real path
-            // when the file is still present; fall back to the raw stored path
-            // when the file is gone (realpath() returns false for a missing file).
+            // Resolve the item's real path when the file is still present; fall
+            // back to the raw stored path when the file is gone (realpath()
+            // returns false for a missing file).
             $resolved = realpath($path);
             $candidate = is_string($resolved) ? $resolved : $path;
 
-            $ownedByAccessibleRoot = false;
+            $owningRoot = null;
             foreach ($prefixes as $prefix) {
                 if (str_starts_with($candidate, $prefix)) {
-                    $ownedByAccessibleRoot = true;
-                    break;
+                    $owningRoot = $prefixToRoot[$prefix];
+                    break; // prefixes sorted longest-first → most specific
                 }
             }
 
             // The root this item lives under is unavailable → never delete; its
             // files are simply unreachable right now, not removed.
-            if (!$ownedByAccessibleRoot) {
+            if ($owningRoot === null) {
                 continue;
             }
 
-            // Owning root IS accessible: prune only when the file is genuinely
-            // gone from disk.
-            if (!file_exists($path)) {
+            if (!isset($perRoot[$owningRoot])) {
+                $perRoot[$owningRoot] = ['present' => 0, 'gone' => []];
+            }
+            if (file_exists($path)) {
+                $perRoot[$owningRoot]['present']++;
+            } else {
+                $perRoot[$owningRoot]['gone'][] = $id;
+            }
+        }
+
+        // Per-root presence guard: only prune a root's gone items when that root
+        // still has ≥1 present item. A root whose every attributed item is
+        // missing is skipped entirely — it could be an unmounted-mountpoint
+        // leftover OR a legitimately-emptied folder, and we refuse to
+        // bulk-delete either (data-loss-safe; intentional full clears go through
+        // the explicit "delete all items" op, not rescan).
+        $toDelete = [];
+        foreach ($perRoot as $rootKey => $tally) {
+            if ($tally['present'] === 0) {
+                if ($tally['gone'] !== []) {
+                    $this->logger->warning(
+                        'Skipping prune for root with no present files; refusing to bulk-delete '
+                        . '(possible unmount or legitimately-emptied folder)',
+                        [
+                            'library_id' => $libraryId,
+                            'root' => $rootKey,
+                            'items_spared' => count($tally['gone']),
+                        ],
+                    );
+                }
+                continue;
+            }
+            foreach ($tally['gone'] as $id) {
                 $toDelete[] = $id;
             }
         }
 
         $removed = 0;
 
-        // Phase 1: prune leaf items whose real source file is gone from disk.
+        // Phase 1: prune leaf items whose real source file is gone from disk and
+        // whose owning root still has present items.
         foreach ($toDelete as $id) {
             $this->db->query("DELETE FROM media_items WHERE id = ?", [$id]);
             $removed++;
         }
 
         // Phase 2: prune now-empty containers — seasons first (their parent
-        // series may become childless afterwards), then series.
+        // series may become childless afterwards), then series. NOT EXISTS
+        // protects any children that were kept by the presence guard above.
         $removed += $this->pruneEmptyContainers($libraryId);
 
         return $removed;

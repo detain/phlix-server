@@ -247,17 +247,21 @@ class LibraryManagerTest extends TestCase
     }
 
     /**
-     * A single accessible root that has been legitimately emptied (the directory
-     * still exists / is mounted, but every file it once held is gone) must prune
-     * ALL of its now-missing leaf items — the storage IS reachable, the media was
-     * genuinely removed. This proves the prior "emptied library never prunes"
-     * regression is fixed: per-item-root scoping replaces the old blunt
-     * presentCount===0 heuristic that skipped pruning here.
+     * CRITICAL single-root unmount / empty-mountpoint data-loss guard (finding
+     * #1). When a NAS/SMB/USB share unmounts, the mountpoint DIRECTORY usually
+     * persists as an empty dir, so is_dir($root) still returns true (the root
+     * looks "accessible") while EVERY file under it reports file_exists()===false.
+     * is_dir() cannot distinguish "unmounted leftover" from "legitimately
+     * emptied", so the per-root PRESENCE GUARD refuses to prune ANY root whose
+     * attributed items are all missing: no deletes, removed==0, items + cascading
+     * user data preserved. (Behaviour change: a genuinely-emptied library now
+     * RETAINS its last items — intentional full clears use the explicit
+     * "delete all items" op, NOT rescan.)
      */
-    public function testRescanPrunesAllItemsWhenAccessibleRootLegitimatelyEmptied(): void
+    public function testRescanSkipsPruneForRootWithNoPresentFiles(): void
     {
-        // Root exists (empty dir, i.e. mounted) but none of the DB items' files
-        // are present any more.
+        // Root exists (empty dir — indistinguishable from an unmounted mountpoint
+        // leftover) but none of the DB items' files are present any more.
         $rootDir = sys_get_temp_dir() . '/phlix_rescan_root_' . uniqid();
         mkdir($rootDir, 0755, true);
 
@@ -275,7 +279,64 @@ class LibraryManagerTest extends TestCase
                 ['id' => 'gone-2', 'path' => $rootDir . '/gone-b.mkv'],
             ],
             'count_before' => 2,
-            'count_after' => 0,
+            'count_after' => 2,
+        ]);
+
+        $scanner = $this->createMock(MediaScanner::class);
+        $watcher = $this->createMock(FolderWatcher::class);
+        $musicLibraryService = $this->createMock(MusicLibraryService::class);
+
+        $manager = new LibraryManager($db, $scanner, $watcher, $musicLibraryService);
+
+        $result = $manager->rescanLibrary('lib-1');
+
+        // Root has ZERO present items → presence guard skips it → NO deletes.
+        $deletes = $this->deletes($queries);
+        $this->assertSame([], $deletes, 'a root with no present files must issue no DELETE');
+        $this->assertNotContains(['DELETE FROM media_items WHERE id = ?', ['gone-1']], $deletes);
+        $this->assertNotContains(['DELETE FROM media_items WHERE id = ?', ['gone-2']], $deletes);
+        $this->assertSame(0, $result->removed);
+
+        @rmdir($rootDir);
+    }
+
+    /**
+     * MULTI-ROOT sibling presence guard. Root A is accessible and holds one
+     * present + one gone file (A HAS presence). Root B is present as an empty
+     * directory (is_dir true — e.g. an unmounted mountpoint leftover) with all of
+     * its attributed items gone. Only root A's gone file is pruned; every item
+     * under root B is preserved because B has zero present items. removed==1.
+     */
+    public function testRescanMultiRootSiblingSkipsRootWithNoPresentFiles(): void
+    {
+        // Root A: accessible, one present file + one genuinely-gone file.
+        $rootA = sys_get_temp_dir() . '/phlix_rescan_rootA_' . uniqid();
+        mkdir($rootA, 0755, true);
+        $presentA = tempnam($rootA, 'phlix_rescan_keep_');
+        $this->assertIsString($presentA);
+        $goneA = $rootA . '/gone-under-a.mkv';
+
+        // Root B: present as an empty dir (is_dir true) but all its items gone.
+        $rootB = sys_get_temp_dir() . '/phlix_rescan_rootB_' . uniqid();
+        mkdir($rootB, 0755, true);
+
+        $queries = [];
+        $db = $this->makeDb($queries, [
+            'library_row' => [
+                'id' => 'lib-1',
+                'name' => 'Movies',
+                'type' => 'video',
+                'paths' => json_encode([$rootA, $rootB]),
+                'options' => json_encode([]),
+            ],
+            'prune_rows' => [
+                ['id' => 'keepA', 'path' => $presentA],
+                ['id' => 'goneA', 'path' => $goneA],
+                ['id' => 'b1', 'path' => $rootB . '/show-a.mkv'],
+                ['id' => 'b2', 'path' => $rootB . '/show-b.mkv'],
+            ],
+            'count_before' => 4,
+            'count_after' => 3,
         ]);
 
         $scanner = $this->createMock(MediaScanner::class);
@@ -287,11 +348,82 @@ class LibraryManagerTest extends TestCase
         $result = $manager->rescanLibrary('lib-1');
 
         $deletes = $this->deletes($queries);
-        $this->assertContains(['DELETE FROM media_items WHERE id = ?', ['gone-1']], $deletes);
-        $this->assertContains(['DELETE FROM media_items WHERE id = ?', ['gone-2']], $deletes);
-        $this->assertSame(2, $result->removed);
+        // Root A HAS a present item → its gone file is pruned.
+        $this->assertContains(['DELETE FROM media_items WHERE id = ?', ['goneA']], $deletes);
+        $this->assertNotContains(['DELETE FROM media_items WHERE id = ?', ['keepA']], $deletes);
+        // Root B has ZERO present items → presence guard preserves ALL its items.
+        $this->assertNotContains(['DELETE FROM media_items WHERE id = ?', ['b1']], $deletes);
+        $this->assertNotContains(['DELETE FROM media_items WHERE id = ?', ['b2']], $deletes);
+        $this->assertSame(1, $result->removed);
 
-        @rmdir($rootDir);
+        @unlink($presentA);
+        @rmdir($rootA);
+        @rmdir($rootB);
+    }
+
+    /**
+     * NESTED-roots presence guard (finding #2). A library configured with a
+     * parent root `/parent` (accessible, ≥1 present item) AND a nested child root
+     * `/parent/child` (present as a dir, all its items gone). Each child item is
+     * attributed to the MOST-SPECIFIC matching root — the child, not the parent —
+     * so the child (zero present items) is skipped and its items are preserved,
+     * while the parent's genuinely-gone file is pruned. This prevents items under
+     * an unmounted nested root from being deleted just because they share the
+     * accessible parent's path prefix.
+     */
+    public function testRescanNestedRootsSkipsChildWithNoPresentFiles(): void
+    {
+        // Parent root: accessible, holds one present file + one gone file.
+        $parent = sys_get_temp_dir() . '/phlix_rescan_parent_' . uniqid();
+        mkdir($parent, 0755, true);
+        $presentParent = tempnam($parent, 'phlix_rescan_keep_');
+        $this->assertIsString($presentParent);
+        $goneParent = $parent . '/gone-parent.mkv';
+
+        // Nested child root under the parent — present as a dir, all items gone.
+        $child = $parent . '/child';
+        mkdir($child, 0755, true);
+
+        $queries = [];
+        $db = $this->makeDb($queries, [
+            'library_row' => [
+                'id' => 'lib-1',
+                'name' => 'Movies',
+                'type' => 'video',
+                'paths' => json_encode([$parent, $child]),
+                'options' => json_encode([]),
+            ],
+            'prune_rows' => [
+                ['id' => 'keepP', 'path' => $presentParent],
+                ['id' => 'goneP', 'path' => $goneParent],
+                ['id' => 'c1', 'path' => $child . '/ep-a.mkv'],
+                ['id' => 'c2', 'path' => $child . '/ep-b.mkv'],
+            ],
+            'count_before' => 4,
+            'count_after' => 3,
+        ]);
+
+        $scanner = $this->createMock(MediaScanner::class);
+        $watcher = $this->createMock(FolderWatcher::class);
+        $musicLibraryService = $this->createMock(MusicLibraryService::class);
+
+        $manager = new LibraryManager($db, $scanner, $watcher, $musicLibraryService);
+
+        $result = $manager->rescanLibrary('lib-1');
+
+        $deletes = $this->deletes($queries);
+        // Parent HAS a present item → its gone file is pruned.
+        $this->assertContains(['DELETE FROM media_items WHERE id = ?', ['goneP']], $deletes);
+        $this->assertNotContains(['DELETE FROM media_items WHERE id = ?', ['keepP']], $deletes);
+        // Child items attributed to the child root (most-specific) → child has
+        // zero present items → preserved, NOT deleted via the parent's prefix.
+        $this->assertNotContains(['DELETE FROM media_items WHERE id = ?', ['c1']], $deletes);
+        $this->assertNotContains(['DELETE FROM media_items WHERE id = ?', ['c2']], $deletes);
+        $this->assertSame(1, $result->removed);
+
+        @unlink($presentParent);
+        @rmdir($child);
+        @rmdir($parent);
     }
 
     /**

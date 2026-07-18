@@ -10,6 +10,7 @@ use Phlix\Media\Streaming\AbrLadder;
 use Phlix\Media\Streaming\SourceProfile;
 use Phlix\Media\Transcoding\FfmpegRunner;
 use Phlix\Media\Transcoding\SegmentBusyException;
+use Phlix\Media\Transcoding\SegmentCacheFullException;
 use Phlix\Media\Transcoding\SegmentProcessRegistry;
 use Phlix\Media\Transcoding\TranscodeManager;
 use ReflectionMethod;
@@ -1728,6 +1729,114 @@ class TranscodeManagerTest extends TestCase
 
         $this->assertSame("{$dir}/seg-00001.ts", $path);
         $this->assertDirectoryExists($dir);
+    }
+
+    /**
+     * SV-1.9: builds a manager with an injected ENOSPC threshold (constructor
+     * position 13) plus a short segment poll ceiling, so the disk-space guard can
+     * be exercised without a 30 s real-world wait. An explicit $segmentDir lets a
+     * test point the guard at a bogus path (disk_free_space() → false → fail-open).
+     *
+     * @param FfmpegRunner&MockObject $ff
+     */
+    private function diskGuardManager(
+        Connection $db,
+        FfmpegRunner $ff,
+        ?int $minDiskSpaceBytes,
+        ?string $segmentDir = null
+    ): TranscodeManager {
+        $this->stubColorMetadata($ff);
+        return new TranscodeManager(
+            $db,
+            $ff,
+            $segmentDir ?? $this->segmentDir,
+            null,
+            6,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            200,               // segmentMaxWaitMs — short poll ceiling for tests
+            $minDiskSpaceBytes // position 13: SV-1.9 ENOSPC threshold
+        );
+    }
+
+    public function testEnsureSegmentThrowsSegmentCacheFullWhenDiskLow(): void
+    {
+        // SV-1.9: an ENOSPC guard threshold larger than any real filesystem's free
+        // space forces the throw. It must fire BEFORE ffmpeg is ever spawned so the
+        // HLS controller can 503 + sweep rather than letting FFmpeg hit ENOSPC.
+        $dir = $this->segmentDir . '/seg-enospc';
+        mkdir($dir, 0755, true);
+        $input = $dir . '/in.mkv';
+        file_put_contents($input, 'x');
+        $captured = [];
+        $db = $this->mockDb([], 0, [], $this->onDemandJobRow($dir, $input), $captured);
+        $ff = $this->createMock(FfmpegRunner::class);
+        $ff->expects($this->never())->method('startSegmentEncode');
+
+        $manager = $this->diskGuardManager($db, $ff, PHP_INT_MAX);
+
+        $this->expectException(SegmentCacheFullException::class);
+        $manager->ensureSegment('seg-job', null, 2);
+    }
+
+    public function testEnsureSegmentEncodesWhenDiskSpaceAmple(): void
+    {
+        // SV-1.9: a trivially-satisfiable 1-byte floor must NOT block the encode —
+        // the guard is a fast-fail floor, not an eager gate.
+        $dir = $this->segmentDir . '/seg-ample';
+        mkdir($dir, 0755, true);
+        $input = $dir . '/in.mkv';
+        file_put_contents($input, 'x');
+        $captured = [];
+        $db = $this->mockDb([], 0, [], $this->onDemandJobRow($dir, $input), $captured);
+        $ff = $this->createMock(FfmpegRunner::class);
+        $ff->expects($this->once())->method('startSegmentEncode')->willReturnCallback(
+            function (string $in, string $out): int {
+                file_put_contents($out, 'encoded');
+                return 4242;
+            }
+        );
+
+        $manager = $this->diskGuardManager($db, $ff, 1);
+
+        $path = $manager->ensureSegment('seg-job', null, 2);
+
+        $this->assertSame("{$dir}/seg-00002.ts", $path);
+        $this->assertFileExists($path);
+    }
+
+    public function testEnsureSegmentFailsOpenWhenFreeSpaceUndeterminable(): void
+    {
+        // SV-1.9 fail-open: only the manager's segment_dir (the path the guard
+        // probes) is bogus, so disk_free_space() returns false; the job dir is real
+        // so the encode still writes there. Even with an impossibly-high floor the
+        // guard must NOT throw when free space can't be determined — the actual
+        // ENOSPC (if any) surfaces later in ffmpeg rather than blocking every encode.
+        $dir = $this->segmentDir . '/seg-failopen';
+        mkdir($dir, 0755, true);
+        $input = $dir . '/in.mkv';
+        file_put_contents($input, 'x');
+        $captured = [];
+        $db = $this->mockDb([], 0, [], $this->onDemandJobRow($dir, $input), $captured);
+        $ff = $this->createMock(FfmpegRunner::class);
+        $ff->expects($this->once())->method('startSegmentEncode')->willReturnCallback(
+            function (string $in, string $out): int {
+                file_put_contents($out, 'encoded');
+                return 4242;
+            }
+        );
+
+        $bogusSegmentDir = $this->segmentDir . '/not-a-real-dir-' . uniqid();
+        $manager = $this->diskGuardManager($db, $ff, PHP_INT_MAX, $bogusSegmentDir);
+
+        $path = $manager->ensureSegment('seg-job', null, 2);
+
+        $this->assertSame("{$dir}/seg-00002.ts", $path);
+        $this->assertFileExists($path);
     }
 
     public function testSweepSegmentCacheEvictsIdleSessionsPastTtl(): void

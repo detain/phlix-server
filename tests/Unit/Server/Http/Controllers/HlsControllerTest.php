@@ -8,6 +8,7 @@ use PHPUnit\Framework\TestCase;
 use Phlix\Media\Streaming\HlsStreamer;
 use Phlix\Media\Streaming\QualitySelector;
 use Phlix\Media\Transcoding\SegmentBusyException;
+use Phlix\Media\Transcoding\SegmentCacheFullException;
 use Phlix\Media\Transcoding\TranscodeManager;
 use Phlix\Server\Http\Controllers\HlsController;
 use Phlix\Server\Http\Request;
@@ -331,6 +332,48 @@ class HlsControllerTest extends TestCase
 
         $this->assertSame(503, $res->statusCode);
         $this->assertSame('1', $res->headers['Retry-After'] ?? null);
+    }
+
+    public function testOnDemandSegmentReturns503AndSweepsWhenCacheFull(): void
+    {
+        // SV-1.9: the ENOSPC guard throws SegmentCacheFullException from
+        // ensureSegment when the segment-cache filesystem is low on space. The
+        // controller must trigger an opportunistic sweep AND return 503 with a
+        // Retry-After of '3' — distinct from the SegmentBusy path's '1' so the
+        // client backs off longer while the sweep reclaims space.
+        $manager = $this->createMock(TranscodeManager::class);
+        $manager->expects($this->once())
+            ->method('ensureSegment')
+            ->willThrowException(new SegmentCacheFullException('cache full'));
+        $manager->expects($this->once())->method('sweepSegmentCache')->willReturn(0);
+
+        $res = $this->controller($manager)->serveFile(
+            new Request(),
+            ['job_id' => 'job-seg', 'file' => 'seg-00005.ts']
+        );
+
+        $this->assertSame(503, $res->statusCode);
+        $this->assertSame('3', $res->headers['Retry-After'] ?? null);
+    }
+
+    public function testMultiVariantSegmentReturns503AndSweepsWhenCacheFull(): void
+    {
+        // SV-1.9: the ENOSPC guard is identical on the variant-aware path — the
+        // same catch handles seg-v{V}-NNNNN.ts, sweeping + 503 + Retry-After '3'.
+        $manager = $this->createMock(TranscodeManager::class);
+        $manager->expects($this->once())
+            ->method('ensureSegment')
+            ->with('job-mv', '720p', 12)
+            ->willThrowException(new SegmentCacheFullException('cache full'));
+        $manager->expects($this->once())->method('sweepSegmentCache')->willReturn(0);
+
+        $res = $this->controller($manager)->serveFile(
+            new Request(),
+            ['job_id' => 'job-mv', 'file' => 'seg-v720p-00012.ts']
+        );
+
+        $this->assertSame(503, $res->statusCode);
+        $this->assertSame('3', $res->headers['Retry-After'] ?? null);
     }
 
     public function testOnDemandSegment404WhenTranscoderUnavailable(): void

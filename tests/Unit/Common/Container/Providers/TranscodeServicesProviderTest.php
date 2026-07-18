@@ -211,4 +211,79 @@ final class TranscodeServicesProviderTest extends TestCase
         $this->assertSame(1, $registry->kill($final), 'real DI: sole-waiter kill reaps');
         $this->assertSame([], $resv->getValue($manager), 'real DI reap callback invalidated the reservation');
     }
+
+    /**
+     * SV-1.9: resolves the singleton {@see TranscodeManager} through the provider
+     * with an arbitrary `hls` config sub-array so the ENOSPC threshold wiring can
+     * be asserted directly off the constructed instance.
+     *
+     * @param array<string, mixed> $hlsConfig
+     */
+    private function resolveManagerWithHlsConfig(array $hlsConfig): TranscodeManager
+    {
+        $this->seedRegistry();
+
+        $builder = new ContainerBuilder();
+        $builder->useAutowiring(true);
+        (new TranscodeServicesProvider())->register($builder, [
+            'ffmpeg' => [
+                'ffmpeg_path' => '/usr/bin/ffmpeg',
+                'ffprobe_path' => '/usr/bin/ffprobe',
+                'transcode_dir' => '/tmp/phlix_transcodes',
+            ],
+            'hls' => $hlsConfig,
+        ]);
+        $builder->addDefinitions([
+            'logger.media' => new NullLogger(),
+            Connection::class => $this->createMock(Connection::class),
+        ]);
+        $container = $builder->build();
+
+        /** @var TranscodeManager $manager */
+        $manager = $container->get(TranscodeManager::class);
+
+        return $manager;
+    }
+
+    private function readMinDiskSpaceBytes(TranscodeManager $manager): int
+    {
+        $p = new \ReflectionProperty(TranscodeManager::class, 'minDiskSpaceBytes');
+        $p->setAccessible(true);
+        $value = $p->getValue($manager);
+        $this->assertIsInt($value);
+
+        return $value;
+    }
+
+    /**
+     * SV-1.9 default-threshold guard: with NO `min_disk_space_bytes` config key
+     * the provider passes null (position 13) and the TranscodeManager applies its
+     * own 500 MiB default. This pins the effective floor so a future drift between
+     * the provider wiring and the constructor default is caught here.
+     */
+    public function test_provider_defaults_enospc_threshold_to_500_mib(): void
+    {
+        $manager = $this->resolveManagerWithHlsConfig([
+            'segment_dir' => '/tmp/phlix_hls',
+            'segment_seconds' => 6,
+        ]);
+
+        $this->assertSame(500 * 1024 * 1024, $this->readMinDiskSpaceBytes($manager));
+    }
+
+    /**
+     * SV-1.9 wiring: when `min_disk_space_bytes` IS configured the provider threads
+     * it through to the TranscodeManager constructor's ENOSPC-threshold arg
+     * (position 13), making the guard operator-tunable.
+     */
+    public function test_provider_threads_configured_enospc_threshold(): void
+    {
+        $manager = $this->resolveManagerWithHlsConfig([
+            'segment_dir' => '/tmp/phlix_hls',
+            'segment_seconds' => 6,
+            'min_disk_space_bytes' => 12_345_678,
+        ]);
+
+        $this->assertSame(12_345_678, $this->readMinDiskSpaceBytes($manager));
+    }
 }

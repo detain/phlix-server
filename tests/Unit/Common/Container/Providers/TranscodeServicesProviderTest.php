@@ -286,4 +286,152 @@ final class TranscodeServicesProviderTest extends TestCase
 
         $this->assertSame(12_345_678, $this->readMinDiskSpaceBytes($manager));
     }
+
+    /**
+     * SV-3.3(1A): resolves the singleton {@see TranscodeManager} through the
+     * provider with an arbitrary `ffmpeg` config sub-array (merged over the standard
+     * paths) so the loudness-normalization plumbing can be asserted directly off the
+     * constructed instance.
+     *
+     * @param array<string, mixed> $ffmpegConfig
+     */
+    private function resolveManagerWithFfmpegConfig(array $ffmpegConfig): TranscodeManager
+    {
+        $this->seedRegistry();
+
+        $builder = new ContainerBuilder();
+        $builder->useAutowiring(true);
+        (new TranscodeServicesProvider())->register($builder, [
+            'ffmpeg' => array_merge([
+                'ffmpeg_path' => '/usr/bin/ffmpeg',
+                'ffprobe_path' => '/usr/bin/ffprobe',
+                'transcode_dir' => '/tmp/phlix_transcodes',
+            ], $ffmpegConfig),
+            'hls' => [
+                'segment_dir' => '/tmp/phlix_hls',
+                'segment_seconds' => 6,
+            ],
+        ]);
+        $builder->addDefinitions([
+            'logger.media' => new NullLogger(),
+            Connection::class => $this->createMock(Connection::class),
+        ]);
+        $container = $builder->build();
+
+        /** @var TranscodeManager $manager */
+        $manager = $container->get(TranscodeManager::class);
+
+        return $manager;
+    }
+
+    /**
+     * @return array<string, float>|null
+     */
+    private function readLoudnormParams(TranscodeManager $manager): ?array
+    {
+        $p = new \ReflectionProperty(TranscodeManager::class, 'loudnormParams');
+        $p->setAccessible(true);
+        /** @var array<string, float>|null $value */
+        $value = $p->getValue($manager);
+
+        return $value;
+    }
+
+    /**
+     * SV-3.3(1A) default-inert guard: with NO `ffmpeg.loudness` config at all the
+     * provider passes null (position 14) and the TranscodeManager stores null, so
+     * loudnorm stays inert. Pins the deployable-by-default behavior.
+     */
+    public function test_provider_defaults_loudnorm_to_null_when_absent(): void
+    {
+        $manager = $this->resolveManagerWithFfmpegConfig([]);
+
+        $this->assertNull($this->readLoudnormParams($manager));
+        $this->assertNull($manager->getLoudnormParams());
+    }
+
+    /**
+     * SV-3.3(1A): the shipped `config/ffmpeg.php` shape (`enabled => false` with
+     * populated `I/LRA/TP`) must still yield null — an explicit disable overrides
+     * present target values, keeping the default deploy inert.
+     */
+    public function test_provider_ignores_loudnorm_when_disabled(): void
+    {
+        $manager = $this->resolveManagerWithFfmpegConfig([
+            'loudness' => [
+                'enabled' => false,
+                'I' => -16,
+                'LRA' => 11,
+                'TP' => -1.5,
+            ],
+        ]);
+
+        $this->assertNull($this->readLoudnormParams($manager));
+        $this->assertNull($manager->getLoudnormParams());
+    }
+
+    /**
+     * SV-3.3(1A) wiring: when `ffmpeg.loudness` is enabled with a numeric integrated
+     * target the provider normalizes it to a float `['I','LRA','TP']` array and
+     * threads it through the TranscodeManager constructor's loudnorm arg (position
+     * 14) so sub-step 1B has something to read. (Still inert: nothing consumes it
+     * yet.)
+     */
+    public function test_provider_threads_configured_loudnorm_params(): void
+    {
+        $manager = $this->resolveManagerWithFfmpegConfig([
+            'loudness' => [
+                'enabled' => true,
+                'I' => -16,
+                'LRA' => 11,
+                'TP' => -1.5,
+            ],
+        ]);
+
+        $expected = ['I' => -16.0, 'LRA' => 11.0, 'TP' => -1.5];
+        $this->assertSame($expected, $this->readLoudnormParams($manager));
+        $this->assertSame($expected, $manager->getLoudnormParams());
+    }
+
+    /**
+     * SV-3.3(1A): when enabled but the required integrated-loudness target is only
+     * partially present, the provider still threads the numeric subset (here just
+     * `I`) rather than fabricating `LRA`/`TP`.
+     */
+    public function test_provider_threads_partial_loudnorm_params(): void
+    {
+        $manager = $this->resolveManagerWithFfmpegConfig([
+            'loudness' => [
+                'enabled' => true,
+                'I' => -23,
+            ],
+        ]);
+
+        $this->assertSame(['I' => -23.0], $this->readLoudnormParams($manager));
+    }
+
+    /**
+     * SV-3.3(1A) safe fallback: enabled=true but a missing/non-numeric integrated
+     * target (`I`) → null, not a malformed param. Guards against shipping an
+     * unusable loudnorm config to sub-step 1B.
+     */
+    public function test_provider_ignores_loudnorm_with_enabled_but_missing_target(): void
+    {
+        $missingI = $this->resolveManagerWithFfmpegConfig([
+            'loudness' => [
+                'enabled' => true,
+                'LRA' => 11,
+                'TP' => -1.5,
+            ],
+        ]);
+        $this->assertNull($this->readLoudnormParams($missingI));
+
+        $nonNumericI = $this->resolveManagerWithFfmpegConfig([
+            'loudness' => [
+                'enabled' => true,
+                'I' => 'loud',
+            ],
+        ]);
+        $this->assertNull($this->readLoudnormParams($nonNumericI));
+    }
 }

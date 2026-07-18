@@ -89,6 +89,25 @@ final class TranscodeServicesProvider implements ServiceProviderInterface
         $minDiskSpaceBytes = is_int($hlsConfig['min_disk_space_bytes'] ?? null)
             ? $hlsConfig['min_disk_space_bytes'] : null;
 
+        // SV-3.3(1A): loudness-normalization target params. `config/ffmpeg.php`'s
+        // `loudness` block is read HERE (this is the plumbing sub-step) and threaded
+        // to the TranscodeManager only when explicitly enabled with a numeric
+        // integrated-loudness (`I`) target; `LRA`/`TP` are folded in when numeric.
+        // Disabled (the shipped default) or malformed config → null → zero behavior
+        // change: nothing consumes the param until sub-step 1B seeds
+        // $params['loudnorm'] at the encode param-assembly sites.
+        $loudnormParams = null;
+        $loudnessConfig = is_array($ffmpegConfig['loudness'] ?? null) ? $ffmpegConfig['loudness'] : [];
+        if (($loudnessConfig['enabled'] ?? false) === true && is_numeric($loudnessConfig['I'] ?? null)) {
+            $loudnormParams = ['I' => (float) $loudnessConfig['I']];
+            if (is_numeric($loudnessConfig['LRA'] ?? null)) {
+                $loudnormParams['LRA'] = (float) $loudnessConfig['LRA'];
+            }
+            if (is_numeric($loudnessConfig['TP'] ?? null)) {
+                $loudnormParams['TP'] = (float) $loudnessConfig['TP'];
+            }
+        }
+
         $builder->addDefinitions([
             // SV-4.2: shared per-worker registry of detached segment-encode PIDs so
             // abandoned/timed-out on-demand encodes can be killed (see FfmpegRunner
@@ -147,7 +166,8 @@ final class TranscodeServicesProvider implements ServiceProviderInterface
                     $maxConcurrentSegments,
                     $cacheMaxBytes,
                     $cacheMaxAge,
-                    $minDiskSpaceBytes
+                    $minDiskSpaceBytes,
+                    $loudnormParams
                 ): TranscodeManager {
                     /** @var \Psr\Log\LoggerInterface $logger */
                     $logger = $c->get('logger.media');
@@ -160,6 +180,8 @@ final class TranscodeServicesProvider implements ServiceProviderInterface
                     // ($segmentMaxWaitMs) too. It has never been surfaced in config,
                     // so pass null explicitly to preserve its existing default
                     // (self::SEGMENT_MAX_WAIT_MS) verbatim — no behavior change.
+                    // SV-3.3(1A): $loudnormParams (position 14) is appended last;
+                    // null by default (loudness disabled) → inert.
                     $manager = new TranscodeManager(
                         $db,
                         $ffmpeg,
@@ -173,7 +195,8 @@ final class TranscodeServicesProvider implements ServiceProviderInterface
                         $cacheMaxBytes,
                         $cacheMaxAge,
                         null,
-                        $minDiskSpaceBytes
+                        $minDiskSpaceBytes,
+                        $loudnormParams
                     );
 
                     // SV-4.2-disconnect (SS-2): make the shared per-worker

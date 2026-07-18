@@ -7297,3 +7297,26 @@ lives — without spawning ffmpeg, publishing the segment so `produceSegment`'s 
   asserted the prefixed strings (none needed updating). php -l clean on all 6; Unit **5720/41855/0 fail/
   0 err/8 skip**; phpstan `[OK] No errors`; phpcs PSR-12 0 errors on src/ (reflowed the collapsed lines
   to stay <=120 and inlined round() to avoid multi-line-call indent).
+
+## SV-3.3(1A) — thread loudness config to TranscodeManager ctor (inert until 1B) (2026-07-18)
+- [x] DONE — Plumbing only. Confirmed the config source: the investigation's `$appConfig['ffmpeg']`
+  claim HELD — `TranscodeServicesProvider::register()` already reads `$ffmpegConfig = $appConfig['ffmpeg']`
+  (:55), so `config/ffmpeg.php`'s `loudness` block is reachable there. Added a nullable ctor arg
+  `?array $loudnormParams = null` at the END of `TranscodeManager::__construct` (position 14, after
+  SV-1.9 `$minDiskSpaceBytes`) → stored in a `private readonly ?array $loudnormParams` + public
+  `getLoudnormParams()` accessor (so it isn't write-only; consumed by 1B). All existing callers pass
+  ≤12 positional args so BC preserved. Provider now reads `$ffmpegConfig['loudness']` and, ONLY when
+  `enabled === true` AND `I` is numeric, normalizes to a float `['I'=>…,'LRA'?=>…,'TP'?=>…]` array
+  (LRA/TP folded in when numeric) and threads it as arg 14; disabled/malformed → null. Built via the
+  explicit `factory()` closure (not autowiring) so no PHP-DI optional-param landmine. INERT by default:
+  `loudness.enabled` ships false → null → zero behavior change (deployable). +5 provider tests (absent,
+  disabled, enabled full I/LRA/TP, partial I-only, enabled-but-missing/non-numeric-I → null) via
+  reflection on the private property + the getter, mirroring the SV-1.9 provider test.
+  Unit **5735/41879/0 fail/0 err/11 skip**; phpstan L9 `[OK] No errors`; phpcs PSR-12 0/0 on the two
+  changed src files.
+  **1B STILL NEEDS:** consume `getLoudnormParams()` to populate `$params['loudnorm']` at the three
+  param-assembly sites — `computeSegmentParams`, the ABR rendition branch, and `produceAudioSegment` —
+  so `FfmpegRunner::buildLoudnormFilter()` (:1906, already wired into buildSegmentCommand/
+  buildAudioSegmentCommand) actually receives targets. Files: `src/Media/Transcoding/TranscodeManager.php`,
+  `src/Common/Container/Providers/TranscodeServicesProvider.php`,
+  `tests/Unit/Common/Container/Providers/TranscodeServicesProviderTest.php`.

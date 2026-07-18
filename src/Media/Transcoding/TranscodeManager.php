@@ -67,6 +67,21 @@ class TranscodeManager
     /** @var int Minimum free bytes required on the segment cache filesystem */
     private int $minDiskSpaceBytes;
 
+    /**
+     * SV-3.3(1A): loudness-normalization target params threaded from
+     * `config/ffmpeg.php`'s `loudness` block via {@see \Phlix\Common\Container\Providers\TranscodeServicesProvider},
+     * or null when loudnorm is disabled/unconfigured. Shape when set:
+     * `['I'=>float, 'LRA'=>float, 'TP'=>float]`.
+     *
+     * INERT today: this is pure plumbing so a later sub-step (1B) can seed
+     * `$params['loudnorm']` at the encode param-assembly sites (computeSegmentParams
+     * / the ABR rendition branch / produceAudioSegment). Nothing in an encode path
+     * reads it yet, so a populated value changes no behavior until 1B lands.
+     *
+     * @var array<string, float>|null
+     */
+    private readonly ?array $loudnormParams;
+
     /** @var LoggerInterface Logger instance */
     private LoggerInterface $logger;
 
@@ -278,6 +293,11 @@ class TranscodeManager
      * @param string $segmentDir Directory for HLS segments
      * @param LoggerInterface|null $logger Optional PSR logger
      * @param int $segmentSeconds Target HLS segment duration in seconds (default 6)
+     * @param array<string, float>|null $loudnormParams SV-3.3(1A) loudness-normalization
+     *                                  target params (`['I'=>float,'LRA'?=>float,'TP'?=>float]`)
+     *                                  from `config/ffmpeg.php`'s `loudness` block, or null when
+     *                                  disabled/unconfigured. Stored only — INERT until sub-step 1B
+     *                                  consumes it at the encode param-assembly sites.
      *
      * @example
      * ```php
@@ -297,7 +317,8 @@ class TranscodeManager
         ?int $cacheMaxBytes = null,
         ?int $cacheMaxAgeSeconds = null,
         ?int $segmentMaxWaitMs = null,
-        ?int $minDiskSpaceBytes = null
+        ?int $minDiskSpaceBytes = null,
+        ?array $loudnormParams = null
     ) {
         $this->db = $db;
         $this->ffmpeg = $ffmpeg;
@@ -321,11 +342,30 @@ class TranscodeManager
         $this->minDiskSpaceBytes = ($minDiskSpaceBytes !== null && $minDiskSpaceBytes > 0)
             ? $minDiskSpaceBytes
             : self::SEGMENT_CACHE_MIN_FREE_BYTES;
+        // SV-3.3(1A): stored verbatim (the provider is the sole normaliser). Kept
+        // INERT — no encode path reads it yet; sub-step 1B will.
+        $this->loudnormParams = $loudnormParams;
         $this->subtitleExtractor = $subtitleExtractor ?? new SubtitleExtractor();
         // PHP_BINARY is the absolute path to the running interpreter, used by the
         // detached job to invoke the VTT-cleaner CLI.
         $this->phpBinary = $phpBinary ?? PHP_BINARY;
         $this->cleanVttScript = $cleanVttScript ?? (dirname(__DIR__, 3) . '/scripts/clean-vtt.php');
+    }
+
+    /**
+     * SV-3.3(1A): returns the configured loudness-normalization target params, or
+     * null when loudnorm is disabled/unconfigured.
+     *
+     * Sub-step 1B will call this to seed `$params['loudnorm']` at the encode
+     * param-assembly sites; it returns null in every production config today
+     * (`config/ffmpeg.php`'s `loudness.enabled` defaults false), so consuming it is
+     * behavior-inert until that step lands.
+     *
+     * @return array<string, float>|null
+     */
+    public function getLoudnormParams(): ?array
+    {
+        return $this->loudnormParams;
     }
 
     /**

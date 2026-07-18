@@ -7267,3 +7267,12 @@ lives — without spawning ffmpeg, publishing the segment so `produceSegment`'s 
 - `tests/Unit/Media/Transcoding/TranscodeManagerTest.php` (+ session test, + applyToneMap-guard test)
 - `tests/Unit/Media/Transcoding/FfmpegRunnerToneMappingTest.php` (+ config-branch test)
 - `tests/Unit/Media/Library/ItemRepositoryTest.php` (+ non-array-row guard test)
+
+## PHP 8.5 deprecation cleanup — curl_close()/imagedestroy() no-op removal (2026-07-18)
+- [x] DONE — removed all 16 `curl_close($ch)` (13 files) + 19 `imagedestroy(...)` (ArtworkStorage 9,
+  AvatarStorage 5, PhotoController 5) standalone no-op call sites; both are no-ops since PHP 8.0 and
+  E_DEPRECATED under PHP 8.5 (polluted live-box logs during TV-series metadata matching). Every site
+  was a standalone statement with a sibling statement, so line-deletes kept all blocks valid; no
+  value-context/sole-statement hazards. `finfo_close` explanatory comments left untouched. `php -l`
+  clean on all 16 edited files; full Unit **5677/41775/0 fail/0 err/5 skip**; phpstan `[OK] No errors`;
+  phpcs PSR-12 0/0. Commits `a4a6281c` (curl_close) + `ed426816` (imagedestroy), pushed to master.

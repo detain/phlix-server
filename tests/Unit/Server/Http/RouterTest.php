@@ -286,6 +286,53 @@ class RouterTest extends TestCase
     }
 
     /**
+     * HEAD hardening (flagged during SV-4.8): a GET path registered ONLY as a
+     * static route, with ZERO parametric GET routes, must still resolve a HEAD
+     * request via dispatchAsHead()'s static branch — NOT 404. Previously the
+     * fallback guard checked only isset($this->routes['GET']) (the parametric
+     * map), which is unset here, so this HEAD would have 404'd. The broadened
+     * guard also consults $staticRoutes['GET']. This is the static-only edge
+     * that testHeadRequestResolvesStaticGetRouteViaHeadFallback does NOT cover
+     * (that test also registers a parametric GET route).
+     *
+     * @covers \Phlix\Server\Http\Router::dispatch
+     * @covers \Phlix\Server\Http\Router::dispatchAsHead
+     */
+    public function testHeadResolvesStaticOnlyGetRouteWithNoParametricGetRoutes(): void
+    {
+        // Register a GET route that is PURELY static (no {param}) — this lands
+        // ONLY in $staticRoutes['GET'] and leaves $this->routes['GET'] unset.
+        $this->router->get('/ping', fn($req, $params) => (new Response())->status(200)->json(['pong' => true]));
+
+        $response = $this->router->dispatch($this->makeRequest('HEAD', '/ping'));
+
+        $this->assertSame(200, $response->statusCode, 'a HEAD to a static-only GET route must resolve, not 404');
+        $this->assertTrue($response->headOnly, 'the HEAD fallback must flag the response head-only');
+        /** @var array{pong?: bool} $body */
+        $body = json_decode($response->body, true);
+        $this->assertTrue($body['pong'] ?? false, 'the GET /ping handler must be the one that ran');
+    }
+
+    /**
+     * HEAD hardening companion: the broadened guard must not change the normal
+     * case. With BOTH a parametric and a static GET route present, a HEAD to a
+     * path that matches NO GET route (neither map) still 404s — the fallback is
+     * entered (a GET route exists) but dispatchAsHead() finds no match.
+     *
+     * @covers \Phlix\Server\Http\Router::dispatch
+     * @covers \Phlix\Server\Http\Router::dispatchAsHead
+     */
+    public function testHeadStillReturns404WhenNoGetRouteMatchesPath(): void
+    {
+        $this->router->get('/users/{id}', fn($req, $params) => (new Response())->json(['p' => $params]));
+        $this->router->get('/health', fn($req, $params) => (new Response())->status(200)->json(['ok' => true]));
+
+        $response = $this->router->dispatch($this->makeRequest('HEAD', '/nope'));
+
+        $this->assertSame(404, $response->statusCode, 'HEAD to an unregistered path must still 404');
+    }
+
+    /**
      * SV-4.8 guard: a resolved array/DI string handler whose method returns a
      * non-Response value triggers BadMethodCallException. This covers the
      * is_array()+container path of callHandler(), previously untested.

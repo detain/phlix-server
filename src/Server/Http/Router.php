@@ -304,8 +304,11 @@ class Router
         if (!isset($this->routes[$method])) {
             // HEAD fallback: if no explicit HEAD route registered, fall back to
             // matching GET handler to get headers (Content-Type, Content-Length,
-            // etc.) without body (RFC 7231).
-            if ($method === 'HEAD' && isset($this->routes['GET'])) {
+            // etc.) without body (RFC 7231). A matching GET route may live in
+            // EITHER the parametric map or the static map — check both, otherwise
+            // a GET path registered only as a static route (zero parametric GET
+            // routes) would 404 a HEAD instead of reaching dispatchAsHead().
+            if ($method === 'HEAD' && (isset($this->routes['GET']) || isset($this->staticRoutes['GET']))) {
                 return $this->dispatchAsHead($request, $path);
             }
             error_log('[DEBUG] ' . date('Y-m-d H:i:s.v') . ' Router::dispatch 404 [method=' . $method . '] [path=' .
@@ -337,8 +340,9 @@ class Router
             }
         }
 
-        // HEAD fallback: route registered but no pattern matched — try GET.
-        if ($method === 'HEAD' && isset($this->routes['GET'])) {
+        // HEAD fallback: route registered but no pattern matched — try GET in
+        // either the parametric or the static map (see note above).
+        if ($method === 'HEAD' && (isset($this->routes['GET']) || isset($this->staticRoutes['GET']))) {
             return $this->dispatchAsHead($request, $path);
         }
 
@@ -369,7 +373,9 @@ class Router
             return $response;
         }
 
-        foreach ($this->routes['GET'] as $pattern => $route) {
+        // May be reached via the static-only GET fallback, where the parametric
+        // GET map is unset — coalesce so the loop is a no-op rather than a warning.
+        foreach (($this->routes['GET'] ?? []) as $pattern => $route) {
             if (preg_match($pattern, $path, $matches)) {
                 $params = array_filter($matches, 'is_string', ARRAY_FILTER_USE_KEY);
                 $request->pathParams = $params;

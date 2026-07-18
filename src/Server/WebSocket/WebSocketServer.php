@@ -351,17 +351,12 @@ class WebSocketServer
             'timestamp' => time(),
         ]);
 
-        // S2 metrics: track the new connection if metrics is enabled.
-        if ($this->metrics !== null) {
-            $this->metrics->openConnection(
-                $wsConnection->getId(),
-                'websocket',
-                $wsConnection->getUserId(),
-                $connection->getRemoteIp(),
-                null,
-                null,
-            );
-        }
+        // S2 metrics: the connection is NOT opened here. At TCP-accept the WS
+        // upgrade request (and its X-Forwarded-For) has not been parsed yet, so the
+        // only IP available is the loopback HAProxy peer — recording it would stamp
+        // every WS row with 127.0.0.1. The metrics record is opened in
+        // {@see onWebSocketConnect()} instead, where the REAL client IP is resolved
+        // (item5+).
     }
 
     /**
@@ -395,6 +390,43 @@ class WebSocketServer
             return;
         }
 
+        // Resolve the REAL client IP ONCE, up front — it feeds BOTH the S2 metrics
+        // record (item5+) and the connect rate-limiter key (SV-4.15 MEDIUM).
+        //
+        // The :8097 WS worker is fronted by HAProxy over loopback (see
+        // deploy/haproxy.cfg) with NO PROXY-protocol, so $connection->getRemoteIp()
+        // is ALWAYS the proxy's loopback address for EVERY client. Recording that
+        // would stamp every WS metrics row with 127.0.0.1, and keying the limiter on
+        // it would collapse the whole server into ONE bucket (an availability bug
+        // worse than no limit). Instead we derive the REAL client from the trusted
+        // upgrade-request headers (HAProxy/nginx set X-Forwarded-For / X-Real-IP)
+        // using the SAME trusted-proxy-aware resolution as the HTTP limiters. If the
+        // peer is not a trusted proxy the resolver safely falls back to the peer
+        // address. This resolution is only possible HERE (not in onConnect): the
+        // upgrade request is not parsed until the handshake.
+        $this->trustedProxyResolver ??= new TrustedProxyResolver();
+        $clientIp = $this->trustedProxyResolver->resolve(
+            $connection->getRemoteIp(),
+            self::upgradeHeader($request, 'x-forwarded-for'),
+            self::upgradeHeader($request, 'x-real-ip'),
+        );
+
+        // S2 metrics: open the connection record with the RESOLVED client IP
+        // (item5+). Deferred from onConnect (TCP-accept) to here so the row carries
+        // the real client address instead of the loopback proxy peer. user_id is the
+        // pre-auth value (null until the auth gate below marks the connection),
+        // matching the previous onConnect timing.
+        if ($this->metrics !== null) {
+            $this->metrics->openConnection(
+                $wsConnection->getId(),
+                'websocket',
+                $wsConnection->getUserId(),
+                $clientIp,
+                null,
+                null,
+            );
+        }
+
         // SV-4.15(h): per-IP connect throttle, enforced BEFORE the auth gate so
         // it protects the anonymous/dev path too. WS != HTTP — there is no HTTP
         // response after the upgrade hook, so the central 429 mapping (SV-4.15(c))
@@ -407,24 +439,7 @@ class WebSocketServer
         // response is sent, so the socket is not yet a WebSocket at the byte layer
         // and a raw close frame would be malformed/out-of-order — a TCP close is
         // the correct rejection at this stage.
-        //
-        // SV-4.15 MEDIUM: keying on $connection->getRemoteIp() alone is WRONG here.
-        // The :8097 WS worker is fronted by HAProxy over loopback (see
-        // deploy/haproxy.cfg) with NO PROXY-protocol, so getRemoteIp() is ALWAYS
-        // the proxy's loopback address for EVERY client — that would collapse the
-        // whole server into ONE 30/60s bucket and let the 30th handshake block
-        // everyone (an availability bug worse than no limit). Instead we derive the
-        // REAL client from the trusted upgrade-request headers (HAProxy/nginx set
-        // X-Forwarded-For / X-Real-IP), using the SAME trusted-proxy-aware
-        // resolution as the HTTP limiters. If the peer is not a trusted proxy the
-        // resolver safely falls back to the peer address.
         if ($this->wsConnectLimiter !== null) {
-            $this->trustedProxyResolver ??= new TrustedProxyResolver();
-            $clientIp = $this->trustedProxyResolver->resolve(
-                $connection->getRemoteIp(),
-                self::upgradeHeader($request, 'x-forwarded-for'),
-                self::upgradeHeader($request, 'x-real-ip'),
-            );
             $state = $this->wsConnectLimiter->hit('ws_connect:' . $clientIp);
             if ($state->limited) {
                 LoggerFactory::get(LogChannels::WEBSOCKET)->warning(

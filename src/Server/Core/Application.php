@@ -16,6 +16,7 @@ use Phlix\Common\Database\ConnectionPool;
 use Phlix\Common\Logger\LogChannels;
 use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Common\Version;
+use Phlix\Auth\RateLimitException;
 use Phlix\Hub\HubClient;
 use Phlix\Hub\HubApplication;
 use Phlix\Hub\RelayApplication;
@@ -1981,6 +1982,15 @@ class Application
      */
     private function handleException(Throwable $e): void
     {
+        // SV-4.15(c): a rate-limit trip that bubbles out of dispatch must map to
+        // HTTP 429 + Retry-After, NOT the generic 500 below. Mirrors the central
+        // catch in the Workerman HttpHandler and public/index.php so all three
+        // dispatch paths emit the identical envelope via rateLimitResponse().
+        if ($e instanceof RateLimitException) {
+            self::rateLimitResponse($e)->send();
+            return;
+        }
+
         $logger = LoggerFactory::get(LogChannels::HTTP);
         $logger->error('Unhandled exception: ' . $e->getMessage(), [
             'exception' => get_class($e),
@@ -2006,6 +2016,27 @@ class Application
         }
 
         $response->send();
+    }
+
+    /**
+     * Build the canonical HTTP 429 envelope for a {@see RateLimitException}
+     * that bubbles out of dispatch: `status(429)` + a `Retry-After` header
+     * (seconds until the window resets, never negative) + a JSON body of
+     * `{error: 'Too Many Requests', code: 'rate_limited'}`.
+     *
+     * SV-4.15(c): shared by every dispatch entrypoint — the Workerman
+     * {@see \Phlix\Server\Workerman\HttpHandler} central catch, this class's
+     * {@see self::handleException()} (used by {@see self::run()}), and the CGI
+     * `public/index.php` path — so a limiter trip produces identical output no
+     * matter which entrypoint served the request. Static + side-effect-free so
+     * tests exercise it directly.
+     */
+    public static function rateLimitResponse(RateLimitException $e): Response
+    {
+        return (new Response())
+            ->status(429)
+            ->header('Retry-After', (string) $e->retryAfterSeconds())
+            ->json(['error' => 'Too Many Requests', 'code' => 'rate_limited']);
     }
 
     /**

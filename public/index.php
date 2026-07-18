@@ -32,7 +32,9 @@ if (extension_loaded('swoole')) {
 require_once __DIR__ . '/../vendor/autoload.php';
 
 use Phlix\Auth\AuthManager;
+use Phlix\Auth\RateLimitException;
 use Phlix\Common\Container\ContainerFactory;
+use Phlix\Server\Core\Application;
 use Phlix\Plugins\PluginLoader;
 use Phlix\Server\Http\Middleware\AccessScheduleMiddleware;
 use Phlix\Server\Http\Middleware\AdminMiddleware;
@@ -70,6 +72,28 @@ $config['web_portal']         = array_merge(
 );
 
 $container = ContainerFactory::create($config);
+
+// ---------------------------------------------------------------------------
+// SV-4.15(c): central RateLimitException -> 429 mapping for the CGI/FPM
+// dispatch path.
+//
+// public/index.php dispatches through several routers (admin Router,
+// WebPortalRouter, page renderers) WITHOUT a wrapping try/catch, so a
+// rate-limiter trip that bubbles out of a controller would otherwise surface as
+// an uncaught fatal (HTTP 500, no Retry-After) — the same latent bug the
+// Workerman HttpHandler had. Registering the shared canonical envelope as the
+// exception handler mirrors the Workerman HttpHandler and Application::run()
+// central catches so all three entrypoints emit identical 429 output. Any other
+// throwable is re-thrown so its existing (fatal 500) behaviour is unchanged.
+// ---------------------------------------------------------------------------
+set_exception_handler(static function (\Throwable $e): void {
+    if ($e instanceof RateLimitException) {
+        Application::rateLimitResponse($e)->send();
+        return;
+    }
+
+    throw $e;
+});
 
 // ---------------------------------------------------------------------------
 // Bootstrap storage snapshot for admin dashboard (PHP-FPM fallback).

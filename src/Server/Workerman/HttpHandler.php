@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Server\Workerman;
 
+use Phlix\Auth\RateLimitException;
 use Phlix\Common\Logger\LogChannels;
 use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Plugins\PluginLoader;
@@ -299,6 +300,17 @@ final class HttpHandler
             $decorated = $securityHeaders->decorate($decorated);
             $this->compressResponse($wr, $decorated);
             $connection->send($decorated->toWorkermanResponse());
+        } catch (RateLimitException $e) {
+            // SV-4.15(c): central 429 mapping for any rate-limiter trip that
+            // bubbles out of dispatch (e.g. the existing login limiter in
+            // AuthManager/DbLoginRateLimitStore, which no controller catches —
+            // previously it fell through to the generic 500 below with no
+            // Retry-After). Emit the shared canonical envelope so the Workerman,
+            // CGI (public/index.php), and Application::run() paths are identical.
+            $responseStatus = 429;
+            $connection->send(
+                Application::rateLimitResponse($e)->toWorkermanResponse()
+            );
         } catch (Throwable $e) {
             $responseStatus = 500;
             LoggerFactory::get(LogChannels::HTTP)->error(

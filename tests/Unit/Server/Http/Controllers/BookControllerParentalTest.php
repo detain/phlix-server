@@ -128,4 +128,41 @@ class BookControllerParentalTest extends TestCase
         $resp = $controller->getBook($this->cappedRequest(), ['id' => 'b1']);
         $this->assertSame(200, $resp->statusCode);
     }
+
+    /**
+     * @param list<array<string, mixed>> $books
+     */
+    private function listController(array $books, ?RatingGate $gate): BookController
+    {
+        $repo = $this->createMock(ItemRepository::class);
+        $repo->method('searchFuzzy')->willReturn($books);
+        $libraryManager = $this->createMock(LibraryManager::class);
+        $opds = new OpdsFeedBuilder($repo, 'http://localhost:8080');
+
+        return new BookController($repo, $libraryManager, $opds, $gate);
+    }
+
+    public function testListBooksDropsOverCapTitlesForCappedProfile(): void
+    {
+        $kid = ['id' => 'kidbook', 'name' => 'Kid Book', 'type' => 'book', 'content_rating' => 'PG'];
+        $adult = ['id' => 'adultbook', 'name' => 'Adult Book', 'type' => 'book', 'content_rating' => 'R'];
+        $controller = $this->listController([$kid, $adult], $this->gate($this->pg13Filter()));
+
+        $resp = $controller->listBooks($this->cappedRequest());
+
+        $this->assertSame(200, $resp->statusCode);
+        $this->assertStringContainsString('kidbook', $resp->body);
+        $this->assertStringNotContainsString('adultbook', $resp->body);
+    }
+
+    public function testListBooksUnfilteredForOwner(): void
+    {
+        $adult = ['id' => 'adultbook', 'name' => 'Adult Book', 'type' => 'book', 'content_rating' => 'R'];
+        $controller = $this->listController([$adult], $this->gate($this->pg13Filter(), true));
+
+        $resp = $controller->listBooks($this->cappedRequest());
+
+        $this->assertSame(200, $resp->statusCode);
+        $this->assertStringContainsString('adultbook', $resp->body);
+    }
 }

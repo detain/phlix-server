@@ -310,10 +310,21 @@ final class WebPortalServicesProvider implements ServiceProviderInterface
                     /** @var BookProgressStore|null $progressStore */
                     $progressStore = $c->get(BookProgressStore::class);
 
+                    // Parental ACCESS gate for book read/download (serve-time
+                    // backstop on the plain /books/{id}/download route this
+                    // container controller serves) — optional; null = no-op.
+                    $bookRatingGate = null;
+                    try {
+                        /** @var \Phlix\Media\Library\RatingGate $bookRatingGate */
+                        $bookRatingGate = $c->get(\Phlix\Media\Library\RatingGate::class);
+                    } catch (\Throwable) {
+                        $bookRatingGate = null;
+                    }
                     $controller = new BookController(
                         $itemRepository,
                         $libraryManager,
                         new OpdsFeedBuilder($itemRepository, 'http://localhost:8080'),
+                        $bookRatingGate,
                     );
                     if ($progressStore !== null) {
                         $controller->setProgressStore($progressStore);

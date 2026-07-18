@@ -261,10 +261,18 @@ class BookController
             $items = $this->itemRepo->searchFuzzy('', 1000);
         }
 
-        $books = array_filter($items, fn($item) => ($item['type'] ?? '') === 'book');
+        $books = array_values(array_filter($items, fn($item) => ($item['type'] ?? '') === 'book'));
+
+        // Parental cap: drop over-cap books so a capped profile does not even see
+        // their titles/ids in the listing (byte access is separately gated on the
+        // read/download routes). Null gate/filter (owner/no-profile) is a no-op.
+        if ($this->ratingGate !== null) {
+            $filter = $this->ratingGate->resolveFilterForUser($request->userId ?? '');
+            $books = $this->ratingGate->filterItems($books, $filter);
+        }
 
         return (new Response())->json([
-            'books' => array_values($books),
+            'books' => $books,
             'limit' => $limit,
             'offset' => $offset,
         ]);

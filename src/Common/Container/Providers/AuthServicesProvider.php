@@ -28,6 +28,7 @@ use Phlix\Common\Container\ServiceProviderInterface;
 use Phlix\Common\RateLimit\DbRateLimiter;
 use Phlix\Common\RateLimit\RateLimiter;
 use Phlix\Common\RateLimit\RateLimitProfiles;
+use Phlix\Server\Http\Controllers\AuthController;
 use Phlix\Server\Http\Controllers\AuthProviderController;
 use Phlix\Server\Http\Controllers\WebAuthnController;
 use Phlix\Stats\StatsCollector;
@@ -186,6 +187,16 @@ final class AuthServicesProvider implements ServiceProviderInterface
                 // bounded by TTL cleanup (login_rate_limit table, migration 074).
                 ->constructorParameter('loginRateLimitStore', get(DbLoginRateLimitStore::class)),
 
+            // SV-4.15(f): register/refresh get their OWN per-surface DB-backed
+            // rate limiters. AuthController is otherwise autowired; the limiter
+            // ctor params are optional (PHP-DI skips optional params during
+            // autowiring), so each must be bound EXPLICITLY to its
+            // RateLimitProfiles container id — an unbound limiter would silently
+            // stay null and leave the surface unprotected.
+            AuthController::class => autowire()
+                ->constructorParameter('registerLimiter', get(RateLimitProfiles::REGISTER))
+                ->constructorParameter('refreshLimiter', get(RateLimitProfiles::REFRESH)),
+
             // WebAuthn — rpId/rpName/rpOrigin come from $appConfig['webauthn'].
             // Without this factory, php-di would try to autowire string scalars
             // and fail with "Parameter $rpId of __construct() has no value defined".
@@ -197,7 +208,13 @@ final class AuthServicesProvider implements ServiceProviderInterface
             ),
             WebAuthnCredentialRepository::class => autowire(),
             WebAuthnManager::class => autowire(),
-            WebAuthnController::class => autowire(),
+            // SV-4.15(f): the start/finish WebAuthn authentication ceremonies get
+            // their own per-surface DB-backed limiters, bound explicitly to their
+            // RateLimitProfiles container ids for the same optional-param reason
+            // as AuthController above.
+            WebAuthnController::class => autowire()
+                ->constructorParameter('startAuthLimiter', get(RateLimitProfiles::WEBAUTHN_START))
+                ->constructorParameter('finishAuthLimiter', get(RateLimitProfiles::WEBAUTHN_FINISH)),
         ]);
 
         $this->registerRateLimiters($builder, $appConfig);

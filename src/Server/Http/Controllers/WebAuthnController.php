@@ -12,9 +12,11 @@ declare(strict_types=1);
 namespace Phlix\Server\Http\Controllers;
 
 use Phlix\Auth\AuthManager;
+use Phlix\Auth\RateLimitException;
 use Phlix\Auth\WebAuthn\WebAuthnCredentialRepository;
 use Phlix\Auth\WebAuthn\WebAuthnManager;
 use Phlix\Auth\WebAuthn\WebAuthnSettings;
+use Phlix\Common\RateLimit\RateLimiterInterface;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
 use Phlix\Server\Http\Router;
@@ -25,12 +27,74 @@ final class WebAuthnController
     private WebAuthnManager $webauthnManager;
     private AuthManager $authManager;
 
+    /**
+     * Per-surface rate limiter for the WebAuthn start-authentication ceremony
+     * (SV-4.15(f)); the DB-backed {@see RateLimitProfiles::WEBAUTHN_START}
+     * instance in production, null (no-op) only in direct-construction tests.
+     *
+     * @var RateLimiterInterface|null
+     */
+    private ?RateLimiterInterface $startAuthLimiter;
+
+    /**
+     * Per-surface rate limiter for the WebAuthn finish-authentication ceremony
+     * (SV-4.15(f)); the DB-backed {@see RateLimitProfiles::WEBAUTHN_FINISH}
+     * instance in production, null (no-op) only in direct-construction tests.
+     *
+     * @var RateLimiterInterface|null
+     */
+    private ?RateLimiterInterface $finishAuthLimiter;
+
+    /**
+     * The limiters are optional so existing direct-construction call sites keep
+     * working; the DI factory binds each explicitly to its
+     * {@see RateLimitProfiles} container id (PHP-DI skips optional ctor params
+     * during autowiring, so an unbound limiter would silently stay null and
+     * leave the surface open).
+     */
     public function __construct(
         WebAuthnManager $webauthnManager,
-        AuthManager $authManager
+        AuthManager $authManager,
+        ?RateLimiterInterface $startAuthLimiter = null,
+        ?RateLimiterInterface $finishAuthLimiter = null,
     ) {
         $this->webauthnManager = $webauthnManager;
         $this->authManager = $authManager;
+        $this->startAuthLimiter = $startAuthLimiter;
+        $this->finishAuthLimiter = $finishAuthLimiter;
+    }
+
+    /**
+     * Record one attempt against `$limiter` for `$key` and, when over budget,
+     * throw {@see RateLimitException} — which the central mapping (SV-4.15(c))
+     * turns into a 429 + `Retry-After` + `code=rate_limited` response. A null
+     * limiter is a no-op (direct-construction test path).
+     *
+     * @throws RateLimitException When the key has exceeded its window budget.
+     */
+    private function enforceRateLimit(?RateLimiterInterface $limiter, string $key): void
+    {
+        if ($limiter === null) {
+            return;
+        }
+
+        $state = $limiter->hit($key);
+        if ($state->limited) {
+            throw new RateLimitException($state->resetAt, $state->remaining);
+        }
+    }
+
+    /**
+     * Build the rate-limit identifier: the submitted username when present, else
+     * the real client IP (X-Forwarded-For aware) — NOT $_SERVER, which is stale
+     * under Workerman's resident workers. Keying on the username throttles
+     * credential-enumeration attempts against a single account.
+     */
+    private function limitIdentifier(mixed $username, Request $request): string
+    {
+        return (is_string($username) && $username !== '')
+            ? $username
+            : $request->getClientIp();
     }
 
     /**
@@ -107,6 +171,14 @@ final class WebAuthnController
         $data = is_array($request->body) ? $request->body : [];
         $username = $data['username'] ?? null;
 
+        // Throttle enumeration BEFORE the ceremony work. Keyed on the username
+        // (falls back to client IP when absent). A trip throws
+        // RateLimitException -> central 429 mapping.
+        $this->enforceRateLimit(
+            $this->startAuthLimiter,
+            'webauthn_start:' . $this->limitIdentifier($username, $request)
+        );
+
         if (!is_string($username)) {
             return (new Response())->status(400)->json([
                 'error' => 'Missing required field: username'
@@ -130,6 +202,14 @@ final class WebAuthnController
         $username = $data['username'] ?? null;
         $credential = $data['credential'] ?? null;
         $challenge = $data['challenge'] ?? null;
+
+        // Throttle credential-verification attempts BEFORE the ceremony work.
+        // Keyed on the username (falls back to client IP when absent). A trip
+        // throws RateLimitException -> central 429 mapping.
+        $this->enforceRateLimit(
+            $this->finishAuthLimiter,
+            'webauthn_finish:' . $this->limitIdentifier($username, $request)
+        );
 
         if (!is_string($username) || !is_array($credential) || !is_string($challenge)) {
             return (new Response())->status(400)->json([

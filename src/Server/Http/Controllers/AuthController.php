@@ -14,8 +14,10 @@ namespace Phlix\Server\Http\Controllers;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
 use Phlix\Auth\AuthManager;
+use Phlix\Auth\RateLimitException;
 use Phlix\Auth\SignupDisabledException;
 use Phlix\Auth\AccountInactiveException;
+use Phlix\Common\RateLimit\RateLimiterInterface;
 use InvalidArgumentException;
 
 /**
@@ -51,13 +53,65 @@ class AuthController
     private AuthManager $authManager;
 
     /**
+     * Per-surface rate limiter for account registration (SV-4.15(f)); the
+     * DB-backed {@see RateLimitProfiles::REGISTER} instance in production. Null
+     * only in the degraded no-container fallback, where it is a no-op.
+     *
+     * @var RateLimiterInterface|null
+     */
+    private ?RateLimiterInterface $registerLimiter;
+
+    /**
+     * Per-surface rate limiter for token refresh (SV-4.15(f)); the DB-backed
+     * {@see RateLimitProfiles::REFRESH} instance in production. Null only in the
+     * degraded no-container fallback, where it is a no-op.
+     *
+     * @var RateLimiterInterface|null
+     */
+    private ?RateLimiterInterface $refreshLimiter;
+
+    /**
      * Creates a new AuthController instance.
      *
-     * @param AuthManager $authManager The authentication manager
+     * The rate limiters are optional so existing direct-construction call sites
+     * (and the degraded no-container fallback in Application) keep working; the
+     * DI factory binds each one explicitly to its {@see RateLimitProfiles}
+     * container id (PHP-DI skips optional ctor params during autowiring, so an
+     * unbound limiter would silently stay null and leave the surface open).
+     *
+     * @param AuthManager             $authManager    The authentication manager
+     * @param RateLimiterInterface|null $registerLimiter Limiter guarding register()
+     * @param RateLimiterInterface|null $refreshLimiter  Limiter guarding refresh()
      */
-    public function __construct(AuthManager $authManager)
-    {
+    public function __construct(
+        AuthManager $authManager,
+        ?RateLimiterInterface $registerLimiter = null,
+        ?RateLimiterInterface $refreshLimiter = null,
+    ) {
         $this->authManager = $authManager;
+        $this->registerLimiter = $registerLimiter;
+        $this->refreshLimiter = $refreshLimiter;
+    }
+
+    /**
+     * Record one attempt against `$limiter` for `$key` and, when the key is over
+     * budget, throw {@see RateLimitException} — which the central mapping
+     * (SV-4.15(c)) turns into a 429 + `Retry-After` + `code=rate_limited`
+     * response at every dispatch entrypoint. A null limiter is a no-op (the
+     * degraded no-container fallback).
+     *
+     * @throws RateLimitException When the key has exceeded its window budget.
+     */
+    private function enforceRateLimit(?RateLimiterInterface $limiter, string $key): void
+    {
+        if ($limiter === null) {
+            return;
+        }
+
+        $state = $limiter->hit($key);
+        if ($state->limited) {
+            throw new RateLimitException($state->resetAt, $state->remaining);
+        }
     }
 
     /**
@@ -71,6 +125,11 @@ class AuthController
      */
     public function register(Request $request, array $params): Response
     {
+        // Brute-force / spam guard keyed on the real client IP (X-Forwarded-For
+        // aware) — NOT $_SERVER, which is stale under Workerman's resident
+        // workers. A trip throws RateLimitException -> central 429 mapping.
+        $this->enforceRateLimit($this->registerLimiter, 'register:' . $request->getClientIp());
+
         $data = $request->body;
         $username = $data['username'] ?? null;
         $email = $data['email'] ?? null;
@@ -209,6 +268,11 @@ class AuthController
      */
     public function refresh(Request $request, array $params): Response
     {
+        // Throttle refresh churn per real client IP (X-Forwarded-For aware) —
+        // NOT $_SERVER, which is stale under Workerman's resident workers. A
+        // trip throws RateLimitException -> central 429 mapping.
+        $this->enforceRateLimit($this->refreshLimiter, 'refresh:' . $request->getClientIp());
+
         $data = $request->body;
         $refreshToken = $data['refresh_token'] ?? null;
 

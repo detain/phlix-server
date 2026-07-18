@@ -115,8 +115,10 @@ return [
         // triggered, rather than letting FFmpeg hit ENOSPC and cascade into silent
         // 404s at the player. Sibling of cache_max_bytes/cache_max_age; the
         // TranscodeManager applies the same 500 MiB default when this key is absent.
-        // Env override: HLS_CACHE_MIN_FREE_BYTES.
-        'min_disk_space_bytes' => (int) (getenv('HLS_CACHE_MIN_FREE_BYTES') ?: 500 * 1024 * 1024),
+        // Env override: HLS_MIN_DISK_SPACE_BYTES (mirrors the config key, like
+        // cache_max_bytes↔HLS_CACHE_MAX_BYTES and max_concurrent_segments↔
+        // HLS_MAX_CONCURRENT_SEGMENTS).
+        'min_disk_space_bytes' => (int) (getenv('HLS_MIN_DISK_SPACE_BYTES') ?: 500 * 1024 * 1024),
     ],
 
     // WebSocket server settings for SyncPlay realtime communication.

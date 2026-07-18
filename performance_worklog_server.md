@@ -7619,3 +7619,32 @@ its trip to 429.
 
 Findings: 4 (1 HIGH, 1 MEDIUM, 2 LOW). Priorities #1 (XFF spoofing) and #2 (WS
 shared bucket) block the feature being effective in the shipped deployment.
+
+## Fixer (SV-4.15 cumulative review) — 2026-07-18
+
+Findings 1-4 resolved. Full Unit suite **5888 tests / 0 failures / 0 errors / 5 skipped**
+(floor was 5857); phpstan L9 `[OK] No errors`; phpcs PSR-12 clean on all changed src/ + tests.
+
+- **Finding 1 [HIGH] — IP-keyed limiters spoofable via forged X-Forwarded-For:** RESOLVED. Added
+  `Phlix\Common\Http\TrustedProxyResolver` (walks XFF RIGHT-TO-LEFT past trusted-proxy hops; default
+  trusted set = LOOPBACK ONLY, matching the shipped nginx→127.0.0.1:8080 / HAProxy→127.0.0.1:8097
+  loopback front that APPENDS `$remote_addr` to XFF; `TRUSTED_PROXIES` env override; always returns a
+  validated IP ≤45 chars so it can't overflow the VARCHAR(191) `rate_key` PK). Decision: **dedicated
+  resolver** — new `Request::getTrustedClientIp()` routed at register/refresh/jwks/webauthn; left the
+  raw `getClientIp()` intact (now doc-flagged untrusted) so its existing contract/test stays green.
+- **Finding 2 [MEDIUM] — WS-connect one-bucket collapse:** RESOLVED in code. The WS hook's
+  `Workerman\Protocols\Http\Request` DOES expose the upgrade headers (`->header()`), so
+  `onWebSocketConnect` now derives the client via the SAME `TrustedProxyResolver` from
+  X-Forwarded-For/X-Real-IP (peer = loopback HAProxy). Distinct real clients now get distinct buckets.
+- **Finding 3 [LOW] — WebAuthn horizontal enumeration:** ACCEPTED TRADEOFF (documented in
+  `WebAuthnController::limitIdentifier`): no secondary per-IP cap — at the tight 10/60s budget it would
+  false-positive on NAT'd households; the account-scoped throttle + existing per-IP `login` limiter are
+  judged sufficient for a low-value enumeration oracle. IP fallback now uses the trusted IP.
+- **Finding 4 [LOW] — 429 skips decoration:** RESOLVED. The Workerman `catch (RateLimitException)`
+  now runs the 429 through the same CORS + security-header + gzip finalization as every other branch.
+
+OWED (infra / on-box, orchestrator sign-off list): (a) on-box verify that a rate-limited 429 carries
+CORS + `Retry-After` headers through the real nginx front; (b) on-box verify WS-connect throttling keys
+per real client behind HAProxy — the true fix for `getRemoteIp()` uselessness there is PROXY-protocol on
+:8097 (currently we rely on the trusted XFF/X-Real-IP the HAProxy front injects; enabling PROXY-protocol
+would also fix `getRemoteIp()` and the S2 metrics `remote_ip`).

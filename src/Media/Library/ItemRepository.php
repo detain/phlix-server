@@ -1003,16 +1003,18 @@ class ItemRepository
      * Extract the content rating from a `metadata_json` payload for the
      * materialized, indexed `content_rating` column (migration 050).
      *
-     * Mirrors the value the old query path read via
-     * `JSON_UNQUOTE(JSON_EXTRACT(metadata_json, '$.rating'))`: the string under
-     * `$.rating` when present, else `null`. Accepts the same shapes
-     * `create()`/`update()` accept for `metadata_json` — an already-decoded
-     * `array<string, mixed>` (the scanner path) or a raw JSON string. Only a
-     * string rating is materialized; any other shape (missing, array, bool)
-     * yields `null` so the column stays NULL, exactly as the JSON extraction did.
-     * The blob itself is never mutated — the rating is only COPIED into the
-     * column. Also used by scripts/backfill-sort-metadata.php so the offline and
-     * live paths derive the column identically.
+     * Reads the resolver's `$.official_rating` (falling back to the legacy
+     * `$.rating`) and passes it through
+     * {@see \Phlix\Media\Library\ContentRating::normalizeOrRestrict()}: a
+     * genuinely absent/empty/non-string cert stays NULL, a recognized cert is
+     * normalized to its canonical value, and a PRESENT-but-unrecognized cert is
+     * stored as the most-restrictive `UNRATED` (never NULL) so it cannot leak to
+     * restricted profiles via the NULL-inclusive rating filter. Accepts the same
+     * shapes `create()`/`update()` accept for `metadata_json` — an
+     * already-decoded `array<string, mixed>` (the scanner path) or a raw JSON
+     * string. The blob itself is never mutated — the rating is only COPIED into
+     * the column. Also used by scripts/backfill-sort-metadata.php so the offline
+     * and live paths derive the column identically.
      *
      * @param mixed $metadataJson Array, JSON string, or anything else (→ null).
      */
@@ -1029,12 +1031,16 @@ class ItemRepository
 
         // Prefer the resolver's canonical `official_rating` (movie release-date
         // certs + TV content_ratings), falling back to the legacy `rating` key.
-        // Normalize (folds `NR`→`UNRATED`, uppercases, drops unknowns) so the
-        // materialized column only ever holds a value the RATING_ORDER-driven
-        // parental filter recognizes.
+        //
+        // Use normalizeOrRestrict (NOT normalize) so we distinguish "no rating"
+        // from an "unrecognized rating": a genuinely absent/empty cert stays
+        // NULL, but a PRESENT-but-unrecognized cert (old MPAA `M`/`GP`, foreign
+        // `FSK 16`, …) is stored as the most-restrictive `UNRATED` rather than
+        // NULL — a NULL here would (via the NULL-inclusive rating filter) leak
+        // the item to every profile, including kids.
         $rating = $metadataJson['official_rating'] ?? ($metadataJson['rating'] ?? null);
 
-        return ContentRating::normalize($rating);
+        return ContentRating::normalizeOrRestrict($rating);
     }
 
     /**
@@ -1750,13 +1756,17 @@ class ItemRepository
      * @param array<string> $allowedRatings Array of allowed rating strings (e.g., ['G', 'PG'])
      * @param int $limit Max items to return
      * @param int $offset Pagination offset
+     * @param bool $allowUnrated When true (default), genuinely-unrated items
+     *        (`content_rating IS NULL`) are also returned; when false they are
+     *        excluded, honoring a profile's `allow_unrated = false` setting.
      * @return array<int, array<string, mixed>> Filtered media items ordered by rating restriction level
      */
     public function getByAllowedRatings(
         string $libraryId,
         array $allowedRatings,
         int $limit = 100,
-        int $offset = 0
+        int $offset = 0,
+        bool $allowUnrated = true
     ): array {
         // Build CASE expression for rating order comparison. Reads the indexed,
         // materialized `content_rating` column (migration 050) rather than a
@@ -1773,14 +1783,17 @@ class ItemRepository
         // Rating restriction first, then an article-insensitive alphabetical tiebreak.
         $orderBy = $ratingOrderSql . ', ' . self::titleOrder();
 
-        // Filter on the indexed `content_rating` column; a NULL column means the
-        // item carries no rating (the old `JSON_EXTRACT(...) IS NULL` case).
+        // Filter on the indexed `content_rating` column. A NULL column means the
+        // item carries NO rating (truly unrated); only include those when the
+        // profile permits unrated content. Note unrecognized-but-present certs
+        // are stored as 'UNRATED' (not NULL) by extractContentRating(), so NULL
+        // here is unambiguously "no rating at all".
+        $nullClause = $allowUnrated ? "\n                   OR content_rating IS NULL" : '';
         $results = $this->db->query(
             "SELECT * FROM media_items
              WHERE library_id = ?
                AND (
-                   content_rating IN ({$ratingPlaceholders})
-                   OR content_rating IS NULL
+                   content_rating IN ({$ratingPlaceholders}){$nullClause}
                )
              ORDER BY {$orderBy}
              LIMIT ? OFFSET ?",
@@ -1797,10 +1810,18 @@ class ItemRepository
      * @param string $maxRating Maximum allowed rating (e.g., 'R' excludes NC-17 and X)
      * @param int $limit Max items to return
      * @param int $offset Pagination offset
+     * @param bool $allowUnrated When true (default), genuinely-unrated items
+     *        (`content_rating IS NULL`) are also returned; when false they are
+     *        excluded. Threaded through to {@see getByAllowedRatings()}.
      * @return array<int, array<string, mixed>> Filtered media items
      */
-    public function getByMaxRating(string $libraryId, string $maxRating, int $limit = 100, int $offset = 0): array
-    {
+    public function getByMaxRating(
+        string $libraryId,
+        string $maxRating,
+        int $limit = 100,
+        int $offset = 0,
+        bool $allowUnrated = true
+    ): array {
         $maxOrder = self::RATING_ORDER[$maxRating] ?? 4;
 
         // Get all ratings up to and including maxRating
@@ -1811,7 +1832,7 @@ class ItemRepository
             }
         }
 
-        return $this->getByAllowedRatings($libraryId, $allowedRatings, $limit, $offset);
+        return $this->getByAllowedRatings($libraryId, $allowedRatings, $limit, $offset, $allowUnrated);
     }
 
     /**

@@ -164,6 +164,52 @@ class TmdbProviderTest extends TestCase
         $this->assertNull($details['official_rating']);
     }
 
+    public function testGetDetailsScansLaterUsEntryWhenFirstHasNoCert(): void
+    {
+        // FINDING 4: a first US results[] entry whose certs are all empty must
+        // NOT short-circuit the scan — a later US entry's non-empty cert wins.
+        $http = $this->createMock(MetadataHttpClient::class);
+        $http->method('get')->willReturn([
+            'id' => 1,
+            'title' => 'Film',
+            'release_dates' => ['results' => [
+                ['iso_3166_1' => 'US', 'release_dates' => [
+                    ['certification' => '', 'type' => 1], // empty-only US entry
+                ]],
+                ['iso_3166_1' => 'US', 'release_dates' => [
+                    ['certification' => 'R', 'type' => 3], // theatrical, later entry
+                ]],
+            ]],
+        ]);
+
+        $details = (new TmdbProvider('k', $http))->getDetails('1');
+
+        $this->assertSame('R', $details['official_rating']);
+    }
+
+    public function testGetDetailsPrefersTheatricalAcrossMultipleUsEntries(): void
+    {
+        // A non-theatrical cert in an earlier US entry is only a fallback; a
+        // theatrical (type 3) cert in a later US entry still wins.
+        $http = $this->createMock(MetadataHttpClient::class);
+        $http->method('get')->willReturn([
+            'id' => 1,
+            'title' => 'Film',
+            'release_dates' => ['results' => [
+                ['iso_3166_1' => 'US', 'release_dates' => [
+                    ['certification' => 'PG', 'type' => 4], // digital fallback
+                ]],
+                ['iso_3166_1' => 'US', 'release_dates' => [
+                    ['certification' => 'PG-13', 'type' => 3], // theatrical wins
+                ]],
+            ]],
+        ]);
+
+        $details = (new TmdbProvider('k', $http))->getDetails('1');
+
+        $this->assertSame('PG-13', $details['official_rating']);
+    }
+
     public function testGetDetailsOfficialRatingNullWhenReleaseDatesAbsent(): void
     {
         $http = $this->createMock(MetadataHttpClient::class);

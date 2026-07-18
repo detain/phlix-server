@@ -69,8 +69,14 @@ final class ContentRating
      * Handles the common TMDB/NFO spellings: case + surrounding whitespace are
      * ignored; `NR` / `NOT RATED` / `UR` fold into `UNRATED`; the FfV-programming
      * suffix (`TV-Y7-FV`) collapses to its base rating. Anything not in the
-     * canonical set yields null so a stray value can never widen the parental
-     * gate (the filter treats "unknown" as "not allowed").
+     * canonical set yields null.
+     *
+     * NOTE: this method CANNOT distinguish "genuinely unrated" (empty/absent)
+     * from "present but unrecognized" (e.g. old MPAA `M`/`GP`/`Approved`, or a
+     * foreign `FSK 16`) — both collapse to null. At the storage boundary use
+     * {@see self::normalizeOrRestrict()} instead, which maps an unrecognized
+     * NON-empty cert to the most-restrictive `UNRATED` so a stray value can
+     * never widen the parental gate (see that method for the rationale).
      *
      * @param mixed $value Raw certification (string) or anything else (→ null).
      */
@@ -94,6 +100,36 @@ final class ContentRating
         }
 
         return isset(self::RANKS[$v]) ? $v : null;
+    }
+
+    /**
+     * Normalize a raw certification for STORAGE, distinguishing "no rating" from
+     * an "unrecognized rating" so the parental filter stays safe:
+     *
+     *   - empty / absent / non-string input  → null  (genuinely UNRATED — the
+     *     column stays NULL, meaning "truly no rating")
+     *   - present, non-empty, but unrecognized (old MPAA `M`/`GP`/`Approved`/
+     *     `Passed`, foreign `FSK 16`/`18`, etc.) → `'UNRATED'` (rank 7, the most
+     *     restrictive value) so a restrictive parental cap HIDES it
+     *   - recognized → the canonical mapped value (via {@see self::normalize()})
+     *
+     * This is the correct choice for {@see \Phlix\Media\Library\ItemRepository::extractContentRating()}:
+     * storing null for an unrecognized-but-present cert would (combined with a
+     * NULL-inclusive rating filter) leak the item to EVERY profile, including
+     * kids. Routing it to `UNRATED` instead keeps such items behind an
+     * `allow_unrated` gate / restrictive cap.
+     *
+     * @param mixed $value Raw certification (string) or anything else.
+     */
+    public static function normalizeOrRestrict(mixed $value): ?string
+    {
+        // Genuinely no rating: absent / non-string / blank → NULL.
+        if (!is_string($value) || trim($value) === '') {
+            return null;
+        }
+
+        // Present but unrecognized → the most-restrictive UNRATED, never NULL.
+        return self::normalize($value) ?? 'UNRATED';
     }
 
     /**

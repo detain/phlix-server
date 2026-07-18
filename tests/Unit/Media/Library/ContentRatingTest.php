@@ -89,6 +89,42 @@ final class ContentRatingTest extends TestCase
         ];
     }
 
+    /**
+     * @dataProvider normalizeOrRestrictCases
+     */
+    public function testNormalizeOrRestrict(mixed $input, ?string $expected): void
+    {
+        $this->assertSame($expected, ContentRating::normalizeOrRestrict($input));
+    }
+
+    /**
+     * @return array<string, array{0: mixed, 1: string|null}>
+     */
+    public static function normalizeOrRestrictCases(): array
+    {
+        return [
+            // Recognized certs normalize as usual.
+            'recognized movie' => ['PG-13', 'PG-13'],
+            'recognized tv' => ['TV-MA', 'TV-MA'],
+            'nr alias' => ['NR', 'UNRATED'],
+            'lowercase recognized' => ['r', 'R'],
+            // Genuinely no rating → NULL (truly unrated).
+            'empty' => ['', null],
+            'whitespace only' => ['   ', null],
+            'null' => [null, null],
+            'non-string int' => [7, null],
+            'non-string array' => [['R'], null],
+            // Present but UNRECOGNIZED → most-restrictive UNRATED (never NULL),
+            // so a restrictive cap hides it rather than leaking it to kids.
+            'old mpaa m' => ['M', 'UNRATED'],
+            'old mpaa gp' => ['GP', 'UNRATED'],
+            'old approved' => ['Approved', 'UNRATED'],
+            'old passed' => ['Passed', 'UNRATED'],
+            'foreign fsk' => ['FSK 16', 'UNRATED'],
+            'foreign numeric' => ['18', 'UNRATED'],
+        ];
+    }
+
     public function testRankAndIsValid(): void
     {
         $this->assertSame(3, ContentRating::rank('TV-14'));

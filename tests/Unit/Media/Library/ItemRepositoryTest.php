@@ -1350,8 +1350,25 @@ class ItemRepositoryTest extends TestCase
         $this->assertSame('TV-Y7', ItemRepository::extractContentRating(['rating' => 'TV-Y7-FV']));
         // NR is an alias of UNRATED.
         $this->assertSame('UNRATED', ItemRepository::extractContentRating(['rating' => 'NR']));
-        // Unknown labels no longer widen the column — they normalize to null.
-        $this->assertNull(ItemRepository::extractContentRating(['rating' => 'GP']));
+        // Present-but-unrecognized labels must NOT widen the column: they are
+        // stored as the most-restrictive UNRATED (never NULL), so a restrictive
+        // parental cap hides them instead of leaking them to every profile.
+        $this->assertSame('UNRATED', ItemRepository::extractContentRating(['rating' => 'GP']));
+        $this->assertSame('UNRATED', ItemRepository::extractContentRating(['rating' => 'M']));
+        $this->assertSame('UNRATED', ItemRepository::extractContentRating(['rating' => 'FSK 16']));
+        $this->assertSame('UNRATED', ItemRepository::extractContentRating(['official_rating' => 'Approved']));
+    }
+
+    public function testExtractContentRatingDistinguishesUnratedFromAbsent(): void
+    {
+        // FINDING 1: a genuinely absent/empty cert stays NULL ("truly no
+        // rating"), while a present-but-unrecognized cert becomes 'UNRATED'
+        // (most restrictive). NULL and 'UNRATED' are deliberately different so
+        // the NULL-inclusive rating filter can be gated by allow_unrated.
+        $this->assertNull(ItemRepository::extractContentRating(['year' => 2020]));           // absent
+        $this->assertNull(ItemRepository::extractContentRating(['rating' => '']));            // empty
+        $this->assertNull(ItemRepository::extractContentRating(['rating' => '   ']));         // blank
+        $this->assertSame('UNRATED', ItemRepository::extractContentRating(['rating' => 'GP'])); // unknown
     }
 
     public function testExtractContentRatingPrefersOfficialRatingOverRating(): void
@@ -1421,6 +1438,60 @@ class ItemRepositoryTest extends TestCase
         $this->assertNotContains('NC-17', $allowed);
         $this->assertNotContains('X', $allowed);
         $this->assertNotContains('UNRATED', $allowed);
+    }
+
+    /**
+     * Capture the SELECT SQL getByAllowedRatings() runs, so we can assert
+     * whether the `content_rating IS NULL` clause is present.
+     */
+    private function captureAllowedRatingsSql(bool $allowUnrated): string
+    {
+        $capturedSql = '';
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(function (string $sql, $params = []) use (&$capturedSql) {
+            if (str_starts_with(trim($sql), 'SELECT * FROM media_items')) {
+                $capturedSql = $sql;
+            }
+            return [];
+        });
+
+        (new ItemRepository($db))->getByAllowedRatings('lib-1', ['G', 'PG'], 100, 0, $allowUnrated);
+
+        return $capturedSql;
+    }
+
+    public function testGetByAllowedRatingsIncludesNullWhenUnratedAllowed(): void
+    {
+        // FINDING 3: default (allowUnrated=true) preserves the historical
+        // behavior — genuinely-unrated (NULL) items are included.
+        $sql = $this->captureAllowedRatingsSql(true);
+        $this->assertStringContainsString('content_rating IS NULL', $sql);
+    }
+
+    public function testGetByAllowedRatingsExcludesNullWhenUnratedDisallowed(): void
+    {
+        // FINDING 3: with allow_unrated=false the NULL inclusion is dropped, so
+        // truly-unrated items do not leak to a profile that forbids them.
+        $sql = $this->captureAllowedRatingsSql(false);
+        $this->assertStringNotContainsString('content_rating IS NULL', $sql);
+        $this->assertStringContainsString('content_rating IN', $sql);
+    }
+
+    public function testGetByMaxRatingThreadsAllowUnratedFlag(): void
+    {
+        // getByMaxRating must forward allowUnrated to getByAllowedRatings.
+        $capturedSql = '';
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(function (string $sql, $params = []) use (&$capturedSql) {
+            if (str_starts_with(trim($sql), 'SELECT * FROM media_items')) {
+                $capturedSql = $sql;
+            }
+            return [];
+        });
+
+        (new ItemRepository($db))->getByMaxRating('lib-1', 'PG-13', 100, 0, false);
+
+        $this->assertStringNotContainsString('content_rating IS NULL', $capturedSql);
     }
 
     public function testExtractContentRatingReturnsNullForEmptyArray(): void

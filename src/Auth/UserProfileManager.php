@@ -820,10 +820,15 @@ class UserProfileManager
             'updated_at' => $row['updated_at'] ?? null,
         ];
 
-        // Compute numeric rating (0-6) to match TS Profile interface (1.2c contract)
+        // Compute the numeric rating rank for the TS Profile interface (1.2c
+        // contract). RATING_ORDER is a rating-string => rank map, so this is a
+        // KEY lookup (array_search would search the INT values against a string
+        // and always miss). Ranks are 0-based and canonical — no `-1` offset.
+        // An unknown/missing content_rating defaults to the most-restrictive
+        // UNRATED rank, matching isContentRatingAllowed()/getAllowedRatings().
         if (isset($row['content_rating'])) {
-            $order = array_search($row['content_rating'], self::RATING_ORDER, true);
-            $profile['rating'] = $order !== false ? (int)$order - 1 : 6; // default UNRATED(6)
+            $contentRating = is_string($row['content_rating']) ? $row['content_rating'] : '';
+            $profile['rating'] = self::RATING_ORDER[$contentRating] ?? self::RATING_ORDER['UNRATED'];
         }
 
         // Settings

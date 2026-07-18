@@ -52,6 +52,79 @@ class UserProfileManagerTest extends TestCase
         $this->assertTrue($result['is_active']);
     }
 
+    /**
+     * FINDING 2: hydrateProfile() must expose the client-facing `rating` int as
+     * the CANONICAL 0-based rank of the profile's content_rating (a KEY lookup
+     * into RATING_ORDER, with NO `-1` offset). The old array_search-against-int
+     * code always missed and defaulted every profile to 6.
+     *
+     * @dataProvider profileRatingRankCases
+     */
+    public function testFindByIdExposesCanonicalRatingRank(string $contentRating, int $expectedRank): void
+    {
+        $this->db->method('query')->willReturn([
+            [
+                'id' => 'profile-1',
+                'user_id' => 'user-1',
+                'name' => 'Profile',
+                'avatar_url' => null,
+                'is_active' => true,
+                'is_admin' => false,
+                'created_at' => '2024-01-01 00:00:00',
+                'updated_at' => '2024-01-01 00:00:00',
+                'content_rating' => $contentRating,
+            ]
+        ]);
+
+        // findByIdWithSettings() runs the row through hydrateProfile().
+        $result = $this->manager->findByIdWithSettings('profile-1');
+
+        $this->assertIsArray($result);
+        $this->assertSame($expectedRank, $result['rating']);
+    }
+
+    /**
+     * @return array<string, array{0: string, 1: int}>
+     */
+    public static function profileRatingRankCases(): array
+    {
+        return [
+            'G is 0' => ['G', 0],
+            'PG is 2' => ['PG', 2],
+            'PG-13 is 3' => ['PG-13', 3],
+            'TV-14 is 3' => ['TV-14', 3],
+            'R is 4' => ['R', 4],
+            'TV-MA is 4' => ['TV-MA', 4],
+            'NC-17 is 5' => ['NC-17', 5],
+            'X is 6' => ['X', 6],
+            'UNRATED is 7' => ['UNRATED', 7],
+        ];
+    }
+
+    public function testFindByIdDefaultsUnknownRatingToUnratedRank(): void
+    {
+        // An unrecognized content_rating defaults to the most-restrictive
+        // UNRATED rank (7), not a lenient value.
+        $this->db->method('query')->willReturn([
+            [
+                'id' => 'profile-1',
+                'user_id' => 'user-1',
+                'name' => 'Profile',
+                'avatar_url' => null,
+                'is_active' => true,
+                'is_admin' => false,
+                'created_at' => '2024-01-01 00:00:00',
+                'updated_at' => '2024-01-01 00:00:00',
+                'content_rating' => 'BOGUS',
+            ]
+        ]);
+
+        $result = $this->manager->findByIdWithSettings('profile-1');
+
+        $this->assertIsArray($result);
+        $this->assertSame(7, $result['rating']);
+    }
+
     public function testFindByUserIdReturnsAllProfiles(): void
     {
         $this->db->method('query')->willReturn([

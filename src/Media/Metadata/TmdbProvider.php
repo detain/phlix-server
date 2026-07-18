@@ -909,29 +909,30 @@ class TmdbProvider implements MetadataProviderInterface
     private function extractUsMovieCertification(mixed $releaseDates): ?string
     {
         $block = MetadataValue::asAssoc($releaseDates);
+        // Scan EVERY US `results[]` entry (TMDB usually emits one, but a movie
+        // can carry several): a theatrical (type 3) cert wins outright, else the
+        // first non-empty cert seen across all US entries is the fallback. We do
+        // NOT return early on a US entry whose certs are all empty — a later US
+        // entry may still name one.
+        $fallback = null;
         foreach (MetadataValue::asAssocList($block['results'] ?? null) as $row) {
             if (MetadataValue::asString($row['iso_3166_1'] ?? null) !== 'US') {
                 continue;
             }
 
             $entries = MetadataValue::asAssocList($row['release_dates'] ?? null);
-            $fallback = null;
             foreach ($entries as $entry) {
                 $cert = MetadataValue::asString($entry['certification'] ?? null);
                 if ($cert === '') {
                     continue;
                 }
-                // Prefer the theatrical release's certification (type 3);
-                // otherwise remember the first non-empty one as a fallback.
                 if (MetadataValue::asInt($entry['type'] ?? null) === 3) {
                     return $cert;
                 }
                 $fallback ??= $cert;
             }
-
-            return $fallback;
         }
-        return null;
+        return $fallback;
     }
 
     /**

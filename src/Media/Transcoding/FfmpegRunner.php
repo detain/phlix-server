@@ -539,9 +539,8 @@ class FfmpegRunner
      * string for the same file.
      *
      * @param array<string, mixed>|null $colorMeta Color metadata as returned by
-     *                                             {@see extractColorMetadata()} /
-     *                                             {@see \Phlix\Media\Library\ItemRepository::getVideoStreamColorMetadata()},
-     *                                             or null.
+     *     {@see extractColorMetadata()} /
+     *     {@see \Phlix\Media\Library\ItemRepository::getVideoStreamColorMetadata()}, or null.
      * @param string                     $codec    Video codec being used for encoding.
      *
      * @return string|null FFmpeg video filter chain for tone mapping, or null if
@@ -1032,8 +1031,12 @@ class FfmpegRunner
      * @since 0.25.0
      * @since SV-4.2 Applies transcode_timeout wrapper.
      */
-    public function buildDetachedCommand(string $command, string $outDir, array $trailingCmds = [], int $timeoutSecs = 0): string
-    {
+    public function buildDetachedCommand(
+        string $command,
+        string $outDir,
+        array $trailingCmds = [],
+        int $timeoutSecs = 0
+    ): string {
         $then = 'touch ' . escapeshellarg($outDir . '/.complete');
         foreach ($trailingCmds as $trailing) {
             if (is_string($trailing) && $trailing !== '') {
@@ -1328,9 +1331,11 @@ class FfmpegRunner
      */
     public function getVersion(): ?string
     {
-        // Try shell fallback if isAvailable() is false (is_executable may fail in web context)
+        // Try shell fallback if isAvailable() is false (is_executable may fail in web context).
+        // Use the configured binary path — never a bare `ffmpeg` — so a missing/invalid
+        // configured path reports null rather than silently resolving a different binary on PATH.
         if (!$this->isAvailable()) {
-            $output = shell_exec('ffmpeg -version 2>&1');
+            $output = shell_exec(escapeshellarg($this->ffmpegPath) . ' -version 2>&1');
             if (is_string($output) && preg_match('/ffmpeg version (\S+)/', $output, $m) === 1) {
                 return $m[1];
             }
@@ -1362,18 +1367,25 @@ class FfmpegRunner
      */
     public function probeHardwareAcceleration(?HwaccelRegistry $registry = null): array
     {
-        if (self::$hwaccelProbed) {
-            return HwaccelRegistry::getInstance()->getAll();
-        }
-
-        $this->hwaccelRegistry = $registry ?? HwaccelRegistry::getInstance();
-        $capabilities = $this->hwaccelRegistry->getAll();
+        // Per-instance wiring runs regardless of the process-wide probe flag: every
+        // runner must reference the (singleton) registry and honour its preferred-
+        // accelerator config. Skipping this on the "already probed" fast path left
+        // later-constructed runners with a null registry, so buildHwaccelSegmentCommand()
+        // silently fell back to software even when hardware was available.
+        $activeRegistry = $registry ?? HwaccelRegistry::getInstance();
+        $this->hwaccelRegistry = $activeRegistry;
 
         // Set preferred accelerator from merged config if specified.
         // This affects getBestAcceleratorForCodec() selection order.
         $preferredAccelerator = $this->config['preferred_accelerator'] ?? null;
         if (is_string($preferredAccelerator) && $preferredAccelerator !== '') {
             $this->setPreferredAccelerator($preferredAccelerator);
+        }
+
+        $capabilities = $activeRegistry->getAll();
+
+        if (self::$hwaccelProbed) {
+            return $capabilities;
         }
 
         $this->logger->info('Hardware acceleration probed', [
@@ -1967,12 +1979,14 @@ class FfmpegRunner
         $pid = getmypid();
         $backtrace = debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 6);
         $callerChain = implode(' <- ', array_map(
-            fn($f) => basename($f['file'] ?? '??') . ':' . ($f['line'] ?? '?') . ' ' . ($f['class'] ?? '') . ($f['type'] ?? '::') . ($f['function'] ?? '??'),
+            fn($f) => basename($f['file'] ?? '??') . ':' . ($f['line'] ?? '?') . ' ' . ($f['class'] ?? '') .
+                ($f['type'] ?? '::') . ($f['function'] ?? '??'),
             array_slice($backtrace, 1, 5)
         ));
 
         $this->logger->error(sprintf(
-            '[HWACCEL_DEBUG][%s][PID:%d][TRACE:%s] buildHwaccelSegmentCommand called | hwaccelProbed=%s | inputPath=%s | outFile=%s | callers=%s',
+            '[HWACCEL_DEBUG][%s][PID:%d][TRACE:%s] buildHwaccelSegmentCommand called'
+            . ' | hwaccelProbed=%s | inputPath=%s | outFile=%s | callers=%s',
             $timestamp,
             $pid,
             $traceId,
@@ -1984,7 +1998,8 @@ class FfmpegRunner
 
         if (!self::$hwaccelProbed) {
             $this->logger->error(sprintf(
-                '[HWACCEL_DEBUG][%s][PID:%d][TRACE:%s] buildHwaccelSegmentCommand triggering probeHardwareAcceleration (was not probed)',
+                '[HWACCEL_DEBUG][%s][PID:%d][TRACE:%s] buildHwaccelSegmentCommand'
+                . ' triggering probeHardwareAcceleration (was not probed)',
                 $timestamp,
                 $pid,
                 $traceId

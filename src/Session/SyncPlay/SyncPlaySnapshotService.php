@@ -121,7 +121,8 @@ class SyncPlaySnapshotService
      *
      * Returns the lightweight fields needed for listGroups REST responses.
      *
-     * @return array<int, array{id: string, name: string, member_count: int, has_password: bool, current_media: string|null, is_playing: bool}> Group summaries
+     * @return array<int, array{id: string, name: string, member_count: int, has_password: bool,
+     *     current_media: string|null, is_playing: bool}> Group summaries
      */
     public function listGroups(): array
     {

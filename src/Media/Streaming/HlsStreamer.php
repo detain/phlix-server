@@ -124,8 +124,12 @@ class HlsStreamer
      * $playlist = $streamer->generateVariantPlaylist('job-123', 0, $segments, 6);
      * ```
      */
-    public function generateVariantPlaylist(string $jobId, int $variantIndex, array $segments, int $targetDuration): string
-    {
+    public function generateVariantPlaylist(
+        string $jobId,
+        int $variantIndex,
+        array $segments,
+        int $targetDuration
+    ): string {
         $playlist = "#EXTM3U\n";
         $playlist .= "#EXT-X-VERSION:3\n";
         $playlist .= "#EXT-X-TARGETDURATION:{$targetDuration}\n";
@@ -306,7 +310,8 @@ class HlsStreamer
      * @param array{max_resolution?: array<int, int>} $profile Device profile with max_resolution
      * @param array<string, mixed> $sourceInfo Source media information
      *
-     * @return array<int, array{index: int, name: string, width: int, height: int, bandwidth: int}> Filtered quality levels
+     * @return array<int, array{index: int, name: string, width: int, height: int, bandwidth: int}> Filtered quality
+     * levels
      */
     public function getQualityLevelsForProfile(array $profile, array $sourceInfo): array
     {

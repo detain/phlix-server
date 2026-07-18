@@ -49,7 +49,11 @@ use Phlix\Media\Metadata\ThemeMusic\ThemeMusicFetcherInterface;
 use Phlix\Media\Metadata\ThemeMusic\ThemeMusicResolver;
 use Phlix\Media\Metadata\TitleSuffixStripper;
 use Phlix\Media\Metadata\TmdbProvider;
+use Phlix\Media\MediaAsset\MediaAssetJobStore;
+use Phlix\Media\MediaAsset\MediaAssetWorker;
 use Phlix\Media\Playback\GaplessPlaybackManager;
+use Phlix\Media\SimilarityJobStore;
+use Phlix\Media\SimilarityWorker;
 use Phlix\Media\Storage\ArtworkStorage;
 use Phlix\Theming\ThemeMediaFinder;
 use Phlix\Media\Streaming\HlsStreamer;
@@ -546,7 +550,7 @@ final class MediaServicesProvider implements ServiceProviderInterface
             // Reads job_queue_dir and max_concurrent from media_asset_jobs config.
 
             // Job store: file-based queue keyed by media item ID.
-            \Phlix\Media\MediaAsset\MediaAssetJobStore::class => factory(static function (ContainerInterface $c): \Phlix\Media\MediaAsset\MediaAssetJobStore {
+            MediaAssetJobStore::class => factory(static function (ContainerInterface $c): MediaAssetJobStore {
                 $appConfig = $c->get('app.config');
                 if (!is_array($appConfig)) {
                     $appConfig = [];
@@ -571,7 +575,7 @@ final class MediaServicesProvider implements ServiceProviderInterface
 
             // Media asset worker: autowires with MediaAssetJobStore, MediaAssetGenerationJob,
             // optional LoggerInterface (defaults to NullLogger), and max_concurrent config.
-            \Phlix\Media\MediaAsset\MediaAssetWorker::class => factory(static function (ContainerInterface $c): \Phlix\Media\MediaAsset\MediaAssetWorker {
+            MediaAssetWorker::class => factory(static function (ContainerInterface $c): MediaAssetWorker {
                 $appConfig = $c->get('app.config');
                 if (!is_array($appConfig)) {
                     $appConfig = [];
@@ -606,7 +610,7 @@ final class MediaServicesProvider implements ServiceProviderInterface
             // the SimilarityWorker (consumer) resolve the SAME queue directory
             // even when an operator overrides it. Registered explicitly so the
             // MediaScanner wiring above resolves a shared instance.
-            \Phlix\Media\SimilarityJobStore::class => factory(static function (ContainerInterface $c): \Phlix\Media\SimilarityJobStore {
+            SimilarityJobStore::class => factory(static function (ContainerInterface $c): SimilarityJobStore {
                 $appConfig = $c->get('app.config');
                 if (!is_array($appConfig)) {
                     $appConfig = [];
@@ -628,7 +632,7 @@ final class MediaServicesProvider implements ServiceProviderInterface
             // undrained on disk (leak). Autowires the SimilarityJobStore + the
             // SimilarityService above; max_concurrent is read from config. Spawned
             // as a managed worker by start.php (config/managed_workers.php).
-            \Phlix\Media\SimilarityWorker::class => factory(static function (ContainerInterface $c): \Phlix\Media\SimilarityWorker {
+            SimilarityWorker::class => factory(static function (ContainerInterface $c): SimilarityWorker {
                 $appConfig = $c->get('app.config');
                 if (!is_array($appConfig)) {
                     $appConfig = [];

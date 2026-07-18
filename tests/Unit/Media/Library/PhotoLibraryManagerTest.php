@@ -85,7 +85,7 @@ class PhotoLibraryManagerTest extends TestCase
         $queryLog = [];
 
         $this->db->method('query')
-            ->willReturnCallback(function($sql, $params = []) use (&$queryLog, $testFile) {
+            ->willReturnCallback(function ($sql, $params = []) use (&$queryLog, $testFile) {
                 $queryLog[] = ['sql' => $sql, 'params' => $params];
                 if (strpos($sql, 'SELECT * FROM media_items WHERE path') !== false) {
                     return []; // No existing item
@@ -163,7 +163,7 @@ class PhotoLibraryManagerTest extends TestCase
         $jan15_2024 = 1705320000;
 
         $this->db->method('query')
-            ->willReturnCallback(function($sql, $params = []) use ($sqlPattern, $jan15_2024) {
+            ->willReturnCallback(function ($sql, $params = []) use ($sqlPattern, $jan15_2024) {
                 if (strpos($sql, $sqlPattern) !== false) {
                     return [
                         [

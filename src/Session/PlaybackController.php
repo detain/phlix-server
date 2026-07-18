@@ -155,8 +155,13 @@ class PlaybackController
      * );
      * ```
      */
-    public function reportProgress(string $sessionId, string $mediaItemId, int $positionTicks, int $durationTicks, bool $isPaused): void
-    {
+    public function reportProgress(
+        string $sessionId,
+        string $mediaItemId,
+        int $positionTicks,
+        int $durationTicks,
+        bool $isPaused
+    ): void {
         $previousStatus = $this->lookupPlaybackStatus($sessionId, $mediaItemId);
         $newStatus = $isPaused ? 'paused' : 'playing';
 
@@ -280,7 +285,8 @@ class PlaybackController
         $previous = $this->lookupPlaybackRow($sessionId, $mediaItemId);
 
         $this->db->query(
-            "UPDATE playback_state SET playback_status = 'stopped', position_ticks = 0 WHERE session_id = ? AND media_item_id = ?",
+            "UPDATE playback_state SET playback_status = 'stopped', position_ticks = 0
+             WHERE session_id = ? AND media_item_id = ?",
             [$sessionId, $mediaItemId]
         );
 

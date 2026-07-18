@@ -209,8 +209,13 @@ class S3Client
      * @param array<string, string> $queryParams Query parameters for signing
      * @return array<string, string> Headers array
      */
-    private function buildAuthHeaders(string $method, string $bucket, string $key, string $payloadHash, array $queryParams = []): array
-    {
+    private function buildAuthHeaders(
+        string $method,
+        string $bucket,
+        string $key,
+        string $payloadHash,
+        array $queryParams = []
+    ): array {
         $date = gmdate('Ymd');
         $dateTime = gmdate('Ymd\THis\Z');
         $credentialScope = "{$date}/{$this->region}/s3/aws4_request";
@@ -235,7 +240,11 @@ class S3Client
             $method,
             $canonicalUri,
             $canonicalQueryString,
-            implode("\n", array_map(fn($k, $v) => strtolower($k) . ':' . trim($v), array_keys($canonicalHeaders), $canonicalHeaders)) . "\n",
+            implode("\n", array_map(
+                fn($k, $v) => strtolower($k) . ':' . trim($v),
+                array_keys($canonicalHeaders),
+                $canonicalHeaders
+            )) . "\n",
             $signedHeaders,
             $payloadHash,
         ]);
@@ -253,7 +262,8 @@ class S3Client
             'Host' => $host,
             'x-amz-content-sha256' => $payloadHash,
             'x-amz-date' => $dateTime,
-            'Authorization' => "AWS4-HMAC-SHA256 Credential={$this->accessKey}/{$credentialScope}, SignedHeaders={$signedHeaders}, Signature={$signature}",
+            'Authorization' => "AWS4-HMAC-SHA256 Credential={$this->accessKey}/{$credentialScope}, "
+                . "SignedHeaders={$signedHeaders}, Signature={$signature}",
         ];
     }
 

@@ -123,7 +123,8 @@ final class WebhookDeliveryRecord implements JsonSerializable
             webhookUrl: is_string($row['webhook_url'] ?? null) ? (string) $row['webhook_url'] : '',
             attempt: is_int($row['attempt'] ?? null) ? (int) $row['attempt'] : 1,
             status: is_string($row['status'] ?? null) ? (string) $row['status'] : self::STATUS_PENDING,
-            responseCode: isset($row['response_code']) && is_int($row['response_code']) ? (int) $row['response_code'] : null,
+            responseCode: isset($row['response_code']) && is_int($row['response_code']) ? (int) $row['response_code'] :
+                null,
             responseBody: is_string($row['response_body'] ?? null) ? (string) $row['response_body'] : null,
             nextRetryAt: $nextRetryAt,
             createdAt: $createdAt,

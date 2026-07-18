@@ -372,7 +372,11 @@ class ContentDirectoryService
         $title = htmlspecialchars(is_string($titleRaw) ? $titleRaw : 'Unknown', ENT_XML1 | ENT_QUOTES, 'UTF-8');
 
         $upnpClassRaw = $item['upnp_class'] ?? null;
-        $upnpClass = htmlspecialchars(is_string($upnpClassRaw) ? $upnpClassRaw : 'object.item', ENT_XML1 | ENT_QUOTES, 'UTF-8');
+        $upnpClass = htmlspecialchars(
+            is_string($upnpClassRaw) ? $upnpClassRaw : 'object.item',
+            ENT_XML1 | ENT_QUOTES,
+            'UTF-8'
+        );
 
         $type = is_string($item['type'] ?? null) ? $item['type'] : 'item';
 
@@ -421,13 +425,17 @@ class ContentDirectoryService
         // Album art URI
         if (!empty($item['albumArtURI']) && is_string($item['albumArtURI'])) {
             $albumArtUri = htmlspecialchars($item['albumArtURI'], ENT_XML1 | ENT_QUOTES, 'UTF-8');
-            $xml .= sprintf('<upnp:albumArtURI xmlns:dlna="urn:schemas-dlna-org:metadata-1-0">%s</upnp:albumArtURI>', $albumArtUri);
+            $xml .= sprintf(
+                '<upnp:albumArtURI xmlns:dlna="urn:schemas-dlna-org:metadata-1-0">%s</upnp:albumArtURI>',
+                $albumArtUri
+            );
         }
 
         // Resource
         if (!empty($item['res']) && is_string($item['res'])) {
             $res = htmlspecialchars($item['res'], ENT_XML1 | ENT_QUOTES, 'UTF-8');
-            $protocolInfo = is_string($item['protocolInfo'] ?? null) ? $item['protocolInfo'] : 'http-get:*:audio/mpeg:*';
+            $protocolInfo = is_string($item['protocolInfo'] ?? null) ? $item['protocolInfo'] :
+                'http-get:*:audio/mpeg:*';
             $xml .= sprintf('<upnp:res protocolInfo="%s">%s</upnp:res>', $protocolInfo, $res);
         }
 

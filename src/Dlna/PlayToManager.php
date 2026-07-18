@@ -123,8 +123,12 @@ class PlayToManager
      *
      * @since 0.12.0
      */
-    public function startSession(string $rendererId, string $mediaItemId, string $uri, string $metadata = ''): ?PlayToSession
-    {
+    public function startSession(
+        string $rendererId,
+        string $mediaItemId,
+        string $uri,
+        string $metadata = ''
+    ): ?PlayToSession {
         $this->logger->info('Starting play-to session', [
             'renderer_id' => $rendererId,
             'media_item_id' => $mediaItemId,

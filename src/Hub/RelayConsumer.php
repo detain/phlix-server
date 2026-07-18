@@ -568,18 +568,14 @@ final class RelayConsumer
         };
 
         $this->logger->debug('RelayConsumer::connect() calling $connection->connect()', [
-            'connection_id' => $this->connection !== null ? spl_object_id($this->connection) : null,
-            'connection_status_before_connect' => $this->connection !== null ? $this->connection->getStatus() : null,
+            'connection_id' => spl_object_id($this->connection),
+            'connection_status_before_connect' => $this->connection->getStatus(),
         ]);
         try {
-            if ($this->connection === null) {
-                $this->logger->warning('RelayConsumer::connect() connection was closed during setup');
-                return;
-            }
             $this->connection->connect();
             $this->logger->debug('RelayConsumer::connect() $connection->connect() returned', [
-                'connection_id' => $this->connection !== null ? spl_object_id($this->connection) : null,
-                'connection_status_after_connect' => $this->connection !== null ? $this->connection->getStatus() : null,
+                'connection_id' => spl_object_id($this->connection),
+                'connection_status_after_connect' => $this->connection->getStatus(),
             ]);
         } catch (Throwable $e) {
             $this->logger->error('RelayConsumer::connect() $connection->connect() threw exception', [

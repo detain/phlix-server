@@ -161,7 +161,8 @@ class RatingService
         /** @var array<array<string, mixed>> $rows */
         $totalVotes = array_reduce(
             $rows,
-            static fn(int $sum, array $row): int => $sum + (isset($row['votes']) && is_int($row['votes']) ? $row['votes'] : 0),
+            static fn(int $sum, array $row): int => $sum + (isset($row['votes']) && is_int($row['votes']) ?
+                $row['votes'] : 0),
             0
         );
 

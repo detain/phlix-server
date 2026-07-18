@@ -263,17 +263,26 @@ class SmartPlaylistEngine
             'equals' => RuleOperators::equals($itemValue, $ruleValue),
             'notEquals' => RuleOperators::notEquals($itemValue, $ruleValue),
             'contains' => RuleOperators::contains($this->mixedToString($itemValue), $this->mixedToString($ruleValue)),
-            'notContains' => RuleOperators::notContains($this->mixedToString($itemValue), $this->mixedToString($ruleValue)),
+            'notContains' => RuleOperators::notContains(
+                $this->mixedToString($itemValue),
+                $this->mixedToString($ruleValue)
+            ),
             'gt' => RuleOperators::greaterThan($this->toFloat($itemValue), $this->toFloat($ruleValue)),
-            'gte' => RuleOperators::greaterThan($this->toFloat($itemValue), $this->toFloat($ruleValue) - 0.001) || RuleOperators::equals($itemValue, $ruleValue),
+            'gte' => RuleOperators::greaterThan($this->toFloat($itemValue), $this->toFloat($ruleValue) - 0.001) ||
+                RuleOperators::equals($itemValue, $ruleValue),
             'lt' => RuleOperators::lessThan($this->toFloat($itemValue), $this->toFloat($ruleValue)),
-            'lte' => RuleOperators::lessThan($this->toFloat($itemValue), $this->toFloat($ruleValue) + 0.001) || RuleOperators::equals($itemValue, $ruleValue),
+            'lte' => RuleOperators::lessThan($this->toFloat($itemValue), $this->toFloat($ruleValue) + 0.001) ||
+                RuleOperators::equals($itemValue, $ruleValue),
             'between' => is_array($ruleValue) && count($ruleValue) >= 2
-                ? RuleOperators::between($this->toFloat($itemValue), $this->toFloat($ruleValue[0] ?? 0), $this->toFloat($ruleValue[1] ?? 0))
+                ? RuleOperators::between($this->toFloat($itemValue), $this->toFloat($ruleValue[0] ?? 0),
+                    $this->toFloat($ruleValue[1] ?? 0))
                 : false,
             'in' => RuleOperators::in($itemValue, is_array($ruleValue) ? $ruleValue : []),
             'notIn' => RuleOperators::notIn($itemValue, is_array($ruleValue) ? $ruleValue : []),
-            'startsWith' => RuleOperators::startsWith($this->mixedToString($itemValue), $this->mixedToString($ruleValue)),
+            'startsWith' => RuleOperators::startsWith(
+                $this->mixedToString($itemValue),
+                $this->mixedToString($ruleValue)
+            ),
             'endsWith' => RuleOperators::endsWith($this->mixedToString($itemValue), $this->mixedToString($ruleValue)),
             default => false,
         };

@@ -27,7 +27,7 @@ class FanartProviderTest extends TestCase
     public function testGetProvidersReturnsExpected(): void
     {
         $providers = $this->provider->getProviders();
-        
+
         $this->assertContains('fanart', $providers);
         $this->assertContains('fanarttv', $providers);
     }

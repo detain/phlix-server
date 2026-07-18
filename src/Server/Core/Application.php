@@ -519,7 +519,8 @@ class Application
 
         // Chapter thumbnail endpoint (public, no auth required).
         // Returns the thumbnail image for a specific chapter.
-        $this->router->get('/api/v1/media/{id}/chapters/{index}/thumbnail', [$mediaItemController, 'getChapterThumbnail']);
+        $this->router->get('/api/v1/media/{id}/chapters/{index}/thumbnail', [$mediaItemController,
+            'getChapterThumbnail']);
 
         // Download URL/info endpoint (public, returns a signed URL).
         $this->router->get('/api/v1/media/{id}/download', [$mediaItemController, 'getDownload']);
@@ -1639,7 +1640,8 @@ class Application
             }
         }
 
-        $storageDir = is_string($trickplayConfig['storage_dir'] ?? null) ? $trickplayConfig['storage_dir'] : '/var/trickplay';
+        $storageDir = is_string($trickplayConfig['storage_dir'] ?? null) ? $trickplayConfig['storage_dir'] :
+            '/var/trickplay';
         $baseUrl = is_string($trickplayConfig['base_url'] ?? null) ? $trickplayConfig['base_url'] : '';
 
         return new \Phlix\Media\Streaming\Trickplay\TrickplayController($storageDir, $baseUrl);
@@ -2091,7 +2093,10 @@ class Application
                 array_merge($newsletterConfig, ['template_dir' => $templateDir])
             );
 
-            $musicScanner = new \Phlix\Media\Music\MusicLibraryScanner($db, new \Phlix\Media\Transcoding\FfmpegRunner());
+            $musicScanner = new \Phlix\Media\Music\MusicLibraryScanner(
+                $db,
+                new \Phlix\Media\Transcoding\FfmpegRunner()
+            );
             $musicLibraryService = new \Phlix\Media\Music\MusicLibraryService($db, $musicScanner);
             $generator = new \Phlix\Admin\NewsletterGenerator(
                 new \Phlix\Stats\StatsCollector($db),
@@ -2934,7 +2939,13 @@ class Application
             $gaplessManager = new \Phlix\Media\Playback\GaplessPlaybackManager(null, $ffmpegRunner);
             $trickplayController = $this->getTrickplayController();
             $chapterMarkerService = new \Phlix\Media\MarkerService($db);
-            return new \Phlix\Server\Http\Controllers\MediaItemController($itemRepository, $markerService, $gaplessManager, $trickplayController, $chapterMarkerService);
+            return new \Phlix\Server\Http\Controllers\MediaItemController(
+                $itemRepository,
+                $markerService,
+                $gaplessManager,
+                $trickplayController,
+                $chapterMarkerService
+            );
         }
 
         /** @var \Phlix\Media\Library\ItemRepository */
@@ -2948,7 +2959,13 @@ class Application
         $trickplayController = $this->getTrickplayController();
         $db = $this->createDatabaseConnection();
         $chapterMarkerService = new \Phlix\Media\MarkerService($db);
-        return new \Phlix\Server\Http\Controllers\MediaItemController($itemRepository, $markerService, $gaplessManager, $trickplayController, $chapterMarkerService);
+        return new \Phlix\Server\Http\Controllers\MediaItemController(
+            $itemRepository,
+            $markerService,
+            $gaplessManager,
+            $trickplayController,
+            $chapterMarkerService
+        );
     }
 
     /**
@@ -3247,7 +3264,10 @@ class Application
                 'password'
             );
             $itemRepository = new \Phlix\Media\Library\ItemRepository($db);
-            $musicScanner = new \Phlix\Media\Music\MusicLibraryScanner($db, new \Phlix\Media\Transcoding\FfmpegRunner());
+            $musicScanner = new \Phlix\Media\Music\MusicLibraryScanner(
+                $db,
+                new \Phlix\Media\Transcoding\FfmpegRunner()
+            );
             $musicLibraryService = new \Phlix\Media\Music\MusicLibraryService($db, $musicScanner);
             $libraryManager = new \Phlix\Media\Library\LibraryManager(
                 $db,
@@ -3297,7 +3317,10 @@ class Application
             );
             $themeMediaRepository = new \Phlix\Theming\ThemeMediaRepository($db);
             $themeMediaFinder = new \Phlix\Theming\ThemeMediaFinder();
-            $musicScanner = new \Phlix\Media\Music\MusicLibraryScanner($db, new \Phlix\Media\Transcoding\FfmpegRunner());
+            $musicScanner = new \Phlix\Media\Music\MusicLibraryScanner(
+                $db,
+                new \Phlix\Media\Transcoding\FfmpegRunner()
+            );
             $musicLibraryService = new \Phlix\Media\Music\MusicLibraryService($db, $musicScanner);
             $libraryManager = new \Phlix\Media\Library\LibraryManager(
                 $db,

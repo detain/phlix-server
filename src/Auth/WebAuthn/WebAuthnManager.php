@@ -61,7 +61,8 @@ class WebAuthnManager
      *     pubKeyCredParams: list<PublicKeyCredentialParameters>,
      *     timeout: int,
      *     excludeCredentials: list<PublicKeyCredentialDescriptor>,
-     *     authenticatorSelection: array{authenticatorAttachment: string|null, residentKey: bool, userVerification: string},
+     *     authenticatorSelection: array{authenticatorAttachment: string|null, residentKey: bool,
+     *         userVerification: string},
      *     attestation: string
      * }
      */

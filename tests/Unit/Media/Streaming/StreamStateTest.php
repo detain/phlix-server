@@ -33,14 +33,14 @@ class StreamStateTest extends TestCase
     {
         $state = new StreamState();
         $state->durationTicks = 100000000;
-        
+
         $state->seek(50000000);
         $this->assertEquals(50000000, $state->positionTicks);
-        
+
         // Test clamping at boundaries
         $state->seek(-10000000);
         $this->assertEquals(0, $state->positionTicks);
-        
+
         $state->seek(200000000);
         $this->assertEquals(100000000, $state->positionTicks);
     }
@@ -50,7 +50,7 @@ class StreamStateTest extends TestCase
         $state = new StreamState();
         $state->id = 'test-id';
         $state->mediaItemId = 'media-1';
-        
+
         $arr = $state->toArray();
         $this->assertEquals('test-id', $arr['id']);
         $this->assertEquals('media-1', $arr['media_item_id']);

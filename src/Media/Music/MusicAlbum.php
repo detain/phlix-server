@@ -68,7 +68,8 @@ final readonly class MusicAlbum
         $id = isset($row['id']) && is_numeric($row['id']) ? (int)$row['id'] : 0;
         $artistId = isset($row['artist_id']) && is_numeric($row['artist_id']) ? (int)$row['artist_id'] : 0;
         $title = isset($row['title']) && is_string($row['title']) ? $row['title'] : '';
-        $mediaItemId = isset($row['media_item_id']) && is_numeric($row['media_item_id']) ? (int)$row['media_item_id'] : null;
+        $mediaItemId = isset($row['media_item_id']) && is_numeric($row['media_item_id']) ? (int)$row['media_item_id'] :
+            null;
         $sortTitle = isset($row['sort_title']) && is_string($row['sort_title']) ? $row['sort_title'] : null;
         $year = isset($row['year']) && is_numeric($row['year']) ? (int)$row['year'] : null;
         $totalTracks = isset($row['total_tracks']) && is_numeric($row['total_tracks']) ? (int)$row['total_tracks'] : 0;

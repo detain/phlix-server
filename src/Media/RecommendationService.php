@@ -207,7 +207,8 @@ final class RecommendationService
 
         $profileIds = array_filter(
             array_map(
-                static fn($row): ?string => is_array($row) && isset($row['id']) && is_string($row['id']) ? $row['id'] : null,
+                static fn($row): ?string => is_array($row) && isset($row['id']) && is_string($row['id']) ? $row['id'] :
+                    null,
                 $profileRows
             )
         );
@@ -231,7 +232,8 @@ final class RecommendationService
 
         $mapped = array_filter(
             array_map(
-                static fn($row): ?string => is_array($row) && isset($row['media_item_id']) && is_string($row['media_item_id']) ? $row['media_item_id'] : null,
+                static fn($row): ?string => is_array($row) && isset($row['media_item_id']) &&
+                    is_string($row['media_item_id']) ? $row['media_item_id'] : null,
                 $watchedRows
             )
         );

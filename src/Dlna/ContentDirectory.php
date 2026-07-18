@@ -228,7 +228,14 @@ class ContentDirectory
 
         if (empty($searchCriteria) || $searchCriteria === '*') {
             // Return all items
-            return $this->browse($containerId, 'BrowseDirectChildren', $filter, $startingIndex, $requestedCount, $sortCriteria);
+            return $this->browse(
+                $containerId,
+                'BrowseDirectChildren',
+                $filter,
+                $startingIndex,
+                $requestedCount,
+                $sortCriteria
+            );
         }
 
         // Parse simple search criteria
@@ -382,7 +389,10 @@ class ContentDirectory
 
         // Handle numeric library container IDs (spec-defined hierarchy)
         // 1 = music, 2 = artists, 3 = albums, 4 = tracks
-        if (in_array($objectId, [self::OBJECT_ID_MUSIC, self::OBJECT_ID_ARTISTS, self::OBJECT_ID_ALBUMS, self::OBJECT_ID_TRACKS], true)) {
+        if (
+            in_array($objectId, [self::OBJECT_ID_MUSIC, self::OBJECT_ID_ARTISTS, self::OBJECT_ID_ALBUMS,
+            self::OBJECT_ID_TRACKS], true)
+        ) {
             return $this->getLibraryItemsById($objectId);
         }
 
@@ -497,7 +507,13 @@ class ContentDirectory
         // Format: property op "value" or property op value
 
         // Check for common patterns
-        if (preg_match('/^(dc:title|dc:creator|upnp:artist|upnp:album)\s+contains\s+["\'](.+)["\']$/i', $criteria, $matches)) {
+        if (
+            preg_match(
+                '/^(dc:title|dc:creator|upnp:artist|upnp:album)\s+contains\s+["\'](.+)["\']$/i',
+                $criteria,
+                $matches
+            )
+        ) {
             return [
                 'property' => strtolower($matches[1]),
                 'op' => 'contains',
@@ -505,7 +521,13 @@ class ContentDirectory
             ];
         }
 
-        if (preg_match('/^(dc:title|dc:creator|upnp:artist|upnp:album)\s+exists\s+["\'](.+)["\']$/i', $criteria, $matches)) {
+        if (
+            preg_match(
+                '/^(dc:title|dc:creator|upnp:artist|upnp:album)\s+exists\s+["\'](.+)["\']$/i',
+                $criteria,
+                $matches
+            )
+        ) {
             return [
                 'property' => strtolower($matches[1]),
                 'op' => 'exists',

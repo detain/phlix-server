@@ -80,7 +80,14 @@ final class EpisodeFilenameParser
         $norm = (string) preg_replace('/^\s*\[[^\]]*\]\s*/', '', $norm);
 
         // 1. Season + episode: S01E02 / S01 E02 / S1EP17 / S02.E03 / S02SP03 / S05 E16-E17.
-        if (preg_match('/^(.+?)[\s._-]*S(\d{1,2})\s*[._x\- ]?\s*(?:EP|SP|E)\s*(\d{1,3})/i', $norm, $m, PREG_OFFSET_CAPTURE)) {
+        if (
+            preg_match(
+                '/^(.+?)[\s._-]*S(\d{1,2})\s*[._x\- ]?\s*(?:EP|SP|E)\s*(\d{1,3})/i',
+                $norm,
+                $m,
+                PREG_OFFSET_CAPTURE
+            )
+        ) {
             return self::build($m[1][0], (int) $m[2][0], (int) $m[3][0], self::remainder($norm, $m), $noiseSuffixes);
         }
 
@@ -91,11 +98,25 @@ final class EpisodeFilenameParser
 
         if ($allowAbsolute) {
             // 3a. Dash-delimited absolute: "Title - 394", "Title - E29", "Title - Ep. 04".
-            if (preg_match('/^(.+?)\s[-–]\s*(?:Episode|Ep\.?|EP|E)?\s*(\d{1,4})(?:v\d+)?(?=$|[\s\[\(.\-])/i', $norm, $m, PREG_OFFSET_CAPTURE)) {
+            if (
+                preg_match(
+                    '/^(.+?)\s[-–]\s*(?:Episode|Ep\.?|EP|E)?\s*(\d{1,4})(?:v\d+)?(?=$|[\s\[\(.\-])/i',
+                    $norm,
+                    $m,
+                    PREG_OFFSET_CAPTURE
+                )
+            ) {
                 return self::build($m[1][0], 1, (int) $m[2][0], self::remainder($norm, $m), $noiseSuffixes);
             }
             // 3b. Space-delimited trailing number: "Bleach 125", "Show E29".
-            if (preg_match('/^(.+?)\s(?:Episode|Ep\.?|EP|E)?\s*(\d{1,4})(?:v\d+)?(?=$|[\s\[\(])/i', $norm, $m, PREG_OFFSET_CAPTURE)) {
+            if (
+                preg_match(
+                    '/^(.+?)\s(?:Episode|Ep\.?|EP|E)?\s*(\d{1,4})(?:v\d+)?(?=$|[\s\[\(])/i',
+                    $norm,
+                    $m,
+                    PREG_OFFSET_CAPTURE
+                )
+            ) {
                 return self::build($m[1][0], 1, (int) $m[2][0], self::remainder($norm, $m), $noiseSuffixes);
             }
         }

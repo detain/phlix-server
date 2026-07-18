@@ -182,7 +182,7 @@ class MusicLibraryManagerTest extends TestCase
 
         // Mock DB - return existing item on findByPath
         $this->db->method('query')
-            ->willReturnCallback(function($sql, $params) use ($tempFile) {
+            ->willReturnCallback(function ($sql, $params) use ($tempFile) {
                 if (strpos($sql, 'SELECT') === 0 && strpos($sql, 'path') !== false) {
                     return [[
                         'id' => 'existing-item-id',
@@ -249,7 +249,7 @@ class MusicLibraryManagerTest extends TestCase
         $libraryId = 'test-lib-artists';
 
         $this->db->method('query')
-            ->willReturnCallback(function($sql, $params) {
+            ->willReturnCallback(function ($sql, $params) {
                 if (strpos($sql, 'SELECT') !== false && strpos($sql, 'media_items') !== false) {
                     return [
                         [

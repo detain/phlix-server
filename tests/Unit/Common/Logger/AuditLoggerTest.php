@@ -16,7 +16,7 @@ class AuditLoggerTest extends TestCase
     {
         $this->tempDir = sys_get_temp_dir() . '/phlix_test_audit_' . uniqid();
         mkdir($this->tempDir, 0755, true);
-        
+
         $config = [
             'handlers' => [
                 'audit' => [
@@ -27,7 +27,7 @@ class AuditLoggerTest extends TestCase
             ],
             'processors' => ['context' => true, 'request_id' => false, 'user_id' => false],
         ];
-        
+
         $this->logger = new StructuredLogger('audit', $config);
         $this->auditLogger = new AuditLogger($this->logger);
     }

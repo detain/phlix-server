@@ -162,7 +162,14 @@ class MusicLibraryScanner
             $totalTracks = count($files);
 
             // Upsert album
-            $albumResult = $this->upsertAlbum($artistId, $artistMediaItemId, $albumTitle, $year, $totalTracks, $albumCache);
+            $albumResult = $this->upsertAlbum(
+                $artistId,
+                $artistMediaItemId,
+                $albumTitle,
+                $year,
+                $totalTracks,
+                $albumCache
+            );
             if ($albumResult === null) {
                 $this->logger->warning('Failed to upsert album', ['album' => $albumTitle]);
                 continue;
@@ -338,7 +345,8 @@ class MusicLibraryScanner
             }
 
             return [
-                'artist' => is_string($tags['artist'] ?? null) ? $tags['artist'] : (is_string($tags['album_artist'] ?? null) ? $tags['album_artist'] : null),
+                'artist' => is_string($tags['artist'] ?? null) ? $tags['artist'] : (is_string($tags['album_artist'] ??
+                    null) ? $tags['album_artist'] : null),
                 'album' => is_string($tags['album'] ?? null) ? $tags['album'] : null,
                 'title' => is_string($tags['title'] ?? null) ? $tags['title'] : null,
                 'track_number' => $trackNumber,
@@ -431,7 +439,8 @@ class MusicLibraryScanner
             $firstRow = $existing[0];
             if (is_array($firstRow)) {
                 $id = isset($firstRow['id']) && is_numeric($firstRow['id']) ? (int)$firstRow['id'] : 0;
-                $mediaItemId = isset($firstRow['media_item_id']) && is_numeric($firstRow['media_item_id']) ? (int)$firstRow['media_item_id'] : null;
+                $mediaItemId = isset($firstRow['media_item_id']) && is_numeric($firstRow['media_item_id']) ?
+                    (int)$firstRow['media_item_id'] : null;
                 $cache[$cacheKey] = ['id' => $id, 'media_item_id' => $mediaItemId];
                 return $cache[$cacheKey];
             }
@@ -472,8 +481,14 @@ class MusicLibraryScanner
      * @param array<string, array{id:int, media_item_id:int|null}> $cache Album cache key by "artistId|title"
      * @return array{id: int, media_item_id: int|null}|null Album ID and media_item_id or null on failure
      */
-    private function upsertAlbum(int $artistId, ?int $artistMediaItemId, string $title, ?int $year, int $totalTracks, array &$cache): ?array
-    {
+    private function upsertAlbum(
+        int $artistId,
+        ?int $artistMediaItemId,
+        string $title,
+        ?int $year,
+        int $totalTracks,
+        array &$cache
+    ): ?array {
         // Check cache first (Early Exit)
         $cacheKey = $artistId . '|' . strtolower($title);
         if (isset($cache[$cacheKey])) {
@@ -490,7 +505,8 @@ class MusicLibraryScanner
             $firstRow = $existing[0];
             if (is_array($firstRow)) {
                 $id = isset($firstRow['id']) && is_numeric($firstRow['id']) ? (int)$firstRow['id'] : 0;
-                $mediaItemId = isset($firstRow['media_item_id']) && is_numeric($firstRow['media_item_id']) ? (int)$firstRow['media_item_id'] : null;
+                $mediaItemId = isset($firstRow['media_item_id']) && is_numeric($firstRow['media_item_id']) ?
+                    (int)$firstRow['media_item_id'] : null;
 
                 // Update existing album with new track count and year
                 $this->db->query(
@@ -511,7 +527,8 @@ class MusicLibraryScanner
 
         // Insert new album
         $result = $this->db->query(
-            "INSERT INTO music_albums (artist_id, media_item_id, title, sort_title, year, total_tracks) VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO music_albums (artist_id, media_item_id, title, sort_title, year, total_tracks)
+             VALUES (?, ?, ?, ?, ?, ?)",
             [$artistId, $mediaItemId > 0 ? $mediaItemId : null, $title, $sortTitle, $year, $totalTracks]
         );
 
@@ -558,13 +575,17 @@ class MusicLibraryScanner
         if (is_array($existing) && count($existing) > 0) {
             $existingTrack = $existing[0];
             if (is_array($existingTrack)) {
-                $existingId = isset($existingTrack['id']) && is_numeric($existingTrack['id']) ? (int)$existingTrack['id'] : 0;
+                $existingId = isset($existingTrack['id']) && is_numeric($existingTrack['id']) ?
+                    (int)$existingTrack['id'] : 0;
 
                 // Check if anything changed
                 $existingTitle = is_string($existingTrack['title'] ?? null) ? $existingTrack['title'] : '';
-                $existingTrackNum = isset($existingTrack['track_number']) && is_numeric($existingTrack['track_number']) ? (int)$existingTrack['track_number'] : 1;
-                $existingDiscNum = isset($existingTrack['disc_number']) && is_numeric($existingTrack['disc_number']) ? (int)$existingTrack['disc_number'] : 1;
-                $existingDuration = isset($existingTrack['duration_secs']) && is_numeric($existingTrack['duration_secs']) ? (int)$existingTrack['duration_secs'] : 0;
+                $existingTrackNum = isset($existingTrack['track_number']) &&
+                    is_numeric($existingTrack['track_number']) ? (int)$existingTrack['track_number'] : 1;
+                $existingDiscNum = isset($existingTrack['disc_number']) && is_numeric($existingTrack['disc_number']) ?
+                    (int)$existingTrack['disc_number'] : 1;
+                $existingDuration = isset($existingTrack['duration_secs']) &&
+                    is_numeric($existingTrack['duration_secs']) ? (int)$existingTrack['duration_secs'] : 0;
 
                 if (
                     $existingTitle === $title
@@ -577,7 +598,8 @@ class MusicLibraryScanner
 
                 // Update existing track
                 $this->db->query(
-                    "UPDATE music_tracks SET title = ?, track_number = ?, disc_number = ?, duration_secs = ? WHERE id = ?",
+                    "UPDATE music_tracks SET title = ?, track_number = ?, disc_number = ?, duration_secs = ?
+                     WHERE id = ?",
                     [$title, $trackNumber, $discNumber, $durationSecs, $existingId]
                 );
 
@@ -587,7 +609,9 @@ class MusicLibraryScanner
 
         // Insert new track
         $result = $this->db->query(
-            "INSERT INTO music_tracks (media_item_id, album_id, artist_id, title, track_number, disc_number, duration_secs) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO music_tracks
+             (media_item_id, album_id, artist_id, title, track_number, disc_number, duration_secs)
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
             [$mediaItemId, $albumId, $artistId, $title, $trackNumber, $discNumber, $durationSecs]
         );
 
@@ -595,7 +619,8 @@ class MusicLibraryScanner
             return 'skipped';
         }
 
-        $this->logger->debug('Upserted track', ['album_id' => $albumId, 'title' => $title, 'media_item_id' => $mediaItemId]);
+        $this->logger->debug('Upserted track', ['album_id' => $albumId, 'title' => $title,
+            'media_item_id' => $mediaItemId]);
 
         return 'added';
     }
@@ -617,7 +642,8 @@ class MusicLibraryScanner
         ];
 
         $result = $this->db->query(
-            "INSERT INTO media_items (type, name, path, metadata_json, created_at, updated_at) VALUES (?, ?, ?, ?, NOW(), NOW())",
+            "INSERT INTO media_items (type, name, path, metadata_json, created_at, updated_at)
+             VALUES (?, ?, ?, ?, NOW(), NOW())",
             [$type, $name, $path ?? '', json_encode($metadata)]
         );
 

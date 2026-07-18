@@ -152,7 +152,8 @@ class FingerprintClusterer
      *
      * @param array<int, array{media_item_id: string, fingerprint: string, duration: int}> $episodes
      *
-     * @return array{episodes: list<array{media_item_id: string, fingerprint: string}>, representative_fingerprint: string, confidence: int}|null
+     * @return array{episodes: list<array{media_item_id: string, fingerprint: string}>,
+     *     representative_fingerprint: string, confidence: int}|null
      *
      * @since 0.12.0
      */
@@ -175,7 +176,8 @@ class FingerprintClusterer
      *
      * @param array<int, array{media_item_id: string, fingerprint: string, duration: int}> $episodes
      *
-     * @return array{episodes: list<array{media_item_id: string, fingerprint: string}>, representative_fingerprint: string, confidence: int}|null
+     * @return array{episodes: list<array{media_item_id: string, fingerprint: string}>,
+     *     representative_fingerprint: string, confidence: int}|null
      *
      * @since 0.12.0
      */
@@ -198,7 +200,8 @@ class FingerprintClusterer
      *
      * @param array<int, array{media_item_id: string, fingerprint: string}> $candidates
      *
-     * @return array{episodes: list<array{media_item_id: string, fingerprint: string}>, representative_fingerprint: string, confidence: int}|null
+     * @return array{episodes: list<array{media_item_id: string, fingerprint: string}>,
+     *     representative_fingerprint: string, confidence: int}|null
      *
      * @since 0.12.0
      */
@@ -324,7 +327,8 @@ class FingerprintClusterer
     /**
      * Build an IntroMarkerCandidate from a group.
      *
-     * @param array{episodes: list<array{media_item_id: string, fingerprint: string}>, representative_fingerprint: string, confidence: int} $group
+     * @param array{episodes: list<array{media_item_id: string, fingerprint: string}>,
+     *     representative_fingerprint: string, confidence: int} $group
      *
      * @return IntroMarkerCandidate
      *
@@ -343,7 +347,8 @@ class FingerprintClusterer
     /**
      * Build an OutroMarkerCandidate from a group.
      *
-     * @param array{episodes: list<array{media_item_id: string, fingerprint: string}>, representative_fingerprint: string, confidence: int} $group
+     * @param array{episodes: list<array{media_item_id: string, fingerprint: string}>,
+     *     representative_fingerprint: string, confidence: int} $group
      *
      * @return OutroMarkerCandidate
      *

@@ -226,7 +226,8 @@ class CdsControlHandler
      * and all parameters.
      *
      * @param string $body Raw SOAP XML body
-     * @return array<string, mixed>|null Parsed data ['service' => string, 'action' => string, 'params' => array<string, string>]
+     * @return array<string, mixed>|null Parsed data ['service' => string, 'action' => string, 'params' => array<string,
+     * string>]
      *                   or null if parsing fails
      *
      * @since 0.12.0

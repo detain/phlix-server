@@ -61,7 +61,8 @@ final readonly class MusicArtist
     {
         $id = isset($row['id']) && is_numeric($row['id']) ? (int)$row['id'] : 0;
         $name = isset($row['name']) && is_string($row['name']) ? $row['name'] : '';
-        $mediaItemId = isset($row['media_item_id']) && is_numeric($row['media_item_id']) ? (int)$row['media_item_id'] : null;
+        $mediaItemId = isset($row['media_item_id']) && is_numeric($row['media_item_id']) ? (int)$row['media_item_id'] :
+            null;
         $sortName = isset($row['sort_name']) && is_string($row['sort_name']) ? $row['sort_name'] : null;
         $biography = isset($row['biography']) && is_string($row['biography']) ? $row['biography'] : null;
         $imageUrl = isset($row['image_url']) && is_string($row['image_url']) ? $row['image_url'] : null;

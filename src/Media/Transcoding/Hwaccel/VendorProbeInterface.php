@@ -64,5 +64,9 @@ interface VendorProbeInterface
      *
      * @since 0.11.0
      */
-    public function runAcceptanceTest(string $ffmpeg_path, string $test_clip_path, ?LoggerInterface $logger = null): bool;
+    public function runAcceptanceTest(
+        string $ffmpeg_path,
+        string $test_clip_path,
+        ?LoggerInterface $logger = null
+    ): bool;
 }

@@ -89,7 +89,8 @@ class IptvTunerDriver implements TunerDriverInterface
      * Parses the M3U playlist and returns the channel lineup.
      *
      * @param HdHomeRunDevice|IptvDevice|DvbtDevice $device The device to query
-     * @return array<int, array{channel_number:int, name:string, type:string, transport_stream_id:null, program_id:null}> Channel list
+     * @return array<int, array{channel_number:int, name:string, type:string, transport_stream_id:null,
+     * program_id:null}> Channel list
      */
     public function getChannelLineup(HdHomeRunDevice|IptvDevice|DvbtDevice $device): array
     {
@@ -128,7 +129,8 @@ class IptvTunerDriver implements TunerDriverInterface
      * Parses the M3U playlist and optionally refreshes EPG data from XMLTV.
      *
      * @param HdHomeRunDevice|IptvDevice|DvbtDevice $device The device to scan
-     * @return array<int, array{channel_number:int, name:string, type:string, transport_stream_id:null, program_id:null}> Discovered channels
+     * @return array<int, array{channel_number:int, name:string, type:string, transport_stream_id:null,
+     * program_id:null}> Discovered channels
      */
     public function scanChannels(HdHomeRunDevice|IptvDevice|DvbtDevice $device): array
     {

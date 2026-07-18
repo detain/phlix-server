@@ -945,7 +945,8 @@ class UserRepository
         $username = $email ?? 'user_' . substr($externalId, 0, 16);
 
         $this->db->query(
-            "INSERT INTO users (id, username, email, display_name, provider, external_id, password_hash) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO users (id, username, email, display_name, provider, external_id, password_hash)
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
             [
                 $id,
                 $username,

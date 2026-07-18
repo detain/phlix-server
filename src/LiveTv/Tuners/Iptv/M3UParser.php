@@ -49,7 +49,8 @@ class M3UParser
      * @example
      * ```php
      * $parser = new M3UParser();
-     * $entries = $parser->parse("#EXTINF:-1 tvg-id=\"1\" tvg-name=\"Channel\",Channel Name\nhttp://example.com/stream.m3u8");
+     * $entries = $parser->parse("#EXTINF:-1 tvg-id=\"1\" tvg-name=\"Channel\",Channel
+     * Name\nhttp://example.com/stream.m3u8");
      * ```
      */
     public function parse(string $content): array
@@ -126,7 +127,8 @@ class M3UParser
 
         if ($content === false) {
             $error = error_get_last();
-            throw new \RuntimeException("Failed to fetch M3U playlist from $url: " . ($error['message'] ?? 'Unknown error'));
+            throw new \RuntimeException("Failed to fetch M3U playlist from $url: " . ($error['message'] ??
+                'Unknown error'));
         }
 
         return $this->parse($content);

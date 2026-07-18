@@ -383,7 +383,8 @@ class MusicLibraryService
             $firstRow = $countResult[0];
             if (is_array($firstRow)) {
                 $albumCount = isset($firstRow['cnt']) && is_numeric($firstRow['cnt']) ? (int)$firstRow['cnt'] : 0;
-                $trackCount = isset($firstRow['track_count']) && is_numeric($firstRow['track_count']) ? (int)$firstRow['track_count'] : 0;
+                $trackCount = isset($firstRow['track_count']) && is_numeric($firstRow['track_count']) ?
+                    (int)$firstRow['track_count'] : 0;
             }
         }
 

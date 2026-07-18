@@ -40,7 +40,10 @@ use Throwable;
  *
  * Use --dry-run (default) to preview what would happen, or --apply to execute.
  */
-#[AsCommand(name: 'media:dedupe-paths', description: 'Find and merge duplicate media items that share the same filesystem path')]
+#[AsCommand(
+    name: 'media:dedupe-paths',
+    description: 'Find and merge duplicate media items that share the same filesystem path'
+)]
 final class MediaDedupePathsCommand extends Command
 {
     /** @var callable(): PathDeduper Lazy factory for the PathDeduper service */
@@ -171,7 +174,8 @@ final class MediaDedupePathsCommand extends Command
      * Display details of a single duplicate group and process it.
      *
      * @param OutputInterface $output    Console output
-     * @param array{path: string, library_id: string, library_name: string, items: list<array{id: string, name: string, type: string, created_at: string}>} $group Duplicate group data
+     * @param array{path: string, library_id: string, library_name: string, items: list<array{id: string, name: string,
+     * type: string, created_at: string}>} $group Duplicate group data
      * @param PathDeduper     $deduper   PathDeduper instance
      * @param bool            $isDryRun  Whether this is a dry run
      * @param int             &$totalDelete Cumulative delete count (passed by reference)

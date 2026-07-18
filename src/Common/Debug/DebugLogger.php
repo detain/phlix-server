@@ -46,7 +46,7 @@ class DebugLogger
     /** @var array<string, int> Task execution counts */
     private array $taskCounts = [];
 
-    /** @var array<string, float> Task durations for last N executions */
+    /** @var array<string, list<float>> Task durations for last N executions */
     private array $recentDurations = [];
 
     /** @var int Maximum recent durations to track per task */
@@ -106,7 +106,9 @@ class DebugLogger
         $startTime = $this->taskStarts[$taskId] ?? null;
 
         if ($startTime === null) {
-            $this->logger->warning("[DEBUG] {$this->timestamp()} {$this->location} end() called for unknown task: {$taskName}");
+            $this->logger->warning(
+                "[DEBUG] {$this->timestamp()} {$this->location} end() called for unknown task: {$taskName}"
+            );
             return 0.0;
         }
 
@@ -186,11 +188,13 @@ class DebugLogger
      */
     public function endBatch(string $batchName, float $durationMs, array $context = []): void
     {
+        $countRaw = $context['count'] ?? 0;
+        $count = is_numeric($countRaw) ? (float) $countRaw : 0.0;
         $this->log('info', "Completed batch: {$batchName} in " . round($durationMs, 2) . "ms", array_merge(
             [
                 'batch' => $batchName,
                 'duration_ms' => round($durationMs, 2),
-                'items_per_sec' => $durationMs > 0 ? round(($context['count'] ?? 0) / ($durationMs / 1000.0), 1) : 0,
+                'items_per_sec' => $durationMs > 0 ? round($count / ($durationMs / 1000.0), 1) : 0,
             ],
             $context
         ));

@@ -570,9 +570,10 @@ class WebPortalRouter
         // detail endpoint hands the player a short-lived `?exp&sig` token that
         // the stream handler verifies. Users without a profile must not receive
         // a stream_url — they have no streaming rights.
-        if ($itemId !== '' && $request->userId !== '') {
+        $userId = $request->userId ?? '';
+        if ($itemId !== '' && $userId !== '') {
             $hasProfile = $this->profileManager !== null
-                && $this->profileManager->getActiveProfile($request->userId) !== null;
+                && $this->profileManager->getActiveProfile($userId) !== null;
             if ($hasProfile) {
                 $shaped['stream_url'] = \Phlix\Auth\SignedUrl::fromEnv()->mint('/media/' . $itemId . '/stream');
             }

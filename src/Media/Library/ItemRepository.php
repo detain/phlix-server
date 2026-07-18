@@ -690,7 +690,8 @@ class ItemRepository
     public function getByType(string $libraryId, string $type, int $limit = 100, int $offset = 0): array
     {
         $results = $this->db->query(
-            "SELECT * FROM media_items WHERE library_id = ? AND type = ? ORDER BY " . self::titleOrder() . " LIMIT ? OFFSET ?",
+            "SELECT * FROM media_items WHERE library_id = ? AND type = ? ORDER BY " . self::titleOrder() .
+                " LIMIT ? OFFSET ?",
             [$libraryId, $type, $limit, $offset]
         );
 
@@ -869,7 +870,8 @@ class ItemRepository
      * item's `metadata_json.$.genres` may introduce a genre not previously
      * seen. {@see batchCreate()} inherits this since it calls this method.
      *
-     * @param array<string, mixed> $data Media item data including library_id, name, type, path, and optionally metadata_json
+     * @param array<string, mixed> $data Media item data including library_id, name, type, path, and optionally
+     * metadata_json
      * @return string The unique identifier of the created media item
      * @throws \InvalidArgumentException If required fields are missing
      */
@@ -902,7 +904,8 @@ class ItemRepository
         $contentRating = self::extractContentRating($data['metadata_json'] ?? null);
 
         $this->db->query(
-            "INSERT INTO media_items (id, library_id, parent_id, name, type, path, canonical_key, sort_title, content_rating, metadata_json)
+            "INSERT INTO media_items
+             (id, library_id, parent_id, name, type, path, canonical_key, sort_title, content_rating, metadata_json)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             [
                 $id,
@@ -1748,8 +1751,12 @@ class ItemRepository
      * @param int $offset Pagination offset
      * @return array<int, array<string, mixed>> Filtered media items ordered by rating restriction level
      */
-    public function getByAllowedRatings(string $libraryId, array $allowedRatings, int $limit = 100, int $offset = 0): array
-    {
+    public function getByAllowedRatings(
+        string $libraryId,
+        array $allowedRatings,
+        int $limit = 100,
+        int $offset = 0
+    ): array {
         // Build CASE expression for rating order comparison. Reads the indexed,
         // materialized `content_rating` column (migration 050) rather than a
         // per-row JSON extraction.
@@ -1858,8 +1865,12 @@ class ItemRepository
      * @param int $offset Pagination offset
      * @return array<int, array<string, mixed>> Filtered media items
      */
-    public function getByAllowedGenres(string $libraryId, array $allowedGenres, int $limit = 100, int $offset = 0): array
-    {
+    public function getByAllowedGenres(
+        string $libraryId,
+        array $allowedGenres,
+        int $limit = 100,
+        int $offset = 0
+    ): array {
         if (empty($allowedGenres)) {
             return $this->getByLibrary($libraryId, $limit, $offset);
         }

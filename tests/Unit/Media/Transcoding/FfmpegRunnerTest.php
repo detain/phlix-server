@@ -338,8 +338,11 @@ class FfmpegRunnerTest extends TestCase
         // On early return (subsequent calls), the singleton must be used.
         // Verify by calling again and checking the same registry instance is returned.
         $runner->probeHardwareAcceleration();
-        $this->assertSame($registry, $runner->getHwaccelRegistry(),
-            'same registry instance must be returned on subsequent calls');
+        $this->assertSame(
+            $registry,
+            $runner->getHwaccelRegistry(),
+            'same registry instance must be returned on subsequent calls'
+        );
 
         // Verify it's actually the singleton.
         $this->assertSame(\Phlix\Media\Transcoding\Hwaccel\HwaccelRegistry::getInstance(), $registry);

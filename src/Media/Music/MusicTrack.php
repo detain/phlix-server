@@ -54,13 +54,16 @@ final readonly class MusicTrack
     public static function fromRow(array $row): self
     {
         $id = isset($row['id']) && is_numeric($row['id']) ? (int)$row['id'] : 0;
-        $mediaItemId = isset($row['media_item_id']) && is_numeric($row['media_item_id']) ? (int)$row['media_item_id'] : 0;
+        $mediaItemId = isset($row['media_item_id']) && is_numeric($row['media_item_id']) ? (int)$row['media_item_id'] :
+            0;
         $albumId = isset($row['album_id']) && is_numeric($row['album_id']) ? (int)$row['album_id'] : 0;
         $artistId = isset($row['artist_id']) && is_numeric($row['artist_id']) ? (int)$row['artist_id'] : 0;
         $title = isset($row['title']) && is_string($row['title']) ? $row['title'] : '';
-        $trackNumber = isset($row['track_number']) && is_numeric($row['track_number']) ? (int)$row['track_number'] : null;
+        $trackNumber = isset($row['track_number']) && is_numeric($row['track_number']) ? (int)$row['track_number'] :
+            null;
         $discNumber = isset($row['disc_number']) && is_numeric($row['disc_number']) ? (int)$row['disc_number'] : 1;
-        $durationSecs = isset($row['duration_secs']) && is_numeric($row['duration_secs']) ? (int)$row['duration_secs'] : 0;
+        $durationSecs = isset($row['duration_secs']) && is_numeric($row['duration_secs']) ?
+            (int)$row['duration_secs'] : 0;
         $createdAt = isset($row['created_at']) ? self::parseDateTime($row['created_at']) : null;
         $updatedAt = isset($row['updated_at']) ? self::parseDateTime($row['updated_at']) : null;
 

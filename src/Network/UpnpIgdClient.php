@@ -31,7 +31,8 @@ class UpnpIgdClient
     private const SSDP_PORT = 1900;
     private const SSDP_SEARCH_TARGET =
         'urn:schemas-upnp-org:device:InternetGatewayDevice:1';
-    private const SSDP_MSEARCH = "M-SEARCH * HTTP/1.1\r\nHOST: %s:%d\r\nMAN: \"ssdp:discover\"\r\nMX: 3\r\nST: %s\r\n\r\n";
+    private const SSDP_MSEARCH = "M-SEARCH * HTTP/1.1\r\nHOST: %s:%d\r\n"
+        . "MAN: \"ssdp:discover\"\r\nMX: 3\r\nST: %s\r\n\r\n";
 
     private LoggerInterface $logger;
     private int $timeout;

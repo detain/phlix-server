@@ -6,6 +6,7 @@ namespace Phlix\Tests\Unit\Server\WebPortal;
 
 use PHPUnit\Framework\TestCase;
 use Phlix\Auth\AuthManager;
+use Phlix\Auth\UserProfileManager;
 use Phlix\Auth\UserRepository;
 use Phlix\Media\Library\IndexBuckets;
 use Phlix\Media\Library\ItemRepository;
@@ -19,8 +20,10 @@ use Phlix\Session\SessionManager;
 
 class WebPortalRouterMediaTest extends TestCase
 {
-    private function makeRouter(ItemRepository $itemRepository): WebPortalRouter
-    {
+    private function makeRouter(
+        ItemRepository $itemRepository,
+        ?UserProfileManager $profileManager = null
+    ): WebPortalRouter {
         return new WebPortalRouter(
             $this->createMock(LibraryManager::class),
             $itemRepository,
@@ -28,7 +31,11 @@ class WebPortalRouterMediaTest extends TestCase
             $this->createMock(PlaybackController::class),
             $this->createMock(AuthManager::class),
             $this->createMock(PlaybackMarkerService::class),
-            $this->createMock(MarkerService::class)
+            $this->createMock(MarkerService::class),
+            null,
+            null,
+            null,
+            $profileManager
         );
     }
 
@@ -414,8 +421,16 @@ class WebPortalRouterMediaTest extends TestCase
             ['stream_index' => 0, 'stream_type' => 'video', 'codec' => 'h264'],
         ]);
 
-        $router = $this->makeRouter($itemRepo);
-        $body = $this->decodeBody($router->getMediaItem(new Request(), ['id' => 'ep-1'])->body);
+        // The stream_url is gated: it is only minted for an authenticated user
+        // who has an active profile. Wire a profile manager that returns one and
+        // populate the request's userId (normally set from the Bearer token).
+        $profileManager = $this->createMock(UserProfileManager::class);
+        $profileManager->method('getActiveProfile')->with('user-1')->willReturn(['id' => 'profile-1']);
+
+        $router = $this->makeRouter($itemRepo, $profileManager);
+        $request = new Request();
+        $request->userId = 'user-1';
+        $body = $this->decodeBody($router->getMediaItem($request, ['id' => 'ep-1'])->body);
         $item = $body['item'];
 
         $this->assertSame('https://image.tmdb.org/t/p/w500/ep.jpg', $item['poster_url']);
@@ -1007,8 +1022,12 @@ class WebPortalRouterMediaTest extends TestCase
         $pgBucket = null;
         $rBucket = null;
         foreach ($body['buckets'] as $b) {
-            if ($b['key'] === 'PG') { $pgBucket = $b; }
-            if ($b['key'] === 'R')  { $rBucket = $b; }
+            if ($b['key'] === 'PG') {
+                $pgBucket = $b;
+            }
+            if ($b['key'] === 'R') {
+                $rBucket = $b;
+            }
         }
         $this->assertNotNull($pgBucket);
         $this->assertNotNull($rBucket);

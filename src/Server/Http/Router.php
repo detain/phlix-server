@@ -291,11 +291,13 @@ class Router
                 return $middlewareResponse;
             }
 
-            error_log('[DEBUG] ' . date('Y-m-d H:i:s.v') . ' Router::dispatch static route [method=' . $method . '] [path=' . $path . ']');
+            error_log('[DEBUG] ' . date('Y-m-d H:i:s.v') . ' Router::dispatch static route [method=' . $method .
+                '] [path=' . $path . ']');
             $startTime = hrtime(true);
             $response = $this->callHandler($route['handler'], $request, []);
             $durationMs = (hrtime(true) - $startTime) / 1_000_000.0;
-            error_log('[DEBUG] ' . date('Y-m-d H:i:s.v') . ' Router::dispatch completed [method=' . $method . '] [path=' . $path . '] [duration=' . round($durationMs, 2) . 'ms]');
+            error_log('[DEBUG] ' . date('Y-m-d H:i:s.v') . ' Router::dispatch completed [method=' . $method .
+                '] [path=' . $path . '] [duration=' . round($durationMs, 2) . 'ms]');
             return $response;
         }
 
@@ -306,7 +308,8 @@ class Router
             if ($method === 'HEAD' && isset($this->routes['GET'])) {
                 return $this->dispatchAsHead($request, $path);
             }
-            error_log('[DEBUG] ' . date('Y-m-d H:i:s.v') . ' Router::dispatch 404 [method=' . $method . '] [path=' . $path . ']');
+            error_log('[DEBUG] ' . date('Y-m-d H:i:s.v') . ' Router::dispatch 404 [method=' . $method . '] [path=' .
+                $path . ']');
             return $this->notFound();
         }
 
@@ -323,11 +326,13 @@ class Router
                 }
 
                 // Call the route handler
-                error_log('[DEBUG] ' . date('Y-m-d H:i:s.v') . ' Router::dispatch parametric route [method=' . $method . '] [path=' . $path . ']');
+                error_log('[DEBUG] ' . date('Y-m-d H:i:s.v') . ' Router::dispatch parametric route [method=' .
+                    $method . '] [path=' . $path . ']');
                 $startTime = hrtime(true);
                 $response = $this->callHandler($route['handler'], $request, $params);
                 $durationMs = (hrtime(true) - $startTime) / 1_000_000.0;
-                error_log('[DEBUG] ' . date('Y-m-d H:i:s.v') . ' Router::dispatch completed [method=' . $method . '] [path=' . $path . '] [duration=' . round($durationMs, 2) . 'ms]');
+                error_log('[DEBUG] ' . date('Y-m-d H:i:s.v') . ' Router::dispatch completed [method=' . $method .
+                    '] [path=' . $path . '] [duration=' . round($durationMs, 2) . 'ms]');
                 return $response;
             }
         }
@@ -337,7 +342,8 @@ class Router
             return $this->dispatchAsHead($request, $path);
         }
 
-        error_log('[DEBUG] ' . date('Y-m-d H:i:s.v') . ' Router::dispatch 404 [method=' . $method . '] [path=' . $path . ']');
+        error_log('[DEBUG] ' . date('Y-m-d H:i:s.v') . ' Router::dispatch 404 [method=' . $method . '] [path=' .
+            $path . ']');
         return $this->notFound();
     }
 

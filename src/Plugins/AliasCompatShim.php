@@ -35,7 +35,8 @@ $eventAliases = [
     \Phlix\Common\Events\Playback\PlaybackResumed::class => \Phlix\Shared\Events\Playback\PlaybackResumed::class,
     \Phlix\Common\Events\Playback\PlaybackStopped::class => \Phlix\Shared\Events\Playback\PlaybackStopped::class,
     \Phlix\Common\Events\Library\LibraryScanStarted::class => \Phlix\Shared\Events\Library\LibraryScanStarted::class,
-    \Phlix\Common\Events\Library\LibraryScanCompleted::class => \Phlix\Shared\Events\Library\LibraryScanCompleted::class,
+    \Phlix\Common\Events\Library\LibraryScanCompleted::class =>
+        \Phlix\Shared\Events\Library\LibraryScanCompleted::class,
     \Phlix\Common\Events\Library\MediaItemAdded::class => \Phlix\Shared\Events\Library\MediaItemAdded::class,
     \Phlix\Common\Events\Library\MediaItemUpdated::class => \Phlix\Shared\Events\Library\MediaItemUpdated::class,
     \Phlix\Common\Events\Library\MediaItemRemoved::class => \Phlix\Shared\Events\Library\MediaItemRemoved::class,

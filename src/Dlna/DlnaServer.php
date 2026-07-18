@@ -501,7 +501,8 @@ class DlnaServer
         $updateId = is_numeric($result['UpdateID'] ?? null) ? (int) $result['UpdateID'] : 1;
 
         return '<?xml version="1.0" encoding="utf-8"?>
-<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">
+<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"'
+            . ' s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">
     <s:Body>
         <BrowseResponse xmlns="urn:schemas-upnp-org:service:ContentDirectory:1">
             <Result>' . $this->encodeXml($resultXml) . '</Result>
@@ -532,7 +533,8 @@ class DlnaServer
         $responseAction = $action . 'Response';
 
         return '<?xml version="1.0" encoding="utf-8"?>
-<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">
+<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"'
+            . ' s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">
     <s:Body>
         <' . $responseAction . ' xmlns="urn:schemas-upnp-org:service:AVTransport:1">
             ' . $resultTags . '
@@ -555,7 +557,8 @@ class DlnaServer
     public function buildSoapFault(string $faultCode, string $faultString): string
     {
         return '<?xml version="1.0" encoding="utf-8"?>
-<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">
+<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"'
+            . ' s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">
     <s:Body>
         <s:Fault>
             <faultcode>s:Client</faultcode>

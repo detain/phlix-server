@@ -10,7 +10,7 @@ class ConnectionPoolTest extends TestCase
     public function testConnectionPoolCanBeInitialized(): void
     {
         $configPath = __DIR__ . '/../../../../config/database.php';
-        
+
         $this->expectNotToPerformAssertions();
 
         // This should not throw

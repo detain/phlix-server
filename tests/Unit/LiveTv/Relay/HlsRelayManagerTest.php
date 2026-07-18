@@ -82,7 +82,8 @@ class HlsRelayManagerTest extends TestCase
     private function isTimerAvailable(): bool
     {
         try {
-            \Workerman\Timer::add(1, function () {}, [], false);
+            \Workerman\Timer::add(1, function () {
+            }, [], false);
             return true;
         } catch (\RuntimeException $e) {
             return false;

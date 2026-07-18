@@ -99,7 +99,8 @@ class PathDeduper
      * episode, movie, audio, book. Containers (series, season) and other types
      * with synthetic/not-real paths are excluded.
      *
-     * @return array<int, array{path: string, library_id: string, library_name: string, items: list<array{id: string, name: string, type: string, created_at: string}>}>
+     * @return array<int, array{path: string, library_id: string, library_name: string, items: list<array{id: string,
+     * name: string, type: string, created_at: string}>}>
      */
     public function findDuplicateGroups(): array
     {

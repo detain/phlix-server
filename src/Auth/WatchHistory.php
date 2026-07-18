@@ -385,7 +385,9 @@ class WatchHistory
             // Create new entry
             $id = $this->generateUuid();
             $this->db->query(
-                "INSERT INTO watch_history (id, profile_id, media_item_id, position_ticks, duration_ticks, playback_status, progress_percent, last_watched_at, completed_at)
+                "INSERT INTO watch_history
+                 (id, profile_id, media_item_id, position_ticks, duration_ticks, playback_status,
+                  progress_percent, last_watched_at, completed_at)
                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 [
                     $id,

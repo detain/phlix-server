@@ -577,7 +577,8 @@ class ImdbDatasetImporter
      * UPSERT one batch of rows with a single multi-row
      * INSERT ... ON DUPLICATE KEY UPDATE statement.
      *
-     * @param list<array{0: string, 1: string, 2: string|null, 3: string, 4: string, 5: int|null, 6: string|null, 7: int|null, 8: float|null, 9: int|null}> $rows
+     * @param list<array{0: string, 1: string, 2: string|null, 3: string, 4: string, 5: int|null, 6: string|null,
+     *     7: int|null, 8: float|null, 9: int|null}> $rows
      */
     private function upsertBatch(array $rows): void
     {

@@ -467,7 +467,8 @@ final class TraktPlugin implements LifecycleInterface
             /** @var string $newAccessToken */
             $newAccessToken = is_string($refreshResult['access_token'] ?? null) ? $refreshResult['access_token'] : '';
             /** @var string $newRefreshToken */
-            $newRefreshToken = is_string($refreshResult['refresh_token'] ?? null) ? $refreshResult['refresh_token'] : '';
+            $newRefreshToken = is_string($refreshResult['refresh_token'] ?? null) ? $refreshResult['refresh_token'] :
+                '';
 
             if ($newAccessToken === '') {
                 $this->logger?->warning('Trakt: refresh returned empty access token');

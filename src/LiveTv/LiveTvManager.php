@@ -219,7 +219,9 @@ class LiveTvManager
      *     echo "Found: {$tuner['name']} ({$tuner['type']})\n";
      * }
      * ```
-     * @return array<string, array{id:string, name:string, type:string, status:string, tuner_index:int, ip_address?:string, tuner_count:int, capabilities:array<string, mixed>, tunerDevice:HdHomeRunDevice|IptvDevice|DvbtDevice}> Discovered tuners keyed by tuner ID
+     * @return array<string, array{id:string, name:string, type:string, status:string, tuner_index:int,
+     * ip_address?:string, tuner_count:int, capabilities:array<string, mixed>,
+     * tunerDevice:HdHomeRunDevice|IptvDevice|DvbtDevice}> Discovered tuners keyed by tuner ID
      */
     public function discoverTuners(): array
     {
@@ -731,7 +733,8 @@ class LiveTvManager
         /** @var array<string, mixed> $row */
         $row = $result[0];
         $channelNum = $row['channel_number'] ?? null;
-        $channelNumber = is_int($channelNum) ? $channelNum : (is_string($channelNum) && is_numeric($channelNum) ? (int) $channelNum : 0);
+        $channelNumber = is_int($channelNum) ? $channelNum : (is_string($channelNum) && is_numeric($channelNum) ?
+            (int) $channelNum : 0);
 
         if ($channelNumber <= 0) {
             $this->logger->warning('Channel has no channel number', [

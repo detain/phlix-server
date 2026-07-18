@@ -76,8 +76,11 @@ class NvencProbe implements VendorProbeInterface
         );
     }
 
-    public function runAcceptanceTest(string $ffmpeg_path, string $test_clip_path, ?LoggerInterface $logger = null): bool
-    {
+    public function runAcceptanceTest(
+        string $ffmpeg_path,
+        string $test_clip_path,
+        ?LoggerInterface $logger = null
+    ): bool {
         if (!file_exists($test_clip_path)) {
             $logger?->warning('Test clip not found', ['path' => $test_clip_path]);
             return false;

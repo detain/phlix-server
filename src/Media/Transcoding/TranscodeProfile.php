@@ -111,7 +111,8 @@ final class TranscodeProfile
 
         return match ($this->toneMapMode) {
             'zscale' => 'zscale=transfer=bt2020ntob709,format=yuv420p',
-            'libplacebo' => 'scale_vaapi=format=nv12,hwupload,tonemap_vaapi=transfer=bt2020:primaries=bt2020:tonemap=hable:desat=0.5',
+            'libplacebo' => 'scale_vaapi=format=nv12,hwupload,tonemap_vaapi=transfer=bt2020'
+                . ':primaries=bt2020:tonemap=hable:desat=0.5',
             default => '',
         };
     }

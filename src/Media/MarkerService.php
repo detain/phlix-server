@@ -50,10 +50,18 @@ final class MarkerService
      * @param string|null $thumbnailPath Optional thumbnail file path
      * @return Marker The created/updated marker
      */
-    public function upsert(string $mediaItemId, MarkerType $type, int $startMs, int $endMs, string $label, ?string $userId = null, ?string $thumbnailPath = null): Marker
-    {
+    public function upsert(
+        string $mediaItemId,
+        MarkerType $type,
+        int $startMs,
+        int $endMs,
+        string $label,
+        ?string $userId = null,
+        ?string $thumbnailPath = null
+    ): Marker {
         $this->db->query(
-            'INSERT INTO media_markers (media_item_id, marker_type, start_time_ms, end_time_ms, label, user_id, thumbnail_path)
+            'INSERT INTO media_markers
+             (media_item_id, marker_type, start_time_ms, end_time_ms, label, user_id, thumbnail_path)
              VALUES (?, ?, ?, ?, ?, ?, ?)
              ON DUPLICATE KEY UPDATE
                marker_type = VALUES(marker_type),

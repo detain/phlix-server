@@ -174,7 +174,8 @@ class LibraryManager
      * @example
      * ```php
      * $library = $manager->getLibrary('abc-123');
-     * // Returns: ['id' => 'abc-123', 'name' => 'Movies', 'type' => 'video', 'paths' => ['/mnt/media'], 'options' => [...]]
+     * // Returns: ['id' => 'abc-123', 'name' => 'Movies', 'type' => 'video', 'paths' => ['/mnt/media'], 'options' =>
+     * [...]]
      * ```
      */
     public function getLibrary(string $id): ?array

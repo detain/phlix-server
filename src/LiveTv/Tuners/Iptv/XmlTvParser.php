@@ -56,8 +56,10 @@ class XmlTvParser
     ) {
         $this->logger = $logger;
         $config = $this->loadXmltvConfig();
-        $this->maxBytes = $maxBytes ?? (is_int($config['max_bytes'] ?? null) ? (int) $config['max_bytes'] : self::DEFAULT_MAX_BYTES);
-        $this->maxRedirects = $maxRedirects ?? (is_int($config['max_redirects'] ?? null) ? (int) $config['max_redirects'] : 3);
+        $this->maxBytes = $maxBytes ?? (is_int($config['max_bytes'] ?? null) ? (int) $config['max_bytes'] :
+            self::DEFAULT_MAX_BYTES);
+        $this->maxRedirects = $maxRedirects ?? (is_int($config['max_redirects'] ?? null) ?
+            (int) $config['max_redirects'] : 3);
     }
 
     /**

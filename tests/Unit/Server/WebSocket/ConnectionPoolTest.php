@@ -105,26 +105,78 @@ class ConnectionPoolTestConnection implements ConnectionInterface
         $this->lastActivity = time();
     }
 
-    public function getId(): string { return $this->id; }
-    public function getUserId(): ?string { return $this->userId; }
-    public function setUserId(?string $userId): void { $this->userId = $userId; }
-    public function getSessionId(): ?string { return $this->sessionId; }
-    public function setSessionId(?string $sessionId): void { $this->sessionId = $sessionId; }
-    public function isAuthenticated(): bool { return $this->authenticated; }
-    public function setAuthenticated(bool $a, ?string $u = null): void { $this->authenticated = $a; $this->userId = $u; }
-    public function getLastActivity(): int { return $this->lastActivity; }
-    public function send(string|array $data): bool { return true; }
-    public function close(): void {}
-    public function sendMessage(string $type, array $data = []): void {}
-    public function sendFlat(string $type, array $payload): void {}
-    public function updateActivity(): void { $this->lastActivity = time(); }
-    public function set(string $key, mixed $value): void { $this->sessionData[$key] = $value; }
-    public function get(string $key, mixed $default = null): mixed { return $this->sessionData[$key] ?? $default; }
-    public function has(string $key): bool { return isset($this->sessionData[$key]); }
-    public function remove(string $key): void { unset($this->sessionData[$key]); }
+    public function getId(): string
+    {
+        return $this->id;
+    }
+    public function getUserId(): ?string
+    {
+        return $this->userId;
+    }
+    public function setUserId(?string $userId): void
+    {
+        $this->userId = $userId;
+    }
+    public function getSessionId(): ?string
+    {
+        return $this->sessionId;
+    }
+    public function setSessionId(?string $sessionId): void
+    {
+        $this->sessionId = $sessionId;
+    }
+    public function isAuthenticated(): bool
+    {
+        return $this->authenticated;
+    }
+    public function setAuthenticated(bool $a, ?string $u = null): void
+    {
+        $this->authenticated = $a;
+        $this->userId = $u;
+    }
+    public function getLastActivity(): int
+    {
+        return $this->lastActivity;
+    }
+    public function send(string|array $data): bool
+    {
+        return true;
+    }
+    public function close(): void
+    {
+    }
+    public function sendMessage(string $type, array $data = []): void
+    {
+    }
+    public function sendFlat(string $type, array $payload): void
+    {
+    }
+    public function updateActivity(): void
+    {
+        $this->lastActivity = time();
+    }
+    public function set(string $key, mixed $value): void
+    {
+        $this->sessionData[$key] = $value;
+    }
+    public function get(string $key, mixed $default = null): mixed
+    {
+        return $this->sessionData[$key] ?? $default;
+    }
+    public function has(string $key): bool
+    {
+        return isset($this->sessionData[$key]);
+    }
+    public function remove(string $key): void
+    {
+        unset($this->sessionData[$key]);
+    }
 
     /**
      * @return array<string, mixed>
      */
-    public function getAll(): array { return $this->sessionData; }
+    public function getAll(): array
+    {
+        return $this->sessionData;
+    }
 }

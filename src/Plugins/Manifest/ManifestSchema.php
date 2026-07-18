@@ -115,7 +115,8 @@ final class ManifestSchema
             $checked = array_map(static fn (string $rel): string => $root . $rel, self::SCHEMA_RELATIVE_PATHS);
             throw new RuntimeException(
                 sprintf(
-                    'Manifest schema not found — looked in: %s. Run composer install (the schema ships with detain/phlix-shared).',
+                    'Manifest schema not found — looked in: %s.'
+                    . ' Run composer install (the schema ships with detain/phlix-shared).',
                     implode(', ', $checked),
                 ),
             );

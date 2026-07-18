@@ -433,8 +433,11 @@ class CrossfadeGenerator
      *
      * @return string Filter complex string
      */
-    private function buildCrossfadeFilterComplex(int $crossfadeDuration, float $fadeOutDuration, float $fadeInDuration): string
-    {
+    private function buildCrossfadeFilterComplex(
+        int $crossfadeDuration,
+        float $fadeOutDuration,
+        float $fadeInDuration
+    ): string {
         $filters = [];
 
         // Track A: apply fade-out

@@ -360,46 +360,46 @@ class DuplicateFinderTest extends TestCase
 class InMemoryDuplicateRepo extends ItemRepository
 {
             /** @var list<array<string, mixed>> */
-            private array $rows;
+    private array $rows;
             /** @var array<string, int> */
-            private array $descendants;
+    private array $descendants;
             /** Spy: number of getTopLevelByLibrary() pages requested. */
-            public int $pageCalls = 0;
+    public int $pageCalls = 0;
             /** Spy: number of countDescendants() calls. */
-            public int $countCalls = 0;
+    public int $countCalls = 0;
 
             /**
              * @param list<array<string, mixed>> $rows
              * @param array<string, int>         $descendants
              */
-            public function __construct(Connection $db, array $rows, array $descendants)
-            {
-                parent::__construct($db);
-                // Ensure each row exposes a decoded 'metadata' array like the
-                // real hydrateItem() does.
-                $this->rows = array_map(static function (array $row): array {
-                    if (!isset($row['metadata']) || !is_array($row['metadata'])) {
-                        $row['metadata'] = [];
-                    }
-                    return $row;
-                }, $rows);
-                $this->descendants = $descendants;
+    public function __construct(Connection $db, array $rows, array $descendants)
+    {
+        parent::__construct($db);
+        // Ensure each row exposes a decoded 'metadata' array like the
+        // real hydrateItem() does.
+        $this->rows = array_map(static function (array $row): array {
+            if (!isset($row['metadata']) || !is_array($row['metadata'])) {
+                $row['metadata'] = [];
             }
+            return $row;
+        }, $rows);
+        $this->descendants = $descendants;
+    }
 
-            public function getTopLevelByLibrary(string $libraryId, int $limit = 500, int $offset = 0): array
-            {
-                $this->pageCalls++;
-                $matching = array_values(array_filter(
-                    $this->rows,
-                    static fn (array $r): bool => ($r['library_id'] ?? null) === $libraryId
-                ));
+    public function getTopLevelByLibrary(string $libraryId, int $limit = 500, int $offset = 0): array
+    {
+        $this->pageCalls++;
+        $matching = array_values(array_filter(
+            $this->rows,
+            static fn (array $r): bool => ($r['library_id'] ?? null) === $libraryId
+        ));
 
-                return array_slice($matching, $offset, $limit);
-            }
+        return array_slice($matching, $offset, $limit);
+    }
 
-            public function countDescendants(string $itemId): int
-            {
-                $this->countCalls++;
-                return $this->descendants[$itemId] ?? 0;
-            }
+    public function countDescendants(string $itemId): int
+    {
+        $this->countCalls++;
+        return $this->descendants[$itemId] ?? 0;
+    }
 }

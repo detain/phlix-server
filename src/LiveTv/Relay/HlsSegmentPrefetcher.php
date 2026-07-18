@@ -256,7 +256,8 @@ class HlsSegmentPrefetcher
      *
      * @param string $sessionId           Session ID for this prefetch task.
      * @param string $variantPlaylistUrl   URL of the variant playlist.
-     * @param int|null $maxBandwidthKbps  Optional max bandwidth in kbps to limit prefetch to renditions at or below this rate.
+     * @param int|null $maxBandwidthKbps  Optional max bandwidth in kbps to limit prefetch to renditions at or below
+     * this rate.
      *
      * @return void
      *
@@ -338,7 +339,11 @@ class HlsSegmentPrefetcher
         $segmentsToFetch = [];
         foreach ($filteredRenditions as $rendition) {
             $variantSegments = $this->parsePlaylistSegments($rendition['playlist_url'], $variantPlaylistUrl);
-            $segmentsToFetch = array_merge($segmentsToFetch, array_slice($variantSegments, 0, (int) ceil($this->prefetchSegments / count($filteredRenditions))));
+            $segmentsToFetch = array_merge($segmentsToFetch, array_slice(
+                $variantSegments,
+                0,
+                (int) ceil($this->prefetchSegments / count($filteredRenditions))
+            ));
             if (count($segmentsToFetch) >= $this->prefetchSegments) {
                 break;
             }

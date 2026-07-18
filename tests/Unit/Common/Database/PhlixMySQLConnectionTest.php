@@ -172,7 +172,7 @@ final class PhlixMySQLConnectionTest extends TestCase
             }
         };
 
-        $conn = new class($mockParent, $inMemoryPdo) extends PhlixMySQLConnection {
+        $conn = new class ($mockParent, $inMemoryPdo) extends PhlixMySQLConnection {
             public function __construct(
                 private Connection $mock,
                 \PDO $pdo,

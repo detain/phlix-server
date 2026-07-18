@@ -84,7 +84,8 @@ final readonly class IdTokenClaims
         $emailVerified = isset($claims['email_verified']) && $claims['email_verified'] === true;
         $name = isset($claims['name']) && is_string($claims['name']) ? $claims['name'] : null;
         $givenName = isset($claims['given_name']) && is_string($claims['given_name']) ? $claims['given_name'] : null;
-        $familyName = isset($claims['family_name']) && is_string($claims['family_name']) ? $claims['family_name'] : null;
+        $familyName = isset($claims['family_name']) && is_string($claims['family_name']) ? $claims['family_name'] :
+            null;
         $picture = isset($claims['picture']) && is_string($claims['picture']) ? $claims['picture'] : null;
         $locale = isset($claims['locale']) && is_string($claims['locale']) ? $claims['locale'] : null;
 

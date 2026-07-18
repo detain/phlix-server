@@ -1066,7 +1066,8 @@ class AuthManager
     }
 
     /**
-     * @return array{access_token: string, refresh_token: string, token_type: string, expires_in: int, user: array<string, mixed>|null}
+     * @return array{access_token: string, refresh_token: string, token_type: string, expires_in: int,
+     *     user: array<string, mixed>|null}
      */
     public function buildAuthResponse(string $userId): array
     {

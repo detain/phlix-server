@@ -214,7 +214,8 @@ final class Messages
      *
      * @param string $groupName The desired group name
      * @param string|null $password Optional password to protect the group
-     * @return array{type: string, protocol_version: int, group_name: string, password_hash?: string, timestamp: int} The message array
+     * @return array{type: string, protocol_version: int, group_name: string, password_hash?: string, timestamp: int}
+     * The message array
      *
      * @example
      * ```php
@@ -243,7 +244,8 @@ final class Messages
      *
      * @param string $groupId The group ID to join
      * @param string|null $password Optional password if group is protected
-     * @return array{type: string, protocol_version: int, group_id: string, password_hash?: string, timestamp: int} The message array
+     * @return array{type: string, protocol_version: int, group_id: string, password_hash?: string, timestamp: int} The
+     * message array
      *
      * @example
      * ```php
@@ -272,7 +274,8 @@ final class Messages
      *
      * @param string $groupId The group ID to leave
      * @param string $memberId The member ID leaving
-     * @return array{type: string, protocol_version: int, group_id: string, member_id: string, timestamp: int} The message array
+     * @return array{type: string, protocol_version: int, group_id: string, member_id: string, timestamp: int} The
+     * message array
      *
      * @example
      * ```php
@@ -348,7 +351,8 @@ final class Messages
      * @param string $memberId The host's member ID
      * @param int $position Current position in milliseconds
      * @param int $serverTime Server timestamp when command was issued
-     * @return array{type: string, protocol_version: int, group_id: string, member_id: string, position: int, server_time: int, timestamp: int} The message array
+     * @return array{type: string, protocol_version: int, group_id: string, member_id: string, position: int,
+     * server_time: int, timestamp: int} The message array
      *
      * @example
      * ```php
@@ -379,7 +383,8 @@ final class Messages
      * @param string $memberId The host's member ID
      * @param int $position Current position in milliseconds
      * @param int $serverTime Server timestamp when command was issued
-     * @return array{type: string, protocol_version: int, group_id: string, member_id: string, position: int, server_time: int, timestamp: int} The message array
+     * @return array{type: string, protocol_version: int, group_id: string, member_id: string, position: int,
+     * server_time: int, timestamp: int} The message array
      *
      * @example
      * ```php
@@ -411,7 +416,8 @@ final class Messages
      * @param int $fromPosition Position before seek
      * @param int $toPosition Position after seek
      * @param int $serverTime Server timestamp when command was issued
-     * @return array{type: string, protocol_version: int, group_id: string, member_id: string, from_position: int, to_position: int, server_time: int, timestamp: int} The message array
+     * @return array{type: string, protocol_version: int, group_id: string, member_id: string, from_position: int,
+     * to_position: int, server_time: int, timestamp: int} The message array
      *
      * @example
      * ```php
@@ -442,7 +448,8 @@ final class Messages
      *
      * @param string $groupId The group ID
      * @param array<int, array{media_id: string, media_info?: array<string, mixed>}> $queue The updated queue
-     * @return array{type: string, protocol_version: int, group_id: string, queue: array<int, array{media_id: string, media_info?: array<string, mixed>}>, timestamp: int} The message array
+     * @return array{type: string, protocol_version: int, group_id: string, queue: array<int, array{media_id: string,
+     * media_info?: array<string, mixed>}>, timestamp: int} The message array
      *
      * @example
      * ```php
@@ -473,7 +480,8 @@ final class Messages
      * @param int $position Current position in milliseconds
      * @param bool $isPlaying Whether playback is active
      * @param int $serverTime Server timestamp
-     * @return array{type: string, protocol_version: int, group_id: string, member_id: string, position: int, is_playing: bool, server_time: int, timestamp: int} The message array
+     * @return array{type: string, protocol_version: int, group_id: string, member_id: string, position: int,
+     * is_playing: bool, server_time: int, timestamp: int} The message array
      *
      * @example
      * ```php
@@ -505,7 +513,8 @@ final class Messages
      * @param string $groupId The group ID
      * @param string $memberId The sender's member ID
      * @param string $message The chat message content
-     * @return array{type: string, protocol_version: int, group_id: string, member_id: string, message: string, timestamp: int} The message array
+     * @return array{type: string, protocol_version: int, group_id: string, member_id: string, message: string,
+     * timestamp: int} The message array
      *
      * @example
      * ```php
@@ -530,7 +539,8 @@ final class Messages
      * @param string $groupId The group ID
      * @param string $memberId The member who is/isn't typing
      * @param bool $isTyping Whether the member is typing
-     * @return array{type: string, protocol_version: int, group_id: string, member_id: string, is_typing: bool, timestamp: int} The message array
+     * @return array{type: string, protocol_version: int, group_id: string, member_id: string, is_typing: bool,
+     * timestamp: int} The message array
      *
      * @example
      * ```php
@@ -555,7 +565,8 @@ final class Messages
      * @param string $groupId The group ID
      * @param string $currentHostId The current host's member ID
      * @param string $newHostId The new host's member ID
-     * @return array{type: string, protocol_version: int, group_id: string, current_host_id: string, new_host_id: string, timestamp: int} The message array
+     * @return array{type: string, protocol_version: int, group_id: string, current_host_id: string,
+     *     new_host_id: string, timestamp: int} The message array
      *
      * @example
      * ```php
@@ -580,7 +591,8 @@ final class Messages
      * @param string $groupId The group ID
      * @param string $electedId The newly elected host's member ID
      * @param string $electedBy The member who initiated the election
-     * @return array{type: string, protocol_version: int, group_id: string, elected_id: string, elected_by: string, timestamp: int} The message array
+     * @return array{type: string, protocol_version: int, group_id: string, elected_id: string, elected_by: string,
+     * timestamp: int} The message array
      *
      * @example
      * ```php
@@ -625,7 +637,8 @@ final class Messages
      *
      * @param int $clientTime Original client timestamp from ping
      * @param int $serverTime Server timestamp when ping was received
-     * @return array{type: string, protocol_version: int, client_time: int, server_time: int, timestamp: int} The message array
+     * @return array{type: string, protocol_version: int, client_time: int, server_time: int, timestamp: int} The
+     * message array
      *
      * @example
      * ```php
@@ -649,7 +662,8 @@ final class Messages
      * @param string $code Error code (e.g., 'NOT_IN_GROUP', 'INVALID_PASSWORD')
      * @param string $message Human-readable error message
      * @param array<string, mixed>|null $details Optional additional error details
-     * @return array{type: string, protocol_version: int, error_code: string, message: string, details?: array<string, mixed>, timestamp: int} The message array
+     * @return array{type: string, protocol_version: int, error_code: string, message: string, details?: array<string,
+     * mixed>, timestamp: int} The message array
      *
      * @example
      * ```php
@@ -679,7 +693,8 @@ final class Messages
      *
      * @param string $message The informational message
      * @param array<string, mixed>|null $data Optional additional data
-     * @return array{type: string, protocol_version: int, message: string, data?: array<string, mixed>, timestamp: int} The message array
+     * @return array{type: string, protocol_version: int, message: string, data?: array<string, mixed>, timestamp: int}
+     * The message array
      *
      * @example
      * ```php
@@ -748,7 +763,8 @@ final class Messages
             if (!is_int($protocolVersion)) {
                 $errors[] = 'Protocol version must be an integer';
             } elseif ($protocolVersion > self::PROTOCOL_VERSION) {
-                $errors[] = 'Protocol version mismatch: expected ' . self::PROTOCOL_VERSION . ', got ' . $protocolVersion;
+                $errors[] = 'Protocol version mismatch: expected ' . self::PROTOCOL_VERSION . ', got ' .
+                    $protocolVersion;
             }
         }
 
@@ -758,7 +774,10 @@ final class Messages
             }
         }
 
-        if (in_array($type, [self::TYPE_GROUP_LEAVE, self::TYPE_PLAYBACK_PLAY, self::TYPE_PLAYBACK_PAUSE, self::TYPE_PLAYBACK_SEEK], true)) {
+        if (
+            in_array($type, [self::TYPE_GROUP_LEAVE, self::TYPE_PLAYBACK_PLAY, self::TYPE_PLAYBACK_PAUSE,
+            self::TYPE_PLAYBACK_SEEK], true)
+        ) {
             if (empty($message['member_id'] ?? '')) {
                 $errors[] = 'Missing member_id';
             }

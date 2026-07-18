@@ -59,7 +59,8 @@ class HdHomeRunApiClient
     /**
      * Get available channel lineup via /lineup.json.
      *
-     * @return array<int, array{channel_number:int, name:string, type:string, transport_stream_id:int, program_id:int|null}> Channel list
+     * @return array<int, array{channel_number:int, name:string, type:string, transport_stream_id:int,
+     * program_id:int|null}> Channel list
      */
     public function getChannelLineup(): array
     {
@@ -83,8 +84,10 @@ class HdHomeRunApiClient
                 'channel_number' => $channelNum,
                 'name' => isset($item['name']) && is_string($item['name']) ? $item['name'] : '',
                 'type' => isset($item['type']) && is_string($item['type']) ? $item['type'] : 'off',
-                'transport_stream_id' => isset($item['transport_stream_id']) && is_numeric($item['transport_stream_id']) ? (int) $item['transport_stream_id'] : 0,
-                'program_id' => isset($item['program_id']) && is_numeric($item['program_id']) ? (int) $item['program_id'] : null,
+                'transport_stream_id' => isset($item['transport_stream_id']) &&
+                    is_numeric($item['transport_stream_id']) ? (int) $item['transport_stream_id'] : 0,
+                'program_id' => isset($item['program_id']) && is_numeric($item['program_id']) ?
+                    (int) $item['program_id'] : null,
             ];
         }, $lineup));
     }

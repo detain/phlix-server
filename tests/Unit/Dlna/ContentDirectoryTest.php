@@ -28,7 +28,7 @@ class ContentDirectoryTest extends TestCase
         $this->assertArrayHasKey('NumberReturned', $result);
         $this->assertArrayHasKey('TotalMatches', $result);
         $this->assertArrayHasKey('UpdateID', $result);
-        
+
         // Root should have library containers
         /** @var array{Result: string, TotalMatches: int} $result */
         $this->assertGreaterThan(0, $result['TotalMatches']);

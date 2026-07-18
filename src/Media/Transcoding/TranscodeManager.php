@@ -450,7 +450,8 @@ class TranscodeManager
         // BC (older readers + the reuse filter). A5 additionally builds the true
         // multi-variant ABR ladder below and persists it in `variants`.
         $rawClientCapabilities = $options['client_capabilities'] ?? null;
-        $clientCapabilities = $rawClientCapabilities instanceof \Phlix\Media\Streaming\ClientCapabilities ? $rawClientCapabilities : null;
+        $clientCapabilities = $rawClientCapabilities instanceof \Phlix\Media\Streaming\ClientCapabilities ?
+            $rawClientCapabilities : null;
         // SV-1.6: job-level subtitle burn-in toggle (see docblock above).
         $rawSubtitleBurnInIndex = $options['subtitle_burn_in_index'] ?? null;
         $subtitleBurnInIndex = is_int($rawSubtitleBurnInIndex) && $rawSubtitleBurnInIndex >= 0
@@ -521,7 +522,16 @@ class TranscodeManager
         // variant now — no encode is needed to know the timeline, so this is
         // instantaneous. Segments themselves are produced on demand per variant.
         // $audioTracks was built above (before the ladder JSON was persisted).
-        $this->writeVodPlaylists($hlsDir, $duration, $segSeconds, $width, $height, $bandwidth, $streamVariants, $audioTracks);
+        $this->writeVodPlaylists(
+            $hlsDir,
+            $duration,
+            $segSeconds,
+            $width,
+            $height,
+            $bandwidth,
+            $streamVariants,
+            $audioTracks
+        );
 
         // Detect embedded TEXT subtitle tracks (ASS/SRT/mov_text — bitmap PGS/VobSub
         // are skipped). Detection is a cheap parse of the in-memory probe; extraction
@@ -2082,9 +2092,10 @@ class TranscodeManager
      * @param int|null                         $height      Variant pixel height, or null.
      * @param int|null                         $bandwidth   Variant nominal bandwidth (master BANDWIDTH), or null.
      * @param list<Rendition>|null             $variants    Multi-variant list (highest-first), or null for legacy.
-     * @param list<array{index:int,stream_index:int,language:string,label:string,default:bool,codec:string}>|null $audioTracks
-     *                                                     Audio-track descriptors ({@see buildAudioTrackDescriptors()}),
-     *                                                     or null when the source has only one audio track.
+     * @param list<array{
+     *     index:int, stream_index:int, language:string, label:string, default:bool, codec:string
+     * }>|null $audioTracks Audio-track descriptors ({@see buildAudioTrackDescriptors()}),
+     *     or null when the source has only one audio track.
      */
     private function writeVodPlaylists(
         string $dir,
@@ -2191,10 +2202,11 @@ class TranscodeManager
      * source's default-disposition track, else the first); all carry
      * `AUTOSELECT=YES` so language-matching clients can auto-pick them.
      *
-     * @param list<Rendition> $variants   Variants in master order (not re-sorted).
-     * @param list<array{index:int,stream_index?:int,language:string,label:string,default:bool,codec:string}>|null $audioTracks
-     *                                    Audio-track descriptors ({@see buildAudioTrackDescriptors()}),
-     *                                    or null for single-audio.
+     * @param list<Rendition> $variants Variants in master order (not re-sorted).
+     * @param list<array{
+     *     index:int, stream_index?:int, language:string, label:string, default:bool, codec:string
+     * }>|null $audioTracks Audio-track descriptors ({@see buildAudioTrackDescriptors()}),
+     *     or null for single-audio.
      *
      * @return string Master playlist text.
      */
@@ -2355,8 +2367,10 @@ class TranscodeManager
      * Maps each detected track to the playable shape the API returns: the sidecar
      * `url` points at the same /hls/{job}/{file} route that serves the segments.
      *
-     * @param string $jobId  Job identifier.
-     * @param list<array{index: int, language: string, label: string, default: bool, codec: string, filename: string}> $tracks
+     * @param string $jobId Job identifier.
+     * @param list<array{
+     *     index: int, language: string, label: string, default: bool, codec: string, filename: string
+     * }> $tracks
      *
      * @return list<array{index: int, language: string, label: string, default: bool, url: string}>
      */
@@ -2626,24 +2640,24 @@ class TranscodeManager
      * Copies a browser-compatible stream when possible (h264 video without a
      * downscale, AAC audio) for a fast remux, otherwise encodes to H.264 / AAC.
      *
-     * @param array<string, mixed>                                 $probe             Raw ffprobe result.
-     * @param string                                                $profileName       Device profile name.
-     * @param \Phlix\Media\Streaming\ClientCapabilities|null        $clientCapabilities SV-3.3
-     *                                                                                  Client decoder capabilities.
-     *                                                                                  When provided and the source audio codec
-     *                                                                                  is not supported by the client, audio
-     *                                                                                  will be transcoded to AAC.
-     * @param array<string, mixed>|null                             $persistedColorMeta SV-1.1(a) persisted
-     *                                                                                   video-stream color metadata
-     *                                                                                   (migration 073); when non-null the HDR
-     *                                                                                   decision is sourced from it (0 probes)
-     *                                                                                   instead of extractColorMetadata($probe).
+     * @param array<string, mixed> $probe Raw ffprobe result.
+     * @param string $profileName Device profile name.
+     * @param \Phlix\Media\Streaming\ClientCapabilities|null $clientCapabilities SV-3.3 client decoder
+     *     capabilities. When provided and the source audio codec is not supported by the client,
+     *     audio will be transcoded to AAC.
+     * @param array<string, mixed>|null $persistedColorMeta SV-1.1(a) persisted video-stream color
+     *     metadata (migration 073); when non-null the HDR decision is sourced from it (0 probes)
+     *     instead of extractColorMetadata($probe).
      *
      * @return array<string, mixed> Parameters for {@see FfmpegRunner::buildHlsCommand()}
      *                              plus variant_width/height/bandwidth descriptors.
      */
-    private function computeHlsParams(array $probe, string $profileName, ?\Phlix\Media\Streaming\ClientCapabilities $clientCapabilities = null, ?array $persistedColorMeta = null): array
-    {
+    private function computeHlsParams(
+        array $probe,
+        string $profileName,
+        ?\Phlix\Media\Streaming\ClientCapabilities $clientCapabilities = null,
+        ?array $persistedColorMeta = null
+    ): array {
         $video = $this->firstStreamOfType($probe, 'video');
         $audio = $this->firstStreamOfType($probe, 'audio');
 
@@ -3397,7 +3411,8 @@ class TranscodeManager
 
             $error = match (true) {
                 $dirGone => 'reaped: working directory missing (dead process)',
-                $noSegmentWithinTimeout => 'reaped: no segment produced within ' . self::SEGMENT_PRODUCTION_TIMEOUT . 's (wedged)',
+                $noSegmentWithinTimeout => 'reaped: no segment produced within ' . self::SEGMENT_PRODUCTION_TIMEOUT .
+                    's (wedged)',
                 default => 'reaped: exceeded max age',
             };
 
@@ -3633,7 +3648,8 @@ class TranscodeManager
 
         $variantsRaw = $row['variants'] ?? null;
         $duration = is_numeric($row['duration_seconds'] ?? null) ? (float) $row['duration_seconds'] : 0.0;
-        $segSeconds = is_numeric($row['segment_seconds'] ?? null) ? (int) $row['segment_seconds'] : $this->segmentSeconds;
+        $segSeconds = is_numeric($row['segment_seconds'] ?? null) ? (int) $row['segment_seconds'] :
+            $this->segmentSeconds;
 
         if ($duration <= 0.0) {
             return false;
@@ -3709,7 +3725,16 @@ class TranscodeManager
                 }
             }
 
-            $this->writeVodPlaylists($dir, $duration, $segSeconds, $width, $height, $bandwidth, $variants, $audioTracks);
+            $this->writeVodPlaylists(
+                $dir,
+                $duration,
+                $segSeconds,
+                $width,
+                $height,
+                $bandwidth,
+                $variants,
+                $audioTracks
+            );
 
             return is_file("{$dir}/master.m3u8");
         }

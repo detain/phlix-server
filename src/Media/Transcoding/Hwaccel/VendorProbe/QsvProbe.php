@@ -69,8 +69,11 @@ class QsvProbe implements VendorProbeInterface
         );
     }
 
-    public function runAcceptanceTest(string $ffmpeg_path, string $test_clip_path, ?LoggerInterface $logger = null): bool
-    {
+    public function runAcceptanceTest(
+        string $ffmpeg_path,
+        string $test_clip_path,
+        ?LoggerInterface $logger = null
+    ): bool {
         if (!file_exists($test_clip_path)) {
             $logger?->warning('Test clip not found', ['path' => $test_clip_path]);
             return false;
@@ -80,7 +83,9 @@ class QsvProbe implements VendorProbeInterface
 
         try {
             $cmd = sprintf(
-                '%s -y -vaapi_device /dev/dri/renderD128 -i %s -vf "format=nv12,hwupload=extra_hw_frames=64" -c:v h264_qsv -preset fast -t 1 -frames 1 %s 2>&1',
+                '%s -y -vaapi_device /dev/dri/renderD128 -i %s'
+                . ' -vf "format=nv12,hwupload=extra_hw_frames=64"'
+                . ' -c:v h264_qsv -preset fast -t 1 -frames 1 %s 2>&1',
                 escapeshellarg($ffmpeg_path),
                 escapeshellarg($test_clip_path),
                 escapeshellarg($output_file)

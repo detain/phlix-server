@@ -130,7 +130,8 @@ class LibraryScanWorker
         $libraryId = is_string($job['library_id'] ?? null) ? $job['library_id'] : '';
         $type = is_string($job['type'] ?? null) ? $job['type'] : 'scan';
 
-        $this->logger->info('[DEBUG] ' . date('Y-m-d H:i:s.v') . ' LibraryScanWorker::runOnce Starting job [jobId=' . $jobId . '] [libraryId=' . $libraryId . '] [type=' . $type . ']');
+        $this->logger->info('[DEBUG] ' . date('Y-m-d H:i:s.v') . ' LibraryScanWorker::runOnce Starting job [jobId=' .
+            $jobId . '] [libraryId=' . $libraryId . '] [type=' . $type . ']');
 
         if ($jobId === '' || $libraryId === '') {
             $this->logger->error('LibraryScanWorker: claimed an invalid job row; skipping', [
@@ -177,7 +178,9 @@ class LibraryScanWorker
             $this->jobs->markCompleted($jobId);
 
             $durationMs = (hrtime(true) - $startTime) / 1_000_000.0;
-            $this->logger->info('[DEBUG] ' . date('Y-m-d H:i:s.v') . ' LibraryScanWorker::runOnce Completed job [jobId=' . $jobId . '] [libraryId=' . $libraryId . '] [type=' . $type . '] [duration=' . round($durationMs, 2) . 'ms]');
+            $this->logger->info('[DEBUG] ' . date('Y-m-d H:i:s.v') .
+                ' LibraryScanWorker::runOnce Completed job [jobId=' . $jobId . '] [libraryId=' . $libraryId .
+                    '] [type=' . $type . '] [duration=' . round($durationMs, 2) . 'ms]');
 
             $this->logger->info('LibraryScanWorker: scan job completed', [
                 'job_id' => $jobId,
@@ -188,7 +191,9 @@ class LibraryScanWorker
             $this->jobs->markFailed($jobId, $e->getMessage());
 
             $durationMs = (hrtime(true) - $startTime) / 1_000_000.0;
-            $this->logger->error('[DEBUG] ' . date('Y-m-d H:i:s.v') . ' LibraryScanWorker::runOnce FAILED job [jobId=' . $jobId . '] [libraryId=' . $libraryId . '] [type=' . $type . '] [duration=' . round($durationMs, 2) . 'ms] [error=' . $e->getMessage() . ']');
+            $this->logger->error('[DEBUG] ' . date('Y-m-d H:i:s.v') .
+                ' LibraryScanWorker::runOnce FAILED job [jobId=' . $jobId . '] [libraryId=' . $libraryId . '] [type=' .
+                    $type . '] [duration=' . round($durationMs, 2) . 'ms] [error=' . $e->getMessage() . ']');
 
             $this->logger->error('LibraryScanWorker: scan job failed', [
                 'job_id' => $jobId,

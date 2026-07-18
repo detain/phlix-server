@@ -52,9 +52,13 @@ class HlsServingIntegrationTest extends TestCase
     public function testManagerPublishesVodPlaylistAndServesSegmentsOnDemand(): void
     {
         // An 8-second clip. At 2s segments the playlist has 4 entries (seg-00000..3).
+        // A 640x480 source so the ABR ladder yields MULTIPLE transcoded rungs
+        // (480p/360p/240p) in addition to the copy "original" — SV-4.6 excludes the
+        // copy variant from the master's switchable set, so a single-rung source
+        // would leave only one #EXT-X-STREAM-INF.
         $clip = "{$this->segmentDir}/in.mkv";
         $cmd = sprintf(
-            '%s -y -hide_banner -loglevel error -f lavfi -i testsrc=duration=8:size=320x240:rate=24 '
+            '%s -y -hide_banner -loglevel error -f lavfi -i testsrc=duration=8:size=640x480:rate=24 '
             . '-f lavfi -i sine=frequency=440:duration=8 -c:v libx264 -pix_fmt yuv420p '
             . '-c:a aac -shortest %s 2>/dev/null',
             escapeshellarg('/usr/bin/ffmpeg'),
@@ -81,8 +85,11 @@ class HlsServingIntegrationTest extends TestCase
         $hls = new HlsController($streamer, $manager);
         $req = new Request();
 
-        // Master → MULTIPLE variants (a 320x240 H.264/AAC source → a 240p rung + a
-        // copy "original"), each pointing at its own media_v{id}.m3u8.
+        // Master → MULTIPLE switchable variants (a 640x480 H.264/AAC source → 480p /
+        // 360p / 240p transcoded rungs), each pointing at its own media_v{id}.m3u8.
+        // SV-4.6: the copy "original" is deliberately NOT advertised as a switchable
+        // rung in the master (its segment boundaries can drift), so it does not
+        // appear here — but its media playlist is still written (asserted below).
         $master = $hls->serveFile($req, ['job_id' => $jobId, 'file' => 'master.m3u8']);
         $this->assertSame(200, $master->statusCode);
         $this->assertSame('application/vnd.apple.mpegurl', $master->headers['Content-Type']);
@@ -92,6 +99,10 @@ class HlsServingIntegrationTest extends TestCase
             substr_count($this->bodyOf($master), '#EXT-X-STREAM-INF:')
         );
         $this->assertContains('media_v240p.m3u8', $mm[1]);
+        // SV-4.6: the copy "original" is excluded from the master's switchable set.
+        $this->assertNotContains('media_voriginal.m3u8', $mm[1]);
+        // …but its media playlist is still written to disk so "Original" is selectable.
+        $this->assertFileExists("{$this->segmentDir}/{$jobId}/media_voriginal.m3u8");
 
         // The 240p variant's media playlist is a COMPLETE VOD list (all segments +
         // ENDLIST) up front, with per-variant seg-v240p-NNNNN.ts names.

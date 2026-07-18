@@ -99,7 +99,8 @@ class HdHomeRunDiscovery
             $tunerCount = is_int($deviceInfo['tuner_count'] ?? null) || is_numeric($deviceInfo['tuner_count'] ?? null)
                 ? (int) $deviceInfo['tuner_count']
                 : 1;
-            $lineupUrl = is_string($deviceInfo['lineup_url'] ?? null) ? $deviceInfo['lineup_url'] : $locationUrl . '/lineup.json';
+            $lineupUrl = is_string($deviceInfo['lineup_url'] ?? null) ? $deviceInfo['lineup_url'] : $locationUrl .
+                '/lineup.json';
 
             $devices[] = new HdHomeRunDevice(
                 deviceId: $deviceId,

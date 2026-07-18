@@ -509,15 +509,15 @@ class SeriesMergerTest extends TestCase
 class InMemorySeriesRepository extends ItemRepository
 {
             /** @var array<string, array<string, mixed>> */
-            private array $store = [];
-            private int $seq = 0;
-            private bool $failOnUpdate;
+    private array $store = [];
+    private int $seq = 0;
+    private bool $failOnUpdate;
 
-            public function __construct(Connection $db, bool $failOnUpdate)
-            {
-                parent::__construct($db);
-                $this->failOnUpdate = $failOnUpdate;
-            }
+    public function __construct(Connection $db, bool $failOnUpdate)
+    {
+        parent::__construct($db);
+        $this->failOnUpdate = $failOnUpdate;
+    }
 
             /**
              * Ids of rows seeded with a RAW (string) metadata_json — for these
@@ -526,23 +526,23 @@ class InMemorySeriesRepository extends ItemRepository
              *
              * @var array<string, true>
              */
-            private array $rawMeta = [];
+    private array $rawMeta = [];
 
             /** @param array<string, mixed> $row */
-            public function seed(array $row): string
-            {
-                $id = 'id-' . (++$this->seq);
-                $this->store[$id] = array_merge([
-                    'id' => $id,
-                    'library_id' => null,
-                    'parent_id' => null,
-                    'name' => null,
-                    'type' => null,
-                    'path' => 'synthetic:' . $id,
-                    'metadata_json' => [],
-                ], $row, ['id' => $id]);
-                return $id;
-            }
+    public function seed(array $row): string
+    {
+        $id = 'id-' . (++$this->seq);
+        $this->store[$id] = array_merge([
+            'id' => $id,
+            'library_id' => null,
+            'parent_id' => null,
+            'name' => null,
+            'type' => null,
+            'path' => 'synthetic:' . $id,
+            'metadata_json' => [],
+        ], $row, ['id' => $id]);
+        return $id;
+    }
 
             /**
              * Seed a row whose metadata_json is a RAW JSON string exactly as the
@@ -552,49 +552,49 @@ class InMemorySeriesRepository extends ItemRepository
              *
              * @param array<string, mixed> $row
              */
-            public function seedRaw(array $row): string
-            {
-                $id = $this->seed($row);
-                $this->rawMeta[$id] = true;
-                return $id;
-            }
+    public function seedRaw(array $row): string
+    {
+        $id = $this->seed($row);
+        $this->rawMeta[$id] = true;
+        return $id;
+    }
 
-            public function findById(string $id): ?array
-            {
-                if (!isset($this->store[$id])) {
-                    return null;
-                }
-                return $this->hydrate($this->store[$id]);
-            }
+    public function findById(string $id): ?array
+    {
+        if (!isset($this->store[$id])) {
+            return null;
+        }
+        return $this->hydrate($this->store[$id]);
+    }
 
-            public function findByParent(string $parentId): array
-            {
-                $out = [];
-                foreach ($this->store as $row) {
-                    if (($row['parent_id'] ?? null) === $parentId) {
-                        $out[] = $this->hydrate($row);
-                    }
-                }
-                return $out;
+    public function findByParent(string $parentId): array
+    {
+        $out = [];
+        foreach ($this->store as $row) {
+            if (($row['parent_id'] ?? null) === $parentId) {
+                $out[] = $this->hydrate($row);
             }
+        }
+        return $out;
+    }
 
-            public function findByParents(array $parentIds): array
-            {
-                if ($parentIds === []) {
-                    return [];
+    public function findByParents(array $parentIds): array
+    {
+        if ($parentIds === []) {
+            return [];
+        }
+        $children = [];
+        foreach ($this->store as $row) {
+            $parentId = $row['parent_id'] ?? null;
+            if (is_string($parentId) && in_array($parentId, $parentIds, true)) {
+                if (!isset($children[$parentId])) {
+                    $children[$parentId] = [];
                 }
-                $children = [];
-                foreach ($this->store as $row) {
-                    $parentId = $row['parent_id'] ?? null;
-                    if (is_string($parentId) && in_array($parentId, $parentIds, true)) {
-                        if (!isset($children[$parentId])) {
-                            $children[$parentId] = [];
-                        }
-                        $children[$parentId][] = $this->hydrate($row);
-                    }
-                }
-                return $children;
+                $children[$parentId][] = $this->hydrate($row);
             }
+        }
+        return $children;
+    }
 
             /**
              * Mimic ItemRepository hydration: a row seeded normally gets a
@@ -604,110 +604,110 @@ class InMemorySeriesRepository extends ItemRepository
              * @param array<string, mixed> $row
              * @return array<string, mixed>
              */
-            private function hydrate(array $row): array
-            {
-                $id = $row['id'] ?? null;
-                if (is_string($id) && isset($this->rawMeta[$id])) {
-                    return $row;
-                }
-                $row['metadata'] = is_array($row['metadata_json'] ?? null) ? $row['metadata_json'] : [];
-                return $row;
-            }
+    private function hydrate(array $row): array
+    {
+        $id = $row['id'] ?? null;
+        if (is_string($id) && isset($this->rawMeta[$id])) {
+            return $row;
+        }
+        $row['metadata'] = is_array($row['metadata_json'] ?? null) ? $row['metadata_json'] : [];
+        return $row;
+    }
 
-            public function update(string $id, array $data): void
-            {
-                if ($this->failOnUpdate) {
-                    throw new \RuntimeException('simulated re-parent failure');
-                }
-                if (!isset($this->store[$id])) {
-                    return;
-                }
-                foreach ($data as $key => $value) {
-                    $this->store[$id][$key] = $value;
-                }
-            }
+    public function update(string $id, array $data): void
+    {
+        if ($this->failOnUpdate) {
+            throw new \RuntimeException('simulated re-parent failure');
+        }
+        if (!isset($this->store[$id])) {
+            return;
+        }
+        foreach ($data as $key => $value) {
+            $this->store[$id][$key] = $value;
+        }
+    }
 
-            public function delete(string $id): void
-            {
-                unset($this->store[$id]);
-            }
+    public function delete(string $id): void
+    {
+        unset($this->store[$id]);
+    }
 
             // ---- test inspection helpers ----
 
             /** @return array<string, mixed>|null */
-            public function find(string $id): ?array
-            {
-                return $this->store[$id] ?? null;
-            }
+    public function find(string $id): ?array
+    {
+        return $this->store[$id] ?? null;
+    }
 
-            public function parentOf(string $id): ?string
-            {
-                $parent = $this->store[$id]['parent_id'] ?? null;
-                return is_string($parent) ? $parent : null;
-            }
+    public function parentOf(string $id): ?string
+    {
+        $parent = $this->store[$id]['parent_id'] ?? null;
+        return is_string($parent) ? $parent : null;
+    }
 
             /**
              * The season number a stored row carries, decoding a raw JSON
              * metadata_json string when present (mirrors the production read).
              */
-            public function seasonNumber(string $id): ?int
-            {
-                $raw = $this->store[$id]['metadata_json'] ?? null;
-                if (is_string($raw) && $raw !== '') {
-                    $decoded = json_decode($raw, true);
-                    $raw = is_array($decoded) ? $decoded : [];
-                }
-                if (!is_array($raw) || !isset($raw['season']) || !is_numeric($raw['season'])) {
-                    return null;
-                }
-                return (int) $raw['season'];
-            }
+    public function seasonNumber(string $id): ?int
+    {
+        $raw = $this->store[$id]['metadata_json'] ?? null;
+        if (is_string($raw) && $raw !== '') {
+            $decoded = json_decode($raw, true);
+            $raw = is_array($decoded) ? $decoded : [];
+        }
+        if (!is_array($raw) || !isset($raw['season']) || !is_numeric($raw['season'])) {
+            return null;
+        }
+        return (int) $raw['season'];
+    }
 
             /** Replace a stored row's id field with a non-string (corrupt) value. */
-            public function corruptId(string $id): void
-            {
-                if (isset($this->store[$id])) {
-                    $this->store[$id]['id'] = null;
-                }
-            }
+    public function corruptId(string $id): void
+    {
+        if (isset($this->store[$id])) {
+            $this->store[$id]['id'] = null;
+        }
+    }
 
             /** @return list<array<string, mixed>> */
-            public function childrenOfType(string $parentId, string $type): array
-            {
-                $out = [];
-                foreach ($this->store as $row) {
-                    if (($row['parent_id'] ?? null) === $parentId && ($row['type'] ?? null) === $type) {
-                        $out[] = $row;
-                    }
-                }
-                return $out;
+    public function childrenOfType(string $parentId, string $type): array
+    {
+        $out = [];
+        foreach ($this->store as $row) {
+            if (($row['parent_id'] ?? null) === $parentId && ($row['type'] ?? null) === $type) {
+                $out[] = $row;
             }
+        }
+        return $out;
+    }
 
             /** @return list<array<string, mixed>> */
-            public function itemsOfType(string $type): array
-            {
-                $out = [];
-                foreach ($this->store as $row) {
-                    if (($row['type'] ?? null) === $type) {
-                        $out[] = $row;
-                    }
-                }
-                return $out;
+    public function itemsOfType(string $type): array
+    {
+        $out = [];
+        foreach ($this->store as $row) {
+            if (($row['type'] ?? null) === $type) {
+                $out[] = $row;
             }
+        }
+        return $out;
+    }
 
             /**
              * Count rows whose parent_id points at an id no longer in the store
              * (a true orphan). Top-level rows (parent_id null) are never orphans.
              */
-            public function orphanCount(): int
-            {
-                $count = 0;
-                foreach ($this->store as $row) {
-                    $parent = $row['parent_id'] ?? null;
-                    if (is_string($parent) && !isset($this->store[$parent])) {
-                        $count++;
-                    }
-                }
-                return $count;
+    public function orphanCount(): int
+    {
+        $count = 0;
+        foreach ($this->store as $row) {
+            $parent = $row['parent_id'] ?? null;
+            if (is_string($parent) && !isset($this->store[$parent])) {
+                $count++;
             }
+        }
+        return $count;
+    }
 }

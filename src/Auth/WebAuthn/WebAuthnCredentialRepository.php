@@ -100,7 +100,9 @@ final class WebAuthnCredentialRepository
         }
 
         $this->db->query(
-            "INSERT INTO webauthn_credentials (id, user_id, credential_id, public_key, counter, type, device_type, aaguid, registered_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO webauthn_credentials
+             (id, user_id, credential_id, public_key, counter, type, device_type, aaguid, registered_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             [
                 $id,
                 $credential->userId,

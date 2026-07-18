@@ -67,7 +67,8 @@ final readonly class PlaybackPreferences
         mixed $crossfadeFadeIn = null
     ): self {
         $duration = self::clampDuration(self::toNumericIntOrNull($crossfadeDuration) ?? 0);
-        $fadeOut = self::clampFadeFraction(self::toNumericFloatOrNull($crossfadeFadeOut) ?? self::DEFAULT_FADE_FRACTION);
+        $fadeOut = self::clampFadeFraction(self::toNumericFloatOrNull($crossfadeFadeOut) ??
+            self::DEFAULT_FADE_FRACTION);
         $fadeIn = self::clampFadeFraction(self::toNumericFloatOrNull($crossfadeFadeIn) ?? self::DEFAULT_FADE_FRACTION);
 
         return new self($duration, $fadeOut, $fadeIn);

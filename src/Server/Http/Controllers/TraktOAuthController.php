@@ -123,7 +123,8 @@ final class TraktOAuthController
 
         // Initialize token cipher if available (plugin may not be installed).
         // Degrades to storing plaintext tokens when cipher is unavailable.
-        if ($tokenEncryptionKey !== null
+        if (
+            $tokenEncryptionKey !== null
             && class_exists(\Phlix\Plugins\Scrobbler\Trakt\SodiumTokenCipher::class)
         ) {
             $this->cipher = \Phlix\Plugins\Scrobbler\Trakt\SodiumTokenCipher::fromConfig($tokenEncryptionKey);

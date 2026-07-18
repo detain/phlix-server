@@ -99,8 +99,10 @@ final class SmartPlaylistController
             }
         }
 
-        $rulesJson = is_array($rulesJsonInput) ? (json_encode($rulesJsonInput) ?: '{}') : (is_string($rulesJsonInput) ? $rulesJsonInput : '{}');
-        $limit = is_int($data['limit'] ?? null) ? $data['limit'] : (is_numeric($data['limit'] ?? null) ? (int)$data['limit'] : 0);
+        $rulesJson = is_array($rulesJsonInput) ? (json_encode($rulesJsonInput) ?: '{}') : (is_string($rulesJsonInput) ?
+            $rulesJsonInput : '{}');
+        $limit = is_int($data['limit'] ?? null) ? $data['limit'] : (is_numeric($data['limit'] ?? null) ?
+            (int)$data['limit'] : 0);
         $sortBy = is_string($data['sort_by'] ?? null) ? $data['sort_by'] : 'addedAt';
         $sortDesc = (bool)($data['sort_desc'] ?? true);
 
@@ -193,7 +195,8 @@ final class SmartPlaylistController
             is_string($rulesJsonInput) => $rulesJsonInput,
             default => $existing->rulesJson,
         };
-        $limit = isset($data['limit']) ? (is_int($data['limit']) ? $data['limit'] : (is_numeric($data['limit']) ? (int)$data['limit'] : $existing->limit)) : $existing->limit;
+        $limit = isset($data['limit']) ? (is_int($data['limit']) ? $data['limit'] : (is_numeric($data['limit']) ?
+            (int)$data['limit'] : $existing->limit)) : $existing->limit;
         $sortBy = is_string($data['sort_by'] ?? null) ? $data['sort_by'] : $existing->sortBy;
         $sortDesc = isset($data['sort_desc']) ? (bool)$data['sort_desc'] : $existing->sortDesc;
 
@@ -293,7 +296,8 @@ final class SmartPlaylistController
             }
         }
 
-        $limit = isset($data['limit']) ? (is_int($data['limit']) ? $data['limit'] : (is_numeric($data['limit']) ? (int)$data['limit'] : $playlist->limit)) : $playlist->limit;
+        $limit = isset($data['limit']) ? (is_int($data['limit']) ? $data['limit'] : (is_numeric($data['limit']) ?
+            (int)$data['limit'] : $playlist->limit)) : $playlist->limit;
         $sortBy = is_string($data['sort_by'] ?? null) ? $data['sort_by'] : $playlist->sortBy;
         $sortDesc = isset($data['sort_desc']) ? (bool)$data['sort_desc'] : $playlist->sortDesc;
 

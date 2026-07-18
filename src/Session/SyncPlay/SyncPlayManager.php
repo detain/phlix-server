@@ -310,7 +310,8 @@ class SyncPlayManager
      * @param string|null $password Optional password to protect the group (null for open groups)
      * @param string|null $memberId The member ID of the group creator (null if not joining)
      * @param string|null $memberName The display name of the creator (defaults to 'Host')
-     * @return array{success: true, group: array<string, mixed>}|array{success: false, error: string} Result with group state or error
+     * @return array{success: true, group: array<string, mixed>}|array{success: false, error: string} Result with group
+     * state or error
      *
      * @example
      * ```php
@@ -321,8 +322,13 @@ class SyncPlayManager
      * $result = $manager->createGroup('Private Watch Party', 'secret123', 'user_1', 'Host');
      * ```
      */
-    public function createGroup(string $name, ?string $password = null, ?string $memberId = null, ?string $memberName = null, ?string $connectionId = null): array
-    {
+    public function createGroup(
+        string $name,
+        ?string $password = null,
+        ?string $memberId = null,
+        ?string $memberName = null,
+        ?string $connectionId = null
+    ): array {
         if (count($this->groups) >= self::MAX_GROUPS) {
             return ['success' => false, 'error' => 'Maximum group limit reached'];
         }
@@ -376,7 +382,8 @@ class SyncPlayManager
      * @param string $memberId Unique identifier for the member joining
      * @param string $memberName Display name for the member
      * @param string|null $password Optional password if group is protected
-     * @return array{success: true, group: array<string, mixed>}|array{success: false, error: string} Result with group state or error
+     * @return array{success: true, group: array<string, mixed>}|array{success: false, error: string} Result with group
+     * state or error
      *
      * @example
      * ```php
@@ -386,8 +393,13 @@ class SyncPlayManager
      * $result = $manager->joinGroup('sp_abc123', 'member_2', 'Guest', 'secret');
      * ```
      */
-    public function joinGroup(string $groupId, string $memberId, string $memberName, ?string $password = null, ?string $connectionId = null): array
-    {
+    public function joinGroup(
+        string $groupId,
+        string $memberId,
+        string $memberName,
+        ?string $password = null,
+        ?string $connectionId = null
+    ): array {
         $group = $this->groups[$groupId] ?? null;
 
         if ($group === null) {
@@ -556,7 +568,8 @@ class SyncPlayManager
      * current media, and playback state. Does not include password-protected
      * details unless verified.
      *
-     * @return array<int, array{id: string, name: string, member_count: int, has_password: bool, current_media: string|null, is_playing: bool}> Array of group summaries
+     * @return array<int, array{id: string, name: string, member_count: int, has_password: bool,
+     *     current_media: string|null, is_playing: bool}> Array of group summaries
      *
      * @example
      * ```php
@@ -1332,7 +1345,8 @@ class SyncPlayManager
     /**
      * Get statistics about the SyncPlay subsystem.
      *
-     * @return array{total_groups: int, total_members: int, time_sync_status: array{offset: int, latency: int, drift_rate: float, is_stable: bool, sample_count: int, last_sync: float}} Statistics
+     * @return array{total_groups: int, total_members: int, time_sync_status: array{offset: int, latency: int,
+     * drift_rate: float, is_stable: bool, sample_count: int, last_sync: float}} Statistics
      *
      * @see TimeSync::getStatus() For the structure of time_sync_status
      */

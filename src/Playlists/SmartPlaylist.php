@@ -72,7 +72,8 @@ final class SmartPlaylist
         $name = is_string($row['name'] ?? null) ? $row['name'] : '';
         $libraryId = is_string($row['library_id'] ?? null) ? $row['library_id'] : '';
         $rulesJson = is_string($row['rules_json'] ?? null) ? $row['rules_json'] : '{}';
-        $limit = is_int($row['limit'] ?? null) ? $row['limit'] : (is_numeric($row['limit'] ?? null) ? (int)$row['limit'] : 0);
+        $limit = is_int($row['limit'] ?? null) ? $row['limit'] : (is_numeric($row['limit'] ?? null) ?
+            (int)$row['limit'] : 0);
         $sortBy = is_string($row['sort_by'] ?? null) ? $row['sort_by'] : 'addedAt';
         $sortDesc = (bool)($row['sort_desc'] ?? true);
         $createdAt = is_string($row['created_at'] ?? null) ? $row['created_at'] : 'now';

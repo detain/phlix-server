@@ -183,7 +183,8 @@ final class MediaItemShaper
         // `backdrop_url` unchanged.
         $merged['backdrop_url_large'] = BackdropSrcset::largeUrl($backdropUrl);
         $merged['backdrop_srcset'] = BackdropSrcset::forBackdropUrl($backdropUrl);
-        $merged['theme_audio_url'] = is_string($metadata['theme_audio_url'] ?? null) && $metadata['theme_audio_url'] !== ''
+        $merged['theme_audio_url'] = is_string($metadata['theme_audio_url'] ?? null) &&
+            $metadata['theme_audio_url'] !== ''
             ? $metadata['theme_audio_url']
             : null;
 

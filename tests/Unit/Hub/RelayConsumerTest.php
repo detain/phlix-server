@@ -290,7 +290,8 @@ class RelayConsumerTest extends TestCase
             new StructuredLogger('relay', []),
             'server-uuid-null2',
             hubConnectionFactory: static function (string $url) use (&$opened): ?AsyncTcpConnection {
-                $connection = count($opened) === 1 ? new FakeRelayConnection($url) : null;
+                // First call returns a real connection (succeeds); second returns null.
+                $connection = count($opened) === 0 ? new FakeRelayConnection($url) : null;
                 $opened[] = $connection;
                 return $connection;
             },
@@ -307,8 +308,10 @@ class RelayConsumerTest extends TestCase
 
         $connect->invoke($consumer); // Second: factory returns null, prior must be closed
         $this->assertCount(2, $opened);
-        $this->assertFalse($consumer->isConnected(),
-            'consumer must be disconnected when reconnect factory returns null');
+        $this->assertFalse(
+            $consumer->isConnected(),
+            'consumer must be disconnected when reconnect factory returns null'
+        );
         // The prior hub connection must have been closed, not leaked.
         $this->assertTrue($opened[0]->closed, 'the prior hub connection must be closed when reconnect returns null');
     }

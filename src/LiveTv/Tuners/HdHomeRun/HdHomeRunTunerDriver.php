@@ -86,7 +86,8 @@ class HdHomeRunTunerDriver implements TunerDriverInterface
      * Uses HDHomeRun HTTP API to get channel lineup.
      *
      * @param HdHomeRunDevice|IptvDevice|DvbtDevice $device The device to query
-     * @return array<int, array{channel_number:int, name:string, type:string, transport_stream_id:int, program_id:int|null}> Channel list
+     * @return array<int, array{channel_number:int, name:string, type:string, transport_stream_id:int,
+     * program_id:int|null}> Channel list
      */
     public function getChannelLineup(HdHomeRunDevice|IptvDevice|DvbtDevice $device): array
     {
@@ -110,7 +111,8 @@ class HdHomeRunTunerDriver implements TunerDriverInterface
      * Triggers a channel scan on the device via HTTP API.
      *
      * @param HdHomeRunDevice|IptvDevice|DvbtDevice $device The device to scan
-     * @return array<int, array{channel_number:int, name:string, type:string, transport_stream_id:int, program_id:int|null}> Discovered channels
+     * @return array<int, array{channel_number:int, name:string, type:string, transport_stream_id:int,
+     * program_id:int|null}> Discovered channels
      */
     public function scanChannels(HdHomeRunDevice|IptvDevice|DvbtDevice $device): array
     {

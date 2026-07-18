@@ -27,7 +27,7 @@ class TvdbProviderTest extends TestCase
     public function testGetProvidersReturnsExpected(): void
     {
         $providers = $this->provider->getProviders();
-        
+
         $this->assertContains('tvdb', $providers);
         $this->assertContains('thetvdb', $providers);
     }

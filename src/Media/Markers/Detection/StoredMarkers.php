@@ -70,16 +70,20 @@ final class StoredMarkers
         $outroConfidence = null;
 
         if ($introCandidate !== null) {
-            $introStartSeconds = is_int($introCandidate['start_seconds'] ?? null) ? $introCandidate['start_seconds'] : null;
+            $introStartSeconds = is_int($introCandidate['start_seconds'] ?? null) ? $introCandidate['start_seconds'] :
+                null;
             $introEndSeconds = is_int($introCandidate['end_seconds'] ?? null) ? $introCandidate['end_seconds'] : null;
-            $introFingerprint = is_string($introCandidate['fingerprint'] ?? null) ? $introCandidate['fingerprint'] : null;
+            $introFingerprint = is_string($introCandidate['fingerprint'] ?? null) ? $introCandidate['fingerprint'] :
+                null;
             $introConfidence = is_int($introCandidate['confidence'] ?? null) ? $introCandidate['confidence'] : null;
         }
 
         if ($outroCandidate !== null) {
-            $outroStartSeconds = is_int($outroCandidate['start_seconds'] ?? null) ? $outroCandidate['start_seconds'] : null;
+            $outroStartSeconds = is_int($outroCandidate['start_seconds'] ?? null) ? $outroCandidate['start_seconds'] :
+                null;
             $outroEndSeconds = is_int($outroCandidate['end_seconds'] ?? null) ? $outroCandidate['end_seconds'] : null;
-            $outroFingerprint = is_string($outroCandidate['fingerprint'] ?? null) ? $outroCandidate['fingerprint'] : null;
+            $outroFingerprint = is_string($outroCandidate['fingerprint'] ?? null) ? $outroCandidate['fingerprint'] :
+                null;
             $outroConfidence = is_int($outroCandidate['confidence'] ?? null) ? $outroCandidate['confidence'] : null;
         }
 

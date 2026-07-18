@@ -160,7 +160,8 @@ class BackupManager
     /**
      * List all backups sorted by creation date descending.
      *
-     * @return array<array{id:string, label:string, file_path:string, size_bytes:int, checksum_sha256:string, is_s3:bool, created_at:string, expires_at:?string}>
+     * @return array<array{id:string, label:string, file_path:string, size_bytes:int, checksum_sha256:string,
+     * is_s3:bool, created_at:string, expires_at:?string}>
      */
     public function listBackups(): array
     {
@@ -506,7 +507,8 @@ class BackupManager
         $dbConfig = $this->getDbConfig();
 
         $cmd = sprintf(
-            'mysqldump --single-transaction --quick --lock-tables=false -h %s -P %s -u %s %s --password=%s > %s 2>/dev/null',
+            'mysqldump --single-transaction --quick --lock-tables=false'
+            . ' -h %s -P %s -u %s %s --password=%s > %s 2>/dev/null',
             escapeshellarg($dbConfig->host),
             escapeshellarg((string) $dbConfig->port),
             escapeshellarg($dbConfig->username),

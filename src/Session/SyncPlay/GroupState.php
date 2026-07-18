@@ -185,7 +185,8 @@ class GroupState
     /**
      * Get all members of the group.
      *
-     * @return array<string, array{name: string, connection_id: string|null, joined_at: int, is_active: bool, is_host?: bool}> Members indexed by ID
+     * @return array<string, array{name: string, connection_id: string|null, joined_at: int, is_active: bool,
+     *     is_host?: bool}> Members indexed by ID
      */
     public function getMembers(): array
     {
@@ -217,7 +218,8 @@ class GroupState
      * Get a specific member's data.
      *
      * @param string $memberId The member ID to retrieve
-     * @return array{name: string, connection_id: string|null, joined_at: int, is_active: bool, is_host?: bool}|null Member data array or null if not found
+     * @return array{name: string, connection_id: string|null, joined_at: int, is_active: bool, is_host?: bool}|null
+     * Member data array or null if not found
      */
     public function getMember(string $memberId): ?array
     {
@@ -228,7 +230,8 @@ class GroupState
      * Add a member to the group.
      *
      * @param string $memberId Unique identifier for the member
-     * @param array{name?: string, connection_id?: string|null} $memberData Member data including name and optional connection_id
+     * @param array{name?: string, connection_id?: string|null} $memberData Member data including name and optional
+     * connection_id
      * @return bool True if added successfully, false if at capacity or duplicate
      */
     public function addMember(string $memberId, array $memberData): bool
@@ -499,7 +502,8 @@ class GroupState
     /**
      * Get the current playback queue.
      *
-     * @return array<int, array{media_id: string, media_info: array<string, mixed>, added_at: int, added_by: string|null}> Queue items
+     * @return array<int, array{media_id: string, media_info: array<string, mixed>, added_at: int,
+     *     added_by: string|null}> Queue items
      */
     public function getPlaybackQueue(): array
     {
@@ -556,7 +560,8 @@ class GroupState
     /**
      * Get the next item in the queue without removing it.
      *
-     * @return array{media_id: string, media_info: array<string, mixed>, added_at: int, added_by: string|null}|null The first queue item or null if queue is empty
+     * @return array{media_id: string, media_info: array<string, mixed>, added_at: int, added_by: string|null}|null The
+     * first queue item or null if queue is empty
      */
     public function getNextInQueue(): ?array
     {
@@ -787,7 +792,8 @@ class GroupState
      * Narrow a raw `members` payload into the typed members shape.
      *
      * @param mixed $raw
-     * @return array<string, array{name: string, connection_id: string|null, joined_at: int, is_active: bool, is_host?: bool}>
+     * @return array<string, array{name: string, connection_id: string|null, joined_at: int, is_active: bool,
+     *     is_host?: bool}>
      */
     private static function deserializeMembers(mixed $raw): array
     {
@@ -827,7 +833,8 @@ class GroupState
      * Narrow a raw `playback_queue` payload into the typed queue shape.
      *
      * @param mixed $raw
-     * @return array<int, array{media_id: string, media_info: array<string, mixed>, added_at: int, added_by: string|null}>
+     * @return array<int, array{media_id: string, media_info: array<string, mixed>, added_at: int,
+     *     added_by: string|null}>
      */
     private static function deserializeQueue(mixed $raw): array
     {

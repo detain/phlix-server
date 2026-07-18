@@ -417,8 +417,12 @@ class TraktHistorySync
      *
      * @since 0.14.0
      */
-    public function syncPhlixToTrakt(string $mediaItemId, string $lastWatchedAt, int $positionTicks, ?int $durationTicks): bool
-    {
+    public function syncPhlixToTrakt(
+        string $mediaItemId,
+        string $lastWatchedAt,
+        int $positionTicks,
+        ?int $durationTicks
+    ): bool {
         if (!$this->settings->isConfigured()) {
             $this->logger->debug('TraktHistorySync: plugin not configured, skipping Phlix→Trakt');
             return false;

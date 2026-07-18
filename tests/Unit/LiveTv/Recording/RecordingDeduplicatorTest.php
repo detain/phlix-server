@@ -33,7 +33,10 @@ class RecordingDeduplicatorTest extends TestCase
     {
         $mockResult = new class {
             public int $num_rows = 0;
-            public function fetch(): false { return false; }
+            public function fetch(): false
+            {
+                return false;
+            }
         };
 
         $this->mockDb->expects($this->once())
@@ -72,7 +75,10 @@ class RecordingDeduplicatorTest extends TestCase
     {
         $mockResult = new class {
             public int $num_rows = 0;
-            public function fetch(): false { return false; }
+            public function fetch(): false
+            {
+                return false;
+            }
         };
 
         $this->mockDb->expects($this->once())
@@ -88,7 +94,10 @@ class RecordingDeduplicatorTest extends TestCase
     {
         $mockResult = new class {
             public int $num_rows = 0;
-            public function fetch(): false { return false; }
+            public function fetch(): false
+            {
+                return false;
+            }
         };
 
         $this->mockDb->expects($this->once())

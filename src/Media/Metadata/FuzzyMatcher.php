@@ -176,7 +176,8 @@ final class FuzzyMatcher
         $matchedBy = $matchedBy === 'system' ? 'system' : 'user';
 
         $this->db->query(
-            "INSERT INTO manual_match_overrides (provider, provider_id, media_item_id, confidence, matched_by, created_at)
+            "INSERT INTO manual_match_overrides
+             (provider, provider_id, media_item_id, confidence, matched_by, created_at)
              VALUES (?, ?, ?, ?, ?, NOW())
              ON DUPLICATE KEY UPDATE
                  media_item_id = VALUES(media_item_id),

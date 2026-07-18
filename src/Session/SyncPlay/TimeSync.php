@@ -440,7 +440,8 @@ class TimeSync
     /**
      * Get time sync status information.
      *
-     * @return array{offset: int, latency: int, drift_rate: float, is_stable: bool, sample_count: int, last_sync: float} Status info
+     * @return array{offset: int, latency: int, drift_rate: float, is_stable: bool, sample_count: int, last_sync: float}
+     * Status info
      */
     public function getStatus(): array
     {

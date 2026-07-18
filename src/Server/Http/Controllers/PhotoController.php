@@ -383,8 +383,13 @@ class PhotoController
         $ifModifiedSince = $request->getHeader('If-Modified-Since');
 
         if (
-            ($ifNoneMatch !== null && $ifNoneMatch === $etag)
-            || ($ifNoneMatch === null && $ifModifiedSince !== null && $mtime > 0 && $ifModifiedSince !== '' && strtotime($ifModifiedSince) >= $mtime)
+            ($ifNoneMatch !== null
+            && $ifNoneMatch === $etag)
+            || ($ifNoneMatch === null
+            && $ifModifiedSince !== null
+            && $mtime > 0
+            && $ifModifiedSince !== ''
+                && strtotime($ifModifiedSince) >= $mtime)
         ) {
             return (new Response())
                 ->status(304)

@@ -266,9 +266,11 @@ class QualitySelector
      * constraints to determine compatibility. When clientCapabilities are
      * provided, also verifies the client can decode the audio codec.
      *
-     * @param array{codec_type?: string, codec?: string, width?: int, height?: int, bitrate?: int}|null $videoStream Video stream info
+     * @param array{codec_type?: string, codec?: string, width?: int, height?: int, bitrate?: int}|null $videoStream
+     * Video stream info
      * @param array{codec_type?: string, codec?: string, channels?: int}|null $audioStream Audio stream info
-     * @param array{max_bitrate: int, max_resolution: array<int, int>, direct_play: array<string>, transcode: array<string>, container: array<string>} $profile Device profile constraints
+     * @param array{max_bitrate: int, max_resolution: array<int, int>, direct_play: array<string>,
+     *     transcode: array<string>, container: array<string>} $profile Device profile constraints
      * @param ClientCapabilities|null $clientCapabilities Client decoder capabilities (SV-3.3)
      *
      * @return bool True if all constraints are satisfied for direct play
@@ -320,9 +322,11 @@ class QualitySelector
     /**
      * Extracts video stream information from source info.
      *
-     * @param array{streams?: array<int, array{codec_type?: string, codec?: string, width?: int, height?: int, bitrate?: int}>, format?: array{format_name?: string}} $sourceInfo Source media information
+     * @param array{streams?: array<int, array{codec_type?: string, codec?: string, width?: int, height?: int,
+     *     bitrate?: int}>, format?: array{format_name?: string}} $sourceInfo Source media information
      *
-     * @return array{codec_type?: string, codec?: string, width?: int, height?: int, bitrate?: int}|null First video stream found or null
+     * @return array{codec_type?: string, codec?: string, width?: int, height?: int, bitrate?: int}|null First video
+     * stream found or null
      */
     private function getVideoStream(array $sourceInfo): ?array
     {
@@ -337,7 +341,8 @@ class QualitySelector
     /**
      * Extracts audio stream information from source info.
      *
-     * @param array{streams?: array<int, array{codec_type?: string, codec?: string, channels?: int}>, format?: array{format_name?: string}} $sourceInfo Source media information
+     * @param array{streams?: array<int, array{codec_type?: string, codec?: string, channels?: int}>,
+     *     format?: array{format_name?: string}} $sourceInfo Source media information
      *
      * @return array{codec_type?: string, codec?: string, channels?: int}|null First audio stream found or null
      */
@@ -354,7 +359,8 @@ class QualitySelector
     /**
      * Detects container format from source format info.
      *
-     * @param array{streams?: array<int, array<string, mixed>>, format?: array{format_name?: string}} $sourceInfo Source media information
+     * @param array{streams?: array<int, array<string, mixed>>, format?: array{format_name?: string}} $sourceInfo Source
+     * media information
      *
      * @return string Detected container type (mkv, mp4, webm, ts, mp4)
      */
@@ -410,7 +416,8 @@ class QualitySelector
      *
      * @param string $name Profile name
      *
-     * @return array{max_bitrate: int, max_resolution: array<int, int>, direct_play: array<string>, transcode: array<string>, container: array<string>}|null Profile definition or null if not found
+     * @return array{max_bitrate: int, max_resolution: array<int, int>, direct_play: array<string>,
+     *     transcode: array<string>, container: array<string>}|null Profile definition or null if not found
      */
     public function getProfile(string $name): ?array
     {

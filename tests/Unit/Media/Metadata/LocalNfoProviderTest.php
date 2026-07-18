@@ -18,7 +18,7 @@ class LocalNfoProviderTest extends TestCase
         LoggerFactory::init(__DIR__ . '/../../../../config/logger.php');
         $this->provider = new LocalNfoProvider('');
         $this->testDir = sys_get_temp_dir() . '/phlix_nfo_test';
-        
+
         if (!is_dir($this->testDir)) {
             mkdir($this->testDir, 0777, true);
         }
@@ -46,7 +46,7 @@ class LocalNfoProviderTest extends TestCase
     public function testGetProvidersReturnsExpected(): void
     {
         $providers = $this->provider->getProviders();
-        
+
         $this->assertContains('local', $providers);
         $this->assertContains('nfo', $providers);
     }
@@ -114,12 +114,12 @@ class LocalNfoProviderTest extends TestCase
     <imdbid>tt1234567</imdbid>
 </movie>
 NFO;
-        
+
         $nfoFile = $this->testDir . '/movie.nfo';
         file_put_contents($nfoFile, $nfoContent);
-        
+
         $result = $this->provider->parseMovieNfo($nfoFile);
-        
+
         $this->assertEquals('movie', $result['type']);
         $this->assertEquals('Test Movie', $result['name']);
         $this->assertEquals('Test Movie Original', $result['original_name']);
@@ -170,12 +170,12 @@ NFO;
     <imdbid>tt1234567</imdbid>
 </tvshow>
 NFO;
-        
+
         $nfoFile = $this->testDir . '/tvshow.nfo';
         file_put_contents($nfoFile, $nfoContent);
-        
+
         $result = $this->provider->parseTvShowNfo($nfoFile);
-        
+
         $this->assertEquals('tvshow', $result['type']);
         $this->assertEquals('Test TV Show', $result['name']);
         $this->assertEquals('Test TV Show Original', $result['original_name']);
@@ -212,12 +212,12 @@ NFO;
     <credits>Episode Writer</credits>
 </episodedetails>
 NFO;
-        
+
         $nfoFile = $this->testDir . '/episode.nfo';
         file_put_contents($nfoFile, $nfoContent);
-        
+
         $result = $this->provider->parseEpisodeNfo($nfoFile);
-        
+
         $this->assertEquals('episode', $result['type']);
         $this->assertEquals('Test Episode', $result['name']);
         $this->assertEquals('An episode plot', $result['overview']);
@@ -235,12 +235,12 @@ NFO;
 tmdb: 12345
 imdb: tt54321
 NFO;
-        
+
         $nfoFile = $this->testDir . '/simple.nfo';
         file_put_contents($nfoFile, $nfoContent);
-        
+
         $result = $this->provider->parseMovieNfo($nfoFile);
-        
+
         $this->assertEquals('movie', $result['type']);
         $externalIds = $result['external_ids'];
         $this->assertIsArray($externalIds);
@@ -255,7 +255,7 @@ NFO;
         file_put_contents($this->testDir . '/fanart.jpg', 'fake-image');
         file_put_contents($this->testDir . '/movie.jpg', 'fake-image');
         file_put_contents($this->testDir . '/folder.jpg', 'fake-image');
-        
+
         $result = $this->provider->getImages($this->testDir);
 
         // The four image files created above are discovered and grouped.
@@ -271,12 +271,12 @@ NFO;
     <tvdbid>789</tvdbid>
 </tvshow>
 NFO;
-        
+
         $nfoFile = $this->testDir . '/tvshow.nfo';
         file_put_contents($nfoFile, $nfoContent);
-        
+
         $result = $this->provider->parseDirectory($this->testDir);
-        
+
         $this->assertEquals('tvshow', $result['type']);
         $metadata = $result['metadata'];
         $this->assertIsArray($metadata);

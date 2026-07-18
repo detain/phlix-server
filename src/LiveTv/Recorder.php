@@ -230,7 +230,10 @@ class Recorder
 
         // Register ComskipLifecycleManager::enqueue as an onComplete callback
         if ($comskipManager !== null) {
-            $this->onCompleteCallbacks[] = function (string $recordingId, string $filePath) use ($comskipManager): void {
+            $this->onCompleteCallbacks[] = function (
+                string $recordingId,
+                string $filePath
+            ) use ($comskipManager): void {
                 $comskipManager->enqueue($recordingId, $filePath);
             };
         }
@@ -2128,7 +2131,8 @@ class Recorder
     /**
      * Get comprehensive storage statistics.
      *
-     * @return array{used_bytes: int, available_bytes: int, max_bytes: int, active_recordings: int, active_timeshifts: int, recordings_by_status: array<string, int>}
+     * @return array{used_bytes: int, available_bytes: int, max_bytes: int, active_recordings: int,
+     *     active_timeshifts: int, recordings_by_status: array<string, int>}
      */
     public function getStorageStats(): array
     {

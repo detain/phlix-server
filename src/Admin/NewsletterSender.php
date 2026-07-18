@@ -349,13 +349,20 @@ class NewsletterSender
      */
     private function createLibraryManager(): \Phlix\Media\Library\LibraryManager
     {
+        $musicScanner = new \Phlix\Media\Music\MusicLibraryScanner(
+            $this->db,
+            new \Phlix\Media\Transcoding\FfmpegRunner()
+        );
+        $musicLibraryService = new \Phlix\Media\Music\MusicLibraryService($this->db, $musicScanner);
+
         return new \Phlix\Media\Library\LibraryManager(
             $this->db,
             new \Phlix\Media\Library\MediaScanner(
                 $this->db,
                 new \Phlix\Media\Library\ItemRepository($this->db)
             ),
-            new \Phlix\Media\Library\FolderWatcher()
+            new \Phlix\Media\Library\FolderWatcher(),
+            $musicLibraryService
         );
     }
 

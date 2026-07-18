@@ -21,7 +21,7 @@ class StructuredLoggerTest extends TestCase
     {
         $this->tempDir = sys_get_temp_dir() . '/phlix_test_logs_' . uniqid();
         mkdir($this->tempDir, 0755, true);
-        
+
         $this->config = [
             'handlers' => [
                 'file' => [
@@ -55,7 +55,7 @@ class StructuredLoggerTest extends TestCase
     {
         $logger = new StructuredLogger('test', $this->config);
         $logger->info('Test info message');
-        
+
         $this->assertFileExists($this->config['handlers']['file']['path']);
     }
 
@@ -63,7 +63,7 @@ class StructuredLoggerTest extends TestCase
     {
         $logger = new StructuredLogger('test', $this->config);
         $logger->info('Test message with context', ['key' => 'value', 'number' => 42]);
-        
+
         $this->assertFileExists($this->config['handlers']['file']['path']);
     }
 
@@ -71,21 +71,21 @@ class StructuredLoggerTest extends TestCase
     {
         $logger = new StructuredLogger('test', $this->config);
         $logger->error('Test error message');
-        
+
         $this->assertFileExists($this->config['handlers']['file']['path']);
     }
 
     public function testLogLevels(): void
     {
         $logger = new StructuredLogger('test', $this->config);
-        
+
         $logger->debug('Debug message');
         $logger->info('Info message');
         $logger->notice('Notice message');
         $logger->warning('Warning message');
         $logger->error('Error message');
         $logger->critical('Critical message');
-        
+
         $this->assertFileExists($this->config['handlers']['file']['path']);
     }
 

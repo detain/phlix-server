@@ -6,9 +6,12 @@ namespace Phlix\Tests\Unit\Server\Core;
 
 use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
+use Phlix\Auth\UserRepository;
 use Phlix\Common\Database\ConnectionPool;
+use Phlix\Common\Logger\AuditLogger;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Library\LibraryManager;
+use Phlix\Media\Music\MusicLibraryService;
 use Phlix\Media\Library\ScanJobRepository;
 use Phlix\Server\Core\Application;
 use Phlix\Server\Http\Controllers\LibraryController;
@@ -89,26 +92,24 @@ class ApplicationFactoryMethodsTest extends TestCase
         $scanJobs = $this->createMock(ScanJobRepository::class);
         $itemRepo = $this->createMock(ItemRepository::class);
 
-        $this->container->method('get')
-            ->willReturnMap([
-                [LibraryManager::class, $libraryManager],
-                [ScanJobRepository::class, $scanJobs],
-                [ItemRepository::class, $itemRepo],
-            ]);
-
-        // Also configure has() to return true for AdminMiddleware
+        // Configure has() to return true for AdminMiddleware
         $this->container->method('has')
             ->willReturnCallback(static function (string $class): bool {
                 return $class === \Phlix\Server\Http\Middleware\AdminMiddleware::class;
             });
 
         $this->container->method('get')
-            ->willReturnCallback(static function (string $class) use ($libraryManager, $scanJobs, $itemRepo): object {
+            ->willReturnCallback(function (string $class) use ($libraryManager, $scanJobs, $itemRepo): object {
                 return match ($class) {
                     LibraryManager::class => $libraryManager,
                     ScanJobRepository::class => $scanJobs,
                     ItemRepository::class => $itemRepo,
-                    \Phlix\Server\Http\Middleware\AdminMiddleware::class => $this->createMock(\Phlix\Server\Http\Middleware\AdminMiddleware::class),
+                    // AdminMiddleware is final and cannot be doubled; build a real
+                    // instance with mocked collaborators instead.
+                    \Phlix\Server\Http\Middleware\AdminMiddleware::class => new \Phlix\Server\Http\Middleware\AdminMiddleware(
+                        $this->createMock(UserRepository::class),
+                        $this->createMock(AuditLogger::class),
+                    ),
                     default => throw new \RuntimeException("Unexpected class: $class"),
                 };
             });
@@ -142,12 +143,17 @@ class ApplicationFactoryMethodsTest extends TestCase
         $libraryManager = $this->createMock(LibraryManager::class);
 
         $this->container->method('get')
-            ->willReturnCallback(static function (string $class) use ($themeMediaRepository, $themeMediaFinder, $libraryManager): object {
+            ->willReturnCallback(function (string $class) use ($themeMediaRepository, $themeMediaFinder, $libraryManager): object {
                 return match ($class) {
                     ThemeMediaRepository::class => $themeMediaRepository,
                     ThemeMediaFinder::class => $themeMediaFinder,
                     LibraryManager::class => $libraryManager,
-                    \Phlix\Server\Http\Middleware\AdminMiddleware::class => $this->createMock(\Phlix\Server\Http\Middleware\AdminMiddleware::class),
+                    // AdminMiddleware is final and cannot be doubled; build a real
+                    // instance with mocked collaborators instead.
+                    \Phlix\Server\Http\Middleware\AdminMiddleware::class => new \Phlix\Server\Http\Middleware\AdminMiddleware(
+                        $this->createMock(UserRepository::class),
+                        $this->createMock(AuditLogger::class),
+                    ),
                     default => throw new \RuntimeException("Unexpected class: $class"),
                 };
             });
@@ -236,6 +242,8 @@ class ApplicationFactoryMethodsTest extends TestCase
         // Verify the 4th parameter is MusicLibraryService
         $params = $constructor->getParameters();
         $this->assertSame('musicLibraryService', $params[3]->getName());
-        $this->assertEquals('MusicLibraryService', $params[3]->getType()->getName());
+        $type = $params[3]->getType();
+        $this->assertInstanceOf(\ReflectionNamedType::class, $type);
+        $this->assertSame(MusicLibraryService::class, $type->getName());
     }
 }

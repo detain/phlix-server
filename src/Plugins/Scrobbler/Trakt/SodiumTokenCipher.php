@@ -93,7 +93,8 @@ final class SodiumTokenCipher implements TokenCipher
         }
 
         // 64-char hex.
-        if (strlen($rawKey) === SODIUM_CRYPTO_SECRETBOX_KEYBYTES * 2
+        if (
+            strlen($rawKey) === SODIUM_CRYPTO_SECRETBOX_KEYBYTES * 2
             && ctype_xdigit($rawKey)
         ) {
             $bin = @hex2bin($rawKey);

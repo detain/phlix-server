@@ -40,7 +40,8 @@ final class SmartPlaylistRepository
     public function insert(SmartPlaylist $playlist): void
     {
         $this->db->query(
-            "INSERT INTO smart_playlists (id, name, library_id, rules_json, `limit`, sort_by, sort_desc, created_at, updated_at)
+            "INSERT INTO smart_playlists
+             (id, name, library_id, rules_json, `limit`, sort_by, sort_desc, created_at, updated_at)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             [
                 $playlist->id,

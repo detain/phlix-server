@@ -75,7 +75,8 @@ final class DbTraktOAuthStateStore implements TraktOAuthStateStore
         $data = json_encode(['code_verifier' => $codeVerifier]);
 
         $result = $this->db->query(
-            "INSERT INTO oauth_state_store (id, provider, state_value, data, expires_at) VALUES (?, ?, ?, ?, FROM_UNIXTIME(?))",
+            "INSERT INTO oauth_state_store (id, provider, state_value, data, expires_at)
+             VALUES (?, ?, ?, ?, FROM_UNIXTIME(?))",
             [$id, self::PROVIDER, $state, $data, $expiresAt]
         );
 

@@ -421,8 +421,12 @@ class TraktApi
      * @throws TraktApiException|TraktAuthenticationException On API error
      * @since 0.14.0
      */
-    public function getWatchedHistory(string $username, int $page = 1, int $limit = 100, string $accessToken = ''): array
-    {
+    public function getWatchedHistory(
+        string $username,
+        int $page = 1,
+        int $limit = 100,
+        string $accessToken = ''
+    ): array {
         $headers = $this->apiHeaders($accessToken);
 
         $params = [
@@ -767,7 +771,8 @@ class TraktApi
     {
         $config = $this->loadConfig();
 
-        return is_string($config['redirect_uri'] ?? null) ? $config['redirect_uri'] : 'https://localhost/api/v1/oauth/trakt/callback';
+        return is_string($config['redirect_uri'] ?? null) ? $config['redirect_uri'] :
+            'https://localhost/api/v1/oauth/trakt/callback';
     }
 
     /**

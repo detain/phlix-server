@@ -38,7 +38,9 @@ class VideoToolboxProbe implements VendorProbeInterface
             return false;
         }
 
-        $output = ShellTimeout::gpuTool('system_profiler SPDisplaysDataType 2>/dev/null | grep -i "Intel\\|Apple\\|AMD\\|NVIDIA" || true');
+        $output = ShellTimeout::gpuTool(
+            'system_profiler SPDisplaysDataType 2>/dev/null | grep -i "Intel\\|Apple\\|AMD\\|NVIDIA" || true'
+        );
 
         return is_string($output) && trim($output) !== '';
     }
@@ -72,8 +74,11 @@ class VideoToolboxProbe implements VendorProbeInterface
         );
     }
 
-    public function runAcceptanceTest(string $ffmpeg_path, string $test_clip_path, ?LoggerInterface $logger = null): bool
-    {
+    public function runAcceptanceTest(
+        string $ffmpeg_path,
+        string $test_clip_path,
+        ?LoggerInterface $logger = null
+    ): bool {
         if (!file_exists($test_clip_path)) {
             $logger?->warning('Test clip not found', ['path' => $test_clip_path]);
             return false;

@@ -11,7 +11,10 @@ declare(strict_types=1);
 
 namespace Phlix\Auth;
 
+use Phlix\Common\RateLimit\RateLimitState;
 use RuntimeException;
+
+use function time;
 
 /**
  * Thrown when a client exceeds the rate limit for authentication attempts.
@@ -34,5 +37,29 @@ final class RateLimitException extends RuntimeException
         $this->resetAt = $resetAt;
         $this->remaining = $remaining;
         parent::__construct('Too many authentication attempts. Please try again later.');
+    }
+
+    /**
+     * Seconds a client should wait before retrying, relative to `$now`
+     * (defaults to the current time). Never negative — suitable for a
+     * `Retry-After` header. Delegates the `max(0, resetAt - now)` math to
+     * {@see RateLimitState::retryAfter()} so the formula stays single-sourced
+     * with the ported per-surface rate-limiter core (SV-4.15).
+     *
+     * @param int|null $now current unix timestamp (defaults to `time()`)
+     *
+     * @return int<0, max>
+     */
+    public function retryAfterSeconds(?int $now = null): int
+    {
+        $now ??= time();
+
+        return (new RateLimitState(
+            count: 0,
+            remaining: $this->remaining,
+            resetAt: $this->resetAt,
+            limited: true,
+            limit: 0,
+        ))->retryAfter($now);
     }
 }

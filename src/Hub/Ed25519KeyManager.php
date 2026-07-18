@@ -184,12 +184,15 @@ final class Ed25519KeyManager
     }
 
     /**
-     * Builds a PKCS8-compatible PEM string from raw 32-byte secret key.
+     * Builds the native PEM string from the raw libsodium secret key.
      *
-     * Uses the Ed25519 private key encoding (not generic PKCS8) as per
-     * RFC 8410 / libsodium convention.
+     * Emits the application's own `-----BEGIN ED25519 PRIVATE KEY-----` label
+     * wrapping the base64url of the raw libsodium secret key. The writer is
+     * intentionally unchanged (SV-4.16): newly generated keys keep this native
+     * format, while {@see parsePem()} now additionally tolerates reading a
+     * standard PKCS#8 Ed25519 key so externally generated keys also load.
      *
-     * @param string $secretKey 32-byte raw secret key.
+     * @param string $secretKey 64-byte libsodium secret key (seed ‖ public key).
      *
      * @return string PEM-encoded private key with line breaks.
      */
@@ -205,11 +208,51 @@ final class Ed25519KeyManager
     /**
      * Parses a PEM string and extracts the raw 64-byte Ed25519 secret key.
      *
+     * Two on-disk PEM formats are accepted so the reader tolerates both keys
+     * this application generates itself and keys produced by standard tooling
+     * (SV-4.16):
+     *
+     *  1. Native format (written by {@see buildPem()}):
+     *     `-----BEGIN ED25519 PRIVATE KEY-----` wrapping the base64url of the
+     *     raw 64-byte libsodium secret key (32-byte seed ‖ 32-byte public key).
+     *  2. Standard PKCS#8 (RFC 8410), e.g. produced by
+     *     `openssl genpkey -algorithm Ed25519`:
+     *     `-----BEGIN PRIVATE KEY-----` wrapping the DER-encoded 32-byte seed.
+     *     The seed is expanded back to the 64-byte libsodium secret key so the
+     *     rest of the pipeline is identical regardless of source format.
+     *
+     * Only the native format is written back; see {@see buildPem()}.
+     *
      * @param string $pem The PEM content.
      *
      * @return string|null The raw 64-byte Ed25519 secret key, or null on parse failure.
      */
     private function parsePem(string $pem): ?string
+    {
+        // Format 1: the application's own label wrapping a base64url-encoded
+        // raw 64-byte libsodium secret key. Kept first for full backward
+        // compatibility with keys written by buildPem().
+        $native = $this->parseNativeEd25519Pem($pem);
+        if ($native !== null) {
+            return $native;
+        }
+
+        // Format 2: interop with a standard PKCS#8 Ed25519 private key.
+        return $this->parsePkcs8Ed25519Pem($pem);
+    }
+
+    /**
+     * Parses the native `-----BEGIN ED25519 PRIVATE KEY-----` PEM format.
+     *
+     * The body is the base64url encoding of the raw 64-byte libsodium secret
+     * key (32-byte seed ‖ 32-byte public key), as written by {@see buildPem()}.
+     *
+     * @param string $pem The PEM content.
+     *
+     * @return string|null The raw 64-byte Ed25519 secret key, or null if the
+     *                     native label is absent or the body is malformed.
+     */
+    private function parseNativeEd25519Pem(string $pem): ?string
     {
         $pattern = '/-----BEGIN ED25519 PRIVATE KEY-----(.*?)-----END ED25519 PRIVATE KEY-----/s';
         if (!preg_match($pattern, $pem, $matches)) {
@@ -228,6 +271,90 @@ final class Ed25519KeyManager
         }
 
         return substr($decoded, 0, 64);
+    }
+
+    /**
+     * Parses a standard PKCS#8 Ed25519 private key (RFC 8410).
+     *
+     * The 32-byte seed is extracted from the DER structure and expanded via
+     * libsodium into the 64-byte secret key (seed ‖ public key). The sodium
+     * seed-expansion path is used rather than ext-openssl because PHP's
+     * `openssl_pkey_get_details()` does not reliably expose the raw Ed25519 key
+     * material across builds, whereas seed expansion is portable and exact.
+     *
+     * @param string $pem The PEM content.
+     *
+     * @return string|null The raw 64-byte Ed25519 secret key, or null if the
+     *                     PKCS#8 label is absent, the DER is malformed, or the
+     *                     key is not an Ed25519 key.
+     */
+    private function parsePkcs8Ed25519Pem(string $pem): ?string
+    {
+        $pattern = '/-----BEGIN PRIVATE KEY-----(.*?)-----END PRIVATE KEY-----/s';
+        if (!preg_match($pattern, $pem, $matches)) {
+            return null;
+        }
+
+        $base64 = preg_replace('/\s+/', '', $matches[1]);
+        if (!is_string($base64) || $base64 === '') {
+            return null;
+        }
+
+        // PKCS#8 uses standard (not URL-safe) base64.
+        $der = base64_decode($base64, true);
+        if ($der === false || strlen($der) < 48) {
+            return null;
+        }
+
+        $seed = $this->extractEd25519SeedFromPkcs8($der);
+        if ($seed === null || $seed === '') {
+            return null;
+        }
+
+        // Expand the 32-byte seed into the 64-byte libsodium secret key so
+        // loadKeyPair()'s strlen === 64 check and every downstream
+        // sodium_crypto_sign_* call behave exactly as for a native key.
+        $keypair = sodium_crypto_sign_seed_keypair($seed);
+
+        return sodium_crypto_sign_secretkey($keypair);
+    }
+
+    /**
+     * Extracts the 32-byte Ed25519 seed from a PKCS#8 DER blob.
+     *
+     * The Ed25519 algorithm OID (1.3.101.112) is verified to be present before
+     * any extraction, so a non-Ed25519 PKCS#8 key (RSA, P-256, …) is never
+     * silently mis-read as an Ed25519 seed. The seed is a 32-byte OCTET STRING
+     * nested inside the PrivateKey OCTET STRING, framed in DER as
+     * `04 22 04 20 <32 seed bytes>`.
+     *
+     * @param string $der Raw DER bytes of the PKCS#8 PrivateKeyInfo.
+     *
+     * @return string|null The 32-byte seed, or null if the structure is not a
+     *                     well-formed Ed25519 PKCS#8 key.
+     */
+    private function extractEd25519SeedFromPkcs8(string $der): ?string
+    {
+        // OID 1.3.101.112 (Ed25519) => DER: 06 03 2B 65 70.
+        if (strpos($der, "\x06\x03\x2b\x65\x70") === false) {
+            return null;
+        }
+
+        // Inner 32-byte OCTET STRING (04 20) nested inside the PrivateKey
+        // OCTET STRING (04 22). Anchor on the full framing so a coincidental
+        // 04 20 elsewhere cannot be mistaken for the seed marker.
+        $marker = "\x04\x22\x04\x20";
+        $pos = strpos($der, $marker);
+        if ($pos === false) {
+            return null;
+        }
+
+        $seed = substr($der, $pos + strlen($marker), 32);
+        if (strlen($seed) !== 32) {
+            return null;
+        }
+
+        return $seed;
     }
 
     /**

@@ -547,11 +547,27 @@ class HubClient
     /**
      * Returns the server's public keys as JWK for the JWKS endpoint.
      *
-     * @return array<int, array<string, mixed>> Array of JWK maps.
+     * Degrades gracefully (SV-4.16): a missing, unreadable, or malformed
+     * signing key must never take down the public `/.well-known/jwks.json`
+     * surface with an unhandled HTTP 500. If key loading throws, the failure is
+     * logged at ERROR and an empty keyset is returned so the controller can
+     * still serve a valid RFC 7517 `{"keys":[]}` with HTTP 200. A JWKS consumer
+     * treats an empty set as "no keys published yet" and retries later.
+     *
+     * @return array<int, array<string, mixed>> Array of JWK maps (empty on key
+     *                                          load failure).
      */
     public function getPublicKeysJwk(): array
     {
-        return [$this->keyManager->getPublicKeyJwk()];
+        try {
+            return [$this->keyManager->getPublicKeyJwk()];
+        } catch (Throwable $e) {
+            $this->logger->error('Failed to build JWKS public key set; serving empty keyset', [
+                'exception' => $e->getMessage(),
+            ]);
+
+            return [];
+        }
     }
 
     /**

@@ -50,6 +50,21 @@ final class LogChannels
     public const EVENTS = 'events';
 
     /**
+     * Environment variable that gates the verbose events log (and the
+     * PSR-14 debug-dispatch decorator). When truthy (1/true/yes/on) the
+     * `events` log handler attaches to the {@see self::EVENTS} channel;
+     * otherwise events.log stays empty. Kept here as the symbolic source
+     * shared by `config/logger.php` and
+     * {@see \Phlix\Common\Logger\StructuredLogger::setupHandlers()}.
+     *
+     * Mirrors the literal used by
+     * {@see \Phlix\Common\Events\EventDispatcherFactory::DEBUG_ENV_VAR}.
+     *
+     * @since 0.10.0
+     */
+    public const DEBUG_EVENTS_ENV = 'PHLIX_DEBUG_EVENTS';
+
+    /**
      * Channel used by the plugin subsystem (install / enable / disable /
      * uninstall, manifest validation, composer-runner shell-outs,
      * signature verification). Introduced in step A.4.

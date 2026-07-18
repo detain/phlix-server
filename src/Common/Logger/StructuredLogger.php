@@ -34,6 +34,10 @@ use Stringable;
  *             'path' => string,
  *             'level' => string, // optional, defaults to 'debug'
  *             'max_files' => int, // optional
+ *             'channels' => string[], // optional; channels this handler
+ *                                     // serves. ABSENT/empty = all channels.
+ *             'env' => string, // optional; name of an env var that must be
+ *                              // truthy for the handler to attach.
  *         ],
  *         ...
  *     ],
@@ -43,6 +47,12 @@ use Stringable;
  *     ],
  * ]
  * ```
+ *
+ * Handler routing: a handler attaches to this logger only when its
+ * `channels` gate admits {@see $channel} AND its `env` gate is satisfied.
+ * This keeps subsystem logs (events.log, plugins.log) scoped to their own
+ * channels instead of receiving every application record, and avoids the
+ * write-amplification of pushing all handlers onto every channel.
  *
  * @package Phlix\Common\Logger
  */
@@ -87,12 +97,63 @@ class StructuredLogger implements LoggerInterface
                 continue;
             }
             /** @var array<string, mixed> $handlerConfig */
+            if (!$this->handlerAppliesToChannel($handlerConfig)) {
+                continue;
+            }
+            if (!$this->handlerEnvEnabled($handlerConfig)) {
+                continue;
+            }
             $handler = $this->createHandler($handlerConfig);
             // The handler's level is already set via its constructor by
             // createHandler(); Monolog's HandlerInterface does not expose
             // setLevel() so we cannot adjust it here generically.
             $this->logger->pushHandler($handler);
         }
+    }
+
+    /**
+     * Whether a handler should attach to this logger's channel.
+     *
+     * A handler with no `channels` key — or a non-array / empty one —
+     * applies to ALL channels, preserving the historical behavior for the
+     * general application log (app.log) and the error-aggregation log
+     * (error.log). When `channels` is a non-empty list, the handler
+     * attaches only when this logger's own channel is a member.
+     *
+     * @param array<string, mixed> $config
+     */
+    private function handlerAppliesToChannel(array $config): bool
+    {
+        $channels = $config['channels'] ?? null;
+        if (!is_array($channels) || $channels === []) {
+            return true;
+        }
+        return in_array($this->channel, $channels, true);
+    }
+
+    /**
+     * Whether a handler's `env` gate (if any) is satisfied.
+     *
+     * A handler with no `env` key always attaches. When `env` names an
+     * environment variable, the handler attaches only when that variable is
+     * set to a truthy value. Truthiness is interpreted identically to
+     * {@see \Phlix\Common\Events\EventDispatcherFactory::debugEnabled()}
+     * (`1`/`true`/`yes`/`on`, case-insensitive) so both subsystems agree on
+     * the same PHLIX_DEBUG_EVENTS switch.
+     *
+     * @param array<string, mixed> $config
+     */
+    private function handlerEnvEnabled(array $config): bool
+    {
+        $envVar = $config['env'] ?? null;
+        if (!is_string($envVar) || $envVar === '') {
+            return true;
+        }
+        $value = getenv($envVar);
+        if ($value === false) {
+            return false;
+        }
+        return in_array(strtolower((string) $value), ['1', 'true', 'yes', 'on'], true);
     }
 
     /**

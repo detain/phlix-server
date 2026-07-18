@@ -11,6 +11,8 @@ declare(strict_types=1);
 
 namespace Phlix\Server\Http\Controllers;
 
+use Phlix\Media\Library\RatingGate;
+use Phlix\Media\Transcoding\TranscodeManager;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
 
@@ -141,6 +143,55 @@ trait TranscodeFileServer
         // this trait should invoke ByteRangeParser::parse() directly (calling a
         // static method on a trait is deprecated as of PHP 8.1).
         return ByteRangeParser::parse($rangeHeader, $fileSize);
+    }
+
+    /**
+     * Serve-time parental ACCESS re-check for an HLS/DASH transcode job (Finding
+     * 1b — defense-in-depth). Maps the job back to its `media_item_id` and, for a
+     * capped active profile, denies serving any file of an over-cap job (by
+     * EFFECTIVE rating) — so a leaked/replayed signed URL still 404s for a capped
+     * session even though the minting endpoints (start/status) already gate it.
+     *
+     * Strict no-op (returns false → serve) whenever the gate cannot restrict:
+     *   - the gate/transcoder is unwired (legacy/no-container construction);
+     *   - {@see RatingGate::resolveFilterForUser()} yields null (owner/admin, no
+     *     active profile, no cap, or an unauthenticated request — e.g. a bare
+     *     signed-token manifest fetch that carries no session userId);
+     *   - the job → media-item mapping can't be resolved (a stale/evicted job row
+     *     will 404 in {@see serveJobFile()} on its own).
+     *
+     * hls.js attaches the session Bearer to every segment XHR (and same-origin
+     * requests carry the session cookie), so `$request->userId` is populated for
+     * the actual byte-bearing segment requests, where this re-check bites.
+     *
+     * @param Request               $request          The incoming request (for userId).
+     * @param string                $jobId            Transcode job id.
+     * @param TranscodeManager|null $transcodeManager Job → media-item resolver.
+     * @param RatingGate|null       $ratingGate       Shared parental access gate.
+     *
+     * @return bool True when the job is over-cap for this request (deny), else false.
+     */
+    private function transcodeJobOverCap(
+        Request $request,
+        string $jobId,
+        ?TranscodeManager $transcodeManager,
+        ?RatingGate $ratingGate
+    ): bool {
+        if ($transcodeManager === null || $ratingGate === null || $jobId === '') {
+            return false;
+        }
+
+        $filter = $ratingGate->resolveFilterForUser($request->userId ?? '');
+        if ($filter === null) {
+            return false;
+        }
+
+        $mediaId = $transcodeManager->getJobMediaItemId($jobId);
+        if ($mediaId === null) {
+            return false;
+        }
+
+        return !$ratingGate->isAllowed($mediaId, $filter);
     }
 
     /**

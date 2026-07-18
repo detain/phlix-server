@@ -12,6 +12,7 @@ declare(strict_types=1);
 namespace Phlix\Server\Http\Controllers;
 
 use Phlix\Auth\SignedUrl;
+use Phlix\Media\Library\RatingGate;
 use Phlix\Media\Transcoding\TranscodeManager;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
@@ -28,9 +29,32 @@ class TranscodeController
 {
     private TranscodeManager $transcodeManager;
 
-    public function __construct(TranscodeManager $transcodeManager)
+    /**
+     * Shared parental-control access gate. Null in legacy/no-container contexts,
+     * in which case every gate check is a strict no-op (owner-safe).
+     */
+    private ?RatingGate $ratingGate;
+
+    public function __construct(TranscodeManager $transcodeManager, ?RatingGate $ratingGate = null)
     {
         $this->transcodeManager = $transcodeManager;
+        $this->ratingGate = $ratingGate;
+    }
+
+    /**
+     * Resolve the active profile's parental cap for the current request, or null
+     * (the permissive no-op) when the gate is unwired, the request is
+     * unauthenticated, or the profile/account is not capped (owner-safe).
+     *
+     * @return array{allowedRatings: list<string>, allowUnrated: bool}|null
+     */
+    private function resolveRatingFilter(Request $request): ?array
+    {
+        if ($this->ratingGate === null) {
+            return null;
+        }
+
+        return $this->ratingGate->resolveFilterForUser($request->userId ?? '');
     }
 
     /**
@@ -56,6 +80,16 @@ class TranscodeController
         $mediaId = $params['id'] ?? '';
         if ($mediaId === '') {
             return (new Response())->status(400)->json(['error' => 'media id is required']);
+        }
+
+        // Parental cap (Finding 1a): a capped profile requesting an over-cap item
+        // (by EFFECTIVE rating — episodes inherit their series) gets a 404 BEFORE
+        // any transcode job is created or any signed HLS/DASH URL is minted, so no
+        // playable stream is ever disclosed. No-op for the owner / un-capped
+        // profile / unauthenticated request. Mirrors MediaItemController's gate.
+        $filter = $this->resolveRatingFilter($request);
+        if ($filter !== null && $this->ratingGate !== null && !$this->ratingGate->isAllowed($mediaId, $filter)) {
+            return (new Response())->status(404)->json(['error' => 'Item not found']);
         }
 
         $explicit = $request->queryString('profile');
@@ -148,6 +182,18 @@ class TranscodeController
         $jobId = $params['jobId'] ?? ($params['job_id'] ?? '');
         if ($jobId === '') {
             return (new Response())->status(400)->json(['error' => 'job id is required']);
+        }
+
+        // Parental cap (Finding 1a): re-resolve the job's media item and deny a
+        // capped profile polling an over-cap job — so status() never leaks the
+        // signed master/hls/dash/variant/subtitle URLs for content the active
+        // profile may not watch. No-op for the owner / un-capped profile.
+        $filter = $this->resolveRatingFilter($request);
+        if ($filter !== null && $this->ratingGate !== null) {
+            $mediaId = $this->transcodeManager->getJobMediaItemId($jobId);
+            if ($mediaId !== null && !$this->ratingGate->isAllowed($mediaId, $filter)) {
+                return (new Response())->status(404)->json(['error' => 'Job not found']);
+            }
         }
 
         $readiness = $this->transcodeManager->getJobReadiness($jobId);

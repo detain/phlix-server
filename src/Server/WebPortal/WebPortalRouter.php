@@ -733,6 +733,46 @@ class WebPortalRouter
     }
 
     /**
+     * Finding 2 — drill-down inheritance: whether the `?parentId=` subtree the
+     * browse request is scoped to is BLOCKED for the active profile.
+     *
+     * The listing SQL ({@see ItemRepository::query()} / {@see ItemRepository::valueBuckets()})
+     * caps on each row's OWN `content_rating` only, so a drill-down of an over-cap
+     * series (`GET /api/v1/media?parentId=<blocked-series-id>`) would still surface
+     * that series' NULL-rated episodes as cards whenever the cap permits unrated
+     * content. Effective (inherited) rating closes this: if the PARENT itself is
+     * over-cap, the WHOLE subtree beneath it is blocked, so the caller returns an
+     * empty result (0 items / 0 total / 0 buckets) consistently.
+     *
+     * Strict no-op — returns false — for the owner/admin, an un-capped profile, an
+     * unauthenticated request, a non-drill-down (no `parentId`) browse, or when the
+     * gate is unwired.
+     *
+     * @param Request $request The HTTP request (carries userId + `parentId`).
+     */
+    private function parentSubtreeBlocked(Request $request): bool
+    {
+        $gate = $this->gate();
+        if ($gate === null) {
+            return false;
+        }
+
+        $filter = $gate->resolveFilterForUser($request->userId ?? '');
+        if ($filter === null) {
+            return false;
+        }
+
+        $parentId = $request->queryString('parentId');
+        if ($parentId === null || $parentId === '') {
+            return false;
+        }
+
+        // Effective-rating check of the parent (series/season): if the parent is
+        // over-cap, the entire drill-down subtree is blocked.
+        return !$gate->isAllowed($parentId, $filter);
+    }
+
+    /**
      * Lazily build (and memoize) the shared {@see RatingGate} from this router's
      * already-injected dependencies.
      *
@@ -847,11 +887,41 @@ class WebPortalRouter
         $libraryIdRaw = $request->queryString('libraryId');
         $libraryId = ($libraryIdRaw !== null && $libraryIdRaw !== '') ? $libraryIdRaw : null;
 
+        // Finding 2 — drill-down inheritance: an over-cap parent blocks its whole
+        // subtree, so a capped profile drilling into a blocked series gets an empty
+        // page (0 items / 0 total) rather than that series' NULL-rated episodes.
+        if ($this->parentSubtreeBlocked($request)) {
+            $limit = isset($queryParams['limit']) && is_numeric($queryParams['limit'])
+                ? (int) $queryParams['limit'] : 50;
+            $offset = isset($queryParams['offset']) && is_numeric($queryParams['offset'])
+                ? (int) $queryParams['offset'] : 0;
+            return (new Response())->json([
+                'items' => [],
+                'total' => 0,
+                'limit' => $limit,
+                'offset' => $offset,
+            ]);
+        }
+
         $result = $this->itemRepository->query($queryParams, $libraryId);
+
+        // Finding 2 backstop: apply the effective-rating gate to the returned rows
+        // so any row whose EFFECTIVE (inherited) rating is over-cap is dropped even
+        // if the own-column SQL cap admitted it. Idempotent (drops nothing) for the
+        // top-level browse and for an allowed drill-down, so counts stay consistent;
+        // a strict no-op for the owner / un-capped profile.
+        $rows = $result['items'];
+        $gate = $this->gate();
+        if ($gate !== null) {
+            $filter = $gate->resolveFilterForUser($request->userId ?? '');
+            if ($filter !== null) {
+                $rows = $gate->filterItems($rows, $filter, 'id');
+            }
+        }
 
         $items = array_map(function (array $item): array {
             return $this->shapeMediaItem($item);
-        }, $result['items']);
+        }, $rows);
 
         return (new Response())->json([
             'items' => $items,
@@ -881,6 +951,17 @@ class WebPortalRouter
         $queryParams = $this->extractMediaQueryParams($request);
         $libraryIdRaw = $request->queryString('libraryId');
         $libraryId = ($libraryIdRaw !== null && $libraryIdRaw !== '') ? $libraryIdRaw : null;
+
+        // Finding 2 — drill-down inheritance: an over-cap parent blocks its whole
+        // subtree, so the A-Z rail for a blocked drill-down is entirely empty
+        // (every bucket count 0), consistent with getMedia returning no items.
+        if ($this->parentSubtreeBlocked($request)) {
+            $letters = [];
+            foreach (array_merge(['#'], range('A', 'Z')) as $bucket) {
+                $letters[] = ['letter' => $bucket, 'offset' => 0, 'count' => 0];
+            }
+            return (new Response())->json(['letters' => $letters, 'total' => 0]);
+        }
 
         // Use valueBuckets (same internal query as getMediaIndex) to get per-letter counts.
         // valueBuckets groups by first-letter expression (article-stripped), matching
@@ -972,6 +1053,17 @@ class WebPortalRouter
             $field = IndexBuckets::FIELD_NAME;
         }
         $order = strtolower($request->queryString('order') ?? 'asc');
+
+        // Finding 2 — drill-down inheritance: an over-cap parent blocks its whole
+        // subtree, so the index for a blocked drill-down carries no buckets / 0
+        // total, consistent with getMedia returning no items.
+        if ($this->parentSubtreeBlocked($request)) {
+            return (new Response())->json([
+                'field' => $field,
+                'buckets' => [],
+                'total' => 0,
+            ]);
+        }
 
         $rawBuckets = $this->itemRepository->valueBuckets($field, $queryParams, $libraryId);
 

@@ -2942,6 +2942,37 @@ class TranscodeManager
     }
 
     /**
+     * Resolve the `media_item_id` a transcode job was created for.
+     *
+     * The parental ACCESS gate ({@see \Phlix\Media\Library\RatingGate}) uses this
+     * to re-check a job's effective content rating at status/serve time — so a
+     * capped profile that somehow presents a signed HLS/DASH URL for an over-cap
+     * job (leaked/replayed token) is still denied, not just at the minting
+     * endpoints. The lookup is a single parameterized `SELECT`; the job row's
+     * media_item_id never changes after creation, so no caching subtlety applies.
+     *
+     * @param string $jobId Transcode job id.
+     *
+     * @return string|null The media item id, or null when the job does not exist
+     *                      (or carries no media id — a malformed row).
+     */
+    public function getJobMediaItemId(string $jobId): ?string
+    {
+        if ($jobId === '') {
+            return null;
+        }
+
+        $result = $this->db->query(
+            "SELECT media_item_id FROM transcode_jobs WHERE id = ?",
+            [$jobId]
+        );
+        $rows = RowMap::listFromMixed($result);
+        $mediaId = $rows[0]['media_item_id'] ?? null;
+
+        return is_string($mediaId) && $mediaId !== '' ? $mediaId : null;
+    }
+
+    /**
      * Counts produced CMAF media segments in a job directory.
      *
      * @param string $dir Job output directory.

@@ -157,6 +157,58 @@ final class HttpHandlerRateLimitTest extends TestCase
         self::assertLessThanOrEqual(90, $retryAfter);
     }
 
+    /**
+     * SV-4.15 F4: the 429 branch must run through the SAME CORS + security-header
+     * decoration as every other branch. A cross-origin XHR needs the CORS headers
+     * to even READ the 429 (and its Retry-After); without them the browser
+     * surfaces an opaque network error instead of the rate-limit signal.
+     */
+    public function testRateLimited429CarriesCorsAndSecurityHeaders(): void
+    {
+        $origin = 'https://app.example.com';
+        $savedCors = getenv('CORS_ALLOWED_ORIGINS');
+        $savedCorsPhlix = getenv('PHLIX_CORS_ALLOWED_ORIGINS');
+        putenv('PHLIX_CORS_ALLOWED_ORIGINS=' . $origin);
+
+        try {
+            $application = $this->createMock(Application::class);
+            $application->method('dispatch')->willReturnCallback(
+                static function (): never {
+                    throw new RateLimitException(resetAt: time() + 30, remaining: 0);
+                }
+            );
+
+            $handler = $this->makeHandler($application);
+            $raw = "GET /api/v1/media/facets HTTP/1.1\r\nHost: localhost\r\n"
+                . "Origin: {$origin}\r\n\r\n";
+            $wr = new WorkermanRequest($raw);
+
+            $sent = [];
+            $handler->__invoke($this->makeConnection($sent), $wr);
+
+            self::assertCount(1, $sent);
+            $this->assertRateLimited($sent[0]);
+
+            self::assertInstanceOf(WorkermanResponse::class, $sent[0]);
+            // CORS: the allowlisted origin is reflected (never '*'), so the browser
+            // lets the page read the 429.
+            self::assertSame($origin, $sent[0]->getHeader('Access-Control-Allow-Origin'));
+            // Security headers: applied on the 429 like every other branch.
+            self::assertSame('nosniff', $sent[0]->getHeader('X-Content-Type-Options'));
+        } finally {
+            if ($savedCorsPhlix === false) {
+                putenv('PHLIX_CORS_ALLOWED_ORIGINS');
+            } else {
+                putenv('PHLIX_CORS_ALLOWED_ORIGINS=' . $savedCorsPhlix);
+            }
+            if ($savedCors === false) {
+                putenv('CORS_ALLOWED_ORIGINS');
+            } else {
+                putenv('CORS_ALLOWED_ORIGINS=' . $savedCors);
+            }
+        }
+    }
+
     // --- regression: the login limiter trip returns 429, NOT 500 --------------
 
     public function testLoginLimiterTripReturns429NotInternalServerError(): void

@@ -126,6 +126,10 @@ final class HttpHandler
         // a keep-alive connection. Declared here so it is defined on EVERY finally
         // path, including an early return before the hook is armed.
         $armedOnClose = null;
+        // Declared before the try so the RateLimitException catch (SV-4.15 F4) can
+        // reuse it to CORS-decorate the 429; stays null if the throw beat its
+        // assignment (in which case the 429 ships without an Origin echo).
+        $request = null;
 
         // [DEBUG] Log incoming request - request uid will be generated after Request creation
         $requestUid = sprintf('%08x', mt_rand(0, 0xffffffff));
@@ -307,10 +311,23 @@ final class HttpHandler
             // previously it fell through to the generic 500 below with no
             // Retry-After). Emit the shared canonical envelope so the Workerman,
             // CGI (public/index.php), and Application::run() paths are identical.
+            //
+            // SV-4.15 F4: route the 429 through the SAME CORS + security-header +
+            // compression decoration the success branches use. A cross-origin XHR
+            // needs the CORS headers to even READ the 429 (and its Retry-After);
+            // without them the browser surfaces an opaque network error instead of
+            // the rate-limit signal. Rebuild the decorators locally (cheap,
+            // deterministic) so this is robust even if the throw beat their
+            // in-try assignment; CORS-decorate only when $request is available.
             $responseStatus = 429;
-            $connection->send(
-                Application::rateLimitResponse($e)->toWorkermanResponse()
-            );
+            $rateResponse = Application::rateLimitResponse($e);
+            $rateCors = CorsManager::fromEnv();
+            if ($request instanceof Request) {
+                $rateResponse = $rateCors->decorate($request, $rateResponse);
+            }
+            $rateResponse = (new SecurityHeaders())->decorate($rateResponse);
+            $this->compressResponse($wr, $rateResponse);
+            $connection->send($rateResponse->toWorkermanResponse());
         } catch (Throwable $e) {
             $responseStatus = 500;
             LoggerFactory::get(LogChannels::HTTP)->error(

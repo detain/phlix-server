@@ -47,6 +47,16 @@ final class ManagedWorkersConfigTest extends TestCase
         return $cfg;
     }
 
+    /**
+     * @return array<string, mixed>
+     */
+    private function markerDetectionConfig(): array
+    {
+        /** @var array<string, mixed> $cfg */
+        $cfg = require dirname(__DIR__, 3) . '/config/marker_detection.php';
+        return $cfg;
+    }
+
     public function test_process_config_registers_the_similarity_worker(): void
     {
         $proc = $this->processConfig();
@@ -64,6 +74,59 @@ final class ManagedWorkersConfigTest extends TestCase
 
         $this->assertArrayHasKey('media-asset', $proc);
         $this->assertTrue($proc['media-asset']['enabled'] ?? false);
+    }
+
+    public function test_process_config_registers_the_marker_detection_worker(): void
+    {
+        // SV-0.7 regression guard: the marker/intro-detection worker drains the
+        // file-based job queue of shows needing intro/outro detection. The generic
+        // test_every_enabled_process_entry… guard SKIPS disabled entries, so a
+        // regression flipping enabled=false (the exact "queue never drains" bug
+        // SV-0.7 fixed) would go uncaught without this dedicated assertion.
+        $proc = $this->processConfig();
+
+        $this->assertArrayHasKey(
+            'marker-detection',
+            $proc,
+            'config/process.php must register a marker-detection worker.'
+        );
+        $this->assertTrue(
+            $proc['marker-detection']['enabled'] ?? false,
+            'The marker-detection worker must be enabled or intro-detection jobs never drain.'
+        );
+        $this->assertArrayHasKey('count', $proc['marker-detection']);
+        $this->assertArrayHasKey('poll_seconds', $proc['marker-detection']);
+    }
+
+    public function test_marker_detection_worker_is_in_the_managed_worker_map(): void
+    {
+        $map = $this->managedWorkers();
+
+        $this->assertArrayHasKey('marker-detection', $map);
+        $this->assertSame(
+            \Phlix\Media\Markers\Detection\BackgroundDetectorWorker::class,
+            $map['marker-detection']
+        );
+    }
+
+    public function test_marker_detection_poll_seconds_matches_worker_interval(): void
+    {
+        // Coherence guard: config/process.php pins poll_seconds to
+        // config/marker_detection.php worker_interval "in a comment" — assert the
+        // invariant so the two configs cannot silently drift apart.
+        $proc = $this->processConfig();
+        $markerCfg = $this->markerDetectionConfig();
+
+        $pollSeconds = $proc['marker-detection']['poll_seconds'] ?? null;
+        $workerInterval = $markerCfg['worker_interval'] ?? null;
+
+        $this->assertNotNull($pollSeconds, 'marker-detection must define poll_seconds.');
+        $this->assertSame(
+            $workerInterval,
+            $pollSeconds,
+            'process.php marker-detection poll_seconds must equal marker_detection.php '
+            . 'worker_interval (the config comment pins this invariant).'
+        );
     }
 
     public function test_similarity_jobs_config_has_expected_shape(): void

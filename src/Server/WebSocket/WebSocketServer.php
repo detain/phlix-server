@@ -14,6 +14,7 @@ namespace Phlix\Server\WebSocket;
 use Workerman\Worker;
 use Workerman\Connection\TcpConnection;
 use Workerman\Protocols\Http\Request;
+use Phlix\Common\Http\TrustedProxyResolver;
 use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Common\Logger\LogChannels;
 use Phlix\Common\RateLimit\RateLimiterInterface;
@@ -82,6 +83,16 @@ class WebSocketServer
      * @var RateLimiterInterface|null
      */
     private ?RateLimiterInterface $wsConnectLimiter = null;
+
+    /**
+     * Trusted-proxy-aware client-IP resolver for the WS-connect limiter key
+     * (SV-4.15 MEDIUM). Lazily built once per worker (immutable config, not
+     * request state). See {@see onWebSocketConnect()} for why the TCP peer alone
+     * is useless behind the loopback HAProxy front.
+     *
+     * @var TrustedProxyResolver|null
+     */
+    private ?TrustedProxyResolver $trustedProxyResolver = null;
 
     /**
      * Creates a new WebSocket server instance.
@@ -396,13 +407,29 @@ class WebSocketServer
         // response is sent, so the socket is not yet a WebSocket at the byte layer
         // and a raw close frame would be malformed/out-of-order — a TCP close is
         // the correct rejection at this stage.
+        //
+        // SV-4.15 MEDIUM: keying on $connection->getRemoteIp() alone is WRONG here.
+        // The :8097 WS worker is fronted by HAProxy over loopback (see
+        // deploy/haproxy.cfg) with NO PROXY-protocol, so getRemoteIp() is ALWAYS
+        // the proxy's loopback address for EVERY client — that would collapse the
+        // whole server into ONE 30/60s bucket and let the 30th handshake block
+        // everyone (an availability bug worse than no limit). Instead we derive the
+        // REAL client from the trusted upgrade-request headers (HAProxy/nginx set
+        // X-Forwarded-For / X-Real-IP), using the SAME trusted-proxy-aware
+        // resolution as the HTTP limiters. If the peer is not a trusted proxy the
+        // resolver safely falls back to the peer address.
         if ($this->wsConnectLimiter !== null) {
-            $remoteIp = $connection->getRemoteIp();
-            $state = $this->wsConnectLimiter->hit('ws_connect:' . $remoteIp);
+            $this->trustedProxyResolver ??= new TrustedProxyResolver();
+            $clientIp = $this->trustedProxyResolver->resolve(
+                $connection->getRemoteIp(),
+                self::upgradeHeader($request, 'x-forwarded-for'),
+                self::upgradeHeader($request, 'x-real-ip'),
+            );
+            $state = $this->wsConnectLimiter->hit('ws_connect:' . $clientIp);
             if ($state->limited) {
                 LoggerFactory::get(LogChannels::WEBSOCKET)->warning(
                     'WebSocket connect rate-limited',
-                    ['remote_ip' => $remoteIp, 'reset_at' => $state->resetAt],
+                    ['client_ip' => $clientIp, 'reset_at' => $state->resetAt],
                 );
                 $this->connections->remove($wsConnection->getId());
                 $connection->close();
@@ -423,6 +450,17 @@ class WebSocketServer
             $this->connections->remove($wsConnection->getId());
             $connection->close();
         }
+    }
+
+    /**
+     * Read a single header value from the parsed WS upgrade request as a string,
+     * or null when absent/non-scalar. {@see Request::header()} returns `mixed`,
+     * so we coerce defensively for the {@see TrustedProxyResolver}.
+     */
+    private static function upgradeHeader(Request $request, string $name): ?string
+    {
+        $value = $request->header($name);
+        return is_string($value) ? $value : null;
     }
 
     /**

@@ -20,9 +20,17 @@ use PHPUnit\Framework\TestCase;
  * {@see RateLimitProfiles::WS_CONNECT} limiter is already server-wide. Unlike the
  * HTTP surfaces (SV-4.15(f)/(g)), there is no HTTP response after the WS-upgrade
  * hook, so the central 429 mapping (SV-4.15(c)) does NOT apply: the check is
- * inline, keyed on the remote IP, runs BEFORE the auth gate, and on a trip
+ * inline, keyed on the TRUSTED client IP, runs BEFORE the auth gate, and on a trip
  * removes the pool wrapper + closes the connection WITHOUT throwing (a throw out
  * of onWebSocketConnect would trigger Workerman's Worker::stopAll()).
+ *
+ * SV-4.15 MEDIUM: the `:8097` worker is fronted by HAProxy over loopback with NO
+ * PROXY-protocol, so `$connection->getRemoteIp()` is ALWAYS the proxy's loopback
+ * address — keying on it alone would collapse EVERY client into one bucket. The
+ * hook therefore derives the real client from the trusted upgrade-request headers
+ * (X-Forwarded-For / X-Real-IP) via the same {@see \Phlix\Common\Http\TrustedProxyResolver}
+ * the HTTP limiters use, so distinct clients behind the loopback proxy get
+ * distinct buckets.
  *
  * @covers \Phlix\Server\WebSocket\WebSocketServer
  */
@@ -110,6 +118,24 @@ final class WsConnectRateLimitTest extends TestCase
             : "GET /?token=" . $token . " HTTP/1.1\r\nHost: localhost\r\n\r\n";
 
         return new \Workerman\Protocols\Http\Request($line);
+    }
+
+    /**
+     * Builds a REAL parsed WS upgrade Request with extra headers (e.g. the
+     * X-Forwarded-For / X-Real-IP a real HAProxy/nginx front injects).
+     *
+     * @param array<string, string> $headers
+     */
+    private function makeRequestWithHeaders(?string $token, array $headers): \Workerman\Protocols\Http\Request
+    {
+        $target = $token === null ? '/' : '/?token=' . $token;
+        $raw = "GET {$target} HTTP/1.1\r\nHost: localhost\r\n";
+        foreach ($headers as $name => $value) {
+            $raw .= "{$name}: {$value}\r\n";
+        }
+        $raw .= "\r\n";
+
+        return new \Workerman\Protocols\Http\Request($raw);
     }
 
     /**
@@ -227,5 +253,68 @@ final class WsConnectRateLimitTest extends TestCase
         self::assertCount(1, $connections);
         self::assertTrue($connections[0]->isAuthenticated());
         self::assertFalse($callTracker['close']);
+    }
+
+    /**
+     * SV-4.15 MEDIUM: behind the shipped loopback HAProxy front, EVERY client
+     * presents as the loopback peer, so keying on the peer would collapse them
+     * all into one bucket. With the trusted-proxy-aware derivation, the real
+     * client is read from the appended X-Forwarded-For entry, so an over-limit
+     * connect is keyed on the REAL client — not the shared loopback peer and not
+     * a forged leftmost value.
+     */
+    public function testLoopbackProxyDerivesClientFromForwardedFor(): void
+    {
+        $config = ['host' => '0.0.0.0', 'port' => 8097, 'jwt_secret' => $this->jwtSecret];
+        $server = new WebSocketServer($config);
+
+        $limiter = $this->makeLimiter(true);
+        $server->setWsConnectLimiter($limiter);
+
+        // Peer is the HAProxy loopback; XFF = <forged>, <real client appended>.
+        $callTracker = [];
+        $mockConnection = $this->createMockTcpConnection('127.0.0.1', $callTracker);
+
+        $server->onConnect($mockConnection);
+        $request = $this->makeRequestWithHeaders(
+            $this->jwtHandler->createAccessToken('user-x'),
+            ['X-Forwarded-For' => '10.9.9.9, 203.0.113.88'],
+        );
+        $server->onWebSocketConnect($mockConnection, $request);
+
+        self::assertTrue($callTracker['close']);
+        self::assertSame(['ws_connect:203.0.113.88'], $limiter->hits);
+    }
+
+    /**
+     * SV-4.15 MEDIUM: two DISTINCT real clients arriving through the SAME loopback
+     * proxy must land in DISTINCT buckets — the availability regression (one
+     * shared bucket blocking everyone) is closed. Both connects are under limit,
+     * so both survive, but the recorded keys differ per real client.
+     */
+    public function testDistinctRealClientsBehindLoopbackProxyGetDistinctBuckets(): void
+    {
+        $config = ['host' => '0.0.0.0', 'port' => 8097];
+        $server = new WebSocketServer($config);
+
+        $limiter = $this->makeLimiter(false);
+        $server->setWsConnectLimiter($limiter);
+
+        foreach (['203.0.113.1', '203.0.113.2'] as $client) {
+            $callTracker = [];
+            $conn = $this->createMockTcpConnection('127.0.0.1', $callTracker);
+            $server->onConnect($conn);
+            $server->onWebSocketConnect(
+                $conn,
+                $this->makeRequestWithHeaders(null, ['X-Forwarded-For' => $client]),
+            );
+        }
+
+        // Two distinct real-client buckets — NOT a single shared loopback bucket.
+        self::assertSame(
+            ['ws_connect:203.0.113.1', 'ws_connect:203.0.113.2'],
+            $limiter->hits,
+        );
+        self::assertCount(2, array_unique($limiter->hits));
     }
 }

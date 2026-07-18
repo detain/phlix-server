@@ -84,13 +84,14 @@ final class HubJwksController
      */
     public function handle(Request $request, array $params): Response
     {
-        // Public DoS guard keyed on the real client IP (X-Forwarded-For aware).
-        // A trip throws RateLimitException -> central 429 mapping (SV-4.15(c)).
-        // The route is an inline closure in Application that delegates to this
-        // method, so the throw propagates through the same dispatch path the
-        // central mapping catches.
+        // Public DoS guard keyed on the TRUSTED client IP (trusted-proxy-aware;
+        // a forged X-Forwarded-For can no longer mint a fresh bucket — SV-4.15
+        // HIGH). A trip throws RateLimitException -> central 429 mapping
+        // (SV-4.15(c)). The route is an inline closure in Application that
+        // delegates to this method, so the throw propagates through the same
+        // dispatch path the central mapping catches.
         if ($this->limiter !== null) {
-            $state = $this->limiter->hit('jwks:' . $request->getClientIp());
+            $state = $this->limiter->hit('jwks:' . $request->getTrustedClientIp());
             if ($state->limited) {
                 throw new RateLimitException($state->resetAt, $state->remaining);
             }

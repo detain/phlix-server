@@ -83,6 +83,42 @@ class RequestTest extends TestCase
 
         $request = Request::fromGlobals();
 
+        // getClientIp() is the RAW, untrusted leftmost XFF entry (kept for
+        // non-security display/logging only).
         $this->assertEquals('192.168.1.1', $request->getClientIp());
+    }
+
+    /**
+     * SV-4.15 HIGH: getTrustedClientIp() is trusted-proxy-aware. Behind the
+     * loopback proxy the rightmost (appended) XFF entry is the real client; the
+     * forged leftmost value is ignored.
+     *
+     * @covers \Phlix\Server\Http\Request::getTrustedClientIp
+     */
+    public function testGetTrustedClientIpReturnsRealClientNotForgedLeftmost(): void
+    {
+        $_SERVER['HTTP_X_FORWARDED_FOR'] = '192.168.1.1, 203.0.113.9';
+        $_SERVER['REMOTE_ADDR'] = '127.0.0.1';
+
+        $request = Request::fromGlobals();
+
+        // Rightmost/appended entry (the address nginx observed) — NOT the forged
+        // leftmost 192.168.1.1.
+        $this->assertEquals('203.0.113.9', $request->getTrustedClientIp());
+    }
+
+    /**
+     * A direct (non-loopback) peer must ignore a client-supplied X-Forwarded-For.
+     *
+     * @covers \Phlix\Server\Http\Request::getTrustedClientIp
+     */
+    public function testGetTrustedClientIpIgnoresXffFromUntrustedPeer(): void
+    {
+        $_SERVER['HTTP_X_FORWARDED_FOR'] = '1.2.3.4';
+        $_SERVER['REMOTE_ADDR'] = '198.51.100.23';
+
+        $request = Request::fromGlobals();
+
+        $this->assertEquals('198.51.100.23', $request->getTrustedClientIp());
     }
 }

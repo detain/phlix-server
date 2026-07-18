@@ -14,16 +14,19 @@ use Phlix\Server\Http\Request;
 use PHPUnit\Framework\TestCase;
 
 /**
- * SV-4.15(f): per-surface rate limiting wired into {@see AuthController::register}
- * and {@see AuthController::refresh}.
+ * SV-4.15(f) + HIGH fix: per-surface rate limiting wired into
+ * {@see AuthController::register} and {@see AuthController::refresh}.
  *
- * Each surface is keyed on the REAL client IP via {@see Request::getClientIp()}
- * (X-Forwarded-For aware) — NOT the stale `$_SERVER['REMOTE_ADDR']` that
- * {@see AuthManager::getClientIp()} reads (unreliable under Workerman's resident
- * workers). An over-limit request throws {@see RateLimitException}, which the
- * central mapping (SV-4.15(c), {@see Application::rateLimitResponse()}) turns
- * into a 429 + `Retry-After` + `code=rate_limited` response. An under-limit
- * request proceeds to {@see AuthManager} normally.
+ * Each surface is keyed on the TRUSTED client IP via
+ * {@see Request::getTrustedClientIp()} — trusted-proxy-aware, so a forged
+ * `X-Forwarded-For` can no longer mint a fresh bucket. The shipped nginx front
+ * APPENDS the connecting address to XFF (`$proxy_add_x_forwarded_for`) over a
+ * loopback upstream, so the peer Phlix sees is `127.0.0.1` and the REAL client is
+ * the RIGHTMOST XFF entry; any client-forged value sits to its LEFT and is
+ * ignored. An over-limit request throws {@see RateLimitException}, which the
+ * central mapping (SV-4.15(c), {@see Application::rateLimitResponse()}) turns into
+ * a 429 + `Retry-After` + `code=rate_limited` response. An under-limit request
+ * proceeds to {@see AuthManager} normally.
  *
  * @covers \Phlix\Server\Http\Controllers\AuthController
  */
@@ -69,6 +72,22 @@ final class AuthControllerRateLimitTest extends TestCase
     }
 
     /**
+     * Build a request as it arrives from the shipped nginx front: the loopback
+     * upstream is the peer, and `X-Forwarded-For` is `<client-supplied>,
+     * <appended-real-client>` (nginx appends `$remote_addr`).
+     *
+     * @param array<string, mixed> $body
+     */
+    private function proxiedRequest(string $xff, array $body, string $peer = '127.0.0.1'): Request
+    {
+        $request = new Request();
+        $request->headers = ['X-Forwarded-For' => $xff];
+        $request->remoteIp = $peer;
+        $request->body = $body;
+        return $request;
+    }
+
+    /**
      * Assert the caught exception yields the canonical 429 envelope when run
      * through the shared central mapping helper (SV-4.15(c)).
      */
@@ -99,14 +118,12 @@ final class AuthControllerRateLimitTest extends TestCase
         $limiter = $this->makeLimiter(true);
         $controller = new AuthController($authManager, $limiter, $this->makeLimiter(false));
 
-        $request = new Request();
-        $request->headers = ['X-Forwarded-For' => '203.0.113.9'];
-        $request->remoteIp = '10.0.0.1';
-        $request->body = [
+        // Forged leftmost (198.51.100.66) + real client appended by nginx.
+        $request = $this->proxiedRequest('198.51.100.66, 203.0.113.9', [
             'username' => 'alice',
             'email' => 'alice@example.com',
             'password' => 'hunter2hunter2',
-        ];
+        ]);
 
         try {
             $controller->register($request, []);
@@ -115,7 +132,8 @@ final class AuthControllerRateLimitTest extends TestCase
             $this->assertProduces429($e);
         }
 
-        // Key is built from getClientIp() (X-Forwarded-For), NOT remoteIp/$_SERVER.
+        // Key is the TRUSTED (rightmost/appended) client IP, NOT the forged
+        // leftmost value and NOT the loopback peer.
         self::assertSame(['register:203.0.113.9'], $limiter->hits);
     }
 
@@ -134,13 +152,11 @@ final class AuthControllerRateLimitTest extends TestCase
         $limiter = $this->makeLimiter(false);
         $controller = new AuthController($authManager, $limiter, $this->makeLimiter(false));
 
-        $request = new Request();
-        $request->headers = ['X-Forwarded-For' => '198.51.100.7'];
-        $request->body = [
+        $request = $this->proxiedRequest('198.51.100.7', [
             'username' => 'alice',
             'email' => 'alice@example.com',
             'password' => 'hunter2hunter2',
-        ];
+        ]);
 
         $response = $controller->register($request, []);
 
@@ -148,36 +164,93 @@ final class AuthControllerRateLimitTest extends TestCase
         self::assertSame(['register:198.51.100.7'], $limiter->hits);
     }
 
-    public function testRegisterKeyDerivesFromForwardedForNotServerGlobals(): void
+    /**
+     * SV-4.15 HIGH: a forged leftmost X-Forwarded-For no longer resets the bucket.
+     * Two requests from the SAME real client but DIFFERENT forged leftmost values
+     * must build the SAME key — the spoof cannot hand out a fresh budget.
+     */
+    public function testForgedLeftmostXffDoesNotMintFreshBucket(): void
     {
-        $saved = $_SERVER['REMOTE_ADDR'] ?? null;
-        $_SERVER['REMOTE_ADDR'] = '192.0.2.55'; // the STALE source we must NOT use
+        $authManager = $this->createMock(AuthManager::class);
+        $limiter = $this->makeLimiter(true);
+        $controller = new AuthController($authManager, $limiter, $this->makeLimiter(false));
 
-        try {
-            $authManager = $this->createMock(AuthManager::class);
-            $limiter = $this->makeLimiter(true);
-            $controller = new AuthController($authManager, $limiter, $this->makeLimiter(false));
+        $body = ['username' => 'a', 'email' => 'a@b.c', 'password' => 'pw123456'];
 
-            $request = new Request();
-            $request->headers = ['X-Forwarded-For' => '203.0.113.200'];
-            $request->remoteIp = '10.9.9.9';
-            $request->body = ['username' => 'a', 'email' => 'a@b.c', 'password' => 'pw'];
-
+        foreach (['1.2.3.4', '9.9.9.9', 'not-an-ip'] as $forged) {
             try {
-                $controller->register($request, []);
+                $controller->register(
+                    $this->proxiedRequest($forged . ', 203.0.113.50', $body),
+                    [],
+                );
             } catch (RateLimitException) {
-                // expected
-            }
-
-            self::assertSame(['register:203.0.113.200'], $limiter->hits);
-            self::assertStringNotContainsString('192.0.2.55', $limiter->hits[0]);
-        } finally {
-            if ($saved === null) {
-                unset($_SERVER['REMOTE_ADDR']);
-            } else {
-                $_SERVER['REMOTE_ADDR'] = $saved;
+                // expected on every attempt
             }
         }
+
+        // All three collapse onto the one real-client bucket.
+        self::assertSame(
+            ['register:203.0.113.50', 'register:203.0.113.50', 'register:203.0.113.50'],
+            $limiter->hits,
+        );
+    }
+
+    /**
+     * A trusted-proxy hop in the chain (an extra loopback entry, as a
+     * two-hop proxy would append) is SKIPPED right-to-left — the first untrusted
+     * address is still the real client.
+     */
+    public function testTrustedProxyHopInChainIsSkipped(): void
+    {
+        $authManager = $this->createMock(AuthManager::class);
+        $limiter = $this->makeLimiter(true);
+        $controller = new AuthController($authManager, $limiter, $this->makeLimiter(false));
+
+        // client -> edge -> loopback: XFF ends with a trusted 127.0.0.1 hop.
+        $request = $this->proxiedRequest('203.0.113.77, 127.0.0.1', [
+            'username' => 'a',
+            'email' => 'a@b.c',
+            'password' => 'pw123456',
+        ]);
+
+        try {
+            $controller->register($request, []);
+        } catch (RateLimitException) {
+            // expected
+        }
+
+        self::assertSame(['register:203.0.113.77'], $limiter->hits);
+    }
+
+    /**
+     * Key-length safety (SV-4.15 HIGH amplifier): a malformed/oversized forwarded
+     * value can never produce a key that would overflow the VARCHAR(191)
+     * `rate_limit_buckets.rate_key` PK. The resolver falls back to a validated
+     * peer address (loopback here), so the whole key stays short.
+     */
+    public function testOversizedForwardedValueCannotOverflowKey(): void
+    {
+        $authManager = $this->createMock(AuthManager::class);
+        $limiter = $this->makeLimiter(true);
+        $controller = new AuthController($authManager, $limiter, $this->makeLimiter(false));
+
+        // A single 5000-char garbage XFF entry (non-IP) with a loopback peer.
+        $request = $this->proxiedRequest(str_repeat('A', 5000), [
+            'username' => 'a',
+            'email' => 'a@b.c',
+            'password' => 'pw123456',
+        ]);
+
+        try {
+            $controller->register($request, []);
+        } catch (RateLimitException) {
+            // expected
+        }
+
+        self::assertCount(1, $limiter->hits);
+        self::assertLessThanOrEqual(191, strlen($limiter->hits[0]));
+        // Non-IP garbage is rejected; the resolver falls back to the peer.
+        self::assertSame('register:127.0.0.1', $limiter->hits[0]);
     }
 
     // --- refresh -------------------------------------------------------------
@@ -190,9 +263,7 @@ final class AuthControllerRateLimitTest extends TestCase
         $limiter = $this->makeLimiter(true);
         $controller = new AuthController($authManager, $this->makeLimiter(false), $limiter);
 
-        $request = new Request();
-        $request->headers = ['X-Forwarded-For' => '203.0.113.42'];
-        $request->body = ['refresh_token' => 'some-refresh-token'];
+        $request = $this->proxiedRequest('203.0.113.42', ['refresh_token' => 'some-refresh-token']);
 
         try {
             $controller->refresh($request, []);
@@ -220,9 +291,7 @@ final class AuthControllerRateLimitTest extends TestCase
         $limiter = $this->makeLimiter(false);
         $controller = new AuthController($authManager, $this->makeLimiter(false), $limiter);
 
-        $request = new Request();
-        $request->headers = ['X-Forwarded-For' => '198.51.100.9'];
-        $request->body = ['refresh_token' => 'some-refresh-token'];
+        $request = $this->proxiedRequest('198.51.100.9', ['refresh_token' => 'some-refresh-token']);
 
         $response = $controller->refresh($request, []);
 

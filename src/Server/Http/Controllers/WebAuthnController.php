@@ -86,15 +86,28 @@ final class WebAuthnController
 
     /**
      * Build the rate-limit identifier: the submitted username when present, else
-     * the real client IP (X-Forwarded-For aware) — NOT $_SERVER, which is stale
+     * the TRUSTED client IP (trusted-proxy-aware; a forged X-Forwarded-For can no
+     * longer mint a fresh bucket — SV-4.15 HIGH) — NOT $_SERVER, which is stale
      * under Workerman's resident workers. Keying on the username throttles
-     * credential-enumeration attempts against a single account.
+     * credential-verification attempts against a single account.
+     *
+     * SV-4.15 Finding 3 (LOW, accepted tradeoff): per-username keying does NOT
+     * throttle HORIZONTAL enumeration — a spray of one attempt each across many
+     * usernames from a single IP hits a fresh bucket per username. A secondary
+     * per-IP cap is deliberately NOT added here: at the surface's tight 10/60s
+     * budget it would false-positive on legitimate shared-IP / NAT'd households
+     * (multiple family members behind one public IP), and a correctly-budgeted
+     * separate per-IP limiter would need its own profile + DI wiring beyond this
+     * fix's scope. WebAuthn "start" is a low-value enumeration oracle (it only
+     * reveals whether a username has passkeys); the account-scoped throttle plus
+     * the existing per-IP `login` limiter (DbLoginRateLimitStore) are judged
+     * sufficient. Revisit if enumeration abuse is observed.
      */
     private function limitIdentifier(mixed $username, Request $request): string
     {
         return (is_string($username) && $username !== '')
             ? $username
-            : $request->getClientIp();
+            : $request->getTrustedClientIp();
     }
 
     /**

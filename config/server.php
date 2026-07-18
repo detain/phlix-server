@@ -176,4 +176,18 @@ return [
         }
         return $limits;
     })(),
+
+    // SV-4.15 (HIGH fix): trusted-proxy set used to derive the REAL client IP for
+    // rate-limit keys from X-Forwarded-For / X-Real-IP. The shipped nginx +
+    // HAProxy front Phlix over loopback (nginx -> 127.0.0.1:8080, HAProxy ->
+    // 127.0.0.1:8097) and APPEND the connecting address to XFF, so the DEFAULT
+    // trusted set is LOOPBACK ONLY: TrustedProxyResolver then walks XFF
+    // right-to-left past the loopback hop and returns the first untrusted entry
+    // (the real client the edge proxy observed), ignoring any client-forged
+    // leftmost value. Override with a comma-separated IP/CIDR list via the bare
+    // TRUSTED_PROXIES env when a NON-loopback proxy fronts the server. Do NOT add
+    // RFC1918 for this loopback-proxy deployment: it would make a LAN client's own
+    // address be skipped as a "proxy" and re-expose the forged hop. This key is
+    // introspection/documentation only — the resolver reads the env itself.
+    'trusted_proxies' => \Phlix\Common\Http\TrustedProxyResolver::configuredProxies(),
 ];

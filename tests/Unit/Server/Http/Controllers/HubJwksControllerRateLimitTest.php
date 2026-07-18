@@ -19,8 +19,9 @@ use PHPUnit\Framework\TestCase;
  *
  * The public JWKS endpoint is a cache-frontable, low-value DoS surface, so it
  * uses the worker-local in-memory {@see RateLimitProfiles::JWKS} limiter (not a
- * shared DB backend). The key is the real client IP via
- * {@see Request::getClientIp()} (X-Forwarded-For aware). An over-limit request
+ * shared DB backend). The key is the TRUSTED client IP via
+ * {@see Request::getTrustedClientIp()} (trusted-proxy-aware; a forged
+ * X-Forwarded-For cannot mint a fresh bucket — SV-4.15 HIGH). An over-limit request
  * throws {@see RateLimitException}, which the central mapping (SV-4.15(c),
  * {@see Application::rateLimitResponse()}) turns into a 429 + `Retry-After` +
  * `code=rate_limited` response — the route is an inline closure in Application
@@ -80,9 +81,10 @@ final class HubJwksControllerRateLimitTest extends TestCase
         $limiter = $this->makeLimiter(true);
         $controller = new HubJwksController($hubClient, $limiter);
 
+        // nginx front: loopback peer + forged leftmost, real client appended.
         $request = new Request();
-        $request->headers = ['X-Forwarded-For' => '203.0.113.77'];
-        $request->remoteIp = '10.0.0.1';
+        $request->headers = ['X-Forwarded-For' => '10.0.0.1, 203.0.113.77'];
+        $request->remoteIp = '127.0.0.1';
 
         try {
             $controller->handle($request, []);
@@ -102,7 +104,8 @@ final class HubJwksControllerRateLimitTest extends TestCase
             self::assertSame('rate_limited', $body['code'] ?? null);
         }
 
-        // Key derives from getClientIp() (X-Forwarded-For), NOT remoteIp/$_SERVER.
+        // Key is the trusted (appended) client IP, NOT the forged leftmost value
+        // and NOT the loopback peer.
         self::assertSame(['jwks:203.0.113.77'], $limiter->hits);
     }
 
@@ -118,6 +121,7 @@ final class HubJwksControllerRateLimitTest extends TestCase
 
         $request = new Request();
         $request->headers = ['X-Forwarded-For' => '198.51.100.3'];
+        $request->remoteIp = '127.0.0.1';
 
         $response = $controller->handle($request, []);
 

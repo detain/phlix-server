@@ -125,10 +125,12 @@ class AuthController
      */
     public function register(Request $request, array $params): Response
     {
-        // Brute-force / spam guard keyed on the real client IP (X-Forwarded-For
-        // aware) — NOT $_SERVER, which is stale under Workerman's resident
-        // workers. A trip throws RateLimitException -> central 429 mapping.
-        $this->enforceRateLimit($this->registerLimiter, 'register:' . $request->getClientIp());
+        // Brute-force / spam guard keyed on the TRUSTED client IP
+        // (trusted-proxy-aware; a forged X-Forwarded-For can no longer mint a
+        // fresh bucket — SV-4.15 HIGH) — NOT $_SERVER, which is stale under
+        // Workerman's resident workers. A trip throws RateLimitException ->
+        // central 429 mapping.
+        $this->enforceRateLimit($this->registerLimiter, 'register:' . $request->getTrustedClientIp());
 
         $data = $request->body;
         $username = $data['username'] ?? null;
@@ -268,10 +270,11 @@ class AuthController
      */
     public function refresh(Request $request, array $params): Response
     {
-        // Throttle refresh churn per real client IP (X-Forwarded-For aware) —
+        // Throttle refresh churn per TRUSTED client IP (trusted-proxy-aware; a
+        // forged X-Forwarded-For can no longer reset the bucket — SV-4.15 HIGH) —
         // NOT $_SERVER, which is stale under Workerman's resident workers. A
         // trip throws RateLimitException -> central 429 mapping.
-        $this->enforceRateLimit($this->refreshLimiter, 'refresh:' . $request->getClientIp());
+        $this->enforceRateLimit($this->refreshLimiter, 'refresh:' . $request->getTrustedClientIp());
 
         $data = $request->body;
         $refreshToken = $data['refresh_token'] ?? null;

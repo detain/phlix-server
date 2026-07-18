@@ -21,11 +21,12 @@ use PHPUnit\Framework\TestCase;
  * {@see WebAuthnController::finishAuthentication}.
  *
  * Both ceremonies are keyed on the submitted username (throttling
- * credential-enumeration against a single account), falling back to the real
- * client IP via {@see Request::getClientIp()} (X-Forwarded-For aware, NOT the
- * stale `$_SERVER['REMOTE_ADDR']`) when no username is present. An over-limit
- * request throws {@see RateLimitException}, which the central mapping
- * (SV-4.15(c)) turns into a 429 + `Retry-After` + `code=rate_limited`.
+ * credential-enumeration against a single account), falling back to the TRUSTED
+ * client IP via {@see Request::getTrustedClientIp()} (trusted-proxy-aware; a
+ * forged X-Forwarded-For cannot mint a fresh bucket — SV-4.15 HIGH) when no
+ * username is present. An over-limit request throws {@see RateLimitException},
+ * which the central mapping (SV-4.15(c)) turns into a 429 + `Retry-After` +
+ * `code=rate_limited`.
  *
  * @covers \Phlix\Server\Http\Controllers\WebAuthnController
  */
@@ -137,9 +138,10 @@ final class WebAuthnControllerRateLimitTest extends TestCase
         $limiter = $this->makeLimiter(true);
         $controller = new WebAuthnController($webauthn, $authManager, $limiter, $this->makeLimiter(false));
 
+        // nginx front: loopback peer + forged leftmost, real client appended.
         $request = new Request();
-        $request->headers = ['X-Forwarded-For' => '203.0.113.77'];
-        $request->remoteIp = '10.0.0.5';
+        $request->headers = ['X-Forwarded-For' => '10.0.0.5, 203.0.113.77'];
+        $request->remoteIp = '127.0.0.1';
         $request->body = []; // no username
 
         try {
@@ -148,6 +150,7 @@ final class WebAuthnControllerRateLimitTest extends TestCase
             // expected — trips on the IP-keyed bucket before the missing-field 400.
         }
 
+        // Trusted (appended) client IP, NOT the forged leftmost or loopback peer.
         self::assertSame(['webauthn_start:203.0.113.77'], $limiter->hits);
     }
 

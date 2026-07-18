@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Server\Http;
 
+use Phlix\Common\Http\TrustedProxyResolver;
 use Workerman\Connection\TcpConnection;
 use Workerman\Protocols\Http\Request as WorkermanRequest;
 
@@ -367,14 +368,18 @@ class Request
     }
 
     /**
-     * Gets the client's real IP address.
+     * Gets the raw, UNTRUSTED client IP from the leftmost `X-Forwarded-For` entry.
      *
-     * Respects X-Forwarded-For header when behind a proxy or
-     * load balancer, returning the first IP in the chain.
+     * WARNING: the leftmost XFF entry is fully client-controlled (the shipped
+     * nginx front APPENDS the connecting address rather than overwriting the
+     * header), so this value is TRIVIALLY SPOOFABLE. It MUST NOT be used for any
+     * security decision — rate-limit keys, authorization, audit trust, etc. Use
+     * {@see getTrustedClientIp()} for anything that must resist forgery. This
+     * accessor is retained only for non-security, best-effort display/logging.
      *
-     * @return string The client's IP address
+     * @return string The client-supplied (untrusted) IP, or the peer address.
      *
-     * @description Handles proxy scenarios by checking X-Forwarded-For header.
+     * @description Returns the leftmost X-Forwarded-For entry (untrusted).
      */
     public function getClientIp(): string
     {
@@ -385,6 +390,32 @@ class Request
             return trim($ips[0]);
         }
         return $this->remoteIp;
+    }
+
+    /**
+     * Resolve the REAL client IP for security-sensitive keys (rate limiting) in a
+     * trusted-proxy-aware way (SV-4.15 HIGH fix).
+     *
+     * Delegates to {@see TrustedProxyResolver}, which walks `X-Forwarded-For`
+     * RIGHT-TO-LEFT past trusted-proxy hops (default: loopback, matching the
+     * shipped nginx/HAProxy front) and returns the first untrusted address — so a
+     * forged leftmost XFF value can no longer mint a fresh rate-limit bucket. The
+     * returned value is always a validated IP (≤45 chars), so it can never
+     * overflow the `rate_limit_buckets.rate_key` VARCHAR(191) primary key.
+     *
+     * @param TrustedProxyResolver|null $resolver Optional resolver (inject a
+     *        configured one in tests); defaults to the `TRUSTED_PROXIES`-env one.
+     *
+     * @return string The trusted client IP.
+     */
+    public function getTrustedClientIp(?TrustedProxyResolver $resolver = null): string
+    {
+        $resolver ??= new TrustedProxyResolver();
+        return $resolver->resolve(
+            $this->remoteIp,
+            $this->getHeader('X-Forwarded-For'),
+            $this->getHeader('X-Real-IP'),
+        );
     }
 
     /**

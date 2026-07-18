@@ -47,7 +47,4 @@ ALTER TABLE `library_scan_jobs`
             'clear_artwork',
             'delete_all'
         ) NOT NULL DEFAULT 'scan'
-        COMMENT 'scan=incremental, rescan=purge+rescan, metadata=background metadata match, '
-            'metadata_refresh=force re-match already-matched items, prune=drop items whose files are gone, '
-            'clear_metadata=reset items to filesystem basics, clear_artwork=delete locally cached artwork, '
-            'delete_all=destructive remove every item in the library';
+        COMMENT 'scan=incremental, rescan=purge+rescan, metadata=background metadata match, metadata_refresh=force re-match already-matched items, prune=drop items whose files are gone, clear_metadata=reset items to filesystem basics, clear_artwork=delete locally cached artwork, delete_all=destructive remove every item in the library';

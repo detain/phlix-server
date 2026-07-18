@@ -393,7 +393,6 @@ class MetadataHttpClient
 
         $body = curl_exec($ch);
         $statusCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        curl_close($ch);
 
         if (!is_string($body)) {
             return null;

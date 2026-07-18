@@ -131,7 +131,6 @@ final class LastfmApiClient implements LastfmApiClientInterface
 
         $raw = curl_exec($ch);
         $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        curl_close($ch);
 
         if (!is_string($raw) || $httpCode >= 400) {
             return false;
@@ -339,7 +338,6 @@ final class LastfmApiClient implements LastfmApiClientInterface
         $raw = curl_exec($ch);
         $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
         $curlError = curl_error($ch);
-        curl_close($ch);
 
         if ($raw === false) {
             return ['error' => 'cURL error: ' . ($curlError ?: 'Unknown error')];

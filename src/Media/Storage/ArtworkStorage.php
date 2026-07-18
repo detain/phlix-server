@@ -614,7 +614,6 @@ class ArtworkStorage
 
         $fp = fopen($tmpFile, 'wb');
         if ($fp === false) {
-            curl_close($ch);
             $this->cleanupTemp($tmpFile);
             throw new \RuntimeException('Failed to open temp file for artwork download');
         }
@@ -632,7 +631,6 @@ class ArtworkStorage
         $success = curl_exec($ch);
         $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
         $error = curl_error($ch);
-        curl_close($ch);
         fclose($fp);
 
         if (!$success || $httpCode !== 200) {

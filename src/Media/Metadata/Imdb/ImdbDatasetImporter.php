@@ -661,7 +661,6 @@ class ImdbDatasetImporter
 
             $fh = fopen($destination, 'wb');
             if ($fh === false) {
-                curl_close($ch);
                 return false;
             }
 
@@ -676,7 +675,6 @@ class ImdbDatasetImporter
             $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
 
             fclose($fh);
-            curl_close($ch);
 
             if ($success !== false && $httpCode === 200) {
                 return true;

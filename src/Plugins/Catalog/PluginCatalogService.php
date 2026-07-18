@@ -500,7 +500,6 @@ final class PluginCatalogService
         $body = curl_exec($ch);
         $status = curl_getinfo($ch, CURLINFO_HTTP_CODE);
         $curlError = curl_error($ch);
-        curl_close($ch);
 
         if ($body === false) {
             throw new \RuntimeException('request failed or timed out: ' . ($curlError ?: 'Unknown error'));

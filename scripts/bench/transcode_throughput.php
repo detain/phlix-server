@@ -292,7 +292,6 @@ function getMediaFilePath(string $server, string $mediaId): ?string
 
     $response = curl_exec($ch);
     $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    curl_close($ch);
 
     if ($httpCode !== 200 || !is_string($response)) {
         return null;

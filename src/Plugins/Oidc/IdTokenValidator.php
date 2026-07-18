@@ -315,7 +315,6 @@ final class IdTokenValidator
 
         $content = curl_exec($ch);
         $curlError = curl_error($ch);
-        curl_close($ch);
 
         if ($content === false || $content === true) {
             throw new RuntimeException('Failed to fetch JWKS from: ' . $jwksUri . ': ' . $curlError);

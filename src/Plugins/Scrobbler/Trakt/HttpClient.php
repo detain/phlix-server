@@ -352,7 +352,6 @@ class HttpClient implements HttpClientInterface
         $raw = curl_exec($ch);
         $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
         $curlError = curl_error($ch);
-        curl_close($ch);
 
         if ($raw === false) {
             throw new TraktApiException('cURL error: ' . ($curlError !== '' ? $curlError : 'Unknown error'));

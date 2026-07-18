@@ -225,7 +225,6 @@ class HttpClient implements HttpClientInterface
         $statusCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
         $headerSize = curl_getinfo($ch, CURLINFO_HEADER_SIZE);
         $curlError = curl_error($ch);
-        curl_close($ch);
 
         if ($rawResponse === false || $rawResponse === true) {
             throw new RuntimeException("cURL error: $curlError");

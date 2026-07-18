@@ -269,7 +269,6 @@ function streamRequest(string $server, string $mediaId, string $quality, int $ti
 
     $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
     $error = curl_error($ch);
-    curl_close($ch);
 
     $success = $httpCode >= 200 && $httpCode < 300;
 

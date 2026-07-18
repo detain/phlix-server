@@ -607,7 +607,6 @@ class PhotoController
         $thumbHeight = max(1, $height);
         $thumb = @imagecreatetruecolor($thumbWidth, $thumbHeight);
         if ($thumb === false) {
-            imagedestroy($source);
             return null;
         }
 
@@ -631,8 +630,6 @@ class PhotoController
         );
 
         if ($resampleResult === false) {
-            imagedestroy($source);
-            imagedestroy($thumb);
             return null;
         }
 
@@ -640,9 +637,6 @@ class PhotoController
         ob_start();
         imagejpeg($thumb, null, 85);
         $data = ob_get_clean();
-
-        imagedestroy($source);
-        imagedestroy($thumb);
 
         return $data !== false ? $data : null;
     }

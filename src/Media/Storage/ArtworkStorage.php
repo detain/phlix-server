@@ -795,13 +795,11 @@ class ArtworkStorage
 
         // Guard against invalid computed dimensions (PHPStan doesn't track the math)
         if ($width < 1 || $height < 1) {
-            imagedestroy($source);
             return null;
         }
 
         $canvas = @imagecreatetruecolor($width, $height);
         if ($canvas === false) {
-            imagedestroy($source);
             return null;
         }
 
@@ -825,8 +823,6 @@ class ArtworkStorage
         );
 
         if ($resampled === false) {
-            imagedestroy($source);
-            imagedestroy($canvas);
             return null;
         }
 
@@ -834,9 +830,6 @@ class ArtworkStorage
         ob_start();
         imagejpeg($canvas, null, self::JPEG_QUALITY);
         $jpegData = ob_get_clean();
-
-        imagedestroy($source);
-        imagedestroy($canvas);
 
         if ($jpegData === false || $jpegData === '') {
             return null;
@@ -882,7 +875,6 @@ class ArtworkStorage
 
         $canvas = @imagecreatetruecolor($width, $height);
         if ($canvas === false) {
-            imagedestroy($source);
             return null;
         }
 
@@ -898,9 +890,6 @@ class ArtworkStorage
         ob_start();
         imagejpeg($canvas, null, self::JPEG_QUALITY);
         $jpegData = ob_get_clean();
-
-        imagedestroy($source);
-        imagedestroy($canvas);
 
         if ($jpegData === false || $jpegData === '') {
             return null;

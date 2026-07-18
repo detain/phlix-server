@@ -285,7 +285,6 @@ class AvatarStorage
 
         $canvas = @imagecreatetruecolor(self::TARGET_SIZE, self::TARGET_SIZE);
         if ($canvas === false) {
-            imagedestroy($source);
             throw new \RuntimeException('Failed to create avatar canvas');
         }
 
@@ -309,8 +308,6 @@ class AvatarStorage
         );
 
         if ($resampled === false) {
-            imagedestroy($source);
-            imagedestroy($canvas);
             throw new \RuntimeException('Failed to resample avatar image');
         }
 
@@ -318,9 +315,6 @@ class AvatarStorage
         ob_start();
         imagejpeg($canvas, null, 85);
         $jpegData = ob_get_clean();
-
-        imagedestroy($source);
-        imagedestroy($canvas);
 
         if ($jpegData === false || $jpegData === '') {
             throw new \RuntimeException('Failed to encode avatar as JPEG');

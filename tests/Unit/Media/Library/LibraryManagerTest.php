@@ -103,7 +103,8 @@ class LibraryManagerTest extends TestCase
         mkdir($rootDir, 0755, true);
         $survivingPath = tempnam($rootDir, 'phlix_rescan_keep_');
         $this->assertIsString($survivingPath);
-        $gonePath = '/nonexistent/path/removed-file.mkv';
+        // A genuinely-removed file that lived UNDER the accessible root.
+        $gonePath = $rootDir . '/removed-file.mkv';
 
         $queries = [];
         $db = $this->makeDb($queries, [
@@ -246,14 +247,17 @@ class LibraryManagerTest extends TestCase
     }
 
     /**
-     * Defensive guard: even if a configured root path happens to resolve to a
-     * directory, if the walk finds ZERO accessible leaf files while the DB still
-     * holds leaf items, the media is effectively unavailable — pruning is skipped
-     * rather than wiping the whole library.
+     * A single accessible root that has been legitimately emptied (the directory
+     * still exists / is mounted, but every file it once held is gone) must prune
+     * ALL of its now-missing leaf items — the storage IS reachable, the media was
+     * genuinely removed. This proves the prior "emptied library never prunes"
+     * regression is fixed: per-item-root scoping replaces the old blunt
+     * presentCount===0 heuristic that skipped pruning here.
      */
-    public function testRescanSkipsPruneWhenNoLeafFileIsAccessible(): void
+    public function testRescanPrunesAllItemsWhenAccessibleRootLegitimatelyEmptied(): void
     {
-        // Root exists (empty dir) but none of the DB items' files are present.
+        // Root exists (empty dir, i.e. mounted) but none of the DB items' files
+        // are present any more.
         $rootDir = sys_get_temp_dir() . '/phlix_rescan_root_' . uniqid();
         mkdir($rootDir, 0755, true);
 
@@ -271,7 +275,7 @@ class LibraryManagerTest extends TestCase
                 ['id' => 'gone-2', 'path' => $rootDir . '/gone-b.mkv'],
             ],
             'count_before' => 2,
-            'count_after' => 2,
+            'count_after' => 0,
         ]);
 
         $scanner = $this->createMock(MediaScanner::class);
@@ -282,10 +286,78 @@ class LibraryManagerTest extends TestCase
 
         $result = $manager->rescanLibrary('lib-1');
 
-        $this->assertSame([], $this->deletes($queries), 'no accessible file → no DELETE');
-        $this->assertSame(0, $result->removed);
+        $deletes = $this->deletes($queries);
+        $this->assertContains(['DELETE FROM media_items WHERE id = ?', ['gone-1']], $deletes);
+        $this->assertContains(['DELETE FROM media_items WHERE id = ?', ['gone-2']], $deletes);
+        $this->assertSame(2, $result->removed);
 
         @rmdir($rootDir);
+    }
+
+    /**
+     * CRITICAL multi-root partial-mount data-loss guard. A library configured with
+     * two roots — root A mounted/accessible, root B unmounted — must prune only the
+     * genuinely-gone file UNDER the accessible root A, while EVERY item whose path
+     * lives under the unavailable root B is preserved (its storage is merely
+     * unreachable, not removed). Deleting B's items here would cascade through
+     * `ON DELETE CASCADE` into user_item_data / watch-history — silent partial
+     * data-loss the old ANY-root-accessible + presentCount heuristic allowed.
+     */
+    public function testRescanMultiRootPreservesItemsUnderUnavailableRoot(): void
+    {
+        // Root A: an accessible temp dir holding one present file; one path under
+        // A is genuinely gone.
+        $rootA = sys_get_temp_dir() . '/phlix_rescan_rootA_' . uniqid();
+        mkdir($rootA, 0755, true);
+        $presentA = tempnam($rootA, 'phlix_rescan_keep_');
+        $this->assertIsString($presentA);
+        $goneA = $rootA . '/gone-under-a.mkv';
+
+        // Root B: an unmounted / non-existent directory whose items are in the DB.
+        $rootB = '/nonexistent/unmounted/nas/root_' . uniqid();
+
+        $queries = [];
+        $db = $this->makeDb($queries, [
+            'library_row' => [
+                'id' => 'lib-1',
+                'name' => 'Movies',
+                'type' => 'video',
+                'paths' => json_encode([$rootA, $rootB]),
+                'options' => json_encode([]),
+            ],
+            'prune_rows' => [
+                ['id' => 'keepA', 'path' => $presentA],
+                ['id' => 'goneA', 'path' => $goneA],
+                ['id' => 'b1', 'path' => $rootB . '/show-a.mkv'],
+                ['id' => 'b2', 'path' => $rootB . '/show-b.mkv'],
+            ],
+            'count_before' => 4,
+            'count_after' => 3,
+        ]);
+
+        $scanner = $this->createMock(MediaScanner::class);
+        $watcher = $this->createMock(FolderWatcher::class);
+        $musicLibraryService = $this->createMock(MusicLibraryService::class);
+
+        $manager = new LibraryManager($db, $scanner, $watcher, $musicLibraryService);
+
+        $result = $manager->rescanLibrary('lib-1');
+
+        $deletes = $this->deletes($queries);
+
+        // The gone file UNDER the accessible root A is pruned.
+        $this->assertContains(['DELETE FROM media_items WHERE id = ?', ['goneA']], $deletes);
+        // The present file under root A is kept.
+        $this->assertNotContains(['DELETE FROM media_items WHERE id = ?', ['keepA']], $deletes);
+        // EVERY item under the unavailable root B is preserved.
+        $this->assertNotContains(['DELETE FROM media_items WHERE id = ?', ['b1']], $deletes);
+        $this->assertNotContains(['DELETE FROM media_items WHERE id = ?', ['b2']], $deletes);
+
+        // removed counts only root A's genuinely-gone file.
+        $this->assertSame(1, $result->removed);
+
+        @unlink($presentA);
+        @rmdir($rootA);
     }
 
     /**

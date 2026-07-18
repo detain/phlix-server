@@ -15,6 +15,7 @@ use DI\ContainerBuilder;
 use Phlix\Auth\JwtHandler;
 use Phlix\Common\Container\ServiceProviderInterface;
 use Phlix\Common\Logger\StructuredLogger;
+use Phlix\Common\RateLimit\RateLimitProfiles;
 use Phlix\Hub\Ed25519KeyManager;
 use Phlix\Hub\HubApplication;
 use Phlix\Hub\HubClient;
@@ -131,8 +132,16 @@ final class HubServicesProvider implements ServiceProviderInterface
                     }
                 )),
 
+            // SV-4.15(g): the public JWKS endpoint gets its OWN worker-local
+            // in-memory limiter (RateLimitProfiles::JWKS). The `limiter` ctor
+            // param is optional (PHP-DI skips optional params during autowiring),
+            // so it must be bound EXPLICITLY to its RateLimitProfiles container id
+            // — an unbound limiter would silently stay null and leave the surface
+            // unlimited. The profile is registered in AuthServicesProvider (all
+            // providers merge into one container).
             HubJwksController::class => autowire()
-                ->constructorParameter('hubClient', get(HubClient::class)),
+                ->constructorParameter('hubClient', get(HubClient::class))
+                ->constructorParameter('limiter', get(RateLimitProfiles::JWKS)),
 
             HubApplication::class => autowire()
                 ->constructorParameter('logger', get('logger.hub'))

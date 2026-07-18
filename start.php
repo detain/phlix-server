@@ -26,6 +26,8 @@ use Phlix\Common\Container\Providers\AuthServicesProvider;
 use Phlix\Common\Database\ConnectionPool;
 use Phlix\Common\Logger\LogChannels;
 use Phlix\Common\Logger\LoggerFactory;
+use Phlix\Common\RateLimit\RateLimiterInterface;
+use Phlix\Common\RateLimit\RateLimitProfiles;
 use Phlix\Server\Core\Application;
 use Phlix\Server\Http\RequestAuthenticator;
 use Phlix\Server\Workerman\HttpHandler;
@@ -525,6 +527,25 @@ try {
         // path.
         $wsServer = new \Phlix\Server\WebSocket\WebSocketServer($wsConfig, $messageHandler, $w);
         $wsServer->setSyncPlayManager($syncPlayManager);
+
+        // SV-4.15(h): inject the per-IP WS-connect limiter so onWebSocketConnect
+        // throttles handshake attempts BEFORE the auth gate. The :8097 WS worker
+        // is count=1, so the worker-local in-memory RateLimitProfiles::WS_CONNECT
+        // limiter is already server-wide — no DB backend needed. Best-effort: a
+        // container hiccup must never stop the WS worker from listening, so a
+        // failed resolve just leaves the hook unthrottled.
+        try {
+            /** @var mixed $wsConnectLimiter */
+            $wsConnectLimiter = $container->get(RateLimitProfiles::WS_CONNECT);
+            if ($wsConnectLimiter instanceof RateLimiterInterface) {
+                $wsServer->setWsConnectLimiter($wsConnectLimiter);
+            }
+        } catch (\Throwable $e) {
+            LoggerFactory::get(LogChannels::WEBSOCKET)->warning(
+                'Failed to wire WS-connect rate limiter; connect hook unthrottled',
+                ['error' => $e->getMessage()],
+            );
+        }
 
         // S2 metrics: wire the metrics collector into the WS server.
         /** @var MetricsCollector $wsMetricsCollector */

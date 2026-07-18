@@ -16,6 +16,7 @@ use Workerman\Connection\TcpConnection;
 use Workerman\Protocols\Http\Request;
 use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Common\Logger\LogChannels;
+use Phlix\Common\RateLimit\RateLimiterInterface;
 use Phlix\Session\SyncPlay\SyncPlayManager;
 use Phlix\Stats\Metrics\MetricsCollector;
 
@@ -63,6 +64,24 @@ class WebSocketServer
      * @var SyncPlayAuthMiddleware|null
      */
     private ?SyncPlayAuthMiddleware $authMiddleware = null;
+
+    /**
+     * Per-surface connect-rate limiter for the `:8097` WS worker (SV-4.15(h));
+     * the worker-local in-memory
+     * {@see \Phlix\Common\RateLimit\RateLimitProfiles::WS_CONNECT} instance in the
+     * resident `start.php` path. Null when unset (all direct-construction call
+     * sites and tests) — the connect hook then applies no throttling.
+     *
+     * In-memory is already GLOBAL here: the :8097 WS worker runs `count=1`, so
+     * per-worker == server-wide. A trip is enforced INLINE (there is no HTTP
+     * response after the WS-upgrade hook, so the central 429 mapping cannot
+     * apply): the connection is removed from the pool and closed, and the hook
+     * returns WITHOUT throwing (a throw out of onWebSocketConnect triggers
+     * Workerman's `Worker::stopAll()`, killing the worker).
+     *
+     * @var RateLimiterInterface|null
+     */
+    private ?RateLimiterInterface $wsConnectLimiter = null;
 
     /**
      * Creates a new WebSocket server instance.
@@ -365,6 +384,32 @@ class WebSocketServer
             return;
         }
 
+        // SV-4.15(h): per-IP connect throttle, enforced BEFORE the auth gate so
+        // it protects the anonymous/dev path too. WS != HTTP — there is no HTTP
+        // response after the upgrade hook, so the central 429 mapping (SV-4.15(c))
+        // does NOT apply here; the check is INLINE and must NOT throw (a throw out
+        // of onWebSocketConnect triggers Workerman's Worker::stopAll(), killing the
+        // :8097 worker — see the protocol handshake in Workerman\Protocols\Websocket).
+        // On a trip we mirror the existing reject idiom below: remove the pool
+        // wrapper + close the connection + return. We deliberately use a plain
+        // close() (no WS 1013 frame): this hook fires BEFORE the 101 upgrade
+        // response is sent, so the socket is not yet a WebSocket at the byte layer
+        // and a raw close frame would be malformed/out-of-order — a TCP close is
+        // the correct rejection at this stage.
+        if ($this->wsConnectLimiter !== null) {
+            $remoteIp = $connection->getRemoteIp();
+            $state = $this->wsConnectLimiter->hit('ws_connect:' . $remoteIp);
+            if ($state->limited) {
+                LoggerFactory::get(LogChannels::WEBSOCKET)->warning(
+                    'WebSocket connect rate-limited',
+                    ['remote_ip' => $remoteIp, 'reset_at' => $state->resetAt],
+                );
+                $this->connections->remove($wsConnection->getId());
+                $connection->close();
+                return;
+            }
+        }
+
         // No secret configured (dev): allow the connection anonymously.
         if ($this->authMiddleware === null) {
             return;
@@ -546,6 +591,22 @@ class WebSocketServer
     public function setMetricsCollector(MetricsCollector $metrics): void
     {
         $this->metrics = $metrics;
+    }
+
+    /**
+     * Sets the connect-rate limiter enforced at the WS handshake (SV-4.15(h)).
+     *
+     * Injected by the resident `start.php` WS worker from the container's
+     * {@see \Phlix\Common\RateLimit\RateLimitProfiles::WS_CONNECT} in-memory
+     * profile. When left unset the connect hook applies no throttling, so
+     * existing direct-construction call sites and tests keep working unchanged.
+     *
+     * @param RateLimiterInterface $limiter The connect-rate limiter.
+     * @return void
+     */
+    public function setWsConnectLimiter(RateLimiterInterface $limiter): void
+    {
+        $this->wsConnectLimiter = $limiter;
     }
 
     /**

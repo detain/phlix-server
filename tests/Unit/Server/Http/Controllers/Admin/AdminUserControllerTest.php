@@ -46,7 +46,7 @@ final class AdminUserControllerTest extends TestCase
      */
     private function clearCurrentUser(): void
     {
-        RequestContext::clearUserId();
+        RequestContext::setUserId(null);
     }
 
     // ─────────────────────────────────────────────────────────────────

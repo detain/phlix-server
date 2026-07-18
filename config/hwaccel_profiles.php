@@ -4,8 +4,8 @@
  * Hardware encoder profile configuration.
  *
  * Maps quality levels to bitrate and preset settings for each hardware
- * accelerator vendor. These profiles are consumed by HwaccelCommandBuilder
- * when constructing FFmpeg commands.
+ * accelerator vendor. These profiles are consumed by the hardware-accelerated
+ * transcode command builders when constructing FFmpeg commands.
  *
  * @since 0.11.0
  */

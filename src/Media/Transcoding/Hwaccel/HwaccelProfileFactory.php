@@ -144,39 +144,6 @@ final class HwaccelProfileFactory
     }
 
     /**
-     * Creates a command builder for the given job parameters.
-     *
-     * @param string $vendor Vendor name
-     * @param string $codec Codec name
-     * @param string $quality Quality level (e.g., 'ultra', 'high', 'medium', 'low')
-     *
-     * @return HwaccelCommandBuilder Command builder instance
-     *
-     * @since 0.11.0
-     */
-    public function createCommandBuilder(string $vendor, string $codec, string $quality): HwaccelCommandBuilder
-    {
-        $profile = $this->getProfile($vendor, $codec);
-        $capability = $this->registry->getEncoder($codec);
-
-        if ($capability === null) {
-            $capability = new HwaccelCapability(
-                vendor: 'software',
-                encoder: 'libx264',
-                decoder: 'libx264',
-                supports_hdr_tone_mapping: false,
-                supported_codecs: ['h264', 'hevc'],
-                supported_profiles: ['baseline', 'main', 'high'],
-                max_resolution_w: 3840,
-                max_resolution_h: 2160,
-                max_bitrate: 100000000,
-            );
-        }
-
-        return new HwaccelCommandBuilder($profile, $capability, $quality);
-    }
-
-    /**
      * Gets the fallback profile for a codec.
      *
      * @param string $codec Codec name

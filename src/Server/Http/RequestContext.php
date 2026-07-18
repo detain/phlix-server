@@ -161,24 +161,6 @@ final class RequestContext
     }
 
     /**
-     * Drop the user-id from the current coroutine's context. Equivalent
-     * to `setUserId(null)`, expressed positively for call sites that
-     * want to assert "clear request state."
-     *
-     * Useful in long-running background coroutines that handle several
-     * "logical" requests in sequence, and in test fixtures that need to
-     * reset shared state between assertions.
-     *
-     * @return void
-     *
-     * @since 0.10.x (Step 0.2b)
-     */
-    public static function clearUserId(): void
-    {
-        Context::set(self::KEY_USER_ID, null);
-    }
-
-    /**
      * Store the active profile-id of the current request.
      *
      * @param string|null $profileId Active profile-id (UUID), or null to clear.
@@ -199,28 +181,6 @@ final class RequestContext
     {
         $value = Context::get(self::KEY_PROFILE_ID);
         return is_string($value) ? $value : null;
-    }
-
-    /**
-     * Returns true if a profile-id has been published into the current
-     * coroutine's context.
-     *
-     * @return bool
-     */
-    public static function hasProfileId(): bool
-    {
-        $value = Context::get(self::KEY_PROFILE_ID);
-        return is_int($value);
-    }
-
-    /**
-     * Drop the profile-id from the current coroutine's context.
-     *
-     * @return void
-     */
-    public static function clearProfileId(): void
-    {
-        Context::set(self::KEY_PROFILE_ID, null);
     }
 
     /**

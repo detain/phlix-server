@@ -106,7 +106,7 @@ final class FfmpegRunnerSubtitleBurnInTest extends TestCase
         $this->assertStringContainsString('-vf "', $cmd);
         $this->assertStringContainsString('subtitles=' . $this->vttPath, $cmd);
         // Subtitle burn-in (a software filter) must precede the scale filter in
-        // the chain, matching HwaccelCommandBuilder's established ordering.
+        // the chain, matching the established software-filter-before-scale ordering.
         $subtitlesPos = strpos($cmd, 'subtitles=');
         $scalePos = strpos($cmd, 'scale=1280:720');
         $this->assertNotFalse($subtitlesPos);

@@ -60,16 +60,6 @@ class HwaccelProfileFactoryTest extends TestCase
         $this->assertArrayHasKey('software', $profiles);
     }
 
-    public function test_create_command_builder(): void
-    {
-        $factory = new HwaccelProfileFactory($this->registry);
-
-        $builder = $factory->createCommandBuilder('software', 'h264', 'high');
-
-        $this->assertInstanceOf(\Phlix\Media\Transcoding\Hwaccel\HwaccelCommandBuilder::class, $builder);
-        $this->assertSame('high', $builder->getQualityLevel());
-    }
-
     public function test_software_profile_direct(): void
     {
         $factory = new HwaccelProfileFactory($this->registry);

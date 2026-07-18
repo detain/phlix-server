@@ -2642,7 +2642,6 @@ class TranscodeManagerTest extends TestCase
         // Release-only on wait-timeout — the still-running encode must NOT be
         // killed, and the plain (completion) release path must NOT run.
         $ff->expects($this->once())->method('releaseSegmentProcessAfterWaitTimeout')->with($final);
-        $ff->expects($this->never())->method('killSegmentProcess');
         $ff->expects($this->never())->method('releaseSegmentProcess');
 
         // Short poll ceiling (200ms) so the timeout path is fast.
@@ -2681,7 +2680,6 @@ class TranscodeManagerTest extends TestCase
             }
         );
         $ff->expects($this->once())->method('releaseSegmentProcess')->with($final);
-        $ff->expects($this->never())->method('killSegmentProcess');
 
         $path = $this->manager($db, $ff)->ensureSegment('seg-job', '480p', 2);
 

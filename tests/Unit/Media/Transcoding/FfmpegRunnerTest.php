@@ -226,10 +226,9 @@ class FfmpegRunnerTest extends TestCase
     }
 
     /**
-     * kill / release / releaseAfterWaitTimeout delegate to the wired registry:
-     * kill signals the tracked PID and drops the entry; release drops it without
-     * signalling; releaseAfterWaitTimeout drops it without signalling a live
-     * encode. No-op (returns 0) when no registry is wired.
+     * release / releaseAfterWaitTimeout delegate to the wired registry:
+     * release drops the tracked entry without signalling; releaseAfterWaitTimeout
+     * drops it without signalling a live encode.
      */
     public function testSegmentProcessLifecycleDelegatesToRegistry(): void
     {
@@ -248,9 +247,6 @@ class FfmpegRunnerTest extends TestCase
 
         $runner = new FfmpegRunner('/usr/bin/ffmpeg', '/usr/bin/ffprobe', '/tmp');
 
-        // No registry wired yet → kill is a safe no-op returning 0.
-        $this->assertSame(0, $runner->killSegmentProcess('seg-x'));
-
         $runner->setSegmentProcessRegistry($registry);
 
         // Release path: entry dropped, nothing signalled.
@@ -264,12 +260,6 @@ class FfmpegRunnerTest extends TestCase
         $runner->releaseSegmentProcessAfterWaitTimeout('seg-wait');
         $this->assertSame(0, $registry->registeredKeyCount());
         $this->assertSame([], $signals, 'wait-timeout release must never signal');
-
-        // Kill path: entry signalled + dropped.
-        $registry->register('seg-kill', 5678);
-        $this->assertSame(1, $runner->killSegmentProcess('seg-kill'));
-        $this->assertSame([5678], $signals);
-        $this->assertSame(0, $registry->registeredKeyCount());
     }
 
     // -------------------------------------------------------------------------

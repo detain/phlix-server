@@ -149,8 +149,8 @@ class FfmpegRunner
     /**
      * Drop the tracked PID(s) for a completed segment encode without killing
      * (the caller observed the segment published on its own). No-op when no
-     * registry is wired. Callers MUST invoke this (or {@see killSegmentProcess()})
-     * for every launched cancel key so the registry never leaks.
+     * registry is wired. Callers MUST invoke this (or kill the encode via the
+     * registry) for every launched cancel key so the registry never leaks.
      *
      * @param string $cancelKey The key passed to {@see startSegmentEncode()}.
      *
@@ -176,23 +176,6 @@ class FfmpegRunner
     public function releaseSegmentProcessAfterWaitTimeout(string $cancelKey): void
     {
         $this->segmentRegistry?->releaseAfterWaitTimeout($cancelKey);
-    }
-
-    /**
-     * Kill the detached ffmpeg process group(s) tracked for a cancel key
-     * (SIGTERM → SIGKILL to the group, coroutine-safe), remove the orphaned
-     * `.part-*` temp, and drop the entry. Used by cancel/disconnect hooks on
-     * genuine abandonment. No-op when no registry is wired or the key is unknown.
-     *
-     * @param string $cancelKey The key passed to {@see startSegmentEncode()}.
-     *
-     * @return int Number of PIDs signalled.
-     *
-     * @since SV-4.2
-     */
-    public function killSegmentProcess(string $cancelKey): int
-    {
-        return $this->segmentRegistry?->kill($cancelKey) ?? 0;
     }
 
     /**

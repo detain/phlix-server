@@ -93,15 +93,15 @@ final class ContextIsolationTest extends TestCase
     }
 
     /**
-     * `setUserId(null)` and `clearUserId()` both wipe the slot. After
-     * either, `getUserId()` returns `null` and `hasUserId()` is `false`.
+     * `setUserId(null)` wipes the slot. After it, `getUserId()` returns
+     * `null` and `hasUserId()` is `false`.
      */
     public function test_clear_user_id_removes_the_slot(): void
     {
         RequestContext::setUserId('user-7');
         $this->assertTrue(RequestContext::hasUserId());
 
-        RequestContext::clearUserId();
+        RequestContext::setUserId(null);
         $this->assertNull(RequestContext::getUserId());
         $this->assertFalse(RequestContext::hasUserId());
 

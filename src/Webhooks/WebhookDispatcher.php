@@ -18,7 +18,6 @@ use Phlix\Common\Net\SsrfGuard;
 use Phlix\Common\Uuid;
 use InvalidArgumentException;
 use Workerman\MySQL\Connection;
-use Workerman\Timer;
 
 class WebhookDispatcher
 {
@@ -32,7 +31,6 @@ class WebhookDispatcher
      */
     private const BACKOFF_BASE_DELAY_MS = 1_000;
     private const BACKOFF_MAX_DELAY_MS = 32_000;
-    private const BACKOFF_MAX_RETRIES = 3;
 
     public function __construct(
         private readonly Connection $db,
@@ -170,104 +168,6 @@ class WebhookDispatcher
         }
 
         return $webhooks;
-    }
-
-    /**
-     * Dispatch webhook event asynchronously with jittered exponential backoff.
-     *
-     * SV-4.4: Uses async HTTP client with retry via one-shot Timer::add
-     * for jittered exponential backoff on failure.
-     *
-     * @param WebhookEvent $event The webhook event to dispatch
-     *
-     * @since SV-4.4
-     */
-    public function dispatchAsync(WebhookEvent $event): void
-    {
-        $webhooks = $this->getMatchingWebhooks($event->eventType);
-
-        if ($webhooks === []) {
-            return;
-        }
-
-        foreach ($webhooks as $webhook) {
-            /** @var array<string, mixed> $webhook */
-            $this->sendToWebhookWithBackoff($webhook, $event, 0);
-        }
-    }
-
-    /**
-     * Send webhook with jittered exponential backoff retry.
-     *
-     * @param array<string, mixed> $webhook Webhook config
-     * @param WebhookEvent $event Event to send
-     * @param int $attempt Current attempt number (0 = first)
-     *
-     * @since SV-4.4
-     */
-    private function sendToWebhookWithBackoff(array $webhook, WebhookEvent $event, int $attempt): void
-    {
-        $webhookId = $this->stringFromMixed($webhook['id'] ?? null);
-        $url = $this->stringFromMixed($webhook['url'] ?? null);
-
-        if ($url === '') {
-            $this->logDispatch($webhookId, $event->eventType, null, null, 'Empty URL');
-            return;
-        }
-
-        // SSRF guard
-        try {
-            SsrfGuard::assertPublicUrl($url);
-        } catch (InvalidArgumentException $e) {
-            $this->logDispatch($webhookId, $event->eventType, null, null, 'SSRF guard blocked: ' . $e->getMessage());
-            return;
-        }
-
-        $secret = $this->stringFromMixed($webhook['secret'] ?? null);
-        $payload = json_encode($event->toArray(), JSON_THROW_ON_ERROR);
-        $signature = $event->getSignature($secret);
-
-        $client = $this->getHttpClient();
-        $result = $client->post($url, $event->eventType, $webhookId, [
-            'payload' => $payload,
-            'signature' => $signature,
-        ]);
-
-        if ($result['success']) {
-            $this->updateLastTriggered($webhookId);
-            $this->logDispatch(
-                $webhookId,
-                $event->eventType,
-                $result['response_code'],
-                $result['response_body'],
-                null
-            );
-            return;
-        }
-
-        // Failure — check if we should retry
-        if ($attempt < self::BACKOFF_MAX_RETRIES) {
-            $delayMs = $this->computeBackoffDelayMs($attempt);
-            Timer::add(
-                (float) ($delayMs / 1000),
-                function () use ($webhook, $event, $attempt): void {
-                    $this->sendToWebhookWithBackoff($webhook, $event, $attempt + 1);
-                },
-                [],
-                false
-            );
-            return;
-        }
-
-        // Exhausted retries
-        $this->incrementFailureCount($webhookId);
-        $this->logDispatch(
-            $webhookId,
-            $event->eventType,
-            $result['response_code'],
-            null,
-            $result['error'] ?? 'Max retries exceeded'
-        );
     }
 
     /**

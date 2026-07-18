@@ -1273,20 +1273,22 @@ class WebPortalRouter
 
         // SV-3.3(2A): capability-gated direct-play. When the client declares its
         // decoder capabilities via X-Phlix-Client-Capabilities and cannot decode
-        // the source's default audio codec (e.g. E-AC-3), report direct_play=false
+        // the source's FIRST audio codec (e.g. E-AC-3), report direct_play=false
         // so the player transcodes instead of receiving silent audio. An
         // absent/empty header preserves the historical always-true verdict
-        // (backward compat). This gates on the SAME first-/default-audio-stream
-        // predicate the transcode path uses (TranscodeManager::computeHlsParams()
-        // → ClientCapabilities::supportsCodec()) so this verdict and the actual
-        // transcode decision agree on what "playable" means.
+        // (backward compat). This gates on the SAME audio stream the transcode
+        // path selects — the FIRST audio stream (TranscodeManager::computeHlsParams()
+        // → firstStreamOfType($probe,'audio') → ClientCapabilities::supportsCodec())
+        // so this verdict and the actual transcode decision agree on what
+        // "playable" means. (SV-3.3 fix: previously keyed on the default-disposition
+        // track, which could differ from computeHlsParams' first-stream choice.)
         $clientCapabilities = ClientCapabilities::fromJson(
             $request->getHeader('X-Phlix-Client-Capabilities')
         );
         $directPlay = true;
         if ($clientCapabilities->hasExplicitCapabilities()) {
             $directPlay = $clientCapabilities->supportsCodec(
-                self::defaultAudioCodec($audioTracks)
+                self::firstAudioCodec($audioTracks)
             );
         }
 
@@ -1312,27 +1314,26 @@ class WebPortalRouter
     }
 
     /**
-     * Returns the codec of the item's default audio track (else the first), or
-     * '' when the item has no audio streams.
+     * Returns the codec of the item's FIRST audio track, or '' when the item has
+     * no audio streams.
      *
-     * This is the codec the SV-3.3 direct-play verdict is gated on. It mirrors
-     * the first-audio-stream predicate the transcode path uses
+     * This is the codec the SV-3.3 direct-play verdict is gated on. It selects the
+     * SAME audio stream the transcode path derives its audio codec from — the
+     * FIRST audio stream in ffprobe order
      * ({@see \Phlix\Media\Transcoding\TranscodeManager::computeHlsParams()} →
-     * {@see ClientCapabilities::supportsCodec()}) so playback-info and the actual
-     * transcode decision stay consistent. StreamTrackShaper guarantees exactly
-     * one `default` track when any exist; the first-track fallback is defensive.
+     * `firstStreamOfType($probe,'audio')` → {@see ClientCapabilities::supportsCodec()}).
+     * {@see StreamTrackShaper::audioTracks()} sorts tracks by global `stream_index`
+     * ascending, so `$audioTracks[0]` is exactly that first ffprobe audio stream —
+     * making this verdict and the actual transcode decision genuinely agree (they
+     * previously diverged whenever a non-first track carried the default
+     * disposition).
      *
      * @param list<array<string, mixed>> $audioTracks Shaped audio tracks from
-     *        {@see StreamTrackShaper::audioTracks()} (each has `codec` + `default`).
+     *        {@see StreamTrackShaper::audioTracks()} (each has `codec`; ordered by
+     *        `stream_index` ascending, matching ffprobe stream order).
      */
-    private static function defaultAudioCodec(array $audioTracks): string
+    private static function firstAudioCodec(array $audioTracks): string
     {
-        foreach ($audioTracks as $track) {
-            if (($track['default'] ?? false) === true) {
-                return is_string($track['codec'] ?? null) ? (string) $track['codec'] : '';
-            }
-        }
-
         $first = $audioTracks[0]['codec'] ?? null;
 
         return is_string($first) ? (string) $first : '';

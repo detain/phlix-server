@@ -24,8 +24,10 @@ use PHPUnit\Framework\TestCase;
  * An E-AC-3 source told to a client that declares `{"eac3":false}` reports
  * direct_play=false; the same source with supportive/absent capabilities keeps
  * direct_play=true (the historical always-true behaviour). The gate keys on the
- * DEFAULT (else first) audio track, matching the first-audio-stream predicate
- * the transcode path (TranscodeManager::computeHlsParams) uses.
+ * FIRST audio track (StreamTrackShaper orders tracks by stream_index ascending),
+ * matching the first-audio-stream predicate the transcode path
+ * (TranscodeManager::computeHlsParams → firstStreamOfType($probe,'audio')) uses —
+ * so the verdict and the actual transcode decision agree.
  */
 class WebPortalRouterPlaybackCapabilityTest extends TestCase
 {
@@ -181,11 +183,15 @@ class WebPortalRouterPlaybackCapabilityTest extends TestCase
         $this->assertFalse($this->directPlayOf($resp));
     }
 
-    public function testDirectPlayGatesOnDefaultTrackNotFirstTrack(): void
+    public function testDirectPlayGatesOnFirstTrackNotDefaultTrack(): void
     {
-        // First audio track is AAC (no default disposition); the second is E-AC-3
-        // and IS the default. The verdict must key on the default (eac3) track,
-        // so `{"eac3":false}` → direct_play=false.
+        // SV-3.3 reconcile: the verdict must key on the FIRST audio stream (the
+        // one TranscodeManager::computeHlsParams → firstStreamOfType selects),
+        // NOT the default-disposition track. Here the first track is AAC (no
+        // default disposition) while the second is E-AC-3 and IS the default.
+        // Because the gate keys on the first track (aac, un-declared → allowed),
+        // `{"eac3":false}` leaves direct_play=true — proving the verdict follows
+        // computeHlsParams' first-stream choice, not the default disposition.
         $streams = [
             [
                 'id' => 's1',
@@ -202,6 +208,42 @@ class WebPortalRouterPlaybackCapabilityTest extends TestCase
                 'codec' => 'eac3',
                 'language' => 'eng',
                 'channels' => 6,
+                'disposition' => 1,
+            ],
+        ];
+
+        $router = $this->router($this->repoWithStreams($streams));
+        $resp = $router->getPlaybackInfo(
+            $this->requestWithCaps('{"eac3": false}'),
+            ['id' => 'm1']
+        );
+
+        $this->assertTrue($this->directPlayOf($resp));
+    }
+
+    public function testDirectPlayGatesOnFirstTrackCodecWhenFirstIsUnsupported(): void
+    {
+        // Mirror of the above with the codecs swapped so the FIRST track is the
+        // undecodable one: first = E-AC-3 (no default disposition), second = AAC
+        // and IS the default. The gate keys on the first (eac3) track, so
+        // `{"eac3":false}` → direct_play=false. Together the two tests pin the
+        // selection to the first ffprobe audio stream regardless of disposition.
+        $streams = [
+            [
+                'id' => 's1',
+                'stream_type' => 'audio',
+                'stream_index' => 1,
+                'codec' => 'eac3',
+                'language' => 'eng',
+                'channels' => 6,
+            ],
+            [
+                'id' => 's2',
+                'stream_type' => 'audio',
+                'stream_index' => 2,
+                'codec' => 'aac',
+                'language' => 'eng',
+                'channels' => 2,
                 'disposition' => 1,
             ],
         ];

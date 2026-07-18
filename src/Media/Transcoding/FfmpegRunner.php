@@ -1956,45 +1956,15 @@ class FfmpegRunner
         float $duration,
         array $params
     ): ?string {
-        // MASSIVE DEBUG: Trace buildHwaccelSegmentCommand calls
-        $traceId = substr(md5((string)mt_rand() . microtime(true)), 0, 12);
-        $timestamp = date('Y-m-d H:i:s.v');
-        $pid = getmypid();
-        $backtrace = debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 6);
-        $callerChain = implode(' <- ', array_map(
-            fn($f) => basename($f['file'] ?? '??') . ':' . ($f['line'] ?? '?') . ' ' . ($f['class'] ?? '') .
-                ($f['type'] ?? '::') . ($f['function'] ?? '??'),
-            array_slice($backtrace, 1, 5)
-        ));
-
-        $this->logger->error(sprintf(
-            '[HWACCEL_DEBUG][%s][PID:%d][TRACE:%s] buildHwaccelSegmentCommand called'
-            . ' | hwaccelProbed=%s | inputPath=%s | outFile=%s | callers=%s',
-            $timestamp,
-            $pid,
-            $traceId,
-            self::$hwaccelProbed ? 'YES' : 'NO',
-            basename($inputPath),
-            basename($outFile),
-            $callerChain
-        ));
-
+        // Ensure hardware acceleration has been probed before we consult the
+        // capability registry. The probe is idempotent (guarded by $hwaccelProbed),
+        // so this is a one-time cost per worker even though this method is on the
+        // per-segment hot path. Logged at debug level only.
         if (!self::$hwaccelProbed) {
-            $this->logger->error(sprintf(
-                '[HWACCEL_DEBUG][%s][PID:%d][TRACE:%s] buildHwaccelSegmentCommand'
-                . ' triggering probeHardwareAcceleration (was not probed)',
-                $timestamp,
-                $pid,
-                $traceId
-            ));
+            $this->logger->debug('buildHwaccelSegmentCommand triggering probeHardwareAcceleration (was not probed)');
             $this->probeHardwareAcceleration();
         } else {
-            $this->logger->error(sprintf(
-                '[HWACCEL_DEBUG][%s][PID:%d][TRACE:%s] buildHwaccelSegmentCommand skipping probe (already probed)',
-                $timestamp,
-                $pid,
-                $traceId
-            ));
+            $this->logger->debug('buildHwaccelSegmentCommand skipping probe (already probed)');
         }
 
         $videoCodec = self::paramString($params, 'video_codec') ?? 'libx264';

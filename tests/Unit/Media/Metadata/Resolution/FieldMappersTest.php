@@ -156,6 +156,55 @@ final class FieldMappersTest extends TestCase
         $this->assertFalse($tvdb->has('trailer_url'), 'TVDB does not supply a trailer');
     }
 
+    public function testFromGenericKeepsValidTrailerFields(): void
+    {
+        $record = FieldMappers::fromGeneric('plugin', [
+            'title' => 'Movie',
+            'trailer_url' => 'https://www.youtube.com/watch?v=KEY1',
+            'trailer_key' => 'KEY1',
+            'trailer_site' => 'YouTube',
+        ]);
+
+        $this->assertSame('https://www.youtube.com/watch?v=KEY1', $record->trailerUrl());
+        $this->assertSame('KEY1', $record->trailerKey());
+        $this->assertSame('YouTube', $record->trailerSite());
+    }
+
+    public function testFromGenericDropsJavascriptTrailerUrl(): void
+    {
+        $record = FieldMappers::fromGeneric('plugin', [
+            'title' => 'Movie',
+            // A javascript: (non-http) URL must never reach the client control.
+            'trailer_url' => 'javascript:alert(document.cookie)',
+        ]);
+
+        $this->assertFalse($record->has('trailer_url'), 'javascript: url is dropped');
+        $this->assertNull($record->trailerUrl());
+    }
+
+    public function testFromGenericDropsNonHttpTrailerUrlButKeepsValidKey(): void
+    {
+        $record = FieldMappers::fromGeneric('plugin', [
+            'title' => 'Movie',
+            'trailer_url' => 'ftp://example.com/evil',
+            'trailer_key' => 'KEY1',
+        ]);
+
+        $this->assertFalse($record->has('trailer_url'), 'ftp url is dropped');
+        $this->assertSame('KEY1', $record->trailerKey());
+    }
+
+    public function testFromGenericDropsOutOfCharsetTrailerKey(): void
+    {
+        $record = FieldMappers::fromGeneric('plugin', [
+            'title' => 'Movie',
+            'trailer_key' => 'abc"><iframe',
+        ]);
+
+        $this->assertFalse($record->has('trailer_key'), 'out-of-charset key is dropped');
+        $this->assertNull($record->trailerKey());
+    }
+
     public function testFromTmdbTvUsesOfficialRatingAndRuntimeFallback(): void
     {
         // Shape from TmdbProvider::formatTvDetails(): official_rating present,

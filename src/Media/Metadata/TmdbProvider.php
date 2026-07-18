@@ -1331,6 +1331,14 @@ class TmdbProvider implements MetadataProviderInterface
         if ($key === '') {
             return null; // No key → no playable URL.
         }
+        // Validate the YouTube id charset before it is interpolated into a
+        // `youtube.com/watch?v={key}` URL. Real ids are 11 chars of
+        // [A-Za-z0-9_-]; a 20-char ceiling stays safe while rejecting keys that
+        // could smuggle a quote/query/markup into the URL a client renders
+        // (open-redirect / javascript: / XSS defence).
+        if (preg_match('/^[A-Za-z0-9_-]{1,20}$/', $key) !== 1) {
+            return null;
+        }
 
         $nameRaw = $video['name'] ?? $type;
         $name = is_string($nameRaw) ? $nameRaw : $type;

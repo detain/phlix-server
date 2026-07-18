@@ -270,12 +270,51 @@ final class FieldMappers
         $b->objectList('crew', $raw['crew'] ?? null);
         $b->objectList('production_companies', $raw['production_companies'] ?? null);
         $b->string('studio', $raw['studio'] ?? null);
-        $b->string('trailer_url', $raw['trailer_url'] ?? null);
-        $b->string('trailer_key', $raw['trailer_key'] ?? null);
+        // Trailer fields come from untrusted plugin/pre-shaped input and are
+        // interpolated into a client "Play Trailer" control, so validate before
+        // recording: the URL must be http/https (drops `javascript:` and other
+        // schemes) and the key must match the safe YouTube-id charset.
+        $b->string('trailer_url', self::safeHttpUrl($raw['trailer_url'] ?? null));
+        $b->string('trailer_key', self::safeYoutubeKey($raw['trailer_key'] ?? null));
         $b->string('trailer_site', $raw['trailer_site'] ?? null);
         $b->externalIds(self::stringMap($raw['external_ids'] ?? null));
 
         return $b->build();
+    }
+
+    /**
+     * Return the value only when it narrows to an `http`/`https` URL, else null.
+     *
+     * Guards the generic (plugin/pre-shaped) trailer passthrough: a value with
+     * any other scheme (e.g. `javascript:`) or no scheme is dropped so a
+     * malicious `trailer_url` never reaches the client render path.
+     */
+    private static function safeHttpUrl(mixed $raw): ?string
+    {
+        $value = MetadataValue::asNullableString($raw);
+        if ($value === null) {
+            return null;
+        }
+        $scheme = parse_url($value, PHP_URL_SCHEME);
+        if (!is_string($scheme)) {
+            return null;
+        }
+        $scheme = strtolower($scheme);
+        return ($scheme === 'http' || $scheme === 'https') ? $value : null;
+    }
+
+    /**
+     * Return the value only when it matches the safe YouTube-id charset
+     * (`[A-Za-z0-9_-]{1,20}`), else null — so an out-of-charset `trailer_key`
+     * from the generic path is dropped rather than interpolated into a URL.
+     */
+    private static function safeYoutubeKey(mixed $raw): ?string
+    {
+        $value = MetadataValue::asNullableString($raw);
+        if ($value === null) {
+            return null;
+        }
+        return preg_match('/^[A-Za-z0-9_-]{1,20}$/', $value) === 1 ? $value : null;
     }
 
     /**

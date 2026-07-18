@@ -969,6 +969,10 @@ class LibraryMetadataMatcher
         if ($actors !== []) {
             $result['actors'] = $actors;
         }
+        // Primary trailer (already validated in TmdbProvider). Mirror the
+        // batch-scan path so an item matched via the interactive apply flow
+        // gets the same trailer_* fields.
+        $this->copyTrailerFields($details, $result);
 
         return $result;
     }
@@ -1042,8 +1046,31 @@ class LibraryMetadataMatcher
         if ($actors !== []) {
             $result['actors'] = $actors;
         }
+        // Primary trailer (already validated in TmdbProvider). Mirror the
+        // batch-scan path so an item matched via the interactive apply flow
+        // gets the same trailer_* fields.
+        $this->copyTrailerFields($details, $result);
 
         return $result;
+    }
+
+    /**
+     * Copy the primary-trailer passthrough fields from raw TMDB `$details`
+     * (as produced by getDetails/getTvDetails) into a formatted metadata
+     * `$result`, only when present and non-empty. Shared by the movie and
+     * series apply-match formatters so both mirror the batch-scan output.
+     *
+     * @param array<string, mixed> $details Raw TMDB details.
+     * @param array<string, mixed> $result  Formatted result to augment (by reference).
+     */
+    private function copyTrailerFields(array $details, array &$result): void
+    {
+        foreach (['trailer_url', 'trailer_key', 'trailer_site'] as $field) {
+            $value = MetadataValue::asNullableString($details[$field] ?? null);
+            if ($value !== null) {
+                $result[$field] = $value;
+            }
+        }
     }
 
     /**

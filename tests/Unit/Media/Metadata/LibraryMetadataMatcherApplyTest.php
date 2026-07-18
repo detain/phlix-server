@@ -227,6 +227,83 @@ class LibraryMetadataMatcherApplyTest extends TestCase
         $this->assertSame(2, $result['children_enriched']);
     }
 
+    public function testApplyMatchMovieCarriesTrailerFields(): void
+    {
+        $items = $this->createMock(ItemRepository::class);
+        $items->method('findById')->with('m1')->willReturn([
+            'id' => 'm1',
+            'type' => 'movie',
+            'name' => 'Old Name',
+            'metadata' => [],
+        ]);
+
+        $tmdb = $this->configuredTmdb();
+        $tmdb->method('getDetails')->with('603')->willReturn([
+            'name' => 'The Matrix',
+            'trailer_url' => 'https://www.youtube.com/watch?v=OFFICIAL1',
+            'trailer_key' => 'OFFICIAL1',
+            'trailer_site' => 'YouTube',
+        ]);
+
+        $captured = null;
+        $items->expects($this->once())->method('update')->with(
+            'm1',
+            $this->callback(function (mixed $data) use (&$captured): bool {
+                $captured = $data;
+                return is_array($data);
+            }),
+        );
+
+        $matcher = $this->makeMatcher($items, $tmdb);
+        $matcher->applyMatch('m1', '603', 'movie');
+
+        $this->assertIsArray($captured);
+        /** @var array<string, mixed> $meta */
+        $meta = $captured['metadata_json'];
+        $this->assertSame('https://www.youtube.com/watch?v=OFFICIAL1', $meta['trailer_url']);
+        $this->assertSame('OFFICIAL1', $meta['trailer_key']);
+        $this->assertSame('YouTube', $meta['trailer_site']);
+    }
+
+    public function testApplyMatchSeriesCarriesTrailerFields(): void
+    {
+        $items = $this->createMock(ItemRepository::class);
+        $items->method('findById')->with('s1')->willReturn([
+            'id' => 's1',
+            'type' => 'series',
+            'name' => 'Some Show',
+            'metadata' => [],
+        ]);
+        $items->method('findByParent')->willReturn([]);
+
+        $tmdb = $this->configuredTmdb();
+        $tmdb->method('getTvDetails')->with('1399')->willReturn([
+            'name' => 'Some Show',
+            'trailer_url' => 'https://www.youtube.com/watch?v=TVOFFICIAL',
+            'trailer_key' => 'TVOFFICIAL',
+            'trailer_site' => 'YouTube',
+        ]);
+
+        $captured = null;
+        $items->expects($this->once())->method('update')->with(
+            's1',
+            $this->callback(function (mixed $data) use (&$captured): bool {
+                $captured = $data;
+                return is_array($data);
+            }),
+        );
+
+        $matcher = $this->makeMatcher($items, $tmdb);
+        $matcher->applyMatch('s1', '1399', 'tv');
+
+        $this->assertIsArray($captured);
+        /** @var array<string, mixed> $meta */
+        $meta = $captured['metadata_json'];
+        $this->assertSame('https://www.youtube.com/watch?v=TVOFFICIAL', $meta['trailer_url']);
+        $this->assertSame('TVOFFICIAL', $meta['trailer_key']);
+        $this->assertSame('YouTube', $meta['trailer_site']);
+    }
+
     public function testApplyMatchUnknownItemReturnsNotMatched(): void
     {
         $items = $this->createMock(ItemRepository::class);

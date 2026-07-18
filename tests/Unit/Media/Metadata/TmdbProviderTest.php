@@ -734,4 +734,38 @@ class TmdbProviderTest extends TestCase
         $this->assertSame('Teaser (Teaser)', $trailers[1]['title']);
         $this->assertSame('https://www.youtube.com/watch?v=DEF', $trailers[1]['url']);
     }
+
+    public function testGetDetailsRejectsTrailerWithMalformedKey(): void
+    {
+        $http = $this->createMock(MetadataHttpClient::class);
+        $http->method('get')->willReturn([
+            'id' => 603,
+            'title' => 'The Matrix',
+            'videos' => ['results' => [
+                // A key carrying markup must never be interpolated into a URL.
+                ['site' => 'YouTube', 'type' => 'Trailer', 'key' => 'abc"><iframe', 'official' => true],
+            ]],
+        ]);
+
+        $details = (new TmdbProvider('k', $http))->getDetails('603');
+
+        $this->assertArrayNotHasKey('trailer_url', $details);
+        $this->assertArrayNotHasKey('trailer_key', $details);
+        $this->assertArrayNotHasKey('trailer_site', $details);
+    }
+
+    public function testGetTrailersDropsEntriesWithMalformedKey(): void
+    {
+        $http = $this->createMock(MetadataHttpClient::class);
+        $http->method('get')->willReturn(['results' => [
+            // A key smuggling a query param is out of the safe charset → dropped.
+            ['site' => 'YouTube', 'type' => 'Trailer', 'key' => 'x&list=PLmalicious', 'name' => 'Evil'],
+            ['site' => 'YouTube', 'type' => 'Trailer', 'key' => 'ABC', 'name' => 'Main Trailer'],
+        ]]);
+
+        $trailers = (new TmdbProvider('k', $http))->getTrailers('603');
+
+        $this->assertCount(1, $trailers);
+        $this->assertSame('https://www.youtube.com/watch?v=ABC', $trailers[0]['url']);
+    }
 }

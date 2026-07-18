@@ -81,6 +81,14 @@ final class TranscodeServicesProvider implements ServiceProviderInterface
         $cacheMaxAge = is_int($hlsConfig['cache_max_age'] ?? null)
             ? $hlsConfig['cache_max_age'] : null;
 
+        // SV-1.9: ENOSPC guard threshold — minimum free bytes on the segment-cache
+        // filesystem before an on-demand encode is attempted. Null lets the
+        // TranscodeManager apply its own 500 MiB default, so an absent config key
+        // changes nothing (the wiring below still passes it explicitly because the
+        // constructor args are positional).
+        $minDiskSpaceBytes = is_int($hlsConfig['min_disk_space_bytes'] ?? null)
+            ? $hlsConfig['min_disk_space_bytes'] : null;
+
         $builder->addDefinitions([
             // SV-4.2: shared per-worker registry of detached segment-encode PIDs so
             // abandoned/timed-out on-demand encodes can be killed (see FfmpegRunner
@@ -138,7 +146,8 @@ final class TranscodeServicesProvider implements ServiceProviderInterface
                     $segmentSeconds,
                     $maxConcurrentSegments,
                     $cacheMaxBytes,
-                    $cacheMaxAge
+                    $cacheMaxAge,
+                    $minDiskSpaceBytes
                 ): TranscodeManager {
                     /** @var \Psr\Log\LoggerInterface $logger */
                     $logger = $c->get('logger.media');
@@ -146,6 +155,11 @@ final class TranscodeServicesProvider implements ServiceProviderInterface
                     $db = $c->get(Connection::class);
                     /** @var FfmpegRunner $ffmpeg */
                     $ffmpeg = $c->get(FfmpegRunner::class);
+                    // The constructor args are POSITIONAL, so threading the SV-1.9
+                    // ENOSPC threshold (position 13) requires passing position 12
+                    // ($segmentMaxWaitMs) too. It has never been surfaced in config,
+                    // so pass null explicitly to preserve its existing default
+                    // (self::SEGMENT_MAX_WAIT_MS) verbatim — no behavior change.
                     $manager = new TranscodeManager(
                         $db,
                         $ffmpeg,
@@ -157,7 +171,9 @@ final class TranscodeServicesProvider implements ServiceProviderInterface
                         null,
                         $maxConcurrentSegments,
                         $cacheMaxBytes,
-                        $cacheMaxAge
+                        $cacheMaxAge,
+                        null,
+                        $minDiskSpaceBytes
                     );
 
                     // SV-4.2-disconnect (SS-2): make the shared per-worker

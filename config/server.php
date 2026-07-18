@@ -108,6 +108,15 @@ return [
         // Age (seconds) after which an idle segment session is reclaimed regardless
         // of the size budget — an abandoned watch. Default 3 hours.
         'cache_max_age' => (int) (getenv('HLS_CACHE_MAX_AGE') ?: 10800),
+        // SV-1.9: minimum free bytes required on the segment-cache filesystem before
+        // an on-demand encode is attempted. `segment_dir` is often a small RAM-backed
+        // tmpfs; when free space falls below this floor the encode is rejected with a
+        // fast 503 + Retry-After (via HlsController) and an opportunistic sweep is
+        // triggered, rather than letting FFmpeg hit ENOSPC and cascade into silent
+        // 404s at the player. Sibling of cache_max_bytes/cache_max_age; the
+        // TranscodeManager applies the same 500 MiB default when this key is absent.
+        // Env override: HLS_CACHE_MIN_FREE_BYTES.
+        'min_disk_space_bytes' => (int) (getenv('HLS_CACHE_MIN_FREE_BYTES') ?: 500 * 1024 * 1024),
     ],
 
     // WebSocket server settings for SyncPlay realtime communication.

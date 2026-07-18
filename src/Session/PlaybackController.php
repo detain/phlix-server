@@ -13,6 +13,7 @@ namespace Phlix\Session;
 
 use Phlix\Common\Uuid;
 use Phlix\Common\Util\RowMap;
+use Phlix\Media\Library\MediaItemShaper;
 use Phlix\Stats\StatsCollector;
 use Phlix\Shared\Events\Playback\PlaybackPaused;
 use Phlix\Shared\Events\Playback\PlaybackResumed;
@@ -327,21 +328,31 @@ class PlaybackController
     }
 
     /**
-     * Get items the user has in progress (continue watching).
+     * Returns the user's continue-watching list.
      *
-     * Returns media items that are currently being watched but not yet completed,
-     * ordered by most recently watched.
+     * Each returned row is shaped via MediaItemShaper and augmented with:
+     * - top-level `id` = media item id (not playback state id)
+     * - top-level `poster_url` = series poster for episodes (resolved before shaping)
+     * - top-level `runtime` (minutes, from metadata) — SPA contract
+     * - top-level `position_ticks` / `duration_ticks` (raw ticks, for SPA resume sync)
+     * - top-level `media_item_id` and `metadata` map (console/gate compatibility)
+     * - shaper-produced fields: `poster_srcset`, `year`, `rating`, `genres`, etc.
+     *
+     * Episodes: the stored poster_url is a TMDB still frame; this method resolves
+     * the series poster (or season poster as fallback) before shaping so the CW
+     * rail in `/app` shows correct poster images and a progress bar.
      *
      * @param string $userId User UUID to get continue watching list for
      * @param int $limit Maximum number of items to return (default: 10)
      *
-     * @return array<int, array<string, mixed>> Array of playback state records with media info
+     * @return array<int, array<string, mixed>> Array of shaped media items with playback position
      *
      * @example
      * ```php
      * $continueWatching = $controller->getContinueWatching('user-uuid-123', 5);
      * foreach ($continueWatching as $item) {
-     *     echo $item['name'] . " - " . $item['progress_percent'] . "% complete";
+     *     echo $item['name'] . " - " . $item['poster_url'];
+     *     // $item['position_ticks'] / $item['duration_ticks'] are raw ticks for useResumeSync()
      * }
      * ```
      */
@@ -353,21 +364,33 @@ class PlaybackController
         // item (the most recently updated, ties broken by id) BEFORE applying
         // the limit, otherwise "LIMIT 10" can return ten rows that are all the
         // same title. The window function keeps the newest row per partition.
+        //
+        // Episode rows carry the TMDB still as their stored poster_url, which
+        // is not appropriate for the CW card — we need the series poster.
+        // We join the parent (season for episodes) and the grandparent series
+        // to resolve the correct poster before shaping.
         $result = $this->db->query(
             "SELECT ranked.id, ranked.session_id, ranked.media_item_id,
                     ranked.position_ticks, ranked.duration_ticks,
                     ranked.playback_status, ranked.updated_at,
-                    ranked.name, ranked.type, ranked.metadata_json
+                    ranked.name, ranked.type, ranked.path, ranked.created_at,
+                    ranked.metadata_json, ranked.parent_metadata_json, ranked.series_metadata_json
              FROM (
-                 SELECT ps.*, mi.name, mi.type, mi.metadata_json,
+                 SELECT ps.*,
+                        mi.id AS id,
+                        mi.name, mi.type, mi.path, mi.created_at, mi.metadata_json,
+                        p.metadata_json AS parent_metadata_json,
+                        s.metadata_json AS series_metadata_json,
                         ROW_NUMBER() OVER (
                             PARTITION BY ps.media_item_id
                             ORDER BY ps.updated_at DESC, ps.id DESC
                         ) AS rn
                  FROM playback_state ps
-                 INNER JOIN sessions s ON ps.session_id = s.id
+                 INNER JOIN sessions s_session ON ps.session_id = s_session.id
                  INNER JOIN media_items mi ON ps.media_item_id = mi.id
-                 WHERE s.user_id = ?
+                 LEFT JOIN media_items p ON mi.parent_id = p.id
+                 LEFT JOIN media_items s ON p.parent_id = s.id
+                 WHERE s_session.user_id = ?
                    AND ps.playback_status IN ('playing', 'paused')
                    AND ps.position_ticks > 0
                    AND ps.position_ticks < (ps.duration_ticks * 0.95)
@@ -378,12 +401,74 @@ class PlaybackController
             [$userId, $limit]
         );
 
+        $rows = RowMap::listFromMixed($result);
+
         return array_map(static function (array $row): array {
             $rawJson = $row['metadata_json'] ?? '{}';
-            $json = is_string($rawJson) ? $rawJson : '{}';
-            $row['metadata'] = json_decode($json, true);
-            return $row;
-        }, RowMap::listFromMixed($result));
+            $metadata = is_string($rawJson) ? json_decode($rawJson, true) : [];
+            if (!is_array($metadata)) {
+                $metadata = [];
+            }
+
+            // For episodes the stored poster_url is a TMDB still frame. Resolve
+            // a real poster: series poster → season poster → episode still.
+            // Movies/series keep their own poster_url unchanged.
+            if (($row['type'] ?? '') === 'episode') {
+                $parentMeta = is_string($row['parent_metadata_json'] ?? null)
+                    ? json_decode($row['parent_metadata_json'], true)
+                    : null;
+                $seriesMeta = is_string($row['series_metadata_json'] ?? null)
+                    ? json_decode($row['series_metadata_json'], true)
+                    : null;
+
+                $seriesPoster = is_array($seriesMeta) ? ($seriesMeta['poster_url'] ?? null) : null;
+                $seasonPoster = is_array($parentMeta) ? ($parentMeta['poster_url'] ?? null) : null;
+                $episodePoster = $metadata['poster_url'] ?? null;
+
+                // Use series poster if available, otherwise season poster.
+                // Only override if the episode's own poster appears to be a still
+                // (i.e., it differs from cover_image_* or still_url is set).
+                $episodeStillUrl = $metadata['still_url'] ?? null;
+                $hasRealOwnPoster = $episodePoster !== null
+                    && $episodePoster !== ''
+                    && $episodePoster !== $episodeStillUrl
+                    && ($metadata['cover_image_large'] ?? null) !== $episodePoster
+                    && ($metadata['cover_image_extralarge'] ?? null) !== $episodePoster;
+
+                if (!$hasRealOwnPoster) {
+                    if ($seriesPoster !== null && $seriesPoster !== '') {
+                        $metadata['poster_url'] = $seriesPoster;
+                    } elseif ($seasonPoster !== null && $seasonPoster !== '') {
+                        $metadata['poster_url'] = $seasonPoster;
+                    }
+                }
+            }
+
+            // Build the item array for MediaItemShaper::shape(): needs top-level
+            // id, name, type, path, parent_id, created_at, updated_at, metadata.
+            // Use media_item_id (not playback state id) as the shaped id.
+            $item = [
+                'id' => $row['media_item_id'],
+                'name' => $row['name'],
+                'type' => $row['type'],
+                'path' => $row['path'] ?? null,
+                'parent_id' => $row['parent_id'] ?? null,
+                'created_at' => $row['created_at'] ?? null,
+                'updated_at' => $row['updated_at'] ?? null,
+                'metadata' => $metadata,
+            ];
+
+            /** @var array<string, mixed> $shaped */
+            $shaped = MediaItemShaper::shape($item);
+
+            // Re-attach playback-specific fields the shaper doesn't carry.
+            $shaped['position_ticks'] = $row['position_ticks'];
+            $shaped['duration_ticks'] = $row['duration_ticks'];
+            $shaped['media_item_id'] = $row['media_item_id'];
+            $shaped['metadata'] = $metadata;
+
+            return $shaped;
+        }, $rows);
     }
 
     /**

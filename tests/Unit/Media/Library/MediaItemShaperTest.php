@@ -128,6 +128,77 @@ final class MediaItemShaperTest extends TestCase
         $this->assertSame('Pilot', $shaped['episode_title']);
     }
 
+    public function testShapeSurfacesMovieOfficialRatingAsRating(): void
+    {
+        // Phase C: the resolver stores the movie cert under `official_rating`
+        // (parsed from TMDB release_dates); the shaper surfaces it as `rating`.
+        $shaped = MediaItemShaper::shape([
+            'id' => 'm-2',
+            'name' => 'Film',
+            'type' => 'movie',
+            'metadata' => ['official_rating' => 'PG-13'],
+        ]);
+
+        $this->assertSame('PG-13', $shaped['rating']);
+    }
+
+    public function testShapeSurfacesTvOfficialRatingAsRating(): void
+    {
+        // TV content_ratings (e.g. TV-14) reach `rating` too, now that the TV
+        // ratings are canonical values.
+        $shaped = MediaItemShaper::shape([
+            'id' => 'ep-2',
+            'name' => 'Pilot',
+            'type' => 'episode',
+            'metadata' => ['official_rating' => 'TV-14'],
+        ]);
+
+        $this->assertSame('TV-14', $shaped['rating']);
+    }
+
+    public function testShapeOfficialRatingWinsOverLegacyRatingKey(): void
+    {
+        $shaped = MediaItemShaper::shape([
+            'id' => 'm-3',
+            'name' => 'Film',
+            'type' => 'movie',
+            'metadata' => ['official_rating' => 'R', 'rating' => 'G'],
+        ]);
+
+        $this->assertSame('R', $shaped['rating']);
+    }
+
+    public function testShapeNormalizesNrAliasAndDropsUnknownRating(): void
+    {
+        $nr = MediaItemShaper::shape([
+            'id' => 'm-4',
+            'name' => 'Film',
+            'type' => 'movie',
+            'metadata' => ['official_rating' => 'NR'],
+        ]);
+        $this->assertSame('UNRATED', $nr['rating']);
+
+        $unknown = MediaItemShaper::shape([
+            'id' => 'm-5',
+            'name' => 'Film',
+            'type' => 'movie',
+            'metadata' => ['rating' => 'BOGUS'],
+        ]);
+        $this->assertNull($unknown['rating']);
+    }
+
+    public function testShapeRatingNullWhenNoCert(): void
+    {
+        $shaped = MediaItemShaper::shape([
+            'id' => 'm-6',
+            'name' => 'Film',
+            'type' => 'movie',
+            'metadata' => ['year' => 2020],
+        ]);
+
+        $this->assertNull($shaped['rating']);
+    }
+
     public function testShapeNormalisesActorObjectsToNameStrings(): void
     {
         // Legacy/interactive-match data stores TMDB actor OBJECTS; the shaper

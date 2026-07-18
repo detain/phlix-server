@@ -140,6 +140,7 @@ class IndexBucketsTest extends TestCase
             ['value' => 'G', 'count' => 20],
             ['value' => 'PG', 'count' => 30],
             ['value' => 'PG-13', 'count' => 15],
+            ['value' => 'TV-14', 'count' => 7], // TV rating now a first-class bucket
             ['value' => 'R', 'count' => 25],
             ['value' => 'NC-17', 'count' => 5],
             ['value' => 'X', 'count' => 3],
@@ -149,13 +150,24 @@ class IndexBucketsTest extends TestCase
 
         $result = $this->buckets->build(IndexBuckets::FIELD_RATING, $distincts, 'asc');
 
-        // 7 RATING_ORDER + Unrated = 8 buckets
-        $this->assertCount(8, $result);
+        // 13 ContentRating::RANKS values (movie + interleaved TV) + Unrated = 14 buckets
+        $this->assertCount(14, $result);
 
-        // First bucket should be G
+        // First bucket should be G (rank 0), and the second the lowest TV rating.
         $this->assertSame('G', $result[0]['key']);
         $this->assertSame('G', $result[0]['label']);
         $this->assertSame(20, $result[0]['count']);
+        $this->assertSame('TV-Y', $result[1]['key']);
+
+        // TV-14 is a real bucket and receives its own count.
+        $keyed = [];
+        foreach ($result as $bucket) {
+            $keyed[$bucket['key']] = $bucket['count'];
+        }
+        $this->assertArrayHasKey('TV-14', $keyed);
+        $this->assertSame(7, $keyed['TV-14']);
+        $this->assertArrayHasKey('TV-MA', $keyed);
+        $this->assertSame(0, $keyed['TV-MA']);
 
         // Last bucket should be Unrated
         $lastBucket = end($result);

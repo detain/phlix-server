@@ -120,6 +120,59 @@ final class AdminProfileControllerTest extends TestCase
         $this->assertSame('Profile created successfully', $body['message']);
     }
 
+    public function testCreateForUserMapsTvRatingInt(): void
+    {
+        // Phase C: numeric keys 7-12 map to the appended US TV ratings.
+        // 11 → TV-14 (see AdminProfileController::RATING_MAP).
+        $profileManager = $this->createMock(UserProfileManager::class);
+        $profileManager->expects($this->once())
+            ->method('findByUserId')
+            ->with('1')
+            ->willReturn([]);
+        $profileManager->expects($this->once())
+            ->method('create')
+            ->with('1', ['name' => 'Teen', 'content_rating' => 'TV-14'])
+            ->willReturn('prof_9');
+
+        $userRepo = $this->createMock(UserRepository::class);
+        $userRepo->expects($this->once())
+            ->method('findById')
+            ->with('1')
+            ->willReturn(['id' => '1', 'username' => 'alice']);
+
+        $controller = new AdminProfileController($profileManager, $userRepo);
+        $response = $controller->createForUser($this->makeRequest([
+            'name' => 'Teen',
+            'rating' => 11,
+        ]), ['userId' => '1']);
+
+        $this->assertSame(201, $response->statusCode);
+    }
+
+    public function testCreateForUserRejectsRatingAboveMax(): void
+    {
+        $profileManager = $this->createMock(UserProfileManager::class);
+        $profileManager->expects($this->once())
+            ->method('findByUserId')
+            ->with('1')
+            ->willReturn([]);
+        $profileManager->expects($this->never())->method('create');
+
+        $userRepo = $this->createMock(UserRepository::class);
+        $userRepo->expects($this->once())
+            ->method('findById')
+            ->with('1')
+            ->willReturn(['id' => '1', 'username' => 'alice']);
+
+        $controller = new AdminProfileController($profileManager, $userRepo);
+        $response = $controller->createForUser($this->makeRequest([
+            'name' => 'Bad',
+            'rating' => 13, // above MAX_RATING_INT (12)
+        ]), ['userId' => '1']);
+
+        $this->assertSame(400, $response->statusCode);
+    }
+
     public function testCreateForUserMaxProfiles(): void
     {
         $existingProfiles = [

@@ -247,7 +247,7 @@ class TmdbProvider implements MetadataProviderInterface
 
         $response = $this->http->get("/movie/{$externalId}", [
             'language' => $language,
-            'append_to_response' => 'credits,genres,production_companies,external_ids,keywords',
+            'append_to_response' => 'credits,genres,production_companies,external_ids,keywords,release_dates',
         ]);
 
         if ($response === null) {
@@ -892,6 +892,49 @@ class TmdbProvider implements MetadataProviderInterface
     }
 
     /**
+     * Pull the US MPAA certification (e.g. `PG-13`) from a movie
+     * `release_dates` block (TMDB `append_to_response=release_dates`).
+     *
+     * The block is `{results: [{iso_3166_1, release_dates: [{certification,
+     * type, …}]}]}`. Within the US entry a movie can carry several dated
+     * releases (premiere/theatrical/digital/…), only some of which name a
+     * certification; the theatrical release (`type === 3`) is preferred, then
+     * any dated release with a non-empty certification. Returns the raw
+     * certification string (normalization to the canonical enum happens at the
+     * storage/display boundary) or null when none is present.
+     *
+     * @param mixed $releaseDates Raw `release_dates` payload.
+     * @return string|null The US certification, or null when absent.
+     */
+    private function extractUsMovieCertification(mixed $releaseDates): ?string
+    {
+        $block = MetadataValue::asAssoc($releaseDates);
+        foreach (MetadataValue::asAssocList($block['results'] ?? null) as $row) {
+            if (MetadataValue::asString($row['iso_3166_1'] ?? null) !== 'US') {
+                continue;
+            }
+
+            $entries = MetadataValue::asAssocList($row['release_dates'] ?? null);
+            $fallback = null;
+            foreach ($entries as $entry) {
+                $cert = MetadataValue::asString($entry['certification'] ?? null);
+                if ($cert === '') {
+                    continue;
+                }
+                // Prefer the theatrical release's certification (type 3);
+                // otherwise remember the first non-empty one as a fallback.
+                if (MetadataValue::asInt($entry['type'] ?? null) === 3) {
+                    return $cert;
+                }
+                $fallback ??= $cert;
+            }
+
+            return $fallback;
+        }
+        return null;
+    }
+
+    /**
      * Pull tag names from a TMDB `keywords` block.
      *
      * TMDB nests TV keywords under `keywords.results[]` and movie keywords under
@@ -1061,7 +1104,7 @@ class TmdbProvider implements MetadataProviderInterface
                 $data['original_title'] ?? ($data['original_name'] ?? null)
             ),
             'overview' => MetadataValue::asString($data['overview'] ?? null),
-            'official_rating' => null,
+            'official_rating' => $this->extractUsMovieCertification($data['release_dates'] ?? null),
             'vote_average' => MetadataValue::asFloat($data['vote_average'] ?? null),
             'vote_count' => MetadataValue::asInt($data['vote_count'] ?? null),
             'year' => $year,

@@ -1030,6 +1030,14 @@ class LibraryMetadataMatcher
         if ($director !== null) {
             $result['director'] = $director;
         }
+        // Content certification parsed from TMDB movie `release_dates`
+        // (Phase C). Mirrors the series path above so a refresh persists the
+        // movie cert into `metadata_json.official_rating`, where the shaper and
+        // the materialized `content_rating` column both read it.
+        $rating = MetadataValue::asNullableString($details['official_rating'] ?? null);
+        if ($rating !== null) {
+            $result['official_rating'] = $rating;
+        }
         $actors = MetadataValue::actorNames($details['actors'] ?? null);
         if ($actors !== []) {
             $result['actors'] = $actors;

@@ -1338,16 +1338,89 @@ class ItemRepositoryTest extends TestCase
         $this->assertSame('R', ItemRepository::extractContentRating(['rating' => 'R', 'year' => 1999]));
     }
 
-    public function testExtractContentRatingPreservesComplexCertificateLabels(): void
+    public function testExtractContentRatingNormalizesToCanonicalEnum(): void
     {
-        // VARCHAR(32) certificate labels pass through verbatim, unquoted.
-        $this->assertSame('TV-Y7-FV', ItemRepository::extractContentRating(['rating' => 'TV-Y7-FV']));
+        // Phase C: the materialized column is normalized to a canonical rating
+        // (see ContentRating) rather than passed through verbatim, so the
+        // RATING_ORDER-driven parental filter always recognizes the value.
         $this->assertSame('NC-17', ItemRepository::extractContentRating(['rating' => 'NC-17']));
+        // TV ratings surface now that they are canonical values.
+        $this->assertSame('TV-14', ItemRepository::extractContentRating(['rating' => 'TV-14']));
+        // FfV-programming suffix collapses to the base TV rating.
+        $this->assertSame('TV-Y7', ItemRepository::extractContentRating(['rating' => 'TV-Y7-FV']));
+        // NR is an alias of UNRATED.
+        $this->assertSame('UNRATED', ItemRepository::extractContentRating(['rating' => 'NR']));
+        // Unknown labels no longer widen the column — they normalize to null.
+        $this->assertNull(ItemRepository::extractContentRating(['rating' => 'GP']));
+    }
+
+    public function testExtractContentRatingPrefersOfficialRatingOverRating(): void
+    {
+        // The resolver stores the content cert under `official_rating`; it wins
+        // over any legacy `rating` key so a resolved cert reaches the column.
+        $this->assertSame(
+            'TV-MA',
+            ItemRepository::extractContentRating(['official_rating' => 'TV-MA', 'rating' => 'PG'])
+        );
+        // Falls back to `rating` when `official_rating` is absent.
+        $this->assertSame('PG-13', ItemRepository::extractContentRating(['rating' => 'PG-13']));
     }
 
     public function testExtractContentRatingReturnsNullWhenRatingKeyAbsent(): void
     {
         $this->assertNull(ItemRepository::extractContentRating(['year' => 2020, 'genres' => ['Drama']]));
+    }
+
+    /**
+     * Capture the allowed-rating list getByMaxRating() feeds getByAllowedRatings()
+     * for a given cap. The SELECT binds [libraryId, ...allowedRatings, limit, offset],
+     * so the allowed ratings are the params between the first and the last two.
+     *
+     * @return list<string>
+     */
+    private function captureAllowedRatingsForMax(string $maxRating): array
+    {
+        $captured = [];
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(function (string $sql, $params = []) use (&$captured) {
+            if (str_starts_with(trim($sql), 'SELECT * FROM media_items')) {
+                // Drop libraryId (first) and limit+offset (last two).
+                $captured = array_slice($params, 1, count($params) - 3);
+            }
+            return [];
+        });
+
+        (new ItemRepository($db))->getByMaxRating('lib-1', $maxRating);
+
+        /** @var list<string> $captured */
+        return $captured;
+    }
+
+    public function testGetByMaxRatingIncludesTvRatingsAtOrBelowPg13(): void
+    {
+        // A PG-13 cap (rank 3) must allow TV-14 (rank 3) and everything below,
+        // and exclude R/TV-MA and above.
+        $allowed = $this->captureAllowedRatingsForMax('PG-13');
+
+        foreach (['G', 'TV-Y', 'TV-G', 'TV-Y7', 'PG', 'TV-PG', 'PG-13', 'TV-14'] as $rating) {
+            $this->assertContains($rating, $allowed, "{$rating} should be allowed under a PG-13 cap");
+        }
+        foreach (['R', 'TV-MA', 'NC-17', 'X', 'UNRATED'] as $rating) {
+            $this->assertNotContains($rating, $allowed, "{$rating} must be excluded under a PG-13 cap");
+        }
+    }
+
+    public function testGetByMaxRatingIncludesTvMaAtRCap(): void
+    {
+        // An R cap (rank 4) allows TV-MA (rank 4) but not NC-17/X/UNRATED.
+        $allowed = $this->captureAllowedRatingsForMax('R');
+
+        $this->assertContains('R', $allowed);
+        $this->assertContains('TV-MA', $allowed);
+        $this->assertContains('TV-14', $allowed);
+        $this->assertNotContains('NC-17', $allowed);
+        $this->assertNotContains('X', $allowed);
+        $this->assertNotContains('UNRATED', $allowed);
     }
 
     public function testExtractContentRatingReturnsNullForEmptyArray(): void

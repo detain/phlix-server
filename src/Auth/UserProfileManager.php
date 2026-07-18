@@ -14,6 +14,7 @@ namespace Phlix\Auth;
 use Phlix\Auth\Dto\UserRow;
 use Phlix\Common\Uuid;
 use Phlix\Common\Util\RowMap;
+use Phlix\Media\Library\ContentRating;
 use Workerman\MySQL\Connection;
 
 /**
@@ -65,15 +66,7 @@ class UserProfileManager
      *
      * @var array<string, int>
      */
-    public const RATING_ORDER = [
-        'G' => 1,
-        'PG' => 2,
-        'PG-13' => 3,
-        'R' => 4,
-        'NC-17' => 5,
-        'X' => 6,
-        'UNRATED' => 7,
-    ];
+    public const RATING_ORDER = ContentRating::RANKS;
 
     /**
      * Maximum number of profiles allowed per user account.

@@ -32,8 +32,28 @@ final class MediaItemShaper
     /** Media-item `type` enum (schema-constrained). */
     private const VALID_TYPES = ['movie', 'series', 'season', 'episode', 'audio', 'image'];
 
-    /** Content-rating enum (schema-constrained). */
-    private const VALID_RATINGS = ['G', 'PG', 'PG-13', 'R', 'NC-17', 'X', 'UNRATED'];
+    /**
+     * Content-rating enum (schema-constrained). The MPAA movie ratings PLUS the
+     * US TV ratings, interleaved on the shared restrictiveness scale (see
+     * {@see ContentRating}). `NR` is normalized to `UNRATED` and so is absent.
+     *
+     * @var list<string>
+     */
+    private const VALID_RATINGS = [
+        'G',
+        'TV-Y',
+        'TV-G',
+        'TV-Y7',
+        'PG',
+        'TV-PG',
+        'PG-13',
+        'TV-14',
+        'R',
+        'TV-MA',
+        'NC-17',
+        'X',
+        'UNRATED',
+    ];
 
     /**
      * Shapes a raw media item row into the media-item schema format.
@@ -59,9 +79,17 @@ final class MediaItemShaper
         $type = is_string($item['type'] ?? null) && in_array($item['type'], self::VALID_TYPES, true)
             ? $item['type']
             : 'movie';
-        $rating = is_string($metadata['rating'] ?? null) && in_array($metadata['rating'], self::VALID_RATINGS, true)
-            ? $metadata['rating']
-            : null;
+        // Content rating: the resolver stores it under `official_rating` (movie
+        // release-date certs + TV content_ratings), while older/pre-resolver rows
+        // carried it under `rating`. Prefer `official_rating`, fall back to
+        // `rating`, and normalize (folds `NR`→`UNRATED`, drops unknowns) so a
+        // resolved cert actually surfaces. Kept behind VALID_RATINGS so the
+        // response stays enum-constrained.
+        $ratingRaw = $metadata['official_rating'] ?? ($metadata['rating'] ?? null);
+        $rating = ContentRating::normalize($ratingRaw);
+        if ($rating !== null && !in_array($rating, self::VALID_RATINGS, true)) {
+            $rating = null;
+        }
 
         $posterUrl = self::nonemptyString($metadata['poster_url'] ?? null)
             ?? self::nonemptyString($metadata['cover_image_large'] ?? null)

@@ -87,6 +87,93 @@ class TmdbProviderTest extends TestCase
         $this->assertSame('1668', $details['tmdb_id']);
     }
 
+    public function testGetDetailsParsesUsMovieCertificationFromReleaseDates(): void
+    {
+        $http = $this->createMock(MetadataHttpClient::class);
+        $http->method('get')->willReturn([
+            'id' => 27205,
+            'title' => 'Inception',
+            'overview' => 'Dreams.',
+            'release_date' => '2010-07-16',
+            'release_dates' => ['results' => [
+                ['iso_3166_1' => 'GB', 'release_dates' => [['certification' => '12A', 'type' => 3]]],
+                ['iso_3166_1' => 'US', 'release_dates' => [
+                    ['certification' => '', 'type' => 1],        // premiere, no cert
+                    ['certification' => 'PG-13', 'type' => 3],   // theatrical
+                ]],
+            ]],
+        ]);
+
+        $details = (new TmdbProvider('k', $http))->getDetails('27205');
+
+        $this->assertSame('PG-13', $details['official_rating']);
+    }
+
+    public function testGetDetailsPrefersTheatricalCertificationOverOtherReleaseTypes(): void
+    {
+        $http = $this->createMock(MetadataHttpClient::class);
+        $http->method('get')->willReturn([
+            'id' => 1,
+            'title' => 'Film',
+            'release_dates' => ['results' => [
+                ['iso_3166_1' => 'US', 'release_dates' => [
+                    ['certification' => 'NR', 'type' => 4],    // digital
+                    ['certification' => 'R', 'type' => 3],     // theatrical wins
+                ]],
+            ]],
+        ]);
+
+        $details = (new TmdbProvider('k', $http))->getDetails('1');
+
+        $this->assertSame('R', $details['official_rating']);
+    }
+
+    public function testGetDetailsFallsBackToFirstNonEmptyCertificationWhenNoTheatrical(): void
+    {
+        $http = $this->createMock(MetadataHttpClient::class);
+        $http->method('get')->willReturn([
+            'id' => 1,
+            'title' => 'Film',
+            'release_dates' => ['results' => [
+                ['iso_3166_1' => 'US', 'release_dates' => [
+                    ['certification' => '', 'type' => 1],
+                    ['certification' => 'PG', 'type' => 4], // only dated cert available
+                ]],
+            ]],
+        ]);
+
+        $details = (new TmdbProvider('k', $http))->getDetails('1');
+
+        $this->assertSame('PG', $details['official_rating']);
+    }
+
+    public function testGetDetailsOfficialRatingNullWhenNoUsCertification(): void
+    {
+        $http = $this->createMock(MetadataHttpClient::class);
+        $http->method('get')->willReturn([
+            'id' => 1,
+            'title' => 'Film',
+            'release_dates' => ['results' => [
+                ['iso_3166_1' => 'GB', 'release_dates' => [['certification' => '15', 'type' => 3]]],
+                ['iso_3166_1' => 'US', 'release_dates' => [['certification' => '', 'type' => 3]]],
+            ]],
+        ]);
+
+        $details = (new TmdbProvider('k', $http))->getDetails('1');
+
+        $this->assertNull($details['official_rating']);
+    }
+
+    public function testGetDetailsOfficialRatingNullWhenReleaseDatesAbsent(): void
+    {
+        $http = $this->createMock(MetadataHttpClient::class);
+        $http->method('get')->willReturn(['id' => 1, 'title' => 'Film']);
+
+        $details = (new TmdbProvider('k', $http))->getDetails('1');
+
+        $this->assertNull($details['official_rating']);
+    }
+
     public function testGetTvDetailsThreadsTvdbIdFromExternalIds(): void
     {
         // M3: the TheTVDB id (integer in TMDB's external_ids) must surface as a

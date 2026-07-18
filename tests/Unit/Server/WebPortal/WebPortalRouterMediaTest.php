@@ -989,8 +989,9 @@ class WebPortalRouterMediaTest extends TestCase
 
     /**
      * Suite C: rating field — verifies the alignment rule for fixed rating buckets.
-     * All 8 rating buckets (7 RATING_ORDER + Unrated) are always present even
-     * when some have count=0; cumulative offsets must still be valid.
+     * All 14 rating buckets (13 ContentRating::RANKS movie + interleaved TV
+     * ratings + Unrated) are always present even when some have count=0;
+     * cumulative offsets must still be valid.
      */
     public function testMediaIndexRatingFieldWithCumulativeOffsets(): void
     {
@@ -1015,8 +1016,8 @@ class WebPortalRouterMediaTest extends TestCase
         $body = $this->decodeBody($response->body);
         $this->assertSame('rating', $body['field']);
 
-        // Must have all 8 fixed rating buckets
-        $this->assertCount(8, $body['buckets']);
+        // Must have all 14 fixed rating buckets
+        $this->assertCount(14, $body['buckets']);
 
         // Find PG and R in the bucket list
         $pgBucket = null;

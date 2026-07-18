@@ -31,19 +31,13 @@ final class IndexBuckets
     private const MAX_YEAR_BUCKETS = 25;
 
     /**
-     * Rating order mapping — least to most restrictive.
+     * Rating order mapping — least to most restrictive. Derived from the single
+     * canonical rank list {@see ContentRating::RANKS} so the rating facet rail
+     * shows the same movie + interleaved TV ratings the filter recognizes.
      *
      * @var array<string, int>
      */
-    private const RATING_ORDER = [
-        'G' => 1,
-        'PG' => 2,
-        'PG-13' => 3,
-        'R' => 4,
-        'NC-17' => 5,
-        'X' => 6,
-        'UNRATED' => 7,
-    ];
+    private const RATING_ORDER = ContentRating::RANKS;
 
     /**
      * Build bucket metadata for a given field from pre-sorted distinct values.
@@ -213,20 +207,22 @@ final class IndexBuckets
     }
 
     /**
-     * Rating field: always 8 fixed buckets (7 RATING_ORDER groups + Unrated for null/empty).
+     * Rating field: one fixed bucket per {@see ContentRating::RANKS} value (the
+     * movie ratings plus the interleaved TV ratings) plus a trailing Unrated
+     * bucket for null/empty/unknown ratings.
      *
      * @param array<int, array{value: string|int, count: int}> $distincts
      * @return array<int, array{key: string, label: string, count: int}>
      */
     private function bucketsForRating(array $distincts): array
     {
-        // Initialize all 7 RATING_ORDER buckets with 0 count
+        // Initialize every RATING_ORDER bucket with 0 count
         $buckets = [];
         foreach (self::RATING_ORDER as $rating => $_order) {
             $buckets[$rating] = ['key' => $rating, 'label' => $rating, 'count' => 0];
         }
 
-        // Add Unrated bucket for null/empty/missing ratings
+        // Add Unrated bucket for null/empty/missing/unknown ratings
         $buckets['Unrated'] = ['key' => 'Unrated', 'label' => 'Unrated', 'count' => 0];
 
         // Distribute counts from distincts

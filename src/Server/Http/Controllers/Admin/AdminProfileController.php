@@ -39,7 +39,12 @@ use Phlix\Server\Http\Response;
 final class AdminProfileController
 {
     /**
-     * Mapping of integer rating (0-6) to string rating label.
+     * Mapping of integer rating (0-12) to string rating label.
+     *
+     * Keys 0-6 are the original MPAA movie ratings and are STABLE (never
+     * renumbered). Keys 7-12 append the US TV ratings so an admin can cap a
+     * profile at a TV rating; they compare on the shared restrictiveness scale
+     * (see {@see \Phlix\Media\Library\ContentRating}).
      *
      * @var array<int, string>
      */
@@ -51,7 +56,16 @@ final class AdminProfileController
         4 => 'NC-17',
         5 => 'X',
         6 => 'UNRATED',
+        7 => 'TV-Y',
+        8 => 'TV-G',
+        9 => 'TV-Y7',
+        10 => 'TV-PG',
+        11 => 'TV-14',
+        12 => 'TV-MA',
     ];
+
+    /** Highest valid numeric rating key accepted by create()/update(). */
+    private const MAX_RATING_INT = 12;
     /**
      * @param UserProfileManager $profileManager Profile management service
      * @param UserRepository    $userRepository  User repository for user existence checks
@@ -85,7 +99,7 @@ final class AdminProfileController
     /**
      * Create a new profile for a user.
      *
-     * @param Request               $request The HTTP request (name required, rating optional 0-6).
+     * @param Request               $request The HTTP request (name required, rating optional 0-12).
      * @param array<string, string> $params  Path parameters ({userId} — a UUID string).
      *
      * @return Response 201 { profile_id: int, message: string }
@@ -117,15 +131,15 @@ final class AdminProfileController
         if ($rating !== null && !is_int($rating) && !is_numeric($rating)) {
             return (new Response())->status(400)->json([
                 'error' => 'Invalid rating',
-                'field_errors' => ['rating' => 'Rating must be an integer 0-6'],
+                'field_errors' => ['rating' => 'Rating must be an integer 0-' . self::MAX_RATING_INT],
             ]);
         }
         if ($rating !== null) {
             $ratingInt = is_int($rating) ? $rating : (int) $rating;
-            if ($ratingInt < 0 || $ratingInt > 6) {
+            if ($ratingInt < 0 || $ratingInt > self::MAX_RATING_INT) {
                 return (new Response())->status(400)->json([
                     'error' => 'Invalid rating',
-                    'field_errors' => ['rating' => 'Rating must be 0-6'],
+                    'field_errors' => ['rating' => 'Rating must be 0-' . self::MAX_RATING_INT],
                 ]);
             }
         }
@@ -194,14 +208,14 @@ final class AdminProfileController
             if (!is_int($rating) && !is_numeric($rating)) {
                 return (new Response())->status(400)->json([
                     'error' => 'Invalid rating',
-                    'field_errors' => ['rating' => 'Rating must be an integer 0-6'],
+                    'field_errors' => ['rating' => 'Rating must be an integer 0-' . self::MAX_RATING_INT],
                 ]);
             }
             $ratingInt = is_int($rating) ? $rating : (int) $rating;
-            if ($ratingInt < 0 || $ratingInt > 6) {
+            if ($ratingInt < 0 || $ratingInt > self::MAX_RATING_INT) {
                 return (new Response())->status(400)->json([
                     'error' => 'Invalid rating',
-                    'field_errors' => ['rating' => 'Rating must be 0-6'],
+                    'field_errors' => ['rating' => 'Rating must be 0-' . self::MAX_RATING_INT],
                 ]);
             }
         }

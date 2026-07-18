@@ -1027,9 +1027,14 @@ class ItemRepository
             return null;
         }
 
-        $rating = $metadataJson['rating'] ?? null;
+        // Prefer the resolver's canonical `official_rating` (movie release-date
+        // certs + TV content_ratings), falling back to the legacy `rating` key.
+        // Normalize (folds `NR`→`UNRATED`, uppercases, drops unknowns) so the
+        // materialized column only ever holds a value the RATING_ORDER-driven
+        // parental filter recognizes.
+        $rating = $metadataJson['official_rating'] ?? ($metadataJson['rating'] ?? null);
 
-        return is_string($rating) ? $rating : null;
+        return ContentRating::normalize($rating);
     }
 
     /**
@@ -1730,17 +1735,13 @@ class ItemRepository
     /**
      * Content rating order mapping from least to most restrictive.
      *
+     * Derived verbatim from {@see ContentRating::RANKS} — the single canonical
+     * rank list — so the movie ratings and the interleaved TV ratings compare on
+     * one scale and can never drift from the shaper / bucket / profile lists.
+     *
      * @var array<string, int> Rating string to numeric order mapping
      */
-    public const RATING_ORDER = [
-        'G' => 1,
-        'PG' => 2,
-        'PG-13' => 3,
-        'R' => 4,
-        'NC-17' => 5,
-        'X' => 6,
-        'UNRATED' => 7,
-    ];
+    public const RATING_ORDER = ContentRating::RANKS;
 
     /**
      * Get items filtered by allowed content ratings.

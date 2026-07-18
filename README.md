@@ -389,6 +389,7 @@ the streaming and auth-hardening features and all have safe defaults.
 | `RATE_LIMIT_<SURFACE>_MAX` | per-surface default | Max attempts per window for an auth surface before it rate-limits. `<SURFACE>` is one of `REGISTER`, `REFRESH`, `WEBAUTHN_START`, `WEBAUTHN_FINISH`, `JWKS`, `WS_CONNECT` (defaults: register 5, refresh 30, webauthn_start/finish 10, jwks 120, ws_connect 30). See `config/server.php` → `rate_limit`. |
 | `RATE_LIMIT_<SURFACE>_WINDOW` | per-surface default | Window length in seconds for the matching surface (defaults: register 600, refresh 60, webauthn_start/finish 60, jwks 60, ws_connect 60). |
 | `TRUSTED_PROXIES` | loopback only (`127.0.0.1`, `::1`) | Comma-separated IP/CIDR list of reverse-proxy hops. Used to derive the **real** client IP from `X-Forwarded-For`/`X-Real-IP` for rate-limit keys. **This must reflect your nginx/HAProxy hops** — if a non-loopback proxy fronts the server and is not listed here, IP-keyed limits will bucket every request under the proxy address (or trust a client-forged header). The stock install fronts Phlix over loopback, so the default is correct there. |
+| `PHLIX_DEBUG_EVENTS` | `0` (off) | Diagnostic toggle. When truthy (`1`/`true`/`yes`/`on`) it (1) wraps the PSR-14 dispatcher in a debug decorator that logs every dispatched event class, and (2) enables the `events` log handler so those records are written to `.logs/events.log`. When off, `events.log` stays empty and no per-event debug logging happens. Leave off in production. `events.log` only ever receives `EVENTS`-channel records; `plugins.log` only `PLUGINS`-channel records; `app.log`/`error.log` still capture everything / all errors. See `config/logger.php`. |
 
 > **Rate limiting.** The auth surfaces above (`register` / `refresh` / WebAuthn
 > `start`+`finish` / public JWKS / WS-connect on `:8097`) are rate-limited.
@@ -446,6 +447,14 @@ login `start`/`finish` endpoints, and the public JWKS endpoint reply
 `429 Too Many Requests` + `Retry-After` (body
 `{"error":"Too Many Requests","code":"rate_limited"}`) when a caller exceeds the
 per-surface limit. Tune via `RATE_LIMIT_*` (see [Environment variables](#environment-variables)).
+
+**JWKS key format.** `GET /.well-known/jwks.json` serves this server's Ed25519
+public key from `config/hub-server-key.pem`. The reader accepts **both** the
+app's native `-----BEGIN ED25519 PRIVATE KEY-----` format **and** a standard
+PKCS#8 Ed25519 key (`-----BEGIN PRIVATE KEY-----`, e.g. from
+`openssl genpkey -algorithm Ed25519`). If the key cannot be loaded, the endpoint
+degrades to a valid empty keyset (`{"keys":[]}`, HTTP 200) and logs an error
+rather than returning a 500.
 
 **Client capability negotiation.** Send an `X-Phlix-Client-Capabilities` request
 header (a JSON codec-support map, e.g. `{"eac3":false}`) on playback-info

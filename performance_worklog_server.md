@@ -7984,3 +7984,68 @@ method; kept `getPreferences()` and the `$preferencesCache` field (still read+wr
 - `./vendor/bin/phpcs --standard=PSR12` on all 4 changed files → 0 violations.
 - `php -l` clean on both changed src files. No `start.php`/DI/ctor change (instance property only) → no
   dual-entrypoint mirroring required.
+
+---
+
+## Reviewer (per-step) — 2026-07-18
+
+Confirming re-review of fix commit `f40de63b` (cumulative findings 1 & 2). Read the fix diff, the
+current `src/Server/WebSocket/WebSocketServer.php`, `src/Media/Playback/GaplessPlaybackManager.php`,
+`src/Stats/Metrics/MetricsRegistry.php` (`touchConnection`/`openConnection`/`!isset` fallback), the
+`Connection`/`ConnectionPool` id model, and the two test files. Ran `php -l` on both changed src
+files and the two WS test files (`WsMetricsRemoteIpTest` + `WebSocketServerTest`): 19 tests / 59
+assertions OK.
+
+Adversarial checks performed and cleared:
+- Set-leak: `$openedConnectionIds` is added ONLY in `onWebSocketConnect()` right after
+  `openConnection()` (same `if ($this->metrics !== null)` block, no early-return between), and
+  removed on EVERY exit — `onClose()` `unset()`s regardless of the gate (:593), and both reject
+  paths `unset()` after `connections->remove()` (:480 rate-limit, :498 auth). Every accepted TCP
+  socket fires exactly one `onClose` (or is rejected, which unsets); rejected sockets whose wrapper
+  is already removed hit `findConnection()===null` in `onClose` and skip the block harmlessly. No
+  orphan path; per-worker instance property (not static/global), bounded by live connections.
+- Wrongly-skipped upgraded connection: id is recorded in the same block immediately after the
+  `openConnection()` call, so no window exists where a row is opened but the id is untracked.
+- `onClose` correctness: pool `remove()` + SyncPlay vacate + auth broadcast stay UNGATED; only the
+  metrics `touchConnection()` is gated on `isset(openedConnectionIds[$id])`; id is stable
+  (`spl_object_id.uniqid` on the single wrapper created in `onConnect`, retrieved via
+  `getByObjectId`).
+- Timer: `touchActiveConnections()` `continue`s only on `!isset(openedConnectionIds[getId()])` — skips
+  never-upgraded, touches all upgraded-live; correct variable, no off-by-one.
+- Concurrency: array check+mutate pairs have no I/O yield point between them; Workerman event-loop
+  callbacks run to completion — no cross-coroutine corruption for the same id.
+- Tests bite: `testNeverUpgradedConnectionCreatesNoPhantomMetricsRow` drives onConnect→timer→onClose
+  against a real `MetricsRegistry` and asserts `snapshotConnections()` stays empty — removing either
+  guard makes the `!isset` fallback fabricate a row (count 1 ≠ 0), failing the test.
+  `testUpgradedConnectionIsTouchedByTimerThenFinalTouchedOnClose` asserts open→timer records
+  1234/5678→close leaves the row — biting the wrongly-skipped direction.
+- Finding 2: `GaplessPlaybackManager::clearCache()` removed with zero dangling refs (no callers, no
+  `@see`, no test) in `src/`/`tests/`; `$preferencesCache` still read/written by `getPreferences()`.
+
+Note (not a finding, out of scope for this commit): a rate-limit/auth reject opens a metrics row via
+`openConnection()` and then only `unset()`s the tracking id, so that row gets no final touch and
+lingers until the flush service TTL-prunes it. This behavior predates `f40de63b` (it originates in
+`882a8f06`: `openConnection()` ran before the reject, and the pre-fix `onClose` already skipped its
+touch because the wrapper was removed on reject) and is self-healing via TTL prune — the fix does not
+change it.
+
+NO FINDINGS
+
+---
+
+## Scribe — 2026-07-18
+
+Documented this session's shipped work (commits `119a3867`/`d21dc123` SV-4.16, `190445c7`/`d781d155`
+§6 removals, `7e8854b8` item5a, `882a8f06`/`f40de63b` item5+/WS-metrics, `cac8c878` item5b logger,
+`f645edbc` item5c3, `2c68da14` v2.1.8 pin). No behavioral code changed — prose/docblock/CHANGELOG only.
+
+Doc files changed (absolute paths):
+- `/home/sites/phlix/phlix-server/CHANGELOG.md` — [Unreleased]: SV-4.16 JWKS PKCS#8 tolerance + `{"keys":[]}` degrade; item5a HWACCEL_DEBUG demote; item5+ WS S2-metrics real-IP + no phantom rows; item5b logger channel/env routing; item5c3 `bootstrapEnabled()` resident-boot wiring; new **Removed** section (§6 Run A + Run B gapless subsystem); plugin catalog pin → v2.1.8.
+- `/home/sites/phlix/phlix-server/README.md` — added `PHLIX_DEBUG_EVENTS` env row + a JWKS key-format tolerance / empty-keyset-degrade note.
+- `/home/sites/phlix/phlix-docs/docs/reference/api/hub-jwks.yaml` — native + PKCS#8 Ed25519 key acceptance; 200 empty-keyset graceful degrade.
+- `/home/sites/phlix/phlix-docs/docs/reference/config-files.md` — logger handler channel/env routing (per-channel gating); `hub-server-key.pem` accepts native + PKCS#8.
+- `/home/sites/phlix/phlix-docs/docs/reference/env-vars.md` — clarified `PHLIX_DEBUG_EVENTS` now also gates the `events.log` handler attachment.
+- `/home/sites/phlix/phlix-ui/CHANGELOG.md` — Unreleased: dead `src/api/music.ts` removal (`7cade5a`).
+- `/home/sites/phlix/performance_plan.md` (loose, NOT committed) — §6 R1 row + per-command note + §8 D2 updated to record the gapless subsystem REMOVED (client-side impl superseded it), replacing the prior "keep + utilize later".
+
+`config/logger.php` verified accurate as-shipped (implementer already updated its routing comments) — left unchanged. Plugin-catalog phlix-docs page describes the catalog conceptually without a pinned-ref version, so no version edit was forced there.

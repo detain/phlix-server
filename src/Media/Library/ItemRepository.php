@@ -685,14 +685,42 @@ class ItemRepository
      * @param string $type The media type filter (e.g., 'movie', 'series', 'audio')
      * @param int $limit Maximum number of items to return
      * @param int $offset Number of items to skip for pagination
+     * @param array<int|string, mixed>|null $allowedRatings Optional parental cap:
+     *        when non-null, restrict to items whose `content_rating` is in this
+     *        allow-list (same semantics as {@see getByAllowedRatings()}). Null
+     *        (the default) applies no cap — the permissive behaviour callers
+     *        without an active capped profile keep.
+     * @param bool $allowUnrated When a cap is applied, whether genuinely-unrated
+     *        (`content_rating IS NULL`) items are included. Ignored when
+     *        `$allowedRatings` is null.
      * @return array<int, array<string, mixed>> Array of hydrated media items
      */
-    public function getByType(string $libraryId, string $type, int $limit = 100, int $offset = 0): array
-    {
+    public function getByType(
+        string $libraryId,
+        string $type,
+        int $limit = 100,
+        int $offset = 0,
+        ?array $allowedRatings = null,
+        bool $allowUnrated = true
+    ): array {
+        $where = 'library_id = ? AND type = ?';
+        $bindings = [$libraryId, $type];
+
+        if ($allowedRatings !== null) {
+            $cap = $this->ratingCapClause($allowedRatings, $allowUnrated);
+            if ($cap['sql'] !== '') {
+                $where .= ' AND ' . $cap['sql'];
+                $bindings = array_merge($bindings, $cap['bindings']);
+            }
+        }
+
+        $bindings[] = $limit;
+        $bindings[] = $offset;
+
         $results = $this->db->query(
-            "SELECT * FROM media_items WHERE library_id = ? AND type = ? ORDER BY " . self::titleOrder() .
+            "SELECT * FROM media_items WHERE {$where} ORDER BY " . self::titleOrder() .
                 " LIMIT ? OFFSET ?",
-            [$libraryId, $type, $limit, $offset]
+            $bindings
         );
 
         return $this->hydrateRows($results);
@@ -1804,6 +1832,41 @@ class ItemRepository
     }
 
     /**
+     * Build the parental content-rating cap WHERE fragment + its bindings,
+     * shared by {@see buildFilters()} (the SPA browse/listing path) and
+     * {@see getByType()} so they can never drift apart.
+     *
+     * Mirrors {@see getByAllowedRatings()}'s semantics exactly: filters the
+     * indexed, materialized `content_rating` column against the allow-list, and
+     * only includes genuinely-unrated rows (`content_rating IS NULL`) when
+     * `$allowUnrated` is true. Non-string / empty entries in `$allowedRatings`
+     * are dropped; an empty allow-list yields an empty clause (no filtering).
+     *
+     * @param array<int|string, mixed> $allowedRatings Allowed rating strings.
+     * @param bool                     $allowUnrated   Include NULL-rated rows?
+     *
+     * @return array{sql: string, bindings: list<string>} Empty `sql` = no cap.
+     */
+    private function ratingCapClause(array $allowedRatings, bool $allowUnrated): array
+    {
+        $valid = array_values(array_filter(
+            $allowedRatings,
+            static fn (mixed $r): bool => is_string($r) && $r !== ''
+        ));
+        if ($valid === []) {
+            return ['sql' => '', 'bindings' => []];
+        }
+
+        $placeholders = implode(',', array_fill(0, count($valid), '?'));
+        $nullClause = $allowUnrated ? ' OR content_rating IS NULL' : '';
+
+        return [
+            'sql' => "(content_rating IN ({$placeholders}){$nullClause})",
+            'bindings' => $valid,
+        ];
+    }
+
+    /**
      * Get items filtered by a maximum content rating.
      *
      * @param string $libraryId Library to filter
@@ -2384,6 +2447,27 @@ class ItemRepository
             // (migration 050) instead of a per-row JSON extraction.
             $wheres[] = "content_rating IN ({$ratingPlaceholders})";
             $bindings = array_merge($bindings, $ratings);
+        }
+
+        // Parental content-rating cap. Threaded in by the browse/listing read
+        // path (see WebPortalRouter) from the ACTIVE profile's cap — never a
+        // user-facing facet. AND-combined with the `ratings` facet above so a
+        // profile's cap always narrows (never widens) what the user chose. Uses
+        // the SAME indexed `content_rating` column + NULL semantics as
+        // {@see getByAllowedRatings()}: a NULL column means "truly unrated" and
+        // is only included when the profile permits it. Absent/empty → no cap
+        // (the permissive default — the account owner and no-profile requests
+        // never set these params).
+        $allowedRatings = isset($params['allowedRatings']) && is_array($params['allowedRatings'])
+            ? $params['allowedRatings']
+            : null;
+        if ($allowedRatings !== null) {
+            $allowUnrated = ($params['allowUnrated'] ?? true) === true;
+            $cap = $this->ratingCapClause($allowedRatings, $allowUnrated);
+            if ($cap['sql'] !== '') {
+                $wheres[] = $cap['sql'];
+                $bindings = array_merge($bindings, $cap['bindings']);
+            }
         }
 
         if ($actors !== null && count($actors) > 0) {

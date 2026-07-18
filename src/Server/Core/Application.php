@@ -490,6 +490,23 @@ class Application
                         } catch (\Throwable) {
                             return (new Response())->status(503)->json(['error' => 'Service unavailable']);
                         }
+
+                        // Parental cap parity with WebPortalRouter's A-Z index: thread
+                        // the ACTIVE profile's cap into the SAME bucket query so counts
+                        // match the capped rows. No-op (null filter) for the owner,
+                        // unauthenticated requests, and un-capped profiles.
+                        try {
+                            /** @var \Phlix\Media\Library\RatingGate $ratingGate */
+                            $ratingGate = $container->get(\Phlix\Media\Library\RatingGate::class);
+                            $ratingFilter = $ratingGate->resolveFilterForUser($request->userId ?? '');
+                            if ($ratingFilter !== null) {
+                                $paramsArr['allowedRatings'] = $ratingFilter['allowedRatings'];
+                                $paramsArr['allowUnrated'] = $ratingFilter['allowUnrated'];
+                            }
+                        } catch (\Throwable) {
+                            // Gate unavailable → leave params uncapped (permissive).
+                        }
+
                         $rawBuckets = $itemRepository->valueBuckets($field, $paramsArr, $libraryId);
 
                         $indexBuckets = new \Phlix\Media\Library\IndexBuckets();
@@ -2973,12 +2990,21 @@ class Application
         $trickplayController = $this->getTrickplayController();
         $db = $this->createDatabaseConnection();
         $chapterMarkerService = new \Phlix\Media\MarkerService($db);
+        $ratingGate = null;
+        try {
+            /** @var \Phlix\Media\Library\RatingGate $ratingGate */
+            $ratingGate = $this->container->get(\Phlix\Media\Library\RatingGate::class);
+        } catch (\Throwable) {
+            $ratingGate = null;
+        }
         return new \Phlix\Server\Http\Controllers\MediaItemController(
             $itemRepository,
             $markerService,
             $gaplessManager,
             $trickplayController,
-            $chapterMarkerService
+            $chapterMarkerService,
+            null,
+            $ratingGate
         );
     }
 
@@ -3516,7 +3542,11 @@ class Application
         $hlsStreamer = $this->container->get(\Phlix\Media\Streaming\HlsStreamer::class);
         /** @var \Phlix\Media\Transcoding\TranscodeManager */
         $transcodeManager = $this->container->get(\Phlix\Media\Transcoding\TranscodeManager::class);
-        return new \Phlix\Server\Http\Controllers\HlsController($hlsStreamer, $transcodeManager);
+        return new \Phlix\Server\Http\Controllers\HlsController(
+            $hlsStreamer,
+            $transcodeManager,
+            $this->optionalRatingGate()
+        );
     }
 
     /**
@@ -3529,7 +3559,34 @@ class Application
         /** @var \Phlix\Media\Transcoding\TranscodeManager $transcodeManager */
         $transcodeManager = $this->container?->get(\Phlix\Media\Transcoding\TranscodeManager::class)
             ?? throw new \RuntimeException('Container required for TranscodeController');
-        return new \Phlix\Server\Http\Controllers\TranscodeController($transcodeManager);
+        return new \Phlix\Server\Http\Controllers\TranscodeController(
+            $transcodeManager,
+            $this->optionalRatingGate()
+        );
+    }
+
+    /**
+     * Resolve the shared {@see \Phlix\Media\Library\RatingGate} from the container,
+     * or null when it isn't wired (legacy/no-container/test contexts) — every gate
+     * consumer treats a null gate as a strict no-op (owner-safe), so a missing gate
+     * never blocks playback. Used to thread the parental ACCESS gate into the
+     * transcode/HLS/DASH/book controllers whose byte/URL-minting paths must honour
+     * a profile's content-rating cap.
+     *
+     * @return \Phlix\Media\Library\RatingGate|null
+     */
+    private function optionalRatingGate(): ?\Phlix\Media\Library\RatingGate
+    {
+        if ($this->container === null) {
+            return null;
+        }
+        try {
+            /** @var \Phlix\Media\Library\RatingGate $gate */
+            $gate = $this->container->get(\Phlix\Media\Library\RatingGate::class);
+            return $gate;
+        } catch (\Throwable) {
+            return null;
+        }
     }
 
     /**
@@ -3547,7 +3604,20 @@ class Application
         $segmentDirRaw = $hlsConfig['segment_dir'] ?? null;
         $segmentDir = is_string($segmentDirRaw) ? $segmentDirRaw : sys_get_temp_dir() . '/phlix_hls';
 
-        return new \Phlix\Server\Http\Controllers\DashController($segmentDir);
+        // Serve-time parental re-check needs the job → media-item resolver
+        // (TranscodeManager) and the shared gate; both are optional (no-op when
+        // the container has not wired them, e.g. legacy/test contexts).
+        $transcodeManager = null;
+        if ($this->container !== null && $this->container->has(\Phlix\Media\Transcoding\TranscodeManager::class)) {
+            /** @var \Phlix\Media\Transcoding\TranscodeManager $transcodeManager */
+            $transcodeManager = $this->container->get(\Phlix\Media\Transcoding\TranscodeManager::class);
+        }
+
+        return new \Phlix\Server\Http\Controllers\DashController(
+            $segmentDir,
+            $transcodeManager,
+            $this->optionalRatingGate()
+        );
     }
 
     /**
@@ -3652,7 +3722,8 @@ class Application
         return new \Phlix\Server\Http\Controllers\BookController(
             $itemRepo,
             $libraryManager,
-            $opdsBuilder
+            $opdsBuilder,
+            $this->optionalRatingGate()
         );
     }
 

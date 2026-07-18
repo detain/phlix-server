@@ -681,6 +681,94 @@ class UserProfileManager
     }
 
     /**
+     * Resolve the parental content-rating filter for a user's ACTIVE profile,
+     * for the media browse/listing read path.
+     *
+     * This is the single decision point that wires the profile's parental cap
+     * into the listing SQL. It returns `null` — meaning "apply NO filtering",
+     * the permissive default — in every case where the profile context is
+     * absent, unknown, or non-restrictive, so a restricted view can never be
+     * applied by accident:
+     *
+     *   - the user has no active profile;
+     *   - the active profile is an admin profile (`is_admin` — the account
+     *     owner / manager, whose browse must stay exactly as today);
+     *   - the profile has no `profile_settings` row (no cap configured);
+     *   - the cap is the most-permissive value (`UNRATED` / the max rank),
+     *     which by definition allows every rating.
+     *
+     * Otherwise it returns the concrete allow-list the browse SQL threads in:
+     *
+     *   ['allowedRatings' => string[], 'allowUnrated' => bool]
+     *
+     * where `allowedRatings` are the canonical rating strings whose rank is
+     * `<= cap` (mirroring {@see getAllowedRatings()} / the interleaved
+     * {@see \Phlix\Media\Library\ItemRepository::RATING_ORDER} scale, so a
+     * movie-terms cap like `PG-13` also gates `TV-14`), and `allowUnrated`
+     * governs whether genuinely-unrated items (`content_rating IS NULL`) are
+     * included. The `UNRATED` STRING is deliberately never in `allowedRatings`
+     * for a capped profile (it is rank 7, above any real cap), so stored
+     * `UNRATED` rows — including certs normalized-but-unrecognized — stay behind
+     * the cap; NULL-column items are the only "unrated" content the profile can
+     * see, and only when `allowUnrated` is true.
+     *
+     * @param string $userId The account (user) identifier whose active profile
+     *                        governs the current request.
+     *
+     * @return array{allowedRatings: list<string>, allowUnrated: bool}|null
+     *         The parental allow-list, or null when no filtering should apply.
+     */
+    public function getActiveRatingFilter(string $userId): ?array
+    {
+        $profile = $this->getActiveProfile($userId);
+        if ($profile === null) {
+            return null;
+        }
+
+        // Account owner / admin profile: preserve exactly today's behaviour.
+        if (($profile['is_admin'] ?? false) === true) {
+            return null;
+        }
+
+        $profileId = is_string($profile['id'] ?? null) ? $profile['id'] : '';
+        if ($profileId === '') {
+            return null;
+        }
+
+        $settings = UserRow::firstFromMixed($this->db->query(
+            "SELECT content_rating, allow_unrated FROM profile_settings WHERE profile_id = ?",
+            [$profileId]
+        ));
+
+        // No parental-controls row → no cap configured → permissive.
+        if ($settings === null) {
+            return null;
+        }
+
+        $maxRating = UserRow::string($settings, 'content_rating') ?? self::DEFAULT_CONTENT_RATING;
+        $maxLevel = self::RATING_ORDER[$maxRating] ?? self::RATING_ORDER['UNRATED'];
+
+        // Most-permissive cap (UNRATED / max rank) allows everything → no filter.
+        if ($maxLevel >= self::RATING_ORDER['UNRATED']) {
+            return null;
+        }
+
+        $allowUnrated = (bool)($settings['allow_unrated'] ?? true);
+
+        $allowedRatings = [];
+        foreach (self::RATING_ORDER as $rating => $level) {
+            if ($level <= $maxLevel) {
+                $allowedRatings[] = $rating;
+            }
+        }
+
+        return [
+            'allowedRatings' => $allowedRatings,
+            'allowUnrated' => $allowUnrated,
+        ];
+    }
+
+    /**
      * Create default profile settings for a new profile.
      *
      * Internal method called during profile creation to establish

@@ -186,8 +186,17 @@ final class WebPortalServicesProvider implements ServiceProviderInterface
 
                     /** @var TranscodeManager|null $transcodeManager */
                     $transcodeManager = $c->get(TranscodeManager::class);
+                    // Parental ACCESS gate for the transcode start/status endpoints
+                    // (Finding 1a) — optional; a null gate is a strict no-op.
+                    $transcodeRatingGate = null;
+                    try {
+                        /** @var \Phlix\Media\Library\RatingGate $transcodeRatingGate */
+                        $transcodeRatingGate = $c->get(\Phlix\Media\Library\RatingGate::class);
+                    } catch (\Throwable) {
+                        $transcodeRatingGate = null;
+                    }
                     $transcodeController = $transcodeManager !== null
-                        ? new TranscodeController($transcodeManager)
+                        ? new TranscodeController($transcodeManager, $transcodeRatingGate)
                         : null;
 
                     return new WebPortalRouter(

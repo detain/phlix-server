@@ -17,6 +17,7 @@ use Phlix\Media\Library\BookProgress;
 use Phlix\Media\Library\BookProgressStore;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Library\LibraryManager;
+use Phlix\Media\Library\RatingGate;
 use Phlix\Media\Metadata\OpdsFeedBuilder;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
@@ -52,6 +53,12 @@ class BookController
     private ?BookProgressStore $progressStore = null;
 
     /**
+     * Shared parental-control access gate. Null in legacy/no-container contexts,
+     * in which case every gate check is a strict no-op (owner-safe).
+     */
+    private ?RatingGate $ratingGate;
+
+    /**
      * Sets the progress store for reading progress tracking.
      *
      * @param BookProgressStore $progressStore Progress store
@@ -85,11 +92,38 @@ class BookController
     public function __construct(
         ItemRepository $itemRepo,
         LibraryManager $libraryManager,
-        OpdsFeedBuilder $opdsBuilder
+        OpdsFeedBuilder $opdsBuilder,
+        ?RatingGate $ratingGate = null
     ) {
         $this->itemRepo = $itemRepo;
         $this->libraryManager = $libraryManager;
         $this->opdsBuilder = $opdsBuilder;
+        $this->ratingGate = $ratingGate;
+    }
+
+    /**
+     * Whether a book row is over the requesting profile's parental content-rating
+     * cap (Finding 3). A book is a `media_items` row, so it can carry a
+     * `content_rating`; a capped profile must not obtain its signed read/download
+     * URLs (mint gate) nor its bytes (serve gate). Strict no-op — returns false —
+     * for the owner/admin, an un-capped profile, an unauthenticated request (no
+     * resolvable userId — e.g. a bare signed-token serve), or when the gate is
+     * unwired.
+     *
+     * @param array<string, mixed> $book The book row.
+     */
+    private function bookOverCap(Request $request, array $book): bool
+    {
+        if ($this->ratingGate === null) {
+            return false;
+        }
+
+        $filter = $this->ratingGate->resolveFilterForUser($request->userId ?? '');
+        if ($filter === null) {
+            return false;
+        }
+
+        return !$this->ratingGate->isAllowed($book, $filter);
     }
 
     /**
@@ -261,6 +295,12 @@ class BookController
             return (new Response())->status(404)->json(['error' => 'Book not found']);
         }
 
+        // Parental cap (Finding 3): a capped profile requesting an over-cap book
+        // gets a 404 so no signed read/download/cover URLs are ever minted for it.
+        if ($this->bookOverCap($request, $book)) {
+            return (new Response())->status(404)->json(['error' => 'Book not found']);
+        }
+
         return (new Response())->json(['book' => $this->withSignedUrls($book, $bookId)]);
     }
 
@@ -313,6 +353,13 @@ class BookController
         $book = $this->itemRepo->findById($bookId);
 
         if ($book === null || ($book['type'] ?? '') !== 'book') {
+            return (new Response())->status(404)->json(['error' => 'Book not found']);
+        }
+
+        // Parental cap (Finding 3): defense-in-depth for a session-authenticated
+        // reader — a capped profile never gets book data or signed URLs for an
+        // over-cap book. No-op for a bare signed-token fetch (no userId).
+        if ($this->bookOverCap($request, $book)) {
             return (new Response())->status(404)->json(['error' => 'Book not found']);
         }
 
@@ -590,6 +637,14 @@ class BookController
         $book = $this->itemRepo->findById($bookId);
 
         if ($book === null || ($book['type'] ?? '') !== 'book') {
+            return (new Response())->status(404)->json(['error' => 'Book not found']);
+        }
+
+        // Parental cap (Finding 3): serve-time backstop for a session-authenticated
+        // download — a capped profile never reads the file bytes of an over-cap
+        // book. No-op for a bare signed-token fetch (no userId); the getBook mint
+        // gate above is the primary defense there.
+        if ($this->bookOverCap($request, $book)) {
             return (new Response())->status(404)->json(['error' => 'Book not found']);
         }
 

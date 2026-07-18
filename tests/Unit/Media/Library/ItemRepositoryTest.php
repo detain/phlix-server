@@ -1498,6 +1498,138 @@ class ItemRepositoryTest extends TestCase
         $this->assertStringNotContainsString('content_rating IS NULL', $capturedSql);
     }
 
+    /**
+     * Run query() against a mock DB, capturing every SQL string + bindings pair.
+     * query() issues a COUNT(*) then a SELECT, so the parental cap must appear in
+     * BOTH for counts/pagination to stay consistent with the filtered page.
+     *
+     * @param array<string, mixed> $params
+     * @return list<array{sql: string, params: array<int, mixed>}>
+     */
+    private function captureQueryCalls(array $params): array
+    {
+        $calls = [];
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(function (string $sql, $p = []) use (&$calls) {
+            $calls[] = ['sql' => $sql, 'params' => is_array($p) ? $p : []];
+            return str_contains($sql, 'COUNT(*)') ? [['count' => 0]] : [];
+        });
+
+        (new ItemRepository($db))->query($params);
+
+        return $calls;
+    }
+
+    public function testQueryThreadsParentalCapIntoCountAndSelect(): void
+    {
+        // A PG-13-shaped allow-list must appear in BOTH the COUNT(*) and the
+        // SELECT so the total, pagination and the page all reflect the cap.
+        $allowed = ['G', 'TV-Y', 'TV-G', 'TV-Y7', 'PG', 'TV-PG', 'PG-13', 'TV-14'];
+        $calls = $this->captureQueryCalls([
+            'limit' => 50,
+            'offset' => 0,
+            'allowedRatings' => $allowed,
+            'allowUnrated' => true,
+        ]);
+
+        $this->assertCount(2, $calls);
+        foreach ($calls as $call) {
+            $this->assertStringContainsString('content_rating IN', $call['sql']);
+            $this->assertStringContainsString('content_rating IS NULL', $call['sql']);
+            foreach ($allowed as $rating) {
+                $this->assertContains($rating, $call['params']);
+            }
+            // R / NC-17 / X / UNRATED must never be bound as allowed values.
+            $this->assertNotContains('R', $call['params']);
+            $this->assertNotContains('TV-MA', $call['params']);
+            $this->assertNotContains('UNRATED', $call['params']);
+        }
+    }
+
+    public function testQueryParentalCapExcludesNullWhenUnratedDisallowed(): void
+    {
+        $calls = $this->captureQueryCalls([
+            'allowedRatings' => ['G', 'PG'],
+            'allowUnrated' => false,
+        ]);
+
+        foreach ($calls as $call) {
+            $this->assertStringContainsString('content_rating IN', $call['sql']);
+            $this->assertStringNotContainsString('content_rating IS NULL', $call['sql']);
+        }
+    }
+
+    public function testQueryWithoutParentalCapAppliesNoRatingFilter(): void
+    {
+        // Regression guard: the owner / no-profile / no-cap path must produce the
+        // exact same unfiltered query as before — no content_rating clause at all.
+        $calls = $this->captureQueryCalls(['limit' => 50, 'offset' => 0]);
+
+        foreach ($calls as $call) {
+            $this->assertStringNotContainsString('content_rating IN', $call['sql']);
+            $this->assertStringNotContainsString('content_rating IS NULL', $call['sql']);
+        }
+    }
+
+    public function testQueryParentalCapWithEmptyAllowListAppliesNoFilter(): void
+    {
+        // An empty allow-list must NOT hide everything — it degrades to no cap.
+        $calls = $this->captureQueryCalls(['allowedRatings' => []]);
+
+        foreach ($calls as $call) {
+            $this->assertStringNotContainsString('content_rating IN', $call['sql']);
+        }
+    }
+
+    /**
+     * Capture the SELECT SQL + bindings getByType() runs.
+     *
+     * @param array<int|string, mixed>|null $allowedRatings
+     * @return array{sql: string, params: array<int, mixed>}
+     */
+    private function captureGetByTypeCall(?array $allowedRatings, bool $allowUnrated = true): array
+    {
+        $captured = ['sql' => '', 'params' => []];
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(function (string $sql, $p = []) use (&$captured) {
+            $captured = ['sql' => $sql, 'params' => is_array($p) ? $p : []];
+            return [];
+        });
+
+        (new ItemRepository($db))->getByType('lib-1', 'movie', 100, 0, $allowedRatings, $allowUnrated);
+
+        return $captured;
+    }
+
+    public function testGetByTypeWithoutCapIsUnfiltered(): void
+    {
+        // Default call (no cap) preserves today's behaviour exactly.
+        $call = $this->captureGetByTypeCall(null);
+
+        $this->assertStringContainsString('type = ?', $call['sql']);
+        $this->assertStringNotContainsString('content_rating IN', $call['sql']);
+        $this->assertStringNotContainsString('content_rating IS NULL', $call['sql']);
+    }
+
+    public function testGetByTypeWithCapFiltersRatingsAndHonorsAllowUnrated(): void
+    {
+        $call = $this->captureGetByTypeCall(['G', 'PG'], true);
+        $this->assertStringContainsString('content_rating IN', $call['sql']);
+        $this->assertStringContainsString('content_rating IS NULL', $call['sql']);
+        $this->assertContains('G', $call['params']);
+        $this->assertContains('PG', $call['params']);
+
+        $callNoUnrated = $this->captureGetByTypeCall(['G', 'PG'], false);
+        $this->assertStringContainsString('content_rating IN', $callNoUnrated['sql']);
+        $this->assertStringNotContainsString('content_rating IS NULL', $callNoUnrated['sql']);
+    }
+
+    public function testGetByTypeWithEmptyCapAppliesNoFilter(): void
+    {
+        $call = $this->captureGetByTypeCall([]);
+        $this->assertStringNotContainsString('content_rating IN', $call['sql']);
+    }
+
     public function testExtractContentRatingReturnsNullForEmptyArray(): void
     {
         $this->assertNull(ItemRepository::extractContentRating([]));

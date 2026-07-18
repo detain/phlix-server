@@ -11,6 +11,8 @@ declare(strict_types=1);
 
 namespace Phlix\Server\Http\Controllers;
 
+use Phlix\Media\Library\RatingGate;
+use Phlix\Media\Transcoding\TranscodeManager;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
 
@@ -32,9 +34,26 @@ class DashController
     /** @var string Base directory holding per-job CMAF output (shared with HLS). */
     private string $segmentDir;
 
-    public function __construct(string $segmentDir)
-    {
+    /**
+     * Job → media-item resolver for the serve-time parental re-check. Null in
+     * legacy/no-container contexts, where the check is a strict no-op.
+     */
+    private ?TranscodeManager $transcodeManager;
+
+    /**
+     * Shared parental-control access gate for the serve-time re-check. Null in
+     * legacy/no-container contexts, where the check is a strict no-op (owner-safe).
+     */
+    private ?RatingGate $ratingGate;
+
+    public function __construct(
+        string $segmentDir,
+        ?TranscodeManager $transcodeManager = null,
+        ?RatingGate $ratingGate = null
+    ) {
         $this->segmentDir = rtrim($segmentDir, '/');
+        $this->transcodeManager = $transcodeManager;
+        $this->ratingGate = $ratingGate;
     }
 
     /**
@@ -67,6 +86,15 @@ class DashController
     {
         $jobId = $params['job_id'] ?? '';
         $file = $params['file'] ?? '';
+
+        // Serve-time parental re-check (Finding 1b): deny a capped profile any
+        // file of an over-cap job before serving it, so a leaked/replayed signed
+        // URL cannot reach over-cap bytes. No-op for the owner / un-capped /
+        // unauthenticated request.
+        if ($this->transcodeJobOverCap($request, $jobId, $this->transcodeManager, $this->ratingGate)) {
+            return (new Response())->status(404)->json(['error' => 'Not found']);
+        }
+
         $dir = $jobId !== '' ? "{$this->segmentDir}/{$jobId}" : '';
         return $this->serveJobFile($request, $dir, $file);
     }

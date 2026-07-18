@@ -685,14 +685,42 @@ class ItemRepository
      * @param string $type The media type filter (e.g., 'movie', 'series', 'audio')
      * @param int $limit Maximum number of items to return
      * @param int $offset Number of items to skip for pagination
+     * @param array<int|string, mixed>|null $allowedRatings Optional parental cap:
+     *        when non-null, restrict to items whose `content_rating` is in this
+     *        allow-list (same semantics as {@see getByAllowedRatings()}). Null
+     *        (the default) applies no cap — the permissive behaviour callers
+     *        without an active capped profile keep.
+     * @param bool $allowUnrated When a cap is applied, whether genuinely-unrated
+     *        (`content_rating IS NULL`) items are included. Ignored when
+     *        `$allowedRatings` is null.
      * @return array<int, array<string, mixed>> Array of hydrated media items
      */
-    public function getByType(string $libraryId, string $type, int $limit = 100, int $offset = 0): array
-    {
+    public function getByType(
+        string $libraryId,
+        string $type,
+        int $limit = 100,
+        int $offset = 0,
+        ?array $allowedRatings = null,
+        bool $allowUnrated = true
+    ): array {
+        $where = 'library_id = ? AND type = ?';
+        $bindings = [$libraryId, $type];
+
+        if ($allowedRatings !== null) {
+            $cap = $this->ratingCapClause($allowedRatings, $allowUnrated);
+            if ($cap['sql'] !== '') {
+                $where .= ' AND ' . $cap['sql'];
+                $bindings = array_merge($bindings, $cap['bindings']);
+            }
+        }
+
+        $bindings[] = $limit;
+        $bindings[] = $offset;
+
         $results = $this->db->query(
-            "SELECT * FROM media_items WHERE library_id = ? AND type = ? ORDER BY " . self::titleOrder() .
+            "SELECT * FROM media_items WHERE {$where} ORDER BY " . self::titleOrder() .
                 " LIMIT ? OFFSET ?",
-            [$libraryId, $type, $limit, $offset]
+            $bindings
         );
 
         return $this->hydrateRows($results);
@@ -1827,6 +1855,226 @@ class ItemRepository
     }
 
     /**
+     * Build the parental content-rating cap WHERE fragment + its bindings,
+     * shared by {@see buildFilters()} (the SPA browse/listing path) and
+     * {@see getByType()} so they can never drift apart.
+     *
+     * Mirrors {@see getByAllowedRatings()}'s semantics exactly: filters the
+     * indexed, materialized `content_rating` column against the allow-list, and
+     * only includes genuinely-unrated rows (`content_rating IS NULL`) when
+     * `$allowUnrated` is true. Non-string / empty entries in `$allowedRatings`
+     * are dropped; an empty allow-list yields an empty clause (no filtering).
+     *
+     * @param array<int|string, mixed> $allowedRatings Allowed rating strings.
+     * @param bool                     $allowUnrated   Include NULL-rated rows?
+     *
+     * @return array{sql: string, bindings: list<string>} Empty `sql` = no cap.
+     */
+    private function ratingCapClause(array $allowedRatings, bool $allowUnrated): array
+    {
+        $valid = array_values(array_filter(
+            $allowedRatings,
+            static fn (mixed $r): bool => is_string($r) && $r !== ''
+        ));
+        if ($valid === []) {
+            return ['sql' => '', 'bindings' => []];
+        }
+
+        $placeholders = implode(',', array_fill(0, count($valid), '?'));
+        $nullClause = $allowUnrated ? ' OR content_rating IS NULL' : '';
+
+        return [
+            'sql' => "(content_rating IN ({$placeholders}){$nullClause})",
+            'bindings' => $valid,
+        ];
+    }
+
+    /**
+     * Maximum ancestor hops the effective-rating parent walk will follow before
+     * giving up (returning null / "unrated").
+     *
+     * The real hierarchy is at most series → season → episode (2 hops), so 8 is
+     * a generous ceiling that ALSO makes the walk immune to a corrupt
+     * `parent_id` cycle: {@see effectiveContentRatingsForIds()} stops after this
+     * many batch rounds no matter what, so a self-referential or looping chain
+     * can never spin the worker.
+     */
+    private const MAX_RATING_INHERITANCE_DEPTH = 8;
+
+    /**
+     * Resolve a single media item's EFFECTIVE content rating: its own
+     * `content_rating` when present, otherwise the nearest ancestor's rating
+     * found by walking `parent_id` up the hierarchy (episode → season → series),
+     * or null when nothing in the chain carries a rating ("genuinely unrated").
+     *
+     * Accepts either a hydrated row (SELECT * — carries `content_rating` +
+     * `parent_id`, so the own-rating case costs ZERO queries) or a bare item id
+     * (fetched first). The parent walk is bounded by
+     * {@see self::MAX_RATING_INHERITANCE_DEPTH} so a corrupt `parent_id` cycle
+     * can never loop.
+     *
+     * @param array<string, mixed>|string $item Hydrated row or item id.
+     *
+     * @return string|null The effective rating string (raw, as stored — already
+     *                      canonical from the scan-time normalization) or null.
+     */
+    public function effectiveContentRating(array|string $item): ?string
+    {
+        if (is_string($item)) {
+            return $this->effectiveContentRatingsForIds([$item])[$item] ?? null;
+        }
+
+        // Row provided: prefer its OWN rating (no query at all for movies /
+        // rated series), else continue the walk from its parent.
+        $own = self::ratingColumnOf($item);
+        if ($own !== null) {
+            return $own;
+        }
+
+        $parentId = self::parentIdOf($item);
+        if ($parentId === null) {
+            return null;
+        }
+
+        return $this->effectiveContentRatingsForIds([$parentId])[$parentId] ?? null;
+    }
+
+    /**
+     * Batch-resolve the EFFECTIVE content rating (see
+     * {@see effectiveContentRating()}) for many item ids at once, avoiding the
+     * N+1 a per-item parent walk would cause across a list.
+     *
+     * Every requested id appears in the returned map; ids with no own rating and
+     * no rated ancestor (or an id that does not exist) map to null. The walk runs
+     * in batch ROUNDS — one `WHERE id IN (...)` query per hierarchy level — and
+     * stops after {@see self::MAX_RATING_INHERITANCE_DEPTH} rounds so a corrupt
+     * `parent_id` cycle is bounded.
+     *
+     * @param array<int, string> $ids Media item ids.
+     *
+     * @return array<string, string|null> id => effective rating (or null).
+     */
+    public function effectiveContentRatingsForIds(array $ids): array
+    {
+        $ids = array_values(array_unique(array_filter(
+            $ids,
+            static fn (mixed $i): bool => is_string($i) && $i !== ''
+        )));
+        if ($ids === []) {
+            return [];
+        }
+
+        /** @var array<string, string|null> $result */
+        $result = [];
+        // Map of itemId => the ancestor id whose row we still need to inspect.
+        $pending = [];
+        foreach ($ids as $id) {
+            $pending[$id] = $id;
+        }
+
+        $depth = 0;
+        while ($pending !== [] && $depth < self::MAX_RATING_INHERITANCE_DEPTH) {
+            $lookupIds = array_values(array_unique(array_values($pending)));
+            $rows = $this->fetchRatingRows($lookupIds);
+
+            $next = [];
+            foreach ($pending as $itemId => $lookupId) {
+                $row = $rows[$lookupId] ?? null;
+                if ($row === null) {
+                    // Ancestor row missing (deleted / broken FK) → unrated.
+                    $result[$itemId] = null;
+                    continue;
+                }
+
+                $rating = self::ratingColumnOf($row);
+                if ($rating !== null) {
+                    $result[$itemId] = $rating;
+                    continue;
+                }
+
+                $parentId = self::parentIdOf($row);
+                if ($parentId === null) {
+                    $result[$itemId] = null;
+                    continue;
+                }
+
+                $next[$itemId] = $parentId;
+            }
+
+            $pending = $next;
+            $depth++;
+        }
+
+        // Anything still unresolved after the depth cap (e.g. a cycle) → unrated.
+        foreach (array_keys($pending) as $itemId) {
+            $result[$itemId] = null;
+        }
+
+        return $result;
+    }
+
+    /**
+     * Fetch the minimal rating-relevant columns for a set of item ids in ONE
+     * query, keyed by id. Used by the batch effective-rating walk so each
+     * hierarchy level costs a single indexed `IN (...)` lookup.
+     *
+     * @param array<int, string> $ids Item ids (already de-duplicated).
+     *
+     * @return array<string, array<string, mixed>> id => {id, content_rating, parent_id}.
+     */
+    private function fetchRatingRows(array $ids): array
+    {
+        if ($ids === []) {
+            return [];
+        }
+
+        $placeholders = implode(',', array_fill(0, count($ids), '?'));
+        $results = $this->db->query(
+            "SELECT id, content_rating, parent_id FROM media_items WHERE id IN ({$placeholders})",
+            array_values($ids)
+        );
+
+        $out = [];
+        if (is_array($results)) {
+            foreach ($results as $row) {
+                if (!is_array($row)) {
+                    continue;
+                }
+                $id = isset($row['id']) && is_string($row['id']) ? $row['id'] : null;
+                if ($id === null || $id === '') {
+                    continue;
+                }
+                $out[$id] = $row;
+            }
+        }
+
+        return $out;
+    }
+
+    /**
+     * The present, non-empty `content_rating` of a row, or null when the column
+     * is NULL/empty/non-string ("genuinely unrated").
+     *
+     * @param array<string, mixed> $row A media item row.
+     */
+    private static function ratingColumnOf(array $row): ?string
+    {
+        $rating = $row['content_rating'] ?? null;
+        return (is_string($rating) && $rating !== '') ? $rating : null;
+    }
+
+    /**
+     * The present, non-empty `parent_id` of a row, or null when it has no parent.
+     *
+     * @param array<string, mixed> $row A media item row.
+     */
+    private static function parentIdOf(array $row): ?string
+    {
+        $parentId = $row['parent_id'] ?? null;
+        return (is_string($parentId) && $parentId !== '') ? $parentId : null;
+    }
+
+    /**
      * Get items filtered by a maximum content rating.
      *
      * @param string $libraryId Library to filter
@@ -2407,6 +2655,27 @@ class ItemRepository
             // (migration 050) instead of a per-row JSON extraction.
             $wheres[] = "content_rating IN ({$ratingPlaceholders})";
             $bindings = array_merge($bindings, $ratings);
+        }
+
+        // Parental content-rating cap. Threaded in by the browse/listing read
+        // path (see WebPortalRouter) from the ACTIVE profile's cap — never a
+        // user-facing facet. AND-combined with the `ratings` facet above so a
+        // profile's cap always narrows (never widens) what the user chose. Uses
+        // the SAME indexed `content_rating` column + NULL semantics as
+        // {@see getByAllowedRatings()}: a NULL column means "truly unrated" and
+        // is only included when the profile permits it. Absent/empty → no cap
+        // (the permissive default — the account owner and no-profile requests
+        // never set these params).
+        $allowedRatings = isset($params['allowedRatings']) && is_array($params['allowedRatings'])
+            ? $params['allowedRatings']
+            : null;
+        if ($allowedRatings !== null) {
+            $allowUnrated = ($params['allowUnrated'] ?? true) === true;
+            $cap = $this->ratingCapClause($allowedRatings, $allowUnrated);
+            if ($cap['sql'] !== '') {
+                $wheres[] = $cap['sql'];
+                $bindings = array_merge($bindings, $cap['bindings']);
+            }
         }
 
         if ($actors !== null && count($actors) > 0) {

@@ -52,9 +52,12 @@ use Throwable;
  *  - {@see ContainerInterface} — resolves the plugin entry class via
  *    autowiring; gives the plugin a handle to the host container.
  *
- * Auto-enable on boot is handled by
- * {@see \Phlix\Common\Container\Providers\PluginsProvider} which calls
- * {@see self::bootstrapEnabled()} once the container is built.
+ * Auto-enable on boot: {@see self::bootstrapEnabled()} is called from the
+ * resident Workerman entrypoint `start.php` in EACH worker's `onWorkerStart`
+ * (the HTTP workers and the relay tunnel worker), because the dispatcher /
+ * {@see ListenerRegistry} is a per-worker container singleton and playback
+ * events are dispatched by the worker that serves the request. It is
+ * deliberately NOT called from the single-shot CGI path (`public/index.php`).
  *
  * @package Phlix\Plugins
  * @since 0.10.0
@@ -726,12 +729,22 @@ class PluginLoader
 
     /**
      * Re-attach every persisted-as-enabled plugin to the dispatcher.
-     * Called by the {@see \Phlix\Common\Container\Providers\PluginsProvider}
-     * after the container is built so server restarts pick up plugins
-     * automatically.
      *
-     * Failures are logged but do not bubble up — one broken plugin
-     * should not block the rest from coming online.
+     * Called from the resident Workerman entrypoint (`start.php`) in each
+     * worker's `onWorkerStart` — the HTTP workers and the relay tunnel worker,
+     * NOT worker-0-gated — so that after a server restart every worker's
+     * per-worker {@see ListenerRegistry} re-subscribes the enabled plugins'
+     * listeners and PUSH event handling (e.g. scrobbling) keeps working. It is
+     * NOT wired into the single-shot CGI path (`public/index.php`), which builds
+     * a throwaway container per request.
+     *
+     * Idempotent within a process: {@see self::enable()} short-circuits on its
+     * `entryInstances` map, and {@see ListenerRegistry::subscribe()} rejects an
+     * exact-duplicate `(event, callable)` pair — so calling this more than once
+     * on the same loader never double-attaches a listener.
+     *
+     * Failures are logged but do not bubble up — one broken plugin's
+     * `onEnable()` should not block the rest from coming online.
      *
      * @return void
      *

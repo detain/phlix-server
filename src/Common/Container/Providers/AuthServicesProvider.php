@@ -25,10 +25,14 @@ use Phlix\Auth\WebAuthn\WebAuthnCredentialRepository;
 use Phlix\Auth\WebAuthn\WebAuthnManager;
 use Phlix\Auth\WebAuthn\WebAuthnSettings;
 use Phlix\Common\Container\ServiceProviderInterface;
+use Phlix\Common\RateLimit\DbRateLimiter;
+use Phlix\Common\RateLimit\RateLimiter;
+use Phlix\Common\RateLimit\RateLimitProfiles;
 use Phlix\Server\Http\Controllers\AuthProviderController;
 use Phlix\Server\Http\Controllers\WebAuthnController;
 use Phlix\Stats\StatsCollector;
 use Psr\EventDispatcher\EventDispatcherInterface;
+use Workerman\MySQL\Connection;
 
 use function DI\autowire;
 use function DI\factory;
@@ -195,5 +199,102 @@ final class AuthServicesProvider implements ServiceProviderInterface
             WebAuthnManager::class => autowire(),
             WebAuthnController::class => autowire(),
         ]);
+
+        $this->registerRateLimiters($builder, $appConfig);
+    }
+
+    /**
+     * SV-4.15(d): register ONE rate-limiter instance per surface under its
+     * {@see RateLimitProfiles} container id, with `{max, window}` sourced from
+     * `config/server.php`'s `rate_limit` section (falling back to
+     * {@see RateLimitProfiles::defaults()} per-key).
+     *
+     * Each id resolves to a DISTINCT instance via an explicit `factory()`
+     * closure — the server registers Common services with explicit factories,
+     * never autowiring, to avoid the PHP-DI optional-ctor-param landmine (a
+     * skipped `$cap`/`$clock` default is silently accepted, but a skipped
+     * required scalar throws).
+     *
+     * Backend per surface follows {@see RateLimitProfiles::isDbBacked()}:
+     *
+     * - `register` / `refresh` / `webauthn_start` / `webauthn_finish` →
+     *   {@see DbRateLimiter} (shared, DB-backed, migration 085) so the
+     *   brute-force counter is TRUE-global across ALL HTTP workers. The
+     *   {@see Connection} injected is the SAME pooled `mysql` one
+     *   {@see \Phlix\Auth\DbLoginRateLimitStore} uses (bound to
+     *   `Connection::class` in `CoreServicesProvider`), NOT a dedicated `txn`
+     *   connection: these are single-statement upsert/select/delete calls, not a
+     *   multi-statement transaction.
+     * - `jwks` / `ws_connect` → worker-local in-memory {@see RateLimiter}
+     *   (`jwks` is a cache-frontable public DoS surface; the `:8097` WS worker
+     *   runs `count=1`, so per-worker == global there).
+     *
+     * `login` is intentionally NOT registered here — it keeps its own
+     * {@see \Phlix\Auth\DbLoginRateLimitStore} (migration 074), wired into
+     * {@see AuthManager} above.
+     *
+     * @param ContainerBuilder<\DI\Container> $builder
+     * @param array<string, mixed>            $appConfig
+     *
+     * @return void
+     */
+    private function registerRateLimiters(ContainerBuilder $builder, array $appConfig): void
+    {
+        $section = $appConfig['rate_limit'] ?? null;
+        $rateLimit = is_array($section) ? $section : [];
+
+        $definitions = [];
+
+        foreach (RateLimitProfiles::defaults() as $id => $spec) {
+            $surfaceRaw = $rateLimit[$spec['key']] ?? null;
+            $surface = is_array($surfaceRaw) ? $surfaceRaw : [];
+
+            $max = self::intOr($surface, 'max', $spec['max']);
+            $window = self::intOr($surface, 'window', $spec['window']);
+
+            if (RateLimitProfiles::isDbBacked($id)) {
+                // Shared DB-backed limiter — TRUE-global across every HTTP worker.
+                // The closure captures $window/$max BY VALUE at definition time so
+                // each surface keeps its own thresholds and its own instance; the
+                // Connection is resolved from the container (bound in
+                // CoreServicesProvider), mirroring DbLoginRateLimitStore.
+                $definitions[$id] = factory(
+                    static fn (Connection $db): DbRateLimiter => new DbRateLimiter($db, $window, $max)
+                );
+                continue;
+            }
+
+            // Worker-local in-memory limiter (jwks / ws_connect). Arrow fn
+            // captures $window/$max BY VALUE, so each surface gets its own
+            // thresholds and its own instance.
+            $definitions[$id] = factory(
+                static fn (): RateLimiter => new RateLimiter($window, $max)
+            );
+        }
+
+        $builder->addDefinitions($definitions);
+    }
+
+    /**
+     * Read an int from a `rate_limit` sub-array, coercing numeric strings and
+     * falling back to `$default` for absent/non-numeric values.
+     *
+     * @param array<array-key, mixed> $config
+     *
+     * @return int
+     */
+    private static function intOr(array $config, string $key, int $default): int
+    {
+        /**
+         * @var mixed $value
+         */
+        $value = $config[$key] ?? null;
+        if (is_int($value)) {
+            return $value;
+        }
+        if (is_numeric($value)) {
+            return (int) $value;
+        }
+        return $default;
     }
 }

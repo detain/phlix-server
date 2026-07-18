@@ -141,4 +141,39 @@ return [
         // start otherwise), so WS auth is enforced there.
         'jwt_secret' => getenv('JWT_SECRET') ?: '',
     ],
+
+    // SV-4.15: per-surface rate limiting for the server's previously-UNLIMITED
+    // auth surfaces (register / refresh / WebAuthn start+finish / public JWKS /
+    // :8097 WS-connect). Each surface named in
+    // Phlix\Common\RateLimit\RateLimitProfiles gets its OWN limiter instance
+    // (registered in AuthServicesProvider) with its own {max, window}; a single
+    // shared budget across unrelated surfaces would be wrong. `login` is
+    // DELIBERATELY absent — it keeps its own IP-keyed DB-backed
+    // DbLoginRateLimitStore (migration 074), untouched by this framework.
+    //
+    // Backend per surface (AuthServicesProvider decides via
+    // RateLimitProfiles::isDbBacked()):
+    //   register / refresh / webauthn_start / webauthn_finish -> shared
+    //     DB-backed DbRateLimiter (migration 085) so the brute-force budget is
+    //     TRUE-global across all HTTP workers (an in-memory limiter would give
+    //     ~max × workers on these credential-enumeration surfaces);
+    //   jwks / ws_connect -> worker-local in-memory RateLimiter (jwks is a
+    //     public, cache-frontable DoS surface; the :8097 WS worker runs count=1
+    //     so per-worker == global there anyway).
+    //
+    // Each surface's max/window is env-overridable via bare
+    // RATE_LIMIT_<SURFACE>_MAX / RATE_LIMIT_<SURFACE>_WINDOW (server convention,
+    // mirroring the hls block's HLS_* knobs); absent env vars fall back to
+    // RateLimitProfiles::defaults().
+    'rate_limit' => (static function (): array {
+        $limits = [];
+        foreach (\Phlix\Common\RateLimit\RateLimitProfiles::defaults() as $spec) {
+            $envPrefix = 'RATE_LIMIT_' . strtoupper($spec['key']);
+            $limits[$spec['key']] = [
+                'max'    => (int) (getenv($envPrefix . '_MAX') ?: $spec['max']),
+                'window' => (int) (getenv($envPrefix . '_WINDOW') ?: $spec['window']),
+            ];
+        }
+        return $limits;
+    })(),
 ];

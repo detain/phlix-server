@@ -495,8 +495,28 @@ class WebPortalRouter
         $limit = $request->queryInt('limit', 50);
         $offset = $request->queryInt('offset', 0);
 
+        // Enforce the active profile's parental cap (null → no cap, permissive).
+        $ratingFilter = $this->resolveRatingFilter($request);
+
         if ($type !== null && $type !== '') {
-            $items = $this->itemRepository->getByType($libraryId, $type, $limit, $offset);
+            $items = $this->itemRepository->getByType(
+                $libraryId,
+                $type,
+                $limit,
+                $offset,
+                $ratingFilter['allowedRatings'] ?? null,
+                $ratingFilter['allowUnrated'] ?? true
+            );
+        } elseif ($ratingFilter !== null) {
+            // Capped profile browsing the whole library → route through the
+            // existing rating-aware query (keeps the cap in SQL, not PHP).
+            $items = $this->itemRepository->getByAllowedRatings(
+                $libraryId,
+                $ratingFilter['allowedRatings'],
+                $limit,
+                $offset,
+                $ratingFilter['allowUnrated']
+            );
         } else {
             $items = $this->itemRepository->getByLibrary($libraryId, $limit, $offset);
         }
@@ -547,6 +567,20 @@ class WebPortalRouter
         $item = $this->itemRepository->findById($params['id']);
 
         if (!$item) {
+            return (new Response())->status(404)->json(['error' => 'Item not found']);
+        }
+
+        // Parental cap on the detail read path. A capped profile that deep-links
+        // an item whose PRESENT content rating exceeds its cap is blocked with a
+        // 404 (not 403) so the response can't confirm the item exists — and, more
+        // importantly, so it never receives the signed stream_url minted below.
+        // We block only on a PRESENT-but-too-mature cert: NULL-rated rows (truly
+        // unrated — including episodes that inherit their series' context) are
+        // left to the listing filter's `allow_unrated` gate rather than hidden
+        // here, so a legitimate series drill-down is never broken. This mirrors
+        // the listing SQL for rated items while staying conservative for NULLs.
+        $ratingFilter = $this->resolveRatingFilter($request);
+        if ($ratingFilter !== null && !$this->isItemRatingWithinCap($item, $ratingFilter)) {
             return (new Response())->status(404)->json(['error' => 'Item not found']);
         }
 
@@ -655,6 +689,101 @@ class WebPortalRouter
 
         $profileId = is_string($profile['id'] ?? null) ? $profile['id'] : '';
         return $profileId !== '' ? $profileId : null;
+    }
+
+    /**
+     * Resolve the parental content-rating filter for the CURRENT request's
+     * active profile, for the browse/listing/detail read path.
+     *
+     * Returns `null` — meaning "apply NO filtering", the permissive default —
+     * whenever the profile context is absent, unknown, or non-restrictive, so a
+     * restricted view is never applied by accident:
+     *
+     *   - the profile manager is not wired;
+     *   - the request is unauthenticated (no `userId`);
+     *   - the requesting account is an admin (the owner/manager — their browse
+     *     stays exactly as today, regardless of any per-profile cap);
+     *   - {@see UserProfileManager::getActiveRatingFilter()} returns null (no
+     *     active profile, an `is_admin` profile, no cap configured, or the
+     *     most-permissive `UNRATED`/max cap).
+     *
+     * Otherwise returns `['allowedRatings' => string[], 'allowUnrated' => bool]`
+     * — the concrete allow-list threaded into the listing SQL.
+     *
+     * @param Request $request The HTTP request (carries the authenticated userId).
+     *
+     * @return array{allowedRatings: list<string>, allowUnrated: bool}|null
+     */
+    private function resolveRatingFilter(Request $request): ?array
+    {
+        if ($this->profileManager === null) {
+            return null;
+        }
+
+        $userId = $request->userId ?? '';
+        if ($userId === '') {
+            return null;
+        }
+
+        // Account owner / admin: preserve exactly today's (unfiltered) behaviour.
+        if ($this->isAdminUser($userId)) {
+            return null;
+        }
+
+        return $this->profileManager->getActiveRatingFilter($userId);
+    }
+
+    /**
+     * Merge the active profile's parental content-rating cap into a media-query
+     * `$params` array so the shared listing SQL ({@see ItemRepository::query()},
+     * {@see ItemRepository::valueBuckets()}, {@see ItemRepository::letterCounts()})
+     * enforces it uniformly across items, counts, pagination and the A-Z rail.
+     *
+     * A no-op (returns `$params` unchanged) whenever {@see resolveRatingFilter()}
+     * decides no filtering applies — the permissive default.
+     *
+     * @param Request              $request The HTTP request.
+     * @param array<string, mixed> $params  Media-query params to augment.
+     *
+     * @return array<string, mixed> The params, plus `allowedRatings`/`allowUnrated`
+     *                              when a cap is active.
+     */
+    private function applyRatingFilter(Request $request, array $params): array
+    {
+        $filter = $this->resolveRatingFilter($request);
+        if ($filter !== null) {
+            $params['allowedRatings'] = $filter['allowedRatings'];
+            $params['allowUnrated'] = $filter['allowUnrated'];
+        }
+
+        return $params;
+    }
+
+    /**
+     * Whether a single media item's rating is permitted by an active parental
+     * cap, for the detail-by-id read path.
+     *
+     * Conservative and consistent with the listing SQL for RATED items: an item
+     * whose `content_rating` is a present, non-empty string is allowed only when
+     * that string is in the cap's allow-list. A NULL/absent rating (truly
+     * unrated — e.g. an episode that inherits its series' context) is left
+     * ALLOWED here; the listing filter's `allow_unrated` gate governs whether
+     * such items surface in browse, but blocking them on a direct fetch would
+     * break legitimate series drill-downs, so detail stays permissive for NULLs.
+     *
+     * @param array<string, mixed>                                     $item   Raw item row (SELECT *).
+     * @param array{allowedRatings: list<string>, allowUnrated: bool}  $filter Active cap.
+     *
+     * @return bool True when the item may be shown to the capped profile.
+     */
+    private function isItemRatingWithinCap(array $item, array $filter): bool
+    {
+        $rating = is_string($item['content_rating'] ?? null) ? $item['content_rating'] : null;
+        if ($rating === null || $rating === '') {
+            return true;
+        }
+
+        return in_array($rating, $filter['allowedRatings'], true);
     }
 
     /**
@@ -963,6 +1092,14 @@ class WebPortalRouter
         if ($minRating !== null && is_numeric($minRating)) {
             $params['minRating'] = (float) $minRating;
         }
+
+        // Parental content-rating cap of the active profile (if any). Injected
+        // here — the one place all three browse surfaces (getMedia, letter-index,
+        // media-index) build their params — so the cap enforces itself on the
+        // items, the COUNT(*) total, pagination and the A-Z rail alike. A no-op
+        // for the account owner, unauthenticated requests, and profiles with no
+        // (or a most-permissive) cap.
+        $params = $this->applyRatingFilter($request, $params);
 
         return $params;
     }

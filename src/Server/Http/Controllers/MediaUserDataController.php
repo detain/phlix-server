@@ -13,6 +13,7 @@ namespace Phlix\Server\Http\Controllers;
 
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Library\MediaItemShaper;
+use Phlix\Media\Library\RatingGate;
 use Phlix\Media\UserItemDataRepository;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
@@ -40,13 +41,24 @@ class MediaUserDataController
     private UserItemDataRepository $userItemData;
 
     /**
+     * Shared parental-control access gate. Null in legacy/test contexts, where
+     * every gate check is a strict no-op (owner-safe).
+     */
+    private ?RatingGate $ratingGate;
+
+    /**
      * @param ItemRepository         $itemRepository Resolves/validates the media item.
      * @param UserItemDataRepository $userItemData   Per-user favorite/rating store.
+     * @param RatingGate|null        $ratingGate     Parental-control access gate.
      */
-    public function __construct(ItemRepository $itemRepository, UserItemDataRepository $userItemData)
-    {
+    public function __construct(
+        ItemRepository $itemRepository,
+        UserItemDataRepository $userItemData,
+        ?RatingGate $ratingGate = null
+    ) {
         $this->itemRepository = $itemRepository;
         $this->userItemData = $userItemData;
+        $this->ratingGate = $ratingGate;
     }
 
     /**
@@ -268,6 +280,12 @@ class MediaUserDataController
 
         $rows = $this->userItemData->getFavorites($userId, $limit, $offset);
 
+        // Favorites are account-level, but the ACTIVE profile's parental cap
+        // still governs what it may see: an over-cap favorite (by effective
+        // rating) is filtered out for a capped profile. No-op for the owner /
+        // un-capped profile (null filter).
+        $ratingFilter = $this->ratingGate?->resolveFilterForUser($userId);
+
         $items = [];
         foreach ($rows as $row) {
             $itemId = is_string($row['item_id'] ?? null) ? $row['item_id'] : '';
@@ -278,6 +296,14 @@ class MediaUserDataController
             $item = $this->itemRepository->findById($itemId);
             if ($item === null) {
                 // Defensive: media item gone since the favorite row was written.
+                continue;
+            }
+
+            if (
+                $ratingFilter !== null
+                && $this->ratingGate !== null
+                && !$this->ratingGate->isAllowed($item, $ratingFilter)
+            ) {
                 continue;
             }
 

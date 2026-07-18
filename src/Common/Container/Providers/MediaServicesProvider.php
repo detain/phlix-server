@@ -20,6 +20,7 @@ use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Library\LibraryManager;
 use Phlix\Media\Library\LibraryScanWorker;
 use Phlix\Media\Library\MediaScanner;
+use Phlix\Media\Library\RatingGate;
 use Phlix\Media\Library\ScanJobRepository;
 use Phlix\Media\ChapterSearchService;
 use Phlix\Media\CollectionService;
@@ -249,6 +250,11 @@ final class MediaServicesProvider implements ServiceProviderInterface
             // dashboard activity feed).
             ItemRepository::class => autowire()
                 ->constructorParameter('statsCollector', get(StatsCollector::class)),
+
+            // Shared parental-control ACCESS gate (effective-rating + cap check),
+            // used by every user-facing read/stream path. Autowires from
+            // ItemRepository + UserProfileManager + UserRepository.
+            RatingGate::class => autowire(),
 
             // Per-user favorites + ratings (E10). The repository takes only a
             // Workerman MySQL Connection; the controller takes ItemRepository +

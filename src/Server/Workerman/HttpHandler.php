@@ -21,6 +21,7 @@ use Phlix\Server\Http\Controllers\ByteRangeParser;
 use Phlix\Server\Http\Controllers\PhotoController;
 use Phlix\Server\Http\Controllers\TranscodeFileServer;
 use Phlix\Media\Library\ItemRepository;
+use Phlix\Media\Library\RatingGate;
 use Phlix\Media\Storage\ArtworkStorage;
 use Phlix\Media\Transcoding\SegmentProcessRegistry;
 use Phlix\Server\Http\Middleware\AdminMiddleware;
@@ -920,6 +921,21 @@ final class HttpHandler
      * `Range` requests are honoured (206 + `Content-Range`) so the browser can
      * seek; an unsatisfiable range yields 416.
      */
+    /**
+     * Resolve the shared parental-control {@see RatingGate} from the container,
+     * or null when it cannot be built (never blocks the stream on wiring error —
+     * a null gate is a strict no-op, owner-safe).
+     */
+    private function ratingGate(): ?RatingGate
+    {
+        try {
+            $gate = $this->container->get(RatingGate::class);
+            return $gate instanceof RatingGate ? $gate : null;
+        } catch (Throwable) {
+            return null;
+        }
+    }
+
     private function serveMediaStream(WorkermanRequest $wr, ?string $userId = null): ?WorkermanResponse
     {
         $method = $wr->method();
@@ -963,6 +979,27 @@ final class HttpHandler
         /** @var ItemRepository $repo */
         $repo = $this->container->get(ItemRepository::class);
         $item = $repo->findById($m['id']);
+
+        // Parental-control ACCESS gate (Finding 1). For an authenticated session
+        // (userId set) whose ACTIVE profile is capped, deny an over-cap item (by
+        // EFFECTIVE rating — own content_rating, else the inherited series
+        // rating) with the SAME 404 used for "not found" below, so existence is
+        // never confirmed and no bytes are served. Signed-URL access (userId
+        // null) is governed by the signed URL itself — and the mint paths
+        // (detail/download) are already gated — so it is intentionally not
+        // re-checked here. Owner / no-profile / un-capped → null filter → no-op.
+        if ($userId !== null && $userId !== '' && is_array($item)) {
+            $gate = $this->ratingGate();
+            $filter = $gate?->resolveFilterForUser($userId);
+            if ($filter !== null && $gate !== null && !$gate->isAllowed($item, $filter)) {
+                return new WorkermanResponse(
+                    404,
+                    ['Content-Type' => 'text/plain; charset=utf-8'],
+                    'Media not found',
+                );
+            }
+        }
+
         $path = is_array($item) && is_string($item['path'] ?? null) ? $item['path'] : '';
         if ($path === '' || !is_file($path) || !is_readable($path)) {
             return new WorkermanResponse(404, ['Content-Type' => 'text/plain; charset=utf-8'], 'Media not found');

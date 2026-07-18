@@ -490,6 +490,23 @@ class Application
                         } catch (\Throwable) {
                             return (new Response())->status(503)->json(['error' => 'Service unavailable']);
                         }
+
+                        // Parental cap parity with WebPortalRouter's A-Z index: thread
+                        // the ACTIVE profile's cap into the SAME bucket query so counts
+                        // match the capped rows. No-op (null filter) for the owner,
+                        // unauthenticated requests, and un-capped profiles.
+                        try {
+                            /** @var \Phlix\Media\Library\RatingGate $ratingGate */
+                            $ratingGate = $container->get(\Phlix\Media\Library\RatingGate::class);
+                            $ratingFilter = $ratingGate->resolveFilterForUser($request->userId ?? '');
+                            if ($ratingFilter !== null) {
+                                $paramsArr['allowedRatings'] = $ratingFilter['allowedRatings'];
+                                $paramsArr['allowUnrated'] = $ratingFilter['allowUnrated'];
+                            }
+                        } catch (\Throwable) {
+                            // Gate unavailable → leave params uncapped (permissive).
+                        }
+
                         $rawBuckets = $itemRepository->valueBuckets($field, $paramsArr, $libraryId);
 
                         $indexBuckets = new \Phlix\Media\Library\IndexBuckets();
@@ -2973,12 +2990,21 @@ class Application
         $trickplayController = $this->getTrickplayController();
         $db = $this->createDatabaseConnection();
         $chapterMarkerService = new \Phlix\Media\MarkerService($db);
+        $ratingGate = null;
+        try {
+            /** @var \Phlix\Media\Library\RatingGate $ratingGate */
+            $ratingGate = $this->container->get(\Phlix\Media\Library\RatingGate::class);
+        } catch (\Throwable) {
+            $ratingGate = null;
+        }
         return new \Phlix\Server\Http\Controllers\MediaItemController(
             $itemRepository,
             $markerService,
             $gaplessManager,
             $trickplayController,
-            $chapterMarkerService
+            $chapterMarkerService,
+            null,
+            $ratingGate
         );
     }
 

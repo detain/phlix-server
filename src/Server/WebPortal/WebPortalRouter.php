@@ -23,6 +23,7 @@ use Phlix\Media\Music\MusicLibraryService;
 use Phlix\Media\RecommendationService;
 use Phlix\Media\Library\IndexBuckets;
 use Phlix\Media\Library\ItemRepository;
+use Phlix\Media\Library\RatingGate;
 use Phlix\Media\Library\MediaItemShaper;
 use Phlix\Media\Library\StreamProbeBackfill;
 use Phlix\Media\Library\StreamTrackShaper;
@@ -134,6 +135,13 @@ class WebPortalRouter
      *      (the optional ctor arg is a test seam)
      */
     private ?StreamProbeBackfill $streamBackfill;
+
+    /**
+     * @var RatingGate|null Shared parental-control access gate; built lazily from
+     *      the item repository + profile/user managers (null only when the
+     *      profile manager is unwired, in which case gating is a strict no-op).
+     */
+    private ?RatingGate $ratingGate = null;
 
     /**
      * Constructs a new WebPortalRouter instance.
@@ -571,16 +579,16 @@ class WebPortalRouter
         }
 
         // Parental cap on the detail read path. A capped profile that deep-links
-        // an item whose PRESENT content rating exceeds its cap is blocked with a
-        // 404 (not 403) so the response can't confirm the item exists — and, more
-        // importantly, so it never receives the signed stream_url minted below.
-        // We block only on a PRESENT-but-too-mature cert: NULL-rated rows (truly
-        // unrated — including episodes that inherit their series' context) are
-        // left to the listing filter's `allow_unrated` gate rather than hidden
-        // here, so a legitimate series drill-down is never broken. This mirrors
-        // the listing SQL for rated items while staying conservative for NULLs.
+        // an over-cap item is blocked with a 404 (not 403) so the response can't
+        // confirm the item exists — and, crucially, so it never receives the
+        // signed stream_url minted below. The gate uses the item's EFFECTIVE
+        // rating (its own content_rating, else the inherited series rating), so a
+        // legitimate drill-down of an allowed series keeps working while an
+        // episode of a blocked series is denied; a genuinely-unrated item is
+        // blocked only when the profile's allow_unrated is false (Finding 5).
         $ratingFilter = $this->resolveRatingFilter($request);
-        if ($ratingFilter !== null && !$this->isItemRatingWithinCap($item, $ratingFilter)) {
+        $gate = $this->gate();
+        if ($ratingFilter !== null && $gate !== null && !$gate->isAllowed($item, $ratingFilter)) {
             return (new Response())->status(404)->json(['error' => 'Item not found']);
         }
 
@@ -716,21 +724,33 @@ class WebPortalRouter
      */
     private function resolveRatingFilter(Request $request): ?array
     {
+        $gate = $this->gate();
+        if ($gate === null) {
+            return null;
+        }
+
+        return $gate->resolveFilterForUser($request->userId ?? '');
+    }
+
+    /**
+     * Lazily build (and memoize) the shared {@see RatingGate} from this router's
+     * already-injected dependencies.
+     *
+     * Returns null only when the profile manager is unwired (test/legacy
+     * contexts) — in which case every caller treats a null gate/filter as a
+     * strict no-op, so the owner and un-profiled requests are never gated.
+     */
+    private function gate(): ?RatingGate
+    {
         if ($this->profileManager === null) {
             return null;
         }
 
-        $userId = $request->userId ?? '';
-        if ($userId === '') {
-            return null;
-        }
-
-        // Account owner / admin: preserve exactly today's (unfiltered) behaviour.
-        if ($this->isAdminUser($userId)) {
-            return null;
-        }
-
-        return $this->profileManager->getActiveRatingFilter($userId);
+        return $this->ratingGate ??= new RatingGate(
+            $this->itemRepository,
+            $this->profileManager,
+            $this->userRepository,
+        );
     }
 
     /**
@@ -757,33 +777,6 @@ class WebPortalRouter
         }
 
         return $params;
-    }
-
-    /**
-     * Whether a single media item's rating is permitted by an active parental
-     * cap, for the detail-by-id read path.
-     *
-     * Conservative and consistent with the listing SQL for RATED items: an item
-     * whose `content_rating` is a present, non-empty string is allowed only when
-     * that string is in the cap's allow-list. A NULL/absent rating (truly
-     * unrated — e.g. an episode that inherits its series' context) is left
-     * ALLOWED here; the listing filter's `allow_unrated` gate governs whether
-     * such items surface in browse, but blocking them on a direct fetch would
-     * break legitimate series drill-downs, so detail stays permissive for NULLs.
-     *
-     * @param array<string, mixed>                                     $item   Raw item row (SELECT *).
-     * @param array{allowedRatings: list<string>, allowUnrated: bool}  $filter Active cap.
-     *
-     * @return bool True when the item may be shown to the capped profile.
-     */
-    private function isItemRatingWithinCap(array $item, array $filter): bool
-    {
-        $rating = is_string($item['content_rating'] ?? null) ? $item['content_rating'] : null;
-        if ($rating === null || $rating === '') {
-            return true;
-        }
-
-        return in_array($rating, $filter['allowedRatings'], true);
     }
 
     /**
@@ -1156,6 +1149,15 @@ class WebPortalRouter
             return (new Response())->status(404)->json(['error' => 'Item not found']);
         }
 
+        // Parental cap: an over-cap item (by effective rating) is 404 here too, so
+        // a capped profile never gets its media source path / tracks. No-op for
+        // the owner / un-capped profile.
+        $filter = $this->resolveRatingFilter($request);
+        $gate = $this->gate();
+        if ($filter !== null && $gate !== null && !$gate->isAllowed($item, $filter)) {
+            return (new Response())->status(404)->json(['error' => 'Item not found']);
+        }
+
         // Get marker data for skip buttons
         $skipSpec = $this->playbackMarkerService->getFullSpec($params['id']);
 
@@ -1223,6 +1225,14 @@ class WebPortalRouter
         $item = $this->itemRepository->findById($params['id']);
 
         if (!$item) {
+            return (new Response())->status(404)->json(['error' => 'Item not found']);
+        }
+
+        // Parental cap: an over-cap item (by effective rating) is 404 here too.
+        // No-op for the owner / un-capped profile.
+        $filter = $this->resolveRatingFilter($request);
+        $gate = $this->gate();
+        if ($filter !== null && $gate !== null && !$gate->isAllowed($item, $filter)) {
             return (new Response())->status(404)->json(['error' => 'Item not found']);
         }
 
@@ -1310,6 +1320,14 @@ class WebPortalRouter
             $limit
         );
 
+        // Parental cap: drop over-cap results (by effective rating) for a capped
+        // active profile. No-op for the owner / un-capped profile.
+        $filter = $this->resolveRatingFilter($request);
+        $gate = $this->gate();
+        if ($filter !== null && $gate !== null) {
+            $items = $gate->filterItems($items, $filter, 'id');
+        }
+
         return (new Response())->json([
             'items' => $items,
             'marker_type' => $type->value,
@@ -1345,6 +1363,14 @@ class WebPortalRouter
 
         $item = $this->itemRepository->findById($params['id']);
         if (!$item) {
+            return (new Response())->status(404)->json(['error' => 'Item not found']);
+        }
+
+        // Parental cap: an over-cap item (by effective rating) is 404 here too, so
+        // its markers are not disclosed. No-op for the owner / un-capped profile.
+        $filter = $this->resolveRatingFilter($request);
+        $gate = $this->gate();
+        if ($filter !== null && $gate !== null && !$gate->isAllowed($item, $filter)) {
             return (new Response())->status(404)->json(['error' => 'Item not found']);
         }
 
@@ -1402,6 +1428,16 @@ class WebPortalRouter
         }
 
         $items = $this->playbackController->getContinueWatching($userId);
+
+        // Continue-watching is account-level, but the ACTIVE profile's cap still
+        // governs what it can see: drop over-cap titles (by effective rating).
+        // The media id lives under `media_item_id` here. No-op for the owner.
+        $filter = $this->resolveRatingFilter($request);
+        $gate = $this->gate();
+        if ($filter !== null && $gate !== null) {
+            $items = $gate->filterItems($items, $filter, 'media_item_id');
+        }
+
         return (new Response())->json(['items' => $items]);
     }
 
@@ -1441,6 +1477,15 @@ class WebPortalRouter
         }
 
         $items = $this->playbackController->getRecentlyWatched($userId);
+
+        // Account-level history, still capped for the active profile (by
+        // effective rating). Media id is under `media_item_id`. Owner → no-op.
+        $filter = $this->resolveRatingFilter($request);
+        $gate = $this->gate();
+        if ($filter !== null && $gate !== null) {
+            $items = $gate->filterItems($items, $filter, 'media_item_id');
+        }
+
         return (new Response())->json(['items' => $items]);
     }
 
@@ -1840,6 +1885,14 @@ class WebPortalRouter
             $items = $filteredItems;
         }
 
+        // Parental cap: drop over-cap similar items for a capped active profile
+        // (by effective rating). No-op for the owner / un-capped profile.
+        $filter = $this->resolveRatingFilter($request);
+        $gate = $this->gate();
+        if ($filter !== null && $gate !== null) {
+            $items = $gate->filterItems($items, $filter, 'id');
+        }
+
         return (new Response())->json(['items' => $items]);
     }
 
@@ -1889,6 +1942,14 @@ class WebPortalRouter
         // Check that the item exists.
         $item = $this->itemRepository->findById($itemId);
         if ($item === null) {
+            return (new Response())->status(404)->json(['error' => 'Item not found']);
+        }
+
+        // Parental cap: an over-cap item (by effective rating) is 404 here too, so
+        // its collection membership can't be probed. No-op for the owner.
+        $filter = $this->resolveRatingFilter($request);
+        $gate = $this->gate();
+        if ($filter !== null && $gate !== null && !$gate->isAllowed($item, $filter)) {
             return (new Response())->status(404)->json(['error' => 'Item not found']);
         }
 
@@ -1966,6 +2027,14 @@ class WebPortalRouter
 
         $members = $this->collectionService->getCollectionMembers((int) $collectionId);
 
+        // Parental cap: drop over-cap members (by effective rating) for a capped
+        // active profile. No-op for the owner / un-capped profile.
+        $filter = $this->resolveRatingFilter($request);
+        $gate = $this->gate();
+        if ($filter !== null && $gate !== null) {
+            $members = $gate->filterItems($members, $filter, 'id');
+        }
+
         // Re-index members array so keys are strings (required by Response::json())
         return (new Response())->json([
             'collection' => $collection,
@@ -2022,6 +2091,14 @@ class WebPortalRouter
         }
 
         $recommendations = $this->recommendationService->getBecauseYouWatched($userId, $limit);
+
+        // Parental cap: drop over-cap recommendations (by effective rating) for a
+        // capped active profile. No-op for the owner / un-capped profile.
+        $filter = $this->resolveRatingFilter($request);
+        $gate = $this->gate();
+        if ($filter !== null && $gate !== null) {
+            $recommendations = $gate->filterItems($recommendations, $filter, 'id');
+        }
 
         return (new Response())->json(['recommendations' => $recommendations]);
     }

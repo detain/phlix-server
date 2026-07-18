@@ -76,8 +76,7 @@ class BackgroundDetectorWorker
             return false;
         }
 
-        $this->logger->info('[DEBUG] ' . date('Y-m-d H:i:s.v') .
-            ' BackgroundDetectorWorker::runOnce Starting [showId=' . $showId . ']');
+        $this->logger->info('BackgroundDetectorWorker::runOnce Starting [showId=' . $showId . ']');
         $startTime = hrtime(true);
 
         try {
@@ -95,20 +94,14 @@ class BackgroundDetectorWorker
             $this->store->completeShow($showId);
 
             $durationMs = (hrtime(true) - $startTime) / 1_000_000.0;
-            $this->logger->info('[DEBUG] ' . date('Y-m-d H:i:s.v') .
-                ' BackgroundDetectorWorker::runOnce Completed [showId=' . $showId . '] [duration=' . round(
-                    $durationMs,
-                    2
-                ) . 'ms] [episodes=' . count($result->episodes_processed) . ']');
+            $this->logger->info('BackgroundDetectorWorker::runOnce Completed [showId=' . $showId . '] [duration='
+                . round($durationMs, 2) . 'ms] [episodes=' . count($result->episodes_processed) . ']');
 
             return true;
         } catch (\Throwable $e) {
             $durationMs = (hrtime(true) - $startTime) / 1_000_000.0;
-            $this->logger->error('[DEBUG] ' . date('Y-m-d H:i:s.v') .
-                ' BackgroundDetectorWorker::runOnce FAILED [showId=' . $showId . '] [duration=' . round(
-                    $durationMs,
-                    2
-                ) . 'ms] [error=' . $e->getMessage() . ']');
+            $this->logger->error('BackgroundDetectorWorker::runOnce FAILED [showId=' . $showId . '] [duration='
+                . round($durationMs, 2) . 'ms] [error=' . $e->getMessage() . ']');
 
             $this->store->completeShow($showId);
 

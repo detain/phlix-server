@@ -7281,3 +7281,15 @@ lives — without spawning ffmpeg, publishing the segment so `produceSegment`'s 
   value-context/sole-statement hazards. `finfo_close` explanatory comments left untouched. `php -l`
   clean on all 16 edited files; full Unit **5677/41775/0 fail/0 err/5 skip**; phpstan `[OK] No errors`;
   phpcs PSR-12 0/0. Commits `a4a6281c` (curl_close) + `ed426816` (imagedestroy), pushed to master.
+
+## Logs page overhaul — server side
+- [x] DONE (2026-07-18) — Dropped the redundant `"[LEVEL] " . date('Y-m-d H:i:s.v') . " "` prefix
+  hand-built into 37 Monolog message strings across 6 call-site files (HttpHandler 11, SimilarityWorker
+  8, MediaAssetWorker 8, PluginAutoUpdateWorker 4, BackgroundDetectorWorker 3, LibraryScanWorker 3).
+  Monolog LineFormatter already emits `[<iso8601>] <channel>.<LEVEL>: <message>`, so the hand-built
+  prefix doubled the level + timestamp on the admin Logs page; now every line is a clean single-
+  level/single-timestamp record. `error_log()` sites (public/index.php, Router.php, ConnectionPool.php)
+  left UNTOUCHED — they write to the PHP error log where the prefix is the only metadata. No test
+  asserted the prefixed strings (none needed updating). php -l clean on all 6; Unit **5720/41855/0 fail/
+  0 err/8 skip**; phpstan `[OK] No errors`; phpcs PSR-12 0 errors on src/ (reflowed the collapsed lines
+  to stay <=120 and inlined round() to avoid multi-line-call indent).

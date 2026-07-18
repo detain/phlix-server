@@ -57,21 +57,19 @@ final class PluginAutoUpdateWorker
             return false;
         }
 
-        $this->logger()->info('[DEBUG] ' . date('Y-m-d H:i:s.v') .
-            ' PluginAutoUpdateWorker::runOnce Starting update cycle');
+        $this->logger()->info('PluginAutoUpdateWorker::runOnce Starting update cycle');
         $startTime = hrtime(true);
 
         try {
             $result = $this->updates->updateAll();
             $durationMs = (hrtime(true) - $startTime) / 1_000_000.0;
-            $this->logger()->info('[DEBUG] ' . date('Y-m-d H:i:s.v') .
-                ' PluginAutoUpdateWorker::runOnce Update cycle completed [duration=' . round($durationMs, 2) .
-                    'ms] [updated=' . count($result['updated']) . '] [failed=' . count($result['failed']) . ']');
+            $this->logger()->info('PluginAutoUpdateWorker::runOnce Update cycle completed [duration='
+                . round($durationMs, 2) . 'ms] [updated=' . count($result['updated']) . '] [failed='
+                . count($result['failed']) . ']');
         } catch (Throwable $e) {
             $durationMs = (hrtime(true) - $startTime) / 1_000_000.0;
-            $this->logger()->error('[DEBUG] ' . date('Y-m-d H:i:s.v') .
-                ' PluginAutoUpdateWorker::runOnce Update cycle FAILED [duration=' . round($durationMs, 2) .
-                    'ms] [error=' . $e->getMessage() . ']');
+            $this->logger()->error('PluginAutoUpdateWorker::runOnce Update cycle FAILED [duration='
+                . round($durationMs, 2) . 'ms] [error=' . $e->getMessage() . ']');
             return false;
         }
 
@@ -96,7 +94,7 @@ final class PluginAutoUpdateWorker
      */
     public function start(int $pollSeconds): void
     {
-        $this->logger()->info('[DEBUG] ' . date('Y-m-d H:i:s.v') . ' PluginAutoUpdateWorker::start [poll_interval=' .
+        $this->logger()->info('PluginAutoUpdateWorker::start [poll_interval=' .
             $pollSeconds . ']');
         Timer::add($pollSeconds, fn(): bool => $this->runOnce());
     }

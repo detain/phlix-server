@@ -149,7 +149,7 @@ class MediaAssetWorker
      */
     public function start(int $pollSeconds): void
     {
-        $this->logger->info('[DEBUG] ' . date('Y-m-d H:i:s.v') . ' MediaAssetWorker::start [poll_interval=' .
+        $this->logger->info('MediaAssetWorker::start [poll_interval=' .
             $pollSeconds . '] [max_concurrent=' . $this->maxConcurrent . ']');
 
         Timer::add($pollSeconds, fn (): bool => $this->runOnce() > 0);
@@ -166,8 +166,7 @@ class MediaAssetWorker
      */
     private function processConcurrently(array $jobs): int
     {
-        $this->logger->debug('[DEBUG] ' . date('Y-m-d H:i:s.v') .
-            ' MediaAssetWorker::processConcurrently Starting batch [count=' . count($jobs) . ']');
+        $this->logger->debug('MediaAssetWorker::processConcurrently Starting batch [count=' . count($jobs) . ']');
         $startTime = hrtime(true);
 
         $processed = 0;
@@ -193,9 +192,8 @@ class MediaAssetWorker
         }
 
         $durationMs = (hrtime(true) - $startTime) / 1_000_000.0;
-        $this->logger->debug('[DEBUG] ' . date('Y-m-d H:i:s.v') .
-            ' MediaAssetWorker::processConcurrently Completed batch [count=' . count($jobs) . '] [processed=' .
-                $processed . '] [duration=' . round($durationMs, 2) . 'ms]');
+        $this->logger->debug('MediaAssetWorker::processConcurrently Completed batch [count=' . count($jobs) . ']'
+            . ' [processed=' . $processed . '] [duration=' . round($durationMs, 2) . 'ms]');
 
         return $processed;
     }
@@ -209,8 +207,7 @@ class MediaAssetWorker
      */
     private function processSequentially(array $jobs): int
     {
-        $this->logger->debug('[DEBUG] ' . date('Y-m-d H:i:s.v') .
-            ' MediaAssetWorker::processSequentially Starting batch [count=' . count($jobs) . ']');
+        $this->logger->debug('MediaAssetWorker::processSequentially Starting batch [count=' . count($jobs) . ']');
         $startTime = hrtime(true);
 
         $processed = 0;
@@ -221,9 +218,8 @@ class MediaAssetWorker
         }
 
         $durationMs = (hrtime(true) - $startTime) / 1_000_000.0;
-        $this->logger->debug('[DEBUG] ' . date('Y-m-d H:i:s.v') .
-            ' MediaAssetWorker::processSequentially Completed batch [count=' . count($jobs) . '] [processed=' .
-                $processed . '] [duration=' . round($durationMs, 2) . 'ms]');
+        $this->logger->debug('MediaAssetWorker::processSequentially Completed batch [count=' . count($jobs) . ']'
+            . ' [processed=' . $processed . '] [duration=' . round($durationMs, 2) . 'ms]');
 
         return $processed;
     }
@@ -235,24 +231,19 @@ class MediaAssetWorker
      */
     private function processOneJob(MediaAssetJob $job): void
     {
-        $this->logger->debug('[DEBUG] ' . date('Y-m-d H:i:s.v') .
-            ' MediaAssetWorker::processOneJob Starting [itemId=' . $job->itemId . ']');
+        $this->logger->debug('MediaAssetWorker::processOneJob Starting [itemId=' . $job->itemId . ']');
         $startTime = hrtime(true);
 
         try {
             $this->jobProcessor->process($job);
             $this->store->complete($job->itemId);
             $durationMs = (hrtime(true) - $startTime) / 1_000_000.0;
-            $this->logger->debug('[DEBUG] ' . date('Y-m-d H:i:s.v') .
-                ' MediaAssetWorker::processOneJob Completed [itemId=' . $job->itemId . '] [duration=' .
+            $this->logger->debug('MediaAssetWorker::processOneJob Completed [itemId=' . $job->itemId . '] [duration=' .
                     round($durationMs, 2) . 'ms]');
         } catch (\Throwable $e) {
             $durationMs = (hrtime(true) - $startTime) / 1_000_000.0;
-            $this->logger->error('[DEBUG] ' . date('Y-m-d H:i:s.v') .
-                ' MediaAssetWorker::processOneJob FAILED [itemId=' . $job->itemId . '] [duration=' . round(
-                    $durationMs,
-                    2
-                ) . 'ms] [error=' . $e->getMessage() . ']');
+            $this->logger->error('MediaAssetWorker::processOneJob FAILED [itemId=' . $job->itemId . '] [duration='
+                . round($durationMs, 2) . 'ms] [error=' . $e->getMessage() . ']');
             // Mark complete anyway so we don't spin forever on a failing item
             $this->store->complete($job->itemId);
         }

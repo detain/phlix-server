@@ -7434,3 +7434,23 @@ instance → `direct_play=true` (backward compat preserved, matching tests); `$l
 ctor-set property (no resident-memory/static-state issue); 1B and 2A tests are genuine (assert real
 `-af "loudnorm=I=-16:LRA=11:TP=-1.5"` strings and real `direct_play` true/false flips, not decorative).
 PSR-12 / strict types / L9 clean on the changed surface.
+
+### Fixer (cumulative SV-3.3) — 2026-07-18 — findings 1-4 RESOLVED
+
+- **1 [MEDIUM, fixed+tested]** `FfmpegRunner::buildHwaccelSegmentCommand` audio RE-ENCODE branch now
+  emits `buildLoudnormFilter()` via `-af "loudnorm=…"` (mirrors the software builders; copy branch
+  stays inert). loudnorm is an AUDIO filter, independent of the video `-vf`/hwupload chain — no
+  collision. Tests: `FfmpegRunnerHwaccelTest` +4 (emit-on-reencode, omit-on-copy, coexist-with-`-vf`,
+  hwaccel-preferred-still-normalizes).
+- **2 [LOW-MED, reconciled behavior]** chose to RECONCILE, not just doc-correct: `WebPortalRouter`
+  `defaultAudioCodec()` → renamed `firstAudioCodec()`, now selects `$audioTracks[0]` (StreamTrackShaper
+  sorts by `stream_index` asc, so `[0]` == `firstStreamOfType($probe,'audio')` that `computeHlsParams`
+  uses) → verdict and transcode decision genuinely agree. Docblock + call-site comment corrected.
+  Test `testDirectPlayGatesOnDefaultTrackNotFirstTrack` rewritten → `...OnFirstTrackNotDefaultTrack`
+  (+ swapped-codec companion) to pin first-stream selection.
+- **3 [INFO, done]** `buildGaplessSegmentCommand` given the same re-encode-only `-af loudnorm` block
+  (still zero callers); +3 lock-in tests in `FfmpegRunnerLoudnormTest`.
+- **4 [INFO, done]** `config/ffmpeg.php` `loudness` block gained an OPERATOR NOTE: loudnorm applies
+  only to RE-ENCODED audio; copy-audio rungs (`original`) + direct-play bypass it by design.
+- Full Unit **5782 / 42039 assertions / 0 fail / 0 err / 5 skip** (baseline 5774 + 8 net new).
+  phpstan L9 `[OK] No errors`; phpcs PSR-12 0/0 on `src/` + `config/ffmpeg.php`.

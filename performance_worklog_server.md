@@ -7365,3 +7365,72 @@ lives — without spawning ffmpeg, publishing the segment so `produceSegment`'s 
   no header→true; empty header→true; aac source + `{"eac3":false}`→true; aac + `{"aac":false}`→false;
   default-track-not-first gating). Full Unit **5774/42011/0 fail/0 err/5 skip** (baseline 5755 + 19 new);
   phpstan L9 `[OK] No errors`; phpcs PSR-12 0/0 on changed src.
+
+## Reviewer (cumulative) — 2026-07-18
+
+Cumulative integration review of SV-3.3 across `e22dfc82` (1A) + `444bf8a3` (1B) + `eaca33dc` (2A).
+Focus: seams between config→provider→ctor→applyLoudnorm→FfmpegRunner emit, and the
+playback-info↔transcode capability-gate consistency. 4 findings (1 real seam bug, 1 consistency/doc
+defect, 2 INFO/by-design).
+
+1. **[MEDIUM — seam / missed 4th emit path] `src/Media/Transcoding/FfmpegRunner.php:2168-2179`
+   (`buildHwaccelSegmentCommand` audio re-encode branch), reached via `startSegmentEncode`
+   (`FfmpegRunner.php:2363-2364`).** 1B correctly seeds `$params['loudnorm']` at all THREE
+   *param-assembly* sites in `TranscodeManager`, and `buildSegmentCommand` (`:1793-1797`) +
+   `buildAudioSegmentCommand` (`:1867-1871`) emit `-af "loudnorm=…"`. But there is a FOURTH *emit*
+   path: `buildHwaccelSegmentCommand` re-encodes inline audio to AAC (`-c:a aac -b:a …`) and NEVER
+   calls `buildLoudnormFilter()`, so it drops the filter. `startSegmentEncode` prefers this builder
+   whenever `hwaccel.enabled && prefer_hardware` — and `config/hwaccel_base.php` ships BOTH `true`
+   by default. So on any deployment with a working hardware encoder, a **single-audio** job's video
+   segment (inline audio, not `-an`) is loudness-normalized on the software path but silently NOT on
+   the hwaccel path. This directly contradicts 1B's own `applyLoudnorm()` docblock ("every ABR video
+   segment's audio re-encode is loudness-normalized … injecting at only one site would silently miss
+   the others — the SV-3.3 landmine") and the SV-3.3 AC. Multi-audio jobs are safe (video segments
+   are `-an`; audio flows through `buildAudioSegmentCommand`, which does emit loudnorm), so the gap is
+   scoped to single-audio inline-audio jobs on GPU boxes. Latent today (loudness ships OFF; the
+   current prod box has no GPU → software fallback), but it is a genuine correctness bug for the
+   general/GPU case and is UNTESTED — `FfmpegRunnerLoudnormTest`/`TranscodeManagerTest` exercise only
+   the software builders. **Fix:** in `buildHwaccelSegmentCommand`'s non-copy audio branch, append the
+   same `buildLoudnormFilter()` `-af` block used by `buildSegmentCommand`; add a hwaccel
+   command-integration test asserting the `-af loudnorm` string (and its absence when disabled).
+
+2. **[LOW-MEDIUM — consistency + inaccurate docblock] direct_play verdict keys on a DIFFERENT audio
+   stream than the transcode copy-vs-encode decision.** `WebPortalRouter::defaultAudioCodec()`
+   (`src/Server/WebPortal/WebPortalRouter.php:1328`) selects the **default-disposition** audio track
+   (else first) — deliberately, as `testDirectPlayGatesOnDefaultTrackNotFirstTrack` proves. But
+   `TranscodeManager::computeHlsParams()` derives `$srcA` from `firstStreamOfType($probe,'audio')`
+   (`TranscodeManager.php:2766,2769`) — the FIRST ffprobe audio stream, ignoring the `default`
+   disposition — and gates copy-vs-transcode on that (`:2839-2845`). The `supportsCodec()` predicate
+   is identical, but the STREAM SELECTION differs. For the common case (default == first audio) they
+   agree; they disagree when the default audio track is not the first ffprobe stream AND the two
+   tracks' codecs differ (e.g. first=aac non-default, default=eac3): playback-info reports
+   `direct_play=false` on eac3 while the on-demand transcode path copies/maps the aac FIRST track
+   (`-map 0:a:0?`). Impact is bounded (the client still receives playable audio), so this is minor —
+   but both the `defaultAudioCodec()` docblock ("mirrors the first-audio-stream predicate the
+   transcode path uses") and the 2A worklog entry ("keys on the SAME first/default audio stream …
+   so playback-info and the transcode decision agree") OVERSTATE the consistency; the selection is
+   not the same. **Fix:** either reconcile (have `computeHlsParams` prefer the default audio track
+   too) or correct the docblock/worklog to state that direct_play gates on the *default* track while
+   the transcode copy decision gates on the *first* track, and why the divergence is acceptable.
+
+3. **[INFO — latent, currently dead] `src/Media/Transcoding/FfmpegRunner.php:2823`
+   (`buildGaplessSegmentCommand`).** Same class of gap as finding 1: it re-encodes audio to AAC
+   (`:2873-2879`) without emitting loudnorm. It has ZERO callers in `src/` today (grep confirms only
+   docref mentions), so it is inert — but if it is ever wired into a playback path it would silently
+   skip normalization. Worth a guard/comment when finding 1 is fixed.
+
+4. **[INFO — by design, operator-facing] copy-audio and direct-play silently bypass loudnorm.**
+   `buildLoudnormFilter` can only apply on a real encode, so when `audio_codec='copy'` (an aac source
+   the client supports → the `original`/copy rung) or when a client DIRECT-PLAYS the source file, no
+   normalization is applied — with no indication. `applyLoudnorm` acknowledges this and it is a
+   correct inherent limitation (you cannot filter a copied stream). Not a bug, but an operator who
+   enables loudness normalization may be surprised that aac-copy rungs and direct-play sessions are
+   un-normalized; consider documenting this in `config/ffmpeg.php`'s `loudness` block.
+
+Non-findings verified: byte-identical-when-disabled holds (null → no `loudnorm` key → `buildLoudnormFilter`
+returns null → no `-af`); loudnorm filter values are `(float)`-cast and `is_numeric`-guarded end to end
+(no shell injection); `ClientCapabilities::fromJson` on absent/empty/garbage/non-object JSON → safe empty
+instance → `direct_play=true` (backward compat preserved, matching tests); `$loudnormParams` is a readonly
+ctor-set property (no resident-memory/static-state issue); 1B and 2A tests are genuine (assert real
+`-af "loudnorm=I=-16:LRA=11:TP=-1.5"` strings and real `direct_play` true/false flips, not decorative).
+PSR-12 / strict types / L9 clean on the changed surface.

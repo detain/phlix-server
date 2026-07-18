@@ -1173,7 +1173,10 @@ class ItemRepositoryTest extends TestCase
             'name' => 'Genre Movie',
             'type' => 'movie',
             'path' => '/movies/genre-movie.mkv',
-            'metadata_json' => ['genres' => ['Action', 'Action', '', 'Drama', 'Action']],
+            // Includes leading/trailing-space variants of "Action": the PK
+            // `genre` (utf8mb4_bin, PAD SPACE) treats "Action" and "Action " as
+            // the same key, so they must be trimmed + deduped to a single row.
+            'metadata_json' => ['genres' => ['Action', 'Action ', '', 'Drama', ' Action', 'Action']],
         ]);
 
         $deleteCalls = array_values(array_filter(
@@ -1182,7 +1185,7 @@ class ItemRepositoryTest extends TestCase
         ));
         $insertCalls = array_values(array_filter(
             $calls,
-            static fn (array $c): bool => str_starts_with(trim($c['sql']), 'INSERT INTO media_item_genres')
+            static fn (array $c): bool => str_starts_with(trim($c['sql']), 'INSERT IGNORE INTO media_item_genres')
         ));
 
         // create() must NEVER delete from media_item_genres — a freshly
@@ -1194,9 +1197,10 @@ class ItemRepositoryTest extends TestCase
         $insertSql = $insertCalls[0]['sql'];
         $insertParams = $insertCalls[0]['params'];
 
-        // Exactly 2 unique, non-empty genres survive → exactly 2 (?, ?) groups.
+        // Exactly 2 unique, trimmed, non-empty genres survive → exactly 2 (?, ?)
+        // groups; INSERT IGNORE makes a concurrent re-sync a no-op, not a fatal.
         $this->assertStringContainsString(
-            'INSERT INTO media_item_genres (media_item_id, genre) VALUES (?, ?),(?, ?)',
+            'INSERT IGNORE INTO media_item_genres (media_item_id, genre) VALUES (?, ?),(?, ?)',
             $insertSql
         );
         $this->assertSame([$id, 'Action', $id, 'Drama'], $insertParams);
@@ -1271,9 +1275,9 @@ class ItemRepositoryTest extends TestCase
         $this->assertCount(2, $genreCalls);
         $this->assertStringStartsWith('DELETE FROM media_item_genres', trim($genreCalls[0]['sql']));
         $this->assertSame(['item-1'], $genreCalls[0]['params']);
-        $this->assertStringStartsWith('INSERT INTO media_item_genres', trim($genreCalls[1]['sql']));
+        $this->assertStringStartsWith('INSERT IGNORE INTO media_item_genres', trim($genreCalls[1]['sql']));
         $this->assertStringContainsString(
-            'INSERT INTO media_item_genres (media_item_id, genre) VALUES (?, ?),(?, ?)',
+            'INSERT IGNORE INTO media_item_genres (media_item_id, genre) VALUES (?, ?),(?, ?)',
             $genreCalls[1]['sql']
         );
         $this->assertSame(['item-1', 'Sci-Fi', 'item-1', 'Drama'], $genreCalls[1]['params']);

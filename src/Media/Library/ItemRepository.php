@@ -1140,7 +1140,24 @@ class ItemRepository
      */
     private function insertGenreRows(string $itemId, array $genres): void
     {
-        $unique = array_values(array_unique($genres));
+        // Trim + drop blanks and de-duplicate before building the batch. Trimming
+        // matters because the PK `genre` (utf8mb4_bin, PAD SPACE) treats
+        // "Animation" and "Animation " as the SAME key, which array_unique() —
+        // comparing raw bytes — would not collapse, yielding a within-batch
+        // duplicate-key error.
+        $unique = [];
+        $seen = [];
+        foreach ($genres as $genre) {
+            if (!is_string($genre)) {
+                continue;
+            }
+            $genre = trim($genre);
+            if ($genre === '' || isset($seen[$genre])) {
+                continue;
+            }
+            $seen[$genre] = true;
+            $unique[] = $genre;
+        }
         if ($unique === []) {
             return;
         }
@@ -1152,8 +1169,14 @@ class ItemRepository
             $values[] = $genre;
         }
 
+        // INSERT IGNORE (not a bare INSERT): the matcher processes items
+        // concurrently and syncGenreRows()' DELETE-then-INSERT is not atomic, so
+        // two concurrent syncs of the SAME item can interleave and the second
+        // INSERT would otherwise 1062-collide on a row the first already wrote —
+        // aborting the whole item match. IGNORE makes the re-insert a no-op
+        // instead of a fatal error; the join table is idempotently re-synced.
         $this->db->query(
-            "INSERT INTO media_item_genres (media_item_id, genre) VALUES {$placeholders}",
+            "INSERT IGNORE INTO media_item_genres (media_item_id, genre) VALUES {$placeholders}",
             $values
         );
     }

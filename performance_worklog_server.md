@@ -104,6 +104,7 @@
 - [x] SV-4.13 Remove superseded whole-file command builders ✅ FINISHED 2026-07-13 (perf-10): the earlier `c8f94c04` removed the older whole-file builders but left `buildTranscodeCommandWithProfile` (zero-caller) behind. This pass: pre-audit re-confirmed ZERO callers (incl. string/reflection refs) → removed the 60-line method + 2 orphaned imports (`HwaccelCommandBuilder`, `HwaccelEncoderProfileInterface`) + fixed the breaking `@see` in `FfmpegRunnerSubtitleBurnInTest` and 3 stale "whole-file path" prose docrefs (`FfmpegRunner` ~:1644/:2034, `HwaccelProfileFactory`). Left `SoftwareProfile.php:21` (live `buildCmafCommand` ref) + `TranscodeManager.php:2006` alone (perf-9's refs there were stale). Commit `4a04e2cc`; review NO FINDINGS; phpstan L9 clean, phpcs 0 err, 343 Transcoding tests green (live per-segment burn-in path intact). **DONE** (docs → batched sweep). ⚠️ §6 REMOVAL-QUEUE CANDIDATE surfaced (NEEDS USER SIGN-OFF, not actioned): `HwaccelCommandBuilder` + `HwaccelProfileFactory::createCommandBuilder()` are now TRANSITIVELY dead (only their own unit tests remain) — §6/R1 scoped this class must-not-alter, so left in place per §0.1.
 - [x] SV-4.14 Fix phantom self::transcode() docref ✅ (commit c8f94c04)
 - [ ] SV-4.15 port hub's per-surface rate-limiting framework to server's unprotected auth surfaces — QUEUED 2026-07-13 (perf-7, cross-repo consistency gap). Server only rate-limits `login` (DB-backed, DbLoginRateLimitStore); `register`/`refresh`/WebAuthn start+finish/public JWKS/WS-connect (:8097) have NO rate limiting, unlike hub's general `Common/RateLimit/` framework. Full spec in `/home/sites/phlix/performance_plan.md` §2 S-W4 SV-4.15. **⚠️ GATED (user direction 2026-07-13): do NOT start until hub's rate-limiting work is FULLY finished + reviewed + docs'd** — HB-4.6 Option B (DbRateLimiter + LOGIN repoint) was still in progress when this was drafted; re-audit the hub donor code fresh once it's settled (don't trust this spec's description of hub's shape as final). Also gated behind the rest of the server COMPLETE queue per the plan's existing ordering.
+  - **SV-4.15(a) DONE 2026-07-18** — ported hub's DB-agnostic rate-limit CORE (in-memory only, NO DB, NO wiring): `src/Common/RateLimit/{RateLimiterInterface,RateLimitState,RateLimiter}.php` under namespace `Phlix\Common\RateLimit` (adapted from hub's `Phlix\Hub\Common\RateLimit`; dropped hub-only `@see \Phlix\Hub\Auth\AuthManager`/"finding B1"/"Feature #6" cross-refs). Tests ported: `tests/Unit/Common/RateLimit/{RateLimiterTest,RateLimitStateTest}.php` (14 tests: bucket restart on new/expired window, cap/eviction, `limited = count >= max`, injected-clock determinism, `retryAfter` floor-at-0). Full Unit **5796 / 42183 assertions / 0 fail / 0 err / 8 skip** (baseline 5782 + 14 new; skips are env-dependent). phpstan L9 clean, phpcs 0/0 on new src. **Sub-steps b–h PENDING** (b=?, d=RateLimitProfiles, e=DbRateLimiter+positional-`?` rewrite+migration, + per-surface wiring: register/refresh/WebAuthn/JWKS/WS-connect).
 
 ## Re-baseline — Claude Code orchestrator pass (2026-07-12)
 
@@ -7454,3 +7455,40 @@ PSR-12 / strict types / L9 clean on the changed surface.
   only to RE-ENCODED audio; copy-audio rungs (`original`) + direct-play bypass it by design.
 - Full Unit **5782 / 42039 assertions / 0 fail / 0 err / 5 skip** (baseline 5774 + 8 net new).
   phpstan L9 `[OK] No errors`; phpcs PSR-12 0/0 on `src/` + `config/ffmpeg.php`.
+
+### Reviewer (cumulative SV-3.3 — confirming re-review of Fixer commits) — 2026-07-18
+
+Re-reviewed the Fixer's two commits (`f39895d6` hwaccel+gapless loudnorm; `768e84de`
+direct_play first-audio reconciliation) against the 4 cumulative findings, verifying both
+correctness AND absence of a fix-introduced regression.
+
+**NO FINDINGS.**
+
+Verified:
+1. **Hwaccel `-af` placement is safe.** Read `buildHwaccelSegmentCommand` in full at HEAD
+   (`FfmpegRunner.php:1969-2201`): the added `-af "loudnorm=…"` sits in the audio RE-ENCODE
+   branch (`:2188-2191`), output-side (well after `-i` at `:2044`), AFTER the video `-vf`
+   chain (`:2158`). The hwaccel builder uses `-vf` only — never `-filter_complex` — so the
+   audio filter graph cannot collide with the tone-map/scale/hwupload video graph. Emitted
+   ONLY on the non-`copy` branch; `-c:a copy` stays inert.
+2. **No regression when disabled.** The only added code is the `if ($loudnormFilter !== null)`
+   guard; with loudness null/absent `buildLoudnormFilter()` returns null → no `-af` → the
+   hwaccel and gapless commands are byte-identical to pre-fix.
+3. **Finding-2 reconciliation is genuinely correct.** `StreamTrackShaper::audioTracks()`
+   (`StreamTrackShaper.php:66-105`) iterates `sortedByStreamIndex()` (`:176-186`, a `usort`
+   on `stream_index` ascending), so `$audioTracks[0]` is the lowest-`stream_index` audio
+   stream. `TranscodeManager::firstStreamOfType($probe,'audio')` (`:3151-3164`) returns the
+   first audio stream in ffprobe array order (index order). These select the same stream —
+   `firstAudioCodec()` and `computeHlsParams`' copy-vs-encode decision now agree. Confirmed
+   `$audioTracks` in `getPlaybackInfo` is that shaper output (`WebPortalRouter.php:1271,1291,1337`);
+   no orphaned `defaultAudioCodec` references remain (grep clean). The still-emitted `default`
+   field on each track is unused by the verdict but retained for the player menu — no regression.
+4. **Tests are genuine.** `test_hwaccel_segment_loudnorm_coexists_with_video_filter` asserts
+   `-vf "` + `scale=1280:720` present, `-af "loudnorm=I=-23:LRA=7:TP=-2"` present, and
+   `assertDoesNotMatchRegularExpression('/-vf "[^"]*loudnorm/')` (loudnorm NOT folded into
+   `-vf`). The flipped `testDirectPlayGatesOnFirstTrackNotDefaultTrack` + swapped-codec
+   companion pin first-`stream_index` selection regardless of disposition.
+5. Numeric guard intact (`buildLoudnormFilter` `is_numeric` + `(float)` casts, no injection);
+   byte-identical-when-disabled holds across all FOUR re-encode builders. Ran the 3 affected
+   test files: **37/37 pass (128 assertions)**. phpstan L9 `[OK] No errors`; phpcs PSR-12 clean
+   on `FfmpegRunner.php`, `WebPortalRouter.php`, `config/ffmpeg.php`.

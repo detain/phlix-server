@@ -530,4 +530,39 @@ class HubClientTest extends TestCase
         $this->assertEquals('OKP', $keys[0]['kty']);
         $this->assertEquals('EdDSA', $keys[0]['alg']);
     }
+
+    public function test_getPublicKeysJwk_degrades_to_empty_keyset_and_logs_error_on_load_failure(): void
+    {
+        // SV-4.16 graceful degrade: a malformed/unreadable signing key must
+        // never take down the public /.well-known/jwks.json surface with an
+        // unhandled 500. getPublicKeysJwk() catches the load failure, logs at
+        // ERROR, and returns an empty keyset so the controller can still serve
+        // a valid RFC 7517 {"keys":[]} at HTTP 200.
+        file_put_contents(
+            $this->keyPath,
+            "-----BEGIN PRIVATE KEY-----\n!!garbage!!\n-----END PRIVATE KEY-----\n"
+        );
+
+        $logFile = $this->tmpDir . '/hub-error.log';
+        $keyManager = new Ed25519KeyManager($this->keyPath);
+        $httpClient = $this->createMock(HttpClientInterface::class);
+        // Route the logger to a temp stream so the ERROR record can be asserted.
+        $logger = new StructuredLogger('hub', [
+            'handlers' => [
+                'err' => ['type' => 'stream', 'path' => $logFile, 'level' => 'error'],
+            ],
+        ]);
+
+        $client = new HubClient($keyManager, $httpClient, $logger, $this->tmpDir);
+        $keys = $client->getPublicKeysJwk();
+
+        $this->assertSame([], $keys);
+
+        $logged = file_get_contents($logFile);
+        if ($logged === false) {
+            self::fail('Expected an ERROR log record but the log file was not written');
+        }
+        $this->assertStringContainsString('hub.ERROR', $logged);
+        $this->assertStringContainsString('serving empty keyset', $logged);
+    }
 }

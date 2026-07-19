@@ -290,6 +290,8 @@ class WebPortalRouter
             $r->get('/api/v1/media/index', [$this, 'getMediaIndex']);
             // P3B-S8: marker-based search — registered before {id} so path is not swallowed
             $r->get('/api/v1/media/search/by-marker', [$this, 'searchByMarker']);
+            // Full-text + fuzzy media search — registered before {id} so path is not swallowed
+            $r->get('/api/v1/media/search', [$this, 'searchMedia']);
             $r->get('/api/v1/media/{id}', [$this, 'getMediaItem']);
             $r->get('/api/v1/media/{id}/playback', [$this, 'getPlaybackInfo']);
             $r->get('/api/v1/media/{id}/chapters', [$this, 'getMediaChapters']);
@@ -351,6 +353,7 @@ class WebPortalRouter
             $r->get('/api/v1/music/artists', [$this, 'getMusicArtists']);
             $r->get('/api/v1/music/artists/{id}', [$this, 'getMusicArtist']);
             $r->get('/api/v1/music/albums/{id}', [$this, 'getMusicAlbum']);
+            $r->get('/api/v1/music/tracks', [$this, 'getMusicTracks']);
             $r->get('/api/v1/music/tracks/{id}', [$this, 'getMusicTrack']);
             $r->post('/api/v1/music/scan', [$this, 'scanMusicDirectory']);
         }, [$auth]);
@@ -1475,6 +1478,64 @@ class WebPortalRouter
             'marker_type' => $type->value,
             'around' => $around,
             'position' => $position,
+        ]);
+    }
+
+    /**
+     * Search media items by name (D-SRV-1).
+     *
+     * Performs full-text search with fuzzy fallback, applies parental rating
+     * filters, and returns shaped media items.
+     *
+     * @param Request $request The HTTP request with query params:
+     *   - q: Search query string (required)
+     *   - limit: Maximum results (default 50, max 100)
+     * @param array<string, string> $params Route parameters (unused)
+     *
+     * @return Response JSON response with items array:
+     *   {items: [...], query: string, total: int}
+     *
+     * @api_endpoint GET /api/v1/media/search
+     *
+     * @requires Authentication
+     *
+     * @since 0.15.0
+     */
+    public function searchMedia(Request $request, array $params): Response
+    {
+        $query = $request->queryString('q') ?? '';
+
+        if ($query === '') {
+            return (new Response())->status(400)->json(['error' => 'Query parameter "q" is required']);
+        }
+
+        $limit = $request->queryInt('limit', 50);
+        if ($limit < 1) {
+            $limit = 1;
+        } elseif ($limit > 100) {
+            $limit = 100;
+        }
+
+        // Run the search via ItemRepository
+        $items = $this->itemRepository->search($query, $limit);
+
+        // Parental cap: drop over-cap results (by effective rating) for a capped
+        // active profile. No-op for the owner / un-capped profile.
+        $filter = $this->resolveRatingFilter($request);
+        $gate = $this->gate();
+        if ($filter !== null && $gate !== null) {
+            $items = $gate->filterItems($items, $filter, 'id');
+        }
+
+        // Shape items like getMedia does
+        $shapedItems = array_map(function (array $item): array {
+            return $this->shapeMediaItem($item);
+        }, $items);
+
+        return (new Response())->json([
+            'items' => $shapedItems,
+            'query' => $query,
+            'total' => count($shapedItems),
         ]);
     }
 
@@ -2783,6 +2844,59 @@ class WebPortalRouter
         }
 
         return (new Response())->json($albumData->toArray());
+    }
+
+    /**
+     * Gets all tracks with pagination.
+     *
+     * GET /api/v1/music/tracks
+     *
+     * @param Request $request The HTTP request with optional limit/offset query params
+     * @param array<string, string> $params Route parameters (unused)
+     *
+     * @return Response JSON response with tracks array and pagination info
+     *
+     * @api_endpoint GET /api/v1/music/tracks
+     */
+    public function getMusicTracks(Request $request, array $params): Response
+    {
+        if ($this->musicLibraryService === null) {
+            return (new Response())->status(503)->json(['error' => 'Music library service not configured']);
+        }
+
+        $limit = $request->queryInt('limit', 100);
+        $offset = $request->queryInt('offset', 0);
+
+        // Clamp limit to valid range
+        $limit = max(1, min(100, $limit));
+        $offset = max(0, $offset);
+
+        $tracks = $this->musicLibraryService->getAllTracks($limit, $offset);
+        $total = $this->musicLibraryService->getTracksCount();
+
+        // Shape tracks for the client with the fields normalizeMusicTrack expects
+        $shapedTracks = [];
+        foreach ($tracks as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            $shapedTracks[] = [
+                'id' => is_string($row['id'] ?? null) ? $row['id'] : (string)($row['id'] ?? ''),
+                'title' => is_string($row['title'] ?? null) ? $row['title'] : 'Unknown Track',
+                'artist' => is_string($row['artist_name'] ?? null) ? $row['artist_name'] : null,
+                'album' => is_string($row['album_name'] ?? null) ? $row['album_name'] : null,
+                'track_number' => is_numeric($row['track_number'] ?? null) ? (int)$row['track_number'] : null,
+                'duration_secs' => is_numeric($row['duration_secs'] ?? null) ? (int)$row['duration_secs'] : 0,
+                'stream_url' => null, // Client resolves via getTrack(id) lazily
+            ];
+        }
+
+        return (new Response())->json([
+            'tracks' => $shapedTracks,
+            'total' => $total,
+            'limit' => $limit,
+            'offset' => $offset,
+        ]);
     }
 
     /**

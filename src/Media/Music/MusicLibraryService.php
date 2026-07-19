@@ -429,4 +429,59 @@ class MusicLibraryService
             $rows
         );
     }
+
+    /**
+     * Gets all tracks with pagination.
+     *
+     * Returns raw arrays with artist_name and album_name included for the API response.
+     *
+     * @param int $limit Maximum number of tracks to return (default 100)
+     * @param int $offset Number of tracks to skip (default 0)
+     * @return array<array<string, mixed>> Tracks ordered by artist, album, disc, track number
+     */
+    public function getAllTracks(int $limit = 100, int $offset = 0): array
+    {
+        $limit = max(1, min(100, $limit));
+        $offset = max(0, $offset);
+
+        $result = $this->db->query(
+            "SELECT t.*, ar.name AS artist_name, al.name AS album_name
+             FROM music_tracks t
+             JOIN music_albums al ON al.id = t.album_id
+             JOIN music_artists ar ON ar.id = t.artist_id
+             ORDER BY ar.name, al.name, t.disc_number, t.track_number
+             LIMIT ? OFFSET ?",
+            [$limit, $offset]
+        );
+
+        if (!is_array($result)) {
+            return [];
+        }
+
+        /** @var array<array<string, mixed>> $rows */
+        $rows = $result;
+
+        return $rows;
+    }
+
+    /**
+     * Gets the total number of tracks.
+     *
+     * @return int Total track count
+     */
+    public function getTracksCount(): int
+    {
+        $result = $this->db->query("SELECT COUNT(*) as cnt FROM music_tracks");
+
+        if (!is_array($result) || count($result) === 0) {
+            return 0;
+        }
+
+        $firstRow = $result[0];
+        if (!is_array($firstRow)) {
+            return 0;
+        }
+
+        return isset($firstRow['cnt']) && is_numeric($firstRow['cnt']) ? (int)$firstRow['cnt'] : 0;
+    }
 }

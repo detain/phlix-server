@@ -1346,13 +1346,15 @@ final class HttpHandler
             return $renderer->renderLibrary($request, ['id' => $m['id']]);
         }
         if ($path === '/search') {
-            return $renderer->renderSearch($request);
+            // D-SRV-1: Search is now a Vue SPA — redirect legacy Smarty route
+            return (new Response())->redirect('/app/search');
         }
         if ($path === '/settings') {
             return $renderer->renderSettings($request);
         }
         if ($path === '/settings/security') {
-            return $renderer->renderWebAuthnSettings($request);
+            // D-SRV-2: Security settings are now a Vue SPA — redirect legacy Smarty route
+            return (new Response())->redirect('/app/settings/security');
         }
         if (str_starts_with($path, '/admin/plugins')) {
             return $this->dispatchAdminPlugins($renderer, $request, $path);
@@ -1439,19 +1441,24 @@ final class HttpHandler
             return $music->albums($request, []);
         }
         if (preg_match('#^/music/albums/(?P<name>.+)$#', $path, $m) === 1) {
-            return $music->album($request, ['name' => urldecode($m['name'])]);
+            // Redirect to the Vue SPA album detail page
+            return (new Response())->redirect('/app/music/album/' . urldecode($m['name']));
         }
         if ($path === '/music/artists') {
-            return $music->artists($request, []);
+            // Redirect to the Vue SPA artists listing
+            return (new Response())->redirect('/app/music/artists');
         }
         if (preg_match('#^/music/artists/(?P<name>.+)$#', $path, $m) === 1) {
-            return $music->artist($request, ['name' => urldecode($m['name'])]);
+            // Redirect to the Vue SPA artist detail page
+            return (new Response())->redirect('/app/music/artist/' . urldecode($m['name']));
         }
         if ($path === '/music/tracks') {
-            return $music->tracks($request, []);
+            // Redirect to the Vue SPA tracks listing
+            return (new Response())->redirect('/app/music/tracks');
         }
         if ($path === '/music/player') {
-            return $music->player($request, []);
+            // Redirect to the Vue SPA player page
+            return (new Response())->redirect('/app/music/player');
         }
         return (new Response())->status(404)->html('<h1>404 - Page not found</h1>');
     }
@@ -1469,35 +1476,33 @@ final class HttpHandler
             return $api->downloadBook($request, ['id' => $m['id']]);
         }
         if (preg_match('#^/books/(?P<id>[^/]+)/read$#', $path, $m) === 1) {
-            /** @var BookPageController $page */
-            $page = $this->container->get(BookPageController::class);
-            return $page->reader($request, ['id' => $m['id']]);
+            // Redirect to the Vue SPA reader page
+            return (new Response())->redirect('/app/books/' . $m['id'] . '/read');
         }
         if (preg_match('#^/books/(?P<id>[^/]+)$#', $path, $m) === 1) {
-            /** @var BookPageController $page */
-            $page = $this->container->get(BookPageController::class);
-            return $page->detail($request, ['id' => $m['id']]);
+            // Redirect to the Vue SPA book detail page
+            return (new Response())->redirect('/app/books/' . $m['id']);
         }
         if ($path === '/books') {
-            /** @var BookPageController $page */
-            $page = $this->container->get(BookPageController::class);
-            return $page->index($request, []);
+            // Redirect to the Vue SPA books listing
+            return (new Response())->redirect('/app/books');
         }
         return (new Response())->status(404)->html('<h1>404 - Page not found</h1>');
     }
 
     private function dispatchAudiobooks(Request $request, string $path): Response
     {
-        /** @var AudiobookPageController $audiobook */
-        $audiobook = $this->container->get(AudiobookPageController::class);
-        if ($path === '/audiobooks') {
-            return $audiobook->index($request, []);
-        }
         if (preg_match('#^/audiobooks/(?P<id>[^/]+)/read$#', $path, $m) === 1) {
-            return $audiobook->player($request, ['id' => $m['id']]);
+            // Redirect to the Vue SPA player page
+            return (new Response())->redirect('/app/audiobooks/' . $m['id'] . '/read');
         }
         if (preg_match('#^/audiobooks/(?P<id>[^/]+)$#', $path, $m) === 1) {
-            return $audiobook->detail($request, ['id' => $m['id']]);
+            // Redirect to the Vue SPA audiobook detail page
+            return (new Response())->redirect('/app/audiobooks/' . $m['id']);
+        }
+        if ($path === '/audiobooks') {
+            // Redirect to the Vue SPA audiobooks listing
+            return (new Response())->redirect('/app/audiobooks');
         }
         return (new Response())->status(404)->html('<h1>404 - Page not found</h1>');
     }
@@ -1514,19 +1519,26 @@ final class HttpHandler
             $api = $this->container->get(PhotoController::class);
             return $api->getFull($request, ['id' => $m['id']]);
         }
-        /** @var PhotoPageController $page */
-        $page = $this->container->get(PhotoPageController::class);
+        // D-SRV-10: Photo pages are now Vue SPA — redirect to /app/photo/*
         if ($path === '/photo/albums') {
-            return $page->albums($request, []);
+            $query = $request->query;
+            $qs = count($query) > 0 ? '?' . http_build_query($query) : '';
+            return (new Response())->redirect('/app/photo/albums' . $qs);
         }
         if (preg_match('#^/photo/album/(?P<id>[^/]+)$#', $path, $m) === 1) {
-            return $page->album($request, ['id' => $m['id']]);
+            $query = $request->query;
+            $qs = count($query) > 0 ? '?' . http_build_query($query) : '';
+            return (new Response())->redirect('/app/photo/album/' . $m['id'] . $qs);
         }
         if (preg_match('#^/photo/photo/(?P<id>[^/]+)$#', $path, $m) === 1) {
-            return $page->photo($request, ['id' => $m['id']]);
+            $query = $request->query;
+            $qs = count($query) > 0 ? '?' . http_build_query($query) : '';
+            return (new Response())->redirect('/app/photo/photo/' . $m['id'] . $qs);
         }
         if ($path === '/photo/slideshow') {
-            return $page->slideshow($request, []);
+            $query = $request->query;
+            $qs = count($query) > 0 ? '?' . http_build_query($query) : '';
+            return (new Response())->redirect('/app/photo/slideshow' . $qs);
         }
         return (new Response())->status(404)->html('<h1>404 - Page not found</h1>');
     }

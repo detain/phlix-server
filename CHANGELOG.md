@@ -67,6 +67,33 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   **8-bit** output (`-pix_fmt yuv420p -profile:v high -level 4.1`), matching the pure-software path; true
   hardware encoders keep their own `nv12` 8-bit output. `TranscodeManager::JOB_KEY_VERSION` was bumped
   **v3 → v4** so any cached 10-bit segments are invalidated and regenerated as 8-bit.
+- **Transcode — HLS audio now downmixed to stereo AAC for browser compatibility.** A re-encoded HLS
+  audio stream from an **AC-3 5.1(side)** source (side channels SL/SR) produced AAC that FFmpeg's native
+  encoder tagged with `channel_configuration=0` (a PCE) in the ADTS header, which **hls.js cannot parse** —
+  it failed to build the audio MSE `SourceBuffer` and the whole player load errored **even with valid
+  8-bit H.264 video**. Re-encoded audio is now forced to **stereo** (`-ac 2`, `channel_configuration=2`,
+  universally browser-safe) via the new `FfmpegRunner::browserSafeAudioChannels()` helper, applied on every
+  re-encode path (direct-play `audio_codec === 'copy'` passthrough is untouched). `TranscodeManager::JOB_KEY_VERSION`
+  was bumped again so any cached surround-AAC segments are invalidated and regenerated as stereo. Together
+  with the 8-bit video fix above and the CSP `blob:` allowances below, this made a **10-bit HEVC + AC-3
+  5.1** episode actually play in a normal browser (confirmed via headless Chrome under enforced CSP) — browser
+  HLS playback requires **all three layers**: 8-bit video **+** stereo AAC audio **+** CSP `blob:` allowances.
+- **CSP — SPA now allows `media-src`/`worker-src 'self' blob:` so browser HLS playback works.** The SPA
+  Content-Security-Policy (`SecurityHeaders::contentSecurityPolicy()`) added `media-src 'self' blob:` and
+  `worker-src 'self' blob:`, required so hls.js can attach its MSE `blob:` object URL to the `<video>`
+  element and spawn its `blob:`-sourced transmux Web Worker. Without them a strict browser rejected the
+  load with `MEDIA_ELEMENT_ERROR: Media load rejected by URL safety check`, blocking **all**
+  HLS/transcoded playback.
+- **CSP — `/app` shell inline bootstrap now runs under a per-request script nonce (no `'unsafe-inline'`).**
+  The `/app` SPA shell's inline `window.__PHLIX__` bootstrap `<script>` now carries a per-request
+  cryptographically-random **nonce**: `SharedUiController` emits `<script nonce="…">` and sets a matching
+  CSP built via `SecurityHeaders::contentSecurityPolicy($nonce)` (adds `'nonce-…'` to `script-src`), so the
+  inline block executes **without** weakening `script-src` to `'unsafe-inline'`. Non-`/app` responses keep
+  the strict default policy (no nonce).
+- **Transcode — 480p rung no longer 404s on a 16:9 source (odd-width reject).** A 480p HLS rung scaled
+  from a 1920×1080 source computed **853×480** — an **odd width** that libx264 rejects, so the rung 404'd.
+  The transcode scale filter now appends `:force_divisible_by=2` so widths round to an even value.
+  `TranscodeManager::JOB_KEY_VERSION` was bumped **v5 → v6** to invalidate any cached/failed rungs.
 
 ### Fixed
 

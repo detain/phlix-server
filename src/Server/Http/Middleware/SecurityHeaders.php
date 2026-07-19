@@ -21,8 +21,9 @@ use Phlix\Server\Http\Response;
  *  - X-Frame-Options: SAMEORIGIN
  *  - Strict-Transport-Security (HSTS) with a 1-year max-age
  *  - Content-Security-Policy scoped to the SPA (script/style self-only;
- *    frame-ancestors SAMEORIGIN so the SPA can embed itself but no external
- *    domain can)
+ *    `media-src`/`worker-src 'self' blob:` so hls.js can attach its MSE
+ *    `blob:` object URL and spawn its transmux Web Worker; frame-ancestors
+ *    SAMEORIGIN so the SPA can embed itself but no external domain can)
  *
  * Called from {@see \Phlix\Server\Workerman\HttpHandler} after CORS decoration
  * on every response that passes through the Workerman entrypoint. The CGI entry
@@ -86,6 +87,12 @@ final class SecurityHeaders
      * This is the single source of truth for the CSP so the default (applied by
      * {@see decorate()}) and any per-request variant (e.g. the SPA shell, which
      * needs a script nonce for its inline bootstrap block) stay in lock-step.
+     *
+     * `media-src`/`worker-src` both allow `'self' blob:` so browser HLS playback
+     * works: hls.js drives an MSE `blob:` object URL on the `<video>` element and
+     * spins up a `blob:`-sourced transmux Web Worker. Without these a strict
+     * browser rejects the load with `MEDIA_ELEMENT_ERROR: Media load rejected by
+     * URL safety check`, blocking ALL HLS/transcoded playback.
      *
      * @param string|null $scriptNonce Optional cryptographically-random nonce.
      *                                  When non-empty, `'nonce-<value>'` is added

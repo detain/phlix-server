@@ -22,7 +22,10 @@ Phlix Media Server provides a complete media management and streaming solution:
 - **Live TV Support**: DVR and guide integration
 - **DLNA Streaming**: Standard protocol support for compatible devices
 - **Transcoding**: On-the-fly media conversion via FFmpeg with automatic quality selection
-- **HLS Streaming**: Adaptive bitrate streaming for web clients with multi-quality playlists
+- **HLS Streaming**: Adaptive bitrate streaming for web clients with multi-quality playlists. Transcoded
+  output is normalized for browser playback: 8-bit H.264 video, **stereo AAC audio** (surround layouts like
+  AC-3 5.1(side) are downmixed — a `channel_configuration=0` PCE otherwise breaks hls.js), and even scale
+  widths (`force_divisible_by=2`)
 - **WebSocket Events**: Real-time progress and notification delivery
 - **Multi-Source Metadata**: Automatic metadata fetching from TMDB (movies), TVDB (TV series), Fanart.tv (artwork), and local NFO files with 24-hour cache and provider fallback
 - **Content Filtering**: Parental controls with rating and genre-based filtering
@@ -136,6 +139,11 @@ public/
   - Daily watch time limits per profile
 - **Content Rating Filters**: Age-based access restrictions
 - **Audit Logging**: Complete security event logging
+- **Security Headers / CSP**: Every response carries `X-Content-Type-Options`, `X-Frame-Options`, HSTS,
+  and a strict Content-Security-Policy (`SecurityHeaders`). The SPA CSP allows `media-src`/`worker-src
+  'self' blob:` so hls.js can attach its MSE `blob:` object URL and transmux Web Worker (required for
+  browser HLS playback), and the `/app` shell's inline bootstrap `<script>` runs under a **per-request
+  script nonce** rather than `'unsafe-inline'`; non-`/app` responses keep the strict default policy.
 
 ### SyncPlay - Group Watching
 - **Synchronized Playback**: Watch content together with friends across devices with sub-second sync accuracy

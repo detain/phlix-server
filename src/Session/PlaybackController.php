@@ -379,7 +379,6 @@ class PlaybackController
                     ranked.metadata_json, ranked.parent_metadata_json, ranked.series_metadata_json
              FROM (
                  SELECT ps.*,
-                        mi.id AS id,
                         mi.name, mi.type, mi.path, mi.parent_id, mi.created_at, mi.metadata_json,
                         p.metadata_json AS parent_metadata_json,
                         s.metadata_json AS series_metadata_json,

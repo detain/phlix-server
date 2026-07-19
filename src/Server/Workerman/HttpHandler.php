@@ -14,7 +14,6 @@ namespace Phlix\Server\Workerman;
 use Phlix\Auth\RateLimitException;
 use Phlix\Common\Logger\LogChannels;
 use Phlix\Common\Logger\LoggerFactory;
-use Phlix\Plugins\PluginLoader;
 use Phlix\Server\Core\Application;
 use Phlix\Server\Http\Controllers\AuthController;
 use Phlix\Server\Http\Controllers\BookController;
@@ -25,20 +24,13 @@ use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Library\RatingGate;
 use Phlix\Media\Storage\ArtworkStorage;
 use Phlix\Media\Transcoding\SegmentProcessRegistry;
-use Phlix\Server\Http\Middleware\AdminMiddleware;
 use Phlix\Server\Http\Middleware\CorsManager;
 use Phlix\Server\Http\Middleware\SecurityHeaders;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\RequestAuthenticator;
 use Phlix\Server\Http\RequestContext;
 use Phlix\Server\Http\Response;
-use Phlix\Server\WebPortal\Controllers\AudiobookPageController;
-use Phlix\Server\WebPortal\Controllers\BookPageController;
-use Phlix\Server\WebPortal\Controllers\MusicPageController;
-use Phlix\Server\WebPortal\Controllers\PhotoPageController;
-use Phlix\Server\WebPortal\Controllers\PluginAdminPageController;
 use Phlix\Server\WebPortal\Controllers\SharedUiController;
-use Phlix\Server\WebPortal\PageRenderer;
 use Phlix\Server\WebPortal\WebPortalRouter;
 use Phlix\Stats\Metrics\MetricsCollector;
 use Phlix\Theming\ThemeMiddleware;
@@ -1314,53 +1306,50 @@ final class HttpHandler
     {
         $path = $request->path;
 
-        /** @var PageRenderer $renderer */
-        $renderer = $this->container->get(PageRenderer::class);
-
         if ($path === '/' || $path === '') {
             // The redesigned Vue SPA is the front door — send the bare root to
             // /app. Old SSR pages (/login, /library, /player/{id}, …) stay
             // reachable at their own paths.
             return (new Response())->redirect('/app');
         }
+        // D-SRV-DEL: the former Smarty SSR pages are fully replaced by the Vue
+        // SPA under /app — redirect the legacy paths to their /app equivalents.
         if ($path === '/login') {
-            return $renderer->renderLogin($request);
+            return (new Response())->redirect('/app/login');
         }
         if ($path === '/register' || $path === '/auth/register') {
-            return $renderer->renderRegister($request);
+            return (new Response())->redirect('/app/signup');
         }
         if ($path === '/library' || $path === '/library/') {
-            return $renderer->renderLibrariesOverview($request);
+            return (new Response())->redirect('/app');
         }
-        // Single media-item detail (linked from media_card.tpl / the player's
-        // back button). MUST be matched before the single-segment library
-        // route below.
+        // Single media-item detail (legacy link target). MUST be matched before
+        // the single-segment library route below.
         if (preg_match('#^/library/item/(?P<id>[^/]+)$#', $path, $m) === 1) {
-            return $renderer->renderItem($request, ['id' => $m['id']]);
+            return (new Response())->redirect('/app/media/' . $m['id']);
         }
-        // Web video player page (linked from the detail page "Play" button).
         if (preg_match('#^/player/(?P<id>[^/]+)$#', $path, $m) === 1) {
-            return $renderer->renderPlayer($request, ['id' => $m['id']]);
+            return (new Response())->redirect('/app/player/' . $m['id']);
         }
         if (preg_match('#^/library/(?P<id>[^/]+)$#', $path, $m) === 1) {
-            return $renderer->renderLibrary($request, ['id' => $m['id']]);
+            return (new Response())->redirect('/app/library/' . $m['id']);
         }
         if ($path === '/search') {
             // D-SRV-1: Search is now a Vue SPA — redirect legacy Smarty route
             return (new Response())->redirect('/app/search');
         }
         if ($path === '/settings') {
-            return $renderer->renderSettings($request);
+            return (new Response())->redirect('/app/settings');
         }
         if ($path === '/settings/security') {
             // D-SRV-2: Security settings are now a Vue SPA — redirect legacy Smarty route
             return (new Response())->redirect('/app/settings/security');
         }
         if (str_starts_with($path, '/admin/plugins')) {
-            return $this->dispatchAdminPlugins($renderer, $request, $path);
+            return (new Response())->redirect('/app/admin/plugins');
         }
         if ($path === '/admin/dashboard') {
-            return $this->dispatchAdminDashboard($renderer, $request);
+            return (new Response())->redirect('/app/admin/dashboard');
         }
         if (str_starts_with($path, '/music')) {
             return $this->dispatchMusic($request, $path);
@@ -1380,46 +1369,6 @@ final class HttpHandler
         return (new Response())->status(404)->html('<h1>404 - Page not found</h1>');
     }
 
-    private function dispatchAdminPlugins(PageRenderer $renderer, Request $request, string $path): Response
-    {
-        /** @var AdminMiddleware $admin */
-        $admin = $this->container->get(AdminMiddleware::class);
-        $gate = $admin->checkAccess($request);
-        if ($gate === 401) {
-            return (new Response())->status(401)->html('<h1>401 — admin authentication required</h1>');
-        }
-        if ($gate === 403) {
-            return (new Response())->status(403)->html('<h1>403 — administrator privileges required</h1>');
-        }
-        /** @var PluginLoader $loader */
-        $loader = $this->container->get(PluginLoader::class);
-        $page = new PluginAdminPageController($loader, $this->publicRoot . '/templates');
-        if ($path === '/admin/plugins') {
-            return $page->index($request, []);
-        }
-        if ($path === '/admin/plugins/install') {
-            return $page->install($request, []);
-        }
-        if (preg_match('#^/admin/plugins/(?P<name>[^/]+)$#', $path, $m) === 1) {
-            return $page->detail($request, ['name' => $m['name']]);
-        }
-        return (new Response())->status(404)->html('<h1>404 - Page not found</h1>');
-    }
-
-    private function dispatchAdminDashboard(PageRenderer $renderer, Request $request): Response
-    {
-        /** @var AdminMiddleware $admin */
-        $admin = $this->container->get(AdminMiddleware::class);
-        $gate = $admin->checkAccess($request);
-        if ($gate === 401) {
-            return (new Response())->status(401)->html('<h1>401 — admin authentication required</h1>');
-        }
-        if ($gate === 403) {
-            return (new Response())->status(403)->html('<h1>403 — administrator privileges required</h1>');
-        }
-        return $renderer->renderDashboard($request);
-    }
-
     /**
      * Serve the shared Vue 3 SPA shell for `/app` + `/app/*` (Phase C).
      *
@@ -1435,10 +1384,9 @@ final class HttpHandler
 
     private function dispatchMusic(Request $request, string $path): Response
     {
-        /** @var MusicPageController $music */
-        $music = $this->container->get(MusicPageController::class);
         if ($path === '/music' || $path === '/music/albums') {
-            return $music->albums($request, []);
+            // D-SRV-DEL: music landing is now a Vue SPA page
+            return (new Response())->redirect('/app/music');
         }
         if (preg_match('#^/music/albums/(?P<name>.+)$#', $path, $m) === 1) {
             // Redirect to the Vue SPA album detail page

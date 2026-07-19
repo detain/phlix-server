@@ -13,7 +13,6 @@
  * @description Web portal entry point with request routing
  *
  * @see \Phlix\Common\Container\ContainerFactory For service wiring
- * @see \Phlix\Server\WebPortal\PageRenderer For HTML page rendering
  * @see \Phlix\Server\WebPortal\WebPortalRouter For API routing
  */
 
@@ -35,9 +34,7 @@ use Phlix\Auth\AuthManager;
 use Phlix\Auth\RateLimitException;
 use Phlix\Common\Container\ContainerFactory;
 use Phlix\Server\Core\Application;
-use Phlix\Plugins\PluginLoader;
 use Phlix\Server\Http\Middleware\AccessScheduleMiddleware;
-use Phlix\Server\Http\Middleware\AdminMiddleware;
 use Phlix\Server\Http\Middleware\CorsManager;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\RequestAuthenticator;
@@ -47,12 +44,6 @@ use Phlix\Server\Http\Router;
 use Phlix\Server\Http\Controllers\BookController;
 use Phlix\Server\Http\Controllers\PhotoController;
 use Phlix\Server\Http\Routes\AdminRoutes;
-use Phlix\Server\WebPortal\Controllers\AudiobookPageController;
-use Phlix\Server\WebPortal\Controllers\BookPageController;
-use Phlix\Server\WebPortal\Controllers\MusicPageController;
-use Phlix\Server\WebPortal\Controllers\PhotoPageController;
-use Phlix\Server\WebPortal\Controllers\PluginAdminPageController;
-use Phlix\Server\WebPortal\PageRenderer;
 use Phlix\Server\WebPortal\WebPortalRouter;
 
 /**
@@ -246,102 +237,58 @@ if (str_starts_with($path, '/api/v1/admin/')) {
     /**
      * Page routes
      *
-     * HTML pages are rendered using Smarty templates via PageRenderer.
-     * Supported routes:
-     * - / or '' : Home page
-     * - /login : Login page
-     * - /admin/plugins : Plugin admin index (Step A.5)
-     * - /admin/plugins/install : Plugin install form (Step A.5)
-     * - /admin/plugins/{name} : Plugin detail page (Step A.5)
+     * The former Smarty SSR pages are fully replaced by the Vue SPA under
+     * `/app` (D-SRV-DEL). Legacy page paths now redirect to their /app
+     * equivalents; the SPA shell is served for `/app` + `/app/*`. Legacy
+     * unsigned binary routes (book cover/download, photo thumbnail/full) are
+     * kept and delegate to the JSON API controllers.
+     * - / or '' : redirect to /app
      * - Other : 404 Not Found
-     *
-     * @see PageRenderer For page rendering
      */
-    /** @var PageRenderer $renderer */
-    $renderer = $container->get(PageRenderer::class);
-
     if ($path === '/' || $path === '') {
         // The redesigned Vue SPA is the front door — send the bare root to /app.
-        // Old SSR pages (/login, /library, /player/{id}, …) stay reachable.
         $response = (new Response())->redirect('/app');
     } elseif ($path === '/login') {
-        $response = $renderer->renderLogin($request);
+        $response = (new Response())->redirect('/app/login');
+    } elseif ($path === '/register' || $path === '/auth/register') {
+        $response = (new Response())->redirect('/app/signup');
+    } elseif ($path === '/library' || $path === '/library/') {
+        $response = (new Response())->redirect('/app');
+    } elseif (preg_match('#^/library/item/(?P<id>[^/]+)$#', $path, $m) === 1) {
+        $response = (new Response())->redirect('/app/media/' . $m['id']);
+    } elseif (preg_match('#^/player/(?P<id>[^/]+)$#', $path, $m) === 1) {
+        $response = (new Response())->redirect('/app/player/' . $m['id']);
+    } elseif (preg_match('#^/library/(?P<id>[^/]+)$#', $path, $m) === 1) {
+        $response = (new Response())->redirect('/app/library/' . $m['id']);
+    } elseif ($path === '/search') {
+        $response = (new Response())->redirect('/app/search');
+    } elseif ($path === '/settings') {
+        $response = (new Response())->redirect('/app/settings');
     } elseif (str_starts_with($path, '/admin/plugins')) {
-        // Browser SSR routes for the plugin admin UI. Reuses the same
-        // AdminMiddleware role check as the JSON API so the gate logic
-        // (lookup + audit logging) lives in one place; only the response
-        // envelope differs (HTML vs JSON).
-        /** @var AdminMiddleware $adminMiddleware */
-        $adminMiddleware = $container->get(AdminMiddleware::class);
-        $gateStatus = $adminMiddleware->checkAccess($request);
-        if ($gateStatus === 401) {
-            $response = (new Response())
-                ->status(401)
-                ->html('<h1>401 — admin authentication required</h1>');
-        } elseif ($gateStatus === 403) {
-            $response = (new Response())
-                ->status(403)
-                ->html('<h1>403 — administrator privileges required</h1>');
-        } else {
-            /** @var PluginLoader $loader */
-            $loader = $container->get(PluginLoader::class);
-            $pageController = new PluginAdminPageController(
-                $loader,
-                __DIR__ . '/templates'
-            );
-            if ($path === '/admin/plugins') {
-                $response = $pageController->index($request, []);
-            } elseif ($path === '/admin/plugins/install') {
-                $response = $pageController->install($request, []);
-            } elseif (preg_match('#^/admin/plugins/(?P<name>[^/]+)$#', $path, $matches) === 1) {
-                $response = $pageController->detail($request, ['name' => $matches['name']]);
-            } else {
-                http_response_code(404);
-                echo '<h1>404 - Page not found</h1>';
-                exit;
-            }
-        }
+        $response = (new Response())->redirect('/app/admin/plugins');
     } elseif ($path === '/admin/dashboard') {
-        /** @var AdminMiddleware $adminMiddleware */
-        $adminMiddleware = $container->get(AdminMiddleware::class);
-        $gateStatus = $adminMiddleware->checkAccess($request);
-        if ($gateStatus === 401) {
-            $response = (new Response())
-                ->status(401)
-                ->html('<h1>401 — admin authentication required</h1>');
-        } elseif ($gateStatus === 403) {
-            $response = (new Response())
-                ->status(403)
-                ->html('<h1>403 — administrator privileges required</h1>');
-        } else {
-            $response = $renderer->renderDashboard($request);
-        }
+        $response = (new Response())->redirect('/app/admin/dashboard');
     } elseif (str_starts_with($path, '/music')) {
-        /**
-         * Music portal pages: albums (default), album detail, artists,
-         * artist detail, all-tracks, and the standalone player.
-         */
-        /** @var MusicPageController $music */
-        $music = $container->get(MusicPageController::class);
+        // Music portal pages are now Vue SPA pages under /app/music/*.
         if ($path === '/music' || $path === '/music/albums') {
-            $response = $music->albums($request, []);
+            $response = (new Response())->redirect('/app/music');
         } elseif (preg_match('#^/music/albums/(?P<name>.+)$#', $path, $m) === 1) {
-            $response = $music->album($request, ['name' => urldecode($m['name'])]);
+            $response = (new Response())->redirect('/app/music/album/' . urldecode($m['name']));
         } elseif ($path === '/music/artists') {
-            $response = $music->artists($request, []);
+            $response = (new Response())->redirect('/app/music/artists');
         } elseif (preg_match('#^/music/artists/(?P<name>.+)$#', $path, $m) === 1) {
-            $response = $music->artist($request, ['name' => urldecode($m['name'])]);
+            $response = (new Response())->redirect('/app/music/artist/' . urldecode($m['name']));
         } elseif ($path === '/music/tracks') {
-            $response = $music->tracks($request, []);
+            $response = (new Response())->redirect('/app/music/tracks');
         } elseif ($path === '/music/player') {
-            $response = $music->player($request, []);
+            $response = (new Response())->redirect('/app/music/player');
         } else {
             $response = (new Response())->status(404)->html('<h1>404 - Page not found</h1>');
         }
     } elseif (str_starts_with($path, '/books')) {
         /**
-         * Book portal pages plus the cover/download file routes (served by
-         * the JSON {@see BookController} so the page links resolve locally).
+         * Book pages are now Vue SPA pages; the cover/download file routes are
+         * still served by the JSON {@see BookController} for legacy clients.
          */
         if (preg_match('#^/books/(?P<id>[^/]+)/cover$#', $path, $m) === 1) {
             /** @var BookController $bookApi */
@@ -352,40 +299,29 @@ if (str_starts_with($path, '/api/v1/admin/')) {
             $bookApi = $container->get(BookController::class);
             $response = $bookApi->downloadBook($request, ['id' => $m['id']]);
         } elseif (preg_match('#^/books/(?P<id>[^/]+)/read$#', $path, $m) === 1) {
-            /** @var BookPageController $bookPage */
-            $bookPage = $container->get(BookPageController::class);
-            $response = $bookPage->reader($request, ['id' => $m['id']]);
+            $response = (new Response())->redirect('/app/books/' . $m['id'] . '/read');
         } elseif (preg_match('#^/books/(?P<id>[^/]+)$#', $path, $m) === 1) {
-            /** @var BookPageController $bookPage */
-            $bookPage = $container->get(BookPageController::class);
-            $response = $bookPage->detail($request, ['id' => $m['id']]);
+            $response = (new Response())->redirect('/app/books/' . $m['id']);
         } elseif ($path === '/books') {
-            /** @var BookPageController $bookPage */
-            $bookPage = $container->get(BookPageController::class);
-            $response = $bookPage->index($request, []);
+            $response = (new Response())->redirect('/app/books');
         } else {
             $response = (new Response())->status(404)->html('<h1>404 - Page not found</h1>');
         }
     } elseif (str_starts_with($path, '/audiobooks')) {
-        /**
-         * Audiobook portal pages: library grid, detail (with chapters), and
-         * the player. Streaming/progress stay on the JSON API.
-         */
-        /** @var AudiobookPageController $audiobook */
-        $audiobook = $container->get(AudiobookPageController::class);
+        // Audiobook pages are now Vue SPA pages under /app/audiobooks/*.
         if ($path === '/audiobooks') {
-            $response = $audiobook->index($request, []);
+            $response = (new Response())->redirect('/app/audiobooks');
         } elseif (preg_match('#^/audiobooks/(?P<id>[^/]+)/read$#', $path, $m) === 1) {
-            $response = $audiobook->player($request, ['id' => $m['id']]);
+            $response = (new Response())->redirect('/app/audiobooks/' . $m['id'] . '/read');
         } elseif (preg_match('#^/audiobooks/(?P<id>[^/]+)$#', $path, $m) === 1) {
-            $response = $audiobook->detail($request, ['id' => $m['id']]);
+            $response = (new Response())->redirect('/app/audiobooks/' . $m['id']);
         } else {
             $response = (new Response())->status(404)->html('<h1>404 - Page not found</h1>');
         }
     } elseif (str_starts_with($path, '/photo')) {
         /**
-         * Photo portal pages plus the thumbnail/full image routes (served by
-         * the JSON {@see PhotoController} so the page <img> links resolve).
+         * Photo pages are now Vue SPA pages; the thumbnail/full image routes are
+         * still served by the JSON {@see PhotoController} for legacy clients.
          */
         if (preg_match('#^/photo/photos/(?P<id>[^/]+)/thumbnail$#', $path, $m) === 1) {
             /** @var PhotoController $photoApi */
@@ -396,21 +332,17 @@ if (str_starts_with($path, '/api/v1/admin/')) {
             $photoApi = $container->get(PhotoController::class);
             $response = $photoApi->getFull($request, ['id' => $m['id']]);
         } elseif ($path === '/photo/albums') {
-            /** @var PhotoPageController $photoPage */
-            $photoPage = $container->get(PhotoPageController::class);
-            $response = $photoPage->albums($request, []);
+            $qs = count($request->query) > 0 ? '?' . http_build_query($request->query) : '';
+            $response = (new Response())->redirect('/app/photo/albums' . $qs);
         } elseif (preg_match('#^/photo/album/(?P<id>[^/]+)$#', $path, $m) === 1) {
-            /** @var PhotoPageController $photoPage */
-            $photoPage = $container->get(PhotoPageController::class);
-            $response = $photoPage->album($request, ['id' => $m['id']]);
+            $qs = count($request->query) > 0 ? '?' . http_build_query($request->query) : '';
+            $response = (new Response())->redirect('/app/photo/album/' . $m['id'] . $qs);
         } elseif (preg_match('#^/photo/photo/(?P<id>[^/]+)$#', $path, $m) === 1) {
-            /** @var PhotoPageController $photoPage */
-            $photoPage = $container->get(PhotoPageController::class);
-            $response = $photoPage->photo($request, ['id' => $m['id']]);
+            $qs = count($request->query) > 0 ? '?' . http_build_query($request->query) : '';
+            $response = (new Response())->redirect('/app/photo/photo/' . $m['id'] . $qs);
         } elseif ($path === '/photo/slideshow') {
-            /** @var PhotoPageController $photoPage */
-            $photoPage = $container->get(PhotoPageController::class);
-            $response = $photoPage->slideshow($request, []);
+            $qs = count($request->query) > 0 ? '?' . http_build_query($request->query) : '';
+            $response = (new Response())->redirect('/app/photo/slideshow' . $qs);
         } else {
             $response = (new Response())->status(404)->html('<h1>404 - Page not found</h1>');
         }

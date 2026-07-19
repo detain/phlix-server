@@ -15,12 +15,11 @@ namespace Phlix\Plugins;
  * Shared helper that hides values for manifest-declared secret settings
  * before they are returned to the admin UI (JSON or SSR).
  *
- * Both {@see \Phlix\Server\Http\Controllers\PluginAdminController} and
- * {@see \Phlix\Server\WebPortal\Controllers\PluginAdminPageController}
- * used to carry a private copy of this logic; this class is the single
- * source of truth.
+ * {@see \Phlix\Server\Http\Controllers\PluginAdminController} used to carry a
+ * private copy of this logic (as did the now-retired Smarty page controller);
+ * this class is the single source of truth.
  *
- * Two shapes are exposed because the API and the SSR template need
+ * Two shapes are exposed because the JSON API and legacy callers need
  * different envelopes:
  *
  *  - {@see self::mask()} returns the raw key/value associative array

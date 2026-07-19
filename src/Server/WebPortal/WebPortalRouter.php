@@ -61,7 +61,6 @@ use Phlix\Media\Storage\AvatarStorage;
  * @version 1.0.0
  * @description Handles REST API routing for the web portal interface
  *
- * @see PageRenderer For HTML page rendering
  * @see Request For request object structure
  * @see Response For response object structure
  */

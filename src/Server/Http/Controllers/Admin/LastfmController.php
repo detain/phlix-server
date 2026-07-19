@@ -23,23 +23,19 @@ use Phlix\Server\Http\Response;
 use Workerman\MySQL\Connection;
 
 /**
- * Admin-side "Connect Last.fm" flow controller.
+ * Admin-side "Connect Last.fm" flow controller (JSON / SPA OAuth only).
  *
- * Two-step web flow:
+ * The legacy Smarty SSR pages (`/admin/lastfm[/callback|/disconnect]`) were
+ * retired with the rest of the server-side Smarty UI; the remaining surface is:
  *
- *  1. `GET /admin/lastfm` — shows the connect page. If the user has not
- *     yet authorised, the page contains a link to
- *     `https://www.last.fm/api/auth/?api_key=...&cb=...` that takes
- *     them off-site to authorise. After approval, Last.fm redirects
- *     back to the configured callback URL with a `?token=...`
- *     parameter.
+ *  1. `GET /api/v1/oauth/lastfm` — SPA-friendly entry point that 302-redirects
+ *     to `https://www.last.fm/api/auth/?api_key=...&cb=...`.
+ *  2. `GET /api/v1/oauth/lastfm/callback?token=...` — exchanges the request
+ *     token for a session key via {@see LastfmApi::getSession()} and persists
+ *     it for the calling user via {@see LastfmSessionRepository::save()}.
  *
- *  2. `GET /admin/lastfm/callback?token=...` — exchanges the request
- *     token for a session key via {@see LastfmApi::getSession()} and
- *     persists it for the calling user via
- *     {@see LastfmSessionRepository::save()}.
- *
- * Disconnect uses `POST /admin/lastfm/disconnect` to delete the row.
+ * Status (`GET /lastfm/status`) and disconnect (`POST /lastfm/disconnect`) are
+ * served by {@see status()} / {@see apiDisconnect()} as JSON.
  *
  * @package Phlix\Server\Http\Controllers\Admin
  * @since 0.15.0
@@ -96,121 +92,6 @@ final class LastfmController
             $this->stateStore = new SessionLastfmOAuthStateStore();
         }
         $this->settings = $settings;
-    }
-
-    /**
-     * `GET /admin/lastfm` — render the connect page.
-     *
-     * Builds the Last.fm authorisation URL when configured. Reports the
-     * current session row for the calling user (if any) so the template
-     * can show a "connected as X" panel.
-     *
-     * @param array<string, string> $params Path parameters (unused).
-     */
-    public function index(Request $request, array $params): Response
-    {
-        $userId = $request->userId ?? '';
-        $session = $userId !== '' ? $this->sessions->findByUserId($userId) : null;
-        $configured = $this->config->isUsable();
-
-        $authUrl = '';
-        if ($configured) {
-            $query = [
-                'api_key' => $this->config->apiKey,
-            ];
-            if ($this->config->callbackUrl !== '') {
-                $query['cb'] = $this->config->callbackUrl;
-            }
-            $authUrl = 'https://www.last.fm/api/auth/?' . http_build_query($query);
-        }
-
-        // This controller lives at src/Server/Http/Controllers/Admin/, i.e.
-        // five directories below the project root, so the template base is
-        // dirname(__DIR__, 5) — NOT 4 (which resolved to the non-existent
-        // src/public/templates and threw "Unable to load template
-        // admin/lastfm.tpl" → HTTP 500 on the Connect Last.fm page).
-        $smarty = new \Smarty();
-        $smarty->setTemplateDir(dirname(__DIR__, 5) . '/public/templates');
-        $smarty->assign('configured', $configured);
-        $smarty->assign('session', $session === null ? null : [
-            'username'     => $this->config->username !== '' ? $this->config->username : ($session['user_id']),
-            'connected_at' => $session['connected_at'],
-        ]);
-        $smarty->assign('auth_url', $authUrl);
-        $smarty->assign('callback_url', $this->config->callbackUrl);
-        // Shared admin nav (partials/admin-nav.tpl) reads $current_page to mark
-        // the active tab; without it the layout emits "Undefined array key
-        // current_page" warnings on every render.
-        $smarty->assign('current_page', 'admin_lastfm');
-
-        return (new Response())->html((string) $smarty->fetch('admin/lastfm.tpl'));
-    }
-
-    /**
-     * `GET /admin/lastfm/callback?token=...` — finishes the OAuth-like
-     * handshake by exchanging the request token for a session key and
-     * persisting it for the calling user.
-     *
-     * Redirects back to `/admin/lastfm` on success, returns 400 JSON on
-     * a malformed/missing token.
-     *
-     * @param array<string, string> $params Path parameters (unused).
-     */
-    public function callback(Request $request, array $params): Response
-    {
-        $userId = $request->userId ?? '';
-        if ($userId === '') {
-            return (new Response())->status(401)->json([
-                'error' => 'Unauthorized',
-                'code'  => 'auth.required',
-            ]);
-        }
-
-        if (!$this->config->isUsable()) {
-            return (new Response())->status(503)->json([
-                'error' => 'Service Unavailable',
-                'code'  => 'lastfm.not_configured',
-            ]);
-        }
-
-        $tokenRaw = $request->query['token'] ?? null;
-        if (!is_string($tokenRaw) || $tokenRaw === '') {
-            return (new Response())->status(400)->json([
-                'error' => 'Bad Request',
-                'code'  => 'missing_token',
-            ]);
-        }
-
-        $session = $this->api->getSession($tokenRaw);
-        if ($session === null) {
-            return (new Response())->status(502)->json([
-                'error' => 'Bad Gateway',
-                'code'  => 'lastfm.session_exchange_failed',
-            ]);
-        }
-
-        $this->sessions->save($userId, $session['session_key']);
-
-        return (new Response())->status(302)->header('Location', '/admin/lastfm');
-    }
-
-    /**
-     * `POST /admin/lastfm/disconnect` — remove the calling user's
-     * Last.fm session.
-     *
-     * @param array<string, string> $params Path parameters (unused).
-     */
-    public function disconnect(Request $request, array $params): Response
-    {
-        $userId = $request->userId ?? '';
-        if ($userId === '') {
-            return (new Response())->status(401)->json([
-                'error' => 'Unauthorized',
-                'code'  => 'auth.required',
-            ]);
-        }
-        $this->sessions->delete($userId);
-        return (new Response())->status(302)->header('Location', '/admin/lastfm');
     }
 
     /**

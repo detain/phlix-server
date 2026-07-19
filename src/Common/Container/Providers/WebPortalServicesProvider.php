@@ -19,11 +19,9 @@ use Phlix\Auth\UserRepository;
 use Phlix\Auth\WatchHistory;
 use Phlix\Common\Logger\AuditLogger;
 use Phlix\Media\ChapterSearchService;
-use Phlix\Media\Library\AudioScanner;
 use Phlix\Media\Library\BookProgressStore;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Library\LibraryManager;
-use Phlix\Media\Library\MusicLibraryManager;
 use Phlix\Media\Library\PhotoLibraryManager;
 use Phlix\Media\Library\PhotoScanner;
 use Phlix\Media\Music\MusicLibraryScanner;
@@ -44,11 +42,6 @@ use Phlix\Server\Http\Controllers\MediaUserDataController;
 use Phlix\Server\Http\Controllers\TranscodeController;
 use Phlix\Server\Http\Controllers\UserAvatarController;
 use Phlix\Server\Http\Controllers\PhotoController;
-use Phlix\Server\WebPortal\Controllers\AudiobookPageController;
-use Phlix\Server\WebPortal\Controllers\BookPageController;
-use Phlix\Server\WebPortal\Controllers\MusicPageController;
-use Phlix\Server\WebPortal\Controllers\PhotoPageController;
-use Phlix\Server\WebPortal\PageRenderer;
 use Phlix\Server\WebPortal\WebPortalRouter;
 use Phlix\Session\PlaybackController;
 use Phlix\Session\SessionManager;
@@ -58,14 +51,12 @@ use Workerman\MySQL\Connection;
 use function DI\factory;
 
 /**
- * Registers web-portal-tier services ({@see PageRenderer} and {@see WebPortalRouter}).
+ * Registers the web-portal-tier {@see WebPortalRouter} service.
  *
- * {@see PageRenderer} needs an absolute path to the Smarty template
- * directory plus three already-container-managed collaborators
- * ({@see LibraryManager}, {@see ItemRepository}, {@see PlaybackController}).
  * The template path is sourced from `$appConfig['web_portal']['template_dir']`
  * with a default that points at `public/templates/` relative to the
- * project root so the stock bootstrap keeps working without extra config.
+ * project root; it is exposed as `web_portal.template_dir` for the remaining
+ * consumers (e.g. the newsletter generator) after the Smarty page UI retired.
  *
  * {@see WebPortalRouter} handles API routing for the web portal,
  * including library browsing, playback info, and user activity endpoints.
@@ -103,38 +94,6 @@ final class WebPortalServicesProvider implements ServiceProviderInterface
 
         $builder->addDefinitions([
             'web_portal.template_dir' => $templateDir,
-
-            PageRenderer::class => factory(
-                static function (ContainerInterface $c) use ($templateDir): PageRenderer {
-                    /** @var LibraryManager $libraryManager */
-                    $libraryManager = $c->get(LibraryManager::class);
-                    /** @var ItemRepository $itemRepository */
-                    $itemRepository = $c->get(ItemRepository::class);
-                    /** @var PlaybackController $playbackController */
-                    $playbackController = $c->get(PlaybackController::class);
-
-                    $renderer = new PageRenderer(
-                        $templateDir,
-                        $libraryManager,
-                        $itemRepository,
-                        $playbackController,
-                    );
-
-                    // Wire AuthManager + UserRepository so renderHome()
-                    // can gate on auth (redirect to /login when no
-                    // session) and trigger the first-run wizard
-                    // (redirect to /auth/register when no users
-                    // exist), and so the greeting can show the real
-                    // display name instead of hard-coded "User".
-                    /** @var AuthManager $authManager */
-                    $authManager = $c->get(AuthManager::class);
-                    /** @var UserRepository $userRepository */
-                    $userRepository = $c->get(UserRepository::class);
-                    $renderer->setAuthServices($authManager, $userRepository);
-
-                    return $renderer;
-                }
-            ),
 
             WebPortalRouter::class => factory(
                 static function (ContainerInterface $c): WebPortalRouter {
@@ -222,78 +181,6 @@ final class WebPortalServicesProvider implements ServiceProviderInterface
                         $recommendationService,
                         null, // CollectionService (not wired in this context)
                         $musicLibraryService,
-                    );
-                }
-            ),
-
-            MusicPageController::class => factory(
-                static function (ContainerInterface $c) use ($templateDir): MusicPageController {
-                    /** @var Connection $db */
-                    $db = $c->get(Connection::class);
-                    /** @var ItemRepository $itemRepository */
-                    $itemRepository = $c->get(ItemRepository::class);
-                    /** @var MetadataManager $metadataManager */
-                    $metadataManager = $c->get(MetadataManager::class);
-                    /** @var LibraryManager $libraryManager */
-                    $libraryManager = $c->get(LibraryManager::class);
-                    /** @var AuthManager $authManager */
-                    $authManager = $c->get(AuthManager::class);
-
-                    $musicManager = new MusicLibraryManager(
-                        new AudioScanner($db, $itemRepository),
-                        $metadataManager,
-                        $itemRepository,
-                        $db,
-                    );
-
-                    return new MusicPageController($musicManager, $libraryManager, $templateDir, $authManager);
-                }
-            ),
-
-            BookPageController::class => factory(
-                static function (ContainerInterface $c) use ($templateDir): BookPageController {
-                    /** @var ItemRepository $itemRepository */
-                    $itemRepository = $c->get(ItemRepository::class);
-                    /** @var LibraryManager $libraryManager */
-                    $libraryManager = $c->get(LibraryManager::class);
-                    /** @var AuthManager $authManager */
-                    $authManager = $c->get(AuthManager::class);
-
-                    return new BookPageController($itemRepository, $libraryManager, $templateDir, $authManager);
-                }
-            ),
-
-            AudiobookPageController::class => factory(
-                static function (ContainerInterface $c) use ($templateDir): AudiobookPageController {
-                    /** @var ItemRepository $itemRepository */
-                    $itemRepository = $c->get(ItemRepository::class);
-                    /** @var LibraryManager $libraryManager */
-                    $libraryManager = $c->get(LibraryManager::class);
-                    /** @var AuthManager $authManager */
-                    $authManager = $c->get(AuthManager::class);
-
-                    return new AudiobookPageController($itemRepository, $libraryManager, $templateDir, $authManager);
-                }
-            ),
-
-            PhotoPageController::class => factory(
-                static function (ContainerInterface $c) use ($templateDir): PhotoPageController {
-                    /** @var Connection $db */
-                    $db = $c->get(Connection::class);
-                    /** @var ItemRepository $itemRepository */
-                    $itemRepository = $c->get(ItemRepository::class);
-                    /** @var LibraryManager $libraryManager */
-                    $libraryManager = $c->get(LibraryManager::class);
-                    /** @var AuthManager $authManager */
-                    $authManager = $c->get(AuthManager::class);
-
-                    return new PhotoPageController(
-                        $itemRepository,
-                        new PhotoLibraryManager(new PhotoScanner($db, $itemRepository), $itemRepository),
-                        new ExifProvider($itemRepository),
-                        $libraryManager,
-                        $templateDir,
-                        $authManager,
                     );
                 }
             ),

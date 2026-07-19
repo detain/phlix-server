@@ -291,7 +291,7 @@ final class ContainerFactoryTest extends TestCase
         );
     }
 
-    public function test_resolves_page_renderer_with_template_dir_config(): void
+    public function test_resolves_web_portal_template_dir_from_config(): void
     {
         $customDir = $this->tempDir . '/my-templates';
         @mkdir($customDir, 0775, true);
@@ -318,16 +318,13 @@ final class ContainerFactoryTest extends TestCase
             'web_portal' => ['template_dir' => $customDir],
         ], $providers);
 
-        /** @var \Phlix\Server\WebPortal\PageRenderer $renderer */
-        $renderer = $container->get(\Phlix\Server\WebPortal\PageRenderer::class);
-        $this->assertInstanceOf(\Phlix\Server\WebPortal\PageRenderer::class, $renderer);
-        $this->assertSame($customDir, $this->readPrivate($renderer, 'templateDir'));
-
-        // Singleton semantics: resolving twice yields the same instance.
-        $this->assertSame($renderer, $container->get(\Phlix\Server\WebPortal\PageRenderer::class));
+        // The Smarty page UI retired (D-SRV-DEL); the template dir is still
+        // exposed as a container string for the remaining consumer(s).
+        $resolved = $container->get('web_portal.template_dir');
+        $this->assertSame($customDir, $resolved);
     }
 
-    public function test_resolves_page_renderer_with_default_template_dir_when_config_missing(): void
+    public function test_resolves_web_portal_default_template_dir_when_config_missing(): void
     {
         $mockConnection = $this->createMock(Connection::class);
 
@@ -348,9 +345,7 @@ final class ContainerFactoryTest extends TestCase
 
         $container = ContainerFactory::create($this->baseConfig(), $providers);
 
-        /** @var \Phlix\Server\WebPortal\PageRenderer $renderer */
-        $renderer = $container->get(\Phlix\Server\WebPortal\PageRenderer::class);
-        $resolved = $this->readPrivate($renderer, 'templateDir');
+        $resolved = $container->get('web_portal.template_dir');
         $this->assertIsString($resolved);
         $this->assertStringEndsWith(
             DIRECTORY_SEPARATOR . WebPortalServicesProvider::DEFAULT_TEMPLATE_DIR,

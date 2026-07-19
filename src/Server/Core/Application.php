@@ -1400,10 +1400,6 @@ class Application
                 settings: $settings,
             );
 
-            $this->router->get('/admin/lastfm', [$controller, 'index']);
-            $this->router->get('/admin/lastfm/callback', [$controller, 'callback']);
-            $this->router->post('/admin/lastfm/disconnect', [$controller, 'disconnect']);
-
             // SPA-friendly "Connect Last.fm" flow (mirrors the Trakt OAuth
             // routes at /api/v1/oauth/trakt[/callback]). These issue top-level
             // browser redirects instead of rendering the legacy Smarty page:

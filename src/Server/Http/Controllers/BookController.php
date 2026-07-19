@@ -21,7 +21,6 @@ use Phlix\Media\Library\RatingGate;
 use Phlix\Media\Metadata\OpdsFeedBuilder;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
-use Phlix\Server\WebPortal\PageRenderer;
 
 /**
  * BookController handles book library and OPDS feed endpoints.

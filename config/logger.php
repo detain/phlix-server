@@ -26,9 +26,14 @@ use Phlix\Common\Logger\LogChannels;
  *   - events.log  — ONLY the EVENTS channel, and ONLY when
  *                   PHLIX_DEBUG_EVENTS is truthy; otherwise stays empty.
  *   - plugins.log — ONLY the PLUGINS channel (plugin lifecycle).
+ *
+ * NOTE: there is deliberately no top-level `default` handler key. app.log's
+ * catch-all behavior comes purely from the `file` handler carrying no
+ * `channels` tag (untagged = attaches to every channel); nothing in
+ * StructuredLogger::setupHandlers() reads a `default` key, so adding one
+ * would only imply routing behavior that does not exist.
  */
 return [
-    'default' => 'file',
     'handlers' => [
         // General application log — every channel, every level (debug+).
         'file' => [

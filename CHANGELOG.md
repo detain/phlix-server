@@ -5,7 +5,68 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] - 2026-07-18
+## [Unreleased] - 2026-07-19
+
+### Changed
+
+- **Legacy Smarty page UI retired — the `/app` Vue SPA is now the ONLY web UI.** All legacy
+  server-rendered (Smarty) portal page routes now issue a **302 redirect** to their `/app` equivalent
+  (dispatched in `public/index.php`), and the SPA shell is served for `/app` + `/app/*`. High-level
+  redirect map: `/` → `/app`; `/login` → `/app/login`; `/register` → `/app/signup`; `/library` → `/app`;
+  `/library/{id}` → `/app/library/{id}`; `/media/{id}` → `/app/media/{id}`; `/player/{id}` →
+  `/app/player/{id}`; `/search` → `/app/search`; `/settings` → `/app/settings`; `/admin` →
+  `/app/admin/dashboard`; `/admin/plugins` → `/app/admin/plugins`; the **Music** pages
+  (`/music`, `/music/album/*`, `/music/artists`, `/music/artist/*`, `/music/tracks`, `/music/player`)
+  → `/app/music/*`; **Books** (`/books`, `/books/{id}`, `/books/{id}/read`) → `/app/books/*`;
+  **Audiobooks** (`/audiobooks`, `/audiobooks/{id}`, `/audiobooks/{id}/read`) → `/app/audiobooks/*`;
+  and **Photos** (`/photo/albums`, `/photo/album/{id}`, `/photo/photo/{id}`, `/photo/slideshow`,
+  preserving the `library_id` query string) → `/app/photo/*`. The redirects stay auth-gated where the
+  legacy page was, so an unauthenticated browser is bounced to `/app/login` first.
+
+### Removed
+
+- **Deleted the migrated Smarty page-rendering stack.** `PageRenderer`, the media/admin page
+  controllers, all `public/templates/**/*.tpl` page templates (auth, home, library, player, music,
+  books, audiobooks, photo, search, settings, admin dashboard/plugins/music/lastfm, layouts, partials),
+  and the legacy per-page JS/CSS were removed now that the `/app` SPA supersedes them.
+  **Retained on the server (still live):** `smarty/smarty` (composer) + `src/Admin/NewsletterGenerator.php`
+  + `public/templates/emails/newsletter.tpl` — the **newsletter email** still renders via Smarty;
+  `ThemeMiddleware`; `WebPortalRouter` (serves the portal JSON under `/api/v1/*`);
+  `SharedUiController` + `ViteAssets` (serve the SPA shell + built bundle); and the legacy **binary**
+  API routes (artwork, book cover/download, photo thumbnail/full, media stream). This supersedes the
+  earlier "Smarty retirement pending owner verification" note in this changelog.
+
+### Fixed (live production batch)
+
+- **Continue-Watching rail 500 on both clients (MySQL error 1060).** `PlaybackController::getContinueWatching()`
+  emitted a duplicate `mi.id AS id` column in its derived table, which MySQL rejected with
+  `ERROR 1060 (Duplicate column name 'id')`, 500-ing the CW rail on the SPA and console. The duplicate
+  projection was removed.
+- **Continue-Watching poster/progress shape for authless clients.** CW rows are shaped via
+  `MediaItemShaper` so each carries top-level `id` / `poster_url` / `runtime` (episodes resolve the
+  **series** poster); additionally the nested `metadata.poster_url` is **re-minted** at response time so
+  the console (which reads the nested metadata) gets a fresh signed artwork URL rather than an expired one.
+- **Signed artwork URLs expiring for authless clients (console 401s).** `poster_url`, `poster_srcset`,
+  `backdrop_url`, `backdrop_srcset`, and `logo_url` are now **re-signed at response time**
+  (`SignedUrl::refreshArtworkUrl()` / `SignedUrl::refreshArtworkSrcset()`), so clients that cannot
+  re-authenticate a request (e.g. the console) no longer receive `401`s on artwork whose signature had
+  aged out.
+- **PHP 8.5 — logging + PDO hardening under coroutines.** The MySQL buffered-query attribute now uses the
+  `\Pdo\Mysql::ATTR_USE_BUFFERED_QUERY` class constant (the global `PDO::` alias is deprecated on 8.5),
+  `connect()` suppresses the PDO `E_DEPRECATED`, and every Monolog handler is wrapped in
+  `WhatFailureGroupHandler` so a concurrent-coroutine `E_DEPRECATED` raised mid-write can no longer crash
+  the log write (which had surfaced as fatal request failures during metadata matching).
+- **Spurious "circular dependency" 500 from a php-di coroutine race.** `WebPortalRouter` is now **warmed
+  once at worker start** (`start.php`), so concurrent coroutines no longer collide on php-di's in-progress
+  resolution guard and mis-report a circular dependency.
+- **RelayConsumer `connect()` debug logging TypeError.** The connect-path debug log is now null-safe, so a
+  synchronous disconnect (null connection) no longer throws `spl_object_id(null)`.
+- **Transcode — undecodable 10-bit H.264 on the hwaccel software-fallback path.** When hardware accel is
+  enabled but only a software encoder is registered, segments were re-encoded to **10-bit** H.264
+  ("High 10") from 10-bit HEVC sources — which no browser can decode. That path now forces browser-safe
+  **8-bit** output (`-pix_fmt yuv420p -profile:v high -level 4.1`), matching the pure-software path; true
+  hardware encoders keep their own `nv12` 8-bit output. `TranscodeManager::JOB_KEY_VERSION` was bumped
+  **v3 → v4** so any cached 10-bit segments are invalidated and regenerated as 8-bit.
 
 ### Fixed
 
@@ -28,8 +89,10 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   **Search** (`/app/search`), and the **Music** sub-pages (`/app/music/artists`, `/app/music/artist/:name`,
   `/app/music/album/:name`, `/app/music/tracks`, `/app/music/player`), plus nav links (Music, Books,
   Audiobooks, Photos, Search). The passkey/WebAuthn surface is now a **Security** tab on the SPA Settings
-  page (`/app/settings/security`) rather than a standalone page. The equivalent Smarty SSR templates and
-  their routes remain in place — deletion is deferred until the migrated `/app` pages are verified live.
+  page (`/app/settings/security`) rather than a standalone page. **Update:** these `/app` pages are now
+  verified live and the equivalent Smarty SSR templates + routes have since been **deleted** (see the
+  Smarty-retirement entries under *Changed* / *Removed* above); the legacy page paths now 302-redirect to
+  `/app`.
 - **SV-3.3 — loudness normalization + client capability negotiation.**
   - `config/ffmpeg.php` gains a `loudness` block (`enabled` defaults to **false**) that, when enabled, applies an EBU R128 `loudnorm` audio filter (`I`/`LRA`/`TP`) to **re-encoded** audio on every segment-assembly path (software, hwaccel, and audio-only). **Copy-audio rungs** (e.g. the `original` variant, `-c:a copy`) and **direct-play sessions bypass loudness normalization by design** — you cannot filter a stream that is copied rather than decoded (documented in the config block).
   - The `X-Phlix-Client-Capabilities` request header (a JSON codec-support map, e.g. `{"eac3":false}`) is now honored on the `/playback-info` `direct_play` verdict: a client that declares it cannot decode the item's audio codec is steered to transcode instead of direct play. Absent/empty/invalid header → `direct_play` stays `true` (backward compatible). The verdict keys on the same first (lowest-`stream_index`) audio stream the transcode copy-vs-encode decision uses, so the two agree.

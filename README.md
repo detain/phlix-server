@@ -44,9 +44,9 @@ src/
 │   │   ├── MessageHandler.php  # Event routing
 │   │   ├── WebSocketServer.php # Server implementation
 │   │   └── Events.php          # Event type constants
-│   └── WebPortal/       # Web portal (HTML UI)
-│       ├── WebPortalRouter.php # REST API for portal
-│       └── PageRenderer.php    # Smarty template rendering
+│   └── WebPortal/       # Web portal
+│       ├── WebPortalRouter.php # REST API for the /app Vue SPA (JSON only)
+│       └── Controllers/SharedUiController.php # serves the /app SPA shell (+ ViteAssets.php)
 ├── Session/            # Playback session management
 ├── Media/              # Media library and metadata
 │   ├── Library/        # Library management (LibraryManager, ItemRepository, MediaScanner)
@@ -57,9 +57,9 @@ src/
 └── Common/             # Shared utilities
 
 public/
-├── index.php           # Web portal entry point
-├── templates/          # Smarty templates
-└── assets/             # Static assets (css, js)
+├── index.php           # Web portal entry point (redirects legacy pages to /app)
+├── templates/emails/   # Smarty newsletter email template (only remaining .tpl)
+└── assets/             # Static assets (css, js) + assets/app/ (built Vue SPA bundle)
 ```
 
 ## Requirements
@@ -104,16 +104,19 @@ public/
   and [phlix-docs / admin / server-settings](https://detain.github.io/phlix-docs/admin/server-settings).
 
 ### Web Portal
-- **Vue SPA (`/app`)**: The primary web UI is the shared `@phlix/ui` Vue SPA. As of **WS-D**, the media
-  surfaces that shipped in `@phlix/ui` but were previously unreachable on the server are now registered
-  (routes + nav) in `web-ui/src/main.ts`: **Books** (`/app/books`, `/app/books/:id`, `/app/books/:id/read`),
-  **Audiobooks** (`/app/audiobooks`, `/app/audiobooks/:id`, `/app/audiobooks/:id/play`), **Photos**
-  (`/app/photo/albums`, `/album/:id`, `/photo/:id`, `/slideshow`), **Search** (`/app/search`), and the
-  **Music** sub-pages (`/app/music/artists`, `/artist/:name`, `/album/:name`, `/tracks`, `/player`), plus
-  Music/Books/Audiobooks/Photos/Search nav links. Passkey/WebAuthn management is a **Security** tab on the
-  SPA Settings page (`/app/settings/security`).
-- **Smarty-based Templates**: Server-side rendered HTML pages using Smarty. These remain in place as the
-  `/app` SPA pages above are verified live — Smarty retirement is deferred, not yet done.
+- **Vue SPA (`/app`) — the ONLY web UI**: The web UI is the shared `@phlix/ui` Vue SPA, served at `/app`
+  (SPA shell via `SharedUiController` + `ViteAssets`; built bundle under `public/assets/app/`). Routes +
+  nav are registered in `web-ui/src/main.ts`, covering **Browse/Library**, **Player**, **Music** sub-pages
+  (`/app/music/*`), **Books** (`/app/books/*`), **Audiobooks** (`/app/audiobooks/*`), **Photos**
+  (`/app/photo/*`), **Search** (`/app/search`), **Settings** (incl. the **Security**/passkey tab at
+  `/app/settings/security`), and **Admin** (`/app/admin/*`).
+- **Legacy Smarty page rendering removed**: The old server-rendered (Smarty) portal pages —
+  `PageRenderer`, the page controllers, and all `public/templates/**/*.tpl` page templates — have been
+  **deleted**. Their old paths now **302-redirect** to the `/app` equivalent (e.g. `/login` →
+  `/app/login`, `/library` → `/app`, `/player/{id}` → `/app/player/{id}`, `/music|/books|/audiobooks|/photo`
+  → their `/app` pages), dispatched in `public/index.php`. Smarty (`smarty/smarty`) is retained on the
+  server **only** for the newsletter email (`src/Admin/NewsletterGenerator.php` +
+  `public/templates/emails/newsletter.tpl`).
 - **REST API Endpoints**: Complete API for library browsing, media info, and user data
 - **JWT Authentication**: Integrated token-based auth with refresh support
 - **Responsive Design**: CSS-first approach with utility classes

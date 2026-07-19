@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Server\WebPortal\Controllers;
 
+use Phlix\Server\Http\Middleware\SecurityHeaders;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
 use Phlix\Server\WebPortal\ViteAssets;
@@ -115,10 +116,21 @@ final class SharedUiController
             'features' => (object) [],
         ];
 
-        $configScript = '<script>window.__PHLIX__ = '
+        // The bootstrap config is emitted as an inline <script>, which the
+        // repo-wide CSP (`script-src 'self'`) would otherwise block. Because
+        // this block is server-templated (its JSON contents can vary per request
+        // / per UI build), a per-request cryptographic nonce is the robust fix:
+        // the same nonce is stamped on the <script> tag and on the CSP header, so
+        // exactly this inline block executes without ever weakening script-src to
+        // 'unsafe-inline'. A fresh nonce is generated on every response.
+        $nonce = base64_encode(random_bytes(16));
+
+        $configScript = '<script nonce="' . $nonce . '">window.__PHLIX__ = '
             . json_encode($config, JSON_UNESCAPED_SLASHES | JSON_HEX_TAG | JSON_HEX_AMP) . '</script>' . "\n";
         $html = preg_replace('/<head>/i', "<head>\n" . $configScript, $html, 1) ?? $html;
 
-        return (new Response())->html($html);
+        return (new Response())
+            ->html($html)
+            ->header('Content-Security-Policy', SecurityHeaders::contentSecurityPolicy($nonce));
     }
 }

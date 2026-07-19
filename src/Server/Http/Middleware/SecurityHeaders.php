@@ -66,16 +66,47 @@ final class SecurityHeaders
         // frame-ancestors SAMEORIGIN lets the SPA embed its own pages but blocks
         // clickjacking from external iframes. Base-uri NONE further restricts
         // any injected base-tag attacks.
+        //
+        // Guard: a caller that already set its own CSP wins. The SPA shell
+        // ({@see \Phlix\Server\WebPortal\Controllers\SharedUiController}) does
+        // exactly this — it serves an inline bootstrap `<script>` and sets a CSP
+        // carrying a per-request `'nonce-…'` (built via {@see contentSecurityPolicy()})
+        // so the inline block executes without weakening `script-src` to
+        // `'unsafe-inline'`.
         if (!isset($headers['Content-Security-Policy'])) {
-            $response->header(
-                'Content-Security-Policy',
-                "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
-                . "img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; "
-                . "media-src 'self' blob:; worker-src 'self' blob:; "
-                . "frame-ancestors 'self'; base-uri 'self'",
-            );
+            $response->header('Content-Security-Policy', self::contentSecurityPolicy());
         }
 
         return $response;
+    }
+
+    /**
+     * Build the repo-wide Content-Security-Policy header value.
+     *
+     * This is the single source of truth for the CSP so the default (applied by
+     * {@see decorate()}) and any per-request variant (e.g. the SPA shell, which
+     * needs a script nonce for its inline bootstrap block) stay in lock-step.
+     *
+     * @param string|null $scriptNonce Optional cryptographically-random nonce.
+     *                                  When non-empty, `'nonce-<value>'` is added
+     *                                  to `script-src` so a single matching inline
+     *                                  `<script nonce="<value>">` may execute. The
+     *                                  caller MUST emit the identical nonce on the
+     *                                  inline tag in the same response.
+     *
+     * @return string The full CSP header value.
+     */
+    public static function contentSecurityPolicy(?string $scriptNonce = null): string
+    {
+        $scriptSrc = "'self'";
+        if ($scriptNonce !== null && $scriptNonce !== '') {
+            $scriptSrc .= " 'nonce-" . $scriptNonce . "'";
+        }
+
+        return "default-src 'self'; script-src " . $scriptSrc . "; "
+            . "style-src 'self' 'unsafe-inline'; "
+            . "img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; "
+            . "media-src 'self' blob:; worker-src 'self' blob:; "
+            . "frame-ancestors 'self'; base-uri 'self'";
     }
 }

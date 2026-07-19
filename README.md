@@ -423,7 +423,7 @@ the streaming and auth-hardening features and all have safe defaults.
 | DELETE | `/api/v1/sessions/{id}` | End a session |
 | POST | `/api/v1/sessions/{id}/progress` | Report playback progress |
 | GET | `/api/v1/sessions/{id}/progress` | Get playback state |
-| GET | `/api/v1/users/me/continue-watching` | Continue-Watching list for the authenticated user — shaped media items with top-level `id`, `poster_url`, `runtime` (minutes), `position_ticks`, `duration_ticks`, `media_item_id`, and `metadata` (with resolved `poster_url` for episodes) |
+| GET | `/api/v1/users/me/continue-watching` (also `/api/v1/me/continue-watching`) | Continue-Watching list for the authenticated user — `{items:[...]}` of `MediaItemShaper`-shaped rows with top-level `id` (= media item id, for detail navigation), `poster_url`/`poster_srcset` (series poster for episodes, falling back season → own), `runtime` (minutes), `year`, `rating`, plus re-attached `position_ticks`/`duration_ticks` (SPA resume) and preserved `media_item_id`, `parent_id`, `metadata` (console/rating-gate compatibility) |
 | GET | `/api/v1/media/facets` | Distinct, sorted genre facet list for the media filter UI (`?libraryId=<uuid>` to scope) → `{genres: string[]}` |
 | GET | `/api/v1/media/{id}` | Media item detail — includes `user_data: {favorite, rating, like_level}` when authenticated (`null` otherwise) |
 | POST | `/api/v1/media/{id}/favorite` | Mark a media item as the user's favorite — auth required |

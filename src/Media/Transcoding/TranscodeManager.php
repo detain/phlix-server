@@ -291,7 +291,7 @@ class TranscodeManager
      * whole player load errors on otherwise-valid 8-bit H.264 video. Bumping the
      * version forces those jobs to regenerate as stereo (`channel_configuration=2`).
      */
-    private const JOB_KEY_VERSION = 'v5';
+    private const JOB_KEY_VERSION = 'v6';
 
     // Job status constants
     public const STATUS_PENDING = 'pending';

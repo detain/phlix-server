@@ -813,7 +813,8 @@ class FfmpegRunner
             $width = self::paramInt($params, 'width');
             $height = self::paramInt($params, 'height');
             if ($width !== null && $height !== null) {
-                $cmd .= ' -vf "scale=' . $width . ':' . $height . ':force_original_aspect_ratio=decrease"';
+                $cmd .= ' -vf "scale=' . $width . ':' . $height
+                    . ':force_original_aspect_ratio=decrease:force_divisible_by=2"';
             }
             // Closed, fixed-size GOP so segments are keyframe-aligned across both protocols.
             $cmd .= ' -g 48 -keyint_min 48 -sc_threshold 0';
@@ -1778,7 +1779,7 @@ class FfmpegRunner
                 $filters[] = $subtitleBurnInFilter;
             }
             if ($width !== null && $height !== null) {
-                $filters[] = "scale={$width}:{$height}:force_original_aspect_ratio=decrease";
+                $filters[] = "scale={$width}:{$height}:force_original_aspect_ratio=decrease:force_divisible_by=2";
             }
             if (!empty($filters)) {
                 $cmd .= ' -vf "' . implode(',', $filters) . '"';
@@ -2129,7 +2130,7 @@ class FfmpegRunner
         $width = self::paramInt($params, 'width');
         $height = self::paramInt($params, 'height');
         if ($width !== null && $height !== null) {
-            $filters[] = "scale={$width}:{$height}:force_original_aspect_ratio=decrease";
+            $filters[] = "scale={$width}:{$height}:force_original_aspect_ratio=decrease:force_divisible_by=2";
         }
 
         // Upload the (system-memory) frames to a HW surface for encoders that

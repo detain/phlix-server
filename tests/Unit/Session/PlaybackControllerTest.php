@@ -110,6 +110,9 @@ final class PlaybackControllerTest extends TestCase
     {
         // Episode with a still as poster → override with series poster.
         // The stored poster_url matches still_url, indicating it's a TMDB still.
+        // Also carries a `runtime` (minutes) in metadata_json so the TOP-LEVEL
+        // `runtime` field the SPA MediaCard reads (progress = runtime * 60) is
+        // actually exercised.
         $rows = [
             [
                 'id' => 'ep-media-uuid',
@@ -121,7 +124,7 @@ final class PlaybackControllerTest extends TestCase
                 'updated_at' => date('Y-m-d H:i:s'),
                 'name' => 'S01E01',
                 'type' => 'episode',
-                'metadata_json' => '{"poster_url":"/stills/ep01.jpg","still_url":"/stills/ep01.jpg"}',
+                'metadata_json' => '{"poster_url":"/stills/ep01.jpg","still_url":"/stills/ep01.jpg","runtime":45}',
                 'parent_metadata_json' => '{"poster_url":"/season/poster.jpg"}',
                 'series_metadata_json' => '{"poster_url":"/series/poster.jpg"}',
             ],
@@ -132,8 +135,23 @@ final class PlaybackControllerTest extends TestCase
         $result = $controller->getContinueWatching('user-1', 10);
 
         self::assertCount(1, $result);
-        // Series poster must be used, not the still
+        // Series poster must be used, not the still (console/gate metadata path).
         self::assertSame('/series/poster.jpg', $result[0]['metadata']['poster_url']);
+
+        // THE ACTUAL /app bug: the SPA MediaCard reads the TOP-LEVEL `poster_url`
+        // (produced by MediaItemShaper::shape from the resolved metadata), NOT the
+        // nested metadata one. It must be the resolved SERIES poster, not the still.
+        self::assertSame('/series/poster.jpg', $result[0]['poster_url'] ?? null);
+
+        // The SPA derives the progress bar from the TOP-LEVEL `runtime` (minutes);
+        // it must be > 0 when the media_items row's metadata_json carries a runtime.
+        $runtime = $result[0]['runtime'] ?? null;
+        self::assertIsInt($runtime);
+        self::assertGreaterThan(0, $runtime);
+        self::assertSame(45, $runtime);
+
+        // Top-level id must be the media item id (not the playback_state id).
+        self::assertSame('ep-media-uuid', $result[0]['id']);
     }
 
     public function testContinueWatchingEpisodeUsesSeasonPosterWhenSeriesPosterUnavailable(): void
@@ -230,10 +248,15 @@ final class PlaybackControllerTest extends TestCase
         self::assertSame(2024, $result[0]['metadata']['year']);
     }
 
-    public function testContinueWatchingPosterNotOverriddenWhenEpisodeHasRealOwnPoster(): void
+    public function testContinueWatchingEpisodeAlwaysPrefersSeriesPosterOverOwnPoster(): void
     {
-        // Episode has a real poster (different from still_url and cover images) →
-        // it must NOT be overridden by series/season poster.
+        // WS-A hardening: the CW rail is a series-of-cards view — for an episode
+        // it must show the SERIES art, not a per-episode image. Even when the
+        // episode row carries its own distinct poster_url + cover_image_large,
+        // the resolved series poster wins whenever one exists. (Previously an
+        // episode with a "real own poster" kept it; that let non-TMDB stills —
+        // which look like real posters because they have no still_url marker —
+        // slip through and render a frame grab in the rail.)
         $rows = [
             [
                 'id' => 'ep-media-uuid',
@@ -245,7 +268,8 @@ final class PlaybackControllerTest extends TestCase
                 'updated_at' => date('Y-m-d H:i:s'),
                 'name' => 'S01E01',
                 'type' => 'episode',
-                // Episode has its own real poster (not a still)
+                // Episode carries its own poster + cover image, but in the CW rail
+                // the series poster still takes precedence.
                 'metadata_json' => '{"poster_url":"/episodes/realposter.jpg","still_url":"/stills/ep01.jpg","cover_image_large":"/episodes/cover.jpg"}',
                 'parent_metadata_json' => '{"poster_url":"/season/poster.jpg"}',
                 'series_metadata_json' => '{"poster_url":"/series/poster.jpg"}',
@@ -257,8 +281,39 @@ final class PlaybackControllerTest extends TestCase
         $result = $controller->getContinueWatching('user-1', 10);
 
         self::assertCount(1, $result);
-        // Episode's own real poster must be preserved
-        self::assertSame('/episodes/realposter.jpg', $result[0]['metadata']['poster_url']);
+        // Series poster wins — both in the metadata block and at the top level.
+        self::assertSame('/series/poster.jpg', $result[0]['metadata']['poster_url']);
+        self::assertSame('/series/poster.jpg', $result[0]['poster_url'] ?? null);
+    }
+
+    public function testContinueWatchingEpisodeKeepsOwnPosterWhenNoSeriesOrSeasonPoster(): void
+    {
+        // When NEITHER a series nor a season poster is available, the episode's
+        // own poster is the only image we have — it must be retained (not blanked).
+        $rows = [
+            [
+                'id' => 'ep-media-uuid',
+                'media_item_id' => 'ep-media-uuid',
+                'session_id' => 'session-1',
+                'position_ticks' => 1000,
+                'duration_ticks' => 10000,
+                'playback_status' => 'playing',
+                'updated_at' => date('Y-m-d H:i:s'),
+                'name' => 'S01E01',
+                'type' => 'episode',
+                'metadata_json' => '{"poster_url":"/episodes/own.jpg"}',
+                'parent_metadata_json' => '{}',
+                'series_metadata_json' => '{}',
+            ],
+        ];
+        $sessionManager = $this->createMock(SessionManager::class);
+        $controller = new PlaybackController($this->captureConnection($rows), $sessionManager);
+
+        $result = $controller->getContinueWatching('user-1', 10);
+
+        self::assertCount(1, $result);
+        self::assertSame('/episodes/own.jpg', $result[0]['metadata']['poster_url']);
+        self::assertSame('/episodes/own.jpg', $result[0]['poster_url'] ?? null);
     }
 
     /**

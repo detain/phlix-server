@@ -345,7 +345,9 @@ class PlaybackController
      * @param string $userId User UUID to get continue watching list for
      * @param int $limit Maximum number of items to return (default: 10)
      *
-     * @return list<array{id: string, metadata: array<string, mixed>, position_ticks: int, duration_ticks: int, media_item_id: string, ...}> Array of shaped media items with playback position
+     * @return list<array{id: string, metadata: array<string, mixed>, position_ticks: int,
+     *                    duration_ticks: int, media_item_id: string, ...}>
+     *         Array of shaped media items with playback position.
      *
      * @example
      * ```php
@@ -373,12 +375,12 @@ class PlaybackController
             "SELECT ranked.id, ranked.session_id, ranked.media_item_id,
                     ranked.position_ticks, ranked.duration_ticks,
                     ranked.playback_status, ranked.updated_at,
-                    ranked.name, ranked.type, ranked.path, ranked.created_at,
+                    ranked.name, ranked.type, ranked.path, ranked.parent_id, ranked.created_at,
                     ranked.metadata_json, ranked.parent_metadata_json, ranked.series_metadata_json
              FROM (
                  SELECT ps.*,
                         mi.id AS id,
-                        mi.name, mi.type, mi.path, mi.created_at, mi.metadata_json,
+                        mi.name, mi.type, mi.path, mi.parent_id, mi.created_at, mi.metadata_json,
                         p.metadata_json AS parent_metadata_json,
                         s.metadata_json AS series_metadata_json,
                         ROW_NUMBER() OVER (
@@ -423,24 +425,20 @@ class PlaybackController
 
                 $seriesPoster = is_array($seriesMeta) ? ($seriesMeta['poster_url'] ?? null) : null;
                 $seasonPoster = is_array($parentMeta) ? ($parentMeta['poster_url'] ?? null) : null;
-                $episodePoster = $metadata['poster_url'] ?? null;
 
-                // Use series poster if available, otherwise season poster.
-                // Only override if the episode's own poster appears to be a still
-                // (i.e., it differs from cover_image_* or still_url is set).
-                $episodeStillUrl = $metadata['still_url'] ?? null;
-                $hasRealOwnPoster = $episodePoster !== null
-                    && $episodePoster !== ''
-                    && $episodePoster !== $episodeStillUrl
-                    && ($metadata['cover_image_large'] ?? null) !== $episodePoster
-                    && ($metadata['cover_image_extralarge'] ?? null) !== $episodePoster;
-
-                if (!$hasRealOwnPoster) {
-                    if ($seriesPoster !== null && $seriesPoster !== '') {
-                        $metadata['poster_url'] = $seriesPoster;
-                    } elseif ($seasonPoster !== null && $seasonPoster !== '') {
-                        $metadata['poster_url'] = $seasonPoster;
-                    }
+                // The episode's stored poster_url is (almost always) a TMDB still
+                // frame — the wrong image for the CW rail. For the TMDB path the
+                // still is detectable (poster_url == still_url), but for non-TMDB
+                // episodes there is no still_url field to compare against, so the
+                // still would slip through the old detection and the rail showed a
+                // frame grab instead of the series art. Prefer the resolved
+                // series → season poster whenever ONE EXISTS, regardless of whether
+                // a still was positively detected; only fall back to the episode's
+                // own poster when neither a series nor a season poster is available.
+                if ($seriesPoster !== null && $seriesPoster !== '') {
+                    $metadata['poster_url'] = $seriesPoster;
+                } elseif ($seasonPoster !== null && $seasonPoster !== '') {
+                    $metadata['poster_url'] = $seasonPoster;
                 }
             }
 

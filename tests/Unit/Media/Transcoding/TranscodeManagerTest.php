@@ -4039,7 +4039,7 @@ class TranscodeManagerTest extends TestCase
 
         $this->manager($db, $ff)->ensureHlsJob('media-1', 'web');
 
-        $expectedKey = sha1('media-1|web|v3');
+        $expectedKey = sha1('media-1|web|v4');
         $reuseKey = null;
         $insertKey = null;
         foreach ($captured as [$sql, $params]) {

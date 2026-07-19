@@ -498,4 +498,97 @@ final class FfmpegRunnerHwaccelTest extends TestCase
         $this->assertStringContainsString('-c:v h264_nvenc', $cmd);
         $this->assertStringContainsString('-af "loudnorm=I=-16"', $cmd);
     }
+
+    /**
+     * The SOFTWARE encoder the registry falls back to (vendor 'software',
+     * encoder 'libx264') when hwaccel is ENABLED but no functional HW encoder
+     * exists — e.g. a VAAPI stub device that probes as present but whose encoder
+     * fails the acceptance test, so only the software capability remains.
+     */
+    private function softwareCapability(): HwaccelCapability
+    {
+        return new HwaccelCapability(
+            vendor: 'software',
+            encoder: 'libx264',
+            decoder: '',
+            supports_hdr_tone_mapping: false,
+            supported_codecs: ['h264', 'hevc'],
+            supported_profiles: ['high'],
+            max_resolution_w: 3840,
+            max_resolution_h: 2160,
+            max_bitrate: 100000000,
+        );
+    }
+
+    /**
+     * 10-bit regression: when hwaccel is ENABLED but the only registered encoder
+     * is the SOFTWARE vendor (libx264 fallback), the hwaccel builder must force
+     * the SAME browser-safe 8-bit output as {@see FfmpegRunner::buildSegmentCommand()}
+     * — `-pix_fmt yuv420p -profile:v high -level 4.1`. Without this a 10-bit HEVC
+     * source is re-encoded to 10-bit H.264 ("High 10" / yuv420p10le), which no
+     * browser can decode (playback dies after every 200-OK segment downloads).
+     * The software encoder gets NO nv12 hwupload filter, so this is the only thing
+     * that guarantees 8-bit on that path.
+     */
+    public function test_software_vendor_on_hwaccel_path_forces_browser_safe_8bit(): void
+    {
+        $registry = $this->seedRegistry(['software' => $this->softwareCapability()]);
+
+        $runner = new FfmpegRunner('/usr/bin/ffmpeg', '/usr/bin/ffprobe', '/tmp');
+        $runner->setConfig(['enabled' => true, 'prefer_hardware' => true]);
+        $runner->probeHardwareAcceleration($registry);
+
+        // A 10-bit HEVC source routed through the software fallback (libx265 param
+        // maps to hevc, whose only encoder is the software libx264 capability).
+        $cmd = $runner->buildHwaccelSegmentCommand(
+            '/input_10bit_hevc.mkv',
+            '/tmp/out.ts',
+            0.0,
+            6.0,
+            ['video_codec' => 'libx265', 'width' => 1280, 'height' => 720],
+        );
+
+        $this->assertNotNull($cmd);
+        // The software libx264 encoder is emitted (the HEVC->h264 fallback) …
+        $this->assertStringContainsString('-c:v libx264', $cmd);
+        // … with browser-safe 8-bit forcing so the output is decodable H.264 High …
+        $this->assertStringContainsString('-pix_fmt yuv420p', $cmd);
+        $this->assertStringContainsString('-profile:v high', $cmd);
+        $this->assertStringContainsString('-level 4.1', $cmd);
+        // … and NO 10-bit pixel format leaks through.
+        $this->assertStringNotContainsString('yuv420p10le', $cmd);
+        // The software path never uploads to a HW surface.
+        $this->assertStringNotContainsString('hwupload', $cmd);
+    }
+
+    /**
+     * Regression guard: a TRUE hardware encoder (VAAPI here) must NOT receive the
+     * libx264-only 8-bit forcing flags — its 8-bit output comes from the
+     * `format=nv12,hwupload` filter instead. Applying `-pix_fmt/-profile:v/-level`
+     * to a `h264_vaapi` encode would be wrong (those are software-encoder options).
+     */
+    public function test_true_hardware_encoder_keeps_nv12_upload_and_no_libx264_flags(): void
+    {
+        $registry = $this->seedRegistry(['vaapi' => $this->vaapiCapability()]);
+
+        $runner = new FfmpegRunner('/usr/bin/ffmpeg', '/usr/bin/ffprobe', '/tmp');
+        $runner->setConfig(['enabled' => true, 'prefer_hardware' => true]);
+        $runner->probeHardwareAcceleration($registry);
+
+        $cmd = $runner->buildHwaccelSegmentCommand(
+            '/input_10bit_hevc.mkv',
+            '/tmp/out.ts',
+            0.0,
+            6.0,
+            ['video_codec' => 'libx265', 'width' => 1280, 'height' => 720],
+        );
+
+        $this->assertNotNull($cmd);
+        // Genuine hardware encoder + its nv12 upload for 8-bit 4:2:0 output …
+        $this->assertStringContainsString('-c:v h264_vaapi', $cmd);
+        $this->assertStringContainsString('format=nv12,hwupload', $cmd);
+        // … and NONE of the software-only browser-safe flags.
+        $this->assertStringNotContainsString('-pix_fmt yuv420p', $cmd);
+        $this->assertStringNotContainsString('-profile:v high', $cmd);
+    }
 }

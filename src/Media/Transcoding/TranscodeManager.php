@@ -275,8 +275,15 @@ class TranscodeManager
      * video-only segments, and the always-present `original` variant — a pre-v3
      * job's master playlist and variants JSON are all incompatible with the new
      * segment producers.
+     *
+     * `v4` = 8-bit browser-safe forcing on the hwaccel path's SOFTWARE-encoder
+     * fallback (FfmpegRunner::buildHwaccelSegmentCommand). Jobs created before the
+     * fix may hold CACHED 10-bit H.264 ("High 10") segments transcoded from 10-bit
+     * HEVC sources, which no browser can decode; bumping the version forces those
+     * jobs to be re-created so every segment is regenerated as genuine 8-bit
+     * `avc1.640029` (High) that matches the master playlist's advertised codec.
      */
-    private const JOB_KEY_VERSION = 'v3';
+    private const JOB_KEY_VERSION = 'v4';
 
     // Job status constants
     public const STATUS_PENDING = 'pending';

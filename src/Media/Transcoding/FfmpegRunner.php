@@ -2114,6 +2114,23 @@ class FfmpegRunner
         // IDR at the segment start for independently decodable segments
         $cmd .= ' -force_key_frames ' . escapeshellarg('expr:gte(t,0)');
 
+        // Browser-safe 8-bit forcing for the SOFTWARE encoder on the hwaccel path.
+        // When hwaccel is *enabled* but the best available encoder resolves to the
+        // software vendor — e.g. VAAPI probes as present yet its encoder is a
+        // non-functional stub, so getEncoder() falls back to libx264/libx265 — the
+        // decoded frames are NEVER uploaded to a HW surface (hwaccelUploadFilter()
+        // returns '' for 'software'), so nothing here forces 8-bit 4:2:0. A 10-bit
+        // HEVC source (yuv420p10le / Main 10) would then be re-encoded to 10-bit
+        // H.264 ("High 10" / yuv420p10le), which NO browser can decode — playback
+        // dies after hls.js downloads every (200-OK) segment. Mirror
+        // buildSegmentCommand() and force the SAME browser-safe 8-bit output
+        // (`-pix_fmt yuv420p -profile:v high -level 4.1`). TRUE hardware encoders
+        // (VAAPI/QSV/NVENC/…) keep relying on their own 8-bit output (nv12 hwupload
+        // filter above for VAAPI/QSV) and must NOT receive these libx264-only flags.
+        if ($capability->vendor === 'software') {
+            $cmd .= self::browserSafeVideoFlags($capability->encoder, $params);
+        }
+
         // Audio: dropped for a video-only (audio-group) variant segment, else
         // re-encode to AAC by default, or stream copy when requested
         if ($videoOnly) {

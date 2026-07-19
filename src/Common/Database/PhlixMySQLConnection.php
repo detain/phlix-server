@@ -135,7 +135,7 @@ class PhlixMySQLConnection extends Connection
         parent::connect();
         if ($this->pdo instanceof \PDO) {
             $this->pdo->setAttribute(\PDO::ATTR_EMULATE_PREPARES, true);
-            $this->pdo->setAttribute(\PDO::MYSQL_ATTR_USE_BUFFERED_QUERY, true);
+            $this->pdo->setAttribute(\Pdo\Mysql::ATTR_USE_BUFFERED_QUERY, true);
         }
     }
 

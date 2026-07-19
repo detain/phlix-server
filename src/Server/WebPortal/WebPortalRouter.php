@@ -2078,7 +2078,14 @@ class WebPortalRouter
                     $filteredItems[] = [
                         'id' => $sid,
                         'title' => $full['name'] ?? $similarItem['title'] ?? '',
-                        'posterUrl' => $full['poster_url'] ?? $similarItem['posterUrl'] ?? null,
+                        // Raw rows bypass MediaItemShaper::shape(), so re-mint the
+                        // (scan-time signed, now-expired) internal artwork signature
+                        // here too; external covers/null pass through unchanged.
+                        'posterUrl' => \Phlix\Auth\SignedUrl::refreshArtworkUrl(
+                            is_string($full['poster_url'] ?? null)
+                                ? $full['poster_url']
+                                : (is_string($similarItem['posterUrl'] ?? null) ? $similarItem['posterUrl'] : null)
+                        ),
                         'year' => $full['year'] ?? $similarItem['year'] ?? null,
                         'score' => $similarItem['score'] ?? 0.0,
                         'reason' => $similarItem['reason'] ?? 'genre',

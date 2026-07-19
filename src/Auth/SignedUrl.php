@@ -195,6 +195,104 @@ final class SignedUrl
     }
 
     /**
+     * Re-mints a fresh `exp`/`sig` on an INTERNAL artwork URL so a response never
+     * carries an already-expired signature.
+     *
+     * Artwork poster URLs are minted at SCAN/enrich time with a bounded TTL and
+     * STORED verbatim in `media_items.metadata_json`, so a few hours after a scan
+     * every stored signature is expired. Clients that fetch artwork WITHOUT a
+     * session (the console TUI's `<img>`/PosterLoader) rely on the signature — not
+     * a Bearer/cookie — so an expired one yields HTTP 401 and a blank poster. Every
+     * server exit point that emits a shaped `poster_url`/`poster_srcset` runs the
+     * value through this helper so the signature is always fresh on the way out.
+     *
+     * Only INTERNAL relative artwork URLs — `/api/v1/artwork/{id}?size=…` (with or
+     * without a stale `exp`/`sig`) — are re-signed. Any existing `exp`/`sig` (and
+     * any other stray query params) are stripped and a fresh token is minted over
+     * `/api/v1/artwork/{id}?size={size}`. Absolute `http(s)` covers (TMDB, AniList,
+     * …), empty strings and `null` are returned UNCHANGED — external URLs are never
+     * signed.
+     *
+     * @param string|null $url Candidate poster/artwork URL.
+     * @return string|null Re-signed internal artwork URL, or the input unchanged.
+     */
+    public static function refreshArtworkUrl(?string $url): ?string
+    {
+        if ($url === null || $url === '') {
+            return $url;
+        }
+
+        // Only INTERNAL relative artwork URLs are re-signed; everything else
+        // (absolute http(s) covers, data: URIs, blanks) passes through untouched.
+        if (!str_starts_with($url, '/api/v1/artwork/')) {
+            return $url;
+        }
+
+        [$path, $query] = array_pad(explode('?', $url, 2), 2, '');
+        // Path must be exactly /api/v1/artwork/{id} (single path segment id).
+        if (preg_match('#^/api/v1/artwork/[^/?]+$#', $path) !== 1) {
+            return $url;
+        }
+
+        parse_str($query, $params);
+        $size = isset($params['size']) && is_string($params['size']) && $params['size'] !== ''
+            ? $params['size']
+            : null;
+        if ($size === null) {
+            // Not a size-bearing artwork URL — leave it exactly as-is.
+            return $url;
+        }
+
+        // Strip any stale exp/sig (and other stray params); re-mint over the
+        // canonical `{path}?size={size}` so the descriptor the client asked for
+        // survives while the signature is fresh.
+        return self::fromEnv()->mint($path . '?size=' . $size);
+    }
+
+    /**
+     * Re-mints every INTERNAL artwork URL inside a `poster_srcset` value while
+     * leaving each width descriptor intact.
+     *
+     * The stored srcset has the form `"<url> 185w, <url> 500w"` (descriptors are
+     * the trailing `w`-width token). Each URL is re-signed via
+     * {@see self::refreshArtworkUrl()} — internal artwork URLs get a fresh
+     * signature, external/blank URLs pass through untouched — and the `<width>w`
+     * descriptor is preserved unchanged. `null`/empty pass through.
+     *
+     * @param string|null $srcset Candidate `poster_srcset` value.
+     * @return string|null Srcset with internal artwork URLs re-signed, descriptors intact.
+     */
+    public static function refreshArtworkSrcset(?string $srcset): ?string
+    {
+        if ($srcset === null || $srcset === '') {
+            return $srcset;
+        }
+
+        $out = [];
+        foreach (explode(',', $srcset) as $candidate) {
+            $trimmed = trim($candidate);
+            if ($trimmed === '') {
+                continue;
+            }
+
+            // Split on the LAST space: the URL carries no spaces, the descriptor
+            // (e.g. "500w") is the trailing token. A bare URL (no descriptor) is
+            // re-signed as-is.
+            $sp = strrpos($trimmed, ' ');
+            if ($sp === false) {
+                $out[] = self::refreshArtworkUrl($trimmed);
+                continue;
+            }
+
+            $url = substr($trimmed, 0, $sp);
+            $descriptor = substr($trimmed, $sp + 1);
+            $out[] = self::refreshArtworkUrl($url) . ' ' . $descriptor;
+        }
+
+        return implode(', ', $out);
+    }
+
+    /**
      * Verifies a request's `exp`/`sig` against the (canonicalised) path.
      *
      * Returns true only when the signature is well-formed, matches the recomputed

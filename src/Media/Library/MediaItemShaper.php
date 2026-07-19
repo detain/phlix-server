@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Media\Library;
 
+use Phlix\Auth\SignedUrl;
 use Phlix\Media\Metadata\BackdropSrcset;
 use Phlix\Media\Metadata\Dto\MetadataValue;
 use Phlix\Media\Metadata\PosterSrcset;
@@ -103,6 +104,20 @@ final class MediaItemShaper
             $posterSrcset = PosterSrcset::forPosterUrl(
                 is_string($posterUrl) ? $posterUrl : null,
             );
+        }
+
+        // Re-mint any stale/expired signature on INTERNAL artwork URLs at RESPONSE
+        // time. poster_url/poster_srcset are signed at scan/enrich time with a
+        // bounded TTL and stored verbatim, so hours later every stored signature is
+        // expired. Clients that fetch artwork WITHOUT a session (the console TUI's
+        // <img>/PosterLoader) authorise by signature — an expired one 401s and the
+        // poster renders blank. This is the single universal shaping point every
+        // media response funnels through (list, detail via shapeDetail(), continue-
+        // watching, user-data, chapter search), so re-signing here fixes them all.
+        // External (TMDB/AniList) covers and null pass through untouched.
+        $posterUrl = SignedUrl::refreshArtworkUrl(is_string($posterUrl) ? $posterUrl : null);
+        if (is_string($posterSrcset)) {
+            $posterSrcset = SignedUrl::refreshArtworkSrcset($posterSrcset);
         }
 
         return [

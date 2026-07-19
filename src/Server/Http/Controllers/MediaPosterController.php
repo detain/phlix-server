@@ -123,9 +123,14 @@ class MediaPosterController
             }
         }
 
+        // Re-mint the stored (scan-time signed, now likely expired) internal
+        // artwork signature so `current` is always fetchable; external covers and
+        // null pass through unchanged. This response bypasses MediaItemShaper.
+        $current = is_string($metadata['poster_url'] ?? null) ? $metadata['poster_url'] : null;
+
         return (new Response())->json([
             'providers' => $providers,
-            'current' => $metadata['poster_url'] ?? null,
+            'current' => \Phlix\Auth\SignedUrl::refreshArtworkUrl($current),
         ]);
     }
 

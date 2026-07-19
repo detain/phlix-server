@@ -228,6 +228,105 @@ final class SignedUrlTest extends TestCase
         $this->assertSame(SignedUrl::DEFAULT_TTL, $signer->defaultTtl());
     }
 
+    public function testRefreshArtworkUrlReSignsExpiredInternalUrl(): void
+    {
+        putenv('PHLIX_SIGNED_URL_SECRET=' . self::SECRET);
+        SignedUrl::resetSharedForTesting();
+        $signer = SignedUrl::fromEnv();
+
+        // A signature that expired an hour ago.
+        $expiredExp = time() - 3600;
+        $expiredSig = $signer->signature('/api/v1/artwork/abc-123', $expiredExp);
+        $stale = '/api/v1/artwork/abc-123?size=w500&exp=' . $expiredExp . '&sig=' . $expiredSig;
+
+        // Sanity: the stale token no longer verifies.
+        $this->assertFalse($signer->verify('/api/v1/artwork/abc-123', (string) $expiredExp, $expiredSig));
+
+        $fresh = SignedUrl::refreshArtworkUrl($stale);
+        $this->assertNotNull($fresh);
+        parse_str((string) parse_url($fresh, PHP_URL_QUERY), $q);
+        /** @var array<string, string> $q */
+
+        // Fresh token: future expiry, verifies, size preserved, no stale/stray params.
+        $this->assertGreaterThan(time(), (int) $q['exp']);
+        $this->assertTrue($signer->verify('/api/v1/artwork/abc-123', $q['exp'], $q['sig']));
+        $this->assertSame('w500', $q['size']);
+        $this->assertSame(['size', 'exp', 'sig'], array_keys($q));
+    }
+
+    public function testRefreshArtworkUrlSignsUnsignedInternalUrl(): void
+    {
+        putenv('PHLIX_SIGNED_URL_SECRET=' . self::SECRET);
+        SignedUrl::resetSharedForTesting();
+        $signer = SignedUrl::fromEnv();
+
+        // Stored poster_srcset entries carry NO exp/sig (built from relativePath()).
+        $fresh = SignedUrl::refreshArtworkUrl('/api/v1/artwork/abc-123?size=w185');
+        $this->assertNotNull($fresh);
+        parse_str((string) parse_url($fresh, PHP_URL_QUERY), $q);
+        /** @var array<string, string> $q */
+        $this->assertTrue($signer->verify('/api/v1/artwork/abc-123', $q['exp'], $q['sig']));
+        $this->assertSame('w185', $q['size']);
+    }
+
+    public function testRefreshArtworkUrlPassesThroughExternalAndEmpty(): void
+    {
+        putenv('PHLIX_SIGNED_URL_SECRET=' . self::SECRET);
+        SignedUrl::resetSharedForTesting();
+
+        $tmdb = 'https://image.tmdb.org/t/p/w500/abcDEF.jpg';
+        $this->assertSame($tmdb, SignedUrl::refreshArtworkUrl($tmdb), 'external URLs are never signed');
+        $this->assertNull(SignedUrl::refreshArtworkUrl(null));
+        $this->assertSame('', SignedUrl::refreshArtworkUrl(''));
+        // An internal path with NO size param is left untouched.
+        $this->assertSame(
+            '/api/v1/artwork/abc-123',
+            SignedUrl::refreshArtworkUrl('/api/v1/artwork/abc-123')
+        );
+    }
+
+    public function testRefreshArtworkSrcsetReSignsEachUrlKeepingDescriptors(): void
+    {
+        putenv('PHLIX_SIGNED_URL_SECRET=' . self::SECRET);
+        SignedUrl::resetSharedForTesting();
+        $signer = SignedUrl::fromEnv();
+
+        $expiredExp = time() - 3600;
+        $expiredSig = $signer->signature('/api/v1/artwork/abc-123', $expiredExp);
+        // As stored: an unsigned w185 candidate + an expired w500 candidate.
+        $srcset = '/api/v1/artwork/abc-123?size=w185 185w, '
+            . '/api/v1/artwork/abc-123?size=w500&exp=' . $expiredExp . '&sig=' . $expiredSig . ' 500w';
+
+        $fresh = SignedUrl::refreshArtworkSrcset($srcset);
+        $this->assertNotNull($fresh);
+
+        $descriptors = [];
+        foreach (explode(', ', $fresh) as $candidate) {
+            $sp = strrpos($candidate, ' ');
+            $this->assertNotFalse($sp);
+            $url = substr($candidate, 0, $sp);
+            $descriptors[] = substr($candidate, $sp + 1);
+            parse_str((string) parse_url($url, PHP_URL_QUERY), $pq);
+            /** @var array<string, string> $pq */
+            $this->assertTrue(
+                $signer->verify('/api/v1/artwork/abc-123', $pq['exp'] ?? null, $pq['sig'] ?? null),
+                'each srcset URL re-verifies with a fresh signature'
+            );
+        }
+        $this->assertSame(['185w', '500w'], $descriptors, 'width descriptors preserved');
+    }
+
+    public function testRefreshArtworkSrcsetPassesThroughExternalAndEmpty(): void
+    {
+        putenv('PHLIX_SIGNED_URL_SECRET=' . self::SECRET);
+        SignedUrl::resetSharedForTesting();
+
+        $ext = 'https://image.tmdb.org/t/p/w185/x.jpg 185w, https://image.tmdb.org/t/p/w500/x.jpg 500w';
+        $this->assertSame($ext, SignedUrl::refreshArtworkSrcset($ext));
+        $this->assertNull(SignedUrl::refreshArtworkSrcset(null));
+        $this->assertSame('', SignedUrl::refreshArtworkSrcset(''));
+    }
+
     public function testFromEnvIsMemoisedUntilReset(): void
     {
         putenv('PHLIX_SIGNED_URL_SECRET=' . self::SECRET);

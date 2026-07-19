@@ -282,8 +282,16 @@ class TranscodeManager
      * HEVC sources, which no browser can decode; bumping the version forces those
      * jobs to be re-created so every segment is regenerated as genuine 8-bit
      * `avc1.640029` (High) that matches the master playlist's advertised codec.
+     *
+     * `v5` = browser-safe STEREO forcing on every re-encoded audio stream
+     * (FfmpegRunner::browserSafeAudioChannels). Jobs created before the fix may
+     * hold CACHED AAC with `channel_configuration=0` (from a 5.1(side) AC-3
+     * source, which the native `aac` encoder writes as a PCE); hls.js cannot
+     * parse that config, so the audio MSE SourceBuffer never builds and the
+     * whole player load errors on otherwise-valid 8-bit H.264 video. Bumping the
+     * version forces those jobs to regenerate as stereo (`channel_configuration=2`).
      */
-    private const JOB_KEY_VERSION = 'v4';
+    private const JOB_KEY_VERSION = 'v5';
 
     // Job status constants
     public const STATUS_PENDING = 'pending';
@@ -1653,6 +1661,12 @@ class TranscodeManager
             'audio_codec' => 'aac',
             'audio_bitrate' => '128k',
             'audio_sample_rate' => 48000,
+            // Force stereo on the re-encode: a 5.1(side) AC-3 source otherwise
+            // produces channel_configuration=0 AAC that hls.js cannot parse (the
+            // audio SourceBuffer fails and the whole player load errors). This is
+            // a no-op given FfmpegRunner::browserSafeAudioChannels() defaults to
+            // stereo, but documents intent at the ABR-ladder producer.
+            'audio_channels' => 2,
         ];
     }
 
@@ -2852,9 +2866,11 @@ class TranscodeManager
             $params['audio_codec'] = 'aac';
             $params['audio_bitrate'] = '128k';
             $params['audio_sample_rate'] = 48000;
-            if ($channels > 0) {
-                $params['audio_channels'] = min($channels, 6);
-            }
+            // Force stereo on the re-encode (covers the audio-only group path):
+            // a 5.1(side) AC-3 source otherwise yields channel_configuration=0
+            // AAC that hls.js cannot parse. Mirrors FfmpegRunner's browser-safe
+            // default; surround-in-browser is unreliable regardless.
+            $params['audio_channels'] = $channels > 0 ? min($channels, 2) : 2;
         }
 
         $params['variant_width'] = $targetW > 0 ? $targetW : null;

@@ -378,6 +378,78 @@ class FfmpegRunnerHlsTest extends TestCase
         $this->assertStringNotContainsString('-ac', $cmd);
     }
 
+    public function testBuildSegmentCommandForcesStereoOnAacReencodeWithoutChannels(): void
+    {
+        // Browser-safe audio: a 6-channel (5.1(side)) AC-3 source re-encoded to AAC
+        // with NO audio_channels pinned must be forced to stereo (-ac 2), otherwise
+        // the native aac encoder emits channel_configuration=0 (PCE) that hls.js
+        // cannot parse — breaking the audio SourceBuffer and the whole player load.
+        $cmd = $this->runner()->buildSegmentCommand('/in.mkv', '/out/seg-00000.ts', 0.0, 6.0, [
+            'video_codec' => 'libx264',
+            'crf' => 23,
+            'audio_codec' => 'aac',
+            'audio_bitrate' => '128k',
+            // deliberately NO audio_channels — mirrors segmentParamsForRendition() legacy
+        ]);
+
+        $this->assertStringContainsString('-c:a aac', $cmd);
+        $this->assertStringContainsString('-ac 2', $cmd);
+    }
+
+    public function testBuildSegmentCommandClampsSurroundChannelsToStereoOnReencode(): void
+    {
+        // Even when a producer explicitly requests a surround layout (6ch), the
+        // re-encode is clamped to browser-safe stereo.
+        $cmd = $this->runner()->buildSegmentCommand('/in.mkv', '/out/seg-00000.ts', 0.0, 6.0, [
+            'video_codec' => 'libx264',
+            'audio_codec' => 'aac',
+            'audio_bitrate' => '128k',
+            'audio_channels' => 6,
+        ]);
+
+        $this->assertStringContainsString('-ac 2', $cmd);
+        $this->assertStringNotContainsString('-ac 6', $cmd);
+    }
+
+    public function testBuildSegmentCommandKeepsPinnedStereoOnReencode(): void
+    {
+        // An already-stereo pin is preserved unchanged.
+        $cmd = $this->runner()->buildSegmentCommand('/in.mkv', '/out/seg-00000.ts', 0.0, 6.0, [
+            'video_codec' => 'libx264',
+            'audio_codec' => 'aac',
+            'audio_channels' => 2,
+        ]);
+
+        $this->assertStringContainsString('-ac 2', $cmd);
+    }
+
+    public function testBuildSegmentCommandNeverEmitsAcOnAudioCopy(): void
+    {
+        // The copy (direct-play) path must never carry -ac — the source layout is
+        // passed through untouched.
+        $cmd = $this->runner()->buildSegmentCommand('/in.mkv', '/out/seg-00000.ts', 0.0, 6.0, [
+            'video_codec' => 'libx264',
+            'audio_codec' => 'copy',
+            'audio_channels' => 6,
+        ]);
+
+        $this->assertStringContainsString('-c:a copy', $cmd);
+        $this->assertStringNotContainsString('-ac', $cmd);
+    }
+
+    public function testBuildAudioSegmentCommandForcesStereoOnReencodeWithoutChannels(): void
+    {
+        // The audio-only rendition builder shares the same browser-safe default.
+        $cmd = $this->runner()->buildAudioSegmentCommand('/in.mkv', '/out/seg-a0-00000.ts', 0.0, 6.0, [
+            'audio_stream_index' => 0,
+            'audio_codec' => 'aac',
+            'audio_bitrate' => '128k',
+        ]);
+
+        $this->assertStringContainsString('-c:a aac', $cmd);
+        $this->assertStringContainsString('-ac 2', $cmd);
+    }
+
     public function testBuildSegmentCommandMixedVideoReencodeAudioCopy(): void
     {
         // The caller pins video re-encode + audio copy; each stream's codec decision

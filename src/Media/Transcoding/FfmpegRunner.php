@@ -1528,6 +1528,40 @@ class FfmpegRunner
     }
 
     /**
+     * Browser-safe channel count (`-ac`) for a RE-ENCODED audio stream.
+     *
+     * Browser MSE / hls.js reliably parse only the STANDARD AAC channel
+     * configurations. A 5.1(side) AC-3 source (side channels SL/SR) does NOT
+     * map to AAC's standard `channel_configuration=6`: FFmpeg's native `aac`
+     * encoder emits a PCE and writes `channel_configuration=0` in the ADTS
+     * header, which hls.js cannot parse — it fails to build the audio MSE
+     * SourceBuffer and the whole player load errors even on valid 8-bit H.264
+     * video. Stereo (`channel_configuration=2`) is universally browser-safe,
+     * and surround-in-browser is unreliable anyway, so we DEFAULT a re-encode to
+     * stereo whenever the caller did not already pin a browser-safe channel
+     * count (a positive value <= 2). This mirrors how browserSafeVideoFlags()
+     * guarantees 8-bit output regardless of the caller, so any future producer
+     * that forgets `audio_channels` still yields a browser-decodable stream.
+     *
+     * NOTE: a clean alternative would be to normalize a 5.1(side) layout to
+     * standard 5.1 (`-af aformat=channel_layouts=5.1` / channelmap) so the ADTS
+     * carries `channel_configuration=6` and surround is preserved; we DEFAULT to
+     * stereo for safety and only keep an explicit browser-safe channel pin.
+     * Callers must NOT invoke this on the `audio_codec === 'copy'` (passthrough /
+     * direct-play) path — a stream copy keeps the source layout untouched.
+     *
+     * @param array<string, mixed> $params
+     */
+    private static function browserSafeAudioChannels(array $params): int
+    {
+        $channels = self::paramInt($params, 'audio_channels');
+        if ($channels !== null && $channels > 0 && $channels <= 2) {
+            return $channels;
+        }
+        return 2;
+    }
+
+    /**
      * Extracts a string value from a mixed parameter array.
      *
      * Returns the value when it is a non-empty string; otherwise null. Numeric
@@ -1768,10 +1802,10 @@ class FfmpegRunner
             } else {
                 $cmd .= ' -c:a ' . $audioCodec;
                 $cmd .= ' -b:a ' . (self::paramString($params, 'audio_bitrate') ?? '128k');
-                $audioChannels = self::paramInt($params, 'audio_channels');
-                if ($audioChannels !== null && $audioChannels > 0) {
-                    $cmd .= ' -ac ' . $audioChannels;
-                }
+                // Force a browser-safe channel layout (stereo by default) so a
+                // 5.1(side) AC-3 source can't yield channel_configuration=0 AAC
+                // that hls.js refuses to parse. See browserSafeAudioChannels().
+                $cmd .= ' -ac ' . self::browserSafeAudioChannels($params);
 
                 // SV-3.3: loudness normalization (ebur128/loudnorm filter)
                 $loudnormFilter = $this->buildLoudnormFilter($params);
@@ -1842,10 +1876,10 @@ class FfmpegRunner
         }
         $cmd .= ' -c:a ' . $audioCodec;
         $cmd .= ' -b:a ' . (self::paramString($params, 'audio_bitrate') ?? '128k');
-        $audioChannels = self::paramInt($params, 'audio_channels');
-        if ($audioChannels !== null && $audioChannels > 0) {
-            $cmd .= ' -ac ' . $audioChannels;
-        }
+        // Force a browser-safe channel layout (stereo by default) so a 5.1(side)
+        // AC-3 source can't yield channel_configuration=0 AAC that hls.js refuses
+        // to parse. See browserSafeAudioChannels().
+        $cmd .= ' -ac ' . self::browserSafeAudioChannels($params);
 
         // SV-3.3: loudness normalization (ebur128/loudnorm filter)
         $loudnormFilter = $this->buildLoudnormFilter($params);
@@ -2142,10 +2176,10 @@ class FfmpegRunner
             } else {
                 $cmd .= ' -c:a ' . $audioCodec;
                 $cmd .= ' -b:a ' . (self::paramString($params, 'audio_bitrate') ?? '128k');
-                $audioChannels = self::paramInt($params, 'audio_channels');
-                if ($audioChannels !== null && $audioChannels > 0) {
-                    $cmd .= ' -ac ' . $audioChannels;
-                }
+                // Force a browser-safe channel layout (stereo by default) so a
+                // 5.1(side) AC-3 source can't yield channel_configuration=0 AAC
+                // that hls.js refuses to parse. See browserSafeAudioChannels().
+                $cmd .= ' -ac ' . self::browserSafeAudioChannels($params);
 
                 // SV-3.3: loudness normalization (ebur128/loudnorm filter). This
                 // mirrors the software builders (buildSegmentCommand /

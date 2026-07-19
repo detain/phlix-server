@@ -555,7 +555,10 @@ class TranscodeManagerTest extends TestCase
         $this->assertSame(1920, $p['width']);
         $this->assertSame(1080, $p['height']);
         $this->assertSame('aac', $p['audio_codec']);
-        $this->assertSame(6, $p['audio_channels']);
+        // A 6-channel AC-3 5.1(side) source is forced to browser-safe stereo: the
+        // native aac encoder would otherwise write channel_configuration=0 (PCE)
+        // that hls.js cannot parse, breaking the audio SourceBuffer.
+        $this->assertSame(2, $p['audio_channels']);
         // The encode must pin a browser-decodable 8-bit 4:2:0 profile.
         $this->assertSame('yuv420p', $p['pix_fmt']);
         $this->assertSame('high', $p['profile']);
@@ -4039,7 +4042,7 @@ class TranscodeManagerTest extends TestCase
 
         $this->manager($db, $ff)->ensureHlsJob('media-1', 'web');
 
-        $expectedKey = sha1('media-1|web|v4');
+        $expectedKey = sha1('media-1|web|v5');
         $reuseKey = null;
         $insertKey = null;
         foreach ($captured as [$sql, $params]) {

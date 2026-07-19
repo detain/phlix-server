@@ -173,6 +173,33 @@ $httpWorker->onWorkerStart = static function (Worker $w) use ($config, $publicRo
     $connectionPool = $container->get(ConnectionPool::class);
     $application = new Application($container, $config, $connectionPool);
 
+    // Warm WebPortalRouter once per worker so its heavy, I/O-yielding factory
+    // (it resolves ~20 services and performs the first pooled DB handshake +
+    // settings reads) is cached in php-di's resolvedEntries BEFORE this worker
+    // accepts concurrent /api/ requests. WebPortalRouter is otherwise resolved
+    // LAZILY per request (see HttpHandler step 1b). php-di's cycle guard
+    // `entriesBeingResolved` is INSTANCE state on the single per-worker
+    // container and is NOT coroutine-safe: if request-coroutine A is mid-resolve
+    // when its factory yields on DB I/O, a second concurrent request-coroutine B
+    // sees the leaked guard flag and throws a spurious "Circular dependency
+    // detected ... WebPortalRouter -> WebPortalRouter" 500. This is a transient
+    // cold-start race after every worker restart. Resolving it here — once, in
+    // this single onWorkerStart coroutine (Worker::run() dispatches the callback
+    // via Coroutine::create), after the pool is ready and BEFORE $w->onMessage
+    // is assigned below (so no request can race it) — caches the instance so
+    // every later get() short-circuits on resolvedEntries before the guard runs.
+    // Non-fatal: the lazy per-request path still applies if this throws.
+    if ($container->has(\Phlix\Server\WebPortal\WebPortalRouter::class)) {
+        try {
+            $container->get(\Phlix\Server\WebPortal\WebPortalRouter::class);
+        } catch (\Throwable $e) {
+            LoggerFactory::get(LogChannels::HTTP)->debug(
+                'WebPortalRouter warm-up skipped (will resolve lazily per request)',
+                ['error' => $e->getMessage()],
+            );
+        }
+    }
+
     // SV-0.1: probe hardware acceleration exactly once per worker at start (not
     // per request) and log the chosen accelerator a single time. Resolving the
     // FfmpegRunner runs the DI factory which calls setConfig() + the probe; the
@@ -697,6 +724,25 @@ try {
         $relayConnectionPool = $container->get(ConnectionPool::class);
         $relayApplication = new Application($container, $config, $relayConnectionPool);
         $relayDispatcher = new \Phlix\Hub\RelayRequestDispatcher($relayApplication, $container);
+
+        // Warm WebPortalRouter once in this relay fork for the same reason as the
+        // HTTP worker above: RelayRequestDispatcher::dispatch() resolves it
+        // LAZILY (RelayRequestDispatcher.php) for any /api/ path the Application
+        // router 404s, and concurrent HTTP_REQUEST frames relayed over the tunnel
+        // can race php-di's non-coroutine-safe `entriesBeingResolved` guard,
+        // producing the same spurious "circular dependency" 500. Resolving it
+        // here — once, before $consumer->start() begins consuming frames — caches
+        // it so later get() calls short-circuit on resolvedEntries. Non-fatal.
+        if ($container->has(\Phlix\Server\WebPortal\WebPortalRouter::class)) {
+            try {
+                $container->get(\Phlix\Server\WebPortal\WebPortalRouter::class);
+            } catch (\Throwable $e) {
+                LoggerFactory::get(LogChannels::HUB)->debug(
+                    'WebPortalRouter warm-up skipped in relay fork (will resolve lazily)',
+                    ['error' => $e->getMessage()],
+                );
+            }
+        }
 
         $consumer = new \Phlix\Hub\RelayConsumer(
             $relayConfig,

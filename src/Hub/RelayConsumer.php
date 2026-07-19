@@ -567,15 +567,21 @@ final class RelayConsumer
             $this->handleDisconnect();
         };
 
+        // Capture the connection id up front: connect() may synchronously
+        // invoke onClose (immediate DNS/socket error) which nulls
+        // $this->connection via handleDisconnect(), so re-dereferencing it
+        // after connect() would spl_object_id(null) and throw a spurious
+        // TypeError that masks the real synchronous-close.
+        $connId = spl_object_id($this->connection);
         $this->logger->debug('RelayConsumer::connect() calling $connection->connect()', [
-            'connection_id' => spl_object_id($this->connection),
+            'connection_id' => $connId,
             'connection_status_before_connect' => $this->connection->getStatus(),
         ]);
         try {
             $this->connection->connect();
             $this->logger->debug('RelayConsumer::connect() $connection->connect() returned', [
-                'connection_id' => spl_object_id($this->connection),
-                'connection_status_after_connect' => $this->connection->getStatus(),
+                'connection_id' => $connId,
+                'connection_status_after_connect' => $this->currentConnectionStatus(),
             ]);
         } catch (Throwable $e) {
             $this->logger->error('RelayConsumer::connect() $connection->connect() threw exception', [
@@ -588,6 +594,24 @@ final class RelayConsumer
             ]);
             $this->scheduleReconnect();
         }
+    }
+
+    /**
+     * Read the current hub connection's status, null-safe.
+     *
+     * connect() may synchronously invoke onClose (an immediate DNS/socket
+     * error), which nulls $this->connection via handleDisconnect(). Reading the
+     * status through this helper honors the property's declared nullable type so
+     * the post-connect debug log cannot spl_object_id(null)/getStatus() on a
+     * nulled connection and throw a spurious TypeError.
+     *
+     * @return int|string|null Workerman connection status, or null if closed.
+     *
+     * @since 0.13.0
+     */
+    private function currentConnectionStatus(): int|string|null
+    {
+        return $this->connection?->getStatus();
     }
 
     /**

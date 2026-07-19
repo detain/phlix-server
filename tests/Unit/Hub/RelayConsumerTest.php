@@ -316,6 +316,72 @@ class RelayConsumerTest extends TestCase
         $this->assertTrue($opened[0]->closed, 'the prior hub connection must be closed when reconnect returns null');
     }
 
+    /**
+     * SV-RELAYSYNCCLOSE: a hub connection whose connect() fails synchronously
+     * (immediate DNS/socket error) invokes onClose synchronously, which runs
+     * handleDisconnect() and NULLS $this->connection mid-connect(). The debug
+     * logging that follows connect() must tolerate that null instead of calling
+     * spl_object_id(null)/getStatus() on it and throwing a spurious TypeError
+     * (which the live hub log mis-reported as "$connection->connect() threw").
+     * The reconnect path must still run exactly once.
+     */
+    public function test_synchronous_close_during_connect_does_not_spl_object_id_null(): void
+    {
+        // A connection whose connect() immediately fires onClose (as Workerman's
+        // AsyncTcpConnection does on a synchronous connect failure).
+        $syncClosing = new class ('ws://hub.example.com:8802') extends FakeRelayConnection {
+            public function connect(): void
+            {
+                $this->connected = true;
+                // Synchronous connect failure → onClose fires before connect() returns.
+                if ($this->onClose !== null) {
+                    ($this->onClose)($this);
+                }
+            }
+        };
+
+        $consumer = new RelayConsumer(
+            new RelayConfig(
+                enabled: true,
+                hubRelayWsUrl: 'ws://hub.example.com:8802',
+                localHttpAddress: '127.0.0.1:8096',
+            ),
+            $this->createMockHubClient(),
+            new StructuredLogger('relay', []),
+            'server-uuid-syncclose',
+            hubConnectionFactory: static function (string $url) use ($syncClosing): AsyncTcpConnection {
+                return $syncClosing;
+            },
+            localConnectionFactory: static fn (string $url): AsyncTcpConnection
+                => new FakeRelayConnection($url),
+        );
+
+        // running=true so handleDisconnect() proceeds to the reconnect path
+        // (mirrors a live consumer that start()ed before the socket dropped).
+        $runningProp = new \ReflectionProperty(RelayConsumer::class, 'running');
+        $runningProp->setAccessible(true);
+        $runningProp->setValue($consumer, true);
+
+        $connect = new \ReflectionMethod(RelayConsumer::class, 'connect');
+        $connect->setAccessible(true);
+
+        // Must NOT throw a TypeError from spl_object_id(null)/getStatus() in the
+        // post-connect debug log.
+        $connect->invoke($consumer);
+
+        $this->assertFalse(
+            $consumer->isConnected(),
+            'the synchronously-closed connection must have been nulled',
+        );
+        // handleDisconnect() ran to completion (incremented attempts + scheduled
+        // reconnect) exactly once — not twice via a caught spurious TypeError.
+        $this->assertSame(
+            1,
+            $consumer->getReconnectAttempts(),
+            'reconnect must be scheduled once for the synchronous close, not doubled by a caught TypeError',
+        );
+    }
+
     public function test_hello_is_sent_on_connect(): void
     {
         $consumer = $this->createConsumer();

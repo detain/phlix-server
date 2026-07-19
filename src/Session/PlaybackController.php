@@ -345,7 +345,7 @@ class PlaybackController
      * @param string $userId User UUID to get continue watching list for
      * @param int $limit Maximum number of items to return (default: 10)
      *
-     * @return array<int, array<string, mixed>> Array of shaped media items with playback position
+     * @return list<array{id: string, metadata: array<string, mixed>, position_ticks: int, duration_ticks: int, media_item_id: string, ...}> Array of shaped media items with playback position
      *
      * @example
      * ```php
@@ -458,13 +458,17 @@ class PlaybackController
                 'metadata' => $metadata,
             ];
 
-            /** @var array<string, mixed> $shaped */
+            /** @var array{id: string, metadata: array<string, mixed>, position_ticks: int, duration_ticks: int, media_item_id: string, ...} $shaped */
             $shaped = MediaItemShaper::shape($item);
 
             // Re-attach playback-specific fields the shaper doesn't carry.
-            $shaped['position_ticks'] = $row['position_ticks'];
-            $shaped['duration_ticks'] = $row['duration_ticks'];
-            $shaped['media_item_id'] = $row['media_item_id'];
+            // Use type checks to satisfy PHPStan
+            $positionTicks = is_numeric($row['position_ticks'] ?? null) ? intval($row['position_ticks']) : 0;
+            $durationTicks = is_numeric($row['duration_ticks'] ?? null) ? intval($row['duration_ticks']) : 0;
+            $mediaItemId = is_string($row['media_item_id'] ?? null) ? $row['media_item_id'] : '';
+            $shaped['position_ticks'] = $positionTicks;
+            $shaped['duration_ticks'] = $durationTicks;
+            $shaped['media_item_id'] = $mediaItemId;
             $shaped['metadata'] = $metadata;
 
             return $shaped;

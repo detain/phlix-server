@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Phlix\Tests\Unit\Media\Library;
 
+use Phlix\Auth\SignedUrl;
 use Phlix\Media\Library\MediaItemShaper;
 use PHPUnit\Framework\TestCase;
 
@@ -323,18 +324,54 @@ final class MediaItemShaperTest extends TestCase
         $this->assertArrayNotHasKey('trailer_url', $shaped);
     }
 
-    public function testShapeDetailExposesLogoUrlWhenPresent(): void
+    public function testShapeDetailReMintsExpiredInternalLogoUrl(): void
+    {
+        putenv('PHLIX_SIGNED_URL_SECRET=shaper-logo-secret');
+        SignedUrl::resetSharedForTesting();
+        $signer = SignedUrl::fromEnv();
+
+        // A locally-cached TMDB PNG logo is served at `?size=logo`, signed at scan
+        // time — hours later the token is expired. The shaper must re-mint it so an
+        // authless <img> can still fetch it.
+        $expiredExp = time() - 3600;
+        $expiredSig = $signer->signature('/api/v1/artwork/m', $expiredExp);
+        $stale = '/api/v1/artwork/m?size=logo&exp=' . $expiredExp . '&sig=' . $expiredSig;
+
+        $shaped = MediaItemShaper::shapeDetail([
+            'id' => 'm',
+            'name' => 'The Matrix',
+            'type' => 'movie',
+            'metadata' => ['logo_url' => $stale],
+        ], []);
+
+        $this->assertIsString($shaped['logo_url']);
+        $this->assertNotSame($stale, $shaped['logo_url'], 'the stale signature is re-minted');
+        parse_str((string) parse_url($shaped['logo_url'], PHP_URL_QUERY), $q);
+        /** @var array<string, string> $q */
+        $this->assertSame('logo', $q['size'], 'the logo size descriptor is preserved');
+        $this->assertGreaterThan(time(), (int) $q['exp']);
+        $this->assertTrue(
+            $signer->verify('/api/v1/artwork/m', $q['exp'], $q['sig']),
+            'the re-minted logo_url verifies with a fresh signature'
+        );
+
+        putenv('PHLIX_SIGNED_URL_SECRET');
+        SignedUrl::resetSharedForTesting();
+    }
+
+    public function testShapeDetailLeavesExternalLogoUrlUnchanged(): void
     {
         $shaped = MediaItemShaper::shapeDetail([
             'id' => 'm',
             'name' => 'The Matrix',
             'type' => 'movie',
             'metadata' => [
-                'logo_url' => '/api/v1/artwork/m?size=logo&exp=1&sig=abc',
+                // A remote (non-localized) SVG/PNG logo is never signed.
+                'logo_url' => 'https://image.tmdb.org/t/p/original/logo.png',
             ],
         ], []);
 
-        $this->assertSame('/api/v1/artwork/m?size=logo&exp=1&sig=abc', $shaped['logo_url']);
+        $this->assertSame('https://image.tmdb.org/t/p/original/logo.png', $shaped['logo_url']);
     }
 
     public function testShapeDetailLogoUrlNullWhenAbsent(): void
@@ -483,6 +520,39 @@ final class MediaItemShaperTest extends TestCase
         ], []);
 
         $this->assertSame('https://image.tmdb.org/t/p/original/bg.jpg', $shaped['backdrop_url']);
+    }
+
+    public function testShapeDetailReMintsExpiredInternalBackdropUrl(): void
+    {
+        putenv('PHLIX_SIGNED_URL_SECRET=shaper-backdrop-secret');
+        SignedUrl::resetSharedForTesting();
+        $signer = SignedUrl::fromEnv();
+
+        // A locally-cached backdrop is served at `/api/v1/artwork/{id}?size=…`; its
+        // scan-time signature is expired hours later and must be re-minted.
+        $expiredExp = time() - 3600;
+        $expiredSig = $signer->signature('/api/v1/artwork/m', $expiredExp);
+        $stale = '/api/v1/artwork/m?size=w780&exp=' . $expiredExp . '&sig=' . $expiredSig;
+
+        $shaped = MediaItemShaper::shapeDetail([
+            'id' => 'm',
+            'name' => 'Local Backdrop Film',
+            'type' => 'movie',
+            'metadata' => ['backdrop_url' => $stale],
+        ], []);
+
+        $this->assertIsString($shaped['backdrop_url']);
+        $this->assertNotSame($stale, $shaped['backdrop_url'], 'the stale signature is re-minted');
+        parse_str((string) parse_url($shaped['backdrop_url'], PHP_URL_QUERY), $q);
+        /** @var array<string, string> $q */
+        $this->assertSame('w780', $q['size']);
+        $this->assertTrue(
+            $signer->verify('/api/v1/artwork/m', $q['exp'], $q['sig']),
+            'the re-minted backdrop_url verifies with a fresh signature'
+        );
+
+        putenv('PHLIX_SIGNED_URL_SECRET');
+        SignedUrl::resetSharedForTesting();
     }
 
     public function testShapeDetailReturnsNullBackdropUrlWhenNotSet(): void

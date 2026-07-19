@@ -218,14 +218,20 @@ final class MediaItemShaper
         $backdropUrl = is_string($metadata['backdrop_url'] ?? null) && $metadata['backdrop_url'] !== ''
             ? $metadata['backdrop_url']
             : null;
-        $merged['backdrop_url'] = $backdropUrl;
+        // Re-mint the signature on the way out (same expiry fix as poster_url in
+        // shape()): a locally-cached backdrop is a signed `/api/v1/artwork/{id}?size=…`
+        // URL stored at scan time whose token is expired hours later — authless
+        // clients (console `<img>`) then 401. External TMDB backdrops pass through
+        // untouched.
+        $merged['backdrop_url'] = SignedUrl::refreshArtworkUrl($backdropUrl);
         // Full-bleed background variants (TMDB width swap). `backdrop_url_large`
         // is the `/original` full-resolution asset for the page background;
         // `backdrop_srcset` advertises w780/w1280/original so the client can pick
         // by viewport. Both null for non-TMDB backdrops → the client uses
-        // `backdrop_url` unchanged.
+        // `backdrop_url` unchanged. Each srcset URL is re-signed too (no-op for the
+        // TMDB-derived variants, correct once backdrops are cached locally).
         $merged['backdrop_url_large'] = BackdropSrcset::largeUrl($backdropUrl);
-        $merged['backdrop_srcset'] = BackdropSrcset::forBackdropUrl($backdropUrl);
+        $merged['backdrop_srcset'] = SignedUrl::refreshArtworkSrcset(BackdropSrcset::forBackdropUrl($backdropUrl));
         $merged['theme_audio_url'] = is_string($metadata['theme_audio_url'] ?? null) &&
             $metadata['theme_audio_url'] !== ''
             ? $metadata['theme_audio_url']
@@ -242,8 +248,13 @@ final class MediaItemShaper
         // Title logo — detail-only, so a client can overlay the transparent title
         // treatment on the hero backdrop. Captured at scan time from TMDB `images`
         // and cached locally as a transparency-safe PNG (served at `?size=logo`).
-        // Absent/empty → null (never a broken URL).
-        $merged['logo_url'] = self::nonemptyString($metadata['logo_url'] ?? null);
+        // Absent/empty → null (never a broken URL). Localized TMDB PNG logos are
+        // served as a signed `/api/v1/artwork/{id}?size=logo` URL stored at scan
+        // time, so re-mint the signature on the way out (same expiry fix as
+        // poster_url); external/SVG logos pass through untouched.
+        $merged['logo_url'] = SignedUrl::refreshArtworkUrl(
+            self::nonemptyString($metadata['logo_url'] ?? null)
+        );
 
         // Curated external provider-id map ({tmdb, imdb, tvdb, anidb, …}) so the
         // SPA can render "view on TMDB/IMDb/…" links. Detail-only. Assembled from

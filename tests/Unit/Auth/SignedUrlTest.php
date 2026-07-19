@@ -254,6 +254,28 @@ final class SignedUrlTest extends TestCase
         $this->assertSame(['size', 'exp', 'sig'], array_keys($q));
     }
 
+    public function testRefreshArtworkUrlReSignsExpiredLogoUrl(): void
+    {
+        putenv('PHLIX_SIGNED_URL_SECRET=' . self::SECRET);
+        SignedUrl::resetSharedForTesting();
+        $signer = SignedUrl::fromEnv();
+
+        // Title logos are cached locally and served at `?size=logo` (detail-only
+        // MediaItemShaper::shapeDetail() field) — same expired-signature bug as
+        // posters.
+        $expiredExp = time() - 3600;
+        $expiredSig = $signer->signature('/api/v1/artwork/abc-123', $expiredExp);
+        $stale = '/api/v1/artwork/abc-123?size=logo&exp=' . $expiredExp . '&sig=' . $expiredSig;
+
+        $fresh = SignedUrl::refreshArtworkUrl($stale);
+        $this->assertNotNull($fresh);
+        parse_str((string) parse_url($fresh, PHP_URL_QUERY), $q);
+        /** @var array<string, string> $q */
+        $this->assertGreaterThan(time(), (int) $q['exp']);
+        $this->assertTrue($signer->verify('/api/v1/artwork/abc-123', $q['exp'], $q['sig']));
+        $this->assertSame('logo', $q['size']);
+    }
+
     public function testRefreshArtworkUrlSignsUnsignedInternalUrl(): void
     {
         putenv('PHLIX_SIGNED_URL_SECRET=' . self::SECRET);

@@ -27,9 +27,19 @@ final class PlaybackControllerTest extends TestCase
                 'media_item_id' => 'm1',
                 'name' => 'MASH S09E02',
                 'type' => 'series',
+                'position_ticks' => 1234567890,
+                'duration_ticks' => 3612345678,
                 'metadata_json' => '{"poster_url":"/a.jpg"}',
             ],
-            ['id' => 'p2', 'media_item_id' => 'm2', 'name' => 'Other', 'type' => 'movie', 'metadata_json' => '{}'],
+            [
+                'id' => 'p2',
+                'media_item_id' => 'm2',
+                'name' => 'Other',
+                'type' => 'movie',
+                'position_ticks' => 1234567890,
+                'duration_ticks' => 3612345678,
+                'metadata_json' => '{}',
+            ],
         ];
         $sessionManager = $this->createMock(SessionManager::class);
         $controller = new PlaybackController($this->captureConnection($rows), $sessionManager);

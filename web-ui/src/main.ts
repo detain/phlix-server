@@ -1,4 +1,24 @@
-import { createPhlixApp, buildAdminRoutes, LibraryScanPage } from '@phlix/ui';
+import {
+    createPhlixApp,
+    buildAdminRoutes,
+    LibraryScanPage,
+    BooksPage,
+    BookDetailPage,
+    BookReaderPage,
+    AudiobooksPage,
+    AudiobookDetailPage,
+    AudiobookPlayerPage,
+    PhotoAlbumsPage,
+    PhotoAlbumPage,
+    PhotoViewPage,
+    PhotoSlideshowPage,
+    SearchPage,
+    MusicArtistsPage,
+    MusicArtistPage,
+    MusicAlbumPage,
+    MusicTracksPage,
+    MusicPlayerPage,
+} from '@phlix/ui';
 import '@phlix/ui/style.css';
 import '@phlix/ui/fonts.css';
 
@@ -12,6 +32,11 @@ const app = createPhlixApp({
         // Anime, …), fetched from /api/v1/libraries — so each library is reachable
         // straight from the nav, matching the per-library Browse sections.
         { id: 'browse', label: 'Browse', to: '/app', libraryLinks: true },
+        { id: 'music', label: 'Music', to: '/app/music' },
+        { id: 'books', label: 'Books', to: '/app/books' },
+        { id: 'audiobooks', label: 'Audiobooks', to: '/app/audiobooks' },
+        { id: 'photos', label: 'Photos', to: '/app/photo/albums' },
+        { id: 'search', label: 'Search', to: '/app/search' },
         { id: 'settings', label: 'Settings', to: '/app/settings' },
         { id: 'admin', label: 'Admin', to: '/app/admin/dashboard', requiresAdmin: true },
     ],
@@ -26,6 +51,26 @@ const app = createPhlixApp({
             name: 'library-scan',
             component: LibraryScanPage,
         },
+        // Media reader/browser pages ported to Vue in @phlix/ui but previously
+        // unrouted (unreachable). Names/paths are hard-coded inside the page
+        // components, so they must match exactly. Every path carries the /app
+        // prefix (the router history base is '/').
+        { path: '/app/books', name: 'books', component: BooksPage },
+        { path: '/app/books/:id', name: 'book-detail', component: BookDetailPage },
+        { path: '/app/books/:id/read', name: 'book-reader', component: BookReaderPage },
+        { path: '/app/audiobooks', name: 'audiobooks', component: AudiobooksPage },
+        { path: '/app/audiobooks/:id', name: 'audiobook-detail', component: AudiobookDetailPage },
+        { path: '/app/audiobooks/:id/play', name: 'audiobook-player', component: AudiobookPlayerPage },
+        { path: '/app/photo/albums', name: 'photo-albums', component: PhotoAlbumsPage },
+        { path: '/app/photo/album/:id', name: 'photo-album', component: PhotoAlbumPage },
+        { path: '/app/photo/photo/:id', name: 'photo-view', component: PhotoViewPage },
+        { path: '/app/photo/slideshow', name: 'photo-slideshow', component: PhotoSlideshowPage },
+        { path: '/app/search', name: 'search', component: SearchPage },
+        { path: '/app/music/artists', name: 'music-artists', component: MusicArtistsPage },
+        { path: '/app/music/artist/:name', name: 'music-artist', component: MusicArtistPage, props: true },
+        { path: '/app/music/album/:name', name: 'music-album', component: MusicAlbumPage, props: true },
+        { path: '/app/music/tracks', name: 'music-tracks', component: MusicTracksPage },
+        { path: '/app/music/player', name: 'music-player', component: MusicPlayerPage },
     ],
 });
 app.mount('#phlix-app');

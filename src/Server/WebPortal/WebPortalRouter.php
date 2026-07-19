@@ -2880,8 +2880,9 @@ class WebPortalRouter
             if (!is_array($row)) {
                 continue;
             }
+            $rawId = $row['id'] ?? null;
             $shapedTracks[] = [
-                'id' => is_string($row['id'] ?? null) ? $row['id'] : (string)($row['id'] ?? ''),
+                'id' => is_string($rawId) ? $rawId : (is_scalar($rawId) ? (string) $rawId : ''),
                 'title' => is_string($row['title'] ?? null) ? $row['title'] : 'Unknown Track',
                 'artist' => is_string($row['artist_name'] ?? null) ? $row['artist_name'] : null,
                 'album' => is_string($row['album_name'] ?? null) ? $row['album_name'] : null,

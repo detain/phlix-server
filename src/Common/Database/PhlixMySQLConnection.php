@@ -132,7 +132,24 @@ class PhlixMySQLConnection extends Connection
      */
     protected function connect()
     {
-        parent::connect();
+        // PHP 8.5 emits E_DEPRECATED from workerman/mysql's parent::connect()
+        // (the PDO MySQL init-command attribute) on EVERY connect. That
+        // deprecation would otherwise reach the process-global error handler and
+        // — under the Swoole coroutine runtime, where set_error_handler() is not
+        // coroutine-scoped — be captured by a concurrent coroutine's Monolog
+        // log-write window, turning a successful log write into a spurious
+        // "Writing to the log file failed" throw -> HTTP 500. Swallow just the
+        // deprecation for the duration of the vendor connect (set + restore are
+        // synchronous around this one call; see the class-level fix in
+        // StructuredLogger for the robust, coroutine-safe backstop). This is a
+        // best-effort, version-independent silencing of the vendor deprecation;
+        // FIX 1 (WhatFailureGroupHandler) remains the authoritative guard.
+        set_error_handler(static fn (): bool => true, E_DEPRECATED);
+        try {
+            parent::connect();
+        } finally {
+            restore_error_handler();
+        }
         if ($this->pdo instanceof \PDO) {
             $this->pdo->setAttribute(\PDO::ATTR_EMULATE_PREPARES, true);
             $this->pdo->setAttribute(\Pdo\Mysql::ATTR_USE_BUFFERED_QUERY, true);

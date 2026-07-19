@@ -14,6 +14,7 @@ namespace Phlix\Common\Logger;
 use Monolog\Handler\HandlerInterface;
 use Monolog\Handler\RotatingFileHandler;
 use Monolog\Handler\StreamHandler;
+use Monolog\Handler\WhatFailureGroupHandler;
 use Monolog\Level;
 use Monolog\Logger;
 use Monolog\LogRecord;
@@ -107,7 +108,24 @@ class StructuredLogger implements LoggerInterface
             // The handler's level is already set via its constructor by
             // createHandler(); Monolog's HandlerInterface does not expose
             // setLevel() so we cannot adjust it here generically.
-            $this->logger->pushHandler($handler);
+            //
+            // Wrap every routed handler in a WhatFailureGroupHandler so an
+            // exception thrown during the inner handler's write can NEVER
+            // propagate out of the logger. This defuses a PHP 8.5 + Swoole
+            // coroutine hazard: Monolog's StreamHandler installs a temporary
+            // set_error_handler() around its fwrite() and THROWS
+            // "Writing to the log file failed: <msg>" if ANY error is captured
+            // during that window. set_error_handler() is process-global, so an
+            // E_DEPRECATED emitted by a DIFFERENT coroutine that happens to run
+            // while our write is in flight (e.g. workerman/mysql's PDO connect,
+            // or any deprecated no-op) is captured here and turns a SUCCESSFUL
+            // write into a spurious throw -> unhandled worker exception -> 500.
+            // The fwrite has already landed, so swallowing the throw loses no
+            // record. Routing is unaffected: the channel/env gates above decide
+            // WHICH handlers attach, and the wrapper delegates isHandling()
+            // (hence per-handler level filtering, e.g. error.log's Error gate)
+            // to its single inner handler transparently.
+            $this->logger->pushHandler(new WhatFailureGroupHandler([$handler]));
         }
     }
 

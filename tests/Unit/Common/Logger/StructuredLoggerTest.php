@@ -4,7 +4,11 @@ namespace Phlix\Tests\Unit\Common\Logger;
 
 use PHPUnit\Framework\TestCase;
 use Phlix\Common\Logger\StructuredLogger;
+use Monolog\Handler\HandlerInterface;
+use Monolog\Handler\WhatFailureGroupHandler;
 use Monolog\Level;
+use Monolog\Logger;
+use Monolog\LogRecord;
 
 class StructuredLoggerTest extends TestCase
 {
@@ -241,5 +245,141 @@ class StructuredLoggerTest extends TestCase
         // Verify events.log was NOT touched by plugins messages.
         $eventsContent = $readLog($eventsLog);
         $this->assertStringNotContainsString('plugins error message', $eventsContent);
+    }
+
+    // -------------------------------------------------------------------------
+    // PHP 8.5 + Swoole resilience: a spurious "Writing to the log file failed"
+    // throw from a concurrent-coroutine E_DEPRECATED must NEVER escape the
+    // logger. Every routed handler is wrapped in a WhatFailureGroupHandler.
+    // -------------------------------------------------------------------------
+
+    public function testEveryRoutedHandlerIsWrappedInWhatFailureGroupHandler(): void
+    {
+        $logger = new StructuredLogger('media', $this->multiHandlerConfig());
+
+        foreach ($this->innerMonolog($logger)->getHandlers() as $handler) {
+            $this->assertInstanceOf(
+                WhatFailureGroupHandler::class,
+                $handler,
+                'each routed handler must be wrapped so inner write failures are swallowed'
+            );
+        }
+    }
+
+    public function testThrowingInnerHandlerDoesNotCrashLoggingAndSiblingsStillWrite(): void
+    {
+        $appLog   = $this->tempDir . '/app.log';
+        $errorLog = $this->tempDir . '/error.log';
+        $config   = $this->multiHandlerConfig();
+
+        $logger  = new StructuredLogger('media', $config);
+        $monolog = $this->innerMonolog($logger);
+
+        // Simulate the PHP 8.5 hazard: replace the app.log handler's INNER
+        // handler with one whose handle()/handleBatch() throws (as Monolog's
+        // StreamHandler does when a concurrent-coroutine deprecation is captured
+        // during its fwrite window). The wrapper must swallow it.
+        $throwing = new class implements HandlerInterface {
+            public function isHandling(LogRecord $record): bool
+            {
+                return true;
+            }
+
+            public function handle(LogRecord $record): bool
+            {
+                throw new \UnexpectedValueException(
+                    'Writing to the log file failed: PDO::MYSQL_ATTR_INIT_COMMAND is deprecated'
+                );
+            }
+
+            /** @param array<LogRecord> $records */
+            public function handleBatch(array $records): void
+            {
+                throw new \UnexpectedValueException('Writing to the log file failed');
+            }
+
+            public function close(): void
+            {
+            }
+        };
+
+        // Find the WhatFailureGroupHandler wrapping the app.log StreamHandler
+        // (the debug-level, catch-all one) and swap its inner for the thrower.
+        $swapped = false;
+        foreach ($monolog->getHandlers() as $wrapper) {
+            $this->assertInstanceOf(WhatFailureGroupHandler::class, $wrapper);
+            $inner = $this->wrappedInnerHandlers($wrapper);
+            $onlyInner = $inner[0] ?? null;
+            if ($onlyInner instanceof \Monolog\Handler\StreamHandler && $onlyInner->getUrl() === $appLog) {
+                $ref = new \ReflectionProperty(WhatFailureGroupHandler::class, 'handlers');
+                $ref->setValue($wrapper, [$throwing]);
+                $swapped = true;
+                break;
+            }
+        }
+        $this->assertTrue($swapped, 'expected to locate the app.log inner handler to sabotage');
+
+        // Logging an error must NOT throw even though the app.log inner throws.
+        $logger->error('resilience-marker');
+
+        // And the sibling error.log handler (a DIFFERENT wrapper) must still
+        // have written the record — proving one handler's failure does not
+        // abort the record for the others, and no records are lost for real
+        // writes.
+        $this->assertFileExists($errorLog, 'sibling error.log must still receive the record');
+        $this->assertStringContainsString(
+            'resilience-marker',
+            (string) file_get_contents($errorLog)
+        );
+    }
+
+    /**
+     * Multi-handler routed config used by the resilience tests: a catch-all
+     * app.log (debug), an error-aggregation error.log (error+), and a
+     * plugins-scoped plugins.log.
+     *
+     * @return array<string, mixed>
+     */
+    private function multiHandlerConfig(): array
+    {
+        return [
+            'handlers' => [
+                'file' => [
+                    'type' => 'stream',
+                    'path' => $this->tempDir . '/app.log',
+                    'level' => 'debug',
+                ],
+                'error' => [
+                    'type' => 'stream',
+                    'path' => $this->tempDir . '/error.log',
+                    'level' => 'error',
+                ],
+                'plugins' => [
+                    'type' => 'stream',
+                    'path' => $this->tempDir . '/plugins.log',
+                    'level' => 'debug',
+                    'channels' => ['plugins'],
+                ],
+            ],
+        ];
+    }
+
+    private function innerMonolog(StructuredLogger $logger): Logger
+    {
+        $ref = new \ReflectionProperty(StructuredLogger::class, 'logger');
+        $monolog = $ref->getValue($logger);
+        $this->assertInstanceOf(Logger::class, $monolog);
+        return $monolog;
+    }
+
+    /**
+     * @return array<int, HandlerInterface>
+     */
+    private function wrappedInnerHandlers(WhatFailureGroupHandler $wrapper): array
+    {
+        $ref = new \ReflectionProperty(WhatFailureGroupHandler::class, 'handlers');
+        /** @var array<int, HandlerInterface> $handlers */
+        $handlers = $ref->getValue($wrapper);
+        return $handlers;
     }
 }

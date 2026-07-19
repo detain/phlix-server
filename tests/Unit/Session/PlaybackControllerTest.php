@@ -316,6 +316,52 @@ final class PlaybackControllerTest extends TestCase
         self::assertSame('/episodes/own.jpg', $result[0]['poster_url'] ?? null);
     }
 
+    public function testContinueWatchingRemintsNestedMetadataPosterUrlForEpisode(): void
+    {
+        // The console TUI reads the NESTED metadata.poster_url and fetches artwork
+        // WITHOUT a session (authorising by signature). The stored series poster is
+        // an INTERNAL artwork URL signed at scan time with a now-STALE exp/sig; the
+        // shaper re-mints the TOP-LEVEL poster_url, and getContinueWatching() must
+        // copy that fresh value back into metadata so the nested field is also
+        // re-minted (otherwise the console 401s on the expired signature → blank).
+        $stalePoster = '/api/v1/artwork/series-1?size=w500&exp=100&sig=deadbeefdeadbeef';
+        $rows = [
+            [
+                'id' => 'ep-media-uuid',
+                'media_item_id' => 'ep-media-uuid',
+                'session_id' => 'session-1',
+                'position_ticks' => 1000,
+                'duration_ticks' => 10000,
+                'playback_status' => 'playing',
+                'updated_at' => date('Y-m-d H:i:s'),
+                'name' => 'S01E01',
+                'type' => 'episode',
+                'metadata_json' => '{"poster_url":"/stills/ep01.jpg","still_url":"/stills/ep01.jpg"}',
+                'parent_metadata_json' => '{}',
+                'series_metadata_json' => '{"poster_url":"' . $stalePoster . '"}',
+            ],
+        ];
+        $sessionManager = $this->createMock(SessionManager::class);
+        $controller = new PlaybackController($this->captureConnection($rows), $sessionManager);
+
+        $result = $controller->getContinueWatching('user-1', 10);
+
+        self::assertCount(1, $result);
+
+        // The top-level poster_url is the re-minted internal artwork URL.
+        $topLevel = $result[0]['poster_url'] ?? null;
+        self::assertIsString($topLevel);
+        self::assertStringStartsWith('/api/v1/artwork/series-1?size=w500', $topLevel);
+        // The stale signature must have been stripped/re-minted (not passed through).
+        self::assertStringNotContainsString('sig=deadbeefdeadbeef', $topLevel);
+
+        // THE FIX: the NESTED metadata.poster_url must equal the re-minted top-level
+        // value — NOT the stale scan-time-signed input the console would 401 on.
+        $nested = $result[0]['metadata']['poster_url'] ?? null;
+        self::assertSame($topLevel, $nested);
+        self::assertNotSame($stalePoster, $nested);
+    }
+
     /**
      * A Connection stub that records the query + params and returns $rows.
      *

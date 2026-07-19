@@ -131,6 +131,10 @@ final class ContinueWatchingIntegrationTest extends TestCase
         $episodeMeta = $episode['metadata'] ?? null;
         $this->assertIsArray($episodeMeta);
         $this->assertSame('/series/poster.jpg', $episodeMeta['poster_url'] ?? null);
+        // The nested metadata.poster_url must be re-minted to match the top-level
+        // (shaped) value — the console reads the NESTED field and 401s on a stale
+        // scan-time signature; here it must equal the fresh top-level poster_url.
+        $this->assertSame($episode['poster_url'] ?? null, $episodeMeta['poster_url'] ?? null);
 
         // Top-level runtime (minutes) drives the SPA progress bar; must be > 0.
         $episodeRuntime = $episode['runtime'] ?? null;

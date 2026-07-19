@@ -466,6 +466,15 @@ class PlaybackController
             $shaped['position_ticks'] = $positionTicks;
             $shaped['duration_ticks'] = $durationTicks;
             $shaped['media_item_id'] = $mediaItemId;
+            // MediaItemShaper::shape() re-mints any stale/expired signature on the
+            // top-level internal-artwork poster_url. Copy that fresh value back into
+            // the metadata map so clients that read the NESTED metadata.poster_url
+            // (the console TUI's authless <img> loader) also get a valid signature —
+            // otherwise they fetch the scan-time-signed (now expired) URL and 401 →
+            // blank poster. External (TMDB/AniList) covers pass through unchanged.
+            if (is_string($shaped['poster_url'] ?? null) && ($shaped['poster_url'] !== '')) {
+                $metadata['poster_url'] = $shaped['poster_url'];
+            }
             $shaped['metadata'] = $metadata;
 
             return $shaped;

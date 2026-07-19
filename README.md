@@ -104,7 +104,16 @@ public/
   and [phlix-docs / admin / server-settings](https://detain.github.io/phlix-docs/admin/server-settings).
 
 ### Web Portal
-- **Smarty-based Templates**: Server-side rendered HTML pages using Smarty
+- **Vue SPA (`/app`)**: The primary web UI is the shared `@phlix/ui` Vue SPA. As of **WS-D**, the media
+  surfaces that shipped in `@phlix/ui` but were previously unreachable on the server are now registered
+  (routes + nav) in `web-ui/src/main.ts`: **Books** (`/app/books`, `/app/books/:id`, `/app/books/:id/read`),
+  **Audiobooks** (`/app/audiobooks`, `/app/audiobooks/:id`, `/app/audiobooks/:id/play`), **Photos**
+  (`/app/photo/albums`, `/album/:id`, `/photo/:id`, `/slideshow`), **Search** (`/app/search`), and the
+  **Music** sub-pages (`/app/music/artists`, `/artist/:name`, `/album/:name`, `/tracks`, `/player`), plus
+  Music/Books/Audiobooks/Photos/Search nav links. Passkey/WebAuthn management is a **Security** tab on the
+  SPA Settings page (`/app/settings/security`).
+- **Smarty-based Templates**: Server-side rendered HTML pages using Smarty. These remain in place as the
+  `/app` SPA pages above are verified live — Smarty retirement is deferred, not yet done.
 - **REST API Endpoints**: Complete API for library browsing, media info, and user data
 - **JWT Authentication**: Integrated token-based auth with refresh support
 - **Responsive Design**: CSS-first approach with utility classes

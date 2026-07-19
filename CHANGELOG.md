@@ -20,6 +20,16 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Added
 
+- **WS-D — media SPA pages are now reachable under `/app` (Smarty retirement pending owner verification).**
+  `web-ui/src/main.ts` now registers routes **and** top-bar nav entries for SPA pages that shipped in
+  `@phlix/ui` but were previously unreachable on the server: **Books** (`/app/books`, `/app/books/:id`,
+  `/app/books/:id/read`), **Audiobooks** (`/app/audiobooks`, `/app/audiobooks/:id`, `/app/audiobooks/:id/play`),
+  **Photos** (`/app/photo/albums`, `/app/photo/album/:id`, `/app/photo/photo/:id`, `/app/photo/slideshow`),
+  **Search** (`/app/search`), and the **Music** sub-pages (`/app/music/artists`, `/app/music/artist/:name`,
+  `/app/music/album/:name`, `/app/music/tracks`, `/app/music/player`), plus nav links (Music, Books,
+  Audiobooks, Photos, Search). The passkey/WebAuthn surface is now a **Security** tab on the SPA Settings
+  page (`/app/settings/security`) rather than a standalone page. The equivalent Smarty SSR templates and
+  their routes remain in place — deletion is deferred until the migrated `/app` pages are verified live.
 - **SV-3.3 — loudness normalization + client capability negotiation.**
   - `config/ffmpeg.php` gains a `loudness` block (`enabled` defaults to **false**) that, when enabled, applies an EBU R128 `loudnorm` audio filter (`I`/`LRA`/`TP`) to **re-encoded** audio on every segment-assembly path (software, hwaccel, and audio-only). **Copy-audio rungs** (e.g. the `original` variant, `-c:a copy`) and **direct-play sessions bypass loudness normalization by design** — you cannot filter a stream that is copied rather than decoded (documented in the config block).
   - The `X-Phlix-Client-Capabilities` request header (a JSON codec-support map, e.g. `{"eac3":false}`) is now honored on the `/playback-info` `direct_play` verdict: a client that declares it cannot decode the item's audio codec is steered to transcode instead of direct play. Absent/empty/invalid header → `direct_play` stays `true` (backward compatible). The verdict keys on the same first (lowest-`stream_index`) audio stream the transcode copy-vs-encode decision uses, so the two agree.
@@ -29,6 +39,10 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- **WS-D — phpstan cast in `WebPortalRouter::getMusicTracks()`.** The music-tracks row mapper cast a
+  `mixed` id straight to `string`; it now guards with `is_string`/`is_scalar` before casting (empty string
+  otherwise). Behavior is unchanged for the real (string) rows; the fix clears the level-9 error surfaced
+  when wiring up the newly-reachable `/app/music/tracks` page.
 - **PHP 8.5 compatibility — removed deprecated no-op `curl_close()` / `imagedestroy()` calls.** Both have been no-ops since PHP 8.0 and emit `E_DEPRECATED` under PHP 8.5, which surfaced as fatal log-write failures during TV-series metadata matching (16 `curl_close()` sites across 13 files; 19 `imagedestroy()` sites in `ArtworkStorage`/`AvatarStorage`/`PhotoController`). Behavior is unchanged — the calls did nothing. (`finfo_close()` was already removed previously.)
 - **Admin Logs page — removed a redundant `[LEVEL] <datetime>` prefix** that ~37 Monolog call sites (across 6 worker/handler files) hand-built into their message strings. Monolog's `LineFormatter` already emits `[<iso8601>] <channel>.<LEVEL>: <message>`, so the hand-built prefix doubled the level and timestamp on every rendered line; each record is now a single, clean level/timestamp. (`error_log()` sites are untouched — there the prefix is the only metadata.) The client-side Logs renderer overhaul ships in `@phlix/ui` v0.82.0.
 - **Router `HEAD` fallback for static-only `GET` routes.** A `HEAD` request now correctly falls back to a purely-static `GET` route even when no parametric `GET` routes are registered (previously the fallback could 404 or warn on a null iteration).

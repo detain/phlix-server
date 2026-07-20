@@ -108,6 +108,11 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Added
 
+- **Phase 1 — `AdminSettingsController` now emits `meta` block in GET `/api/v1/admin/settings`.**
+  Each key in `data.meta` carries per-setting metadata: `label`, `helpText`, `helpLinks`, `tier`, `group`,
+  `enum`, `enumLabels`, `optionHelp`, `minimum`, `maximum`, `default`, `secret`, and `restart`. As
+  defensive defaults `helpLinks` resolves to `[]` (empty array) and `tier` resolves to `'standard'` when
+  not explicitly set in the schema.
 - **WS-D — media SPA pages are now reachable under `/app` (Smarty retirement pending owner verification).**
   `web-ui/src/main.ts` now registers routes **and** top-bar nav entries for SPA pages that shipped in
   `@phlix/ui` but were previously unreachable on the server: **Books** (`/app/books`, `/app/books/:id`,

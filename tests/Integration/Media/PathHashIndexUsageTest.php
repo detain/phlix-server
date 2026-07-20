@@ -270,14 +270,20 @@ final class PathHashIndexUsageTest extends TestCase
 
     /**
      * SV-0.8 HIGH-finding regression against the REAL generated column: a
-     * NON-deduped type (season/image) has a NULL `path_hash` — verify that
+     * NON-deduped type (season/photo) has a NULL `path_hash` — verify that
      * directly, then confirm BOTH {@see ItemRepository::findByPath()} and
      * {@see ItemRepository::findPathsMap()} still resolve the row by its raw path
      * (the fast `path_hash = SHA1(?)` pass cannot see a NULL hash). Before the
      * raw-path fallback these lookups silently missed every non-deduped row and
      * the scanner forked a fresh DUPLICATE (a new empty season, or a full photo/
      * audiobook set) on every rescan. Pins Finding 3's recommendation to seed a
-     * series/season/image case, which the deduped-only fixtures could not catch.
+     * series/season/photo case, which the deduped-only fixtures could not catch.
+     *
+     * NOTE ON `photo`: the image case MUST use type `photo`. `media_items.type`
+     * is an ENUM (migrations 001 → 011 → 034) whose image member is `photo` —
+     * there is no `image` member, so seeding `'image'` makes MySQL reject the
+     * INSERT with error 1265 ("Data truncated for column 'type'") under strict
+     * mode. `MediaItemShaper::VALID_TYPES` lists `image` and is NOT the schema.
      */
     public function testFindByPathAndFindPathsMapResolveNullHashTypesByRawPath(): void
     {
@@ -287,7 +293,7 @@ final class PathHashIndexUsageTest extends TestCase
         // all NON-deduped types whose generated path_hash is NULL.
         $seriesPath = self::PATH_PREFIX . 'series:' . $this->libraryId . ':null-hash-show';
         $seasonPath = self::PATH_PREFIX . 'season:' . $this->libraryId . ':null-hash-show:1';
-        $imagePath = self::PATH_PREFIX . 'gallery/photo-' . md5('null-hash') . '.jpg';
+        $photoPath = self::PATH_PREFIX . 'gallery/photo-' . md5('null-hash') . '.jpg';
 
         $seriesId = $repo->create([
             'library_id' => $this->libraryId,
@@ -304,22 +310,22 @@ final class PathHashIndexUsageTest extends TestCase
             'path' => $seasonPath,
             'metadata_json' => ['season' => 1],
         ]);
-        $imageId = $repo->create([
+        $photoId = $repo->create([
             'library_id' => $this->libraryId,
             'name' => 'Null Hash Photo',
-            'type' => 'image',
-            'path' => $imagePath,
+            'type' => 'photo',
+            'path' => $photoPath,
             'metadata_json' => [],
         ]);
 
         // 1. The generated column really IS NULL for these types (the root cause).
-        foreach ([$seasonId, $imageId] as $id) {
+        foreach ([$seasonId, $photoId] as $id) {
             $row = $this->db()->row('SELECT path_hash FROM media_items WHERE id = ?', [$id]);
             $this->assertIsArray($row);
             $this->assertArrayHasKey('path_hash', $row);
             $this->assertNull(
                 $row['path_hash'],
-                'non-deduped types (season/image) must have a NULL generated path_hash',
+                'non-deduped types (season/photo) must have a NULL generated path_hash',
             );
         }
 
@@ -329,19 +335,19 @@ final class PathHashIndexUsageTest extends TestCase
         $this->assertIsArray($foundSeason, 'NULL-hash season must be resolved by findByPath, not silently missed');
         $this->assertSame($seasonId, $foundSeason['id']);
 
-        $foundImage = $repo->findByPath($imagePath, $this->libraryId);
-        $this->assertIsArray($foundImage, 'NULL-hash image must be resolved by findByPath, not silently missed');
-        $this->assertSame($imageId, $foundImage['id']);
+        $foundPhoto = $repo->findByPath($photoPath, $this->libraryId);
+        $this->assertIsArray($foundPhoto, 'NULL-hash photo must be resolved by findByPath, not silently missed');
+        $this->assertSame($photoId, $foundPhoto['id']);
 
         // 3. findPathsMap resolves them in one batch via its raw-path fallback
         //    pass — mixed with a deduped movie that resolves in the fast pass.
         $dedupedMoviePath = $this->seededPaths[0];
-        $map = $repo->findPathsMap([$dedupedMoviePath, $seasonPath, $imagePath], $this->libraryId);
+        $map = $repo->findPathsMap([$dedupedMoviePath, $seasonPath, $photoPath], $this->libraryId);
         $this->assertArrayHasKey($dedupedMoviePath, $map, 'the deduped movie resolves via the fast path_hash pass');
         $this->assertArrayHasKey($seasonPath, $map, 'NULL-hash season must appear in the batch map (fallback pass)');
-        $this->assertArrayHasKey($imagePath, $map, 'NULL-hash image must appear in the batch map (fallback pass)');
+        $this->assertArrayHasKey($photoPath, $map, 'NULL-hash photo must appear in the batch map (fallback pass)');
         $this->assertSame($seasonId, $map[$seasonPath]['id']);
-        $this->assertSame($imageId, $map[$imagePath]['id']);
+        $this->assertSame($photoId, $map[$photoPath]['id']);
     }
 
     /**

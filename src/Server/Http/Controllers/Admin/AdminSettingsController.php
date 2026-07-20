@@ -357,42 +357,10 @@ final class AdminSettingsController
             if (!($def instanceof \stdClass)) {
                 continue;
             }
-            self::applyNullEnumSentinelShim($def);
             $out[$key] = $def;
         }
 
         return $out;
-    }
-
-    /**
-     * Compatibility shim for the one schema property that declares
-     * `"type": "string"` while listing a JSON `null` among its `enum` members
-     * (`transcoding.preferred_accelerator`'s "auto-detect" sentinel).
-     *
-     * The admin SPA renders that option's value through `String(v)`, so it
-     * submits the four-character string `"null"`. Without this shim, turning on
-     * real `enum` enforcement would start rejecting the UI's own "Auto-detect"
-     * choice with a 400.
-     *
-     * This is deliberately a narrow, self-deleting workaround: the correct fix
-     * is in `detain/phlix-shared`, replacing the `null` enum member with an
-     * explicit `"auto"` sentinel (and rekeying `enumLabels`/`optionHelp`/
-     * `default`). Once that lands and is re-vendored, no property will contain
-     * a `null` enum member and this method becomes a no-op.
-     *
-     * @param \stdClass $def A property sub-schema, mutated in place.
-     */
-    private static function applyNullEnumSentinelShim(\stdClass $def): void
-    {
-        $enum = $def->enum ?? null;
-        if (!is_array($enum) || !in_array(null, $enum, true)) {
-            return;
-        }
-
-        if (!in_array('null', $enum, true)) {
-            $enum[] = 'null';
-            $def->enum = $enum;
-        }
     }
 
     /**

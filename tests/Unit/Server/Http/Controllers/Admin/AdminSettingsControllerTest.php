@@ -40,12 +40,44 @@ final class AdminSettingsControllerTest extends TestCase
         // detain/phlix-shared's server-settings.schema.json). A mismatch means
         // the vendored schema is missing, drifted, or mistranslated — all of
         // which would silently change GET/PUT behaviour, so this test fails
-        // loudly instead. Update it deliberately when the shared schema grows:
-        // the `lastfm.*` trio arrived with phlix-shared v0.21.0.
+        // loudly instead.
+        //
+        // This list is DELIBERATELY hand-written rather than derived from the
+        // vendored schema: deriving it would make the assertion vacuous and
+        // let an unreviewed schema key addition (or deletion) land silently.
+        // Update it deliberately, in the same commit as the re-vendor.
+        //
+        // phlix-shared v0.24.0 cut this from 53 keys to 40, deleting every key
+        // that resolved to no config path and had no runtime consumer — the
+        // `trakt.*` trio, the `subsystem.*`/`database.*`/`hls.*` families, the
+        // duplicated `transcoding.*` tunables (the surviving ones live under
+        // `ffmpeg.*` / `server.hls.*` / `process.*`), and the unimplemented
+        // `metadata.preferred_*`/`fanart_api_key` and `auth.*` extras.
         $expected = [
+            // Hardware acceleration.
             'hwaccel.enabled'                           => 'bool',
             'hwaccel.prefer_hardware'                   => 'bool',
             'hwaccel.probe_timeout'                     => 'int',
+
+            // Transcoding behaviour. `preferred_accelerator`'s "auto-detect"
+            // option is the EMPTY-STRING enum member (v0.24.0 replaced the old
+            // JSON `null` member, which needed a controller-side shim).
+            'transcoding.preferred_accelerator'         => 'string',
+            'transcoding.include_software_fallback'     => 'bool',
+            'transcoding.tone_mapping_mode'             => 'string',
+            'transcoding.prefer_hdr_output'             => 'bool',
+
+            // FFmpeg process limits (config/ffmpeg.php).
+            'ffmpeg.max_concurrent_transcodes'          => 'int',
+            'ffmpeg.transcode_timeout'                  => 'int',
+            'ffmpeg.max_concurrent_scan_probes'         => 'int',
+
+            // HLS segment cache + segmenter (config/server.php `hls` block).
+            'server.hls.cache_max_age'                  => 'int',
+            'server.hls.cache_max_bytes'                => 'int',
+            'server.hls.segment_seconds'                => 'int',
+            'server.hls.max_concurrent_segments'        => 'int',
+
             'tmdb.api_key'                              => 'string',
             'auth.signup_mode'                          => 'string',
             'marker_detection.similarity_threshold'     => 'float',
@@ -59,64 +91,33 @@ final class AdminSettingsControllerTest extends TestCase
             'newsletter.enabled'                        => 'bool',
             'newsletter.send_hour'                      => 'int',
             'port-forward.port_forwarding.upnp_enabled' => 'bool',
-            'trakt.client_id'                           => 'string',
-            'trakt.client_secret'                       => 'string',
-            'trakt.redirect_uri'                        => 'string',
+
+            // phlix-shared v0.21.0: Last.fm scrobbling credentials.
+            'lastfm.api_key'                            => 'string',
+            'lastfm.shared_secret'                      => 'string',
+            'lastfm.enabled'                            => 'bool',
+
             // Step 13.3: array-typed noise-suffix list → internal `json`.
             'matching.noise_suffixes'                   => 'json',
             // Step 3.3: object-typed per-type priority map → internal `json`;
             // string-typed genres mode → `string`.
             'metadata.provider_priority'                => 'json',
             'metadata.genres_mode'                      => 'string',
-            // phlix-shared v0.21.0: Last.fm scrobbling credentials.
-            'lastfm.api_key'                            => 'string',
-            'lastfm.shared_secret'                      => 'string',
-            'lastfm.enabled'                            => 'bool',
 
-            // Phase 2A: transcoding keys (7).
-            'transcoding.preferred_accelerator'          => 'string',
-            'transcoding.include_software_fallback'      => 'bool',
-            'transcoding.tone_mapping_mode'              => 'string',
-            'transcoding.prefer_hdr_output'              => 'bool',
-            'transcoding.max_concurrent_transcodes'      => 'int',
-            'transcoding.transcode_timeout'              => 'int',
-            'transcoding.max_concurrent_scan_probes'     => 'int',
-
-            // Phase 2B: metadata keys (3).
-            'metadata.preferred_language'                => 'string',
-            'metadata.preferred_country'                 => 'string',
-            'metadata.fanart_api_key'                    => 'string',
-
-            // Phase 2C: infra keys (6).
-            'database.pool_size'                         => 'int',
-            'database.timeout'                           => 'int',
-            'relay.reconnect_delay'                      => 'int',
+            'relay.reconnect_delay'                     => 'int',
             'relay.ping_interval'                       => 'int',
-            'hls.segment_seconds'                       => 'int',
-            'hls.max_concurrent_segments'               => 'int',
 
-            // Phase 3: tunables (4).
-            'transcoding.segment_max_inflight_global'    => 'int',
-            'transcoding.segment_cache_max_age'          => 'int',
-            'transcoding.segment_cache_max_bytes'        => 'int',
-            'transcoding.stale_job_max_age'              => 'int',
-
-            // Phase 4: subsystem keys (5).
-            'subsystem.library_scan_enabled'             => 'bool',
-            'subsystem.plugin_auto_update_enabled'      => 'bool',
-            'subsystem.marker_detection_enabled'        => 'bool',
-            'subsystem.media_asset_jobs_enabled'         => 'bool',
-            'subsystem.similarity_enabled'               => 'bool',
-
-            // Phase 5: auth keys (3).
-            'auth.enabled'                              => 'bool',
-            'auth.rate_limit'                           => 'int',
-            'auth.session_lifetime'                     => 'int',
+            // Managed-worker toggles (config/process.php).
+            'process.library-scan.enabled'              => 'bool',
+            'process.plugin-auto-update.enabled'        => 'bool',
+            'process.marker-detection.enabled'          => 'bool',
+            'process.media-asset.enabled'               => 'bool',
+            'process.similarity.enabled'                => 'bool',
         ];
 
         $actual = AdminSettingsController::allowedKeys();
 
-        $this->assertCount(53, $actual);
+        $this->assertCount(40, $actual);
         $this->assertEquals($expected, $actual);
     }
 
@@ -189,8 +190,15 @@ final class AdminSettingsControllerTest extends TestCase
 
         $this->assertNotEmpty($meta, 'schemaMeta() must not be empty when schema is present');
         $this->assertArrayHasKey('hwaccel.enabled', $meta);
-        $this->assertArrayHasKey('trakt.client_secret', $meta);
+        $this->assertArrayHasKey('tmdb.api_key', $meta);
         $this->assertArrayHasKey('lastfm.shared_secret', $meta);
+
+        // schemaMeta() covers EVERY declared property, not just the typed ones
+        // that reach allowedKeys().
+        $this->assertCount(40, $meta);
+        foreach (array_keys(AdminSettingsController::allowedKeys()) as $key) {
+            $this->assertArrayHasKey($key, $meta, sprintf('%s must carry a meta block', $key));
+        }
     }
 
     public function testSchemaMetaHwaccelEnabledHasRequiredMetaFields(): void
@@ -211,20 +219,34 @@ final class AdminSettingsControllerTest extends TestCase
         $this->assertNull($hwaccel['optionHelp']);
         $this->assertNull($hwaccel['minimum']);
         $this->assertNull($hwaccel['maximum']);
-        $this->assertNull($hwaccel['default']);
+        // phlix-shared v0.24.0 gave this key an explicit schema `default`; it
+        // must be projected through verbatim, not flattened to null.
+        $this->assertTrue($hwaccel['default']);
         $this->assertFalse($hwaccel['secret']);
         $this->assertTrue($hwaccel['restart']);
     }
 
-    public function testSchemaMetaTraktClientSecretHasSecretFlag(): void
+    public function testSchemaMetaTmdbApiKeyHasSecretFlag(): void
     {
-        // trakt.client_secret has secret:true in the schema.
+        // tmdb.api_key has secret:true in the schema.
         $meta = AdminSettingsController::schemaMeta();
-        $trakt = $meta['trakt.client_secret'];
+        $tmdb = $meta['tmdb.api_key'];
 
-        $this->assertTrue($trakt['secret']);
-        $this->assertFalse($trakt['restart']);
-        $this->assertSame('scrobblers', $trakt['group']);
+        $this->assertTrue($tmdb['secret']);
+        $this->assertFalse($tmdb['restart']);
+        $this->assertSame('metadata', $tmdb['group']);
+    }
+
+    public function testSchemaMetaSecretKeysAreExactlyTheExpectedTrio(): void
+    {
+        // Lock-in: which keys are secret drives masking on BOTH GET and PUT, so
+        // a key silently losing `"secret": true` in a re-vendor would start
+        // shipping a credential to the browser in plaintext. Assert the exact
+        // set rather than merely "at least one".
+        $this->assertSame(
+            ['tmdb.api_key', 'lastfm.api_key', 'lastfm.shared_secret'],
+            $this->secretKeys(),
+        );
     }
 
     public function testSchemaMetaLastfmSharedSecretHasSecretFlag(): void
@@ -267,11 +289,13 @@ final class AdminSettingsControllerTest extends TestCase
         $secretKeys = $this->secretKeys();
 
         // Give every secret key a distinctive, greppable plaintext value.
+        // (`tmdb.api_key` used to be excluded here as "not flagged secret yet";
+        // it carries `"secret": true` in the schema, so it is covered like the
+        // rest — no key gets a free pass.)
         $values = [];
         foreach ($secretKeys as $i => $key) {
             $values[$key] = sprintf('SUPER-SECRET-VALUE-%d-%s', $i, md5($key));
         }
-        $values['tmdb.api_key'] = 'not-flagged-secret-yet';
 
         $repo = $this->createMock(SettingsRepository::class);
         $repo->method('getEffectiveMany')->willReturn([
@@ -337,16 +361,17 @@ final class AdminSettingsControllerTest extends TestCase
     {
         // The mask-overwrite bug: without this guard, the FIRST Save on the
         // settings page replaces every stored secret with the literal '***'.
+        // Driven off secretKeys() so a newly-flagged secret is covered without
+        // touching this test.
+        $secretKeys = $this->secretKeys();
+
         $repo = $this->createMock(SettingsRepository::class);
         $repo->expects($this->never())->method('set');
         $repo->method('getEffectiveMany')->willReturn(['values' => [], 'overridden' => []]);
 
         $controller = new AdminSettingsController($repo);
         $response = $controller->update(
-            $this->makeRequest(['settings' => [
-                'trakt.client_secret'  => SettingsMasker::MASK,
-                'lastfm.shared_secret' => SettingsMasker::MASK,
-            ]]),
+            $this->makeRequest(['settings' => array_fill_keys($secretKeys, SettingsMasker::MASK)]),
             [],
         );
 
@@ -354,6 +379,8 @@ final class AdminSettingsControllerTest extends TestCase
         /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertTrue($body['success']);
+        // The sentinel must never be persisted AS a value, either.
+        $this->assertStringNotContainsString('"' . SettingsMasker::MASK . '"', json_encode($body['data'] ?? []) ?: '');
     }
 
     public function testUpdatePersistsAGenuinelyChangedSecret(): void
@@ -361,44 +388,80 @@ final class AdminSettingsControllerTest extends TestCase
         $repo = $this->createMock(SettingsRepository::class);
         $repo->expects($this->once())
             ->method('set')
-            ->with('trakt.client_secret', 'brand-new-secret', 'string');
-        $repo->method('getEffectiveMany')->willReturn(['values' => [], 'overridden' => []]);
+            ->with('lastfm.shared_secret', 'brand-new-secret', 'string');
+        // The store now reports the new value as effective — the PUT response
+        // must still mask it on the way back out.
+        $repo->method('getEffectiveMany')->willReturn([
+            'values'     => ['lastfm.shared_secret' => 'brand-new-secret'],
+            'overridden' => ['lastfm.shared_secret'],
+        ]);
 
         $controller = new AdminSettingsController($repo);
         $response = $controller->update(
-            $this->makeRequest(['settings' => ['trakt.client_secret' => 'brand-new-secret']]),
+            $this->makeRequest(['settings' => ['lastfm.shared_secret' => 'brand-new-secret']]),
             [],
         );
 
         $this->assertSame(200, $response->statusCode);
+        $this->assertStringNotContainsString(
+            'brand-new-secret',
+            $response->body,
+            'A freshly-saved secret must not be echoed back in the PUT response',
+        );
+        /** @var array{data: array{settings: array<string, mixed>}} $body */
+        $body = json_decode($response->body, true);
+        $this->assertSame(SettingsMasker::MASK, $body['data']['settings']['lastfm.shared_secret']);
     }
 
     public function testUpdateSkipsOnlyTheMaskedSecretAndStillPersistsSiblings(): void
     {
+        $written = [];
+
         $repo = $this->createMock(SettingsRepository::class);
-        $repo->expects($this->once())
-            ->method('set')
-            ->with('trakt.client_id', 'client-abc', 'string');
+        $repo->method('set')->willReturnCallback(
+            function (string $key, mixed $value, string $type) use (&$written): void {
+                $written[$key] = [$value, $type];
+            },
+        );
         $repo->method('getEffectiveMany')->willReturn(['values' => [], 'overridden' => []]);
 
         $controller = new AdminSettingsController($repo);
         $response = $controller->update(
             $this->makeRequest(['settings' => [
-                'trakt.client_secret' => SettingsMasker::MASK,
-                'trakt.client_id'     => 'client-abc',
+                // Untouched by the admin → must NOT be written.
+                'lastfm.shared_secret' => SettingsMasker::MASK,
+                // A genuinely edited secret sibling → must be written.
+                'lastfm.api_key'       => 'brand-new-api-key',
+                // A non-secret sibling → must be written.
+                'lastfm.enabled'       => true,
             ]]),
             [],
         );
 
         $this->assertSame(200, $response->statusCode);
+        $this->assertArrayNotHasKey(
+            'lastfm.shared_secret',
+            $written,
+            'The masked secret must not be overwritten with the sentinel',
+        );
+        $this->assertSame(['brand-new-api-key', 'string'], $written['lastfm.api_key']);
+        $this->assertSame([true, 'bool'], $written['lastfm.enabled']);
+        $this->assertCount(2, $written);
     }
 
     public function testUpdateResponseAlsoMasksSecrets(): void
     {
+        $secretKeys = $this->secretKeys();
+
+        $values = [];
+        foreach ($secretKeys as $i => $key) {
+            $values[$key] = sprintf('LEAKY-VALUE-%d-%s', $i, md5($key));
+        }
+
         $repo = $this->createMock(SettingsRepository::class);
         $repo->method('getEffectiveMany')->willReturn([
-            'values'     => ['trakt.client_secret' => 'LEAKY-VALUE'],
-            'overridden' => ['trakt.client_secret'],
+            'values'     => $values,
+            'overridden' => $secretKeys,
         ]);
 
         $controller = new AdminSettingsController($repo);
@@ -408,7 +471,22 @@ final class AdminSettingsControllerTest extends TestCase
         );
 
         $this->assertSame(200, $response->statusCode);
-        $this->assertStringNotContainsString('LEAKY-VALUE', $response->body);
+
+        /** @var array{data: array{settings: array<string, mixed>}} $body */
+        $body = json_decode($response->body, true);
+
+        foreach ($values as $key => $plaintext) {
+            $this->assertStringNotContainsString(
+                $plaintext,
+                $response->body,
+                sprintf('Secret %s leaked into the PUT response body', $key),
+            );
+            $this->assertSame(
+                SettingsMasker::MASK,
+                $body['data']['settings'][$key],
+                sprintf('Secret %s must be replaced by the mask sentinel', $key),
+            );
+        }
     }
 
     // ---------------------------------------------------------------------
@@ -457,17 +535,42 @@ final class AdminSettingsControllerTest extends TestCase
         $repo->expects($this->never())->method('set');
 
         $controller = new AdminSettingsController($repo);
-        // transcoding.max_concurrent_transcodes declares minimum 1.
+        // ffmpeg.max_concurrent_transcodes declares minimum 1.
         $response = $controller->update(
-            $this->makeRequest(['settings' => ['transcoding.max_concurrent_transcodes' => 0]]),
+            $this->makeRequest(['settings' => ['ffmpeg.max_concurrent_transcodes' => 0]]),
             [],
         );
 
         $this->assertSame(400, $response->statusCode);
         /** @var array{errors: array<string, string>} $body */
         $body = json_decode($response->body, true);
-        $this->assertArrayHasKey('transcoding.max_concurrent_transcodes', $body['errors']);
-        $this->assertStringContainsString('minimum', $body['errors']['transcoding.max_concurrent_transcodes']);
+        $this->assertArrayHasKey('ffmpeg.max_concurrent_transcodes', $body['errors']);
+        $this->assertStringContainsString('minimum', $body['errors']['ffmpeg.max_concurrent_transcodes']);
+    }
+
+    public function testUpdateAcceptsBothEndsOfAnIntegerRange(): void
+    {
+        // The bound is inclusive on both ends — a rejection test alone would
+        // also pass against an off-by-one that rejects the legal extremes.
+        foreach ([1, 64] as $value) {
+            $repo = $this->createMock(SettingsRepository::class);
+            $repo->expects($this->once())
+                ->method('set')
+                ->with('ffmpeg.max_concurrent_transcodes', $value, 'int');
+            $repo->method('getEffectiveMany')->willReturn(['values' => [], 'overridden' => []]);
+
+            $controller = new AdminSettingsController($repo);
+            $response = $controller->update(
+                $this->makeRequest(['settings' => ['ffmpeg.max_concurrent_transcodes' => $value]]),
+                [],
+            );
+
+            $this->assertSame(
+                200,
+                $response->statusCode,
+                sprintf('ffmpeg.max_concurrent_transcodes=%d is within bounds and must be accepted', $value),
+            );
+        }
     }
 
     public function testUpdateRejectsAValueAboveItsMaximum(): void
@@ -476,16 +579,16 @@ final class AdminSettingsControllerTest extends TestCase
         $repo->expects($this->never())->method('set');
 
         $controller = new AdminSettingsController($repo);
-        // transcoding.max_concurrent_transcodes declares maximum 64.
+        // ffmpeg.max_concurrent_transcodes declares maximum 64.
         $response = $controller->update(
-            $this->makeRequest(['settings' => ['transcoding.max_concurrent_transcodes' => 999999]]),
+            $this->makeRequest(['settings' => ['ffmpeg.max_concurrent_transcodes' => 999999]]),
             [],
         );
 
         $this->assertSame(400, $response->statusCode);
         /** @var array{errors: array<string, string>} $body */
         $body = json_decode($response->body, true);
-        $this->assertStringContainsString('maximum', $body['errors']['transcoding.max_concurrent_transcodes']);
+        $this->assertStringContainsString('maximum', $body['errors']['ffmpeg.max_concurrent_transcodes']);
     }
 
     public function testUpdateRejectsAFloatOutsideItsBounds(): void
@@ -501,18 +604,44 @@ final class AdminSettingsControllerTest extends TestCase
         );
 
         $this->assertSame(400, $response->statusCode);
+        /** @var array{errors: array<string, string>} $body */
+        $body = json_decode($response->body, true);
+        $this->assertArrayHasKey('marker_detection.similarity_threshold', $body['errors']);
+        $this->assertStringContainsString(
+            'maximum',
+            $body['errors']['marker_detection.similarity_threshold'],
+        );
     }
 
     public function testUpdateStillAcceptsTheAutoDetectAcceleratorSentinel(): void
     {
-        // The schema's "auto-detect" option is a JSON `null` enum member, but
-        // the SPA transports it as the string "null". Enum enforcement must not
-        // break the UI's own option; see applyNullEnumSentinelShim().
+        // phlix-shared v0.24.0 replaced the old JSON `null` "auto-detect" enum
+        // member with an explicit EMPTY-STRING sentinel, which retired the
+        // controller-side `applyNullEnumSentinelShim()` that used to translate
+        // the SPA's `String(null)` → "null". The '' sentinel must round-trip
+        // through PUT and be persisted verbatim.
         $repo = $this->createMock(SettingsRepository::class);
         $repo->expects($this->once())
             ->method('set')
-            ->with('transcoding.preferred_accelerator', 'null', 'string');
+            ->with('transcoding.preferred_accelerator', '', 'string');
         $repo->method('getEffectiveMany')->willReturn(['values' => [], 'overridden' => []]);
+
+        $controller = new AdminSettingsController($repo);
+        $response = $controller->update(
+            $this->makeRequest(['settings' => ['transcoding.preferred_accelerator' => '']]),
+            [],
+        );
+
+        $this->assertSame(200, $response->statusCode);
+    }
+
+    public function testUpdateRejectsTheRetiredNullStringAcceleratorSentinel(): void
+    {
+        // Regression guard for the removed shim: "null" is NOT an enum member
+        // and must now be rejected. If this starts passing, the shim (or an
+        // equivalent) has been reintroduced.
+        $repo = $this->createMock(SettingsRepository::class);
+        $repo->expects($this->never())->method('set');
 
         $controller = new AdminSettingsController($repo);
         $response = $controller->update(
@@ -520,7 +649,72 @@ final class AdminSettingsControllerTest extends TestCase
             [],
         );
 
-        $this->assertSame(200, $response->statusCode);
+        $this->assertSame(400, $response->statusCode);
+        /** @var array{errors: array<string, string>} $body */
+        $body = json_decode($response->body, true);
+        $this->assertStringContainsString(
+            'enumeration',
+            $body['errors']['transcoding.preferred_accelerator'],
+        );
+    }
+
+    public function testUpdateAcceleratorEnumMatchesTheCorrectedFfmpegHwaccelNames(): void
+    {
+        // v0.24.0 also corrected the enum for accuracy: 'nvenc' is an FFmpeg
+        // ENCODER, not an hwaccel, and 'v4l2' was renamed 'v4l2m2m'. Lock both
+        // in so a future edit cannot quietly re-admit an invalid hwaccel name.
+        $enum = AdminSettingsController::schemaMeta()['transcoding.preferred_accelerator']['enum'];
+
+        $this->assertSame(
+            ['', 'cuda', 'qsv', 'vaapi', 'videotoolbox', 'amf', 'opencl', 'd3d11va', 'dxva2', 'v4l2m2m'],
+            $enum,
+        );
+        $this->assertNotContains('nvenc', $enum, 'nvenc is an encoder, not an hwaccel');
+        $this->assertNotContains('v4l2', $enum, "v4l2 was corrected to 'v4l2m2m'");
+
+        // And the enforcement actually rejects the removed members.
+        foreach (['nvenc', 'v4l2'] as $retired) {
+            $repo = $this->createMock(SettingsRepository::class);
+            $repo->expects($this->never())->method('set');
+
+            $controller = new AdminSettingsController($repo);
+            $response = $controller->update(
+                $this->makeRequest(['settings' => ['transcoding.preferred_accelerator' => $retired]]),
+                [],
+            );
+
+            $this->assertSame(
+                400,
+                $response->statusCode,
+                sprintf('%s is not a valid hwaccel and must be rejected', $retired),
+            );
+        }
+    }
+
+    public function testUpdateAcceptsEveryDeclaredAcceleratorEnumMember(): void
+    {
+        /** @var list<string> $enum */
+        $enum = AdminSettingsController::schemaMeta()['transcoding.preferred_accelerator']['enum'];
+
+        foreach ($enum as $member) {
+            $repo = $this->createMock(SettingsRepository::class);
+            $repo->expects($this->once())
+                ->method('set')
+                ->with('transcoding.preferred_accelerator', $member, 'string');
+            $repo->method('getEffectiveMany')->willReturn(['values' => [], 'overridden' => []]);
+
+            $controller = new AdminSettingsController($repo);
+            $response = $controller->update(
+                $this->makeRequest(['settings' => ['transcoding.preferred_accelerator' => $member]]),
+                [],
+            );
+
+            $this->assertSame(
+                200,
+                $response->statusCode,
+                sprintf('accelerator=%s is a declared enum member and must be accepted', var_export($member, true)),
+            );
+        }
     }
 
     public function testIndexReturns500OnRepositoryError(): void

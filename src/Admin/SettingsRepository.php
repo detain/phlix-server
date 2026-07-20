@@ -212,9 +212,10 @@ class SettingsRepository
      * Does a dotted key address a config path that actually EXISTS?
      *
      * Distinguishes "the config declares this key and its value happens to be
-     * null" (true — e.g. `transcoding.preferred_accelerator`, whose null means
-     * "auto-detect") from "no config file or path of that name exists" (false),
-     * which {@see getDefault()} cannot express because both return `null`.
+     * null/empty" (true — e.g. `transcoding.preferred_accelerator`, whose `''`
+     * means "auto-detect") from "no config file or path of that name exists"
+     * (false), which {@see getDefault()} cannot express because a declared-null
+     * default and a missing path both return `null`.
      *
      * That distinction is what makes it possible to assert that every schema
      * key is backed by a real default; see

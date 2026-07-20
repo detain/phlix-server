@@ -10,12 +10,22 @@ return [
     /**
      * Preferred hardware accelerator to use for transcoding.
      *
-     * Set to null to auto-select based on availability and priority order.
-     * Supported values: 'cuda', 'qsv', 'vaapi', 'videotoolbox', 'amf', 'opencl'
+     * Set to the empty string '' (the default) to auto-select based on
+     * availability and priority order. '' is also the "auto-detect" sentinel
+     * declared by the shared `server-settings.schema.json` for
+     * `transcoding.preferred_accelerator`, so the effective value returned by
+     * GET /api/v1/admin/settings matches an enum member and the admin SPA's
+     * select renders it as selected rather than blank.
+     *
+     * Supported values: '' (auto-detect), 'cuda', 'qsv', 'vaapi',
+     * 'videotoolbox', 'amf', 'opencl', 'd3d11va', 'dxva2', 'v4l2m2m'.
+     *
+     * Note these are FFmpeg *hwaccel* names, not encoder names — 'nvenc' is an
+     * encoder and is deliberately not accepted here.
      *
      * Example env: PREFERRED_ACCELERATOR=cuda
      */
-    'preferred_accelerator' => getenv('PREFERRED_ACCELERATOR') ?: null,
+    'preferred_accelerator' => getenv('PREFERRED_ACCELERATOR') ?: '',
 
     /**
      * Timeout for hardware accelerator probing in seconds.

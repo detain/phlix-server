@@ -18,9 +18,10 @@ use Workerman\MySQL\Connection;
  * `getDefault()` returns null because the key's dotted prefix names a config
  * file (or a path inside one) that does not exist, the setting is a *fake*: it
  * renders in the admin UI, accepts a PUT, and reports `null` as its value
- * forever. An audit found 25 of the 53 vendored keys in exactly that state,
- * all from wrong config-file prefixes. This test catches that entire class of
- * defect in one assertion, against the REAL `config/` directory.
+ * forever. An audit found 25 of the then-53 vendored keys in exactly that
+ * state, all from wrong config-file prefixes; phlix-shared v0.24.0 removed
+ * them, leaving 40 keys that all resolve. This test catches that entire class
+ * of defect in one assertion, against the REAL `config/` directory.
  *
  * It deliberately does NOT mock the config dir — the point is to check the
  * schema against the files actually shipped.
@@ -30,59 +31,22 @@ use Workerman\MySQL\Connection;
 final class SettingsDefaultResolvabilityTest extends TestCase
 {
     /**
-     * Keys KNOWN to be unresolvable against the currently-vendored
-     * `detain/phlix-shared` schema, pending the in-flight schema key rename +
-     * re-vendor in that repo.
+     * Every key the vendored schema declares must resolve to a real config
+     * default — no quarantine, no exceptions.
      *
-     * ---------------------------------------------------------------------
-     * TODO(phlix-shared re-vendor): DELETE THIS CONSTANT ENTIRELY.
+     * This assertion ran quarantined behind a `PENDING_SHARED_REVENDOR` list of
+     * 25 unresolvable keys while `detain/phlix-shared` still declared settings
+     * whose dotted prefix named a config file that does not exist. That
+     * re-vendor landed in phlix-shared v0.24.0 (the schema dropped from 53 keys
+     * to 40, removing every key with no resolvable config path and no runtime
+     * consumer), so the quarantine constant and its companion staleness test
+     * were deleted and this assertion now runs for real against all 40 keys.
      *
-     * This list is a temporary quarantine, not an accepted state. Every entry
-     * is a setting that is live in the admin UI today and does nothing. The
-     * fix lands in `detain/phlix-shared` (rename each key so its prefix names
-     * a config file that exists, or delete the key), followed by
-     * `composer update detain/phlix-shared` here. When that re-vendor happens,
-     * empty this array — the test then runs its assertion for real.
-     *
-     * Note the nuance for the `trakt.*` trio: `config/scrobblers/trakt.php`
-     * DOES exist and `SettingsRepository::getDefault()` now resolves nested
-     * config paths, so those keys resolve as soon as the schema renames them
-     * to `scrobblers.trakt.*`. No server-side change is needed for them.
-     *
-     * A key NOT in this list that fails to resolve is a genuine regression and
-     * fails the test — the quarantine never grows silently.
-     * ---------------------------------------------------------------------
-     *
-     * @var list<string>
+     * Do NOT re-introduce a quarantine list here. A key that fails to resolve
+     * is a live setting that renders in the admin UI, accepts a PUT, and
+     * reports `null` forever — fix the config default or remove the key from
+     * the shared schema instead.
      */
-    private const PENDING_SHARED_REVENDOR = [
-        'auth.enabled',
-        'auth.rate_limit',
-        'auth.session_lifetime',
-        'database.pool_size',
-        'database.timeout',
-        'hls.max_concurrent_segments',
-        'hls.segment_seconds',
-        'metadata.fanart_api_key',
-        'metadata.preferred_country',
-        'metadata.preferred_language',
-        'subsystem.library_scan_enabled',
-        'subsystem.marker_detection_enabled',
-        'subsystem.media_asset_jobs_enabled',
-        'subsystem.plugin_auto_update_enabled',
-        'subsystem.similarity_enabled',
-        'trakt.client_id',
-        'trakt.client_secret',
-        'trakt.redirect_uri',
-        'transcoding.max_concurrent_scan_probes',
-        'transcoding.max_concurrent_transcodes',
-        'transcoding.segment_cache_max_age',
-        'transcoding.segment_cache_max_bytes',
-        'transcoding.segment_max_inflight_global',
-        'transcoding.stale_job_max_age',
-        'transcoding.transcode_timeout',
-    ];
-
     public function testEverySchemaKeyResolvesToAConfigDefault(): void
     {
         $repo = $this->repositoryOverRealConfigDir();
@@ -95,55 +59,63 @@ final class SettingsDefaultResolvabilityTest extends TestCase
         }
         sort($unresolvable);
 
-        // Any NEW unresolvable key is a hard failure — the quarantine below
-        // covers only the keys the pending phlix-shared re-vendor will fix.
-        $regressions = array_values(array_diff($unresolvable, self::PENDING_SHARED_REVENDOR));
         self::assertSame(
             [],
-            $regressions,
+            $unresolvable,
             "These schema keys resolve to a NULL default — they render in the admin UI and do nothing.\n"
-            . "Add the missing config/*.php default, or fix the key's config-file prefix in phlix-shared:\n  - "
-            . implode("\n  - ", $regressions),
+            . "Add the missing config/*.php default, or remove the key from phlix-shared:\n  - "
+            . implode("\n  - ", $unresolvable),
         );
-
-        if ($unresolvable !== []) {
-            self::markTestSkipped(sprintf(
-                'PENDING phlix-shared re-vendor: %d of %d schema keys still resolve to a null default '
-                . '(%s). These are quarantined in self::PENDING_SHARED_REVENDOR; delete that constant '
-                . 'after `composer update detain/phlix-shared` picks up the schema key renames, then '
-                . 'this assertion runs for real.',
-                count($unresolvable),
-                count($this->schemaKeys()),
-                implode(', ', $unresolvable),
-            ));
-        }
-
-        // Reached only once the vendored schema is clean.
-        self::assertSame([], $unresolvable);
     }
 
     /**
-     * A stale quarantine entry is itself a defect: once a key starts resolving
-     * it must be removed from the list, or the list silently stops meaning
-     * anything.
+     * A resolvable default is not enough — an `enum`-constrained key's config
+     * default must actually BE one of its declared members.
+     *
+     * `config/transcoding.php` shipped `'preferred_accelerator' => ... ?: null`
+     * against a schema whose auto-detect sentinel is the empty string, so GET
+     * returned `null`, the SPA's select matched no option and rendered blank,
+     * and a plain Save then round-tripped a value the PUT validator rejects.
+     * This assertion covers that whole class, not just the one key.
      */
-    public function testQuarantineListContainsNoAlreadyFixedKeys(): void
+    public function testEnumConstrainedKeysHaveADefaultThatIsADeclaredMember(): void
     {
         $repo = $this->repositoryOverRealConfigDir();
 
-        $fixed = [];
-        foreach (self::PENDING_SHARED_REVENDOR as $key) {
-            if ($repo->hasDefault($key)) {
-                $fixed[] = $key;
+        foreach ($this->schemaProperties() as $key => $def) {
+            if (!isset($def['enum']) || !is_array($def['enum'])) {
+                continue;
             }
-        }
 
-        self::assertSame(
-            [],
-            $fixed,
-            'These keys now resolve — remove them from self::PENDING_SHARED_REVENDOR: '
-            . implode(', ', $fixed),
-        );
+            /** @var mixed $default */
+            $default = $repo->getDefault($key);
+            self::assertContains(
+                $default,
+                $def['enum'],
+                sprintf(
+                    'config default for %s is %s, which is not one of its schema enum members [%s]',
+                    $key,
+                    var_export($default, true),
+                    implode(', ', array_map(
+                        static fn (mixed $m): string => var_export($m, true),
+                        $def['enum'],
+                    )),
+                ),
+            );
+        }
+    }
+
+    /**
+     * The auto-detect sentinel specifically: phlix-shared v0.24.0 swapped the
+     * JSON `null` enum member for `''`, and `config/transcoding.php` must match
+     * it exactly (not `null`, not absent).
+     */
+    public function testPreferredAcceleratorDefaultIsTheEmptyStringSentinel(): void
+    {
+        $repo = $this->repositoryOverRealConfigDir();
+
+        self::assertTrue($repo->hasDefault('transcoding.preferred_accelerator'));
+        self::assertSame('', $repo->getDefault('transcoding.preferred_accelerator'));
     }
 
     /**
@@ -187,6 +159,29 @@ final class SettingsDefaultResolvabilityTest extends TestCase
         $db = (new ReflectionClass(Connection::class))->newInstanceWithoutConstructor();
 
         return new SettingsRepository($db, dirname(__DIR__, 3) . '/config');
+    }
+
+    /**
+     * @return array<string, array<string, mixed>> Every declared property, keyed by dotted key.
+     */
+    private function schemaProperties(): array
+    {
+        $path = SchemaPaths::serverSettings();
+        self::assertFileExists($path, 'Vendored server-settings.schema.json is missing');
+
+        $raw = file_get_contents($path);
+        self::assertIsString($raw);
+
+        $decoded = json_decode($raw, true);
+        self::assertIsArray($decoded);
+        self::assertArrayHasKey('properties', $decoded);
+        self::assertIsArray($decoded['properties']);
+
+        /** @var array<string, array<string, mixed>> $properties */
+        $properties = $decoded['properties'];
+        self::assertNotEmpty($properties, 'Schema declares no properties');
+
+        return $properties;
     }
 
     /**

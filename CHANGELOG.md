@@ -26,8 +26,8 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   use it. Regression tests assert the clamp per endpoint on both paths.
 - **Admin settings API no longer returns secrets in plaintext, and saving no longer wipes them.**
   `GET /api/v1/admin/settings` returned `getEffectiveMany()` raw, so every key flagged
-  `"secret": true` in the shared schema (today `trakt.client_secret`, `lastfm.shared_secret`,
-  `metadata.fanart_api_key`) was shipped to the browser in clear text — present in the XHR body, in
+  `"secret": true` in the shared schema (after the v0.24.0 re-vendor: `tmdb.api_key`,
+  `lastfm.api_key`, `lastfm.shared_secret`) was shipped to the browser in clear text — present in the XHR body, in
   the DOM, and one "Show" click from being displayed, plus whatever proxy logs and HAR captures
   picked up. Secret values are now replaced with the existing `SettingsMasker::MASK` sentinel (the
   same mechanism the plugin settings path already used), and a new `data.secretStatus` map carries
@@ -47,12 +47,45 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   any string, `transcoding.max_concurrent_transcodes` to `0` or `999999`). Coerced values are now
   validated against their own JSON-Schema property sub-schema using `justinrainbow/json-schema`
   (already a dependency, previously unused here), reported through the same `errors{}` map the SPA
-  renders as inline per-field errors. A narrow shim keeps the UI's "Auto-detect" accelerator option
-  (transported as the string `"null"` against a JSON `null` enum member) working until
-  `phlix-shared` replaces that sentinel with `"auto"`.
+  renders as inline per-field errors. The UI's "Auto-detect" accelerator option is the schema's
+  empty-string enum member and validates directly — the narrow shim that briefly translated the
+  SPA's `"null"` string against a JSON `null` enum member was removed once `phlix-shared` v0.24.0
+  swapped that member for `""` (see *Changed* below).
 - **`SettingsRepository::hasDefault()`**, distinguishing "the config declares this key and its value
   is null" from "no such config path exists" — which `getDefault()` cannot express. Backs a new
-  regression test asserting every schema key resolves to a real config default.
+  regression test asserting every schema key resolves to a real config default. That test ran
+  quarantined behind a 25-key `PENDING_SHARED_REVENDOR` list while the schema still declared
+  unresolvable keys; the v0.24.0 re-vendor removed them all, so the constant and its companion
+  staleness test were deleted and the assertion now runs unconditionally over all 40 keys.
+
+### Changed
+
+- **Bumped `detain/phlix-shared` to `^0.24.0`; the server-settings schema went from 53 keys to 40.**
+  The shared repo deleted every key that resolved to no config path and had no runtime consumer —
+  the `trakt.*` trio, the `subsystem.*`, `database.*` and `hls.*` families, the duplicated
+  `transcoding.*` tunables (the surviving equivalents live under `ffmpeg.*`, `server.hls.*` and
+  `process.*`), and the unimplemented `metadata.preferred_*` / `metadata.fanart_api_key` / `auth.*`
+  extras. Those keys rendered in the admin Settings page, accepted a `PUT`, and reported `null`
+  forever; they are now simply absent. The controller derives its allow-list from the schema, so no
+  server-side key list needed editing — but the `assertCount(53)` lock-in test and its explicit
+  dotted-key → internal-type map were updated to the real 40, deliberately kept hand-written so an
+  unreviewed schema addition still fails loudly rather than being auto-derived into a no-op.
+  **Operator-visible consequence:** Trakt operator credentials are no longer settable from the admin
+  Settings page. They remain fully configurable via `config/scrobblers/trakt.php` and the
+  `TRAKT_CLIENT_ID` / `TRAKT_CLIENT_SECRET` / `TRAKT_REDIRECT_URI` environment variables, and
+  `TraktOAuthController` still reads any `trakt.*` rows already stored in `server_settings`, so
+  existing deployments keep working. Restoring the UI path needs the keys re-added to `phlix-shared`
+  as `scrobblers.trakt.*` (that prefix resolves against the real nested config file).
+- **`transcoding.preferred_accelerator`'s "auto-detect" sentinel is now the empty string, not
+  `null`.** `config/transcoding.php` defaulted to `getenv('PREFERRED_ACCELERATOR') ?: null` against a
+  schema whose auto-detect enum member is `""`, so `GET /api/v1/admin/settings` returned `null`, the
+  SPA's `<select>` matched no option and rendered blank, and saving that blank value back failed the
+  new enum enforcement. The config default is now `''`. The consumer in `FfmpegRunner` was already
+  correct (`is_string($x) && $x !== ''`), so no transcoding behaviour changes. The schema's enum was
+  also corrected upstream for accuracy: `nvenc` was dropped (it is an FFmpeg *encoder*, not an
+  hwaccel name) and `v4l2` became `v4l2m2m`; `d3d11va` and `dxva2` were added. A new test asserts
+  every `enum`-constrained key's config default is one of its declared members, which covers this
+  whole class of drift rather than just the one key.
 
 ### Fixed
 

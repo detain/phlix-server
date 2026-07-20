@@ -10,6 +10,99 @@ use Workerman\MySQL\Connection;
 
 class PathDeduperTest extends TestCase
 {
+    /**
+     * The deduper's scope and the `path_hash` generated column's CASE define
+     * the SAME set of rows — the column decides which rows the unique index
+     * constrains, the deduper decides which rows the cleanup will merge. A
+     * type in one but not the other either leaves rows unprotected or trips
+     * the index on a type nothing will clean up.
+     *
+     * This reads the live migration SQL rather than restating the list, so an
+     * edit to either side that forgets the other fails here.
+     */
+    public function testDedupedTypesMatchThePathHashGeneratedColumn(): void
+    {
+        $sql = file_get_contents(__DIR__ . '/../../../../migrations/087_path_hash_include_track_audiobook.sql');
+        $this->assertIsString($sql);
+
+        // The CASE's `type IN (...)` list, ignoring the commented-out prose.
+        $statement = substr($sql, (int) strpos($sql, 'ALTER TABLE media_items'));
+        $matched = preg_match("/type IN \(([^)]*)\)/", $statement, $m);
+        $this->assertSame(1, $matched, 'Could not locate the path_hash type list in migration 087.');
+
+        $migrationTypes = [];
+        foreach (explode(',', $m[1]) as $part) {
+            $migrationTypes[] = trim(trim($part), "'");
+        }
+        sort($migrationTypes);
+
+        $codeTypes = PathDeduper::DEDUPED_TYPES;
+        sort($codeTypes);
+
+        $this->assertSame(
+            $migrationTypes,
+            $codeTypes,
+            'PathDeduper::DEDUPED_TYPES and migration 087\'s path_hash CASE must stay in lockstep.'
+        );
+    }
+
+    public function testFindDuplicateGroupsScopesQueryToTheDedupedTypes(): void
+    {
+        $capturedSql = '';
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(
+            function (string $sql) use (&$capturedSql): array {
+                $capturedSql = $sql;
+                return [];
+            }
+        );
+
+        (new PathDeduper($db))->findDuplicateGroups();
+
+        foreach (PathDeduper::DEDUPED_TYPES as $type) {
+            $this->assertStringContainsString("'" . $type . "'", $capturedSql);
+        }
+
+        // Containers carry synthetic paths that legitimately repeat.
+        $this->assertStringNotContainsString("'series'", $capturedSql);
+        $this->assertStringNotContainsString("'season'", $capturedSql);
+    }
+
+    /**
+     * `track` is the most exposed type of all: MusicLibraryManager persists
+     * tracks via ItemRepository::create(), NOT upsertByPath(), so nothing
+     * dedupes music on the insert path.
+     */
+    public function testFindDuplicateGroupsDetectsDuplicateTracks(): void
+    {
+        $rows = [
+            ['path' => '/m/s.flac', 'library_id' => 'lib-1', 'library_name' => 'Music', 'id' => 't1', 'name' => 'S', 'type' => 'track', 'created_at' => '2026-01-01'],
+            ['path' => '/m/s.flac', 'library_id' => 'lib-1', 'library_name' => 'Music', 'id' => 't2', 'name' => 'S', 'type' => 'track', 'created_at' => '2026-01-02'],
+        ];
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturn($rows);
+
+        $groups = (new PathDeduper($db))->findDuplicateGroups();
+
+        $this->assertCount(1, $groups);
+        $this->assertSame(['t1', 't2'], array_column($groups[0]['items'], 'id'));
+    }
+
+    public function testFindDuplicateGroupsDetectsDuplicateAudiobooks(): void
+    {
+        $rows = [
+            ['path' => '/a/b.m4b', 'library_id' => 'lib-2', 'library_name' => 'Books', 'id' => 'ab1', 'name' => 'B', 'type' => 'audiobook', 'created_at' => '2026-01-01'],
+            ['path' => '/a/b.m4b', 'library_id' => 'lib-2', 'library_name' => 'Books', 'id' => 'ab2', 'name' => 'B', 'type' => 'audiobook', 'created_at' => '2026-01-02'],
+        ];
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturn($rows);
+
+        $groups = (new PathDeduper($db))->findDuplicateGroups();
+
+        $this->assertCount(1, $groups);
+        $this->assertSame(['ab1', 'ab2'], array_column($groups[0]['items'], 'id'));
+    }
+
     public function testFindDuplicateGroupsKeepsOnlyGroupsWithTwoOrMoreItems(): void
     {
         // Two rows share (library_id, path); a third is unique. Only the shared

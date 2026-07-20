@@ -5,7 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] - 2026-07-19
+## [Unreleased] - 2026-07-20
+
+### Added
+
+- **Phase 8 — `AdminRestartController`: `POST /api/v1/admin/restart` sends graceful SIGUSR1 to restart workers.**
+  New admin endpoint triggers a graceful worker restart by sending `SIGUSR1` to the master process via
+  `posix_kill()` (falls back to `SIGTERM` if POSIX is unavailable). The handler returns `200` with a
+  `{"message":"Restarting"}` body immediately after the signal, so the caller receives a response before
+  the workers cycle. `config/server.php` exposes the `pid_file` path (env `PHLIX_PID_FILE`,
+  default `var/server.pid`). Admin-gated via `AdminMiddleware`. Mirrors the `HubRestartController`
+  surface in `detain/phlix-hub` so `@phlix/ui` admin Settings can trigger both restarts.
 
 ### Changed
 
@@ -113,6 +123,26 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   `enum`, `enumLabels`, `optionHelp`, `minimum`, `maximum`, `default`, `secret`, and `restart`. As
   defensive defaults `helpLinks` resolves to `[]` (empty array) and `tier` resolves to `'standard'` when
   not explicitly set in the schema.
+- **Phase 2 — 28 new server settings added to `schemas/server-settings.schema.json` and `config/*.php`.**
+  Schema extended with Phase 2A–2C settings: `transcoding.preferred_accelerator`,
+  `transcoding.include_software_fallback`, `transcoding.tone_mapping_mode`,
+  `transcoding.prefer_hdr_output`, `transcoding.max_concurrent_transcodes`,
+  `transcoding.transcode_timeout`, `transcoding.max_concurrent_scan_probes` (Phase 2A);
+  `metadata.preferred_language`, `metadata.preferred_country`, `metadata.fanart_api_key`
+  (Phase 2B); `database.pool_size`, `database.timeout`, `relay.reconnect_delay`,
+  `relay.ping_interval`, `hls.segment_seconds`, `hls.max_concurrent_segments` (Phase 2C).
+  All keys are optional with defensive defaults in `config/*.php`.
+- **Phase 3 — server tunables added to schema: segment cache limits, stale-job age, global inflight cap.**
+  New keys: `transcoding.segment_max_inflight_global`, `transcoding.segment_cache_max_age`,
+  `transcoding.segment_cache_max_bytes`, `transcoding.stale_job_max_age`.
+- **Phase 4 — subsystem killswitches: scan, plugin auto-update, marker detection, asset jobs, similarity.**
+  New keys: `subsystem.library_scan_enabled`, `subsystem.plugin_auto_update_enabled`,
+  `subsystem.marker_detection_enabled`, `subsystem.media_asset_jobs_enabled`,
+  `subsystem.similarity_enabled` — each a boolean kill-switch to disable heavy background
+  subsystems independently.
+- **Phase 5 — auth settings: enabled flag, rate limit override, session lifetime.**
+  New keys: `auth.enabled`, `auth.rate_limit`, `auth.session_lifetime`. Consumed by
+  `AuthManager` to gate auth surfaces and override per-surface rate limits.
 - **WS-D — media SPA pages are now reachable under `/app` (Smarty retirement pending owner verification).**
   `web-ui/src/main.ts` now registers routes **and** top-bar nav entries for SPA pages that shipped in
   `@phlix/ui` but were previously unreachable on the server: **Books** (`/app/books`, `/app/books/:id`,

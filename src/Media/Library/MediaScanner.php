@@ -137,9 +137,21 @@ class MediaScanner
      * playback duration worth probing during the scan. Image/book/photo types
      * have no duration and are never probed.
      *
+     * `audiobook` belongs here: LibraryManager::scanAudiobookLibrary() scans
+     * audiobook libraries through THIS scanner (`scan($id, $path, 'audiobook')`),
+     * so {@see determineMediaType()} types those files `'audiobook'` and they
+     * were silently skipped for duration despite being long-form audio — the
+     * one type where a missing duration is most visible.
+     *
+     * `track` is deliberately ABSENT. It is never produced here: music
+     * libraries route to MusicLibraryManager/AudioScanner
+     * (see LibraryManager::scanLibrary()), which does its own tag harvesting
+     * and never calls {@see processFile()}. Listing it would be dead config
+     * implying a path that does not exist.
+     *
      * @var array<int, string>
      */
-    private const DURATION_PROBE_TYPES = ['video', 'movie', 'episode', 'audio'];
+    private const DURATION_PROBE_TYPES = ['video', 'movie', 'episode', 'audio', 'audiobook'];
 
     /**
      * S8 default bounded fan-out cap for {@see scanFlat()}'s concurrent
@@ -671,15 +683,23 @@ class MediaScanner
      * entire scanFlat() call) because {@see determineMediaType()} maps every
      * video-content library type to `'movie'` and an episode is always typed
      * `'episode'` — both members of `DURATION_PROBE_TYPES` — while `'audio'`
-     * passes through unchanged (also a member) and `'image'`/`'book'` never
-     * are. So per-file naming does not need to run before deciding whether a
-     * candidate is worth fanning out to the probe pool.
+     * and `'audiobook'` pass through unchanged (also members) and
+     * `'image'`/`'book'` never are. So per-file naming does not need to run
+     * before deciding whether a candidate is worth fanning out to the probe
+     * pool.
+     *
+     * MUST stay in lockstep with `DURATION_PROBE_TYPES`: a type this gate
+     * rejects never reaches the concurrent probe pool, so widening the probe
+     * list alone would leave the new type probed only on the slower
+     * one-at-a-time path.
      *
      * @param string $type Library type passed into {@see scanFlat()}.
      */
     private function isProbeEligibleLibraryType(string $type): bool
     {
-        return $this->isVideoContentLibrary($type) || $type === 'audio';
+        return $this->isVideoContentLibrary($type)
+            || $type === 'audio'
+            || $type === 'audiobook';
     }
 
     /**

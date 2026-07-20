@@ -2505,8 +2505,8 @@ class MediaScannerTest extends TestCase
      * discard the result for ineligible types". Every `DURATION_PROBE_TYPES`
      * member reachable at the scanFlat() library-type level ('video',
      * 'series', 'movie' — all mapped via {@see isVideoContentLibrary()} —
-     * plus 'audio') must gate true; every non-probe-eligible type ('image',
-     * 'book', an unrecognised/empty string) must gate false.
+     * plus 'audio' and 'audiobook') must gate true; every non-probe-eligible
+     * type ('image', 'book', an unrecognised/empty string) must gate false.
      */
     public function testIsProbeEligibleLibraryTypeGatesVideoContentAndAudioTrueEverythingElseFalse(): void
     {
@@ -2515,11 +2515,101 @@ class MediaScannerTest extends TestCase
         $method = new \ReflectionMethod(MediaScanner::class, 'isProbeEligibleLibraryType');
         $method->setAccessible(true);
 
-        foreach (['video', 'series', 'movie', 'audio'] as $type) {
+        foreach (['video', 'series', 'movie', 'audio', 'audiobook'] as $type) {
             $this->assertTrue($method->invoke($scanner, $type), "'{$type}' must be probe-eligible");
         }
         foreach (['image', 'book', 'unknown-type', ''] as $type) {
             $this->assertFalse($method->invoke($scanner, $type), "'{$type}' must NOT be probe-eligible");
+        }
+    }
+
+    /**
+     * The two halves of the probe gate must agree. `isProbeEligibleLibraryType()`
+     * decides whether a library's new files reach the concurrent probe pool at
+     * all, while `DURATION_PROBE_TYPES` decides whether the resulting media type
+     * keeps its duration — so a type accepted by one and rejected by the other
+     * is either probed and discarded, or wanted and never fanned out.
+     *
+     * Checked through {@see MediaScanner::determineMediaType()} so the mapping
+     * from library type to media type is exercised rather than assumed.
+     */
+    public function testProbeGateAndDurationProbeTypesAgreeForEveryLibraryType(): void
+    {
+        $scanner = new MediaScanner($this->createMock(Connection::class), $this->makeFakeRepo());
+
+        $gate = new \ReflectionMethod(MediaScanner::class, 'isProbeEligibleLibraryType');
+        $gate->setAccessible(true);
+        $determine = new \ReflectionMethod(MediaScanner::class, 'determineMediaType');
+        $determine->setAccessible(true);
+
+        /** @var list<string> $probeTypes */
+        $probeTypes = (new \ReflectionClass(MediaScanner::class))->getConstant('DURATION_PROBE_TYPES');
+
+        $file = new \SplFileInfo(__FILE__);
+
+        foreach (['video', 'series', 'movie', 'audio', 'audiobook', 'image', 'book'] as $libraryType) {
+            $mediaType = $determine->invoke($scanner, $file, $libraryType);
+            $this->assertIsString($mediaType);
+
+            $this->assertSame(
+                in_array($mediaType, $probeTypes, true),
+                $gate->invoke($scanner, $libraryType),
+                sprintf(
+                    'Library type "%s" yields media type "%s"; the probe gate and '
+                    . 'DURATION_PROBE_TYPES disagree about whether to probe it.',
+                    $libraryType,
+                    $mediaType
+                )
+            );
+        }
+    }
+
+    /**
+     * Audiobook libraries are scanned by THIS scanner
+     * (LibraryManager::scanAudiobookLibrary() calls
+     * `scan($id, $path, 'audiobook')`), so their files must keep a duration.
+     * They were previously typed `audiobook` and then skipped — long-form
+     * audio with no runtime.
+     */
+    public function testAudiobookLibraryTypeYieldsADurationProbedMediaType(): void
+    {
+        $scanner = new MediaScanner($this->createMock(Connection::class), $this->makeFakeRepo());
+
+        $determine = new \ReflectionMethod(MediaScanner::class, 'determineMediaType');
+        $determine->setAccessible(true);
+
+        /** @var list<string> $probeTypes */
+        $probeTypes = (new \ReflectionClass(MediaScanner::class))->getConstant('DURATION_PROBE_TYPES');
+
+        $mediaType = $determine->invoke($scanner, new \SplFileInfo(__FILE__), 'audiobook');
+
+        $this->assertSame('audiobook', $mediaType);
+        $this->assertContains('audiobook', $probeTypes);
+    }
+
+    /**
+     * `track` must NOT be listed: music libraries route to
+     * MusicLibraryManager/AudioScanner and never reach processFile(), so a
+     * `track` entry would be dead config implying a path that does not exist.
+     */
+    public function testTrackIsNotADurationProbeTypeBecauseThisScannerNeverProducesIt(): void
+    {
+        /** @var list<string> $probeTypes */
+        $probeTypes = (new \ReflectionClass(MediaScanner::class))->getConstant('DURATION_PROBE_TYPES');
+
+        $this->assertNotContains('track', $probeTypes);
+
+        $scanner = new MediaScanner($this->createMock(Connection::class), $this->makeFakeRepo());
+        $determine = new \ReflectionMethod(MediaScanner::class, 'determineMediaType');
+        $determine->setAccessible(true);
+
+        $file = new \SplFileInfo(__FILE__);
+        foreach (['video', 'series', 'movie', 'audio', 'audiobook', 'image', 'book', 'music'] as $libraryType) {
+            $this->assertNotSame(
+                'track',
+                $determine->invoke($scanner, $file, $libraryType),
+                'MediaScanner must never type an item `track`.'
+            );
         }
     }
 

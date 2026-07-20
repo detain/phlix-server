@@ -89,8 +89,8 @@
       "_Icon-Ci10VWtp-7By-4p3O.js"
     ]
   },
-  "_PosterPicker-xgzoRxpy-CjCluVW0.js": {
-    "file": "assets/PosterPicker-xgzoRxpy-CjCluVW0.js",
+  "_PosterPicker-xgzoRxpy-DJZ-Ta-J.js": {
+    "file": "assets/PosterPicker-xgzoRxpy-DJZ-Ta-J.js",
     "name": "PosterPicker-xgzoRxpy",
     "imports": [
       "_pinia-BVT-Qm9z.js",
@@ -292,8 +292,8 @@
       "_runtime-core.esm-bundler-BsKpGOEM.js"
     ]
   },
-  "_useResolvePlayable-wCiMWuME-BtuvgzZD.js": {
-    "file": "assets/useResolvePlayable-wCiMWuME-BtuvgzZD.js",
+  "_useResolvePlayable-wCiMWuME-BKsvfdHC.js": {
+    "file": "assets/useResolvePlayable-wCiMWuME-BKsvfdHC.js",
     "name": "useResolvePlayable-wCiMWuME",
     "imports": [
       "index.html",
@@ -325,7 +325,7 @@
     ]
   },
   "index.html": {
-    "file": "assets/index-BaXvFK0y.js",
+    "file": "assets/index-fD2C0cVx.js",
     "name": "index",
     "src": "index.html",
     "isEntry": true,
@@ -390,7 +390,7 @@
       "node_modules/@phlix/ui/dist/MediaDetailPage-yHgjbP2T.js",
       "node_modules/@phlix/ui/dist/SeasonPage-B6k5epof.js",
       "node_modules/@phlix/ui/dist/LibraryPage-BD-sYY1h.js",
-      "node_modules/@phlix/ui/dist/PlayerPage-C0e0Y9Xo.js",
+      "node_modules/@phlix/ui/dist/PlayerPage-DFXutftR.js",
       "node_modules/@phlix/ui/dist/LoginPage-C_Nxba-_.js",
       "node_modules/@phlix/ui/dist/SignupPage-CfWxjkY3.js",
       "node_modules/@phlix/ui/dist/ConnectPage-DNXEZgsL.js",
@@ -406,7 +406,7 @@
       "node_modules/@phlix/ui/dist/FilterBar-BjCy4XRZ.js"
     ],
     "css": [
-      "assets/index-CVMwaNmN.css"
+      "assets/index-DcJj-RSk.css"
     ],
     "assets": [
       "assets/fraunces-var-latin-DihXLNYH.woff2",
@@ -462,7 +462,7 @@
     ]
   },
   "node_modules/@phlix/ui/dist/BrowsePage-sUGp5kVY.js": {
-    "file": "assets/BrowsePage-sUGp5kVY-DdHkp1fS.js",
+    "file": "assets/BrowsePage-sUGp5kVY-BEAcNT7g.js",
     "name": "BrowsePage-sUGp5kVY",
     "src": "node_modules/@phlix/ui/dist/BrowsePage-sUGp5kVY.js",
     "isDynamicEntry": true,
@@ -480,8 +480,8 @@
       "_Button-AW4z0vv0-Bg1jAvah.js",
       "index.html",
       "node_modules/@phlix/ui/dist/MetadataMatchModal-ColcHcaU.js",
-      "_PosterPicker-xgzoRxpy-CjCluVW0.js",
-      "_useResolvePlayable-wCiMWuME-BtuvgzZD.js"
+      "_PosterPicker-xgzoRxpy-DJZ-Ta-J.js",
+      "_useResolvePlayable-wCiMWuME-BKsvfdHC.js"
     ]
   },
   "node_modules/@phlix/ui/dist/CastDevicesPage-D45qyVRc.js": {
@@ -524,7 +524,7 @@
     ]
   },
   "node_modules/@phlix/ui/dist/CommandPalette-C4Dvyisv.js": {
-    "file": "assets/CommandPalette-C4Dvyisv-CtSguGMa.js",
+    "file": "assets/CommandPalette-C4Dvyisv-CyaLc2Bo.js",
     "name": "CommandPalette-C4Dvyisv",
     "src": "node_modules/@phlix/ui/dist/CommandPalette-C4Dvyisv.js",
     "isDynamicEntry": true,
@@ -541,7 +541,7 @@
     ]
   },
   "node_modules/@phlix/ui/dist/ConnectPage-DNXEZgsL.js": {
-    "file": "assets/ConnectPage-DNXEZgsL-B_-kuHHn.js",
+    "file": "assets/ConnectPage-DNXEZgsL-DTAb_y3z.js",
     "name": "ConnectPage-DNXEZgsL",
     "src": "node_modules/@phlix/ui/dist/ConnectPage-DNXEZgsL.js",
     "isDynamicEntry": true,
@@ -612,7 +612,7 @@
     ]
   },
   "node_modules/@phlix/ui/dist/ExplorePage-B8RpdVQ3.js": {
-    "file": "assets/ExplorePage-B8RpdVQ3-R-fAIflw.js",
+    "file": "assets/ExplorePage-B8RpdVQ3-C-ZNBLiq.js",
     "name": "ExplorePage-B8RpdVQ3",
     "src": "node_modules/@phlix/ui/dist/ExplorePage-B8RpdVQ3.js",
     "isDynamicEntry": true,
@@ -629,11 +629,11 @@
       "_useApi-CROJJdhE-BPV5GGHl.js",
       "_Button-AW4z0vv0-Bg1jAvah.js",
       "index.html",
-      "_useResolvePlayable-wCiMWuME-BtuvgzZD.js"
+      "_useResolvePlayable-wCiMWuME-BKsvfdHC.js"
     ]
   },
   "node_modules/@phlix/ui/dist/FilterBar-BjCy4XRZ.js": {
-    "file": "assets/FilterBar-BjCy4XRZ-C3bjjDOb.js",
+    "file": "assets/FilterBar-BjCy4XRZ-CPux2XUP.js",
     "name": "FilterBar-BjCy4XRZ",
     "src": "node_modules/@phlix/ui/dist/FilterBar-BjCy4XRZ.js",
     "isDynamicEntry": true,
@@ -705,7 +705,7 @@
     ]
   },
   "node_modules/@phlix/ui/dist/LibrariesPage-B0ykzlIy.js": {
-    "file": "assets/LibrariesPage-B0ykzlIy-CxDPqL-Y.js",
+    "file": "assets/LibrariesPage-B0ykzlIy-h89hv4dp.js",
     "name": "LibrariesPage-B0ykzlIy",
     "src": "node_modules/@phlix/ui/dist/LibrariesPage-B0ykzlIy.js",
     "isDynamicEntry": true,
@@ -729,7 +729,7 @@
     ]
   },
   "node_modules/@phlix/ui/dist/LibraryPage-BD-sYY1h.js": {
-    "file": "assets/LibraryPage-BD-sYY1h-xz9LcT4l.js",
+    "file": "assets/LibraryPage-BD-sYY1h-CLNMoHlm.js",
     "name": "LibraryPage-BD-sYY1h",
     "src": "node_modules/@phlix/ui/dist/LibraryPage-BD-sYY1h.js",
     "isDynamicEntry": true,
@@ -747,8 +747,8 @@
       "_Button-AW4z0vv0-Bg1jAvah.js",
       "index.html",
       "node_modules/@phlix/ui/dist/MetadataMatchModal-ColcHcaU.js",
-      "_PosterPicker-xgzoRxpy-CjCluVW0.js",
-      "_useResolvePlayable-wCiMWuME-BtuvgzZD.js",
+      "_PosterPicker-xgzoRxpy-DJZ-Ta-J.js",
+      "_useResolvePlayable-wCiMWuME-BKsvfdHC.js",
       "node_modules/@phlix/ui/dist/FilterBar-BjCy4XRZ.js"
     ]
   },
@@ -776,7 +776,7 @@
     ]
   },
   "node_modules/@phlix/ui/dist/LoginPage-C_Nxba-_.js": {
-    "file": "assets/LoginPage-C_Nxba-_-gpbjpm6I.js",
+    "file": "assets/LoginPage-C_Nxba-_-BE3QDcfb.js",
     "name": "LoginPage-C_Nxba-_",
     "src": "node_modules/@phlix/ui/dist/LoginPage-C_Nxba-_.js",
     "isDynamicEntry": true,
@@ -806,7 +806,7 @@
     ]
   },
   "node_modules/@phlix/ui/dist/MediaDetail-BHHwfs2d.js": {
-    "file": "assets/MediaDetail-BHHwfs2d-Coyg21WV.js",
+    "file": "assets/MediaDetail-BHHwfs2d-CydSuzOe.js",
     "name": "MediaDetail-BHHwfs2d",
     "src": "node_modules/@phlix/ui/dist/MediaDetail-BHHwfs2d.js",
     "isDynamicEntry": true,
@@ -829,7 +829,7 @@
     ]
   },
   "node_modules/@phlix/ui/dist/MediaDetailPage-yHgjbP2T.js": {
-    "file": "assets/MediaDetailPage-yHgjbP2T-VRPv2BzN.js",
+    "file": "assets/MediaDetailPage-yHgjbP2T-Dz3df0uP.js",
     "name": "MediaDetailPage-yHgjbP2T",
     "src": "node_modules/@phlix/ui/dist/MediaDetailPage-yHgjbP2T.js",
     "isDynamicEntry": true,
@@ -850,15 +850,15 @@
       "_Button-AW4z0vv0-Bg1jAvah.js",
       "index.html",
       "node_modules/@phlix/ui/dist/MetadataMatchModal-ColcHcaU.js",
-      "_PosterPicker-xgzoRxpy-CjCluVW0.js",
+      "_PosterPicker-xgzoRxpy-DJZ-Ta-J.js",
       "_episode-order-C2yqgMeX-Cqa4ezH4.js",
-      "_useResolvePlayable-wCiMWuME-BtuvgzZD.js",
+      "_useResolvePlayable-wCiMWuME-BKsvfdHC.js",
       "node_modules/@phlix/ui/dist/MediaDetail-BHHwfs2d.js",
       "_useMediaItemCache-BKCJnCbr-CtDoqeVW.js"
     ]
   },
   "node_modules/@phlix/ui/dist/MetadataMatchModal-ColcHcaU.js": {
-    "file": "assets/MetadataMatchModal-ColcHcaU-CFYy6nAw.js",
+    "file": "assets/MetadataMatchModal-ColcHcaU-f3xmCf3T.js",
     "name": "MetadataMatchModal-ColcHcaU",
     "src": "node_modules/@phlix/ui/dist/MetadataMatchModal-ColcHcaU.js",
     "isDynamicEntry": true,
@@ -876,7 +876,7 @@
     ]
   },
   "node_modules/@phlix/ui/dist/MetricsPage-BPLPuLXF.js": {
-    "file": "assets/MetricsPage-BPLPuLXF-89xiQyK8.js",
+    "file": "assets/MetricsPage-BPLPuLXF-B9C6KlpZ.js",
     "name": "MetricsPage-BPLPuLXF",
     "src": "node_modules/@phlix/ui/dist/MetricsPage-BPLPuLXF.js",
     "isDynamicEntry": true,
@@ -899,7 +899,7 @@
     ]
   },
   "node_modules/@phlix/ui/dist/MusicLibraryPage-Cvt_7w_t.js": {
-    "file": "assets/MusicLibraryPage-Cvt_7w_t-DPc-BnZr.js",
+    "file": "assets/MusicLibraryPage-Cvt_7w_t-CdWEbuMe.js",
     "name": "MusicLibraryPage-Cvt_7w_t",
     "src": "node_modules/@phlix/ui/dist/MusicLibraryPage-Cvt_7w_t.js",
     "isDynamicEntry": true,
@@ -938,10 +938,10 @@
       "_Card-BvLj4L6F-FLxea2jI.js"
     ]
   },
-  "node_modules/@phlix/ui/dist/PlayerPage-C0e0Y9Xo.js": {
-    "file": "assets/PlayerPage-C0e0Y9Xo-C4yVHAFQ.js",
-    "name": "PlayerPage-C0e0Y9Xo",
-    "src": "node_modules/@phlix/ui/dist/PlayerPage-C0e0Y9Xo.js",
+  "node_modules/@phlix/ui/dist/PlayerPage-DFXutftR.js": {
+    "file": "assets/PlayerPage-DFXutftR-eRYRyKof.js",
+    "name": "PlayerPage-DFXutftR",
+    "src": "node_modules/@phlix/ui/dist/PlayerPage-DFXutftR.js",
     "isDynamicEntry": true,
     "imports": [
       "_pinia-BVT-Qm9z.js",
@@ -972,7 +972,7 @@
     ]
   },
   "node_modules/@phlix/ui/dist/PluginsPage-CJDaEBnE.js": {
-    "file": "assets/PluginsPage-CJDaEBnE-l9gYcJ6R.js",
+    "file": "assets/PluginsPage-CJDaEBnE-C1nRdlf4.js",
     "name": "PluginsPage-CJDaEBnE",
     "src": "node_modules/@phlix/ui/dist/PluginsPage-CJDaEBnE.js",
     "isDynamicEntry": true,
@@ -994,7 +994,7 @@
     ]
   },
   "node_modules/@phlix/ui/dist/RecommendationsPage-B0Lyncfh.js": {
-    "file": "assets/RecommendationsPage-B0Lyncfh-DEouEyMi.js",
+    "file": "assets/RecommendationsPage-B0Lyncfh-CL8pSzNr.js",
     "name": "RecommendationsPage-B0Lyncfh",
     "src": "node_modules/@phlix/ui/dist/RecommendationsPage-B0Lyncfh.js",
     "isDynamicEntry": true,
@@ -1011,7 +1011,7 @@
       "_useApi-CROJJdhE-BPV5GGHl.js",
       "_Button-AW4z0vv0-Bg1jAvah.js",
       "index.html",
-      "_useResolvePlayable-wCiMWuME-BtuvgzZD.js"
+      "_useResolvePlayable-wCiMWuME-BKsvfdHC.js"
     ]
   },
   "node_modules/@phlix/ui/dist/RemoteAccessPage-CySPN0Cw.js": {
@@ -1052,7 +1052,7 @@
     ]
   },
   "node_modules/@phlix/ui/dist/SeasonPage-B6k5epof.js": {
-    "file": "assets/SeasonPage-B6k5epof-BKaw6VAz.js",
+    "file": "assets/SeasonPage-B6k5epof-B6XHJkYT.js",
     "name": "SeasonPage-B6k5epof",
     "src": "node_modules/@phlix/ui/dist/SeasonPage-B6k5epof.js",
     "isDynamicEntry": true,
@@ -1073,7 +1073,7 @@
       "_Button-AW4z0vv0-Bg1jAvah.js",
       "index.html",
       "_episode-order-C2yqgMeX-Cqa4ezH4.js",
-      "_useResolvePlayable-wCiMWuME-BtuvgzZD.js"
+      "_useResolvePlayable-wCiMWuME-BKsvfdHC.js"
     ]
   },
   "node_modules/@phlix/ui/dist/ServicesPage-CoNuDF87.js": {
@@ -1116,7 +1116,7 @@
     ]
   },
   "node_modules/@phlix/ui/dist/SettingsPage-D0FpLdNM.js": {
-    "file": "assets/SettingsPage-D0FpLdNM-CaBg1KFr.js",
+    "file": "assets/SettingsPage-D0FpLdNM-DZI8vcxA.js",
     "name": "SettingsPage-D0FpLdNM",
     "src": "node_modules/@phlix/ui/dist/SettingsPage-D0FpLdNM.js",
     "isDynamicEntry": true,
@@ -1137,7 +1137,7 @@
     ]
   },
   "node_modules/@phlix/ui/dist/SignupPage-CfWxjkY3.js": {
-    "file": "assets/SignupPage-CfWxjkY3-BnbOQIGR.js",
+    "file": "assets/SignupPage-CfWxjkY3-BddnrIam.js",
     "name": "SignupPage-CfWxjkY3",
     "src": "node_modules/@phlix/ui/dist/SignupPage-CfWxjkY3.js",
     "isDynamicEntry": true,
@@ -1168,7 +1168,7 @@
     ]
   },
   "node_modules/@phlix/ui/dist/SyncPlayPage-CRcc_P-9.js": {
-    "file": "assets/SyncPlayPage-CRcc_P-9-DOi58bzk.js",
+    "file": "assets/SyncPlayPage-CRcc_P-9-BPmUnNkV.js",
     "name": "SyncPlayPage-CRcc_P-9",
     "src": "node_modules/@phlix/ui/dist/SyncPlayPage-CRcc_P-9.js",
     "isDynamicEntry": true,
@@ -1229,7 +1229,7 @@
     ]
   },
   "node_modules/@phlix/ui/dist/WatchHistoryPage-CFpHtO6i.js": {
-    "file": "assets/WatchHistoryPage-CFpHtO6i-9acn5nmQ.js",
+    "file": "assets/WatchHistoryPage-CFpHtO6i-CtBgBI6r.js",
     "name": "WatchHistoryPage-CFpHtO6i",
     "src": "node_modules/@phlix/ui/dist/WatchHistoryPage-CFpHtO6i.js",
     "isDynamicEntry": true,
@@ -1246,11 +1246,11 @@
       "_useApi-CROJJdhE-BPV5GGHl.js",
       "_Button-AW4z0vv0-Bg1jAvah.js",
       "index.html",
-      "_useResolvePlayable-wCiMWuME-BtuvgzZD.js"
+      "_useResolvePlayable-wCiMWuME-BKsvfdHC.js"
     ]
   },
   "node_modules/@phlix/ui/dist/WebhooksPage-h-b3eY3E.js": {
-    "file": "assets/WebhooksPage-h-b3eY3E-BOMBjkLt.js",
+    "file": "assets/WebhooksPage-h-b3eY3E-BONMTyMH.js",
     "name": "WebhooksPage-h-b3eY3E",
     "src": "node_modules/@phlix/ui/dist/WebhooksPage-h-b3eY3E.js",
     "isDynamicEntry": true,

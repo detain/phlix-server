@@ -34,12 +34,13 @@ final class AdminSettingsControllerTest extends TestCase
 
     public function testAllowedKeysAreDerivedFromSharedSchemaWithExpectedTypes(): void
     {
-        // Lock-in: the schema-derived allow-list must equal the exact 15
-        // dotted-key → internal-type map the former ALLOWED_KEYS const declared
-        // (step 0.7 sources it from detain/phlix-shared's
-        // server-settings.schema.json). A mismatch means the vendored schema
-        // is missing, drifted, or mistranslated — all of which would silently
-        // change GET/PUT behaviour, so this test fails loudly instead.
+        // Lock-in: the schema-derived allow-list must equal this exact
+        // dotted-key → internal-type map (step 0.7 sources it from
+        // detain/phlix-shared's server-settings.schema.json). A mismatch means
+        // the vendored schema is missing, drifted, or mistranslated — all of
+        // which would silently change GET/PUT behaviour, so this test fails
+        // loudly instead. Update it deliberately when the shared schema grows:
+        // the `lastfm.*` trio arrived with phlix-shared v0.21.0.
         $expected = [
             'hwaccel.enabled'                           => 'bool',
             'hwaccel.prefer_hardware'                   => 'bool',
@@ -66,11 +67,15 @@ final class AdminSettingsControllerTest extends TestCase
             // string-typed genres mode → `string`.
             'metadata.provider_priority'                => 'json',
             'metadata.genres_mode'                      => 'string',
+            // phlix-shared v0.21.0: Last.fm scrobbling credentials.
+            'lastfm.api_key'                            => 'string',
+            'lastfm.shared_secret'                      => 'string',
+            'lastfm.enabled'                            => 'bool',
         ];
 
         $actual = AdminSettingsController::allowedKeys();
 
-        $this->assertCount(22, $actual);
+        $this->assertCount(25, $actual);
         $this->assertEquals($expected, $actual);
     }
 

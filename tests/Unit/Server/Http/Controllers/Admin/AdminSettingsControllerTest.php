@@ -71,11 +71,51 @@ final class AdminSettingsControllerTest extends TestCase
             'lastfm.api_key'                            => 'string',
             'lastfm.shared_secret'                      => 'string',
             'lastfm.enabled'                            => 'bool',
+
+            // Phase 2A: transcoding keys (7).
+            'transcoding.preferred_accelerator'          => 'string',
+            'transcoding.include_software_fallback'      => 'bool',
+            'transcoding.tone_mapping_mode'              => 'string',
+            'transcoding.prefer_hdr_output'              => 'bool',
+            'transcoding.max_concurrent_transcodes'      => 'int',
+            'transcoding.transcode_timeout'              => 'int',
+            'transcoding.max_concurrent_scan_probes'     => 'int',
+
+            // Phase 2B: metadata keys (3).
+            'metadata.preferred_language'                => 'string',
+            'metadata.preferred_country'                 => 'string',
+            'metadata.fanart_api_key'                    => 'string',
+
+            // Phase 2C: infra keys (6).
+            'database.pool_size'                         => 'int',
+            'database.timeout'                           => 'int',
+            'relay.reconnect_delay'                      => 'int',
+            'relay.ping_interval'                       => 'int',
+            'hls.segment_seconds'                       => 'int',
+            'hls.max_concurrent_segments'               => 'int',
+
+            // Phase 3: tunables (4).
+            'transcoding.segment_max_inflight_global'    => 'int',
+            'transcoding.segment_cache_max_age'          => 'int',
+            'transcoding.segment_cache_max_bytes'        => 'int',
+            'transcoding.stale_job_max_age'              => 'int',
+
+            // Phase 4: subsystem keys (5).
+            'subsystem.library_scan_enabled'             => 'bool',
+            'subsystem.plugin_auto_update_enabled'      => 'bool',
+            'subsystem.marker_detection_enabled'        => 'bool',
+            'subsystem.media_asset_jobs_enabled'         => 'bool',
+            'subsystem.similarity_enabled'               => 'bool',
+
+            // Phase 5: auth keys (3).
+            'auth.enabled'                              => 'bool',
+            'auth.rate_limit'                           => 'int',
+            'auth.session_lifetime'                     => 'int',
         ];
 
         $actual = AdminSettingsController::allowedKeys();
 
-        $this->assertCount(25, $actual);
+        $this->assertCount(53, $actual);
         $this->assertEquals($expected, $actual);
     }
 

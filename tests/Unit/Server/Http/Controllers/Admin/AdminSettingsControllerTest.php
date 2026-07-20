@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Phlix\Tests\Unit\Server\Http\Controllers\Admin;
 
 use Phlix\Admin\SettingsRepository;
+use Phlix\Plugins\SettingsMasker;
 use Phlix\Server\Http\Controllers\Admin\AdminSettingsController;
 use Phlix\Server\Http\Request;
 use PHPUnit\Framework\TestCase;
@@ -234,6 +235,292 @@ final class AdminSettingsControllerTest extends TestCase
 
         $this->assertTrue($lastfm['secret']);
         $this->assertFalse($lastfm['restart']);
+    }
+
+    // ---------------------------------------------------------------------
+    // SECRETS — GET must not leak them, PUT must not wipe them.
+    //
+    // The pre-existing tests asserted only that `meta.secret` was PROJECTED
+    // correctly; none asserted the VALUE's absence from the response body,
+    // which is exactly why plaintext third-party credentials shipped to the
+    // browser for a full program cycle without review catching it.
+    // ---------------------------------------------------------------------
+
+    /**
+     * @return list<string> Every key the vendored schema flags `"secret": true`.
+     */
+    private function secretKeys(): array
+    {
+        $keys = [];
+        foreach (AdminSettingsController::schemaMeta() as $key => $meta) {
+            if (($meta['secret'] ?? false) === true) {
+                $keys[] = (string) $key;
+            }
+        }
+        self::assertNotEmpty($keys, 'Schema must declare at least one secret key');
+
+        return $keys;
+    }
+
+    public function testIndexNeverEmitsASecretValueAnywhereInTheResponseBody(): void
+    {
+        $secretKeys = $this->secretKeys();
+
+        // Give every secret key a distinctive, greppable plaintext value.
+        $values = [];
+        foreach ($secretKeys as $i => $key) {
+            $values[$key] = sprintf('SUPER-SECRET-VALUE-%d-%s', $i, md5($key));
+        }
+        $values['tmdb.api_key'] = 'not-flagged-secret-yet';
+
+        $repo = $this->createMock(SettingsRepository::class);
+        $repo->method('getEffectiveMany')->willReturn([
+            'values'     => $values,
+            'overridden' => $secretKeys,
+        ]);
+
+        $controller = new AdminSettingsController($repo);
+        $response = $controller->index($this->makeRequest(), []);
+
+        $this->assertSame(200, $response->statusCode);
+
+        // The strongest form of this assertion: the raw plaintext must not
+        // appear ANYWHERE in the serialized body — not in `settings`, not in
+        // `meta.default`, not in any future key someone adds.
+        foreach ($values as $key => $plaintext) {
+            if (!in_array($key, $secretKeys, true)) {
+                continue;
+            }
+            $this->assertStringNotContainsString(
+                $plaintext,
+                $response->body,
+                sprintf('Secret %s leaked into the GET response body', $key),
+            );
+        }
+
+        /** @var array{data: array{settings: array<string, mixed>, secretStatus: array<string, mixed>}} $body */
+        $body = json_decode($response->body, true);
+
+        foreach ($secretKeys as $key) {
+            $this->assertSame(
+                SettingsMasker::MASK,
+                $body['data']['settings'][$key],
+                sprintf('Secret %s must be replaced by the mask sentinel', $key),
+            );
+            $this->assertTrue($body['data']['secretStatus'][$key]['set']);
+            $this->assertGreaterThan(0, $body['data']['secretStatus'][$key]['length']);
+        }
+    }
+
+    public function testIndexLeavesUnsetSecretsUnmaskedAndReportsThemAsUnset(): void
+    {
+        $secretKeys = $this->secretKeys();
+        $values = array_fill_keys($secretKeys, '');
+
+        $repo = $this->createMock(SettingsRepository::class);
+        $repo->method('getEffectiveMany')->willReturn(['values' => $values, 'overridden' => []]);
+
+        $controller = new AdminSettingsController($repo);
+        $response = $controller->index($this->makeRequest(), []);
+
+        /** @var array{data: array{settings: array<string, mixed>, secretStatus: array<string, mixed>}} $body */
+        $body = json_decode($response->body, true);
+
+        foreach ($secretKeys as $key) {
+            $this->assertSame('', $body['data']['settings'][$key]);
+            $this->assertFalse($body['data']['secretStatus'][$key]['set']);
+            $this->assertSame(0, $body['data']['secretStatus'][$key]['length']);
+        }
+    }
+
+    public function testUpdateIgnoresASecretResubmittedAsTheMaskSentinel(): void
+    {
+        // The mask-overwrite bug: without this guard, the FIRST Save on the
+        // settings page replaces every stored secret with the literal '***'.
+        $repo = $this->createMock(SettingsRepository::class);
+        $repo->expects($this->never())->method('set');
+        $repo->method('getEffectiveMany')->willReturn(['values' => [], 'overridden' => []]);
+
+        $controller = new AdminSettingsController($repo);
+        $response = $controller->update(
+            $this->makeRequest(['settings' => [
+                'trakt.client_secret'  => SettingsMasker::MASK,
+                'lastfm.shared_secret' => SettingsMasker::MASK,
+            ]]),
+            [],
+        );
+
+        $this->assertSame(200, $response->statusCode);
+        /** @var array<string, mixed> $body */
+        $body = json_decode($response->body, true);
+        $this->assertTrue($body['success']);
+    }
+
+    public function testUpdatePersistsAGenuinelyChangedSecret(): void
+    {
+        $repo = $this->createMock(SettingsRepository::class);
+        $repo->expects($this->once())
+            ->method('set')
+            ->with('trakt.client_secret', 'brand-new-secret', 'string');
+        $repo->method('getEffectiveMany')->willReturn(['values' => [], 'overridden' => []]);
+
+        $controller = new AdminSettingsController($repo);
+        $response = $controller->update(
+            $this->makeRequest(['settings' => ['trakt.client_secret' => 'brand-new-secret']]),
+            [],
+        );
+
+        $this->assertSame(200, $response->statusCode);
+    }
+
+    public function testUpdateSkipsOnlyTheMaskedSecretAndStillPersistsSiblings(): void
+    {
+        $repo = $this->createMock(SettingsRepository::class);
+        $repo->expects($this->once())
+            ->method('set')
+            ->with('trakt.client_id', 'client-abc', 'string');
+        $repo->method('getEffectiveMany')->willReturn(['values' => [], 'overridden' => []]);
+
+        $controller = new AdminSettingsController($repo);
+        $response = $controller->update(
+            $this->makeRequest(['settings' => [
+                'trakt.client_secret' => SettingsMasker::MASK,
+                'trakt.client_id'     => 'client-abc',
+            ]]),
+            [],
+        );
+
+        $this->assertSame(200, $response->statusCode);
+    }
+
+    public function testUpdateResponseAlsoMasksSecrets(): void
+    {
+        $repo = $this->createMock(SettingsRepository::class);
+        $repo->method('getEffectiveMany')->willReturn([
+            'values'     => ['trakt.client_secret' => 'LEAKY-VALUE'],
+            'overridden' => ['trakt.client_secret'],
+        ]);
+
+        $controller = new AdminSettingsController($repo);
+        $response = $controller->update(
+            $this->makeRequest(['settings' => ['hwaccel.enabled' => true]]),
+            [],
+        );
+
+        $this->assertSame(200, $response->statusCode);
+        $this->assertStringNotContainsString('LEAKY-VALUE', $response->body);
+    }
+
+    // ---------------------------------------------------------------------
+    // CONSTRAINT ENFORCEMENT — enum / minimum / maximum are enforced on WRITE,
+    // not merely emitted to the UI for display.
+    // ---------------------------------------------------------------------
+
+    public function testUpdateRejectsAValueOutsideItsEnum(): void
+    {
+        $repo = $this->createMock(SettingsRepository::class);
+        $repo->expects($this->never())->method('set');
+
+        $controller = new AdminSettingsController($repo);
+        $response = $controller->update(
+            $this->makeRequest(['settings' => ['auth.signup_mode' => 'definitely-not-a-mode']]),
+            [],
+        );
+
+        $this->assertSame(400, $response->statusCode);
+        /** @var array{errors: array<string, string>} $body */
+        $body = json_decode($response->body, true);
+        $this->assertArrayHasKey('auth.signup_mode', $body['errors']);
+        $this->assertStringContainsString('enumeration', $body['errors']['auth.signup_mode']);
+    }
+
+    public function testUpdateAcceptsEveryDeclaredEnumMember(): void
+    {
+        foreach (['open', 'approval', 'disabled'] as $mode) {
+            $repo = $this->createMock(SettingsRepository::class);
+            $repo->expects($this->once())->method('set')->with('auth.signup_mode', $mode, 'string');
+            $repo->method('getEffectiveMany')->willReturn(['values' => [], 'overridden' => []]);
+
+            $controller = new AdminSettingsController($repo);
+            $response = $controller->update(
+                $this->makeRequest(['settings' => ['auth.signup_mode' => $mode]]),
+                [],
+            );
+
+            $this->assertSame(200, $response->statusCode, sprintf('signup_mode=%s must be accepted', $mode));
+        }
+    }
+
+    public function testUpdateRejectsAValueBelowItsMinimum(): void
+    {
+        $repo = $this->createMock(SettingsRepository::class);
+        $repo->expects($this->never())->method('set');
+
+        $controller = new AdminSettingsController($repo);
+        // transcoding.max_concurrent_transcodes declares minimum 1.
+        $response = $controller->update(
+            $this->makeRequest(['settings' => ['transcoding.max_concurrent_transcodes' => 0]]),
+            [],
+        );
+
+        $this->assertSame(400, $response->statusCode);
+        /** @var array{errors: array<string, string>} $body */
+        $body = json_decode($response->body, true);
+        $this->assertArrayHasKey('transcoding.max_concurrent_transcodes', $body['errors']);
+        $this->assertStringContainsString('minimum', $body['errors']['transcoding.max_concurrent_transcodes']);
+    }
+
+    public function testUpdateRejectsAValueAboveItsMaximum(): void
+    {
+        $repo = $this->createMock(SettingsRepository::class);
+        $repo->expects($this->never())->method('set');
+
+        $controller = new AdminSettingsController($repo);
+        // transcoding.max_concurrent_transcodes declares maximum 64.
+        $response = $controller->update(
+            $this->makeRequest(['settings' => ['transcoding.max_concurrent_transcodes' => 999999]]),
+            [],
+        );
+
+        $this->assertSame(400, $response->statusCode);
+        /** @var array{errors: array<string, string>} $body */
+        $body = json_decode($response->body, true);
+        $this->assertStringContainsString('maximum', $body['errors']['transcoding.max_concurrent_transcodes']);
+    }
+
+    public function testUpdateRejectsAFloatOutsideItsBounds(): void
+    {
+        $repo = $this->createMock(SettingsRepository::class);
+        $repo->expects($this->never())->method('set');
+
+        $controller = new AdminSettingsController($repo);
+        // marker_detection.similarity_threshold is bounded 0..1.
+        $response = $controller->update(
+            $this->makeRequest(['settings' => ['marker_detection.similarity_threshold' => '5.0']]),
+            [],
+        );
+
+        $this->assertSame(400, $response->statusCode);
+    }
+
+    public function testUpdateStillAcceptsTheAutoDetectAcceleratorSentinel(): void
+    {
+        // The schema's "auto-detect" option is a JSON `null` enum member, but
+        // the SPA transports it as the string "null". Enum enforcement must not
+        // break the UI's own option; see applyNullEnumSentinelShim().
+        $repo = $this->createMock(SettingsRepository::class);
+        $repo->expects($this->once())
+            ->method('set')
+            ->with('transcoding.preferred_accelerator', 'null', 'string');
+        $repo->method('getEffectiveMany')->willReturn(['values' => [], 'overridden' => []]);
+
+        $controller = new AdminSettingsController($repo);
+        $response = $controller->update(
+            $this->makeRequest(['settings' => ['transcoding.preferred_accelerator' => 'null']]),
+            [],
+        );
+
+        $this->assertSame(200, $response->statusCode);
     }
 
     public function testIndexReturns500OnRepositoryError(): void

@@ -12,6 +12,7 @@ declare(strict_types=1);
 namespace Phlix\Common\Container\Providers;
 
 use DI\ContainerBuilder;
+use Phlix\Admin\SettingsRepository;
 use Phlix\Common\Container\ServiceProviderInterface;
 use Phlix\Config\HwAccelConfig;
 use Phlix\Media\Transcoding\FfmpegRunner;
@@ -96,6 +97,15 @@ final class TranscodeServicesProvider implements ServiceProviderInterface
         // Disabled (the shipped default) or malformed config → null → zero behavior
         // change: nothing consumes the param until sub-step 1B seeds
         // $params['loudnorm'] at the encode param-assembly sites.
+        // Ceiling on simultaneously-running transcode JOBS. `config/ffmpeg.php`'s
+        // `max_concurrent_transcodes` was previously read by nobody: TranscodeManager's
+        // ctor assigned a bare literal `4`, so both the config key and its admin-UI
+        // setting were inert. The boot default is read here; the DB override is
+        // layered on inside the factory below (getEffective() needs the container).
+        $maxConcurrentTranscodes = is_int($ffmpegConfig['max_concurrent_transcodes'] ?? null)
+            ? $ffmpegConfig['max_concurrent_transcodes']
+            : null;
+
         $loudnormParams = null;
         $loudnessConfig = is_array($ffmpegConfig['loudness'] ?? null) ? $ffmpegConfig['loudness'] : [];
         if (($loudnessConfig['enabled'] ?? false) === true && is_numeric($loudnessConfig['I'] ?? null)) {
@@ -167,7 +177,8 @@ final class TranscodeServicesProvider implements ServiceProviderInterface
                     $cacheMaxBytes,
                     $cacheMaxAge,
                     $minDiskSpaceBytes,
-                    $loudnormParams
+                    $loudnormParams,
+                    $maxConcurrentTranscodes
                 ): TranscodeManager {
                     /** @var \Psr\Log\LoggerInterface $logger */
                     $logger = $c->get('logger.media');
@@ -175,6 +186,27 @@ final class TranscodeServicesProvider implements ServiceProviderInterface
                     $db = $c->get(Connection::class);
                     /** @var FfmpegRunner $ffmpeg */
                     $ffmpeg = $c->get(FfmpegRunner::class);
+
+                    // Layer the admin's `server_settings` override (if any) over
+                    // the config default, exactly as MediaServicesProvider does
+                    // for metadata.genres_mode. Resolved once per worker (this
+                    // factory result is reused), never per request. A settings
+                    // store that is unavailable/misconfigured must not break
+                    // transcoding, so any failure falls back to the config value.
+                    $effectiveMaxTranscodes = $maxConcurrentTranscodes;
+                    try {
+                        $settings = $c->get(SettingsRepository::class);
+                        if ($settings instanceof SettingsRepository) {
+                            $override = $settings->getEffective('ffmpeg.max_concurrent_transcodes');
+                            if (is_int($override) && $override > 0) {
+                                $effectiveMaxTranscodes = $override;
+                            } elseif (is_string($override) && ctype_digit($override) && (int) $override > 0) {
+                                $effectiveMaxTranscodes = (int) $override;
+                            }
+                        }
+                    } catch (\Throwable) {
+                        // Keep the config-file default.
+                    }
                     // The constructor args are POSITIONAL, so threading the SV-1.9
                     // ENOSPC threshold (position 13) requires passing position 12
                     // ($segmentMaxWaitMs) too. It has never been surfaced in config,
@@ -196,7 +228,8 @@ final class TranscodeServicesProvider implements ServiceProviderInterface
                         $cacheMaxAge,
                         null,
                         $minDiskSpaceBytes,
-                        $loudnormParams
+                        $loudnormParams,
+                        $effectiveMaxTranscodes
                     );
 
                     // SV-4.2-disconnect (SS-2): make the shared per-worker

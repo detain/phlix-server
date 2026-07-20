@@ -300,6 +300,13 @@ class TranscodeManager
      */
     private const JOB_KEY_VERSION = 'v8';
 
+    /**
+     * Fallback ceiling on simultaneously-running transcode jobs when the
+     * caller supplies none. Mirrors `config/ffmpeg.php`'s
+     * `max_concurrent_transcodes` default.
+     */
+    public const DEFAULT_MAX_CONCURRENT_TRANSCODES = 4;
+
     // Job status constants
     public const STATUS_PENDING = 'pending';
     public const STATUS_RUNNING = 'running';
@@ -320,6 +327,16 @@ class TranscodeManager
      *                                  from `config/ffmpeg.php`'s `loudness` block, or null when
      *                                  disabled/unconfigured. Stored only — INERT until sub-step 1B
      *                                  consumes it at the encode param-assembly sites.
+     * @param int|null $maxConcurrentTranscodes Ceiling on simultaneously-running transcode JOBS
+     *                                  (enforced in {@see ensureHlsJob()}). Resolved by
+     *                                  {@see \Phlix\Common\Container\Providers\TranscodeServicesProvider}
+     *                                  from the EFFECTIVE `ffmpeg.max_concurrent_transcodes`
+     *                                  (`config/ffmpeg.php` default merged with any admin
+     *                                  `server_settings` override). Null → {@see DEFAULT_MAX_CONCURRENT_TRANSCODES}.
+     *                                  Until this parameter existed the ctor assigned a bare
+     *                                  literal `4`, so the shipped config key and its admin-UI
+     *                                  setting were both completely inert — an admin who followed
+     *                                  the setting's own help text and set 8 still got 4.
      *
      * @example
      * ```php
@@ -340,12 +357,15 @@ class TranscodeManager
         ?int $cacheMaxAgeSeconds = null,
         ?int $segmentMaxWaitMs = null,
         ?int $minDiskSpaceBytes = null,
-        ?array $loudnormParams = null
+        ?array $loudnormParams = null,
+        ?int $maxConcurrentTranscodes = null
     ) {
         $this->db = $db;
         $this->ffmpeg = $ffmpeg;
         $this->segmentDir = $segmentDir;
-        $this->maxConcurrentTranscodes = 4;
+        $this->maxConcurrentTranscodes = ($maxConcurrentTranscodes !== null && $maxConcurrentTranscodes > 0)
+            ? $maxConcurrentTranscodes
+            : self::DEFAULT_MAX_CONCURRENT_TRANSCODES;
         $this->logger = $logger ?? new NullLogger();
         $this->segmentSeconds = $segmentSeconds > 0 ? $segmentSeconds : 6;
         $this->maxConcurrentSegments = ($maxConcurrentSegments !== null && $maxConcurrentSegments > 0)

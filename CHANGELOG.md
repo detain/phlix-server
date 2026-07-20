@@ -7,15 +7,106 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased] - 2026-07-20
 
+### Security
+
+- **Pagination DoS hole closed — an over-large `?limit=` can no longer reach a `LIMIT ?` binding.**
+  `Request::queryInt()` performed no bounds checking at all, and an unclamped page size flowed from
+  nine list endpoints straight into `LIMIT ?`. Under Workerman the worker process is **resident and
+  shared**, so `GET /api/v1/libraries/{id}/items?limit=100000000` was not a big page — it was a
+  memory-exhaustion vector able to OOM the process serving every other user. New
+  `Phlix\Common\Http\PageLimit` is now the single pagination policy, with a **hard compile-time
+  ceiling** (`PageLimit::MAX = 100`) that no configurable default can raise; it is reached through
+  the new `Request::queryPageSize()` / `Request::queryOffset()` helpers. `ItemRepository`'s existing
+  (and previously only correct) clamp now delegates to it rather than keeping a second copy of the
+  bounds. Applied across **both** dispatch paths: `MediaItemController` (`index`, `recentlyAdded`),
+  `LibraryController::scanHistory`, `MediaUserDataController::listFavorites`,
+  `AdminLiveTvController::listUpcomingRecordings`, and `WebPortalRouter`'s library-items, search,
+  similar-items, because-you-watched, music-artists and music-tracks endpoints. `queryInt()` is
+  deliberately left unbounded — it serves non-pagination params — which is why pagination must not
+  use it. Regression tests assert the clamp per endpoint on both paths.
+- **Admin settings API no longer returns secrets in plaintext, and saving no longer wipes them.**
+  `GET /api/v1/admin/settings` returned `getEffectiveMany()` raw, so every key flagged
+  `"secret": true` in the shared schema (today `trakt.client_secret`, `lastfm.shared_secret`,
+  `metadata.fanart_api_key`) was shipped to the browser in clear text — present in the XHR body, in
+  the DOM, and one "Show" click from being displayed, plus whatever proxy logs and HAR captures
+  picked up. Secret values are now replaced with the existing `SettingsMasker::MASK` sentinel (the
+  same mechanism the plugin settings path already used), and a new `data.secretStatus` map carries
+  `{set, length}` per secret so the UI can still distinguish configured from unconfigured without
+  seeing the value. Masking is driven by the schema's `secret` flag, **not** a hardcoded key list, so
+  keys that gain the flag in a future `phlix-shared` release are covered automatically.
+  Shipped in the same commit: `PUT` now skips any secret key resubmitted as the mask sentinel,
+  leaving the stored value untouched — without that guard, fixing the GET alone would have made the
+  first Save overwrite all three secrets with the literal `***`.
+
 ### Added
 
-- **Phase 8 — `AdminRestartController`: `POST /api/v1/admin/restart` sends graceful SIGUSR1 to restart workers.**
-  New admin endpoint triggers a graceful worker restart by sending `SIGUSR1` to the master process via
-  `posix_kill()` (falls back to `SIGTERM` if POSIX is unavailable). The handler returns `200` with a
-  `{"message":"Restarting"}` body immediately after the signal, so the caller receives a response before
-  the workers cycle. `config/server.php` exposes the `pid_file` path (env `PHLIX_PID_FILE`,
-  default `var/server.pid`). Admin-gated via `AdminMiddleware`. Mirrors the `HubRestartController`
-  surface in `detain/phlix-hub` so `@phlix/ui` admin Settings can trigger both restarts.
+- **`enum` / `minimum` / `maximum` are now enforced on `PUT /api/v1/admin/settings`.** The endpoint
+  previously validated the internal *type* only; the schema's 4 `enum`, 21 `minimum` and 18
+  `maximum` constraints were emitted to the UI for display and never checked on write, so every
+  bound was cosmetic and trivially bypassed with a direct PUT (`auth.signup_mode` could be set to
+  any string, `transcoding.max_concurrent_transcodes` to `0` or `999999`). Coerced values are now
+  validated against their own JSON-Schema property sub-schema using `justinrainbow/json-schema`
+  (already a dependency, previously unused here), reported through the same `errors{}` map the SPA
+  renders as inline per-field errors. A narrow shim keeps the UI's "Auto-detect" accelerator option
+  (transported as the string `"null"` against a JSON `null` enum member) working until
+  `phlix-shared` replaces that sentinel with `"auto"`.
+- **`SettingsRepository::hasDefault()`**, distinguishing "the config declares this key and its value
+  is null" from "no such config path exists" — which `getDefault()` cannot express. Backs a new
+  regression test asserting every schema key resolves to a real config default.
+
+### Fixed
+
+- **`POST /api/v1/admin/restart` could not work on any real box.** Three separate defects:
+  1. **The PID file nothing wrote.** The controller read `config/server.php`'s
+     `worker.pid_file` (`/var/run/phlix/pid`), but `Worker::$pidFile` was never assigned anywhere in
+     the repo, so Workerman used its own default (`dirname(start.php)/workerman.start.php.pid`).
+     Every call returned HTTP 500 "PID file not found". New `Phlix\Server\Runtime\PidFile` is
+     applied from `start.php` before `Worker::runAll()` so the writer and the reader agree; it
+     creates the directory when needed and degrades to Workerman's default (with a stderr warning)
+     rather than aborting boot if the location is unusable.
+  2. **The signal was inverted.** In Workerman, `SIGUSR2` is the *graceful* reload and `SIGUSR1` is
+     the *non-graceful* one (`Worker::reload()`: `$sig = getGracefulStop() ? SIGUSR2 : SIGUSR1;`);
+     SIGUSR1 stops children immediately and arms a `SIGKILL`. The endpoint sent SIGUSR1 while both
+     docblocks asserted the exact opposite. It now sends `SIGUSR2`, and the docblocks are corrected.
+  3. **The signal fired mid-request.** `posix_kill()` ran before the `Response` was even built, so
+     the caller could get a connection reset instead of the ack — which the SPA renders as "Failed
+     to restart server" for a restart that did happen. The handler now pre-flights the target with
+     `posix_kill($pid, 0)` (a probe that sends no signal, so a stale PID is still a real 500) and
+     defers the actual `SIGUSR2` to a Workerman one-shot timer, so the JSON ack flushes first.
+
+  The response body is `{"success":true,"message":"Restart signal sent"}`. The tests were rewritten
+  to exercise the pid-path agreement between `start.php`, `config/server.php` and the DI provider,
+  and to assert which signal is sent and that it is deferred — none of which the previous
+  `sendSignal()`-stubbing suite covered.
+- **`ffmpeg.max_concurrent_transcodes` is no longer a fake setting.**
+  `TranscodeManager::__construct()` assigned a bare literal `$this->maxConcurrentTranscodes = 4;` —
+  not a constructor parameter, not a config read — so `config/ffmpeg.php`'s value and its admin-UI
+  setting (min 1 / max 64 / default 4, whose help text advises "a 16-core CPU with an NVIDIA GPU can
+  typically handle 6–8") were both inert. An admin who set 8 still got 4. The ceiling is now a
+  constructor parameter resolved by `TranscodeServicesProvider` from the **effective** value (config
+  default merged with any `server_settings` override), with `DEFAULT_MAX_CONCURRENT_TRANSCODES` as
+  the fallback. A settings-store failure degrades to the config default rather than breaking
+  transcoding.
+- **`SettingsRepository::getDefault()` can now resolve nested config paths.** The dotted-key rule
+  treated the first segment as the entire filename, so `config/scrobblers/trakt.php` — a real,
+  shipped config file — was unreachable by any key, and anything pointing at it resolved to a `null`
+  default. The file part may now span subdirectories (longest match wins:
+  `scrobblers.trakt.client_id` → `config/scrobblers/trakt.php`'s `client_id`). Purely additive — a
+  multi-segment file path never resolved before — and the path jail is tightened to validate every
+  segment, so no key can escape `config/`.
+
+### Known gaps (documented, NOT fixed)
+
+- **`restart: true` settings still do not take effect on restart.** The restart endpoint now works,
+  but a reload cannot apply boot-only settings, because `start.php` `include`s `config/server.php`
+  once in the master and nothing ever merges `server_settings` DB overrides into that array — and a
+  full `systemctl restart` does not either. This affects every `restart: true` schema key. The fix
+  is an architectural change (rewire each consumer to `getEffective()`, or overlay the overrides
+  onto `$config` inside `onWorkerStart`) and is deliberately out of scope here. Full write-up,
+  including the two candidate designs: **`docs/dev/settings-restart-gap.md`**. Until it lands, do
+  not describe a `restart: true` key as taking effect after a restart.
+- The restart endpoint has no rate limit and emits no audit-log entry; a reload also cycles the
+  SyncPlay WebSocket and DLNA SSDP workers, dropping live sessions, with no warning in the UI.
 
 ### Changed
 

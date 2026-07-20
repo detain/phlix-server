@@ -11,7 +11,9 @@ declare(strict_types=1);
 
 namespace Phlix\Server\Http\Controllers\Admin;
 
+use JsonSchema\Validator;
 use Phlix\Admin\SettingsRepository;
+use Phlix\Plugins\SettingsMasker;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
 use Phlix\Shared\Schema\SchemaPaths;
@@ -28,15 +30,40 @@ use Throwable;
  *     restart because the DB is the persistent store.
  *
  * The editable-settings allow-list (dotted key → internal type) is the single
- * source of truth for PUT validation and the GET `types` map. As of Step 0.7
- * it is **derived from the shared `server-settings.schema.json`** bundled in
- * `detain/phlix-shared` (located via {@see SchemaPaths::serverSettings()}) so
- * the server and the admin SPA render/validate from one schema; the prior
+ * source of truth for the key allow-list and the GET `types` map. As of Step
+ * 0.7 it is **derived from the shared `server-settings.schema.json`** bundled
+ * in `detain/phlix-shared` (located via {@see SchemaPaths::serverSettings()})
+ * so the server and the admin SPA render/validate from one schema; the prior
  * hardcoded `ALLOWED_KEYS` constant (and its `0.7:` seam) is gone. The
  * JSON-Schema `type` of each property is mapped to the internal vocabulary
  * (`boolean→bool`, `integer→int`, `number→float`, `string→string`,
- * `array`/`object→json`); the resulting map preserves the exact key/type set
- * the constant declared, so GET/PUT behaviour is unchanged.
+ * `array`/`object→json`).
+ *
+ * **PUT validation is two-stage:**
+ *   1. The internal-type gate ({@see valueMatchesType()} + {@see coerce()}) —
+ *      tolerant of the string-y values a JSON/form body actually carries
+ *      (`"45"` for an int, `"true"` for a bool) and responsible for turning
+ *      them into canonical PHP values.
+ *   2. **Real JSON-Schema validation of the coerced value against that key's
+ *      own property sub-schema** via `justinrainbow/json-schema`
+ *      ({@see validateAgainstSchema()}). This is what actually enforces
+ *      `enum`, `minimum` and `maximum` — before this stage existed those
+ *      keywords were emitted to the UI for display and never checked on
+ *      write, so every bound in the schema was cosmetic and trivially
+ *      bypassed with a direct PUT.
+ *
+ * Both stages report through the same `errors` map (`{"<key>": "<message>"}`)
+ * that the admin SPA renders as inline per-field errors, and a single failing
+ * key rejects the whole request without persisting anything.
+ *
+ * **Secrets** (schema `"secret": true`) are never echoed back: GET replaces
+ * their values with {@see SettingsMasker::MASK} and publishes a separate
+ * `secretStatus` map ({@see secretStatus()}) so the UI can distinguish a set
+ * secret from an unset one without seeing it. PUT mirrors this — submitting
+ * the unchanged mask sentinel for a secret key is a no-op that leaves the
+ * stored value untouched, so saving the form cannot wipe credentials the
+ * admin never edited. This reuses the same mechanism the plugin settings path
+ * already uses ({@see \Phlix\Server\Http\Controllers\PluginAdminController}).
  *
  * Route group is gated by {@see \Phlix\Server\Http\Middleware\AdminMiddleware}
  * (registered in {@see \Phlix\Server\Http\Routes\AdminRoutes}); non-admin
@@ -79,6 +106,22 @@ final class AdminSettingsController
      * @var array<string, array<string, mixed>>|null
      */
     private static ?array $schemaMeta = null;
+
+    /**
+     * Lazily-loaded cache of the raw per-property JSON-Schema sub-schemas, as
+     * `stdClass` objects, for use with `justinrainbow/json-schema`'s
+     * {@see Validator}. Populated once by {@see loadSchemaValidators()}.
+     *
+     * The library needs genuine `stdClass` (not associative arrays) to tell an
+     * object from an array, which is why this is decoded separately from
+     * {@see $schemaMeta} rather than re-encoded per request.
+     *
+     * Same resident-memory reasoning as the other two caches: immutable,
+     * process-wide, read-only config that does not grow per request.
+     *
+     * @var array<string, \stdClass>|null
+     */
+    private static ?array $schemaValidators = null;
 
     /** @var SettingsRepository Server-settings store. */
     private SettingsRepository $settings;
@@ -264,6 +307,170 @@ final class AdminSettingsController
     }
 
     /**
+     * Per-key JSON-Schema sub-schemas (as `stdClass`) used to enforce `enum`,
+     * `minimum` and `maximum` — every constraint the schema declares — on PUT.
+     *
+     * @return array<string, \stdClass> Dotted setting key → property sub-schema.
+     *
+     * @since 1.3.0
+     */
+    private static function schemaValidators(): array
+    {
+        if (self::$schemaValidators === null) {
+            self::$schemaValidators = self::loadSchemaValidators();
+        }
+
+        return self::$schemaValidators;
+    }
+
+    /**
+     * Decode the shared schema a second time as `stdClass` and project each
+     * property into a standalone sub-schema the validator can be pointed at.
+     *
+     * Validating each key against its OWN property sub-schema (rather than the
+     * whole document against an assembled object) keeps error attribution
+     * trivially per-key and side-steps the document's `additionalProperties:
+     * false`, which would otherwise reject a partial PUT payload outright.
+     *
+     * Fail-safe: an unreadable/unparseable schema yields `[]`, which means no
+     * constraint validation runs — the internal-type gate still applies. This
+     * mirrors the other two loaders' non-crashing degradation.
+     *
+     * @return array<string, \stdClass> Dotted setting key → property sub-schema.
+     */
+    private static function loadSchemaValidators(): array
+    {
+        $path = SchemaPaths::serverSettings();
+        $raw  = is_file($path) ? file_get_contents($path) : false;
+        if ($raw === false) {
+            return [];
+        }
+
+        $decoded = json_decode((string) $raw);
+        if (!($decoded instanceof \stdClass) || !($decoded->properties ?? null) instanceof \stdClass) {
+            return [];
+        }
+
+        $out = [];
+        /** @var mixed $def */
+        foreach (get_object_vars($decoded->properties) as $key => $def) {
+            if (!($def instanceof \stdClass)) {
+                continue;
+            }
+            self::applyNullEnumSentinelShim($def);
+            $out[$key] = $def;
+        }
+
+        return $out;
+    }
+
+    /**
+     * Compatibility shim for the one schema property that declares
+     * `"type": "string"` while listing a JSON `null` among its `enum` members
+     * (`transcoding.preferred_accelerator`'s "auto-detect" sentinel).
+     *
+     * The admin SPA renders that option's value through `String(v)`, so it
+     * submits the four-character string `"null"`. Without this shim, turning on
+     * real `enum` enforcement would start rejecting the UI's own "Auto-detect"
+     * choice with a 400.
+     *
+     * This is deliberately a narrow, self-deleting workaround: the correct fix
+     * is in `detain/phlix-shared`, replacing the `null` enum member with an
+     * explicit `"auto"` sentinel (and rekeying `enumLabels`/`optionHelp`/
+     * `default`). Once that lands and is re-vendored, no property will contain
+     * a `null` enum member and this method becomes a no-op.
+     *
+     * @param \stdClass $def A property sub-schema, mutated in place.
+     */
+    private static function applyNullEnumSentinelShim(\stdClass $def): void
+    {
+        $enum = $def->enum ?? null;
+        if (!is_array($enum) || !in_array(null, $enum, true)) {
+            return;
+        }
+
+        if (!in_array('null', $enum, true)) {
+            $enum[] = 'null';
+            $def->enum = $enum;
+        }
+    }
+
+    /**
+     * Validate one already-coerced value against its property sub-schema.
+     *
+     * @param string $key   Dotted setting key.
+     * @param mixed  $value The coerced PHP value about to be persisted.
+     *
+     * @return string|null Null when valid, else a human-readable message for
+     *                     the `errors` map the SPA renders inline.
+     */
+    private static function validateAgainstSchema(string $key, mixed $value): ?string
+    {
+        $schema = self::schemaValidators()[$key] ?? null;
+        if ($schema === null) {
+            // No sub-schema (degraded/missing schema file) — the internal-type
+            // gate already ran; do not invent a second failure mode here.
+            return null;
+        }
+
+        $subject = self::toValidatorValue($schema, $value);
+
+        $validator = new Validator();
+        $validator->validate($subject, $schema);
+
+        if ($validator->isValid()) {
+            return null;
+        }
+
+        $messages = [];
+        /** @var array<string, mixed> $error */
+        foreach ($validator->getErrors() as $error) {
+            $message = $error['message'] ?? null;
+            if (is_string($message) && $message !== '') {
+                $messages[] = $message;
+            }
+        }
+
+        return $messages === []
+            ? 'Value does not satisfy the schema constraints.'
+            : implode(' ', array_unique($messages));
+    }
+
+    /**
+     * Normalise a coerced PHP value into the shape `justinrainbow/json-schema`
+     * expects.
+     *
+     * PHP associative arrays are ambiguous — the library reads them as JSON
+     * arrays, so an `object`-typed setting persisted as an assoc array would
+     * spuriously fail its `type` check. Round-tripping non-scalars through JSON
+     * restores the object/array distinction. An empty array submitted for an
+     * `object`-typed key is treated as an empty object (clearing the map),
+     * preserving the pre-validation behaviour.
+     *
+     * @param \stdClass $schema The property sub-schema.
+     * @param mixed     $value  The coerced value.
+     *
+     * @return mixed A value the validator can check.
+     */
+    private static function toValidatorValue(\stdClass $schema, mixed $value): mixed
+    {
+        if (!is_array($value)) {
+            return $value;
+        }
+
+        if ($value === [] && ($schema->type ?? null) === 'object') {
+            return new \stdClass();
+        }
+
+        $encoded = json_encode($value);
+        if ($encoded === false) {
+            return $value;
+        }
+
+        return json_decode($encoded);
+    }
+
+    /**
      * Map a JSON-Schema `type` to the controller's internal type vocabulary.
      *
      * The internal vocabulary (`bool|int|float|string|json`) is exactly what
@@ -288,15 +495,97 @@ final class AdminSettingsController
     }
 
     /**
+     * Is this key flagged `"secret": true` in the shared schema?
+     *
+     * Driven by the schema flag, NOT by a hardcoded key list — so a key that
+     * gains `"secret": true` in a future `detain/phlix-shared` release is
+     * masked automatically, with no change here.
+     *
+     * @param string $key Dotted setting key.
+     *
+     * @return bool True when the key's value must never leave the server.
+     */
+    private static function isSecret(string $key): bool
+    {
+        return (self::schemaMeta()[$key]['secret'] ?? false) === true;
+    }
+
+    /**
+     * Replace every secret key's value with {@see SettingsMasker::MASK}.
+     *
+     * A secret that is unset (null / empty string) is left as-is so the UI can
+     * still tell "not configured" from "configured but hidden" even without
+     * consulting {@see secretStatus()}.
+     *
+     * @param array<string, mixed> $values Effective values, secrets included.
+     *
+     * @return array<string, mixed> The same map with secret values redacted.
+     */
+    private static function maskSecrets(array $values): array
+    {
+        /** @var mixed $value */
+        foreach ($values as $key => $value) {
+            if (!self::isSecret($key)) {
+                continue;
+            }
+            if ($value === null || $value === '' || !is_scalar($value)) {
+                continue;
+            }
+            $values[$key] = SettingsMasker::MASK;
+        }
+
+        return $values;
+    }
+
+    /**
+     * Per-secret "is it set?" summary, mirroring
+     * {@see SettingsMasker::secretStatus()}'s shape for plugin settings.
+     *
+     * The raw secret is NEVER included — only whether a non-empty value is
+     * stored and its character length, so the UI can render a
+     * length-appropriate "yes, it really is set" cue next to a masked field.
+     *
+     * @param array<string, mixed> $values Effective values BEFORE masking.
+     *
+     * @return array<string, array{set: bool, length: int}> Keyed by secret key.
+     */
+    private static function secretStatus(array $values): array
+    {
+        $out = [];
+        foreach (self::schemaMeta() as $key => $meta) {
+            if (($meta['secret'] ?? false) !== true) {
+                continue;
+            }
+            /** @var mixed $value */
+            $value = $values[$key] ?? null;
+            $set   = is_scalar($value) && (string) $value !== '';
+            $out[$key] = [
+                'set'    => $set,
+                'length' => $set ? mb_strlen((string) $value) : 0,
+            ];
+        }
+
+        return $out;
+    }
+
+    /**
      * Return effective values (config default merged with DB override) and
      * the list of overridden keys.
+     *
+     * Values for keys flagged `"secret": true` in the schema are replaced with
+     * {@see SettingsMasker::MASK} — they are never sent to the browser, where
+     * they would otherwise sit in the XHR body, the DOM, proxy logs and HAR
+     * captures, one "Show" click from being displayed. `secretStatus` carries
+     * the set/unset + length cue instead. {@see update()} honours the same
+     * sentinel so re-submitting a masked field does not overwrite the stored
+     * secret.
      *
      * GET /api/v1/admin/settings
      *
      * @param Request              $request The HTTP request (unused).
      * @param array<string, string> $params Path parameters (unused).
      *
-     * @return Response JSON `{ success, data: { settings, overridden, types, meta } }`.
+     * @return Response JSON `{ success, data: { settings, overridden, types, meta, secretStatus } }`.
      *
      * @since 0.5
      */
@@ -310,10 +599,11 @@ final class AdminSettingsController
             return (new Response())->json([
                 'success' => true,
                 'data'    => [
-                    'settings'   => $merged['values'],
-                    'overridden' => $merged['overridden'],
-                    'types'      => $allowed,
-                    'meta'       => self::schemaMeta(),
+                    'settings'     => self::maskSecrets($merged['values']),
+                    'overridden'   => $merged['overridden'],
+                    'types'        => $allowed,
+                    'meta'         => self::schemaMeta(),
+                    'secretStatus' => self::secretStatus($merged['values']),
                 ],
             ]);
         } catch (Throwable $e) {
@@ -331,9 +621,17 @@ final class AdminSettingsController
      * PUT /api/v1/admin/settings
      * Body: `{ "settings": { "<key>": <value>, ... } }`
      *
-     * Rejects (400) unknown keys and values that don't match the allow-list
-     * type. On success persists each override and returns the refreshed
-     * effective values.
+     * Rejects (400) unknown keys, values that don't match the allow-list type,
+     * and values that violate their property's JSON-Schema constraints
+     * (`enum` / `minimum` / `maximum` / anything else the schema declares).
+     * Errors are reported as a `{"<key>": "<message>"}` map, and a single bad
+     * key rejects the whole request without persisting anything.
+     *
+     * A key flagged `"secret": true` whose submitted value is exactly
+     * {@see SettingsMasker::MASK} is SKIPPED — that is the sentinel
+     * {@see index()} sent, meaning "unchanged", so the stored secret is left
+     * alone. Without this guard the first Save on the settings page would
+     * overwrite every secret with the literal mask string.
      *
      * @param Request              $request The HTTP request.
      * @param array<string, string> $params Path parameters (unused).
@@ -365,13 +663,46 @@ final class AdminSettingsController
                     continue;
                 }
 
+                // Secret echoed back unchanged → keep the stored value, skip.
+                // Mirrors PluginAdminController's guard so a Save cannot wipe
+                // credentials the admin never touched.
+                if (self::isSecret($key) && $value === SettingsMasker::MASK) {
+                    continue;
+                }
+
                 $type = $allowed[$key];
                 if (!self::valueMatchesType($value, $type)) {
                     $errors[$key] = sprintf('Expected type %s.', $type);
                     continue;
                 }
 
-                $validated[$key] = ['value' => self::coerce($value, $type), 'type' => $type];
+                $coerced = self::coerce($value, $type);
+
+                // Real JSON-Schema validation of the coerced value: this is
+                // what enforces enum / minimum / maximum, which were previously
+                // display-only metadata and unenforced on write.
+                $schemaError = self::validateAgainstSchema($key, $coerced);
+                if ($schemaError !== null) {
+                    $errors[$key] = $schemaError;
+                    continue;
+                }
+
+                $validated[$key] = ['value' => $coerced, 'type' => $type];
+            }
+
+            // Every submitted key was an unchanged secret sentinel: nothing to
+            // persist, but this is a successful no-op, not a 400.
+            if ($errors === [] && $validated === []) {
+                $merged = $this->settings->getEffectiveMany(array_keys($allowed));
+
+                return (new Response())->json([
+                    'success' => true,
+                    'message' => 'Settings updated.',
+                    'data'    => [
+                        'settings'   => self::maskSecrets($merged['values']),
+                        'overridden' => $merged['overridden'],
+                    ],
+                ]);
             }
 
             if ($errors !== []) {
@@ -392,7 +723,7 @@ final class AdminSettingsController
                 'success' => true,
                 'message' => 'Settings updated.',
                 'data'    => [
-                    'settings'   => $merged['values'],
+                    'settings'   => self::maskSecrets($merged['values']),
                     'overridden' => $merged['overridden'],
                 ],
             ]);

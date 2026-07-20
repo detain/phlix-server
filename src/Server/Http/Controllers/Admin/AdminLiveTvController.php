@@ -693,9 +693,8 @@ final class AdminLiveTvController
             /** @var Recorder $recorder */
             $recorder = $this->container->get(Recorder::class);
 
-            $limit = is_string($request->query['limit'] ?? null) && is_numeric($request->query['limit'])
-                ? (int) $request->query['limit']
-                : 10;
+            // SECURITY: clamped to PageLimit::MAX server-side before it reaches `LIMIT ?`.
+            $limit = $request->queryPageSize('limit', 10);
 
             $recordings = $recorder->getUpcomingRecordings($limit);
 

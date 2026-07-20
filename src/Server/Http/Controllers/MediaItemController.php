@@ -109,8 +109,11 @@ class MediaItemController
     {
         $libraryId = $params['library_id'] ?? null;
         $type = $request->queryString('type');
-        $limit = $request->queryInt('limit', 100);
-        $offset = $request->queryInt('offset', 0);
+        // SECURITY: page size is clamped to PageLimit::MAX server-side. An
+        // unclamped `?limit=` here reaches `LIMIT ?` and can OOM the resident
+        // Workerman worker that is serving every other user.
+        $limit = $request->queryPageSize('limit', 100);
+        $offset = $request->queryOffset();
 
         $filter = $this->resolveRatingFilter($request);
 
@@ -214,7 +217,8 @@ class MediaItemController
     public function recentlyAdded(Request $request, array $params): Response
     {
         $libraryId = $params['library_id'] ?? null;
-        $limit = $request->queryInt('limit', 20);
+        // SECURITY: clamped server-side (see index()).
+        $limit = $request->queryPageSize('limit', 20);
 
         if (!$libraryId) {
             return (new Response())->status(400)->json(['error' => 'library_id is required']);

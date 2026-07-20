@@ -12,6 +12,7 @@ declare(strict_types=1);
 namespace Phlix\Media\Library;
 
 use Phlix\Collection\SmartRuleVocabulary;
+use Phlix\Common\Http\PageLimit;
 use Phlix\Common\Uuid;
 use Phlix\Server\Http\RequestContext;
 use Phlix\Stats\StatsCollector;
@@ -3015,21 +3016,21 @@ class ItemRepository
     }
 
     /**
-     * Normalizes the limit to an integer between 1 and 100.
+     * Normalizes the limit to an integer between
+     * {@see \Phlix\Common\Http\PageLimit::MIN} and
+     * {@see \Phlix\Common\Http\PageLimit::MAX}.
+     *
+     * This method's bounds were the codebase's only correct page-size clamp;
+     * they now live in {@see PageLimit} so the HTTP boundary
+     * ({@see \Phlix\Server\Http\Request::queryPageSize()}) and this repository
+     * share ONE policy instead of two that can drift. Behaviour is unchanged.
      *
      * @param mixed $limit Raw limit value
      * @return int Normalized limit
      */
     private function normalizeLimit(mixed $limit): int
     {
-        $l = is_numeric($limit) ? (int) $limit : 50;
-        if ($l < 1) {
-            return 1;
-        }
-        if ($l > 100) {
-            return 100;
-        }
-        return $l;
+        return PageLimit::clamp($limit, PageLimit::DEFAULT);
     }
 
     /**

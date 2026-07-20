@@ -29,6 +29,7 @@ use Phlix\Admin\WatchHistoryService;
 use Phlix\Server\Http\Controllers\Admin\AdminMergeController;
 use Phlix\Server\Http\Controllers\Admin\AdminMetadataSourceController;
 use Phlix\Server\Http\Controllers\Admin\AdminProfileController;
+use Phlix\Server\Http\Controllers\Admin\AdminRestartController;
 use Phlix\Server\Http\Controllers\Admin\AdminSettingsController;
 use Phlix\Server\Http\Controllers\Admin\AdminTranscodingController;
 use Phlix\Server\Http\Controllers\Admin\AdminUserController;
@@ -246,6 +247,13 @@ final class AdminRoutesTest extends TestCase
                     DashboardController::class => $this->dashboardController,
                     BackupController::class    => $this->backupController,
                     AdminSettingsController::class => $this->settingsController,
+                    // POST /api/v1/admin/restart is registered by AdminRoutes; the
+                    // stub container must bind it or every route test in this class
+                    // dies during registration. Pointed at a path that does not exist
+                    // so it can never signal anything from a test run.
+                    AdminRestartController::class => new AdminRestartController(
+                        '/nonexistent/phlix-test-pid',
+                    ),
                     FsBrowseController::class => $this->fsBrowseController,
                     LogController::class => $this->logController,
                     AdminUserController::class => $this->adminUserController,
@@ -274,6 +282,7 @@ final class AdminRoutesTest extends TestCase
                     DashboardController::class,
                     BackupController::class,
                     AdminSettingsController::class,
+                    AdminRestartController::class,
                     FsBrowseController::class,
                     LogController::class,
                     AdminUserController::class,

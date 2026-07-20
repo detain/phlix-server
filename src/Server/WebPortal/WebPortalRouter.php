@@ -503,8 +503,11 @@ class WebPortalRouter
     {
         $libraryId = $params['id'];
         $type = $request->queryString('type');
-        $limit = $request->queryInt('limit', 50);
-        $offset = $request->queryInt('offset', 0);
+        // SECURITY: page size is clamped to PageLimit::MAX server-side. An
+        // unclamped `?limit=` here reaches `LIMIT ?` and can OOM the resident
+        // Workerman worker that is serving every other user.
+        $limit = $request->queryPageSize('limit', 50);
+        $offset = $request->queryOffset();
 
         // Enforce the active profile's parental cap (null → no cap, permissive).
         $ratingFilter = $this->resolveRatingFilter($request);
@@ -1508,12 +1511,9 @@ class WebPortalRouter
             return (new Response())->status(400)->json(['error' => 'Query parameter "q" is required']);
         }
 
-        $limit = $request->queryInt('limit', 50);
-        if ($limit < 1) {
-            $limit = 1;
-        } elseif ($limit > 100) {
-            $limit = 100;
-        }
+        // SECURITY: single shared clamp policy (PageLimit) rather than a
+        // hand-rolled bound that can drift from the rest of the API.
+        $limit = $request->queryPageSize('limit', 50);
 
         // Run the search via ItemRepository
         $items = $this->itemRepository->search($query, $limit);
@@ -2050,7 +2050,8 @@ class WebPortalRouter
             return (new Response())->status(404)->json(['error' => 'Item not found']);
         }
 
-        $limit = $request->queryInt('limit', 10);
+        // SECURITY: clamped to PageLimit::MAX server-side before it reaches `LIMIT ?`.
+        $limit = $request->queryPageSize('limit', 10);
         $items = $this->similarityService->getSimilar($itemId, $limit);
 
         if ($items !== []) {
@@ -2294,10 +2295,9 @@ class WebPortalRouter
             return (new Response())->status(401)->json(['error' => 'Unauthorized']);
         }
 
-        $limit = $request->queryInt('limit', 20);
-        if ($limit < 1 || $limit > 100) {
-            $limit = 20;
-        }
+        // SECURITY: single shared clamp policy (PageLimit); an over-large limit
+        // is clamped down rather than silently reset to the default.
+        $limit = $request->queryPageSize('limit', 20);
 
         $recommendations = $this->recommendationService->getBecauseYouWatched($userId, $limit);
 
@@ -2772,12 +2772,9 @@ class WebPortalRouter
             return (new Response())->status(503)->json(['error' => 'Music library service not configured']);
         }
 
-        $limit = $request->queryInt('limit', 50);
-        $offset = $request->queryInt('offset', 0);
-
-        // Clamp limit to valid range
-        $limit = max(1, min(100, $limit));
-        $offset = max(0, $offset);
+        // SECURITY: single shared clamp policy (PageLimit).
+        $limit = $request->queryPageSize('limit', 50);
+        $offset = $request->queryOffset();
 
         $artists = $this->musicLibraryService->getAllArtists($limit, $offset);
         $total = $this->musicLibraryService->getArtistsCount();
@@ -2870,12 +2867,9 @@ class WebPortalRouter
             return (new Response())->status(503)->json(['error' => 'Music library service not configured']);
         }
 
-        $limit = $request->queryInt('limit', 100);
-        $offset = $request->queryInt('offset', 0);
-
-        // Clamp limit to valid range
-        $limit = max(1, min(100, $limit));
-        $offset = max(0, $offset);
+        // SECURITY: single shared clamp policy (PageLimit).
+        $limit = $request->queryPageSize('limit', 100);
+        $offset = $request->queryOffset();
 
         $tracks = $this->musicLibraryService->getAllTracks($limit, $offset);
         $total = $this->musicLibraryService->getTracksCount();

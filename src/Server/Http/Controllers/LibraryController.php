@@ -892,7 +892,8 @@ class LibraryController
             return (new Response())->status(404)->json(['error' => 'Library not found']);
         }
 
-        $limit = $request->queryInt('limit', 20);
+        // SECURITY: clamped to PageLimit::MAX server-side before it reaches `LIMIT ?`.
+        $limit = $request->queryPageSize('limit', 20);
         $history = $this->scanJobs->getHistoryForLibrary($params['id'], $limit);
 
         return (new Response())->json(['history' => $history]);

@@ -274,9 +274,9 @@ class MediaUserDataController
             return (new Response())->status(401)->json(['error' => 'Unauthorized']);
         }
 
-        $limit = $request->queryInt('limit', 50);
-        $limit = max(1, min(100, $limit));
-        $offset = max(0, $request->queryInt('offset', 0));
+        // SECURITY: single shared clamp policy (PageLimit).
+        $limit = $request->queryPageSize('limit', 50);
+        $offset = $request->queryOffset();
 
         $rows = $this->userItemData->getFavorites($userId, $limit, $offset);
 

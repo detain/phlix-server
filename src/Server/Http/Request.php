@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Server\Http;
 
+use Phlix\Common\Http\PageLimit;
 use Phlix\Common\Http\TrustedProxyResolver;
 use Workerman\Connection\TcpConnection;
 use Workerman\Protocols\Http\Request as WorkermanRequest;
@@ -520,6 +521,45 @@ class Request
     {
         $value = $this->query[$key] ?? null;
         return is_numeric($value) ? (int)$value : $default;
+    }
+
+    /**
+     * Gets a pagination page size, CLAMPED to the hard server-side ceiling.
+     *
+     * Use this — never {@see queryInt()} — for any value that ends up bound to
+     * a `LIMIT ?`. `queryInt()` performs no bounds checking at all, so an
+     * unclamped `?limit=` reaching a query is a memory-exhaustion vector
+     * against a **resident** Workerman worker: one request can OOM the process
+     * serving every other user.
+     *
+     * The ceiling ({@see PageLimit::MAX}) is a hard compile-time maximum, not a
+     * configurable default a client may exceed.
+     *
+     * @param string $key     The query parameter name (usually `limit`).
+     * @param int    $default Page size when the parameter is absent/non-numeric.
+     *
+     * @return int A page size guaranteed to satisfy `PageLimit::MIN <= n <= PageLimit::MAX`.
+     *
+     * @since 1.3.0
+     */
+    public function queryPageSize(string $key = 'limit', int $default = PageLimit::DEFAULT): int
+    {
+        return PageLimit::clamp($this->query[$key] ?? null, $default);
+    }
+
+    /**
+     * Gets a pagination row offset, clamped to a non-negative integer.
+     *
+     * @param string $key     The query parameter name (usually `offset`).
+     * @param int    $default Offset when the parameter is absent/non-numeric.
+     *
+     * @return int A non-negative row offset.
+     *
+     * @since 1.3.0
+     */
+    public function queryOffset(string $key = 'offset', int $default = 0): int
+    {
+        return PageLimit::clampOffset($this->query[$key] ?? null, $default);
     }
 
     /**

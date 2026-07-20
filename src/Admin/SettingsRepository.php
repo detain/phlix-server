@@ -25,11 +25,20 @@ use Workerman\MySQL\Connection;
  *     admin settings API.
  *   - **effective** — the override when present, else the default.
  *
- * Keys are *dotted*: the first segment names the config file and the
- * remaining segments walk into the array it returns. For example
+ * Keys are *dotted*: a leading run of segments names the config **file** and
+ * the remaining segments walk into the array it returns. For example
  * `hwaccel.enabled` resolves the `'enabled'` key of `config/hwaccel.php`,
  * and `port-forward.port_forwarding.upnp_enabled` walks two levels into
  * `config/port-forward.php`.
+ *
+ * The file part may span **subdirectories**: `scrobblers.trakt.client_id`
+ * resolves `config/scrobblers/trakt.php`'s `'client_id'`. The longest matching
+ * file path wins, so `config/foo/bar.php` is preferred over `config/foo.php`
+ * for the key `foo.bar.baz`. This exists because `config/scrobblers/trakt.php`
+ * is a real, shipped config file that was unreachable under the original
+ * "first segment is the whole filename" rule — any key pointing at it resolved
+ * to a `null` default. The change is purely additive (a multi-segment file path
+ * previously never resolved at all), so no existing key's resolution changes.
  *
  * Storage notes:
  *   - `setting_value` is always stored as text; `value_type`
@@ -196,26 +205,75 @@ class SettingsRepository
      */
     public function getDefault(string $key): mixed
     {
+        return $this->resolveDefault($key)['value'];
+    }
+
+    /**
+     * Does a dotted key address a config path that actually EXISTS?
+     *
+     * Distinguishes "the config declares this key and its value happens to be
+     * null" (true — e.g. `transcoding.preferred_accelerator`, whose null means
+     * "auto-detect") from "no config file or path of that name exists" (false),
+     * which {@see getDefault()} cannot express because both return `null`.
+     *
+     * That distinction is what makes it possible to assert that every schema
+     * key is backed by a real default; see
+     * {@see \Phlix\Tests\Unit\Admin\SettingsDefaultResolvabilityTest}.
+     *
+     * @param string $key Dotted setting key.
+     *
+     * @return bool True when the config path resolves (whatever its value).
+     *
+     * @since 1.3.0
+     */
+    public function hasDefault(string $key): bool
+    {
+        return $this->resolveDefault($key)['found'];
+    }
+
+    /**
+     * Resolve a dotted key against the config files, reporting BOTH whether
+     * the path exists and the value found there.
+     *
+     * @param string $key Dotted setting key.
+     *
+     * @return array{found: bool, value: mixed}
+     */
+    private function resolveDefault(string $key): array
+    {
         $segments = explode('.', $key);
-        $file     = array_shift($segments);
-        if ($file === null || $file === '') {
-            return null;
+        if (count($segments) < 2) {
+            // A bare file name addresses no value inside it.
+            return ['found' => false, 'value' => null];
         }
 
-        $config = $this->loadConfig($file);
-        if ($config === null) {
-            return null;
-        }
-
-        $cursor = $config;
-        foreach ($segments as $segment) {
-            if (!is_array($cursor) || !array_key_exists($segment, $cursor)) {
-                return null;
+        // Longest-file-path-first: try `config/a/b/c.php`, then `config/a/b.php`,
+        // then `config/a.php`, so a nested config file (config/scrobblers/trakt.php)
+        // is preferred over a same-named flat one. At least one segment must
+        // remain to address a value inside the file.
+        for ($fileSegmentCount = count($segments) - 1; $fileSegmentCount >= 1; $fileSegmentCount--) {
+            $filePath = array_slice($segments, 0, $fileSegmentCount);
+            $config   = $this->loadConfig($filePath);
+            if ($config === null) {
+                continue;
             }
-            $cursor = $cursor[$segment];
+
+            $cursor  = $config;
+            $missing = false;
+            foreach (array_slice($segments, $fileSegmentCount) as $segment) {
+                if (!is_array($cursor) || !array_key_exists($segment, $cursor)) {
+                    $missing = true;
+                    break;
+                }
+                $cursor = $cursor[$segment];
+            }
+
+            if (!$missing) {
+                return ['found' => true, 'value' => $cursor];
+            }
         }
 
-        return $cursor;
+        return ['found' => false, 'value' => null];
     }
 
     /**
@@ -269,24 +327,31 @@ class SettingsRepository
     }
 
     /**
-     * Load and cache a single `config/<file>.php`.
+     * Load and cache a single `config/<a>/<b>/....php`.
      *
-     * @param string $file Config file segment (no extension), e.g. `hwaccel`.
+     * @param list<string> $fileSegments Path segments of the config file, no
+     *                                   extension, e.g. `['hwaccel']` or
+     *                                   `['scrobblers', 'trakt']`.
      *
      * @return array<array-key, mixed>|null Decoded config, or null when
      *         missing / not an array.
      */
-    private function loadConfig(string $file): ?array
+    private function loadConfig(array $fileSegments): ?array
     {
+        $file = implode('/', $fileSegments);
+
         if (array_key_exists($file, $this->configCache)) {
             return $this->configCache[$file];
         }
 
-        // Jail the lookup to the config directory: reject any traversal in
-        // the key's first segment so a crafted setting_key cannot include
-        // arbitrary PHP files. Only simple file names are permitted.
-        if (!preg_match('/^[A-Za-z0-9_-]+$/', $file)) {
-            return $this->configCache[$file] = null;
+        // Jail the lookup to the config directory: EVERY segment must be a
+        // simple name, so a crafted setting_key can contain no `..`, no `/`
+        // and no absolute path, and therefore cannot include arbitrary PHP
+        // files from outside `config/`.
+        foreach ($fileSegments as $segment) {
+            if (!preg_match('/^[A-Za-z0-9_-]+$/', $segment)) {
+                return $this->configCache[$file] = null;
+            }
         }
 
         $path = $this->configDir . '/' . $file . '.php';

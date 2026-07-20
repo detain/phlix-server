@@ -30,6 +30,7 @@ use Phlix\Common\RateLimit\RateLimiterInterface;
 use Phlix\Common\RateLimit\RateLimitProfiles;
 use Phlix\Server\Core\Application;
 use Phlix\Server\Http\RequestAuthenticator;
+use Phlix\Server\Runtime\PidFile;
 use Phlix\Server\Workerman\HttpHandler;
 use Phlix\Stats\Metrics\MetricsCollector;
 use Phlix\Stats\Metrics\MetricsFlushService;
@@ -74,6 +75,21 @@ $config['web_portal']         = array_merge(
 );
 
 LoggerFactory::init($config['logger_config_path']);
+
+// Point Workerman's master PID file at config/server.php's `worker.pid_file`.
+// MUST run in the master, before Worker::runAll(). Without this, Workerman uses
+// its own default (dirname(start.php)/workerman.start.php.pid) while
+// AdminRestartController reads the configured path — so the admin restart
+// endpoint 500s with "PID file not found" on every real box. Non-fatal: an
+// unusable directory leaves Workerman's default in place rather than aborting
+// boot. {@see \Phlix\Server\Runtime\PidFile}
+if (PidFile::apply($config) === null) {
+    fwrite(
+        STDERR,
+        "[phlix] WARNING: worker.pid_file is unset or its directory is not writable; "
+        . "falling back to Workerman's default PID path. POST /api/v1/admin/restart will not work.\n"
+    );
+}
 
 // -----------------------------------------------------------------------------
 // 0. Coroutine runtime — make Swoole the eventLoop driver and enable a CURATED

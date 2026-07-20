@@ -238,8 +238,8 @@ final class AdminSettingsController
                 'helpText'   => $def['helpText'] ?? null,
                 'helpLinks'  => isset($def['helpLinks']) && is_array($def['helpLinks'])
                     ? $def['helpLinks']
-                    : null,
-                'tier'       => $def['tier'] ?? null,
+                    : [],
+                'tier'       => $def['tier'] ?? 'standard',
                 'group'      => $def['group'] ?? null,
                 'enum'       => isset($def['enum']) && is_array($def['enum']) ? $def['enum'] : null,
                 'enumLabels' => isset($def['enumLabels']) && is_array($def['enumLabels'])

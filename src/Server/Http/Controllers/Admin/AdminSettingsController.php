@@ -67,6 +67,19 @@ final class AdminSettingsController
      */
     private static ?array $allowedKeys = null;
 
+    /**
+     * Lazily-loaded cache of the per-key meta block derived from the same
+     * schema: dotted key → meta block. Populated once by
+     * {@see loadSchemaMeta()} on the first call and reused thereafter.
+     *
+     * This is immutable config data (the schema is shipped read-only in the
+     * vendored package), NOT per-request state, so caching it in a static is
+     * resident-memory-safe.
+     *
+     * @var array<string, array<string, mixed>>|null
+     */
+    private static ?array $schemaMeta = null;
+
     /** @var SettingsRepository Server-settings store. */
     private SettingsRepository $settings;
 
@@ -102,6 +115,29 @@ final class AdminSettingsController
         }
 
         return self::$allowedKeys;
+    }
+
+    /**
+     * Per-key meta block sourced directly from the shared schema.
+     *
+     * Each key in the returned map corresponds to a property in
+     * `server-settings.schema.json` — including keys that have no type
+     * mapping (and therefore do not appear in {@see allowedKeys()}).  The
+     * meta block carries everything the admin SPA needs to render a settings
+     * row: label, help text, help links, tier, group, enum constraints, min/
+     * max bounds, default value, and the secret/restart flags.
+     *
+     * @return array<string, array<string, mixed>> Dotted setting key → meta block.
+     *
+     * @since 0.7.1
+     */
+    public static function schemaMeta(): array
+    {
+        if (self::$schemaMeta === null) {
+            self::$schemaMeta = self::loadSchemaMeta();
+        }
+
+        return self::$schemaMeta;
     }
 
     /**
@@ -158,6 +194,76 @@ final class AdminSettingsController
     }
 
     /**
+     * Read and decode the shared `server-settings.schema.json` and project
+     * every property into a per-key meta block.
+     *
+     * Unlike {@see loadAllowedKeysFromSchema()}, no type filtering is applied —
+     * every declared property appears in the result, providing the rich
+     * per-key metadata the admin SPA needs for rendering.  Optional fields
+     * that are absent from a given property definition are emitted as `null`.
+     *
+     * Fail-safe: any unreadable, unparseable, or structurally-unexpected
+     * schema yields an empty map `[]` rather than an exception.
+     *
+     * @return array<string, array<string, mixed>> Dotted setting key → meta block.
+     *
+     * @since 0.7.1
+     */
+    private static function loadSchemaMeta(): array
+    {
+        $path = SchemaPaths::serverSettings();
+        $raw  = is_file($path) ? file_get_contents($path) : false;
+        if ($raw === false) {
+            return [];
+        }
+
+        $decoded = json_decode((string) $raw, true);
+        if (!is_array($decoded)) {
+            return [];
+        }
+
+        if (!isset($decoded['properties']) || !is_array($decoded['properties'])) {
+            return [];
+        }
+
+        /** @var array<string, array<string, mixed>> $meta */
+        $meta = [];
+        foreach ($decoded['properties'] as $key => $def) {
+            if (!is_string($key) || !is_array($def)) {
+                continue;
+            }
+
+            $meta[$key] = [
+                'label'      => $def['label'] ?? null,
+                'helpText'   => $def['helpText'] ?? null,
+                'helpLinks'  => isset($def['helpLinks']) && is_array($def['helpLinks'])
+                    ? $def['helpLinks']
+                    : null,
+                'tier'       => $def['tier'] ?? null,
+                'group'      => $def['group'] ?? null,
+                'enum'       => isset($def['enum']) && is_array($def['enum']) ? $def['enum'] : null,
+                'enumLabels' => isset($def['enumLabels']) && is_array($def['enumLabels'])
+                    ? $def['enumLabels']
+                    : null,
+                'optionHelp' => isset($def['optionHelp']) && is_array($def['optionHelp'])
+                    ? $def['optionHelp']
+                    : null,
+                'minimum'    => isset($def['minimum']) && is_numeric($def['minimum'])
+                    ? (float) $def['minimum']
+                    : null,
+                'maximum'    => isset($def['maximum']) && is_numeric($def['maximum'])
+                    ? (float) $def['maximum']
+                    : null,
+                'default'    => array_key_exists('default', $def) ? $def['default'] : null,
+                'secret'     => !empty($def['secret']),
+                'restart'    => !empty($def['restart']),
+            ];
+        }
+
+        return $meta;
+    }
+
+    /**
      * Map a JSON-Schema `type` to the controller's internal type vocabulary.
      *
      * The internal vocabulary (`bool|int|float|string|json`) is exactly what
@@ -190,7 +296,7 @@ final class AdminSettingsController
      * @param Request              $request The HTTP request (unused).
      * @param array<string, string> $params Path parameters (unused).
      *
-     * @return Response JSON `{ success, data: { settings, overridden, types } }`.
+     * @return Response JSON `{ success, data: { settings, overridden, types, meta } }`.
      *
      * @since 0.5
      */
@@ -207,6 +313,7 @@ final class AdminSettingsController
                     'settings'   => $merged['values'],
                     'overridden' => $merged['overridden'],
                     'types'      => $allowed,
+                    'meta'       => self::schemaMeta(),
                 ],
             ]);
         } catch (Throwable $e) {

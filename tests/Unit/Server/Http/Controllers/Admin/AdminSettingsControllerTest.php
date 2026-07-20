@@ -131,12 +131,69 @@ final class AdminSettingsControllerTest extends TestCase
         $response = $controller->index($this->makeRequest(), []);
 
         $this->assertSame(200, $response->statusCode);
-        /** @var array{success: mixed, data: array{settings: array<string, mixed>, overridden: mixed, types: array<string, mixed>}} $body */
+        /** @var array{success: mixed, data: array{settings: array<string, mixed>, overridden: mixed, types: array<string, mixed>, meta: array<string, mixed>}} $body */
         $body = json_decode($response->body, true);
         $this->assertTrue($body['success']);
         $this->assertFalse($body['data']['settings']['hwaccel.enabled']);
         $this->assertSame(['hwaccel.enabled'], $body['data']['overridden']);
         $this->assertArrayHasKey('types', $body['data']);
+        $this->assertArrayHasKey('meta', $body['data']);
+    }
+
+    public function testSchemaMetaReturnsPerKeyMetaBlockFromSchema(): void
+    {
+        // schemaMeta() returns a non-empty map for every property in the
+        // vendored server-settings.schema.json.
+        $meta = AdminSettingsController::schemaMeta();
+
+        $this->assertNotEmpty($meta, 'schemaMeta() must not be empty when schema is present');
+        $this->assertArrayHasKey('hwaccel.enabled', $meta);
+        $this->assertArrayHasKey('trakt.client_secret', $meta);
+        $this->assertArrayHasKey('lastfm.shared_secret', $meta);
+    }
+
+    public function testSchemaMetaHwaccelEnabledHasRequiredMetaFields(): void
+    {
+        // hwaccel.enabled is a boot-only, standard-tier transcoding setting —
+        // verify its meta block is fully populated from the schema.
+        $meta = AdminSettingsController::schemaMeta();
+        $hwaccel = $meta['hwaccel.enabled'];
+
+        $this->assertSame('Enable hardware acceleration', $hwaccel['label']);
+        $this->assertNotEmpty($hwaccel['helpText']);
+        $this->assertIsArray($hwaccel['helpLinks']);
+        $this->assertNotNull($hwaccel['helpLinks']);
+        $this->assertSame('transcoding', $hwaccel['group']);
+        $this->assertSame('standard', $hwaccel['tier']);
+        $this->assertNull($hwaccel['enum']);
+        $this->assertNull($hwaccel['enumLabels']);
+        $this->assertNull($hwaccel['optionHelp']);
+        $this->assertNull($hwaccel['minimum']);
+        $this->assertNull($hwaccel['maximum']);
+        $this->assertNull($hwaccel['default']);
+        $this->assertFalse($hwaccel['secret']);
+        $this->assertTrue($hwaccel['restart']);
+    }
+
+    public function testSchemaMetaTraktClientSecretHasSecretFlag(): void
+    {
+        // trakt.client_secret has secret:true in the schema.
+        $meta = AdminSettingsController::schemaMeta();
+        $trakt = $meta['trakt.client_secret'];
+
+        $this->assertTrue($trakt['secret']);
+        $this->assertFalse($trakt['restart']);
+        $this->assertSame('scrobblers', $trakt['group']);
+    }
+
+    public function testSchemaMetaLastfmSharedSecretHasSecretFlag(): void
+    {
+        // lastfm.shared_secret has secret:true in the schema.
+        $meta = AdminSettingsController::schemaMeta();
+        $lastfm = $meta['lastfm.shared_secret'];
+
+        $this->assertTrue($lastfm['secret']);
+        $this->assertFalse($lastfm['restart']);
     }
 
     public function testIndexReturns500OnRepositoryError(): void

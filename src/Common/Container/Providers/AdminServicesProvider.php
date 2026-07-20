@@ -24,6 +24,7 @@ use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Library\SeriesMerger;
 use Phlix\Server\Http\Controllers\Admin\AdminMergeController;
 use Phlix\Server\Http\Controllers\Admin\AdminMetadataSourceController;
+use Phlix\Server\Http\Controllers\Admin\AdminRestartController;
 use Phlix\Server\Http\Controllers\Admin\AdminTranscodingController;
 use Phlix\Server\Http\Controllers\Admin\AdminSettingsController;
 use Phlix\Server\Http\Controllers\Admin\AdminUserController;
@@ -183,6 +184,23 @@ final class AdminServicesProvider implements ServiceProviderInterface
             WebhookHttpClient::class => autowire(),
             WebhookService::class => autowire(),
             AdminWebhooksController::class => autowire(),
+
+            // Phase 8: graceful server restart via SIGUSR1.
+            AdminRestartController::class => factory(
+                static function (ContainerInterface $c): AdminRestartController {
+                    /** @var array<string, mixed> $appConfig */
+                    $appConfig = $c->get('app.config');
+                    $worker = $appConfig['worker'] ?? null;
+
+                    if (is_array($worker) && is_string($worker['pid_file'] ?? null)) {
+                        $pidFile = $worker['pid_file'];
+                    } else {
+                        $pidFile = '/var/run/phlix/pid';
+                    }
+
+                    return new AdminRestartController($pidFile);
+                }
+            ),
         ]);
     }
 }

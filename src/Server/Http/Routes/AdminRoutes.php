@@ -14,6 +14,7 @@ namespace Phlix\Server\Http\Routes;
 use Phlix\Server\Http\Controllers\Admin\AdminMergeController;
 use Phlix\Server\Http\Controllers\Admin\AdminMetadataSourceController;
 use Phlix\Server\Http\Controllers\Admin\AdminProfileController;
+use Phlix\Server\Http\Controllers\Admin\AdminRestartController;
 use Phlix\Server\Http\Controllers\Admin\AdminSettingsController;
 use Phlix\Server\Http\Controllers\Admin\AdminTranscodingController;
 use Phlix\Server\Http\Controllers\Admin\AdminUserController;
@@ -195,6 +196,11 @@ final class AdminRoutes
 
                 $r->get('/settings', [$settingsController, 'index']);
                 $r->put('/settings', [$settingsController, 'update']);
+
+                // Phase 8: graceful server restart.
+                /** @var AdminRestartController $restartController */
+                $restartController = $container->get(AdminRestartController::class);
+                $r->post('/restart', [$restartController, 'restart']);
 
                 // Hardware accelerator introspection (P6-S1).
                 /** @var AdminTranscodingController $transcodingController */

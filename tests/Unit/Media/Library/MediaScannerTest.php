@@ -987,6 +987,36 @@ class MediaScannerTest extends TestCase
         );
     }
 
+    /**
+     * An `'image'` LIBRARY type must yield `type='photo'` MEDIA items. `image`
+     * keys the extension set in the scanner's naming options, but it is not a
+     * member of the `media_items.type` ENUM — the column calls that concept
+     * `photo`. Regression: determineMediaType() returned the library type
+     * verbatim, so every photo INSERT was rejected by a strict-mode server
+     * (error 1265) and a photo library could never produce a single row.
+     */
+    public function testImageLibraryCreatesItemsTypedPhotoNotImage(): void
+    {
+        $repo = $this->makeFakeRepo();
+        $ffmpeg = $this->createMock(FfmpegRunner::class);
+        $ffmpeg->expects($this->never())->method('probe');
+
+        $this->tmpDir = $this->makeTempDirWith(['One.jpg', 'Two.png']);
+
+        $scanner = new MediaScanner(
+            $this->createMock(Connection::class),
+            $repo,
+            null,
+            null,
+            null,
+            $ffmpeg
+        );
+        $scanner->scan('lib-img', $this->tmpDir, 'image');
+
+        $types = array_column($repo->items(), 'type');
+        $this->assertSame(['photo', 'photo'], $types, "photos must be typed 'photo', never 'image'");
+    }
+
     public function testProbeReturningNullLeavesNoDurationAndDoesNotAbort(): void
     {
         $repo = $this->makeFakeRepo();
@@ -1789,7 +1819,7 @@ class MediaScannerTest extends TestCase
         $scanner = new MediaScanner($this->createMock(Connection::class), $repoB, null, null, null, $ff);
         $this->assertSame(
             'skipped',
-            $scanner->backfillItemSourceMetadata(['id' => 'x', 'type' => 'image', 'path' => '/x.jpg', 'metadata' => []])
+            $scanner->backfillItemSourceMetadata(['id' => 'x', 'type' => 'photo', 'path' => '/x.jpg', 'metadata' => []])
         );
 
         // Probe returns null → failed, nothing written.

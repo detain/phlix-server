@@ -182,20 +182,20 @@ class LibraryBridgeTest extends TestCase
     /**
      * @since 0.12.0
      */
-    public function testItemToCdsObjectHandlesImageType(): void
+    public function testItemToCdsObjectHandlesPhotoType(): void
     {
         $item = [
             'id' => 'image-123',
             'parent_id' => 'library-images',
             'name' => 'Test Photo',
-            'type' => 'image',
+            'type' => 'photo',
             'path' => '/media/images/test.jpg',
         ];
 
         $cdsObject = $this->bridge->itemToCdsObject($item);
 
         $this->assertEquals('image-123', $cdsObject['id']);
-        $this->assertEquals('image', $cdsObject['type']);
+        $this->assertEquals('photo', $cdsObject['type']);
         $this->assertEquals('object.item.imageItem.photo', $cdsObject['class']);
     }
 

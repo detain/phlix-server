@@ -453,14 +453,14 @@ class ItemRepositoryTest extends TestCase
         $db = $this->createMock(Connection::class);
         $db->method('query')->willReturnCallback(function (string $sql, $params = []) use (&$queries) {
             $queries[] = ['sql' => $sql, 'params' => $params];
-            // Fast path_hash IN pass sees nothing — image rows hash to NULL.
+            // Fast path_hash IN pass sees nothing — photo rows hash to NULL.
             if (str_contains($sql, 'path_hash')) {
                 return [];
             }
-            // Raw-path fallback resolves the existing image rows by exact path.
+            // Raw-path fallback resolves the existing photo rows by exact path.
             return [
-                ['id' => 'img-a', 'path' => '/photos/a.jpg', 'type' => 'image', 'metadata_json' => '{}'],
-                ['id' => 'img-b', 'path' => '/photos/b.jpg', 'type' => 'image', 'metadata_json' => '{}'],
+                ['id' => 'img-a', 'path' => '/photos/a.jpg', 'type' => 'photo', 'metadata_json' => '{}'],
+                ['id' => 'img-b', 'path' => '/photos/b.jpg', 'type' => 'photo', 'metadata_json' => '{}'],
             ];
         });
 
@@ -481,7 +481,7 @@ class ItemRepositoryTest extends TestCase
 
     /**
      * SV-0.8: the fallback pass must re-probe ONLY the paths the hash pass left
-     * unresolved (a mixed batch of a deduped movie + a NULL-hash image) — the
+     * unresolved (a mixed batch of a deduped movie + a NULL-hash photo) — the
      * deduped row is already in the map, so the second query is bounded to the
      * remainder and never re-fetches an already-resolved path.
      */
@@ -496,8 +496,8 @@ class ItemRepositoryTest extends TestCase
                 // The deduped movie resolves in the fast pass.
                 return [['id' => 'mov', 'path' => '/movies/m.mkv', 'type' => 'movie', 'metadata_json' => '{}']];
             }
-            // Only the NULL-hash image is left for the fallback pass.
-            return [['id' => 'img', 'path' => '/photos/p.jpg', 'type' => 'image', 'metadata_json' => '{}']];
+            // Only the NULL-hash photo is left for the fallback pass.
+            return [['id' => 'img', 'path' => '/photos/p.jpg', 'type' => 'photo', 'metadata_json' => '{}']];
         });
 
         $repo = new ItemRepository($db);

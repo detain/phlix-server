@@ -188,6 +188,24 @@ class HlsController
             $this->transcodeManager?->ensurePlaylistRegenerated($jobId);
         }
 
+        // Robustness for the FOLDED "original" variant (v7 ABR ladder): when the
+        // re-encoded "Original" rung is byte-identical to the top ladder rung the
+        // ladder DROPS it from the master (see {@see \Phlix\Media\Streaming\LadderResult::streamVariants()}),
+        // so `media_voriginal.m3u8` is never produced. An older/other client that
+        // requests it directly (e.g. a persisted "Original" quality preference)
+        // would 404 → fatal playback error. Transparently resolve the folded
+        // `original` alias to the TOP available rung's playlist (served in place,
+        // no redirect — playlists are `no-cache`, so this is cache-safe). This is
+        // purely a serve-time alias: the ladder folding and master playlist are
+        // unchanged. Applied ONLY to the `original` alias, and only when that
+        // playlist is genuinely absent — a truly unknown rung still 404s.
+        if ($file === 'media_voriginal.m3u8' && !is_file("{$dir}/{$file}")) {
+            $topVariant = $this->resolveTopVariantPlaylist($dir);
+            if ($topVariant !== null) {
+                $file = $topVariant;
+            }
+        }
+
         return $this->serveJobFile($request, $dir, $file);
     }
 
@@ -203,5 +221,68 @@ class HlsController
         // media_a{id}.m3u8 (audio-only).
         return $file === 'master.m3u8'
             || preg_match('/^media_(v\w+|a\d+|0)\.m3u8$/i', $file) === 1;
+    }
+
+    /**
+     * Resolve the TOP (highest-BANDWIDTH) per-variant media playlist for a job,
+     * used as the serve-time alias for a FOLDED `original` variant playlist.
+     *
+     * The master playlist lists one `#EXT-X-STREAM-INF:...BANDWIDTH=N` line per
+     * rung, each immediately followed by its `media_v{id}.m3u8` URI (highest-first
+     * per {@see \Phlix\Media\Streaming\LadderResult::streamVariants()}). We parse
+     * every such pair and pick the highest-BANDWIDTH variant whose playlist file
+     * ACTUALLY exists on disk — deriving "top rung" from the job's real rung set,
+     * not a hardcoded name or a trusted master ordering.
+     *
+     * Guards: `media_voriginal.m3u8` is excluded from the candidate set (it is the
+     * folded alias being resolved — never self-select, so no serve loop), and only
+     * an existing file is returned. Returns null when there is no master, no video
+     * stream-inf, or no usable variant on disk — in which case the caller keeps the
+     * original request and lets it 404 (a genuinely missing job is NOT masked).
+     *
+     * @param string $dir Absolute job directory.
+     */
+    private function resolveTopVariantPlaylist(string $dir): ?string
+    {
+        $masterPath = "{$dir}/master.m3u8";
+        if (!is_file($masterPath)) {
+            return null;
+        }
+        $contents = @file_get_contents($masterPath);
+        if (!is_string($contents) || $contents === '') {
+            return null;
+        }
+
+        $bestFile = null;
+        $bestBandwidth = -1;
+        $pendingBandwidth = null;
+        foreach (preg_split('/\r\n|\r|\n/', $contents) ?: [] as $rawLine) {
+            $line = trim($rawLine);
+            if (str_starts_with($line, '#EXT-X-STREAM-INF:')) {
+                $pendingBandwidth = preg_match('/(?:^|,)BANDWIDTH=(\d+)/', $line, $m) === 1
+                    ? (int) $m[1]
+                    : 0;
+                continue;
+            }
+            // Only the URI line immediately following a STREAM-INF is a candidate.
+            if ($pendingBandwidth === null || $line === '' || $line[0] === '#') {
+                continue;
+            }
+            $uri = $line;
+            $bandwidth = $pendingBandwidth;
+            $pendingBandwidth = null;
+            if (
+                $uri === 'media_voriginal.m3u8'
+                || preg_match('/^media_v[a-z0-9]+\.m3u8$/', $uri) !== 1
+            ) {
+                continue;
+            }
+            if ($bandwidth > $bestBandwidth && is_file("{$dir}/{$uri}")) {
+                $bestBandwidth = $bandwidth;
+                $bestFile = $uri;
+            }
+        }
+
+        return $bestFile;
     }
 }

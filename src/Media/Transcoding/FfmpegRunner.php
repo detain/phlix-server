@@ -1629,8 +1629,12 @@ class FfmpegRunner
      *        stays CRF-only (unchanged legacy behaviour). A bare `-b:v` is
      *        deliberately NOT set — it would disable CRF mode; the cap is the VBV pair.
      *      - `-vf scale=…` — the per-rung downscale (`width`/`height`).
-     *      - `-force_key_frames expr:gte(t,0)` — the first output frame is an IDR, so
+     *      - `-force_key_frames expr:eq(n,0)` — the first output frame is an IDR, so
      *        every segment is independently decodable (EXT-X-INDEPENDENT-SEGMENTS).
+     *        The expression matches frame INDEX zero. It must NOT be a time-based
+     *        `gte(t,0)`: that predicate is true for every frame, so ffmpeg emits an
+     *        ALL-INTRA stream, and under the rung's `-maxrate` VBV ceiling the encoder
+     *        pins QP at maximum — visible as heavy vertical column smearing.
      *      - `browserSafeVideoFlags()` — `-pix_fmt`/`-profile:v`/`-level` (the `level`
      *        is honoured per-rung from `params['level']`).
      *    The `-force_key_frames`, `-t`, `-output_ts_offset`, and `-muxdelay`/
@@ -1785,7 +1789,11 @@ class FfmpegRunner
                 $cmd .= ' -vf "' . implode(',', $filters) . '"';
             }
             // IDR at the segment start → independently decodable, frame-aligned segment.
-            $cmd .= ' -force_key_frames ' . escapeshellarg('expr:gte(t,0)');
+            // MUST be `eq(n,0)` (frame INDEX zero), not `gte(t,0)`: `t >= 0` holds for
+            // EVERY frame, which forces an all-intra encode. Under the rung's VBV cap
+            // that starves each intra frame of bits and produces gross vertical column
+            // artefacts. See buildHwaccelSegmentCommand() for the mirrored expression.
+            $cmd .= ' -force_key_frames ' . escapeshellarg('expr:eq(n,0)');
             $cmd .= self::browserSafeVideoFlags($videoCodec, $params);
         }
 
@@ -2146,8 +2154,10 @@ class FfmpegRunner
             $cmd .= ' -vf "' . implode(',', $filters) . '"';
         }
 
-        // IDR at the segment start for independently decodable segments
-        $cmd .= ' -force_key_frames ' . escapeshellarg('expr:gte(t,0)');
+        // IDR at the segment start for independently decodable segments. `eq(n,0)`
+        // matches frame INDEX zero only — see buildSegmentCommand() for why `gte(t,0)`
+        // is wrong (it matches every frame and forces an all-intra encode).
+        $cmd .= ' -force_key_frames ' . escapeshellarg('expr:eq(n,0)');
 
         // Browser-safe 8-bit forcing for the SOFTWARE encoder on the hwaccel path.
         // When hwaccel is *enabled* but the best available encoder resolves to the

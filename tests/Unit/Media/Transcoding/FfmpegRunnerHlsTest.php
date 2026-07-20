@@ -267,7 +267,10 @@ class FfmpegRunnerHlsTest extends TestCase
         $this->assertMatchesRegularExpression('/-ss 780 -i /', $cmd);
         $this->assertStringContainsString('-t 6', $cmd);
         // First output frame is an IDR → independently decodable segment.
-        $this->assertStringContainsString("-force_key_frames 'expr:gte(t,0)'", $cmd);
+        $this->assertStringContainsString("-force_key_frames 'expr:eq(n,0)'", $cmd);
+        // ...and ONLY the first: a time predicate like `gte(t,0)` matches every frame
+        // and silently forces an all-intra encode (gross artefacts under the VBV cap).
+        $this->assertStringNotContainsString('gte(t,0)', $cmd);
         // PTS anchored to the absolute timeline position so segments stitch + a seek lands right.
         $this->assertStringContainsString('-output_ts_offset 780', $cmd);
         // Browser-decodable encode + MPEG-TS output.
@@ -588,7 +591,7 @@ class FfmpegRunnerHlsTest extends TestCase
         // Boundary / PTS / framing flags are IDENTICAL across the two rungs.
         foreach (
             [
-                "-force_key_frames 'expr:gte(t,0)'",
+                "-force_key_frames 'expr:eq(n,0)'",
                 '-output_ts_offset 780',
                 '-muxdelay 0 -muxpreload 0',
                 '-ss 780 -i ',

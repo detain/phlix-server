@@ -226,4 +226,41 @@ final class SourceProfileTest extends TestCase
     {
         self::assertFalse((new SourceProfile())->isAac());
     }
+
+    /**
+     * Every HLS rung is re-encoded to H.264, so a more efficient source codec
+     * needs MORE H.264 bits than it occupies itself to survive the transcode.
+     *
+     * @param string|null $codec   Source video codec, or null when unprobed.
+     * @param float       $factor  Expected H.264-equivalence multiplier.
+     */
+    #[DataProvider('h264EquivalenceProvider')]
+    public function testH264BitrateEquivalenceFactor(?string $codec, float $factor): void
+    {
+        self::assertSame($factor, (new SourceProfile(videoCodec: $codec))->h264BitrateEquivalenceFactor());
+    }
+
+    /**
+     * @return iterable<string, array{string|null, float}>
+     */
+    public static function h264EquivalenceProvider(): iterable
+    {
+        // Same codec in and out — nothing to compensate for.
+        yield 'h264' => ['h264', 1.0];
+        yield 'avc1' => ['avc1', 1.0];
+        // ~1.5x generational gap over H.264.
+        yield 'hevc' => ['hevc', 1.5];
+        yield 'h265' => ['h265', 1.5];
+        yield 'hvc1' => ['hvc1', 1.5];
+        yield 'hev1' => ['hev1', 1.5];
+        yield 'vp9' => ['vp9', 1.5];
+        // ~1.8x.
+        yield 'av1' => ['av1', 1.8];
+        yield 'av01' => ['av01', 1.8];
+        // Case-insensitive — ffprobe casing varies by container.
+        yield 'uppercase HEVC' => ['HEVC', 1.5];
+        // No evidence of an efficiency gap → never inflate the clamp.
+        yield 'unknown codec' => ['mpeg2video', 1.0];
+        yield 'null codec' => [null, 1.0];
+    }
 }

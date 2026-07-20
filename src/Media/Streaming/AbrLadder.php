@@ -188,8 +188,14 @@ final class AbrLadder
         $srcWidth = max($srcWidth, 2);
         $aspect = $srcWidth / $srcHeight;
 
+        // The clamp budget is the source's own bitrate translated into H.264 terms
+        // (see SourceProfile::h264BitrateEquivalenceFactor()): every rung is
+        // re-encoded to H.264, so an HEVC/VP9/AV1 source needs proportionally MORE
+        // bits than it occupies itself to come through the transcode intact.
+        // Clamping to the raw source figure would spend the codec-generation gap
+        // as quality loss and make the stream look worse than the file.
         $srcVideoBitrate = ($source->videoBitrate !== null && $source->videoBitrate > 0)
-            ? $source->videoBitrate
+            ? (int) round($source->videoBitrate * $source->h264BitrateEquivalenceFactor())
             : null;
 
         // Reserve audio + maxrate headroom so the advertised BANDWIDTH ≤ profile cap.
@@ -394,8 +400,11 @@ final class AbrLadder
             $height = $topRung->height;
         }
 
+        // This branch is a TRANSCODE to H.264, so the source's bitrate needs the
+        // same codec-equivalence translation the rungs get (the stream-copy branch
+        // above keeps the raw figure — a copy really does reproduce it exactly).
         $videoBitrate = ($source->videoBitrate !== null && $source->videoBitrate > 0)
-            ? $source->videoBitrate
+            ? (int) round($source->videoBitrate * $source->h264BitrateEquivalenceFactor())
             : self::canonicalTargetKbps($height) * 1000;
         $videoBitrate = min($videoBitrate, $profileVideoCeil);
         $videoBitrate = max($videoBitrate, self::MIN_VIDEO_BITRATE);

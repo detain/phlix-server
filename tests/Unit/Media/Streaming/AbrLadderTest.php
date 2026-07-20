@@ -287,10 +287,17 @@ final class AbrLadderTest extends TestCase
 
     /**
      * A LOW-bitrate (~1.2 Mbps) 1080p HEVC source: the source-bitrate cap
-     * collapses 1080p/720p/480p to one identical BANDWIDTH, and the re-encoded
-     * (non-copy) Original duplicates the top rung. The ladder must NOT advertise
-     * several identical-BANDWIDTH variants — it must fold the native rung and
-     * prune the collapsed middle rungs to a genuine descending gradient.
+     * collapses the upper rungs toward one identical BANDWIDTH, and the
+     * re-encoded (non-copy) Original duplicates the top rung. The ladder must NOT
+     * advertise several identical-BANDWIDTH variants — it must fold the native
+     * rung and prune any collapsed rungs to a genuine descending gradient.
+     *
+     * The clamp budget is the source's H.264 EQUIVALENT (1.2 Mbps HEVC x1.5 =
+     * 1.8 Mbps), not its raw figure: every rung is re-encoded to H.264, so
+     * clamping to 1.2 Mbps would spend the codec-generation gap as quality loss.
+     * The extra headroom also keeps 480p genuinely distinct from 1080p instead of
+     * collapsing onto it, so the gradient degrades in steps rather than falling
+     * off a 1080p -> 360p cliff.
      */
     public function testLowBitrate1080pSourceCollapsesToDistinctGradient(): void
     {
@@ -299,12 +306,13 @@ final class AbrLadderTest extends TestCase
             'generic',
         );
 
-        // Reduced ladder: source-resolution top + a couple genuinely-lower rungs
-        // (the middle 720p/480p rungs that collapsed onto the 1080p BANDWIDTH are
-        // gone). Every retained rung is capped at the 1.2 Mbps source.
-        self::assertSame([1080, 360, 240], self::heights($result));
+        self::assertSame([1080, 480, 360, 240], self::heights($result));
         foreach ($result->renditions as $rung) {
-            self::assertLessThanOrEqual(1_200_000, $rung->videoBitrate, 'no rung exceeds the source bitrate');
+            self::assertLessThanOrEqual(
+                1_800_000,
+                $rung->videoBitrate,
+                'no rung exceeds the H.264-equivalent source budget',
+            );
         }
         self::assertDescendingDistinctBandwidths($result->renditions);
 
@@ -316,7 +324,7 @@ final class AbrLadderTest extends TestCase
         // the master emits ONE 1080p variant, not a duplicate native+1080p pair.
         self::assertFalse($result->original->isCopy, 'HEVC source → transcode Original');
         $variants = $result->streamVariants();
-        self::assertSame([1080, 360, 240], array_map(static fn (Rendition $r): int => $r->height, $variants));
+        self::assertSame([1080, 480, 360, 240], array_map(static fn (Rendition $r): int => $r->height, $variants));
         $variantBandwidths = array_map(static fn (Rendition $r): int => $r->bandwidth(), $variants);
         self::assertSame($variantBandwidths, array_unique($variantBandwidths), 'master has no duplicate BANDWIDTH');
         self::assertSame(
@@ -558,9 +566,14 @@ final class AbrLadderTest extends TestCase
 
         // Non-copy sources now yield a TRANSCODE Original at source resolution +
         // source-ish bitrate (bandwidth = round(vb*1.07) + 128k, capped at profile).
-        yield 'hevc video -> transcode original at source res/bitrate' => [
+        // A TRANSCODED original re-encodes to H.264, so an HEVC source's bitrate is
+        // translated to its H.264 equivalent (x1.5) first — 8 Mbps HEVC needs
+        // ~12 Mbps of H.264 to survive the transcode, giving
+        // round(12e6*1.07)+128k = 12,968,000. Contrast the h264 row below, which
+        // re-encodes same-codec (factor 1.0) and keeps the raw 8 Mbps figure.
+        yield 'hevc video -> transcode original at h264-equivalent bitrate' => [
             new SourceProfile(1920, 1080, 'hevc', 8_000_000, 'aac', 192_000),
-            'generic', false, 'Original (1080p)', 1920, 1080, 8_688_000, $codec1080,
+            'generic', false, 'Original (1080p)', 1920, 1080, 12_968_000, $codec1080,
         ];
 
         yield 'non-aac audio (ac3) -> transcode original' => [

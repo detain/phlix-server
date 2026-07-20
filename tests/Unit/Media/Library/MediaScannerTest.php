@@ -1218,6 +1218,32 @@ class MediaScannerTest extends TestCase
     }
 
     /**
+     * A Matroska per-track `BPS` tag is the TRUE per-stream rate and must beat
+     * the whole-file `format.bit_rate` fallback, which charges the video with the
+     * audio's bits too. Modelled on a real 1080p HEVC + AC-3 .mkv: video is
+     * 1,081,553 bps but format.bit_rate reads 1,533,248 (~40 % high), which would
+     * inflate every ABR rung's target and advertised BANDWIDTH.
+     */
+    public function testSummarizeProbePrefersMatroskaBpsTagOverFormatBitRate(): void
+    {
+        $summary = $this->summarize([
+            'streams' => [
+                ['index' => 0, 'codec_type' => 'video', 'codec_name' => 'hevc',
+                 'width' => 1920, 'height' => 1080, 'pix_fmt' => 'yuv420p10le',
+                 'tags' => ['BPS' => '1081553', 'DURATION' => '00:21:41.000000000']],
+                ['index' => 1, 'codec_type' => 'audio', 'codec_name' => 'ac3',
+                 'channels' => 6, 'tags' => ['BPS-eng' => '448000']],
+            ],
+            'format' => ['duration' => '1301', 'bit_rate' => '1533248'],
+        ]);
+
+        $source = $this->arrOf($summary, 'source');
+        $this->assertSame(1081553, $source['video_bitrate'], 'BPS tag beats format.bit_rate');
+        $this->assertSame(448000, $source['audio_bitrate'], 'language-suffixed BPS-eng is honoured');
+        $this->assertSame(1081553, $summary['streams'][0]['bitrate'], 'stream row uses the tagged rate');
+    }
+
+    /**
      * video_bitrate falls back to the whole-file container bitrate
      * (format.bit_rate) when the video stream carries none — common for
      * Matroska — so the ladder always has a usable source ceiling. The derived

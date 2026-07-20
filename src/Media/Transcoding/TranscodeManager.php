@@ -290,8 +290,15 @@ class TranscodeManager
      * parse that config, so the audio MSE SourceBuffer never builds and the
      * whole player load errors on otherwise-valid 8-bit H.264 video. Bumping the
      * version forces those jobs to regenerate as stereo (`channel_configuration=2`).
+     *
+     * v7 (ABR ladder de-collapse): {@see \Phlix\Media\Streaming\AbrLadder} now
+     * prunes source-bitrate-cap-collapsed rungs to a strictly-decreasing
+     * BANDWIDTH gradient and folds a re-encoded "Original" that duplicates the
+     * top rung — so a low-bitrate source no longer emits several
+     * identical-BANDWIDTH variants. The ladder OUTPUT (persisted `variants`
+     * JSON + master playlist) changes, so pre-v7 jobs must regenerate.
      */
-    private const JOB_KEY_VERSION = 'v6';
+    private const JOB_KEY_VERSION = 'v7';
 
     // Job status constants
     public const STATUS_PENDING = 'pending';
@@ -2731,14 +2738,21 @@ class TranscodeManager
             }
         }
 
-        // Mirror LadderResult::streamVariants(): `original` is ALWAYS its own
-        // playable variant (stream-copy or transcode-at-source-resolution) →
-        // prepend it whenever the persisted descriptor is well-formed. Old rows
+        // Mirror LadderResult::streamVariants(): `original` is its own playable
+        // variant (stream-copy or transcode-at-source-resolution) → prepend it
+        // whenever the persisted descriptor is well-formed, UNLESS it is a
+        // re-encoded (non-copy) "Original" byte-identical to the top rung (same
+        // frame + effectively identical BANDWIDTH), which streamVariants() folds
+        // into that rung. Keeping this check in lock-step keeps the client
+        // quality picker exactly consistent with the emitted HLS master. Old rows
         // whose `original` lacks an id (or whose JSON predates this shape) simply
         // don't get the extra entry.
         $original = $decoded['original'] ?? null;
         if (is_array($original) && is_string($original['id'] ?? null) && $original['id'] !== '') {
-            array_unshift($playable, $original);
+            $topRung = $playable[0] ?? null;
+            if (!is_array($topRung) || !self::originalDuplicatesTopRung($original, $topRung)) {
+                array_unshift($playable, $original);
+            }
         }
 
         // Fill each entry's own media-playlist url (relative, unsigned).
@@ -2757,6 +2771,46 @@ class TranscodeManager
         }
 
         return $out;
+    }
+
+    /**
+     * Array-level mirror of {@see \Phlix\Media\Streaming\LadderResult::streamVariants()}'s
+     * de-dup, operating on the persisted (decoded) variant descriptors.
+     *
+     * A re-encoded (non-copy) "Original" that is the SAME frame as the top rung
+     * at an effectively identical BANDWIDTH (within
+     * {@see \Phlix\Media\Streaming\Rendition::ABR_DUPLICATE_TOLERANCE}) is a
+     * duplicate — the rung already covers it — so it is NOT advertised as its own
+     * variant. A stream-COPY "Original" is exempt (a genuinely distinct
+     * passthrough). Field names match {@see \Phlix\Media\Streaming\Rendition::toArray()}
+     * (`is_copy`, `width`, `height`, `bitrate`).
+     *
+     * @param array<string, mixed> $original Persisted `original` descriptor.
+     * @param array<string, mixed> $topRung  Persisted top (highest) rung descriptor.
+     */
+    private static function originalDuplicatesTopRung(array $original, array $topRung): bool
+    {
+        if (($original['is_copy'] ?? false) === true) {
+            return false;
+        }
+
+        $originalWidth = self::renditionInt($original, 'width');
+        $originalHeight = self::renditionInt($original, 'height');
+        if (
+            $originalWidth <= 0 || $originalHeight <= 0
+            || $originalWidth !== self::renditionInt($topRung, 'width')
+            || $originalHeight !== self::renditionInt($topRung, 'height')
+        ) {
+            return false;
+        }
+
+        $originalBandwidth = self::renditionInt($original, 'bitrate');
+        $topBandwidth = self::renditionInt($topRung, 'bitrate');
+        $low = min($originalBandwidth, $topBandwidth);
+        $high = max($originalBandwidth, $topBandwidth);
+
+        return $high > 0
+            && $low >= (int) floor($high * \Phlix\Media\Streaming\Rendition::ABR_DUPLICATE_TOLERANCE);
     }
 
     /**

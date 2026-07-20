@@ -55,11 +55,16 @@ class HlsServingIntegrationTest extends TestCase
         // A 640x480 source so the ABR ladder yields MULTIPLE transcoded rungs
         // (480p/360p/240p) in addition to the copy "original" — SV-4.6 excludes the
         // copy variant from the master's switchable set, so a single-rung source
-        // would leave only one #EXT-X-STREAM-INF.
+        // would leave only one #EXT-X-STREAM-INF. The video bitrate is forced high
+        // (~4 Mbps CBR) so it sits ABOVE every rung's canonical target: otherwise
+        // AbrLadder's source-bitrate cap would collapse the 480p/360p/240p rungs
+        // onto one shared BANDWIDTH and the monotonic-gradient guard would (rightly)
+        // prune them to a single rung.
         $clip = "{$this->segmentDir}/in.mkv";
         $cmd = sprintf(
             '%s -y -hide_banner -loglevel error -f lavfi -i testsrc=duration=8:size=640x480:rate=24 '
             . '-f lavfi -i sine=frequency=440:duration=8 -c:v libx264 -pix_fmt yuv420p '
+            . '-x264-params nal-hrd=cbr -b:v 4M -minrate 4M -maxrate 4M -bufsize 8M '
             . '-c:a aac -shortest %s 2>/dev/null',
             escapeshellarg('/usr/bin/ffmpeg'),
             escapeshellarg($clip)

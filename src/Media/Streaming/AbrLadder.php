@@ -269,10 +269,53 @@ final class AbrLadder
             $rungsAsc[] = $highest;
         }
 
-        $renditions = array_reverse($rungsAsc);
+        $renditions = $this->enforceBandwidthGradient(array_reverse($rungsAsc));
         $original = $this->buildOriginal($source, $highest, $maxWidth, $maxHeight, $maxBitrate, $profileVideoCeil);
 
         return new LadderResult($renditions, $original);
+    }
+
+    /**
+     * Prune a highest-first rung list to a strictly-decreasing BANDWIDTH set.
+     *
+     * The "no exceeding source bitrate" clamp in the rung builder caps EVERY
+     * rung whose canonical target exceeds a low source bitrate down to that same
+     * source bitrate — so a 1.2 Mbps 1080p source produces 1080p/720p/480p rungs
+     * that all collapse to the ONE identical BANDWIDTH. Such a run advertises no
+     * quality gradient: a player just merges the duplicates and ABR has nothing
+     * to climb to. Walking highest-first, keep a rung only when its BANDWIDTH is
+     * at least (1 − {@see Rendition::ABR_DUPLICATE_TOLERANCE}) below the last
+     * RETAINED rung; drop the rest. Because the list is highest-RESOLUTION-first,
+     * the survivor of each collapsed bandwidth cluster is its highest-resolution
+     * member (the lower-resolution siblings add no value at the same bandwidth),
+     * and the survivors form a strictly-decreasing gradient.
+     *
+     * A normal-bitrate ladder is untouched: its canonical rungs step by ≥1.65×
+     * in bandwidth (400→800→1400→2800→5000… kbps targets), far beyond the 15 %
+     * threshold, so none is pruned. Only a rung dragged down NEAR its neighbour
+     * by the source/profile cap — exactly the degenerate case — is removed. The
+     * first rung is always retained, so the ladder never empties.
+     *
+     * @param list<Rendition> $renditions Highest-first, non-increasing bandwidth.
+     *
+     * @return list<Rendition>
+     */
+    private function enforceBandwidthGradient(array $renditions): array
+    {
+        $kept = [];
+        $lastBandwidth = null;
+        foreach ($renditions as $rung) {
+            $bandwidth = $rung->bandwidth();
+            if (
+                $lastBandwidth === null
+                || $bandwidth <= (int) floor($lastBandwidth * Rendition::ABR_DUPLICATE_TOLERANCE)
+            ) {
+                $kept[] = $rung;
+                $lastBandwidth = $bandwidth;
+            }
+        }
+
+        return $kept;
     }
 
     /**

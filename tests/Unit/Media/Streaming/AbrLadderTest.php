@@ -269,11 +269,114 @@ final class AbrLadderTest extends TestCase
             self::assertLessThanOrEqual(900_000, $rung->videoBitrate, 'no rung claims more than the source has');
         }
 
-        // The 480p tier target (1.4 Mbps) is clamped to the 900 kbps source; lower
-        // tiers whose canonical target is already below the source stay unchanged.
+        // The 480p tier target (1.4 Mbps) is clamped to the 900 kbps source, which
+        // drags its BANDWIDTH (1_091_000) to within ~11 % of the 360p tier
+        // (984_000) — too close to be a distinct ABR choice — so the 360p rung is
+        // pruned by the monotonic-gradient guard. What survives is the
+        // highest-resolution rung of that bandwidth cluster (480p) plus the
+        // genuinely-lower 240p tier: a real descending gradient, no duplicates.
+        self::assertSame([480, 240], self::heights($result));
         self::assertSame(900_000, $result->renditions[0]->videoBitrate);
-        self::assertSame(800_000, $result->renditions[1]->videoBitrate);
-        self::assertSame(400_000, $result->renditions[2]->videoBitrate);
+        self::assertSame(400_000, $result->renditions[1]->videoBitrate);
+        self::assertDescendingDistinctBandwidths($result->renditions);
+    }
+
+    // -----------------------------------------------------------------
+    // Monotonic BANDWIDTH gradient + native-rung de-dup (the fix)
+    // -----------------------------------------------------------------
+
+    /**
+     * A LOW-bitrate (~1.2 Mbps) 1080p HEVC source: the source-bitrate cap
+     * collapses 1080p/720p/480p to one identical BANDWIDTH, and the re-encoded
+     * (non-copy) Original duplicates the top rung. The ladder must NOT advertise
+     * several identical-BANDWIDTH variants — it must fold the native rung and
+     * prune the collapsed middle rungs to a genuine descending gradient.
+     */
+    public function testLowBitrate1080pSourceCollapsesToDistinctGradient(): void
+    {
+        $result = $this->ladder->build(
+            new SourceProfile(1920, 1080, 'hevc', 1_200_000, 'aac', 128_000),
+            'generic',
+        );
+
+        // Reduced ladder: source-resolution top + a couple genuinely-lower rungs
+        // (the middle 720p/480p rungs that collapsed onto the 1080p BANDWIDTH are
+        // gone). Every retained rung is capped at the 1.2 Mbps source.
+        self::assertSame([1080, 360, 240], self::heights($result));
+        foreach ($result->renditions as $rung) {
+            self::assertLessThanOrEqual(1_200_000, $rung->videoBitrate, 'no rung exceeds the source bitrate');
+        }
+        self::assertDescendingDistinctBandwidths($result->renditions);
+
+        // No two RETAINED rungs share a BANDWIDTH.
+        $bandwidths = array_map(static fn (Rendition $r): int => $r->bandwidth(), $result->renditions);
+        self::assertSame($bandwidths, array_unique($bandwidths), 'no two rungs share a BANDWIDTH');
+
+        // The non-copy Original re-encode is byte-identical to the 1080p rung, so
+        // the master emits ONE 1080p variant, not a duplicate native+1080p pair.
+        self::assertFalse($result->original->isCopy, 'HEVC source → transcode Original');
+        $variants = $result->streamVariants();
+        self::assertSame([1080, 360, 240], array_map(static fn (Rendition $r): int => $r->height, $variants));
+        $variantBandwidths = array_map(static fn (Rendition $r): int => $r->bandwidth(), $variants);
+        self::assertSame($variantBandwidths, array_unique($variantBandwidths), 'master has no duplicate BANDWIDTH');
+        self::assertSame(
+            $variantBandwidths,
+            self::sortedDescending($variantBandwidths),
+            'master is strictly descending',
+        );
+    }
+
+    /**
+     * A NORMAL-bitrate (~8 Mbps) 1080p HEVC source: the full canonical ladder is
+     * preserved (its rungs are already far apart) and the distinct
+     * higher-bandwidth Original sits above it — the fix must NOT strip a healthy
+     * ladder.
+     */
+    public function testNormalBitrate1080pSourceKeepsFullLadder(): void
+    {
+        $result = $this->ladder->build(
+            new SourceProfile(1920, 1080, 'hevc', 8_000_000, 'aac', 192_000),
+            'generic',
+        );
+
+        // Full descending ladder, untouched by the gradient prune.
+        self::assertSame([1080, 720, 480, 360, 240], self::heights($result));
+        self::assertDescendingDistinctBandwidths($result->renditions);
+
+        // The transcode Original (~8 Mbps) is genuinely above the 1080p rung
+        // (~5 Mbps) → kept as a distinct highest master variant.
+        self::assertFalse($result->original->isCopy);
+        $variants = $result->streamVariants();
+        self::assertSame(
+            [1080, 1080, 720, 480, 360, 240],
+            array_map(static fn (Rendition $r): int => $r->height, $variants),
+            'Original (1080p) + full rung ladder',
+        );
+        $variantBandwidths = array_map(static fn (Rendition $r): int => $r->bandwidth(), $variants);
+        self::assertSame($variantBandwidths, array_unique($variantBandwidths), 'master has no duplicate BANDWIDTH');
+        self::assertSame(
+            $variantBandwidths,
+            self::sortedDescending($variantBandwidths),
+            'master is strictly descending',
+        );
+    }
+
+    /**
+     * A small (480p) source is never upscaled and its retained rungs still have
+     * distinct, strictly-descending BANDWIDTHs.
+     */
+    public function testSmall480pSourceStaysAtOrBelowSourceResolutionWithDistinctBandwidths(): void
+    {
+        $result = $this->ladder->build(
+            new SourceProfile(854, 480, 'hevc', 5_000_000, 'aac', 128_000),
+            'generic',
+        );
+
+        foreach ($result->renditions as $rung) {
+            self::assertLessThanOrEqual(480, $rung->height, 'never upscales beyond the 480p source');
+        }
+        self::assertSame(480, $result->renditions[0]->height, 'top rung is the source resolution');
+        self::assertDescendingDistinctBandwidths($result->renditions);
     }
 
     // -----------------------------------------------------------------
@@ -759,6 +862,47 @@ final class AbrLadderTest extends TestCase
                 self::LEVEL_MAXFS[$video],
             ),
         );
+    }
+
+    /**
+     * The ordered rung heights of a ladder result.
+     *
+     * @return list<int>
+     */
+    private static function heights(LadderResult $result): array
+    {
+        return array_map(static fn (Rendition $r): int => $r->height, $result->renditions);
+    }
+
+    /**
+     * @param list<int> $bandwidths
+     *
+     * @return list<int>
+     */
+    private static function sortedDescending(array $bandwidths): array
+    {
+        rsort($bandwidths);
+
+        return $bandwidths;
+    }
+
+    /**
+     * Assert a rung list has strictly-decreasing, all-distinct BANDWIDTHs — the
+     * gradient a player needs to actually climb between rungs.
+     *
+     * @param list<Rendition> $rungs
+     */
+    private static function assertDescendingDistinctBandwidths(array $rungs): void
+    {
+        $previous = PHP_INT_MAX;
+        $seen = [];
+        foreach ($rungs as $rung) {
+            $bandwidth = $rung->bandwidth();
+            self::assertLessThan($previous, $bandwidth, 'BANDWIDTH strictly decreasing');
+            self::assertArrayNotHasKey($bandwidth, $seen, 'no two rungs share a BANDWIDTH');
+            $seen[$bandwidth] = true;
+            $previous = $bandwidth;
+        }
     }
 
     private static function videoCodecOf(Rendition $rendition): string

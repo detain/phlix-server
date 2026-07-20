@@ -38,18 +38,59 @@ final class LadderResultTest extends TestCase
         self::assertSame($copy, $variants[0], 'copy Original is the highest master variant');
     }
 
-    public function testStreamVariantsPrependsNonCopyOriginalToo(): void
+    public function testStreamVariantsPrependsDistinctNonCopyOriginal(): void
     {
-        // The transcode (non-copy) Original is ALSO a distinct master variant now —
-        // it is never dropped, so the client's "Original" pick is always playable.
-        $r1080 = $this->rung('1080p', 1920, 1080);
+        // A transcode (non-copy) Original that is DISTINCT from the top rung (here
+        // a genuinely higher BANDWIDTH at the same frame — a normal-bitrate HEVC
+        // source whose re-encode sits above its 1080p rung) is prepended as the
+        // highest master variant, so the client's "Original" pick stays playable.
+        $r1080 = $this->rung('1080p', 1920, 1080);          // 5_478_000
         $r720 = $this->rung('720p', 1280, 720);
-        $best = $this->bestAvailableOriginal();
+        $best = $this->distinctNonCopyOriginal();            // 1920x1080 @ 8_688_000
 
         $variants = (new LadderResult([$r1080, $r720], $best))->streamVariants();
 
         self::assertSame([$best, $r1080, $r720], $variants);
-        self::assertSame($best, $variants[0], 'transcode Original is prepended as the highest master variant');
+        self::assertSame($best, $variants[0], 'a distinct transcode Original is the highest master variant');
+    }
+
+    public function testStreamVariantsFoldsNonCopyOriginalThatDuplicatesTopRung(): void
+    {
+        // A re-encoded (non-copy) Original byte-identical to the top rung — SAME
+        // frame at the SAME source-capped BANDWIDTH (the low-bitrate collapse) —
+        // is folded: only the rung is emitted, never two identical-BANDWIDTH
+        // variants that a player would merge and that give ABR nothing to climb.
+        $r1080 = $this->rung('1080p', 1920, 1080);           // 5_478_000
+        $r720 = $this->rung('720p', 1280, 720);
+        $dupe = $this->bestAvailableOriginal();              // 1920x1080 @ 5_478_000
+
+        $variants = (new LadderResult([$r1080, $r720], $dupe))->streamVariants();
+
+        self::assertSame([$r1080, $r720], $variants, 'the duplicate Original is folded into the top rung');
+        self::assertNotContains($dupe, $variants);
+    }
+
+    public function testStreamVariantsKeepsCopyOriginalEvenWhenItMatchesTopRung(): void
+    {
+        // A stream-COPY Original is a genuinely distinct passthrough (different
+        // bytes, no transcode) and is NEVER folded, even when its frame/BANDWIDTH
+        // coincide with the top rung.
+        $r1080 = $this->rung('1080p', 1920, 1080);           // 5_478_000
+        $copy = new Rendition(
+            id: 'original',
+            label: 'Original (1080p)',
+            width: 1920,
+            height: 1080,
+            bitrate: 5_478_000,
+            videoBitrate: 5_000_000,
+            codecs: 'avc1.640029,mp4a.40.2',
+            isOriginal: true,
+            isCopy: true,
+        );
+
+        $variants = (new LadderResult([$r1080], $copy))->streamVariants();
+
+        self::assertSame([$copy, $r1080], $variants);
     }
 
     public function testToArrayNestsRenditionsAndOriginal(): void
@@ -110,6 +151,21 @@ final class LadderResultTest extends TestCase
             height: 1080,
             bitrate: 5_478_000,
             videoBitrate: 5_000_000,
+            codecs: 'avc1.640029,mp4a.40.2',
+            isOriginal: true,
+            isCopy: false,
+        );
+    }
+
+    private function distinctNonCopyOriginal(): Rendition
+    {
+        return new Rendition(
+            id: 'original',
+            label: 'Original (1080p)',
+            width: 1920,
+            height: 1080,
+            bitrate: 8_688_000,
+            videoBitrate: 8_000_000,
             codecs: 'avc1.640029,mp4a.40.2',
             isOriginal: true,
             isCopy: false,

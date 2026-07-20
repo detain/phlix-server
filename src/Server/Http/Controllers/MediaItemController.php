@@ -30,6 +30,26 @@ use Phlix\Media\MarkerType;
 
 class MediaItemController
 {
+    /**
+     * `media_items.type` members that exist purely to group other rows and are
+     * never themselves playable.
+     *
+     * Used by {@see shufflePlay()} to decide what a childless item means. It is
+     * deliberately an exclusion list rather than an allow-list of playable
+     * leaves: the leaf set is open (`movie`, `episode`, `video`, `track`,
+     * `audio`, `book`, `photo`, `audiobook`, …) and grows as new library types
+     * land, whereas the container set is small and stable. An allow-list is how
+     * this check previously came to 404 on a childless `track`/`book`/`photo`/
+     * `audiobook` — it named only `movie` and `audio`.
+     *
+     * `music`/`album`/`artist` carry no scanner-created rows today (the music
+     * scanner writes `track`), but they are grouping types by definition and
+     * are listed so they stay non-playable if that ever changes.
+     *
+     * @var list<string>
+     */
+    private const CONTAINER_TYPES = ['series', 'season', 'music', 'album', 'artist'];
+
     private ItemRepository $itemRepository;
     private MarkerService $markerService;
     private GaplessPlaybackManager $gaplessManager;
@@ -708,8 +728,10 @@ class MediaItemController
         $children = $this->itemRepository->findByParent($mediaId);
 
         if (empty($children)) {
-            $type = $item['type'] ?? '';
-            if ($type === 'movie' || $type === 'audio') {
+            // A childless item is playable on its own unless it is a pure
+            // grouping type, in which case there is genuinely nothing to play.
+            $type = is_string($item['type'] ?? null) ? $item['type'] : '';
+            if ($type !== '' && !in_array($type, self::CONTAINER_TYPES, true)) {
                 return (new Response())->json([
                     'shuffled_ids' => [$mediaId],
                     'mode' => 'single',

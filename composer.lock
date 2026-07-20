@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "a97454dc93c8705e74189ae376402ef1",
+    "content-hash": "4bca4bf36c2b67ce36816ec71b39eb3a",
     "packages": [
         {
             "name": "brick/math",
@@ -412,16 +412,16 @@
         },
         {
             "name": "detain/phlix-shared",
-            "version": "0.21.0",
+            "version": "dev-master",
             "source": {
                 "type": "git",
                 "url": "https://github.com/detain/phlix-shared.git",
-                "reference": "129946521f64182d5337f56f5617e05ba8d3bcde"
+                "reference": "3fc43223aeab16e272e48449466bd89f9ffd0315"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/detain/phlix-shared/zipball/129946521f64182d5337f56f5617e05ba8d3bcde",
-                "reference": "129946521f64182d5337f56f5617e05ba8d3bcde",
+                "url": "https://api.github.com/repos/detain/phlix-shared/zipball/3fc43223aeab16e272e48449466bd89f9ffd0315",
+                "reference": "3fc43223aeab16e272e48449466bd89f9ffd0315",
                 "shasum": ""
             },
             "require": {
@@ -442,6 +442,7 @@
                 "ext-curl": "Required only for the bundled blocking Arr\\Transport\\CurlArrTransport (CLI/test use). Event-loop (Workerman/Webman) consumers should inject an async ArrTransportInterface instead and do not need ext-curl.",
                 "workerman/http-client": "Event-loop (Workerman/Webman) consumers should inject a workerman/http-client-backed Arr\\Transport\\ArrTransportInterface so *arr API calls do not block the worker; the bundled CurlArrTransport is blocking and for CLI/test only."
             },
+            "default-branch": true,
             "type": "library",
             "autoload": {
                 "psr-4": {
@@ -455,9 +456,9 @@
             "description": "Shared interfaces, DTOs, event names, and protocol types used by both phlix-server and phlix-hub. Composer-installable, PHP 8.3+, zero I/O by charter — the only bundled network code is the blocking CurlArrTransport (CLI/test only); event-loop consumers MUST inject an async ArrTransportInterface.",
             "support": {
                 "issues": "https://github.com/detain/phlix-shared/issues",
-                "source": "https://github.com/detain/phlix-shared/tree/v0.21.0"
+                "source": "https://github.com/detain/phlix-shared/tree/master"
             },
-            "time": "2026-07-20T16:32:01+00:00"
+            "time": "2026-07-20T20:09:49+00:00"
         },
         {
             "name": "directorytree/ldaprecord",
@@ -8237,7 +8238,9 @@
     ],
     "aliases": [],
     "minimum-stability": "stable",
-    "stability-flags": {},
+    "stability-flags": {
+        "detain/phlix-shared": 20
+    },
     "prefer-stable": false,
     "prefer-lowest": false,
     "platform": {

@@ -1445,9 +1445,11 @@ class MediaScanner
      * video_bitrate, pix_fmt, audio_codec, audio_bitrate}` (each value null when
      * the probe does not expose it), stored under `metadata_json['source']` for
      * the ABR-ladder builder. `pix_fmt` lives only there because the
-     * media_streams table has no such column. `video_bitrate` falls back to the
-     * whole-file bitrate (`format.bit_rate`) when the video stream carries none
-     * (common for Matroska) so the ladder always has a usable source ceiling.
+     * media_streams table has no such column. `video_bitrate` prefers the stream's
+     * own rate, then its Matroska `BPS` tag (see {@see streamBitrate()}), and only
+     * then falls back to the whole-file bitrate (`format.bit_rate`) so the ladder
+     * always has a usable source ceiling — that last fallback counts audio and
+     * container overhead as if they were video, so it OVERSTATES the video rate.
      *
      * Duration rounding matches {@see TranscodeManager::persistProbedDuration()}
      * (`(int) round((float) $raw)`, positive only) so the scan- and
@@ -1533,9 +1535,9 @@ class MediaScanner
         }
 
         $videoBitrate = $video !== null
-            ? (self::intOrNull($video['bit_rate'] ?? null) ?? self::intOrNull($format['bit_rate'] ?? null))
+            ? (self::streamBitrate($video) ?? self::intOrNull($format['bit_rate'] ?? null))
             : null;
-        $audioBitrate = $audio !== null ? self::intOrNull($audio['bit_rate'] ?? null) : null;
+        $audioBitrate = $audio !== null ? self::streamBitrate($audio) : null;
 
         $source = [
             'width' => $video !== null ? self::intOrNull($video['width'] ?? null) : null,
@@ -1624,6 +1626,44 @@ class MediaScanner
         }
 
         return ['duration_seconds' => $duration, 'source' => $source, 'streams' => $streams];
+    }
+
+    /**
+     * A single stream's OWN bitrate in bits/sec, or null when the probe omits it.
+     *
+     * Matroska stores no per-stream bitrate in its header, so ffprobe reports NO
+     * `bit_rate` for an MKV stream. Falling straight through to `format.bit_rate`
+     * (as this did before) charges the video with the audio's bits too — a
+     * 1.08 Mbps HEVC track next to 448 kbps AC-3 reads as ~1.53 Mbps, ~40 % high,
+     * which inflates every ABR rung's target and advertised BANDWIDTH.
+     *
+     * mkvmerge and ffmpeg do write a per-track `BPS` tag (plus language-suffixed
+     * variants like `BPS-eng`) carrying the true per-stream rate, so prefer the
+     * real `bit_rate`, then any `BPS*` tag. Mirrors
+     * {@see \Phlix\Media\Transcoding\TranscodeManager::streamBitrate()} — the two
+     * paths must agree or a rescan would shift the ladder.
+     *
+     * @param array<string, mixed> $stream One ffprobe stream entry.
+     */
+    private static function streamBitrate(array $stream): ?int
+    {
+        $bitrate = self::intOrNull($stream['bit_rate'] ?? null);
+        if ($bitrate !== null && $bitrate > 0) {
+            return $bitrate;
+        }
+
+        $tags = is_array($stream['tags'] ?? null) ? $stream['tags'] : [];
+        foreach ($tags as $key => $value) {
+            if (!is_string($key) || stripos($key, 'BPS') !== 0) {
+                continue;
+            }
+            $tagged = self::intOrNull($value);
+            if ($tagged !== null && $tagged > 0) {
+                return $tagged;
+            }
+        }
+
+        return null;
     }
 
     /**

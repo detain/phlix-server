@@ -83,6 +83,36 @@ final readonly class SourceProfile
     }
 
     /**
+     * How many H.264 bits it takes to match one bit of this source's codec.
+     *
+     * The ABR ladder never spends more than the SOURCE's bitrate on a rung —
+     * spending more than the source contains is wasted bandwidth. That holds only
+     * when source and output use the SAME codec. Every HLS rung is re-encoded to
+     * H.264 (browser MSE decodes nothing else reliably), so a modern-codec source
+     * needs MORE H.264 bits than it occupies itself to survive the transcode:
+     * HEVC and VP9 are conventionally ~1.5x more efficient than H.264 at equal
+     * quality, AV1 roughly 1.8x. Clamping an H.264 rung to a 1.08 Mbps HEVC
+     * source's own 1.08 Mbps therefore guarantees the stream looks WORSE than the
+     * file it came from — the generational efficiency gap is spent as loss.
+     *
+     * Returns the multiplier to apply to the source-bitrate clamp. 1.0 for H.264
+     * and for any unknown codec (no evidence of an efficiency gap → do not inflate;
+     * the profile ceiling still caps the result either way).
+     */
+    public function h264BitrateEquivalenceFactor(): float
+    {
+        if ($this->videoCodec === null) {
+            return 1.0;
+        }
+
+        return match (strtolower($this->videoCodec)) {
+            'hevc', 'h265', 'hvc1', 'hev1', 'vp9' => 1.5,
+            'av1', 'av01' => 1.8,
+            default => 1.0,
+        };
+    }
+
+    /**
      * Coerce a mixed value to a positive-or-any int, or null.
      */
     private static function intOrNull(mixed $value): ?int

@@ -298,7 +298,7 @@ class TranscodeManager
      * identical-BANDWIDTH variants. The ladder OUTPUT (persisted `variants`
      * JSON + master playlist) changes, so pre-v7 jobs must regenerate.
      */
-    private const JOB_KEY_VERSION = 'v7';
+    private const JOB_KEY_VERSION = 'v8';
 
     // Job status constants
     public const STATUS_PENDING = 'pending';
@@ -3479,9 +3479,16 @@ class TranscodeManager
      * Derive a {@see SourceProfile} from a live ffprobe result.
      *
      * Mirrors {@see computeHlsParams()}'s field extraction: first video/audio stream
-     * codec name / dimensions / pix_fmt, and the video bitrate from the stream's
-     * `bit_rate` (falling back to `format.bit_rate` when the stream omits it). Absent
-     * or non-positive fields map to null so the ladder's source-clamp sees "unknown".
+     * codec name / dimensions / pix_fmt, plus per-stream bitrates. Absent or
+     * non-positive fields map to null so the ladder's source-clamp sees "unknown".
+     *
+     * Bitrate resolution order per stream (see {@see streamBitrate()}): the stream's
+     * own `bit_rate`, then its Matroska `BPS` tag, and only then — for VIDEO alone —
+     * `format.bit_rate`. That last fallback is the whole-container rate (video PLUS
+     * audio plus overhead), so it OVERSTATES the video bitrate; it is kept only
+     * because a totally unknown video bitrate disables the ladder's source-clamp
+     * entirely, which is worse. Audio gets no such fallback: `format.bit_rate` is
+     * nowhere near an audio-stream rate, and null simply means "unknown".
      *
      * @param array<string, mixed> $probe Raw ffprobe result.
      */
@@ -3493,11 +3500,11 @@ class TranscodeManager
 
         $width = $this->intVal($video['width'] ?? null);
         $height = $this->intVal($video['height'] ?? null);
-        $videoBitrate = $this->intVal($video['bit_rate'] ?? null);
+        $videoBitrate = $this->streamBitrate($video);
         if ($videoBitrate <= 0) {
             $videoBitrate = $this->intVal($format['bit_rate'] ?? null);
         }
-        $audioBitrate = $this->intVal($audio['bit_rate'] ?? null);
+        $audioBitrate = $this->streamBitrate($audio);
 
         return new SourceProfile(
             width: $width > 0 ? $width : null,
@@ -3508,6 +3515,45 @@ class TranscodeManager
             audioBitrate: $audioBitrate > 0 ? $audioBitrate : null,
             pixFmt: $this->probeString($video['pix_fmt'] ?? null),
         );
+    }
+
+    /**
+     * Resolve a single ffprobe stream's own bitrate in bits/sec, or 0 when unknown.
+     *
+     * Matroska does NOT store a per-stream bitrate in the container header, so
+     * ffprobe reports NO `bit_rate` on an MKV stream — every rung would then fall
+     * back to `format.bit_rate`, the whole-mux rate, and treat video-plus-audio as
+     * if it were the video alone. For a 1.08 Mbps HEVC + 448 kbps AC-3 file that
+     * over-reads the video by ~40 %, inflating every rung's target and the
+     * advertised BANDWIDTH.
+     *
+     * mkvmerge/ffmpeg do however write a per-track `BPS` tag (and language-suffixed
+     * variants such as `BPS-eng`), which IS the true per-stream rate. Prefer the
+     * real `bit_rate`, then any `BPS*` tag; return 0 so the caller can decide
+     * whether a container-level fallback is appropriate for that stream type.
+     *
+     * @param array<string, mixed> $stream One ffprobe stream entry.
+     */
+    private function streamBitrate(array $stream): int
+    {
+        $bitrate = $this->intVal($stream['bit_rate'] ?? null);
+        if ($bitrate > 0) {
+            return $bitrate;
+        }
+
+        $tags = is_array($stream['tags'] ?? null) ? $stream['tags'] : [];
+        foreach ($tags as $key => $value) {
+            // `BPS`, `BPS-eng`, `bps-en`, … — match the tag family case-insensitively.
+            if (!is_string($key) || stripos($key, 'BPS') !== 0) {
+                continue;
+            }
+            $tagged = $this->intVal($value);
+            if ($tagged > 0) {
+                return $tagged;
+            }
+        }
+
+        return 0;
     }
 
     /**

@@ -21,6 +21,9 @@ use Workerman\MySQL\Connection;
  * via PHP-FPM (e.g., admin dashboard), this helper provides a one-time
  * snapshot so the dashboard has data even without the daemon.
  *
+ * Both paths share {@see collectBuckets()} so the folder map, the vault scan
+ * and — critically — the {@see TYPE_TO_BUCKET} fold exist exactly once.
+ *
  * @internal Phlix-internal helper for admin dashboard bootstrap.
  *
  * @package Phlix\Stats
@@ -29,43 +32,111 @@ use Workerman\MySQL\Connection;
 final class StorageSnapshotHelper
 {
     /**
-     * Record one storage snapshot if data is stale or missing.
+     * The `stats_storage.media_type` ENUM (migration 019 → 086), i.e. the
+     * coarse buckets a snapshot may be recorded under.
      *
-     * This is a one-time bootstrap for PHP-FPM context. It scans the
-     * filesystem at /vault1 and /vault2 to get real storage sizes and
-     * queries the database for item counts, then records a snapshot.
+     * @var list<string>
+     */
+    public const BUCKETS = ['movie', 'series', 'music', 'photo', 'book'];
+
+    /**
+     * Zeroed starting totals, one entry per {@see BUCKETS} member, so a bucket
+     * with no rows is still recorded as an explicit zero rather than vanishing
+     * from the dashboard.
      *
-     * @param StatsCollector $collector Collector to write through
-     * @param Connection     $db        Live MySQL connection
+     * Spelled out as a literal (rather than built from {@see BUCKETS} in a
+     * loop) so the array shape stays statically inferable at PHPStan level 9.
+     * `testCollectBucketsAlwaysReturnsEveryBucketEvenWithNoRows` asserts the
+     * two constants cannot drift apart.
      *
-     * @return void
+     * @var array<string, array{count: int, bytes: int}>
+     */
+    private const EMPTY_BUCKETS = [
+        'movie' => ['count' => 0, 'bytes' => 0],
+        'series' => ['count' => 0, 'bytes' => 0],
+        'music' => ['count' => 0, 'bytes' => 0],
+        'photo' => ['count' => 0, 'bytes' => 0],
+        'book' => ['count' => 0, 'bytes' => 0],
+    ];
+
+    /**
+     * EXHAUSTIVE fold of the `media_items.type` ENUM (migrations 001 → 011 →
+     * 034, 13 members) onto {@see BUCKETS}.
+     *
+     * Every member MUST appear here. A type missing from this map is dropped
+     * from the snapshot entirely — silently, since the row simply never
+     * reaches a bucket — which is exactly how `track` (the type the music
+     * scanner actually writes, see {@see \Phlix\Media\Library\AudioScanner})
+     * came to be excluded from the Music totals, and how `book`/`audiobook`
+     * were excluded from everything.
+     *
+     * Keep in lockstep with {@see \Phlix\Media\Library\MediaItemShaper} —
+     * both enumerate the same column ENUM.
+     *
+     * @var array<string, string>
+     */
+    public const TYPE_TO_BUCKET = [
+        // Video content.
+        'movie' => 'movie',
+        'video' => 'movie',
+        // Series hierarchy — containers and leaves all count as series content.
+        'series' => 'series',
+        'season' => 'series',
+        'episode' => 'series',
+        // Music hierarchy. `track` is the scanner's real per-file type;
+        // `music`/`album`/`artist` are containers, `audio` the generic leaf.
+        'music' => 'music',
+        'album' => 'music',
+        'artist' => 'music',
+        'audio' => 'music',
+        'track' => 'music',
+        // Stills.
+        'photo' => 'photo',
+        // Book shelf. `audiobook` is book content that happens to be
+        // audio-encoded, so it is shelved with books rather than music.
+        'book' => 'book',
+        'audiobook' => 'book',
+    ];
+
+    /**
+     * Map of top-level vault folder name to the bucket its bytes belong to.
+     *
+     * @var array<string, string>
+     */
+    private const FOLDER_TO_BUCKET = [
+        'anime' => 'movie',
+        'movies' => 'movie',
+        'tv' => 'series',
+        'music' => 'music',
+    ];
+
+    /**
+     * Filesystem roots scanned for real on-disk sizes.
+     *
+     * @var list<string>
+     */
+    private const VAULT_ROOTS = ['/vault1', '/vault2'];
+
+    /**
+     * Build the per-bucket item counts and byte totals for one snapshot.
+     *
+     * Byte totals come from the filesystem (the `file_size` field in
+     * `media_items.metadata_json` is never populated); item counts come from
+     * the database so they reflect what is actually indexed.
+     *
+     * @param Connection $db Live MySQL connection
+     *
+     * @return array<string, array{count: int, bytes: int}> Totals keyed by
+     *         bucket, always containing every {@see BUCKETS} member
      *
      * @since 1.8
      */
-    public static function bootstrapSnapshot(
-        StatsCollector $collector,
-        Connection $db
-    ): void {
-        // Map storage folders to media type buckets
-        // anime/ and movies/ -> movie, tv/ -> series, music/ -> music
-        $folderToBucket = [
-            'anime' => 'movie',
-            'movies' => 'movie',
-            'tv' => 'series',
-            'music' => 'music',
-        ];
+    public static function collectBuckets(Connection $db): array
+    {
+        $buckets = self::EMPTY_BUCKETS;
 
-        // Initialize buckets with filesystem-sourced sizes and DB-sourced counts
-        $buckets = [
-            'movie' => ['count' => 0, 'bytes' => 0],
-            'series' => ['count' => 0, 'bytes' => 0],
-            'music' => ['count' => 0, 'bytes' => 0],
-            'photo' => ['count' => 0, 'bytes' => 0],
-        ];
-
-        // Scan filesystem for actual storage sizes
-        $vaultRoots = ['/vault1', '/vault2'];
-        foreach ($vaultRoots as $vaultRoot) {
+        // Scan filesystem for actual storage sizes.
+        foreach (self::VAULT_ROOTS as $vaultRoot) {
             if (!is_dir($vaultRoot)) {
                 continue;
             }
@@ -75,7 +146,7 @@ final class StorageSnapshotHelper
                 if ($entry === '.' || $entry === '..') {
                     continue;
                 }
-                $bucket = $folderToBucket[$entry] ?? null;
+                $bucket = self::FOLDER_TO_BUCKET[$entry] ?? null;
                 if ($bucket === null) {
                     continue;
                 }
@@ -95,7 +166,7 @@ final class StorageSnapshotHelper
             }
         }
 
-        // Get item counts from database
+        // Get item counts from database.
         /** @var array<array<string, mixed>> $rows */
         $rows = $db->query(
             "SELECT type, COUNT(*) AS item_count
@@ -103,19 +174,11 @@ final class StorageSnapshotHelper
              GROUP BY type"
         );
 
-        // Fold the granular media_items.type ENUM into the four buckets the
-        // dashboard / stats_storage ENUM supports. Types with no bucket
-        // (e.g. book, video) are intentionally dropped.
-        $typeToBucket = [
-            'movie' => 'movie',
-            'series' => 'series', 'season' => 'series', 'episode' => 'series',
-            'music' => 'music', 'album' => 'music', 'artist' => 'music', 'audio' => 'music',
-            'photo' => 'photo',
-        ];
-
         foreach ($rows as $row) {
             $type = is_string($row['type'] ?? null) ? $row['type'] : '';
-            $bucket = $typeToBucket[$type] ?? null;
+            // TYPE_TO_BUCKET covers the whole column ENUM, so a miss here means
+            // the ENUM grew without this map being updated.
+            $bucket = self::TYPE_TO_BUCKET[$type] ?? null;
             if ($bucket === null) {
                 continue;
             }
@@ -123,7 +186,28 @@ final class StorageSnapshotHelper
             $buckets[$bucket]['count'] += $count;
         }
 
-        foreach ($buckets as $mediaType => $totals) {
+        return $buckets;
+    }
+
+    /**
+     * Record one storage snapshot if data is stale or missing.
+     *
+     * This is a one-time bootstrap for PHP-FPM context. It scans the
+     * filesystem at /vault1 and /vault2 to get real storage sizes and
+     * queries the database for item counts, then records a snapshot.
+     *
+     * @param StatsCollector $collector Collector to write through
+     * @param Connection     $db        Live MySQL connection
+     *
+     * @return void
+     *
+     * @since 1.8
+     */
+    public static function bootstrapSnapshot(
+        StatsCollector $collector,
+        Connection $db
+    ): void {
+        foreach (self::collectBuckets($db) as $mediaType => $totals) {
             $collector->recordStorageSnapshot($mediaType, $totals['count'], $totals['bytes']);
         }
     }

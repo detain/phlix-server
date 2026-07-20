@@ -359,31 +359,6 @@ class MediaScanner
     }
 
     /**
-     * Scans a single audio file and returns media item data.
-     *
-     * This method is used by AudioScanner for tag harvesting but can also
-     * be called directly for single-file processing.
-     *
-     * @param string $libraryId The library's unique identifier
-     * @param \SplFileInfo $file The file to process
-     * @return array<string, mixed>|null Media item data or null if skipped
-     */
-    public function scanAudioFile(string $libraryId, \SplFileInfo $file): ?array
-    {
-        if ($this->shouldSkipFile($file->getFilename())) {
-            return null;
-        }
-
-        return [
-            'library_id' => $libraryId,
-            'name' => $file->getBasename('.' . $file->getExtension()),
-            'type' => 'track',
-            'path' => $file->getPathname(),
-            'metadata_json' => [],
-        ];
-    }
-
-    /**
      * Scans a directory for media files and creates items in the repository.
      *
      * Recursively iterates through all files in the given path, filters by

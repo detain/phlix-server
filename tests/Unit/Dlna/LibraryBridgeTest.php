@@ -200,6 +200,66 @@ class LibraryBridgeTest extends TestCase
     }
 
     /**
+     * Types whose class used to come from the `default => 'object.item.' . $type`
+     * arm, i.e. an invented class no renderer is required to accept.
+     *
+     * @return array<string, array{string, string}>
+     */
+    public static function previouslyMalformedTypeProvider(): array
+    {
+        return [
+            'book' => ['book', 'object.item.textItem'],
+            'audiobook' => ['audiobook', 'object.item.audioItem.audioBook'],
+            'track' => ['track', 'object.item.audioItem.musicTrack'],
+            'album' => ['album', 'object.container.album.musicAlbum'],
+            'artist' => ['artist', 'object.container.person.musicArtist'],
+            'season' => ['season', 'object.item.videoItem.videoBroadcast'],
+            'episode' => ['episode', 'object.item.videoItem.videoBroadcast'],
+        ];
+    }
+
+    /**
+     * @dataProvider previouslyMalformedTypeProvider
+     *
+     * @since 0.12.0
+     */
+    public function testItemToCdsObjectEmitsSpecClassForPreviouslyMalformedTypes(
+        string $type,
+        string $expectedClass
+    ): void {
+        $cdsObject = $this->bridge->itemToCdsObject([
+            'id' => 'item-1',
+            'parent_id' => 'parent-1',
+            'name' => 'Test Item',
+            'type' => $type,
+            'path' => '/media/test',
+        ]);
+
+        $this->assertEquals($expectedClass, $cdsObject['class']);
+        $this->assertStringNotContainsString(
+            'object.item.' . $type,
+            $cdsObject['class'],
+            'The class must not be built by concatenating the raw type.'
+        );
+    }
+
+    /**
+     * @since 0.12.0
+     */
+    public function testItemToCdsObjectFallsBackToGenericItemForUnknownType(): void
+    {
+        $cdsObject = $this->bridge->itemToCdsObject([
+            'id' => 'item-1',
+            'parent_id' => 'parent-1',
+            'name' => 'Test Item',
+            'type' => 'not-a-real-type',
+            'path' => '/media/test',
+        ]);
+
+        $this->assertEquals('object.item', $cdsObject['class']);
+    }
+
+    /**
      * @since 0.12.0
      */
     public function testGetStreamUrlUsesHlsStreamer(): void

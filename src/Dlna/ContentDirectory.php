@@ -663,8 +663,16 @@ class ContentDirectory
         // Determine UPnP class
         $upnpClass = $this->getUpnpClass($item);
 
+        // DIDL-Lite requires an `object.container…` class to be serialised as a
+        // <container> element — emitting one inside <item> is malformed. The
+        // node type stays authoritative for explicit container nodes; the class
+        // check additionally covers media types that ARE containers by
+        // definition (album, artist).
+        $isContainer = $type === 'container' || UpnpClassMap::isContainerClass($upnpClass);
+
         $didl = sprintf(
-            '<item id="%s" parentID="%s" restricted="true">',
+            '<%s id="%s" parentID="%s" restricted="true">',
+            $isContainer ? 'container' : 'item',
             $id,
             $parentId
         );
@@ -672,8 +680,7 @@ class ContentDirectory
         $didl .= sprintf('<dc:title>%s</dc:title>', $name);
         $didl .= sprintf('<upnp:class>%s</upnp:class>', $upnpClass);
 
-        if ($type === 'container') {
-            $didl = str_replace('<item ', '<container ', $didl);
+        if ($isContainer) {
             $childCountRaw = $item['child_count'] ?? 0;
             $childCount = is_numeric($childCountRaw) ? (int) $childCountRaw : 0;
             $didl .= sprintf('<upnp:childCount>%d</upnp:childCount>', $childCount);
@@ -684,11 +691,7 @@ class ContentDirectory
             $didl .= $this->addItemMetadata($item);
         }
 
-        if ($type === 'container') {
-            $didl .= '</container>';
-        } else {
-            $didl .= '</item>';
-        }
+        $didl .= $isContainer ? '</container>' : '</item>';
 
         return $didl;
     }
@@ -700,20 +703,20 @@ class ContentDirectory
      */
     private function getUpnpClass(array $item): string
     {
-        $type = is_string($item['type'] ?? null) ? $item['type'] : 'unknown';
-        $mediaTypeRaw = $item['media_type'] ?? '';
-        $mediaType = is_string($mediaTypeRaw) ? $mediaTypeRaw : '';
+        // An already-resolved class wins. LibraryBridge::itemToCdsObject() sets
+        // `class` to a FULL UPnP class, so the old code's
+        // `'object.item.videoItem.' . $classStr` treated it as a suffix and
+        // emitted `object.item.videoItem.object.item.videoItem.movie` for every
+        // bridge-sourced movie — i.e. on the primary browse path. No producer
+        // anywhere sets a bare suffix, so that concatenation is gone.
         $classRaw = $item['class'] ?? '';
-        $classStr = is_string($classRaw) ? $classRaw : '';
+        if (is_string($classRaw) && str_starts_with($classRaw, 'object.')) {
+            return $classRaw;
+        }
 
-        return match ($type) {
-            'container', 'folder' => 'object.container',
-            'movie', 'video' => 'object.item.videoItem.' . ($classStr !== '' ? $classStr : 'movie'),
-            'audio', 'music' => 'object.item.audioItem.' . ($classStr !== '' ? $classStr : 'musicTrack'),
-            'image', 'photo' => 'object.item.imageItem.photo',
-            'series', 'tvshow' => 'object.item.videoItem.videoBroadcast',
-            default => 'object.item.' . ($mediaType !== '' ? $mediaType : 'unknown'),
-        };
+        $type = is_string($item['type'] ?? null) ? $item['type'] : '';
+
+        return UpnpClassMap::forType($type);
     }
 
     /**

@@ -130,6 +130,102 @@ class ContentDirectoryTest extends TestCase
         $this->assertStringContainsString('library-video', $didl);
     }
 
+    /**
+     * @return array<string, array{string, string}>
+     */
+    public static function upnpClassProvider(): array
+    {
+        return [
+            'movie' => ['movie', 'object.item.videoItem.movie'],
+            'video' => ['video', 'object.item.videoItem.movie'],
+            'series' => ['series', 'object.item.videoItem.videoBroadcast'],
+            'season' => ['season', 'object.item.videoItem.videoBroadcast'],
+            'episode' => ['episode', 'object.item.videoItem.videoBroadcast'],
+            'track' => ['track', 'object.item.audioItem.musicTrack'],
+            'music' => ['music', 'object.item.audioItem.musicTrack'],
+            'audio' => ['audio', 'object.item.audioItem.musicTrack'],
+            'audiobook' => ['audiobook', 'object.item.audioItem.audioBook'],
+            'album' => ['album', 'object.container.album.musicAlbum'],
+            'artist' => ['artist', 'object.container.person.musicArtist'],
+            'photo' => ['photo', 'object.item.imageItem.photo'],
+            'book' => ['book', 'object.item.textItem'],
+        ];
+    }
+
+    /**
+     * Every ENUM member must emit its exact spec-defined class — no invented
+     * `object.item.book` / `object.item.unknown` fallbacks.
+     *
+     * @dataProvider upnpClassProvider
+     */
+    public function testGenerateDidlEmitsSpecDefinedClassForEveryType(string $type, string $expected): void
+    {
+        $didl = $this->contentDirectory->generateDidl([
+            ['id' => 'i-1', 'parent_id' => 'p-1', 'name' => 'Thing', 'type' => $type],
+        ]);
+
+        $this->assertStringContainsString(
+            sprintf('<upnp:class>%s</upnp:class>', $expected),
+            $didl
+        );
+        $this->assertStringNotContainsString('object.item.unknown', $didl);
+    }
+
+    /**
+     * Regression: LibraryBridge::itemToCdsObject() sets `class` to a FULL UPnP
+     * class, but getUpnpClass() used to treat it as a SUFFIX, producing
+     * `object.item.videoItem.object.item.videoItem.movie` for every
+     * bridge-sourced movie — i.e. on the primary browse path.
+     */
+    public function testBridgeSuppliedClassIsNotConcatenatedIntoItself(): void
+    {
+        $didl = $this->contentDirectory->generateDidl([
+            [
+                'id' => 'i-1',
+                'parent_id' => 'p-1',
+                'name' => 'Bridge Movie',
+                'type' => 'movie',
+                'class' => 'object.item.videoItem.movie',
+            ],
+        ]);
+
+        $this->assertStringContainsString(
+            '<upnp:class>object.item.videoItem.movie</upnp:class>',
+            $didl
+        );
+        $this->assertStringNotContainsString('object.item.videoItem.object.', $didl);
+        $this->assertSame(1, substr_count($didl, 'object.item.videoItem.movie'));
+    }
+
+    /**
+     * DIDL-Lite requires an `object.container…` class to live in a
+     * <container> element, never an <item>.
+     */
+    public function testContainerClassedTypesAreSerialisedAsContainerElements(): void
+    {
+        foreach (['album', 'artist'] as $type) {
+            $didl = $this->contentDirectory->generateDidl([
+                ['id' => 'c-1', 'parent_id' => 'p-1', 'name' => 'Group', 'type' => $type],
+            ]);
+
+            $this->assertStringContainsString('<container ', $didl, $type);
+            $this->assertStringContainsString('</container>', $didl, $type);
+            $this->assertStringNotContainsString('<item ', $didl, $type);
+        }
+    }
+
+    public function testLeafTypesRemainItemElements(): void
+    {
+        foreach (['movie', 'episode', 'track', 'book', 'photo', 'audiobook'] as $type) {
+            $didl = $this->contentDirectory->generateDidl([
+                ['id' => 'i-1', 'parent_id' => 'p-1', 'name' => 'Leaf', 'type' => $type],
+            ]);
+
+            $this->assertStringContainsString('<item ', $didl, $type);
+            $this->assertStringNotContainsString('<container ', $didl, $type);
+        }
+    }
+
     public function testSystemUpdateId(): void
     {
         $initialId = $this->contentDirectory->getSystemUpdateId();

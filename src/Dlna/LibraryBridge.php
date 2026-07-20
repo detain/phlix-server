@@ -263,6 +263,12 @@ class LibraryBridge
     /**
      * Determine the UPnP class based on media item type.
      *
+     * Delegates to {@see UpnpClassMap}, which covers the whole
+     * `media_items.type` ENUM. This previously carried its own `match` whose
+     * `default` built `'object.item.' . $type` — an invented, non-spec class
+     * for `book`, `audiobook`, `track`, `album`, `artist`, `season` and
+     * `episode`.
+     *
      * @param array<string, mixed> $item Media item from repository
      * @return string UPnP class string
      *
@@ -270,16 +276,9 @@ class LibraryBridge
      */
     private function determineUpnpClass(array $item): string
     {
-        /** @var string $type */
-        $type = $item['type'] ?? 'unknown';
+        $type = is_string($item['type'] ?? null) ? $item['type'] : '';
 
-        return match ($type) {
-            'movie', 'video' => 'object.item.videoItem.movie',
-            'series', 'tvshow' => 'object.item.videoItem.videoBroadcast',
-            'audio', 'music' => 'object.item.audioItem.musicTrack',
-            'image', 'photo' => 'object.item.imageItem.photo',
-            default => 'object.item.' . $type,
-        };
+        return UpnpClassMap::forType($type);
     }
 
     /**

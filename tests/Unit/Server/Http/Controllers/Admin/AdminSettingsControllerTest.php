@@ -49,10 +49,17 @@ final class AdminSettingsControllerTest extends TestCase
         //
         // phlix-shared v0.24.0 cut this from 53 keys to 40, deleting every key
         // that resolved to no config path and had no runtime consumer — the
-        // `trakt.*` trio, the `subsystem.*`/`database.*`/`hls.*` families, the
-        // duplicated `transcoding.*` tunables (the surviving ones live under
-        // `ffmpeg.*` / `server.hls.*` / `process.*`), and the unimplemented
+        // `subsystem.*`/`database.*`/`hls.*` families, the duplicated
+        // `transcoding.*` tunables (the surviving ones live under `ffmpeg.*` /
+        // `server.hls.*` / `process.*`), and the unimplemented
         // `metadata.preferred_*`/`fanart_api_key` and `auth.*` extras.
+        //
+        // v0.25.0 took it back to 43 by RESTORING the `trakt.*` trio. Those
+        // three did have a runtime consumer all along (TraktOAuthController);
+        // only their config default was unreachable, so deleting them made
+        // Trakt credentials unsettable via PUT. `config/trakt.php` now
+        // re-exports `config/scrobblers/trakt.php` and they resolve again,
+        // under their ORIGINAL flat names so persisted overrides survive.
         $expected = [
             // Hardware acceleration.
             'hwaccel.enabled'                           => 'bool',
@@ -97,6 +104,12 @@ final class AdminSettingsControllerTest extends TestCase
             'lastfm.shared_secret'                      => 'string',
             'lastfm.enabled'                            => 'bool',
 
+            // phlix-shared v0.25.0: Trakt operator credentials, resolved via
+            // the config/trakt.php re-export of config/scrobblers/trakt.php.
+            'trakt.client_id'                           => 'string',
+            'trakt.client_secret'                       => 'string',
+            'trakt.redirect_uri'                        => 'string',
+
             // Step 13.3: array-typed noise-suffix list → internal `json`.
             'matching.noise_suffixes'                   => 'json',
             // Step 3.3: object-typed per-type priority map → internal `json`;
@@ -117,7 +130,7 @@ final class AdminSettingsControllerTest extends TestCase
 
         $actual = AdminSettingsController::allowedKeys();
 
-        $this->assertCount(40, $actual);
+        $this->assertCount(43, $actual);
         $this->assertEquals($expected, $actual);
     }
 
@@ -195,7 +208,7 @@ final class AdminSettingsControllerTest extends TestCase
 
         // schemaMeta() covers EVERY declared property, not just the typed ones
         // that reach allowedKeys().
-        $this->assertCount(40, $meta);
+        $this->assertCount(43, $meta);
         foreach (array_keys(AdminSettingsController::allowedKeys()) as $key) {
             $this->assertArrayHasKey($key, $meta, sprintf('%s must carry a meta block', $key));
         }
@@ -237,14 +250,27 @@ final class AdminSettingsControllerTest extends TestCase
         $this->assertSame('metadata', $tmdb['group']);
     }
 
-    public function testSchemaMetaSecretKeysAreExactlyTheExpectedTrio(): void
+    public function testSchemaMetaSecretKeysAreExactlyTheExpectedQuintet(): void
     {
         // Lock-in: which keys are secret drives masking on BOTH GET and PUT, so
         // a key silently losing `"secret": true` in a re-vendor would start
         // shipping a credential to the browser in plaintext. Assert the exact
         // set rather than merely "at least one".
+        //
+        // phlix-shared v0.25.0 grew this from a trio to a quintet by restoring
+        // the Trakt operator credentials. `trakt.client_id` is masked even
+        // though an OAuth client_id is nominally public: it is the exact
+        // analogue of `lastfm.api_key` (Phlix sends it as the `trakt-api-key`
+        // header on every request), which this schema already masks.
+        // `trakt.redirect_uri` is a public URL and is deliberately NOT secret.
         $this->assertSame(
-            ['tmdb.api_key', 'lastfm.api_key', 'lastfm.shared_secret'],
+            [
+                'tmdb.api_key',
+                'lastfm.api_key',
+                'lastfm.shared_secret',
+                'trakt.client_id',
+                'trakt.client_secret',
+            ],
             $this->secretKeys(),
         );
     }

@@ -56,26 +56,28 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   regression test asserting every schema key resolves to a real config default. That test ran
   quarantined behind a 25-key `PENDING_SHARED_REVENDOR` list while the schema still declared
   unresolvable keys; the v0.24.0 re-vendor removed them all, so the constant and its companion
-  staleness test were deleted and the assertion now runs unconditionally over all 40 keys.
+  staleness test were deleted and the assertion now runs unconditionally over all 40 keys —
+  **43 as of the v0.25.0 re-vendor below**, still unconditionally, still with no quarantine.
 
 ### Changed
 
-- **Bumped `detain/phlix-shared` to `^0.24.0`; the server-settings schema went from 53 keys to 40.**
-  The shared repo deleted every key that resolved to no config path and had no runtime consumer —
-  the `trakt.*` trio, the `subsystem.*`, `database.*` and `hls.*` families, the duplicated
+- **Bumped `detain/phlix-shared` to `^0.25.0`; the server-settings schema went 53 keys → 40 → 43.**
+  The v0.24.0 re-vendor deleted every key that resolved to no config path and had no runtime
+  consumer — the `trakt.*` trio, the `subsystem.*`, `database.*` and `hls.*` families, the duplicated
   `transcoding.*` tunables (the surviving equivalents live under `ffmpeg.*`, `server.hls.*` and
   `process.*`), and the unimplemented `metadata.preferred_*` / `metadata.fanart_api_key` / `auth.*`
   extras. Those keys rendered in the admin Settings page, accepted a `PUT`, and reported `null`
   forever; they are now simply absent. The controller derives its allow-list from the schema, so no
   server-side key list needed editing — but the `assertCount(53)` lock-in test and its explicit
-  dotted-key → internal-type map were updated to the real 40, deliberately kept hand-written so an
+  dotted-key → internal-type map were updated to the real count, deliberately kept hand-written so an
   unreviewed schema addition still fails loudly rather than being auto-derived into a no-op.
-  **Operator-visible consequence:** Trakt operator credentials are no longer settable from the admin
-  Settings page. They remain fully configurable via `config/scrobblers/trakt.php` and the
-  `TRAKT_CLIENT_ID` / `TRAKT_CLIENT_SECRET` / `TRAKT_REDIRECT_URI` environment variables, and
-  `TraktOAuthController` still reads any `trakt.*` rows already stored in `server_settings`, so
-  existing deployments keep working. Restoring the UI path needs the keys re-added to `phlix-shared`
-  as `scrobblers.trakt.*` (that prefix resolves against the real nested config file).
+
+  **Correction — the `trakt.*` trio should not have been in that sweep, and is restored in
+  v0.25.0 (see *Fixed* below).** Unlike the other deletions, those three keys always had a real
+  runtime consumer; only their *config default* was unreachable. Deleting them cost a genuine
+  admin capability, and the earlier suggestion here to re-add them as `scrobblers.trakt.*` was
+  wrong: that prefix does resolve, but renaming would orphan `trakt.*` rows already persisted in
+  `server_settings` on live installs.
 - **`transcoding.preferred_accelerator`'s "auto-detect" sentinel is now the empty string, not
   `null`.** `config/transcoding.php` defaulted to `getenv('PREFERRED_ACCELERATOR') ?: null` against a
   schema whose auto-detect enum member is `""`, so `GET /api/v1/admin/settings` returned `null`, the
@@ -89,6 +91,49 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- **Trakt operator credentials are settable from the admin Settings page again.** The v0.24.0
+  schema sweep (above) deleted `trakt.client_id`, `trakt.client_secret` and `trakt.redirect_uri`
+  because `SettingsRepository::getDefault()` resolves a two-segment key like `trakt.client_id`
+  against a FLAT `config/trakt.php`, and the real config lives at `config/scrobblers/trakt.php`.
+  The *read* path never broke — `TraktOAuthController::SETTING_KEY_MAP`
+  (`src/Server/Http/Controllers/TraktOAuthController.php:63-67`) maps those keys itself, so
+  installs with existing overrides kept working — but the admin `PUT` allow-list is derived from
+  the schema, so saving any of the three started failing with
+  `{"errors":{"trakt.client_id":"Unknown setting key."}}`. Operators were left with env vars and a
+  file edit.
+
+  **Fix:** new `config/trakt.php`, a one-line re-export
+  (`return require __DIR__ . '/scrobblers/trakt.php';`) using the same idiom `config/hwaccel.php`
+  already uses for `config/hwaccel_base.php`. The three keys resolve again under their **original
+  flat names** — no rename, no orphaned `server_settings` rows, no read-path change, no migration.
+  `config/scrobblers/trakt.php` remains the canonical file; the shim holds no values of its own and
+  is asserted to return the identical array.
+
+  They were deliberately **not** renamed to `scrobblers.trakt.*`, even though `getDefault()` now
+  walks nested config paths and would resolve that form: `trakt.*` overrides are already persisted
+  on live installs and are what the controller reads, so a rename would silently drop working Trakt
+  credentials on upgrade.
+
+  Both credential halves are masked (`"secret": true` upstream), matching this schema's existing
+  treatment of `lastfm.api_key` — the exact analogue, since Phlix sends the Trakt client_id as the
+  `trakt-api-key` header on every request. `trakt.redirect_uri` is a public URL and is not masked.
+  The documented secret set grows from a trio to a quintet.
+
+  `"restart": false` on all three is verified rather than assumed:
+  `TraktOAuthController::applySettingsOverrides()` (`:414-429`) calls
+  `SettingsRepository::getOverride()` at `:421` on every request via `loadConfig()` (`:402`), reached
+  from `authorize()` (`:158`), `callback()` (`:226`) and `status()` (`:511`). A saved credential is
+  live on the very next request. These are among the few settings for which `restart: false` is
+  literally true — the general boot-only override gap remains open and is tracked in
+  `docs/dev/settings-restart-gap.md`.
+
+  New `tests/Unit/Server/Http/Controllers/Admin/TraktSettingsEndToEndTest.php` asserts the
+  **consequence, not the shape**: that a `PUT` is accepted and persisted, that the saved client_id
+  is the one that actually ends up in the Trakt authorize redirect (`status()` flips to
+  `configured: true` and `authorize()` goes 503 → 302 with no restart), that the secret never
+  appears in a GET or PUT body, and that re-submitting the mask sentinel leaves the *stored*
+  credential intact and Trakt still working. Mutation-verified: deleting the shim, removing the keys
+  from the vendored schema, and disabling the PUT mask guard each fail it.
 - **`POST /api/v1/admin/restart` could not work on any real box.** Three separate defects:
   1. **The PID file nothing wrote.** The controller read `config/server.php`'s
      `worker.pid_file` (`/var/run/phlix/pid`), but `Worker::$pidFile` was never assigned anywhere in

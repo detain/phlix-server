@@ -246,6 +246,52 @@ final class MediaItemShaperTest extends TestCase
         $this->assertNull($shaped['rating']); // invalid rating → null
     }
 
+    /**
+     * Every member of the real `media_items.type` column ENUM (migrations 001 →
+     * 011 → 034) must survive shaping UNCHANGED. Regression: VALID_TYPES listed
+     * only 6 of the 13 members (plus a non-existent `image`), so a genuine
+     * `photo`/`book`/`audiobook`/`track`/… row was silently relabelled `movie`
+     * on its way to API clients.
+     *
+     * @dataProvider mediaItemTypeEnumProvider
+     */
+    public function testShapePreservesEveryMemberOfTheTypeColumnEnum(string $type): void
+    {
+        $shaped = MediaItemShaper::shape(['id' => 'x', 'name' => 'X', 'type' => $type]);
+
+        $this->assertSame($type, $shaped['type'], "type '$type' must not be coerced");
+    }
+
+    /**
+     * The exact ENUM members of `media_items.type`, mirroring migration 034's
+     * final `MODIFY COLUMN type ENUM(...)`.
+     *
+     * @return iterable<string, array{string}>
+     */
+    public static function mediaItemTypeEnumProvider(): iterable
+    {
+        foreach (
+            [
+                'movie', 'series', 'season', 'episode', 'track', 'music', 'album',
+                'artist', 'video', 'audio', 'book', 'photo', 'audiobook',
+            ] as $type
+        ) {
+            yield $type => [$type];
+        }
+    }
+
+    /**
+     * `image` is a scanner-side label (the extension-set key), NOT a member of
+     * the `media_items.type` ENUM — the column calls that concept `photo`. It
+     * must therefore NOT be accepted as a media-item type.
+     */
+    public function testShapeRejectsTheNonSchemaImageType(): void
+    {
+        $shaped = MediaItemShaper::shape(['id' => 'x', 'name' => 'X', 'type' => 'image']);
+
+        $this->assertSame('movie', $shaped['type'], "'image' is not a media_items.type member");
+    }
+
     public function testShapeYieldsNullSrcsetForNonTmdbPoster(): void
     {
         $shaped = MediaItemShaper::shape([

@@ -30,8 +30,31 @@ use Phlix\Media\Metadata\PosterSrcset;
  */
 final class MediaItemShaper
 {
-    /** Media-item `type` enum (schema-constrained). */
-    private const VALID_TYPES = ['movie', 'series', 'season', 'episode', 'audio', 'image'];
+    /**
+     * Media-item `type` enum — the EXACT members of the `media_items.type`
+     * column ENUM as built up by migrations 001 → 011 (`track`/`music`/`album`/
+     * `artist`/`video`/`audio`/`book`/`photo`) → 034 (`audiobook`). Keep this in
+     * lockstep with that column: {@see shape()} coerces any value NOT listed
+     * here to `'movie'`, so a member missing from this list silently mislabels
+     * real rows (a `photo` reported to clients as a movie).
+     *
+     * @var list<string>
+     */
+    private const VALID_TYPES = [
+        'movie',
+        'series',
+        'season',
+        'episode',
+        'track',
+        'music',
+        'album',
+        'artist',
+        'video',
+        'audio',
+        'book',
+        'photo',
+        'audiobook',
+    ];
 
     /**
      * Content-rating enum (schema-constrained). The MPAA movie ratings PLUS the

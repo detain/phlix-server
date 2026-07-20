@@ -1979,16 +1979,27 @@ class MediaScanner
      * non-episodic files to 'movie' — a file sitting in a series library that
      * carries no `SxxExx` marker becomes a top-level movie rather than a bogus
      * `type='series'` row (the prior behaviour that made every episode look like
-     * its own separate series). Other library types pass through unchanged.
+     * its own separate series). Other library types pass through unchanged,
+     * EXCEPT `'image'`: that is a scanner-side label (it keys the extension set
+     * in {@see loadNamingOptions()} and is what {@see LibraryManager} passes for
+     * a photo library) and is NOT a member of the `media_items.type` ENUM — the
+     * column calls the same concept `'photo'`. Returning it verbatim made every
+     * photo INSERT fail on a strict-mode server (error 1265, "Data truncated for
+     * column 'type'"), so a photo library could never produce a single row. Map
+     * it across to the real ENUM member.
      *
      * @param SplFileInfo $file The file info
      * @param string $libraryType The library type ('video', 'series', 'movie', 'audio', 'image', …)
-     * @return string The specific media type ('movie', 'audio', 'image', 'book', …)
+     * @return string The specific media type ('movie', 'audio', 'photo', 'book', …)
      */
     private function determineMediaType(SplFileInfo $file, string $libraryType): string
     {
         if ($this->isVideoContentLibrary($libraryType)) {
             return 'movie';
+        }
+
+        if ($libraryType === 'image') {
+            return 'photo';
         }
 
         return $libraryType;

@@ -1,12 +1,20 @@
 <?php
 
 /**
- * Migration 072 finalizer: merge duplicate paths, then add the unique index.
+ * path_hash finalizer: merge duplicate paths, then add the unique index.
  *
  * Run this ONCE after migration 072 (which adds the `path_hash` generated
  * column) has been applied:
  *
  *     php migrations/cleanup_072.php
+ *
+ * RE-RUN IT after ANY later migration that widens `path_hash`'s scope — those
+ * migrations drop the unique index so the column rewrite cannot fail on a
+ * dirty DB, and rely on this script to merge duplicates under the new scope
+ * and put the index back. Migration 087 (adding `track` and `audiobook`) is
+ * the first such case. The scope itself comes from
+ * {@see PathDeduper::DEDUPED_TYPES}, so this script always follows whatever
+ * the current code and column agree on.
  *
  * It performs the one-time work the auto-run `.sql` migration deliberately does
  * NOT do, because it can fail on a DB that still holds duplicates:

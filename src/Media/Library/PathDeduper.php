@@ -93,24 +93,49 @@ class PathDeduper
     }
 
     /**
+     * `media_items.type` members that carry a real filesystem path and are
+     * therefore in scope for path deduplication.
+     *
+     * MUST stay in lockstep with the `path_hash` generated column's `CASE`
+     * (migration 072, widened by migration 087) — that column defines which
+     * rows the `(library_id, path_hash)` unique index constrains, and a type in
+     * one list but not the other either leaves rows unprotected or trips the
+     * index on a type the cleanup will not merge. Changing this list requires
+     * a migration rewriting the column, followed by a re-run of
+     * `migrations/cleanup_072.php`.
+     *
+     * Containers (series, season) are excluded: their paths are synthetic
+     * (`series:<libraryId>:<slug>`) and legitimately repeat. `photo` is
+     * excluded as well, matching 072.
+     *
+     * @var list<string>
+     */
+    public const DEDUPED_TYPES = ['episode', 'movie', 'audio', 'book', 'track', 'audiobook'];
+
+    /**
      * Find all duplicate path groups within media items.
      *
-     * Only considers items of types that have real filesystem paths:
-     * episode, movie, audio, book. Containers (series, season) and other types
-     * with synthetic/not-real paths are excluded.
+     * Scoped to {@see DEDUPED_TYPES} — the types that have real filesystem
+     * paths. Containers (series, season) and other types with synthetic /
+     * not-real paths are excluded.
      *
      * @return array<int, array{path: string, library_id: string, library_name: string, items: list<array{id: string,
      * name: string, type: string, created_at: string}>}>
      */
     public function findDuplicateGroups(): array
     {
+        // Interpolated, not bound: DEDUPED_TYPES is a compile-time constant of
+        // literals with no request-derived input, and inlining keeps this query
+        // readable next to the identically-worded `path_hash` CASE it mirrors.
+        $typeList = "'" . implode("', '", self::DEDUPED_TYPES) . "'";
+
         // First find all paths that appear more than once (with their library and all item ids)
         $result = $this->db->query(
             "SELECT mi.path, mi.library_id, l.name AS library_name,
                     mi.id, mi.name, mi.type, mi.created_at
              FROM media_items mi
              JOIN libraries l ON l.id = mi.library_id
-             WHERE mi.type IN ('episode', 'movie', 'audio', 'book')
+             WHERE mi.type IN ({$typeList})
                AND mi.path IS NOT NULL
                AND mi.path != ''
              ORDER BY mi.library_id, mi.path, mi.id ASC"

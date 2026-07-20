@@ -230,6 +230,7 @@ class DashboardService
      *     series_bytes: int,
      *     music_bytes: int,
      *     photo_bytes: int,
+     *     book_bytes: int,
      *     transcode_cache_bytes: int,
      *     items: array<int, array{
      *         media_type: string,
@@ -264,12 +265,13 @@ class DashboardService
               ORDER BY ss.total_bytes DESC"
         );
 
-        /** @var array{movie_bytes: int, series_bytes: int, music_bytes: int, photo_bytes: int, transcode_cache_bytes: int, items: array<int, array{media_type: string, item_count: int, total_bytes: int, transcode_cache_bytes: int, formatted_total: string, formatted_cache: string}>, formatted_transcode_cache: string} $result */
+        /** @var array{movie_bytes: int, series_bytes: int, music_bytes: int, photo_bytes: int, book_bytes: int, transcode_cache_bytes: int, items: array<int, array{media_type: string, item_count: int, total_bytes: int, transcode_cache_bytes: int, formatted_total: string, formatted_cache: string}>, formatted_transcode_cache: string} $result */
         $result = [
             'movie_bytes' => 0,
             'series_bytes' => 0,
             'music_bytes' => 0,
             'photo_bytes' => 0,
+            'book_bytes' => 0,
             'transcode_cache_bytes' => 0,
             'items' => [],
         ];
@@ -288,6 +290,7 @@ class DashboardService
                 'series' => $result['series_bytes'] = $totalBytes,
                 'music' => $result['music_bytes'] = $totalBytes,
                 'photo' => $result['photo_bytes'] = $totalBytes,
+                'book' => $result['book_bytes'] = $totalBytes,
                 default => null,
             };
 

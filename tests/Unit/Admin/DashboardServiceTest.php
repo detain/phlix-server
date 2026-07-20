@@ -241,6 +241,7 @@ class DashboardServiceTest extends TestCase
         $this->assertArrayHasKey('series_bytes', $result);
         $this->assertArrayHasKey('music_bytes', $result);
         $this->assertArrayHasKey('photo_bytes', $result);
+        $this->assertArrayHasKey('book_bytes', $result);
         $this->assertArrayHasKey('transcode_cache_bytes', $result);
         $this->assertArrayHasKey('items', $result);
         $this->assertArrayHasKey('formatted_transcode_cache', $result);
@@ -259,6 +260,34 @@ class DashboardServiceTest extends TestCase
 
         $this->assertEquals('series', $result['items'][1]['media_type']);
         $this->assertEquals(300, $result['items'][1]['item_count']);
+    }
+
+    public function test_get_storage_summary_surfaces_the_book_bucket(): void
+    {
+        $mockConnection = $this->createMockConnection();
+        $mockConnection->method('query')->willReturn([
+            [
+                'media_type' => 'book',
+                'item_count' => 42,
+                'total_bytes' => 3000000000,
+                'transcode_cache_bytes' => 0,
+            ],
+        ]);
+
+        $service = new DashboardService(
+            $this->createMockStatsCollector(),
+            $this->createMockSessionManager(),
+            $this->createMockStreamManager(),
+            $this->createMockItemRepository(),
+            $mockConnection
+        );
+
+        $result = $service->getStorageSummary();
+
+        $this->assertEquals(3000000000, $result['book_bytes']);
+        $this->assertCount(1, $result['items']);
+        $this->assertEquals('book', $result['items'][0]['media_type']);
+        $this->assertEquals(42, $result['items'][0]['item_count']);
     }
 
     public function test_get_recent_activity_returns_feed(): void

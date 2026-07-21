@@ -193,6 +193,16 @@ class MediaScanner
     private array $containerCache = [];
 
     /**
+     * Effective `scanner.ignore_patterns` list used by {@see shouldSkipFile()}.
+     *
+     * Never null: legacy construction substitutes a store-less instance that
+     * reports the shipped defaults. Refreshed at the top of every
+     * {@see scan()} / {@see countFiles()} so an admin change applies to the
+     * next scan without a restart.
+     */
+    private ScanIgnorePatterns $ignorePatterns;
+
+    /**
      * Constructor for MediaScanner.
      *
      * @param Connection $db Database connection for media item persistence
@@ -245,6 +255,11 @@ class MediaScanner
      *                           similarity computation is enqueued as a background
      *                           job instead of running inline. Null = inline
      *                           computation (legacy mode).
+     * @param ScanIgnorePatterns|null $ignorePatterns Effective
+     *                           `scanner.ignore_patterns` list consulted by
+     *                           {@see shouldSkipFile()}. Null (legacy
+     *                           construction) substitutes a store-less instance
+     *                           = {@see ScanIgnorePatterns::DEFAULT_PATTERNS}.
      *
      * @since 0.14.0 TrailerFinder parameter added for extras detection
      * @since 0.35.0 SimilarityService parameter added for P4-S1
@@ -264,11 +279,15 @@ class MediaScanner
         ?SimilarityService $similarityService = null,
         ?CollectionService $collectionService = null,
         ?\Phlix\Media\MediaAsset\MediaAssetJobStore $mediaAssetJobStore = null,
-        ?SimilarityJobStore $similarityJobStore = null
+        ?SimilarityJobStore $similarityJobStore = null,
+        ?ScanIgnorePatterns $ignorePatterns = null
     ) {
         $this->db = $db;
         $this->itemRepository = $itemRepository;
         $this->logger = $logger ?? $this->createDefaultLogger();
+        // Never null internally: a legacy construction that omits it gets a
+        // store-less instance, which yields ScanIgnorePatterns::DEFAULT_PATTERNS.
+        $this->ignorePatterns = $ignorePatterns ?? new ScanIgnorePatterns();
         $this->namingOptions = $this->loadNamingOptions();
         $this->eventDispatcher = $eventDispatcher;
         $this->trailerFinder = $trailerFinder;
@@ -316,18 +335,93 @@ class MediaScanner
     }
 
     /**
-     * Loads supported file extensions by media type.
+     * Loads supported file extensions by EXTENSION CLASS.
      *
-     * @return array<string, array<string>> Media type to extension list mapping
+     * The keys here are their own vocabulary — `video`, `audio`, `image`,
+     * `book`, `audiobook` — and are NOT `libraries.type` values and NOT
+     * `media_items.type` values. Note `image`, which the `media_items.type`
+     * ENUM spells `photo`. Callers must translate through
+     * {@see extensionsForLibraryType()} rather than indexing this map with a
+     * library type directly; doing the latter is what left audiobook libraries
+     * scanning for video files.
+     *
+     * @return array<string, array<string>> Extension class to extension list mapping
      */
     private function loadNamingOptions(): array
     {
+        $audio = ['mp3', 'flac', 'aac', 'ogg', 'wav', 'm4a', 'wma', 'alac', 'opus'];
+
         return [
             'video' => ['mkv', 'mp4', 'avi', 'mov', 'wmv', 'flv', 'webm', 'm4v', 'mpg', 'mpeg', 'ts'],
-            'audio' => ['mp3', 'flac', 'aac', 'ogg', 'wav', 'm4a', 'wma', 'alac', 'opus'],
+            'audio' => $audio,
             'image' => ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp', 'tiff', 'tif'],
             'book' => ['epub', 'pdf', 'cbz'],
+            // Audiobooks are the audio set PLUS `.m4b`, the dominant audiobook
+            // container. `m4b` is deliberately NOT added to the plain `audio`
+            // list: that list describes MUSIC files, and an `.m4b` is not a
+            // music track. This mirrors AudiobookScanner's own supported set
+            // (`m4b`, `m4a`, `mp3` — see AudiobookScanner::…['m4b']).
+            'audiobook' => array_merge($audio, ['m4b']),
         ];
+    }
+
+    /**
+     * Translate a `libraries.type` value into the extension class whose list
+     * {@see loadNamingOptions()} holds.
+     *
+     * ## Three distinct vocabularies share these words — do not conflate them
+     *
+     *  1. **`libraries.type`** (what `$type` is here): `movie`, `series`,
+     *     `music`, `photo`, `video`, `book`, `audiobook`.
+     *  2. **`media_items.type`** (the DB ENUM, 13 members): uses `photo`, NOT
+     *     `image`. `$type` is ALSO passed through to
+     *     {@see determineMediaType()} and ends up typing the created rows, so
+     *     the value handed to {@see scan()} must stay in vocabulary 1 — it
+     *     cannot simply be rewritten at the call site.
+     *  3. **extension classes** (the {@see loadNamingOptions()} keys, 4
+     *     members): `video`, `audio`, `image`, `book`. This is a naming-only
+     *     vocabulary and uses `image`, NOT `photo`.
+     *
+     * ## The bug this fixes
+     *
+     * The lookup used to be `$this->namingOptions[$type] ?? ['video']`, mixing
+     * vocabularies 1 and 3 and relying on the fallback for every mismatch.
+     * `LibraryManager` hand-translated two cases before calling
+     * ({@see \Phlix\Media\Library\LibraryManager::scanPhotoLibrary()} passes
+     * `image`, `scanBookLibrary()` passes `book`) but `scanAudiobookLibrary()`
+     * passes `audiobook`, which is not a key — so AUDIOBOOK LIBRARIES FELL
+     * THROUGH TO VIDEO EXTENSIONS and scanned for `.mkv`/`.mp4`, never for the
+     * `.m4b`/`.mp3` files they actually contain.
+     *
+     * `movie`, `series` and `video` also miss the map, but their fallback to
+     * video extensions is CORRECT, so the mapping below makes that explicit
+     * rather than incidental. `music` never reaches this class (LibraryManager
+     * routes it to MusicLibraryService).
+     *
+     * @param string $type A `libraries.type` value.
+     *
+     * @return array<int, string> Extensions to accept for that library type.
+     *
+     * @since 1.6.0
+     */
+    private function extensionsForLibraryType(string $type): array
+    {
+        $class = match ($type) {
+            // Audiobooks get the audio set plus `.m4b`; without this they were
+            // scanned with VIDEO extensions and matched nothing they contain.
+            'audiobook' => 'audiobook',
+            // `music` never actually reaches this class (LibraryManager routes
+            // it to MusicLibraryService), but mapping it is correct and stops
+            // the next caller falling into the same video default.
+            'music', 'audio' => 'audio',
+            // `libraries.type` says `photo`; the extension class says `image`.
+            'photo', 'image' => 'image',
+            'book' => 'book',
+            // movie / series / video and anything unrecognised.
+            default => 'video',
+        };
+
+        return $this->namingOptions[$class] ?? $this->namingOptions['video'];
     }
 
     /**
@@ -406,9 +500,12 @@ class MediaScanner
 
         $startNs = hrtime(true);
         $this->containerCache = [];
+        // Re-read `scanner.ignore_patterns` once per scan (read-path class (a)
+        // LIVE at scan granularity) rather than once per file.
+        $this->ignorePatterns->refresh();
         $this->dispatchScanStarted($libraryId, $path);
 
-        $extensions = $this->namingOptions[$type] ?? $this->namingOptions['video'];
+        $extensions = $this->extensionsForLibraryType($type);
 
         if ($seriesPerDirectory && $type === 'series') {
             $added = $this->scanSeriesPerDirectory($libraryId, $path, $type, $extensions, $onFile);
@@ -441,7 +538,11 @@ class MediaScanner
             return 0;
         }
 
-        $extensions = $this->namingOptions[$type] ?? $this->namingOptions['video'];
+        // Same list the subsequent scan() will use, so the progress denominator
+        // and the walk agree.
+        $this->ignorePatterns->refresh();
+
+        $extensions = $this->extensionsForLibraryType($type);
 
         $count = 0;
         $iterator = new \RecursiveIteratorIterator(
@@ -1095,6 +1196,13 @@ class MediaScanner
     /**
      * Determines if a file should be skipped during scanning.
      *
+     * Two independent rules, in order:
+     *  1. **dotfiles** — hardcoded and deliberately NOT configurable; whether
+     *     to import `.DS_Store` is not an operator decision, so no value of
+     *     `scanner.ignore_patterns` (including an empty list) can re-enable it;
+     *  2. the effective `scanner.ignore_patterns` list — see
+     *     {@see ScanIgnorePatterns} and `config/scanner.php`.
+     *
      * @param string $filename The filename to check
      * @return bool True if the file should be skipped
      */
@@ -1105,15 +1213,10 @@ class MediaScanner
             return true;
         }
 
-        // Skip system files
-        $skipPatterns = ['.part', '.tmp', '_unpack', '.download', '.!ut'];
-        foreach ($skipPatterns as $pattern) {
-            if (str_contains($filename, $pattern)) {
-                return true;
-            }
-        }
-
-        return false;
+        // Skip system/partial/sample files per the effective
+        // `scanner.ignore_patterns` list. Consulted AFTER the dotfile rule
+        // above, which no configured value can reach or disable.
+        return $this->ignorePatterns->matches($filename);
     }
 
     /**

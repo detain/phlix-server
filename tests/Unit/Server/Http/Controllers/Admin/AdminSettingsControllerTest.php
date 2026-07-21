@@ -204,6 +204,12 @@ final class AdminSettingsControllerTest extends TestCase
             'transcoding.preset'                        => 'string',
             'transcoding.crf_h264'                      => 'int',
             'transcoding.audio_bitrate'                 => 'string',
+            // Gates BOTH artwork download choke points (poster/backdrop and
+            // the separate logo path) via ArtworkDownloadPolicy.
+            'artwork.download_enabled'                  => 'bool',
+            // MediaScanner::shouldSkipFile() via ScanIgnorePatterns. Note
+            // config/scanner.php is NOT in boot $appConfig.
+            'scanner.ignore_patterns'                   => 'json',
 
             // FFmpeg process limits (config/ffmpeg.php).
             'ffmpeg.max_concurrent_transcodes'          => 'int',
@@ -303,7 +309,7 @@ final class AdminSettingsControllerTest extends TestCase
 
         $actual = AdminSettingsController::allowedKeys();
 
-        $this->assertCount(63, $actual);
+        $this->assertCount(65, $actual);
         $this->assertEquals($expected, $actual);
     }
 
@@ -381,7 +387,7 @@ final class AdminSettingsControllerTest extends TestCase
 
         // schemaMeta() covers EVERY declared property, not just the typed ones
         // that reach allowedKeys().
-        $this->assertCount(63, $meta);
+        $this->assertCount(65, $meta);
         foreach (array_keys(AdminSettingsController::allowedKeys()) as $key) {
             $this->assertArrayHasKey($key, $meta, sprintf('%s must carry a meta block', $key));
         }

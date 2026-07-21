@@ -2412,6 +2412,15 @@ class Application
         $this->startTranscodeReaperTimer();
     }
 
+    /**
+     * Delay (seconds) before the post-boot catch-up backup check.
+     *
+     * Long enough to stay off the boot path, short enough that any install which
+     * stays up a few minutes performs the check. {@see self::registerBackupTimer()}
+     * explains why a daily-only timer never fires on a box that gets deployed to.
+     */
+    private const BACKUP_INITIAL_CHECK_DELAY = 300;
+
     private function startBackupTimerIfEnabled(): void
     {
         $configDirRaw = $this->config['_config_dir'] ?? 'config';
@@ -2469,8 +2478,7 @@ class Application
     {
         $logger = \Phlix\Common\Logger\LoggerFactory::get(\Phlix\Common\Logger\LogChannels::APPLICATION);
 
-        // Run daily to check if it's time for a backup
-        \Workerman\Timer::add(86400, function () use ($backupManager, $intervalDays, $logger): void {
+        $check = function () use ($backupManager, $intervalDays, $logger): void {
             $nextBackup = $backupManager->getNextScheduledBackup();
 
             if ($nextBackup === null) {
@@ -2497,7 +2505,27 @@ class Application
                     ]);
                 }
             }
-        });
+        };
+
+        // Catch-up check shortly after boot.
+        //
+        // This is NOT belt-and-braces — without it the feature does not work on a
+        // box that is deployed to. A bare Timer::add(86400) fires only after 24h of
+        // UNINTERRUPTED uptime, and every restart or reload resets that countdown
+        // to zero, so an install that restarts even once a day never backs up. That
+        // is what production looked like: the timer had been armed since the
+        // 2026-07-20 deploy, the worker was alive and its sibling storage-snapshot
+        // timer was writing rows, and `backups` was still empty.
+        //
+        // Deciding at boot is safe because the decision is idempotent: $check
+        // consults getNextScheduledBackup(), which returns last_backup + interval,
+        // so restart churn cannot produce more than one backup per interval. The
+        // delay only keeps the archive off the boot path — it is not a correctness
+        // guard. One-shot: Workerman's Timer::add repeats unless passed [], false.
+        \Workerman\Timer::add(self::BACKUP_INITIAL_CHECK_DELAY, $check, [], false);
+
+        // Steady-state daily check thereafter.
+        \Workerman\Timer::add(86400, $check);
     }
 
     /**

@@ -1925,20 +1925,10 @@ class Application
         // Start discovery server for SSDP/mDNS device discovery
         $this->startDiscoveryIfEnabled();
 
-        // Start newsletter timer if enabled
-        $this->startNewsletterTimerIfEnabled();
-
-        // Start backup timer if enabled
-        $this->startBackupTimerIfEnabled();
-
-        // Start the periodic storage-snapshot timer so the admin dashboard's
-        // Storage card has data (nothing else writes stats_storage).
-        $this->startStorageSnapshotTimer();
-
-        // Start the transcode stale-job reaper so wedged encodes free their
-        // concurrency slot promptly (default: checks every 45 s, kills jobs
-        // older than 120 s or with no segment within 60 s).
-        $this->startTranscodeReaperTimer();
+        // Periodic background timers. Shared with the Workerman daemon, which
+        // reaches them via {@see self::startBackgroundTimers()} because it never
+        // calls this method — see that method's docblock.
+        $this->startBackgroundTimers();
 
         $request = Request::fromGlobals();
 
@@ -2277,6 +2267,74 @@ class Application
      *
      * @since 0.19.0
      */
+    /**
+     * Register the periodic background timers.
+     *
+     * ## Why this method exists
+     *
+     * These four timers were originally registered only inside {@see self::run()}.
+     * `run()` is a **CGI-era entry point** — it ends in `Request::fromGlobals()` and
+     * dispatches a single request — and it has **no caller anywhere in the tree**:
+     * `start.php` constructs {@see Application} (`start.php:199`, `:760`) but never
+     * runs it, and `public/index.php` dispatches through `Router` directly. The only
+     * `->run()` occurrences are a docblock example on this class and an unrelated CLI
+     * class in `bin/phlix`.
+     *
+     * `start.php:191-196` records that the daemon "does NOT call boot() or run() and
+     * therefore does not start hub/relay/discovery/newsletter/backup timers", and
+     * re-wires the hub heartbeat (`start.php:670`) and relay tunnel separately. The
+     * remaining timers were missed, so on every Workerman install:
+     *
+     *  - **automatic backups never ran** (`backups` was empty on production),
+     *  - **`stats_storage` was never written**, leaving the admin dashboard's Storage
+     *    card permanently blank — this method's initial snapshot is its only writer,
+     *  - wedged transcodes never had their concurrency slot reclaimed,
+     *  - the newsletter never sent.
+     *
+     * Nothing detected this because a timer that is never registered throws nothing.
+     *
+     * Calling `run()` from the daemon would be wrong (it would dispatch a bogus
+     * request from CLI globals into a resident worker), so the timer block lives here
+     * and both entry points call it.
+     *
+     * ## Deliberately NOT included: `startDiscoveryIfEnabled()`
+     *
+     * {@see \Phlix\Discovery\DiscoveryServer} is registered in no DI provider, its
+     * `config/discovery.php` is loaded by nothing, and it advertises over SSDP
+     * alongside the DLNA `SsdpAdvertiser` the daemon already starts
+     * (`start.php:937`). Activating it here would risk an SSDP port conflict to
+     * enable a subsystem with no configuration path. It stays in `run()` only.
+     *
+     * ## Concurrency
+     *
+     * Must be called from exactly ONE worker (the daemon uses a dedicated `count=1`
+     * worker). Running it in every HTTP worker would multiply the backup and snapshot
+     * writes by the worker count.
+     *
+     * @return void
+     *
+     * @since 1.6.0
+     */
+    public function startBackgroundTimers(): void
+    {
+        // Start newsletter timer if enabled
+        $this->startNewsletterTimerIfEnabled();
+
+        // Start backup timer if enabled
+        $this->startBackupTimerIfEnabled();
+
+        // Start the periodic storage-snapshot timer so the admin dashboard's
+        // Storage card has data (nothing else writes stats_storage).
+        $this->startStorageSnapshotTimer();
+
+        // Start the transcode stale-job reaper so wedged encodes free their
+        // concurrency slot promptly (default: checks every 45 s, kills jobs
+        // older than 120 s or with no segment within 60 s). Only 'running' rows
+        // are reaped; on-demand seek jobs are inserted as 'completed' precisely
+        // so this cannot tear them down mid-playback.
+        $this->startTranscodeReaperTimer();
+    }
+
     private function startBackupTimerIfEnabled(): void
     {
         $configDirRaw = $this->config['_config_dir'] ?? 'config';

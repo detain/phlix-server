@@ -66,6 +66,15 @@ return [
     // real enabled/source/cache_dir instead of bare defaults.
     'theme_music' => require __DIR__ . '/theme_music.php',
 
+    // Newsletter config. Sourced here because Application::startNewsletterTimerIfEnabled()
+    // reads $config['newsletter'] — without this line that array was permanently
+    // absent, the `enabled` gate returned early on every boot, and the weekly
+    // newsletter could never send regardless of configuration. Composing it also
+    // makes the `newsletter.*` admin settings genuinely reachable via
+    // EffectiveConfig::overlayAppConfig(), which refuses to create absent keys.
+    // Ships disabled: config/newsletter.php sets 'enabled' => false.
+    'newsletter' => require __DIR__ . '/newsletter.php',
+
     // Local artwork cache (SV-3.4) config. Sourced here so MediaServicesProvider
     // constructs ArtworkStorage with the operator-configured `storage_path`
     // (env ARTWORK_STORAGE_PATH) instead of the hard-coded /var/artwork default.

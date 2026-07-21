@@ -706,6 +706,47 @@ try {
 }
 
 // -----------------------------------------------------------------------------
+// 4c-bis. Background timer worker.
+//
+// Registers the periodic timers that were previously reachable ONLY from
+// Application::run() — a CGI-era entry point this daemon never calls (see the
+// note at the top of section 4 and Application::startBackgroundTimers()). The
+// omission meant automatic backups never ran, stats_storage was never written
+// (blank dashboard Storage card), wedged transcodes never freed their slot, and
+// the newsletter never sent.
+//
+// count=1 is REQUIRED, not an optimisation: these timers write backups and
+// storage snapshots, so running them per-HTTP-worker would multiply both by the
+// worker count.
+// -----------------------------------------------------------------------------
+
+try {
+    $backgroundTimerWorker = new Worker();
+    $backgroundTimerWorker->count = 1;
+    $backgroundTimerWorker->name = 'phlix-background-timers';
+    $backgroundTimerWorker->onWorkerStart = static function (Worker $w) use (
+        $config,
+        $applyCuratedCoroutineHooks
+    ): void {
+        $applyCuratedCoroutineHooks();
+        // Effective-config overlay, mirroring the HTTP worker.
+        // {@see \Phlix\Config\EffectiveConfig}
+        $config = EffectiveConfig::bootstrapAndOverlay($config);
+        // Built inside the fork so the child owns its own DB state.
+        $container = ContainerFactory::create($config);
+        /** @var ConnectionPool $pool */
+        $pool = $container->get(ConnectionPool::class);
+
+        $timerApp = new Application($container, $config, $pool);
+        $timerApp->startBackgroundTimers();
+    };
+} catch (\Throwable $e) {
+    // Best-effort, exactly like the heartbeat worker: a timer-setup failure must
+    // never stop the HTTP server from booting.
+    trigger_error('Failed to set up background timer worker: ' . $e->getMessage(), E_USER_WARNING);
+}
+
+// -----------------------------------------------------------------------------
 // 4d. Relay tunnel worker.
 //
 // When the server is enrolled with a hub and relay is enabled in config,
@@ -960,6 +1001,7 @@ foreach (
         $hubHeartbeatWorker ?? null,
         $relayTunnelWorker ?? null,
         $dlnaSsdpWorker ?? null,
+        $backgroundTimerWorker ?? null,
     ] as $stopCleanupWorker
 ) {
     if ($stopCleanupWorker instanceof Worker) {

@@ -752,12 +752,26 @@ class ContentDirectory
             );
         }
 
-        // Resource URL for streaming (HLS URL via LibraryBridge)
+        // Resource URL for streaming (HLS URL via LibraryBridge).
+        //
+        // `res` belongs to the DIDL-Lite DEFAULT namespace
+        // (urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/), declared as xmlns= on
+        // the <DIDL-Lite> root in generateDidl(). It is NOT a `upnp:` element:
+        // only upnp-namespace properties (upnp:class, upnp:album, upnp:artist,
+        // upnp:albumArtURI, …) take that prefix, exactly as dc:title takes dc:.
+        //
+        // Emitting <upnp:res> put the resource in the wrong namespace, so
+        // control points did not recognise the element as a resource at all and
+        // treated the object as having no playable content.
+        //
+        // NOTE: this is a correctness fix for the DIDL wire format ONLY. It does
+        // NOT make DLNA playback work end to end -- the stream URL must also be
+        // reachable without authentication, which it currently is not.
         if ($this->libraryBridge !== null && !empty($item['id'])) {
             $streamUrl = $this->libraryBridge->getStreamUrl($item);
             $protocolInfo = $this->getProtocolInfo($item);
             $metadata .= sprintf(
-                '<upnp:res protocolInfo="%s">%s</upnp:res>',
+                '<res protocolInfo="%s">%s</res>',
                 htmlspecialchars($protocolInfo),
                 htmlspecialchars($streamUrl)
             );
@@ -765,7 +779,7 @@ class ContentDirectory
             // Fallback to file path if no LibraryBridge
             $protocolInfo = $this->getProtocolInfo($item);
             $metadata .= sprintf(
-                '<upnp:res protocolInfo="%s">%s</upnp:res>',
+                '<res protocolInfo="%s">%s</res>',
                 htmlspecialchars($protocolInfo),
                 htmlspecialchars((string) $item['path'])
             );

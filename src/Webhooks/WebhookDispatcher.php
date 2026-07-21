@@ -116,6 +116,15 @@ class WebhookDispatcher
 
     public function dispatch(WebhookEvent $event): DispatchResult
     {
+        // Master kill-switch. Checked BEFORE the DB lookup so switching webhooks
+        // off also stops the per-dispatch query, and returned as an empty
+        // DispatchResult rather than an error: callers dispatch as a
+        // side-effect of unrelated work and must not fail because an operator
+        // turned webhooks off.
+        if (!$this->isEnabled()) {
+            return new DispatchResult(0, 0, []);
+        }
+
         $webhooks = $this->getMatchingWebhooks($event->eventType);
 
         if ($webhooks === []) {
@@ -387,12 +396,14 @@ class WebhookDispatcher
      */
     private function getConfig(): array
     {
-        $configPath = defined('PHLIX_CONFIG_PATH') ? PHLIX_CONFIG_PATH : __DIR__ . '/../../config';
-        $configFile = $configPath . '/webhooks.php';
+        // Routed through EffectiveConfig::file() so `webhooks.*` admin overrides
+        // actually reach this class. It previously did a RAW `include` of
+        // config/webhooks.php, which is read-path class (d) NOT REACHABLE: the
+        // file's values were honoured but no override on top of them ever was.
+        // {@see \Phlix\Config\EffectiveConfig}
+        $config = \Phlix\Config\EffectiveConfig::file('webhooks');
 
-        if (file_exists($configFile)) {
-            /** @var array<string, mixed> $config */
-            $config = include $configFile;
+        if ($config !== []) {
             return $config;
         }
 
@@ -403,6 +414,26 @@ class WebhookDispatcher
             'max_retries' => 2,
             'parallel_dispatch' => true,
         ];
+    }
+
+    /**
+     * Is outbound webhook delivery enabled?
+     *
+     * Backs the `webhooks.enabled` setting. Before this existed, that config
+     * key had ZERO consumers -- `'enabled' => true` appeared only in the
+     * fallback array returned when the config file was missing, and was never
+     * read on any path. The toggle shipped in config and did nothing.
+     *
+     * Defaults to TRUE when unset so an install that has never seen the key
+     * keeps delivering, exactly as it did before.
+     *
+     * @return bool
+     *
+     * @since 1.3.0
+     */
+    public function isEnabled(): bool
+    {
+        return ($this->getConfig()['enabled'] ?? true) !== false;
     }
 
     /**

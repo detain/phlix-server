@@ -271,7 +271,29 @@ class ContentDirectory
      */
     private function browseRoot(string $filter, int $startingIndex, int $requestedCount, string $sortCriteria): array
     {
-        // Root contains library containers with fixed object IDs per spec
+        // Prefer the real library. `browseRoot()` used to IGNORE the
+        // LibraryBridge entirely and always return the hardcoded music-only
+        // list below — with child_count hardcoded to 0 — so
+        // LibraryBridge::getRootContainers() had ZERO callers and a TV browsing
+        // this server saw four permanently empty music folders. On production
+        // that meant 10 719 movies and 434 series were invisible while
+        // "Music/Artists/Albums/Tracks" showed nothing.
+        if ($this->libraryBridge !== null) {
+            $libraries = $this->libraryBridge->getRootContainers();
+
+            $this->totalMatches = count($libraries);
+            $resultItems = array_slice($libraries, $startingIndex, $requestedCount > 0 ? $requestedCount : null);
+
+            return [
+                'Result' => $this->generateDidl($resultItems),
+                'NumberReturned' => count($resultItems),
+                'TotalMatches' => $this->totalMatches,
+                'UpdateID' => $this->systemUpdateId,
+            ];
+        }
+
+        // Fallback for a bridge-less ContentDirectory (tests, and any caller
+        // that builds one directly). Kept so behaviour is unchanged there.
         $libraries = [
             [
                 'id' => self::OBJECT_ID_MUSIC,

@@ -34,34 +34,122 @@ class LibraryBridgeTest extends TestCase
     }
 
     /**
+     * Stub per-type counts; anything unlisted counts zero.
+     *
+     * @param array<string, int> $counts media_items.type => row count
+     */
+    private function stubCounts(array $counts): void
+    {
+        $this->itemRepositoryMock->method('countAllByType')
+            ->willReturnCallback(static fn (string $type): int => $counts[$type] ?? 0);
+    }
+
+    /**
+     * CONSEQUENCE: root containers reflect what is actually in the library.
+     *
+     * Counts used to be hardcoded to 0 and the category->type mapping did not
+     * match the media_items ENUM, so every container was permanently empty.
+     *
      * @since 0.12.0
      */
-    public function testGetRootContainersReturnsVideoAndAudio(): void
+    public function testGetRootContainersReturnsCategoriesThatHaveContent(): void
     {
+        // Production-shaped: video only.
+        $this->stubCounts(['movie' => 10719, 'series' => 434]);
+
         $containers = $this->bridge->getRootContainers();
 
         $this->assertArrayHasKey(0, $containers);
-        $this->assertGreaterThanOrEqual(3, count($containers));
 
-        // Verify structure of each container
         foreach ($containers as $container) {
-            $this->assertArrayHasKey('id', $container);
-            $this->assertArrayHasKey('parent_id', $container);
-            $this->assertArrayHasKey('name', $container);
-            $this->assertArrayHasKey('type', $container);
-            $this->assertArrayHasKey('class', $container);
-            $this->assertArrayHasKey('child_count', $container);
-
+            foreach (['id', 'parent_id', 'name', 'type', 'class', 'child_count'] as $key) {
+                $this->assertArrayHasKey($key, $container);
+            }
             $this->assertEquals('0', $container['parent_id']);
             $this->assertEquals('container', $container['type']);
             $this->assertEquals('object.container', $container['class']);
         }
 
-        // Verify specific container IDs
-        $containerIds = array_column($containers, 'id');
-        $this->assertContains('library-video', $containerIds);
-        $this->assertContains('library-audio', $containerIds);
-        $this->assertContains('library-images', $containerIds);
+        $byId = array_column($containers, 'child_count', 'id');
+
+        // Video spans SEVERAL enum members. Mapping 'video' to just 'movie',
+        // as the old code did, would report 10719 here and hide the series.
+        $this->assertSame(10719 + 434, $byId['library-video'] ?? null);
+    }
+
+    /**
+     * CONSEQUENCE: photos are counted as `photo`, never `image`.
+     *
+     * `image` is a SCANNER label; the media_items ENUM says `photo`. The old
+     * mapping used 'image', so the Images container counted zero on every
+     * install no matter how many photos were present.
+     *
+     * Mutation-verified: changing the photos mapping back to 'image' fails this.
+     */
+    public function testPhotosAreCountedUnderTheRealEnumMember(): void
+    {
+        $this->stubCounts(['photo' => 7]);
+
+        $byId = array_column($this->bridge->getRootContainers(), 'child_count', 'id');
+
+        $this->assertSame(7, $byId['library-photos'] ?? null);
+    }
+
+    /**
+     * CONSEQUENCE: empty categories are not advertised.
+     *
+     * A TV showing containers that are always empty is worse than showing only
+     * what exists.
+     */
+    public function testEmptyCategoriesAreOmitted(): void
+    {
+        $this->stubCounts(['movie' => 3]);
+
+        $ids = array_column($this->bridge->getRootContainers(), 'id');
+
+        $this->assertSame(['library-video'], $ids);
+    }
+
+    /**
+     * CONSEQUENCE: a completely empty library advertises nothing at all.
+     */
+    public function testAnEmptyLibraryYieldsNoContainers(): void
+    {
+        $this->stubCounts([]);
+
+        $this->assertSame([], $this->bridge->getRootContainers());
+    }
+
+    /**
+     * CONSEQUENCE: ContentDirectory's root browse USES the bridge.
+     *
+     * This is the zero-caller bug. `ContentDirectory::browseRoot()` ignored the
+     * LibraryBridge completely and always returned a hardcoded
+     * Music/Artists/Albums/Tracks list with child_count 0, so
+     * `LibraryBridge::getRootContainers()` had no callers at all and a TV saw
+     * four empty music folders while 10 719 movies sat invisible.
+     *
+     * Asserts through the PUBLIC browse path, not by calling the bridge
+     * directly — calling the bridge would have passed even while nothing used it.
+     *
+     * Mutation-verified: removing the bridge branch from browseRoot() fails this.
+     */
+    public function testContentDirectoryRootBrowseUsesTheBridge(): void
+    {
+        $this->stubCounts(['movie' => 10719, 'series' => 434]);
+
+        $cd = new \Phlix\Dlna\ContentDirectory($this->itemRepositoryMock);
+        $cd->setLibraryBridge($this->bridge);
+
+        $result = $cd->browse('0', 'BrowseDirectChildren', '*', 0, 10, '');
+        $didl = is_string($result['Result'] ?? null) ? $result['Result'] : '';
+
+        $this->assertStringContainsString('Video', $didl, 'Root browse must list the real library categories.');
+        $this->assertStringNotContainsString(
+            'Artists',
+            $didl,
+            'Root browse must not fall back to the hardcoded music-only list when a bridge is set.'
+        );
     }
 
     /**

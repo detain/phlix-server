@@ -52,9 +52,36 @@ class LibraryBridge
     }
 
     /**
-     * Get root containers representing the media library categories.
+     * Which `media_items.type` ENUM members belong to each browse category.
      *
-     * Returns video, audio, and image libraries with accurate child counts from the database.
+     * ONE definition, used for both the child COUNT and the child LISTING —
+     * they previously had separate `match` blocks that disagreed with each
+     * other and with the database.
+     *
+     * Every value here is a real member of the migration-034 ENUM:
+     * `movie, series, season, episode, track, music, album, artist, video,
+     * audio, book, photo, audiobook`. Note **`photo`, not `image`** — the
+     * long-standing landmine in this codebase, and the reason the Images
+     * container counted zero on every install.
+     *
+     * `season`/`episode` are deliberately excluded from the top level: they
+     * hang off their series and would otherwise flood the root (production has
+     * 26 389 episodes against 434 series).
+     *
+     * @var array<string, list<string>>
+     */
+    private const CATEGORY_TYPES = [
+        'video'  => ['movie', 'series', 'video'],
+        'audio'  => ['music', 'audio', 'album', 'artist', 'track', 'audiobook'],
+        'photos' => ['photo'],
+        'books'  => ['book'],
+    ];
+
+    /**
+     * Root containers representing the media library categories, with accurate
+     * child counts read from the database.
+     *
+     * Empty categories are omitted.
      *
      * @return array<int, array{id: string, parent_id: string, name: string,
      *           type: string, class: string, child_count: int}>
@@ -65,32 +92,35 @@ class LibraryBridge
     {
         $this->logger?->debug('LibraryBridge: Getting root containers');
 
-        return [
+        $containers = [];
+        foreach (
             [
-                'id' => 'library-video',
+                'video'  => 'Video',
+                'audio'  => 'Audio',
+                'photos' => 'Photos',
+                'books'  => 'Books',
+            ] as $category => $label
+        ) {
+            $count = $this->getLibraryChildCount($category);
+
+            // Hide empty categories. A TV showing four containers of which
+            // three are always empty is worse than showing only what exists —
+            // and before this, ALL of them were empty regardless of content.
+            if ($count === 0) {
+                continue;
+            }
+
+            $containers[] = [
+                'id' => 'library-' . $category,
                 'parent_id' => '0',
-                'name' => 'Video',
+                'name' => $label,
                 'type' => 'container',
                 'class' => 'object.container',
-                'child_count' => $this->getLibraryChildCount('video'),
-            ],
-            [
-                'id' => 'library-audio',
-                'parent_id' => '0',
-                'name' => 'Audio',
-                'type' => 'container',
-                'class' => 'object.container',
-                'child_count' => $this->getLibraryChildCount('audio'),
-            ],
-            [
-                'id' => 'library-images',
-                'parent_id' => '0',
-                'name' => 'Images',
-                'type' => 'container',
-                'class' => 'object.container',
-                'child_count' => $this->getLibraryChildCount('image'),
-            ],
-        ];
+                'child_count' => $count,
+            ];
+        }
+
+        return $containers;
     }
 
     /**
@@ -103,18 +133,17 @@ class LibraryBridge
      */
     private function getLibraryChildCount(string $libraryType): int
     {
-        $type = match ($libraryType) {
-            'video' => 'movie',
-            'audio' => 'audio',
-            'images' => 'image',
-            default => null,
-        };
-
-        if ($type === null) {
+        $types = self::CATEGORY_TYPES[$libraryType] ?? null;
+        if ($types === null) {
             return 0;
         }
 
-        return $this->itemRepository->countAllByType($type);
+        $total = 0;
+        foreach ($types as $type) {
+            $total += $this->itemRepository->countAllByType($type);
+        }
+
+        return $total;
     }
 
     /**
@@ -153,20 +182,19 @@ class LibraryBridge
      */
     private function getLibraryItems(string $libraryType): array
     {
-        $type = match ($libraryType) {
-            'video' => 'movie',
-            'audio' => 'audio',
-            'images' => 'image',
-            default => null,
-        };
-
-        if ($type === null) {
+        $types = self::CATEGORY_TYPES[$libraryType] ?? null;
+        if ($types === null) {
             return [];
         }
 
-        $items = $this->itemRepository->getAllByType($type);
+        $objects = [];
+        foreach ($types as $type) {
+            foreach ($this->itemRepository->getAllByType($type) as $item) {
+                $objects[] = $this->itemToCdsObject($item);
+            }
+        }
 
-        return array_map(fn($item) => $this->itemToCdsObject($item), $items);
+        return $objects;
     }
 
     /**

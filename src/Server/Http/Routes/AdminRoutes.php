@@ -58,6 +58,7 @@ use Psr\Container\ContainerInterface;
  *  - `PUT    /api/v1/admin/plugins/{name}/settings`  → save settings
  *  - `POST   /api/v1/admin/plugins/{name}/enable`    → enable
  *  - `POST   /api/v1/admin/plugins/{name}/disable`   → disable
+ *  - `POST   /api/v1/admin/plugins/{name}/test`      → test credentials
  *  - `DELETE /api/v1/admin/plugins/{name}`           → uninstall
  *  - `GET    /api/v1/admin/settings`                 → effective settings
  *  - `PUT    /api/v1/admin/settings`                 → persist overrides
@@ -124,6 +125,7 @@ final class AdminRoutes
                 $r->put('/plugins/{name}/settings', [$pluginController, 'updateSettings']);
                 $r->post('/plugins/{name}/enable', [$pluginController, 'enable']);
                 $r->post('/plugins/{name}/disable', [$pluginController, 'disable']);
+                $r->post('/plugins/{name}/test', [$pluginController, 'testCredentials']);
                 $r->post('/plugins/{name}/update', [$catalogController, 'updatePlugin']);
                 $r->delete('/plugins/{name}', [$pluginController, 'uninstall']);
 

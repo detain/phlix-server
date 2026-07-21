@@ -114,7 +114,28 @@ final class HwAccelConfig
             'test_clip_path' => $transcodingConfig['test_clip_path']
                 ?? ($hwaccelBase['test_clip_path'] ?? '/tmp/hwaccel_probe_test.mp4'),
 
-            // From transcoding.php - include software fallback
+            // From transcoding.php - include software fallback.
+            //
+            // NOT AN ADMIN SETTING. `transcoding.include_software_fallback` was
+            // removed from server-settings.schema.json in phlix-shared v0.27.0
+            // for the same reason as `probe_timeout` above: this merged value
+            // has NO CONSUMER. The merged array reaches exactly two places, and
+            // neither reads this key:
+            //   1. FfmpegRunner::setConfig() (Application.php:2971,
+            //      TranscodeServicesProvider.php:149) — FfmpegRunner reads only
+            //      tone_mapping_mode, prefer_hdr_output, preferred_accelerator,
+            //      enabled and prefer_hardware from $this->config, and its
+            //      getConfig() accessor has no caller in src/.
+            //   2. HwaccelRegistry — whose software-fallback decision
+            //      (HwaccelRegistry.php:160,206) reads the SEPARATE
+            //      `fallback_to_software` key, sourced from
+            //      config/hwaccel_base.php and re-asserted below.
+            // So the toggle was inert in both directions. Kept only so the
+            // merged array shape is unchanged for any caller that reads it
+            // defensively — do NOT re-expose it as a setting. If a
+            // software-fallback toggle is wanted, expose
+            // `hwaccel.fallback_to_software`, which IS genuinely consumed.
+            // See docs/dev/settings-restart-gap.md.
             'include_software_fallback' => $transcodingConfig['include_software_fallback'] ?? true,
         ]);
 

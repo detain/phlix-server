@@ -552,6 +552,249 @@ final class AdminRoutesTest extends TestCase
         $this->assertSame(0, $this->loader->installCalls);
     }
 
+    public function test_test_credentials_route_is_registered_and_admin_gated(): void
+    {
+        // `POST /plugins/{name}/test` binds to PluginAdminController::testCredentials(),
+        // which was fully implemented but NEVER REGISTERED — every call 404'd, which
+        // is why the UI's "Test credentials" button was withheld. An anonymous caller
+        // must now hit the AdminMiddleware 401, not a 404: 401 proves the route both
+        // exists AND sits inside the admin group. Registered once in
+        // AdminRoutes::register(), which BOTH entry points call
+        // (Application.php:771 daemon + public/index.php:213 web portal).
+        $response = $this->router->dispatch(
+            $this->request('POST', '/api/v1/admin/plugins/phlix-plugin-demo/test', null),
+        );
+
+        $this->assertSame(401, $response->statusCode);
+        $this->assertNotSame(404, $response->statusCode);
+    }
+
+    public function test_test_credentials_route_rejects_non_admin_with_403(): void
+    {
+        // Every sibling plugin route is admin-gated; this one must be too.
+        // A KNOWN but non-admin user must be refused with 403 and audited.
+        $this->users->register('user-2', false);
+        $this->loader->installed[] = $this->fixturePlugin('phlix-plugin-demo', enabled: true);
+        $this->loader->entryInstance = new FakeCredentialTestingPlugin();
+
+        $response = $this->router->dispatch($this->request(
+            'POST',
+            '/api/v1/admin/plugins/phlix-plugin-demo/test',
+            'user-2',
+            ['settings' => ['api_key' => 'super-secret-key']],
+        ));
+
+        $this->assertSame(403, $response->statusCode);
+        $this->assertSame(1, $this->audit->permissionDenied);
+        // The consequence that matters: the gate ran BEFORE the controller, so the
+        // plugin's testCredentials() was never invoked with the submitted secret.
+        $this->assertSame([], $this->loader->entryInstance->calls);
+    }
+
+    public function test_test_credentials_route_reaches_controller_and_returns_result(): void
+    {
+        // Assert the CONSEQUENCE: a real request reaches the controller, the
+        // controller invokes the plugin's testCredentials() with the submitted
+        // settings, and the plugin's verdict comes back in the `{success, message}`
+        // envelope. Not merely that a route entry exists in a table.
+        $this->users->register('admin-1', true);
+        $this->loader->installed[] = $this->fixturePlugin('phlix-plugin-demo', enabled: true);
+        $entry = new FakeCredentialTestingPlugin();
+        $entry->result = ['success' => true, 'message' => 'Authenticated as demo.'];
+        $this->loader->entryInstance = $entry;
+
+        $response = $this->router->dispatch($this->request(
+            'POST',
+            '/api/v1/admin/plugins/phlix-plugin-demo/test',
+            'admin-1',
+            ['settings' => ['api_key' => 'super-secret-key']],
+        ));
+
+        $this->assertSame(200, $response->statusCode);
+        $body = json_decode($response->body, true);
+        $this->assertIsArray($body);
+        $this->assertTrue($body['success']);
+        $this->assertSame('Authenticated as demo.', $body['message']);
+        // The controller actually called through to the plugin with our settings.
+        $this->assertSame([['api_key' => 'super-secret-key']], $entry->calls);
+    }
+
+    public function test_test_credentials_route_reports_unsupported_plugin(): void
+    {
+        // A plugin entry without a testCredentials() method must 501, proving the
+        // route reached the controller rather than 404ing at the router.
+        $this->users->register('admin-1', true);
+        $this->loader->installed[] = $this->fixturePlugin('phlix-plugin-demo', enabled: true);
+        $this->loader->entryInstance = new \stdClass();
+
+        $response = $this->router->dispatch($this->request(
+            'POST',
+            '/api/v1/admin/plugins/phlix-plugin-demo/test',
+            'admin-1',
+            ['settings' => []],
+        ));
+
+        $this->assertSame(501, $response->statusCode);
+        $body = json_decode($response->body, true);
+        $this->assertIsArray($body);
+        $this->assertSame('plugin.test_not_supported', $body['code'] ?? null);
+    }
+
+    public function test_test_credentials_does_not_leak_a_thrown_secret_into_the_response(): void
+    {
+        // THE leak this endpoint invites. A plugin's testCredentials() typically
+        // performs an HTTP call, and HTTP client exceptions embed the full request
+        // URI — while several provider APIs carry the key as a QUERY PARAMETER
+        // (OMDb's `?apikey=…` is the in-tree example). Relaying getMessage()
+        // verbatim would put the operator's plaintext key in the JSON body.
+        //
+        // Assert the CONSEQUENCE: the secret is ABSENT from the whole response,
+        // not merely that some masking flag was set.
+        $this->users->register('admin-1', true);
+        $this->loader->installed[] = $this->fixturePluginWithSecretSetting('phlix-plugin-demo');
+        $entry = new FakeCredentialTestingPlugin();
+        $entry->throwable = new \RuntimeException(
+            'GET https://www.omdbapi.com/?apikey=s3cr3t-live-key&t=Dune resulted in a 401 response',
+        );
+        $this->loader->entryInstance = $entry;
+
+        $response = $this->router->dispatch($this->request(
+            'POST',
+            '/api/v1/admin/plugins/phlix-plugin-demo/test',
+            'admin-1',
+            ['settings' => ['api_key' => 's3cr3t-live-key']],
+        ));
+
+        $this->assertSame(200, $response->statusCode);
+        $this->assertStringNotContainsString('s3cr3t-live-key', $response->body);
+        $body = json_decode($response->body, true);
+        $this->assertIsArray($body);
+        $this->assertFalse($body['success']);
+        $this->assertStringContainsString('Credential test failed', $body['message']);
+        // Redacted, not merely truncated — the surrounding diagnostic survives.
+        $this->assertStringContainsString('omdbapi.com', $body['message']);
+        $this->assertStringContainsString('***', $body['message']);
+    }
+
+    public function test_test_credentials_redacts_a_secret_echoed_by_the_plugin_itself(): void
+    {
+        // The non-exception path leaks just as easily: a plugin that helpfully
+        // echoes the rejected key into its own `message` must not get that key
+        // relayed to the client either.
+        $this->users->register('admin-1', true);
+        $this->loader->installed[] = $this->fixturePluginWithSecretSetting('phlix-plugin-demo');
+        $entry = new FakeCredentialTestingPlugin();
+        $entry->result = ['success' => false, 'message' => 'Rejected key s3cr3t-live-key.'];
+        $this->loader->entryInstance = $entry;
+
+        $response = $this->router->dispatch($this->request(
+            'POST',
+            '/api/v1/admin/plugins/phlix-plugin-demo/test',
+            'admin-1',
+            ['settings' => ['api_key' => 's3cr3t-live-key']],
+        ));
+
+        $this->assertSame(200, $response->statusCode);
+        $this->assertStringNotContainsString('s3cr3t-live-key', $response->body);
+        $body = json_decode($response->body, true);
+        $this->assertIsArray($body);
+        $this->assertSame('Rejected key ***.', $body['message']);
+    }
+
+    public function test_test_credentials_redacts_a_url_encoded_secret(): void
+    {
+        // A credential leaks most often INSIDE a URI, where it arrives
+        // percent-encoded. A literal-substring-only scrub would miss it.
+        $this->users->register('admin-1', true);
+        $this->loader->installed[] = $this->fixturePluginWithSecretSetting('phlix-plugin-demo');
+        $entry = new FakeCredentialTestingPlugin();
+        $entry->throwable = new \RuntimeException(
+            'GET https://api.example.com/v1?key=' . rawurlencode('p@ss w0rd/key+1') . ' failed',
+        );
+        $this->loader->entryInstance = $entry;
+
+        $response = $this->router->dispatch($this->request(
+            'POST',
+            '/api/v1/admin/plugins/phlix-plugin-demo/test',
+            'admin-1',
+            ['settings' => ['api_key' => 'p@ss w0rd/key+1']],
+        ));
+
+        $this->assertSame(200, $response->statusCode);
+        $this->assertStringNotContainsString(rawurlencode('p@ss w0rd/key+1'), $response->body);
+        $this->assertStringNotContainsString('p%40ss', $response->body);
+    }
+
+    public function test_test_credentials_redacts_a_long_value_not_flagged_secret(): void
+    {
+        // Defence in depth: `secret` is plugin-authored advisory metadata, and
+        // manifests get it wrong. A long submitted value must be scrubbed even
+        // when the manifest never flagged it — otherwise a forgotten flag is a
+        // leak. `fixturePlugin()` declares NO settings schema at all.
+        $this->users->register('admin-1', true);
+        $this->loader->installed[] = $this->fixturePlugin('phlix-plugin-demo', enabled: true);
+        $entry = new FakeCredentialTestingPlugin();
+        $entry->throwable = new \RuntimeException('auth failed for token unflagged-but-secret-token');
+        $this->loader->entryInstance = $entry;
+
+        $response = $this->router->dispatch($this->request(
+            'POST',
+            '/api/v1/admin/plugins/phlix-plugin-demo/test',
+            'admin-1',
+            ['settings' => ['token' => 'unflagged-but-secret-token']],
+        ));
+
+        $this->assertSame(200, $response->statusCode);
+        $this->assertStringNotContainsString('unflagged-but-secret-token', $response->body);
+    }
+
+    public function test_test_credentials_keeps_short_non_credential_values_readable(): void
+    {
+        // The length floor exists so diagnostics stay useful: a short, non-secret
+        // value like a locale must NOT be scrubbed out of the message.
+        $this->users->register('admin-1', true);
+        $this->loader->installed[] = $this->fixturePlugin('phlix-plugin-demo', enabled: true);
+        $entry = new FakeCredentialTestingPlugin();
+        $entry->throwable = new \RuntimeException('unsupported language "en"');
+        $this->loader->entryInstance = $entry;
+
+        $response = $this->router->dispatch($this->request(
+            'POST',
+            '/api/v1/admin/plugins/phlix-plugin-demo/test',
+            'admin-1',
+            ['settings' => ['language' => 'en']],
+        ));
+
+        $this->assertSame(200, $response->statusCode);
+        $body = json_decode($response->body, true);
+        $this->assertIsArray($body);
+        $this->assertStringContainsString('unsupported language "en"', $body['message']);
+    }
+
+    public function test_test_credentials_redacts_a_short_value_the_manifest_flags_secret(): void
+    {
+        // Below the length floor, but manifest-declared secret → still redacted.
+        // This is the branch that proves the two rules are independent.
+        $this->users->register('admin-1', true);
+        $this->loader->installed[] = $this->fixturePluginWithSecretSetting('phlix-plugin-demo');
+        $entry = new FakeCredentialTestingPlugin();
+        $entry->throwable = new \RuntimeException('rejected pin 1234');
+        $this->loader->entryInstance = $entry;
+
+        $response = $this->router->dispatch($this->request(
+            'POST',
+            '/api/v1/admin/plugins/phlix-plugin-demo/test',
+            'admin-1',
+            ['settings' => ['api_key' => '1234']],
+        ));
+
+        $this->assertSame(200, $response->statusCode);
+        $body = json_decode($response->body, true);
+        $this->assertIsArray($body);
+        $this->assertStringNotContainsString('1234', $body['message']);
+        $this->assertStringContainsString('***', $body['message']);
+    }
+
     public function test_enable_404_for_unknown_plugin(): void
     {
         $this->users->register('admin-1', true);
@@ -600,6 +843,64 @@ final class AdminRoutesTest extends TestCase
             settings: [],
             directory: '/tmp/' . $name,
         );
+    }
+
+    /**
+     * Like {@see self::fixturePlugin()} but with a manifest that declares an
+     * `api_key` setting flagged `secret: true`, so the credential-test
+     * redaction can be exercised against a real manifest flag.
+     */
+    private function fixturePluginWithSecretSetting(string $name): InstalledPlugin
+    {
+        return new InstalledPlugin(
+            id: 'id-' . $name,
+            manifest: Manifest::fromArray([
+                'name' => $name,
+                'version' => '1.0.0',
+                'phlix_min_server_version' => '0.10.0',
+                'type' => 'metadata-provider',
+                'entry' => 'Demo\\Plugin',
+                'settings' => [
+                    'api_key' => ['type' => 'string', 'required' => true, 'secret' => true],
+                ],
+            ]),
+            enabled: true,
+            installedAt: new DateTimeImmutable('2024-01-01 00:00:00'),
+            settings: [],
+            directory: '/tmp/' . $name,
+        );
+    }
+}
+
+/**
+ * Stand-in for a plugin entry class that implements `testCredentials()`.
+ *
+ * Records each invocation so a test can assert the controller actually called
+ * through (or, for the 403 case, that it did NOT).
+ *
+ * @internal
+ */
+final class FakeCredentialTestingPlugin
+{
+    /** @var list<array<mixed, mixed>> Settings maps this was called with. */
+    public array $calls = [];
+
+    /** Thrown from testCredentials() when set — models an HTTP client failure. */
+    public ?\Throwable $throwable = null;
+
+    /** Returned from testCredentials() when no throwable is configured. */
+    public mixed $result = true;
+
+    /**
+     * @param array<mixed, mixed> $settings
+     */
+    public function testCredentials(array $settings): mixed
+    {
+        $this->calls[] = $settings;
+        if ($this->throwable !== null) {
+            throw $this->throwable;
+        }
+        return $this->result;
     }
 }
 
@@ -669,6 +970,32 @@ final class FakePluginLoader extends PluginLoader
     public function disable(string $name): void
     {
         $this->disableCalls[] = $name;
+    }
+
+    /**
+     * Entry instance handed back by {@see self::getEntryInstance()}.
+     *
+     * `false` means "not configured by the test" and yields `null` (the
+     * controller's 404 "entry class could not be instantiated" branch).
+     */
+    public object|false|null $entryInstance = false;
+
+    public function getInstalled(string $name): InstalledPlugin
+    {
+        foreach ($this->installed as $plugin) {
+            if ($plugin->manifest->name === $name) {
+                return $plugin;
+            }
+        }
+        throw new PluginNotFoundException(sprintf('No installed plugin named "%s".', $name));
+    }
+
+    public function getEntryInstance(string $name): ?object
+    {
+        if ($this->entryInstance === false) {
+            return null;
+        }
+        return $this->entryInstance;
     }
 
     public function uninstall(string $name): void

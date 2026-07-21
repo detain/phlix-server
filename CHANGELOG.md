@@ -7,7 +7,55 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased] - 2026-07-20
 
+### Added
+
+- **`POST /api/v1/admin/plugins/{name}/test` is now actually routed.**
+  `PluginAdminController::testCredentials()` was fully implemented and reachable by
+  nobody — `AdminRoutes::register()` registered every other plugin route and stopped
+  short of this one, so every call 404'd. That is why a "Test credentials" button was
+  deliberately withheld from `phlix-ui`. The route is now registered alongside its
+  siblings, inside the same `/api/v1/admin` group and therefore behind the same
+  `AdminMiddleware` gate. Registered **once**, in the registrar both entry points call
+  (`Application.php:771` daemon + `public/index.php:213` web portal), so there is no
+  dual-entry-point drift.
+
+  New tests assert the **consequence**, not the route table: an anonymous POST gets
+  401 (not 404 — proving the route exists *and* is inside the admin group), a known
+  non-admin gets 403 *and the plugin's `testCredentials()` is never invoked with the
+  submitted secret*, and an admin POST reaches the controller, invokes the plugin with
+  the submitted settings, and gets its verdict back in the `{success, message}`
+  envelope. Mutation-verified: deleting the registration turns all ten new tests red
+  with 404, and moving the route outside the admin group turns both gate tests red.
+
 ### Security
+
+- **Credential-test responses can no longer echo a submitted plaintext credential.**
+  `PluginAdminController::testCredentials()` hands operator-supplied secrets to
+  third-party plugin code and then relayed that code's message — a returned string, a
+  returned `message` field, or a caught exception's `getMessage()` — straight back in
+  the JSON body. That is a plaintext-credential leak waiting to happen: HTTP client
+  exceptions routinely embed the full request URI, and several provider APIs carry the
+  API key as a **query parameter** (OMDb's `?apikey=…` is the in-tree example), so one
+  `RequestException` would have put the operator's live key in the response verbatim.
+
+  Every outgoing message now passes through
+  `PluginAdminController::redactSubmittedSecrets()`, which replaces each submitted
+  credential — literal form plus both URL-encoded spellings, since the value usually
+  surfaces inside a URI — with `SettingsMasker::MASK`. A value is redacted when the
+  manifest flags that setting `secret: true` (any length) **or** it is at least
+  `REDACT_MIN_LENGTH` (8) characters. The second rule is deliberate defence in depth:
+  `secret` is plugin-authored advisory metadata, so a manifest that forgets to flag a
+  `password`/`token` field must not become a leak. The 8-character floor matches the
+  password minimum already enforced elsewhere and keeps short non-credential values
+  (`en`, `true`, a port number) readable in diagnostics.
+
+  Tests assert the secret is **absent from the whole response body** — not that some
+  masking flag was projected — across the thrown-exception path, the plugin-returned
+  `message` path, the URL-encoded path, the not-flagged-but-long path and the
+  flagged-but-short path, plus a negative test that a short non-secret value survives.
+  Mutation-verified: reverting to the raw `getMessage()`/`message` relay turns five of
+  them red with the plaintext key in the body. No credential is written to any log —
+  this endpoint emits no audit entry and no log line.
 
 - **Pagination DoS hole closed — an over-large `?limit=` can no longer reach a `LIMIT ?` binding.**
   `Request::queryInt()` performed no bounds checking at all, and an unclamped page size flowed from
@@ -135,6 +183,32 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   **43 as of the v0.25.0 re-vendor below**, still unconditionally, still with no quarantine.
 
 ### Changed
+
+- **Bumped `detain/phlix-shared` to `^0.27.0`; the server-settings schema went 42 keys → 41.**
+  `transcoding.include_software_fallback` was deleted upstream as a **consumerless** key —
+  the same defect shape as `hwaccel.probe_timeout` in v0.26.0, and the reason
+  `SettingsDefaultResolvabilityTest` did not catch either: **resolvable ≠ consumed.** The
+  key resolved cleanly to `config/transcoding.php:44` and `HwAccelConfig::get()` copied it
+  into the merged hwaccel array, but nothing read the merged value. That array reaches
+  exactly two consumers, and neither reads this key: `FfmpegRunner::setConfig()`
+  (`Application.php:2971`, `TranscodeServicesProvider.php:149`), which reads precisely
+  `tone_mapping_mode` / `prefer_hdr_output` / `preferred_accelerator` / `enabled` /
+  `prefer_hardware` and whose `getConfig()` accessor has no caller in `src/`; and
+  `HwaccelRegistry`, whose software-fallback branch (`HwaccelRegistry.php:160,206`) reads
+  the **separate** `hwaccel.fallback_to_software` key out of `config/hwaccel_base.php`. So
+  the toggle was inert in both directions — turning it off never disabled software
+  fallback, turning it on never enabled anything.
+
+  Deleted rather than wired (plan §4 rule 10) because the working equivalent already
+  exists: `hwaccel.fallback_to_software` is genuinely consumed and is the key to expose if
+  a software-fallback toggle is wanted. The `config/transcoding.php` default and the
+  `HwAccelConfig::get()` merge line are **retained**, now carrying a "NOT AN ADMIN SETTING"
+  comment, so the merged array shape is unchanged for any caller reading it defensively —
+  mirroring exactly what v0.26.0 did for `probe_timeout`. The `assertCount` lock-in and its
+  dotted-key → internal-type map in `AdminSettingsControllerTest` were updated to 41 and
+  remain **deliberately hand-written**: deriving them from the vendored schema would make
+  the assertion tautological. Mutation-verified by re-adding the key to the hand-written
+  list and confirming the test goes red against the 41-key vendored schema.
 
 - **Bumped `detain/phlix-shared` to `^0.25.0`; the server-settings schema went 53 keys → 40 → 43.**
   The v0.24.0 re-vendor deleted every key that resolved to no config path and had no runtime

@@ -72,6 +72,26 @@ final class AdminSettingsControllerTest extends TestCase
         // shipped `restart: true`, so the admin UI promised a restart would
         // apply it — the exact false advertising this program exists to remove.
         // See docs/dev/settings-restart-gap.md.
+        //
+        // v0.27.0 dropped it to 41 by DELETING
+        // `transcoding.include_software_fallback` — the same "resolvable but
+        // consumerless" shape as `hwaccel.probe_timeout`, found by re-running
+        // that audit across the rest of the key set. Its config default
+        // (config/transcoding.php:44) resolved, and HwAccelConfig::get()
+        // (src/Config/HwAccelConfig.php:118) copied it into the merged hwaccel
+        // array, but NOTHING read the merged value: FfmpegRunner::setConfig()'s
+        // consumer reads exactly tone_mapping_mode / prefer_hdr_output /
+        // preferred_accelerator / enabled / prefer_hardware, and
+        // HwaccelRegistry's software-fallback branch
+        // (HwaccelRegistry.php:160,206) reads the SEPARATE
+        // `hwaccel.fallback_to_software` key out of config/hwaccel_base.php.
+        // The toggle was therefore inert in BOTH directions. If a
+        // software-fallback switch is wanted, expose
+        // `hwaccel.fallback_to_software`, which is genuinely consumed.
+        //
+        // KEEP THIS LIST HAND-WRITTEN. Deriving it from the shared schema would
+        // make the assertion tautological — it exists precisely to catch an
+        // unintended schema change reaching the writable allow-list.
         $expected = [
             // Hardware acceleration.
             'hwaccel.enabled'                           => 'bool',
@@ -81,7 +101,6 @@ final class AdminSettingsControllerTest extends TestCase
             // option is the EMPTY-STRING enum member (v0.24.0 replaced the old
             // JSON `null` member, which needed a controller-side shim).
             'transcoding.preferred_accelerator'         => 'string',
-            'transcoding.include_software_fallback'     => 'bool',
             'transcoding.tone_mapping_mode'             => 'string',
             'transcoding.prefer_hdr_output'             => 'bool',
 
@@ -141,7 +160,7 @@ final class AdminSettingsControllerTest extends TestCase
 
         $actual = AdminSettingsController::allowedKeys();
 
-        $this->assertCount(42, $actual);
+        $this->assertCount(41, $actual);
         $this->assertEquals($expected, $actual);
     }
 
@@ -219,7 +238,7 @@ final class AdminSettingsControllerTest extends TestCase
 
         // schemaMeta() covers EVERY declared property, not just the typed ones
         // that reach allowedKeys().
-        $this->assertCount(42, $meta);
+        $this->assertCount(41, $meta);
         foreach (array_keys(AdminSettingsController::allowedKeys()) as $key) {
             $this->assertArrayHasKey($key, $meta, sprintf('%s must carry a meta block', $key));
         }

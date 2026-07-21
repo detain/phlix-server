@@ -40,6 +40,7 @@ use Phlix\Server\Http\Response;
  *  - `PUT    /api/v1/admin/plugins/{name}/settings`    → save settings
  *  - `POST   /api/v1/admin/plugins/{name}/enable`      → enable
  *  - `POST   /api/v1/admin/plugins/{name}/disable`     → disable
+ *  - `POST   /api/v1/admin/plugins/{name}/test`        → test credentials
  *  - `DELETE /api/v1/admin/plugins/{name}`             → uninstall
  *
  * Failure modes are translated to HTTP shape:
@@ -68,6 +69,18 @@ use Phlix\Server\Http\Response;
  */
 final class PluginAdminController
 {
+    /**
+     * Minimum length at which a submitted setting value is scrubbed out of a
+     * credential-test message even when the manifest does NOT flag it
+     * `secret: true`.
+     *
+     * Matches the 8-character password floor already enforced elsewhere in this
+     * codebase. No real API key or bearer token is shorter, while common short
+     * non-credential values (`en`, `true`, `json`, a port) stay readable in
+     * diagnostics. See {@see self::redactSubmittedSecrets()}.
+     */
+    private const REDACT_MIN_LENGTH = 8;
+
     /**
      * @param PluginLoader         $loader  The lifecycle facade from Step A.4.
      * @param AuditLogger          $audit   Records every admin-initiated lifecycle action.
@@ -511,6 +524,8 @@ final class PluginAdminController
             );
         }
 
+        // Every message below is passed through self::redactSubmittedSecrets()
+        // before it leaves this method. See that helper for why.
         try {
             /** @var mixed $result */
             $result = $entryInstance->testCredentials($submitted);
@@ -520,7 +535,7 @@ final class PluginAdminController
                 $message = isset($result['message']) && is_string($result['message']) ? $result['message'] : 'OK';
                 return (new Response())->json([
                     'success' => $success,
-                    'message' => $message,
+                    'message' => self::redactSubmittedSecrets($message, $submitted, $plugin),
                 ]);
             }
             // Boolean return: true = success, false = failure
@@ -534,7 +549,7 @@ final class PluginAdminController
             if (is_string($result)) {
                 return (new Response())->json([
                     'success' => false,
-                    'message' => $result,
+                    'message' => self::redactSubmittedSecrets($result, $submitted, $plugin),
                 ]);
             }
             // Default: assume success with no message
@@ -545,9 +560,91 @@ final class PluginAdminController
         } catch (\Throwable $e) {
             return (new Response())->json([
                 'success' => false,
-                'message' => 'Credential test failed: ' . $e->getMessage(),
+                'message' => self::redactSubmittedSecrets(
+                    'Credential test failed: ' . $e->getMessage(),
+                    $submitted,
+                    $plugin,
+                ),
             ]);
         }
+    }
+
+    /**
+     * Strip any submitted credential value out of a message before it is
+     * returned to the client.
+     *
+     * {@see self::testCredentials()} hands operator-supplied secrets to
+     * third-party plugin code and then relays that code's message — either a
+     * returned string or a caught exception's `getMessage()` — straight back in
+     * the JSON body. That is a plaintext-credential leak waiting to happen:
+     * HTTP client exceptions routinely embed the full request URI, and several
+     * provider APIs carry the API key as a *query parameter* (OMDb's
+     * `?apikey=…` is the in-tree example), so one `RequestException` would put
+     * the key in the response verbatim. The controller knows which values it
+     * just passed in, so it is the right place to scrub them.
+     *
+     * A value is redacted when EITHER:
+     *
+     *  - the manifest flags that setting `secret: true` (any length), or
+     *  - it is a string of at least {@see self::REDACT_MIN_LENGTH} characters.
+     *
+     * The second rule is deliberate defence-in-depth: `secret` is
+     * plugin-authored advisory metadata, so a manifest that forgets to flag a
+     * `password`/`token` field must not become a leak. The length floor keeps
+     * short non-credential values (`en`, `true`, `json`, a port number) from
+     * mangling otherwise-useful diagnostics; it matches the 8-character minimum
+     * this codebase already enforces on passwords, and no real API key or token
+     * is shorter.
+     *
+     * URL-encoded forms are redacted too, since the value most often surfaces
+     * inside a URI rather than as a bare substring.
+     *
+     * @param string               $message   The candidate message to sanitise.
+     * @param array<mixed, mixed>  $submitted The settings map posted to this endpoint.
+     * @param InstalledPlugin      $plugin    Installed plugin, for its manifest's `secret` flags.
+     *
+     * @return string The message with every submitted credential replaced by
+     *                {@see SettingsMasker::MASK}.
+     *
+     * @since 1.3.0
+     */
+    private static function redactSubmittedSecrets(
+        string $message,
+        array $submitted,
+        InstalledPlugin $plugin
+    ): string {
+        if ($message === '') {
+            return $message;
+        }
+
+        foreach ($submitted as $key => $value) {
+            if (!is_scalar($value)) {
+                continue;
+            }
+            $raw = (string) $value;
+            if ($raw === '') {
+                continue;
+            }
+
+            $declaredSecret = false;
+            if (is_string($key)) {
+                $schema = $plugin->manifest->settings[$key] ?? null;
+                $declaredSecret = is_array($schema)
+                    && isset($schema['secret'])
+                    && $schema['secret'] === true;
+            }
+
+            if (!$declaredSecret && mb_strlen($raw) < self::REDACT_MIN_LENGTH) {
+                continue;
+            }
+
+            // Redact the literal value plus both URL-encoded spellings, since a
+            // leaked credential usually arrives embedded in a URI.
+            $needles = array_unique([$raw, rawurlencode($raw), urlencode($raw)]);
+            $message = str_replace($needles, SettingsMasker::MASK, $message);
+        }
+
+        return $message;
     }
 
     /**

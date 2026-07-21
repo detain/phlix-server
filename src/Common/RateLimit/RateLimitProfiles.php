@@ -94,6 +94,59 @@ final class RateLimitProfiles
     }
 
     /**
+     * Hard floor for a surface's `max`.
+     *
+     * **This is a lock-out fail-safe, not a sanity check.** A configured `max`
+     * of 0 would reject every request to the surface: `refresh` at 0 signs out
+     * every client on the server the moment their access token expires, and
+     * `register` at 0 silently blocks all sign-ups. A settings field must not
+     * be able to do that, so a configured 0 or negative is raised to 1.
+     */
+    public const MIN_MAX = 1;
+
+    /**
+     * Ceiling for a surface's `max`. Bounds what a mistyped value commits the
+     * server to; an operator wanting an effectively unlimited surface can set
+     * this ceiling and get it.
+     */
+    public const MAX_MAX = 100000;
+
+    /**
+     * Hard floor for a surface's `window`, in seconds. A 0-second window makes
+     * the budget meaningless (every request lands in a fresh bucket), which
+     * would silently disable the limiter while the UI showed a limit.
+     */
+    public const MIN_WINDOW = 1;
+
+    /**
+     * Ceiling for a surface's `window`, in seconds — 24 hours. Longer windows
+     * hold bucket rows for the whole period, and a day is already far beyond
+     * any credible brute-force accounting period.
+     */
+    public const MAX_WINDOW = 86400;
+
+    /**
+     * Clamp a configured `max` into {@see self::MIN_MAX}..{@see self::MAX_MAX}.
+     *
+     * @since 1.3.0
+     */
+    public static function clampMax(int $max): int
+    {
+        return max(self::MIN_MAX, min(self::MAX_MAX, $max));
+    }
+
+    /**
+     * Clamp a configured `window` into
+     * {@see self::MIN_WINDOW}..{@see self::MAX_WINDOW}.
+     *
+     * @since 1.3.0
+     */
+    public static function clampWindow(int $window): int
+    {
+        return max(self::MIN_WINDOW, min(self::MAX_WINDOW, $window));
+    }
+
+    /**
      * The subset of profile ids that MUST resolve to the shared, DB-backed
      * {@see DbRateLimiter} for true cross-worker enforcement (the brute-force /
      * credential-enumeration surfaces). Every other id in {@see defaults()}

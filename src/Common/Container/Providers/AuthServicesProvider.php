@@ -299,8 +299,14 @@ final class AuthServicesProvider implements ServiceProviderInterface
             $surfaceRaw = $rateLimit[$spec['key']] ?? null;
             $surface = is_array($surfaceRaw) ? $surfaceRaw : [];
 
-            $max = self::intOr($surface, 'max', $spec['max']);
-            $window = self::intOr($surface, 'window', $spec['window']);
+            // Clamped, not trusted. `$appConfig['rate_limit']` now carries
+            // admin-editable `server.rate_limit.*` overrides (via
+            // EffectiveConfig's boot overlay), and a `max` of 0 would reject
+            // every request to the surface — `refresh` at 0 signs out the whole
+            // install as access tokens expire. RateLimitProfiles::MIN_MAX is
+            // the lock-out fail-safe.
+            $max = RateLimitProfiles::clampMax(self::intOr($surface, 'max', $spec['max']));
+            $window = RateLimitProfiles::clampWindow(self::intOr($surface, 'window', $spec['window']));
 
             if (RateLimitProfiles::isDbBacked($id)) {
                 // Shared DB-backed limiter — TRUE-global across every HTTP worker.

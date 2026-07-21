@@ -225,6 +225,21 @@ final class AdminSettingsControllerTest extends TestCase
             'auth.max_profiles'                         => 'int',
             // Per-playback fallback in StreamSessionService::getStreamLimit().
             'access.default_concurrent_streams'         => 'int',
+            // The server.rate_limit.* block. Class (b) RESTART — the limiters
+            // are factory() closures capturing max/window BY VALUE at
+            // container-build time, so restart:true is accurate, not cautious.
+            'server.rate_limit.register.max'            => 'int',
+            'server.rate_limit.register.window'         => 'int',
+            'server.rate_limit.refresh.max'             => 'int',
+            'server.rate_limit.refresh.window'          => 'int',
+            'server.rate_limit.webauthn_start.max'      => 'int',
+            'server.rate_limit.webauthn_start.window'   => 'int',
+            'server.rate_limit.webauthn_finish.max'     => 'int',
+            'server.rate_limit.webauthn_finish.window'  => 'int',
+            'server.rate_limit.jwks.max'                => 'int',
+            'server.rate_limit.jwks.window'             => 'int',
+            'server.rate_limit.ws_connect.max'          => 'int',
+            'server.rate_limit.ws_connect.window'       => 'int',
             'webhooks.enabled'                          => 'bool',
             'stats.enabled'                             => 'bool',
             'subtitles.default_language'                => 'string',
@@ -282,7 +297,7 @@ final class AdminSettingsControllerTest extends TestCase
 
         $actual = AdminSettingsController::allowedKeys();
 
-        $this->assertCount(48, $actual);
+        $this->assertCount(60, $actual);
         $this->assertEquals($expected, $actual);
     }
 
@@ -360,7 +375,7 @@ final class AdminSettingsControllerTest extends TestCase
 
         // schemaMeta() covers EVERY declared property, not just the typed ones
         // that reach allowedKeys().
-        $this->assertCount(48, $meta);
+        $this->assertCount(60, $meta);
         foreach (array_keys(AdminSettingsController::allowedKeys()) as $key) {
             $this->assertArrayHasKey($key, $meta, sprintf('%s must carry a meta block', $key));
         }

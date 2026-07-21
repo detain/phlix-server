@@ -126,21 +126,25 @@ class DlnaContentDirectoryController
             if ($reader->nodeType === XMLReader::ELEMENT) {
                 $elementPath[] = $reader->localName;
 
-                // Detect action name from the action namespace
-                if ($reader->localName === 'action' && count($elementPath) >= 2) {
-                    // Inside Body/action
+                // The SOAP action is the FIRST CHILD ELEMENT OF <Body>, and it
+                // is named after the operation — `Browse`, `Search`,
+                // `GetSortCapabilities`. It is never literally named "action".
+                //
+                // This used to test `localName === 'action'`, which no real
+                // control point ever sends, so $action stayed null and EVERY
+                // well-formed UPnP Browse was rejected with
+                // "Invalid SOAP body" / HTTP 400. Confirmed against the live
+                // server before the fix.
+                //
+                // The check is on the PARENT rather than on the name, so any
+                // ContentDirectory action dispatches; unknown ones are handled
+                // by dispatchAction()'s default arm, which returns a proper
+                // UPnP 401 fault instead of a parse failure.
+                if ($action === null && count($elementPath) >= 2) {
                     $parent = $elementPath[count($elementPath) - 2] ?? '';
-                    if ($parent === 'Body' || $parent === 'Envelope') {
-                        // The first child element inside Body is the action
-                        if ($action === null) {
-                            $action = $reader->localName;
-                        }
+                    if ($parent === 'Body') {
+                        $action = $reader->localName;
                     }
-                }
-
-                // Extract all element values
-                if (!$reader->isEmptyElement) {
-                    // Track element path for argument context
                 }
             } elseif ($reader->nodeType === XMLReader::TEXT || $reader->nodeType === XMLReader::CDATA) {
                 if (count($elementPath) >= 2) {

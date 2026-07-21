@@ -35,6 +35,7 @@ use Phlix\Media\Markers\MarkerService;
 use Phlix\Media\Markers\PlaybackMarkerService;
 use Phlix\Media\Metadata\Imdb\ImdbLookup;
 use Phlix\Media\Metadata\FuzzyMatcher;
+use Phlix\Media\Library\ScanIgnorePatterns;
 use Phlix\Media\Metadata\LibraryMetadataMatcher;
 use Phlix\Media\Metadata\MetadataManager;
 use Phlix\Media\Metadata\MovieMetadataResolver;
@@ -55,6 +56,7 @@ use Phlix\Media\MediaAsset\MediaAssetWorker;
 use Phlix\Media\Playback\GaplessPlaybackManager;
 use Phlix\Media\SimilarityJobStore;
 use Phlix\Media\SimilarityWorker;
+use Phlix\Media\Storage\ArtworkDownloadPolicy;
 use Phlix\Media\Storage\ArtworkStorage;
 use Phlix\Theming\ThemeMediaFinder;
 use Phlix\Media\Streaming\HlsStreamer;
@@ -327,7 +329,13 @@ final class MediaServicesProvider implements ServiceProviderInterface
                 ->constructorParameter(
                     'similarityJobStore',
                     get(\Phlix\Media\SimilarityJobStore::class)
-                ),
+                )
+                // Effective `scanner.ignore_patterns` list for shouldSkipFile().
+                // Named for the same PHP-DI reason as every entry above — an
+                // unnamed optional param is SKIPPED during autowiring, which
+                // would pin the scanner to the shipped defaults and make the
+                // admin control inert while still rendering and accepting a PUT.
+                ->constructorParameter('ignorePatterns', get(ScanIgnorePatterns::class)),
 
             LibraryManager::class => autowire()
                 ->constructorParameter('logger', get('logger.media'))
@@ -416,7 +424,32 @@ final class MediaServicesProvider implements ServiceProviderInterface
                 // never downloaded/resized locally (poster_srcset never emitted).
                 // Safe to wire now that ArtworkStorage::downloadToTemp() is
                 // non-blocking under the event loop (SV-3.4 sub-step 1).
-                ->constructorParameter('artworkStorage', get(ArtworkStorage::class)),
+                ->constructorParameter('artworkStorage', get(ArtworkStorage::class))
+                // Gate for `artwork.download_enabled`. Named for the same
+                // PHP-DI reason as every entry above — an unnamed optional
+                // param is SKIPPED during autowiring, which would leave the
+                // matcher on a store-less policy and make the admin toggle
+                // inert while still rendering and accepting a PUT.
+                ->constructorParameter(
+                    'artworkDownloadPolicy',
+                    get(ArtworkDownloadPolicy::class)
+                ),
+
+            // Gate for `artwork.download_enabled`, read live per metadata
+            // persist. A factory (not autowire()) because the SettingsRepository
+            // must be OPTIONAL: an unavailable settings store degrades to the
+            // shipped default (downloads enabled) instead of throwing.
+            ArtworkDownloadPolicy::class => factory(
+                static fn(ContainerInterface $c): ArtworkDownloadPolicy
+                    => new ArtworkDownloadPolicy(self::optionalSettings($c))
+            ),
+
+            // Effective scanner skip-pattern list behind `scanner.ignore_patterns`.
+            // Same optional-store rationale as ArtworkDownloadPolicy above.
+            ScanIgnorePatterns::class => factory(
+                static fn(ContainerInterface $c): ScanIgnorePatterns
+                    => new ScanIgnorePatterns(self::optionalSettings($c))
+            ),
 
             // Async scan worker (Step 1.1b). Its ctor deps — ScanJobRepository,
             // LibraryManager and the LibraryMetadataMatcher (for `metadata`
@@ -774,5 +807,26 @@ final class MediaServicesProvider implements ServiceProviderInterface
         }
 
         return $out;
+    }
+
+    /**
+     * Resolve {@see SettingsRepository} from the container, or NULL when it is
+     * unavailable.
+     *
+     * Wrapped because neither {@see ArtworkDownloadPolicy} nor
+     * {@see ScanIgnorePatterns} may be the reason a scan or a metadata match
+     * fails: a container without a settings binding (or one whose database is
+     * down) must degrade to the shipped defaults rather than throw out of the
+     * factory. Mirrors `TranscodeServicesProvider::optionalSettings()`.
+     */
+    private static function optionalSettings(ContainerInterface $c): ?SettingsRepository
+    {
+        try {
+            $settings = $c->get(SettingsRepository::class);
+
+            return $settings instanceof SettingsRepository ? $settings : null;
+        } catch (\Throwable) {
+            return null;
+        }
     }
 }

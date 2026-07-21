@@ -21,6 +21,7 @@ use Phlix\Media\Metadata\Exception\TmdbUnconfiguredException;
 use Phlix\Media\Metadata\Resolution\LibraryPriorityResolver;
 use Phlix\Media\Metadata\Resolution\PriorityConfig;
 use Phlix\Media\Metadata\ThemeMusic\ThemeMusicResolver;
+use Phlix\Media\Storage\ArtworkDownloadPolicy;
 use Phlix\Media\Storage\ArtworkStorage;
 use Throwable;
 use Phlix\Media\Metadata\SceneFilenameNormalizer;
@@ -169,6 +170,15 @@ class LibraryMetadataMatcher
     private ?ArtworkStorage $artworkStorage;
 
     /**
+     * Gate for `artwork.download_enabled`, consulted at BOTH artwork download
+     * choke points ({@see cacheArtworkLocally()} and {@see cacheLogoLocally()}).
+     *
+     * Never null: legacy construction substitutes a store-less policy, which
+     * reports the shipped default (downloads enabled).
+     */
+    private ArtworkDownloadPolicy $artworkDownloadPolicy;
+
+    /**
      * Scan-scoped map of TMDB poster path => the local artwork override fields
      * ({@see cacheArtworkLocally()} produces `poster_url` / `poster_srcset` /
      * `poster_path`) generated the FIRST time that path was downloaded this run.
@@ -281,6 +291,12 @@ class LibraryMetadataMatcher
      *                                                   that already have metadata
      *                                                   (metadata_refreshed_at IS NOT NULL).
      *                                                   When false (default), skip them.
+     * @param ArtworkDownloadPolicy|null  $artworkDownloadPolicy Gate for
+     *                                                   `artwork.download_enabled`.
+     *                                                   Null (legacy construction)
+     *                                                   substitutes a store-less
+     *                                                   policy = downloads enabled,
+     *                                                   the pre-setting behaviour.
      *
      * @since 0.21.0
      */
@@ -296,7 +312,8 @@ class LibraryMetadataMatcher
         ?ThemeMusicResolver $themeMusic = null,
         ?FuzzyMatcher $fuzzyMatcher = null,
         ?ArtworkStorage $artworkStorage = null,
-        bool $forceRefresh = false
+        bool $forceRefresh = false,
+        ?ArtworkDownloadPolicy $artworkDownloadPolicy = null
     ) {
         $this->items = $items;
         $this->resolver = $resolver;
@@ -314,6 +331,10 @@ class LibraryMetadataMatcher
         $this->fuzzyMatcher = $fuzzyMatcher;
         $this->artworkStorage = $artworkStorage;
         $this->forceRefresh = $forceRefresh;
+        // Never null internally: a legacy construction that omits the policy
+        // gets a store-less one, which yields the shipped default (downloads
+        // ENABLED) — i.e. exactly the behaviour before the gate existed.
+        $this->artworkDownloadPolicy = $artworkDownloadPolicy ?? new ArtworkDownloadPolicy();
     }
 
     /**
@@ -1746,6 +1767,14 @@ class LibraryMetadataMatcher
             return $merged;
         }
 
+        // Skip if the operator has switched artwork downloads off
+        // (`artwork.download_enabled`). Returning $merged untouched leaves the
+        // REMOTE poster_url in place and writes nothing new to disk; artwork
+        // already cached is unaffected. See ArtworkDownloadPolicy.
+        if (!$this->artworkDownloadPolicy->downloadsEnabled()) {
+            return $merged;
+        }
+
         // Extract poster_path from poster_url if it's a TMDB URL
         $posterUrl = $merged['poster_url'] ?? null;
         if (!is_string($posterUrl) || $posterUrl === '') {
@@ -1855,6 +1884,13 @@ class LibraryMetadataMatcher
     private function cacheLogoLocally(string $id, array $merged): array
     {
         if ($this->artworkStorage === null) {
+            return $merged;
+        }
+
+        // Same gate as cacheArtworkLocally(): `artwork.download_enabled` off
+        // means no new logo is fetched and `logo_url` keeps pointing at the
+        // remote provider URL. Already-cached logos are untouched.
+        if (!$this->artworkDownloadPolicy->downloadsEnabled()) {
             return $merged;
         }
 

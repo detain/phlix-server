@@ -18,6 +18,7 @@ use Phlix\Plugins\Scrobbler\Trakt\SessionTraktOAuthStateStore;
 use Phlix\Plugins\Scrobbler\Trakt\SodiumTokenCipher;
 use Phlix\Plugins\Scrobbler\Trakt\TraktApi;
 use Phlix\Plugins\Scrobbler\Trakt\TraktOAuthStateStore;
+use Phlix\Plugins\Scrobbler\Trakt\TraktOperatorConfig;
 use Phlix\Plugins\Scrobbler\Trakt\TraktSettings;
 use Phlix\Plugins\Repository\PluginRepository;
 use Phlix\Admin\SettingsRepository;
@@ -54,17 +55,14 @@ final class TraktOAuthController
      */
     private const TRAKT_PLUGIN_NAME = 'phlix-plugin-trakt';
 
-    /**
-     * Maps the dotted server-settings keys to the local config keys they
-     * override. {@see self::loadConfig()} overlays a DB value on top of the
-     * env/file value whenever an operator has saved it in the admin Settings
-     * page (DB-set wins over environment, which wins over the file literal).
+    /*
+     * The `trakt.client_id` / `trakt.client_secret` / `trakt.redirect_uri`
+     * setting-key map used to live here. It now has ONE owner,
+     * {@see TraktOperatorConfig::SETTING_KEY_MAP}, shared with
+     * {@see \Phlix\Plugins\Scrobbler\Trakt\TraktPlugin} — which read the same
+     * config file with NO overlay at all, so an operator's admin-saved
+     * credentials reached the OAuth connect flow and never reached sync.
      */
-    private const SETTING_KEY_MAP = [
-        'trakt.client_id'     => 'client_id',
-        'trakt.client_secret' => 'client_secret',
-        'trakt.redirect_uri'  => 'redirect_uri',
-    ];
 
     /**
      * @param LoggerInterface|null      $logger             Optional PSR-3 logger
@@ -391,49 +389,7 @@ final class TraktOAuthController
      */
     private function loadConfig(): array
     {
-        $configFile = $this->configPath();
-
-        $config = [];
-        if (is_file($configFile)) {
-            /**
- * @var mixed $loaded
-*/
-            $loaded = include $configFile;
-            if (is_array($loaded)) {
-                /**
- * @var array<string, mixed> $config
-*/
-                $config = $loaded;
-            }
-        }
-
-        return $this->applySettingsOverrides($config);
-    }
-
-    /**
-     * Overlay operator credentials saved in the admin Settings page on top of
-     * the env/file config. A DB value wins only when it is a non-empty string,
-     * so an unset (or blank) setting falls back to the environment/file value.
-     *
-     * @param array<string, mixed> $config
-     *
-     * @return array<string, mixed>
-     */
-    private function applySettingsOverrides(array $config): array
-    {
-        if ($this->settings === null) {
-            return $config;
-        }
-
-        foreach (self::SETTING_KEY_MAP as $settingKey => $configKey) {
-            $override = $this->settings->getOverride($settingKey);
-            $value = $override['value'] ?? null;
-            if (is_string($value) && $value !== '') {
-                $config[$configKey] = $value;
-            }
-        }
-
-        return $config;
+        return TraktOperatorConfig::load($this->configPath(), $this->settings);
     }
 
     /**

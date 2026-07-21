@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Plugins\Scrobbler\Trakt;
 
+use Phlix\Admin\SettingsRepository;
 use Phlix\Auth\WatchHistory;
 use Workerman\MySQL\Connection;
 use Phlix\Media\Library\ItemRepository;
@@ -60,6 +61,15 @@ final class TraktPlugin implements LifecycleInterface
     private ?LoggerInterface $logger = null;
     private ?TraktApi $api = null;
     private ?Connection $db = null;
+
+    /**
+     * Admin settings store, resolved from the host container in
+     * {@see self::onEnable()}. Supplies the `trakt.client_id` /
+     * `trakt.client_secret` / `trakt.redirect_uri` overrides to
+     * {@see self::loadConfig()}. Null when no container has been seen yet or
+     * when the host has no settings repository bound.
+     */
+    private ?SettingsRepository $settingsRepository = null;
 
     /** Disables all scrobbling and sync when false. */
     private bool $enabled = false;
@@ -117,6 +127,25 @@ final class TraktPlugin implements LifecycleInterface
 
         $db = $container->get(Connection::class);
         $this->db = $db instanceof Connection ? $db : null;
+
+        // Resolved BEFORE initApi(), which is the whole point: initApi() builds
+        // the TraktApi from the operator credentials, and without this the
+        // credentials came from a raw include that could not see an
+        // admin-saved override. `has()` first because a host container without
+        // a database binding must degrade to file/env rather than throw.
+        if ($container->has(SettingsRepository::class)) {
+            try {
+                $settingsRepo = $container->get(SettingsRepository::class);
+                $this->settingsRepository = $settingsRepo instanceof SettingsRepository
+                    ? $settingsRepo
+                    : null;
+            } catch (\Throwable $e) {
+                $this->logger?->warning(
+                    'Trakt: settings repository unavailable, using file/env credentials',
+                    ['error' => $e->getMessage()],
+                );
+            }
+        }
 
         $this->initApi();
     }
@@ -599,21 +628,28 @@ final class TraktPlugin implements LifecycleInterface
     }
 
     /**
-     * Load Trakt plugin configuration.
+     * Load the operator's Trakt application credentials.
+     *
+     * Delegates to {@see TraktOperatorConfig} so this path sees admin-saved
+     * `server_settings` overrides exactly as `TraktOAuthController` does.
+     * Before that, this method was a raw `include` — read-path class (d) — so
+     * an operator who supplied credentials in the admin Settings page could
+     * connect their Trakt account and then have sync silently never run,
+     * because {@see self::initApi()} left `$this->api` null and
+     * {@see self::isConfigured()} therefore returned false with nothing logged.
+     *
+     * `$this->settingsRepository` is populated in {@see self::onEnable()} from
+     * the host container. It stays null in contexts without a database, in
+     * which case the file/env values are used unchanged — the pre-existing
+     * behaviour.
      *
      * @return array<string, mixed>
      */
     private function loadConfig(): array
     {
-        $configFile = dirname(__DIR__, 5) . '/config/scrobblers/trakt.php';
-
-        if (is_file($configFile)) {
-            /** @var array<string, mixed> $config */
-            $config = include $configFile;
-
-            return $config;
-        }
-
-        return [];
+        return TraktOperatorConfig::load(
+            dirname(__DIR__, 5) . '/config/scrobblers/trakt.php',
+            $this->settingsRepository,
+        );
     }
 }

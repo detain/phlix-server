@@ -12,6 +12,8 @@ declare(strict_types=1);
 namespace Phlix\Common\Container\Providers;
 
 use DI\ContainerBuilder;
+use Phlix\Access\StreamSessionService;
+use Phlix\Admin\SettingsRepository;
 use Phlix\Common\Container\ServiceProviderInterface;
 use Phlix\Session\PlaybackController;
 use Phlix\Session\SessionManager;
@@ -48,6 +50,17 @@ final class SessionServicesProvider implements ServiceProviderInterface
     public function register(ContainerBuilder $builder, array $appConfig): void
     {
         $builder->addDefinitions([
+            // Was resolved by implicit autowiring, which silently skipped the
+            // optional `settings` param and left the concurrent-stream default
+            // pinned at DEFAULT_CONCURRENT_STREAMS — i.e.
+            // `access.default_concurrent_streams` would have been inert
+            // (read-path class (g)). Registered explicitly so the store is
+            // actually handed over. The second construction path is
+            // `Application::getStreamLimitController()`'s no-container
+            // fallback, which passes its own SettingsRepository.
+            StreamSessionService::class => autowire()
+                ->constructorParameter('settings', get(SettingsRepository::class)),
+
             SessionManager::class => autowire()
                 ->constructorParameter('logger', get('logger.session')),
 

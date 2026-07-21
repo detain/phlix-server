@@ -44,6 +44,12 @@ final class AdminProfileControllerTest extends TestCase
         ];
 
         $profileManager = $this->createMock(UserProfileManager::class);
+        // The controller's profile-cap pre-check now reads the EFFECTIVE cap
+        // via maxProfiles(). An unstubbed mock returns 0, which would make
+        // `count($existing) >= 0` true and 400 every creation — a test-double
+        // artifact, not a real state: the real method clamps to >= 1.
+        $profileManager->method('maxProfiles')
+            ->willReturn(UserProfileManager::MAX_PROFILES_PER_USER);
         $profileManager->expects($this->once())
             ->method('findByUserId')
             ->with('1')
@@ -68,6 +74,12 @@ final class AdminProfileControllerTest extends TestCase
     public function testListForUserNotFound(): void
     {
         $profileManager = $this->createMock(UserProfileManager::class);
+        // The controller's profile-cap pre-check now reads the EFFECTIVE cap
+        // via maxProfiles(). An unstubbed mock returns 0, which would make
+        // `count($existing) >= 0` true and 400 every creation — a test-double
+        // artifact, not a real state: the real method clamps to >= 1.
+        $profileManager->method('maxProfiles')
+            ->willReturn(UserProfileManager::MAX_PROFILES_PER_USER);
         $profileManager->expects($this->never())->method('findByUserId');
 
         $userRepo = $this->createMock(UserRepository::class);
@@ -92,6 +104,12 @@ final class AdminProfileControllerTest extends TestCase
     public function testCreateForUserHappy(): void
     {
         $profileManager = $this->createMock(UserProfileManager::class);
+        // The controller's profile-cap pre-check now reads the EFFECTIVE cap
+        // via maxProfiles(). An unstubbed mock returns 0, which would make
+        // `count($existing) >= 0` true and 400 every creation — a test-double
+        // artifact, not a real state: the real method clamps to >= 1.
+        $profileManager->method('maxProfiles')
+            ->willReturn(UserProfileManager::MAX_PROFILES_PER_USER);
         $profileManager->expects($this->once())
             ->method('findByUserId')
             ->with('1')
@@ -125,6 +143,12 @@ final class AdminProfileControllerTest extends TestCase
         // Phase C: numeric keys 7-12 map to the appended US TV ratings.
         // 11 → TV-14 (see AdminProfileController::RATING_MAP).
         $profileManager = $this->createMock(UserProfileManager::class);
+        // The controller's profile-cap pre-check now reads the EFFECTIVE cap
+        // via maxProfiles(). An unstubbed mock returns 0, which would make
+        // `count($existing) >= 0` true and 400 every creation — a test-double
+        // artifact, not a real state: the real method clamps to >= 1.
+        $profileManager->method('maxProfiles')
+            ->willReturn(UserProfileManager::MAX_PROFILES_PER_USER);
         $profileManager->expects($this->once())
             ->method('findByUserId')
             ->with('1')
@@ -152,6 +176,12 @@ final class AdminProfileControllerTest extends TestCase
     public function testCreateForUserRejectsRatingAboveMax(): void
     {
         $profileManager = $this->createMock(UserProfileManager::class);
+        // The controller's profile-cap pre-check now reads the EFFECTIVE cap
+        // via maxProfiles(). An unstubbed mock returns 0, which would make
+        // `count($existing) >= 0` true and 400 every creation — a test-double
+        // artifact, not a real state: the real method clamps to >= 1.
+        $profileManager->method('maxProfiles')
+            ->willReturn(UserProfileManager::MAX_PROFILES_PER_USER);
         $profileManager->expects($this->once())
             ->method('findByUserId')
             ->with('1')
@@ -184,6 +214,12 @@ final class AdminProfileControllerTest extends TestCase
         ];
 
         $profileManager = $this->createMock(UserProfileManager::class);
+        // The controller's profile-cap pre-check now reads the EFFECTIVE cap
+        // via maxProfiles(). An unstubbed mock returns 0, which would make
+        // `count($existing) >= 0` true and 400 every creation — a test-double
+        // artifact, not a real state: the real method clamps to >= 1.
+        $profileManager->method('maxProfiles')
+            ->willReturn(UserProfileManager::MAX_PROFILES_PER_USER);
         $profileManager->expects($this->once())
             ->method('findByUserId')
             ->with('1')
@@ -208,6 +244,12 @@ final class AdminProfileControllerTest extends TestCase
     public function testCreateForUserUserNotFound(): void
     {
         $profileManager = $this->createMock(UserProfileManager::class);
+        // The controller's profile-cap pre-check now reads the EFFECTIVE cap
+        // via maxProfiles(). An unstubbed mock returns 0, which would make
+        // `count($existing) >= 0` true and 400 every creation — a test-double
+        // artifact, not a real state: the real method clamps to >= 1.
+        $profileManager->method('maxProfiles')
+            ->willReturn(UserProfileManager::MAX_PROFILES_PER_USER);
         $profileManager->expects($this->never())->method('findByUserId');
         $profileManager->expects($this->never())->method('create');
 
@@ -226,6 +268,12 @@ final class AdminProfileControllerTest extends TestCase
     public function testCreateForUserInvalidName(): void
     {
         $profileManager = $this->createMock(UserProfileManager::class);
+        // The controller's profile-cap pre-check now reads the EFFECTIVE cap
+        // via maxProfiles(). An unstubbed mock returns 0, which would make
+        // `count($existing) >= 0` true and 400 every creation — a test-double
+        // artifact, not a real state: the real method clamps to >= 1.
+        $profileManager->method('maxProfiles')
+            ->willReturn(UserProfileManager::MAX_PROFILES_PER_USER);
         $profileManager->expects($this->once())
             ->method('findByUserId')
             ->willReturn([]);
@@ -251,6 +299,12 @@ final class AdminProfileControllerTest extends TestCase
     public function testCreateForUserInvalidRating(): void
     {
         $profileManager = $this->createMock(UserProfileManager::class);
+        // The controller's profile-cap pre-check now reads the EFFECTIVE cap
+        // via maxProfiles(). An unstubbed mock returns 0, which would make
+        // `count($existing) >= 0` true and 400 every creation — a test-double
+        // artifact, not a real state: the real method clamps to >= 1.
+        $profileManager->method('maxProfiles')
+            ->willReturn(UserProfileManager::MAX_PROFILES_PER_USER);
         $profileManager->expects($this->once())
             ->method('findByUserId')
             ->willReturn([]);
@@ -300,6 +354,12 @@ final class AdminProfileControllerTest extends TestCase
         ];
 
         $profileManager = $this->createMock(UserProfileManager::class);
+        // The controller's profile-cap pre-check now reads the EFFECTIVE cap
+        // via maxProfiles(). An unstubbed mock returns 0, which would make
+        // `count($existing) >= 0` true and 400 every creation — a test-double
+        // artifact, not a real state: the real method clamps to >= 1.
+        $profileManager->method('maxProfiles')
+            ->willReturn(UserProfileManager::MAX_PROFILES_PER_USER);
         $profileManager->expects($this->once())
             ->method('findByIdWithSettings')
             ->with('1')
@@ -321,6 +381,12 @@ final class AdminProfileControllerTest extends TestCase
     public function testGetNotFound(): void
     {
         $profileManager = $this->createMock(UserProfileManager::class);
+        // The controller's profile-cap pre-check now reads the EFFECTIVE cap
+        // via maxProfiles(). An unstubbed mock returns 0, which would make
+        // `count($existing) >= 0` true and 400 every creation — a test-double
+        // artifact, not a real state: the real method clamps to >= 1.
+        $profileManager->method('maxProfiles')
+            ->willReturn(UserProfileManager::MAX_PROFILES_PER_USER);
         $profileManager->expects($this->once())
             ->method('findByIdWithSettings')
             ->with('999')
@@ -350,6 +416,12 @@ final class AdminProfileControllerTest extends TestCase
         $hydratedProfile = ['id' => $uuid, 'user_id' => '1', 'name' => 'Alice', 'rating' => 2];
 
         $profileManager = $this->createMock(UserProfileManager::class);
+        // The controller's profile-cap pre-check now reads the EFFECTIVE cap
+        // via maxProfiles(). An unstubbed mock returns 0, which would make
+        // `count($existing) >= 0` true and 400 every creation — a test-double
+        // artifact, not a real state: the real method clamps to >= 1.
+        $profileManager->method('maxProfiles')
+            ->willReturn(UserProfileManager::MAX_PROFILES_PER_USER);
         $profileManager->expects($this->once())
             ->method('findByIdWithSettings')
             ->with($uuid)
@@ -372,6 +444,12 @@ final class AdminProfileControllerTest extends TestCase
         $userUuid = 'd9b2d63d-a233-4123-847b-1ff2da0b9a35';
 
         $profileManager = $this->createMock(UserProfileManager::class);
+        // The controller's profile-cap pre-check now reads the EFFECTIVE cap
+        // via maxProfiles(). An unstubbed mock returns 0, which would make
+        // `count($existing) >= 0` true and 400 every creation — a test-double
+        // artifact, not a real state: the real method clamps to >= 1.
+        $profileManager->method('maxProfiles')
+            ->willReturn(UserProfileManager::MAX_PROFILES_PER_USER);
         $profileManager->expects($this->once())
             ->method('findByUserId')
             ->with($userUuid)
@@ -399,6 +477,12 @@ final class AdminProfileControllerTest extends TestCase
         $profile = ['id' => 'prof_1', 'user_id' => '1', 'name' => 'Alice'];
 
         $profileManager = $this->createMock(UserProfileManager::class);
+        // The controller's profile-cap pre-check now reads the EFFECTIVE cap
+        // via maxProfiles(). An unstubbed mock returns 0, which would make
+        // `count($existing) >= 0` true and 400 every creation — a test-double
+        // artifact, not a real state: the real method clamps to >= 1.
+        $profileManager->method('maxProfiles')
+            ->willReturn(UserProfileManager::MAX_PROFILES_PER_USER);
         $profileManager->expects($this->once())
             ->method('findById')
             ->with('1')
@@ -421,6 +505,12 @@ final class AdminProfileControllerTest extends TestCase
     public function testUpdateNotFound(): void
     {
         $profileManager = $this->createMock(UserProfileManager::class);
+        // The controller's profile-cap pre-check now reads the EFFECTIVE cap
+        // via maxProfiles(). An unstubbed mock returns 0, which would make
+        // `count($existing) >= 0` true and 400 every creation — a test-double
+        // artifact, not a real state: the real method clamps to >= 1.
+        $profileManager->method('maxProfiles')
+            ->willReturn(UserProfileManager::MAX_PROFILES_PER_USER);
         $profileManager->expects($this->once())
             ->method('findById')
             ->with('999')
@@ -443,6 +533,12 @@ final class AdminProfileControllerTest extends TestCase
         $profile = ['id' => 'prof_1', 'user_id' => '1', 'name' => 'Alice'];
 
         $profileManager = $this->createMock(UserProfileManager::class);
+        // The controller's profile-cap pre-check now reads the EFFECTIVE cap
+        // via maxProfiles(). An unstubbed mock returns 0, which would make
+        // `count($existing) >= 0` true and 400 every creation — a test-double
+        // artifact, not a real state: the real method clamps to >= 1.
+        $profileManager->method('maxProfiles')
+            ->willReturn(UserProfileManager::MAX_PROFILES_PER_USER);
         $profileManager->expects($this->once())
             ->method('findById')
             ->with('1')
@@ -465,6 +561,12 @@ final class AdminProfileControllerTest extends TestCase
     public function testDeleteNotFound(): void
     {
         $profileManager = $this->createMock(UserProfileManager::class);
+        // The controller's profile-cap pre-check now reads the EFFECTIVE cap
+        // via maxProfiles(). An unstubbed mock returns 0, which would make
+        // `count($existing) >= 0` true and 400 every creation — a test-double
+        // artifact, not a real state: the real method clamps to >= 1.
+        $profileManager->method('maxProfiles')
+            ->willReturn(UserProfileManager::MAX_PROFILES_PER_USER);
         $profileManager->expects($this->once())
             ->method('findById')
             ->with('999')
@@ -487,6 +589,12 @@ final class AdminProfileControllerTest extends TestCase
         $profile = ['id' => 'prof_1', 'user_id' => '1', 'name' => 'Alice'];
 
         $profileManager = $this->createMock(UserProfileManager::class);
+        // The controller's profile-cap pre-check now reads the EFFECTIVE cap
+        // via maxProfiles(). An unstubbed mock returns 0, which would make
+        // `count($existing) >= 0` true and 400 every creation — a test-double
+        // artifact, not a real state: the real method clamps to >= 1.
+        $profileManager->method('maxProfiles')
+            ->willReturn(UserProfileManager::MAX_PROFILES_PER_USER);
         $profileManager->expects($this->once())
             ->method('findById')
             ->with('1')
@@ -511,6 +619,12 @@ final class AdminProfileControllerTest extends TestCase
         $profile = ['id' => 'prof_1', 'user_id' => '1', 'name' => 'Alice'];
 
         $profileManager = $this->createMock(UserProfileManager::class);
+        // The controller's profile-cap pre-check now reads the EFFECTIVE cap
+        // via maxProfiles(). An unstubbed mock returns 0, which would make
+        // `count($existing) >= 0` true and 400 every creation — a test-double
+        // artifact, not a real state: the real method clamps to >= 1.
+        $profileManager->method('maxProfiles')
+            ->willReturn(UserProfileManager::MAX_PROFILES_PER_USER);
         $profileManager->expects($this->once())
             ->method('findById')
             ->with('1')
@@ -532,6 +646,12 @@ final class AdminProfileControllerTest extends TestCase
         $profile = ['id' => 'prof_1', 'user_id' => '1', 'name' => 'Alice'];
 
         $profileManager = $this->createMock(UserProfileManager::class);
+        // The controller's profile-cap pre-check now reads the EFFECTIVE cap
+        // via maxProfiles(). An unstubbed mock returns 0, which would make
+        // `count($existing) >= 0` true and 400 every creation — a test-double
+        // artifact, not a real state: the real method clamps to >= 1.
+        $profileManager->method('maxProfiles')
+            ->willReturn(UserProfileManager::MAX_PROFILES_PER_USER);
         $profileManager->expects($this->once())
             ->method('findById')
             ->with('1')
@@ -556,6 +676,12 @@ final class AdminProfileControllerTest extends TestCase
         $profile = ['id' => 'prof_1', 'user_id' => '1', 'name' => 'Alice'];
 
         $profileManager = $this->createMock(UserProfileManager::class);
+        // The controller's profile-cap pre-check now reads the EFFECTIVE cap
+        // via maxProfiles(). An unstubbed mock returns 0, which would make
+        // `count($existing) >= 0` true and 400 every creation — a test-double
+        // artifact, not a real state: the real method clamps to >= 1.
+        $profileManager->method('maxProfiles')
+            ->willReturn(UserProfileManager::MAX_PROFILES_PER_USER);
         $profileManager->expects($this->once())
             ->method('findById')
             ->with('1')
@@ -578,6 +704,12 @@ final class AdminProfileControllerTest extends TestCase
         $profile = ['id' => 'prof_1', 'user_id' => '1', 'name' => 'Alice'];
 
         $profileManager = $this->createMock(UserProfileManager::class);
+        // The controller's profile-cap pre-check now reads the EFFECTIVE cap
+        // via maxProfiles(). An unstubbed mock returns 0, which would make
+        // `count($existing) >= 0` true and 400 every creation — a test-double
+        // artifact, not a real state: the real method clamps to >= 1.
+        $profileManager->method('maxProfiles')
+            ->willReturn(UserProfileManager::MAX_PROFILES_PER_USER);
         $profileManager->expects($this->once())
             ->method('findById')
             ->with('1')
@@ -598,6 +730,12 @@ final class AdminProfileControllerTest extends TestCase
     public function testSetPinNotFound(): void
     {
         $profileManager = $this->createMock(UserProfileManager::class);
+        // The controller's profile-cap pre-check now reads the EFFECTIVE cap
+        // via maxProfiles(). An unstubbed mock returns 0, which would make
+        // `count($existing) >= 0` true and 400 every creation — a test-double
+        // artifact, not a real state: the real method clamps to >= 1.
+        $profileManager->method('maxProfiles')
+            ->willReturn(UserProfileManager::MAX_PROFILES_PER_USER);
         $profileManager->expects($this->once())
             ->method('findById')
             ->with('999')
@@ -620,6 +758,12 @@ final class AdminProfileControllerTest extends TestCase
         $profile = ['id' => 'prof_1', 'user_id' => '1', 'name' => 'Alice'];
 
         $profileManager = $this->createMock(UserProfileManager::class);
+        // The controller's profile-cap pre-check now reads the EFFECTIVE cap
+        // via maxProfiles(). An unstubbed mock returns 0, which would make
+        // `count($existing) >= 0` true and 400 every creation — a test-double
+        // artifact, not a real state: the real method clamps to >= 1.
+        $profileManager->method('maxProfiles')
+            ->willReturn(UserProfileManager::MAX_PROFILES_PER_USER);
         $profileManager->expects($this->once())
             ->method('findById')
             ->with('1')
@@ -642,6 +786,12 @@ final class AdminProfileControllerTest extends TestCase
     public function testDeletePinNotFound(): void
     {
         $profileManager = $this->createMock(UserProfileManager::class);
+        // The controller's profile-cap pre-check now reads the EFFECTIVE cap
+        // via maxProfiles(). An unstubbed mock returns 0, which would make
+        // `count($existing) >= 0` true and 400 every creation — a test-double
+        // artifact, not a real state: the real method clamps to >= 1.
+        $profileManager->method('maxProfiles')
+            ->willReturn(UserProfileManager::MAX_PROFILES_PER_USER);
         $profileManager->expects($this->once())
             ->method('findById')
             ->with('999')

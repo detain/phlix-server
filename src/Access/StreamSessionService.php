@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Access;
 
+use Phlix\Admin\SettingsRepository;
 use Workerman\MySQL\Connection;
 
 /**
@@ -57,9 +58,85 @@ final class StreamSessionService
      *
      * @param Connection $db Database connection for accessing stream session data.
      */
+    /**
+     * The dotted settings key backing {@see self::defaultConcurrentStreams()}.
+     */
+    public const DEFAULT_STREAMS_SETTING_KEY = 'access.default_concurrent_streams';
+
+    /**
+     * Shipped per-profile concurrent-stream allowance.
+     *
+     * Nothing writes a `profile_stream_limits` row at profile creation — the
+     * only writer is {@see self::updateStreamLimit()}, reached solely from the
+     * admin API — so this fallback is what EVERY profile an admin has not
+     * explicitly configured actually runs on. That makes
+     * `access.default_concurrent_streams` a live, server-wide control rather
+     * than a creation-time seed.
+     */
+    public const DEFAULT_CONCURRENT_STREAMS = 1;
+
+    /**
+     * Hard floor. A configured 0 would deny playback to every profile without
+     * an explicit override, i.e. almost all of them.
+     */
+    public const MIN_CONCURRENT_STREAMS = 1;
+
+    /**
+     * Hard ceiling. Concurrent streams are the transcode/bandwidth budget;
+     * this bounds what a single mis-typed value can commit the server to.
+     */
+    public const MAX_CONCURRENT_STREAMS = 100;
+
+    /**
+     * @param Connection              $db       Database connection.
+     * @param SettingsRepository|null $settings Effective-settings store. NULL
+     *        degrades to {@see self::DEFAULT_CONCURRENT_STREAMS}.
+     *
+     *        NOTE for DI: PHP-DI skips optional constructor parameters during
+     *        autowiring. This class has TWO construction paths — the container
+     *        and a direct `new` in `Application::getStreamLimitController()`'s
+     *        no-container fallback — and both pass this explicitly. Wiring only
+     *        one would make the setting apply on some requests and not others.
+     */
     public function __construct(
         private readonly Connection $db,
+        private readonly ?SettingsRepository $settings = null,
     ) {
+    }
+
+    /**
+     * The effective default concurrent-stream allowance for a profile with no
+     * explicit `profile_stream_limits` row.
+     *
+     * Read-path class (a) LIVE: resolved per playback, no restart.
+     *
+     * @return int Between {@see self::MIN_CONCURRENT_STREAMS} and
+     *         {@see self::MAX_CONCURRENT_STREAMS} inclusive.
+     *
+     * @since 1.3.0
+     */
+    public function defaultConcurrentStreams(): int
+    {
+        if ($this->settings === null) {
+            return self::DEFAULT_CONCURRENT_STREAMS;
+        }
+
+        try {
+            /** @var mixed $configured */
+            $configured = $this->settings->getEffective(self::DEFAULT_STREAMS_SETTING_KEY);
+        } catch (\Throwable) {
+            // A settings-store failure must not silently lift the concurrency
+            // cap, and must not drop it to zero and block all playback.
+            return self::DEFAULT_CONCURRENT_STREAMS;
+        }
+
+        $value = match (true) {
+            is_int($configured) => $configured,
+            is_string($configured) && is_numeric($configured) => (int) $configured,
+            default => self::DEFAULT_CONCURRENT_STREAMS,
+        };
+
+        return max(self::MIN_CONCURRENT_STREAMS, min(self::MAX_CONCURRENT_STREAMS, $value));
     }
 
     /**
@@ -304,8 +381,13 @@ final class StreamSessionService
         );
 
         if (!is_array($rows) || $rows === [] || !is_array($rows[0])) {
-            // Default limit if none configured
-            return new ProfileStreamLimit(profileId: $profileId, maxConcurrentStreams: 1);
+            // No explicit row — the common case, since nothing seeds one at
+            // profile creation. Falls back to the effective
+            // `access.default_concurrent_streams`.
+            return new ProfileStreamLimit(
+                profileId: $profileId,
+                maxConcurrentStreams: $this->defaultConcurrentStreams(),
+            );
         }
 
         /** @var array<string, mixed> $firstRow */

@@ -1294,7 +1294,15 @@ class Application
         if ($this->container === null) {
             // Fallback: create with direct DB connection
             $db = $this->connectionPool->getPooledConnection('mysql');
-            $streamSessionService = new \Phlix\Access\StreamSessionService($db);
+            // Pass the settings store here too. This fallback path is only
+            // taken when there is no container, but it serves the same admin
+            // routes — leaving it unwired would make
+            // `access.default_concurrent_streams` apply on some requests and
+            // not others, which is harder to diagnose than not shipping it.
+            $streamSessionService = new \Phlix\Access\StreamSessionService(
+                $db,
+                new \Phlix\Admin\SettingsRepository($db),
+            );
             return new \Phlix\Server\Http\Controllers\StreamLimitController($streamSessionService);
         }
 

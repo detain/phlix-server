@@ -114,8 +114,13 @@ final class AdminProfileController
             return (new Response())->status(404)->json(['error' => 'User not found']);
         }
 
+        // Must read the EFFECTIVE cap, not the shipped constant. This
+        // pre-check returns 400 before UserProfileManager::create() runs, so
+        // it — not create()'s own guard — is what an operator actually hits.
+        // Leaving the constant here would have pinned the admin API at 5 while
+        // `auth.max_profiles` appeared to be wired.
         $existing = $this->profileManager->findByUserId($userId);
-        if (count($existing) >= UserProfileManager::MAX_PROFILES_PER_USER) {
+        if (count($existing) >= $this->profileManager->maxProfiles()) {
             return (new Response())->status(400)->json(['error' => 'Maximum profiles reached']);
         }
 

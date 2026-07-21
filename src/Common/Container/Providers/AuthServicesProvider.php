@@ -186,7 +186,11 @@ final class AuthServicesProvider implements ServiceProviderInterface
             ),
 
             UserRepository::class => autowire(),
-            UserProfileManager::class => autowire(),
+            // `settings` is named explicitly: PHP-DI skips optional ctor params
+            // during autowiring, which would leave the profile cap pinned at
+            // MAX_PROFILES_PER_USER and make `auth.max_profiles` inert.
+            UserProfileManager::class => autowire()
+                ->constructorParameter('settings', get(SettingsRepository::class)),
             WatchHistory::class => autowire(),
 
             AuthProviderRegistry::class => autowire(),

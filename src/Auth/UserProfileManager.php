@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Auth;
 
+use Phlix\Admin\SettingsRepository;
 use Phlix\Auth\Dto\UserRow;
 use Phlix\Common\Uuid;
 use Phlix\Common\Util\RowMap;
@@ -69,13 +70,39 @@ class UserProfileManager
     public const RATING_ORDER = ContentRating::RANKS;
 
     /**
-     * Maximum number of profiles allowed per user account.
+     * Shipped maximum number of profiles allowed per user account.
      *
-     * This limit ensures system performance and user experience quality.
+     * This is the DEFAULT, not the enforced limit — {@see self::maxProfiles()}
+     * is the single enforcement point and applies the `auth.max_profiles`
+     * override on top of this. Both call sites that cap profile creation
+     * (this class's {@see self::create()} and the admin controller's
+     * pre-check) must go through that method; using this constant directly
+     * would reintroduce a hardcoded cap that the setting cannot move.
      *
      * @var int
      */
     public const MAX_PROFILES_PER_USER = 5;
+
+    /**
+     * The dotted settings key backing {@see self::maxProfiles()}.
+     */
+    public const MAX_PROFILES_SETTING_KEY = 'auth.max_profiles';
+
+    /**
+     * Hard floor for the profile cap. A configured 0 (or negative) would make
+     * profile creation impossible for everyone, including the account's first
+     * profile — a settings field must not be able to brick the feature it
+     * configures.
+     */
+    public const MIN_MAX_PROFILES = 1;
+
+    /**
+     * Hard ceiling for the profile cap. The limit exists to bound per-account
+     * fan-out (every profile carries its own settings, watch history and
+     * stream-limit rows); an unbounded value would let one account multiply
+     * that indefinitely.
+     */
+    public const MAX_MAX_PROFILES = 50;
 
     /**
      * Profile type constants for categorization.
@@ -109,15 +136,73 @@ class UserProfileManager
     public const DEFAULT_CONTENT_RATING = 'R';
 
     /**
+     * Effective-settings store behind `auth.max_profiles`, or NULL to use the
+     * shipped default.
+     */
+    private ?SettingsRepository $settings;
+
+    /**
      * Constructs a new UserProfileManager instance.
      *
-     * @param Connection $db Database connection for profile data persistence
+     * @param Connection              $db       Database connection for profile
+     *                                          data persistence
+     * @param SettingsRepository|null $settings Effective-settings store. NULL
+     *        degrades to {@see self::MAX_PROFILES_PER_USER}.
+     *
+     *        NOTE for DI: PHP-DI skips optional constructor parameters during
+     *        autowiring, so the binding in `AuthServicesProvider` names this
+     *        explicitly. Without that the manager silently keeps the shipped
+     *        cap and `auth.max_profiles` becomes inert (read-path class (g)).
      *
      * @throws void
      */
-    public function __construct(Connection $db)
+    public function __construct(Connection $db, ?SettingsRepository $settings = null)
     {
         $this->db = $db;
+        $this->settings = $settings;
+    }
+
+    /**
+     * The effective maximum number of profiles per user account.
+     *
+     * ## Single enforcement point
+     *
+     * There are TWO places that cap profile creation: {@see self::create()}
+     * and the pre-check in `AdminProfileController::createForUser()`, which
+     * returns 400 before `create()` is ever reached. Wiring only the former
+     * would have left the admin API — the only route that creates profiles —
+     * still hardcoded at 5, so the setting would appear to do nothing. Both
+     * now call this method.
+     *
+     * Read-path class (a) LIVE: resolved at check time, no restart.
+     *
+     * @return int Between {@see self::MIN_MAX_PROFILES} and
+     *         {@see self::MAX_MAX_PROFILES} inclusive.
+     *
+     * @since 1.3.0
+     */
+    public function maxProfiles(): int
+    {
+        if ($this->settings === null) {
+            return self::MAX_PROFILES_PER_USER;
+        }
+
+        try {
+            /** @var mixed $configured */
+            $configured = $this->settings->getEffective(self::MAX_PROFILES_SETTING_KEY);
+        } catch (\Throwable) {
+            // A settings-store failure must not raise the cap, and must not
+            // drop it to zero and block profile creation outright.
+            return self::MAX_PROFILES_PER_USER;
+        }
+
+        $value = match (true) {
+            is_int($configured) => $configured,
+            is_string($configured) && is_numeric($configured) => (int) $configured,
+            default => self::MAX_PROFILES_PER_USER,
+        };
+
+        return max(self::MIN_MAX_PROFILES, min(self::MAX_MAX_PROFILES, $value));
     }
 
     /**
@@ -316,9 +401,10 @@ class UserProfileManager
             [$userId]
         ));
 
-        if (UserRow::int($countRow, 'count', 0) >= self::MAX_PROFILES_PER_USER) {
+        $maxProfiles = $this->maxProfiles();
+        if (UserRow::int($countRow, 'count', 0) >= $maxProfiles) {
             throw new \InvalidArgumentException(
-                'Maximum number of profiles (' . self::MAX_PROFILES_PER_USER . ') reached'
+                'Maximum number of profiles (' . $maxProfiles . ') reached'
             );
         }
 

@@ -219,6 +219,12 @@ final class AdminSettingsControllerTest extends TestCase
             // read the same instance, so they cannot disagree.
             'auth.access_ttl'                           => 'int',
             'auth.refresh_ttl'                          => 'int',
+            // Profile cap. Single enforcement point is
+            // UserProfileManager::maxProfiles(); the admin controller's
+            // pre-check calls it too, and that is the guard that fires.
+            'auth.max_profiles'                         => 'int',
+            // Per-playback fallback in StreamSessionService::getStreamLimit().
+            'access.default_concurrent_streams'         => 'int',
             'webhooks.enabled'                          => 'bool',
             'stats.enabled'                             => 'bool',
             'subtitles.default_language'                => 'string',
@@ -276,7 +282,7 @@ final class AdminSettingsControllerTest extends TestCase
 
         $actual = AdminSettingsController::allowedKeys();
 
-        $this->assertCount(46, $actual);
+        $this->assertCount(48, $actual);
         $this->assertEquals($expected, $actual);
     }
 
@@ -354,7 +360,7 @@ final class AdminSettingsControllerTest extends TestCase
 
         // schemaMeta() covers EVERY declared property, not just the typed ones
         // that reach allowedKeys().
-        $this->assertCount(46, $meta);
+        $this->assertCount(48, $meta);
         foreach (array_keys(AdminSettingsController::allowedKeys()) as $key) {
             $this->assertArrayHasKey($key, $meta, sprintf('%s must carry a meta block', $key));
         }

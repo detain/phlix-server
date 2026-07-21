@@ -61,6 +61,20 @@ return [
      * an out-of-range value here (or in an override) cannot mint a token that
      * expires instantly or one that lives for a year.
      */
+    /**
+     * Maximum number of profiles a single user account may create.
+     *
+     * Addressed by the dotted setting key `auth.max_profiles`. Enforced by
+     * {@see \Phlix\Auth\UserProfileManager::maxProfiles()}, which is the single
+     * point both cap checks go through — `UserProfileManager::create()` and the
+     * pre-check in `AdminProfileController::createForUser()` (the one an
+     * operator actually hits, since it returns 400 first).
+     *
+     * Clamped to `MIN_MAX_PROFILES`..`MAX_MAX_PROFILES` in code, so a 0 here
+     * cannot make profile creation impossible.
+     */
+    'max_profiles' => 5,
+
     'access_ttl' => 3600,
 
     /**

@@ -60,11 +60,22 @@ final class AdminSettingsControllerTest extends TestCase
         // Trakt credentials unsettable via PUT. `config/trakt.php` now
         // re-exports `config/scrobblers/trakt.php` and they resolve again,
         // under their ORIGINAL flat names so persisted overrides survive.
+        //
+        // v0.26.0 dropped it to 42 by DELETING `hwaccel.probe_timeout`. Unlike
+        // the trakt trio, that key had the opposite problem: its config default
+        // resolved fine, but no runtime consumer ever read the effective value.
+        // The real hwaccel probe timeouts are the hardcoded
+        // ShellTimeout::FFMPEG_TIMEOUT (10s) / ::GPU_TOOL_TIMEOUT (5s)
+        // constants, reached via static calls from seven VendorProbe classes
+        // that take no timeout argument, and HwAccelConfig::get() additionally
+        // let config/transcoding.php shadow the `hwaccel.*` side outright. It
+        // shipped `restart: true`, so the admin UI promised a restart would
+        // apply it — the exact false advertising this program exists to remove.
+        // See docs/dev/settings-restart-gap.md.
         $expected = [
             // Hardware acceleration.
             'hwaccel.enabled'                           => 'bool',
             'hwaccel.prefer_hardware'                   => 'bool',
-            'hwaccel.probe_timeout'                     => 'int',
 
             // Transcoding behaviour. `preferred_accelerator`'s "auto-detect"
             // option is the EMPTY-STRING enum member (v0.24.0 replaced the old
@@ -130,7 +141,7 @@ final class AdminSettingsControllerTest extends TestCase
 
         $actual = AdminSettingsController::allowedKeys();
 
-        $this->assertCount(43, $actual);
+        $this->assertCount(42, $actual);
         $this->assertEquals($expected, $actual);
     }
 
@@ -208,7 +219,7 @@ final class AdminSettingsControllerTest extends TestCase
 
         // schemaMeta() covers EVERY declared property, not just the typed ones
         // that reach allowedKeys().
-        $this->assertCount(43, $meta);
+        $this->assertCount(42, $meta);
         foreach (array_keys(AdminSettingsController::allowedKeys()) as $key) {
             $this->assertArrayHasKey($key, $meta, sprintf('%s must carry a meta block', $key));
         }
@@ -942,14 +953,19 @@ final class AdminSettingsControllerTest extends TestCase
     public function testUpdateCoercesNumericStringsBeforePersisting(): void
     {
         $repo = $this->createMock(SettingsRepository::class);
+        // Any int-typed key works here; `marker_detection.intro_max_duration`
+        // is declared `minimum: 0` with no maximum, so 45 is comfortably legal
+        // and the assertion isolates STRING -> INT coercion rather than bounds.
+        // (This used hwaccel.probe_timeout until phlix-shared v0.26.0 deleted
+        // that consumerless key.)
         $repo->expects($this->once())
             ->method('set')
-            ->with('hwaccel.probe_timeout', 45, 'int');
+            ->with('marker_detection.intro_max_duration', 45, 'int');
         $repo->method('getEffectiveMany')->willReturn(['values' => [], 'overridden' => []]);
 
         $controller = new AdminSettingsController($repo);
         $response = $controller->update(
-            $this->makeRequest(['settings' => ['hwaccel.probe_timeout' => '45']]),
+            $this->makeRequest(['settings' => ['marker_detection.intro_max_duration' => '45']]),
             [],
         );
 
@@ -980,16 +996,18 @@ final class AdminSettingsControllerTest extends TestCase
         $repo->expects($this->never())->method('set');
 
         $controller = new AdminSettingsController($repo);
-        // hwaccel.probe_timeout expects int; a non-numeric string is invalid.
+        // marker_detection.intro_max_duration expects int; a non-numeric string
+        // is invalid. (This used hwaccel.probe_timeout until phlix-shared
+        // v0.26.0 deleted that consumerless key.)
         $response = $controller->update(
-            $this->makeRequest(['settings' => ['hwaccel.probe_timeout' => 'not-a-number']]),
+            $this->makeRequest(['settings' => ['marker_detection.intro_max_duration' => 'not-a-number']]),
             [],
         );
 
         $this->assertSame(400, $response->statusCode);
         /** @var array{errors: array<string, mixed>} $body */
         $body = json_decode($response->body, true);
-        $this->assertArrayHasKey('hwaccel.probe_timeout', $body['errors']);
+        $this->assertArrayHasKey('marker_detection.intro_max_duration', $body['errors']);
     }
 
     public function testUpdateRejectsEmptyOrMissingSettingsObject(): void

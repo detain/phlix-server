@@ -1,11 +1,16 @@
-# `restart: true` settings — FIXED, with two documented exceptions
+# `restart: true` settings — FIXED, with one documented asymmetry
 
 **Status:** the mechanism is implemented and tested. **Scope:** `phlix-server`
 (a sibling gap still exists in `phlix-hub`, untouched by this work).
 
 Read this before telling a user — in docs, in a CHANGELOG entry, in a docblock, or in the admin UI —
-that restarting the server makes a specific setting take effect. Fifteen of the sixteen keys now
-genuinely apply; the exceptions below are real and must not be papered over.
+that restarting the server makes a specific setting take effect.
+
+**All fifteen `restart: true` keys now genuinely apply on restart.** The sixteenth,
+`hwaccel.probe_timeout`, was **deleted** from `server-settings.schema.json` in `phlix-shared`
+**v0.26.0** rather than wired — it had no consumer and could not be given one cheaply or safely
+(reasoning below). The one remaining caveat is the `process.<worker>.enabled` enable/disable
+asymmetry, which is now disclosed in the keys' own admin-facing `helpText`, not merely here.
 
 ---
 
@@ -42,7 +47,8 @@ It is reached two ways:
 ### Why not "just overlay `$config`"
 
 The original recommendation (option (b) in the pre-fix version of this document) was to overlay the
-boot `$config` array and stop there. **That covers only 4 of the 16 keys.** Dotted keys name config
+boot `$config` array and stop there. **That covers only 4 of the 16 keys** (the schema carried 16 at
+the time; it carries 15 since `hwaccel.probe_timeout` was deleted). Dotted keys name config
 *files*, and only `server.hls.*` lives in `config/server.php`. `ffmpeg.*` is reachable through
 `$config` solely because `config/server.php` happens to compose `'ffmpeg' => require
 __DIR__ . '/ffmpeg.php'`; `hwaccel.*`, `transcoding.*` and `process.*` are not in `$config` at all.
@@ -72,7 +78,7 @@ or hand-edited row cannot inject a config key the code does not already read.
 | --- | --- | --- |
 | `hwaccel.enabled` | ✅ | via `HwAccelConfig::get()` → `FfmpegRunner::setConfig()` |
 | `hwaccel.prefer_hardware` | ✅ | same path |
-| `hwaccel.probe_timeout` | ❌ **NO CONSUMER** | see below |
+| ~~`hwaccel.probe_timeout`~~ | 🗑️ **DELETED** (shared v0.26.0) | had no consumer; see below |
 | `transcoding.preferred_accelerator` | ✅ | via `HwAccelConfig::get()` |
 | `ffmpeg.max_concurrent_transcodes` | ✅ | `TranscodeManager` (also already had a `getEffective()` path) |
 | `ffmpeg.transcode_timeout` | ✅ | `FfmpegRunner` + `Recorder` `getTranscodeTimeout()` |
@@ -81,29 +87,56 @@ or hand-edited row cannot inject a config key the code does not already read.
 | `server.hls.cache_max_bytes` | ✅ | same |
 | `server.hls.segment_seconds` | ✅ | same |
 | `server.hls.max_concurrent_segments` | ✅ | same |
-| `process.library-scan.enabled` | ⚠️ partial | see below |
-| `process.plugin-auto-update.enabled` | ⚠️ partial | see below |
-| `process.marker-detection.enabled` | ⚠️ partial | see below |
-| `process.media-asset.enabled` | ⚠️ partial | see below |
-| `process.similarity.enabled` | ⚠️ partial | see below |
+| `process.library-scan.enabled` | ⚠️ asymmetric | disable ✅ / enable-from-file-disabled ❌ — see below |
+| `process.plugin-auto-update.enabled` | ⚠️ asymmetric | same |
+| `process.marker-detection.enabled` | ⚠️ asymmetric | same |
+| `process.media-asset.enabled` | ⚠️ asymmetric | same |
+| `process.similarity.enabled` | ⚠️ asymmetric | same |
 
-### ❌ `hwaccel.probe_timeout` — genuinely inert, flag should be reconsidered
+### 🗑️ `hwaccel.probe_timeout` — DELETED in `phlix-shared` v0.26.0
 
-Two independent reasons, neither fixed here because both are behaviour changes outside this step's
-scope:
+The follow-up this document previously requested has been actioned: the key is **gone from the
+schema**, not flipped to `restart: false` (which would have claimed it was *live* — even less true).
 
-1. **Nothing reads it.** `HwaccelRegistry` is constructed via `getInstance()` with **no config**
-   (`FfmpegRunner.php:1359`), so it uses its own literal `'probe_timeout' => 30` default. The merged
-   `HwAccelConfig::get()['probe_timeout']` has no consumer at all.
-2. **It is shadowed even if a consumer appeared.** `HwAccelConfig::get()` resolves
-   `$transcodingConfig['probe_timeout'] ?? $hwaccelBase['probe_timeout']`, and
-   `config/transcoding.php` *always* declares `probe_timeout`, so the `??` never falls through to the
-   `hwaccel.*` side.
+**Why it was inert.** Two independent causes, both re-verified before deletion:
 
-**Follow-up for `phlix-shared`:** either wire `HwaccelRegistry` to the merged config (making the key
-live), or drop the key from `server-settings.schema.json`. Shipping it as `restart: true` is exactly
-the false advertising this remediation exists to eliminate. The audit's item (d) already flagged
-this as "resolves but has no consumer"; this step confirms it and adds the shadowing detail.
+1. **Nothing read it.** `HwaccelRegistry` is constructed via `getInstance()` with **no config**
+   (`FfmpegRunner.php:1359`), so it used its own literal `'probe_timeout' => 30`
+   (`HwaccelRegistry.php:89`) — and never passed even that on: `initialize()` calls
+   `new HwaccelProbe($this->ffmpeg_path)`, and `HwaccelProbe::__construct()` (`HwaccelProbe.php:51`)
+   accepts only a binary path and a logger. The merged `HwAccelConfig::get()['probe_timeout']` had no
+   consumer at all.
+2. **It was shadowed anyway.** `HwAccelConfig::get()` resolved
+   `$transcodingConfig['probe_timeout'] ?? $hwaccelBase['probe_timeout']` (`HwAccelConfig.php:103`),
+   and `config/transcoding.php:33` *always* declares `probe_timeout`, so the `??` never fell through
+   to the `hwaccel.*` side.
+
+**Why it was deleted rather than wired** (plan §4 rule 10 — a setting that cannot be made to work
+must be deleted). Wiring it is neither cheap nor safe:
+
+- **The real timeouts are two different hardcoded constants.**
+  `ShellTimeout::FFMPEG_TIMEOUT = 10` and `ShellTimeout::GPU_TOOL_TIMEOUT = 5`
+  (`src/Media/Transcoding/Hwaccel/ShellTimeout.php:25,28`). A single `probe_timeout` (default 30)
+  maps onto neither without inventing a semantic — and inventing config semantics nothing reads is
+  the specific first-pass mistake this program already had to undo.
+- **The plumbing is wide.** `ShellTimeout::exec()` is **static**, called from 22 sites across seven
+  `VendorProbe` classes. Threading a configured value means changing
+  `VendorProbeInterface::probe()` / `runAcceptanceTest()` across all seven implementations, plus
+  `HwaccelProbe` and `HwaccelRegistry`'s private-constructor singleton.
+- **It was an admin-reachable worker hang.** The schema declared `"minimum": 0`, and coreutils'
+  `timeout 0 CMD` means **no timeout at all**. `ShellTimeout` exists precisely "to prevent coroutine
+  deadlock during shutdown" (`ShellTimeout.php:15`). Wiring the key would have handed an admin a
+  one-click way to hang a resident Workerman worker at boot.
+- **Its `helpText` described a feature that does not exist.** It promised a *per-file, pre-transcode*
+  probe of "the file's codec profile". There is no such probe: `HwaccelRegistry::initialize()` runs a
+  **one-time, process-wide capability scan** (`ffmpeg -encoders`, `nvidia-smi`, `vainfo`) guarded by
+  `$this->initialized`. Wiring it would have left the UI text false regardless.
+
+**Guards against reintroduction:** `ServerSettingsSchemaTest::test_consumerless_probe_timeout_key_is_not_reintroduced()`
+in `phlix-shared`, and the hand-written allow-list + `assertCount(42, …)` in
+`tests/Unit/Server/Http/Controllers/Admin/AdminSettingsControllerTest.php`. `config/hwaccel_base.php`
+and `config/transcoding.php` keep their `probe_timeout` literals so the merged array shape is
+unchanged; they are simply not an admin setting.
 
 ### ⚠️ `process.<worker>.enabled` — disable works, enable-from-file-disabled does not
 
@@ -122,10 +155,19 @@ every reload: a worker disabled by an admin override starts, logs
 - Re-enabling something you disabled via the admin UI → **works** (the Worker is still spawned,
   because `config/process.php` still says `enabled => true`).
 - Enabling a worker that `config/process.php` itself disables on disk → **does not work**; requires
-  editing the file and a full restart. This is an operator file edit, not a UI action.
+  editing the file and a full service restart. The in-app Restart button cannot do it, because
+  SIGUSR2 re-forks children from the already-executed master rather than re-running it.
 
 The visible cost is one idle process per UI-disabled worker. That was chosen over the alternative
 (master-side DB read) because it keeps the reload path honest and avoids a fork-inherited connection.
+
+**This is now disclosed to the admin, not just to developers.** As of `phlix-shared` v0.26.0 all five
+keys' `helpText` states (a) turning a worker OFF takes effect after a restart, (b) turning one back ON
+needs a full service restart if it is disabled in the on-disk config, and (c) a worker switched off
+here still occupies an idle process. The previous text was actively wrong — it claimed the worker
+"is not spawned", when `start.php` spawns it regardless and the gate lives in `onWorkerStart`.
+`ServerSettingsSchemaTest::test_managed_worker_switches_disclose_the_restart_asymmetry()` locks all
+three statements in and forbids the old wording's return.
 
 ## What the restart endpoint does
 

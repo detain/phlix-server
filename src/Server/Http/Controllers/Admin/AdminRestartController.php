@@ -50,13 +50,22 @@ use Workerman\Timer;
  * `onWorkerStart` now calls
  * {@see \Phlix\Config\EffectiveConfig::bootstrapAndOverlay()} on that array
  * BEFORE `ContainerFactory::create()`, so the `server_settings` overrides ARE
- * merged in per worker start and a reload genuinely applies them. Fifteen of
- * the sixteen `restart: true` schema keys take effect through this endpoint;
- * the exceptions are documented in `docs/dev/settings-restart-gap.md` —
- * notably `hwaccel.probe_timeout`, which has no consumer at all, and
- * `process.<worker>.enabled`, where a reload can stop a worker's poll timer
- * but cannot spawn a Worker group that the master never forked. Consult that
- * document before telling a user a specific setting applies on restart.
+ * merged in per worker start and a reload genuinely applies them. ALL FIFTEEN
+ * of the schema's `restart: true` keys now take effect through this endpoint,
+ * with one documented asymmetry: `process.<worker>.enabled` (five keys) — a
+ * reload can stop a worker's poll timer, but it cannot spawn a Worker group
+ * that the master never forked, so re-enabling a worker that
+ * `config/process.php` disables ON DISK needs a full service restart rather
+ * than this endpoint. That limitation is stated in the keys' admin-facing
+ * `helpText`, not just in developer docs.
+ *
+ * (The sixteenth key, `hwaccel.probe_timeout`, was DELETED in phlix-shared
+ * v0.26.0 rather than wired: it had no consumer, and the real probe timeouts
+ * are hardcoded `ShellTimeout` constants behind seven static-calling
+ * `VendorProbe` classes.)
+ *
+ * See `docs/dev/settings-restart-gap.md` for the per-key table, and consult it
+ * before telling a user a specific setting applies on restart.
  *
  * Route is gated by {@see \Phlix\Server\Http\Middleware\AdminMiddleware}
  * (registered in {@see \Phlix\Server\Http\Routes\AdminRoutes}).

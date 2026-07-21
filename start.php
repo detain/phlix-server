@@ -842,6 +842,11 @@ try {
 // `"restart": true` flag promises. The one case this cannot cover is ENABLING a
 // worker that `config/process.php` itself disables — no Worker was ever spawned
 // to re-check — which is an operator editing the file on disk, not a UI action.
+// That asymmetry, and the "one idle process per UI-disabled worker" cost, are
+// stated in each key's admin-facing `helpText` in phlix-shared v0.26.0+ (locked
+// by ServerSettingsSchemaTest), so the admin sees it at the switch rather than
+// only here. Do not silently widen or narrow this gate without updating that
+// text — the whole point is that the UI must not promise what this cannot do.
 // -----------------------------------------------------------------------------
 
 // Managed-worker key → its DI-resolvable class exposing `start(int $pollSeconds)`.

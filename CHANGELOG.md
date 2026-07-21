@@ -40,6 +40,46 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- **The last two dishonest `restart: true` settings are now honest** (closes out the item below,
+  which fixed 14 of 16 keys). Bumps `detain/phlix-shared` to **v0.26.0** (43 → 42 settings keys).
+
+  **`hwaccel.probe_timeout` — DELETED, not wired.** It resolved to a config default, so it passed
+  every resolvability test, but **no code ever read the effective value** — while the admin UI still
+  rendered "requires a server restart to take effect" beside it. Two independent causes, both
+  re-verified: `HwaccelRegistry` is built via `getInstance()` with no config
+  (`FfmpegRunner.php:1359`) and its `initialize()` hands `HwaccelProbe` only a binary path
+  (`HwaccelProbe.php:51`); and `HwAccelConfig::get()` resolved
+  `$transcodingConfig['probe_timeout'] ?? $hwaccelBase['probe_timeout']` (`HwAccelConfig.php:103`)
+  while `config/transcoding.php:33` always declares the key, so the `hwaccel.*` side could never win.
+  Deleted rather than wired (plan §4 rule 10) because wiring is neither cheap nor safe: the real
+  timeouts are **two different** hardcoded constants (`ShellTimeout::FFMPEG_TIMEOUT = 10`,
+  `::GPU_TOOL_TIMEOUT = 5`) reached through 22 static call sites across seven `VendorProbe` classes;
+  the schema permitted `minimum: 0` and coreutils `timeout 0 CMD` means **no timeout**, which would
+  let an admin hang a resident worker at boot — precisely what `ShellTimeout` exists to prevent; and
+  the shipped `helpText` described a per-file pre-transcode probe that does not exist (the real one
+  is a one-time process-wide capability scan). `config/hwaccel_base.php` and `config/transcoding.php`
+  keep their `probe_timeout` literals, so the merged array shape is unchanged — it is simply no
+  longer an admin setting. Flipping `restart` to `false` was rejected: that would claim the key is
+  *live*, which is even less true.
+
+  **`process.<worker>.enabled` (5 keys) — the half-live asymmetry is now disclosed in the UI.** The
+  old `helpText` claimed the worker "is not spawned", which is **false**: `start.php` spawns it
+  regardless and the gate lives in each worker's `onWorkerStart`, which logs and skips arming the
+  poll timer. Since the admin only ever sees `helpText`, all five now state that turning a worker
+  OFF applies after a restart; that turning one back ON also applies after a restart *unless* it is
+  disabled in the on-disk `config/process.php`, in which case the in-app Restart button (SIGUSR2, a
+  graceful reload of the already-executed master) cannot help and the service itself must be
+  restarted; and that a worker switched off here still occupies an idle process. No behaviour
+  change — the gate is unchanged and correct; only the promise made to the admin was wrong.
+
+  Server-side: the hand-written allow-list lock-in and key-count assertions in
+  `tests/Unit/Server/Http/Controllers/Admin/AdminSettingsControllerTest.php` go 43 → 42 (the list is
+  deliberately **not** derived from the schema — mutation-verified: re-adding the deleted key to it
+  turns the test red). Two tests that used `hwaccel.probe_timeout` merely as a convenient int-typed
+  key now use `marker_detection.intro_max_duration`.
+  `tests/Unit/Admin/SettingsDefaultResolvabilityTest` still passes with **every** key resolving.
+  `docs/dev/settings-restart-gap.md`'s per-key table updated to final reality.
+
 - **`restart: true` settings now actually take effect on restart.** The shared settings schema marks
   16 boot-only keys `"restart": true` and the admin SPA renders "requires a server restart to take
   effect" beside each one — a promise nothing kept. `SettingsRepository::getEffective()` resolves

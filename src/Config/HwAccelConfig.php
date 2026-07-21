@@ -94,12 +94,20 @@ final class HwAccelConfig
             'prefer_hdr_output' => $transcodingConfig['prefer_hdr_output'] ?? false,
 
             // From transcoding.php - probe timeout (ensure consistency).
-            // NOTE: transcoding.php ALWAYS declares `probe_timeout`, so this
-            // `??` never falls through and the `hwaccel.probe_timeout` setting
-            // cannot win here. Nothing reads the merged `probe_timeout` either
-            // (HwaccelRegistry is constructed without this config and uses its
-            // own literal default), so `hwaccel.probe_timeout` remains inert —
-            // see docs/dev/settings-restart-gap.md.
+            //
+            // NOT AN ADMIN SETTING. `hwaccel.probe_timeout` was removed from
+            // server-settings.schema.json in phlix-shared v0.26.0 because this
+            // merged value has NO CONSUMER: HwaccelRegistry is built via
+            // getInstance() with no config (FfmpegRunner.php:1359) and its
+            // initialize() hands HwaccelProbe only a binary path, while the
+            // actual probe timeouts are the hardcoded
+            // ShellTimeout::FFMPEG_TIMEOUT (10s) / ::GPU_TOOL_TIMEOUT (5s)
+            // constants used by the seven VendorProbe classes. The `??` below
+            // also never falls through, since transcoding.php always declares
+            // the key. Kept only so the merged array shape is unchanged for
+            // any caller that reads it defensively — do NOT re-expose it as a
+            // setting without first threading a value all the way to
+            // ShellTimeout::exec(). See docs/dev/settings-restart-gap.md.
             'probe_timeout' => $transcodingConfig['probe_timeout'] ?? ($hwaccelBase['probe_timeout'] ?? 30),
 
             // From transcoding.php - test clip path (ensure consistency)

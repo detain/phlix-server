@@ -2769,7 +2769,7 @@ class Application
             $this->router->get('/description.xml', [$deviceDescController, 'handle']);
 
             // P10-S1: DLNA routes with /dlna/ prefix
-            $this->router->get('/dlna/description.xml', [$deviceDescController, 'handle']);
+            $this->router->get(\Phlix\Dlna\DlnaRoutes::DESCRIPTION, [$deviceDescController, 'handle']);
 
             // SCPD XML endpoints - route pattern matches /scpd/{service}.xml
             $this->router->get('/scpd/{service}.xml', function (
@@ -2799,7 +2799,10 @@ class Application
                         $cdsController = new \Phlix\Server\Http\Controllers\Dlna\DlnaContentDirectoryController(
                             $contentDirectory
                         );
-                        $this->router->post('/dlna/content_directory', [$cdsController, 'handle']);
+                        $this->router->post(
+                            \Phlix\Dlna\DlnaRoutes::CONTENT_DIRECTORY_CONTROL,
+                            [$cdsController, 'handle'],
+                        );
                     }
                 }
             } catch (\Throwable $e) {
@@ -2808,7 +2811,7 @@ class Application
 
             // CDS control endpoint (legacy path)
             $cdsControlController = new \Phlix\Server\Http\Controllers\Dlna\CdsControlController($cdsServer);
-            $this->router->post('/cds/control', [$cdsControlController, 'handle']);
+            $this->router->post(\Phlix\Dlna\DlnaRoutes::CDS_CONTROL, [$cdsControlController, 'handle']);
         } catch (\Throwable $e) {
             // LOG, do not swallow. This bare catch previously said only
             // "CDS not configured - silent ignore", and it hid a permanent

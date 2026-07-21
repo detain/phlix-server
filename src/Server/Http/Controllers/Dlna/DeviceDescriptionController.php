@@ -56,6 +56,6 @@ class DeviceDescriptionController
         return (new Response())
             ->header('Content-Type', 'application/xml; charset=utf-8')
             ->header('Cache-Control', 'no-cache, must-revalidate')
-            ->text($descriptionXml);
+            ->xml($descriptionXml);
     }
 }

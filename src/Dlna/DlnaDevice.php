@@ -118,19 +118,28 @@ class DlnaDevice
     {
         if ($this->deviceType === self::TYPE_SERVER) {
             $this->services = [
+                // Paths come from DlnaRoutes so the description can never again
+                // advertise an endpoint the server does not register. These used
+                // to say '/ctl/ContentDirectory', which has never been a route:
+                // a control point would fetch this document and then 404 on
+                // every single Browse request.
                 self::SERVICE_CONTENT_DIRECTORY => [
                     'serviceType' => 'urn:schemas-upnp-org:service:ContentDirectory:1',
                     'serviceId' => 'urn:upnp-org:serviceId:ContentDirectory',
-                    'controlUrl' => '/ctl/ContentDirectory',
-                    'eventSubUrl' => '/evt/ContentDirectory',
-                    'SCPDUrl' => '/scpd/ContentDirectory.xml',
+                    'controlUrl' => DlnaRoutes::CONTENT_DIRECTORY_CONTROL,
+                    'eventSubUrl' => DlnaRoutes::NO_EVENTING,
+                    // NOTE the key casing: toDeviceDescriptionXml() reads
+                    // 'SCPDURL'. This entry previously spelled it 'SCPDUrl', so
+                    // ContentDirectory — the one service a client actually needs
+                    // — advertised an EMPTY <SCPDURL>.
+                    'SCPDURL' => DlnaRoutes::scpd('ContentDirectory'),
                 ],
                 self::SERVICE_CONNECTION_MANAGER => [
                     'serviceType' => 'urn:schemas-upnp-org:service:ConnectionManager:1',
                     'serviceId' => 'urn:upnp-org:serviceId:ConnectionManager',
-                    'controlUrl' => '/ctl/ConnectionManager',
-                    'eventSubUrl' => '/evt/ConnectionManager',
-                    'SCPDURL' => '/scpd/ConnectionManager.xml',
+                    'controlUrl' => DlnaRoutes::CDS_CONTROL,
+                    'eventSubUrl' => DlnaRoutes::NO_EVENTING,
+                    'SCPDURL' => DlnaRoutes::scpd('ConnectionManager'),
                 ],
             ];
 

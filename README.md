@@ -54,7 +54,7 @@ src/
 ├── Media/              # Media library and metadata
 │   ├── Library/        # Library management (LibraryManager, ItemRepository, MediaScanner)
 │   ├── Metadata/      # Metadata fetching (TMDB, TVDB, Fanart, NFO providers)
-│   ├── Transcoding/    # FFmpeg transcoding with EncodingHelper
+│   ├── Transcoding/    # FFmpeg transcoding (FfmpegRunner, TranscodeManager, EncodeSettings)
 │   └── Streaming/      # HLS streaming with adaptive bitrate
 ├── Auth/               # Authentication services
 └── Common/             # Shared utilities

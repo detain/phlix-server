@@ -187,12 +187,43 @@ class PluginLoader
             throw $e;
         }
 
-        if ($this->repository->existsByName($manifest->name)) {
-            $this->repository->delete($manifest->name);
-        }
+        // Carry the operator's state across a RE-install (i.e. an update).
+        //
+        // This block used to be a bare delete-then-insert-with-defaults, which
+        // silently destroyed two things every time a plugin was updated:
+        // the `enabled` flag, and the ENTIRE settings blob — including API keys
+        // and OAuth tokens. Same failure family as
+        // PluginRepository::updateSettings()'s wholesale replace, but wider.
+        //
+        // It went unnoticed for so long only because auto-update never actually
+        // ran (PluginAutoUpdateWorker armed a bare 86400s timer that a
+        // deployed-to box never reached). The moment that was fixed, the first
+        // real update cycle disabled three plugins and wiped Trakt's OAuth
+        // access + refresh tokens on production. Recovered from the nightly
+        // backup; do not reintroduce this.
+        //
+        // A plugin is still installed DISABLED when it is genuinely new — that
+        // default belongs to first install, not to an upgrade an operator never
+        // asked to be switched off.
+        $previous = $this->repository->existsByName($manifest->name)
+            ? $this->repository->findByName($manifest->name)
+            : null;
 
         $defaults = self::defaultSettings($manifest);
-        $this->repository->insert($manifest, false, $defaults);
+        if ($previous !== null) {
+            // Manifest defaults supply any NEWLY-declared setting; the stored
+            // values win wherever they exist, so an upgrade neither loses
+            // configuration nor misses new keys.
+            $settings = array_merge($defaults, $previous->settings);
+            $enabled  = $previous->enabled;
+
+            $this->repository->delete($manifest->name);
+        } else {
+            $settings = $defaults;
+            $enabled  = false;
+        }
+
+        $this->repository->insert($manifest, $enabled, $settings);
 
         $this->auditLogger->logPluginAction(
             null,

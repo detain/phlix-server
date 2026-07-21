@@ -157,6 +157,165 @@ final class PluginLoaderTest extends TestCase
         $this->assertSame($manifest, $returned);
     }
 
+    /**
+     * CONSEQUENCE: re-installing over an existing plugin keeps its settings.
+     *
+     * This is the production incident, pinned. `finalizeInstall()` used to
+     * delete the row and re-insert with manifest DEFAULTS, so every update
+     * destroyed the entire settings blob — on the live box that meant Trakt's
+     * OAuth access and refresh tokens, recovered only from a nightly backup.
+     *
+     * It hid for months because auto-update never actually ran; the first real
+     * update cycle after that timer was fixed destroyed three plugins' state.
+     *
+     * Mutation-verified: restoring `insert($manifest, false, $defaults)` fails
+     * this test.
+     */
+    public function test_updating_an_installed_plugin_preserves_its_settings(): void
+    {
+        // The manifest DECLARES defaults that differ from what is stored, and
+        // also declares one key the stored settings have never seen. Without
+        // that the test cannot discriminate: with an empty defaults array both
+        // array_merge() orders behave identically, so flipping them would pass.
+        $manifest = Manifest::fromArray([
+            'name' => 'phlix-plugin-fixture',
+            'version' => '1.0.0',
+            'phlix_min_server_version' => '0.10.0',
+            'type' => 'metadata-provider',
+            'entry' => FakeLifecyclePlugin::class,
+            'settings' => [
+                'access_token' => ['type' => 'string', 'default' => null],
+                'username'     => ['type' => 'string', 'default' => ''],
+                'new_option'   => ['type' => 'boolean', 'default' => true],
+            ],
+        ]);
+        $stored = [
+            'access_token'  => 'secret-access',
+            'refresh_token' => 'secret-refresh',
+            'username'      => 'detain',
+        ];
+
+        $this->expect($this->installer, 'installFromDirectory')
+            ->once()
+            ->andReturn([$manifest, $this->stagedDir]);
+        $this->expect($this->verifier, 'verify')->andReturn(SignatureVerifier::RESULT_UNSIGNED);
+        $this->expect($this->composer, 'install')->once();
+        $this->expect($this->repository, 'existsByName')->andReturn(true);
+        $this->expect($this->repository, 'findByName')
+            ->andReturn(new InstalledPlugin(
+                id: 'id',
+                manifest: $manifest,
+                enabled: true,
+                installedAt: new DateTimeImmutable(),
+                settings: $stored,
+                directory: $this->stagedDir,
+            ));
+        $this->expect($this->repository, 'delete')->once();
+
+        $captured = null;
+        $this->expect($this->repository, 'insert')
+            ->once()
+            ->with(
+                Mockery::on(fn ($m) => $m === $manifest),
+                Mockery::any(),
+                Mockery::on(function ($settings) use (&$captured) {
+                    $captured = $settings;
+                    return true;
+                }),
+            );
+
+        $this->makeLoader()->installFromDirectory('/path/to/source');
+
+        self::assertSame('secret-access', $captured['access_token'] ?? null,
+            'An update must not destroy stored credentials.');
+        self::assertSame('secret-refresh', $captured['refresh_token'] ?? null,
+            'An update must not destroy stored credentials.');
+        self::assertSame('detain', $captured['username'] ?? null,
+            'A stored value must beat the manifest default, not the other way round.');
+
+        // A key the manifest newly declares must still arrive with its default,
+        // so an upgrade that adds a setting is not left with it missing.
+        self::assertTrue($captured['new_option'] ?? null,
+            'A newly declared manifest setting must pick up its default.');
+    }
+
+    /**
+     * CONSEQUENCE: re-installing keeps the plugin ENABLED.
+     *
+     * The live symptom that exposed the bug: an auto-update silently switched
+     * off every plugin it updated. "Install disabled" is a first-install
+     * default, not something an upgrade should impose on an operator.
+     *
+     * Mutation-verified: passing a hardcoded `false` to insert() fails this.
+     */
+    public function test_updating_an_installed_plugin_preserves_the_enabled_flag(): void
+    {
+        $manifest = $this->manifest();
+
+        $this->expect($this->installer, 'installFromDirectory')
+            ->once()
+            ->andReturn([$manifest, $this->stagedDir]);
+        $this->expect($this->verifier, 'verify')->andReturn(SignatureVerifier::RESULT_UNSIGNED);
+        $this->expect($this->composer, 'install')->once();
+        $this->expect($this->repository, 'existsByName')->andReturn(true);
+        $this->expect($this->repository, 'findByName')
+            ->andReturn($this->makeInstalled($manifest, enabled: true));
+        $this->expect($this->repository, 'delete')->once();
+
+        $captured = null;
+        $this->expect($this->repository, 'insert')
+            ->once()
+            ->with(
+                Mockery::any(),
+                Mockery::on(function ($enabled) use (&$captured) {
+                    $captured = $enabled;
+                    return true;
+                }),
+                Mockery::any(),
+            );
+
+        $this->makeLoader()->installFromDirectory('/path/to/source');
+
+        self::assertTrue($captured, 'An update must not silently disable the plugin.');
+    }
+
+    /**
+     * CONSEQUENCE: a genuinely NEW plugin still installs disabled.
+     *
+     * The preservation fix must not turn into "everything installs enabled".
+     * A newly installed plugin has no prior state, so the safe default stands.
+     *
+     * Mutation-verified: defaulting $enabled to true fails this.
+     */
+    public function test_a_brand_new_plugin_still_installs_disabled(): void
+    {
+        $manifest = $this->manifest();
+
+        $this->expect($this->installer, 'installFromDirectory')
+            ->once()
+            ->andReturn([$manifest, $this->stagedDir]);
+        $this->expect($this->verifier, 'verify')->andReturn(SignatureVerifier::RESULT_UNSIGNED);
+        $this->expect($this->composer, 'install')->once();
+        $this->expect($this->repository, 'existsByName')->andReturn(false);
+        $this->repository->shouldNotReceive('findByName');
+
+        $captured = null;
+        $this->expect($this->repository, 'insert')
+            ->once()
+            ->with(
+                Mockery::any(),
+                Mockery::on(function ($enabled) use (&$captured) {
+                    $captured = $enabled;
+                    return true;
+                }),
+                Mockery::any(),
+            );
+
+        $this->makeLoader()->installFromDirectory('/path/to/source');
+
+        self::assertFalse($captured, 'A brand-new plugin must install disabled.');
+    }
+
     public function test_install_rejects_invalid_manifest_with_install_exception(): void
     {
         $this->expect($this->installer, 'installFromDirectory')
@@ -552,6 +711,16 @@ final class PluginLoaderTest extends TestCase
         $this->assertDirectoryDoesNotExist($stagedDir);
     }
 
+    /**
+     * NOTE: this asserts the row is REPLACED, not what it is replaced WITH.
+     *
+     * That is precisely why the state-destroying update went unnoticed for so
+     * long: `insert()` was asserted `->once()` with no argument matcher, so a
+     * call that wiped every stored setting and disabled the plugin satisfied it
+     * exactly as well as a correct one. The consequence assertions live in
+     * test_updating_an_installed_plugin_preserves_* above; this one is kept for
+     * the delete/insert ordering only.
+     */
     public function test_install_replaces_existing_db_row(): void
     {
         $manifest = $this->manifest();
@@ -560,6 +729,7 @@ final class PluginLoaderTest extends TestCase
         $this->expect($this->verifier, 'verify')->andReturn(SignatureVerifier::RESULT_VALID);
         $this->expect($this->composer, 'install')->once();
         $this->expect($this->repository, 'existsByName')->andReturn(true);
+        $this->expect($this->repository, 'findByName')->andReturn($this->makeInstalled($manifest));
         $this->expect($this->repository, 'delete')->once()->with($manifest->name);
         $this->expect($this->repository, 'insert')->once();
 

@@ -254,6 +254,13 @@ final class AdminSettingsControllerTest extends TestCase
             'server.rate_limit.ws_connect.window'       => 'int',
             'webhooks.enabled'                          => 'bool',
             'stats.enabled'                             => 'bool',
+            // phlix-shared v0.40.0: metrics recording toggle (config/metrics.php,
+            // composed into config/server.php). Class (b) RESTART.
+            'metrics.enabled'                           => 'bool',
+            // phlix-shared v0.40.0: theme-music producer (config/theme_music.php,
+            // composed into config/server.php). Class (b) RESTART.
+            'theme_music.enabled'                       => 'bool',
+            'theme_music.source'                        => 'string',
             'subtitles.default_language'                => 'string',
             'trickplay.enabled'                         => 'bool',
             'newsletter.enabled'                        => 'bool',
@@ -309,7 +316,7 @@ final class AdminSettingsControllerTest extends TestCase
 
         $actual = AdminSettingsController::allowedKeys();
 
-        $this->assertCount(65, $actual);
+        $this->assertCount(68, $actual);
         $this->assertEquals($expected, $actual);
     }
 
@@ -387,7 +394,7 @@ final class AdminSettingsControllerTest extends TestCase
 
         // schemaMeta() covers EVERY declared property, not just the typed ones
         // that reach allowedKeys().
-        $this->assertCount(65, $meta);
+        $this->assertCount(68, $meta);
         foreach (array_keys(AdminSettingsController::allowedKeys()) as $key) {
             $this->assertArrayHasKey($key, $meta, sprintf('%s must carry a meta block', $key));
         }

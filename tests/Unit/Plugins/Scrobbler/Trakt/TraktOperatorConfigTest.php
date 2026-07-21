@@ -7,7 +7,7 @@ declare(strict_types=1);
  * @license MIT
  */
 
-namespace Tests\Unit\Plugins\Scrobbler\Trakt;
+namespace Phlix\Tests\Unit\Plugins\Scrobbler\Trakt;
 
 use Phlix\Admin\SettingsRepository;
 use Phlix\Plugins\Scrobbler\Trakt\TraktOperatorConfig;

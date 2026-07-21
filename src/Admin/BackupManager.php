@@ -27,7 +27,7 @@ use Workerman\MySQL\Connection;
  *
  * Backup archives contain:
  * - MySQL database dump (all tables via mysqldump)
- * - Config files (config/*.php)
+ * - Config files (every `*.php` under config/, recursively)
  * - User data files (data/)
  * - SSL certificates (if present)
  *
@@ -562,15 +562,61 @@ class BackupManager
         $backupDir = $tempDir . '/config';
         mkdir($backupDir, 0755, true);
 
-        $phpFiles = glob($configDir . '/*.php');
-        if ($phpFiles === false) {
-            return;
+        foreach (self::configFilesUnder($configDir) as $relative => $file) {
+            $target = $backupDir . '/' . $relative;
+            $parent = dirname($target);
+            if (!is_dir($parent)) {
+                mkdir($parent, 0755, true);
+            }
+            copy($file, $target);
+        }
+    }
+
+    /**
+     * Every `*.php` under a config directory, keyed by path RELATIVE to it.
+     *
+     * Recursive on purpose. This used to be a flat `glob($dir . '/*.php')`, which
+     * silently excluded `config/scrobblers/trakt.php` — the only nested config
+     * file in the tree, and the one holding Trakt's OAuth tokens. It has
+     * therefore never been present in any backup this install ever produced.
+     * That is not hypothetical: when a plugin update wiped those tokens, the
+     * recovery came from the database dump, and the config half of the same
+     * archive would not have helped.
+     *
+     * Keys are relative paths rather than basenames so the directory structure
+     * survives the round trip. Flattening with basename() would also collide a
+     * hypothetical `config/trakt.php` with `config/scrobblers/trakt.php`.
+     *
+     * @param string $dir Directory to walk.
+     *
+     * @return array<string, string> Map of relative path → absolute path.
+     */
+    private static function configFilesUnder(string $dir): array
+    {
+        if (!is_dir($dir)) {
+            return [];
         }
 
-        foreach ($phpFiles as $file) {
-            $basename = basename($file);
-            copy($file, $backupDir . '/' . $basename);
+        $out = [];
+        $iterator = new \RecursiveIteratorIterator(
+            new \RecursiveDirectoryIterator($dir, \FilesystemIterator::SKIP_DOTS),
+        );
+
+        /** @var \SplFileInfo $info */
+        foreach ($iterator as $info) {
+            if (!$info->isFile() || strtolower($info->getExtension()) !== 'php') {
+                continue;
+            }
+            $path = $info->getPathname();
+            $relative = ltrim(substr($path, strlen($dir)), '/');
+            if ($relative !== '') {
+                $out[$relative] = $path;
+            }
         }
+
+        ksort($out);
+
+        return $out;
     }
 
     /**
@@ -589,14 +635,34 @@ class BackupManager
             mkdir($configDir, 0755, true);
         }
 
-        $phpFiles = glob($backupConfigDir . '/*.php');
-        if ($phpFiles === false) {
+        // Recursive, mirroring backupConfigs(). Older archives are FLAT (nested
+        // files were never captured), so their entries simply have no directory
+        // component and restore exactly as before — this stays backward
+        // compatible with every backup already on disk.
+        $realConfigDir = realpath($configDir);
+        if ($realConfigDir === false) {
             return;
         }
 
-        foreach ($phpFiles as $file) {
-            $basename = basename($file);
-            copy($file, $configDir . '/' . $basename);
+        foreach (self::configFilesUnder($backupConfigDir) as $relative => $file) {
+            $target = $configDir . '/' . $relative;
+
+            // Containment check. A restore writes files out of an archive, so a
+            // crafted or corrupt entry must not be able to escape config/ via a
+            // relative path. Resolve the PARENT, since the target may not exist.
+            $parent = dirname($target);
+            if (!is_dir($parent) && !mkdir($parent, 0755, true) && !is_dir($parent)) {
+                continue;
+            }
+            $realParent = realpath($parent);
+            if ($realParent === false || !str_starts_with($realParent . '/', $realConfigDir . '/')) {
+                $this->logger?->warning('Skipped config file outside the config directory during restore', [
+                    'entry' => $relative,
+                ]);
+                continue;
+            }
+
+            copy($file, $target);
         }
     }
 

@@ -38,6 +38,53 @@ final class SettingsMasker
     public const MASK = '***';
 
     /**
+     * The complete disclosure-tier vocabulary, mirroring the server-settings
+     * schema's `tier`. Anything else a manifest declares is not a tier we can
+     * honour, so {@see self::normaliseTier()} folds it to `standard` — the
+     * fail-VISIBLE direction.
+     */
+    public const TIERS = ['standard', 'advanced'];
+
+    /**
+     * Default tier for a field whose manifest omits `tier` (most of them).
+     */
+    public const DEFAULT_TIER = 'standard';
+
+    /**
+     * Resolve a manifest's declared `tier` to one we will actually render.
+     *
+     * Two deliberate asymmetries, both erring toward SHOWING a field:
+     *
+     * 1. An unrecognised or non-string tier becomes `standard`, not `advanced`.
+     *    A typo (`"advnaced"`) must never hide a field.
+     * 2. A `required` field is ALWAYS `standard`, whatever the manifest says.
+     *    `PluginAdminController::configure()` validates types and unknown keys
+     *    but does NOT enforce `required`, so a required field hidden behind the
+     *    Advanced toggle produces no error at all — the admin saves a form that
+     *    looks complete and the plugin silently never works. That is precisely
+     *    the "control that lies" failure this settings program exists to remove,
+     *    so the invariant is enforced here, in the single projection that both
+     *    the read path and the validation path share, rather than in the UI
+     *    where a second consumer could forget it.
+     *
+     * @param mixed $declared  Raw `tier` from the manifest descriptor.
+     * @param bool  $required  Whether the field is manifest-required.
+     *
+     * @return string One of {@see self::TIERS}.
+     *
+     * @since 1.3.0
+     */
+    public static function normaliseTier(mixed $declared, bool $required): string
+    {
+        if ($required) {
+            return 'standard';
+        }
+        return is_string($declared) && in_array($declared, self::TIERS, true)
+            ? $declared
+            : self::DEFAULT_TIER;
+    }
+
+    /**
      * Mask any setting flagged `secret: true` in the manifest. Returns
      * a copy of the persisted settings array with the secret values
      * replaced by {@see self::MASK}.
@@ -72,10 +119,14 @@ final class SettingsMasker
      * The `default` key is only present when the manifest declares one,
      * so the UI can distinguish "no default" from "default is null".
      *
+     * `tier` is ALWAYS emitted, even when the manifest omits it, so the UI
+     * never has to re-derive the default and the `required` invariant in
+     * {@see self::normaliseTier()} is visible in the payload itself.
+     *
      * @param InstalledPlugin $plugin Installed plugin whose manifest to project.
      *
      * @return array<string, array{type:string, required:bool, secret:bool, label:string,
-     *     description:string, default?:mixed}>
+     *     description:string, tier:string, default?:mixed}>
      *
      * @since 0.12.0 (S6 — plugin configure endpoint)
      */
@@ -83,12 +134,14 @@ final class SettingsMasker
     {
         $out = [];
         foreach ($plugin->manifest->settings as $key => $schema) {
+            $required = isset($schema['required']) && $schema['required'] === true;
             $entry = [
                 'type'        => is_string($schema['type'] ?? null) ? (string) $schema['type'] : 'mixed',
-                'required'    => isset($schema['required']) && $schema['required'] === true,
+                'required'    => $required,
                 'secret'      => isset($schema['secret']) && $schema['secret'] === true,
                 'label'       => is_string($schema['label'] ?? null) ? (string) $schema['label'] : '',
                 'description' => is_string($schema['description'] ?? null) ? (string) $schema['description'] : '',
+                'tier'        => self::normaliseTier($schema['tier'] ?? null, $required),
             ];
             // Optional "where to get this value" link a manifest may declare
             // (`link` = URL, `link_text` = anchor label). Passed through so the

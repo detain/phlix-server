@@ -31,9 +31,13 @@ namespace Phlix\Plugins;
 final class PluginFieldHelp
 {
     /**
-     * Keys the overlay is allowed to contribute. Everything else in a schema
-     * descriptor (`type`/`required`/`secret`/`default`) always comes from the
-     * manifest and is never touched by the overlay.
+     * Free-text keys the overlay is allowed to contribute. Everything else in a
+     * schema descriptor (`type`/`required`/`secret`/`default`) always comes from
+     * the manifest and is never touched by the overlay.
+     *
+     * `tier` is handled separately in {@see self::decorate()} rather than listed
+     * here: it is a closed vocabulary and needs validation, which this loop —
+     * "any non-empty string wins" — does not perform.
      */
     private const OVERLAY_KEYS = ['label', 'description', 'link', 'link_text'];
 
@@ -81,6 +85,18 @@ final class PluginFieldHelp
                 if (is_string($value) && $value !== '') {
                     $descriptor[$overlayKey] = $value;
                 }
+            }
+            // `tier` is NOT in OVERLAY_KEYS because that loop accepts any
+            // non-empty string, which for a closed vocabulary would let an
+            // operator typo silently mis-file a field. Route it through the
+            // same normaliser the manifest path uses, re-asserting the
+            // "required fields are never hidden" invariant so the overlay
+            // cannot do what the manifest is forbidden from doing.
+            if (array_key_exists('tier', $fieldHelp)) {
+                $descriptor['tier'] = SettingsMasker::normaliseTier(
+                    $fieldHelp['tier'],
+                    ($descriptor['required'] ?? false) === true,
+                );
             }
             $schema[$key] = $descriptor;
         }

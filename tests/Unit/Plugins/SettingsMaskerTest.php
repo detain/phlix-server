@@ -219,6 +219,115 @@ final class SettingsMaskerTest extends TestCase
         $this->assertArrayNotHasKey('link_text', $schema['plain']);
     }
 
+    /**
+     * CONSEQUENCE: a field with no declared tier is VISIBLE by default.
+     *
+     * Every manifest in the fleet predates `tier`. If the projection defaulted
+     * to `advanced`, adding tier support would hide every existing plugin
+     * field behind the Advanced toggle in one release.
+     *
+     * Mutation-verified: changing DEFAULT_TIER to 'advanced' fails this.
+     */
+    public function test_schema_defaults_a_tierless_field_to_standard(): void
+    {
+        $plugin = $this->plugin([], ['legacy' => ['type' => 'string']]);
+
+        $schema = SettingsMasker::schema($plugin);
+
+        $this->assertSame('standard', $schema['legacy']['tier']);
+    }
+
+    /**
+     * CONSEQUENCE: a declared advanced tier is actually carried through.
+     *
+     * Mutation-verified: dropping the 'tier' entry from schema() fails this.
+     */
+    public function test_schema_passes_through_a_declared_advanced_tier(): void
+    {
+        $plugin = $this->plugin([], [
+            'expert' => ['type' => 'string', 'tier' => 'advanced'],
+        ]);
+
+        $schema = SettingsMasker::schema($plugin);
+
+        $this->assertSame('advanced', $schema['expert']['tier']);
+    }
+
+    /**
+     * CONSEQUENCE: a REQUIRED field is never hidden, even if it asks to be.
+     *
+     * PluginAdminController::configure() validates types and unknown keys but
+     * does NOT enforce `required`. So a required field filed as `advanced`
+     * would be invisible by default AND produce no validation error: the admin
+     * saves an apparently-complete form and the plugin silently never works.
+     *
+     * Mutation-verified: removing the `if ($required)` early return in
+     * normaliseTier() fails this test.
+     */
+    public function test_schema_forces_a_required_field_to_standard(): void
+    {
+        $plugin = $this->plugin([], [
+            'api_key' => ['type' => 'string', 'required' => true, 'tier' => 'advanced'],
+        ]);
+
+        $schema = SettingsMasker::schema($plugin);
+
+        $this->assertSame(
+            'standard',
+            $schema['api_key']['tier'],
+            'A required field must never be hidden behind the Advanced toggle: '
+            . 'nothing enforces `required` on save, so the plugin would just '
+            . 'silently not work.'
+        );
+    }
+
+    /**
+     * CONSEQUENCE: an unrecognised tier fails VISIBLE, not hidden.
+     *
+     * A typo must not remove a control from the form.
+     *
+     * Mutation-verified: making normaliseTier() return the raw declared value
+     * fails this test.
+     */
+    public function test_schema_folds_an_unknown_tier_to_standard(): void
+    {
+        $plugin = $this->plugin([], [
+            'typo'    => ['type' => 'string', 'tier' => 'advnaced'],
+            'notastr' => ['type' => 'string', 'tier' => 42],
+        ]);
+
+        $schema = SettingsMasker::schema($plugin);
+
+        $this->assertSame('standard', $schema['typo']['tier']);
+        $this->assertSame('standard', $schema['notastr']['tier']);
+    }
+
+    /**
+     * CONSEQUENCE: every projected field carries a tier the UI can trust.
+     *
+     * The UI treats `tier` as optional, so a missing key silently means
+     * "standard" there too — which makes an omission invisible. Emitting it
+     * unconditionally keeps the contract explicit.
+     *
+     * Mutation-verified: making the 'tier' entry conditional on the manifest
+     * declaring one fails this test.
+     */
+    public function test_schema_emits_a_tier_for_every_field(): void
+    {
+        $plugin = $this->plugin([], [
+            'a' => ['type' => 'string'],
+            'b' => ['type' => 'bool', 'tier' => 'advanced'],
+            'c' => ['type' => 'string', 'required' => true],
+        ]);
+
+        $schema = SettingsMasker::schema($plugin);
+
+        foreach (['a', 'b', 'c'] as $key) {
+            $this->assertArrayHasKey('tier', $schema[$key]);
+            $this->assertContains($schema[$key]['tier'], SettingsMasker::TIERS);
+        }
+    }
+
     private function plugin(array $values, array $manifestSettings): InstalledPlugin
     {
         return new InstalledPlugin(

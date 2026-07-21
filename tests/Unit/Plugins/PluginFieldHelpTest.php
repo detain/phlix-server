@@ -98,6 +98,102 @@ final class PluginFieldHelpTest extends TestCase
         $this->assertSame('https://demo.test', $decorated['api_key']['link']);
     }
 
+    /**
+     * CONSEQUENCE: the overlay can promote a field to the Advanced tier.
+     *
+     * This is the point of routing `tier` through the overlay at all: an
+     * ALREADY-INSTALLED plugin gets correct tiering without waiting for a
+     * plugin release that carries it in its own manifest.
+     *
+     * Mutation-verified: removing the tier branch from decorate() fails this.
+     */
+    public function test_decorate_applies_a_valid_tier_from_the_overlay(): void
+    {
+        PluginFieldHelp::setMapForTesting([
+            'phlix-plugin-demo' => ['debug_mode' => ['tier' => 'advanced']],
+        ]);
+
+        $schema = ['debug_mode' => ['type' => 'bool', 'required' => false, 'tier' => 'standard']];
+
+        $decorated = PluginFieldHelp::decorate('phlix-plugin-demo', $schema);
+
+        $this->assertSame('advanced', $decorated['debug_mode']['tier']);
+    }
+
+    /**
+     * CONSEQUENCE: an operator typo in the overlay cannot hide a field.
+     *
+     * `tier` is deliberately NOT in OVERLAY_KEYS, whose loop accepts any
+     * non-empty string. Routing it through SettingsMasker::normaliseTier()
+     * folds anything outside the vocabulary back to `standard`.
+     *
+     * Mutation-verified: adding 'tier' to OVERLAY_KEYS and deleting the
+     * dedicated branch makes the raw string win and fails this test.
+     */
+    public function test_decorate_folds_an_invalid_overlay_tier_to_standard(): void
+    {
+        PluginFieldHelp::setMapForTesting([
+            'phlix-plugin-demo' => ['thing' => ['tier' => 'advnaced']],
+        ]);
+
+        $schema = ['thing' => ['type' => 'string', 'required' => false, 'tier' => 'standard']];
+
+        $decorated = PluginFieldHelp::decorate('phlix-plugin-demo', $schema);
+
+        $this->assertSame('standard', $decorated['thing']['tier']);
+    }
+
+    /**
+     * CONSEQUENCE: the overlay cannot hide a REQUIRED field.
+     *
+     * SettingsMasker::schema() refuses to file a required field as advanced.
+     * The overlay runs AFTER that projection, so without re-asserting the
+     * invariant here the overlay would be a back door around it — and a
+     * required field the admin cannot see means a plugin that silently never
+     * works, since nothing enforces `required` on save.
+     *
+     * Mutation-verified: passing `false` instead of the descriptor's own
+     * `required` flag into normaliseTier() fails this test.
+     */
+    public function test_decorate_cannot_hide_a_required_field(): void
+    {
+        PluginFieldHelp::setMapForTesting([
+            'phlix-plugin-demo' => ['api_key' => ['tier' => 'advanced']],
+        ]);
+
+        $schema = ['api_key' => ['type' => 'string', 'required' => true, 'tier' => 'standard']];
+
+        $decorated = PluginFieldHelp::decorate('phlix-plugin-demo', $schema);
+
+        $this->assertSame(
+            'standard',
+            $decorated['api_key']['tier'],
+            'The overlay must not be a back door around the required-fields-are-'
+            . 'never-hidden invariant enforced in SettingsMasker::normaliseTier().'
+        );
+    }
+
+    /**
+     * CONSEQUENCE: an overlay that says nothing about tier leaves it alone.
+     *
+     * Mutation-verified: replacing the array_key_exists('tier', ...) guard with
+     * an unconditional assignment rewrites every covered field to `standard`
+     * and fails this test.
+     */
+    public function test_decorate_leaves_tier_untouched_when_overlay_omits_it(): void
+    {
+        PluginFieldHelp::setMapForTesting([
+            'phlix-plugin-demo' => ['thing' => ['label' => 'Renamed']],
+        ]);
+
+        $schema = ['thing' => ['type' => 'string', 'required' => false, 'tier' => 'advanced']];
+
+        $decorated = PluginFieldHelp::decorate('phlix-plugin-demo', $schema);
+
+        $this->assertSame('Renamed', $decorated['thing']['label']);
+        $this->assertSame('advanced', $decorated['thing']['tier']);
+    }
+
     public function test_production_overlay_config_is_wellformed(): void
     {
         // Force a real load from config/plugin_field_help.php.

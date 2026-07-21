@@ -198,6 +198,12 @@ final class AdminSettingsControllerTest extends TestCase
             'transcoding.preferred_accelerator'         => 'string',
             'transcoding.tone_mapping_mode'             => 'string',
             'transcoding.prefer_hdr_output'             => 'bool',
+            // Software-encode tunables. Single source is EncodeSettings,
+            // replacing TEN literals across TranscodeManager, and folded into
+            // the transcode job key so a change is not masked by a reused job.
+            'transcoding.preset'                        => 'string',
+            'transcoding.crf_h264'                      => 'int',
+            'transcoding.audio_bitrate'                 => 'string',
 
             // FFmpeg process limits (config/ffmpeg.php).
             'ffmpeg.max_concurrent_transcodes'          => 'int',
@@ -297,7 +303,7 @@ final class AdminSettingsControllerTest extends TestCase
 
         $actual = AdminSettingsController::allowedKeys();
 
-        $this->assertCount(60, $actual);
+        $this->assertCount(63, $actual);
         $this->assertEquals($expected, $actual);
     }
 
@@ -375,7 +381,7 @@ final class AdminSettingsControllerTest extends TestCase
 
         // schemaMeta() covers EVERY declared property, not just the typed ones
         // that reach allowedKeys().
-        $this->assertCount(60, $meta);
+        $this->assertCount(63, $meta);
         foreach (array_keys(AdminSettingsController::allowedKeys()) as $key) {
             $this->assertArrayHasKey($key, $meta, sprintf('%s must carry a meta block', $key));
         }

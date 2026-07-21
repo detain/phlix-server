@@ -274,7 +274,7 @@ final class FfmpegRunnerToneMapThreadingTest extends TestCase
         $forRendition = new ReflectionMethod(TranscodeManager::class, 'segmentParamsForRendition');
         $forRendition->setAccessible(true);
         /** @var array<string, mixed> $segParams */
-        $segParams = $forRendition->invoke(null, [
+        $segParams = $forRendition->invoke(self::bareTranscodeManagerForRendition(), [
             'is_copy' => false,
             'video_bitrate' => 1400000,
             'codecs' => 'avc1.64001f,mp4a.40.2',
@@ -304,5 +304,24 @@ final class FfmpegRunnerToneMapThreadingTest extends TestCase
         $this->assertIsInt($scalePos);
         $this->assertLessThan($scalePos, $tonePos, 'tone-map must precede scale');
         $this->assertNoReDerive($runner);
+    }
+
+    /**
+     * A bare TranscodeManager for reflecting into `segmentParamsForRendition()`,
+     * which became an instance method when the ABR rungs started reading the
+     * effective `transcoding.*` encode settings. Constructed without the ctor so
+     * no database is needed; the encode settings then default to the shipped
+     * literals, which is what these assertions expect.
+     */
+    private static function bareTranscodeManagerForRendition(): TranscodeManager
+    {
+        $ref = new \ReflectionClass(TranscodeManager::class);
+        $manager = $ref->newInstanceWithoutConstructor();
+
+        $prop = $ref->getProperty('encodeSettings');
+        $prop->setAccessible(true);
+        $prop->setValue($manager, new \Phlix\Media\Transcoding\EncodeSettings());
+
+        return $manager;
     }
 }

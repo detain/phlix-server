@@ -65,4 +65,48 @@ return [
      * Example env: PREFER_HDR_OUTPUT=true
      */
     'prefer_hdr_output' => filter_var(getenv('PREFER_HDR_OUTPUT') ?: 'false', FILTER_VALIDATE_BOOLEAN),
+
+    /**
+     * x264/x265 encoder preset — the speed/compression trade.
+     *
+     * Addressed by the dotted setting key `transcoding.preset`. Consumed by
+     * {@see \Phlix\Media\Transcoding\EncodeSettings::preset()}, which is the
+     * single source for all THREE sites in `TranscodeManager` that assemble
+     * encode parameters (the ABR rendition builder, the copy-to-encode upgrade
+     * branch, and the legacy single-variant path).
+     *
+     * Validated against `EncodeSettings::PRESETS`; an unrecognised value falls
+     * back to `veryfast` rather than reaching ffmpeg, since a bad `-preset`
+     * makes every transcode fail immediately.
+     *
+     * On hardware encoders this is honoured only once it differs from the
+     * shipped default — see the comment in
+     * `FfmpegRunner::buildHwaccelSegmentCommand()`.
+     */
+    'preset' => 'veryfast',
+
+    /**
+     * Constant Rate Factor for H.264 software encodes: lower is better quality
+     * and a larger file.
+     *
+     * Addressed by the dotted setting key `transcoding.crf_h264`. Clamped to
+     * `EncodeSettings::MIN_CRF`..`MAX_CRF` (16..40) in code — the codec accepts
+     * 0..51, but 0 is lossless and 51 is unwatchable, and neither is something
+     * a settings field should permit by accident.
+     *
+     * NB there is deliberately no `crf_h265` companion: nothing in `src/` ever
+     * sets `video_codec` to `libx265`, so such a key would have no live
+     * consumer.
+     */
+    'crf_h264' => 23,
+
+    /**
+     * AAC audio bitrate for transcoded output.
+     *
+     * Addressed by the dotted setting key `transcoding.audio_bitrate`. Consumed
+     * by {@see \Phlix\Media\Transcoding\EncodeSettings::audioBitrate()}, the
+     * single source for all FOUR sites that set it. Accepts `128k` or a bare
+     * `128`; normalised to ffmpeg's `<n>k` form and clamped to 32..512 kbps.
+     */
+    'audio_bitrate' => '128k',
 ];

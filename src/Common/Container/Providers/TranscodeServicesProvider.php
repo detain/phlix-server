@@ -16,6 +16,7 @@ use Phlix\Admin\SettingsRepository;
 use Phlix\Common\Container\ServiceProviderInterface;
 use Phlix\Config\HwAccelConfig;
 use Phlix\Media\Transcoding\FfmpegRunner;
+use Phlix\Media\Transcoding\EncodeSettings;
 use Phlix\Media\Transcoding\Hwaccel\HwaccelRegistry;
 use Phlix\Media\Transcoding\SegmentProcessRegistry;
 use Phlix\Media\Transcoding\TranscodeManager;
@@ -229,7 +230,17 @@ final class TranscodeServicesProvider implements ServiceProviderInterface
                         null,
                         $minDiskSpaceBytes,
                         $loudnormParams,
-                        $effectiveMaxTranscodes
+                        $effectiveMaxTranscodes,
+                        // Position 16: the software-encode tunables
+                        // (`transcoding.preset` / `crf_h264` / `audio_bitrate`).
+                        // Unlike $effectiveMaxTranscodes above, this is NOT
+                        // resolved to a value here — EncodeSettings holds the
+                        // store and reads it per param-assembly, so a change
+                        // applies to the next transcode with no restart
+                        // (read-path class (a) LIVE). Resolving it here instead
+                        // would freeze the value into this once-per-worker
+                        // factory result and make the keys restart-only.
+                        new EncodeSettings(self::optionalSettings($c))
                     );
 
                     // SV-4.2-disconnect (SS-2): make the shared per-worker
@@ -264,5 +275,25 @@ final class TranscodeServicesProvider implements ServiceProviderInterface
                 }
             ),
         ]);
+    }
+
+    /**
+     * Resolve {@see SettingsRepository} from the container, or NULL when it is
+     * unavailable.
+     *
+     * Wrapped because {@see EncodeSettings} must never be the reason a
+     * transcode fails: a container without a settings binding (or one whose
+     * database is down) degrades to the shipped encode defaults rather than
+     * throwing out of the TranscodeManager factory.
+     */
+    private static function optionalSettings(ContainerInterface $c): ?SettingsRepository
+    {
+        try {
+            $settings = $c->get(SettingsRepository::class);
+
+            return $settings instanceof SettingsRepository ? $settings : null;
+        } catch (\Throwable) {
+            return null;
+        }
     }
 }

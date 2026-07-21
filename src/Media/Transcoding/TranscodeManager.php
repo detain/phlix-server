@@ -49,6 +49,17 @@ class TranscodeManager
     /** @var int Maximum concurrent transcode jobs allowed */
     private int $maxConcurrentTranscodes;
 
+    /**
+     * Effective software-encode tunables behind `transcoding.preset`,
+     * `transcoding.crf_h264` and `transcoding.audio_bitrate`.
+     *
+     * Read at param-assembly time (class (a) LIVE) at every site that builds an
+     * encode `$params` array, and folded into the job key via
+     * {@see EncodeSettings::fingerprint()} so a change is not masked by a
+     * reused job.
+     */
+    private EncodeSettings $encodeSettings;
+
     /** @var int Target HLS segment duration in seconds */
     private int $segmentSeconds;
 
@@ -358,8 +369,15 @@ class TranscodeManager
         ?int $segmentMaxWaitMs = null,
         ?int $minDiskSpaceBytes = null,
         ?array $loudnormParams = null,
-        ?int $maxConcurrentTranscodes = null
+        ?int $maxConcurrentTranscodes = null,
+        ?EncodeSettings $encodeSettings = null
     ) {
+        // NULL degrades to the shipped literals, so direct-construction call
+        // sites (tests, CLI) behave exactly as before. PHP-DI skips optional
+        // ctor params during autowiring, so TranscodeServicesProvider names
+        // this explicitly — without that every `transcoding.*` encode key
+        // would be inert (read-path class (g)).
+        $this->encodeSettings = $encodeSettings ?? new EncodeSettings();
         $this->db = $db;
         $this->ffmpeg = $ffmpeg;
         $this->segmentDir = $segmentDir;
@@ -454,7 +472,22 @@ class TranscodeManager
      */
     public function ensureHlsJob(string $mediaItemId, string $profileName = 'web', array $options = []): array
     {
-        $keyHash = sha1($mediaItemId . '|' . $profileName . '|' . self::JOB_KEY_VERSION);
+        // The encode-settings fingerprint MUST be part of the key. A job
+        // persists the params it was built with (`segment_params`) and
+        // findReusableJob() hands that job back for every later request with
+        // the same key — so without this, changing `transcoding.preset` would
+        // silently keep serving the old encode for anything already watched,
+        // i.e. exactly the content an admin would test the change against.
+        //
+        // fingerprint() is '' while every value is at its shipped default, so
+        // this hash is byte-identical to the pre-settings one on an install
+        // that has never changed a knob: deploying it does NOT invalidate the
+        // transcode cache. The key only diverges once a setting actually
+        // changes, which is precisely when the cached segments are stale.
+        $keyHash = sha1(
+            $mediaItemId . '|' . $profileName . '|' . self::JOB_KEY_VERSION
+            . $this->encodeSettings->fingerprint()
+        );
 
         // Self-heal first: drop any dead 'running' ghosts so a fresh play request
         // is not refused by the previous worker's leftovers (see reapStaleRunningJobs).
@@ -818,7 +851,7 @@ class TranscodeManager
             if ($rendition === null) {
                 return null; // unknown / non-advertised variant → 404 (mirrors out-of-range)
             }
-            $segParams = self::segmentParamsForRendition($rendition);
+            $segParams = $this->segmentParamsForRendition($rendition);
             // P3B-S3: when the master carries a shared audio GROUP, video variant
             // segments are VIDEO-ONLY (-an) — sound plays from the audio renditions,
             // so muxing a track here would duplicate (and possibly desync) it.
@@ -1392,7 +1425,7 @@ class TranscodeManager
         $segParams = [
             'audio_only' => true,
             'audio_codec' => 'aac',
-            'audio_bitrate' => '128k',
+            'audio_bitrate' => $this->encodeSettings->audioBitrate(),
             'audio_stream_index' => $audioStreamIndex,
         ];
         // SV-3.3(1B): in a multi-audio job the video segments are `-an`, so loudness
@@ -1657,7 +1690,9 @@ class TranscodeManager
      *
      * @return array<string, mixed> Encode params for FfmpegRunner::buildSegmentCommand().
      */
-    private static function segmentParamsForRendition(array $rendition): array
+    // NOT static: reads the effective encode settings, which the ABR rungs
+    // must share with the legacy and copy-upgrade paths.
+    private function segmentParamsForRendition(array $rendition): array
     {
         if (($rendition['is_copy'] ?? false) === true) {
             // Genuine passthrough: A4 emits only `-c:v copy` / `-c:a copy` and skips
@@ -1672,8 +1707,10 @@ class TranscodeManager
 
         return [
             'video_codec' => 'libx264',
-            'preset' => 'veryfast',
-            'crf' => 23,
+            // Effective encode settings, not literals — every ABR rung must
+            // agree with the legacy and copy-upgrade paths below.
+            'preset' => $this->encodeSettings->preset(),
+            'crf' => $this->encodeSettings->crfH264(),
             'pix_fmt' => 'yuv420p',
             'profile' => 'high',
             'level' => self::ffmpegLevelFromCodecs($codecs),
@@ -1686,7 +1723,7 @@ class TranscodeManager
             'maxrate' => $maxrate,
             'bufsize' => $bufsize,
             'audio_codec' => 'aac',
-            'audio_bitrate' => '128k',
+            'audio_bitrate' => $this->encodeSettings->audioBitrate(),
             'audio_sample_rate' => 48000,
             // Force stereo on the re-encode: a 5.1(side) AC-3 source otherwise
             // produces channel_configuration=0 AAC that hls.js cannot parse (the
@@ -2157,15 +2194,21 @@ class TranscodeManager
 
         if (($params['video_codec'] ?? null) === 'copy') {
             $params['video_codec'] = 'libx264';
-            $params['preset'] = is_string($params['preset'] ?? null) ? $params['preset'] : 'veryfast';
-            $params['crf'] = is_numeric($params['crf'] ?? null) ? (int) $params['crf'] : 23;
+            $params['preset'] = is_string($params['preset'] ?? null)
+                ? $params['preset']
+                : $this->encodeSettings->preset();
+            $params['crf'] = is_numeric($params['crf'] ?? null)
+                ? (int) $params['crf']
+                : $this->encodeSettings->crfH264();
             $params['pix_fmt'] = 'yuv420p';
             $params['profile'] = 'high';
             $params['level'] = '4.1';
         }
         if (($params['audio_codec'] ?? null) === 'copy') {
             $params['audio_codec'] = 'aac';
-            $params['audio_bitrate'] = is_string($params['audio_bitrate'] ?? null) ? $params['audio_bitrate'] : '128k';
+            $params['audio_bitrate'] = is_string($params['audio_bitrate'] ?? null)
+                ? $params['audio_bitrate']
+                : $this->encodeSettings->audioBitrate();
         }
 
         // SV-3.3(1B): thread the configured loudness-normalization target (if any)
@@ -2914,8 +2957,8 @@ class TranscodeManager
             $params['video_codec'] = 'copy';
         } else {
             $params['video_codec'] = 'libx264';
-            $params['preset'] = 'veryfast';
-            $params['crf'] = 23;
+            $params['preset'] = $this->encodeSettings->preset();
+            $params['crf'] = $this->encodeSettings->crfH264();
             // 8-bit 4:2:0 High@4.1 — the browser-decodable baseline (see
             // FfmpegRunner::browserSafeVideoFlags). Explicit here so the policy
             // lives with the rest of the encode decision.
@@ -2938,7 +2981,7 @@ class TranscodeManager
             $params['audio_codec'] = 'copy';
         } else {
             $params['audio_codec'] = 'aac';
-            $params['audio_bitrate'] = '128k';
+            $params['audio_bitrate'] = $this->encodeSettings->audioBitrate();
             $params['audio_sample_rate'] = 48000;
             // Force stereo on the re-encode (covers the audio-only group path):
             // a 5.1(side) AC-3 source otherwise yields channel_configuration=0

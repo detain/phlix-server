@@ -2475,7 +2475,7 @@ class TranscodeManagerTest extends TestCase
         $forRendition = new ReflectionMethod(TranscodeManager::class, 'segmentParamsForRendition');
         $forRendition->setAccessible(true);
         /** @var array<string, mixed> $segParams */
-        $segParams = $forRendition->invoke(null, [
+        $segParams = $forRendition->invoke(self::bareTranscodeManagerForRendition(), [
             'is_copy' => false,
             'video_bitrate' => 1400000,
             'codecs' => 'avc1.64001f,mp4a.40.2',
@@ -3380,12 +3380,12 @@ class TranscodeManagerTest extends TestCase
         $method->setAccessible(true);
 
         // Copy rendition → minimal -c copy contract (A4 skips everything else).
-        $copy = $method->invoke(null, ['is_copy' => true, 'width' => 1920, 'height' => 1080,
+        $copy = $method->invoke(self::bareTranscodeManagerForRendition(), ['is_copy' => true, 'width' => 1920, 'height' => 1080,
             'codecs' => 'avc1.640029,mp4a.40.2', 'video_bitrate' => 6000000]);
         $this->assertSame(['video_codec' => 'copy', 'audio_codec' => 'copy'], $copy);
 
         // Transcode rendition → capped-CRF H.264/AAC contract with derived VBV + level.
-        $t = $method->invoke(null, ['is_copy' => false, 'width' => 1280, 'height' => 720,
+        $t = $method->invoke(self::bareTranscodeManagerForRendition(), ['is_copy' => false, 'width' => 1280, 'height' => 720,
             'codecs' => 'avc1.640029,mp4a.40.2', 'video_bitrate' => 2800000]);
         $this->assertIsArray($t);
         $this->assertSame('libx264', $t['video_codec']);
@@ -4638,5 +4638,24 @@ class TranscodeManagerTest extends TestCase
             }
         }
         rmdir($dir);
+    }
+
+    /**
+     * A bare TranscodeManager for reflecting into `segmentParamsForRendition()`,
+     * which became an instance method when the ABR rungs started reading the
+     * effective `transcoding.*` encode settings. Constructed without the ctor so
+     * no database is needed; the encode settings then default to the shipped
+     * literals, which is what these assertions expect.
+     */
+    private static function bareTranscodeManagerForRendition(): TranscodeManager
+    {
+        $ref = new \ReflectionClass(TranscodeManager::class);
+        $manager = $ref->newInstanceWithoutConstructor();
+
+        $prop = $ref->getProperty('encodeSettings');
+        $prop->setAccessible(true);
+        $prop->setValue($manager, new \Phlix\Media\Transcoding\EncodeSettings());
+
+        return $manager;
     }
 }

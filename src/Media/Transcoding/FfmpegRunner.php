@@ -2054,17 +2054,41 @@ class FfmpegRunner
         // Hardware video encoder
         $cmd .= ' -c:v ' . $capability->encoder;
 
-        // Vendor-specific preset tuning
-        switch ($capability->vendor) {
-            case 'nvenc':
-                $cmd .= ' -preset:v p4';
-                break;
-            case 'vaapi':
-            case 'qsv':
-                $cmd .= ' -preset:v fast';
-                break;
-            default:
-                $cmd .= ' -preset:v medium';
+        // Vendor-specific preset tuning.
+        //
+        // These vendor literals are the SHIPPED tuning and stay authoritative
+        // unless an administrator has actually moved `transcoding.preset` off
+        // its default. That condition is deliberate: NVENC's namespace is
+        // p1..p7 rather than the x264 names, and vaapi/qsv were tuned to
+        // `fast` independently of the software path's `veryfast`, so blindly
+        // forwarding the software preset would silently RETUNE every GPU
+        // encode the moment this setting shipped — a behaviour change nobody
+        // asked for, on the one path hardest to test.
+        //
+        // Once the admin does change it, honouring it is the whole point: a
+        // preset control that only moved software transcodes would be a
+        // control that lies on any box with a GPU.
+        $requestedPreset = self::paramString($params, 'preset');
+        $adminOverrode = $requestedPreset !== null
+            && $requestedPreset !== EncodeSettings::DEFAULT_PRESET
+            && in_array($requestedPreset, EncodeSettings::PRESETS, true);
+
+        if ($adminOverrode) {
+            $cmd .= ' -preset:v ' . ($capability->vendor === 'nvenc'
+                ? (EncodeSettings::NVENC_PRESET_MAP[$requestedPreset] ?? 'p4')
+                : $requestedPreset);
+        } else {
+            switch ($capability->vendor) {
+                case 'nvenc':
+                    $cmd .= ' -preset:v p4';
+                    break;
+                case 'vaapi':
+                case 'qsv':
+                    $cmd .= ' -preset:v fast';
+                    break;
+                default:
+                    $cmd .= ' -preset:v medium';
+            }
         }
 
         // Rate control: CRF when supplied, and VBV ceiling when supplied

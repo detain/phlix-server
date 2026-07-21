@@ -63,7 +63,25 @@ final class AuthProviderControllerTest extends TestCase
         $this->assertSame([], $body['providers']);
     }
 
-    public function test_enable_provider_success(): void
+    /**
+     * Enabling a provider must NOT claim success.
+     *
+     * There is no store for a provider's enabled state:
+     * `AuthProviderRegistry` keeps providers in a private in-memory array with
+     * no enabled flag and no unregister (`src/Auth/AuthProviderRegistry.php:37`),
+     * its only writers are the OIDC/LDAP plugins' `onEnable()`
+     * (`src/Plugins/Oidc/Plugin.php:95`, `src/Plugins/Ldap/Plugin.php:77`), and
+     * those run solely through `PluginLoader::bootstrapEnabled()`
+     * (`src/Plugins/PluginLoader.php:771`), which has ZERO callers.
+     *
+     * The handler used to answer 200 `{"enabled": true}` with the message
+     * "Provider 'oidc' is now enabled." having persisted and mutated nothing.
+     *
+     * The CONSEQUENCE asserted here is that an operator is never told a state
+     * change happened: the status is 501 and the body carries no `enabled`
+     * claim at all.
+     */
+    public function test_enable_provider_reports_not_implemented(): void
     {
         $this->registry->method('hasProvider')->willReturn(true);
 
@@ -71,14 +89,22 @@ final class AuthProviderControllerTest extends TestCase
 
         $response = $this->controller->enableProvider($request, ['name' => 'oidc']);
 
-        $this->assertSame(200, $response->statusCode);
+        $this->assertSame(501, $response->statusCode);
         /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
+        $this->assertSame('not_implemented', $body['error']);
         $this->assertSame('oidc', $body['name']);
-        $this->assertTrue($body['enabled']);
+        $this->assertArrayNotHasKey('enabled', $body);
+        $this->assertStringContainsString('not implemented', (string) $body['message']);
     }
 
-    public function test_enable_provider_not_found(): void
+    /**
+     * An unregistered provider gets the SAME 501, not a 404.
+     *
+     * The capability is missing for every provider, so a 404 would wrongly
+     * imply that a *registered* provider could be toggled.
+     */
+    public function test_enable_provider_unknown_name_also_not_implemented(): void
     {
         $this->registry->method('hasProvider')->willReturn(false);
 
@@ -86,13 +112,19 @@ final class AuthProviderControllerTest extends TestCase
 
         $response = $this->controller->enableProvider($request, ['name' => 'nonexistent']);
 
-        $this->assertSame(404, $response->statusCode);
+        $this->assertSame(501, $response->statusCode);
         /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
-        $this->assertSame('provider_not_found', $body['error']);
+        $this->assertSame('not_implemented', $body['error']);
     }
 
-    public function test_disable_provider_success(): void
+    /**
+     * Disabling must not claim success either -- same evidence as
+     * {@see test_enable_provider_reports_not_implemented()}. The old handler's
+     * `enabled => false` was a *falsey* lie, so asserting the key is ABSENT
+     * (rather than asserting it is not true) is what discriminates.
+     */
+    public function test_disable_provider_reports_not_implemented(): void
     {
         $this->registry->method('hasProvider')->willReturn(true);
 
@@ -100,14 +132,15 @@ final class AuthProviderControllerTest extends TestCase
 
         $response = $this->controller->disableProvider($request, ['name' => 'ldap']);
 
-        $this->assertSame(200, $response->statusCode);
+        $this->assertSame(501, $response->statusCode);
         /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
+        $this->assertSame('not_implemented', $body['error']);
         $this->assertSame('ldap', $body['name']);
-        $this->assertFalse($body['enabled']);
+        $this->assertArrayNotHasKey('enabled', $body);
     }
 
-    public function test_disable_provider_not_found(): void
+    public function test_disable_provider_unknown_name_also_not_implemented(): void
     {
         $this->registry->method('hasProvider')->willReturn(false);
 
@@ -115,7 +148,7 @@ final class AuthProviderControllerTest extends TestCase
 
         $response = $this->controller->disableProvider($request, ['name' => 'unknown']);
 
-        $this->assertSame(404, $response->statusCode);
+        $this->assertSame(501, $response->statusCode);
     }
 
     public function test_config_schema_returns_json_schema(): void

@@ -730,7 +730,10 @@ class ItemRepository
     /**
      * Gets all media items of a specific type across all libraries.
      *
-     * @param string $type The media type filter (e.g., 'movie', 'audio', 'image')
+     * @param string $type A `media_items.type` ENUM member: movie, series,
+     *        season, episode, track, music, album, artist, video, audio, book,
+     *        photo or audiobook. NOT `image` — that is a scanner-side label for
+     *        the extension set; the column calls the same concept `photo`.
      * @param int $limit Maximum number of items to return
      * @param int $offset Number of items to skip for pagination
      * @return array<int, array<string, mixed>> Array of hydrated media items

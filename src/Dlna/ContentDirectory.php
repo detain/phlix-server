@@ -409,20 +409,17 @@ class ContentDirectory
             return $this->libraryBridge->getContainerChildren($objectId);
         }
 
-        // Handle numeric library container IDs (spec-defined hierarchy)
-        // 1 = music, 2 = artists, 3 = albums, 4 = tracks
-        if (
-            in_array($objectId, [self::OBJECT_ID_MUSIC, self::OBJECT_ID_ARTISTS, self::OBJECT_ID_ALBUMS,
-            self::OBJECT_ID_TRACKS], true)
-        ) {
-            return $this->getLibraryItemsById($objectId);
-        }
-
-        // Handle legacy library-* prefixed IDs for backwards compatibility
-        if (strpos($objectId, 'library-') === 0) {
-            $libraryType = substr($objectId, 8); // Remove 'library-' prefix
-            return $this->getLibraryItems($libraryType);
-        }
+        // NOTE: two placeholder branches used to sit here, dispatching to
+        // getLibraryItems()/getLibraryItemsById(). Both returned `[]`
+        // unconditionally, their own comments saying they would be replaced
+        // "when LibraryBridge is properly integrated" — which it now is (the
+        // branch above). They are deleted rather than kept, because dead code
+        // that LOOKS functional is exactly what makes this subsystem hard to
+        // reason about: getLibraryItems() also carried a stale
+        // `'images' => 'image'` mapping, against a media_items ENUM that has no
+        // `image` member and calls it `photo`, and computed that value only to
+        // discard it. Bridge-less callers now fall through to real container
+        // resolution below.
 
         // Handle item-based containers
         $item = $this->resolveObjectId($objectId);
@@ -431,47 +428,6 @@ class ContentDirectory
             return $this->itemRepository->findByParent(is_string($parentId) ? $parentId : '');
         }
 
-        return [];
-    }
-
-    /**
-     * Get items from a specific library.
-     *
-     * @return array<int, array<string, mixed>>
-     */
-    private function getLibraryItems(string $libraryType): array
-    {
-        $type = match ($libraryType) {
-            'video' => 'movie',
-            'audio' => 'audio',
-            'images' => 'image',
-            default => null,
-        };
-
-        if ($type === null) {
-            return [];
-        }
-
-        // This would typically come from a library manager
-        // For now, return empty array as libraries need to be set up
-        return [];
-    }
-
-    /**
-     * Get items from a library container by numeric ID.
-     *
-     * Handles the spec-defined object IDs: 1=music, 2=artists, 3=albums, 4=tracks
-     *
-     * @param string $objectId The container object ID
-     * @return array<int, array<string, mixed>>
-     *
-     * @since 0.12.0
-     */
-    private function getLibraryItemsById(string $objectId): array
-    {
-        // For now, return empty arrays - real implementation would query library
-        // This is a placeholder that will be replaced with actual library queries
-        // when LibraryBridge is properly integrated
         return [];
     }
 

@@ -275,9 +275,17 @@ final class TraktOAuthController
                         : true,
                 );
 
+                // MERGE, never replace. PluginRepository::updateSettings() does a
+                // wholesale `SET settings_json = ?`, and TraktSettings owns only 7 of
+                // the manifest's 8 keys -- it has no `enabled` field at all. Writing
+                // the DTO directly therefore DELETED the master on/off toggle every
+                // time an admin completed the OAuth flow, and start.php:387 reads
+                // `settings['enabled'] ?? false`, so the pull-sync timer silently
+                // never armed again. Production was in exactly that state: valid
+                // tokens, `sync_enabled: true`, and no `enabled` key.
                 $this->plugins->updateSettings(
                     self::TRAKT_PLUGIN_NAME,
-                    $settingsObj->toStorageArray($this->cipher)
+                    array_merge($currentSettings, $settingsObj->toStorageArray($this->cipher))
                 );
             }
 
@@ -576,7 +584,13 @@ HTML;
                     'scrobble_enabled' => $currentSettings['scrobble_enabled'] ?? true,
                 ];
 
-                $this->plugins->updateSettings(self::TRAKT_PLUGIN_NAME, $clearedSettings);
+                // Same merge rule as the connect path: this block's own comment
+                // says "preserve user preferences", but `enabled` is a user
+                // preference and was not in the array, so a disconnect wiped it too.
+                $this->plugins->updateSettings(
+                    self::TRAKT_PLUGIN_NAME,
+                    array_merge($currentSettings, $clearedSettings)
+                );
             } catch (\Exception $e) {
                 $this->logger?->warning(
                     'Failed to clear Trakt tokens on disconnect',

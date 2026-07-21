@@ -214,6 +214,7 @@ final class AdminSettingsControllerTest extends TestCase
             'auth.signup_mode'                          => 'string',
             'auth.password.min_length'                  => 'int',
             'webhooks.enabled'                          => 'bool',
+            'stats.enabled'                             => 'bool',
             'subtitles.default_language'                => 'string',
             'trickplay.enabled'                         => 'bool',
             'newsletter.enabled'                        => 'bool',
@@ -251,7 +252,7 @@ final class AdminSettingsControllerTest extends TestCase
 
         $actual = AdminSettingsController::allowedKeys();
 
-        $this->assertCount(37, $actual);
+        $this->assertCount(38, $actual);
         $this->assertEquals($expected, $actual);
     }
 
@@ -329,7 +330,7 @@ final class AdminSettingsControllerTest extends TestCase
 
         // schemaMeta() covers EVERY declared property, not just the typed ones
         // that reach allowedKeys().
-        $this->assertCount(37, $meta);
+        $this->assertCount(38, $meta);
         foreach (array_keys(AdminSettingsController::allowedKeys()) as $key) {
             $this->assertArrayHasKey($key, $meta, sprintf('%s must carry a meta block', $key));
         }

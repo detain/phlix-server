@@ -48,6 +48,31 @@ class StatsCollector
     /**
      * Generate a UUID v4 string.
      */
+    /**
+     * Are usage statistics being recorded?
+     *
+     * Backs the `stats.enabled` setting. Read at call time through
+     * {@see \Phlix\Config\EffectiveConfig::file()} (which memoises per
+     * bootstrap generation), so an admin override applies on reload without a
+     * full restart.
+     *
+     * Guarding HERE rather than at the ~52 call sites is deliberate: a switch
+     * that each caller had to remember to consult would be honoured
+     * inconsistently, which is the "half-effective setting" failure this
+     * settings program keeps running into.
+     *
+     * Defaults to TRUE when the key is absent so existing installs keep
+     * recording exactly as before.
+     *
+     * @return bool
+     *
+     * @since 1.3.0
+     */
+    public function isEnabled(): bool
+    {
+        return (\Phlix\Config\EffectiveConfig::file('stats')['enabled'] ?? true) !== false;
+    }
+
     private function generateUuid(): string
     {
         return Uuid::v4();
@@ -117,6 +142,13 @@ class StatsCollector
         ?string $deviceId = null
     ): string {
         $eventId = $this->generateUuid();
+
+        // Still returns a well-formed id when disabled: callers hand it to
+        // recordPlaybackEnd(), which is guarded too, so the contract holds and
+        // no caller needs to know statistics are off.
+        if (!$this->isEnabled()) {
+            return $eventId;
+        }
         $clientIp = null;
 
         $this->db->query(
@@ -145,6 +177,10 @@ class StatsCollector
      */
     public function recordPlaybackEnd(string $eventId, int $durationSeconds, bool $completed): void
     {
+        if (!$this->isEnabled()) {
+            return;
+        }
+
         $this->db->query(
             "UPDATE stats_playback_events
              SET ended_at = NOW(), duration_seconds = ?, completed = ?
@@ -176,6 +212,10 @@ class StatsCollector
         ?string $userId = null,
         array $details = []
     ): void {
+        if (!$this->isEnabled()) {
+            return;
+        }
+
         $id = $this->generateUuid();
         $detailsJson = $details !== [] ? json_encode($details) : null;
 
@@ -208,6 +248,10 @@ class StatsCollector
         ?string $ipAddress = null,
         array $details = []
     ): void {
+        if (!$this->isEnabled()) {
+            return;
+        }
+
         $id = $this->generateUuid();
         $userAgent = null;
         $detailsJson = $details !== [] ? json_encode($details) : null;
@@ -243,6 +287,10 @@ class StatsCollector
         int $transcodeCacheBytes = 0,
         ?string $libraryId = null
     ): void {
+        if (!$this->isEnabled()) {
+            return;
+        }
+
         $id = $this->generateUuid();
 
         $this->db->query(

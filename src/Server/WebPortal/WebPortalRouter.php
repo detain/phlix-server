@@ -117,6 +117,13 @@ class WebPortalRouter
     /** @var TranscodeController|null Handles transcode job start/status routes; null when not wired */
     private ?TranscodeController $transcodeController;
 
+    /**
+     * Admin settings store, used for the server-wide defaults applied to users
+     * who have never saved their own preferences. Null in contexts that cannot
+     * supply one, in which case the hardcoded fallbacks stand.
+     */
+    private ?\Phlix\Admin\SettingsRepository $settings = null;
+
     /** @var SimilarityService|null Computes and retrieves item similarity scores; null when not wired */
     private ?SimilarityService $similarityService;
 
@@ -208,7 +215,8 @@ class WebPortalRouter
         ?RecommendationService $recommendationService = null,
         ?CollectionService $collectionService = null,
         ?MusicLibraryService $musicLibraryService = null,
-        ?StreamProbeBackfill $streamBackfill = null
+        ?StreamProbeBackfill $streamBackfill = null,
+        ?\Phlix\Admin\SettingsRepository $settings = null
     ) {
         // SessionManager and AuthManager are accepted for future middleware wiring
         // but not stored — see WebPortalRouter routes for authenticated endpoints.
@@ -230,6 +238,7 @@ class WebPortalRouter
         $this->userAvatarController = $userAvatarController;
         $this->mediaRatingsController = $mediaRatingsController;
         $this->transcodeController = $transcodeController;
+        $this->settings = $settings;
         $this->similarityService = $similarityService;
         $this->recommendationService = $recommendationService;
         $this->collectionService = $collectionService;
@@ -2568,11 +2577,23 @@ class WebPortalRouter
 
         // Sensible defaults applied when a user has never saved settings (or when
         // no persistence layer is wired). Persisted values override these.
+        //
+        // `preferred_subtitle_language` takes its default from the server-wide
+        // `subtitles.default_language` admin setting. That key shipped in the
+        // schema with NO consumer anywhere — an operator on production had saved
+        // 'en' and nothing read it. This is its consumer: the fallback for users
+        // who have never chosen a subtitle language. Read at request time via
+        // getEffective(), so it applies with no restart.
+        //
+        // Vocabulary note (§4 rule 8): this field is ISO 639-1 (two-letter, 'en').
+        // config/subtitles.php shipped 'eng' (ISO 639-2), which disagreed with
+        // this, its only consumer — the config default was corrected to 'en'
+        // rather than converting here, so one vocabulary is used end to end.
         $defaults = [
             'max_streams' => 3,
             'max_bitrate' => 100000000,
             'preferred_audio_language' => 'en',
-            'preferred_subtitle_language' => 'en',
+            'preferred_subtitle_language' => $this->defaultSubtitleLanguage(),
             'subtitle_mode' => 'only_foreign',
         ];
 
@@ -2587,6 +2608,29 @@ class WebPortalRouter
         }
 
         return (new Response())->json(['settings' => $settings]);
+    }
+
+    /**
+     * Server-wide default subtitle language for users with no saved preference.
+     *
+     * Backs the `subtitles.default_language` admin setting. Degrades to 'en' —
+     * the historical hardcoded value — whenever the settings store is absent,
+     * unreadable, or holds a non-string, so a settings failure can never strip
+     * the field from the response or emit a malformed language code.
+     */
+    private function defaultSubtitleLanguage(): string
+    {
+        if ($this->settings === null) {
+            return 'en';
+        }
+
+        try {
+            $value = $this->settings->getEffective('subtitles.default_language');
+        } catch (\Throwable) {
+            return 'en';
+        }
+
+        return is_string($value) && $value !== '' ? $value : 'en';
     }
 
     /**

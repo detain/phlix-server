@@ -44,13 +44,40 @@ class MediaAssetGenerationJob
      * @param Connection      $db           Database connection for MarkerService
      * @param LoggerInterface|null $logger   Optional logger; defaults to NullLogger
      */
+    /**
+     * @param \Phlix\Admin\SettingsRepository|null $settings When supplied, the
+     *        `trickplay.enabled` admin setting gates sprite generation. Null
+     *        (tests, or a container that cannot supply one) means enabled, which
+     *        preserves the historical behaviour.
+     */
     public function __construct(
         private readonly FfmpegRunner $ffmpeg,
         private readonly ItemRepository $itemRepo,
         private readonly Connection $db,
         ?LoggerInterface $logger = null,
+        private readonly ?\Phlix\Admin\SettingsRepository $settings = null,
     ) {
         $this->logger = $logger ?? new NullLogger();
+    }
+
+    /**
+     * Whether trickplay sprite generation is enabled.
+     *
+     * Reads the effective value at use-time, so a change applies on the next job
+     * with no restart. Degrades to enabled on any settings-store failure — a
+     * transient DB problem must not silently stop asset generation.
+     */
+    private function trickplayEnabled(): bool
+    {
+        if ($this->settings === null) {
+            return true;
+        }
+
+        try {
+            return $this->settings->getEffective('trickplay.enabled') !== false;
+        } catch (\Throwable) {
+            return true;
+        }
     }
 
     /**
@@ -159,6 +186,29 @@ class MediaAssetGenerationJob
     {
         $path = $job->path;
         $itemId = $job->itemId;
+
+        // Honour the `trickplay.enabled` admin setting.
+        //
+        // This is the LIVE trickplay implementation. There is a second, older one
+        // (TrickplayGenerator + TrickplayConfig, driven by config/trickplay.php's
+        // interval_seconds/grid_*/thumb_* keys) which is dead code: its only entry
+        // point is StreamManager::generateTrickplay(), which throws unless
+        // StreamManager::setTrickplay() has been called, and setTrickplay() has no
+        // callers anywhere in the tree.
+        //
+        // `trickplay.enabled` was therefore inert — an operator on production had
+        // set it to 0 and sprites kept being generated. Gating here, on the path
+        // that actually runs, is what makes that toggle real. Read at use-time via
+        // getEffective(), so it applies immediately with no restart.
+        if (!$this->trickplayEnabled()) {
+            $this->logger->debug('MediaAssetGenerationJob: trickplay disabled by setting', [
+                'item_id' => $itemId,
+            ]);
+
+            // Disabled is a successful no-op, not a failure: process() ANDs the
+            // two results, and returning false here would mark every job failed.
+            return true;
+        }
 
         try {
             $spriteDir = $this->ffmpeg->getTranscodeDir() . '/trickplay/' . $itemId;

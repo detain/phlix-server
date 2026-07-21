@@ -22,6 +22,101 @@ use PHPUnit\Framework\TestCase;
  */
 final class AdminSettingsControllerTest extends TestCase
 {
+
+    /**
+     * Install a synthetic float-typed setting key into the controller's static
+     * schema caches for the duration of one test, and return a callable that
+     * restores them.
+     *
+     * ## Why this exists
+     *
+     * These two tests exercise the endpoint's FLOAT arms — `valueMatchesType()`'s
+     * float branch, `coerce()`'s float branch, and float bounds enforcement on
+     * PUT. They used to borrow whichever real `number`-typed key happened to be in
+     * the schema (`hwaccel.probe_timeout`, then
+     * `marker_detection.similarity_threshold`). phlix-shared v0.28.0 deleted the
+     * last one, so the schema now declares NO `number` property at all.
+     *
+     * Skipping the tests would have silently dropped coverage of live controller
+     * code because an unrelated key was deleted — a coverage cliff triggered by
+     * schema churn. Injecting a synthetic key instead keeps the float arms tested
+     * regardless of which keys ship, and stops these tests breaking every time the
+     * key list changes.
+     *
+     * @return callable(): void Restores the real caches.
+     */
+    private function withSyntheticFloatKey(string $key, float $min, float $max): callable
+    {
+        $ref = new \ReflectionClass(AdminSettingsController::class);
+
+        $keysProp = $ref->getProperty('allowedKeys');
+        $keysProp->setAccessible(true);
+        $metaProp = $ref->getProperty('schemaMeta');
+        $metaProp->setAccessible(true);
+        // The THIRD cache. schemaMeta() drives rendering; schemaValidators() is
+        // what actually enforces minimum/maximum on PUT. Injecting only the first
+        // two produced a synthetic key whose bounds were silently unenforced —
+        // the request fell through to persist instead of 400ing.
+        $valProp = $ref->getProperty('schemaValidators');
+        $valProp->setAccessible(true);
+
+        $origKeys = $keysProp->getValue();
+        $origMeta = $metaProp->getValue();
+        $origVal  = $valProp->getValue();
+
+        $keys = AdminSettingsController::allowedKeys();
+        $meta = AdminSettingsController::schemaMeta();
+        $validators = $valProp->getValue();
+        if (!is_array($validators)) {
+            // Force population, then re-read.
+            $vm = $ref->getMethod('schemaValidators');
+            $vm->setAccessible(true);
+            $validators = $vm->invoke(null);
+            $origVal = $valProp->getValue();
+        }
+
+        $keys[$key] = 'float';
+        // Mirror the exact shape loadSchemaMeta() emits — every optional field is
+        // present and explicitly null when absent, so a partial entry would 500.
+        $meta[$key] = [
+            'label'      => 'Synthetic float (test only)',
+            'helpText'   => 'Injected by withSyntheticFloatKey().',
+            'helpLinks'  => null,
+            'tier'       => 'advanced',
+            'group'      => 'transcoding',
+            'enum'       => null,
+            'enumLabels' => null,
+            'optionHelp' => null,
+            'minimum'    => $min,
+            'maximum'    => $max,
+            'default'    => $min,
+            'secret'     => false,
+            'restart'    => false,
+        ];
+
+        $validators[$key] = (object) [
+            'type'    => 'number',
+            'minimum' => $min,
+            'maximum' => $max,
+        ];
+
+        $keysProp->setValue(null, $keys);
+        $metaProp->setValue(null, $meta);
+        $valProp->setValue(null, $validators);
+
+        return static function () use (
+            $keysProp,
+            $metaProp,
+            $valProp,
+            $origKeys,
+            $origMeta,
+            $origVal
+        ): void {
+            $keysProp->setValue(null, $origKeys);
+            $metaProp->setValue(null, $origMeta);
+            $valProp->setValue(null, $origVal);
+        };
+    }
     /**
      * @param array<string, mixed> $body
      */
@@ -117,14 +212,8 @@ final class AdminSettingsControllerTest extends TestCase
 
             'tmdb.api_key'                              => 'string',
             'auth.signup_mode'                          => 'string',
-            'marker_detection.similarity_threshold'     => 'float',
-            'marker_detection.intro_max_duration'       => 'int',
-            'subtitles.enabled'                         => 'bool',
             'subtitles.default_language'                => 'string',
-            'subtitles.burn_in_by_default'              => 'bool',
-            'discovery.discovery_port'                  => 'int',
             'trickplay.enabled'                         => 'bool',
-            'trickplay.interval_seconds'                => 'int',
             'newsletter.enabled'                        => 'bool',
             'newsletter.send_hour'                      => 'int',
             'port-forward.port_forwarding.upnp_enabled' => 'bool',
@@ -160,7 +249,7 @@ final class AdminSettingsControllerTest extends TestCase
 
         $actual = AdminSettingsController::allowedKeys();
 
-        $this->assertCount(41, $actual);
+        $this->assertCount(35, $actual);
         $this->assertEquals($expected, $actual);
     }
 
@@ -238,7 +327,7 @@ final class AdminSettingsControllerTest extends TestCase
 
         // schemaMeta() covers EVERY declared property, not just the typed ones
         // that reach allowedKeys().
-        $this->assertCount(41, $meta);
+        $this->assertCount(35, $meta);
         foreach (array_keys(AdminSettingsController::allowedKeys()) as $key) {
             $this->assertArrayHasKey($key, $meta, sprintf('%s must carry a meta block', $key));
         }
@@ -652,21 +741,27 @@ final class AdminSettingsControllerTest extends TestCase
         $repo = $this->createMock(SettingsRepository::class);
         $repo->expects($this->never())->method('set');
 
-        $controller = new AdminSettingsController($repo);
-        // marker_detection.similarity_threshold is bounded 0..1.
-        $response = $controller->update(
-            $this->makeRequest(['settings' => ['marker_detection.similarity_threshold' => '5.0']]),
-            [],
-        );
+        $restore = $this->withSyntheticFloatKey('ffmpeg.synthetic_float', 0.0, 1.0);
 
-        $this->assertSame(400, $response->statusCode);
-        /** @var array{errors: array<string, string>} $body */
-        $body = json_decode($response->body, true);
-        $this->assertArrayHasKey('marker_detection.similarity_threshold', $body['errors']);
-        $this->assertStringContainsString(
-            'maximum',
-            $body['errors']['marker_detection.similarity_threshold'],
-        );
+        try {
+            $controller = new AdminSettingsController($repo);
+            // ffmpeg.synthetic_float is bounded 0..1, so 5.0 must be rejected.
+            $response = $controller->update(
+                $this->makeRequest(['settings' => ['ffmpeg.synthetic_float' => '5.0']]),
+                [],
+            );
+
+            $this->assertSame(400, $response->statusCode);
+            /** @var array{errors: array<string, string>} $body */
+            $body = json_decode($response->body, true);
+            $this->assertArrayHasKey('ffmpeg.synthetic_float', $body['errors']);
+            $this->assertStringContainsString(
+                'maximum',
+                $body['errors']['ffmpeg.synthetic_float'],
+            );
+        } finally {
+            $restore();
+        }
     }
 
     public function testUpdateStillAcceptsTheAutoDetectAcceleratorSentinel(): void
@@ -972,19 +1067,22 @@ final class AdminSettingsControllerTest extends TestCase
     public function testUpdateCoercesNumericStringsBeforePersisting(): void
     {
         $repo = $this->createMock(SettingsRepository::class);
-        // Any int-typed key works here; `marker_detection.intro_max_duration`
-        // is declared `minimum: 0` with no maximum, so 45 is comfortably legal
-        // and the assertion isolates STRING -> INT coercion rather than bounds.
-        // (This used hwaccel.probe_timeout until phlix-shared v0.26.0 deleted
-        // that consumerless key.)
+        // Any int-typed key works here; `newsletter.send_hour` is declared
+        // `minimum: 0, maximum: 23`, so 9 is comfortably legal and the assertion
+        // isolates STRING -> INT coercion rather than bounds.
+        // (This used hwaccel.probe_timeout until phlix-shared v0.26.0 deleted that
+        // consumerless key, then marker_detection.intro_max_duration until v0.28.0
+        // deleted that one. Pick a key that is genuinely consumed, and re-check its
+        // bounds when you swap: send_hour caps at 23, so the previous sample value
+        // of 45 would now be rejected for the wrong reason.)
         $repo->expects($this->once())
             ->method('set')
-            ->with('marker_detection.intro_max_duration', 45, 'int');
+            ->with('newsletter.send_hour', 9, 'int');
         $repo->method('getEffectiveMany')->willReturn(['values' => [], 'overridden' => []]);
 
         $controller = new AdminSettingsController($repo);
         $response = $controller->update(
-            $this->makeRequest(['settings' => ['marker_detection.intro_max_duration' => '45']]),
+            $this->makeRequest(['settings' => ['newsletter.send_hour' => '9']]),
             [],
         );
 
@@ -1015,18 +1113,18 @@ final class AdminSettingsControllerTest extends TestCase
         $repo->expects($this->never())->method('set');
 
         $controller = new AdminSettingsController($repo);
-        // marker_detection.intro_max_duration expects int; a non-numeric string
+        // newsletter.send_hour expects int; a non-numeric string
         // is invalid. (This used hwaccel.probe_timeout until phlix-shared
         // v0.26.0 deleted that consumerless key.)
         $response = $controller->update(
-            $this->makeRequest(['settings' => ['marker_detection.intro_max_duration' => 'not-a-number']]),
+            $this->makeRequest(['settings' => ['newsletter.send_hour' => 'not-a-number']]),
             [],
         );
 
         $this->assertSame(400, $response->statusCode);
         /** @var array{errors: array<string, mixed>} $body */
         $body = json_decode($response->body, true);
-        $this->assertArrayHasKey('marker_detection.intro_max_duration', $body['errors']);
+        $this->assertArrayHasKey('newsletter.send_hour', $body['errors']);
     }
 
     public function testUpdateRejectsEmptyOrMissingSettingsObject(): void
@@ -1087,19 +1185,22 @@ final class AdminSettingsControllerTest extends TestCase
     public function testUpdateAcceptsFloatKeyAndCoercesIt(): void
     {
         $repo = $this->createMock(SettingsRepository::class);
-        // marker_detection.similarity_threshold is a float key — exercises the
-        // valueMatchesType() float arm (line 231-232) and the coerce() float
-        // arm (line 256). A numeric string is accepted and coerced to float.
+        // A float key exercises the valueMatchesType() float arm and the coerce()
+        // float arm: a numeric string is accepted and coerced to float. Synthetic,
+        // because the schema no longer declares any `number` property — see
+        // withSyntheticFloatKey().
+        $restore = $this->withSyntheticFloatKey('ffmpeg.synthetic_float', 0.0, 1.0);
         $repo->expects($this->once())
             ->method('set')
-            ->with('marker_detection.similarity_threshold', 0.42, 'float');
+            ->with('ffmpeg.synthetic_float', 0.42, 'float');
         $repo->method('getEffectiveMany')->willReturn(['values' => [], 'overridden' => []]);
 
         $controller = new AdminSettingsController($repo);
         $response = $controller->update(
-            $this->makeRequest(['settings' => ['marker_detection.similarity_threshold' => '0.42']]),
+            $this->makeRequest(['settings' => ['ffmpeg.synthetic_float' => '0.42']]),
             [],
         );
+        $restore();
 
         $this->assertSame(200, $response->statusCode);
     }
@@ -1150,12 +1251,12 @@ final class AdminSettingsControllerTest extends TestCase
         // not in ['1','true'] → false).
         $repo->expects($this->once())
             ->method('set')
-            ->with('subtitles.burn_in_by_default', false, 'bool');
+            ->with('trickplay.enabled', false, 'bool');
         $repo->method('getEffectiveMany')->willReturn(['values' => [], 'overridden' => []]);
 
         $controller = new AdminSettingsController($repo);
         $response = $controller->update(
-            $this->makeRequest(['settings' => ['subtitles.burn_in_by_default' => '0']]),
+            $this->makeRequest(['settings' => ['trickplay.enabled' => '0']]),
             [],
         );
 

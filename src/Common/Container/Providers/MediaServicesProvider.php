@@ -583,7 +583,9 @@ final class MediaServicesProvider implements ServiceProviderInterface
             \Phlix\Media\MediaAsset\MediaAssetGenerationJob::class => autowire()
                 ->constructorParameter('ffmpeg', get(FfmpegRunner::class))
                 ->constructorParameter('itemRepo', get(ItemRepository::class))
-                ->constructorParameter('db', get(Connection::class)),
+                ->constructorParameter('db', get(Connection::class))
+                // Gates sprite generation on the `trickplay.enabled` setting.
+                ->constructorParameter('settings', get(\Phlix\Admin\SettingsRepository::class)),
 
             // Media asset worker: autowires with MediaAssetJobStore, MediaAssetGenerationJob,
             // optional LoggerInterface (defaults to NullLogger), and max_concurrent config.

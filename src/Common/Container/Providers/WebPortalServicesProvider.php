@@ -158,6 +158,14 @@ final class WebPortalServicesProvider implements ServiceProviderInterface
                         ? new TranscodeController($transcodeManager, $transcodeRatingGate)
                         : null;
 
+                    $settingsRepo = null;
+                    if ($c->has(\Phlix\Admin\SettingsRepository::class)) {
+                        $resolved = $c->get(\Phlix\Admin\SettingsRepository::class);
+                        $settingsRepo = $resolved instanceof \Phlix\Admin\SettingsRepository
+                            ? $resolved
+                            : null;
+                    }
+
                     return new WebPortalRouter(
                         $libraryManager,
                         $itemRepository,
@@ -181,6 +189,9 @@ final class WebPortalServicesProvider implements ServiceProviderInterface
                         $recommendationService,
                         null, // CollectionService (not wired in this context)
                         $musicLibraryService,
+                        null, // StreamProbeBackfill (not wired in this context)
+                        // Backs the `subtitles.default_language` server-wide default.
+                        $settingsRepo,
                     );
                 }
             ),

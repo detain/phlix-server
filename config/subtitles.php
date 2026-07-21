@@ -13,7 +13,7 @@ return [
     'enabled' => true,
 
     // Default language for subtitle selection when multiple tracks exist
-    'default_language' => 'eng',
+    'default_language' => 'en',
 
     // When true: burn in subtitles unless explicitly disabled
     // When false: prefer soft subtitles (external tracks) for players that support them

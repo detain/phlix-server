@@ -985,12 +985,33 @@ try {
 // announcements are broadcast network messages that don't need redundancy.
 // -----------------------------------------------------------------------------
 
+// WHERE `dlna.enabled` IS HONOURED — and why it is split across two places.
+// Exactly the same reasoning as the `process.<key>.enabled` gate above: this
+// runs in the MASTER, before Worker::runAll(), so it cannot consult the
+// `server_settings` overrides without (a) a blocking DB read whose connection
+// every fork would then inherit, and (b) still not being re-evaluated by the
+// admin "Restart server" button, which sends SIGUSR2 — a GRACEFUL RELOAD that
+// re-forks children from this same, already-executed master. So the spawn
+// decision below stays on the config-file default (which ships `true`), and the
+// EFFECTIVE value is applied inside SsdpAdvertiser::onWorkerStart, where it IS
+// re-read on every reload: an advertiser disabled by an admin override starts
+// and idles without opening its multicast socket. The one case this cannot
+// cover is ENABLING an advertiser that `config/dlna.php` itself disables — no
+// Worker was ever spawned to re-check — which is an operator editing the file
+// on disk, not a UI action. That asymmetry, and the "one idle process" cost,
+// are stated in the key's admin-facing helpText, so the admin sees it at the
+// switch rather than only here.
 try {
     $serverConfig = is_array($config['server'] ?? null) ? $config['server'] : [];
     $dlnaPort = is_int($serverConfig['port'] ?? null) ? $serverConfig['port'] : 8096;
-    $dlnaSsdpWorker = new \Phlix\Dlna\SsdpAdvertiser(null, $dlnaPort);
-    $dlnaSsdpWorker->count = 1;
-    $dlnaSsdpWorker->name = 'phlix-dlna-ssdp';
+    /** @var array{enabled?: bool} $dlnaFileConfig */
+    $dlnaFileConfig = require __DIR__ . '/config/dlna.php';
+    if (!is_array($dlnaFileConfig) || ($dlnaFileConfig['enabled'] ?? true) !== false) {
+        $dbConfigPath = is_string($config['db_config_path'] ?? null) ? $config['db_config_path'] : null;
+        $dlnaSsdpWorker = new \Phlix\Dlna\SsdpAdvertiser(null, $dlnaPort, $dbConfigPath);
+        $dlnaSsdpWorker->count = 1;
+        $dlnaSsdpWorker->name = 'phlix-dlna-ssdp';
+    }
 } catch (\Throwable $e) {
     // The SSDP advertiser is best-effort; never block the HTTP server.
     trigger_error('Failed to set up DLNA SSDP advertiser worker: ' . $e->getMessage(), E_USER_WARNING);

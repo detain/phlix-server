@@ -12,6 +12,7 @@ declare(strict_types=1);
 namespace Phlix\Dlna;
 
 use Exception;
+use Phlix\Config\EffectiveConfig;
 use Workerman\Worker;
 
 /**
@@ -57,21 +58,57 @@ class SsdpAdvertiser extends Worker
     private int $timerId = 0;
 
     /**
+     * Path to `config/database.php`, used to bootstrap the settings overlay
+     * inside this worker's own process. Null in tests and in any caller that
+     * has already bootstrapped {@see EffectiveConfig}.
+     */
+    private ?string $dbConfigPath;
+
+    /**
      * Create a new SsdpAdvertiser.
      *
      * @param string|null $ipAddress IP address for LOCATION header (auto-detected if null)
      * @param int $port Port for LOCATION header
+     * @param string|null $dbConfigPath Path to `config/database.php`, so this
+     *        worker can read the effective `dlna.enabled` in its own fork
      *
      * @since 0.12.0
      */
-    public function __construct(?string $ipAddress = null, int $port = 8080)
+    public function __construct(?string $ipAddress = null, int $port = 8080, ?string $dbConfigPath = null)
     {
         parent::__construct();
 
         $this->ipAddress = $ipAddress;
         $this->port = $port;
+        $this->dbConfigPath = $dbConfigPath;
 
         $this->onWorkerStart = function (SsdpAdvertiser $worker): void {
+            // Load the persisted `server_settings` overrides into THIS fork.
+            // The master deliberately does not do this (its DB connection would
+            // be inherited by every child), so the effective value is resolved
+            // here — which also means it is re-read on every graceful reload.
+            // Never throws: an unreachable settings store yields the file
+            // defaults. {@see \Phlix\Config\EffectiveConfig}
+            //
+            // Conditional on being TOLD where the database config lives. The
+            // rule is "if I was given a path, loading the overlay is my job;
+            // otherwise the surrounding process has already bootstrapped it and
+            // re-running it here would CLOBBER that state" — which is exactly
+            // what an unconditional call did to this class's own tests, and
+            // would equally clobber any caller that had already bootstrapped.
+            // start.php always passes the path, so the production fork always
+            // loads its own overrides.
+            if ($this->dbConfigPath !== null) {
+                EffectiveConfig::bootstrap(null, $this->dbConfigPath);
+            }
+
+            // Honour an admin `dlna.enabled = false` override. Idle rather than
+            // exit, so a graceful reload can pick the value up again without
+            // the master having to re-fork a worker it no longer knows about.
+            if (!self::isEnabled()) {
+                return;
+            }
+
             $this->socket = $this->createUdpSocket();
             if ($this->socket === null) {
                 return;
@@ -105,6 +142,38 @@ class SsdpAdvertiser extends Worker
                 $this->socket = null;
             }
         };
+    }
+
+    /**
+     * Is this server advertising itself to DLNA/UPnP devices?
+     *
+     * Backs the `dlna.enabled` setting. Read through
+     * {@see EffectiveConfig::file()} (memoised per bootstrap generation), so an
+     * admin override applies on the next graceful reload without needing the
+     * master process to re-evaluate anything.
+     *
+     * ## What this does and does NOT gate
+     *
+     * It gates the SSDP advertiser — the broadcast that makes this server
+     * appear in a smart TV's source list — and nothing else. It deliberately
+     * does not claim to gate DLNA *browsing*, because the ContentDirectory
+     * service is not currently registered at all: `Application::loadCdsRoutes()`
+     * resolves {@see CdsServer} inside a bare `catch (\Throwable)`, and that
+     * resolution always throws because {@see DlnaServer} has no DI registration
+     * and un-autowirable `string` constructor parameters. See `config/dlna.php`
+     * for the production evidence. If that is ever fixed, extend the gate to
+     * the CDS routes and widen the schema `helpText` in the same change.
+     *
+     * Defaults to TRUE when the key is absent, so existing installs keep
+     * advertising exactly as they did before `config/dlna.php` existed.
+     *
+     * @return bool
+     *
+     * @since 1.3.0
+     */
+    public static function isEnabled(): bool
+    {
+        return (EffectiveConfig::file('dlna')['enabled'] ?? true) !== false;
     }
 
     /**

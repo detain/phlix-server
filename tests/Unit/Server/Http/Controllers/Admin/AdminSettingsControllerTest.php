@@ -248,11 +248,16 @@ final class AdminSettingsControllerTest extends TestCase
             'process.marker-detection.enabled'          => 'bool',
             'process.media-asset.enabled'               => 'bool',
             'process.similarity.enabled'                => 'bool',
+
+            // SSDP advertiser toggle (config/dlna.php). Gates the DLNA
+            // ADVERTISEMENT only, not DLNA browsing — the ContentDirectory
+            // service is not currently registered at all. See config/dlna.php.
+            'dlna.enabled'                              => 'bool',
         ];
 
         $actual = AdminSettingsController::allowedKeys();
 
-        $this->assertCount(38, $actual);
+        $this->assertCount(39, $actual);
         $this->assertEquals($expected, $actual);
     }
 
@@ -330,7 +335,7 @@ final class AdminSettingsControllerTest extends TestCase
 
         // schemaMeta() covers EVERY declared property, not just the typed ones
         // that reach allowedKeys().
-        $this->assertCount(38, $meta);
+        $this->assertCount(39, $meta);
         foreach (array_keys(AdminSettingsController::allowedKeys()) as $key) {
             $this->assertArrayHasKey($key, $meta, sprintf('%s must carry a meta block', $key));
         }

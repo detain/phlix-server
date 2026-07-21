@@ -36,6 +36,15 @@ use Workerman\Timer;
  */
 final class PluginAutoUpdateWorker
 {
+    /**
+     * Delay (seconds) before the post-boot catch-up update check.
+     *
+     * Long enough to stay off the boot path, short enough that any install which
+     * stays up a few minutes performs the check. {@see self::start()} explains
+     * why a poll-only timer never fires on a box that gets deployed to.
+     */
+    private const BOOT_CATCHUP_DELAY = 300;
+
     public function __construct(
         private readonly PluginCatalogService $catalog,
         private readonly PluginUpdateService $updates,
@@ -96,7 +105,33 @@ final class PluginAutoUpdateWorker
     {
         $this->logger()->info('PluginAutoUpdateWorker::start [poll_interval=' .
             $pollSeconds . ']');
+
+        // Steady-state poll.
         Timer::add($pollSeconds, fn(): bool => $this->runOnce());
+
+        // Catch-up check shortly after boot.
+        //
+        // This is NOT belt-and-braces — without it the feature does not work on a
+        // box that is deployed to, which is exactly what production looked like.
+        // `config/process.php` polls every 86400 s, and a bare Timer::add(86400)
+        // fires only after 24 h of UNINTERRUPTED uptime: every restart or reload
+        // resets the countdown to zero. Production restarted SIX times on
+        // 2026-07-21 alone, so the tick never arrived. The plugins log showed
+        // `PluginAutoUpdateWorker::start` on every boot and `runOnce` never once,
+        // while trakt sat at 1.2.1 against a catalog offering 1.3.0 (and anilist
+        // 0.2.0 vs 0.3.0, musicbrainz 0.2.1 vs 0.3.0). Same defect, same shape,
+        // and the same fix as the scheduled-backup timer.
+        // {@see \Phlix\Server\Core\Application::registerBackupTimer()}
+        //
+        // Deciding at boot is safe because runOnce() is idempotent twice over: it
+        // returns immediately unless the operator has opted in via
+        // PluginCatalogService::autoUpdateEnabled(), and updateAll() re-installs
+        // only plugins the catalog reports a NEWER version for, so restart churn
+        // re-checks but cannot re-install. The delay only keeps catalog HTTP and
+        // any install off the boot path — it is not a correctness guard.
+        //
+        // One-shot: Workerman's Timer::add repeats unless passed [], false.
+        Timer::add(self::BOOT_CATCHUP_DELAY, fn(): bool => $this->runOnce(), [], false);
     }
 
     /**

@@ -45,16 +45,18 @@ use Workerman\Timer;
  * **What a reload does and does NOT re-read — read this before promising a
  * user that a setting will take effect.** A reload re-forks the workers from
  * the existing master, so each child re-runs `onWorkerStart` and rebuilds its
- * DI container. What it does NOT do is re-read `config/server.php`: `start.php`
- * `include`s that file ONCE in the master and closes over the resulting
- * `$config` array, and nothing merges `server_settings` DB overrides into it at
- * boot. Consequently a setting whose consumer reads boot `$config` (rather than
- * `SettingsRepository::getEffective()`) does not change on reload — and would
- * not change on a full `systemctl restart` either. That gap covers every
- * `restart: true` schema key today. It is a known, documented architectural
- * limitation, NOT something this endpoint fixes; see
- * `docs/dev/settings-restart-gap.md`. Do not describe this endpoint as making
- * boot-only settings take effect.
+ * DI container. `start.php` still `include`s `config/server.php` ONCE in the
+ * master and closes over the resulting `$config` array — but each child's
+ * `onWorkerStart` now calls
+ * {@see \Phlix\Config\EffectiveConfig::bootstrapAndOverlay()} on that array
+ * BEFORE `ContainerFactory::create()`, so the `server_settings` overrides ARE
+ * merged in per worker start and a reload genuinely applies them. Fifteen of
+ * the sixteen `restart: true` schema keys take effect through this endpoint;
+ * the exceptions are documented in `docs/dev/settings-restart-gap.md` —
+ * notably `hwaccel.probe_timeout`, which has no consumer at all, and
+ * `process.<worker>.enabled`, where a reload can stop a worker's poll timer
+ * but cannot spawn a Worker group that the master never forked. Consult that
+ * document before telling a user a specific setting applies on restart.
  *
  * Route is gated by {@see \Phlix\Server\Http\Middleware\AdminMiddleware}
  * (registered in {@see \Phlix\Server\Http\Routes\AdminRoutes}).

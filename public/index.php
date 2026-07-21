@@ -33,6 +33,7 @@ require_once __DIR__ . '/../vendor/autoload.php';
 use Phlix\Auth\AuthManager;
 use Phlix\Auth\RateLimitException;
 use Phlix\Common\Container\ContainerFactory;
+use Phlix\Config\EffectiveConfig;
 use Phlix\Server\Core\Application;
 use Phlix\Server\Http\Middleware\AccessScheduleMiddleware;
 use Phlix\Server\Http\Middleware\CorsManager;
@@ -61,6 +62,14 @@ $config['web_portal']         = array_merge(
     is_array($config['web_portal'] ?? null) ? $config['web_portal'] : [],
     ['template_dir' => __DIR__ . '/templates']
 );
+
+// Overlay the persisted `server_settings` overrides onto the boot config BEFORE
+// the container is built, so every DI provider that reads boot config observes
+// the EFFECTIVE value. Mirrors start.php's onWorkerStart (§7 dual entry points)
+// so the CGI/FPM path and the Workerman daemon cannot drift. Never throws: an
+// unreachable settings store leaves $config untouched.
+// {@see \Phlix\Config\EffectiveConfig}
+$config = EffectiveConfig::bootstrapAndOverlay($config);
 
 $container = ContainerFactory::create($config);
 

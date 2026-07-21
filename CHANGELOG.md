@@ -38,6 +38,41 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   leaving the stored value untouched — without that guard, fixing the GET alone would have made the
   first Save overwrite all three secrets with the literal `***`.
 
+### Fixed
+
+- **`restart: true` settings now actually take effect on restart.** The shared settings schema marks
+  16 boot-only keys `"restart": true` and the admin SPA renders "requires a server restart to take
+  effect" beside each one — a promise nothing kept. `SettingsRepository::getEffective()` resolves
+  `override ?? default`, but almost nothing called it: every other consumer read the boot `$config`
+  array (which `start.php` `include`s ONCE in the master and closes over) or `include`d a
+  `config/*.php` file straight from disk, and **nothing merged the `server_settings` table into
+  either**. Changing one of these settings and restarting — even a full `systemctl restart` — did
+  nothing. New `Phlix\Config\EffectiveConfig` loads the persisted overrides once per process and
+  overlays them onto the config defaults using the same dotted-key semantics as
+  `SettingsRepository` (leading segment = config *file*, remainder = path inside it). It is called
+  as `bootstrapAndOverlay($config)` at the top of every `onWorkerStart` in `start.php` (HTTP,
+  WebSocket, hub-heartbeat, relay-tunnel, managed workers) **and** in `public/index.php`, before
+  `ContainerFactory::create()`, so every DI provider that reads boot config observes the effective
+  value with no per-provider wiring; consumers that bypass `$config` by `include`ing a config file
+  directly (`HwAccelConfig::get()`, `FfmpegRunner::getTranscodeTimeout()`,
+  `Recorder::getTranscodeTimeout()`) now read `EffectiveConfig::file()` instead.
+  **Note the recommended design was wrong and was corrected:** overlaying only the boot `$config`
+  array covers just 4 of the 16 keys, because dotted keys name config *files* and only
+  `server.hls.*` lives in `config/server.php`.
+  **15 of 16 keys are now live after a restart or the in-app graceful reload.** Two honest
+  exceptions, documented rather than hidden: `hwaccel.probe_timeout` has **no consumer at all**
+  (`HwaccelRegistry` is constructed without this config) and is additionally shadowed by
+  `config/transcoding.php`'s own always-present `probe_timeout` — it needs a `phlix-shared`
+  follow-up to either wire it up or drop the key; and `process.<worker>.enabled` can *disable* a
+  worker on reload (the gate moved into the worker's own `onWorkerStart`, which skips arming the
+  poll timer and logs) but cannot *enable* one that `config/process.php` disables on disk, because
+  the master's spawn loop runs before `Worker::runAll()` and Workerman cannot fork a Worker group
+  afterwards. A settings-store failure — DB down, `server_settings` missing on a fresh install —
+  degrades to the shipped file defaults rather than crash-looping the worker, and an override is
+  applied only where the default already exists, so a malformed or unknown persisted row cannot
+  inject a config key. Per-key status table and the reasoning behind both exceptions live in
+  `docs/dev/settings-restart-gap.md`, rewritten from "known gap" to reflect the fix.
+
 ### Added
 
 - **`enum` / `minimum` / `maximum` are now enforced on `PUT /api/v1/admin/settings`.** The endpoint

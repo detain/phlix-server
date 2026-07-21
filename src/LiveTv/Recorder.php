@@ -1277,30 +1277,27 @@ class Recorder
     /**
      * Get the configured transcode timeout in seconds.
      *
+     * Reads the EFFECTIVE `config/ffmpeg.php` — file default merged with any
+     * admin `ffmpeg.transcode_timeout` override — via
+     * {@see \Phlix\Config\EffectiveConfig::file()}. Mirrors
+     * {@see \Phlix\Media\Transcoding\FfmpegRunner::getTranscodeTimeout()}; both
+     * previously `include`d the config file directly behind a method-level
+     * `static`, which bypassed the settings store.
+     *
      * @return int Timeout in seconds (0 = no timeout)
      *
      * @since SV-4.2
      */
     private function getTranscodeTimeout(): int
     {
-        static $timeout = null;
-        if ($timeout === null) {
-            $configPath = defined('PHLIX_CONFIG_PATH') ? PHLIX_CONFIG_PATH : __DIR__ . '/../../config';
-            $configFile = $configPath . '/ffmpeg.php';
-            if (file_exists($configFile)) {
-                /** @var array<string, mixed> $config */
-                $config = include $configFile;
-                $timeoutSecs = $config['transcode_timeout'] ?? null;
-                $timeout = match (true) {
-                    is_int($timeoutSecs) => $timeoutSecs,
-                    is_string($timeoutSecs) && is_numeric($timeoutSecs) => (int) $timeoutSecs,
-                    default => 0,
-                };
-            } else {
-                $timeout = 0;
-            }
-        }
-        return $timeout;
+        /** @var mixed $timeoutSecs */
+        $timeoutSecs = \Phlix\Config\EffectiveConfig::file('ffmpeg')['transcode_timeout'] ?? null;
+
+        return match (true) {
+            is_int($timeoutSecs) => $timeoutSecs,
+            is_string($timeoutSecs) && is_numeric($timeoutSecs) => (int) $timeoutSecs,
+            default => 0,
+        };
     }
 
     /**

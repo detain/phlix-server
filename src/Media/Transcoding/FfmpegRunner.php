@@ -962,7 +962,12 @@ class FfmpegRunner
     /**
      * Get the configured transcode timeout in seconds.
      *
-     * Loads from ffmpeg.php config on first call, then caches.
+     * Reads the EFFECTIVE `config/ffmpeg.php` — file default merged with any
+     * admin `ffmpeg.transcode_timeout` override — via
+     * {@see \Phlix\Config\EffectiveConfig::file()}, which memoises the loaded
+     * file per bootstrap generation. This replaced a direct `include` cached in
+     * a method-level `static`, which bypassed the settings store entirely and
+     * made the setting's schema `"restart": true` promise false.
      *
      * @return int Timeout in seconds (0 = no timeout)
      *
@@ -970,24 +975,14 @@ class FfmpegRunner
      */
     private function getTranscodeTimeout(): int
     {
-        static $timeout = null;
-        if ($timeout === null) {
-            $configPath = defined('PHLIX_CONFIG_PATH') ? PHLIX_CONFIG_PATH : __DIR__ . '/../../../config';
-            $configFile = $configPath . '/ffmpeg.php';
-            if (file_exists($configFile)) {
-                /** @var array<string, mixed> $config */
-                $config = include $configFile;
-                $timeoutSecs = $config['transcode_timeout'] ?? null;
-                $timeout = match (true) {
-                    is_int($timeoutSecs) => $timeoutSecs,
-                    is_string($timeoutSecs) && is_numeric($timeoutSecs) => (int) $timeoutSecs,
-                    default => 0,
-                };
-            } else {
-                $timeout = 0;
-            }
-        }
-        return $timeout;
+        /** @var mixed $timeoutSecs */
+        $timeoutSecs = \Phlix\Config\EffectiveConfig::file('ffmpeg')['transcode_timeout'] ?? null;
+
+        return match (true) {
+            is_int($timeoutSecs) => $timeoutSecs,
+            is_string($timeoutSecs) && is_numeric($timeoutSecs) => (int) $timeoutSecs,
+            default => 0,
+        };
     }
 
     /**

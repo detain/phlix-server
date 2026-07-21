@@ -28,6 +28,7 @@ use Phlix\Common\Logger\LogChannels;
 use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Common\RateLimit\RateLimiterInterface;
 use Phlix\Common\RateLimit\RateLimitProfiles;
+use Phlix\Config\EffectiveConfig;
 use Phlix\Server\Core\Application;
 use Phlix\Server\Http\RequestAuthenticator;
 use Phlix\Server\Runtime\PidFile;
@@ -169,6 +170,14 @@ $httpWorker->count = 14;
 $httpWorker->name = 'phlix-server-http';
 $httpWorker->onWorkerStart = static function (Worker $w) use ($config, $publicRoot, $applyCuratedCoroutineHooks): void {
     $applyCuratedCoroutineHooks();
+    // Overlay the persisted `server_settings` overrides onto the boot config
+    // BEFORE the container is built, so every DI provider that reads boot
+    // config observes the EFFECTIVE value. This is what makes the schema's
+    // `"restart": true` keys actually apply on a restart/graceful reload —
+    // the master's $config is frozen at fork, but this runs per worker start.
+    // Never throws: an unreachable settings store leaves $config untouched.
+    // {@see \Phlix\Config\EffectiveConfig}
+    $config = EffectiveConfig::bootstrapAndOverlay($config);
     $container = ContainerFactory::create($config);
     /** @var AuthManager $authManager */
     $authManager = $container->get(AuthManager::class);
@@ -499,6 +508,10 @@ try {
     $wsWorker->onWorkerStart = static function (Worker $w) use ($config, $applyCuratedCoroutineHooks): void {
         $applyCuratedCoroutineHooks();
 
+        // Effective-config overlay, mirroring the HTTP worker (§7 dual entry
+        // points / every fork). {@see \Phlix\Config\EffectiveConfig}
+        $config = EffectiveConfig::bootstrapAndOverlay($config);
+
         // Build the container inside the fork so each worker owns its own state.
         $container = ContainerFactory::create($config);
 
@@ -659,6 +672,9 @@ try {
     $hubHeartbeatWorker->name = 'phlix-hub-heartbeat';
     $hubHeartbeatWorker->onWorkerStart = static function (Worker $w) use ($config, $applyCuratedCoroutineHooks): void {
         $applyCuratedCoroutineHooks();
+        // Effective-config overlay, mirroring the HTTP worker.
+        // {@see \Phlix\Config\EffectiveConfig}
+        $config = EffectiveConfig::bootstrapAndOverlay($config);
         // Built inside the fork so the child owns its own DB/HTTP state.
         $container = ContainerFactory::create($config);
         /** @var \Phlix\Hub\HubApplication $hubApp */
@@ -704,6 +720,9 @@ try {
     $relayTunnelWorker->name = 'phlix-relay-tunnel';
     $relayTunnelWorker->onWorkerStart = static function (Worker $w) use ($config, $applyCuratedCoroutineHooks): void {
         $applyCuratedCoroutineHooks();
+        // Effective-config overlay, mirroring the HTTP worker.
+        // {@see \Phlix\Config\EffectiveConfig}
+        $config = EffectiveConfig::bootstrapAndOverlay($config);
         // Built inside the fork so the child owns its own DB/HTTP state.
         $container = ContainerFactory::create($config);
 
@@ -806,6 +825,23 @@ try {
 // Earlier this spawn loop lived here but was dropped during the Swoole
 // event-loop refactor, leaving the `library_scan_jobs` queue with nothing to
 // drain unless an operator ran the standalone script by hand.
+//
+// WHERE `process.<key>.enabled` IS HONOURED — and why it is not honoured here.
+// This loop runs in the MASTER, before Worker::runAll(), and Workerman cannot
+// fork a new Worker group afterwards. It therefore CANNOT consult the
+// `server_settings` overrides: doing so would (a) require a blocking DB read in
+// the master whose connection would then be inherited across every fork, and
+// (b) still not be re-evaluated by the admin "Restart server" button, which
+// sends SIGUSR2 — a GRACEFUL RELOAD that re-forks children from this same,
+// already-executed master. So the spawn decision stays on the config-file
+// default (all five ship `enabled => true`), and the EFFECTIVE value is applied
+// inside onWorkerStart below, where it IS re-read on every reload: a worker
+// disabled by an admin override starts, logs, and idles without arming its
+// poll timer. Net effect for the operator: toggling `process.<key>.enabled` in
+// the admin UI takes effect on the next reload/restart, exactly as the schema's
+// `"restart": true` flag promises. The one case this cannot cover is ENABLING a
+// worker that `config/process.php` itself disables — no Worker was ever spawned
+// to re-check — which is an operator editing the file on disk, not a UI action.
 // -----------------------------------------------------------------------------
 
 // Managed-worker key → its DI-resolvable class exposing `start(int $pollSeconds)`.
@@ -833,10 +869,28 @@ try {
                 $config,
                 $applyCuratedCoroutineHooks,
                 $workerClass,
+                $procKey,
                 $pollSeconds
             ): void {
                 $applyCuratedCoroutineHooks();
                 try {
+                    // Effective-config overlay, mirroring the HTTP worker.
+                    // {@see \Phlix\Config\EffectiveConfig}
+                    $config = EffectiveConfig::bootstrapAndOverlay($config);
+
+                    // Honour an admin `process.<key>.enabled = false` override.
+                    // See the block comment above for why this gate lives here
+                    // (in the fork, re-evaluated on every graceful reload)
+                    // rather than in the master's spawn decision.
+                    $procSettings = EffectiveConfig::file('process')[$procKey] ?? null;
+                    if (is_array($procSettings) && ($procSettings['enabled'] ?? true) !== true) {
+                        LoggerFactory::get(LogChannels::MEDIA)->info(
+                            'Managed worker disabled by settings override; idling',
+                            ['process' => $procKey, 'worker_class' => $workerClass],
+                        );
+                        return;
+                    }
+
                     // Built inside the fork so the child owns its own DB/HTTP state.
                     $container = ContainerFactory::create($config);
                     /** @var \Phlix\Media\Library\LibraryScanWorker|\Phlix\Plugins\Catalog\PluginAutoUpdateWorker|\Phlix\Media\Markers\Detection\BackgroundDetectorWorker|\Phlix\Media\MediaAsset\MediaAssetWorker|\Phlix\Media\SimilarityWorker $managed */

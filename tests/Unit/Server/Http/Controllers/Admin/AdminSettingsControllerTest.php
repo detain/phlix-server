@@ -284,6 +284,10 @@ final class AdminSettingsControllerTest extends TestCase
             // string-typed genres mode → `string`.
             'metadata.provider_priority'                => 'json',
             'metadata.genres_mode'                      => 'string',
+            // Phase 3: boolean overwrite gate → internal `bool`. Read-path class
+            // (a) LIVE via MetadataOverwritePolicy; consumed by
+            // LibraryMetadataMatcher::shouldSkipOverwrite().
+            'metadata.overwrite_existing'               => 'bool',
 
             'relay.reconnect_delay'                     => 'int',
             'relay.ping_interval'                       => 'int',
@@ -316,7 +320,7 @@ final class AdminSettingsControllerTest extends TestCase
 
         $actual = AdminSettingsController::allowedKeys();
 
-        $this->assertCount(68, $actual);
+        $this->assertCount(69, $actual);
         $this->assertEquals($expected, $actual);
     }
 
@@ -394,7 +398,7 @@ final class AdminSettingsControllerTest extends TestCase
 
         // schemaMeta() covers EVERY declared property, not just the typed ones
         // that reach allowedKeys().
-        $this->assertCount(68, $meta);
+        $this->assertCount(69, $meta);
         foreach (array_keys(AdminSettingsController::allowedKeys()) as $key) {
             $this->assertArrayHasKey($key, $meta, sprintf('%s must carry a meta block', $key));
         }

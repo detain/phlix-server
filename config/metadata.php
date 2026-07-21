@@ -59,4 +59,14 @@ return [
 
     // 'first' (first-non-empty, behavior-preserving) or 'union'.
     'genres_mode' => 'first',
+
+    // Whether a metadata (re)match may overwrite an item that already has
+    // resolved metadata. TRUE (default) is the historical unconditional
+    // `array_merge($existing, $resolved)` behaviour, so nothing changes at the
+    // default. Read LIVE via SettingsRepository — this file is NOT composed into
+    // config/server.php, so a boot $appConfig['metadata'] lookup would miss it —
+    // and consumed by Phlix\Media\Metadata\MetadataOverwritePolicy at
+    // LibraryMetadataMatcher::shouldSkipOverwrite(). Keep in sync with the shared
+    // server-settings.schema.json `metadata.overwrite_existing` default.
+    'overwrite_existing' => true,
 ];

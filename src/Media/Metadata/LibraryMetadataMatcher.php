@@ -179,6 +179,21 @@ class LibraryMetadataMatcher
     private ArtworkDownloadPolicy $artworkDownloadPolicy;
 
     /**
+     * Gate for `metadata.overwrite_existing`, consulted by
+     * {@see shouldSkipOverwrite()} — the SINGLE decision point that governs
+     * every `array_merge($existing, $resolved)` metadata-overwrite site in this
+     * class (movie, series, season, episode and all four interactive-apply
+     * branches), reached through the three (re)resolve entry points
+     * ({@see matchItem()}, {@see matchSeries()}, {@see applyMatchResolved()}).
+     *
+     * Never null: legacy construction / unit tests substitute a store-less
+     * policy, which reports the shipped default (overwrite ENABLED) — i.e.
+     * exactly the unconditional `array_merge` behaviour before this gate
+     * existed, so nothing changes at the default.
+     */
+    private MetadataOverwritePolicy $overwritePolicy;
+
+    /**
      * Scan-scoped map of TMDB poster path => the local artwork override fields
      * ({@see cacheArtworkLocally()} produces `poster_url` / `poster_srcset` /
      * `poster_path`) generated the FIRST time that path was downloaded this run.
@@ -297,6 +312,14 @@ class LibraryMetadataMatcher
      *                                                   substitutes a store-less
      *                                                   policy = downloads enabled,
      *                                                   the pre-setting behaviour.
+     * @param MetadataOverwritePolicy|null $overwritePolicy Gate for
+     *                                                   `metadata.overwrite_existing`.
+     *                                                   Null (legacy construction /
+     *                                                   unit tests) substitutes a
+     *                                                   store-less policy = overwrite
+     *                                                   ENABLED, the pre-setting
+     *                                                   behaviour (unconditional
+     *                                                   array_merge).
      *
      * @since 0.21.0
      */
@@ -313,7 +336,8 @@ class LibraryMetadataMatcher
         ?FuzzyMatcher $fuzzyMatcher = null,
         ?ArtworkStorage $artworkStorage = null,
         bool $forceRefresh = false,
-        ?ArtworkDownloadPolicy $artworkDownloadPolicy = null
+        ?ArtworkDownloadPolicy $artworkDownloadPolicy = null,
+        ?MetadataOverwritePolicy $overwritePolicy = null
     ) {
         $this->items = $items;
         $this->resolver = $resolver;
@@ -335,6 +359,60 @@ class LibraryMetadataMatcher
         // gets a store-less one, which yields the shipped default (downloads
         // ENABLED) — i.e. exactly the behaviour before the gate existed.
         $this->artworkDownloadPolicy = $artworkDownloadPolicy ?? new ArtworkDownloadPolicy();
+        // Never null internally: a legacy construction / unit test that omits
+        // the policy gets a store-less one, which yields the shipped default
+        // (overwrite ENABLED) — i.e. exactly the unconditional array_merge
+        // behaviour before the gate existed.
+        $this->overwritePolicy = $overwritePolicy ?? new MetadataOverwritePolicy();
+    }
+
+    /**
+     * The SINGLE decision point behind `metadata.overwrite_existing`.
+     *
+     * Returns TRUE when a (re)match must SKIP an item WHOLESALE because the
+     * operator has turned overwrite OFF and the item ALREADY carries resolved
+     * metadata (a `metadata_refreshed_at` stamp is present) — mirroring the
+     * manual-override short-circuit in {@see matchItem()}. There is no per-field
+     * provenance in the pipeline, so "don't overwrite" can only mean a
+     * whole-item skip; a never-resolved item still returns false here and is
+     * enriched normally (nothing to protect).
+     *
+     * At the shipped default (overwrite ON) this ALWAYS returns false, so
+     * nothing is skipped and behaviour is byte-for-byte identical to before this
+     * setting existed (plan_settings.md §4 rule 7).
+     *
+     * Consulted at the THREE (re)resolve entry points — {@see matchItem()},
+     * {@see matchSeries()} and {@see applyMatchResolved()} — which between them
+     * gate EVERY `array_merge($existing, $resolved)` metadata-overwrite site in
+     * this class (movie item, series root, season patch on both the interactive
+     * and batch paths, episode patch, and all four interactive-apply branches),
+     * so no single site can drift from the others.
+     *
+     * @param array<string, mixed> $item Hydrated media-item row (must carry the
+     *        `metadata_refreshed_at` column, as every row from
+     *        {@see ItemRepository::getByLibrary()} / {@see ItemRepository::findById()}
+     *        does). An absent/empty stamp is treated as "never resolved", which
+     *        fails safe toward the historical overwrite behaviour.
+     *
+     * @return bool True to skip the (re)match for this item.
+     */
+    private function shouldSkipOverwrite(array $item): bool
+    {
+        if ($this->overwritePolicy->overwriteExisting()) {
+            return false;
+        }
+
+        // Mirror the batch pre-skip predicate in matchBatchConcurrently(): an
+        // item that has been through persistMetadata() carries a
+        // metadata_refreshed_at stamp. Absent/empty => never resolved => still
+        // enrich it (there is nothing to preserve).
+        $refreshedAt = $item['metadata_refreshed_at'] ?? null;
+        if (is_string($refreshedAt)) {
+            $refreshedAt = trim($refreshedAt);
+            return $refreshedAt !== '' && $refreshedAt !== '0000-00-00 00:00:00';
+        }
+
+        return $refreshedAt !== null;
     }
 
     /**
@@ -769,6 +847,27 @@ class LibraryMetadataMatcher
     ): array {
         $itemType = $item['type'] ?? null;
         $mode = $type === 'tv' ? 'tv' : 'movie';
+
+        // `metadata.overwrite_existing` gate: when overwrite is off and this
+        // item already has resolved metadata, skip the interactive apply
+        // WHOLESALE — none of this method's four array_merge($existing,$resolved)
+        // branches, nor applyToSeason()/applyToEpisode()/enrichSeriesChildren()
+        // downstream, run. No-op at the shipped default (overwrite on).
+        if ($this->shouldSkipOverwrite($item)) {
+            $this->logger->info('LibraryMetadataMatcher: interactive apply skipped — overwrite disabled, item already resolved', [
+                'item_id' => $itemId,
+                'tmdb_id' => $tmdbId,
+                'mode' => $mode,
+            ]);
+            return [
+                'item_id' => $itemId,
+                'mode' => $mode,
+                'tmdb_id' => $tmdbId,
+                'matched' => false,
+                'children_enriched' => 0,
+            ];
+        }
+
         $existing = $this->extractMetadata($item);
         $childrenEnriched = 0;
         $matched = false;
@@ -1192,6 +1291,17 @@ class LibraryMetadataMatcher
             return false;
         }
 
+        // `metadata.overwrite_existing` gate: when overwrite is off and this
+        // item already has resolved metadata, skip re-resolving/re-merging it
+        // WHOLESALE (mirrors the manual-override short-circuit below). No-op at
+        // the shipped default (overwrite on).
+        if ($this->shouldSkipOverwrite($item)) {
+            $this->logger->debug('LibraryMetadataMatcher: skip re-match — overwrite disabled, item already resolved', [
+                'item_id' => $id,
+            ]);
+            return false;
+        }
+
         $existingMetadata = $this->extractMetadata($item);
 
         $name = $this->extractName($item, $existingMetadata);
@@ -1290,6 +1400,18 @@ class LibraryMetadataMatcher
 
         $id = is_string($seriesItem['id'] ?? null) ? $seriesItem['id'] : '';
         if ($id === '') {
+            return false;
+        }
+
+        // `metadata.overwrite_existing` gate: when overwrite is off and this
+        // series already has resolved metadata, skip the WHOLE subtree — the
+        // series root is not re-persisted and enrichSeriesChildren() (the batch
+        // season/episode overwrite sites) never runs. No-op at the shipped
+        // default (overwrite on).
+        if ($this->shouldSkipOverwrite($seriesItem)) {
+            $this->logger->debug('LibraryMetadataMatcher: skip series re-match — overwrite disabled, series already resolved', [
+                'item_id' => $id,
+            ]);
             return false;
         }
 

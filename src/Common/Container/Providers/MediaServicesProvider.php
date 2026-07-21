@@ -37,6 +37,7 @@ use Phlix\Media\Metadata\Imdb\ImdbLookup;
 use Phlix\Media\Metadata\FuzzyMatcher;
 use Phlix\Media\Library\ScanIgnorePatterns;
 use Phlix\Media\Metadata\LibraryMetadataMatcher;
+use Phlix\Media\Metadata\MetadataOverwritePolicy;
 use Phlix\Media\Metadata\MetadataManager;
 use Phlix\Media\Metadata\MovieMetadataResolver;
 use Phlix\Media\Metadata\Rating;
@@ -433,6 +434,15 @@ final class MediaServicesProvider implements ServiceProviderInterface
                 ->constructorParameter(
                     'artworkDownloadPolicy',
                     get(ArtworkDownloadPolicy::class)
+                )
+                // Gate for `metadata.overwrite_existing`. Named for the same
+                // PHP-DI reason as every entry above — an unnamed optional param
+                // is SKIPPED during autowiring, which would leave the matcher on
+                // a store-less policy (overwrite always on) and make the admin
+                // toggle inert while still rendering and accepting a PUT.
+                ->constructorParameter(
+                    'overwritePolicy',
+                    get(MetadataOverwritePolicy::class)
                 ),
 
             // Gate for `artwork.download_enabled`, read live per metadata
@@ -442,6 +452,15 @@ final class MediaServicesProvider implements ServiceProviderInterface
             ArtworkDownloadPolicy::class => factory(
                 static fn(ContainerInterface $c): ArtworkDownloadPolicy
                     => new ArtworkDownloadPolicy(self::optionalSettings($c))
+            ),
+
+            // Gate for `metadata.overwrite_existing`, read live at the matcher's
+            // (re)resolve decision point. Same optional-store rationale as
+            // ArtworkDownloadPolicy above: an unavailable settings store degrades
+            // to the shipped default (overwrite enabled) instead of throwing.
+            MetadataOverwritePolicy::class => factory(
+                static fn(ContainerInterface $c): MetadataOverwritePolicy
+                    => new MetadataOverwritePolicy(self::optionalSettings($c))
             ),
 
             // Effective scanner skip-pattern list behind `scanner.ignore_patterns`.

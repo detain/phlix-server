@@ -9,6 +9,39 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Added
 
+- **`metadata.overwrite_existing` — respect hand-corrected metadata on rescan.**
+  A metadata (re)match unconditionally did `array_merge($existing, $resolved)` at
+  every persist site, so freshly-resolved fields always won and there was no way to
+  stop a forced rescan (or an interactive re-apply) from clobbering a hand-corrected
+  item. Adds the `metadata.overwrite_existing` boolean setting (phlix-shared v0.41.0),
+  `default: true` so behaviour at the default is byte-for-byte identical to before.
+
+  Wired through a new `MetadataOverwritePolicy` (a direct mirror of
+  `ArtworkDownloadPolicy`: optional `SettingsRepository`, live `getEffective()` read,
+  safe-degrades to overwrite-on) that gates ONE decision point,
+  `LibraryMetadataMatcher::shouldSkipOverwrite()`. That helper is consulted at the
+  three (re)resolve entry points — `matchItem()`, `matchSeries()` and
+  `applyMatchResolved()` — which between them dominate every
+  `array_merge($existing, $resolved)` metadata-overwrite site in the class (movie
+  item, series root, the interactive AND batch season/episode enrichment sites, and
+  all four interactive-apply branches), so a subset cannot silently drift. Class (a)
+  LIVE, `restart: false`; the default lives in `config/metadata.php` (not composed
+  into `config/server.php`, read via `SettingsRepository`).
+
+  When an admin turns it OFF, an item that has ALREADY been resolved
+  (`metadata_refreshed_at` present) is skipped WHOLESALE on a forced rescan and on
+  interactive apply — not re-resolved, not re-merged — mirroring the existing
+  manual-override short-circuit in `matchItem()`. There is no per-field provenance in
+  the pipeline, so "don't overwrite" can only be a whole-item skip. Items never yet
+  resolved are still enriched. Wired in DI as a named ctor param
+  (`MediaServicesProvider`) so PHP-DI does not skip it; `MetadataOverwritePolicy`
+  registered as a factory over the optional settings store.
+
+  New tests assert the CONSEQUENCE across the movie / series-subtree / interactive
+  paths: at the default an already-resolved item is still overwritten (rule 7); with
+  the switch off it is skipped wholesale, while a never-resolved item is still
+  enriched.
+
 - **`POST /api/v1/admin/plugins/{name}/test` is now actually routed.**
   `PluginAdminController::testCredentials()` was fully implemented and reachable by
   nobody — `AdminRoutes::register()` registered every other plugin route and stopped

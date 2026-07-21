@@ -48,4 +48,29 @@ return [
          */
         'min_length' => 8,
     ],
+
+    /**
+     * Access-token lifetime in seconds (1 hour).
+     *
+     * Addressed by the dotted setting key `auth.access_ttl`. Read at MINT time
+     * by {@see \Phlix\Auth\TokenTtlPolicy} via {@see \Phlix\Auth\JwtHandler},
+     * which is the single source the token's `exp` claim, the auth response's
+     * `expires_in` and the session cookie's `Max-Age` all derive from.
+     *
+     * `TokenTtlPolicy::MIN_ACCESS_TTL`/`MAX_ACCESS_TTL` clamp this in code, so
+     * an out-of-range value here (or in an override) cannot mint a token that
+     * expires instantly or one that lives for a year.
+     */
+    'access_ttl' => 3600,
+
+    /**
+     * Refresh-token lifetime in seconds (7 days).
+     *
+     * Addressed by the dotted setting key `auth.refresh_ttl`. Clamped by
+     * `TokenTtlPolicy::MIN_REFRESH_TTL`/`MAX_REFRESH_TTL`, and additionally
+     * raised to at least the access TTL — a refresh token that expires before
+     * the access token it renews would end the session early with no way for
+     * the client to continue.
+     */
+    'refresh_ttl' => 604800,
 ];

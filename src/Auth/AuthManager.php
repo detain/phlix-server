@@ -1110,9 +1110,42 @@ class AuthManager
             'access_token' => $accessToken,
             'refresh_token' => $refreshToken,
             'token_type' => 'Bearer',
-            'expires_in' => 3600,
+            // Read from the handler that just minted the token, NOT a literal.
+            // This was a hardcoded 3600 independent of the handler's actual
+            // TTL, so the number the client was told and the `exp` baked into
+            // the token were two unrelated constants. See TokenTtlPolicy.
+            'expires_in' => $this->jwtHandler->accessTtl(),
             'user' => $user,
         ];
+    }
+
+    /**
+     * Effective access-token lifetime, from the handler that mints the tokens.
+     *
+     * Exposed so {@see \Phlix\Server\Http\Controllers\AuthController} can set
+     * cookie lifetimes from the SAME source as the tokens themselves.
+     *
+     * @return int Seconds.
+     *
+     * @since 1.3.0
+     */
+    public function accessTtl(): int
+    {
+        return $this->jwtHandler->accessTtl();
+    }
+
+    /**
+     * Effective refresh-token lifetime, from the handler that mints the tokens.
+     *
+     * @return int Seconds.
+     *
+     * @since 1.3.0
+     *
+     * @see self::accessTtl()
+     */
+    public function refreshTtl(): int
+    {
+        return $this->jwtHandler->refreshTtl();
     }
 
     /**

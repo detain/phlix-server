@@ -18,6 +18,7 @@ use Phlix\Auth\AuthProviderRegistry;
 use Phlix\Auth\DbLoginRateLimitStore;
 use Phlix\Auth\JwtHandler;
 use Phlix\Auth\ProviderManager;
+use Phlix\Auth\TokenTtlPolicy;
 use Phlix\Auth\UserProfileManager;
 use Phlix\Auth\UserRepository;
 use Phlix\Auth\WatchHistory;
@@ -32,6 +33,7 @@ use Phlix\Server\Http\Controllers\AuthController;
 use Phlix\Server\Http\Controllers\AuthProviderController;
 use Phlix\Server\Http\Controllers\WebAuthnController;
 use Phlix\Stats\StatsCollector;
+use Psr\Container\ContainerInterface;
 use Psr\EventDispatcher\EventDispatcherInterface;
 use Workerman\MySQL\Connection;
 
@@ -142,17 +144,44 @@ final class AuthServicesProvider implements ServiceProviderInterface
     public function register(ContainerBuilder $builder, array $appConfig): void
     {
         $jwtSecret = (string)(getenv('JWT_SECRET') ?: self::DEFAULT_JWT_SECRET);
+        // The TTLs deliberately do NOT come from $appConfig. They used to be
+        // read from $appConfig['jwt'], but `config/server.php` has never
+        // composed a `jwt` key, so that branch was dead and the 3600/604800
+        // fallbacks were ALWAYS what shipped. The lifetimes now live in
+        // `config/auth.php` and are resolved LIVE per mint by TokenTtlPolicy,
+        // so `auth.access_ttl` / `auth.refresh_ttl` apply without a restart.
+        // The algorithm is NOT exposed as a setting (see plan §10 Phase 5
+        // "DO NOT EXPOSE") and stays boot-only.
         $jwtConfig = is_array($appConfig['jwt'] ?? null) ? $appConfig['jwt'] : [];
-        $jwtTtl = is_numeric($jwtConfig['ttl'] ?? null) ? (int)$jwtConfig['ttl'] : 3600;
-        $jwtRefreshTtl = is_numeric($jwtConfig['refresh_ttl'] ?? null)
-            ? (int)$jwtConfig['refresh_ttl']
-            : 604800;
         $jwtAlgorithm = is_string($jwtConfig['algorithm'] ?? null) ? $jwtConfig['algorithm'] : 'HS256';
 
         $builder->addDefinitions([
             JwtHandler::class => factory(
-                static function () use ($jwtSecret, $jwtAlgorithm, $jwtTtl, $jwtRefreshTtl): JwtHandler {
-                    return new JwtHandler($jwtSecret, $jwtAlgorithm, $jwtTtl, $jwtRefreshTtl);
+                static function (ContainerInterface $c) use ($jwtSecret, $jwtAlgorithm): JwtHandler {
+                    // PHP-DI would skip the optional $ttlPolicy parameter during
+                    // autowiring and silently leave the handler on its ctor
+                    // defaults, making both settings inert (read-path class
+                    // (g)). It must be passed explicitly.
+                    //
+                    // DEFERRED, not eager: SettingsRepository needs a live DB
+                    // connection, and resolving it here would make JwtHandler —
+                    // a pure crypto object — transitively un-resolvable in any
+                    // context that has not run ConnectionPool::init() yet.
+                    $ttlPolicy = TokenTtlPolicy::deferred(
+                        static function () use ($c): ?SettingsRepository {
+                            $resolved = $c->get(SettingsRepository::class);
+
+                            return $resolved instanceof SettingsRepository ? $resolved : null;
+                        }
+                    );
+
+                    return new JwtHandler(
+                        $jwtSecret,
+                        $jwtAlgorithm,
+                        TokenTtlPolicy::DEFAULT_ACCESS_TTL,
+                        TokenTtlPolicy::DEFAULT_REFRESH_TTL,
+                        $ttlPolicy
+                    );
                 }
             ),
 

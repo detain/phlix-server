@@ -49,11 +49,24 @@ class JwtHandler
     /** @var string JWT algorithm (default: HS256) */
     private string $algorithm;
 
-    /** @var int Access token TTL in seconds (default: 3600 = 1 hour) */
+    /** @var int Fallback access token TTL used when no policy is wired */
     private int $ttl;
 
-    /** @var int Refresh token TTL in seconds (default: 604800 = 7 days) */
+    /** @var int Fallback refresh token TTL used when no policy is wired */
     private int $refreshTtl;
+
+    /**
+     * Effective-lifetime policy behind `auth.access_ttl` / `auth.refresh_ttl`.
+     *
+     * When present it OVERRIDES the constructor's `$ttl`/`$refreshTtl`, which
+     * then serve only as the no-container fallback. This handler is the single
+     * source both the auth response (`expires_in`) and the auth cookies
+     * (`Max-Age`) read their lifetimes from — see {@see TokenTtlPolicy} for why
+     * that matters.
+     *
+     * @var TokenTtlPolicy|null
+     */
+    private ?TokenTtlPolicy $ttlPolicy;
 
     /**
      * Create a new JwtHandler instance.
@@ -79,12 +92,45 @@ class JwtHandler
         string $secretKey,
         string $algorithm = 'HS256',
         int $ttl = 3600,
-        int $refreshTtl = 604800
+        int $refreshTtl = 604800,
+        ?TokenTtlPolicy $ttlPolicy = null
     ) {
         $this->secretKey = $secretKey;
         $this->algorithm = $algorithm;
         $this->ttl = $ttl;
         $this->refreshTtl = $refreshTtl;
+        $this->ttlPolicy = $ttlPolicy;
+    }
+
+    /**
+     * The effective access-token lifetime in seconds.
+     *
+     * Every consumer that needs to know how long an access token lives — the
+     * `exp` claim, the `expires_in` field of the auth response, and the session
+     * cookie's `Max-Age` — MUST read it from here rather than from its own
+     * constant, or the three disagree the moment the setting changes.
+     *
+     * @return int Seconds.
+     *
+     * @since 1.3.0
+     */
+    public function accessTtl(): int
+    {
+        return $this->ttlPolicy?->accessTtl() ?? $this->ttl;
+    }
+
+    /**
+     * The effective refresh-token lifetime in seconds.
+     *
+     * @return int Seconds.
+     *
+     * @since 1.3.0
+     *
+     * @see self::accessTtl() for why this is read rather than re-declared.
+     */
+    public function refreshTtl(): int
+    {
+        return $this->ttlPolicy?->refreshTtl() ?? $this->refreshTtl;
     }
 
     /**
@@ -111,7 +157,7 @@ class JwtHandler
             'iss' => 'phlix',
             'sub' => $userId,
             'iat' => $now,
-            'exp' => $now + $this->ttl,
+            'exp' => $now + $this->accessTtl(),
             'type' => 'access',
         ]);
 
@@ -142,7 +188,7 @@ class JwtHandler
             'iss' => 'phlix',
             'sub' => $userId,
             'iat' => $now,
-            'exp' => $now + $this->refreshTtl,
+            'exp' => $now + $this->refreshTtl(),
             'type' => 'refresh',
             'jti' => bin2hex(random_bytes(16)),
         ];

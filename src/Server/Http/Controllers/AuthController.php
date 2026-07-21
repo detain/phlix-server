@@ -376,8 +376,9 @@ class AuthController
      * register or login.
      *
      * The access cookie expires alongside the JWT (Max-Age = expires_in
-     * from {@see AuthManager::buildAuthResponse()}); the refresh cookie
-     * gets a 7-day lifetime to match JwtHandler's refresh token TTL.
+     * from {@see AuthManager::buildAuthResponse()}); the refresh cookie's
+     * Max-Age comes from {@see AuthManager::refreshTtl()}, i.e. the same
+     * handler that minted the refresh token.
      *
      * @param array<string, mixed> $authResponse The shape returned by
      *        AuthManager (access_token, refresh_token, expires_in, user).
@@ -398,8 +399,9 @@ class AuthController
      * {@see self::refresh()} rotation set cookies identically — HttpOnly so XSS
      * can't read them, Secure so they only ride HTTPS, SameSite=Lax so top-level
      * navigations still carry them. The access cookie expires with the JWT
-     * (`expires_in`); the refresh cookie gets a 7-day lifetime matching the
-     * refresh-token TTL. Empty token values are skipped.
+     * (`expires_in`); the refresh cookie's lifetime is read from the same
+     * handler that minted the refresh token, so the two cannot drift when
+     * `auth.refresh_ttl` changes. Empty token values are skipped.
      *
      * @param array<string, mixed> $authResponse The shape returned by
      *        AuthManager (access_token, refresh_token, expires_in, user).
@@ -408,7 +410,13 @@ class AuthController
     {
         $access = is_string($authResponse['access_token'] ?? null) ? $authResponse['access_token'] : '';
         $refresh = is_string($authResponse['refresh_token'] ?? null) ? $authResponse['refresh_token'] : '';
-        $expiresIn = is_int($authResponse['expires_in'] ?? null) ? $authResponse['expires_in'] : 3600;
+        // Both lifetimes come from the AuthManager -> JwtHandler that minted
+        // these tokens, never from a literal here: a cookie whose Max-Age
+        // disagrees with its token's `exp` either strands a still-valid
+        // credential or leaves a dead one in the jar. See TokenTtlPolicy.
+        $expiresIn = is_int($authResponse['expires_in'] ?? null)
+            ? $authResponse['expires_in']
+            : $this->authManager->accessTtl();
 
         $secure = self::cookiesSecure();
 
@@ -426,7 +434,7 @@ class AuthController
             $response->cookie(
                 self::REFRESH_COOKIE,
                 $refresh,
-                maxAge: 7 * 24 * 3600,
+                maxAge: $this->authManager->refreshTtl(),
                 secure: $secure,
                 httpOnly: true,
                 sameSite: 'Lax',

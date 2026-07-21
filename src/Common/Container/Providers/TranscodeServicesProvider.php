@@ -161,7 +161,17 @@ final class TranscodeServicesProvider implements ServiceProviderInterface
                     // Probe hardware acceleration once at container build time and cache
                     // the result on the runner. This avoids per-request probing (which
                     // uses shell_exec/Coroutine\System::exec).
-                    // The probe respects vendor_priority from the merged config.
+                    //
+                    // NB: this does NOT respect vendor_priority from the merged config,
+                    // despite what this comment used to claim. probeHardwareAcceleration()
+                    // resolves the registry via FfmpegRunner:1354
+                    // (`$registry ?? HwaccelRegistry::getInstance()`), and getInstance()
+                    // (HwaccelRegistry.php:49-52) calls a PRIVATE constructor with no
+                    // arguments — so the registry always carries the ctor defaults at
+                    // HwaccelRegistry.php:78-92, never config/hwaccel_base.php. The same
+                    // is true of probe_timeout, test_clip_path and fallback_to_software.
+                    // Only `enabled` and `prefer_hardware` reach a consumer, via the
+                    // setConfig() above. See docs/developers/hardware-acceleration.md.
                     $runner->probeHardwareAcceleration();
 
                     return $runner;

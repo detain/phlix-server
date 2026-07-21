@@ -213,6 +213,12 @@ final class AdminSettingsControllerTest extends TestCase
             'tmdb.api_key'                              => 'string',
             'auth.signup_mode'                          => 'string',
             'auth.password.min_length'                  => 'int',
+            // JWT lifetimes. Single-sourced through JwtHandler ->
+            // Phlix\Auth\TokenTtlPolicy, which is what makes them honest:
+            // the two `exp` claims, `expires_in` and both cookie Max-Ages all
+            // read the same instance, so they cannot disagree.
+            'auth.access_ttl'                           => 'int',
+            'auth.refresh_ttl'                          => 'int',
             'webhooks.enabled'                          => 'bool',
             'stats.enabled'                             => 'bool',
             'subtitles.default_language'                => 'string',
@@ -270,7 +276,7 @@ final class AdminSettingsControllerTest extends TestCase
 
         $actual = AdminSettingsController::allowedKeys();
 
-        $this->assertCount(44, $actual);
+        $this->assertCount(46, $actual);
         $this->assertEquals($expected, $actual);
     }
 
@@ -348,7 +354,7 @@ final class AdminSettingsControllerTest extends TestCase
 
         // schemaMeta() covers EVERY declared property, not just the typed ones
         // that reach allowedKeys().
-        $this->assertCount(44, $meta);
+        $this->assertCount(46, $meta);
         foreach (array_keys(AdminSettingsController::allowedKeys()) as $key) {
             $this->assertArrayHasKey($key, $meta, sprintf('%s must carry a meta block', $key));
         }

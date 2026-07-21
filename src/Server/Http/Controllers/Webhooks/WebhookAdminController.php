@@ -303,7 +303,14 @@ class WebhookAdminController
             new DateTimeImmutable()
         );
 
-        $result = $this->dispatcher->dispatch($testEvent);
+        // Deliver to THE webhook the operator clicked, not to whichever rows
+        // happen to subscribe to `webhook.test`. Routing this through
+        // dispatch() meant the subscription filter dropped every UI-created
+        // webhook (the admin catalogue excludes `webhook.test`), leaving
+        // failureCount === 0 and this endpoint answering `success: true` for a
+        // request that never left the process.
+        // {@see WebhookDispatcher::dispatchToWebhook()}
+        $result = $this->dispatcher->dispatchToWebhook($id, $testEvent);
 
         return (new Response())->json([
             'success' => $result->failureCount === 0,

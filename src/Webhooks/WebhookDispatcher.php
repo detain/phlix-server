@@ -158,6 +158,148 @@ class WebhookDispatcher
     }
 
     /**
+     * Deliver one event to ONE specific webhook row, bypassing the event-type
+     * subscription matching {@see dispatch()} performs.
+     *
+     * ## Why this exists
+     *
+     * The admin "Test" button targets a webhook the operator picked by id. It
+     * used to route through {@see dispatch()}, which only delivers to rows whose
+     * stored `events_json` contains the event type. The test event is
+     * `webhook.test`, and the admin UI's subscribable catalogue deliberately
+     * excludes it, so NO webhook created through the UI ever matched:
+     * `getMatchingWebhooks()` returned `[]`, `dispatch()` short-circuited to
+     * `DispatchResult(0, 0, [])`, and the caller read `failureCount === 0` as
+     * success. The button reported a delivery that never left the process.
+     *
+     * This method answers the question the operator actually asked -- "can the
+     * server reach THIS webhook?" -- so the reported outcome is the real one.
+     * Signing, secret handling, SSRF re-validation, retry/backoff and delivery
+     * logging are unchanged: it reuses the same {@see sendToWebhook()} path as
+     * {@see dispatch()}.
+     *
+     * A webhook that does not exist, is inactive, or whose URL is unreachable
+     * is reported as a FAILURE with the reason surfaced in
+     * {@see DispatchResult::$failures}.
+     *
+     * @param string       $webhookId Id of the webhook row to deliver to.
+     * @param WebhookEvent $event     Event to deliver.
+     *
+     * @return DispatchResult Always describes exactly one delivery attempt.
+     *
+     * @since 1.3.0
+     */
+    public function dispatchToWebhook(string $webhookId, WebhookEvent $event): DispatchResult
+    {
+        // Master kill-switch. Unlike dispatch() -- whose callers fire webhooks
+        // as a side-effect of unrelated work and must not fail when an operator
+        // turned webhooks off -- this is an explicit, operator-initiated
+        // delivery. Reporting "success, 0 delivered" here would be the same lie
+        // this method exists to remove, so say plainly that nothing was sent.
+        if (!$this->isEnabled()) {
+            return new DispatchResult(0, 1, [[
+                'webhook_id' => $webhookId,
+                'url' => '',
+                'error' => 'Webhook delivery is disabled (webhooks.enabled is false).',
+            ]]);
+        }
+
+        $webhook = $this->findWebhookById($webhookId);
+
+        if ($webhook === null) {
+            return new DispatchResult(0, 1, [[
+                'webhook_id' => $webhookId,
+                'url' => '',
+                'error' => 'Webhook not found.',
+            ]]);
+        }
+
+        $url = $this->stringFromMixed($webhook['url'] ?? null);
+
+        if (!$this->isRowActive($webhook)) {
+            return new DispatchResult(0, 1, [[
+                'webhook_id' => $webhookId,
+                'url' => $url,
+                'error' => 'Webhook is inactive.',
+            ]]);
+        }
+
+        $result = $this->sendToWebhook($webhook, $event);
+
+        if ($result['success'] === true) {
+            $this->updateLastTriggered($webhookId);
+
+            return new DispatchResult(1, 0, []);
+        }
+
+        $this->incrementFailureCount($webhookId);
+
+        return new DispatchResult(0, 1, [[
+            'webhook_id' => $webhookId,
+            'url' => $url,
+            'error' => $this->stringFromMixed($result['error'] ?? null),
+        ]]);
+    }
+
+    /**
+     * Load a single webhook row by id, including its `secret` so
+     * {@see sendToWebhook()} can sign identically to the subscription path.
+     *
+     * {@see listWebhooks()} deliberately omits `secret`, so callers holding a
+     * listing row cannot be used for delivery.
+     *
+     * @return array<string, mixed>|null Null when no row has that id.
+     */
+    private function findWebhookById(string $webhookId): ?array
+    {
+        /** @var array<array<string, mixed>> $rows */
+        $rows = $this->db->query(
+            "SELECT id, name, url, secret, events_json, is_active FROM webhooks WHERE id = ?",
+            [$webhookId]
+        );
+
+        foreach ($rows as $row) {
+            if (is_array($row)) {
+                return $row;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Is this webhook row active?
+     *
+     * `is_active` arrives as a bool, an int, or a numeric string depending on
+     * driver/emulation settings, so coerce rather than trusting `===`. A row
+     * that does not carry the column at all is treated as active: the column is
+     * `TRUE`-defaulted at insert and its absence means "not selected", not
+     * "disabled".
+     *
+     * @param array<string, mixed> $webhook
+     */
+    private function isRowActive(array $webhook): bool
+    {
+        if (!array_key_exists('is_active', $webhook)) {
+            return true;
+        }
+
+        $value = $webhook['is_active'];
+
+        if (is_bool($value)) {
+            return $value;
+        }
+        if (is_int($value)) {
+            return $value !== 0;
+        }
+        if (is_string($value)) {
+            return $value !== '' && $value !== '0' && strtolower($value) !== 'false';
+        }
+
+        return false;
+    }
+
+    /**
      * @return list<array<string, mixed>>
      */
     public function listWebhooks(): array
@@ -201,8 +343,12 @@ class WebhookDispatcher
 
     /**
      * Get the async HTTP client (lazy initialized).
+     *
+     * Protected for the same reason as {@see sleepMilliseconds()}: tests
+     * substitute a double so delivery outcomes are asserted deterministically
+     * and offline, instead of depending on a real network round trip.
      */
-    private function getHttpClient(): WebhookHttpClient
+    protected function getHttpClient(): WebhookHttpClient
     {
         if ($this->httpClient === null) {
             $config = $this->getConfig();

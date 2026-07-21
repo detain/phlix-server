@@ -210,6 +210,9 @@ final class WebhookAdminControllerTest extends TestCase
         self::assertArrayHasKey('success', $body);
         self::assertTrue($body['success']);
         self::assertSame(1, $body['success_count']);
+        // The clicked webhook id must be the one delivered to, not routed
+        // through the subscription-filtered dispatch() path.
+        self::assertSame('webhook-1', $this->dispatcher->lastDispatchedWebhookId);
     }
 
     public function test_test_with_nonexistent_webhook_id_returns_404(): void
@@ -281,6 +284,15 @@ final class FakeWebhookDispatcher extends WebhookDispatcher
 
     public function dispatch(WebhookEvent $event): DispatchResult
     {
+        return $this->dispatchResult ?? new DispatchResult(0, 0, []);
+    }
+
+    /** @var string|null Id passed to the last dispatchToWebhook() call. */
+    public ?string $lastDispatchedWebhookId = null;
+
+    public function dispatchToWebhook(string $webhookId, WebhookEvent $event): DispatchResult
+    {
+        $this->lastDispatchedWebhookId = $webhookId;
         return $this->dispatchResult ?? new DispatchResult(0, 0, []);
     }
 }

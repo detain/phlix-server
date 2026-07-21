@@ -6,7 +6,7 @@ declare(strict_types=1);
  * Trakt.tv scrobbler plugin configuration.
  *
  * These are the *operator's* Trakt application credentials — every Phlix
- * install must register its own application at https://trakt.tv/apps to obtain
+ * install must register its own application at https://app.trakt.tv/settings/apps/api/new to obtain
  * a client_id and client_secret (Phlix cannot ship a shared one because each
  * Trakt app is bound to its owner and redirect URI). Per-user OAuth tokens are
  * stored separately (see {@see \Phlix\Plugins\Scrobbler\Trakt\TraktSettings}),
@@ -23,13 +23,13 @@ declare(strict_types=1);
 return [
     /**
      * Trakt application client ID. Required.
-     * Set TRAKT_CLIENT_ID. Get yours at: https://trakt.tv/apps
+     * Set TRAKT_CLIENT_ID. Get yours at: https://app.trakt.tv/settings/apps/api/new
      */
     'client_id' => getenv('TRAKT_CLIENT_ID') ?: '',
 
     /**
      * Trakt application client secret. Required.
-     * Set TRAKT_CLIENT_SECRET. Get yours at: https://trakt.tv/apps
+     * Set TRAKT_CLIENT_SECRET. Get yours at: https://app.trakt.tv/settings/apps/api/new
      */
     'client_secret' => getenv('TRAKT_CLIENT_SECRET') ?: '',
 

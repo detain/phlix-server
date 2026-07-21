@@ -476,8 +476,8 @@ final class TraktOAuthController
 </p>
 <ol>
   <li>Create an application at
-    <a href="https://trakt.tv/oauth/applications" target="_blank" rel="noopener noreferrer"
-    >trakt.tv/oauth/applications</a>.</li>
+    <a href="https://app.trakt.tv/settings/apps/api/new" target="_blank" rel="noopener noreferrer"
+    >app.trakt.tv/settings/apps/api/new</a>.</li>
   <li>Set its <em>Redirect URI</em> to your server's <code>/api/v1/oauth/trakt/callback</code> URL.</li>
   <li>
     Supply the resulting credentials either by setting the

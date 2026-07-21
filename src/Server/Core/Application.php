@@ -2749,6 +2749,15 @@ class Application
             return;
         }
 
+        // `dlna.cds_enabled` — OFF by default, and deliberately so: DLNA/UPnP
+        // has no authentication, so serving these endpoints lets ANY device on
+        // the local network browse and stream the whole library without logging
+        // in. Read per worker start, so it applies on a graceful reload.
+        // {@see config/dlna.php} for the full warning.
+        if ((\Phlix\Config\EffectiveConfig::file('dlna')['cds_enabled'] ?? false) !== true) {
+            return;
+        }
+
         try {
             $cdsServer = $this->container->get(\Phlix\Dlna\CdsServer::class);
             if (!$cdsServer instanceof \Phlix\Dlna\CdsServer) {
@@ -2801,7 +2810,17 @@ class Application
             $cdsControlController = new \Phlix\Server\Http\Controllers\Dlna\CdsControlController($cdsServer);
             $this->router->post('/cds/control', [$cdsControlController, 'handle']);
         } catch (\Throwable $e) {
-            // CDS not configured - silent ignore
+            // LOG, do not swallow. This bare catch previously said only
+            // "CDS not configured - silent ignore", and it hid a permanent
+            // DI failure for months: DlnaServer had no registration, so every
+            // resolution threw and NO DLNA route was ever registered, on any
+            // install, while the SSDP advertiser kept telling the network the
+            // server was browsable. An admin who has explicitly switched
+            // `dlna.cds_enabled` ON must be told when it does not come up.
+            \Phlix\Common\Logger\LoggerFactory::get(\Phlix\Common\Logger\LogChannels::DLNA)->error(
+                'DLNA ContentDirectory is enabled but failed to start; browse endpoints are NOT registered',
+                ['error' => $e->getMessage(), 'exception' => $e::class],
+            );
         }
     }
 

@@ -261,11 +261,16 @@ final class AdminSettingsControllerTest extends TestCase
             'casting.chromecast.enabled'                => 'bool',
             'casting.roku.enabled'                      => 'bool',
             'casting.airplay.enabled'                   => 'bool',
+
+            // DLNA media server (config/dlna.php). `cds_enabled` is the master
+            // switch and ships FALSE — DLNA has no authentication at all.
+            'dlna.cds_enabled'                          => 'bool',
+            'dlna.friendly_name'                        => 'string',
         ];
 
         $actual = AdminSettingsController::allowedKeys();
 
-        $this->assertCount(42, $actual);
+        $this->assertCount(44, $actual);
         $this->assertEquals($expected, $actual);
     }
 
@@ -343,7 +348,7 @@ final class AdminSettingsControllerTest extends TestCase
 
         // schemaMeta() covers EVERY declared property, not just the typed ones
         // that reach allowedKeys().
-        $this->assertCount(42, $meta);
+        $this->assertCount(44, $meta);
         foreach (array_keys(AdminSettingsController::allowedKeys()) as $key) {
             $this->assertArrayHasKey($key, $meta, sprintf('%s must carry a meta block', $key));
         }

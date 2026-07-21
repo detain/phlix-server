@@ -173,7 +173,25 @@ class SsdpAdvertiser extends Worker
      */
     public static function isEnabled(): bool
     {
-        return (EffectiveConfig::file('dlna')['enabled'] ?? true) !== false;
+        $dlna = EffectiveConfig::file('dlna');
+
+        // Requires BOTH switches. Announcing is meaningless — actively harmful,
+        // in fact — when the ContentDirectory is not being served: a control
+        // point that sees the advertisement fetches the LOCATION URL and then
+        // fails, so the server shows up in every TV's source list as a device
+        // that cannot be opened. That was the real production state for months,
+        // and it is exactly what this gate now prevents.
+        //
+        // `cds_enabled` therefore behaves as the master "run a DLNA server"
+        // switch (default FALSE — DLNA has no authentication), while `enabled`
+        // chooses whether a running server also announces itself. Turning the
+        // server on with announcement off is a legitimate combination: clients
+        // that are given the address directly still work.
+        if (($dlna['cds_enabled'] ?? false) !== true) {
+            return false;
+        }
+
+        return ($dlna['enabled'] ?? true) !== false;
     }
 
     /**
@@ -307,15 +325,29 @@ class SsdpAdvertiser extends Worker
     }
 
     /**
-     * Detect the local IP address for LOCATION header.
+     * Detect the LAN-facing local IP address.
      *
-     * @return string Local IP address
+     * Shared deliberately. The SSDP `LOCATION` header this class broadcasts and
+     * the `URLBase`/control URLs inside {@see DlnaServer}'s device description
+     * MUST resolve to the same address — a control point fetches the
+     * description from LOCATION and then follows the URLs inside it, so if the
+     * two disagree every browse request goes to the wrong host. Keeping one
+     * implementation is what guarantees they agree.
      *
-     * @since 0.12.0
+     * Opens a UDP socket toward a public address purely to ask the kernel which
+     * local interface it would route through; no packet is sent.
+     *
+     * @return string Local IP address, or `127.0.0.1` when detection fails.
+     *
+     * @since 1.3.0
      */
-    private function detectLocalIpAddress(): string
+    public static function detectLocalIp(): string
     {
-        // Connect to an external address to determine the local IP
+        // Connect to an external address to determine the local IP.
+        // NOTE: deliberately NOT `(new self())->…` — this class extends
+        // Workerman\Worker, whose constructor registers the instance in
+        // Worker::$workers, so instantiating one just to read an IP would
+        // inject a phantom worker into the runtime.
         $socket = @fsockopen('8.8.8.8', 53, $errno, $errstr, 1);
         if ($socket !== false) {
             $localAddress = stream_socket_get_name($socket, false);
@@ -331,6 +363,18 @@ class SsdpAdvertiser extends Worker
 
         // Fallback to localhost
         return '127.0.0.1';
+    }
+
+    /**
+     * Detect the local IP address for LOCATION header.
+     *
+     * @return string Local IP address
+     *
+     * @since 0.12.0
+     */
+    private function detectLocalIpAddress(): string
+    {
+        return self::detectLocalIp();
     }
 
     /**

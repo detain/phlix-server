@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "050fdc210e6721a165533281f7dcd9a8",
+    "content-hash": "c162f7eee500619ad80d5e751a4e34ac",
     "packages": [
         {
             "name": "brick/math",
@@ -412,16 +412,16 @@
         },
         {
             "name": "detain/phlix-shared",
-            "version": "v0.33.0",
+            "version": "v0.34.0",
             "source": {
                 "type": "git",
                 "url": "https://github.com/detain/phlix-shared.git",
-                "reference": "68aa8809c3ffb9fc2e6d166e3b7aabd26d18b9b4"
+                "reference": "9f9245f2846b01dde50ff5d20621e1caa7dd9bc0"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/detain/phlix-shared/zipball/68aa8809c3ffb9fc2e6d166e3b7aabd26d18b9b4",
-                "reference": "68aa8809c3ffb9fc2e6d166e3b7aabd26d18b9b4",
+                "url": "https://api.github.com/repos/detain/phlix-shared/zipball/9f9245f2846b01dde50ff5d20621e1caa7dd9bc0",
+                "reference": "9f9245f2846b01dde50ff5d20621e1caa7dd9bc0",
                 "shasum": ""
             },
             "require": {
@@ -455,9 +455,9 @@
             "description": "Shared interfaces, DTOs, event names, and protocol types used by both phlix-server and phlix-hub. Composer-installable, PHP 8.3+, zero I/O by charter — the only bundled network code is the blocking CurlArrTransport (CLI/test only); event-loop consumers MUST inject an async ArrTransportInterface.",
             "support": {
                 "issues": "https://github.com/detain/phlix-shared/issues",
-                "source": "https://github.com/detain/phlix-shared/tree/v0.33.0"
+                "source": "https://github.com/detain/phlix-shared/tree/v0.34.0"
             },
-            "time": "2026-07-21T14:32:20+00:00"
+            "time": "2026-07-21T15:39:17+00:00"
         },
         {
             "name": "directorytree/ldaprecord",

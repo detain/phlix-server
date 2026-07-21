@@ -21,17 +21,20 @@ use Workerman\Worker;
  * drives the real `onWorkerStart` callback and then inspects those two pieces
  * of worker state, so a guard that read the setting and ignored it would fail.
  *
- * ## Scope
+ * ## Scope — TWO switches since 1.3.0
  *
- * `dlna.enabled` gates the ADVERTISER only. It does not gate DLNA browsing,
- * because the ContentDirectory service is not currently registered at all —
- * `Application::loadCdsRoutes()` resolves `Phlix\Dlna\CdsServer` inside a bare
- * `catch (\Throwable)` and that resolution always throws, since
- * `Phlix\Dlna\DlnaServer` has no DI registration and takes three un-autowirable
- * `string` constructor parameters. See `config/dlna.php` for the production
- * evidence. These tests therefore assert nothing about CDS routes: asserting
- * that a gate works on code that never runs is exactly the fake-coverage this
- * program keeps finding.
+ * `dlna.cds_enabled` is the master "run a DLNA server" switch (default FALSE;
+ * DLNA has no authentication). `dlna.enabled` chooses whether a running server
+ * also ANNOUNCES itself over SSDP.
+ *
+ * `isEnabled()` requires both, and that conjunction is itself under test here.
+ * Announcing a server whose ContentDirectory is not served puts Phlix in every
+ * TV's source list as a device that cannot be opened — which was the real
+ * production state until 1.3.0, because `DlnaServer` had no DI registration and
+ * `Application::loadCdsRoutes()` swallowed the resulting resolution failure in a
+ * bare `catch (\Throwable)`. The route wiring itself is covered by
+ * {@see \Phlix\Tests\Unit\Common\Container\Providers\DlnaServicesProviderTest};
+ * these tests cover the advertiser.
  *
  * ## Workerman note
  *
@@ -169,7 +172,7 @@ final class DlnaEnabledGateTest extends TestCase
      */
     public function test_disabling_dlna_opens_no_socket_and_arms_no_timer(): void
     {
-        $this->bootstrapWith(['enabled' => false]);
+        $this->bootstrapWith(['enabled' => false, 'cds_enabled' => true]);
 
         $state = $this->startAdvertiser(new SsdpAdvertiser('10.0.0.1', 8096));
 
@@ -190,7 +193,7 @@ final class DlnaEnabledGateTest extends TestCase
     public function test_enabled_dlna_opens_a_socket_and_arms_the_broadcast_timer(): void
     {
         $this->seedWorkermanRuntime();
-        $this->bootstrapWith(['enabled' => true]);
+        $this->bootstrapWith(['enabled' => true, 'cds_enabled' => true]);
 
         $state = $this->startAdvertiser(new SsdpAdvertiser('10.0.0.1', 8096));
 
@@ -211,7 +214,7 @@ final class DlnaEnabledGateTest extends TestCase
      */
     public function test_an_admin_override_beats_the_config_file(): void
     {
-        $this->bootstrapWith(['enabled' => true], ['dlna.enabled' => ['0', 'bool']]);
+        $this->bootstrapWith(['enabled' => true, 'cds_enabled' => true], ['dlna.enabled' => ['0', 'bool']]);
 
         self::assertFalse(SsdpAdvertiser::isEnabled());
 
@@ -229,11 +232,46 @@ final class DlnaEnabledGateTest extends TestCase
      *
      * Mutation-verified: changing the `?? true` default to `?? false` fails this.
      */
-    public function test_an_absent_setting_keeps_advertising(): void
+    public function test_an_absent_cds_switch_means_silence(): void
     {
+        // `cds_enabled` ships FALSE, so a config file that predates it (or an
+        // install that never opted in) must NOT advertise. Announcing a DLNA
+        // server whose ContentDirectory is not served is the exact production
+        // defect this pair of switches exists to prevent.
         $this->bootstrapWith([]);
+        self::assertFalse(SsdpAdvertiser::isEnabled());
 
+        EffectiveConfig::reset();
+
+        // `enabled` still defaults true ON TOP of an enabled server, so an
+        // operator who turns the server on gets discovery without a second step.
+        $this->bootstrapWith(['cds_enabled' => true]);
         self::assertTrue(SsdpAdvertiser::isEnabled());
+    }
+
+    /**
+     * CONSEQUENCE: announcing requires the server to actually be running.
+     *
+     * With the ContentDirectory off, a control point that saw the broadcast
+     * would fetch the LOCATION URL and fail, leaving Phlix in every TV's source
+     * list as a device that cannot be opened. That WAS the live production
+     * state. Asserts the advertiser stays silent even though `enabled` is true.
+     *
+     * Mutation-verified: deleting the `cds_enabled` check from isEnabled()
+     * fails this test.
+     */
+    public function test_the_advertiser_stays_silent_when_the_cds_is_off(): void
+    {
+        $this->bootstrapWith(['enabled' => true, 'cds_enabled' => false]);
+
+        self::assertFalse(
+            SsdpAdvertiser::isEnabled(),
+            'Announcing a DLNA server whose browse service is off advertises a device that cannot be opened.'
+        );
+
+        $state = $this->startAdvertiser(new SsdpAdvertiser('10.0.0.1', 8096));
+        self::assertFalse($state['socket'], 'No multicast socket should be opened.');
+        self::assertSame(0, $state['timerId'], 'No broadcast timer should be armed.');
     }
 
     /**
@@ -250,12 +288,12 @@ final class DlnaEnabledGateTest extends TestCase
      */
     public function test_a_malformed_override_does_not_disable_advertising(): void
     {
-        $this->bootstrapWith(['enabled' => true], ['dlna.enabled' => ['maybe', 'string']]);
+        $this->bootstrapWith(['enabled' => true, 'cds_enabled' => true], ['dlna.enabled' => ['maybe', 'string']]);
         self::assertTrue(SsdpAdvertiser::isEnabled(), 'A junk override must not disable advertising.');
 
         EffectiveConfig::reset();
 
-        $this->bootstrapWith(['enabled' => true], ['dlna.enabled' => ['', 'string']]);
+        $this->bootstrapWith(['enabled' => true, 'cds_enabled' => true], ['dlna.enabled' => ['', 'string']]);
         self::assertTrue(SsdpAdvertiser::isEnabled(), 'An empty override must not disable advertising.');
     }
 }

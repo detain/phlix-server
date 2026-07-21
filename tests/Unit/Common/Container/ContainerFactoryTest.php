@@ -252,8 +252,15 @@ final class ContainerFactoryTest extends TestCase
     {
         $providers = ContainerFactory::defaultProviders();
 
-        $this->assertCount(14, $providers);
+        $this->assertCount(15, $providers);
         $this->assertInstanceOf(CoreServicesProvider::class, $providers[0]);
+        // DlnaServicesProvider (added 1.3.0) registers DlnaServer/CdsServer.
+        // Without it CdsServer cannot resolve at all and every DLNA browse
+        // route silently fails to register — the defect it was added to fix.
+        $this->assertInstanceOf(
+            \Phlix\Common\Container\Providers\DlnaServicesProvider::class,
+            $providers[14],
+        );
         $this->assertInstanceOf(EventServicesProvider::class, $providers[1]);
         $this->assertInstanceOf(AuthServicesProvider::class, $providers[2]);
         $this->assertInstanceOf(\Phlix\Common\Container\Providers\HubServicesProvider::class, $providers[3]);

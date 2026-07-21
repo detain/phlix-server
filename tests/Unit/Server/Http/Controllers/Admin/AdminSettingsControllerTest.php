@@ -253,11 +253,19 @@ final class AdminSettingsControllerTest extends TestCase
             // ADVERTISEMENT only, not DLNA browsing — the ContentDirectory
             // service is not currently registered at all. See config/dlna.php.
             'dlna.enabled'                              => 'bool',
+
+            // Casting protocol toggles (config/casting.php). Enforced by
+            // CastingEnabledMiddleware on each protocol's route group, so these
+            // are class (a) LIVE — see config/casting.php for why that matters
+            // (mDNS discovery blocks the worker for ~5s per call).
+            'casting.chromecast.enabled'                => 'bool',
+            'casting.roku.enabled'                      => 'bool',
+            'casting.airplay.enabled'                   => 'bool',
         ];
 
         $actual = AdminSettingsController::allowedKeys();
 
-        $this->assertCount(39, $actual);
+        $this->assertCount(42, $actual);
         $this->assertEquals($expected, $actual);
     }
 
@@ -335,7 +343,7 @@ final class AdminSettingsControllerTest extends TestCase
 
         // schemaMeta() covers EVERY declared property, not just the typed ones
         // that reach allowedKeys().
-        $this->assertCount(39, $meta);
+        $this->assertCount(42, $meta);
         foreach (array_keys(AdminSettingsController::allowedKeys()) as $key) {
             $this->assertArrayHasKey($key, $meta, sprintf('%s must carry a meta block', $key));
         }

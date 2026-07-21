@@ -2888,6 +2888,14 @@ class Application
             }
             $controller = new \Phlix\Server\Http\Controllers\Chromecast\ChromecastController($castManager);
             $authMiddleware = new \Phlix\Server\Http\Middleware\AuthMiddleware();
+            // Backs `casting.chromecast.enabled`. Appended to the group rather
+            // than checked here, so it is re-evaluated PER REQUEST (class (a)
+            // LIVE) — this Application is built once per worker, so a check at
+            // this point would only apply after a reload.
+            $castingMiddleware = new \Phlix\Server\Http\Middleware\CastingEnabledMiddleware(
+                'chromecast',
+                $this->optionalSettingsRepository(),
+            );
 
             // All Chromecast routes require authentication
             $this->router->group('', function (Router $r) use ($controller): void {
@@ -2905,7 +2913,7 @@ class Application
 
                 // Get session status
                 $r->get('/api/v1/cast/devices/{id}/status', [$controller, 'getStatus']);
-            }, [$authMiddleware]);
+            }, [$authMiddleware, $castingMiddleware]);
         } catch (\Throwable $e) {
             // CastManager not configured - silent ignore
         }
@@ -2938,6 +2946,12 @@ class Application
             }
             $controller = new \Phlix\Server\Http\Controllers\Roku\RokuController($rokuManager);
             $authMiddleware = new \Phlix\Server\Http\Middleware\AuthMiddleware();
+            // Backs `casting.roku.enabled`. See loadChromecastRoutes() for why
+            // this is group middleware rather than a check here.
+            $castingMiddleware = new \Phlix\Server\Http\Middleware\CastingEnabledMiddleware(
+                'roku',
+                $this->optionalSettingsRepository(),
+            );
 
             // All Roku routes require authentication
             $this->router->group('', function (Router $r) use ($controller): void {
@@ -2955,7 +2969,7 @@ class Application
 
                 // Get session status
                 $r->get('/api/v1/roku/devices/{id}/status', [$controller, 'getStatus']);
-            }, [$authMiddleware]);
+            }, [$authMiddleware, $castingMiddleware]);
         } catch (\Throwable $e) {
             // RokuManager not configured - silent ignore
         }
@@ -2989,6 +3003,12 @@ class Application
             }
             $controller = new \Phlix\Server\Http\Controllers\AirPlay\AirPlayController($airPlayManager);
             $authMiddleware = new \Phlix\Server\Http\Middleware\AuthMiddleware();
+            // Backs `casting.airplay.enabled`. See loadChromecastRoutes() for
+            // why this is group middleware rather than a check here.
+            $castingMiddleware = new \Phlix\Server\Http\Middleware\CastingEnabledMiddleware(
+                'airplay',
+                $this->optionalSettingsRepository(),
+            );
 
             // All AirPlay routes require authentication
             $this->router->group('', function (Router $r) use ($controller): void {
@@ -3005,7 +3025,7 @@ class Application
 
                 // Get session status
                 $r->get('/api/v1/airplay/devices/{id}/status', [$controller, 'getStatus']);
-            }, [$authMiddleware]);
+            }, [$authMiddleware, $castingMiddleware]);
         } catch (\Throwable $e) {
             // AirPlayManager not configured - silent ignore
         }

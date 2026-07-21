@@ -123,6 +123,14 @@ class AuthManager
     private ?SettingsRepository $settingsRepository;
 
     /**
+     * Effective password-strength policy, built from
+     * {@see $settingsRepository} so `auth.password.min_length` applies LIVE.
+     *
+     * @var PasswordPolicy
+     */
+    private PasswordPolicy $passwordPolicy;
+
+    /**
      * In-worker TTL cache for user status lookups.
      *
      * Avoids a PK lookup on user_repository.getStatus() for every authenticated
@@ -218,6 +226,28 @@ class AuthManager
         $this->statsCollector = $statsCollector;
         $this->settingsRepository = $settingsRepository;
         $this->loginRateLimitStore = $loginRateLimitStore;
+        // Built from the already-explicitly-wired settings store rather than
+        // taken as its own optional ctor param: PHP-DI skips optional params
+        // during autowiring, so an unnamed PasswordPolicy param would silently
+        // arrive null and the min-length setting would go inert (class (g)).
+        $this->passwordPolicy = new PasswordPolicy($settingsRepository);
+    }
+
+    /**
+     * The password-strength policy backing `auth.password.min_length`.
+     *
+     * Exposed so callers holding an AuthManager (notably `AdminUserController`)
+     * can enforce the SAME effective policy rather than re-deriving it — the
+     * three duplicated `strlen($password) < 8` literals this replaced are
+     * exactly what made the setting half-effective before.
+     *
+     * @return PasswordPolicy The effective policy.
+     *
+     * @since 1.3.0
+     */
+    public function passwordPolicy(): PasswordPolicy
+    {
+        return $this->passwordPolicy;
     }
 
     /**
@@ -590,8 +620,9 @@ class AuthManager
             throw new \InvalidArgumentException('Invalid email format');
         }
 
-        if (strlen($password) < 8) {
-            throw new \InvalidArgumentException('Password must be at least 8 characters');
+        $passwordError = $this->passwordPolicy->validate($password);
+        if ($passwordError !== null) {
+            throw new \InvalidArgumentException($passwordError);
         }
 
         // Check uniqueness

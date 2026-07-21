@@ -12,6 +12,7 @@ declare(strict_types=1);
 namespace Phlix\Server\Http\Controllers\Admin;
 
 use Phlix\Auth\AuthManager;
+use Phlix\Auth\PasswordPolicy;
 use Phlix\Auth\UserRepository;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\RequestContext;
@@ -58,6 +59,30 @@ final class AdminUserController
         private readonly UserRepository $userRepository,
         private readonly ?AuthManager $authManager = null,
     ) {
+    }
+
+    /**
+     * The effective password policy behind `auth.password.min_length`.
+     *
+     * Deliberately taken from {@see AuthManager::passwordPolicy()} rather than
+     * injected as its own optional constructor parameter. PHP-DI skips optional
+     * parameters during autowiring, so an unnamed `?PasswordPolicy` param would
+     * silently arrive null here and this controller would quietly fall back to
+     * the historical floor while self-service registration honoured the
+     * configured value — reintroducing exactly the half-effective split that
+     * centralising this check was meant to remove.
+     *
+     * `authManager` IS explicitly bound in `AdminServicesProvider`, so this
+     * path is reachable in production; the null branch covers unit tests and
+     * legacy callers and enforces the same baseline the literals used to.
+     *
+     * @return PasswordPolicy The effective policy.
+     *
+     * @since 1.3.0
+     */
+    private function passwordPolicy(): PasswordPolicy
+    {
+        return $this->authManager?->passwordPolicy() ?? new PasswordPolicy();
     }
 
     /**
@@ -238,11 +263,14 @@ final class AdminUserController
             ]);
         }
 
-        // Validate password: min 8 chars
-        if (strlen($password) < 8) {
+        // Validate password against the effective `auth.password.min_length`
+        // policy -- the SAME instance self-service registration uses, so an
+        // admin cannot create a weaker password than the policy allows.
+        $passwordError = $this->passwordPolicy()->validate($password);
+        if ($passwordError !== null) {
             return (new Response())->status(400)->json([
                 'error' => 'Invalid password',
-                'field_errors' => ['password' => 'Password must be at least 8 characters'],
+                'field_errors' => ['password' => $passwordError],
             ]);
         }
 
@@ -327,10 +355,11 @@ final class AdminUserController
         // Validate password if provided
         if ($password !== null) {
             $password = is_string($password) ? $password : '';
-            if (strlen($password) < 8) {
+            $passwordError = $this->passwordPolicy()->validate($password);
+            if ($passwordError !== null) {
                 return (new Response())->status(400)->json([
                     'error' => 'Invalid password',
-                    'field_errors' => ['password' => 'Password must be at least 8 characters'],
+                    'field_errors' => ['password' => $passwordError],
                 ]);
             }
         }

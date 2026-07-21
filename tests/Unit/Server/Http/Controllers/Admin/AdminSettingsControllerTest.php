@@ -212,6 +212,7 @@ final class AdminSettingsControllerTest extends TestCase
 
             'tmdb.api_key'                              => 'string',
             'auth.signup_mode'                          => 'string',
+            'auth.password.min_length'                  => 'int',
             'subtitles.default_language'                => 'string',
             'trickplay.enabled'                         => 'bool',
             'newsletter.enabled'                        => 'bool',
@@ -249,7 +250,7 @@ final class AdminSettingsControllerTest extends TestCase
 
         $actual = AdminSettingsController::allowedKeys();
 
-        $this->assertCount(35, $actual);
+        $this->assertCount(36, $actual);
         $this->assertEquals($expected, $actual);
     }
 
@@ -327,7 +328,7 @@ final class AdminSettingsControllerTest extends TestCase
 
         // schemaMeta() covers EVERY declared property, not just the typed ones
         // that reach allowedKeys().
-        $this->assertCount(35, $meta);
+        $this->assertCount(36, $meta);
         foreach (array_keys(AdminSettingsController::allowedKeys()) as $key) {
             $this->assertArrayHasKey($key, $meta, sprintf('%s must carry a meta block', $key));
         }

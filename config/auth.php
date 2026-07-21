@@ -29,4 +29,23 @@ return [
      * regardless of this setting so a fresh install can bootstrap.
      */
     'signup_mode' => 'approval',
+
+    /**
+     * Password policy.
+     *
+     * Addressed by the dotted setting key `auth.password.min_length`
+     * (the `auth` file segment + the `password` -> `min_length` path).
+     */
+    'password' => [
+        /**
+         * Minimum characters required in a user password.
+         *
+         * Enforced by {@see \Phlix\Auth\PasswordPolicy}, which is the single
+         * check behind self-service registration AND both administrator
+         * password paths. `PasswordPolicy::ABSOLUTE_MIN_LENGTH` clamps this
+         * from below, so lowering it here (or via an override) cannot weaken
+         * the policy past the historical baseline of 8.
+         */
+        'min_length' => 8,
+    ],
 ];

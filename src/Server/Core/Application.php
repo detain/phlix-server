@@ -1328,28 +1328,112 @@ class Application
      *
      * @return \Phlix\Server\Http\Controllers\Admin\LastfmController
      */
+    /**
+     * Overlay the `lastfm.*` admin settings onto the raw `config/lastfm.php`
+     * array before anything is constructed from it.
+     *
+     * ## Why this exists
+     *
+     * `LastfmController` already applied these overrides — but only inside
+     * `buildOverrideAwareConfig()`, whose result fed exactly one thing: the
+     * `api_key_set` boolean returned by `status()`. Both objects that actually
+     * talk to Last.fm were built from the override-BLIND raw include: the
+     * `LastfmConfig` gating `apiAuthorize()`/`apiCallback()`, and the
+     * `LastfmApi` that signs the token exchange.
+     *
+     * So an operator who saved `lastfm.api_key` in the admin Settings page saw
+     * the UI report "configured" while the handshake kept sending the key from
+     * `config/lastfm.php`. The control reported its own success.
+     *
+     * Applying the overlay HERE fixes both objects at once, which patching the
+     * controller's call sites could not: `LastfmApi` takes its credentials as
+     * constructor-promoted readonly properties, and its `$http` transport is a
+     * constructor-injected test seam, so rebuilding it per request would break
+     * that seam.
+     *
+     * Semantics: this runs at route-build time (once per worker), so a changed
+     * credential applies on the next reload, not mid-request. That is why the
+     * `lastfm.*` schema keys carry `"restart": true` — plan §4 rule 2 option (b).
+     * Compare `TraktOAuthController::loadConfig()`, which re-reads per request
+     * and is genuinely live.
+     *
+     * @param array<string, mixed>     $rawConfig Raw `config/lastfm.php` array.
+     * @param \Phlix\Admin\SettingsRepository|null $settings Null when the
+     *        container could not supply one; the file values then stand.
+     *
+     * @return array<string, mixed> `$rawConfig` with any saved overrides applied.
+     *
+     * @since 1.6.0
+     */
+    private function applyLastfmOverrides(array $rawConfig, ?\Phlix\Admin\SettingsRepository $settings): array
+    {
+        if ($settings === null) {
+            return $rawConfig;
+        }
+
+        // Mirrors LastfmController::SETTING_KEY_MAP. A non-empty string DB value
+        // wins over the env/file literal; a boolean always wins.
+        $map = [
+            'lastfm.api_key'       => 'api_key',
+            'lastfm.shared_secret' => 'shared_secret',
+            'lastfm.enabled'       => 'enabled',
+        ];
+
+        foreach ($map as $settingKey => $configKey) {
+            try {
+                $override = $settings->getOverride($settingKey);
+            } catch (\Throwable) {
+                // A settings-store failure must never stop Last.fm from loading
+                // on its file config.
+                continue;
+            }
+
+            $value = $override['value'] ?? null;
+            if (is_string($value) && $value !== '') {
+                $rawConfig[$configKey] = $value;
+            } elseif (is_bool($value)) {
+                $rawConfig[$configKey] = $value;
+            }
+        }
+
+        return $rawConfig;
+    }
+
+    /**
+     * Resolve the SettingsRepository, or null when the container cannot supply it.
+     */
+    private function optionalSettingsRepository(): ?\Phlix\Admin\SettingsRepository
+    {
+        if ($this->container === null) {
+            return null;
+        }
+
+        try {
+            /** @var \Phlix\Admin\SettingsRepository $settings */
+            $settings = $this->container->get(\Phlix\Admin\SettingsRepository::class);
+
+            return $settings;
+        } catch (\Throwable) {
+            // Settings repository not available — fall back to env/file config.
+            return null;
+        }
+    }
+
     private function getLastfmController(): \Phlix\Server\Http\Controllers\Admin\LastfmController
     {
+        $settings = $this->optionalSettingsRepository();
+
         $rawConfig = include __DIR__ . '/../../../config/lastfm.php';
-        $config = \Phlix\Plugins\Scrobbler\Lastfm\LastfmConfig::fromArray(
-            is_array($rawConfig) ? $rawConfig : []
-        );
+        // Overlay BEFORE constructing, so $config and $api both see the override.
+        $rawConfig = $this->applyLastfmOverrides(is_array($rawConfig) ? $rawConfig : [], $settings);
+
+        $config = \Phlix\Plugins\Scrobbler\Lastfm\LastfmConfig::fromArray($rawConfig);
         $db = $this->connectionPool->getPooledConnection('mysql');
         $sessions = new \Phlix\Plugins\Scrobbler\Lastfm\LastfmSessionRepository($db);
         $api = new \Phlix\Plugins\Scrobbler\Lastfm\LastfmApi(
             $config->apiKey,
             $config->sharedSecret,
         );
-
-        $settings = null;
-        if ($this->container !== null) {
-            try {
-                /** @var \Phlix\Admin\SettingsRepository $settings */
-                $settings = $this->container->get(\Phlix\Admin\SettingsRepository::class);
-            } catch (\Throwable) {
-                // Settings repository not available — fall back to env/file config.
-            }
-        }
 
         return new \Phlix\Server\Http\Controllers\Admin\LastfmController(
             $config,
@@ -1371,21 +1455,14 @@ class Application
      */
     private function loadLastfmRoutes(): void
     {
-        $settings = null;
-        if ($this->container !== null) {
-            try {
-                /** @var \Phlix\Admin\SettingsRepository $settings */
-                $settings = $this->container->get(\Phlix\Admin\SettingsRepository::class);
-            } catch (\Throwable) {
-                // Settings repository not available — fall back to env/file config.
-            }
-        }
+        $settings = $this->optionalSettingsRepository();
 
         try {
             $rawConfig = include __DIR__ . '/../../../config/lastfm.php';
-            $config = \Phlix\Plugins\Scrobbler\Lastfm\LastfmConfig::fromArray(
-                is_array($rawConfig) ? $rawConfig : []
-            );
+            // Overlay BEFORE constructing — see applyLastfmOverrides().
+            $rawConfig = $this->applyLastfmOverrides(is_array($rawConfig) ? $rawConfig : [], $settings);
+
+            $config = \Phlix\Plugins\Scrobbler\Lastfm\LastfmConfig::fromArray($rawConfig);
             $db = $this->connectionPool->getPooledConnection('mysql');
             $sessions = new \Phlix\Plugins\Scrobbler\Lastfm\LastfmSessionRepository($db);
             $api = new \Phlix\Plugins\Scrobbler\Lastfm\LastfmApi(

@@ -13,6 +13,7 @@ namespace Phlix\Common\Container\Providers;
 
 use DI\ContainerBuilder;
 use Phlix\Common\Container\ServiceProviderInterface;
+use Phlix\Config\EffectiveConfig;
 use Phlix\Network\NatPmpClient;
 use Phlix\Network\PortForwardService;
 use Phlix\Network\StunClient;
@@ -45,7 +46,22 @@ final class NetworkServicesProvider implements ServiceProviderInterface
      */
     public function register(ContainerBuilder $builder, array $appConfig): void
     {
-        $pfConfig = is_array($appConfig['port_forwarding'] ?? null) ? $appConfig['port_forwarding'] : [];
+        // Read through EffectiveConfig, NOT $appConfig.
+        //
+        // config/server.php does not compose config/port-forward.php, so
+        // $appConfig['port_forwarding'] was PERMANENTLY absent and every value
+        // below silently took its `??` literal. That made the shipped admin
+        // setting `port-forward.port_forwarding.upnp_enabled` inert in both
+        // directions: SettingsRepository resolved its default straight from
+        // config/port-forward.php (so SettingsDefaultResolvabilityTest passed and
+        // always would), while this provider — the only consumer — never saw the
+        // file at all. EffectiveConfig::overlayAppConfig() could not rescue it
+        // either, because it refuses to create keys that do not already exist.
+        //
+        // EffectiveConfig::file() loads the file AND applies any `port-forward.*`
+        // override, so these values are now genuinely admin-controlled (on reload).
+        $pfFile = EffectiveConfig::file('port-forward');
+        $pfConfig = is_array($pfFile['port_forwarding'] ?? null) ? $pfFile['port_forwarding'] : [];
         $autoEnabled = (bool) ($pfConfig['auto'] ?? true);
         $portValue = $pfConfig['port'] ?? 32400;
         $port = is_numeric($portValue) ? (int) $portValue : 32400;

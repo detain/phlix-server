@@ -728,17 +728,30 @@ try {
         $config,
         $applyCuratedCoroutineHooks
     ): void {
-        $applyCuratedCoroutineHooks();
-        // Effective-config overlay, mirroring the HTTP worker.
-        // {@see \Phlix\Config\EffectiveConfig}
-        $config = EffectiveConfig::bootstrapAndOverlay($config);
-        // Built inside the fork so the child owns its own DB state.
-        $container = ContainerFactory::create($config);
-        /** @var ConnectionPool $pool */
-        $pool = $container->get(ConnectionPool::class);
+        // Guard the whole body. The outer try/catch below only covers WORKER
+        // SETUP; anything thrown in here runs inside the forked child, where an
+        // uncaught throwable takes the process down and systemd restarts it —
+        // i.e. a crash-loop that would take the HTTP service with it. These
+        // timers are strictly best-effort: losing them degrades backups and
+        // dashboard stats, which is bad, but it must never cost availability.
+        try {
+            $applyCuratedCoroutineHooks();
+            // Effective-config overlay, mirroring the HTTP worker.
+            // {@see \Phlix\Config\EffectiveConfig}
+            $config = EffectiveConfig::bootstrapAndOverlay($config);
+            // Built inside the fork so the child owns its own DB state.
+            $container = ContainerFactory::create($config);
+            /** @var ConnectionPool $pool */
+            $pool = $container->get(ConnectionPool::class);
 
-        $timerApp = new Application($container, $config, $pool);
-        $timerApp->startBackgroundTimers();
+            $timerApp = new Application($container, $config, $pool);
+            $timerApp->startBackgroundTimers();
+        } catch (\Throwable $e) {
+            trigger_error(
+                'Background timer worker failed to start: ' . $e->getMessage(),
+                E_USER_WARNING
+            );
+        }
     };
 } catch (\Throwable $e) {
     // Best-effort, exactly like the heartbeat worker: a timer-setup failure must

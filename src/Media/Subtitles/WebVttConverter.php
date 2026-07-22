@@ -31,6 +31,15 @@ use Phlix\Media\Transcoding\Subtitles\AssWebVttCleaner;
 final class WebVttConverter
 {
     /**
+     * Defensive upper bound on the subtitle payload we will process. A text
+     * subtitle far larger than this is not legitimate; capping bounds the
+     * transient memory the conversion (which explodes the whole string) can use
+     * on a provider-supplied blob. 8 MiB is orders of magnitude above any real
+     * subtitle track.
+     */
+    private const MAX_BYTES = 8 * 1024 * 1024;
+
+    /**
      * Convert raw subtitle content to WebVTT text.
      *
      *  - `vtt`/`webvtt` → cleaned through {@see AssWebVttCleaner} (strips any
@@ -51,6 +60,10 @@ final class WebVttConverter
      */
     public static function toWebVtt(string $content, string $format): string
     {
+        if (strlen($content) > self::MAX_BYTES) {
+            $content = substr($content, 0, self::MAX_BYTES);
+        }
+
         $normalised = str_replace(["\r\n", "\r"], "\n", $content);
 
         return match (strtolower(trim($format))) {
@@ -77,13 +90,20 @@ final class WebVttConverter
     {
         $lines = explode("\n", $srt);
         $out = ['WEBVTT', ''];
+        $count = count($lines);
 
-        foreach ($lines as $line) {
+        for ($i = 0; $i < $count; $i++) {
+            $line = $lines[$i];
             $trimmed = trim($line);
 
-            // Drop the SubRip numeric cue-index lines (a line that is nothing
-            // but digits, standing alone before a timing line).
-            if ($trimmed !== '' && ctype_digit($trimmed)) {
+            // Drop a SubRip numeric cue-index line ONLY when the NEXT line is a
+            // timing line (which is how a real cue index appears). Without the
+            // look-ahead, a legitimate cue whose text is nothing but a number
+            // (e.g. a countdown "3") would be silently dropped.
+            if (
+                $trimmed !== '' && ctype_digit($trimmed)
+                && isset($lines[$i + 1]) && str_contains($lines[$i + 1], '-->')
+            ) {
                 continue;
             }
 

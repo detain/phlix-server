@@ -171,6 +171,13 @@ final class SubtitleStorage
     {
         $clean = preg_replace('/[^A-Za-z0-9._-]/', '', basename($value));
 
-        return is_string($clean) && $clean !== '' ? $clean : $fallback;
+        // Reject empty, and the traversal components `.`/`..` which survive the
+        // allowlist (dots are permitted for extensions) — defense-in-depth so a
+        // single component can never be a relative-path segment.
+        if (!is_string($clean) || $clean === '' || $clean === '.' || $clean === '..') {
+            return $fallback;
+        }
+
+        return $clean;
     }
 }

@@ -75,6 +75,25 @@ final class SubtitleStorageTest extends TestCase
         $this->assertNotSame($plain, $hi);
     }
 
+    /**
+     * Defense-in-depth: a traversal-shaped language component (`.`/`..`) must
+     * fall back to `und` rather than produce a relative-path filename segment.
+     * Regression for the review finding that `safeComponent()` accepted `.`/`..`.
+     */
+    public function testTraversalLanguageComponentFallsBackAndStaysInRoot(): void
+    {
+        $storage = new SubtitleStorage($this->baseDir);
+
+        $path = $storage->store('item-1', $this->file('..', "WEBVTT\n\nz\n", 'vtt'));
+
+        $this->assertSame($this->baseDir . '/item-1/und.vtt', $path);
+        $this->assertFileExists($path);
+        // The file is confined under <base>/item-1, never an escaped segment.
+        $real = realpath($path);
+        $this->assertIsString($real);
+        $this->assertStringStartsWith(realpath($this->baseDir) . '/item-1/', (string) $real);
+    }
+
     public function testReadRefusesPathOutsideTheBaseDir(): void
     {
         $storage = new SubtitleStorage($this->baseDir);

@@ -459,6 +459,92 @@ final class AdminRoutesTest extends TestCase
         $this->assertSame(0, $body['available']);
     }
 
+    public function test_catalog_channel_route_is_registered_and_admin_gated(): void
+    {
+        // S27: `GET /plugins/catalog/channel` must be reachable through
+        // AdminRoutes::register() and sit inside the admin group. An anonymous
+        // caller hits the AdminMiddleware 401 (route exists + gated), NOT a 404
+        // from an unregistered path — and NOT a capture by `/plugins/{name}`.
+        $response = $this->router->dispatch(
+            $this->request('GET', '/api/v1/admin/plugins/catalog/channel', null),
+        );
+
+        $this->assertSame(401, $response->statusCode);
+        $this->assertNotSame(404, $response->statusCode);
+    }
+
+    public function test_catalog_channel_get_route_reaches_controller_for_admin(): void
+    {
+        // An admin GET must reach PluginCatalogController::channel() and return
+        // the 200 `{channel, options}` envelope (default `stable`, with `dev`
+        // flagged advanced/opt-in), NOT a 404 — confirming the route binds to
+        // the controller rather than being shadowed by `/plugins/{name}`.
+        $this->users->register('admin-1', true);
+
+        $response = $this->router->dispatch(
+            $this->request('GET', '/api/v1/admin/plugins/catalog/channel', 'admin-1'),
+        );
+
+        $this->assertSame(200, $response->statusCode);
+        $body = json_decode($response->body, true);
+        $this->assertIsArray($body);
+        $this->assertSame('stable', $body['channel']);
+        $dev = array_values(array_filter(
+            $body['options'],
+            static fn (array $o): bool => $o['value'] === 'dev',
+        ));
+        $this->assertCount(1, $dev);
+        $this->assertTrue($dev[0]['advanced']);
+    }
+
+    public function test_catalog_channel_put_rejects_invalid_value_through_router(): void
+    {
+        // Enum validation end-to-end: an admin PUT with an out-of-enum channel
+        // must be refused with 400 `plugin.catalog.channel.invalid` — proving the
+        // reject happens through the full router + middleware stack, not only via
+        // a direct controller call. The store is left untouched (validated before
+        // setChannel), so no audit is recorded.
+        $this->users->register('admin-1', true);
+
+        $response = $this->router->dispatch($this->request(
+            'PUT',
+            '/api/v1/admin/plugins/catalog/channel',
+            'admin-1',
+            ['channel' => 'bogus'],
+        ));
+
+        $this->assertSame(400, $response->statusCode);
+        $body = json_decode($response->body, true);
+        $this->assertIsArray($body);
+        $this->assertSame('plugin.catalog.channel.invalid', $body['code']);
+        $this->assertArrayNotHasKey('catalog.channel.ui', $this->audit->pluginActions);
+    }
+
+    public function test_catalog_channel_put_valid_reaches_controller_and_audits(): void
+    {
+        // A valid admin PUT reaches the controller's set branch, returns the 200
+        // `{channel, options}` envelope, and audits `catalog.channel` (source ui).
+        // The channel readback is `stable` here because the test SettingsRepository
+        // is backed by a mocked Connection that does not persist the write — the
+        // persistence round-trip is covered by the service/controller unit tests;
+        // this asserts the ROUTE reaches the controller and the write path runs.
+        $this->users->register('admin-1', true);
+
+        $response = $this->router->dispatch($this->request(
+            'PUT',
+            '/api/v1/admin/plugins/catalog/channel',
+            'admin-1',
+            ['channel' => 'dev'],
+        ));
+
+        $this->assertSame(200, $response->statusCode);
+        $body = json_decode($response->body, true);
+        $this->assertIsArray($body);
+        $this->assertArrayHasKey('channel', $body);
+        $this->assertArrayHasKey('options', $body);
+        $this->assertSame(1, $this->audit->pluginActions['catalog.channel.ui'] ?? 0);
+    }
+
     public function test_install_then_enable_then_disable_then_uninstall_via_http(): void
     {
         $this->users->register('admin-1', true);

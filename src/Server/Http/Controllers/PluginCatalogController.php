@@ -94,6 +94,7 @@ final class PluginCatalogController
 
         return (new Response())->json([
             'default_source' => $this->catalog->defaultSource(),
+            'channel'        => $this->catalog->channelInfo(),
             'sources'        => $aggregate['sources'],
             'catalogs'       => $catalogs,
             'errors'         => $aggregate['errors'],
@@ -212,6 +213,49 @@ final class PluginCatalogController
             );
         }
         return (new Response())->json(['auto_update' => $this->catalog->autoUpdateEnabled()]);
+    }
+
+    /**
+     * Read or set the OFFICIAL catalog release channel (S27).
+     *
+     * `GET /api/v1/admin/plugins/catalog/channel` →
+     * `200 { channel, options: [{ value, label, description, advanced }] }`.
+     * `PUT` body `{ channel: 'stable'|'dev' }` → same shape.
+     *
+     * The `dev` option is flagged **opt-in / advanced** via its `description`
+     * and its `advanced` flag so the admin UI can gate it clearly. Per-entry
+     * `ref` + `artifactSha256` verification still gates every install on both
+     * channels — the channel only widens catalog *discovery*, never trust.
+     *
+     * @param Request              $request The HTTP request.
+     * @param array<string,string> $params  Path parameters (unused).
+     *
+     * @since 0.42.0
+     */
+    public function channel(Request $request, array $params): Response
+    {
+        if ($request->method === 'PUT') {
+            $channel = $request->input('channel');
+            if (
+                !is_string($channel)
+                || !in_array(strtolower(trim($channel)), PluginCatalogService::CHANNEL_VALUES, true)
+            ) {
+                return $this->jsonError(
+                    400,
+                    'plugin.catalog.channel.invalid',
+                    'A "channel" of "stable" or "dev" is required.',
+                    ['channel'],
+                );
+            }
+            $this->catalog->setChannel($channel);
+            $this->audit->logPluginAction(
+                $this->actor($request),
+                'catalog.channel',
+                '*',
+                ['source' => 'ui', 'channel' => $this->catalog->channel()],
+            );
+        }
+        return (new Response())->json($this->catalog->channelInfo());
     }
 
     /**

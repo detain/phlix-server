@@ -59,6 +59,22 @@ final class PluginCatalogService
     public const KEY_AUTO_UPDATE = 'plugins.auto_update';
 
     /**
+     * Settings key (dotted) for the OFFICIAL catalog release channel (S27):
+     * `stable` (default) or `dev`. See {@see channel()}.
+     */
+    public const KEY_CHANNEL = 'plugins.catalog.channel';
+
+    /**
+     * The accepted `plugins.catalog.channel` values, for input validation (S27).
+     *
+     * @var list<string>
+     */
+    public const CHANNEL_VALUES = [
+        CatalogSourceResolver::CHANNEL_STABLE,
+        CatalogSourceResolver::CHANNEL_DEV,
+    ];
+
+    /**
      * Hard-coded fallback used only when `config/plugins.php` is absent (e.g.
      * a partial checkout), so the section is never sourceless.
      */
@@ -122,6 +138,100 @@ final class PluginCatalogService
     }
 
     /**
+     * The OFFICIAL catalog release channel: `stable` (default) or `dev` (S27).
+     *
+     * `dev` tracks the catalog repo's moving `master` branch and is **opt-in /
+     * advanced**; `stable` — and any unrecognised/empty value, fail-safe — keeps
+     * the audited {@see CatalogSourceResolver::OFFICIAL_PINNED_REF} pin. The
+     * `PHLIX_PLUGINS_CATALOG_REF` env override still wins over the channel
+     * (env > setting > default). Per-entry `ref` + `artifactSha256` install-time
+     * verification is unaffected by the channel — it only widens *discovery*.
+     *
+     * @return CatalogSourceResolver::CHANNEL_STABLE|CatalogSourceResolver::CHANNEL_DEV
+     *
+     * @since 0.42.0
+     */
+    public function channel(): string
+    {
+        $value = $this->settings->getEffective(self::KEY_CHANNEL);
+        if (is_string($value) && strtolower(trim($value)) === CatalogSourceResolver::CHANNEL_DEV) {
+            return CatalogSourceResolver::CHANNEL_DEV;
+        }
+        return CatalogSourceResolver::CHANNEL_STABLE;
+    }
+
+    /**
+     * Persist the OFFICIAL catalog release channel. Any value other than `dev`
+     * is stored as `stable` (fail-safe default).
+     *
+     * @param string $channel `stable` or `dev`.
+     *
+     * @since 0.42.0
+     */
+    public function setChannel(string $channel): void
+    {
+        $normalized = strtolower(trim($channel)) === CatalogSourceResolver::CHANNEL_DEV
+            ? CatalogSourceResolver::CHANNEL_DEV
+            : CatalogSourceResolver::CHANNEL_STABLE;
+        $this->settings->set(self::KEY_CHANNEL, $normalized, 'string');
+    }
+
+    /**
+     * Channel state + option metadata for the admin UI, including the opt-in /
+     * advanced labelling of the `dev` channel (S27). Server-side source of truth
+     * so the admin SPA renders one consistent, auditable description of what the
+     * channel does and how `dev` differs.
+     *
+     * @return array{
+     *     channel: string,
+     *     options: list<array{value: string, label: string, description: string, advanced: bool}>
+     * }
+     *
+     * @since 0.42.0
+     */
+    public function channelInfo(): array
+    {
+        return [
+            'channel' => $this->channel(),
+            'options' => [
+                [
+                    'value'       => CatalogSourceResolver::CHANNEL_STABLE,
+                    'label'       => 'Stable (recommended)',
+                    'description' => 'Tracks the audited, pinned catalog release. The default and recommended channel.',
+                    'advanced'    => false,
+                ],
+                [
+                    'value'       => CatalogSourceResolver::CHANNEL_DEV,
+                    'label'       => 'Development (advanced)',
+                    'description' => 'Opt-in / advanced: tracks the catalog repository\'s moving "'
+                        . CatalogSourceResolver::DEV_REF
+                        . '" branch to surface the newest, unreleased catalog entries. '
+                        . 'Every install is still individually verified by its pinned commit and '
+                        . 'artifact checksum, so this only affects what is discovered, not what is trusted.',
+                    'advanced'    => true,
+                ],
+            ],
+        ];
+    }
+
+    /**
+     * Normalise a catalog URL to its raw `plugins.json`, applying the current
+     * release channel to the OFFICIAL catalog's ref (S27). Non-official repos
+     * are unaffected. Centralised so every normalize call in this service uses
+     * one consistent channel ref (canonical dedup comparisons stay coherent).
+     */
+    private function normalizeSource(
+        string $url,
+        string $file = CatalogSourceResolver::CATALOG_FILE,
+    ): string {
+        return CatalogSourceResolver::normalize(
+            $url,
+            $file,
+            CatalogSourceResolver::refForChannel($this->channel()),
+        );
+    }
+
+    /**
      * Operator-added extra catalog sources (excludes the default).
      *
      * @return list<string>
@@ -182,11 +292,11 @@ final class PluginCatalogService
         // Compare CANONICAL fetch URLs so trailing-slash / .git / ref variants of
         // the same repo are recognised (github.com/detain/phlix-plugins,
         // …/phlix-plugins/, …/phlix-plugins.git all normalise to one raw URL).
-        $normalized = CatalogSourceResolver::normalize($clean);
+        $normalized = $this->normalizeSource($clean);
 
         // Adding the built-in default (the exact "silent no-op" users hit) — tell
         // them clearly instead of returning 200 with no visible change.
-        if ($normalized === CatalogSourceResolver::normalize($this->defaultSource())) {
+        if ($normalized === $this->normalizeSource($this->defaultSource())) {
             throw new \InvalidArgumentException(
                 'That is the built-in default catalog — it is always available and does not need to be added.',
                 409,
@@ -195,7 +305,7 @@ final class PluginCatalogService
 
         $extras = $this->extraSources();
         foreach ($extras as $existing) {
-            if (CatalogSourceResolver::normalize($existing) === $normalized) {
+            if ($this->normalizeSource($existing) === $normalized) {
                 throw new \InvalidArgumentException('That catalog is already in your list.', 409);
             }
         }
@@ -247,7 +357,7 @@ final class PluginCatalogService
             throw new CatalogFetchException($source, 'Catalog source URL is empty.');
         }
 
-        $url = CatalogSourceResolver::normalize($source);
+        $url = $this->normalizeSource($source);
 
         // SSRF guard at fetch time on the resolved raw URL: the normalizer can
         // rewrite a repo URL into a different host, so re-validate before the

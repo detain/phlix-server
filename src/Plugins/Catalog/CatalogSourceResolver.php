@@ -76,20 +76,52 @@ final class CatalogSourceResolver
     public const PINNED_REF_ENV = 'PHLIX_PLUGINS_CATALOG_REF';
 
     /**
+     * Release channels for the OFFICIAL first-party catalog (S27). The channel
+     * selects which ref the official catalog resolves to when no explicit ref
+     * is given in the URL and no {@see PINNED_REF_ENV} override is set:
+     *
+     *  - {@see CHANNEL_STABLE} (default) → {@see OFFICIAL_PINNED_REF}, the
+     *    audited pinned release tag.
+     *  - {@see CHANNEL_DEV} → {@see DEV_REF} (`master`), the moving default
+     *    branch — **opt-in / advanced**.
+     *
+     * The channel only widens catalog *discovery*: per-entry `ref` +
+     * `artifactSha256` verification still gates every actual install on BOTH
+     * channels (see {@see PluginCatalogService::pinFor()} +
+     * {@see \Phlix\Plugins\PluginLoader::install()}), so `dev` does not move the
+     * trust boundary.
+     */
+    public const CHANNEL_STABLE = 'stable';
+    public const CHANNEL_DEV = 'dev';
+
+    /** The ref the `dev` channel tracks: the catalog repo's moving default branch. */
+    public const DEV_REF = 'master';
+
+    /**
      * Rewrite a GitHub repository URL to a raw file in its default branch
      * (`$file`, default `plugins.json`), or return the URL unchanged when it
      * already names a `.json` file or is not a recognised GitHub repository URL.
      *
-     * @param string $url  The raw repository/source URL.
-     * @param string $file Repo-relative file to resolve to (e.g. `plugin.json`
-     *                     for a plugin's own manifest, used by update checks).
+     * @param string      $url         The raw repository/source URL.
+     * @param string      $file        Repo-relative file to resolve to (e.g.
+     *                                 `plugin.json` for a plugin's own manifest,
+     *                                 used by update checks).
+     * @param string|null $officialRef Ref selected by the caller's catalog
+     *                                 channel for the OFFICIAL repo (S27; see
+     *                                 {@see refForChannel()}). `null` preserves
+     *                                 the historic env-or-pinned behaviour. The
+     *                                 {@see PINNED_REF_ENV} env override still
+     *                                 takes precedence over this value.
      *
      * @return string A raw URL the caller can fetch.
      *
      * @since 0.33.0
      */
-    public static function normalize(string $url, string $file = self::CATALOG_FILE): string
-    {
+    public static function normalize(
+        string $url,
+        string $file = self::CATALOG_FILE,
+        ?string $officialRef = null,
+    ): string {
         $trimmed = trim($url);
         if ($trimmed === '') {
             return $url;
@@ -113,7 +145,7 @@ final class CatalogSourceResolver
             // operator's install targets. Operator-added catalogs (any other
             // owner/repo) keep `HEAD` but their entries are subject to
             // default-deny at install time (PluginLoader::assertVerifiedOrOverride).
-            $ref = self::isOfficialRepo($owner, $name) ? self::officialPinnedRef() : 'HEAD';
+            $ref = self::isOfficialRepo($owner, $name) ? self::officialPinnedRef($officialRef) : 'HEAD';
         }
 
         return sprintf(
@@ -135,16 +167,49 @@ final class CatalogSourceResolver
     }
 
     /**
-     * The configured pinned ref for the official catalog: the
-     * {@see PINNED_REF_ENV} env override when set, else {@see OFFICIAL_PINNED_REF}.
+     * The configured ref for the official catalog, resolved in strict
+     * precedence order (highest first):
+     *
+     *   1. the {@see PINNED_REF_ENV} env override, when set — the operator
+     *      escape hatch, always wins;
+     *   2. `$channelRef` — the ref selected by the `plugins.catalog.channel`
+     *      setting (`master` for `dev`), when the caller supplies one;
+     *   3. {@see OFFICIAL_PINNED_REF} — the audited default (stable channel).
+     *
+     * i.e. **env > setting > default** (S27). Passing `$channelRef = null`
+     * preserves the historic env-or-pinned behaviour exactly.
+     *
+     * @param string|null $channelRef Setting-derived ref (see {@see refForChannel()}),
+     *                                or `null` when the caller supplies no channel.
      */
-    public static function officialPinnedRef(): string
+    public static function officialPinnedRef(?string $channelRef = null): string
     {
         $env = getenv(self::PINNED_REF_ENV);
         if (is_string($env) && trim($env) !== '') {
             return trim($env);
         }
+        if ($channelRef !== null && trim($channelRef) !== '') {
+            return trim($channelRef);
+        }
         return self::OFFICIAL_PINNED_REF;
+    }
+
+    /**
+     * Map a catalog channel name to the OFFICIAL-catalog ref it selects, or
+     * `null` for the stable/default channel (which keeps {@see OFFICIAL_PINNED_REF}).
+     *
+     * Unknown, empty, or mixed-case values are treated as **stable** (fail-safe):
+     * a typo can never silently promote installs to the moving `dev` branch.
+     *
+     * @param string $channel A channel name (`stable` | `dev`).
+     *
+     * @return string|null {@see DEV_REF} for the `dev` channel, else `null`.
+     *
+     * @since 0.42.0
+     */
+    public static function refForChannel(string $channel): ?string
+    {
+        return strtolower(trim($channel)) === self::CHANNEL_DEV ? self::DEV_REF : null;
     }
 
     /**

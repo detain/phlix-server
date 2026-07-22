@@ -9,6 +9,37 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Added
 
+- **`plugins.catalog.channel` — plugin-catalog release channel (`stable` / `dev`).**
+  Lets the OFFICIAL first-party plugin catalog (`detain/phlix-plugins`) track
+  something other than a hard-pinned release tag, without losing the safe default.
+  Adds the `plugins.catalog.channel` setting (`stable` **default** | `dev`) and a
+  `GET/PUT /api/v1/admin/plugins/catalog/channel` admin endpoint (admin-gated like
+  every sibling plugin route; `PUT` validates the value against `stable|dev` →
+  `400 plugin.catalog.channel.invalid`, audits `catalog.channel`). The same
+  `{ channel, options: [{ value, label, description, advanced }] }` shape is also
+  embedded under `channel` in the `GET /plugins/catalog` response.
+
+  Channel resolution has strict precedence **env > setting > default**:
+  1. the `PHLIX_PLUGINS_CATALOG_REF` env override — unchanged, still highest;
+  2. `plugins.catalog.channel` — `dev` resolves the official catalog to its moving
+     `master` branch (`CatalogSourceResolver::DEV_REF`);
+  3. `CatalogSourceResolver::OFFICIAL_PINNED_REF` — the audited pinned tag, used for
+     `stable` / default. Any unrecognised or empty value fails **safe to `stable`**
+     in three independent layers (`refForChannel()`, `channel()`, `setChannel()`).
+
+  `dev` is labelled **opt-in / advanced** server-side via `PluginCatalogService::channelInfo()`
+  (the `dev` option carries `advanced: true` and a description explaining it tracks
+  the moving `master` branch); the admin Plugins page renders that metadata verbatim.
+  The channel only affects the OFFICIAL catalog and only widens catalog **discovery**
+  — operator-added catalogs still resolve at `HEAD`, and **install-time integrity
+  verification is unchanged**: per-entry `ref` + `artifactSha256` still gate every
+  actual install on BOTH channels (`PluginCatalogService::pinFor()` /
+  `PluginLoader::install()` untouched), so `dev` never moves the trust boundary.
+  Passing `null` for the new `CatalogSourceResolver::normalize()` `$officialRef`
+  argument reproduces the historic env-or-pinned behaviour byte-for-byte, so existing
+  callers are unaffected. GitHub-Releases-API "always latest" (updates.md #27 option b)
+  is intentionally deferred. Class (a) LIVE, `restart: false`.
+
 - **`metadata.overwrite_existing` — respect hand-corrected metadata on rescan.**
   A metadata (re)match unconditionally did `array_merge($existing, $resolved)` at
   every persist site, so freshly-resolved fields always won and there was no way to

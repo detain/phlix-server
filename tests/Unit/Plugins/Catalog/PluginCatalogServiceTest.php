@@ -227,6 +227,82 @@ final class PluginCatalogServiceTest extends TestCase
         self::assertSame('phlix-plugin-anidb', $catalog['plugins'][0]->name);
     }
 
+    public function test_channel_defaults_to_stable(): void
+    {
+        $store = [];
+        self::assertSame('stable', $this->service($this->settings($store))->channel());
+    }
+
+    public function test_channel_reads_the_dev_setting(): void
+    {
+        $store = [PluginCatalogService::KEY_CHANNEL => 'dev'];
+        self::assertSame('dev', $this->service($this->settings($store))->channel());
+    }
+
+    public function test_channel_is_fail_safe_for_unknown_values(): void
+    {
+        // A typo or stale value must never silently promote to `dev`.
+        $store = [PluginCatalogService::KEY_CHANNEL => 'garbage'];
+        self::assertSame('stable', $this->service($this->settings($store))->channel());
+    }
+
+    public function test_set_channel_persists_normalized_value(): void
+    {
+        $store = [];
+        $service = $this->service($this->settings($store));
+
+        $service->setChannel('DEV'); // case-insensitive
+        self::assertSame('dev', $store[PluginCatalogService::KEY_CHANNEL]);
+        self::assertSame('dev', $service->channel());
+
+        $service->setChannel('nonsense'); // anything but dev → stable
+        self::assertSame('stable', $store[PluginCatalogService::KEY_CHANNEL]);
+        self::assertSame('stable', $service->channel());
+    }
+
+    /**
+     * S27: on the `dev` channel the OFFICIAL catalog is fetched from the moving
+     * `master` branch instead of the pinned release tag.
+     */
+    public function test_dev_channel_fetches_official_catalog_from_master(): void
+    {
+        $masterRaw = 'https://raw.githubusercontent.com/detain/phlix-plugins/master/plugins.json';
+        $body = json_encode([
+            'name' => 'Phlix Official Plugins (dev)',
+            'plugins' => [
+                ['name' => 'phlix-plugin-anidb', 'repo' => 'https://github.com/detain/phlix-plugin-anidb'],
+            ],
+        ], JSON_THROW_ON_ERROR);
+
+        $store = [
+            PluginCatalogService::KEY_DEFAULT_SOURCE => self::DEFAULT_SOURCE,
+            PluginCatalogService::KEY_CHANNEL => 'dev',
+        ];
+        $service = $this->service($this->settings($store), [$masterRaw => $body]);
+
+        $catalog = $service->fetchCatalog(self::DEFAULT_SOURCE);
+
+        self::assertSame('Phlix Official Plugins (dev)', $catalog['name']);
+        self::assertCount(1, $catalog['plugins']);
+    }
+
+    public function test_channel_info_flags_dev_as_advanced_opt_in(): void
+    {
+        $store = [];
+        $info = $this->service($this->settings($store))->channelInfo();
+
+        self::assertSame('stable', $info['channel']);
+        $byValue = [];
+        foreach ($info['options'] as $option) {
+            $byValue[$option['value']] = $option;
+        }
+        self::assertArrayHasKey('stable', $byValue);
+        self::assertArrayHasKey('dev', $byValue);
+        self::assertFalse($byValue['stable']['advanced']);
+        self::assertTrue($byValue['dev']['advanced']);
+        self::assertStringContainsStringIgnoringCase('opt-in', $byValue['dev']['description']);
+    }
+
     public function test_fetch_catalog_throws_on_transport_failure(): void
     {
         $store = [PluginCatalogService::KEY_DEFAULT_SOURCE => self::DEFAULT_SOURCE];

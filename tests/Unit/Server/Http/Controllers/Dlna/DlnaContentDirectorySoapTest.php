@@ -149,6 +149,25 @@ final class DlnaContentDirectorySoapTest extends TestCase
     }
 
     /**
+     * CONSEQUENCE: a well-formed envelope with NO action element under <Body>
+     * is rejected, not silently treated as some default action.
+     *
+     * `parseSoapBody()` returns null when `firstBodyChild()` finds nothing under
+     * the SOAP Body, and `handle()` maps that to 400 "Invalid SOAP body".
+     */
+    public function test_a_body_without_an_action_element_is_rejected(): void
+    {
+        $envelope = '<?xml version="1.0"?>'
+            . '<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">'
+            . '<s:Body></s:Body></s:Envelope>';
+
+        $response = $this->post($envelope);
+
+        self::assertSame(400, $response->statusCode);
+        self::assertStringContainsString('Invalid SOAP body', $response->body);
+    }
+
+    /**
      * SECURITY: embedded metadata must not bleed into a top-level argument.
      *
      * The old walk read "the first text node for each local-name ANYWHERE in

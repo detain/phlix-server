@@ -265,4 +265,39 @@ class DlnaServerTest extends TestCase
         $this->server->stop();
         $this->assertFalse($this->server->isRunning());
     }
+
+    /**
+     * S28 (b): after de-duplication onto SoapArgumentExtractor, parseSoapBody
+     * still returns an empty positional list for an unknown action (not in the
+     * ACTION_ARGUMENTS table) rather than throwing.
+     */
+    public function testParseSoapBodyReturnsEmptyForUnknownAction(): void
+    {
+        $method = new \ReflectionMethod(DlnaServer::class, 'parseSoapBody');
+        $method->setAccessible(true);
+
+        $body = '<u:Frobnicate xmlns:u="urn:x">'
+            . '<InstanceID>0</InstanceID></u:Frobnicate>';
+
+        self::assertSame([], $method->invoke($this->server, $body, 'Frobnicate'));
+    }
+
+    /**
+     * S28 (b): a known action whose element is ABSENT from the body yields an
+     * empty positional list (findActionElement() returns null), so the handler
+     * runs on its own defaults instead of on stale/positional garbage.
+     */
+    public function testParseSoapBodyReturnsEmptyWhenActionElementMissing(): void
+    {
+        $method = new \ReflectionMethod(DlnaServer::class, 'parseSoapBody');
+        $method->setAccessible(true);
+
+        // A well-formed envelope that contains NO <Browse> element at all.
+        $body = '<?xml version="1.0"?>'
+            . '<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">'
+            . '<s:Body><u:Search xmlns:u="urn:x"><ContainerID>0</ContainerID></u:Search></s:Body>'
+            . '</s:Envelope>';
+
+        self::assertSame([], $method->invoke($this->server, $body, 'Browse'));
+    }
 }

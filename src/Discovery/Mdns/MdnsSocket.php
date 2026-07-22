@@ -126,9 +126,33 @@ class MdnsSocket
      */
     public function close(): void
     {
-        if ($this->socket !== null) {
-            @socket_close($this->socket);
-            $this->socket = null;
+        if ($this->socket === null) {
+            return;
+        }
+
+        // Capture and clear FIRST so a re-entrant close() (this also runs from
+        // __destruct) is an idempotent no-op even if socket_close() below
+        // throws.
+        $socket = $this->socket;
+        $this->socket = null;
+
+        try {
+            // `@` suppresses a benign "not a valid Socket" warning on an
+            // already-freed handle; it does NOT suppress the thrown TypeError
+            // below (error suppression only affects diagnostics), so the guard
+            // still catches the coroutine-runtime case.
+            @socket_close($socket);
+        } catch (\Throwable $e) {
+            // Under the Swoole coroutine runtime SWOOLE_HOOK_SOCKETS hands
+            // socket_create() back a Swoole\Coroutine\Socket; the NATIVE
+            // socket_close() then rejects it with a TypeError once the
+            // coroutine runtime is torn down at worker shutdown — which is
+            // exactly when __destruct fires. Socket cleanup must NEVER fatal a
+            // worker (it fatal'd the whole HTTP fleet on a restart), and the
+            // underlying fd is reclaimed by the OS at process exit regardless.
+            $this->logger->debug('mDNS: socket_close failed (coroutine-runtime socket at shutdown)', [
+                'error' => $e->getMessage(),
+            ]);
         }
     }
 

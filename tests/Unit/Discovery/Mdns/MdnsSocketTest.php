@@ -101,6 +101,46 @@ class MdnsSocketTest extends TestCase
         $this->addToAssertionCount(1);
     }
 
+    public function testCloseIsIdempotentAndNullsSocket(): void
+    {
+        $mdns = new MdnsSocket(null, 5);
+        $native = socket_create(AF_INET, SOCK_DGRAM, SOL_UDP);
+        self::assertInstanceOf(\Socket::class, $native);
+
+        $prop = new \ReflectionProperty(MdnsSocket::class, 'socket');
+        $prop->setValue($mdns, $native);
+
+        $mdns->close();
+        self::assertNull($prop->getValue($mdns));
+
+        // A second close() (e.g. __destruct after an explicit close) must be a
+        // safe no-op, never a double-free or a throw.
+        $mdns->close();
+        $this->addToAssertionCount(1);
+    }
+
+    /**
+     * Regression: close() must NOT let socket teardown fatal a worker. The
+     * production trigger was a Swoole\Coroutine\Socket rejected by the native
+     * socket_close() at shutdown (a TypeError from __destruct that took out the
+     * whole HTTP fleet). We can't materialise a Swoole socket in a unit test,
+     * so we exercise the same guard with an already-freed handle: close() must
+     * complete cleanly and clear the reference regardless.
+     */
+    public function testCloseSwallowsFailureFromAnAlreadyFreedSocket(): void
+    {
+        $mdns = new MdnsSocket(null, 5);
+        $native = socket_create(AF_INET, SOCK_DGRAM, SOL_UDP);
+        self::assertInstanceOf(\Socket::class, $native);
+        socket_close($native); // free it out-of-band
+
+        $prop = new \ReflectionProperty(MdnsSocket::class, 'socket');
+        $prop->setValue($mdns, $native);
+
+        $mdns->close();
+        self::assertNull($prop->getValue($mdns));
+    }
+
     public function testConstants(): void
     {
         $this->assertEquals('224.0.0.251', MdnsSocket::MULTICAST_ADDR);

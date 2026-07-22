@@ -22,14 +22,22 @@ use Workerman\MySQL\Connection;
 /**
  * MusicLibraryScanner discovers and indexes music files into the Artist→Album→Track hierarchy.
  *
- * Scans directories for audio files (mp3, flac, m4a, ogg, wav), reads metadata via
- * FFmpeg/ffprobe (artist, album, title, track number, disc number, duration), and creates
- * artist/album/track entries with media_items FK.
+ * Scans directories for audio files (mp3, flac, m4a, ogg, wav), reads metadata
+ * (artist, album, title, track number, disc number, duration) — natively via
+ * getID3 first (a pure-PHP tag reader, ~1-3 ms/file), falling back to
+ * FFmpeg/ffprobe only when getID3 yields nothing usable — and creates
+ * artist/album/track entries with a `media_items` FK.
+ *
+ * **Progress.** {@see self::scanDirectory()} accepts an optional
+ * `(processed, total, currentPath)` callback and ticks it once per audio file
+ * during the (slow) tag-reading pass, so the async scan worker can stream a real
+ * percentage onto the job row instead of leaving the UI frozen. Use
+ * {@see self::countAudioFiles()} to pre-compute the denominator.
  *
  * @author Phlix Development Team
- * @version 1.0.0
+ * @version 1.1.0
  * @description Scans directories for audio files and builds Artist→Album→Track hierarchy
- * @see FfmpegRunner For FFprobe metadata extraction
+ * @see FfmpegRunner For FFprobe metadata extraction (fallback)
  * @see ScanResult For scan operation results
  *
  * @autowire
@@ -45,8 +53,11 @@ class MusicLibraryScanner
     /** @var Connection Database connection */
     private Connection $db;
 
-    /** @var FfmpegRunner FFprobe runner for metadata extraction */
+    /** @var FfmpegRunner FFprobe runner for metadata extraction (fallback) */
     private FfmpegRunner $ffmpeg;
+
+    /** @var \getID3|null Lazily-constructed native tag reader. */
+    private ?\getID3 $id3Reader = null;
 
     /**
      * Constructor for MusicLibraryScanner.
@@ -96,13 +107,38 @@ class MusicLibraryScanner
     }
 
     /**
+     * Counts the audio files under a path that {@see self::scanDirectory()}
+     * would process — using the SAME extension + skip filters — so a caller can
+     * pre-compute the progress denominator without reading any tags.
+     *
+     * @param string $path Root path to count under.
+     * @return int Number of scannable audio files (0 when the path is unreadable).
+     */
+    public function countAudioFiles(string $path): int
+    {
+        if (!is_dir($path) || !is_readable($path)) {
+            return 0;
+        }
+
+        $count = 0;
+        foreach ($this->audioFileIterator($path) as $file) {
+            unset($file);
+            $count++;
+        }
+
+        return $count;
+    }
+
+    /**
      * Scans a directory tree for audio files and builds the Artist→Album→Track hierarchy.
      *
-     * Recursively walks the given path, probes metadata from each audio file,
+     * Recursively walks the given path, reads metadata from each audio file,
      * and upserts the data into music_artists, music_albums, and music_tracks tables
      * with corresponding media_items entries.
      *
-     * @param string $path Root path to scan
+     * @param string        $path       Root path to scan
+     * @param callable|null $onProgress Optional `(int $processed, int $total, string $currentPath): void`
+     *                                  sink, ticked once per audio file during the tag-reading pass.
      * @return ScanResult Summary of the scan operation
      *
      * @example
@@ -112,7 +148,7 @@ class MusicLibraryScanner
      * echo "Scanned {$result->scanned}, added {$result->added}, updated {$result->updated}";
      * ```
      */
-    public function scanDirectory(string $path): ScanResult
+    public function scanDirectory(string $path, ?callable $onProgress = null): ScanResult
     {
         $result = new ScanResult();
         $startTime = hrtime(true);
@@ -125,8 +161,10 @@ class MusicLibraryScanner
 
         $this->logger->info('Starting music directory scan', ['path' => $path]);
 
-        // Group files by (artist, album) to count tracks and process efficiently
-        $albumMap = $this->groupFilesByAlbum($path);
+        // Group files by (artist, album) to count tracks and process efficiently.
+        // Progress is ticked here, during the tag-reading pass (the slow part).
+        $total = $onProgress !== null ? $this->countAudioFiles($path) : 0;
+        $albumMap = $this->groupFilesByAlbum($path, $total, $onProgress);
 
         // Track artist/album IDs to handle the hierarchy
         /** @var array<string, array{id:int, media_item_id:int|null}> $artistCache */
@@ -135,57 +173,77 @@ class MusicLibraryScanner
         $albumCache = [];
 
         foreach ($albumMap as $albumKey => $albumData) {
-            $result->scanned++;
+            unset($albumKey);
 
-            $artistName = $albumData['artist'];
-            $albumTitle = $albumData['album'];
-            $year = $albumData['year'];
-            $files = $albumData['files'];
+            // Defensive: a single malformed album/track must not abort the whole
+            // scan. The DB layer throws on error (it does not return false), so
+            // without this an unexpected row kills the entire library index.
+            try {
+                $result->scanned++;
 
-            // Early exit: skip if no valid artist name
-            if ($artistName === '' || $artistName === 'Unknown Artist') {
-                $this->logger->debug('Skipping album with unknown artist', ['album' => $albumTitle]);
-                continue;
-            }
+                $artistName = $albumData['artist'];
+                $albumTitle = $albumData['album'];
+                $year = $albumData['year'];
+                $files = $albumData['files'];
 
-            // Upsert artist and get media_item_id
-            $artistResult = $this->upsertArtist($artistName, $artistCache);
-            if ($artistResult === null) {
-                $this->logger->warning('Failed to upsert artist', ['artist' => $artistName]);
-                continue;
-            }
-
-            $artistId = $artistResult['id'];
-            $artistMediaItemId = $artistResult['media_item_id'];
-
-            // Count total tracks for this album
-            $totalTracks = count($files);
-
-            // Upsert album
-            $albumResult = $this->upsertAlbum(
-                $artistId,
-                $artistMediaItemId,
-                $albumTitle,
-                $year,
-                $totalTracks,
-                $albumCache
-            );
-            if ($albumResult === null) {
-                $this->logger->warning('Failed to upsert album', ['album' => $albumTitle]);
-                continue;
-            }
-
-            $albumId = $albumResult['id'];
-            $albumMediaItemId = $albumResult['media_item_id'];
-
-            // Upsert tracks
-            foreach ($files as $fileInfo) {
-                $trackResult = $this->upsertTrack($albumId, $albumMediaItemId, $artistId, $fileInfo);
-                if ($trackResult === 'added') {
-                    $result->added++;
-                } elseif ($trackResult === 'updated') {
-                    $result->updated++;
+                // Early exit: skip if no valid artist name
+                if ($artistName === '' || $artistName === 'Unknown Artist') {
+                    $this->logger->debug('Skipping album with unknown artist', ['album' => $albumTitle]);
+                    continue;
                 }
+
+                // Upsert artist and get media_item_id
+                $artistResult = $this->upsertArtist($artistName, $artistCache);
+                if ($artistResult === null) {
+                    $this->logger->warning('Failed to upsert artist', ['artist' => $artistName]);
+                    continue;
+                }
+
+                $artistId = $artistResult['id'];
+                $artistMediaItemId = $artistResult['media_item_id'];
+
+                // Count total tracks for this album
+                $totalTracks = count($files);
+
+                // Upsert album
+                $albumResult = $this->upsertAlbum(
+                    $artistId,
+                    $artistMediaItemId,
+                    $albumTitle,
+                    $year,
+                    $totalTracks,
+                    $albumCache
+                );
+                if ($albumResult === null) {
+                    $this->logger->warning('Failed to upsert album', ['album' => $albumTitle]);
+                    continue;
+                }
+
+                $albumId = $albumResult['id'];
+                $albumMediaItemId = $albumResult['media_item_id'];
+
+                // Upsert tracks (metadata already read during grouping — no re-probe).
+                foreach ($files as $fileInfo) {
+                    $trackResult = $this->upsertTrack(
+                        $albumId,
+                        $albumMediaItemId,
+                        $artistId,
+                        $fileInfo['file'],
+                        $fileInfo['meta']
+                    );
+                    if ($trackResult === 'added') {
+                        $result->added++;
+                    } elseif ($trackResult === 'updated') {
+                        $result->updated++;
+                    }
+                }
+            } catch (\Throwable $e) {
+                $this->logger->error('Skipping album after error during indexing', [
+                    'album' => $albumData['album'] ?? '(unknown)',
+                    'artist' => $albumData['artist'] ?? '(unknown)',
+                    'error' => $e->getMessage(),
+                ]);
+                continue;
             }
         }
 
@@ -203,27 +261,21 @@ class MusicLibraryScanner
     }
 
     /**
-     * Groups audio files by artist and album.
+     * Yields every scannable audio file under a path (extension + skip filters
+     * applied), so counting and grouping share one definition of "in scope".
      *
-     * @param string $path Root path to scan
-     * @return array<string, array{artist:string, album:string, year:?int, files:array<SplFileInfo>}>
+     * @param string $path Root path to walk.
+     * @return \Generator<int, SplFileInfo>
      */
-    private function groupFilesByAlbum(string $path): array
+    private function audioFileIterator(string $path): \Generator
     {
-        /** @var array<string, array{artist:string, album:string, year:?int, files:list<SplFileInfo>}> $albumMap */
-        $albumMap = [];
-
         $iterator = new \RecursiveIteratorIterator(
             new \RecursiveDirectoryIterator($path, \RecursiveDirectoryIterator::SKIP_DOTS),
             \RecursiveIteratorIterator::LEAVES_ONLY
         );
 
         foreach ($iterator as $file) {
-            if (!($file instanceof SplFileInfo)) {
-                continue;
-            }
-
-            if ($file->isDir()) {
+            if (!($file instanceof SplFileInfo) || $file->isDir()) {
                 continue;
             }
 
@@ -236,8 +288,38 @@ class MusicLibraryScanner
                 continue;
             }
 
-            // Probe metadata from file using FFprobe
+            yield $file;
+        }
+    }
+
+    /**
+     * Groups audio files by artist and album, reading each file's tags exactly
+     * once and caching the result alongside the file (so the sort below and the
+     * later track upsert never re-read tags).
+     *
+     * @param string        $path       Root path to scan
+     * @param int           $total      Progress denominator (audio file count)
+     * @param callable|null $onProgress Optional `(processed, total, currentPath)` sink
+     * @return array<string, array{artist:string, album:string, year:?int,
+     *     files:list<array{file:SplFileInfo, meta:array<string, mixed>}>}>
+     */
+    private function groupFilesByAlbum(string $path, int $total, ?callable $onProgress): array
+    {
+        /** @var array<string, array{artist:string, album:string, year:?int,
+         *     files:list<array{file:SplFileInfo, meta:array<string, mixed>}>}> $albumMap */
+        $albumMap = [];
+        $processed = 0;
+
+        foreach ($this->audioFileIterator($path) as $file) {
+            $processed++;
+            if ($onProgress !== null) {
+                $onProgress($processed, $total, $file->getPathname());
+            }
+
+            // Read metadata from file (getID3 first, ffprobe fallback).
             $metadata = $this->probeMetadata($file->getPathname());
+
+            $extension = strtolower($file->getExtension());
 
             // Determine artist and album from tags
             $artist = is_string($metadata['artist']) ? $metadata['artist'] : 'Unknown Artist';
@@ -256,22 +338,19 @@ class MusicLibraryScanner
                 ];
             }
 
-            $albumMap[$key]['files'][] = $file;
+            $albumMap[$key]['files'][] = ['file' => $file, 'meta' => $metadata];
         }
 
-        // Sort files within each album by track number
+        // Sort files within each album by track number using the CACHED metadata.
         foreach ($albumMap as $key => $albumData) {
             unset($albumData); // Suppress unused warning
-            usort($albumMap[$key]['files'], function (SplFileInfo $a, SplFileInfo $b): int {
-                $metaA = $this->probeMetadata($a->getPathname());
-                $metaB = $this->probeMetadata($b->getPathname());
-
-                $trackA = is_numeric($metaA['track_number'] ?? null) ? (int)$metaA['track_number'] : 0;
-                $trackB = is_numeric($metaB['track_number'] ?? null) ? (int)$metaB['track_number'] : 0;
+            usort($albumMap[$key]['files'], function (array $a, array $b): int {
+                $trackA = is_numeric($a['meta']['track_number'] ?? null) ? (int)$a['meta']['track_number'] : 0;
+                $trackB = is_numeric($b['meta']['track_number'] ?? null) ? (int)$b['meta']['track_number'] : 0;
 
                 // If track numbers are equal, compare by filename
                 if ($trackA === $trackB) {
-                    return strcmp($a->getFilename(), $b->getFilename());
+                    return strcmp($a['file']->getFilename(), $b['file']->getFilename());
                 }
 
                 return $trackA - $trackB;
@@ -282,18 +361,162 @@ class MusicLibraryScanner
     }
 
     /**
-     * Probes metadata from an audio file using FFprobe.
+     * Reads metadata from an audio file: getID3 (native, fast) first, then
+     * ffprobe, then a filename-derived fallback that always succeeds.
      *
      * @param string $path Absolute filesystem path
      * @return array<string, mixed> Metadata including artist, album, title, track_number, disc_number, duration
      */
     private function probeMetadata(string $path): array
     {
+        $viaId3 = $this->probeViaGetId3($path);
+        if ($viaId3 !== null) {
+            return $viaId3;
+        }
+
+        $viaFfprobe = $this->probeViaFfprobe($path);
+        if ($viaFfprobe !== null) {
+            return $viaFfprobe;
+        }
+
+        return $this->fallbackMetadataFromFilename($path);
+    }
+
+    /**
+     * Reads tags natively with getID3.
+     *
+     * @param string $path Absolute filesystem path
+     * @return array<string, mixed>|null Mapped metadata, or null when getID3 read
+     *                                   nothing usable (so a fallback should run).
+     */
+    protected function probeViaGetId3(string $path): ?array
+    {
+        try {
+            $info = $this->getId3Reader()->analyze($path);
+            if (!is_array($info)) {
+                return null;
+            }
+
+            $comments = isset($info['comments']) && is_array($info['comments']) ? $info['comments'] : [];
+
+            return $this->mapId3Comments($comments, $info);
+        } catch (\Throwable $e) {
+            $this->logger->debug('getID3 read failed, will try ffprobe', [
+                'path' => $path,
+                'error' => $e->getMessage(),
+            ]);
+            return null;
+        }
+    }
+
+    /**
+     * Maps a getID3 `comments` block (its format-agnostic merged tag view) onto
+     * the scanner's canonical metadata shape.
+     *
+     * @param array<string, mixed> $comments getID3 `$info['comments']`
+     * @param array<string, mixed> $info     Full getID3 analyze() result (for playtime)
+     * @return array<string, mixed>|null Canonical metadata, or null when no
+     *                                   identifying tag (artist/album/title) is present.
+     */
+    protected function mapId3Comments(array $comments, array $info): ?array
+    {
+        $artist = $this->firstComment($comments, 'artist');
+        $albumArtist = $this->firstComment($comments, 'band', 'album_artist', 'albumartist');
+        $album = $this->firstComment($comments, 'album');
+        $title = $this->firstComment($comments, 'title');
+
+        // No identifying tag → let ffprobe try, then filename fallback.
+        if (($artist ?? $albumArtist) === null && $album === null && ($title === null || $title === '')) {
+            return null;
+        }
+
+        $duration = 0;
+        if (isset($info['playtime_seconds']) && is_numeric($info['playtime_seconds'])) {
+            $duration = (int)floor((float)$info['playtime_seconds']);
+        }
+
+        return [
+            'artist' => $artist ?? $albumArtist,
+            'album' => $album,
+            'title' => $title,
+            'track_number' => $this->parseLeadingInt($this->firstComment($comments, 'track_number', 'track')),
+            'disc_number' => $this->parseLeadingInt($this->firstComment($comments, 'part_of_a_set', 'disc')) ?? 1,
+            'duration_secs' => $duration,
+            'year' => $this->parseYear($this->firstComment($comments, 'year', 'date', 'recording_time')),
+            'genre' => $this->firstComment($comments, 'genre'),
+        ];
+    }
+
+    /**
+     * Returns the first non-empty string value among the given comment keys.
+     *
+     * @param array<string, mixed> $comments getID3 comments block (values are arrays)
+     * @param string               ...$keys  Candidate keys, in priority order
+     * @return string|null
+     */
+    private function firstComment(array $comments, string ...$keys): ?string
+    {
+        foreach ($keys as $key) {
+            $value = $comments[$key] ?? null;
+            if (is_array($value)) {
+                $value = $value[0] ?? null;
+            }
+            if (is_string($value) && trim($value) !== '') {
+                return trim($value);
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Parses a leading integer from a raw tag value, tolerating the "3/12"
+     * (position/total) form used for track and disc numbers.
+     *
+     * @param string|null $raw Raw tag value.
+     * @return int|null Parsed integer, or null when not numeric.
+     */
+    private function parseLeadingInt(?string $raw): ?int
+    {
+        if ($raw === null) {
+            return null;
+        }
+
+        $part = str_contains($raw, '/') ? explode('/', $raw, 2)[0] : $raw;
+        $part = trim($part);
+
+        return is_numeric($part) ? (int)$part : null;
+    }
+
+    /**
+     * Extracts a 4-digit year from a raw date tag.
+     *
+     * @param string|null $raw Raw tag value.
+     * @return int|null Parsed year, or null when none is present.
+     */
+    private function parseYear(?string $raw): ?int
+    {
+        if ($raw !== null && preg_match('/(\d{4})/', $raw, $matches) === 1) {
+            return (int)$matches[1];
+        }
+
+        return null;
+    }
+
+    /**
+     * Reads metadata from an audio file using FFprobe (fallback path).
+     *
+     * @param string $path Absolute filesystem path
+     * @return array<string, mixed>|null Metadata, or null when ffprobe read
+     *                                   nothing usable (so filename fallback runs).
+     */
+    protected function probeViaFfprobe(string $path): ?array
+    {
         try {
             $probeResult = $this->ffmpeg->probe($path);
 
             if ($probeResult === null) {
-                return $this->fallbackMetadataFromFilename($path);
+                return null;
             }
 
             // Extract format-level tags
@@ -301,52 +524,25 @@ class MusicLibraryScanner
             $tags = $format['tags'] ?? [];
 
             if (!is_array($tags)) {
-                return $this->fallbackMetadataFromFilename($path);
+                return null;
             }
 
-            // Handle numeric fields
-            $trackNumber = null;
-            $trackRaw = $tags['track'] ?? null;
-            if (is_string($trackRaw)) {
-                // Handle "1/12" format
-                if (str_contains($trackRaw, '/')) {
-                    $parts = explode('/', $trackRaw);
-                    $trackStr = $parts[0];
-                } else {
-                    $trackStr = $trackRaw;
-                }
-                $trackNumber = is_numeric(trim($trackStr)) ? (int)trim($trackStr) : null;
-            }
-
-            $discNumber = 1;
-            $discRaw = $tags['disc'] ?? null;
-            if (is_string($discRaw)) {
-                if (str_contains($discRaw, '/')) {
-                    $parts = explode('/', $discRaw);
-                    $discStr = $parts[0];
-                } else {
-                    $discStr = $discRaw;
-                }
-                $discNumber = is_numeric(trim($discStr)) ? (int)trim($discStr) : 1;
-            }
+            $trackNumber = $this->parseLeadingInt(is_string($tags['track'] ?? null) ? $tags['track'] : null);
+            $discNumber = $this->parseLeadingInt(is_string($tags['disc'] ?? null) ? $tags['disc'] : null) ?? 1;
 
             $durationSecs = 0;
             if (isset($format['duration']) && is_numeric($format['duration'])) {
                 $durationSecs = (int)floor((float)$format['duration']);
             }
 
-            $year = null;
-            $dateRaw = $tags['date'] ?? null;
-            if (is_string($dateRaw)) {
-                // Try to extract 4-digit year
-                if (preg_match('/(\d{4})/', $dateRaw, $matches)) {
-                    $year = (int)$matches[1];
-                }
-            }
+            $year = $this->parseYear(is_string($tags['date'] ?? null) ? $tags['date'] : null);
+
+            $artist = is_string($tags['artist'] ?? null)
+                ? $tags['artist']
+                : (is_string($tags['album_artist'] ?? null) ? $tags['album_artist'] : null);
 
             return [
-                'artist' => is_string($tags['artist'] ?? null) ? $tags['artist'] : (is_string($tags['album_artist'] ??
-                    null) ? $tags['album_artist'] : null),
+                'artist' => $artist,
                 'album' => is_string($tags['album'] ?? null) ? $tags['album'] : null,
                 'title' => is_string($tags['title'] ?? null) ? $tags['title'] : null,
                 'track_number' => $trackNumber,
@@ -360,12 +556,12 @@ class MusicLibraryScanner
                 'path' => $path,
                 'error' => $e->getMessage(),
             ]);
-            return $this->fallbackMetadataFromFilename($path);
+            return null;
         }
     }
 
     /**
-     * Extracts basic metadata from filename when FFprobe fails.
+     * Extracts basic metadata from filename when tag reading fails.
      *
      * @param string $path Absolute filesystem path
      * @return array<string, mixed> Basic metadata
@@ -384,6 +580,26 @@ class MusicLibraryScanner
             'year' => null,
             'genre' => null,
         ];
+    }
+
+    /**
+     * Lazily constructs the native getID3 reader (disabling the expensive
+     * md5/sha1 hashing we do not need for tag harvesting).
+     *
+     * `protected` so tests can inject a fake reader.
+     */
+    protected function getId3Reader(): \getID3
+    {
+        if ($this->id3Reader === null) {
+            $reader = new \getID3();
+            $reader->option_md5_data = false;
+            $reader->option_md5_data_source = false;
+            $reader->option_sha1_data = false;
+            $reader->encoding = 'UTF-8';
+            $this->id3Reader = $reader;
+        }
+
+        return $this->id3Reader;
     }
 
     /**
@@ -489,6 +705,8 @@ class MusicLibraryScanner
         int $totalTracks,
         array &$cache
     ): ?array {
+        unset($artistMediaItemId);
+
         // Check cache first (Early Exit)
         $cacheKey = $artistId . '|' . strtolower($title);
         if (isset($cache[$cacheKey])) {
@@ -551,14 +769,23 @@ class MusicLibraryScanner
      * @param int|null $albumMediaItemId Album's media_item_id for linking
      * @param int $artistId Artist ID (denormalized for queries)
      * @param SplFileInfo $file Audio file info
+     * @param array<string, mixed> $metadata Tags already read during grouping (no re-probe)
      * @return string 'added', 'updated', or 'skipped'
      */
-    private function upsertTrack(int $albumId, ?int $albumMediaItemId, int $artistId, SplFileInfo $file): string
-    {
-        $path = $file->getPathname();
-        $metadata = $this->probeMetadata($path);
+    private function upsertTrack(
+        int $albumId,
+        ?int $albumMediaItemId,
+        int $artistId,
+        SplFileInfo $file,
+        array $metadata
+    ): string {
+        unset($albumMediaItemId);
 
-        $title = is_string($metadata['title']) ? $metadata['title'] : $file->getBasename('.' . $file->getExtension());
+        $path = $file->getPathname();
+
+        $title = is_string($metadata['title'] ?? null) && $metadata['title'] !== ''
+            ? $metadata['title']
+            : $file->getBasename('.' . $file->getExtension());
         $trackNumber = is_numeric($metadata['track_number'] ?? null) ? (int)$metadata['track_number'] : 1;
         $discNumber = is_numeric($metadata['disc_number'] ?? null) ? (int)$metadata['disc_number'] : 1;
         $durationSecs = is_numeric($metadata['duration_secs'] ?? null) ? (int)$metadata['duration_secs'] : 0;
@@ -628,27 +855,42 @@ class MusicLibraryScanner
     /**
      * Creates a media_item entry for a music entity.
      *
-     * @param string $subType Subtype: 'artist', 'album', or 'track'
+     * The `type` column is a strict ENUM whose audio members are `artist`,
+     * `album`, and `track` — so the sub-type IS the media_items type. (A
+     * `music_`-prefixed value is not a valid ENUM member and, under
+     * STRICT_TRANS_TABLES, a hard "Data truncated" error.) The finer-grained
+     * label is preserved in `metadata_json.sub_type`.
+     *
+     * @param string $subType Subtype: 'artist', 'album', or 'track' (also the media_items type)
      * @param string $name Display name
      * @param string|null $path File path (for tracks)
-     * @return int The media_item ID
+     * @return int The media_item ID (0 on failure)
      */
     private function createMediaItem(string $subType, string $name, ?string $path = null): int
     {
-        $type = 'music_' . $subType;
+        $type = $subType;
         $metadata = [
             'sub_type' => $subType,
             'name' => $name,
         ];
 
-        $result = $this->db->query(
-            "INSERT INTO media_items (type, name, path, metadata_json, created_at, updated_at)
-             VALUES (?, ?, ?, ?, NOW(), NOW())",
-            [$type, $name, $path ?? '', json_encode($metadata)]
-        );
+        try {
+            $result = $this->db->query(
+                "INSERT INTO media_items (type, name, path, metadata_json, created_at, updated_at)
+                 VALUES (?, ?, ?, ?, NOW(), NOW())",
+                [$type, $name, $path ?? '', json_encode($metadata)]
+            );
 
-        if ($result === false) {
-            $this->logger->error('Failed to create media_item', ['type' => $type, 'name' => $name]);
+            if ($result === false) {
+                $this->logger->error('Failed to create media_item', ['type' => $type, 'name' => $name]);
+                return 0;
+            }
+        } catch (\Throwable $e) {
+            $this->logger->error('Failed to create media_item', [
+                'type' => $type,
+                'name' => $name,
+                'error' => $e->getMessage(),
+            ]);
             return 0;
         }
 

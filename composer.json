@@ -9,6 +9,7 @@
         "crell/tukio": "^2.0",
         "detain/phlix-shared": "^0.41.0",
         "directorytree/ldaprecord": "^3.0",
+        "james-heinrich/getid3": "^1.9",
         "justinrainbow/json-schema": "^5.2",
         "monolog/monolog": "^3.0",
         "php-di/php-di": "^7.0",

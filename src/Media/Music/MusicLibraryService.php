@@ -53,7 +53,9 @@ class MusicLibraryService
     /**
      * Scans a directory tree for audio files and builds the Artist→Album→Track hierarchy.
      *
-     * @param string $path Root path to scan
+     * @param string        $path       Root path to scan
+     * @param callable|null $onProgress Optional `(int $processed, int $total, string $currentPath): void`
+     *                                  sink, forwarded to the scanner so a scan job can stream progress.
      * @return ScanResult Summary of the scan operation
      *
      * @example
@@ -61,9 +63,20 @@ class MusicLibraryService
      * $result = $service->scanDirectory('/music/rock');
      * ```
      */
-    public function scanDirectory(string $path): ScanResult
+    public function scanDirectory(string $path, ?callable $onProgress = null): ScanResult
     {
-        return $this->scanner->scanDirectory($path);
+        return $this->scanner->scanDirectory($path, $onProgress);
+    }
+
+    /**
+     * Counts the scannable audio files under a path (the progress denominator).
+     *
+     * @param string $path Root path to count under.
+     * @return int Number of audio files {@see scanDirectory()} would process.
+     */
+    public function countFiles(string $path): int
+    {
+        return $this->scanner->countAudioFiles($path);
     }
 
     /**

@@ -2273,6 +2273,23 @@ class MediaScanner
 
         $this->containerCache[$syntheticPath] = $id;
 
+        // Series-container enrichment gap (F2b): leaf movie/episode items dispatch
+        // {@see MediaItemAdded} at line ~1446, but series PARENTS are created here
+        // and would otherwise emit no event — so anime providers (anidb/mal), which
+        // match at the SERIES level, never auto-enrich. Dispatch a `series`-type
+        // event on genuine creation of a top-level series container (parent_id ===
+        // null, both existing-row branches above return early, so this point is
+        // reached only for a freshly created container). Seasons are excluded:
+        // they are not an enrichable type. The event carries the synthetic path,
+        // which the background enricher never reads — it searches by the item's
+        // title/year — so a non-filesystem path is harmless. Enrichment is
+        // idempotent (plugin_enriched marker + needsEnrichment check), so this is
+        // symmetric with the movie leaf dispatch: fired once at creation, before
+        // the later metadata-scan job resolves TMDB.
+        if ($type === 'series' && $parentId === null) {
+            $this->dispatchMediaItemAdded($id, $libraryId, $syntheticPath, 'series');
+        }
+
         return $id;
     }
 

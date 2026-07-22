@@ -10,6 +10,8 @@ use Phlix\Media\Transcoding\FfmpegRunner;
 use Phlix\Media\MediaAsset\MediaAssetJobStore;
 use Phlix\Media\SimilarityJobStore;
 use Phlix\Common\Logger\LoggerFactory;
+use Phlix\Shared\Events\Library\MediaItemAdded;
+use Psr\EventDispatcher\EventDispatcherInterface;
 use Workerman\MySQL\Connection;
 
 class MediaScannerTest extends TestCase
@@ -159,6 +161,119 @@ class MediaScannerTest extends TestCase
             $this->assertArrayHasKey('season', $this->metaOf($ep));
             $this->assertArrayHasKey('episode', $this->metaOf($ep));
         }
+    }
+
+    /**
+     * F2b series/anime enrichment gap (consequence test). Background plugin
+     * enrichment is driven by {@see MediaItemAdded} events, and both
+     * BackgroundEnrichmentSubscriber and PluginMetadataEnricher gate on
+     * ENRICHABLE_TYPES = ['movie','series']. The anime providers (anidb/mal)
+     * match at the SERIES level — but the scanner historically dispatched
+     * MediaItemAdded ONLY for leaf movie/episode items, so a freshly created
+     * series PARENT container emitted no event and never auto-enriched.
+     *
+     * {@see MediaScanner::findOrCreateContainer()} now dispatches a
+     * `series`-type MediaItemAdded on genuine creation of a top-level series
+     * container. This pins the four consequences: exactly one `series` event
+     * (one container) carrying that container's id, ZERO `season` events
+     * (seasons are not an enrichable type and must never dispatch), and the
+     * pre-existing leaf `episode` dispatch is preserved.
+     */
+    public function testSeriesContainerCreationDispatchesSeriesTypeMediaItemAdded(): void
+    {
+        $repo = $this->makeFakeRepo();
+        $dispatcher = new LibraryRecordingEventDispatcher();
+        $scanner = new MediaScanner(
+            $this->createMock(Connection::class),
+            $repo,
+            null,
+            $dispatcher
+        );
+
+        $this->tmpDir = $this->makeTempDirWith([
+            '24 S01E01.mkv',
+            '24 S01E02.mkv',
+            '24 S02E01.mkv',
+        ]);
+
+        $scanner->scan('lib-1', $this->tmpDir, 'series');
+
+        /** @var list<MediaItemAdded> $added */
+        $added = array_values(array_filter(
+            $dispatcher->events,
+            fn ($e) => $e instanceof MediaItemAdded
+        ));
+
+        $seriesEvents = array_values(array_filter($added, fn ($e) => $e->type === 'series'));
+        $seasonEvents = array_values(array_filter($added, fn ($e) => $e->type === 'season'));
+        $episodeEvents = array_values(array_filter($added, fn ($e) => $e->type === 'episode'));
+
+        // Exactly one series-container event...
+        $this->assertCount(1, $seriesEvents, 'exactly one series-type MediaItemAdded is dispatched');
+
+        // ...carrying the id of the sole series row in the repo.
+        $seriesRows = array_values(array_filter($repo->items(), fn ($i) => $i['type'] === 'series'));
+        $this->assertCount(1, $seriesRows, 'one series container row was created');
+        $this->assertSame(
+            $seriesRows[0]['id'],
+            $seriesEvents[0]->mediaItemId,
+            'the series event references the created series container id'
+        );
+
+        // Seasons are NOT enrichable — they must never dispatch.
+        $this->assertCount(0, $seasonEvents, 'season containers must NOT dispatch MediaItemAdded');
+
+        // The existing leaf episode dispatch is preserved.
+        $this->assertNotEmpty($episodeEvents, 'episode leaf items still dispatch MediaItemAdded');
+    }
+
+    /**
+     * F2b create-only guard idempotency: the series dispatch fires ONLY on
+     * genuine container creation. Both existing-row branches of
+     * findOrCreateContainer() (findByPath hit, findTopLevelByCanonical hit)
+     * return before the dispatch, so a second scan of the same library — where
+     * the series container already exists — must record ZERO further `series`
+     * events. Otherwise every rescan would re-enqueue enrichment for every show.
+     */
+    public function testSeriesContainerDispatchIsCreateOnlyNotOnRescan(): void
+    {
+        $repo = $this->makeFakeRepo();
+        $dispatcher = new LibraryRecordingEventDispatcher();
+
+        $this->tmpDir = $this->makeTempDirWith([
+            '24 S01E01.mkv',
+            '24 S01E02.mkv',
+        ]);
+
+        // First scan creates the container → one series event.
+        (new MediaScanner($this->createMock(Connection::class), $repo, null, $dispatcher))
+            ->scan('lib-1', $this->tmpDir, 'series');
+
+        $firstSeries = array_values(array_filter(
+            $dispatcher->events,
+            fn ($e) => $e instanceof MediaItemAdded && $e->type === 'series'
+        ));
+        $this->assertCount(1, $firstSeries, 'first scan dispatches the series-container event');
+
+        // Rescan with a FRESH scanner (empty containerCache) so resolution goes
+        // through the existing-row branches exactly as a real second scan would.
+        $dispatcher->reset();
+        (new MediaScanner($this->createMock(Connection::class), $repo, null, $dispatcher))
+            ->scan('lib-1', $this->tmpDir, 'series');
+
+        $rescanSeries = array_values(array_filter(
+            $dispatcher->events,
+            fn ($e) => $e instanceof MediaItemAdded && $e->type === 'series'
+        ));
+        $this->assertCount(
+            0,
+            $rescanSeries,
+            'the already-existing series container must NOT re-dispatch on rescan'
+        );
+
+        // And no duplicate series row was forked.
+        $seriesRows = array_values(array_filter($repo->items(), fn ($i) => $i['type'] === 'series'));
+        $this->assertCount(1, $seriesRows, 'rescan reuses the single series container');
     }
 
     public function testEpisodesShareContainersAcrossSeasons(): void
@@ -3385,5 +3500,28 @@ class InMemoryScannerRepo extends ItemRepository
     public function items(): array
     {
         return $this->store;
+    }
+}
+
+/**
+ * A PSR-14 dispatcher that records every event it is handed, for the F2b
+ * series-container enrichment consequence tests. Declared in THIS namespace
+ * (the Music suite has its own same-named double) to avoid a redeclare fatal.
+ */
+final class LibraryRecordingEventDispatcher implements EventDispatcherInterface
+{
+    /** @var list<object> */
+    public array $events = [];
+
+    public function dispatch(object $event): object
+    {
+        $this->events[] = $event;
+        return $event;
+    }
+
+    /** Clear the recorded events between two scans of the same library. */
+    public function reset(): void
+    {
+        $this->events = [];
     }
 }

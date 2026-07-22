@@ -186,7 +186,6 @@ class TranscodeManagerTest extends TestCase
         $this->assertTrue($result['reused']);
         $this->assertSame('existing-job', $result['job_id']);
         $this->assertStringContainsString('/hls/existing-job/master.m3u8', $result['master_url']);
-        $this->assertSame('/dash/existing-job/manifest.mpd', $result['dash_url']);
     }
 
     public function testEnsureHlsJobIgnoresReuseRowWhenDirMissing(): void

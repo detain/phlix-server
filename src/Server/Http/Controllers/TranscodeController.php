@@ -133,7 +133,6 @@ class TranscodeController
             'job_id' => $job['job_id'],
             'master_url' => $sign($job['master_url']),
             'hls_url' => $sign($job['hls_url']),
-            'dash_url' => $sign($job['dash_url']),
             'status' => $job['status'],
             'reused' => $job['reused'],
             'subtitles' => self::signSubtitleUrls($job['subtitles'], $sign),
@@ -186,7 +185,7 @@ class TranscodeController
 
         // Parental cap (Finding 1a): re-resolve the job's media item and deny a
         // capped profile polling an over-cap job — so status() never leaks the
-        // signed master/hls/dash/variant/subtitle URLs for content the active
+        // signed master/hls/variant/subtitle URLs for content the active
         // profile may not watch. No-op for the owner / un-capped profile.
         $filter = $this->resolveRatingFilter($request);
         if ($filter !== null && $this->ratingGate !== null) {
@@ -216,7 +215,6 @@ class TranscodeController
             'playlist_ready' => $readiness['playlist_ready'],
             'progress' => $readiness['progress'],
             'master_url' => $sign("/hls/{$readiness['job_id']}/master.m3u8"),
-            'dash_url' => $sign("/dash/{$readiness['job_id']}/manifest.mpd"),
             'subtitles' => self::signSubtitleUrls($readiness['subtitles'], $sign),
             'variants' => $variants === null ? null : self::signVariantUrls($variants, $sign),
         ]);

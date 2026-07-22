@@ -216,11 +216,10 @@ PHP;
             $this->assertSame(['fanart', 'local'], $resolved['movie']);
             $this->assertSame(['fanart'], $resolved['series']);
 
-            // Types the fixture doesn't define (e.g. episode/artist/album/
-            // track — outside Feature 3's schema) still fall back to this
-            // class's own additional defaults, unaffected by the fixture.
+            // The type the fixture doesn't define (episode — outside Feature
+            // 3's schema) still falls back to this class's own additional
+            // default, unaffected by the fixture.
             $this->assertSame(['tvdb', 'local'], $resolved['episode']);
-            $this->assertSame(['musicbrainz', 'audiodb', 'local'], $resolved['artist']);
         } finally {
             @unlink($fixturePath);
         }
@@ -240,6 +239,73 @@ PHP;
         $this->assertSame(['tmdb', 'imdb'], $resolved['movie']);
         $this->assertSame(['tmdb', 'imdb'], $resolved['series']);
         $this->assertSame(['tvdb', 'local'], $resolved['episode']);
+    }
+
+    /**
+     * F4 (plugin program): the native host music path
+     * (`MusicBrainzProvider`/`AudioDbProvider` + `config/music_providers.php`)
+     * was DELETED — music enrichment is now owned by the event-driven
+     * `musicbrainz` plugin. So `defaultProviderPriority()` must NO LONGER carry
+     * `artist`/`album`/`track` rows. This asserts the removal directly: a
+     * reintroduced music row (or the deleted `musicbrainz`/`audiodb` provider
+     * names) turns this RED.
+     */
+    public function testDefaultProviderPriorityHasNoMusicTypeRows(): void
+    {
+        $resolved = MetadataManager::defaultProviderPriority();
+
+        $this->assertArrayNotHasKey('artist', $resolved);
+        $this->assertArrayNotHasKey('album', $resolved);
+        $this->assertArrayNotHasKey('track', $resolved);
+
+        // The deleted native providers must not be referenced by ANY surviving
+        // media type's priority order either.
+        foreach ($resolved as $order) {
+            $this->assertNotContains('musicbrainz', $order);
+            $this->assertNotContains('audiodb', $order);
+        }
+    }
+
+    /**
+     * F4 correctness gate: after removing the native music providers, asking
+     * MetadataManager to enrich a music item (type `artist`/`album`/`track`)
+     * must be a GRACEFUL NO-OP — never a fatal / undefined-index. With the
+     * music rows gone `getProvidersForType()` falls through to its `['local']`
+     * default; no `local` (or any) provider is registered for music at runtime,
+     * so no provider resolves, the item is never mutated, and the method
+     * returns false. This is the exact call `MusicLibraryManager::
+     * enrichTrackMetadata()` makes (`MusicLibraryManager.php:298`).
+     *
+     * @dataProvider musicTypeProvider
+     */
+    public function testMusicItemEnrichmentIsGracefulNoOp(string $musicType): void
+    {
+        $itemRepo = $this->createMock(ItemRepository::class);
+        $itemRepo->method('findById')->willReturn([
+            'id' => 'music-1',
+            'type' => $musicType,
+            'name' => 'Some Track',
+            'metadata_json' => null,
+        ]);
+        // The no-op contract: a music item is NEVER written by this path.
+        $itemRepo->expects($this->never())->method('update');
+
+        $manager = new MetadataManager($itemRepo);
+
+        // Must not throw (undefined-index / fatal) and must report "not refreshed".
+        $this->assertFalse($manager->refreshItemMetadata('music-1', true));
+    }
+
+    /**
+     * @return array<string, array{0: string}>
+     */
+    public static function musicTypeProvider(): array
+    {
+        return [
+            'artist' => ['artist'],
+            'album' => ['album'],
+            'track' => ['track'],
+        ];
     }
 
     public function testRegisterProviderWithEmptySupportedTypes(): void

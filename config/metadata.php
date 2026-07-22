@@ -33,9 +33,12 @@
  * both now trace back to these SAME values rather than MetadataManager
  * hand-maintaining its own competing literal (which had silently diverged:
  * `movie => ['tmdb','local']` / `series => ['tvdb','fanart','local']` prior to
- * this fix). MetadataManager additionally defaults `episode`/`artist`/`album`/
- * `track` (media types this file's schema does not cover) from its own
- * fallback — see `MetadataManager::defaultProviderPriority()`.
+ * this fix). MetadataManager additionally defaults `episode` (a media type
+ * this file's schema does not cover) from its own fallback — see
+ * `MetadataManager::defaultProviderPriority()`. Music types
+ * (`artist`/`album`/`track`) are intentionally NOT defaulted (F4): the native
+ * host music path was removed; the event-driven `musicbrainz` plugin owns
+ * music enrichment now.
  *
  * CAVEAT: that "same values" equivalence holds only for this file's STATIC
  * DEFAULT. `MetadataManager::defaultProviderPriority()` reads this file via a

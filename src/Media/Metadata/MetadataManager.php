@@ -143,11 +143,18 @@ class MetadataManager
      * editor manages (movie/series/anime — see
      * {@see \Phlix\Media\Metadata\Resolution\PriorityConfig} and
      * `AdminMetadataSourceController`); it intentionally does not cover
-     * `episode`/`artist`/`album`/`track`, which this class also refreshes
-     * (music library scans — see `MusicLibraryManager::refreshItemMetadata()`
-     * callers). Those extra types are merged in from the fallback below so
-     * every media type this class handles still has a sane default; the
-     * config file remains authoritative for every type it does define.
+     * `episode`, which this class also refreshes. That extra type is merged
+     * in from the fallback below so it still has a sane default; the config
+     * file remains authoritative for every type it does define.
+     *
+     * Music types (`artist`/`album`/`track`) are DELIBERATELY absent (F4):
+     * the native `MusicBrainzProvider`/`AudioDbProvider` host path was removed
+     * because music enrichment is now handled entirely by the event-driven
+     * `musicbrainz` plugin (subscribes `MediaItemAdded`). A music-type refresh
+     * through this class is a graceful no-op: `getProvidersForType()` falls
+     * through to its `['local']` default, no `local` provider is registered
+     * for music, so {@see refreshItemMetadata()} finds no providers and
+     * returns false without throwing.
      *
      * The fallback array is also used verbatim when `config/metadata.php` is
      * missing/unreadable (defensive; mirrors the `matching.noise_suffixes`
@@ -177,9 +184,6 @@ class MetadataManager
             'series' => ['tmdb', 'imdb'],
             'episode' => ['tvdb', 'local'],
             'anime' => ['anidb', 'myanimelist', 'tvdb', 'fanart', 'local'],
-            'artist' => ['musicbrainz', 'audiodb', 'local'],
-            'album' => ['musicbrainz', 'audiodb', 'local'],
-            'track' => ['musicbrainz', 'audiodb', 'local'],
         ];
 
         $path = $configPath ?? (__DIR__ . '/../../../config/metadata.php');
@@ -196,8 +200,8 @@ class MetadataManager
         }
 
         // config/metadata.php is authoritative for any type it names (movie/
-        // series/anime today); this class's own extra types (episode/artist/
-        // album/track — outside Feature 3's schema) fill the remaining gaps.
+        // series/anime today); this class's own extra type (episode — outside
+        // Feature 3's schema) fills the remaining gap.
         return array_merge($fallback, $configured);
     }
 

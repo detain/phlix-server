@@ -134,8 +134,38 @@ final class StreamTrackShaper
             if (($stream['stream_type'] ?? '') !== 'subtitle') {
                 continue;
             }
-            // Per-type ordinal increments for EVERY subtitle row (even skipped
-            // bitmaps) so it matches ffmpeg's 0:s:N selector — see class docblock.
+
+            // DOWNLOADED external subtitle (F3): stored as a `.vtt` file on disk
+            // (media_streams.storage_path, migration 088) rather than embedded in
+            // the container. It is NOT part of ffmpeg's 0:s:N selector space, so
+            // it must NOT consume a `$subOrdinal` — it is served by row id via the
+            // external endpoint instead of the extraction endpoint.
+            $storagePath = self::nonEmptyString($stream['storage_path'] ?? null);
+            if ($storagePath !== null) {
+                $emitted++;
+                $streamId = self::nonEmptyString($stream['id'] ?? null);
+                $language = self::nonEmptyString($stream['language'] ?? null);
+                $title = self::nonEmptyString($stream['title'] ?? null);
+                $source = self::nonEmptyString($stream['source'] ?? null);
+
+                $tracks[] = [
+                    'id' => $stream['id'] ?? '',
+                    'index' => self::intFrom($stream['stream_index'] ?? null) ?? $emitted,
+                    'stream_index' => self::intFrom($stream['stream_index'] ?? null) ?? $emitted,
+                    'language' => $language ?? 'und',
+                    'label' => $title ?? $language ?? ('Subtitle ' . $emitted),
+                    'codec' => strtolower(self::nonEmptyString($stream['codec'] ?? null) ?? 'webvtt'),
+                    'source' => $source,
+                    'hearing_impaired' => self::isTruthy($stream['hearing_impaired'] ?? null),
+                    'url' => ($itemId !== '' && $streamId !== null)
+                        ? $signer->mint('/api/v1/media/' . $itemId . '/subtitles/external/' . $streamId)
+                        : null,
+                ];
+                continue;
+            }
+
+            // Per-type ordinal increments for EVERY embedded subtitle row (even
+            // skipped bitmaps) so it matches ffmpeg's 0:s:N selector — see docblock.
             $subOrdinal++;
 
             $codec = strtolower(self::nonEmptyString($stream['codec'] ?? null) ?? '');
@@ -148,11 +178,14 @@ final class StreamTrackShaper
             $title = self::nonEmptyString($stream['title'] ?? null);
 
             $tracks[] = [
+                'id' => $stream['id'] ?? '',
                 'index' => $subOrdinal,
                 'stream_index' => self::intFrom($stream['stream_index'] ?? null) ?? $subOrdinal,
                 'language' => $language ?? 'und',
                 'label' => $title ?? $language ?? ('Subtitle ' . $emitted),
                 'codec' => $codec,
+                'source' => null,
+                'hearing_impaired' => self::isTruthy($stream['hearing_impaired'] ?? null),
                 'url' => $itemId !== ''
                     ? $signer->mint('/api/v1/media/' . $itemId . '/subtitles/' . $subOrdinal)
                     : null,
@@ -221,5 +254,13 @@ final class StreamTrackShaper
     private static function nonEmptyString(mixed $value): ?string
     {
         return (is_string($value) && $value !== '') ? $value : null;
+    }
+
+    /**
+     * Coerces a stored flag (0/1, "0"/"1", bool) to a boolean.
+     */
+    private static function isTruthy(mixed $value): bool
+    {
+        return is_numeric($value) ? (int) $value === 1 : $value === true;
     }
 }

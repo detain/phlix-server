@@ -51,10 +51,13 @@ ProtectHome=true
 # "mkdir(): Read-only file system" and, because nothing ever caches, re-downloads
 # every poster on every scan — flooding the concurrent matcher with blocking
 # cURL until Swoole aborts with "all coroutines are asleep - deadlock".
+# /var/subtitles is the DOWNLOADED external-subtitle store (config/subtitles.php's
+# SUBTITLE_STORAGE_PATH default); without it here ProtectSystem=strict keeps it
+# read-only and the on-demand subtitle download write fails (the /var/artwork lesson).
 # /var/cache/phlix/anidb is the anidb plugin's persistent title-dump cache
 # (PHLIX_ANIDB_CACHE_DIR above); without it here ProtectSystem=strict keeps it
 # read-only and the plugin's index write fails (the /var/artwork lesson).
-ReadWritePaths=/var/phlix /var/log/phlix /var/run/phlix /var/www/phlix/.logs /var/www/phlix/templates_c /var/www/phlix/var /var/artwork /var/cache/phlix/anidb
+ReadWritePaths=/var/phlix /var/log/phlix /var/run/phlix /var/www/phlix/.logs /var/www/phlix/templates_c /var/www/phlix/var /var/artwork /var/subtitles /var/cache/phlix/anidb
 RestrictNamespaces=true
 LockPersonality=true
 RemoveIPC=true

@@ -46,6 +46,12 @@ ARTWORK_DIR="$(grep -m1 -E '^ARTWORK_STORAGE_PATH=' "$ENV_FILE" 2>/dev/null | cu
 # fails. Honour an operator override already recorded in the env file.
 ANIDB_CACHE_DIR="$(grep -m1 -E '^PHLIX_ANIDB_CACHE_DIR=' "$ENV_FILE" 2>/dev/null | cut -d= -f2- || true)"
 [ -n "$ANIDB_CACHE_DIR" ] || ANIDB_CACHE_DIR="/var/cache/phlix/anidb"
+# Root for DOWNLOADED external subtitles (config/subtitles.php: SUBTITLE_STORAGE_PATH,
+# default /var/subtitles). Like ARTWORK_DIR it MUST be a systemd ReadWritePath, else
+# ProtectSystem=strict makes it read-only and the on-demand subtitle download write
+# fails with "Read-only file system". Honour an operator override in the env file.
+SUBTITLE_DIR="$(grep -m1 -E '^SUBTITLE_STORAGE_PATH=' "$ENV_FILE" 2>/dev/null | cut -d= -f2- || true)"
+[ -n "$SUBTITLE_DIR" ] || SUBTITLE_DIR="/var/subtitles"
 
 DB_HOST="127.0.0.1"
 DB_PORT="3306"
@@ -1075,12 +1081,13 @@ do_update() {
   # binds ReadWritePaths at start), so create them here, ahead of the chown.
   mkdir -p "$INSTALL_PATH/.logs" "$LOG_DIR" "$RUN_DIR" \
     "$INSTALL_PATH/var/plugins" "$INSTALL_PATH/var/themes" "$INSTALL_PATH/var/cache" \
-    "$ARTWORK_DIR" "$ANIDB_CACHE_DIR"
+    "$ARTWORK_DIR" "$SUBTITLE_DIR" "$ANIDB_CACHE_DIR"
   # Restore ownership the install was running with.
   if [ "$repo_owner" != "root" ] && id -u "$repo_owner" >/dev/null 2>&1; then
     chown -R "$repo_owner:$repo_owner" "$INSTALL_PATH"
     chown -R "$repo_owner:$repo_owner" "$LOG_DIR" "$RUN_DIR" 2>/dev/null || true
     chown "$repo_owner:$repo_owner" "$ARTWORK_DIR" 2>/dev/null || true
+    chown "$repo_owner:$repo_owner" "$SUBTITLE_DIR" 2>/dev/null || true
     chown -R "$repo_owner:$repo_owner" "$ANIDB_CACHE_DIR" 2>/dev/null || true
   fi
 
@@ -1155,6 +1162,24 @@ do_update() {
             for (i=1;i<=n;i++) if (a[i]==p) f=1 } END { exit f?0:1 }' "$SERVICE_FILE"; then
     log "Adding $ARTWORK_DIR to systemd ReadWritePaths (local artwork cache writes)"
     sed -i "s|^\(ReadWritePaths=.*\)\$|\1 $ARTWORK_DIR|" "$SERVICE_FILE"
+    systemctl daemon-reload >/dev/null 2>&1 || true
+  fi
+
+  # 4g-B. One-off migration: ensure the DOWNLOADED external-subtitle store is in
+  # ReadWritePaths (F3). The on-demand subtitle download writes .vtt files into
+  # $SUBTITLE_DIR (config/subtitles.php's SUBTITLE_STORAGE_PATH, default
+  # /var/subtitles), but ProtectSystem=strict keeps it read-only unless listed —
+  # the /var/artwork lesson. Create + chown it first (a missing ReadWritePath
+  # fails the unit at 226/NAMESPACE), then append only when absent. Idempotent.
+  mkdir -p "$SUBTITLE_DIR" 2>/dev/null || true
+  chown "$SERVICE_USER:$SERVICE_USER" "$SUBTITLE_DIR" 2>/dev/null || true
+  if [ -f "$SERVICE_FILE" ] \
+     && grep -q '^ReadWritePaths=' "$SERVICE_FILE" 2>/dev/null \
+     && ! awk -v p="$SUBTITLE_DIR" '
+          /^ReadWritePaths=/ { s=$0; sub(/^ReadWritePaths=/,"",s); n=split(s,a,/[[:space:]]+/);
+            for (i=1;i<=n;i++) if (a[i]==p) f=1 } END { exit f?0:1 }' "$SERVICE_FILE"; then
+    log "Adding $SUBTITLE_DIR to systemd ReadWritePaths (downloaded subtitle writes)"
+    sed -i "s|^\(ReadWritePaths=.*\)\$|\1 $SUBTITLE_DIR|" "$SERVICE_FILE"
     systemctl daemon-reload >/dev/null 2>&1 || true
   fi
 
@@ -1466,9 +1491,10 @@ log "Installing PHP dependencies"
 # does not exist makes systemd fail the unit at 226/NAMESPACE.
 mkdir -p "$INSTALL_PATH/.logs" "$INSTALL_PATH/templates_c" \
   "$INSTALL_PATH/var/plugins" "$INSTALL_PATH/var/themes" "$INSTALL_PATH/var/cache" \
-  "$ARTWORK_DIR" "$ANIDB_CACHE_DIR"
+  "$ARTWORK_DIR" "$SUBTITLE_DIR" "$ANIDB_CACHE_DIR"
 chown -R "$SERVICE_USER:$SERVICE_USER" "$INSTALL_PATH"
 chown -R "$SERVICE_USER:$SERVICE_USER" "$ARTWORK_DIR" 2>/dev/null || true
+chown -R "$SERVICE_USER:$SERVICE_USER" "$SUBTITLE_DIR" 2>/dev/null || true
 chown -R "$SERVICE_USER:$SERVICE_USER" "$ANIDB_CACHE_DIR" 2>/dev/null || true
 
 # ---------------------------------------------------------------------------

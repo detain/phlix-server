@@ -568,9 +568,15 @@ class Application
         $markerController = $this->getMarkerController();
         $extrasController = $this->getExtrasController();
         $subtitleController = $this->getSubtitleController();
+        $remoteSubtitleController = $this->getRemoteSubtitleController();
         $this->router->group(
             '',
-            function (Router $r) use ($markerController, $extrasController, $subtitleController): void {
+            function (Router $r) use (
+                $markerController,
+                $extrasController,
+                $subtitleController,
+                $remoteSubtitleController
+            ): void {
                 $r->get('/api/v1/media/{id}/markers', [$markerController, 'getMarkers']);
                 $r->get('/api/v1/media/{id}/markers/intro', [$markerController, 'getIntroMarker']);
                 $r->get('/api/v1/media/{id}/markers/outro', [$markerController, 'getOutroMarker']);
@@ -578,6 +584,13 @@ class Application
                 $r->get('/api/v1/media/{id}/extras', [$extrasController, 'getExtras']);
                 $r->get('/api/v1/media/{id}/trailers', [$extrasController, 'getTrailers']);
                 $r->get('/api/v1/media/{id}/extras/other', [$extrasController, 'getOtherExtras']);
+                // On-demand REMOTE (provider-plugin) subtitle search + download
+                // (F3). Registered BEFORE the embedded-track `/subtitles/{index}`
+                // route below so `/subtitles/search` (a literal segment) is not
+                // shadowed by the `{index}` placeholder. Download attaches the
+                // fetched subtitle as an external track and returns it.
+                $r->get('/api/v1/media/{id}/subtitles/search', [$remoteSubtitleController, 'search']);
+                $r->post('/api/v1/media/{id}/subtitles/download', [$remoteSubtitleController, 'download']);
                 // On-demand subtitle tracks for a direct-play client (no HLS
                 // sidecars): list the embedded text tracks. (The per-track
                 // extraction endpoint is registered below under the signed-URL
@@ -593,7 +606,15 @@ class Application
         // playback-info's subtitle_tracks[].url carries (see StreamTrackShaper).
         $this->router->group(
             '',
-            function (Router $r) use ($subtitleController): void {
+            function (Router $r) use ($subtitleController, $remoteSubtitleController): void {
+                // Downloaded external subtitle, served by row id as text/vtt.
+                // Registered BEFORE `/subtitles/{index}` — its two-segment path
+                // does not collide with the single-segment `{index}`, but keeping
+                // it first is defensive and matches the search-route ordering.
+                $r->get(
+                    '/api/v1/media/{id}/subtitles/external/{streamId}',
+                    [$remoteSubtitleController, 'serveExternal']
+                );
                 $r->get('/api/v1/media/{id}/subtitles/{index}', [$subtitleController, 'getTrack']);
             },
             [new \Phlix\Server\Http\Middleware\SignedUrlMiddleware()]
@@ -3200,6 +3221,47 @@ class Application
         }
 
         return new \Phlix\Server\Http\Controllers\SubtitleController($itemRepository, $ffmpeg, $extractor);
+    }
+
+    /**
+     * Returns a RemoteSubtitleController for on-demand provider-plugin subtitle
+     * search / download / serving (F3).
+     *
+     * Resolved from the container (all deps — SubtitleFetchService, ItemRepository,
+     * SubtitleStorage — are wired in MediaServicesProvider). Falls back to a
+     * hand-built instance with the default storage root only when no container is
+     * present (mirrors {@see getSubtitleController()}'s container-less fallback).
+     *
+     * @return \Phlix\Server\Http\Controllers\RemoteSubtitleController
+     */
+    private function getRemoteSubtitleController(): \Phlix\Server\Http\Controllers\RemoteSubtitleController
+    {
+        if ($this->container !== null) {
+            /** @var \Phlix\Server\Http\Controllers\RemoteSubtitleController */
+            return $this->container->get(\Phlix\Server\Http\Controllers\RemoteSubtitleController::class);
+        }
+
+        $db = new \Phlix\Common\Database\PhlixMySQLConnection(
+            '127.0.0.1',
+            3306,
+            'phlix',
+            'root',
+            'password'
+        );
+        $itemRepository = new \Phlix\Media\Library\ItemRepository($db);
+        $storage = new \Phlix\Media\Subtitles\SubtitleStorage();
+        $fetchService = new \Phlix\Media\Subtitles\SubtitleFetchService(
+            new \Phlix\Media\Subtitles\SubtitleSourceRegistry(),
+            $storage,
+            new \Phlix\Media\Subtitles\Quota\SubtitleProviderQuotaRepository($db),
+            $itemRepository,
+        );
+
+        return new \Phlix\Server\Http\Controllers\RemoteSubtitleController(
+            $fetchService,
+            $itemRepository,
+            $storage,
+        );
     }
 
     /**

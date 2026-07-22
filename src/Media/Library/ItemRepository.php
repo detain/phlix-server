@@ -1658,6 +1658,89 @@ class ItemRepository
     }
 
     /**
+     * Fetch a single media_streams row by its id, or null when unknown.
+     *
+     * Used by the external-subtitle serving endpoint to resolve a stored
+     * downloaded subtitle back to its `storage_path` (and confirm it belongs to
+     * the requested item) without loading every stream row.
+     *
+     * @param string $streamId The media_streams row id.
+     *
+     * @return array<string, mixed>|null The row, or null when not found.
+     */
+    public function getStreamById(string $streamId): ?array
+    {
+        $result = $this->db->query(
+            "SELECT * FROM media_streams WHERE id = ?",
+            [$streamId]
+        );
+
+        return $this->firstRow($result);
+    }
+
+    /**
+     * Persist a DOWNLOADED external subtitle as a `media_streams` subtitle row.
+     *
+     * Unlike {@see addStream()} (embedded container streams from an ffprobe),
+     * this attaches a subtitle that lives as a `.vtt` file on disk under the
+     * subtitle storage root: the row carries `source` (the provider name),
+     * `storage_path` (absolute path to the stored file) and `hearing_impaired`
+     * (migration 088). {@see StreamTrackShaper::subtitleTracks()} recognises a
+     * row with a non-empty `storage_path` as external and emits it with a signed
+     * URL to the external-serving endpoint instead of the ffmpeg extraction one.
+     *
+     * The synthetic `stream_index` is placed AFTER any existing streams
+     * (`MAX(stream_index) + 1`) so external rows never collide with the
+     * container's `0:s:N` selector space.
+     *
+     * @param string $itemId The media item's unique identifier.
+     * @param array{
+     *     language?: string|null,
+     *     codec?: string|null,
+     *     title?: string|null,
+     *     source: string,
+     *     storage_path: string,
+     *     hearing_impaired?: bool
+     * } $data External subtitle attributes.
+     *
+     * @return string The id of the created stream row.
+     */
+    public function addExternalSubtitleStream(string $itemId, array $data): string
+    {
+        $id = $this->generateUuid();
+
+        $maxRows = $this->db->query(
+            "SELECT COALESCE(MAX(stream_index), -1) + 1 AS next_index
+             FROM media_streams WHERE media_item_id = ?",
+            [$itemId]
+        );
+        $nextIndex = 0;
+        if (is_array($maxRows) && is_array($maxRows[0] ?? null) && is_numeric($maxRows[0]['next_index'] ?? null)) {
+            $nextIndex = (int) $maxRows[0]['next_index'];
+        }
+
+        $this->db->query(
+            "INSERT INTO media_streams
+                (id, media_item_id, stream_index, stream_type, codec, language,
+                 title, is_default, source, storage_path, hearing_impaired)
+             VALUES (?, ?, ?, 'subtitle', ?, ?, ?, 0, ?, ?, ?)",
+            [
+                $id,
+                $itemId,
+                $nextIndex,
+                is_string($data['codec'] ?? null) ? $data['codec'] : 'webvtt',
+                $data['language'] ?? null,
+                $data['title'] ?? null,
+                $data['source'],
+                $data['storage_path'],
+                ($data['hearing_impaired'] ?? false) ? 1 : 0,
+            ]
+        );
+
+        return $id;
+    }
+
+    /**
      * Deletes every media_streams row belonging to a media item.
      *
      * Lets the scanner make stream persistence idempotent: on rescan the item's

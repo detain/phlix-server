@@ -20,6 +20,7 @@ use Phlix\Common\Logger\LogChannels;
 use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Common\Logger\StructuredLogger;
 use Phlix\Media\Metadata\Resolution\SourceRegistry;
+use Phlix\Media\Subtitles\SubtitleSourceRegistry;
 use Phlix\Plugins\Catalog\PluginAutoUpdateWorker;
 use Phlix\Plugins\Catalog\PluginCatalogService;
 use Phlix\Plugins\Catalog\PluginUpdateService;
@@ -163,6 +164,12 @@ final class PluginsProvider implements ServiceProviderInterface
                     /** @var SourceRegistry $sourceRegistry */
                     $sourceRegistry = $c->get(SourceRegistry::class);
 
+                    // F3: the process-scoped subtitle-source registry the loader
+                    // (de)registers plugin SubtitleSourceInterface instances into
+                    // on enable/disable — the parallel of $sourceRegistry.
+                    /** @var SubtitleSourceRegistry $subtitleSourceRegistry */
+                    $subtitleSourceRegistry = $c->get(SubtitleSourceRegistry::class);
+
                     return new PluginLoader(
                         $installer,
                         $composer,
@@ -173,6 +180,7 @@ final class PluginsProvider implements ServiceProviderInterface
                         $audit,
                         $logger,
                         $sourceRegistry,
+                        $subtitleSourceRegistry,
                     );
                 }
             ),

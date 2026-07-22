@@ -64,6 +64,10 @@ use Phlix\Media\SimilarityJobStore;
 use Phlix\Media\SimilarityWorker;
 use Phlix\Media\Storage\ArtworkDownloadPolicy;
 use Phlix\Media\Storage\ArtworkStorage;
+use Phlix\Media\Subtitles\Quota\SubtitleProviderQuotaRepository;
+use Phlix\Media\Subtitles\SubtitleFetchService;
+use Phlix\Media\Subtitles\SubtitleSourceRegistry;
+use Phlix\Media\Subtitles\SubtitleStorage;
 use Phlix\Theming\ThemeMediaFinder;
 use Phlix\Media\Streaming\HlsStreamer;
 use Phlix\Media\Streaming\QualitySelector;
@@ -848,6 +852,50 @@ final class MediaServicesProvider implements ServiceProviderInterface
             // config value is unset.
             ArtworkStorage::class => autowire()
                 ->constructorParameter('storageDir', get('artwork.storage_path')),
+
+            // F3: root directory for DOWNLOADED external subtitles
+            // (config/subtitles.php `storage_path`, operator-overridable via
+            // SUBTITLE_STORAGE_PATH), with a defensive @include fallback + the
+            // historic /var/subtitles default. Mirrors the artwork.storage_path
+            // config-read idiom.
+            'subtitles.storage_path' => factory(static function (ContainerInterface $c): string {
+                $appConfig = $c->get('app.config');
+                if (!is_array($appConfig)) {
+                    $appConfig = [];
+                }
+                $subCfg = $appConfig['subtitles'] ?? null;
+                if (!is_array($subCfg)) {
+                    /** @var mixed $inc */
+                    $inc = @include __DIR__ . '/../../../../config/subtitles.php';
+                    $subCfg = is_array($inc) ? $inc : [];
+                }
+                $path = $subCfg['storage_path'] ?? null;
+                return is_string($path) && $path !== '' ? $path : '/var/subtitles';
+            }),
+
+            // F3: process-scoped registry of PLUGIN subtitle sources
+            // (SubtitleSourceInterface). Single container-scoped instance —
+            // PluginLoader registers a source on plugin-enable and deregisters it
+            // on plugin-disable (no leak). Mirrors SourceRegistry.
+            SubtitleSourceRegistry::class => autowire(),
+
+            // F3: downloaded-subtitle storage under the configured root
+            // (named because PHP-DI skips defaulted optional ctor params).
+            SubtitleStorage::class => autowire()
+                ->constructorParameter('baseDir', get('subtitles.storage_path')),
+
+            // F3: per-provider download-quota persistence (Workerman MySQL
+            // Connection is globally bound by CoreServicesProvider).
+            SubtitleProviderQuotaRepository::class => autowire(),
+
+            // F3: on-demand subtitle fetch orchestrator. All ctor deps are
+            // resolvable above; `settings` (for subtitles.provider_priority) is
+            // NAMED because PHP-DI skips defaulted optional ctor params during
+            // autowiring — without this it would stay null and the priority
+            // override would never be read. The optional logger defaults to the
+            // MEDIA channel.
+            SubtitleFetchService::class => autowire()
+                ->constructorParameter('settings', get(SettingsRepository::class)),
         ]);
     }
 

@@ -18,6 +18,8 @@ use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Common\Logger\StructuredLogger;
 use Phlix\Common\Version;
 use Phlix\Media\Metadata\Resolution\SourceRegistry;
+use Phlix\Media\Subtitles\SubtitleSourceRegistry;
+use Phlix\Shared\Subtitle\SubtitleSourceInterface;
 use Phlix\Plugins\Exception\PluginEnableException;
 use Phlix\Plugins\Exception\PluginInstallException;
 use Phlix\Plugins\Exception\PluginNotFoundException;
@@ -91,6 +93,7 @@ class PluginLoader
         private readonly AuditLogger $auditLogger,
         private ?StructuredLogger $logger = null,
         private readonly ?SourceRegistry $sourceRegistry = null,
+        private readonly ?SubtitleSourceRegistry $subtitleSourceRegistry = null,
     ) {
     }
 
@@ -411,6 +414,16 @@ class PluginLoader
             $registeredSource = $instance->sourceName();
         }
 
+        // First-class SUBTITLE-source registration (F3), the exact parallel of
+        // the metadata-source branch above: an enabled plugin whose entry
+        // instance implements the shared SubtitleSourceInterface is registered
+        // into this worker's SubtitleSourceRegistry, sniff-free. F1
+        // boot-activation therefore wires enabled subtitle plugins
+        // automatically. Deregistered in disable() for a leak-free cycle.
+        if ($this->subtitleSourceRegistry !== null && $instance instanceof SubtitleSourceInterface) {
+            $this->subtitleSourceRegistry->register($instance);
+        }
+
         return $registeredSource;
     }
 
@@ -633,6 +646,11 @@ class PluginLoader
             // (no leak across enable/disable cycles).
             if ($this->sourceRegistry !== null && $instance instanceof MetadataSourceInterface) {
                 $this->sourceRegistry->deregisterInstance($instance);
+            }
+            // Mirror for subtitle sources (F3): truly removes the entry so an
+            // enable → disable cycle leaves the registry as it started.
+            if ($this->subtitleSourceRegistry !== null && $instance instanceof SubtitleSourceInterface) {
+                $this->subtitleSourceRegistry->deregisterInstance($instance);
             }
             try {
                 $instance->onDisable();

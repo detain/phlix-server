@@ -895,9 +895,11 @@ class AudiobookScanner extends BookScanner
         if (class_exists('getID3', false)) {
             try {
                 $instance = new \getID3();
-                if (method_exists($instance, 'analyze')) {
-                    $tag = $instance->analyze($path);
-                }
+                // getid3 is a hard composer dependency (james-heinrich/getid3),
+                // so getID3::analyze() always exists — call it directly. (A
+                // method_exists() probe here is dead code and trips phpstan L9
+                // `function.alreadyNarrowedType`.)
+                $tag = $instance->analyze($path);
             } catch (\Throwable $e) {
                 $this->logger?->warning('Failed to parse MP3 metadata via getID3 class', [
                     'path' => $path,

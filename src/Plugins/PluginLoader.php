@@ -266,6 +266,58 @@ class PluginLoader
             return;
         }
 
+        // Operator-initiated enable = wire into THIS worker + PERSIST the
+        // enabled flag + write an audit row. The wire step (onEnable +
+        // subscribe + register) is shared with the boot re-attach path
+        // {@see self::bootstrapEnabled()}, which deliberately does NOT persist
+        // or audit (the plugin is already persisted-enabled — re-attaching it
+        // in every resident worker at boot must not spam N DB writes / audit
+        // rows, once per worker × 14+ workers).
+        $registeredSource = $this->wire($installed);
+
+        $this->repository->setEnabled($name, true);
+
+        $this->auditLogger->logPluginAction(
+            null,
+            'enable',
+            $name,
+            ['subscriptions' => count($this->activeSubscriptions[$name] ?? [])],
+        );
+        $this->logger()->info('plugin enabled', [
+            'plugin' => $name,
+            'subscriptions' => count($this->activeSubscriptions[$name] ?? []),
+            'metadata_source' => $registeredSource,
+        ]);
+    }
+
+    /**
+     * Wire an already-loaded, persisted-enabled plugin into THIS worker's
+     * dispatch surfaces: run its (de-blocked, boot-safe) `onEnable()`, subscribe
+     * its {@see LifecycleInterface::subscribedEvents()} into this worker's
+     * {@see ListenerRegistry}, and register any {@see MetadataSourceInterface}
+     * into this worker's {@see SourceRegistry}.
+     *
+     * This is the boot re-attach primitive shared by {@see self::enable()} and
+     * {@see self::bootstrapEnabled()}. It performs NO persistence and writes NO
+     * audit row — those side-effects belong ONLY to the operator-initiated
+     * {@see self::enable()} path. Every plugin's `onEnable()` is required to be
+     * a cheap, non-blocking "wire" step (no network / migrations / blocking I/O
+     * — deferred to first use); running it across every resident worker at boot
+     * must never hang a worker (the item-5c3 landmine).
+     *
+     * @param InstalledPlugin $installed The persisted plugin record.
+     *
+     * @return string|null The registered metadata-source name, or null when the
+     *                      plugin is not a {@see MetadataSourceInterface}.
+     *
+     * @throws PluginEnableException On a missing/invalid entry class or a
+     *         throwing `onEnable()` / bad subscription — callers that must not
+     *         let one bad plugin abort the rest (bootstrapEnabled) catch this.
+     */
+    private function wire(InstalledPlugin $installed): ?string
+    {
+        $name = $installed->name();
+
         $autoload = $installed->directory . DIRECTORY_SEPARATOR . 'vendor' . DIRECTORY_SEPARATOR . 'autoload.php';
         if (is_file($autoload)) {
             require_once $autoload;
@@ -359,19 +411,7 @@ class PluginLoader
             $registeredSource = $instance->sourceName();
         }
 
-        $this->repository->setEnabled($name, true);
-
-        $this->auditLogger->logPluginAction(
-            null,
-            'enable',
-            $name,
-            ['subscriptions' => count($subscriptions)],
-        );
-        $this->logger()->info('plugin enabled', [
-            'plugin' => $name,
-            'subscriptions' => count($subscriptions),
-            'metadata_source' => $registeredSource,
-        ]);
+        return $registeredSource;
     }
 
     /**
@@ -756,13 +796,32 @@ class PluginLoader
     }
 
     /**
-     * Re-attach every persisted-as-enabled plugin to the dispatcher.
-     * Called by the {@see \Phlix\Common\Container\Providers\PluginsProvider}
-     * after the container is built so server restarts pick up plugins
-     * automatically.
+     * Re-attach every persisted-as-enabled plugin into THIS worker's dispatch
+     * surfaces. Called from each resident worker's `onWorkerStart` (the HTTP
+     * workers — playback → scrobble — and the `library-scan` managed worker —
+     * `MediaItemAdded` → enrich) so that after any restart every enabled plugin
+     * is actually subscribed to events and registered as a metadata source in
+     * every worker that dispatches the events it cares about. This is the F1
+     * keystone: without it, an admin "enable" only wires the single HTTP worker
+     * that served the request and is lost on restart.
      *
-     * Failures are logged but do not bubble up — one broken plugin
-     * should not block the rest from coming online.
+     * WIRE-ONLY: uses {@see self::wire()}, which runs each plugin's (de-blocked,
+     * boot-safe) `onEnable()` + subscribes + registers, but performs NO
+     * persistence and writes NO audit row. It must NOT call {@see self::enable()}
+     * — that would re-run `setEnabled()` + an `enable` audit row once per worker
+     * (14+ HTTP workers + the managed workers) on every boot. The plugin is
+     * already persisted-enabled; boot re-attach only mirrors that state into the
+     * live worker.
+     *
+     * Idempotent: a plugin already wired in this worker (e.g. an admin enabled it
+     * in this exact worker before this ran) is skipped. Failures are logged but
+     * do not bubble up — one broken plugin must not block the rest from coming
+     * online, nor stop the worker from serving.
+     *
+     * PREREQUISITE (item-5c3): every plugin's `onEnable()` must be non-blocking
+     * (no network / migrations / blocking I/O — deferred to first use). A
+     * blocking `onEnable()` here would hang the worker at boot across the whole
+     * fleet, which is exactly the outage this call was reverted for in the past.
      *
      * @return void
      *
@@ -771,11 +830,16 @@ class PluginLoader
     public function bootstrapEnabled(): void
     {
         foreach ($this->repository->listEnabled() as $installed) {
+            $name = $installed->name();
+            if (isset($this->entryInstances[$name])) {
+                // Already wired in this worker — nothing to do (idempotent).
+                continue;
+            }
             try {
-                $this->enable($installed->name());
+                $this->wire($installed);
             } catch (Throwable $e) {
                 $this->logger()->error('failed to bootstrap enabled plugin', [
-                    'plugin' => $installed->name(),
+                    'plugin' => $name,
                     'error' => $e->getMessage(),
                 ]);
             }

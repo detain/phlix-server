@@ -556,6 +556,112 @@ final class PluginLoaderTest extends TestCase
         $this->makeLoader()->enable('phlix-plugin-fixture');
     }
 
+    /**
+     * F1 CONSEQUENCE: {@see PluginLoader::bootstrapEnabled()} (called from every
+     * resident worker's `onWorkerStart`) re-attaches an already-enabled plugin
+     * into THIS worker — running `onEnable()` and subscribing its events — but
+     * must NOT re-persist the enabled flag or write an `enable` audit row. Those
+     * side-effects belong only to the operator-initiated {@see PluginLoader::enable()};
+     * doing them here would fire once per worker across the 14+ HTTP workers plus
+     * the scan worker on every single boot.
+     *
+     * Mutation-verified: reverting `bootstrapEnabled()` to call `enable()` (the
+     * pre-F1 behaviour) invokes `setEnabled()` + `logPluginAction()`, tripping the
+     * `shouldNotReceive()` gates below.
+     */
+    public function test_bootstrapEnabled_wires_without_persisting_or_auditing(): void
+    {
+        $manifest = $this->manifest();
+        $plugin = new FakeLifecyclePlugin();
+
+        $this->expect($this->repository, 'listEnabled')
+            ->once()
+            ->andReturn([$this->makeInstalled($manifest, enabled: true)]);
+        $this->expect($this->container, 'get')->with(FakeLifecyclePlugin::class)->andReturn($plugin);
+        $this->repository->shouldNotReceive('setEnabled');
+        $this->auditLogger->shouldNotReceive('logPluginAction');
+
+        $this->makeLoader()->bootstrapEnabled();
+
+        $this->assertTrue($plugin->onEnableCalled, 'onEnable() must run during boot re-attach');
+
+        // Prove the subscription actually landed in THIS worker's registry.
+        $event = new PlaybackStarted('sess', 'user', 'item', 'dev', 0);
+        foreach ($this->listenerRegistry->provider()->getListenersForEvent($event) as $listener) {
+            $listener($event);
+        }
+        $this->assertSame(1, $plugin->fired, 'the dispatched event must reach the re-attached plugin');
+    }
+
+    /**
+     * F1 CONSEQUENCE: `bootstrapEnabled()` is idempotent within a worker. A
+     * plugin already wired in this process is skipped, so `onEnable()` runs
+     * exactly once and its listener is subscribed exactly once (no double
+     * dispatch). Mutation-verified: dropping the `entryInstances` guard re-runs
+     * `onEnable()` and double-subscribes, so `onEnableCount`/`fired` become 2.
+     */
+    public function test_bootstrapEnabled_is_idempotent_within_a_worker(): void
+    {
+        $manifest = $this->manifest();
+        $plugin = new FakeLifecyclePlugin();
+
+        $this->expect($this->repository, 'listEnabled')
+            ->twice()
+            ->andReturn([$this->makeInstalled($manifest, enabled: true)]);
+        // Resolved exactly ONCE across both passes — the second pass sees it
+        // already wired and skips before touching the container.
+        $this->expect($this->container, 'get')
+            ->with(FakeLifecyclePlugin::class)
+            ->once()
+            ->andReturn($plugin);
+
+        $loader = $this->makeLoader();
+        $loader->bootstrapEnabled();
+        $loader->bootstrapEnabled();
+
+        $this->assertSame(1, $plugin->onEnableCount, 'onEnable() must run exactly once across repeated boot passes');
+
+        $event = new PlaybackStarted('sess', 'user', 'item', 'dev', 0);
+        foreach ($this->listenerRegistry->provider()->getListenersForEvent($event) as $listener) {
+            $listener($event);
+        }
+        $this->assertSame(1, $plugin->fired, 'the handler must be subscribed exactly once');
+    }
+
+    /**
+     * F1 CONSEQUENCE: one broken plugin must not stop the rest from coming
+     * online at boot — a throwing wire is logged and the loop continues to the
+     * next plugin. Mutation-verified: letting the exception bubble out of
+     * `bootstrapEnabled()` leaves the good plugin unwired (`fired === 0`).
+     */
+    public function test_bootstrapEnabled_continues_past_a_failing_plugin(): void
+    {
+        $badManifest = Manifest::fromArray([
+            'name' => 'phlix-plugin-bad',
+            'version' => '1.0.0',
+            'phlix_min_server_version' => '0.10.0',
+            'type' => 'notifier',
+            'entry' => \stdClass::class,
+        ]);
+        $goodManifest = $this->manifest();
+        $good = new FakeLifecyclePlugin();
+
+        $this->expect($this->repository, 'listEnabled')->once()->andReturn([
+            $this->makeInstalled($badManifest, enabled: true),
+            $this->makeInstalled($goodManifest, enabled: true),
+        ]);
+        $this->expect($this->container, 'get')->with(\stdClass::class)->andReturn(new \stdClass());
+        $this->expect($this->container, 'get')->with(FakeLifecyclePlugin::class)->andReturn($good);
+
+        $this->makeLoader()->bootstrapEnabled();
+
+        $event = new PlaybackStarted('sess', 'user', 'item', 'dev', 0);
+        foreach ($this->listenerRegistry->provider()->getListenersForEvent($event) as $listener) {
+            $listener($event);
+        }
+        $this->assertSame(1, $good->fired, 'the good plugin must still be wired after the bad one threw');
+    }
+
     public function test_enable_is_no_op_when_already_enabled_in_process(): void
     {
         $manifest = $this->manifest();

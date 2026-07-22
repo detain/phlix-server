@@ -225,6 +225,24 @@ $httpWorker->onWorkerStart = static function (Worker $w) use ($config, $publicRo
         }
     }
 
+    // F1 — plugin boot activation. Re-attach every persisted-enabled plugin into
+    // THIS HTTP worker's ListenerRegistry + SourceRegistry, so playback events
+    // reach scrobbler plugins (trakt/lastfm) and metadata-source plugins are
+    // registered immediately after a restart — not only in whichever single
+    // worker happened to serve an admin "enable" request. WIRE-ONLY (no
+    // persist/audit — the row is already enabled): {@see PluginLoader::bootstrapEnabled()}.
+    // Every plugin's onEnable() is de-blocked/non-blocking, so this cannot hang
+    // the worker at boot (the item-5c3 landmine that reverted the naive version).
+    // Non-fatal: a bootstrap failure must never stop the worker from serving.
+    try {
+        $container->get(\Phlix\Plugins\PluginLoader::class)->bootstrapEnabled();
+    } catch (\Throwable $e) {
+        LoggerFactory::get(LogChannels::PLUGINS)->error(
+            'plugin boot activation failed (HTTP worker)',
+            ['worker_id' => $w->id ?? '?', 'error' => $e->getMessage()],
+        );
+    }
+
     // SV-0.1: probe hardware acceleration exactly once per worker at start (not
     // per request) and log the chosen accelerator a single time. Resolving the
     // FfmpegRunner runs the DI factory which calls setConfig() + the probe; the
@@ -954,6 +972,28 @@ try {
                     $container = ContainerFactory::create($config);
                     /** @var \Phlix\Media\Library\LibraryScanWorker|\Phlix\Plugins\Catalog\PluginAutoUpdateWorker|\Phlix\Media\Markers\Detection\BackgroundDetectorWorker|\Phlix\Media\MediaAsset\MediaAssetWorker|\Phlix\Media\SimilarityWorker $managed */
                     $managed = $container->get($workerClass);
+
+                    // F1 — plugin boot activation in the scan/job worker. The
+                    // library-scan worker dispatches `MediaItemAdded` (→ enrich
+                    // plugins musicbrainz/anilist) and runs metadata enrichment
+                    // (→ SourceRegistry-registered omdb/anidb/myanimelist), so its
+                    // fork must wire the enabled plugins into ITS own
+                    // ListenerRegistry + SourceRegistry. Gated to `library-scan`:
+                    // the other managed workers (media-asset, similarity,
+                    // marker-detection, plugin-auto-update) dispatch none of the
+                    // plugin events, so wiring plugins there would only hold dead
+                    // instances. WIRE-ONLY + non-blocking; never blocks the fork.
+                    if ($procKey === 'library-scan') {
+                        try {
+                            $container->get(\Phlix\Plugins\PluginLoader::class)->bootstrapEnabled();
+                        } catch (\Throwable $pluginBootError) {
+                            LoggerFactory::get(LogChannels::PLUGINS)->error(
+                                'plugin boot activation failed (managed worker)',
+                                ['process' => $procKey, 'error' => $pluginBootError->getMessage()],
+                            );
+                        }
+                    }
+
                     // Arms a Workerman\Timer that polls runOnce() every $pollSeconds.
                     $managed->start($pollSeconds);
                 } catch (\Throwable $e) {

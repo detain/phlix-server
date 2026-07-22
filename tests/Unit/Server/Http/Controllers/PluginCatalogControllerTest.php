@@ -196,6 +196,54 @@ final class PluginCatalogControllerTest extends TestCase
         $this->assertSame([], $this->store[PluginCatalogService::KEY_SOURCES]);
     }
 
+    public function test_channel_get_returns_stable_by_default_with_advanced_dev(): void
+    {
+        $controller = $this->controller([]);
+        $request = $this->makeRequest('admin-1');
+        $request->method = 'GET';
+
+        $response = $controller->channel($request, []);
+
+        $this->assertSame(200, $response->statusCode);
+        $payload = $this->decode($response->body);
+        $this->assertSame('stable', $payload['channel']);
+        /** @var list<array<string, mixed>> $options */
+        $options = $payload['options'];
+        $dev = array_values(array_filter($options, static fn (array $o): bool => $o['value'] === 'dev'));
+        $this->assertCount(1, $dev);
+        $this->assertTrue($dev[0]['advanced']);
+    }
+
+    public function test_channel_put_sets_dev_and_audits(): void
+    {
+        $this->expect($this->audit, 'logPluginAction')
+            ->once()
+            ->with('admin-1', 'catalog.channel', '*', Mockery::type('array'));
+
+        $controller = $this->controller([]);
+        $request = $this->makeRequest('admin-1', ['channel' => 'dev']);
+        $request->method = 'PUT';
+
+        $response = $controller->channel($request, []);
+
+        $this->assertSame(200, $response->statusCode);
+        $this->assertSame('dev', $this->decode($response->body)['channel']);
+        $this->assertSame('dev', $this->store[PluginCatalogService::KEY_CHANNEL]);
+    }
+
+    public function test_channel_put_rejects_invalid_value(): void
+    {
+        $controller = $this->controller([]);
+        $request = $this->makeRequest('admin-1', ['channel' => 'bogus']);
+        $request->method = 'PUT';
+
+        $response = $controller->channel($request, []);
+
+        $this->assertSame(400, $response->statusCode);
+        $this->assertSame('plugin.catalog.channel.invalid', $this->decode($response->body)['code']);
+        $this->assertArrayNotHasKey(PluginCatalogService::KEY_CHANNEL, $this->store);
+    }
+
     /**
      * @param array<string, string> $catalogBodies
      */

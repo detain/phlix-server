@@ -70,6 +70,64 @@ final class CatalogSourceResolverTest extends TestCase
         }
     }
 
+    /**
+     * S27: the `dev` channel resolves the OFFICIAL catalog to the moving
+     * `master` branch (via {@see CatalogSourceResolver::refForChannel()}),
+     * while `stable`/unknown keeps the audited pinned ref.
+     */
+    public function test_dev_channel_resolves_official_repo_to_master(): void
+    {
+        $devRef = CatalogSourceResolver::refForChannel(CatalogSourceResolver::CHANNEL_DEV);
+        self::assertSame(CatalogSourceResolver::DEV_REF, $devRef);
+        self::assertSame(
+            'https://raw.githubusercontent.com/detain/phlix-plugins/master/plugins.json',
+            CatalogSourceResolver::normalize('https://github.com/detain/phlix-plugins', 'plugins.json', $devRef),
+        );
+    }
+
+    public function test_stable_channel_keeps_pinned_ref(): void
+    {
+        // Stable (and any unknown value) maps to null → the audited pinned ref.
+        self::assertNull(CatalogSourceResolver::refForChannel(CatalogSourceResolver::CHANNEL_STABLE));
+        self::assertNull(CatalogSourceResolver::refForChannel('bogus'));
+        $stableRef = CatalogSourceResolver::refForChannel(CatalogSourceResolver::CHANNEL_STABLE);
+        self::assertSame(
+            'https://raw.githubusercontent.com/detain/phlix-plugins/'
+                . CatalogSourceResolver::OFFICIAL_PINNED_REF . '/plugins.json',
+            CatalogSourceResolver::normalize('https://github.com/detain/phlix-plugins', 'plugins.json', $stableRef),
+        );
+    }
+
+    /**
+     * S27: precedence is env > setting(channel) > default. Even with the `dev`
+     * channel selected, the {@see CatalogSourceResolver::PINNED_REF_ENV} override
+     * wins.
+     */
+    public function test_env_override_beats_the_dev_channel(): void
+    {
+        putenv(CatalogSourceResolver::PINNED_REF_ENV . '=v9.9.9');
+        try {
+            $devRef = CatalogSourceResolver::refForChannel(CatalogSourceResolver::CHANNEL_DEV);
+            self::assertSame('v9.9.9', CatalogSourceResolver::officialPinnedRef($devRef));
+            self::assertSame(
+                'https://raw.githubusercontent.com/detain/phlix-plugins/v9.9.9/plugins.json',
+                CatalogSourceResolver::normalize('https://github.com/detain/phlix-plugins', 'plugins.json', $devRef),
+            );
+        } finally {
+            putenv(CatalogSourceResolver::PINNED_REF_ENV);
+        }
+    }
+
+    public function test_channel_does_not_affect_operator_added_repos(): void
+    {
+        // Non-official repos keep HEAD regardless of the channel ref supplied.
+        $devRef = CatalogSourceResolver::refForChannel(CatalogSourceResolver::CHANNEL_DEV);
+        self::assertSame(
+            'https://raw.githubusercontent.com/someorg/their-catalog/HEAD/plugins.json',
+            CatalogSourceResolver::normalize('https://github.com/someorg/their-catalog', 'plugins.json', $devRef),
+        );
+    }
+
     public function test_tree_url_targets_the_named_branch(): void
     {
         self::assertSame(

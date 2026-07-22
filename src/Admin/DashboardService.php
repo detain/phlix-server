@@ -147,9 +147,12 @@ class DashboardService
      * @param int $limit Maximum number of users to return (default: 10)
      * @param int|null $days Number of days to look back (default: 30, null for all time)
      *
+     * Rows for since-deleted accounts are excluded, so every returned entry
+     * carries a resolved username — no blank rows.
+     *
      * @return array<int, array{
      *     user_id: string,
-     *     username: string|null,
+     *     username: string,
      *     total_watch_time: int,
      *     play_count: int,
      *     avatar_url: string|null
@@ -163,6 +166,16 @@ class DashboardService
         $result = [];
         foreach ($statsData as $row) {
             $username = $this->getUsernameById($row['user_id']);
+
+            // S14 orphan guard (defense-in-depth). StatsCollector::getTopUsers()
+            // already INNER JOINs users so deleted-account events are dropped at
+            // the query level; a null username here means the account was removed
+            // in the TOCTOU window, so skip it rather than surface a blank
+            // leaderboard row.
+            if ($username === null) {
+                continue;
+            }
+
             $avatarUrl = $this->getUserAvatarUrl($row['user_id']);
 
             $result[] = [
@@ -183,10 +196,13 @@ class DashboardService
      * @param int $limit Maximum number of items to return (default: 10)
      * @param int|null $days Number of days to look back (default: 30, null for all time)
      *
+     * Orphaned rows (plays whose media item was deleted) are excluded, so the
+     * returned entries always carry a resolved title/type — no blank rows.
+     *
      * @return array<int, array{
      *     media_item_id: string,
-     *     title: string|null,
-     *     type: string|null,
+     *     title: string,
+     *     type: string,
      *     poster_url: string|null,
      *     play_count: int,
      *     total_duration: int
@@ -201,15 +217,23 @@ class DashboardService
         foreach ($statsData as $row) {
             $mediaItem = $this->items->findById($row['media_item_id']);
 
-            $title = is_array($mediaItem) ? $this->toString($mediaItem['name'] ?? null) : null;
-            $type = is_array($mediaItem) ? $this->toString($mediaItem['type'] ?? null) : null;
+            // S14 orphan guard (defense-in-depth). StatsCollector::getTopMedia()
+            // already INNER JOINs media_items so deleted-item plays are dropped
+            // at the query level; this also covers the TOCTOU race where an item
+            // is removed between that aggregate query and this hydrate. Either
+            // way a blank (null-title / no-poster) row can never reach the
+            // dashboard — orphaned rows are hidden, not shown as a placeholder.
+            if (!is_array($mediaItem)) {
+                continue;
+            }
+
             $playCount = is_int($row['play_count']) ? $row['play_count'] : 0;
             $totalDuration = is_int($row['total_duration']) ? $row['total_duration'] : 0;
 
             $result[] = [
                 'media_item_id' => $this->toString($row['media_item_id']),
-                'title' => $title,
-                'type' => $type,
+                'title' => $this->toString($mediaItem['name'] ?? null),
+                'type' => $this->toString($mediaItem['type'] ?? null),
                 'poster_url' => $this->getPosterUrl($mediaItem),
                 'play_count' => $playCount,
                 'total_duration' => $totalDuration,

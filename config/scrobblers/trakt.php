@@ -9,7 +9,7 @@ declare(strict_types=1);
  * install must register its own application at https://app.trakt.tv/settings/apps/api/new to obtain
  * a client_id and client_secret (Phlix cannot ship a shared one because each
  * Trakt app is bound to its owner and redirect URI). Per-user OAuth tokens are
- * stored separately (see {@see \Phlix\Plugins\Scrobbler\Trakt\TraktSettings}),
+ * stored separately (see {@see \Phlix\Server\Integrations\Trakt\TraktSettings}),
  * NOT here.
  *
  * Defaults pull from environment variables so secrets stay out of the repo —

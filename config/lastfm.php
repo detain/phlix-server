@@ -30,8 +30,9 @@ return [
      * Shared secret used to sign authenticated calls (`api_sig`).
      * Required. Obtain alongside the API key.
      *
-     * Also exposed as `api_secret` for backward compatibility with the
-     * legacy `Phlix\Plugins\Lastfm\Plugin` consumer.
+     * Also exposed as `api_secret` for backward compatibility with older
+     * config readers (the legacy `Phlix\Plugins\Lastfm\Plugin` consumer that
+     * once read this key has been removed).
      */
     'shared_secret' => getenv('LASTFM_SHARED_SECRET') ?: '',
     'api_secret'    => getenv('LASTFM_SHARED_SECRET') ?: '',
@@ -45,7 +46,7 @@ return [
     'callback_url' => getenv('LASTFM_CALLBACK_URL') ?: '',
 
     /**
-     * Session key for the legacy single-user Plugin. The per-user
+     * Session key for the removed legacy single-user Plugin. The per-user
      * `LastfmScrobbler` reads its keys from the `lastfm_sessions` table
      * instead, so this can stay empty when using the new flow.
      */
@@ -63,11 +64,11 @@ return [
     'submit_now_playing' => filter_var(getenv('LASTFM_SUBMIT_NOW_PLAYING') ?: '1', FILTER_VALIDATE_BOOLEAN),
 
     /**
-     * Legacy fraction-based threshold consumed by the original
-     * `Phlix\Plugins\Lastfm\Plugin`. The new
-     * `Phlix\Plugins\Scrobbler\Lastfm\LastfmScrobbler` enforces
-     * Last.fm's official rule (>30s duration AND >50% played) regardless
-     * of this value.
+     * Legacy fraction-based threshold consumed by the original (now removed)
+     * `Phlix\Plugins\Lastfm\Plugin`. The current
+     * `Phlix\Plugins\Scrobbler\Lastfm\LastfmScrobbler` (provided by the
+     * installed Last.fm plugin) enforces Last.fm's official rule (>30s
+     * duration AND >50% played) regardless of this value.
      */
     'scrobble_threshold' => 0.5,
 ];

@@ -389,7 +389,7 @@ $httpWorker->onWorkerStart = static function (Worker $w) use ($config, $publicRo
             // Manifest name of the Trakt scrobbler (phlix-plugin-trakt/plugin.json).
             $traktPluginName = 'phlix-plugin-trakt';
             $installedTrakt = $pluginLoader->getInstalled($traktPluginName);
-            $traktSettings = \Phlix\Plugins\Scrobbler\Trakt\TraktSettings::fromArray(
+            $traktSettings = \Phlix\Server\Integrations\Trakt\TraktSettings::fromArray(
                 $installedTrakt->settings,
             );
             $traktIntervalMinutes = $traktSettings->syncIntervalMinutes;

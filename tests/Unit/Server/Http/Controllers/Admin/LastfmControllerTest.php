@@ -4,10 +4,10 @@ declare(strict_types=1);
 
 namespace Phlix\Tests\Unit\Server\Http\Controllers\Admin;
 
-use Phlix\Plugins\Scrobbler\Lastfm\LastfmApi;
-use Phlix\Plugins\Scrobbler\Lastfm\LastfmConfig;
-use Phlix\Plugins\Scrobbler\Lastfm\LastfmOAuthStateStore;
-use Phlix\Plugins\Scrobbler\Lastfm\LastfmSessionRepository;
+use Phlix\Server\Integrations\Lastfm\LastfmApi;
+use Phlix\Server\Integrations\Lastfm\LastfmConfig;
+use Phlix\Server\Integrations\Lastfm\LastfmOAuthStateStore;
+use Phlix\Server\Integrations\Lastfm\LastfmSessionRepository;
 use Phlix\Server\Http\Controllers\Admin\LastfmController;
 use Phlix\Server\Http\Request;
 use PHPUnit\Framework\TestCase;

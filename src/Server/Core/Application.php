@@ -1435,10 +1435,10 @@ class Application
         // Overlay BEFORE constructing, so $config and $api both see the override.
         $rawConfig = $this->applyLastfmOverrides(is_array($rawConfig) ? $rawConfig : [], $settings);
 
-        $config = \Phlix\Plugins\Scrobbler\Lastfm\LastfmConfig::fromArray($rawConfig);
+        $config = \Phlix\Server\Integrations\Lastfm\LastfmConfig::fromArray($rawConfig);
         $db = $this->connectionPool->getPooledConnection('mysql');
-        $sessions = new \Phlix\Plugins\Scrobbler\Lastfm\LastfmSessionRepository($db);
-        $api = new \Phlix\Plugins\Scrobbler\Lastfm\LastfmApi(
+        $sessions = new \Phlix\Server\Integrations\Lastfm\LastfmSessionRepository($db);
+        $api = new \Phlix\Server\Integrations\Lastfm\LastfmApi(
             $config->apiKey,
             $config->sharedSecret,
         );
@@ -1470,10 +1470,10 @@ class Application
             // Overlay BEFORE constructing — see applyLastfmOverrides().
             $rawConfig = $this->applyLastfmOverrides(is_array($rawConfig) ? $rawConfig : [], $settings);
 
-            $config = \Phlix\Plugins\Scrobbler\Lastfm\LastfmConfig::fromArray($rawConfig);
+            $config = \Phlix\Server\Integrations\Lastfm\LastfmConfig::fromArray($rawConfig);
             $db = $this->connectionPool->getPooledConnection('mysql');
-            $sessions = new \Phlix\Plugins\Scrobbler\Lastfm\LastfmSessionRepository($db);
-            $api = new \Phlix\Plugins\Scrobbler\Lastfm\LastfmApi(
+            $sessions = new \Phlix\Server\Integrations\Lastfm\LastfmSessionRepository($db);
+            $api = new \Phlix\Server\Integrations\Lastfm\LastfmApi(
                 $config->apiKey,
                 $config->sharedSecret,
             );

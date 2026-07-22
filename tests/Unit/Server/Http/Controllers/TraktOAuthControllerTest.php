@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace Phlix\Tests\Unit\Server\Http\Controllers;
 
 use Phlix\Admin\SettingsRepository;
-use Phlix\Plugins\Scrobbler\Trakt\TraktOAuthStateStore;
+use Phlix\Server\Integrations\Trakt\TraktOAuthStateStore;
 use Phlix\Server\Http\Controllers\TraktOAuthController;
 use Phlix\Server\Http\Request;
 use PHPUnit\Framework\TestCase;

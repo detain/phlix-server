@@ -11,15 +11,15 @@ declare(strict_types=1);
 
 namespace Phlix\Server\Http\Controllers;
 
-use Phlix\Plugins\Scrobbler\Trakt\HttpClient;
-use Phlix\Plugins\Scrobbler\Trakt\DbTraktOAuthStateStore;
-use Phlix\Plugins\Scrobbler\Trakt\InvalidOAuthStateException;
-use Phlix\Plugins\Scrobbler\Trakt\SessionTraktOAuthStateStore;
-use Phlix\Plugins\Scrobbler\Trakt\SodiumTokenCipher;
-use Phlix\Plugins\Scrobbler\Trakt\TraktApi;
-use Phlix\Plugins\Scrobbler\Trakt\TraktOAuthStateStore;
-use Phlix\Plugins\Scrobbler\Trakt\TraktOperatorConfig;
-use Phlix\Plugins\Scrobbler\Trakt\TraktSettings;
+use Phlix\Server\Integrations\Trakt\HttpClient;
+use Phlix\Server\Integrations\Trakt\DbTraktOAuthStateStore;
+use Phlix\Server\Integrations\Trakt\InvalidOAuthStateException;
+use Phlix\Server\Integrations\Trakt\SessionTraktOAuthStateStore;
+use Phlix\Server\Integrations\Trakt\SodiumTokenCipher;
+use Phlix\Server\Integrations\Trakt\TraktApi;
+use Phlix\Server\Integrations\Trakt\TraktOAuthStateStore;
+use Phlix\Server\Integrations\Trakt\TraktOperatorConfig;
+use Phlix\Server\Integrations\Trakt\TraktSettings;
 use Phlix\Plugins\Repository\PluginRepository;
 use Phlix\Admin\SettingsRepository;
 use Phlix\Server\Http\Request;
@@ -123,9 +123,9 @@ final class TraktOAuthController
         // Degrades to storing plaintext tokens when cipher is unavailable.
         if (
             $tokenEncryptionKey !== null
-            && class_exists(\Phlix\Plugins\Scrobbler\Trakt\SodiumTokenCipher::class)
+            && class_exists(\Phlix\Server\Integrations\Trakt\SodiumTokenCipher::class)
         ) {
-            $this->cipher = \Phlix\Plugins\Scrobbler\Trakt\SodiumTokenCipher::fromConfig($tokenEncryptionKey);
+            $this->cipher = \Phlix\Server\Integrations\Trakt\SodiumTokenCipher::fromConfig($tokenEncryptionKey);
         } else {
             $this->cipher = null;
         }

@@ -12,12 +12,12 @@ declare(strict_types=1);
 namespace Phlix\Server\Http\Controllers\Admin;
 
 use Phlix\Admin\SettingsRepository;
-use Phlix\Plugins\Scrobbler\Lastfm\DbLastfmOAuthStateStore;
-use Phlix\Plugins\Scrobbler\Lastfm\LastfmApi;
-use Phlix\Plugins\Scrobbler\Lastfm\LastfmConfig;
-use Phlix\Plugins\Scrobbler\Lastfm\LastfmOAuthStateStore;
-use Phlix\Plugins\Scrobbler\Lastfm\LastfmSessionRepository;
-use Phlix\Plugins\Scrobbler\Lastfm\SessionLastfmOAuthStateStore;
+use Phlix\Server\Integrations\Lastfm\DbLastfmOAuthStateStore;
+use Phlix\Server\Integrations\Lastfm\LastfmApi;
+use Phlix\Server\Integrations\Lastfm\LastfmConfig;
+use Phlix\Server\Integrations\Lastfm\LastfmOAuthStateStore;
+use Phlix\Server\Integrations\Lastfm\LastfmSessionRepository;
+use Phlix\Server\Integrations\Lastfm\SessionLastfmOAuthStateStore;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
 use Workerman\MySQL\Connection;

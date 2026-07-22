@@ -9,7 +9,7 @@ use Phlix\Plugins\SettingsMasker;
 use Phlix\Server\Http\Controllers\Admin\AdminSettingsController;
 use Phlix\Server\Http\Controllers\TraktOAuthController;
 use Phlix\Server\Http\Request;
-use Phlix\Plugins\Scrobbler\Trakt\TraktOAuthStateStore;
+use Phlix\Server\Integrations\Trakt\TraktOAuthStateStore;
 use PHPUnit\Framework\TestCase;
 use ReflectionClass;
 use Workerman\MySQL\Connection;

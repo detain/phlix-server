@@ -8,7 +8,7 @@ use PHPUnit\Framework\TestCase;
 use Phlix\Plugins\InstalledPlugin;
 use Phlix\Plugins\Manifest;
 use Phlix\Plugins\Repository\PluginRepository;
-use Phlix\Plugins\Scrobbler\Trakt\TraktSettings;
+use Phlix\Server\Integrations\Trakt\TraktSettings;
 use Phlix\Server\Http\Controllers\TraktOAuthController;
 use Phlix\Server\Http\Request;
 

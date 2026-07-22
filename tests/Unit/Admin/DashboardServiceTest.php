@@ -204,6 +204,118 @@ class DashboardServiceTest extends TestCase
         $this->assertEquals(5, $result[1]['play_count']);
     }
 
+    public function test_get_top_media_excludes_orphaned_deleted_item(): void
+    {
+        // S14 orphan guard (behavioural proof of the consumer-side skip).
+        // A play-count row whose media item has since been deleted must NOT
+        // surface as a blank (null-title) dashboard entry: getTopMedia() skips
+        // any row whose ItemRepository::findById() hydrate returns null.
+        $mockConnection = $this->createMockConnection();
+        $mockConnection->method('query')->willReturn([]);
+
+        $mockStatsCollector = $this->createMockStatsCollector();
+        // The aggregate still reports the deleted item's historical plays here —
+        // this is exactly the TOCTOU window the defense-in-depth guard closes
+        // (item removed after StatsCollector's INNER JOIN would have dropped it).
+        $mockStatsCollector->method('getTopMedia')->willReturn([
+            ['media_item_id' => 'media-live', 'play_count' => 10, 'total_duration' => 18000],
+            ['media_item_id' => 'media-gone', 'play_count' => 7, 'total_duration' => 12600],
+        ]);
+
+        $mockItemRepository = $this->createMockItemRepository();
+        $mockItemRepository->method('findById')
+            ->willReturnCallback(function (string $id): ?array {
+                if ($id === 'media-live') {
+                    return [
+                        'id' => 'media-live',
+                        'name' => 'Surviving Movie',
+                        'type' => 'movie',
+                        'metadata' => ['poster_url' => '/poster-live.jpg'],
+                    ];
+                }
+                // Deleted item — the repository no longer has a row for it.
+                return null;
+            });
+
+        $service = new DashboardService(
+            $mockStatsCollector,
+            $this->createMockSessionManager(),
+            $this->createMockStreamManager(),
+            $mockItemRepository,
+            $mockConnection
+        );
+
+        $result = $service->getTopMedia(10, 30);
+
+        // Only the surviving item is returned; the orphaned row is hidden.
+        $this->assertCount(1, $result);
+        $this->assertSame('media-live', $result[0]['media_item_id']);
+        $this->assertSame('Surviving Movie', $result[0]['title']);
+
+        // The deleted item never leaks through, and no blank-title row exists.
+        foreach ($result as $row) {
+            $this->assertNotSame('media-gone', $row['media_item_id']);
+            $this->assertNotSame('', $row['title'], 'no blank-title row may reach the dashboard');
+        }
+
+        // Regression: the surviving neighbour's aggregates are passed through
+        // unchanged by the orphan skip — no double-count, no perturbation.
+        $this->assertSame(10, $result[0]['play_count']);
+        $this->assertSame(18000, $result[0]['total_duration']);
+        $this->assertSame('/poster-live.jpg', $result[0]['poster_url']);
+    }
+
+    public function test_get_top_users_excludes_deleted_user(): void
+    {
+        // S14 orphan guard (analogous, user side). A watch-time row whose user
+        // account has since been deleted must NOT surface as a blank (no-name)
+        // leaderboard entry: getTopUsers() skips any row whose username lookup
+        // returns null (the users SELECT comes back empty for a removed row).
+        $mockConnection = $this->createMockConnection();
+        $mockConnection->method('query')
+            ->willReturnCallback(function (string $sql, array $params = []): array {
+                $userId = $params[0] ?? '';
+                if ($userId === 'user-live') {
+                    return [['id' => 'user-live', 'username' => 'alice', 'avatar_url' => '/avatar1.png']];
+                }
+                // Deleted user — both the username and avatar lookups miss.
+                return [];
+            });
+
+        $mockStatsCollector = $this->createMockStatsCollector();
+        $mockStatsCollector->method('getTopUsers')->willReturn([
+            ['user_id' => 'user-live', 'total_watch_time' => 7200, 'play_count' => 5],
+            ['user_id' => 'user-gone', 'total_watch_time' => 3600, 'play_count' => 3],
+        ]);
+
+        $service = new DashboardService(
+            $mockStatsCollector,
+            $this->createMockSessionManager(),
+            $this->createMockStreamManager(),
+            $this->createMockItemRepository(),
+            $mockConnection
+        );
+
+        $result = $service->getTopUsers(10, 30);
+
+        // Only the surviving user is returned; the deleted account is hidden.
+        $this->assertCount(1, $result);
+        $this->assertSame('user-live', $result[0]['user_id']);
+        $this->assertSame('alice', $result[0]['username']);
+
+        // The deleted user never leaks through, and no blank-username row exists.
+        foreach ($result as $row) {
+            $this->assertNotSame('user-gone', $row['user_id']);
+            $this->assertNotSame('', $row['username'], 'no blank-username row may reach the dashboard');
+        }
+
+        // Regression: the surviving neighbour's aggregates are passed through
+        // unchanged by the orphan skip — no double-count, no perturbation.
+        $this->assertSame(7200, $result[0]['total_watch_time']);
+        $this->assertSame(5, $result[0]['play_count']);
+        $this->assertSame('/avatar1.png', $result[0]['avatar_url']);
+    }
+
     public function test_get_storage_summary_aggregates_by_type(): void
     {
         $mockConnection = $this->createMockConnection();

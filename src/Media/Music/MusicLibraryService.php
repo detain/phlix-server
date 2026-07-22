@@ -56,16 +56,18 @@ class MusicLibraryService
      * @param string        $path       Root path to scan
      * @param callable|null $onProgress Optional `(int $processed, int $total, string $currentPath): void`
      *                                  sink, forwarded to the scanner so a scan job can stream progress.
+     * @param string|null   $libraryId  Owning library UUID, forwarded so the scanner can stamp
+     *                                  `media_items.library_id` and carry it on the MediaItemAdded event.
      * @return ScanResult Summary of the scan operation
      *
      * @example
      * ```php
-     * $result = $service->scanDirectory('/music/rock');
+     * $result = $service->scanDirectory('/music/rock', null, $libraryId);
      * ```
      */
-    public function scanDirectory(string $path, ?callable $onProgress = null): ScanResult
+    public function scanDirectory(string $path, ?callable $onProgress = null, ?string $libraryId = null): ScanResult
     {
-        return $this->scanner->scanDirectory($path, $onProgress);
+        return $this->scanner->scanDirectory($path, $onProgress, $libraryId);
     }
 
     /**

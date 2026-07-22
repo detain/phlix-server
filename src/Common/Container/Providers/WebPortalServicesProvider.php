@@ -26,7 +26,6 @@ use Phlix\Media\Library\PhotoLibraryManager;
 use Phlix\Media\Library\PhotoScanner;
 use Phlix\Media\Music\MusicLibraryScanner;
 use Phlix\Media\Music\MusicLibraryService;
-use Phlix\Media\Transcoding\FfmpegRunner;
 use Phlix\Media\Transcoding\TranscodeManager;
 use Phlix\Media\Markers\MarkerService;
 use Phlix\Media\Markers\PlaybackMarkerService;
@@ -137,10 +136,12 @@ final class WebPortalServicesProvider implements ServiceProviderInterface
                     /** @var MetadataManager $metadataManager */
                     $metadataManager = $c->get(MetadataManager::class);
 
-                    // Create MusicLibraryScanner and MusicLibraryService for music hierarchy
-                    /** @var FfmpegRunner $ffmpegRunner */
-                    $ffmpegRunner = $c->get(FfmpegRunner::class);
-                    $musicLibraryScanner = new MusicLibraryScanner($db, $ffmpegRunner);
+                    // Create MusicLibraryService for the music hierarchy. Resolve
+                    // the scanner from the container (not `new`) so it carries the
+                    // wired EventDispatcher (musicbrainz enrichment) + the live
+                    // ScanIgnorePatterns setting — see MediaServicesProvider.
+                    /** @var MusicLibraryScanner $musicLibraryScanner */
+                    $musicLibraryScanner = $c->get(MusicLibraryScanner::class);
                     $musicLibraryService = new MusicLibraryService($db, $musicLibraryScanner);
 
                     /** @var TranscodeManager|null $transcodeManager */

@@ -566,7 +566,7 @@ class LibraryManager
                     $this->logger->warning('Music library path does not exist', ['path' => $path]);
                     continue;
                 }
-                $this->musicLibraryService->scanDirectory($path);
+                $this->musicLibraryService->scanDirectory($path, null, $libraryId);
             }
             $this->logger->info('Music library scan complete', ['library_id' => $libraryId]);
             return;
@@ -601,7 +601,7 @@ class LibraryManager
                 $this->logger->warning('Music library path does not exist', ['path' => $path]);
                 continue;
             }
-            $this->musicLibraryService->scanDirectory($path, $onScanProgress);
+            $this->musicLibraryService->scanDirectory($path, $onScanProgress, $libraryId);
             $base += $counts[$i];
         }
 

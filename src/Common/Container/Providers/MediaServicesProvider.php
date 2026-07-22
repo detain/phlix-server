@@ -22,6 +22,7 @@ use Phlix\Media\Library\LibraryScanWorker;
 use Phlix\Media\Library\MediaScanner;
 use Phlix\Media\Library\RatingGate;
 use Phlix\Media\Library\ScanJobRepository;
+use Phlix\Media\Music\MusicLibraryScanner;
 use Phlix\Media\ChapterSearchService;
 use Phlix\Media\CollectionService;
 use Phlix\Media\Markers\Detection\BackgroundDetectorWorker;
@@ -336,6 +337,19 @@ final class MediaServicesProvider implements ServiceProviderInterface
                 // unnamed optional param is SKIPPED during autowiring, which
                 // would pin the scanner to the shipped defaults and make the
                 // admin control inert while still rendering and accepting a PUT.
+                ->constructorParameter('ignorePatterns', get(ScanIgnorePatterns::class)),
+
+            // Native (getID3) music scanner. Registered explicitly — NOT left to
+            // bare autowiring — because PHP-DI SKIPS defaulted optional ctor
+            // params, which would leave the scanner with a null EventDispatcher
+            // (music enrichment via the musicbrainz plugin's MediaItemAdded
+            // subscription would silently never fire) and the shipped
+            // ScanIgnorePatterns defaults instead of the live admin setting. The
+            // same shared EventDispatcher the plugins subscribe to (and the video
+            // MediaScanner publishes on) is injected, so a track added by the
+            // library-scan worker reaches the plugin listener.
+            MusicLibraryScanner::class => autowire()
+                ->constructorParameter('eventDispatcher', get(EventDispatcherInterface::class))
                 ->constructorParameter('ignorePatterns', get(ScanIgnorePatterns::class)),
 
             LibraryManager::class => autowire()

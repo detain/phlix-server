@@ -13,8 +13,12 @@ namespace Phlix\Media\Music;
 
 use Phlix\Common\Logger\LogChannels;
 use Phlix\Common\Logger\StructuredLogger;
+use Phlix\Common\Uuid;
+use Phlix\Media\Library\ScanIgnorePatterns;
 use Phlix\Media\Library\ScanResult;
 use Phlix\Media\Transcoding\FfmpegRunner;
+use Phlix\Shared\Events\Library\MediaItemAdded;
+use Psr\EventDispatcher\EventDispatcherInterface;
 use Psr\Log\LoggerInterface;
 use SplFileInfo;
 use Workerman\MySQL\Connection;
@@ -60,20 +64,49 @@ class MusicLibraryScanner
     private ?\getID3 $id3Reader = null;
 
     /**
+     * @var EventDispatcherInterface|null PSR-14 dispatcher for library lifecycle
+     * events. When wired (the library-scan worker path), each genuinely-new
+     * track publishes a {@see MediaItemAdded} that the enabled `musicbrainz`
+     * plugin subscribes for enrichment — the only music-enrichment path after
+     * the native providers were removed (F4). Null in the legacy/manual
+     * construction sites, where enrichment is simply not triggered.
+     */
+    private ?EventDispatcherInterface $eventDispatcher;
+
+    /**
+     * @var ScanIgnorePatterns Effective `scanner.ignore_patterns` list consulted
+     * by {@see self::shouldSkipFile()} — the SAME live admin setting the video
+     * {@see \Phlix\Media\Library\MediaScanner} reads, not a hardcoded list.
+     */
+    private ScanIgnorePatterns $ignorePatterns;
+
+    /**
      * Constructor for MusicLibraryScanner.
      *
      * @param Connection $db Database connection
      * @param FfmpegRunner $ffmpeg FFmpeg runner for metadata extraction
      * @param LoggerInterface|null $logger Optional custom logger
+     * @param EventDispatcherInterface|null $eventDispatcher Optional PSR-14
+     *        dispatcher; when supplied, {@see MediaItemAdded} is published for
+     *        each new track so plugin metadata enrichment can run.
+     * @param ScanIgnorePatterns|null $ignorePatterns Effective
+     *        `scanner.ignore_patterns` list; NULL degrades to a store-less
+     *        instance yielding {@see ScanIgnorePatterns::DEFAULT_PATTERNS}.
      */
     public function __construct(
         Connection $db,
         FfmpegRunner $ffmpeg,
-        ?LoggerInterface $logger = null
+        ?LoggerInterface $logger = null,
+        ?EventDispatcherInterface $eventDispatcher = null,
+        ?ScanIgnorePatterns $ignorePatterns = null
     ) {
         $this->db = $db;
         $this->ffmpeg = $ffmpeg;
         $this->logger = $this->createLogger($logger);
+        $this->eventDispatcher = $eventDispatcher;
+        // Never null internally: a legacy construction that omits it gets a
+        // store-less instance, which yields ScanIgnorePatterns::DEFAULT_PATTERNS.
+        $this->ignorePatterns = $ignorePatterns ?? new ScanIgnorePatterns();
     }
 
     /**
@@ -120,6 +153,11 @@ class MusicLibraryScanner
             return 0;
         }
 
+        // Re-read `scanner.ignore_patterns` once per walk (read-path class (a))
+        // so the count denominator uses the same effective skip list the scan
+        // will apply.
+        $this->ignorePatterns->refresh();
+
         $count = 0;
         foreach ($this->audioFileIterator($path) as $file) {
             unset($file);
@@ -139,16 +177,21 @@ class MusicLibraryScanner
      * @param string        $path       Root path to scan
      * @param callable|null $onProgress Optional `(int $processed, int $total, string $currentPath): void`
      *                                  sink, ticked once per audio file during the tag-reading pass.
+     * @param string|null   $libraryId  Owning library UUID. Stamped onto every
+     *                                  `media_items` row this scan creates and
+     *                                  carried on the {@see MediaItemAdded} event.
+     *                                  NULL only for the legacy manual-path scan
+     *                                  endpoint (no library context).
      * @return ScanResult Summary of the scan operation
      *
      * @example
      * ```php
      * $scanner = new MusicLibraryScanner($db, $ffmpeg);
-     * $result = $scanner->scanDirectory('/music/rock');
+     * $result = $scanner->scanDirectory('/music/rock', null, $libraryId);
      * echo "Scanned {$result->scanned}, added {$result->added}, updated {$result->updated}";
      * ```
      */
-    public function scanDirectory(string $path, ?callable $onProgress = null): ScanResult
+    public function scanDirectory(string $path, ?callable $onProgress = null, ?string $libraryId = null): ScanResult
     {
         $result = new ScanResult();
         $startTime = hrtime(true);
@@ -159,6 +202,9 @@ class MusicLibraryScanner
             return $result;
         }
 
+        // Re-read `scanner.ignore_patterns` once per scan (read-path class (a)).
+        $this->ignorePatterns->refresh();
+
         $this->logger->info('Starting music directory scan', ['path' => $path]);
 
         // Group files by (artist, album) to count tracks and process efficiently.
@@ -167,9 +213,9 @@ class MusicLibraryScanner
         $albumMap = $this->groupFilesByAlbum($path, $total, $onProgress);
 
         // Track artist/album IDs to handle the hierarchy
-        /** @var array<string, array{id:int, media_item_id:int|null}> $artistCache */
+        /** @var array<string, array{id:int, media_item_id:string|null}> $artistCache */
         $artistCache = [];
-        /** @var array<string, array{id:int, media_item_id:int|null}> $albumCache */
+        /** @var array<string, array{id:int, media_item_id:string|null}> $albumCache */
         $albumCache = [];
 
         foreach ($albumMap as $albumKey => $albumData) {
@@ -193,7 +239,7 @@ class MusicLibraryScanner
                 }
 
                 // Upsert artist and get media_item_id
-                $artistResult = $this->upsertArtist($artistName, $artistCache);
+                $artistResult = $this->upsertArtist($artistName, $artistCache, $libraryId);
                 if ($artistResult === null) {
                     $this->logger->warning('Failed to upsert artist', ['artist' => $artistName]);
                     continue;
@@ -212,7 +258,8 @@ class MusicLibraryScanner
                     $albumTitle,
                     $year,
                     $totalTracks,
-                    $albumCache
+                    $albumCache,
+                    $libraryId
                 );
                 if ($albumResult === null) {
                     $this->logger->warning('Failed to upsert album', ['album' => $albumTitle]);
@@ -229,7 +276,8 @@ class MusicLibraryScanner
                         $albumMediaItemId,
                         $artistId,
                         $fileInfo['file'],
-                        $fileInfo['meta']
+                        $fileInfo['meta'],
+                        $libraryId
                     );
                     if ($trackResult === 'added') {
                         $result->added++;
@@ -605,7 +653,15 @@ class MusicLibraryScanner
     /**
      * Determines if a file should be skipped during scanning.
      *
-     * Skips hidden files (starting with .) and common non-music files.
+     * Two rules, in order:
+     *  1. the hardcoded dotfile rule (hidden files) — deliberately not operator
+     *     configurable, matching {@see \Phlix\Media\Library\MediaScanner};
+     *  2. the effective `scanner.ignore_patterns` list — the SAME live admin
+     *     setting the video scanner consults, via {@see ScanIgnorePatterns}.
+     *
+     * Non-audio artwork (folder.jpg, cover.png, …) no longer needs a bespoke
+     * skip list here: {@see self::audioFileIterator()} already excludes anything
+     * whose extension is not in {@see self::AUDIO_EXTENSIONS}.
      *
      * @param string $filename File name to check
      * @return bool True if file should be skipped
@@ -621,23 +677,19 @@ class MusicLibraryScanner
             return true;
         }
 
-        // Skip common non-music patterns
-        $skipPatterns = ['folder.jpg', 'folder.png', 'album.jpg', 'album.png', 'cover.jpg', 'cover.png'];
-        if (in_array(strtolower($filename), $skipPatterns, true)) {
-            return true;
-        }
-
-        return false;
+        // Consult the effective, admin-configurable ignore-pattern list.
+        return $this->ignorePatterns->matches($filename);
     }
 
     /**
      * Upserts an artist into the database with a corresponding media_item.
      *
      * @param string $name Artist name
-     * @param array<string, array{id:int, media_item_id:int|null}> $cache Artist cache to avoid duplicate queries
-     * @return array{id: int, media_item_id: int|null}|null Artist ID and media_item_id or null on failure
+     * @param array<string, array{id:int, media_item_id:string|null}> $cache Artist cache to avoid duplicate queries
+     * @param string|null $libraryId Owning library UUID stamped onto a new media_item.
+     * @return array{id: int, media_item_id: string|null}|null Artist ID and media_item_id or null on failure
      */
-    private function upsertArtist(string $name, array &$cache): ?array
+    private function upsertArtist(string $name, array &$cache, ?string $libraryId = null): ?array
     {
         // Check cache first (Early Exit)
         $cacheKey = strtolower($name);
@@ -655,8 +707,8 @@ class MusicLibraryScanner
             $firstRow = $existing[0];
             if (is_array($firstRow)) {
                 $id = isset($firstRow['id']) && is_numeric($firstRow['id']) ? (int)$firstRow['id'] : 0;
-                $mediaItemId = isset($firstRow['media_item_id']) && is_numeric($firstRow['media_item_id']) ?
-                    (int)$firstRow['media_item_id'] : null;
+                $mediaItemId = isset($firstRow['media_item_id']) && is_string($firstRow['media_item_id'])
+                    && $firstRow['media_item_id'] !== '' ? $firstRow['media_item_id'] : null;
                 $cache[$cacheKey] = ['id' => $id, 'media_item_id' => $mediaItemId];
                 return $cache[$cacheKey];
             }
@@ -666,12 +718,12 @@ class MusicLibraryScanner
         $sortName = $this->generateSortName($name);
 
         // Create media_item for artwork/metadata
-        $mediaItemId = $this->createMediaItem('artist', $name);
+        $mediaItemId = $this->createMediaItem('artist', $name, null, $libraryId);
 
         // Insert new artist
         $result = $this->db->query(
             "INSERT INTO music_artists (name, sort_name, media_item_id) VALUES (?, ?, ?)",
-            [$name, $sortName, $mediaItemId > 0 ? $mediaItemId : null]
+            [$name, $sortName, $mediaItemId !== '' ? $mediaItemId : null]
         );
 
         if ($result === false) {
@@ -679,7 +731,7 @@ class MusicLibraryScanner
         }
 
         $id = (int)$this->db->lastInsertId();
-        $cache[$cacheKey] = ['id' => $id, 'media_item_id' => $mediaItemId > 0 ? $mediaItemId : null];
+        $cache[$cacheKey] = ['id' => $id, 'media_item_id' => $mediaItemId !== '' ? $mediaItemId : null];
 
         $this->logger->debug('Upserted artist', ['id' => $id, 'name' => $name, 'media_item_id' => $mediaItemId]);
 
@@ -690,20 +742,22 @@ class MusicLibraryScanner
      * Upserts an album into the database with a corresponding media_item.
      *
      * @param int $artistId Artist ID
-     * @param int|null $artistMediaItemId Artist's media_item_id for linking
+     * @param string|null $artistMediaItemId Artist's media_item_id for linking
      * @param string $title Album title
      * @param int|null $year Release year
      * @param int $totalTracks Total number of tracks
-     * @param array<string, array{id:int, media_item_id:int|null}> $cache Album cache key by "artistId|title"
-     * @return array{id: int, media_item_id: int|null}|null Album ID and media_item_id or null on failure
+     * @param array<string, array{id:int, media_item_id:string|null}> $cache Album cache key by "artistId|title"
+     * @param string|null $libraryId Owning library UUID stamped onto a new media_item.
+     * @return array{id: int, media_item_id: string|null}|null Album ID and media_item_id or null on failure
      */
     private function upsertAlbum(
         int $artistId,
-        ?int $artistMediaItemId,
+        ?string $artistMediaItemId,
         string $title,
         ?int $year,
         int $totalTracks,
-        array &$cache
+        array &$cache,
+        ?string $libraryId = null
     ): ?array {
         unset($artistMediaItemId);
 
@@ -723,8 +777,8 @@ class MusicLibraryScanner
             $firstRow = $existing[0];
             if (is_array($firstRow)) {
                 $id = isset($firstRow['id']) && is_numeric($firstRow['id']) ? (int)$firstRow['id'] : 0;
-                $mediaItemId = isset($firstRow['media_item_id']) && is_numeric($firstRow['media_item_id']) ?
-                    (int)$firstRow['media_item_id'] : null;
+                $mediaItemId = isset($firstRow['media_item_id']) && is_string($firstRow['media_item_id'])
+                    && $firstRow['media_item_id'] !== '' ? $firstRow['media_item_id'] : null;
 
                 // Update existing album with new track count and year
                 $this->db->query(
@@ -741,13 +795,13 @@ class MusicLibraryScanner
         $sortTitle = $this->generateSortName($title);
 
         // Create media_item for artwork/metadata
-        $mediaItemId = $this->createMediaItem('album', $title);
+        $mediaItemId = $this->createMediaItem('album', $title, null, $libraryId);
 
         // Insert new album
         $result = $this->db->query(
             "INSERT INTO music_albums (artist_id, media_item_id, title, sort_title, year, total_tracks)
              VALUES (?, ?, ?, ?, ?, ?)",
-            [$artistId, $mediaItemId > 0 ? $mediaItemId : null, $title, $sortTitle, $year, $totalTracks]
+            [$artistId, $mediaItemId !== '' ? $mediaItemId : null, $title, $sortTitle, $year, $totalTracks]
         );
 
         if ($result === false) {
@@ -755,7 +809,7 @@ class MusicLibraryScanner
         }
 
         $id = (int)$this->db->lastInsertId();
-        $cache[$cacheKey] = ['id' => $id, 'media_item_id' => $mediaItemId > 0 ? $mediaItemId : null];
+        $cache[$cacheKey] = ['id' => $id, 'media_item_id' => $mediaItemId !== '' ? $mediaItemId : null];
 
         $this->logger->debug('Upserted album', ['id' => $id, 'title' => $title, 'artist_id' => $artistId]);
 
@@ -765,19 +819,29 @@ class MusicLibraryScanner
     /**
      * Upserts a track into the database with a corresponding media_item.
      *
+     * Stable identity is the track's file path within its library (the
+     * `media_items.path` + `library_id`). The existing row is looked up by that
+     * identity BEFORE any id is minted, so a rescan reuses the existing
+     * `media_items` + `music_tracks` pair and takes the updated/skipped branch
+     * instead of inserting a fresh duplicate every pass. A {@see MediaItemAdded}
+     * event is dispatched ONLY when a genuinely-new track is inserted — never on
+     * an update or a no-op skip.
+     *
      * @param int $albumId Album ID
-     * @param int|null $albumMediaItemId Album's media_item_id for linking
+     * @param string|null $albumMediaItemId Album's media_item_id for linking
      * @param int $artistId Artist ID (denormalized for queries)
      * @param SplFileInfo $file Audio file info
      * @param array<string, mixed> $metadata Tags already read during grouping (no re-probe)
+     * @param string|null $libraryId Owning library UUID (stamped on a new media_item + event).
      * @return string 'added', 'updated', or 'skipped'
      */
     private function upsertTrack(
         int $albumId,
-        ?int $albumMediaItemId,
+        ?string $albumMediaItemId,
         int $artistId,
         SplFileInfo $file,
-        array $metadata
+        array $metadata,
+        ?string $libraryId = null
     ): string {
         unset($albumMediaItemId);
 
@@ -790,18 +854,22 @@ class MusicLibraryScanner
         $discNumber = is_numeric($metadata['disc_number'] ?? null) ? (int)$metadata['disc_number'] : 1;
         $durationSecs = is_numeric($metadata['duration_secs'] ?? null) ? (int)$metadata['duration_secs'] : 0;
 
-        // Create media_item for the track stream
-        $mediaItemId = $this->createMediaItem('track', $title, $path);
+        // Idempotency: find an EXISTING media_items row for this file path within
+        // the library BEFORE minting a new id. If found, reuse it and take the
+        // update/skip branch — never a fresh insert (the old code minted an id
+        // first and then queried music_tracks by that never-matching id, which
+        // duplicated every track on every rescan and leaked media_items rows).
+        $existingMediaItemId = $this->findExistingTrackMediaItemId($path, $libraryId);
 
-        // Check if track exists by media_item_id
-        $existing = $this->db->query(
-            "SELECT id, title, track_number, disc_number, duration_secs FROM music_tracks WHERE media_item_id = ?",
-            [$mediaItemId]
-        );
+        if ($existingMediaItemId !== null) {
+            $existing = $this->db->query(
+                "SELECT id, title, track_number, disc_number, duration_secs
+                 FROM music_tracks WHERE media_item_id = ?",
+                [$existingMediaItemId]
+            );
 
-        if (is_array($existing) && count($existing) > 0) {
-            $existingTrack = $existing[0];
-            if (is_array($existingTrack)) {
+            if (is_array($existing) && count($existing) > 0 && is_array($existing[0])) {
+                $existingTrack = $existing[0];
                 $existingId = isset($existingTrack['id']) && is_numeric($existingTrack['id']) ?
                     (int)$existingTrack['id'] : 0;
 
@@ -823,7 +891,7 @@ class MusicLibraryScanner
                     return 'skipped';
                 }
 
-                // Update existing track
+                // Update existing track (no new media_item, no event).
                 $this->db->query(
                     "UPDATE music_tracks SET title = ?, track_number = ?, disc_number = ?, duration_secs = ?
                      WHERE id = ?",
@@ -832,6 +900,24 @@ class MusicLibraryScanner
 
                 return 'updated';
             }
+
+            // Rare: the media_item exists but its music_tracks row is missing
+            // (a partial prior scan). Reuse the existing media_item id for the
+            // track insert — the media item was already "added", so no event.
+            $result = $this->db->query(
+                "INSERT INTO music_tracks
+                 (media_item_id, album_id, artist_id, title, track_number, disc_number, duration_secs)
+                 VALUES (?, ?, ?, ?, ?, ?, ?)",
+                [$existingMediaItemId, $albumId, $artistId, $title, $trackNumber, $discNumber, $durationSecs]
+            );
+
+            return $result === false ? 'skipped' : 'updated';
+        }
+
+        // Genuinely new track: mint the media_item, insert, and announce it.
+        $mediaItemId = $this->createMediaItem('track', $title, $path, $libraryId);
+        if ($mediaItemId === '') {
+            return 'skipped';
         }
 
         // Insert new track
@@ -849,7 +935,70 @@ class MusicLibraryScanner
         $this->logger->debug('Upserted track', ['album_id' => $albumId, 'title' => $title,
             'media_item_id' => $mediaItemId]);
 
+        // F4: the only music-enrichment trigger after native providers were
+        // removed — the musicbrainz plugin subscribes MediaItemAdded. Dispatched
+        // only for a genuinely-new track insert.
+        $this->dispatchMediaItemAdded($mediaItemId, $libraryId, $path, 'track');
+
         return 'added';
+    }
+
+    /**
+     * Finds the `media_items.id` for a track already indexed at this file path
+     * within the given library, or NULL when none exists.
+     *
+     * The scoping mirrors the `(library_id, path_hash)` unique index (migrations
+     * 072/087): a track's identity is its path inside its owning library.
+     *
+     * @param string $path Absolute filesystem path of the audio file.
+     * @param string|null $libraryId Owning library UUID (null-safe matched).
+     * @return string|null Existing media_items UUID, or null when unseen.
+     */
+    private function findExistingTrackMediaItemId(string $path, ?string $libraryId): ?string
+    {
+        $rows = $this->db->query(
+            "SELECT id FROM media_items WHERE type = 'track' AND path = ? AND library_id <=> ? LIMIT 1",
+            [$path, $libraryId]
+        );
+
+        if (is_array($rows) && count($rows) > 0 && is_array($rows[0])) {
+            $id = $rows[0]['id'] ?? null;
+            if (is_string($id) && $id !== '') {
+                return $id;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Publish {@see MediaItemAdded} for a genuinely-new track.
+     *
+     * No-op when no dispatcher is wired (legacy/manual construction) or the
+     * library id is unknown — the enrichment contract requires a real library id.
+     *
+     * @param string $mediaItemId UUID of the newly-persisted track media_item.
+     * @param string|null $libraryId Owning library UUID.
+     * @param string $path Absolute filesystem path of the source file.
+     * @param string $type Concrete media-item type ('track').
+     * @return void
+     */
+    private function dispatchMediaItemAdded(
+        string $mediaItemId,
+        ?string $libraryId,
+        string $path,
+        string $type
+    ): void {
+        if ($this->eventDispatcher === null || $libraryId === null || $libraryId === '') {
+            return;
+        }
+
+        $this->eventDispatcher->dispatch(new MediaItemAdded(
+            mediaItemId: $mediaItemId,
+            libraryId: $libraryId,
+            path: $path,
+            type: $type,
+        ));
     }
 
     /**
@@ -861,29 +1010,39 @@ class MusicLibraryScanner
      * STRICT_TRANS_TABLES, a hard "Data truncated" error.) The finer-grained
      * label is preserved in `metadata_json.sub_type`.
      *
+     * The `media_items.id` is a CHAR(36) UUID with no DB-side default and
+     * `library_id` is NOT NULL, so BOTH must be supplied on insert — a bare
+     * INSERT that omits them cannot succeed against the real schema.
+     *
      * @param string $subType Subtype: 'artist', 'album', or 'track' (also the media_items type)
      * @param string $name Display name
      * @param string|null $path File path (for tracks)
-     * @return int The media_item ID (0 on failure)
+     * @param string|null $libraryId Owning library UUID (stamped into the NOT NULL library_id column)
+     * @return string The media_item UUID ('' on failure)
      */
-    private function createMediaItem(string $subType, string $name, ?string $path = null): int
-    {
+    private function createMediaItem(
+        string $subType,
+        string $name,
+        ?string $path = null,
+        ?string $libraryId = null
+    ): string {
         $type = $subType;
         $metadata = [
             'sub_type' => $subType,
             'name' => $name,
         ];
+        $id = Uuid::v4();
 
         try {
             $result = $this->db->query(
-                "INSERT INTO media_items (type, name, path, metadata_json, created_at, updated_at)
-                 VALUES (?, ?, ?, ?, NOW(), NOW())",
-                [$type, $name, $path ?? '', json_encode($metadata)]
+                "INSERT INTO media_items (id, library_id, type, name, path, metadata_json, created_at, updated_at)
+                 VALUES (?, ?, ?, ?, ?, ?, NOW(), NOW())",
+                [$id, $libraryId, $type, $name, $path ?? '', json_encode($metadata)]
             );
 
             if ($result === false) {
                 $this->logger->error('Failed to create media_item', ['type' => $type, 'name' => $name]);
-                return 0;
+                return '';
             }
         } catch (\Throwable $e) {
             $this->logger->error('Failed to create media_item', [
@@ -891,10 +1050,10 @@ class MusicLibraryScanner
                 'name' => $name,
                 'error' => $e->getMessage(),
             ]);
-            return 0;
+            return '';
         }
 
-        return (int)$this->db->lastInsertId();
+        return $id;
     }
 
     /**

@@ -489,6 +489,51 @@ final class PluginLoaderTest extends TestCase
         $this->makeLoader()->enable('phlix-plugin-bad');
     }
 
+    /**
+     * Regression for the prod incident where every enabled plugin reported its
+     * entry class as "does not exist (forgot composer install?)" when the real
+     * cause was a root-owned (0750 root:root) plugin directory the non-root
+     * worker could not traverse. wire() now distinguishes an UNREADABLE
+     * directory from a genuinely-missing class, so the failure self-diagnoses.
+     *
+     * Reproduces the exact condition: the plugin directory itself is
+     * untraversable, so `is_file(vendor/autoload.php)` is false (autoload is
+     * skipped) and the entry class cannot be found — but the directory exists.
+     */
+    public function test_enable_reports_unreadable_directory_distinctly_from_missing_class(): void
+    {
+        if (function_exists('posix_geteuid') && posix_geteuid() === 0) {
+            self::markTestSkipped('root bypasses filesystem permission bits; cannot simulate EACCES as root.');
+        }
+
+        $dir = sys_get_temp_dir() . '/phlix_wire_perm_' . uniqid('', true);
+        mkdir($dir . '/vendor', 0755, true);
+        file_put_contents($dir . '/vendor/autoload.php', '<?php');
+        // Make the plugin directory itself untraversable — the real incident's
+        // shape (a root-owned 0750 dir the phlix user cannot enter).
+        chmod($dir, 0000);
+
+        $manifest = Manifest::fromArray([
+            'name' => 'phlix-plugin-unreadable',
+            'version' => '1.0.0',
+            'phlix_min_server_version' => '0.10.0',
+            'type' => 'metadata-provider',
+            'entry' => 'Phlix\\Tests\\Ghost\\DefinitelyMissingEntryClass',
+        ]);
+
+        $this->expect($this->repository, 'findByName')
+            ->andReturn($this->makeInstalled($manifest, directory: $dir));
+
+        try {
+            $this->expectException(PluginEnableException::class);
+            $this->expectExceptionMessage('not readable by the server user');
+            $this->makeLoader()->enable('phlix-plugin-unreadable');
+        } finally {
+            @chmod($dir, 0755);
+            @system('rm -rf ' . escapeshellarg($dir));
+        }
+    }
+
     public function test_enable_subscribes_each_declared_event_to_listener_registry(): void
     {
         $manifest = $this->manifest();

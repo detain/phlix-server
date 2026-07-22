@@ -27,6 +27,7 @@ use Phlix\Plugins\Installer\ComposerRunner;
 use Phlix\Plugins\Installer\HttpInstaller;
 use Phlix\Plugins\Repository\PluginRepository;
 use Phlix\Plugins\Signature\SignatureVerifier;
+use Phlix\Plugins\Util\DirectoryOwnership;
 use Phlix\Plugins\Util\RecursiveDelete;
 use DI\FactoryInterface;
 use Phlix\Shared\Metadata\MetadataSourceInterface;
@@ -190,6 +191,23 @@ class PluginLoader
             throw $e;
         }
 
+        // Re-own the freshly written tree (dir + composer's `vendor/`) to the
+        // plugins-base-dir owner. An install/update run as root — a deploy-time
+        // catalog refresh or an out-of-band `PluginUpdateService::updateAll()`
+        // from a root shell — otherwise leaves it root:root 0750, which the
+        // NON-root resident worker (User=phlix) cannot traverse: autoload then
+        // silently fails and wire() reports every entry class as "does not
+        // exist". This normalization keeps the tree readable regardless of who
+        // ran the install; it is a no-op on the normal in-worker install path.
+        // Best-effort — a soft ownership miss must not fail a good install.
+        if (!DirectoryOwnership::matchToParent($directory)) {
+            $this->logger()->warning(
+                'plugin directory ownership could not be normalized to the plugins-dir owner; '
+                . 'the non-root server worker may be unable to read it (chown var/plugins to the service user)',
+                ['plugin' => $manifest->name, 'directory' => $directory],
+            );
+        }
+
         // Carry the operator's state across a RE-install (i.e. an update).
         //
         // This block used to be a bare delete-then-insert-with-defaults, which
@@ -317,6 +335,27 @@ class PluginLoader
      *         throwing `onEnable()` / bad subscription — callers that must not
      *         let one bad plugin abort the rest (bootstrapEnabled) catch this.
      */
+    /**
+     * Best-effort name (or numeric uid) of the OS user this process runs as,
+     * for the permission-aware {@see self::wire()} diagnostic. Falls back
+     * gracefully when the POSIX extension is absent.
+     */
+    private static function currentProcessUser(): string
+    {
+        if (function_exists('posix_geteuid')) {
+            $uid = posix_geteuid();
+            if (function_exists('posix_getpwuid')) {
+                $info = posix_getpwuid($uid);
+                if (is_array($info) && $info['name'] !== '') {
+                    return $info['name'];
+                }
+            }
+            return 'uid=' . $uid;
+        }
+        $env = getenv('USER');
+        return is_string($env) && $env !== '' ? $env : 'unknown';
+    }
+
     private function wire(InstalledPlugin $installed): ?string
     {
         $name = $installed->name();
@@ -328,6 +367,25 @@ class PluginLoader
 
         $entryFqcn = $installed->manifest->entry;
         if (!class_exists($entryFqcn)) {
+            // Distinguish the two ways this fails. A root-owned plugin tree
+            // (from an install/update run as root) is unreadable by the
+            // non-root resident worker, so autoload cannot see the class even
+            // though it is present on disk. The old generic "forgot composer
+            // install?" message masked exactly this — an entire fleet reporting
+            // every enabled plugin as missing when the real cause was
+            // var/plugins being root:root 0750. Surface the permission cause
+            // explicitly so it self-diagnoses instead of sending the next
+            // operator hunting for a phantom missing class.
+            if (is_dir($installed->directory) && !is_readable($installed->directory)) {
+                throw new PluginEnableException(sprintf(
+                    'Plugin %s entry class %s is unreadable: directory %s is not readable by the server user "%s" '
+                    . '— likely a root-owned plugin directory; chown var/plugins to the service user.',
+                    $name,
+                    $entryFqcn,
+                    $installed->directory,
+                    self::currentProcessUser(),
+                ));
+            }
             throw new PluginEnableException(sprintf(
                 'Plugin %s entry class %s does not exist (forgot composer install?).',
                 $name,

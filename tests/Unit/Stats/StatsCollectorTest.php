@@ -158,6 +158,80 @@ class StatsCollectorTest extends TestCase
         $this->assertEquals(45000, $topMedia[1]['total_duration']);
     }
 
+    public function testGetTopUsersInnerJoinsUsersToExcludeOrphans(): void
+    {
+        // S14: orphan exclusion is enforced at the query level — getTopUsers()
+        // INNER JOINs `users` so playback events belonging to a since-deleted
+        // account are dropped before aggregation and can never surface as a
+        // blank "Top Users" row. Assert the JOIN is present and the aggregates
+        // are unchanged (the PK join is 1:1, so no COUNT/SUM fan-out).
+        $db = $this->createMock(Connection::class);
+        $db->expects($this->once())
+            ->method('query')
+            ->with(
+                $this->logicalAnd(
+                    $this->stringContains('INNER JOIN users u ON e.user_id = u.id'),
+                    $this->stringContains('COALESCE(SUM(e.duration_seconds), 0) AS total_watch_time'),
+                    $this->stringContains('COUNT(*) AS play_count')
+                ),
+                $this->anything()
+            )
+            ->willReturn([
+                [
+                    'user_id' => 'user-live',
+                    'total_watch_time' => '36000',
+                    'play_count' => '10',
+                ],
+            ]);
+
+        $collector = new StatsCollector($db);
+        $topUsers = $collector->getTopUsers(10, null);
+
+        // Regression: the surviving row's aggregates pass through unchanged by
+        // the join (no double-count).
+        $this->assertCount(1, $topUsers);
+        $this->assertSame('user-live', $topUsers[0]['user_id']);
+        $this->assertSame(36000, $topUsers[0]['total_watch_time']);
+        $this->assertSame(10, $topUsers[0]['play_count']);
+    }
+
+    public function testGetTopMediaInnerJoinsMediaItemsToExcludeOrphans(): void
+    {
+        // S14: orphan exclusion is enforced at the query level — getTopMedia()
+        // INNER JOINs `media_items` so plays of a since-deleted item are dropped
+        // before aggregation and can never surface as a blank / no-title row.
+        // Assert the JOIN is present and the aggregates are unchanged (the PK
+        // join is 1:1, so no COUNT/SUM fan-out).
+        $db = $this->createMock(Connection::class);
+        $db->expects($this->once())
+            ->method('query')
+            ->with(
+                $this->logicalAnd(
+                    $this->stringContains('INNER JOIN media_items mi ON e.media_item_id = mi.id'),
+                    $this->stringContains('COUNT(*) AS play_count'),
+                    $this->stringContains('COALESCE(SUM(e.duration_seconds), 0) AS total_duration')
+                ),
+                $this->anything()
+            )
+            ->willReturn([
+                [
+                    'media_item_id' => 'media-live',
+                    'play_count' => '25',
+                    'total_duration' => '90000',
+                ],
+            ]);
+
+        $collector = new StatsCollector($db);
+        $topMedia = $collector->getTopMedia(10, null);
+
+        // Regression: the surviving row's aggregates pass through unchanged by
+        // the join (no double-count).
+        $this->assertCount(1, $topMedia);
+        $this->assertSame('media-live', $topMedia[0]['media_item_id']);
+        $this->assertSame(25, $topMedia[0]['play_count']);
+        $this->assertSame(90000, $topMedia[0]['total_duration']);
+    }
+
     public function testGetPlaybackStatsReturnsTimeSeries(): void
     {
         $db = $this->createMock(Connection::class);

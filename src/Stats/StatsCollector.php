@@ -359,20 +359,26 @@ class StatsCollector
      */
     public function getTopUsers(int $limit = 10, ?DateTimeInterface $since = null): array
     {
+        // INNER JOIN users so playback events belonging to a since-deleted
+        // account are excluded at the query level (S14 orphan guard) — this
+        // keeps blank / no-name rows out of the admin "Top Users" leaderboard.
+        // users.id is the PK, so the join is 1:1 and does not fan out the
+        // COUNT/SUM aggregates.
         $sql = "SELECT
-                    user_id,
-                    COALESCE(SUM(duration_seconds), 0) AS total_watch_time,
+                    e.user_id,
+                    COALESCE(SUM(e.duration_seconds), 0) AS total_watch_time,
                     COUNT(*) AS play_count
-                FROM stats_playback_events";
+                FROM stats_playback_events e
+                INNER JOIN users u ON e.user_id = u.id";
 
         $params = [];
 
         if ($since !== null) {
-            $sql .= " WHERE started_at >= ?";
+            $sql .= " WHERE e.started_at >= ?";
             $params[] = $since->format('Y-m-d H:i:s');
         }
 
-        $sql .= " GROUP BY user_id ORDER BY total_watch_time DESC LIMIT ?";
+        $sql .= " GROUP BY e.user_id ORDER BY total_watch_time DESC LIMIT ?";
         $params[] = $limit;
 
         /** @var array<array<string, mixed>> $rows */
@@ -404,20 +410,25 @@ class StatsCollector
      */
     public function getTopMedia(int $limit = 10, ?DateTimeInterface $since = null): array
     {
+        // INNER JOIN media_items so plays of a since-deleted item are excluded
+        // at the query level (S14 orphan guard) — this keeps blank / no-title
+        // rows out of the admin "Top Media" list. media_items.id is the PK, so
+        // the join is 1:1 and does not fan out the COUNT/SUM aggregates.
         $sql = "SELECT
-                    media_item_id,
+                    e.media_item_id,
                     COUNT(*) AS play_count,
-                    COALESCE(SUM(duration_seconds), 0) AS total_duration
-                FROM stats_playback_events";
+                    COALESCE(SUM(e.duration_seconds), 0) AS total_duration
+                FROM stats_playback_events e
+                INNER JOIN media_items mi ON e.media_item_id = mi.id";
 
         $params = [];
 
         if ($since !== null) {
-            $sql .= " WHERE started_at >= ?";
+            $sql .= " WHERE e.started_at >= ?";
             $params[] = $since->format('Y-m-d H:i:s');
         }
 
-        $sql .= " GROUP BY media_item_id ORDER BY play_count DESC LIMIT ?";
+        $sql .= " GROUP BY e.media_item_id ORDER BY play_count DESC LIMIT ?";
         $params[] = $limit;
 
         /** @var array<array<string, mixed>> $rows */

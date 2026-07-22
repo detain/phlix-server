@@ -121,6 +121,16 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- **CSP `img-src` allowlists the TMDB image CDN so remote poster/backdrop/cast artwork renders**
+  (updates.md #1). `SecurityHeaders::contentSecurityPolicy()` previously served artwork loaded
+  directly from TMDB only under the default `'self'` policy, so any image not yet cached on our
+  origin was blocked by the browser. `img-src` now explicitly names the two TMDB hosts —
+  `https://image.tmdb.org` and `https://tmdb.org` (no wildcard) — alongside `'self' data: blob:`.
+  This is a **stopgap**: an inline `// TODO(updates.md #47 / S71-S73)` marks it for removal once the
+  generic image caching/loader work proxies all remote artwork through our own origin. Single source
+  of truth in `SecurityHeaders`, also consumed by the `/app` shell's nonce'd variant; covered by an
+  extended `SecurityHeadersTest` asserting both hosts are present and no wildcard is used.
+
 - **The last two dishonest `restart: true` settings are now honest** (closes out the item below,
   which fixed 14 of 16 keys). Bumps `detain/phlix-shared` to **v0.26.0** (43 → 42 settings keys).
 

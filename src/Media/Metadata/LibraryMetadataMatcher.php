@@ -194,6 +194,19 @@ class LibraryMetadataMatcher
     private MetadataOverwritePolicy $overwritePolicy;
 
     /**
+     * Rating persistence (F2). When a resolve() result carries `plugin_ratings`
+     * (produced only on the opt-in `includePluginSources=true` path — e.g. an
+     * on-demand single-item refresh), the matcher owns the media_item_id and so
+     * persists each rating here via {@see RatingService::upsert()}. Null in
+     * legacy construction / unit tests and on the bulk-scan path (which never
+     * sets `plugin_ratings`), so this is a guaranteed no-op unless a caller opts
+     * in — keeping the scan quota-safe and behaviour identical to today.
+     *
+     * @var RatingService|null
+     */
+    private ?RatingService $ratingService;
+
+    /**
      * Scan-scoped map of TMDB poster path => the local artwork override fields
      * ({@see cacheArtworkLocally()} produces `poster_url` / `poster_srcset` /
      * `poster_path`) generated the FIRST time that path was downloaded this run.
@@ -337,7 +350,8 @@ class LibraryMetadataMatcher
         ?ArtworkStorage $artworkStorage = null,
         bool $forceRefresh = false,
         ?ArtworkDownloadPolicy $artworkDownloadPolicy = null,
-        ?MetadataOverwritePolicy $overwritePolicy = null
+        ?MetadataOverwritePolicy $overwritePolicy = null,
+        ?RatingService $ratingService = null
     ) {
         $this->items = $items;
         $this->resolver = $resolver;
@@ -364,6 +378,7 @@ class LibraryMetadataMatcher
         // (overwrite ENABLED) — i.e. exactly the unconditional array_merge
         // behaviour before the gate existed.
         $this->overwritePolicy = $overwritePolicy ?? new MetadataOverwritePolicy();
+        $this->ratingService = $ratingService;
     }
 
     /**
@@ -1373,7 +1388,88 @@ class LibraryMetadataMatcher
         // next to the film.
         $this->persistMetadata($id, $this->applyThemeAudio($item, $merged));
 
+        // F2: persist any ratings surfaced by plugin sources (opt-in path only;
+        // a no-op on the bulk scan, which never sets `plugin_ratings`).
+        $this->persistPluginRatings($id, $resolved);
+
         return true;
+    }
+
+    /**
+     * Persist ratings surfaced by plugin metadata sources (F2).
+     *
+     * The resolver has no media_item_id, so it collects plugin ratings under the
+     * `plugin_ratings` key of its result; the matcher (which DOES own the id)
+     * upserts each one here via {@see RatingService}. Each entry's `source` is
+     * mapped through {@see RatingSource::tryFrom()} so a value outside the DB
+     * ENUM (`imdb`/`tmdb`/`rt`/`aggregate`/`user`) is skipped rather than
+     * throwing — omdb (the only rating-bearing source today) emits enum-valid
+     * `imdb`/`rt` only. After upserting the individual rows the aggregate is
+     * recomputed so the denormalised `media_items.rating_score` stays current,
+     * mirroring {@see \Phlix\Media\Metadata\MetadataManager}'s TMDB-rating path.
+     *
+     * No-op when the service is unwired (unit tests / legacy) or the result
+     * carries no `plugin_ratings` — which is ALWAYS the case on the bulk-scan
+     * path, since that path never opts into plugin sources. So this never fires
+     * during a library scan and never burns a source's rating quota there.
+     *
+     * @param string               $mediaItemId The owning media item's UUID.
+     * @param array<string, mixed> $resolved    The resolve() result.
+     */
+    private function persistPluginRatings(string $mediaItemId, array $resolved): void
+    {
+        if ($this->ratingService === null || $mediaItemId === '') {
+            return;
+        }
+        $ratings = $resolved['plugin_ratings'] ?? null;
+        if (!is_array($ratings) || $ratings === []) {
+            return;
+        }
+
+        $persisted = false;
+        foreach ($ratings as $rating) {
+            if (!is_array($rating)) {
+                continue;
+            }
+            $sourceName = MetadataValue::asNullableString($rating['source'] ?? null);
+            $score = MetadataValue::asNullableFloat($rating['score'] ?? null);
+            if ($sourceName === null || $score === null) {
+                continue;
+            }
+            $source = RatingSource::tryFrom($sourceName);
+            if ($source === null) {
+                $this->logger->debug('LibraryMetadataMatcher: skipping plugin rating with non-enum source', [
+                    'item_id' => $mediaItemId,
+                    'source' => $sourceName,
+                ]);
+                continue;
+            }
+            $votes = MetadataValue::asNullableInt($rating['votes'] ?? null);
+
+            try {
+                // RatingType::User mirrors MetadataManager's source-rating rows
+                // (a source's headline score, distinct from the computed Average).
+                $this->ratingService->upsert($mediaItemId, $source, RatingType::User, $score, $votes);
+                $persisted = true;
+            } catch (Throwable $e) {
+                $this->logger->warning('LibraryMetadataMatcher: plugin rating upsert failed', [
+                    'item_id' => $mediaItemId,
+                    'source' => $sourceName,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+        }
+
+        if ($persisted) {
+            try {
+                $this->ratingService->aggregate($mediaItemId);
+            } catch (Throwable $e) {
+                $this->logger->warning('LibraryMetadataMatcher: rating aggregate failed', [
+                    'item_id' => $mediaItemId,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+        }
     }
 
     /**
@@ -1451,6 +1547,10 @@ class LibraryMetadataMatcher
         // metadata is also the source of the theme url episodes/seasons inherit.
         $themed = $this->applyThemeAudio($seriesItem, array_merge($existing, $resolved));
         $this->persistMetadata($id, $themed);
+
+        // F2: persist any ratings surfaced by plugin sources (opt-in path only;
+        // a no-op on the bulk scan, which never sets `plugin_ratings`).
+        $this->persistPluginRatings($id, $resolved);
 
         $tmdbId = $this->resolvedTmdbId($resolved);
         if ($tmdbId !== '') {

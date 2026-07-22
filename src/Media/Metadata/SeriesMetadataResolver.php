@@ -16,8 +16,10 @@ use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Common\Logger\StructuredLogger;
 use Phlix\Media\Metadata\Dto\MetadataValue;
 use Phlix\Media\Metadata\Resolution\FieldMappers;
+use Phlix\Media\Metadata\Resolution\PluginSourceConsultation;
 use Phlix\Media\Metadata\Resolution\PriorityConfig;
 use Phlix\Media\Metadata\Resolution\PriorityFieldResolver;
+use Phlix\Media\Metadata\Resolution\SourceRegistry;
 use Throwable;
 
 /**
@@ -58,12 +60,16 @@ class SeriesMetadataResolver
      *     record, so it stays free of any TVDB-sourced field (e.g. a TVDB site rating mapped into the
      *     imdb_rating slot) regardless of the configured order.
      * @param PriorityFieldResolver|null $fieldResolver  The merge engine; a fresh pure instance by default.
+     * @param SourceRegistry|null        $sourceRegistry Enabled plugin metadata sources. Only consulted when
+     *     {@see resolve()} is called with `$includePluginSources = true`; null (unit tests / legacy) makes
+     *     plugin consultation a no-op, so behaviour is byte-for-byte identical to today's TMDB-only result.
      */
     public function __construct(
         private readonly TmdbProvider $tmdb,
         private readonly ?StructuredLogger $loggerOverride = null,
         ?PriorityConfig $priorityConfig = null,
         ?PriorityFieldResolver $fieldResolver = null,
+        private readonly ?SourceRegistry $sourceRegistry = null,
     ) {
         // Default config reproduces today's TMDB-only series behavior. Even if an
         // admin order names other sources, the series path below only constructs a
@@ -87,13 +93,23 @@ class SeriesMetadataResolver
      *     provided it drives the genres mode for THIS call instead of the injected
      *     global `$this->priorityConfig`; null (the default) preserves the existing
      *     global behaviour, so all existing callers are unaffected. The series path
-     *     stays TMDB-only, so only the genres mode is affected by the override.
+     *     stays TMDB-only for the built-ins, so only the genres mode is affected by the override.
+     * @param bool                $includePluginSources When true (AND a SourceRegistry is injected),
+     *     the enabled plugin metadata sources for `series` are consulted AFTER TMDB and merged UNDER
+     *     it (pure gap-fill; TMDB wins every shared field), and any surfaced ratings are returned under
+     *     a `plugin_ratings` key for the caller to persist. **DEFAULT false** — the bulk library-scan
+     *     path leaves this off so a scan makes ZERO plugin-source network calls. When false, output is
+     *     byte-for-byte identical to today (TMDB only).
      *
      * @return array<string, mixed>|null Metadata to merge (with `external_ids.tmdb`
      *     + `tmdb_id` so the caller can fetch seasons), or null on no match.
      */
-    public function resolve(string $title, ?int $year, ?PriorityConfig $priorityOverride = null): ?array
-    {
+    public function resolve(
+        string $title,
+        ?int $year,
+        ?PriorityConfig $priorityOverride = null,
+        bool $includePluginSources = false
+    ): ?array {
         if (trim($title) === '') {
             return null;
         }
@@ -128,7 +144,7 @@ class SeriesMetadataResolver
                 return null;
             }
 
-            $result = $this->format($tmdbId, $details, $priorityOverride);
+            $result = $this->format($tmdbId, $details, $priorityOverride, $includePluginSources, $title, $year);
 
             $resultExternalIds = is_array($result['external_ids'] ?? null) ? $result['external_ids'] : [];
             $this->logger()->info('SeriesMetadataResolver: resolved', [
@@ -257,10 +273,21 @@ class SeriesMetadataResolver
      * @param array<string, mixed> $details
      * @param PriorityConfig|null  $priorityOverride Per-library override; when null the
      *     injected global `$this->priorityConfig` drives the genres mode.
+     * @param bool                 $includePluginSources When true and a SourceRegistry is injected,
+     *     plugin `series` sources are consulted and merged UNDER TMDB; their ratings surface under
+     *     `plugin_ratings`. Default false = today's TMDB-only behaviour.
+     * @param string               $title            Title fed to plugin `search()` (opt-in only).
+     * @param int|null             $year             Optional year hint for plugin search.
      * @return array<string, mixed>
      */
-    private function format(string $tmdbId, array $details, ?PriorityConfig $priorityOverride = null): array
-    {
+    private function format(
+        string $tmdbId,
+        array $details,
+        ?PriorityConfig $priorityOverride = null,
+        bool $includePluginSources = false,
+        string $title = '',
+        ?int $year = null
+    ): array {
         // Per-field selection is delegated to PriorityFieldResolver. The series
         // path builds ONLY a TMDB record, so it stays TMDB-only — no TVDB/IMDb
         // source can contribute a field (in particular no TVDB site rating can
@@ -272,13 +299,38 @@ class SeriesMetadataResolver
         // series resolver remains robustly TMDB-driven regardless of admin config
         // until real series sources are registered (Step 3.5).
         $priority = $priorityOverride ?? $this->priorityConfig;
+
+        // The built-in series record is TMDB-only; the built-in merge order stays
+        // `['tmdb']` regardless of the configured order (no TVDB/IMDb record is
+        // built here). F2: when the caller opts in AND a registry is wired, plugin
+        // `series` sources are appended to the END of the order so TMDB wins every
+        // shared field (pure gap-fill). Off by default = today's output, verbatim.
+        $records = [FieldMappers::fromTmdb($details)];
+        $order = ['tmdb'];
+        $pluginSourceNames = [];
+        $pluginRatings = [];
+        if ($includePluginSources && $this->sourceRegistry !== null) {
+            $consult = (new PluginSourceConsultation($this->sourceRegistry, $this->logger()))
+                ->consult('series', $title, $year, $priority->orderFor('series'));
+            foreach ($consult['records'] as $record) {
+                $records[] = $record;
+            }
+            foreach ($consult['sources'] as $sourceName) {
+                if (!in_array($sourceName, $order, true)) {
+                    $order[] = $sourceName;
+                }
+            }
+            $pluginSourceNames = $consult['sources'];
+            $pluginRatings = $consult['ratings'];
+        }
+
         $resolved = $this->fieldResolver->resolve(
-            [FieldMappers::fromTmdb($details)],
-            ['tmdb'],
+            $records,
+            $order,
             $priority->genresMode(),
         );
         // Drop the resolver's provenance/id keys — rebuilt below to match the live
-        // shape exactly (hard-coded sources=['tmdb'], an explicit tmdb_id, and the
+        // shape exactly (sources=['tmdb', …plugins], an explicit tmdb_id, and the
         // tmdb+imdb external_ids derived from the resolved id and the details).
         unset($resolved['external_ids'], $resolved['sources']);
 
@@ -292,8 +344,11 @@ class SeriesMetadataResolver
                 'tvdb' => MetadataValue::asNullableString($details['tvdb_id'] ?? null),
             ], static fn(?string $v): bool => $v !== null && $v !== ''),
             'tmdb_id' => $tmdbId,
-            'sources' => ['tmdb'],
+            'sources' => array_merge(['tmdb'], $pluginSourceNames),
         ];
+        if ($pluginRatings !== []) {
+            $result['plugin_ratings'] = $pluginRatings;
+        }
 
         foreach ($resolved as $key => $value) {
             $result[$key] = $value;

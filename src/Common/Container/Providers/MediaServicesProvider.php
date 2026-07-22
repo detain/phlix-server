@@ -366,7 +366,13 @@ final class MediaServicesProvider implements ServiceProviderInterface
             MovieMetadataResolver::class => autowire()
                 ->constructorParameter('tmdb', get(TmdbProvider::class))
                 ->constructorParameter('imdb', get(ImdbLookup::class))
-                ->constructorParameter('priorityConfig', get(PriorityConfig::class)),
+                ->constructorParameter('priorityConfig', get(PriorityConfig::class))
+                // F2: the container-scoped registry of enabled plugin metadata
+                // sources (omdb/anidb/myanimelist). Named because PHP-DI skips
+                // defaulted optional ctor params during autowiring. Consulted only
+                // when resolve() is called with includePluginSources=true (the
+                // quota-safe on-demand path); the bulk scan leaves it dormant.
+                ->constructorParameter('sourceRegistry', get(SourceRegistry::class)),
 
             // Theme-music (M3) producer. The validated config is built once from
             // the coerced config array; the default fetcher uses the same
@@ -388,7 +394,11 @@ final class MediaServicesProvider implements ServiceProviderInterface
             // contribute a field regardless of the configured order.
             SeriesMetadataResolver::class => autowire()
                 ->constructorParameter('tmdb', get(TmdbProvider::class))
-                ->constructorParameter('priorityConfig', get(PriorityConfig::class)),
+                ->constructorParameter('priorityConfig', get(PriorityConfig::class))
+                // F2: same container-scoped plugin-source registry as the movie
+                // resolver. Named for the same PHP-DI reason; consulted only on the
+                // opt-in (includePluginSources=true) path, never on the bulk scan.
+                ->constructorParameter('sourceRegistry', get(SourceRegistry::class)),
 
             // Background per-library metadata matcher run for `metadata`-type
             // scan jobs. Its ItemRepository + resolver deps are resolvable above;
@@ -443,7 +453,13 @@ final class MediaServicesProvider implements ServiceProviderInterface
                 ->constructorParameter(
                     'overwritePolicy',
                     get(MetadataOverwritePolicy::class)
-                ),
+                )
+                // F2: persists ratings surfaced by plugin sources on the opt-in
+                // (includePluginSources=true) resolve path — the matcher owns the
+                // media_item_id the resolver lacks. Named because PHP-DI skips
+                // defaulted optional ctor params; a no-op on the bulk scan (which
+                // never sets plugin_ratings), so it never fires there.
+                ->constructorParameter('ratingService', get(RatingService::class)),
 
             // Gate for `artwork.download_enabled`, read live per metadata
             // persist. A factory (not autowire()) because the SettingsRepository

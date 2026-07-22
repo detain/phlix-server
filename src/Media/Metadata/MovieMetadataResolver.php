@@ -17,8 +17,10 @@ use Phlix\Common\Logger\StructuredLogger;
 use Phlix\Media\Metadata\Dto\MetadataValue;
 use Phlix\Media\Metadata\Imdb\ImdbLookup;
 use Phlix\Media\Metadata\Resolution\FieldMappers;
+use Phlix\Media\Metadata\Resolution\PluginSourceConsultation;
 use Phlix\Media\Metadata\Resolution\PriorityConfig;
 use Phlix\Media\Metadata\Resolution\PriorityFieldResolver;
+use Phlix\Media\Metadata\Resolution\SourceRegistry;
 use Throwable;
 
 /**
@@ -55,6 +57,14 @@ class MovieMetadataResolver
     private PriorityFieldResolver $fieldResolver;
 
     /**
+     * @var SourceRegistry|null Registry of enabled plugin metadata sources (omdb,
+     *     anidb, myanimelist, …). Null in legacy construction / unit tests, in
+     *     which case plugin-source consultation is skipped entirely and output is
+     *     exactly today's TMDB+IMDb result.
+     */
+    private ?SourceRegistry $sourceRegistry;
+
+    /**
      * @param TmdbProvider               $tmdb           Online TMDB provider.
      * @param ImdbLookup                 $imdb           Offline IMDb dataset lookup.
      * @param StructuredLogger|null      $logger         Optional logger; defaults to the MEDIA channel.
@@ -62,6 +72,9 @@ class MovieMetadataResolver
      *     defaults to the canonical `['tmdb','imdb']` order — i.e. today's hard-coded precedence — so
      *     behavior is unchanged for callers that do not inject it.
      * @param PriorityFieldResolver|null $fieldResolver  The merge engine; a fresh pure instance by default.
+     * @param SourceRegistry|null        $sourceRegistry Enabled plugin metadata sources. Only consulted when
+     *     {@see resolve()} is called with `$includePluginSources = true`; null (unit tests / legacy) makes
+     *     plugin consultation a no-op, so behaviour is byte-for-byte identical to today.
      *
      * @since 0.21.0
      */
@@ -70,7 +83,8 @@ class MovieMetadataResolver
         ImdbLookup $imdb,
         ?StructuredLogger $logger = null,
         ?PriorityConfig $priorityConfig = null,
-        ?PriorityFieldResolver $fieldResolver = null
+        ?PriorityFieldResolver $fieldResolver = null,
+        ?SourceRegistry $sourceRegistry = null
     ) {
         $this->tmdb = $tmdb;
         $this->imdb = $imdb;
@@ -79,6 +93,7 @@ class MovieMetadataResolver
         // keeping the merge behavior-identical when no PriorityConfig is injected.
         $this->priorityConfig = $priorityConfig ?? new PriorityConfig(['movie' => ['tmdb', 'imdb']]);
         $this->fieldResolver = $fieldResolver ?? new PriorityFieldResolver();
+        $this->sourceRegistry = $sourceRegistry;
     }
 
     /**
@@ -92,6 +107,14 @@ class MovieMetadataResolver
      *     provided it drives the source order + genres mode for THIS call instead of
      *     the injected global `$this->priorityConfig`; null (the default) preserves
      *     the existing global behaviour, so all existing callers are unaffected.
+     * @param bool                  $includePluginSources When true (AND a SourceRegistry is
+     *     injected), the enabled plugin metadata sources for `movie` are consulted AFTER
+     *     TMDB/IMDb and merged UNDER them (pure gap-fill; TMDB wins every shared field), and
+     *     any surfaced ratings are returned under a `plugin_ratings` key for the caller to
+     *     persist. **DEFAULT false** — the keystone safety property: the bulk library-scan
+     *     path leaves this off so a 1000-item scan makes ZERO plugin-source network calls
+     *     (omdb 1000/day quota, anidb ban risk). When false, output is byte-for-byte identical
+     *     to today (TMDB+IMDb only).
      *
      * @return array<string, mixed>|null Merged details, or null when neither source matched.
      *     Shape (keys present only when data is available):
@@ -117,7 +140,8 @@ class MovieMetadataResolver
         string $title,
         ?int $year,
         array $existingExternalIds = [],
-        ?PriorityConfig $priorityOverride = null
+        ?PriorityConfig $priorityOverride = null,
+        bool $includePluginSources = false
     ): ?array {
         // 1. Seed the IMDb id from caller-provided ids, else attempt an offline
         //    title lookup to discover one.
@@ -197,6 +221,9 @@ class MovieMetadataResolver
             $tmdbDetails,
             $imdbData,
             $priorityOverride,
+            $includePluginSources,
+            $title,
+            $year,
         );
 
         $this->logger->info('MovieMetadataResolver: resolved', [
@@ -223,6 +250,12 @@ class MovieMetadataResolver
      * @param array<string, mixed>|null $imdbData            Offline IMDb row.
      * @param PriorityConfig|null       $priorityOverride    Per-library override; when
      *     null the injected global `$this->priorityConfig` drives the order/genres mode.
+     * @param bool                      $includePluginSources When true and a SourceRegistry is
+     *     injected, plugin `movie` sources are consulted and merged UNDER TMDB/IMDb; their
+     *     ratings are surfaced under `plugin_ratings`. Default false = today's behaviour.
+     * @param string                    $title               Title fed to plugin `search()` (only
+     *     used when `$includePluginSources` is true).
+     * @param int|null                  $year                Optional year hint for plugin search.
      *
      * @return array<string, mixed> Merged details.
      */
@@ -232,7 +265,10 @@ class MovieMetadataResolver
         ?string $imdbId,
         ?array $tmdbDetails,
         ?array $imdbData,
-        ?PriorityConfig $priorityOverride = null
+        ?PriorityConfig $priorityOverride = null,
+        bool $includePluginSources = false,
+        string $title = '',
+        ?int $year = null
     ): array {
         // Per-field selection is delegated to PriorityFieldResolver, driven by the
         // configurable source order (PriorityConfig). The 3.1 FieldMappers normalize
@@ -257,9 +293,33 @@ class MovieMetadataResolver
         }
 
         $priority = $priorityOverride ?? $this->priorityConfig;
+        $order = $priority->orderFor('movie');
+
+        // F2: gap-fill under the built-ins from enabled plugin `movie` sources —
+        // ONLY when the caller opted in AND a registry is wired. The plugin source
+        // names are appended to the END of the merge order so TMDB/IMDb win every
+        // shared field (plugin data is pure gap-fill); PriorityFieldResolver is
+        // first-non-empty by order. Off by default = today's behaviour, byte-for-byte.
+        $pluginSourceNames = [];
+        $pluginRatings = [];
+        if ($includePluginSources && $this->sourceRegistry !== null) {
+            $consult = (new PluginSourceConsultation($this->sourceRegistry, $this->logger))
+                ->consult('movie', $title, $year, $order);
+            foreach ($consult['records'] as $record) {
+                $records[] = $record;
+            }
+            foreach ($consult['sources'] as $sourceName) {
+                if (!in_array($sourceName, $order, true)) {
+                    $order[] = $sourceName;
+                }
+            }
+            $pluginSourceNames = $consult['sources'];
+            $pluginRatings = $consult['ratings'];
+        }
+
         $resolved = $this->fieldResolver->resolve(
             $records,
-            $priority->orderFor('movie'),
+            $order,
             $priority->genresMode(),
         );
         // Drop the resolver's own provenance/id keys — rebuilt below to match live.
@@ -288,7 +348,22 @@ class MovieMetadataResolver
         if ($imdbData !== null) {
             $sources[] = 'imdb';
         }
+        // Append any plugin sources that contributed (empty unless the caller
+        // opted into plugin consultation), preserving their consult order.
+        foreach ($pluginSourceNames as $sourceName) {
+            if (!in_array($sourceName, $sources, true)) {
+                $sources[] = $sourceName;
+            }
+        }
         $result['sources'] = $sources;
+
+        // Ratings surfaced by plugin sources (e.g. omdb's imdb/rt scores). The
+        // resolver has no media_item_id, so it never writes metadata_ratings —
+        // it only carries them here for the caller (which owns the id) to persist
+        // via RatingService. Absent unless a plugin source supplied ratings.
+        if ($pluginRatings !== []) {
+            $result['plugin_ratings'] = $pluginRatings;
+        }
 
         return $result;
     }

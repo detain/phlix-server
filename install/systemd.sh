@@ -33,8 +33,14 @@ echo "Creating directories..."
 mkdir -p /var/phlix/{config,data,logs,backups}
 mkdir -p /var/log/phlix /var/run/phlix
 mkdir -p /var/www/phlix /etc/phlix
+# anidb plugin's persistent title-dump cache (PHLIX_ANIDB_CACHE_DIR in the
+# unit + its ReadWritePaths). Must exist and be owned by the service user
+# before the worker starts, mirroring how the full installer provisions
+# /var/artwork.
+mkdir -p /var/cache/phlix/anidb
 chown -R phlix:phlix /var/phlix /var/log/phlix /var/run/phlix
 chown -R phlix:phlix /var/www/phlix
+chown -R phlix:phlix /var/cache/phlix
 
 # ---------------------------------------------------------------------------
 # Workerman preflight + Swoole/php-uv extensions

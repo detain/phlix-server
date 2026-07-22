@@ -289,6 +289,95 @@ class ItemRepository
     }
 
     /**
+     * Finds the first media item whose `metadata_json` blob carries a given
+     * value at a given key.
+     *
+     * Host hook (Wave 2) for plugin reverse-lookups: the anilist plugin stores
+     * a MyAnimeList id at the TOP LEVEL of the blob (`buildMetadataFromEntry()`
+     * writes `metadata_json.$.mal_id`, persisted through
+     * `update($id, ['metadata_json' => …])`) and needs to map that external id
+     * back to the local row for watchlist write-back. Before this method the
+     * plugin had only a null-returning `resolveMediaItemIdByMalId()` seam.
+     *
+     * `$field` names the JSON key, resolved against `metadata_json`:
+     *  - a bare key (e.g. `mal_id`) → the TOP-LEVEL key `$.mal_id`. This is
+     *    exactly where anilist (and every plugin doing a flat enrichment write)
+     *    lands its ids.
+     *  - a dotted key (e.g. `external_ids.imdb`) → the nested path
+     *    `$.external_ids.imdb`. This is where the host's own metadata resolver
+     *    stamps canonical ids (see {@see \Phlix\Media\Metadata\Resolution\FieldMappers}
+     *    → `external_ids.<source>`).
+     *
+     * The JSON path is derived from a strictly-validated `$field`
+     * (`[A-Za-z0-9_]` segments joined by single dots — see
+     * {@see self::metadataJsonPath()}); anything else returns null without
+     * touching the DB. Both the path and the searched `$value` are bound as
+     * query parameters — nothing is interpolated into the SQL text, so no
+     * caller-supplied value can inject. The match is on the UNQUOTED scalar, so
+     * a JSON number (`mal_id`) and a JSON string (an imdb id) both compare
+     * equal to a scalar `$value`. `LIMIT 1` bounds the read.
+     *
+     * Returns the FIRST matching hydrated item (same plain-array shape as
+     * {@see findById()}/{@see findByPath()}), or null when the field name is
+     * invalid, `$value` is null/non-scalar, or no row matches. Like
+     * {@see findByPath()} — and unlike the user-facing {@see findById()} — it
+     * does NOT apply profile tag restrictions: this is a mechanical identity
+     * lookup for background write-back, which has no request profile.
+     *
+     * @param string $field Top-level or dotted `metadata_json` key.
+     * @param mixed  $value Scalar value to match (compared as a string).
+     * @return array<string, mixed>|null Hydrated item, or null.
+     */
+    public function findByMetadataField(string $field, mixed $value): ?array
+    {
+        if ($value === null || !is_scalar($value)) {
+            return null;
+        }
+
+        $path = self::metadataJsonPath($field);
+        if ($path === null) {
+            return null;
+        }
+
+        $result = $this->db->query(
+            'SELECT * FROM media_items'
+            . ' WHERE JSON_UNQUOTE(JSON_EXTRACT(metadata_json, ?)) = ?'
+            . ' LIMIT 1',
+            [$path, (string) $value]
+        );
+
+        $row = $this->firstRow($result);
+        if ($row === null) {
+            return null;
+        }
+
+        return $this->hydrateItem($row);
+    }
+
+    /**
+     * Builds a safe MySQL JSON path (`$.a.b`) from a caller-supplied
+     * `metadata_json` key for {@see findByMetadataField()}.
+     *
+     * Only accepts `[A-Za-z0-9_]` segments joined by single dots; anything else
+     * (empty, leading/trailing/double dots, wildcards, quotes, brackets)
+     * returns null. The resulting path is still bound as a query parameter — so
+     * this validation is defence-in-depth against a malformed key rather than
+     * the sole injection guard.
+     *
+     * @return string|null e.g. `mal_id` → `$.mal_id`,
+     *                      `external_ids.imdb` → `$.external_ids.imdb`,
+     *                      invalid → null.
+     */
+    private static function metadataJsonPath(string $field): ?string
+    {
+        if ($field === '' || preg_match('/^[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*$/', $field) !== 1) {
+            return null;
+        }
+
+        return '$.' . $field;
+    }
+
+    /**
      * Find an existing media item by path, or create it — race-safe.
      *
      * Resolves the duplicate-row race that exists when multiple scanner workers

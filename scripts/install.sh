@@ -40,6 +40,12 @@ RUN_DIR="/var/run/phlix"
 # tracks wherever the cache actually lives.
 ARTWORK_DIR="$(grep -m1 -E '^ARTWORK_STORAGE_PATH=' "$ENV_FILE" 2>/dev/null | cut -d= -f2- || true)"
 [ -n "$ARTWORK_DIR" ] || ARTWORK_DIR="/var/artwork"
+# Persistent cache root for the anidb plugin's offline title-dump index
+# (PHLIX_ANIDB_CACHE_DIR). Like ARTWORK_DIR it MUST be a systemd ReadWritePath,
+# else ProtectSystem=strict makes it read-only and the plugin's index write
+# fails. Honour an operator override already recorded in the env file.
+ANIDB_CACHE_DIR="$(grep -m1 -E '^PHLIX_ANIDB_CACHE_DIR=' "$ENV_FILE" 2>/dev/null | cut -d= -f2- || true)"
+[ -n "$ANIDB_CACHE_DIR" ] || ANIDB_CACHE_DIR="/var/cache/phlix/anidb"
 
 DB_HOST="127.0.0.1"
 DB_PORT="3306"
@@ -1069,12 +1075,13 @@ do_update() {
   # binds ReadWritePaths at start), so create them here, ahead of the chown.
   mkdir -p "$INSTALL_PATH/.logs" "$LOG_DIR" "$RUN_DIR" \
     "$INSTALL_PATH/var/plugins" "$INSTALL_PATH/var/themes" "$INSTALL_PATH/var/cache" \
-    "$ARTWORK_DIR"
+    "$ARTWORK_DIR" "$ANIDB_CACHE_DIR"
   # Restore ownership the install was running with.
   if [ "$repo_owner" != "root" ] && id -u "$repo_owner" >/dev/null 2>&1; then
     chown -R "$repo_owner:$repo_owner" "$INSTALL_PATH"
     chown -R "$repo_owner:$repo_owner" "$LOG_DIR" "$RUN_DIR" 2>/dev/null || true
     chown "$repo_owner:$repo_owner" "$ARTWORK_DIR" 2>/dev/null || true
+    chown -R "$repo_owner:$repo_owner" "$ANIDB_CACHE_DIR" 2>/dev/null || true
   fi
 
   # 4. Apply migrations. run-migrations.php currently has no tracking table
@@ -1148,6 +1155,36 @@ do_update() {
             for (i=1;i<=n;i++) if (a[i]==p) f=1 } END { exit f?0:1 }' "$SERVICE_FILE"; then
     log "Adding $ARTWORK_DIR to systemd ReadWritePaths (local artwork cache writes)"
     sed -i "s|^\(ReadWritePaths=.*\)\$|\1 $ARTWORK_DIR|" "$SERVICE_FILE"
+    systemctl daemon-reload >/dev/null 2>&1 || true
+  fi
+
+  # 4h. One-off migration: ensure the anidb plugin's persistent title-dump cache
+  # ($ANIDB_CACHE_DIR, default /var/cache/phlix/anidb) is in ReadWritePaths. The
+  # plugin writes title_index.json there (PHLIX_ANIDB_CACHE_DIR), but
+  # ProtectSystem=strict keeps it read-only unless listed — the /var/artwork
+  # lesson. Create + chown it first (a missing ReadWritePath fails the unit at
+  # 226/NAMESPACE), then append the exact path only when absent. Idempotent.
+  mkdir -p "$ANIDB_CACHE_DIR" 2>/dev/null || true
+  chown -R "$SERVICE_USER:$SERVICE_USER" "$ANIDB_CACHE_DIR" 2>/dev/null || true
+  if [ -f "$SERVICE_FILE" ] \
+     && grep -q '^ReadWritePaths=' "$SERVICE_FILE" 2>/dev/null \
+     && ! awk -v p="$ANIDB_CACHE_DIR" '
+          /^ReadWritePaths=/ { s=$0; sub(/^ReadWritePaths=/,"",s); n=split(s,a,/[[:space:]]+/);
+            for (i=1;i<=n;i++) if (a[i]==p) f=1 } END { exit f?0:1 }' "$SERVICE_FILE"; then
+    log "Adding $ANIDB_CACHE_DIR to systemd ReadWritePaths (anidb title-cache writes)"
+    sed -i "s|^\(ReadWritePaths=.*\)\$|\1 $ANIDB_CACHE_DIR|" "$SERVICE_FILE"
+    systemctl daemon-reload >/dev/null 2>&1 || true
+  fi
+
+  # 4h-B. Ensure the systemd unit exports PHLIX_ANIDB_CACHE_DIR. Older units
+  # (generated before this key existed) have no Environment= line for it, so the
+  # plugin would fall back to sys_get_temp_dir(); inject it right after the
+  # existing PHLIX_ENV Environment line, only when absent. Idempotent.
+  if [ -f "$SERVICE_FILE" ] \
+     && grep -q '^Environment="PHLIX_ENV=' "$SERVICE_FILE" 2>/dev/null \
+     && ! grep -q '^Environment="PHLIX_ANIDB_CACHE_DIR=' "$SERVICE_FILE" 2>/dev/null; then
+    log "Adding PHLIX_ANIDB_CACHE_DIR=$ANIDB_CACHE_DIR to systemd unit Environment"
+    sed -i "/^Environment=\"PHLIX_ENV=/a Environment=\"PHLIX_ANIDB_CACHE_DIR=$ANIDB_CACHE_DIR\"" "$SERVICE_FILE"
     systemctl daemon-reload >/dev/null 2>&1 || true
   fi
 
@@ -1429,9 +1466,10 @@ log "Installing PHP dependencies"
 # does not exist makes systemd fail the unit at 226/NAMESPACE.
 mkdir -p "$INSTALL_PATH/.logs" "$INSTALL_PATH/templates_c" \
   "$INSTALL_PATH/var/plugins" "$INSTALL_PATH/var/themes" "$INSTALL_PATH/var/cache" \
-  "$ARTWORK_DIR"
+  "$ARTWORK_DIR" "$ANIDB_CACHE_DIR"
 chown -R "$SERVICE_USER:$SERVICE_USER" "$INSTALL_PATH"
 chown -R "$SERVICE_USER:$SERVICE_USER" "$ARTWORK_DIR" 2>/dev/null || true
+chown -R "$SERVICE_USER:$SERVICE_USER" "$ANIDB_CACHE_DIR" 2>/dev/null || true
 
 # ---------------------------------------------------------------------------
 # 4. Database
@@ -1511,6 +1549,12 @@ $( [ -n "$TRUSTED_PROXIES" ] && printf 'TRUSTED_PROXIES=%s\n' "$TRUSTED_PROXIES"
 
 PHLIX_LOG_LEVEL=info
 PHLIX_ENV=production
+
+# Persistent, writable cache dir for the anidb plugin's offline title-dump
+# index (title_index.json). Also a systemd ReadWritePath (below). The plugin
+# reads this after an explicit ctor arg / cache_dir setting, before falling
+# back to sys_get_temp_dir().
+PHLIX_ANIDB_CACHE_DIR=${ANIDB_CACHE_DIR}
 
 # --- Optional integrations (uncomment / fill in to enable) ---
 $( [ -n "$TMDB_API_KEY" ] && printf 'TMDB_API_KEY=%s\n' "$TMDB_API_KEY" || printf '#TMDB_API_KEY=\n' )
@@ -1604,7 +1648,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=${DATA_ROOT} ${LOG_DIR} ${RUN_DIR} ${INSTALL_PATH}/.logs ${INSTALL_PATH}/templates_c ${INSTALL_PATH}/var ${ARTWORK_DIR}
+ReadWritePaths=${DATA_ROOT} ${LOG_DIR} ${RUN_DIR} ${INSTALL_PATH}/.logs ${INSTALL_PATH}/templates_c ${INSTALL_PATH}/var ${ARTWORK_DIR} ${ANIDB_CACHE_DIR}
 RestrictNamespaces=true
 LockPersonality=true
 RemoveIPC=true

@@ -26,6 +26,12 @@ TimeoutStartSec=30
 LimitMEMLOCK=infinity
 
 Environment="PHLIX_ENV=production"
+# Persistent, writable cache dir for the anidb plugin's offline title-dump
+# index (title_index.json). The plugin reads this env (after an explicit ctor
+# arg / cache_dir setting) before falling back to sys_get_temp_dir(); pointing
+# it at /var/cache/phlix/anidb (also in ReadWritePaths below) gives it a real
+# persistent home instead of PrivateTmp's per-start scratch.
+Environment="PHLIX_ANIDB_CACHE_DIR=/var/cache/phlix/anidb"
 EnvironmentFile=/etc/phlix/env
 
 StandardOutput=journal
@@ -45,7 +51,10 @@ ProtectHome=true
 # "mkdir(): Read-only file system" and, because nothing ever caches, re-downloads
 # every poster on every scan — flooding the concurrent matcher with blocking
 # cURL until Swoole aborts with "all coroutines are asleep - deadlock".
-ReadWritePaths=/var/phlix /var/log/phlix /var/run/phlix /var/www/phlix/.logs /var/www/phlix/templates_c /var/www/phlix/var /var/artwork
+# /var/cache/phlix/anidb is the anidb plugin's persistent title-dump cache
+# (PHLIX_ANIDB_CACHE_DIR above); without it here ProtectSystem=strict keeps it
+# read-only and the plugin's index write fails (the /var/artwork lesson).
+ReadWritePaths=/var/phlix /var/log/phlix /var/run/phlix /var/www/phlix/.logs /var/www/phlix/templates_c /var/www/phlix/var /var/artwork /var/cache/phlix/anidb
 RestrictNamespaces=true
 LockPersonality=true
 RemoveIPC=true

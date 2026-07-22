@@ -3691,4 +3691,101 @@ class ItemRepositoryTest extends TestCase
             'path'       => '/m/broken.mkv',
         ]);
     }
+
+    // ------------------------------------------------------------------
+    // findByMetadataField() — Wave 2 host hook for plugin reverse-lookups
+    // (anilist maps a MyAnimeList id in metadata_json back to a local row).
+    // ------------------------------------------------------------------
+
+    public function testFindByMetadataFieldMatchesTopLevelKeyAndHydrates(): void
+    {
+        // The anilist plugin stores `mal_id` at the TOP LEVEL of metadata_json,
+        // so a bare-key lookup must resolve `$.mal_id` and return the hydrated
+        // row (metadata_json decoded into the `metadata` key, like findById).
+        $captured = null;
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(function (string $sql, $params = []) use (&$captured) {
+            if (str_contains($sql, 'JSON_EXTRACT(metadata_json')) {
+                $captured = ['sql' => $sql, 'params' => $params];
+                return [[
+                    'id' => 'item-mal',
+                    'name' => 'Cowboy Bebop',
+                    'metadata_json' => json_encode(['mal_id' => 205, 'title_english' => 'Cowboy Bebop']),
+                ]];
+            }
+            return [];
+        });
+
+        $repo = new ItemRepository($db);
+        $item = $repo->findByMetadataField('mal_id', 205);
+
+        $this->assertIsArray($item);
+        $this->assertSame('item-mal', $item['id']);
+        $this->assertSame(205, $item['metadata']['mal_id'], 'blob hydrated into metadata key');
+
+        // The searched value is a bound parameter — never interpolated into SQL.
+        $this->assertIsArray($captured);
+        $this->assertStringContainsString('LIMIT 1', $captured['sql'], 'read is bounded to one row');
+        $this->assertStringNotContainsString('205', $captured['sql'], 'value must not appear in the SQL text');
+        $this->assertSame('$.mal_id', $captured['params'][0], 'bare key -> top-level JSON path');
+        $this->assertSame('205', $captured['params'][1], 'value bound as a string parameter');
+    }
+
+    public function testFindByMetadataFieldMatchesNestedExternalIdsKey(): void
+    {
+        // A dotted key resolves a nested path — where the host resolver stamps
+        // canonical ids (external_ids.<source>).
+        $captured = null;
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(function (string $sql, $params = []) use (&$captured) {
+            if (str_contains($sql, 'JSON_EXTRACT(metadata_json')) {
+                $captured = ['params' => $params];
+                return [[
+                    'id' => 'item-imdb',
+                    'metadata_json' => json_encode(['external_ids' => ['imdb' => 'tt0213338']]),
+                ]];
+            }
+            return [];
+        });
+
+        $repo = new ItemRepository($db);
+        $item = $repo->findByMetadataField('external_ids.imdb', 'tt0213338');
+
+        $this->assertIsArray($item);
+        $this->assertSame('item-imdb', $item['id']);
+        $this->assertSame('$.external_ids.imdb', $captured['params'][0], 'dotted key -> nested JSON path');
+        $this->assertSame('tt0213338', $captured['params'][1]);
+    }
+
+    public function testFindByMetadataFieldReturnsNullWhenNoRowMatches(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturn([]); // no matching row
+
+        $repo = new ItemRepository($db);
+        $this->assertNull($repo->findByMetadataField('mal_id', 999999));
+    }
+
+    public function testFindByMetadataFieldRejectsInvalidFieldWithoutQuerying(): void
+    {
+        // A malformed key (path wildcards, quotes, brackets, dots at the edges)
+        // must be rejected up front — the DB is never touched.
+        $db = $this->createMock(Connection::class);
+        $db->expects($this->never())->method('query');
+
+        $repo = new ItemRepository($db);
+        foreach (["ids[*]", "mal_id'", '$.mal_id', 'external_ids.', '.mal', 'a..b', ''] as $bad) {
+            $this->assertNull($repo->findByMetadataField($bad, 1), "must reject: {$bad}");
+        }
+    }
+
+    public function testFindByMetadataFieldRejectsNonScalarValueWithoutQuerying(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->expects($this->never())->method('query');
+
+        $repo = new ItemRepository($db);
+        $this->assertNull($repo->findByMetadataField('mal_id', null));
+        $this->assertNull($repo->findByMetadataField('mal_id', ['array']));
+    }
 }

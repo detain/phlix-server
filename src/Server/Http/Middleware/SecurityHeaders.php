@@ -110,9 +110,17 @@ final class SecurityHeaders
             $scriptSrc .= " 'nonce-" . $scriptNonce . "'";
         }
 
+        // img-src explicitly allowlists the TMDB image CDN hosts so poster/backdrop/
+        // cast artwork served directly from TMDB (not yet locally cached) renders
+        // instead of being blocked by the default `'self'` policy. No wildcard — only
+        // the two known TMDB hosts are named.
+        // TODO(updates.md #47 / S71-S73): stopgap allowlist. Remove the explicit TMDB
+        //   hosts once the generic image caching/loader work proxies all remote
+        //   artwork through our own origin.
         return "default-src 'self'; script-src " . $scriptSrc . "; "
             . "style-src 'self' 'unsafe-inline'; "
-            . "img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; "
+            . "img-src 'self' data: blob: https://image.tmdb.org https://tmdb.org; "
+            . "font-src 'self'; connect-src 'self'; "
             . "media-src 'self' blob:; worker-src 'self' blob:; "
             . "frame-ancestors 'self'; base-uri 'self'";
     }

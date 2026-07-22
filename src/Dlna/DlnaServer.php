@@ -397,11 +397,13 @@ class DlnaServer
      * Locates the action element namespace-agnostically as a direct child of
      * the SOAP `Body` (matched by LOCAL name, so `Browse`, `u:Browse` and a
      * default-namespaced `<Browse xmlns="urn:...">` are all handled), then reads
-     * each declared argument from that element's OWN direct children. Scoping to
-     * the action element — rather than the previous loose "any descendant with
-     * this local-name, anywhere in the document" match — means embedded DIDL-Lite
-     * metadata (e.g. inside `CurrentURIMetaData`) can no longer bleed a same-named
-     * node into the wrong argument.
+     * each declared argument from that element's OWN direct children, via the
+     * shared {@see SoapArgumentExtractor} (also used by the live
+     * `/dlna/content_directory` controller, so the two cannot diverge). Scoping
+     * to the action element — rather than the previous loose "any descendant
+     * with this local-name, anywhere in the document" match — means embedded
+     * DIDL-Lite metadata (e.g. inside `CurrentURIMetaData`) can no longer bleed
+     * a same-named node into the wrong argument.
      *
      * Argument ORDER is reconstructed from {@see self::ACTION_ARGUMENTS}, not
      * from document order, and an absent INTERIOR argument is filled with a
@@ -419,7 +421,7 @@ class DlnaServer
             return [];
         }
 
-        $actionElement = $this->findActionElement($body, $action);
+        $actionElement = SoapArgumentExtractor::findActionElement($body, $action);
         if ($actionElement === null) {
             return [];
         }
@@ -427,7 +429,7 @@ class DlnaServer
         // Collect only the arguments actually present, keyed by name.
         $present = [];
         foreach ($pattern as $name) {
-            $value = $this->extractXmlValue($actionElement, $name);
+            $value = SoapArgumentExtractor::extractArgument($actionElement, $name);
             if ($value !== null) {
                 $present[$name] = $value;
             }
@@ -456,96 +458,6 @@ class DlnaServer
         }
 
         return $params;
-    }
-
-    /**
-     * Locate a SOAP action element by LOCAL name, namespace-agnostically.
-     *
-     * Prefers the action element sitting directly under the SOAP `Body`, then
-     * falls back to a bare action element posted without the envelope wrapper
-     * (some minimalist control points do this). Returns null when the body is
-     * not well-formed XML or the action element is absent.
-     */
-    private function findActionElement(string $body, string $action): ?\SimpleXMLElement
-    {
-        $previous = libxml_use_internal_errors(true);
-        $doc = simplexml_load_string($body);
-        libxml_clear_errors();
-        libxml_use_internal_errors($previous);
-
-        if ($doc === false) {
-            return null;
-        }
-
-        $literal = $this->xpathLiteral($action);
-
-        // Action element as a direct child of the SOAP Body (any prefix).
-        $matches = $doc->xpath("//*[local-name()='Body']/*[local-name()={$literal}]");
-        if (is_array($matches) && $matches !== []) {
-            return $matches[0];
-        }
-
-        // The document root itself is the bare action element.
-        if ($doc->getName() === $action) {
-            return $doc;
-        }
-
-        // A bare action element that is not the root but carries no Body wrapper.
-        $bare = $doc->xpath("//*[local-name()={$literal}]");
-        if (is_array($bare) && $bare !== []) {
-            return $bare[0];
-        }
-
-        return null;
-    }
-
-    /**
-     * Read a single argument value from an action element's direct children.
-     *
-     * Matches by LOCAL name so the child may be unprefixed, carry the action's
-     * default namespace, or use any prefix. Returns null when the element is
-     * absent and '' when it is present but empty (`<SortCriteria/>`), so the
-     * caller can distinguish "omitted" from "explicitly empty".
-     */
-    private function extractXmlValue(\SimpleXMLElement $actionElement, string $name): ?string
-    {
-        $literal = $this->xpathLiteral($name);
-        $matches = $actionElement->xpath("*[local-name()={$literal}]");
-
-        if (is_array($matches) && $matches !== []) {
-            return (string) $matches[0];
-        }
-
-        return null;
-    }
-
-    /**
-     * Quote a string as an XPath 1.0 literal, safe against embedded quotes.
-     *
-     * Argument names come from a fixed allow-list here, but quoting defensively
-     * keeps the extraction correct if that ever changes and documents intent.
-     */
-    private function xpathLiteral(string $value): string
-    {
-        if (!str_contains($value, "'")) {
-            return "'" . $value . "'";
-        }
-        if (!str_contains($value, '"')) {
-            return '"' . $value . '"';
-        }
-
-        // Contains both quote kinds: assemble with concat().
-        $parts = [];
-        foreach (explode("'", $value) as $i => $segment) {
-            if ($i > 0) {
-                $parts[] = '"\'"';
-            }
-            if ($segment !== '') {
-                $parts[] = "'" . $segment . "'";
-            }
-        }
-
-        return 'concat(' . implode(', ', $parts) . ')';
     }
 
     /**

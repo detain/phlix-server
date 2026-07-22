@@ -147,4 +147,50 @@ final class DlnaContentDirectorySoapTest extends TestCase
     {
         self::assertSame(400, $this->post('')->statusCode);
     }
+
+    /**
+     * SECURITY: embedded metadata must not bleed into a top-level argument.
+     *
+     * The old walk read "the first text node for each local-name ANYWHERE in
+     * the document", so a nested `<ObjectID>` buried inside another argument
+     * became THE ObjectID whenever the real top-level one was absent — embedded
+     * DIDL-Lite metadata could hijack the request. Arguments are now read only
+     * from the action element's DIRECT children, so a nested same-named element
+     * is ignored and the handler default applies instead.
+     *
+     * Mutation-verified: restoring the any-descendant walk makes this fail with
+     * `arguments['ObjectID'] === 'injected-999'`.
+     */
+    public function test_nested_same_named_element_does_not_bleed_into_arguments(): void
+    {
+        // NOTE: NO top-level <ObjectID> — the only <ObjectID> is nested inside
+        // <Filter>, exactly the DIDL-Lite bleed shape the hardening prevents.
+        $envelope = '<?xml version="1.0"?>'
+            . '<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">'
+            . '<s:Body>'
+            . '<u:Browse xmlns:u="urn:schemas-upnp-org:service:ContentDirectory:1">'
+            . '<BrowseFlag>BrowseDirectChildren</BrowseFlag>'
+            . '<Filter><ObjectID>injected-999</ObjectID></Filter>'
+            . '<StartingIndex>0</StartingIndex>'
+            . '<RequestedCount>10</RequestedCount>'
+            . '</u:Browse>'
+            . '</s:Body></s:Envelope>';
+
+        $controller = $this->controller();
+        $method = new \ReflectionMethod($controller, 'parseSoapBody');
+        $method->setAccessible(true);
+
+        /** @var array{action: string, arguments: array<string, mixed>}|null $parsed */
+        $parsed = $method->invoke($controller, $envelope);
+
+        self::assertNotNull($parsed, 'A real Browse envelope must parse.');
+        self::assertSame('Browse', $parsed['action']);
+        self::assertArrayNotHasKey(
+            'ObjectID',
+            $parsed['arguments'],
+            'A nested <ObjectID> inside <Filter> must NOT bleed into the top-level arguments.'
+        );
+        // The genuine direct-child arguments are still extracted correctly.
+        self::assertSame('BrowseDirectChildren', $parsed['arguments']['BrowseFlag'] ?? null);
+    }
 }

@@ -152,6 +152,23 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- **Top Media / Top Users leaderboards no longer show blank rows for deleted items/users**
+  (updates.md #14 / S14). The admin dashboard's Top Media list previously rendered play-count
+  rows with no title/poster (and Top Users rows with no username) whenever a media item or user
+  that had recorded plays was later deleted — the aggregate queries counted the surviving
+  `stats_playback_events` rows while the per-row hydrate found nothing to render.
+  `StatsCollector::getTopMedia()` / `getTopUsers()` now `INNER JOIN media_items` / `users`
+  (`mi ON e.media_item_id = mi.id` / `u ON e.user_id = u.id`), so events whose item or user no
+  longer exists are excluded at the query level, mirroring `WatchHistoryService`. A
+  defense-in-depth null-skip in `DashboardService::getTopMedia()` / `getTopUsers()`
+  (`continue` when `findById()` / `getUsernameById()` returns null) closes the narrow TOCTOU
+  window if a row is deleted between the aggregate query and the hydrate. **Decision: orphaned
+  rows are hidden**, not shown as a "(deleted item)" placeholder carrying the historical
+  play-count. The joins are 1:1 on the PKs, so watch-time / play-count / ordering semantics for
+  surviving items and users are unchanged, and the underlying `stats_playback_events` rows are
+  retained (purging orphaned stats is a separate maintenance task, S77). New positive coverage in
+  `DashboardServiceTest` (null-skip) and `StatsCollectorTest` (INNER JOIN present).
+
 - **DLNA Start/Stop toggle now genuinely enables/disables the ContentDirectory service**
   (updates.md #28 / S28). The admin `POST /api/v1/admin/dlna/start` and `/stop` endpoints
   previously only flipped an in-memory boolean on the single request-worker's `CdsServer` (the SSDP

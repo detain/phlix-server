@@ -262,6 +262,9 @@ final class AdminSettingsControllerTest extends TestCase
             'theme_music.enabled'                       => 'bool',
             'theme_music.source'                        => 'string',
             'subtitles.default_language'                => 'string',
+            // phlix-shared v0.44.0: flat ordered subtitle-source priority list →
+            // internal `json` (array-typed, like matching.noise_suffixes).
+            'subtitles.provider_priority'               => 'json',
             'trickplay.enabled'                         => 'bool',
             'newsletter.enabled'                        => 'bool',
             'newsletter.send_hour'                      => 'int',
@@ -320,7 +323,7 @@ final class AdminSettingsControllerTest extends TestCase
 
         $actual = AdminSettingsController::allowedKeys();
 
-        $this->assertCount(69, $actual);
+        $this->assertCount(70, $actual);
         $this->assertEquals($expected, $actual);
     }
 
@@ -398,7 +401,7 @@ final class AdminSettingsControllerTest extends TestCase
 
         // schemaMeta() covers EVERY declared property, not just the typed ones
         // that reach allowedKeys().
-        $this->assertCount(69, $meta);
+        $this->assertCount(70, $meta);
         foreach (array_keys(AdminSettingsController::allowedKeys()) as $key) {
             $this->assertArrayHasKey($key, $meta, sprintf('%s must carry a meta block', $key));
         }

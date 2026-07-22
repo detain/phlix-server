@@ -460,7 +460,7 @@ class TranscodeManager
      *                                          stream can spread that config straight into `$options`.
      *
      * @return array{
-     *     job_id: string, status: string, master_url: string, hls_url: string, dash_url: string, reused: bool,
+     *     job_id: string, status: string, master_url: string, hls_url: string, reused: bool,
      *     subtitles: list<array{index: int, language: string, label: string, default: bool, url: string}>
      * }
      *
@@ -500,7 +500,6 @@ class TranscodeManager
                 'status' => $this->statusOf($existing),
                 'master_url' => "/hls/{$existing}/master.m3u8",
                 'hls_url' => "/hls/{$existing}/master.m3u8",
-                'dash_url' => "/dash/{$existing}/manifest.mpd",
                 'reused' => true,
                 'subtitles' => $this->subtitleTracksFor($existing),
             ];
@@ -719,7 +718,6 @@ class TranscodeManager
             'status' => self::STATUS_COMPLETED,
             'master_url' => "/hls/{$jobId}/master.m3u8",
             'hls_url' => "/hls/{$jobId}/master.m3u8",
-            'dash_url' => "/dash/{$jobId}/manifest.mpd",
             'reused' => false,
             'subtitles' => $this->subtitleTrackUrls($jobId, $tracks),
         ];

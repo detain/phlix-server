@@ -186,7 +186,9 @@ class TranscodeManagerTest extends TestCase
         $this->assertTrue($result['reused']);
         $this->assertSame('existing-job', $result['job_id']);
         $this->assertStringContainsString('/hls/existing-job/master.m3u8', $result['master_url']);
-        $this->assertSame('/dash/existing-job/manifest.mpd', $result['dash_url']);
+        // S11 regression guard: ensureHlsJob() must not re-emit a `dash_url`
+        // pointing at the unbuilt /dash/{job}/manifest.mpd route (S56-S60).
+        $this->assertArrayNotHasKey('dash_url', $result);
     }
 
     public function testEnsureHlsJobIgnoresReuseRowWhenDirMissing(): void

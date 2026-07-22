@@ -27,7 +27,6 @@ class TranscodeControllerTest extends TestCase
                 'status' => 'running',
                 'master_url' => '/hls/job-7/master.m3u8',
                 'hls_url' => '/hls/job-7/master.m3u8',
-                'dash_url' => '/dash/job-7/manifest.mpd',
                 'reused' => false,
                 'subtitles' => [
                     ['index' => 0, 'language' => 'eng', 'label' => 'English', 'default' => true,
@@ -39,13 +38,12 @@ class TranscodeControllerTest extends TestCase
         $response = $controller->start(new Request(), ['id' => 'media-1']);
 
         $this->assertSame(200, $response->statusCode);
-        /** @var array{job_id: mixed, master_url: string, dash_url: string, reused: mixed, subtitles: array<int, array{url: string, label: mixed, default: mixed}>} $body */
+        /** @var array{job_id: mixed, master_url: string, reused: mixed, subtitles: array<int, array{url: string, label: mixed, default: mixed}>} $body */
         $body = json_decode($response->body, true);
         $this->assertSame('job-7', $body['job_id']);
         // Streaming URLs are now signed (prefix-scoped to the job dir) so the
         // player can fetch the manifest/segments/subtitles without a Bearer header.
         $this->assertSignedUrlFor('/hls/job-7/master.m3u8', $body['master_url']);
-        $this->assertSignedUrlFor('/dash/job-7/manifest.mpd', $body['dash_url']);
         $this->assertFalse($body['reused']);
         $this->assertSignedUrlFor('/hls/job-7/sub-0.vtt', $body['subtitles'][0]['url']);
         $this->assertSame('English', $body['subtitles'][0]['label']);
@@ -166,7 +164,7 @@ class TranscodeControllerTest extends TestCase
     /**
      * @return array{
      *     job_id: string, status: string, master_url: string, hls_url: string,
-     *     dash_url: string, reused: bool, subtitles: array<int, array<string, mixed>>
+     *     reused: bool, subtitles: array<int, array<string, mixed>>
      * }
      */
     private function jobFixture(): array
@@ -176,7 +174,6 @@ class TranscodeControllerTest extends TestCase
             'status' => 'running',
             'master_url' => '/hls/job-7/master.m3u8',
             'hls_url' => '/hls/job-7/master.m3u8',
-            'dash_url' => '/dash/job-7/manifest.mpd',
             'reused' => false,
             'subtitles' => [],
         ];
@@ -233,9 +230,12 @@ class TranscodeControllerTest extends TestCase
         $this->assertArrayHasKey('variants', $body);
         $this->assertNull($body['variants']);
         // Every pre-existing key is intact (backward compatibility).
-        foreach (['job_id', 'master_url', 'hls_url', 'dash_url', 'status', 'reused', 'subtitles'] as $key) {
+        foreach (['job_id', 'master_url', 'hls_url', 'status', 'reused', 'subtitles'] as $key) {
             $this->assertArrayHasKey($key, $body);
         }
+        // S11 regression guard: a 404'ing `dash_url` must never re-enter the
+        // start() payload while real DASH (S56-S60) is unbuilt.
+        $this->assertArrayNotHasKey('dash_url', $body);
     }
 
     public function testStatusIncludesSignedVariantsForMultiVariantJob(): void
@@ -284,6 +284,9 @@ class TranscodeControllerTest extends TestCase
         $body = json_decode($response->body, true);
         $this->assertArrayHasKey('variants', $body);
         $this->assertNull($body['variants']);
+        // S11 regression guard: the status() payload must not advertise a
+        // `dash_url` that always 404s (real DASH is S56-S60).
+        $this->assertArrayNotHasKey('dash_url', $body);
     }
 
     /**
@@ -366,12 +369,11 @@ class TranscodeControllerTest extends TestCase
         $response = $controller->status(new Request(), ['jobId' => 'job-7']);
 
         $this->assertSame(200, $response->statusCode);
-        /** @var array{status: mixed, playlist_ready: mixed, master_url: string, dash_url: string, subtitles: array<int, array{url: string}>} $body */
+        /** @var array{status: mixed, playlist_ready: mixed, master_url: string, subtitles: array<int, array{url: string}>} $body */
         $body = json_decode($response->body, true);
         $this->assertSame('running', $body['status']);
         $this->assertTrue($body['playlist_ready']);
         $this->assertSignedUrlFor('/hls/job-7/master.m3u8', $body['master_url']);
-        $this->assertSignedUrlFor('/dash/job-7/manifest.mpd', $body['dash_url']);
         $this->assertSignedUrlFor('/hls/job-7/sub-0.vtt', $body['subtitles'][0]['url']);
     }
 

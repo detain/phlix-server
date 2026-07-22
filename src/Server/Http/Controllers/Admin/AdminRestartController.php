@@ -177,6 +177,51 @@ class AdminRestartController
     }
 
     /**
+     * Schedule a graceful worker reload, returning a plain success boolean.
+     *
+     * This is the reusable core of {@see self::restart()} for callers that
+     * only need "reload the workers" without the HTTP error taxonomy — e.g.
+     * {@see \Phlix\Server\Http\Controllers\Dlna\AdminDlnaServerController}
+     * applying a just-persisted `dlna.cds_enabled` change so every worker
+     * re-reads it at the next `onWorkerStart`. Returns false (rather than a
+     * Response) for every failure mode: missing/invalid PID file, an
+     * unsignalable master, or a schedule failure.
+     *
+     * Like `restart()`, the SIGUSR2 (graceful) reload is DEFERRED onto the
+     * Workerman event loop so the caller's own JSON ack flushes first; only a
+     * no-op `posix_kill($pid, 0)` probe runs inline.
+     *
+     * @return bool True when a graceful reload was scheduled (or sent by the
+     *              no-event-loop fallback); false when it could not be.
+     */
+    public function scheduleGracefulReload(): bool
+    {
+        if (!is_file($this->pidFile)) {
+            return false;
+        }
+
+        $raw = file_get_contents($this->pidFile);
+        if ($raw === false) {
+            return false;
+        }
+
+        $pid = trim($raw);
+        if ($pid === '' || !is_numeric($pid)) {
+            return false;
+        }
+
+        $masterPid = (int) $pid;
+
+        // Probe-only (signal 0): confirm the master exists and is signalable
+        // before deferring the real reload signal.
+        if ($this->sendSignal($masterPid, 0) === false) {
+            return false;
+        }
+
+        return $this->scheduleSignal($masterPid, SIGUSR2);
+    }
+
+    /**
      * Defer the reload signal until after this response has been flushed.
      *
      * Uses a Workerman ONE-SHOT timer (`Timer::add(..., [], false)` — the 4th

@@ -12,9 +12,9 @@ declare(strict_types=1);
 namespace Phlix\Server\Http\Controllers\Dlna;
 
 use Phlix\Dlna\ContentDirectory;
+use Phlix\Dlna\SoapArgumentExtractor;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
-use XMLReader;
 
 /**
  * DlnaContentDirectoryController handles UPnP ContentDirectory SOAP actions.
@@ -106,6 +106,20 @@ class DlnaContentDirectoryController
     /**
      * Parse the SOAP body to extract action name and arguments.
      *
+     * The SOAP action is the FIRST CHILD ELEMENT of `<Body>`, named after the
+     * operation — `Browse`, `Search`, `GetSortCapabilities` — never literally
+     * `action`. Its arguments are read ONLY from that element's OWN direct
+     * children via {@see SoapArgumentExtractor}. This deliberately replaces the
+     * previous loose "first text node for each local-name ANYWHERE in the
+     * document" walk, which let embedded DIDL-Lite metadata (e.g. a nested
+     * same-named `<ObjectID>` inside another argument) bleed into a top-level
+     * argument. The extractor also parses XXE-safely (no external entities).
+     *
+     * The action NAME is not validated here — whatever child of `<Body>` is
+     * present is taken as the action, and unknown actions are handled by
+     * {@see self::dispatchAction()}'s default arm (a proper UPnP fault) rather
+     * than being rejected as an invalid SOAP body.
+     *
      * @param string $soapBody Raw SOAP body
      * @return array{action: string, arguments: array<string, mixed>}|null Parsed data or null
      *
@@ -113,61 +127,19 @@ class DlnaContentDirectoryController
      */
     private function parseSoapBody(string $soapBody): ?array
     {
-        $reader = new XMLReader();
-        $reader->xml($soapBody, null, LIBXML_NOCDATA);
-
-        $action = null;
-        /** @var array<string, mixed> $arguments */
-        $arguments = [];
-
-        $elementPath = [];
-
-        while ($reader->read()) {
-            if ($reader->nodeType === XMLReader::ELEMENT) {
-                $elementPath[] = $reader->localName;
-
-                // The SOAP action is the FIRST CHILD ELEMENT OF <Body>, and it
-                // is named after the operation — `Browse`, `Search`,
-                // `GetSortCapabilities`. It is never literally named "action".
-                //
-                // This used to test `localName === 'action'`, which no real
-                // control point ever sends, so $action stayed null and EVERY
-                // well-formed UPnP Browse was rejected with
-                // "Invalid SOAP body" / HTTP 400. Confirmed against the live
-                // server before the fix.
-                //
-                // The check is on the PARENT rather than on the name, so any
-                // ContentDirectory action dispatches; unknown ones are handled
-                // by dispatchAction()'s default arm, which returns a proper
-                // UPnP 401 fault instead of a parse failure.
-                if ($action === null && count($elementPath) >= 2) {
-                    $parent = $elementPath[count($elementPath) - 2] ?? '';
-                    if ($parent === 'Body') {
-                        $action = $reader->localName;
-                    }
-                }
-            } elseif ($reader->nodeType === XMLReader::TEXT || $reader->nodeType === XMLReader::CDATA) {
-                if (count($elementPath) >= 2) {
-                    $value = trim($reader->value);
-                    if ($value !== '') {
-                        $argName = end($elementPath);
-                        if (is_string($argName) && !isset($arguments[$argName])) {
-                            $arguments[$argName] = $value;
-                        }
-                    }
-                }
-            } elseif ($reader->nodeType === XMLReader::END_ELEMENT) {
-                array_pop($elementPath);
-            }
+        $actionElement = SoapArgumentExtractor::firstBodyChild($soapBody);
+        if ($actionElement === null) {
+            return null;
         }
 
-        if ($action === null) {
+        $action = $actionElement->getName();
+        if ($action === '') {
             return null;
         }
 
         return [
             'action' => $action,
-            'arguments' => $arguments,
+            'arguments' => SoapArgumentExtractor::directChildArguments($actionElement),
         ];
     }
 

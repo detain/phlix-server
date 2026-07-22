@@ -272,6 +272,57 @@ final class AdminRestartControllerTest extends TestCase
         }
     }
 
+    // ---------------------------------------------------------------------
+    // scheduleGracefulReload() — the reusable core S28 added for the DLNA
+    // toggle. It returns a plain bool for every outcome, never a Response.
+    // ---------------------------------------------------------------------
+
+    public function testScheduleGracefulReloadReturnsFalseWhenPidFileMissing(): void
+    {
+        $controller = new TestableRestartController($this->pidFile, true);
+
+        self::assertFalse($controller->scheduleGracefulReload());
+        // Nothing was probed or scheduled — the missing file short-circuits.
+        self::assertSame([], $controller->sent);
+        self::assertSame([], $controller->scheduled);
+    }
+
+    public function testScheduleGracefulReloadReturnsFalseForNonNumericPid(): void
+    {
+        file_put_contents($this->pidFile, "not-a-pid\n");
+
+        $controller = new TestableRestartController($this->pidFile, true);
+
+        self::assertFalse($controller->scheduleGracefulReload());
+        self::assertSame([], $controller->scheduled);
+    }
+
+    public function testScheduleGracefulReloadReturnsFalseWhenMasterUnsignalable(): void
+    {
+        file_put_contents($this->pidFile, '99999');
+
+        // sendSignal() returns false → the probe fails → no reload scheduled.
+        $controller = new TestableRestartController($this->pidFile, false);
+
+        self::assertFalse($controller->scheduleGracefulReload());
+        self::assertSame([[99999, 0]], $controller->sent);
+        self::assertSame([], $controller->scheduled);
+    }
+
+    public function testScheduleGracefulReloadSchedulesSigusr2OnSuccess(): void
+    {
+        file_put_contents($this->pidFile, '12345');
+
+        $controller = new TestableRestartController($this->pidFile, true);
+
+        self::assertTrue($controller->scheduleGracefulReload());
+        // Only the no-op probe (signal 0) runs inline; the real reload is
+        // deferred and is SIGUSR2 (Workerman's GRACEFUL reload), not SIGUSR1.
+        self::assertSame([[12345, 0]], $controller->sent);
+        self::assertSame([[12345, SIGUSR2]], $controller->scheduled);
+        self::assertNotSame(SIGUSR1, $controller->scheduled[0][1]);
+    }
+
     /**
      * @param mixed $body
      *

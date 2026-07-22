@@ -47,9 +47,6 @@ class DlnaServer
     /** @var array<string, array<string, callable>> SOAP action handlers, indexed by service then action */
     private array $soapHandlers = [];
 
-    /** @var array<string, string> Service SCPD URLs */
-    private array $scpdUrls = [];
-
     /**
      * @since 0.12.0 Requires real ItemRepository
      */
@@ -81,7 +78,6 @@ class DlnaServer
         $this->deviceRegistry = new DeviceRegistry();
 
         $this->setupSoapHandlers();
-        $this->setupScpdUrls();
 
         $this->logger->info('DLNA Server initialized', [
             'server_id' => $serverId,
@@ -182,18 +178,6 @@ class DlnaServer
                     'Sink' => '',
                 ];
             },
-        ];
-    }
-
-    /**
-     * Setup SCPD URLs for services.
-     */
-    private function setupScpdUrls(): void
-    {
-        $this->scpdUrls = [
-            'ContentDirectory' => '/scpd/ContentDirectory.xml',
-            'AVTransport' => '/scpd/AVTransport.xml',
-            'ConnectionManager' => '/scpd/ConnectionManager.xml',
         ];
     }
 
@@ -375,101 +359,105 @@ class DlnaServer
     }
 
     /**
-     * Parse SOAP body to extract action parameters.
+     * The declared IN-argument order for each supported SOAP action.
+     *
+     * The handlers are invoked POSITIONALLY via `call_user_func_array`, so the
+     * order here is load-bearing — it must match each handler's signature.
+     *
+     * @var array<string, list<string>>
+     */
+    private const ACTION_ARGUMENTS = [
+        'Browse' => ['ObjectID', 'BrowseFlag', 'Filter', 'StartingIndex', 'RequestedCount', 'SortCriteria'],
+        'Search' => ['ContainerID', 'SearchCriteria', 'Filter', 'StartingIndex', 'RequestedCount', 'SortCriteria'],
+        'SetAVTransportURI' => ['InstanceID', 'CurrentURI', 'CurrentURIMetaData'],
+        'Play' => ['InstanceID', 'Speed'],
+        'Pause' => ['InstanceID'],
+        'Stop' => ['InstanceID'],
+        'Seek' => ['InstanceID', 'Unit', 'Target'],
+        'GetTransportInfo' => ['InstanceID'],
+        'GetPositionInfo' => ['InstanceID'],
+        'GetMediaInfo' => ['InstanceID'],
+        'GetDeviceCapabilities' => ['InstanceID'],
+        'GetTransportSettings' => ['InstanceID'],
+        'SetPlayMode' => ['InstanceID', 'NewPlayMode'],
+        'GetCurrentTransportActions' => ['InstanceID'],
+        'GetSearchCapabilities' => [],
+        'GetSortCapabilities' => [],
+        'GetSystemUpdateID' => [],
+        'GetCurrentConnectionInfo' => ['ConnectionID'],
+        'GetProtocolInfo' => [],
+    ];
+
+    /** Arguments that must be coerced to int before the handler is called. */
+    private const INT_ARGUMENTS = ['InstanceID', 'StartingIndex', 'RequestedCount', 'ConnectionID'];
+
+    /**
+     * Parse a SOAP body into the positional argument list for an action.
+     *
+     * Locates the action element namespace-agnostically as a direct child of
+     * the SOAP `Body` (matched by LOCAL name, so `Browse`, `u:Browse` and a
+     * default-namespaced `<Browse xmlns="urn:...">` are all handled), then reads
+     * each declared argument from that element's OWN direct children, via the
+     * shared {@see SoapArgumentExtractor} (also used by the live
+     * `/dlna/content_directory` controller, so the two cannot diverge). Scoping
+     * to the action element — rather than the previous loose "any descendant
+     * with this local-name, anywhere in the document" match — means embedded
+     * DIDL-Lite metadata (e.g. inside `CurrentURIMetaData`) can no longer bleed
+     * a same-named node into the wrong argument.
+     *
+     * Argument ORDER is reconstructed from {@see self::ACTION_ARGUMENTS}, not
+     * from document order, and an absent INTERIOR argument is filled with a
+     * type-appropriate default so a later argument keeps its slot. Trailing
+     * absent arguments are dropped so each handler's own default applies. This
+     * fixes the previous positional corruption where a missing element silently
+     * shifted every following value one slot to the left.
      *
      * @return list<mixed>
      */
     private function parseSoapBody(string $body, string $action): array
     {
-        $params = [];
-
-        // Simple XML parsing for common parameters
-        libxml_use_internal_errors(true);
-        $doc = simplexml_load_string($body);
-
-        if ($doc === false) {
-            return $params;
+        $pattern = self::ACTION_ARGUMENTS[$action] ?? [];
+        if ($pattern === []) {
+            return [];
         }
 
-        // Handle different action parameter patterns
-        $paramPatterns = [
-            'Browse' => ['ObjectID', 'BrowseFlag', 'Filter', 'StartingIndex', 'RequestedCount', 'SortCriteria'],
-            'Search' => ['ContainerID', 'SearchCriteria', 'Filter', 'StartingIndex', 'RequestedCount', 'SortCriteria'],
-            'SetAVTransportURI' => ['InstanceID', 'CurrentURI', 'CurrentURIMetaData'],
-            'Play' => ['InstanceID', 'Speed'],
-            'Pause' => ['InstanceID'],
-            'Stop' => ['InstanceID'],
-            'Seek' => ['InstanceID', 'Unit', 'Target'],
-            'GetTransportInfo' => ['InstanceID'],
-            'GetPositionInfo' => ['InstanceID'],
-            'GetMediaInfo' => ['InstanceID'],
-            'GetDeviceCapabilities' => ['InstanceID'],
-            'GetTransportSettings' => ['InstanceID'],
-            'SetPlayMode' => ['InstanceID', 'NewPlayMode'],
-            'GetCurrentTransportActions' => ['InstanceID'],
-            'GetSearchCapabilities' => [],
-            'GetSortCapabilities' => [],
-            'GetSystemUpdateID' => [],
-            'GetCurrentConnectionInfo' => ['ConnectionID'],
-            'GetProtocolInfo' => [],
-        ];
+        $actionElement = SoapArgumentExtractor::findActionElement($body, $action);
+        if ($actionElement === null) {
+            return [];
+        }
 
-        $pattern = $paramPatterns[$action] ?? [];
-
-        foreach ($pattern as $param) {
-            // Try various XML paths
-            $value = $this->extractXmlValue($doc, $param);
-
-            // Type conversion
-            if (in_array($param, ['InstanceID', 'StartingIndex', 'RequestedCount', 'ConnectionID'])) {
-                $value = $value !== null ? (int)$value : 0;
-            }
-
+        // Collect only the arguments actually present, keyed by name.
+        $present = [];
+        foreach ($pattern as $name) {
+            $value = SoapArgumentExtractor::extractArgument($actionElement, $name);
             if ($value !== null) {
-                $params[] = $value;
+                $present[$name] = $value;
+            }
+        }
+
+        // Determine the highest present index so trailing absentees can be
+        // dropped (letting the handler default apply) while interior gaps are
+        // filled to preserve positional alignment.
+        $lastPresent = -1;
+        foreach ($pattern as $index => $name) {
+            if (array_key_exists($name, $present)) {
+                $lastPresent = $index;
+            }
+        }
+
+        $params = [];
+        for ($index = 0; $index <= $lastPresent; $index++) {
+            $name = $pattern[$index];
+            $value = $present[$name] ?? null;
+
+            if (in_array($name, self::INT_ARGUMENTS, true)) {
+                $params[] = $value !== null ? (int) $value : 0;
+            } else {
+                $params[] = $value ?? '';
             }
         }
 
         return $params;
-    }
-
-    /**
-     * Extract value from XML document.
-     */
-    private function extractXmlValue(\SimpleXMLElement $doc, string $name): ?string
-    {
-        // Try direct child (no namespace)
-        if (isset($doc->{$name})) {
-            return (string)$doc->{$name};
-        }
-
-        // Try body/ + name (non-namespaced)
-        if (isset($doc->Body->{$name})) {
-            return (string)$doc->Body->{$name};
-        }
-
-        // Use XPath for better namespace handling
-        $serialized = $doc->asXML();
-        if ($serialized === false) {
-            return null;
-        }
-        $xpath = new \SimpleXMLElement($serialized);
-        $xpath->registerXPathNamespace('s', 'http://schemas.xmlsoap.org/soap/envelope/');
-
-        // Try to find the element in Body/ActionName/parameterName pattern
-        // This handles both namespaced and non-namespaced elements
-        $result = $xpath->xpath("//s:Body/*/*[local-name()='{$name}']");
-        if ($result !== false && $result !== null && count($result) > 0) {
-            return (string)$result[0];
-        }
-
-        // Also try direct path without namespace
-        $result2 = $xpath->xpath("//Body/*[local-name()='{$name}']");
-        if ($result2 !== false && $result2 !== null && count($result2) > 0) {
-            return (string)$result2[0];
-        }
-
-        return null;
     }
 
     /**

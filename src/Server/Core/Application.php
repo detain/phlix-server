@@ -980,6 +980,35 @@ class Application
             // CdsServer unavailable — controller stays null; status() reports disabled.
         }
 
+        // Wire the settings store + restart controller so the Start/Stop toggle
+        // can genuinely PERSIST `dlna.cds_enabled` and schedule a graceful
+        // reload (the CDS routes are gated on that setting at worker start —
+        // see loadCdsRoutes()). Best-effort, like the CdsServer wiring above:
+        // a resolution failure must not drop the admin DLNA route group.
+        try {
+            if ($this->container->has(\Phlix\Admin\SettingsRepository::class)) {
+                $settingsRepo = $this->container->get(\Phlix\Admin\SettingsRepository::class);
+                if ($settingsRepo instanceof \Phlix\Admin\SettingsRepository) {
+                    $controller->setSettingsRepository($settingsRepo);
+                }
+            }
+        } catch (\Throwable) {
+            // Settings store unavailable — start()/stop() report 503.
+        }
+
+        try {
+            if ($this->container->has(\Phlix\Server\Http\Controllers\Admin\AdminRestartController::class)) {
+                $restartController = $this->container->get(
+                    \Phlix\Server\Http\Controllers\Admin\AdminRestartController::class,
+                );
+                if ($restartController instanceof \Phlix\Server\Http\Controllers\Admin\AdminRestartController) {
+                    $controller->setRestartController($restartController);
+                }
+            }
+        } catch (\Throwable) {
+            // Restart controller unavailable — toggle still persists, reloadScheduled=false.
+        }
+
         $this->router->group(
             '/api/v1/admin/dlna',
             function (Router $r) use ($controller): void {

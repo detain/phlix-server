@@ -233,6 +233,9 @@ class TranscodeControllerTest extends TestCase
         foreach (['job_id', 'master_url', 'hls_url', 'status', 'reused', 'subtitles'] as $key) {
             $this->assertArrayHasKey($key, $body);
         }
+        // S11 regression guard: a 404'ing `dash_url` must never re-enter the
+        // start() payload while real DASH (S56-S60) is unbuilt.
+        $this->assertArrayNotHasKey('dash_url', $body);
     }
 
     public function testStatusIncludesSignedVariantsForMultiVariantJob(): void
@@ -281,6 +284,9 @@ class TranscodeControllerTest extends TestCase
         $body = json_decode($response->body, true);
         $this->assertArrayHasKey('variants', $body);
         $this->assertNull($body['variants']);
+        // S11 regression guard: the status() payload must not advertise a
+        // `dash_url` that always 404s (real DASH is S56-S60).
+        $this->assertArrayNotHasKey('dash_url', $body);
     }
 
     /**

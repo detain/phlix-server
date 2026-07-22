@@ -144,6 +144,11 @@ public/
   'self' blob:` so hls.js can attach its MSE `blob:` object URL and transmux Web Worker (required for
   browser HLS playback), and the `/app` shell's inline bootstrap `<script>` runs under a **per-request
   script nonce** rather than `'unsafe-inline'`; non-`/app` responses keep the strict default policy.
+  `img-src` additionally allowlists the two TMDB image CDN hosts (`https://image.tmdb.org` and
+  `https://tmdb.org`, no wildcard) so poster/backdrop/cast artwork served directly from TMDB renders
+  rather than being blocked. This is a **stopgap** until the generic image caching/loader work
+  (updates.md #47 / S71-S73) proxies all remote artwork through our own origin, at which point the
+  explicit TMDB hosts are removed.
 
 ### SyncPlay - Group Watching
 - **Synchronized Playback**: Watch content together with friends across devices with sub-second sync accuracy

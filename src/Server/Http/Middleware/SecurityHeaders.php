@@ -94,6 +94,15 @@ final class SecurityHeaders
      * browser rejects the load with `MEDIA_ELEMENT_ERROR: Media load rejected by
      * URL safety check`, blocking ALL HLS/transcoded playback.
      *
+     * `img-src` explicitly allowlists the two TMDB image CDN hosts
+     * (`https://image.tmdb.org` and `https://tmdb.org`) — with no wildcard — so
+     * poster/backdrop/cast artwork served directly from TMDB (i.e. not yet locally
+     * cached) renders instead of being blocked by the default `'self'` policy. This
+     * is a documented stopgap; once the generic image caching/loader work
+     * (updates.md #47 / S71-S73) proxies all remote artwork through our own origin,
+     * the explicit TMDB hosts should be removed. See the inline `TODO` at the
+     * `img-src` directive below.
+     *
      * @param string|null $scriptNonce Optional cryptographically-random nonce.
      *                                  When non-empty, `'nonce-<value>'` is added
      *                                  to `script-src` so a single matching inline

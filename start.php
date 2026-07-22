@@ -992,6 +992,30 @@ try {
                                 ['process' => $procKey, 'error' => $pluginBootError->getMessage()],
                             );
                         }
+
+                        // F2b — the automatic, THROTTLED, BACKGROUND trigger for
+                        // plugin metadata SOURCES (omdb/anidb/myanimelist). F2a
+                        // wired SourceRegistry dispatch behind an opt-in flag but
+                        // left NO production caller. This subscriber lives in the
+                        // SAME worker that dispatches MediaItemAdded (this
+                        // library-scan managed worker): on the event it only
+                        // ENQUEUES (no HTTP — the scan path stays fast); a re-arming
+                        // Workerman timer drains one item per tick and gap-fills it
+                        // from the DUE sources OVER the scan-resolved metadata. With
+                        // no source plugins enabled the registry is empty, so
+                        // nothing is ever enqueued and behaviour equals pre-F2b
+                        // (RULE 7). Wired AFTER bootstrapEnabled() so the enabled
+                        // sources are already registered in THIS worker's
+                        // SourceRegistry. Non-blocking; never blocks the fork.
+                        try {
+                            $container->get(\Phlix\Media\Metadata\Enrichment\BackgroundEnrichmentSubscriber::class)
+                                ->register($container->get(\Phlix\Common\Events\ListenerRegistry::class));
+                        } catch (\Throwable $enrichBootError) {
+                            LoggerFactory::get(LogChannels::MEDIA)->error(
+                                'background enrichment subscriber wiring failed (managed worker)',
+                                ['process' => $procKey, 'error' => $enrichBootError->getMessage()],
+                            );
+                        }
                     }
 
                     // Arms a Workerman\Timer that polls runOnce() every $pollSeconds.

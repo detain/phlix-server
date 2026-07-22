@@ -37,6 +37,10 @@ use Phlix\Media\Markers\PlaybackMarkerService;
 use Phlix\Media\Metadata\Imdb\ImdbLookup;
 use Phlix\Media\Metadata\FuzzyMatcher;
 use Phlix\Media\Library\ScanIgnorePatterns;
+use Phlix\Media\Metadata\Enrichment\BackgroundEnrichmentSubscriber;
+use Phlix\Media\Metadata\Enrichment\PluginEnrichmentQueue;
+use Phlix\Media\Metadata\Enrichment\PluginMetadataEnricher;
+use Phlix\Media\Metadata\Enrichment\SourceRateLimiter;
 use Phlix\Media\Metadata\LibraryMetadataMatcher;
 use Phlix\Media\Metadata\MetadataOverwritePolicy;
 use Phlix\Media\Metadata\MetadataManager;
@@ -545,6 +549,61 @@ final class MediaServicesProvider implements ServiceProviderInterface
             // yields the singleton PHP-DI binds by default.
             SourceRegistry::class => autowire(),
 
+            // F2b — per-source quota-safety limiter for background enrichment.
+            // Reads the per-source min-spacing knobs from config/metadata.php's
+            // `background_enrichment.source_intervals` (a direct @include: this
+            // file is not composed into config/server.php). SourceRateLimiter
+            // clamps every interval up to a 1s floor, so a bad config can only
+            // slow a source down, never remove the quota guard.
+            SourceRateLimiter::class => factory(
+                static function (): SourceRateLimiter {
+                    $cfg = self::backgroundEnrichmentConfig();
+                    /** @var array<string, float|int> $intervals */
+                    $intervals = is_array($cfg['source_intervals'] ?? null) ? $cfg['source_intervals'] : [];
+                    $default = isset($cfg['default_interval']) && is_numeric($cfg['default_interval'])
+                        ? (float) $cfg['default_interval']
+                        : null;
+                    return new SourceRateLimiter($intervals, $default);
+                }
+            ),
+
+            // F2b — bounded, de-duped FIFO of item-ids awaiting enrichment.
+            // Instance-scoped (resident-memory bound); one per worker.
+            PluginEnrichmentQueue::class => factory(
+                static function (): PluginEnrichmentQueue {
+                    $cfg = self::backgroundEnrichmentConfig();
+                    $maxSize = isset($cfg['queue_max_size']) && is_numeric($cfg['queue_max_size'])
+                        ? (int) $cfg['queue_max_size']
+                        : 10000;
+                    $minInterval = isset($cfg['queue_min_interval']) && is_numeric($cfg['queue_min_interval'])
+                        ? (float) $cfg['queue_min_interval']
+                        : 1.0;
+                    return new PluginEnrichmentQueue($minInterval, $maxSize);
+                }
+            ),
+
+            // F2b — drains ONE item and gap-fills it from the DUE plugin sources
+            // (never clobbering scan-resolved TMDB/IMDb values, never re-hitting
+            // TMDB). Required deps (SourceRegistry, ItemRepository, RatingService,
+            // PriorityConfig, SourceRateLimiter) are all bound above; the optional
+            // logger + PriorityFieldResolver default internally (PHP-DI skips
+            // defaulted optional ctor params during autowiring).
+            PluginMetadataEnricher::class => autowire()
+                ->constructorParameter('registry', get(SourceRegistry::class))
+                ->constructorParameter('items', get(ItemRepository::class))
+                ->constructorParameter('ratingService', get(RatingService::class))
+                ->constructorParameter('priorityConfig', get(PriorityConfig::class))
+                ->constructorParameter('rateLimiter', get(SourceRateLimiter::class)),
+
+            // F2b — the host-side subscriber wired into the library-scan worker's
+            // ListenerRegistry at onWorkerStart (start.php). It enqueues on
+            // MediaItemAdded (no HTTP) and drains off a re-arming Workerman timer.
+            BackgroundEnrichmentSubscriber::class => autowire()
+                ->constructorParameter('queue', get(PluginEnrichmentQueue::class))
+                ->constructorParameter('enricher', get(PluginMetadataEnricher::class))
+                ->constructorParameter('registry', get(SourceRegistry::class))
+                ->constructorParameter('items', get(ItemRepository::class)),
+
             QualitySelector::class => factory(static function (): QualitySelector {
                 return new QualitySelector();
             }),
@@ -821,6 +880,38 @@ final class MediaServicesProvider implements ServiceProviderInterface
             $out[] = $trimmed;
         }
 
+        return $out;
+    }
+
+    /**
+     * Load the `background_enrichment` sub-array from config/metadata.php (F2b).
+     *
+     * A direct `@include` mirroring the theme-music pattern above: config/metadata.php
+     * is NOT composed into config/server.php, so a boot `$appConfig` lookup would
+     * miss it. Returns an empty array when the file or key is unreadable, so the
+     * consuming factories fall back to their in-code defaults.
+     *
+     * @return array<string, mixed>
+     */
+    private static function backgroundEnrichmentConfig(): array
+    {
+        /** @var mixed $included */
+        $included = @include __DIR__ . '/../../../../config/metadata.php';
+        if (!is_array($included)) {
+            return [];
+        }
+        $cfg = $included['background_enrichment'] ?? null;
+        if (!is_array($cfg)) {
+            return [];
+        }
+        /** @var array<string, mixed> $out */
+        $out = [];
+        /** @var mixed $v */
+        foreach ($cfg as $k => $v) {
+            if (is_string($k)) {
+                $out[$k] = $v;
+            }
+        }
         return $out;
     }
 

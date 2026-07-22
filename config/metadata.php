@@ -72,4 +72,31 @@ return [
     // LibraryMetadataMatcher::shouldSkipOverwrite(). Keep in sync with the shared
     // server-settings.schema.json `metadata.overwrite_existing` default.
     'overwrite_existing' => true,
+
+    // F2b — background, throttled plugin-source enrichment. Consumed by
+    // MediaServicesProvider to build the SourceRateLimiter + PluginEnrichmentQueue
+    // that the library-scan worker's BackgroundEnrichmentSubscriber drains. These
+    // are quota-safety knobs, NOT a feature toggle: the automatic trigger is gated
+    // purely on whether any plugin metadata source is enabled/registered (RULE 7 —
+    // no sources ⇒ nothing is ever enqueued and behaviour equals pre-F2b), so
+    // there is no dead on/off key here.
+    'background_enrichment' => [
+        // Per-source MINIMUM spacing between dispatches, in seconds. Enforces a
+        // conservative quota budget so a large library trickles through rather
+        // than flooding: omdb 1000/day ⇒ 90s ≈ ~960/day; anidb ban risk ⇒ sparse;
+        // myanimelist is friendlier. SourceRateLimiter clamps every value up to a
+        // 1s courtesy floor, so these can only make a source SLOWER, never faster.
+        'source_intervals' => [
+            'omdb' => 90,
+            'anidb' => 4,
+            'myanimelist' => 2,
+        ],
+        // Spacing (seconds) for any source not named above.
+        'default_interval' => 2,
+        // Hard cap on the in-worker pending-item FIFO (resident-memory bound).
+        'queue_max_size' => 10000,
+        // Queue-level drain spacing (seconds); paces the drain loop against the
+        // event loop. The per-source limiter above is the real quota guard.
+        'queue_min_interval' => 1,
+    ],
 ];

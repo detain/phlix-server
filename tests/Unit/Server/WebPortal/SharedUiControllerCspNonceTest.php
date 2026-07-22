@@ -93,6 +93,11 @@ final class SharedUiControllerCspNonceTest extends TestCase
         self::assertStringContainsString("frame-ancestors 'self'", $csp);
         self::assertStringContainsString('media-src \'self\' blob:', $csp);
         self::assertStringContainsString('worker-src \'self\' blob:', $csp);
+
+        // The SPA-shell CSP is built from SecurityHeaders::contentSecurityPolicy(),
+        // so the TMDB image allowlist must reach the consumer path too (S01).
+        self::assertStringContainsString('https://image.tmdb.org', $csp);
+        self::assertStringContainsString('https://tmdb.org', $csp);
     }
 
     public function testEachResponseGeneratesAFreshNonce(): void
@@ -115,6 +120,43 @@ final class SharedUiControllerCspNonceTest extends TestCase
         self::assertStringContainsString("script-src 'self';", $csp);
         self::assertStringNotContainsString('nonce-', $csp);
         self::assertStringNotContainsString("script-src 'self' 'unsafe-inline'", $csp);
+    }
+
+    /**
+     * S01 (updates.md #1): the CSP `img-src` directive must explicitly allowlist the
+     * TMDB image CDN hosts so remotely-served poster/backdrop/cast artwork renders,
+     * WITHOUT opening the policy up to a scheme/host wildcard.
+     */
+    public function testCspImgSrcAllowlistsTmdbHostsExplicitlyWithoutWildcard(): void
+    {
+        $csp = SecurityHeaders::contentSecurityPolicy();
+
+        // Isolate the img-src directive's source list (between "img-src " and ";").
+        self::assertSame(
+            1,
+            preg_match('/img-src ([^;]+);/', $csp, $m),
+            'CSP must contain a terminated img-src directive.',
+        );
+        $imgSrc = trim($m[1] ?? '');
+        $sources = preg_split('/\s+/', $imgSrc) ?: [];
+
+        // Both TMDB hosts are named explicitly.
+        self::assertContains('https://image.tmdb.org', $sources);
+        self::assertContains('https://tmdb.org', $sources);
+
+        // No wildcard leaked in: neither a bare host/scheme wildcard nor "https:".
+        self::assertNotContains('*', $sources, 'img-src must not use a bare wildcard.');
+        self::assertNotContains('https:', $sources, 'img-src must not open the whole https: scheme.');
+        self::assertNotContains('https://*', $sources, 'img-src must not wildcard the https host.');
+        foreach ($sources as $source) {
+            self::assertStringNotContainsString('*', $source, 'No img-src source may contain a wildcard.');
+        }
+
+        // The directive is exactly the intended allowlist — locks the surface down.
+        self::assertSame(
+            "'self' data: blob: https://image.tmdb.org https://tmdb.org",
+            $imgSrc,
+        );
     }
 
     private function rmrf(string $path): void

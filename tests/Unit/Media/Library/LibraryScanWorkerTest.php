@@ -12,6 +12,8 @@ use Phlix\Media\Library\ScanJobRepository;
 use Phlix\Media\Library\ScanResult;
 use Phlix\Media\Metadata\LibraryMetadataMatcher;
 use RuntimeException;
+use Workerman\Timer;
+use Workerman\Worker;
 
 /**
  * Unit tests for {@see LibraryScanWorker} (Step 1.1b).
@@ -524,5 +526,89 @@ class LibraryScanWorkerTest extends TestCase
         $worker = new LibraryScanWorker($jobs, $libraries, $matcher, $this->makeLogger());
 
         $this->assertTrue($worker->runOnce());
+    }
+
+    /**
+     * start() reaps orphaned `running` jobs BEFORE arming the poll timer, so a
+     * scan interrupted by a restart/crash cannot leave the UI spinner alive
+     * forever (the music-scan-hang incident).
+     *
+     * `Timer::add()` refuses to schedule (and throws) unless at least one
+     * Workerman worker is registered, so we seed one via reflection — mirroring
+     * {@see \Phlix\Tests\Unit\Server\Core\ApplicationBackupTimerTest}.
+     */
+    public function testStartReapsStaleJobsBeforeArmingTimer(): void
+    {
+        $workersProp = new \ReflectionProperty(Worker::class, 'workers');
+        $workersProp->setAccessible(true);
+        /** @var array<int, Worker> $saved */
+        $saved = $workersProp->getValue();
+
+        $stub = new Worker();
+        $workersProp->setValue(null, [spl_object_id($stub) => $stub]);
+        Timer::delAll();
+
+        try {
+            $jobs = $this->createMock(ScanJobRepository::class);
+            $jobs->expects($this->once())
+                ->method('reapStaleJobs')
+                ->with('Interrupted by server restart')
+                ->willReturn(2);
+            $jobs->expects($this->never())->method('claimNext');
+
+            $worker = new LibraryScanWorker(
+                $jobs,
+                $this->createMock(LibraryManager::class),
+                $this->makeUnusedMatcher(),
+                $this->makeLogger(),
+            );
+
+            $worker->start(5);
+        } finally {
+            Timer::delAll();
+            $workersProp->setValue(null, $saved);
+        }
+    }
+
+    /**
+     * A reaper failure at startup must NOT stop the worker from arming its poll
+     * timer (it is caught and logged).
+     */
+    public function testStartStillArmsTimerWhenReaperThrows(): void
+    {
+        $workersProp = new \ReflectionProperty(Worker::class, 'workers');
+        $workersProp->setAccessible(true);
+        /** @var array<int, Worker> $saved */
+        $saved = $workersProp->getValue();
+
+        $stub = new Worker();
+        $workersProp->setValue(null, [spl_object_id($stub) => $stub]);
+        Timer::delAll();
+
+        try {
+            $jobs = $this->createMock(ScanJobRepository::class);
+            $jobs->expects($this->once())
+                ->method('reapStaleJobs')
+                ->willThrowException(new RuntimeException('db down'));
+
+            $worker = new LibraryScanWorker(
+                $jobs,
+                $this->createMock(LibraryManager::class),
+                $this->makeUnusedMatcher(),
+                $this->makeLogger(),
+            );
+
+            // Must not throw despite the reaper error.
+            $worker->start(5);
+
+            $tasksProp = new \ReflectionProperty(Timer::class, 'tasks');
+            $tasksProp->setAccessible(true);
+            /** @var array<int, mixed> $tasks */
+            $tasks = $tasksProp->getValue();
+            $this->assertNotEmpty($tasks, 'poll timer should still be armed');
+        } finally {
+            Timer::delAll();
+            $workersProp->setValue(null, $saved);
+        }
     }
 }

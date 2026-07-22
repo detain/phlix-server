@@ -289,6 +289,32 @@ class ScanJobRepository
     }
 
     /**
+     * Fail every job still marked `running`, stamping the error + `completed_at`.
+     *
+     * The single `count:1` {@see LibraryScanWorker} is the only consumer of this
+     * queue and drains one job at a time, so on a fresh worker start NO job can
+     * legitimately be `running` — any such row is orphaned by a restart/crash of
+     * the process that owned it and would otherwise sit `running` forever (and
+     * keep a UI spinner alive). Call this once at worker startup to reap them.
+     *
+     * @param string $error Failure message stored on each reaped row.
+     *
+     * @return int Number of rows reaped.
+     *
+     * @since 0.35.0
+     */
+    public function reapStaleJobs(string $error): int
+    {
+        $affected = $this->db->query(
+            "UPDATE library_scan_jobs SET status = 'failed', error = ?, completed_at = NOW()"
+            . " WHERE status = 'running'",
+            [$error],
+        );
+
+        return is_int($affected) ? $affected : 0;
+    }
+
+    /**
      * Fetch a single job by id.
      *
      * @param string $jobId Job UUID.

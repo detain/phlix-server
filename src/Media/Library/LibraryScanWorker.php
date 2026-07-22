@@ -292,6 +292,25 @@ class LibraryScanWorker
      */
     public function start(int $pollSeconds): void
     {
+        // Reap orphaned `running` jobs left behind by a previous worker's
+        // restart/crash before we begin draining. This worker is the single
+        // (`count:1`) consumer, so on a fresh start nothing is legitimately
+        // running — any such row would otherwise sit `running` forever and keep
+        // a scan UI spinner alive (cf. the music-scan hang incident).
+        try {
+            $reaped = $this->jobs->reapStaleJobs('Interrupted by server restart');
+            if ($reaped > 0) {
+                $this->logger->info('LibraryScanWorker: reaped stale running jobs at startup', [
+                    'reaped' => $reaped,
+                ]);
+            }
+        } catch (Throwable $e) {
+            // Never let a reaper hiccup stop the worker from draining new jobs.
+            $this->logger->error('LibraryScanWorker: stale-job reaper failed at startup', [
+                'error' => $e->getMessage(),
+            ]);
+        }
+
         Timer::add($pollSeconds, fn(): bool => $this->runOnce());
     }
 }

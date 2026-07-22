@@ -487,4 +487,37 @@ final class ScanJobRepositoryTest extends TestCase
         $repo = new ScanJobRepository($db);
         $this->assertSame([], $repo->getHistoryForLibrary('lib-1'));
     }
+
+    public function testReapStaleJobsFailsAllRunningRowsAndReturnsAffectedCount(): void
+    {
+        $captured = ['sql' => '', 'params' => []];
+        $db = $this->createMock(Connection::class);
+        $db->expects($this->once())
+            ->method('query')
+            ->willReturnCallback(
+                static function (string $sql, ?array $params = null) use (&$captured) {
+                    $captured = ['sql' => $sql, 'params' => $params ?? []];
+                    return 3; // affected rows
+                },
+            );
+
+        $repo = new ScanJobRepository($db);
+        $reaped = $repo->reapStaleJobs('Interrupted by server restart');
+
+        $this->assertSame(3, $reaped);
+        // Targets ONLY running rows, flipping them to failed with the message.
+        $this->assertStringContainsString('UPDATE library_scan_jobs', $captured['sql']);
+        $this->assertStringContainsString("status = 'failed'", $captured['sql']);
+        $this->assertStringContainsString("WHERE status = 'running'", $captured['sql']);
+        $this->assertSame(['Interrupted by server restart'], $captured['params']);
+    }
+
+    public function testReapStaleJobsReturnsZeroWhenDriverResultNotInt(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturn(true); // non-int driver return
+
+        $repo = new ScanJobRepository($db);
+        $this->assertSame(0, $repo->reapStaleJobs('x'));
+    }
 }

@@ -484,7 +484,7 @@ class LibraryManager
 
         // Route music libraries through MusicLibraryManager for tag harvesting
         if ($library->type === 'music') {
-            $this->scanMusicLibrary($libraryId, $library);
+            $this->scanMusicLibrary($libraryId, $library, $onProgress);
             return;
         }
 
@@ -544,22 +544,65 @@ class LibraryManager
     /**
      * Scans a music library using MusicLibraryService for tag harvesting.
      *
-     * @param string $libraryId The library's unique identifier
-     * @param LibraryRow $library The library data
+     * Music scanning uses {@see MusicLibraryScanner} for native (getID3) tag
+     * harvesting rather than the video {@see MediaScanner}. When a progress sink
+     * is supplied we pre-count the audio files across every path (the cheap walk
+     * MusicLibraryService::countFiles() runs, no tag reading) so the scanner's
+     * per-path ticks can be offset into a single library-wide `processed/total`
+     * percentage — matching the video path and the shape the scan-job row expects.
+     *
+     * @param string        $libraryId  The library's unique identifier
+     * @param LibraryRow    $library    The library data
+     * @param callable|null $onProgress Optional `(int $processed, int $total, string $currentPath): void` sink.
      * @return void
      */
-    private function scanMusicLibrary(string $libraryId, LibraryRow $library): void
+    private function scanMusicLibrary(string $libraryId, LibraryRow $library, ?callable $onProgress = null): void
     {
-        // Music scanning is handled by MusicLibraryService which uses
-        // MusicLibraryScanner for ID3/MP4 tag harvesting. This requires
-        // a different scan approach than video libraries.
-        foreach ($library->paths as $path) {
+        $paths = $library->paths;
+
+        if ($onProgress === null) {
+            foreach ($paths as $path) {
+                if (!is_dir($path)) {
+                    $this->logger->warning('Music library path does not exist', ['path' => $path]);
+                    continue;
+                }
+                $this->musicLibraryService->scanDirectory($path);
+            }
+            $this->logger->info('Music library scan complete', ['library_id' => $libraryId]);
+            return;
+        }
+
+        // Pre-count each path once: the sum is the denominator, and each path's
+        // count offsets the running total as we advance from path to path.
+        $counts = [];
+        $total = 0;
+        foreach ($paths as $i => $path) {
+            $count = is_dir($path) ? $this->musicLibraryService->countFiles($path) : 0;
+            $counts[$i] = $count;
+            $total += $count;
+        }
+
+        $base = 0;
+        $onScanProgress = function (
+            int $processedInPath,
+            int $totalInPath,
+            string $currentPath
+        ) use (
+            &$base,
+            $total,
+            $onProgress
+        ): void {
+            unset($totalInPath);
+            $onProgress($base + $processedInPath, $total, $currentPath);
+        };
+
+        foreach ($paths as $i => $path) {
             if (!is_dir($path)) {
                 $this->logger->warning('Music library path does not exist', ['path' => $path]);
                 continue;
             }
-            // Use MusicLibraryService for music scanning
-            $this->musicLibraryService->scanDirectory($path);
+            $this->musicLibraryService->scanDirectory($path, $onScanProgress);
+            $base += $counts[$i];
         }
 
         $this->logger->info('Music library scan complete', ['library_id' => $libraryId]);

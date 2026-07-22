@@ -204,6 +204,23 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   inject a config key. Per-key status table and the reasoning behind both exceptions live in
   `docs/dev/settings-restart-gap.md`, rewritten from "known gap" to reflect the fix.
 
+### Removed
+
+- **`dash_url` dropped from the transcode/status response payloads** (updates.md #11 / S11).
+  `POST /api/v1/media/{id}/transcode` and `GET /api/v1/transcode/{jobId}/status` (via
+  `TranscodeController::start()` / `::status()`), plus both `TranscodeManager::ensureHlsJob()`
+  return arrays (reused-job and fresh-job), previously advertised a
+  `dash_url` → `/dash/{job}/manifest.mpd`. Real DASH is **not** produced by the on-demand
+  pipeline: `ensureHlsJob()` emits a multi-variant HLS `.ts` ladder and never invokes the CMAF
+  DASH muxer (`FfmpegRunner::buildCmafCommand()` / `startCmafTranscode()` exist but are not wired
+  into the on-demand flow), so that manifest never exists on disk and every request to the
+  advertised URL 404'd. The field is now removed — and the `ensureHlsJob()` `@return` docblock
+  narrowed to match — so clients are no longer handed an unresolvable URL. The DASH library
+  (`DashStreamer`, `StreamManager`, and the CMAF muxer path) is left untouched, reserved for real
+  DASH support tracked as **S56-S60** (updates.md #57). Repo-wide grep confirmed no `dash_url`
+  reader remained in `src/`, `tests/`, phlix-ui, or web-ui — no known client depended on the key's
+  presence; tests dropped their `dash_url` assertions in lockstep and added absence guards.
+
 ### Added
 
 - **`enum` / `minimum` / `maximum` are now enforced on `PUT /api/v1/admin/settings`.** The endpoint

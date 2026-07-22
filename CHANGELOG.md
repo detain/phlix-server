@@ -121,6 +121,42 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- **DLNA Start/Stop toggle now genuinely enables/disables the ContentDirectory service**
+  (updates.md #28 / S28). The admin `POST /api/v1/admin/dlna/start` and `/stop` endpoints
+  previously only flipped an in-memory boolean on the single request-worker's `CdsServer` (the SSDP
+  announce), which neither registered the browse routes, reached the other worker processes, nor
+  survived the next reload — the ContentDirectory routes are registered once per worker at boot in
+  `Application::loadCdsRoutes()`, gated on the effective `dlna.cds_enabled` setting. `start()`/
+  `stop()` now **persist** `dlna.cds_enabled` via the shared `SettingsRepository`
+  (`set(..., 'bool')`, the same store the generic admin settings page writes) and schedule a
+  **graceful SIGUSR2 reload** via a new reusable `AdminRestartController::scheduleGracefulReload()`,
+  so every worker re-reads the setting at its next `onWorkerStart` and registers or drops the CDS
+  routes accordingly. Idempotent — `409` when already in the desired state (no write, no reload);
+  `503` when the settings store is unwired; `500` if the persist throws.
+  `GET /api/v1/admin/dlna/status` now reports truthfully: `enabled` (persisted intent, read live
+  from the store), `running` (whether THIS worker is actually serving the routes right now, frozen
+  at its boot), and a new transient `reloadPending` (`enabled !== running`) the SPA can surface as
+  "applying…". The reload is a Workerman one-shot timer + `posix_kill` probe — no blocking I/O,
+  exit, or static request state in the request path. New `AdminDlnaServerControllerTest` (11 tests)
+  and first-ever coverage of `scheduleGracefulReload()` in `AdminRestartControllerTest`.
+
+- **DLNA ContentDirectory SOAP control parsing hardened against DIDL-Lite argument bleed**
+  (updates.md #28 / S28). The live control parser `DlnaContentDirectoryController::parseSoapBody`
+  (the `POST /dlna/content_directory` path) walked the whole document with `XMLReader`, taking the
+  first text value for each localName found at ANY depth — so a same-named element nested inside
+  embedded DIDL-Lite metadata (e.g. `<Filter><ObjectID>injected</ObjectID></Filter>`) could bleed
+  into a top-level argument. A new namespace-aware, XXE-safe `Phlix\Dlna\SoapArgumentExtractor`
+  reads arguments ONLY from the SOAP action element's DIRECT children (XPath `*`, so a wrapper
+  element carrying nested metadata contributes no text and is skipped), parsing with `LIBXML_NONET`
+  and never `LIBXML_NOENT`/`LIBXML_DTDLOAD` so external entities are never substituted.
+  `DlnaServer::parseSoapBody` was de-duplicated onto the same helper (single source of truth, so the
+  two parsers cannot diverge). The legacy `/cds/control` handler
+  (`CdsControlHandler::parseSoapEnvelope`) was already direct-child scoped and is left unchanged.
+  Real Browse/Search envelopes are unaffected; the empty-body `400` and the unknown-action UPnP
+  fault are preserved. New `SoapArgumentExtractorTest` (18 tests) plus a regression test asserting a
+  nested same-named element does not bleed into the extracted arguments (mutation-verified against
+  the old any-descendant walk).
+
 - **CSP `img-src` allowlists the TMDB image CDN so remote poster/backdrop/cast artwork renders**
   (updates.md #1). `SecurityHeaders::contentSecurityPolicy()` previously served artwork loaded
   directly from TMDB only under the default `'self'` policy, so any image not yet cached on our
@@ -220,6 +256,17 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   DASH support tracked as **S56-S60** (updates.md #57). Repo-wide grep confirmed no `dash_url`
   reader remained in `src/`, `tests/`, phlix-ui, or web-ui — no known client depended on the key's
   presence; tests dropped their `dash_url` assertions in lockstep and added absence guards.
+
+- **Dead `Router::dashStreaming()` route removed** (updates.md #28 / S28). The helper wired `/dash/*`
+  to `DashController::getMasterManifest`/`getAdaptationSetManifest`/`getSegment` — methods that do
+  not exist — and had ZERO callers (grep-clean across `src/`, `tests/`, `public/`). It is deleted.
+  The real DASH routes registered in `Application::loadStreamingRoutes()`
+  (`GET /dash/{job}/manifest` → `getManifest`, `GET /dash/{job}/{file}` → `serveFile`) and the
+  `DashStreamer`/`DashController` library are untouched, reserved for real DASH support tracked as
+  **S56-S60** (updates.md #57). An incidental genuinely-dead `$scpdUrls` property + `setupScpdUrls()`
+  in `DlnaServer` (surfaced by the SOAP-parser rewrite; `getScpdXml()` reads the services directly
+  and never the map) was removed in the same step. A `DashRouteRemovalTest` guards that the dead
+  route and phantom controller methods stay gone while the real `getManifest`/`serveFile` remain.
 
 ### Added
 

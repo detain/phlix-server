@@ -20,6 +20,7 @@ use Phlix\Media\Library\StreamTrackShaper;
 use Phlix\Media\Subtitles\Quota\SubtitleProviderQuotaRepository;
 use Phlix\Shared\Subtitle\Exception\QuotaExceeded;
 use Phlix\Shared\Subtitle\SubtitleCandidate;
+use Phlix\Shared\Subtitle\SubtitleFile;
 use Throwable;
 
 /**
@@ -263,7 +264,7 @@ final class SubtitleFetchService
 
         return [
             'status' => self::RESULT_OK,
-            'track' => $this->attachedTrack($itemId, $streamId),
+            'track' => $this->attachedTrack($itemId, $streamId, $file),
         ];
     }
 
@@ -334,18 +335,41 @@ final class SubtitleFetchService
      * exactly the `subtitle_tracks[]` entry the player will later see in
      * playback-info. Falls back to a minimal shape if the row is not found.
      *
-     * @param string $itemId   Media item UUID.
-     * @param string $streamId The attached media_streams row id.
+     * @param string       $itemId   Media item UUID.
+     * @param string       $streamId The attached media_streams row id.
+     * @param SubtitleFile $file     The just-downloaded file (fallback shaping source).
      *
      * @return array<string, mixed>
      */
-    private function attachedTrack(string $itemId, string $streamId): array
+    private function attachedTrack(string $itemId, string $streamId, SubtitleFile $file): array
     {
         $streams = $this->items->getItemStreams($itemId);
         foreach (StreamTrackShaper::subtitleTracks($streams, $itemId) as $track) {
             if (($track['id'] ?? null) === $streamId) {
                 return $track;
             }
+        }
+
+        // Defensive fallback: the row was just inserted but the read-back missed
+        // it (e.g. a commit-visibility/replication race). Shape a synthetic
+        // external row for the SAME stream id through the shaper so the response
+        // is still a COMPLETE, signed-URL-bearing track — otherwise the client
+        // would get a url-less entry, drop it, and show a "added" toast for a
+        // track that never appears. `storage_path` need only be non-empty for
+        // the shaper to treat the row as external (it does not read the file).
+        $synthetic = [[
+            'id' => $streamId,
+            'stream_type' => 'subtitle',
+            'stream_index' => 0,
+            'language' => $file->language,
+            'title' => $file->releaseName,
+            'source' => $file->provider,
+            'codec' => 'webvtt',
+            'storage_path' => 'pending',
+            'hearing_impaired' => $file->hearingImpaired,
+        ]];
+        foreach (StreamTrackShaper::subtitleTracks($synthetic, $itemId) as $track) {
+            return $track;
         }
 
         return ['id' => $streamId];

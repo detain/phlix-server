@@ -255,6 +255,45 @@ final class SubtitleFetchServiceTest extends TestCase
         $this->assertSame(['opensubtitles', null, null], $last['params']);
     }
 
+    /**
+     * Review-finding regression: if the just-inserted row is NOT visible on the
+     * immediate read-back (getItemStreams returns nothing for it), the response
+     * must STILL be a complete, url-bearing track shaped from the downloaded
+     * file — never a url-less `{id}` stub that the client silently drops while
+     * showing a false "added" toast.
+     */
+    public function testDownloadFallsBackToASignedTrackWhenReadBackMisses(): void
+    {
+        $file = new SubtitleFile(
+            language: 'es',
+            format: 'srt',
+            content: "1\n00:00:01,000 --> 00:00:02,000\nHola\n",
+            provider: 'opensubtitles',
+            suggestedFilename: 'x.srt',
+            releaseName: 'Some.Release',
+        );
+        $source = new FakeSubtitleSource('opensubtitles', 0, [], $file);
+
+        $registry = new SubtitleSourceRegistry();
+        $registry->register($source);
+
+        $items = $this->createMock(ItemRepository::class);
+        $items->method('findById')->willReturn(['id' => 'm1', 'path' => '/x.mkv', 'metadata' => []]);
+        $items->method('addExternalSubtitleStream')->willReturn('stream-77');
+        // Read-back MISSES the freshly-inserted row → force the fallback path.
+        $items->method('getItemStreams')->willReturn([]);
+
+        $result = $this->service($registry, $items)
+            ->download('m1', 'opensubtitles', 'dl-1', 'es', 'srt');
+
+        $this->assertSame(SubtitleFetchService::RESULT_OK, $result['status']);
+        $this->assertSame('stream-77', $result['track']['id']);
+        $this->assertSame('es', $result['track']['language']);
+        // The fallback still mints a usable signed URL to the external endpoint.
+        $this->assertIsString($result['track']['url']);
+        $this->assertStringContainsString('/subtitles/external/stream-77', $result['track']['url']);
+    }
+
     public function testDownloadReturnsProviderUnavailableForUnknownProvider(): void
     {
         $items = $this->createMock(ItemRepository::class);

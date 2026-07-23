@@ -34,6 +34,7 @@ use Phlix\Server\Http\Controllers\Admin\DashboardController;
 use Phlix\Server\Http\Controllers\Admin\FsBrowseController;
 use Phlix\Server\Http\Controllers\Admin\LogController;
 use Phlix\Server\Http\Controllers\Admin\WatchHistoryController;
+use Phlix\Server\Http\Controllers\MostWatchedController;
 use Phlix\Server\Http\Controllers\Stats\MetricsController;
 use Phlix\Server\Http\Controllers\Stats\StatsController;
 use Phlix\Stats\StatsCollector;
@@ -88,6 +89,11 @@ final class AdminServicesProvider implements ServiceProviderInterface
             StatsCollector::class    => autowire(),
             StatsController::class   => autowire(),
             MetricsController::class => autowire(),
+
+            // Public "Most Watched" rail (S31). Autowires StatsCollector (above)
+            // + ItemRepository (MediaServicesProvider) — both live in this same
+            // container, so plain autowiring resolves them.
+            MostWatchedController::class => autowire(),
 
             DashboardService::class    => autowire(),
             DashboardController::class => autowire(),

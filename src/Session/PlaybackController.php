@@ -548,6 +548,36 @@ class PlaybackController
     }
 
     /**
+     * Resolve the stored `media_items.type` for a media item (S31).
+     *
+     * Used by {@see dispatchPlaybackStarted()} so playback-stats rows carry the
+     * REAL type (episode/track/photo/…), letting Top Media / Most Watched
+     * aggregate correctly. The value is the raw ENUM stored on the row — NEVER
+     * remapped (`media_items.type` uses `photo`, not `image`, and the 13 members
+     * must pass through verbatim).
+     *
+     * Falls back to `'movie'` when the row is missing or the column is empty —
+     * the SAME default {@see \Phlix\Media\Library\MediaItemShaper::shape()} uses
+     * for an unknown/absent type, so a since-deleted item stays consistent with
+     * the rest of the pipeline rather than inventing a new sentinel.
+     *
+     * @param string $mediaItemId Media item UUID being played.
+     *
+     * @return string The stored media type, or `'movie'` when unresolvable.
+     */
+    private function lookupMediaType(string $mediaItemId): string
+    {
+        $result = $this->db->query(
+            "SELECT type FROM media_items WHERE id = ? LIMIT 1",
+            [$mediaItemId]
+        );
+        $rows = RowMap::listFromMixed($result);
+        $type = $rows[0]['type'] ?? null;
+
+        return is_string($type) && $type !== '' ? $type : 'movie';
+    }
+
+    /**
      * Look up the latest playback_state row for a `(session, media)` pair.
      *
      * @param string $sessionId   Session UUID.
@@ -649,12 +679,16 @@ class PlaybackController
     {
         [$userId, $deviceId] = $this->resolveSessionContext($sessionId);
 
-        // Record stats if collector is available
+        // Record stats if collector is available. Resolve the REAL media type
+        // from media_items so Top Media / Most Watched aggregate by the correct
+        // type (S31) — previously this was hardcoded to 'movie', mislabelling
+        // every episode/track/photo/etc. play. The lookup only runs on the stats
+        // path so the non-stats deployment pays no extra query.
         if ($this->statsCollector !== null && $userId !== '') {
             $eventId = $this->statsCollector->recordPlaybackStart(
                 $userId,
                 $mediaItemId,
-                'movie', // Default type; actual type lookup would require DB query
+                $this->lookupMediaType($mediaItemId),
                 $deviceId
             );
             $key = $sessionId . ':' . $mediaItemId;

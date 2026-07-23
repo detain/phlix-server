@@ -1,0 +1,51 @@
+-- Migration 090: playback_state (session_id, media_item_id) UNIQUE KEY.
+--
+-- This is the SCHEMA half of updates.md #29 (plan step S29). The finish-signal
+-- wiring is the SEPARATE step S30 and is NOT part of this migration.
+--
+-- THE BUG THIS FIXES: `PlaybackController::reportProgress()` and
+-- `StreamManager::persistStreamState()` persist progress with
+--
+--     INSERT INTO playback_state (id, session_id, media_item_id, ...)
+--     VALUES (?, ?, ?, ...)
+--     ON DUPLICATE KEY UPDATE position_ticks = VALUES(position_ticks), ...
+--
+-- whose INTENDED conflict target is the `(session_id, media_item_id)` pair. But
+-- `playback_state` only had the `id` PRIMARY KEY — a fresh random UUID on every
+-- call — so the `ON DUPLICATE KEY` clause could never fire and every ~15s
+-- progress tick INSERTed a brand-new row. That bloats the table and breaks
+-- resume / continue-watching, which read the single "current" row per pair.
+--
+-- Adding `UNIQUE KEY uq_playback_state_session_media (session_id, media_item_id)`
+-- makes the existing upserts update-not-insert — no controller change is needed
+-- because the INSERT column list and ON DUPLICATE KEY UPDATE clause already
+-- target exactly this pair.
+--
+-- WHY THE KEY IS NOT ADDED IN THIS .sql FILE:
+--
+-- Any production DB already holds many duplicate `(session_id, media_item_id)`
+-- rows (that IS the bug). An inline `ADD UNIQUE KEY` on such a table fails with
+-- error 1062 (`Duplicate entry ... for key ...`), and the migration runner
+-- (`Phlix\Common\Database\MigrationRunner`) treats 1062 as a GENUINE error
+-- (unlike duplicate-column / duplicate-key-NAME, which it downgrades to a
+-- replay note). A failed statement leaves the migration UNRECORDED and would be
+-- retried — and keep failing — on every deploy. The duplicates must be merged
+-- FIRST.
+--
+-- So, exactly like migration 072 (`media_items.path_hash`) defers its
+-- `(library_id, path_hash)` unique index to `migrations/cleanup_072.php` after
+-- merging duplicate paths, this migration defers its unique key to a one-time,
+-- BATCHED cleanup script. Run it ONCE post-migration (it is safe to re-run):
+--
+--     php migrations/cleanup_090.php
+--
+-- The script merges duplicate `(session_id, media_item_id)` groups — keeping the
+-- row with the greatest `updated_at` (ties broken by the greatest `id`) — in
+-- bounded batches (never one table-wide DELETE), then adds the unique key. On a
+-- fresh / clean DB it merges nothing and adds the key immediately. See
+-- `Phlix\Session\PlaybackStateDeduper` for the dedupe logic.
+--
+-- This .sql file therefore carries NO executable statement on purpose: it exists
+-- to reserve the migration number, record the decision in the schema timeline /
+-- `schema_migrations` ledger, and point operators at the finalizer. The runner
+-- applies it cleanly (zero statements) and records it.

@@ -807,18 +807,31 @@ try {
         /** @var \Phlix\Common\Logger\StructuredLogger $logger */
         $logger = $container->get('logger.hub');
 
+        // S38/S39: cross-process state store — this relay fork is the SOLE writer
+        // of relay-tunnel.state.json (which the HTTP worker's health/admin
+        // surfaces read to reflect the real tunnel state), and the SOLE READER of
+        // relay-control.json (the operator kill-switch persisted by the admin
+        // relay Enable/Disable controls). Resolved here, before the disabled-gate
+        // below, so both the boot decision and the consumer share one instance.
+        /** @var \Phlix\Hub\RelayStateStore $relayStateStore */
+        $relayStateStore = $container->get(\Phlix\Hub\RelayStateStore::class);
+
         $enrollment = $hubClient->loadEnrollment();
         $serverId = $enrollment !== null ? $enrollment->serverId : '';
 
         // Auto-enable the relay tunnel once the server is paired with a hub
         // (P1): the presence of a stored enrollment is enough — no
-        // PHLIX_RELAY_ENABLED env var required. An explicit
-        // PHLIX_RELAY_DISABLED=1 still wins as an operator kill-switch.
-        $relayDisabled = in_array(
+        // PHLIX_RELAY_ENABLED env var required. An explicit operator kill-switch
+        // still wins: either the PHLIX_RELAY_DISABLED env var OR the persisted
+        // relay-control.json flag written by the admin "Disable" control (S39).
+        // The persisted flag is why the toggle "takes effect on reload" — this
+        // fork re-reads it on every graceful reload.
+        $relayDisabledEnv = in_array(
             strtolower((string) (getenv('PHLIX_RELAY_DISABLED') ?: '')),
             ['1', 'true', 'yes', 'on'],
             true,
         );
+        $relayDisabled = $relayDisabledEnv || $relayStateStore->isRelayDisabled();
         if ($enrollment !== null && !$relayDisabled) {
             $relayConfig = $relayConfig->withAutoEnable($enrollment->hubBaseUrl);
         }
@@ -851,13 +864,9 @@ try {
             }
         }
 
-        // S38: cross-process state store — this relay fork is the SOLE writer of
-        // relay-tunnel.state.json, which the HTTP worker's health/admin surfaces
-        // (S39/S40) read to reflect the real tunnel's state instead of the
-        // never-started container-local copy they hold.
-        /** @var \Phlix\Hub\RelayStateStore $relayStateStore */
-        $relayStateStore = $container->get(\Phlix\Hub\RelayStateStore::class);
-
+        // The relay fork's RelayStateStore (resolved above, before the
+        // disabled-gate) is passed to the consumer so it can persist live tunnel
+        // state to relay-tunnel.state.json for the HTTP worker to read.
         $consumer = new \Phlix\Hub\RelayConsumer(
             $relayConfig,
             $hubClient,

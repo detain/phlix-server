@@ -13,8 +13,7 @@ namespace Phlix\Server\Http\Controllers\Admin;
 
 use Phlix\Hub\HubApplication;
 use Phlix\Hub\HubClient;
-use Phlix\Hub\RelayApplication;
-use Phlix\Hub\RelayConsumer;
+use Phlix\Hub\RelayStateStore;
 use Phlix\Hub\SubdomainClient;
 use Phlix\Network\PortForwardService;
 use Phlix\Server\Http\Request;
@@ -485,34 +484,56 @@ final class AdminHubController
      *
      * GET /api/v1/admin/remote/relay/status
      *
+     * The real tunnel runs in a SEPARATE forked process (`phlix-relay-tunnel`),
+     * which is the sole writer of `relay-tunnel.state.json` (S38). This HTTP
+     * worker reads that file — the honest, cross-process live status — instead
+     * of the never-started container-local relay consumer copy, and without the
+     * blocking process-probe / log-scrape the previous implementation ran in the
+     * event loop (S39).
+     *
      * @param Request              $request The HTTP request (unused).
      * @param array<string, string> $params  Path parameters (unused).
      *
-     * @return Response JSON { connected, active, endpoint, establishedAt }.
+     * @return Response JSON { connected, active, reconnectAttempts, activeSessions,
+     *   lastDisconnectTime, lastConnectError, lastConnectErrorAt, disabled,
+     *   enrolled, updatedAt, endpoint, establishedAt }.
      */
     public function relayStatus(Request $request, array $params): Response
     {
         try {
-            // The relay tunnel runs as a separate Workerman worker process (phlix-relay-tunnel)
-            // which creates its own RelayConsumer directly. The RelayConsumer from our container
-            // is a different instance that was never started. So we check the actual tunnel
-            // worker process state instead of the container instance.
-            $tunnelRunning = $this->isTunnelWorkerRunning();
-            $tunnelActive = false;
-            $lastActivity = null;
+            $state = $this->getRelayStateStore()->readRelayState();
 
-            if ($tunnelRunning) {
-                // Check recent logs for tunnel active status
-                $logState = $this->getTunnelLogState();
-                $tunnelActive = $logState['active'];
-                $lastActivity = $logState['lastActivity'];
-            }
+            // `disabled` reflects what will actually take effect on reload: the
+            // persisted operator kill-switch OR the env var. `enrolled` and the
+            // kill-switch are the REAL levers the UI reframe surfaces.
+            $disabled = $this->relayEnvDisabled() || $this->getRelayStateStore()->isRelayDisabled();
+            $enrolled = $this->getHubEnrollment() !== null;
+
+            $updatedAt = isset($state['updatedAt']) && is_string($state['updatedAt'])
+                ? $state['updatedAt'] : null;
 
             return (new Response())->json([
-                'connected' => $tunnelRunning && $tunnelActive,
-                'active' => $tunnelActive,
+                'connected' => ($state['connected'] ?? false) === true,
+                'active' => ($state['active'] ?? false) === true,
+                'reconnectAttempts' => isset($state['reconnectAttempts']) && is_int($state['reconnectAttempts'])
+                    ? $state['reconnectAttempts'] : 0,
+                'activeSessions' => isset($state['activeSessions']) && is_int($state['activeSessions'])
+                    ? $state['activeSessions'] : 0,
+                'lastDisconnectTime' => isset($state['lastDisconnectTime']) && is_string($state['lastDisconnectTime'])
+                    ? $state['lastDisconnectTime'] : null,
+                'lastConnectError' => isset($state['lastConnectError']) && is_string($state['lastConnectError'])
+                    ? $state['lastConnectError'] : null,
+                'lastConnectErrorAt' => isset($state['lastConnectErrorAt']) && is_string($state['lastConnectErrorAt'])
+                    ? $state['lastConnectErrorAt'] : null,
+                'disabled' => $disabled,
+                'enrolled' => $enrolled,
+                // When the relay fork last wrote state (staleness signal); null
+                // if the fork has never run / never written.
+                'updatedAt' => $updatedAt,
+                // Back-compat keys retained for the current UI; the state file
+                // does not carry them.
                 'endpoint' => null,
-                'establishedAt' => $lastActivity,
+                'establishedAt' => $updatedAt,
             ]);
         } catch (Throwable $e) {
             return (new Response())->status(500)->json([
@@ -523,30 +544,54 @@ final class AdminHubController
     }
 
     /**
-     * Enables the relay tunnel.
+     * Enables the relay tunnel (clears the persisted operator kill-switch).
      *
      * POST /api/v1/admin/remote/relay/enable
+     *
+     * HONEST lever (S39): the real tunnel runs in a separate fork with no live
+     * control channel, so "Enable" clears the persisted `relay-control.json`
+     * kill-switch that the relay fork reads at boot. It takes effect on the next
+     * server reload — reported via `takesEffectOnReload`. This is NOT a fake
+     * `{success:true}` no-op: it persists a real state change and returns the
+     * resolved levers. If `PHLIX_RELAY_DISABLED` is set in the environment it
+     * still wins (this endpoint cannot unset an env var), so `disabled` may stay
+     * `true` even after a successful enable.
      *
      * @param Request              $request The HTTP request (unused).
      * @param array<string, string> $params  Path parameters (unused).
      *
-     * @return Response JSON { success: true }.
+     * @return Response JSON { success, disabled, enrolled, takesEffectOnReload, message }.
      */
     public function relayEnable(Request $request, array $params): Response
     {
         try {
-            $relayApp = $this->getRelayApplication();
-            if ($relayApp === null) {
+            if (!$this->getRelayStateStore()->setRelayDisabled(false)) {
                 return (new Response())->status(500)->json([
                     'success' => false,
-                    'message' => 'Relay not configured.',
+                    'message' => 'Failed to persist relay enable state.',
                 ]);
             }
 
-            $relayApp->ensureStarted();
+            $envDisabled = $this->relayEnvDisabled();
+            $enrolled = $this->getHubEnrollment() !== null;
+
+            if ($envDisabled) {
+                $message = 'Relay kill-switch cleared, but PHLIX_RELAY_DISABLED is set in the '
+                    . 'environment; the tunnel stays disabled until that is removed and the '
+                    . 'server reloads.';
+            } elseif (!$enrolled) {
+                $message = 'Relay enabled, but this server is not paired with a hub; pair with a '
+                    . 'hub for the tunnel to connect on the next reload.';
+            } else {
+                $message = 'Relay enabled; the tunnel will (re)connect on the next server reload.';
+            }
 
             return (new Response())->json([
                 'success' => true,
+                'disabled' => $envDisabled,
+                'enrolled' => $enrolled,
+                'takesEffectOnReload' => true,
+                'message' => $message,
             ]);
         } catch (Throwable $e) {
             return (new Response())->status(500)->json([
@@ -557,32 +602,37 @@ final class AdminHubController
     }
 
     /**
-     * Disables the relay tunnel.
+     * Disables the relay tunnel (persists the operator kill-switch).
      *
      * POST /api/v1/admin/remote/relay/disable
+     *
+     * HONEST lever (S39): persists `disabled:true` to `relay-control.json`, which
+     * the relay fork honors at boot IN ADDITION to `PHLIX_RELAY_DISABLED`. It
+     * does NOT tear down the already-running fork in-process (cross-process, no
+     * live channel), so it takes effect on the next server reload — reported via
+     * `takesEffectOnReload`. Stops the previous fake `{success:true}` no-op.
      *
      * @param Request              $request The HTTP request (unused).
      * @param array<string, string> $params  Path parameters (unused).
      *
-     * @return Response JSON { success: true }.
+     * @return Response JSON { success, disabled, enrolled, takesEffectOnReload, message }.
      */
     public function relayDisable(Request $request, array $params): Response
     {
         try {
-            $relayApp = $this->getRelayApplication();
-            if ($relayApp === null) {
+            if (!$this->getRelayStateStore()->setRelayDisabled(true)) {
                 return (new Response())->status(500)->json([
                     'success' => false,
-                    'message' => 'Relay not configured.',
+                    'message' => 'Failed to persist relay disable state.',
                 ]);
-            }
-
-            if ($relayApp->isRunning()) {
-                $relayApp->stop();
             }
 
             return (new Response())->json([
                 'success' => true,
+                'disabled' => true,
+                'enrolled' => $this->getHubEnrollment() !== null,
+                'takesEffectOnReload' => true,
+                'message' => 'Relay disabled; the tunnel will disconnect on the next server reload.',
             ]);
         } catch (Throwable $e) {
             return (new Response())->status(500)->json([
@@ -593,45 +643,64 @@ final class AdminHubController
     }
 
     /**
-     * Pings the relay tunnel.
+     * Pings the relay tunnel (reports persisted connection state + latency).
      *
      * POST /api/v1/admin/remote/relay/ping
+     *
+     * HONEST report (S39): the old implementation timed `isConnected()` on the
+     * never-started container-local `RelayConsumer` — a meaningless boolean-getter
+     * duration, not a network round-trip. This reads the relay fork's persisted
+     * connection state (`relay-tunnel.state.json`) and the last persisted hub
+     * round-trip latency (`hub-heartbeat.state.json`, written by the heartbeat
+     * fork in S40). `latencyMs` is `null` until a heartbeat has been recorded —
+     * honest "no measurement yet" rather than a fabricated timing.
      *
      * @param Request              $request The HTTP request (unused).
      * @param array<string, string> $params  Path parameters (unused).
      *
-     * @return Response JSON { success: true, latencyMs }.
+     * @return Response JSON { success, connected, active, latencyMs,
+     *   lastHeartbeatAt, latencySource } or 409 when the tunnel is not connected.
      */
     public function relayPing(Request $request, array $params): Response
     {
         try {
-            $relayConsumer = $this->getRelayConsumer();
+            $store = $this->getRelayStateStore();
+            $relayState = $store->readRelayState();
 
-            if ($relayConsumer === null) {
-                return (new Response())->status(500)->json([
-                    'success' => false,
-                    'message' => 'Relay not configured.',
-                ]);
-            }
-
-            // Measure time for a round-trip through the relay
-            $start = hrtime(true);
-            $connected = $relayConsumer->isConnected();
-            $end = hrtime(true);
+            $connected = ($relayState['connected'] ?? false) === true;
+            $active = ($relayState['active'] ?? false) === true;
 
             if (!$connected) {
                 return (new Response())->status(409)->json([
                     'success' => false,
+                    'connected' => false,
+                    'active' => $active,
                     'message' => 'Relay not connected.',
+                    'lastConnectError' =>
+                        isset($relayState['lastConnectError']) && is_string($relayState['lastConnectError'])
+                            ? $relayState['lastConnectError'] : null,
+                    'lastConnectErrorAt' =>
+                        isset($relayState['lastConnectErrorAt']) && is_string($relayState['lastConnectErrorAt'])
+                            ? $relayState['lastConnectErrorAt'] : null,
                 ]);
             }
 
-            $latencyNs = $end - $start;
-            $latencyMs = (int) ($latencyNs / 1_000_000);
+            $heartbeat = $store->readHeartbeatState();
+            $latencyMs = isset($heartbeat['lastLatencyMs']) && is_int($heartbeat['lastLatencyMs'])
+                ? $heartbeat['lastLatencyMs'] : null;
+            $lastHeartbeatAt =
+                isset($heartbeat['lastSuccessfulHeartbeat']) && is_string($heartbeat['lastSuccessfulHeartbeat'])
+                    ? $heartbeat['lastSuccessfulHeartbeat'] : null;
 
             return (new Response())->json([
                 'success' => true,
+                'connected' => true,
+                'active' => $active,
                 'latencyMs' => $latencyMs,
+                'lastHeartbeatAt' => $lastHeartbeatAt,
+                // Signals the value is the last persisted measurement, not a
+                // live probe fired by this request.
+                'latencySource' => 'persisted',
             ]);
         } catch (Throwable $e) {
             return (new Response())->status(500)->json([
@@ -888,41 +957,36 @@ final class AdminHubController
     }
 
     /**
-     * Returns a RelayApplication instance from the container or null.
+     * Returns a RelayStateStore bound to this controller's config dir.
      *
-     * @return RelayApplication|null The RelayApplication instance or null.
+     * The relay tunnel + heartbeat forks write their live state to single-writer
+     * JSON files under `$configDir`; this HTTP-worker controller reads them (and
+     * writes the operator kill-switch to `relay-control.json`). Constructed from
+     * `$this->configDir` for the same reason {@see getHubEnrollment()} reads the
+     * enrollment file directly — so seeded-config unit tests need no container.
+     *
+     * @return RelayStateStore The state store for the relay control surface.
      */
-    private function getRelayApplication(): ?RelayApplication
+    private function getRelayStateStore(): RelayStateStore
     {
-        if ($this->container === null) {
-            return null;
-        }
-
-        try {
-            /** @var RelayApplication */
-            return $this->container->get(RelayApplication::class);
-        } catch (Throwable) {
-            return null;
-        }
+        return new RelayStateStore($this->configDir);
     }
 
     /**
-     * Returns a RelayConsumer instance from the container or null.
+     * Whether the `PHLIX_RELAY_DISABLED` env kill-switch is set.
      *
-     * @return RelayConsumer|null The RelayConsumer instance or null.
+     * The env var is an operator lever this endpoint cannot unset; it wins over
+     * the persisted `relay-control.json` flag when reporting effective state.
+     *
+     * @return bool `true` when the env var disables the relay tunnel.
      */
-    private function getRelayConsumer(): ?RelayConsumer
+    private function relayEnvDisabled(): bool
     {
-        if ($this->container === null) {
-            return null;
+        $value = getenv('PHLIX_RELAY_DISABLED');
+        if ($value === false) {
+            return false;
         }
-
-        try {
-            /** @var RelayConsumer */
-            return $this->container->get(RelayConsumer::class);
-        } catch (Throwable) {
-            return null;
-        }
+        return in_array(strtolower($value), ['1', 'true', 'yes', 'on'], true);
     }
 
     /**
@@ -965,67 +1029,5 @@ final class AdminHubController
         // Fallback: construct HubClient directly to get status
         $hubClient = $this->getHubClient();
         return $hubClient->getStatus();
-    }
-
-    /**
-     * Check if the relay tunnel worker process is running.
-     */
-    private function isTunnelWorkerRunning(): bool
-    {
-        // Check for the tunnel worker process
-        $output = [];
-        exec('pgrep -f "phlix-relay-tunnel" 2>/dev/null', $output);
-        return count($output) > 0;
-    }
-
-    /**
-     * Get tunnel connection state from recent log entries.
-     *
-     * @return array{active: bool, lastActivity: ?string}
-     */
-    private function getTunnelLogState(): array
-    {
-        $logFile = defined('PHLIX_LOG_DIR') ? PHLIX_LOG_DIR : __DIR__ . '/../../../../.logs';
-        $logFile = $logFile . '/events-' . date('Y-m-d') . '.log';
-
-        if (!file_exists($logFile)) {
-            return ['active' => false, 'lastActivity' => null];
-        }
-
-        // Read last 50 lines and look for tunnel active status
-        $fp = fopen($logFile, 'r');
-        if ($fp === false) {
-            return ['active' => false, 'lastActivity' => null];
-        }
-
-        $lines = [];
-        while (($line = fgets($fp)) !== false) {
-            $lines[] = $line;
-            if (count($lines) > 50) {
-                array_shift($lines);
-            }
-        }
-        fclose($fp);
-
-        $active = false;
-        $lastActivity = null;
-
-        foreach (array_reverse($lines) as $line) {
-            if (strpos($line, 'RelayConsumer: tunnel active') !== false) {
-                $active = true;
-                // Extract timestamp from log line
-                if (preg_match('/^\[([^\]]+)\]/', $line, $matches)) {
-                    $lastActivity = $matches[1];
-                }
-                break;
-            }
-            if (strpos($line, 'RelayConsumer connected; sending HELLO') !== false && $lastActivity === null) {
-                if (preg_match('/^\[([^\]]+)\]/', $line, $matches)) {
-                    $lastActivity = $matches[1];
-                }
-            }
-        }
-
-        return ['active' => $active, 'lastActivity' => $lastActivity];
     }
 }

@@ -131,6 +131,7 @@ final class HubApplication
      *     lastHeartbeatAttempt: string|null,
      *     lastSuccessfulHeartbeat: string|null,
      *     consecutiveFailures: int,
+     *     lastLatencyMs: int|null,
      *     enrollmentExpiresAt: string|null,
      *     isEnrolled: bool
      * }

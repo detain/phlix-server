@@ -11,13 +11,10 @@ declare(strict_types=1);
 
 namespace Phlix\Server\Http\Controllers\Admin;
 
-use Phlix\Common\Version;
 use Phlix\Hub\HubClient;
-use Phlix\Hub\RelayConsumer;
-use Phlix\Hub\SubdomainClient;
+use Phlix\Hub\RelayStateStore;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
-use Phlix\Shared\Hub\HeartbeatDto;
 use Psr\Container\ContainerInterface;
 use Throwable;
 
@@ -64,6 +61,14 @@ final class HealthController
      *
      * GET /api/v1/health/relay
      *
+     * The relay tunnel and hub heartbeat run in SEPARATE forked processes
+     * (`phlix-relay-tunnel`, `phlix-hub-heartbeat`) with no shared memory, so
+     * this HTTP-worker endpoint reads the cross-process state files those forks
+     * write (`relay-tunnel.state.json`, `hub-heartbeat.state.json`) via
+     * {@see RelayStateStore} — NOT a never-started, container-local
+     * `RelayConsumer`/`HubClient` copy (which always reported offline/0/null).
+     * Enrollment presence/expiry stay cheap file reads via {@see HubClient}.
+     *
      * @param Request              $request The HTTP request (unused).
      * @param array<string, string> $params  Path parameters (unused).
      *
@@ -73,11 +78,14 @@ final class HealthController
      *         active: bool,
      *         reconnectAttempts: int,
      *         lastDisconnectTime: string|null,
-     *         activeSessions: int
+     *         activeSessions: int,
+     *         lastConnectError: string|null,
+     *         lastConnectErrorAt: string|null
      *     },
      *     hub: {
      *         lastSuccessfulHeartbeat: string|null,
      *         consecutiveFailures: int,
+     *         lastLatencyMs: int|null,
      *         isEnrolled: bool,
      *         enrollmentExpiresAt: string|null
      *     }
@@ -86,34 +94,31 @@ final class HealthController
     public function relayHealth(Request $request, array $params): Response
     {
         try {
-            $relayConsumer = $this->getRelayConsumer();
-            $heartbeatStatus = $this->getHeartbeatStatus();
+            $store = $this->getStateStore();
+            $relayState = $store->readRelayState();
+            $heartbeatState = $store->readHeartbeatState();
+            $hubClient = $this->getHubClient();
 
-            if ($relayConsumer !== null) {
-                $relay = [
-                    'connected' => $relayConsumer->isConnected(),
-                    'active' => $relayConsumer->isActive(),
-                    'reconnectAttempts' => $relayConsumer->getReconnectAttempts(),
-                    'lastDisconnectTime' => $relayConsumer->getLastDisconnectTime(),
-                    'activeSessions' => $relayConsumer->getActiveSessionCount(),
-                ];
-            } else {
-                $relay = [
-                    'connected' => false,
-                    'active' => false,
-                    'reconnectAttempts' => 0,
-                    'lastDisconnectTime' => null,
-                    'activeSessions' => 0,
-                ];
-            }
+            $relay = [
+                'connected' => (bool) ($relayState['connected'] ?? false),
+                'active' => (bool) ($relayState['active'] ?? false),
+                'reconnectAttempts' => $this->intOrZero($relayState['reconnectAttempts'] ?? null),
+                'lastDisconnectTime' => $this->nullableString($relayState['lastDisconnectTime'] ?? null),
+                'activeSessions' => $this->intOrZero($relayState['activeSessions'] ?? null),
+                'lastConnectError' => $this->nullableString($relayState['lastConnectError'] ?? null),
+                'lastConnectErrorAt' => $this->nullableString($relayState['lastConnectErrorAt'] ?? null),
+            ];
+
+            $lastSuccess = $this->nullableString($heartbeatState['lastSuccessfulHeartbeat'] ?? null);
 
             return (new Response())->json([
                 'relay' => $relay,
                 'hub' => [
-                    'lastSuccessfulHeartbeat' => $heartbeatStatus['lastSuccessfulHeartbeat'],
-                    'consecutiveFailures' => $heartbeatStatus['consecutiveFailures'],
-                    'isEnrolled' => $heartbeatStatus['isEnrolled'],
-                    'enrollmentExpiresAt' => $heartbeatStatus['enrollmentExpiresAt'],
+                    'lastSuccessfulHeartbeat' => $lastSuccess,
+                    'consecutiveFailures' => $this->intOrZero($heartbeatState['consecutiveFailures'] ?? null),
+                    'lastLatencyMs' => $this->nullableInt($heartbeatState['lastLatencyMs'] ?? null),
+                    'isEnrolled' => $hubClient->loadEnrollment() !== null,
+                    'enrollmentExpiresAt' => $hubClient->getEnrollmentExpiry()?->format('c'),
                 ],
             ]);
         } catch (Throwable $e) {
@@ -129,21 +134,33 @@ final class HealthController
     // ─────────────────────────────────────────────────────────────────────────
 
     /**
-     * Measures network latency to the hub heartbeat endpoint.
+     * Reports hub network health from PERSISTED heartbeat state (cheap probe).
      *
      * GET /api/v1/health/network
+     *
+     * This endpoint is polled continuously by the admin UI's network-health
+     * indicator. It MUST NOT fire an outbound heartbeat: the previous
+     * implementation POSTed a REAL `/api/v1/servers/{id}/heartbeat` on every
+     * call, mutating hub-side state and hammering the hub as the poller ran.
+     * Instead it reads the latency/health snapshot the `phlix-hub-heartbeat`
+     * fork already persists each tick to `hub-heartbeat.state.json`
+     * ({@see HubClient::performHeartbeatTick()}). No blocking I/O, no side
+     * effects — enrollment presence is a cheap file read, everything else a
+     * best-effort read of the state store.
      *
      * @param Request              $request The HTTP request (unused).
      * @param array<string, string> $params  Path parameters (unused).
      *
      * @return Response JSON {
-     *     latencyMs: int,
+     *     latencyMs: int|null,
      *     status: 'healthy'|'degraded'|'offline',
-     *     measuredAt: string
+     *     measuredAt: string,
+     *     error?: string
      * }.
      *
-     * Status is 'healthy' when latency < 100ms, 'degraded' when 100-500ms,
-     * and 'offline' when the request fails or latency > 500ms.
+     * Status is 'healthy' when the last heartbeat's latency < 100ms, 'degraded'
+     * at 100-500ms, and 'offline' when not enrolled, no heartbeat has yet
+     * succeeded, the heartbeat is currently failing, or latency > 500ms.
      */
     public function networkHealth(Request $request, array $params): Response
     {
@@ -160,62 +177,37 @@ final class HealthController
                 ]);
             }
 
-            // Measure round-trip time to the hub heartbeat endpoint
-            $start = hrtime(true);
+            $heartbeatState = $this->getStateStore()->readHeartbeatState();
 
-            // Create a temporary HTTP client pointed at the hub
-            $tempClient = new \Phlix\Hub\HttpClient($enrollment->hubBaseUrl, $enrollment->enrollmentJwt);
+            $latencyMs = $this->nullableInt($heartbeatState['lastLatencyMs'] ?? null);
+            $lastSuccess = $this->nullableString($heartbeatState['lastSuccessfulHeartbeat'] ?? null);
+            $consecutiveFailures = $this->intOrZero($heartbeatState['consecutiveFailures'] ?? null);
+            $measuredAt = $this->nullableString($heartbeatState['updatedAt'] ?? null) ?? date('c');
 
-            try {
-                // Build from HeartbeatDto so the wire payload uses the camelCase
-                // keys the hub parses with HeartbeatDto::fromPayload();
-                $requestTimeStart = $_SERVER['REQUEST_TIME_START'] ?? null;
-                $uptimeStart = is_int($requestTimeStart) ? $requestTimeStart : time();
-                $payload = (new HeartbeatDto(
-                    serverId: $enrollment->serverId,
-                    version: Version::STRING,
-                    timestamp: time(),
-                    uptimeSeconds: time() - $uptimeStart,
-                    activeSessions: 0,
-                    activeTranscodes: 0,
-                    hostnameCandidates: [],
-                    libraries: [],
-                ))->toPayload();
-                $response = $tempClient->post("/api/v1/servers/{$enrollment->serverId}/heartbeat", $payload);
-                $end = hrtime(true);
-
-                if (!$response->isSuccess()) {
-                    return (new Response())->json([
-                        'latencyMs' => null,
-                        'status' => 'offline',
-                        'measuredAt' => date('c'),
-                        'error' => 'Heartbeat failed: ' . $response->getErrorCode(),
-                    ]);
-                }
-
-                $latencyNs = $end - $start;
-                $latencyMs = (int) (($latencyNs / 1_000_000) + 0.5); // Round to nearest ms
-
-                // Determine status based on latency thresholds
-                $status = match (true) {
-                    $latencyMs < 100 => 'healthy',
-                    $latencyMs <= 500 => 'degraded',
-                    default => 'offline',
-                };
-
+            // Offline when the fork has never recorded a successful heartbeat,
+            // the heartbeat is currently failing, or there is no latency sample.
+            if ($lastSuccess === null || $consecutiveFailures > 0 || $latencyMs === null) {
                 return (new Response())->json([
                     'latencyMs' => $latencyMs,
-                    'status' => $status,
-                    'measuredAt' => date('c'),
-                ]);
-            } catch (Throwable $e) {
-                return (new Response())->json([
-                    'latencyMs' => null,
                     'status' => 'offline',
-                    'measuredAt' => date('c'),
-                    'error' => $e->getMessage(),
+                    'measuredAt' => $measuredAt,
+                    'error' => $lastSuccess === null
+                        ? 'No successful heartbeat recorded yet'
+                        : 'Hub heartbeat failing',
                 ]);
             }
+
+            $status = match (true) {
+                $latencyMs < 100 => 'healthy',
+                $latencyMs <= 500 => 'degraded',
+                default => 'offline',
+            };
+
+            return (new Response())->json([
+                'latencyMs' => $latencyMs,
+                'status' => $status,
+                'measuredAt' => $measuredAt,
+            ]);
         } catch (Throwable $e) {
             return (new Response())->status(500)->json([
                 'success' => false,
@@ -254,38 +246,53 @@ final class HealthController
     }
 
     /**
-     * Returns a RelayConsumer instance from the container or null.
+     * Returns the cross-process relay/heartbeat state store.
      *
-     * @return RelayConsumer|null The RelayConsumer instance or null.
+     * Bound to this controller's config dir (the same directory the relay +
+     * heartbeat forks write their single-writer state files to, and where
+     * `hub-enrollment.json` lives). Constructed directly — like
+     * {@see AdminHubController} — so seeded-config unit tests need no container.
+     *
+     * @return RelayStateStore The state store the forks write and this endpoint reads.
      */
-    private function getRelayConsumer(): ?RelayConsumer
+    private function getStateStore(): RelayStateStore
     {
-        if ($this->container === null) {
-            return null;
-        }
-
-        try {
-            /** @var RelayConsumer */
-            return $this->container->get(RelayConsumer::class);
-        } catch (Throwable) {
-            return null;
-        }
+        return new RelayStateStore($this->configDir);
     }
 
     /**
-     * Returns the heartbeat status from HubClient.
+     * Coerces a state-file value to a non-empty string, or null.
      *
-     * @return array{
-     *     lastHeartbeatAttempt: string|null,
-     *     lastSuccessfulHeartbeat: string|null,
-     *     consecutiveFailures: int,
-     *     enrollmentExpiresAt: string|null,
-     *     isEnrolled: bool
-     * }
+     * @param mixed $value Raw value read from the (untyped) state JSON.
+     *
+     * @return string|null The string when non-empty, otherwise null.
      */
-    private function getHeartbeatStatus(): array
+    private function nullableString(mixed $value): ?string
     {
-        $hubClient = $this->getHubClient();
-        return $hubClient->getStatus();
+        return (is_string($value) && $value !== '') ? $value : null;
+    }
+
+    /**
+     * Coerces a state-file value to an int, or null when absent/non-numeric.
+     *
+     * @param mixed $value Raw value read from the (untyped) state JSON.
+     *
+     * @return int|null The int value, or null when the value is missing/null.
+     */
+    private function nullableInt(mixed $value): ?int
+    {
+        return is_numeric($value) ? (int) $value : null;
+    }
+
+    /**
+     * Coerces a state-file value to an int, defaulting to 0 when non-numeric.
+     *
+     * @param mixed $value Raw value read from the (untyped) state JSON.
+     *
+     * @return int The int value, or 0 when the value is missing/non-numeric.
+     */
+    private function intOrZero(mixed $value): int
+    {
+        return is_numeric($value) ? (int) $value : 0;
     }
 }

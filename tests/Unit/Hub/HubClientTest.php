@@ -14,6 +14,7 @@ use Phlix\Hub\HubClientException;
 use Phlix\Hub\HttpClient;
 use Phlix\Hub\HttpClientInterface;
 use Phlix\Hub\HttpResponse;
+use Phlix\Hub\RelayStateStore;
 use Phlix\Hub\StoredEnrollment;
 use Phlix\Common\Logger\StructuredLogger;
 
@@ -252,6 +253,125 @@ class HubClientTest extends TestCase
         $this->assertEquals('https://hub.example.com/.well-known/jwks.json', $result->hubJwksUrl);
         $this->assertEquals('server-uuid', $result->serverId);
         $this->assertEquals('https://hub.example.com', $result->hubBaseUrl);
+    }
+
+    /**
+     * Invokes the private per-tick heartbeat routine (armed by the timer in the
+     * `phlix-hub-heartbeat` fork) without needing a live Workerman event loop.
+     */
+    private function invokeHeartbeatTick(HubClient $client): void
+    {
+        $method = new \ReflectionMethod($client, 'performHeartbeatTick');
+        $method->setAccessible(true);
+        $method->invoke($client);
+    }
+
+    public function test_heartbeat_tick_persists_success_state_to_hub_heartbeat_file(): void
+    {
+        // S40: the heartbeat fork writes its live state to hub-heartbeat.state.json
+        // so the HTTP-worker health endpoints can read it cross-process.
+        $keyManager = new Ed25519KeyManager($this->keyPath);
+        $httpClient = $this->createMock(HttpClientInterface::class);
+        $logger = new StructuredLogger('hub', []);
+        $stateStore = new RelayStateStore($this->tmpDir);
+
+        $client = new HubClient(
+            $keyManager,
+            $httpClient,
+            $logger,
+            $this->tmpDir,
+            '0.11.0',
+            null,
+            '',
+            null,
+            518400,
+            $stateStore,
+        );
+        $client->storeEnrollment(
+            'jwt-token',
+            'https://hub.example.com/.well-known/jwks.json',
+            'server-uuid',
+            'https://hub.example.com',
+        );
+        $httpClient->method('post')->willReturn(new HttpResponse(200, [], []));
+
+        $this->invokeHeartbeatTick($client);
+
+        $state = $stateStore->readHeartbeatState();
+        $this->assertArrayHasKey('lastHeartbeatAttempt', $state);
+        $this->assertArrayHasKey('lastSuccessfulHeartbeat', $state);
+        $this->assertArrayHasKey('consecutiveFailures', $state);
+        $this->assertArrayHasKey('lastLatencyMs', $state);
+        $this->assertArrayHasKey('updatedAt', $state);
+
+        $this->assertSame(0, $state['consecutiveFailures']);
+        $this->assertNotNull($state['lastSuccessfulHeartbeat']);
+        $this->assertNotNull($state['lastHeartbeatAttempt']);
+        $this->assertIsInt($state['lastLatencyMs']);
+        $this->assertGreaterThanOrEqual(0, $state['lastLatencyMs']);
+    }
+
+    public function test_heartbeat_tick_persists_failure_state_to_hub_heartbeat_file(): void
+    {
+        $keyManager = new Ed25519KeyManager($this->keyPath);
+        $httpClient = $this->createMock(HttpClientInterface::class);
+        $logger = new StructuredLogger('hub', []);
+        $stateStore = new RelayStateStore($this->tmpDir);
+
+        $client = new HubClient(
+            $keyManager,
+            $httpClient,
+            $logger,
+            $this->tmpDir,
+            '0.11.0',
+            null,
+            '',
+            null,
+            518400,
+            $stateStore,
+        );
+        $client->storeEnrollment(
+            'jwt-token',
+            'https://hub.example.com/.well-known/jwks.json',
+            'server-uuid',
+            'https://hub.example.com',
+        );
+        // A failing heartbeat (500) increments the failure counter and clears latency.
+        $httpClient->method('post')->willReturn(new HttpResponse(500, [], []));
+
+        $this->invokeHeartbeatTick($client);
+
+        $state = $stateStore->readHeartbeatState();
+        $this->assertSame(1, $state['consecutiveFailures']);
+        $this->assertNull($state['lastSuccessfulHeartbeat']);
+        $this->assertNull($state['lastLatencyMs']);
+        $this->assertNotNull($state['lastHeartbeatAttempt']);
+    }
+
+    public function test_heartbeat_tick_without_state_store_is_a_noop_writer(): void
+    {
+        // No RelayStateStore injected → the writer must be a no-op, and the tick
+        // itself must still run without throwing.
+        $keyManager = new Ed25519KeyManager($this->keyPath);
+        $httpClient = $this->createMock(HttpClientInterface::class);
+        $logger = new StructuredLogger('hub', []);
+
+        $client = new HubClient($keyManager, $httpClient, $logger, $this->tmpDir);
+        $client->storeEnrollment(
+            'jwt-token',
+            'https://hub.example.com/.well-known/jwks.json',
+            'server-uuid',
+            'https://hub.example.com',
+        );
+        $httpClient->method('post')->willReturn(new HttpResponse(200, [], []));
+
+        $this->invokeHeartbeatTick($client);
+
+        // No file was written.
+        $this->assertSame([], (new RelayStateStore($this->tmpDir))->readHeartbeatState());
+        // getStatus() reflects the successful tick in-memory.
+        $this->assertSame(0, $client->getStatus()['consecutiveFailures']);
+        $this->assertIsInt($client->getStatus()['lastLatencyMs']);
     }
 
     public function test_sendHeartbeat_success(): void

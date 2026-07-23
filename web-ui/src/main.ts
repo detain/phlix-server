@@ -32,10 +32,13 @@ const app = createPhlixApp({
         // Anime, …), fetched from /api/v1/libraries — so each library is reachable
         // straight from the nav, matching the per-library Browse sections.
         { id: 'browse', label: 'Browse', to: '/app', libraryLinks: true },
-        { id: 'music', label: 'Music', to: '/app/music' },
-        { id: 'books', label: 'Books', to: '/app/books' },
-        { id: 'audiobooks', label: 'Audiobooks', to: '/app/audiobooks' },
-        { id: 'photos', label: 'Photos', to: '/app/photo/albums' },
+        // `requiresLibraryType` hides each media-type entry unless a library of
+        // that server `type` (singular DB ENUM value) exists — fail-closed while
+        // the library list is still loading. Filtering lives in @phlix/ui (S25).
+        { id: 'music', label: 'Music', to: '/app/music', requiresLibraryType: 'music' },
+        { id: 'books', label: 'Books', to: '/app/books', requiresLibraryType: 'book' },
+        { id: 'audiobooks', label: 'Audiobooks', to: '/app/audiobooks', requiresLibraryType: 'audiobook' },
+        { id: 'photos', label: 'Photos', to: '/app/photo/albums', requiresLibraryType: 'photo' },
         { id: 'search', label: 'Search', to: '/app/search' },
         { id: 'settings', label: 'Settings', to: '/app/settings' },
         { id: 'admin', label: 'Admin', to: '/app/admin/dashboard', requiresAdmin: true },

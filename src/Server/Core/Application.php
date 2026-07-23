@@ -702,6 +702,32 @@ class Application
             }
         }
 
+        // Most Watched rail (S31) — GLOBAL "trending" (most-watched across the
+        // WHOLE server), fed by StatsCollector::getTopMedia(). Registered on THIS
+        // shared router (the same one the /api/v1/media/* and session routes sit
+        // on) so the Workerman HttpHandler path serves it exactly like its
+        // siblings — and, being a literal segment tried before WebPortalRouter's
+        // `/api/v1/media/{id}`, it is never swallowed as an item id. Auth-gated
+        // with AuthMiddleware to match the audience of the other home-rail media
+        // endpoints (GET /api/v1/media et al. all require a signed-in user).
+        if ($this->container !== null) {
+            try {
+                /** @var \Phlix\Server\Http\Controllers\MostWatchedController $mostWatchedController */
+                $mostWatchedController = $this->container->get(
+                    \Phlix\Server\Http\Controllers\MostWatchedController::class
+                );
+                $this->router->group(
+                    '',
+                    function (Router $r) use ($mostWatchedController): void {
+                        $r->get('/api/v1/media/most-watched', [$mostWatchedController, 'mostWatched']);
+                    },
+                    [new \Phlix\Server\Http\Middleware\AuthMiddleware()]
+                );
+            } catch (\Throwable) {
+                // Controller unavailable — route not registered
+            }
+        }
+
         // WebAuthn / Passkey endpoints
         $webauthn = $this->getWebAuthnController();
         $this->router->post('/api/v1/auth/webauthn/register/options', [$webauthn, 'startRegistration']);

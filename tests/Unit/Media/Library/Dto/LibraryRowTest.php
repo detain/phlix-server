@@ -274,4 +274,103 @@ class LibraryRowTest extends TestCase
             $imageTypes['enabled']
         );
     }
+
+    /**
+     * S33: an ABSENT autoCollections flag defaults to enabled (true) — the
+     * backward-compatible default that preserves today's unconditional
+     * auto-collection generation for un-migrated libraries.
+     */
+    public function testAutoCollectionsEnabledDefaultsTrueWhenFlagAbsent(): void
+    {
+        $row = LibraryRow::fromRow([
+            'id' => 'lib-1',
+            'type' => 'movie',
+            'options' => '{"scan_interval":3600}',
+        ]);
+
+        $this->assertTrue($row->autoCollectionsEnabled());
+    }
+
+    /**
+     * S33: an explicit stored `{"autoCollections":{"enabled":false}}` disables
+     * generation.
+     */
+    public function testAutoCollectionsEnabledReadsExplicitFalse(): void
+    {
+        $row = LibraryRow::fromRow([
+            'id' => 'lib-1',
+            'type' => 'movie',
+            'options' => '{"autoCollections":{"enabled":false}}',
+        ]);
+
+        $this->assertFalse($row->autoCollectionsEnabled());
+    }
+
+    /**
+     * S33: an explicit stored `{"enabled":true}` reads as enabled, and a range of
+     * truthy encodings ("1"/"true"/1) all coerce to true.
+     *
+     * @dataProvider truthyAutoCollectionsProvider
+     */
+    public function testAutoCollectionsEnabledReadsTruthyValues(mixed $value): void
+    {
+        $row = LibraryRow::fromRow([
+            'id' => 'lib-1',
+            'type' => 'movie',
+            'options' => ['autoCollections' => ['enabled' => $value]],
+        ]);
+
+        $this->assertTrue($row->autoCollectionsEnabled());
+    }
+
+    /**
+     * @return array<string, array{mixed}>
+     */
+    public static function truthyAutoCollectionsProvider(): array
+    {
+        return [
+            'bool true' => [true],
+            'int 1' => [1],
+            'string 1' => ['1'],
+            'string true' => ['true'],
+            'string on' => ['on'],
+        ];
+    }
+
+    /**
+     * S33: a malformed autoCollections block (not a `{enabled:...}` map) falls back
+     * to the enabled default rather than misreading as disabled.
+     */
+    public function testAutoCollectionsEnabledDefaultsTrueForMalformedBlock(): void
+    {
+        $row = LibraryRow::fromRow([
+            'id' => 'lib-1',
+            'type' => 'movie',
+            'options' => ['autoCollections' => 'nonsense'],
+        ]);
+
+        $this->assertTrue($row->autoCollectionsEnabled());
+    }
+
+    /**
+     * S33: toArray() surfaces the EFFECTIVE toggle under a top-level
+     * `auto_collections` block, defaulting to enabled for un-set libraries and
+     * reflecting an explicit stored `false`.
+     */
+    public function testToArraySurfacesEffectiveAutoCollectionsToggle(): void
+    {
+        $enabledByDefault = LibraryRow::fromRow([
+            'id' => 'lib-1',
+            'type' => 'movie',
+            'options' => '{"scan_interval":3600}',
+        ])->toArray();
+        $this->assertSame(['enabled' => true], $enabledByDefault['auto_collections']);
+
+        $explicitlyOff = LibraryRow::fromRow([
+            'id' => 'lib-2',
+            'type' => 'movie',
+            'options' => '{"autoCollections":{"enabled":false}}',
+        ])->toArray();
+        $this->assertSame(['enabled' => false], $explicitlyOff['auto_collections']);
+    }
 }

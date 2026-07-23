@@ -51,9 +51,11 @@ final class CollectionServiceTest extends TestCase
         $calls = [];
         $db = $this->recordingDb($calls, null);
 
-        $service = new CollectionService($db, $itemRepo, $this->createMock(TmdbProvider::class));
+        $tmdb = $this->createMock(TmdbProvider::class);
+        $tmdb->method('hasApiKey')->willReturn(true);
+        $service = new CollectionService($db, $itemRepo, $tmdb);
 
-        $result = $service->syncCollectionForMovie(self::MOVIE_UUID, 'api-key');
+        $result = $service->syncCollectionForMovie(self::MOVIE_UUID);
 
         $this->assertFalse($result);
         $this->assertSame([], $calls, 'No DB query should run when the movie is not found.');
@@ -68,6 +70,7 @@ final class CollectionServiceTest extends TestCase
         $itemRepo->method('findById')->with(self::MOVIE_UUID)->willReturn(null);
 
         $tmdb = $this->createMock(TmdbProvider::class);
+        $tmdb->method('hasApiKey')->willReturn(true);
         $tmdb->expects($this->never())->method('getCollectionIdForMovie');
 
         $calls = [];
@@ -75,7 +78,7 @@ final class CollectionServiceTest extends TestCase
 
         $service = new CollectionService($db, $itemRepo, $tmdb);
 
-        $this->assertFalse($service->syncCollectionForMovie(self::MOVIE_UUID, 'api-key'));
+        $this->assertFalse($service->syncCollectionForMovie(self::MOVIE_UUID));
         $this->assertSame([], $calls);
     }
 
@@ -92,6 +95,7 @@ final class CollectionServiceTest extends TestCase
         ]);
 
         $tmdb = $this->createMock(TmdbProvider::class);
+        $tmdb->method('hasApiKey')->willReturn(true);
         $tmdb->expects($this->never())->method('getCollectionIdForMovie');
 
         $calls = [];
@@ -99,7 +103,7 @@ final class CollectionServiceTest extends TestCase
 
         $service = new CollectionService($db, $itemRepo, $tmdb);
 
-        $this->assertTrue($service->syncCollectionForMovie(self::MOVIE_UUID, 'api-key'));
+        $this->assertTrue($service->syncCollectionForMovie(self::MOVIE_UUID));
 
         $deletes = $this->callsMatching($calls, 'DELETE FROM media_collection_members');
         $this->assertCount(1, $deletes, 'Exactly one membership DELETE expected.');
@@ -120,6 +124,7 @@ final class CollectionServiceTest extends TestCase
         ]);
 
         $tmdb = $this->createMock(TmdbProvider::class);
+        $tmdb->method('hasApiKey')->willReturn(true);
         $tmdb->expects($this->once())
             ->method('getCollectionIdForMovie')
             ->with(self::TMDB_MOVIE_ID)
@@ -131,7 +136,7 @@ final class CollectionServiceTest extends TestCase
 
         $service = new CollectionService($db, $itemRepo, $tmdb);
 
-        $this->assertTrue($service->syncCollectionForMovie(self::MOVIE_UUID, 'api-key'));
+        $this->assertTrue($service->syncCollectionForMovie(self::MOVIE_UUID));
 
         $deletes = $this->callsMatching($calls, 'DELETE FROM media_collection_members');
         $this->assertCount(1, $deletes);
@@ -162,7 +167,7 @@ final class CollectionServiceTest extends TestCase
 
         $service = new CollectionService($db, $itemRepo, $tmdb);
 
-        $this->assertTrue($service->syncCollectionForMovie(self::MOVIE_UUID, 'api-key'));
+        $this->assertTrue($service->syncCollectionForMovie(self::MOVIE_UUID));
 
         $inserts = $this->callsMatching($calls, 'INSERT INTO media_collection_members');
         $this->assertCount(1, $inserts, 'Exactly one membership INSERT expected.');
@@ -194,7 +199,7 @@ final class CollectionServiceTest extends TestCase
 
         $service = new CollectionService($db, $itemRepo, $tmdb);
 
-        $this->assertTrue($service->syncCollectionForMovie(self::MOVIE_UUID, 'api-key'));
+        $this->assertTrue($service->syncCollectionForMovie(self::MOVIE_UUID));
 
         $inserts = $this->callsMatching($calls, 'INSERT INTO media_collection_members');
         $this->assertCount(1, $inserts);
@@ -214,6 +219,7 @@ final class CollectionServiceTest extends TestCase
         ]);
 
         $tmdb = $this->createMock(TmdbProvider::class);
+        $tmdb->method('hasApiKey')->willReturn(true);
         $tmdb->expects($this->never())->method('getCollectionIdForMovie');
 
         $calls = [];
@@ -221,7 +227,7 @@ final class CollectionServiceTest extends TestCase
 
         $service = new CollectionService($db, $itemRepo, $tmdb);
 
-        $this->assertTrue($service->syncCollectionForMovie(self::MOVIE_UUID, 'api-key'));
+        $this->assertTrue($service->syncCollectionForMovie(self::MOVIE_UUID));
 
         $deletes = $this->callsMatching($calls, 'DELETE FROM media_collection_members');
         $this->assertCount(1, $deletes);
@@ -241,6 +247,7 @@ final class CollectionServiceTest extends TestCase
         ]);
 
         $tmdb = $this->createMock(TmdbProvider::class);
+        $tmdb->method('hasApiKey')->willReturn(true);
         $tmdb->method('getCollectionIdForMovie')
             ->with(self::TMDB_MOVIE_ID)
             ->willReturn(self::TMDB_COLLECTION_ID);
@@ -253,7 +260,7 @@ final class CollectionServiceTest extends TestCase
 
         $service = new CollectionService($db, $itemRepo, $tmdb);
 
-        $this->assertFalse($service->syncCollectionForMovie(self::MOVIE_UUID, 'api-key'));
+        $this->assertFalse($service->syncCollectionForMovie(self::MOVIE_UUID));
         $this->assertSame([], $this->callsMatching($calls, 'INSERT INTO media_collection_members'));
     }
 
@@ -287,12 +294,41 @@ final class CollectionServiceTest extends TestCase
 
         $service = new CollectionService($db, $itemRepo, $tmdb);
 
-        $this->assertTrue($service->syncCollectionForMovie($coerced, 'api-key'));
+        $this->assertTrue($service->syncCollectionForMovie($coerced));
 
         $inserts = $this->callsMatching($calls, 'INSERT INTO media_collection_members');
         $this->assertCount(1, $inserts, 'Coerced id must still write a membership row (no silent no-op).');
         $this->assertSame($coerced, $inserts[0]['params'][1]);
         $this->assertIsString($inserts[0]['params'][1]);
+    }
+
+    /**
+     * S33 empty-API-key smell fix: when no TMDB key is configured, the injected
+     * provider reports `hasApiKey() === false`, and sync must skip CLEANLY — no
+     * item lookup, no TMDB request, no DB write — returning true (a no-op
+     * success) rather than churning failing requests. This is the replacement for
+     * the old dead `$tmdbApiKey` parameter callers filled with an empty string:
+     * the key now lives on the provider, and its absence is a clean skip.
+     */
+    public function testSyncSkipsCleanlyWhenTmdbKeyIsNotConfigured(): void
+    {
+        $itemRepo = $this->createMock(ItemRepository::class);
+        // With no key, the movie is never even looked up.
+        $itemRepo->expects($this->never())->method('findById');
+
+        $tmdb = $this->createMock(TmdbProvider::class);
+        $tmdb->method('hasApiKey')->willReturn(false);
+        $tmdb->expects($this->never())->method('getCollectionIdForMovie');
+        $tmdb->expects($this->never())->method('getCollection');
+
+        $calls = [];
+        $db = $this->recordingDb($calls, null);
+
+        $service = new CollectionService($db, $itemRepo, $tmdb);
+
+        // No-op success: unconfigured TMDB is not an error, and nothing is written.
+        $this->assertTrue($service->syncCollectionForMovie(self::MOVIE_UUID));
+        $this->assertSame([], $calls, 'No DB query may run when TMDB is unconfigured.');
     }
 
     /**
@@ -336,6 +372,7 @@ final class CollectionServiceTest extends TestCase
         }
 
         $tmdb = $this->createMock(TmdbProvider::class);
+        $tmdb->method('hasApiKey')->willReturn(true);
         $tmdb->method('getCollectionIdForMovie')
             ->with(self::TMDB_MOVIE_ID)
             ->willReturn(self::TMDB_COLLECTION_ID);

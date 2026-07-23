@@ -9,6 +9,25 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Added
 
+- **Per-library TMDB auto-collections toggle (backend)** (updates.md / S33). TMDB
+  box-set auto-collection generation is now switchable **per library** instead of
+  running unconditionally on every scan. The flag lives in the existing
+  `libraries.options` JSON column as `{"autoCollections": {"enabled": bool}}` (no
+  new migration/column) and round-trips through the existing library create/update
+  endpoint: `LibraryController` gained an `applyAutoCollections()` handler that
+  accepts the flag at the body top level OR nested in `options` (as a bare bool or
+  a `{enabled: bool}` map), normalises it to the canonical `{enabled: bool}` shape,
+  and — on update — MERGES it into the existing options blob so editing it
+  preserves `metadata_priority`/`image_types`/`series_per_directory` (and vice
+  versa). `LibraryRow::autoCollectionsEnabled()` reads it, **defaulting to `true`
+  when the flag is absent** so existing libraries keep today's behaviour; only an
+  explicit stored `false` disables generation. `LibraryRow::toArray()` surfaces the
+  effective value under a top-level `auto_collections` block. `MediaScanner::scan()`
+  takes a new optional `bool $autoCollectionsEnabled = true` (latched per-scan) and
+  gates its per-item `CollectionService::syncCollectionForMovie()` block on it;
+  `LibraryManager::scanLibrary()` passes the library's resolved flag. The
+  library-edit UI checkbox is a separate deferred UI-lane task.
+
 - **`GET /api/v1/users/me/next-up` — per-user "Next Up" rail** (updates.md #43 /
   S36). The sibling to Continue Watching: where CW lists in-progress items you can
   resume, Next Up returns, for **each series the active profile has STARTED, the
@@ -159,6 +178,18 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   the submitted settings, and gets its verdict back in the `{success, message}`
   envelope. Mutation-verified: deleting the registration turns all ten new tests red
   with 404, and moving the route outside the admin group turns both gate tests red.
+
+### Fixed
+
+- **`CollectionService` empty-TMDB-key smell** (S33). `getOrCreateCollection()` and
+  `syncCollectionForMovie()` took a `$tmdbApiKey` argument the bodies never used —
+  the scanner passed an empty string (`syncCollectionForMovie($id, '')`). The TMDB
+  key is actually resolved by the injected `TmdbProvider` (constructed with the
+  configured key), so the dead parameter is removed from both methods.
+  `syncCollectionForMovie()` now also skips cleanly (no HTTP, no DB writes, returns
+  a no-op success) when `TmdbProvider::hasApiKey()` is false, instead of issuing
+  requests that would just fail. TMDB calls continue to flow through the async
+  `MetadataHttpClient` — never a new inline/blocking call in the scan path.
 
 ### Security
 

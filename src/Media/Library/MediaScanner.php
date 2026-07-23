@@ -75,6 +75,23 @@ class MediaScanner
     private ?CollectionService $collectionService = null;
 
     /**
+     * S33: per-scan gate for TMDB box-set auto-collection generation, set once at
+     * the top of {@see scan()} from the library's
+     * `options.autoCollections.enabled` flag (resolved by the caller via
+     * {@see \Phlix\Media\Library\Dto\LibraryRow::autoCollectionsEnabled()}).
+     *
+     * Defaults to true so the historical unconditional behaviour is preserved for
+     * any caller/library that does not set it; only an explicit `false` skips the
+     * per-item {@see CollectionService::syncCollectionForMovie()} block. This is
+     * per-scan mutable instance state, exactly like {@see $containerCache} — a
+     * single {@see scan()} call runs to completion for one library before the
+     * next, so it is never shared across concurrent libraries.
+     *
+     * @var bool
+     */
+    private bool $autoCollectionsEnabled = true;
+
+    /**
      * Optional ffprobe runner used to read each time-based file's total
      * duration during the scan, so the player's scrubber knows the full
      * length immediately (rather than growing as an in-progress transcode
@@ -479,6 +496,12 @@ class MediaScanner
      *               series: the directory name supplies the authoritative series
      *               title + year, and EVERY episode file beneath it attaches to
      *               that single series regardless of its filename's title text.
+     * @param bool   $autoCollectionsEnabled S33: whether TMDB box-set
+     *               auto-collection generation runs for this library, from its
+     *               `options.autoCollections.enabled` flag. Defaults to true (the
+     *               historical unconditional behaviour); pass false to skip the
+     *               per-item {@see CollectionService::syncCollectionForMovie()}
+     *               block entirely for this scan.
      * @return void
      *
      * @example
@@ -491,7 +514,8 @@ class MediaScanner
         string $path,
         string $type,
         bool $seriesPerDirectory = false,
-        ?callable $onFile = null
+        ?callable $onFile = null,
+        bool $autoCollectionsEnabled = true
     ): void {
         if (!is_dir($path)) {
             $this->logger->warning('Scan path does not exist', ['path' => $path]);
@@ -500,6 +524,10 @@ class MediaScanner
 
         $startNs = hrtime(true);
         $this->containerCache = [];
+        // S33: latch the per-library auto-collections toggle for this scan so the
+        // per-item collection-sync gate (see processFile) can read it without
+        // threading the flag through the whole scan call chain.
+        $this->autoCollectionsEnabled = $autoCollectionsEnabled;
         // Re-read `scanner.ignore_patterns` once per scan (read-path class (a)
         // LIVE at scan granularity) rather than once per file.
         $this->ignorePatterns->refresh();
@@ -1468,7 +1496,12 @@ class MediaScanner
         // Only runs when the item has a tmdb_id in metadata_json (populated by
         // LibraryMetadataMatcher in a separate metadata scan job, not at scan time).
         // This path handles items that were already matched before this scan.
-        if ($this->collectionService !== null) {
+        //
+        // S33: gated on the per-library auto-collections toggle (latched at the
+        // top of scan()). When the library's options.autoCollections.enabled is
+        // false the whole block — including the findById() lookup — is skipped;
+        // the default (flag absent) is true, preserving today's behaviour.
+        if ($this->collectionService !== null && $this->autoCollectionsEnabled) {
             try {
                 $item = $this->itemRepository->findById((string) $itemId);
                 if ($item !== null) {
@@ -1480,7 +1513,7 @@ class MediaScanner
                         $meta = is_array($metaRaw) ? $metaRaw : null;
                     }
                     if ($meta !== null && isset($meta['tmdb_id']) && is_numeric($meta['tmdb_id'])) {
-                        $this->collectionService->syncCollectionForMovie((string) $itemId, '');
+                        $this->collectionService->syncCollectionForMovie((string) $itemId);
                     }
                 }
             } catch (\Throwable $e) {

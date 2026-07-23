@@ -190,6 +190,57 @@ class LibraryController
     }
 
     /**
+     * Validate and apply the per-library `autoCollections` toggle (S33) onto the
+     * options blob being persisted.
+     *
+     * Accepts EITHER a bare boolean-ish flag (`true`/`false`, `1`/`0`,
+     * `"true"`/`"on"`/…) OR a `{enabled: <flag>}` map, and always stores the
+     * canonical `{"enabled": bool}` shape under `options.autoCollections`. A
+     * `null` value CLEARS the key (the library falls back to the default —
+     * generation ON; see
+     * {@see \Phlix\Media\Library\Dto\LibraryRow::autoCollectionsEnabled()}).
+     *
+     * Returns a `400` {@see Response} when the value is present but malformed (a
+     * `{...}` map without an `enabled` key, or a non-scalar/non-map value);
+     * returns null when applied successfully (including the clear case).
+     *
+     * @param array<string, mixed> $options Options blob to mutate in place.
+     * @param mixed                $raw     Raw `autoCollections` value from the body.
+     */
+    private function applyAutoCollections(array &$options, mixed $raw): ?Response
+    {
+        // Null → clear the override (fall back to the default: generation ON).
+        if ($raw === null) {
+            unset($options['autoCollections']);
+            return null;
+        }
+
+        if (is_array($raw)) {
+            if (!array_key_exists('enabled', $raw)) {
+                return $this->autoCollectionsError();
+            }
+            $enabled = $this->toBool($raw['enabled']);
+        } elseif (is_bool($raw) || is_int($raw) || is_string($raw)) {
+            $enabled = $this->toBool($raw);
+        } else {
+            return $this->autoCollectionsError();
+        }
+
+        $options['autoCollections'] = ['enabled' => $enabled];
+        return null;
+    }
+
+    /**
+     * The canonical 400 response for a malformed `autoCollections` value.
+     */
+    private function autoCollectionsError(): Response
+    {
+        return (new Response())->status(400)->json([
+            'error' => 'autoCollections must be a boolean, or a { "enabled": bool } object',
+        ]);
+    }
+
+    /**
      * Require authentication for the request.
      */
     private function requireAuth(Request $request): ?Response
@@ -389,6 +440,24 @@ class LibraryController
             }
         }
 
+        // `autoCollections` (S33, per-library TMDB box-set toggle): accept it at
+        // the body top level OR nested inside `options`, normalise to the
+        // canonical `{enabled: bool}` map, and persist it into the options blob.
+        // Absent → the library defaults to generation ON at scan time (no key
+        // stored). The top-level value wins over a nested one, mirroring
+        // series_per_directory / metadata_priority / image_types.
+        if (array_key_exists('autoCollections', $data)) {
+            $autoCollectionsError = $this->applyAutoCollections($options, $data['autoCollections']);
+            if ($autoCollectionsError !== null) {
+                return $autoCollectionsError;
+            }
+        } elseif (array_key_exists('autoCollections', $options)) {
+            $autoCollectionsError = $this->applyAutoCollections($options, $options['autoCollections']);
+            if ($autoCollectionsError !== null) {
+                return $autoCollectionsError;
+            }
+        }
+
         $libraryId = $this->libraryManager->createLibrary(
             $name,
             $type,
@@ -481,8 +550,14 @@ class LibraryController
         $hasNestedPriority = array_key_exists('metadata_priority', $bodyOptions);
         $hasTopLevelImages = array_key_exists('image_types', $data);
         $hasNestedImages = array_key_exists('image_types', $bodyOptions);
+        $hasTopLevelAutoCollections = array_key_exists('autoCollections', $data);
+        $hasNestedAutoCollections = array_key_exists('autoCollections', $bodyOptions);
 
-        if ($hasTopLevelPriority || $hasNestedPriority || $hasTopLevelImages || $hasNestedImages) {
+        if (
+            $hasTopLevelPriority || $hasNestedPriority
+            || $hasTopLevelImages || $hasNestedImages
+            || $hasTopLevelAutoCollections || $hasNestedAutoCollections
+        ) {
             $existingOptions = is_array($library['options'] ?? null) ? $library['options'] : [];
             $mergedOptions = [];
             foreach ($existingOptions as $optKey => $optVal) {
@@ -517,6 +592,21 @@ class LibraryController
                     return $imageTypesError;
                 }
                 unset($data['image_types']);
+            }
+
+            // S33: per-library auto-collections toggle. Merging into the existing
+            // options blob (rather than the raw generic `options` full-replace)
+            // means editing this flag PRESERVES metadata_priority / image_types /
+            // series_per_directory, and editing those preserves this flag.
+            if ($hasTopLevelAutoCollections || $hasNestedAutoCollections) {
+                $rawAutoCollections = $hasTopLevelAutoCollections
+                    ? $data['autoCollections']
+                    : $bodyOptions['autoCollections'];
+                $autoCollectionsError = $this->applyAutoCollections($mergedOptions, $rawAutoCollections);
+                if ($autoCollectionsError !== null) {
+                    return $autoCollectionsError;
+                }
+                unset($data['autoCollections']);
             }
 
             $data['options'] = $mergedOptions;

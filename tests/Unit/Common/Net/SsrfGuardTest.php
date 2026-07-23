@@ -238,4 +238,44 @@ final class SsrfGuardTest extends TestCase
         self::assertTrue(SsrfGuard::isPublicUrl('https://example.com/'));
         self::assertFalse(SsrfGuard::isPublicUrl('http://127.0.0.1/'));
     }
+
+    // --- Public CIDR primitives (reused by DlnaAllowlistMiddleware) ---------
+
+    /**
+     * The public ipMatchesAnyCidr() helper matches IPv4 and IPv6 CIDRs and
+     * returns false for a non-match or an empty list.
+     */
+    public function test_ip_matches_any_cidr_public_helper(): void
+    {
+        self::assertTrue(SsrfGuard::ipMatchesAnyCidr('192.168.1.50', ['10.0.0.0/8', '192.168.0.0/16']));
+        self::assertFalse(SsrfGuard::ipMatchesAnyCidr('8.8.8.8', ['10.0.0.0/8', '192.168.0.0/16']));
+        self::assertFalse(SsrfGuard::ipMatchesAnyCidr('192.168.1.50', []));
+        self::assertTrue(SsrfGuard::ipMatchesAnyCidr('fd00::1', ['fc00::/7']));
+        // A v4 address never matches a v6 CIDR and vice versa.
+        self::assertFalse(SsrfGuard::ipMatchesAnyCidr('192.168.1.1', ['fc00::/7']));
+    }
+
+    /**
+     * The public filterCidrs() helper drops blanks and malformed entries and
+     * de-duplicates, preserving well-formed CIDRs.
+     */
+    public function test_filter_cidrs_public_helper(): void
+    {
+        self::assertSame(
+            ['10.0.0.0/8', '192.168.0.0/16'],
+            SsrfGuard::filterCidrs(['10.0.0.0/8', ' 192.168.0.0/16 ', '10.0.0.0/8', 'not-a-cidr', '', 'bare-host']),
+        );
+    }
+
+    /**
+     * The public embeddedIpv4() helper collapses an IPv4-mapped IPv6 address to
+     * its dotted-quad, and returns null for a plain address.
+     */
+    public function test_embedded_ipv4_public_helper(): void
+    {
+        self::assertSame('127.0.0.1', SsrfGuard::embeddedIpv4('::ffff:127.0.0.1'));
+        self::assertSame('8.8.8.8', SsrfGuard::embeddedIpv4('::ffff:8.8.8.8'));
+        self::assertNull(SsrfGuard::embeddedIpv4('192.168.1.1'));
+        self::assertNull(SsrfGuard::embeddedIpv4('2001:4860:4860::8888'));
+    }
 }

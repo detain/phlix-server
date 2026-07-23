@@ -236,8 +236,13 @@ final class SsrfGuard
      *
      * The decision is made on the canonical 16-byte binary representation so
      * that every textual spelling of the same address is handled uniformly.
+     *
+     * Public because it is a shared, well-tested primitive: inbound gates such
+     * as {@see \Phlix\Server\Http\Middleware\DlnaAllowlistMiddleware} collapse a
+     * peer's IPv4-mapped IPv6 address the same way this guard does before
+     * evaluating it against IPv4 CIDR rules, rather than re-rolling the logic.
      */
-    private static function embeddedIpv4(string $ip): ?string
+    public static function embeddedIpv4(string $ip): ?string
     {
         // Only IPv6 literals can embed an IPv4 address.
         if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6) === false) {
@@ -390,11 +395,16 @@ final class SsrfGuard
     /**
      * Trim/validate a list of CIDR strings (drops blanks and malformed entries).
      *
+     * Public because it is the canonical CIDR-parse helper: inbound allowlists
+     * such as {@see \Phlix\Server\Http\Middleware\DlnaAllowlistMiddleware}
+     * normalise an operator-supplied CIDR list through the exact same rules that
+     * validate the outbound SSRF allowlist, rather than hand-rolling parsing.
+     *
      * @param list<string> $cidrs
      *
      * @return list<string>
      */
-    private static function filterCidrs(array $cidrs): array
+    public static function filterCidrs(array $cidrs): array
     {
         $out = [];
         foreach ($cidrs as $cidr) {
@@ -416,9 +426,15 @@ final class SsrfGuard
     /**
      * Whether an IP matches any CIDR in the list.
      *
+     * Public because it is the canonical CIDR-match helper: inbound gates such
+     * as {@see \Phlix\Server\Http\Middleware\DlnaAllowlistMiddleware} test a
+     * peer address against an allowlist (and against the built-in LAN ranges)
+     * with the same binary-prefix matcher this guard uses for SSRF, rather than
+     * re-implementing CIDR matching.
+     *
      * @param list<string> $cidrs
      */
-    private static function ipMatchesAnyCidr(string $ip, array $cidrs): bool
+    public static function ipMatchesAnyCidr(string $ip, array $cidrs): bool
     {
         foreach ($cidrs as $cidr) {
             if (self::ipMatchesCidr($ip, $cidr)) {

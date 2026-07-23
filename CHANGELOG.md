@@ -9,6 +9,27 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Added
 
+- **DLNA inbound IP allowlist** (updates.md #35 / S50). The DLNA
+  ContentDirectory (CDS) browse routes — which have NO authentication once
+  `dlna.cds_enabled` is on — are now gated by a new
+  `Server\Http\Middleware\DlnaAllowlistMiddleware`, wrapped around
+  `Application::loadCdsRoutes()`'s route group exactly as `SignedUrlMiddleware`
+  wraps the streaming group. Two new `config/dlna.php` keys drive it:
+  `allowed_cidrs` (array of CIDRs, default empty) and `restrict_to_lan` (bool,
+  default **true**). The client address is resolved via the spoof-resistant
+  `Request::getTrustedClientIp()` (the same accessor the rate limiters use), and
+  an IPv4-mapped IPv6 peer is collapsed to its IPv4 form before matching. CIDR
+  parsing/matching **reuses** `Common\Net\SsrfGuard` rather than re-rolling it
+  (its `filterCidrs()`, `ipMatchesAnyCidr()` and `embeddedIpv4()` helpers are now
+  public). Policy, and the whole point of the change: an **empty allowlist is
+  never "allow all"** — with the defaults, only loopback + RFC1918/ULA/link-local
+  may reach the CDS routes and everything else gets a 403; with
+  `restrict_to_lan=false` the allowlist becomes the sole gate (an empty list then
+  denies everyone). The matching shared-settings schema keys
+  (`dlna.allowed_cidrs`, `dlna.restrict_to_lan`) are added in `detain/phlix-shared`
+  and surface once that package is released and re-vendored. This step wires only
+  the existing CDS routes; the new DLNA stream route (S52) is out of scope.
+
 - **Nav entries hide without a matching library type** (updates.md / S25, Half B).
   The web-ui now consumes `@phlix/ui` **v0.98.22**, which added the optional
   `MenuItem.requiresLibraryType` field plus a fail-closed nav filter (Half A). The

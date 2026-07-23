@@ -2851,54 +2851,71 @@ class Application
                 return;
             }
 
-            // Device description endpoint (legacy path)
-            $deviceDescController = new \Phlix\Server\Http\Controllers\Dlna\DeviceDescriptionController($cdsServer);
-            $this->router->get('/description.xml', [$deviceDescController, 'handle']);
+            // DLNA/UPnP carries no credentials, so the ONLY thing gating these
+            // browse endpoints is the inbound IP allowlist. Wrap the whole group
+            // with it, mirroring exactly how loadStreamingRoutes() wraps its
+            // group with SignedUrlMiddleware — attaching it to the GROUP (not
+            // checking here) makes it re-evaluated PER REQUEST (class (a) LIVE);
+            // this Application is built once per worker, so a check at load time
+            // would only apply after a reload.
+            $allowlistMiddleware = new \Phlix\Server\Http\Middleware\DlnaAllowlistMiddleware(
+                $this->optionalSettingsRepository(),
+            );
 
-            // P10-S1: DLNA routes with /dlna/ prefix
-            $this->router->get(\Phlix\Dlna\DlnaRoutes::DESCRIPTION, [$deviceDescController, 'handle']);
+            // Narrow $this->container to non-null for the closure (the null case
+            // returned at the top of this method).
+            $container = $this->container;
 
-            // SCPD XML endpoints - route pattern matches /scpd/{service}.xml
-            $this->router->get('/scpd/{service}.xml', function (
-                \Phlix\Server\Http\Request $request,
-                array $params
-            ) use ($cdsServer): \Phlix\Server\Http\Response {
-                $serviceRaw = $params['service'] ?? '';
-                $service = is_string($serviceRaw) ? $serviceRaw : '';
-                $scpdXml = $cdsServer->getScpdXml($service);
+            $this->router->group('', function (Router $r) use ($cdsServer, $container): void {
+                // Device description endpoint (legacy path)
+                $deviceDescController = new \Phlix\Server\Http\Controllers\Dlna\DeviceDescriptionController($cdsServer);
+                $r->get('/description.xml', [$deviceDescController, 'handle']);
 
-                if ($scpdXml === null) {
-                    return (new \Phlix\Server\Http\Response())->status(404)->text('Service not found');
-                }
+                // P10-S1: DLNA routes with /dlna/ prefix
+                $r->get(\Phlix\Dlna\DlnaRoutes::DESCRIPTION, [$deviceDescController, 'handle']);
 
-                return (new \Phlix\Server\Http\Response())
-                    ->header('Content-Type', 'application/xml; charset=utf-8')
-                    ->header('Cache-Control', 'no-cache, must-revalidate')
-                    ->text($scpdXml);
-            });
+                // SCPD XML endpoints - route pattern matches /scpd/{service}.xml
+                $r->get('/scpd/{service}.xml', function (
+                    \Phlix\Server\Http\Request $request,
+                    array $params
+                ) use ($cdsServer): \Phlix\Server\Http\Response {
+                    $serviceRaw = $params['service'] ?? '';
+                    $service = is_string($serviceRaw) ? $serviceRaw : '';
+                    $scpdXml = $cdsServer->getScpdXml($service);
 
-            // P10-S1: DLNA ContentDirectory SOAP endpoint
-            // Try to get ContentDirectory from container for the SOAP controller
-            try {
-                if ($this->container->has(\Phlix\Dlna\ContentDirectory::class)) {
-                    $contentDirectory = $this->container->get(\Phlix\Dlna\ContentDirectory::class);
-                    if ($contentDirectory instanceof \Phlix\Dlna\ContentDirectory) {
-                        $cdsController = new \Phlix\Server\Http\Controllers\Dlna\DlnaContentDirectoryController(
-                            $contentDirectory
-                        );
-                        $this->router->post(
-                            \Phlix\Dlna\DlnaRoutes::CONTENT_DIRECTORY_CONTROL,
-                            [$cdsController, 'handle'],
-                        );
+                    if ($scpdXml === null) {
+                        return (new \Phlix\Server\Http\Response())->status(404)->text('Service not found');
                     }
-                }
-            } catch (\Throwable $e) {
-                // ContentDirectory not available - skip SOAP route
-            }
 
-            // CDS control endpoint (legacy path)
-            $cdsControlController = new \Phlix\Server\Http\Controllers\Dlna\CdsControlController($cdsServer);
-            $this->router->post(\Phlix\Dlna\DlnaRoutes::CDS_CONTROL, [$cdsControlController, 'handle']);
+                    return (new \Phlix\Server\Http\Response())
+                        ->header('Content-Type', 'application/xml; charset=utf-8')
+                        ->header('Cache-Control', 'no-cache, must-revalidate')
+                        ->text($scpdXml);
+                });
+
+                // P10-S1: DLNA ContentDirectory SOAP endpoint
+                // Try to get ContentDirectory from container for the SOAP controller
+                try {
+                    if ($container->has(\Phlix\Dlna\ContentDirectory::class)) {
+                        $contentDirectory = $container->get(\Phlix\Dlna\ContentDirectory::class);
+                        if ($contentDirectory instanceof \Phlix\Dlna\ContentDirectory) {
+                            $cdsController = new \Phlix\Server\Http\Controllers\Dlna\DlnaContentDirectoryController(
+                                $contentDirectory
+                            );
+                            $r->post(
+                                \Phlix\Dlna\DlnaRoutes::CONTENT_DIRECTORY_CONTROL,
+                                [$cdsController, 'handle'],
+                            );
+                        }
+                    }
+                } catch (\Throwable $e) {
+                    // ContentDirectory not available - skip SOAP route
+                }
+
+                // CDS control endpoint (legacy path)
+                $cdsControlController = new \Phlix\Server\Http\Controllers\Dlna\CdsControlController($cdsServer);
+                $r->post(\Phlix\Dlna\DlnaRoutes::CDS_CONTROL, [$cdsControlController, 'handle']);
+            }, [$allowlistMiddleware]);
         } catch (\Throwable $e) {
             // LOG, do not swallow. This bare catch previously said only
             // "CDS not configured - silent ignore", and it hid a permanent

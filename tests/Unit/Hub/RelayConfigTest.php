@@ -81,6 +81,19 @@ final class RelayConfigTest extends TestCase
         $this->assertSame('ws://custom-hub:12000', $config->buildHubRelayWsUrl());
     }
 
+    public function test_explicit_wss_hub_relay_ws_url_wins_over_plaintext_derivation(): void
+    {
+        // relayTls off would derive ws://, but the explicit wss:// override is
+        // returned verbatim — proving precedence holds in BOTH scheme directions
+        // (the ws-over-wss direction is covered above).
+        $config = new RelayConfig(
+            hubWssUrl: 'https://hub.example.com/api/v1/servers/{id}/relay',
+            hubRelayWsUrl: 'wss://custom-hub:12000',
+            relayTls: false,
+        );
+        $this->assertSame('wss://custom-hub:12000', $config->buildHubRelayWsUrl());
+    }
+
     public function test_build_hub_relay_ws_url_empty_when_unconfigured(): void
     {
         $this->assertSame('', (new RelayConfig())->buildHubRelayWsUrl());

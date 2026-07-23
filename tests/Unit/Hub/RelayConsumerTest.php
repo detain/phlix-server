@@ -1728,6 +1728,57 @@ class RelayConsumerTest extends TestCase
         }
     }
 
+    public function test_relay_fork_persists_connect_throw_reason(): void
+    {
+        $dir = sys_get_temp_dir() . '/phlix-relay-consumer-connthrow-' . bin2hex(random_bytes(6));
+        mkdir($dir, 0700, true);
+
+        try {
+            $store = new RelayStateStore($dir);
+
+            // A hub connection whose connect() throws — exercises the connect()
+            // catch branch (recordConnectError('connect() failed: …') +
+            // scheduleReconnect() → writeRelayState()). openHubConnection() itself
+            // succeeds (returns this double); the failure happens on connect().
+            $throwingHub = new class ('ws://hub.example.com:8802') extends FakeRelayConnection {
+                public function connect(): void
+                {
+                    throw new \RuntimeException('boom-socket');
+                }
+            };
+
+            $consumer = new RelayConsumer(
+                new RelayConfig(
+                    enabled: true,
+                    hubRelayWsUrl: 'ws://hub.example.com:8802',
+                ),
+                $this->createMockHubClient(),
+                new StructuredLogger('relay', []),
+                'server-uuid-123',
+                hubConnectionFactory: static fn (string $url): AsyncTcpConnection => $throwingHub,
+                localConnectionFactory: static fn (string $url): AsyncTcpConnection
+                    => new FakeRelayConnection($url),
+                httpDispatcher: null,
+                stateStore: $store,
+            );
+
+            $consumer->start();
+
+            $state = $store->readRelayState();
+            $this->assertFalse($state['connected']);
+            $this->assertFalse($state['active']);
+            $this->assertIsString($state['lastConnectError']);
+            $this->assertStringContainsString('connect() failed', $state['lastConnectError']);
+            $this->assertStringContainsString('boom-socket', $state['lastConnectError']);
+            $this->assertNotNull($state['lastConnectErrorAt']);
+        } finally {
+            foreach (glob($dir . '/*') ?: [] as $f) {
+                @unlink($f);
+            }
+            @rmdir($dir);
+        }
+    }
+
     public function test_relay_fork_does_not_persist_tls_mismatch_advisory(): void
     {
         $dir = sys_get_temp_dir() . '/phlix-relay-consumer-tlswarn-' . bin2hex(random_bytes(6));

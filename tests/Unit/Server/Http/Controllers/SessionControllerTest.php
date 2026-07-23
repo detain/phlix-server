@@ -476,4 +476,253 @@ class SessionControllerTest extends TestCase
 
         $this->assertSame(201, $controller->createSession($request, [])->statusCode);
     }
+
+    /**
+     * The finish signal (default reached_end) finalizes via markAsWatched and
+     * never via clearProgress. This is the caller S10 found missing.
+     */
+    public function testCompletePlaybackDefaultsToMarkAsWatched(): void
+    {
+        $sessionId = 'session-123';
+        $userId = 'user-456';
+        $mediaItemId = 'media-789';
+
+        $sessionManager = $this->createMock(SessionManager::class);
+        $sessionManager->method('getSession')->willReturn([
+            'id' => $sessionId,
+            'user_id' => $userId,
+            'device_id' => 'device-abc',
+        ]);
+
+        $playbackController = $this->createMock(PlaybackController::class);
+        $playbackController->expects($this->once())
+            ->method('markAsWatched')
+            ->with($sessionId, $mediaItemId);
+        $playbackController->expects($this->never())->method('clearProgress');
+
+        $controller = new SessionController(
+            $sessionManager,
+            $playbackController,
+            $this->createMock(MarkerService::class),
+        );
+
+        $request = new Request();
+        $request->userId = $userId;
+        $request->body = ['media_item_id' => $mediaItemId];
+
+        $response = $controller->completePlayback($request, ['id' => $sessionId]);
+
+        $this->assertSame(200, $response->statusCode);
+        /** @var array<string, mixed> $body */
+        $body = json_decode($response->body, true);
+        $this->assertSame('Playback completed', $body['message']);
+        $this->assertTrue($body['reached_end']);
+    }
+
+    /**
+     * reached_end=false finalizes via clearProgress (the other dead caller S10
+     * flagged) rather than marking the item watched.
+     */
+    public function testCompletePlaybackWithReachedEndFalseClearsProgress(): void
+    {
+        $sessionId = 'session-123';
+        $userId = 'user-456';
+        $mediaItemId = 'media-789';
+
+        $sessionManager = $this->createMock(SessionManager::class);
+        $sessionManager->method('getSession')->willReturn([
+            'id' => $sessionId,
+            'user_id' => $userId,
+            'device_id' => 'device-abc',
+        ]);
+
+        $playbackController = $this->createMock(PlaybackController::class);
+        $playbackController->expects($this->once())
+            ->method('clearProgress')
+            ->with($sessionId, $mediaItemId);
+        $playbackController->expects($this->never())->method('markAsWatched');
+
+        $controller = new SessionController(
+            $sessionManager,
+            $playbackController,
+            $this->createMock(MarkerService::class),
+        );
+
+        $request = new Request();
+        $request->userId = $userId;
+        $request->body = ['media_item_id' => $mediaItemId, 'reached_end' => false];
+
+        $response = $controller->completePlayback($request, ['id' => $sessionId]);
+
+        $this->assertSame(200, $response->statusCode);
+        /** @var array<string, mixed> $body */
+        $body = json_decode($response->body, true);
+        $this->assertFalse($body['reached_end']);
+    }
+
+    /**
+     * An explicit `reached_end: true` in the body must take the markAsWatched
+     * path — exercising the right-hand operand of the `reached_end` resolution
+     * (the default-true test only covers the key-absent short-circuit).
+     */
+    public function testCompletePlaybackWithExplicitReachedEndTrueMarksAsWatched(): void
+    {
+        $sessionId = 'session-123';
+        $userId = 'user-456';
+        $mediaItemId = 'media-789';
+
+        $sessionManager = $this->createMock(SessionManager::class);
+        $sessionManager->method('getSession')->willReturn([
+            'id' => $sessionId,
+            'user_id' => $userId,
+            'device_id' => 'device-abc',
+        ]);
+
+        $playbackController = $this->createMock(PlaybackController::class);
+        $playbackController->expects($this->once())
+            ->method('markAsWatched')
+            ->with($sessionId, $mediaItemId);
+        $playbackController->expects($this->never())->method('clearProgress');
+
+        $controller = new SessionController(
+            $sessionManager,
+            $playbackController,
+            $this->createMock(MarkerService::class),
+        );
+
+        $request = new Request();
+        $request->userId = $userId;
+        $request->body = ['media_item_id' => $mediaItemId, 'reached_end' => true];
+
+        $response = $controller->completePlayback($request, ['id' => $sessionId]);
+
+        $this->assertSame(200, $response->statusCode);
+        /** @var array<string, mixed> $body */
+        $body = json_decode($response->body, true);
+        $this->assertSame('Playback completed', $body['message']);
+        $this->assertTrue($body['reached_end']);
+    }
+
+    /**
+     * An empty-string `media_item_id` must be rejected with 400 — exercises the
+     * `=== ''` sub-condition of the required-field guard (the missing-key test
+     * only exercises the `!is_string(null)` branch).
+     */
+    public function testCompletePlaybackRejectsEmptyMediaItemId(): void
+    {
+        $sessionId = 'session-123';
+        $userId = 'user-456';
+
+        $sessionManager = $this->createMock(SessionManager::class);
+        $sessionManager->method('getSession')->willReturn([
+            'id' => $sessionId,
+            'user_id' => $userId,
+            'device_id' => 'device-abc',
+        ]);
+
+        $playbackController = $this->createMock(PlaybackController::class);
+        $playbackController->expects($this->never())->method('markAsWatched');
+        $playbackController->expects($this->never())->method('clearProgress');
+
+        $controller = new SessionController(
+            $sessionManager,
+            $playbackController,
+            $this->createMock(MarkerService::class),
+        );
+
+        $request = new Request();
+        $request->userId = $userId;
+        $request->body = ['media_item_id' => ''];
+
+        $response = $controller->completePlayback($request, ['id' => $sessionId]);
+
+        $this->assertSame(400, $response->statusCode);
+        /** @var array<string, mixed> $body */
+        $body = json_decode($response->body, true);
+        $this->assertSame('Missing required field: media_item_id', $body['error']);
+    }
+
+    public function testCompletePlaybackRejectsMissingMediaItemId(): void
+    {
+        $sessionId = 'session-123';
+        $userId = 'user-456';
+
+        $sessionManager = $this->createMock(SessionManager::class);
+        $sessionManager->method('getSession')->willReturn([
+            'id' => $sessionId,
+            'user_id' => $userId,
+            'device_id' => 'device-abc',
+        ]);
+
+        $playbackController = $this->createMock(PlaybackController::class);
+        $playbackController->expects($this->never())->method('markAsWatched');
+        $playbackController->expects($this->never())->method('clearProgress');
+
+        $controller = new SessionController(
+            $sessionManager,
+            $playbackController,
+            $this->createMock(MarkerService::class),
+        );
+
+        $request = new Request();
+        $request->userId = $userId;
+        $request->body = []; // no media_item_id
+
+        $response = $controller->completePlayback($request, ['id' => $sessionId]);
+
+        $this->assertSame(400, $response->statusCode);
+    }
+
+    public function testCompletePlaybackReturns404WhenSessionNotFound(): void
+    {
+        $sessionManager = $this->createMock(SessionManager::class);
+        $sessionManager->method('getSession')->willReturn(null);
+
+        $playbackController = $this->createMock(PlaybackController::class);
+        $playbackController->expects($this->never())->method('markAsWatched');
+
+        $controller = new SessionController(
+            $sessionManager,
+            $playbackController,
+            $this->createMock(MarkerService::class),
+        );
+
+        $request = new Request();
+        $request->userId = 'user-456';
+        $request->body = ['media_item_id' => 'media-789'];
+
+        $response = $controller->completePlayback($request, ['id' => 'missing-session']);
+
+        $this->assertSame(404, $response->statusCode);
+    }
+
+    public function testCompletePlaybackReturns403WhenUserDoesNotOwnSession(): void
+    {
+        $sessionId = 'session-123';
+
+        $sessionManager = $this->createMock(SessionManager::class);
+        $sessionManager->method('getSession')->willReturn([
+            'id' => $sessionId,
+            'user_id' => 'other-user-999',
+            'device_id' => 'device-abc',
+        ]);
+
+        $playbackController = $this->createMock(PlaybackController::class);
+        $playbackController->expects($this->never())->method('markAsWatched');
+        $playbackController->expects($this->never())->method('clearProgress');
+
+        $controller = new SessionController(
+            $sessionManager,
+            $playbackController,
+            $this->createMock(MarkerService::class),
+        );
+
+        $request = new Request();
+        $request->userId = 'user-456'; // not the owner
+        $request->body = ['media_item_id' => 'media-789'];
+
+        $response = $controller->completePlayback($request, ['id' => $sessionId]);
+
+        $this->assertSame(403, $response->statusCode);
+    }
 }

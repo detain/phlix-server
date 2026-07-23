@@ -517,6 +517,178 @@ class WatchHistoryTest extends TestCase
     }
 
     /**
+     * getNextUp resolves the profile → owning user FIRST; a profile with no user
+     * row (deleted/detached) yields an empty rail and NEVER issues the candidate-
+     * series scan. Covers the null-user early return.
+     */
+    public function testGetNextUpReturnsEmptyWhenProfileHasNoUser(): void
+    {
+        $scanIssued = false;
+        $this->db->method('query')->willReturnCallback(
+            function (string $sql) use (&$scanIssued) {
+                if (str_contains($sql, 'user_profiles')) {
+                    return []; // profile resolves to no user
+                }
+                if (str_contains($sql, 'ps.media_item_id AS episode_id')) {
+                    $scanIssued = true;
+                }
+                return [];
+            }
+        );
+
+        $this->assertSame([], $this->watchHistory->getNextUp('ghost-profile', 20));
+        $this->assertFalse($scanIssued, 'No candidate-series scan when the profile resolves to no user');
+    }
+
+    /**
+     * A started "series" whose per-series episode query returns no rows (e.g. a
+     * season-less flat hierarchy that never satisfies the episode→season→series
+     * join chain) is skipped — it contributes nothing rather than a broken card.
+     */
+    public function testGetNextUpSkipsSeriesWhoseEpisodeQueryReturnsNoRows(): void
+    {
+        $this->db->method('query')->willReturnCallback(
+            function (string $sql) {
+                if (str_contains($sql, 'user_profiles')) {
+                    return [['user_id' => 'user-1']];
+                }
+                if (str_contains($sql, 'ps.media_item_id AS episode_id')) {
+                    return [[
+                        'series_id' => 'series-x',
+                        'episode_id' => 'ep-x',
+                        'updated_at' => '2026-01-01 00:00:00',
+                    ]];
+                }
+                // fetchSeriesEpisodes → no episodes for this series.
+                return [];
+            }
+        );
+
+        $this->assertSame([], $this->watchHistory->getNextUp('profile-1', 20));
+    }
+
+    /**
+     * A candidate row with a blank series_id (a malformed join result) is skipped
+     * BEFORE any per-series episode query is issued — defensive guard.
+     */
+    public function testGetNextUpSkipsStartedRowWithBlankSeriesId(): void
+    {
+        $episodeQueryIssued = false;
+        $this->db->method('query')->willReturnCallback(
+            function (string $sql) use (&$episodeQueryIssued) {
+                if (str_contains($sql, 'user_profiles')) {
+                    return [['user_id' => 'user-1']];
+                }
+                if (str_contains($sql, 'ps.media_item_id AS episode_id')) {
+                    return [[
+                        'series_id' => '',
+                        'episode_id' => 'ep-x',
+                        'updated_at' => '2026-01-01 00:00:00',
+                    ]];
+                }
+                if (str_contains($sql, 'series_metadata_json')) {
+                    $episodeQueryIssued = true;
+                }
+                return [];
+            }
+        );
+
+        $this->assertSame([], $this->watchHistory->getNextUp('profile-1', 20));
+        $this->assertFalse($episodeQueryIssued, 'A blank series_id must be skipped before the episode query');
+    }
+
+    /**
+     * A malformed episode row with a blank id is dropped from the selector input
+     * while a valid fresh sibling is still resolved as the pick — defensive guard.
+     */
+    public function testGetNextUpSkipsEpisodeRowsWithBlankId(): void
+    {
+        $episode = static function (string $id): array {
+            return [
+                'id' => $id,
+                'name' => 'S01E01',
+                'type' => 'episode',
+                'metadata_json' => '{"season":1,"episode":1}',
+                'parent_metadata_json' => '{}',
+                'series_metadata_json' => '{"poster_url":"/series/x.jpg"}',
+                'series_id' => 'series-x',
+                'series_name' => 'Series X',
+                'playback_status' => null,
+                'position_ticks' => 0,
+                'duration_ticks' => 0,
+            ];
+        };
+
+        $this->db->method('query')->willReturnCallback(
+            function (string $sql) use ($episode) {
+                if (str_contains($sql, 'user_profiles')) {
+                    return [['user_id' => 'user-1']];
+                }
+                if (str_contains($sql, 'ps.media_item_id AS episode_id')) {
+                    return [[
+                        'series_id' => 'series-x',
+                        'episode_id' => 'ep-1',
+                        'updated_at' => '2026-01-01 00:00:00',
+                    ]];
+                }
+                if (str_contains($sql, 'series_metadata_json')) {
+                    return [$episode(''), $episode('ep-1')];
+                }
+                return [];
+            }
+        );
+
+        $result = $this->watchHistory->getNextUp('profile-1', 20);
+        $this->assertCount(1, $result);
+        $this->assertSame('ep-1', $result[0]['media_item_id'] ?? null);
+    }
+
+    /**
+     * When the series carries no poster (its metadata_json is null) the episode
+     * card falls back to the SEASON (parent) poster — covers shapeNextEpisode's
+     * poster fallback branch AND decodeMetadata's null/empty-string guard.
+     */
+    public function testGetNextUpFallsBackToSeasonPosterWhenSeriesPosterMissing(): void
+    {
+        $this->db->method('query')->willReturnCallback(
+            function (string $sql) {
+                if (str_contains($sql, 'user_profiles')) {
+                    return [['user_id' => 'user-1']];
+                }
+                if (str_contains($sql, 'ps.media_item_id AS episode_id')) {
+                    return [[
+                        'series_id' => 'series-x',
+                        'episode_id' => 'ep-1',
+                        'updated_at' => '2026-01-01 00:00:00',
+                    ]];
+                }
+                if (str_contains($sql, 'series_metadata_json')) {
+                    return [[
+                        'id' => 'ep-1',
+                        'name' => 'S01E01',
+                        'type' => 'episode',
+                        'metadata_json' => '{"season":1,"episode":1}',
+                        'parent_metadata_json' => '{"poster_url":"/season/1.jpg"}',
+                        // No series poster → season fallback; null → decodeMetadata([]).
+                        'series_metadata_json' => null,
+                        'series_id' => 'series-x',
+                        'series_name' => 'Series X',
+                        'playback_status' => null,
+                        'position_ticks' => 0,
+                        'duration_ticks' => 0,
+                    ]];
+                }
+                return [];
+            }
+        );
+
+        $result = $this->watchHistory->getNextUp('profile-1', 20);
+        $this->assertCount(1, $result);
+        $this->assertSame('/season/1.jpg', $result[0]['poster_url'] ?? null);
+        $this->assertSame('series-x', $result[0]['series_id'] ?? null);
+    }
+
+    /**
      * @return array<string, array{int, int}> [requested $limit, expected inlined scan cap]
      */
     public static function nextUpScanCapProvider(): array

@@ -239,6 +239,22 @@ final class NextUpSelectorTest extends TestCase
         $this->assertSame('e1', $next['id']);
     }
 
+    public function testPickNextWithOnlyNonNumberedEpisodesReturnsNull(): void
+    {
+        // A "series" made up solely of Specials (season 0) and season-less rows
+        // has an EMPTY numbered ordering, so there is nothing to play next — even
+        // when every episode is fresh. Exercises the empty-ordering short-circuit
+        // (both with and without a most-recent touch).
+        $episodes = [
+            $this->ep('special-1', 0, 1, 'Special 1', NextUpSelector::STATE_FRESH),
+            $this->ep('no-season', null, 2, 'No Season', NextUpSelector::STATE_FRESH),
+        ];
+
+        $this->assertNull(NextUpSelector::pickNext($episodes, 'special-1'));
+        $this->assertNull(NextUpSelector::pickNext($episodes, null));
+        $this->assertNull(NextUpSelector::pickNext([], 'anything'));
+    }
+
     /**
      * @return array{id: string, season_number: int|null, episode_number: int|null, title: string, state: string}
      */

@@ -432,6 +432,18 @@ the streaming and auth-hardening features and all have safe defaults.
 > table). Run `php bin/phlix migrate` (or `php scripts/run-migrations.php`) after
 > pulling — migrations are idempotent, so re-running is safe.
 
+> **Migration + one-time cleanup required on deploy (S29, updates.md #29).** Adds
+> `migrations/090_playback_state_session_media_unique.sql` (documentation-only —
+> reserves the number). After `php bin/phlix migrate` (or `php scripts/run-migrations.php`),
+> run **once**: `php migrations/cleanup_090.php`. It merges any duplicate
+> `(session_id, media_item_id)` rows in `playback_state` (keeping the max `updated_at`,
+> tie-break max `id`; batched for large tables) then adds the
+> `uq_playback_state_session_media` unique key, so playback-progress upserts update the
+> existing row instead of inserting a new one every ~15s. **`scripts/install.sh` / the
+> Docker entrypoint do NOT run it automatically** (same as the migration-072
+> `cleanup_072.php` step); until it runs, the unique key does not exist and progress
+> writes keep duplicating. The script is idempotent, so re-running is safe.
+
 ## API Reference
 
 ### HTTP Endpoints

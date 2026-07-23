@@ -152,6 +152,29 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- **`playback_state` progress upserts now update in place instead of inserting a new row every ~15s**
+  (updates.md #29 / S29). Every progress tick from `PlaybackController::reportProgress()` (and
+  `StreamManager::persistStreamState()`) writes via `INSERT ... ON DUPLICATE KEY UPDATE`, but the
+  `playback_state` table only carried its `id` PRIMARY KEY — a fresh random UUID per call — and had no
+  key on the upsert's real conflict target, so `ON DUPLICATE KEY` could never fire and each ~15s tick
+  inserted a brand-new row, bloating the table and undermining resume / Continue Watching. Adds
+  `UNIQUE KEY uq_playback_state_session_media (session_id, media_item_id)` so the existing upserts
+  finally update the matching row. No controller change was needed — both upserts already INSERT
+  `(id, session_id, media_item_id, ...)` and touch only `position_ticks`/`duration_ticks`/
+  `playback_status`/`updated_at` in their `ON DUPLICATE KEY UPDATE`, i.e. they already target exactly
+  the new key's columns. Mirrors the migration-072 `path_hash` dedupe-then-constrain precedent:
+  `migrations/090_playback_state_session_media_unique.sql` is documentation-only (it splits to zero
+  executable statements, reserving the number in the ledger), and the unique key is added out-of-band
+  by the new one-time `migrations/cleanup_090.php`, which first merges any pre-existing duplicate
+  `(session_id, media_item_id)` groups — keeps the max `updated_at`, tie-break max `id`, batched via
+  the new `Phlix\Session\PlaybackStateDeduper` so a large production table drains safely across
+  multiple bounded passes — so the `ADD UNIQUE KEY` cannot fail 1062.
+  **⚠️ Post-deploy one-time step (like `cleanup_072.php`): after migration `090` is applied, run
+  `php migrations/cleanup_090.php` ONCE.** `scripts/install.sh` and the Docker entrypoint do NOT run it
+  automatically; until it runs, the unique key does not exist and progress writes keep duplicating.
+  The script is idempotent and re-run-safe (the dedupe is a no-op once clean and `addUniqueKey()`
+  swallows a duplicate-key-name; re-run it if it reports lingering duplicates).
+
 - **Top Media / Top Users leaderboards no longer show blank rows for deleted items/users**
   (updates.md #14 / S14). The admin dashboard's Top Media list previously rendered play-count
   rows with no title/poster (and Top Users rows with no username) whenever a media item or user

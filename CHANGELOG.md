@@ -9,6 +9,36 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Added
 
+- **`GET /api/v1/users/me/next-up` — per-user "Next Up" rail** (updates.md #43 /
+  S36). The sibling to Continue Watching: where CW lists in-progress items you can
+  resume, Next Up returns, for **each series the active profile has STARTED, the
+  single next unwatched episode to play**. New pure `Phlix\Media\Library\NextUpSelector`
+  (DB-free ordering + next-episode selection — a server-side port of the SPA's
+  `episode-order.ts`), new `WatchHistory::getNextUp(string $profileId, int $limit = 20)`
+  (resolves `profileId → userId`, Query A = the started series most-recently-touched
+  first, Query B = every episode of a series with the user's latest per-episode
+  `playback_state`), and the route + handler `WebPortalRouter::getNextUp()` registered
+  beside `continue-watching` in the same `AuthMiddleware` group. Optional `?limit=`
+  (default 20, clamped 1-50); the candidate-series fan-out is bounded at
+  `max(limit × NEXT_UP_SERIES_SCAN_MULTIPLIER(3), NEXT_UP_SERIES_SCAN_FLOOR(50))`
+  most-recently-touched series (LIMIT inlined as a validated int — bound LIMIT
+  raises 1064 under emulated prepares in this repo). **Selection:** an in-progress
+  episode (playing/paused within 0–95% of duration) resumes that episode; a finished
+  episode (`stopped` at position 0, or watched ≥95% of duration) advances to the next
+  numbered episode, rolling into the next numbered season; a series with all episodes
+  watched yields no entry; only numbered seasons are walked (Specials/season-less
+  excluded). **[BINDING design]** the watched/in-progress signal is `playback_state`
+  ONLY — the `watch_history` table and `user_item_data.watched` flag are deliberately
+  NOT consulted (they are write-orphaned / a manual account-level toggle). Response is
+  a bare `{items:[...]}` of `MediaItemShaper::shape()`-shaped episode rows (series
+  poster resolved, artwork re-signed) with `position_ticks`/`duration_ticks` = 0 (a
+  fresh pick) plus added `series_id`/`series_name`; each carries `media_item_id`, the
+  key the active-profile parental rating gate post-filters on (over-cap episodes
+  dropped for a gated profile; owner unfiltered). `401` unauthenticated, `503` when
+  watch-history is unwired, `{items:[]}` when the user has no active profile. The
+  season-less (flat, no season row) series edge is invisible to the rail by design
+  (the numbered-season-only binding). Home-rail UI is a separate step (S37).
+
 - **`GET /api/v1/media/most-watched` — public "Most Watched" trending rail**
   (updates.md #31 / S31). Exposes the GLOBAL, all-time, cross-user most-watched
   aggregate (the same list the admin Top Media report reads via

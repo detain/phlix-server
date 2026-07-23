@@ -258,6 +258,7 @@ class WebPortalRouter
      * - GET /api/v1/media/{id} - Get media item details with streams
      * - GET /api/v1/media/{id}/playback - Get playback information
      * - GET /api/v1/users/me/continue-watching - Get user's continue watching list
+     * - GET /api/v1/users/me/next-up - Get user's Next Up (next unwatched episode per series)
      * - GET /api/v1/users/me/recently-watched - Get user's recently watched items
      * - GET /api/v1/users/me/settings - Get user settings
      * - PUT /api/v1/users/me/settings - Update user settings
@@ -315,6 +316,9 @@ class WebPortalRouter
 
             // User activity routes
             $r->get('/api/v1/users/me/continue-watching', [$this, 'getContinueWatching']);
+            // S36 (updates.md #43): "Next Up" — the next unwatched episode for each
+            // series the active profile has started. Sits beside continue-watching.
+            $r->get('/api/v1/users/me/next-up', [$this, 'getNextUp']);
             $r->get('/api/v1/users/me/recently-watched', [$this, 'getRecentlyWatched']);
             $r->get('/api/v1/users/me/favorites', [$this, 'listFavorites']);
 
@@ -1643,6 +1647,68 @@ class WebPortalRouter
         // Continue-watching is account-level, but the ACTIVE profile's cap still
         // governs what it can see: drop over-cap titles (by effective rating).
         // The media id lives under `media_item_id` here. No-op for the owner.
+        $filter = $this->resolveRatingFilter($request);
+        $gate = $this->gate();
+        if ($filter !== null && $gate !== null) {
+            $items = $gate->filterItems($items, $filter, 'media_item_id');
+        }
+
+        return (new Response())->json(['items' => $items]);
+    }
+
+    /**
+     * Retrieves the user's "Next Up" list (S36 · updates.md #43).
+     *
+     * The sibling rail to continue-watching: for each series the active profile
+     * has STARTED, the next unwatched episode to play (continue-watching shows
+     * in-progress items; Next-Up shows the FRESH one to start next). Requires
+     * authentication and mirrors {@see getContinueWatching()} — same router, same
+     * auth group, same active-profile RATING-GATE post-filter (keyed on
+     * `media_item_id`).
+     *
+     * The watched / in-progress signal is `playback_state` (never
+     * `user_item_data.watched`), read the same way the live CW rail reads it. The
+     * heavy aggregation lives in {@see \Phlix\Auth\WatchHistory::getNextUp()},
+     * which resolves the active `profileId → userId` and walks the series'
+     * episode order to the first unwatched episode.
+     *
+     * @param Request $request The HTTP request (userId set from auth)
+     * @param array<string, string> $params Route parameters (unused)
+     *
+     * @return Response JSON `{ items: [...] }`, 401 if unauthenticated, 503 if the
+     *                  watch-history service is not configured. Returns an empty
+     *                  list when the user has no active profile.
+     *
+     * @api_endpoint GET /api/v1/users/me/next-up
+     *
+     * @requires Authentication
+     */
+    public function getNextUp(Request $request, array $params): Response
+    {
+        $userId = $request->userId ?? '';
+        if (!$userId) {
+            return (new Response())->status(401)->json(['error' => 'Unauthorized']);
+        }
+
+        if ($this->watchHistory === null) {
+            return (new Response())->status(503)->json([
+                'error' => 'Watch history is not configured on this server',
+            ]);
+        }
+
+        // Next-Up is scoped to the active profile (resolved to its user inside
+        // WatchHistory::getNextUp). No active profile → nothing to resume.
+        $profileId = $this->resolveProfileId($request, $userId);
+        if ($profileId === null) {
+            return (new Response())->json(['items' => []]);
+        }
+
+        $limit = $request->queryInt('limit', 20);
+        $items = $this->watchHistory->getNextUp($profileId, $limit);
+
+        // Same parental cap post-filter as continue-watching: drop over-cap
+        // episodes (by effective rating). Media id lives under `media_item_id`.
+        // No-op for the owner / un-capped profile.
         $filter = $this->resolveRatingFilter($request);
         $gate = $this->gate();
         if ($filter !== null && $gate !== null) {

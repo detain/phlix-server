@@ -201,8 +201,9 @@ class LibraryController
      * {@see \Phlix\Media\Library\Dto\LibraryRow::autoCollectionsEnabled()}).
      *
      * Returns a `400` {@see Response} when the value is present but malformed (a
-     * `{...}` map without an `enabled` key, or a non-scalar/non-map value);
-     * returns null when applied successfully (including the clear case).
+     * `{...}` map without an `enabled` key, a `{...}` map whose `enabled` value
+     * is not a bool-ish scalar, or a non-scalar/non-map top-level value); returns
+     * null when applied successfully (including the clear case).
      *
      * @param array<string, mixed> $options Options blob to mutate in place.
      * @param mixed                $raw     Raw `autoCollections` value from the body.
@@ -219,7 +220,15 @@ class LibraryController
             if (!array_key_exists('enabled', $raw)) {
                 return $this->autoCollectionsError();
             }
-            $enabled = $this->toBool($raw['enabled']);
+            // The nested `enabled` value must itself be a bool-ish SCALAR —
+            // mirroring the bare-flag branch below. A non-scalar (map/list) or a
+            // nonsensical non-bool scalar (e.g. a float) is malformed → 400,
+            // rather than being silently coerced to false by toBool().
+            $flag = $raw['enabled'];
+            if (!is_bool($flag) && !is_int($flag) && !is_string($flag)) {
+                return $this->autoCollectionsError();
+            }
+            $enabled = $this->toBool($flag);
         } elseif (is_bool($raw) || is_int($raw) || is_string($raw)) {
             $enabled = $this->toBool($raw);
         } else {

@@ -198,6 +198,75 @@ class SessionController
     }
 
     /**
+     * Signals that playback of a media item in a session has finished.
+     *
+     * This is the explicit "playback finished" signal (S30). Progress ticks
+     * (`reportProgress`) only ever leave the row in a `playing`/`paused` state,
+     * so without this call a finished title lingers in Continue Watching and its
+     * watch-time stats never finalize. The client player POSTs here when the
+     * media reaches its natural end (or is deliberately stopped) so the server
+     * runs the finalize path on {@see PlaybackController}, which:
+     *   - drops the item from Continue Watching, and
+     *   - finalizes `duration_seconds` + dispatches `PlaybackStopped`/stats
+     *     (feeding Top Users watch time and Most Watched).
+     *
+     * The optional `reached_end` flag (default `true`) selects the semantics:
+     *   - `true`  → {@see PlaybackController::markAsWatched()} — the row is set to
+     *     `stopped` with `position_ticks = 0` and the stats event is recorded as
+     *     completed. The item leaves Continue Watching because
+     *     `getContinueWatching()` only returns rows in (`playing`,`paused`) with
+     *     `position_ticks > 0`.
+     *   - `false` → {@see PlaybackController::clearProgress()} — the
+     *     `playback_state` row is deleted and the stats event is recorded as
+     *     not completed. Also removes the item from Continue Watching.
+     *
+     * @param Request $request The HTTP request
+     * @param array<string, string> $params Path parameters with 'id' for session ID
+     * @return Response JSON response confirming completion
+     *
+     * @required_fields media_item_id
+     */
+    public function completePlayback(Request $request, array $params): Response
+    {
+        $sessionId = $params['id'] ?? '';
+        $session = $this->sessionManager->getSession($sessionId);
+
+        if (!$session) {
+            return (new Response())->status(404)->json(['error' => 'Session not found']);
+        }
+
+        if ($session['user_id'] !== ($request->userId ?? '')) {
+            return (new Response())->status(403)->json(['error' => 'Forbidden']);
+        }
+
+        $data = $request->body;
+
+        $mediaItemId = $data['media_item_id'] ?? null;
+        if (!is_string($mediaItemId) || $mediaItemId === '') {
+            return (new Response())->status(400)->json([
+                'error' => 'Missing required field: media_item_id',
+            ]);
+        }
+
+        // `reached_end` defaults to true — the overwhelmingly common case is the
+        // player firing this on its native `ended` event. `true` finalizes the
+        // item as watched; `false` finalizes it as stopped-early (clears the
+        // resume point). Both remove the item from Continue Watching.
+        $reachedEnd = !array_key_exists('reached_end', $data) || (bool)$data['reached_end'];
+
+        if ($reachedEnd) {
+            $this->playbackController->markAsWatched($sessionId, $mediaItemId);
+        } else {
+            $this->playbackController->clearProgress($sessionId, $mediaItemId);
+        }
+
+        return (new Response())->json([
+            'message' => 'Playback completed',
+            'reached_end' => $reachedEnd,
+        ]);
+    }
+
+    /**
      * Gets the current playback state for a session.
      *
      * @param Request $request The HTTP request

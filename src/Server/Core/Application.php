@@ -641,6 +641,9 @@ class Application
         $this->router->post('/api/v1/sessions', [$sessionController, 'createSession']);
         $this->router->get('/api/v1/sessions/{id}/progress', [$sessionController, 'getProgress']);
         $this->router->post('/api/v1/sessions/{id}/progress', [$sessionController, 'reportProgress']);
+        // Explicit "playback finished" signal (S30). Finalizes watch-time stats
+        // and removes the item from Continue Watching via markAsWatched/clearProgress.
+        $this->router->post('/api/v1/sessions/{id}/complete', [$sessionController, 'completePlayback']);
         $this->router->get('/api/v1/me/continue-watching', [$sessionController, 'getContinueWatching']);
         $this->router->get('/api/v1/me/sessions', [$sessionController, 'listSessions']);
         $this->router->delete('/api/v1/sessions/{id}', [$sessionController, 'endSession']);

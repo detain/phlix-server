@@ -150,6 +150,32 @@ class WatchHistory
     public const RECENTLY_COMPLETED_LIMIT = 20;
 
     /**
+     * Multiplier applied to the requested Next-Up pick `$limit` to bound how
+     * many most-recently-touched STARTED series {@see getNextUp()} will scan.
+     *
+     * Each candidate series costs one blocking Query B round-trip
+     * ({@see fetchSeriesEpisodes()}), so on this resident Workerman event loop
+     * the scan MUST be bounded — otherwise a complete-watcher whose leading
+     * series are all finished (finale watched → no pick) makes one sequential
+     * blocking query per started series, bounded only by their total
+     * started-series count. We over-scan the pick count (×3) so leading series
+     * that yield no next-episode don't starve the rail, while capping the
+     * worst-case fan-out. See {@see NEXT_UP_SERIES_SCAN_FLOOR}.
+     *
+     * @var int
+     */
+    public const NEXT_UP_SERIES_SCAN_MULTIPLIER = 3;
+
+    /**
+     * Absolute floor for the started-series scan cap, independent of `$limit`,
+     * so small limits still over-scan enough candidates to reliably fill the
+     * rail even when some leading series yield no next-episode.
+     *
+     * @var int
+     */
+    public const NEXT_UP_SERIES_SCAN_FLOOR = 50;
+
+    /**
      * Constructs a new WatchHistory instance.
      *
      * @param Connection $db Database connection for watch history persistence
@@ -323,7 +349,17 @@ class WatchHistory
             return [];
         }
 
-        $startedSeries = $this->fetchStartedSeries($userId);
+        // Bound the candidate-series fan-out: each started series below costs one
+        // blocking Query B ({@see fetchSeriesEpisodes()}) round-trip on this
+        // resident event loop, so cap how many most-recently-touched series we
+        // even consider. Over-scan the requested pick count so leading series that
+        // yield no pick (finale already watched) don't starve the rail. NOTE: if
+        // the cap is hit before $limit picks are collected, a complete-watcher
+        // with more than the cap of fully-watched leading series may not see some
+        // series beyond the cap — the intended bounded-work tradeoff.
+        $scanCap = max($limit * self::NEXT_UP_SERIES_SCAN_MULTIPLIER, self::NEXT_UP_SERIES_SCAN_FLOOR);
+
+        $startedSeries = $this->fetchStartedSeries($userId, $scanCap);
         if ($startedSeries === []) {
             return [];
         }
@@ -400,13 +436,25 @@ class WatchHistory
      * `episode → season → series` `parent_id` chain (INNER JOINs — an episode
      * without a full chain has no series and thus no "next in series").
      *
-     * @param string $userId The resolved user UUID.
+     * Capped at `$scanCap` most-recently-touched series (recency-ordered) so the
+     * downstream one-query-per-series fan-out in {@see getNextUp()} is bounded on
+     * this resident event loop — never the caller's total started-series count.
+     *
+     * @param string $userId  The resolved user UUID.
+     * @param int    $scanCap Upper bound on candidate series returned (inlined as
+     *                        a validated int LIMIT — see below).
      *
      * @return list<array<string, mixed>> Rows of `series_id`, `episode_id`,
-     *         `updated_at`, ordered by recency (newest first).
+     *         `updated_at`, ordered by recency (newest first), at most `$scanCap`.
      */
-    private function fetchStartedSeries(string $userId): array
+    private function fetchStartedSeries(string $userId, int $scanCap): array
     {
+        // Inline a validated int for the scan-cap LIMIT; NEVER bind a LIMIT-like
+        // value (emulated prepares raise a 1064 on a bound LIMIT in this repo —
+        // the same reason getNextUp() inlines its clamped $limit). Clamp
+        // defensively so a stray direct caller can never issue an unbounded scan.
+        $scanCap = max(1, min(500, $scanCap));
+
         $result = $this->db->query(
             "SELECT ranked.series_id, ranked.episode_id, ranked.updated_at
              FROM (
@@ -425,7 +473,8 @@ class WatchHistory
                  WHERE sess.user_id = ?
              ) ranked
              WHERE ranked.rn = 1
-             ORDER BY ranked.updated_at DESC",
+             ORDER BY ranked.updated_at DESC
+             LIMIT " . $scanCap,
             [$userId]
         );
 

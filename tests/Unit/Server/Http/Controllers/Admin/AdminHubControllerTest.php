@@ -353,6 +353,9 @@ final class AdminHubControllerTest extends TestCase
         self::assertStringNotContainsString('exec(', $source, 'no shell exec() in the event loop');
         self::assertStringNotContainsString('pgrep', $source, 'no pgrep process probe');
         self::assertStringNotContainsString('proc_open', $source, 'no subprocess in the event loop');
+        self::assertStringNotContainsString('popen(', $source, 'no popen() subprocess in the event loop');
+        self::assertStringNotContainsString('passthru(', $source, 'no passthru() shell out in the event loop');
+        self::assertStringNotContainsString('system(', $source, 'no system() shell out in the event loop');
         self::assertStringNotContainsString('events-', $source, 'no daily log-file scrape');
         self::assertStringNotContainsString('shell_exec', $source, 'no shell_exec in the event loop');
     }

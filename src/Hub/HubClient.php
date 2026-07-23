@@ -66,6 +66,9 @@ class HubClient
     /** @var int Number of consecutive heartbeat failures. */
     private int $consecutiveFailures = 0;
 
+    /** @var int|null Round-trip latency (ms) of the last successful heartbeat. */
+    private ?int $lastLatencyMs = null;
+
     /** @var int Process start time (for uptime calculation). */
     private int $processStartTime;
 
@@ -90,6 +93,15 @@ class HubClient
     private ?\Closure $librariesProvider = null;
 
     /**
+     * @var RelayStateStore|null Cross-process state store. When set, the
+     *      heartbeat loop (running in the dedicated `phlix-hub-heartbeat` fork)
+     *      persists its live state to `hub-heartbeat.state.json` after each tick
+     *      so the HTTP worker's health endpoints can read it without touching
+     *      this fork's memory or firing their own side-effecting heartbeat (S40).
+     */
+    private ?RelayStateStore $stateStore = null;
+
+    /**
      * Creates a new HubClient.
      *
      * @param Ed25519KeyManager    $keyManager  Key manager for Ed25519 operations.
@@ -104,6 +116,11 @@ class HubClient
      *                                            Returns the libraries to advertise in heartbeats; null = none.
      * @param int                   $renewalThreshold Seconds before expiry to trigger proactive
      *                                            enrollment renewal (R5: extracted from config).
+     * @param RelayStateStore|null  $stateStore  Cross-process state store; when supplied, the
+     *                                            heartbeat loop persists its state to
+     *                                            `hub-heartbeat.state.json` for the health
+     *                                            endpoints to read (S40). Optional — omitting it
+     *                                            (e.g. in tests) simply disables the state write.
      */
     public function __construct(
         Ed25519KeyManager $keyManager,
@@ -115,6 +132,7 @@ class HubClient
         string $publicUrl = '',
         ?\Closure $librariesProvider = null,
         int $renewalThreshold = 518400,
+        ?RelayStateStore $stateStore = null,
     ) {
         $this->keyManager = $keyManager;
         $this->httpClient = $httpClient;
@@ -126,6 +144,7 @@ class HubClient
         $this->librariesProvider = $librariesProvider;
         $this->processStartTime = time();
         $this->renewalThreshold = $renewalThreshold;
+        $this->stateStore = $stateStore;
     }
 
     /**
@@ -410,26 +429,82 @@ class HubClient
         $this->heartbeatTimer = \Workerman\Timer::add(
             self::HEARTBEAT_INTERVAL,
             function (): void {
-                $this->lastHeartbeatAttempt = new \DateTimeImmutable();
-                $this->reEnrollIfNeeded();
-                $result = $this->sendHeartbeat();
-                if ($result->ok) {
-                    $this->lastSuccessfulHeartbeat = $this->lastHeartbeatAttempt;
-                    $this->consecutiveFailures = 0;
-                } else {
-                    ++$this->consecutiveFailures;
-                    $this->logger->warning('Heartbeat failed', [
-                        'error' => $result->error,
-                        'error_code' => $result->errorCode,
-                        'http_status' => $result->errorCode,
-                        'consecutive_failures' => $this->consecutiveFailures,
-                    ]);
-                }
+                $this->performHeartbeatTick();
             },
         );
 
         $this->logger->info('Heartbeat loop started', [
             'interval' => self::HEARTBEAT_INTERVAL,
+        ]);
+    }
+
+    /**
+     * Runs one heartbeat tick: renew if due, send a heartbeat, update the
+     * failure/latency counters, and persist the cross-process heartbeat state.
+     *
+     * Extracted from the {@see startHeartbeatLoop()} timer callback so the tick
+     * can be exercised without a live Workerman event loop. Runs in the
+     * dedicated `phlix-hub-heartbeat` fork. The round-trip latency is measured
+     * with the monotonic `hrtime(true)` clock (never `microtime()`), and the
+     * result is written to `hub-heartbeat.state.json` via {@see writeHeartbeatState()}
+     * so the HTTP-worker health endpoints (S40) can read a fresh, side-effect-free
+     * snapshot instead of firing their own heartbeat.
+     *
+     * @return void
+     */
+    private function performHeartbeatTick(): void
+    {
+        $this->lastHeartbeatAttempt = new \DateTimeImmutable();
+        $this->reEnrollIfNeeded();
+
+        $start = hrtime(true);
+        $result = $this->sendHeartbeat();
+        $elapsedMs = (int) round((hrtime(true) - $start) / 1_000_000);
+
+        if ($result->ok) {
+            $this->lastSuccessfulHeartbeat = $this->lastHeartbeatAttempt;
+            $this->consecutiveFailures = 0;
+            $this->lastLatencyMs = $elapsedMs;
+        } else {
+            ++$this->consecutiveFailures;
+            // A failed request has no meaningful latency, so clear it rather
+            // than report the time-to-error as if it were a healthy round-trip.
+            $this->lastLatencyMs = null;
+            $this->logger->warning('Heartbeat failed', [
+                'error' => $result->error,
+                'error_code' => $result->errorCode,
+                'http_status' => $result->errorCode,
+                'consecutive_failures' => $this->consecutiveFailures,
+            ]);
+        }
+
+        $this->writeHeartbeatState();
+    }
+
+    /**
+     * Persist the current heartbeat state to the cross-process store (S40).
+     *
+     * No-op when no {@see RelayStateStore} was injected. The write is
+     * best-effort (the store swallows I/O failures) so a state-write problem
+     * can never disrupt the resident heartbeat fork.
+     *
+     * Emits exactly the keys the health endpoints expect:
+     * `{lastHeartbeatAttempt, lastSuccessfulHeartbeat, consecutiveFailures,
+     * lastLatencyMs}` (the store stamps `updatedAt`).
+     *
+     * @return void
+     */
+    private function writeHeartbeatState(): void
+    {
+        if ($this->stateStore === null) {
+            return;
+        }
+
+        $this->stateStore->writeHeartbeatState([
+            'lastHeartbeatAttempt' => $this->lastHeartbeatAttempt?->format('c'),
+            'lastSuccessfulHeartbeat' => $this->lastSuccessfulHeartbeat?->format('c'),
+            'consecutiveFailures' => $this->consecutiveFailures,
+            'lastLatencyMs' => $this->lastLatencyMs,
         ]);
     }
 
@@ -684,6 +759,7 @@ class HubClient
      *     lastHeartbeatAttempt: string|null,
      *     lastSuccessfulHeartbeat: string|null,
      *     consecutiveFailures: int,
+     *     lastLatencyMs: int|null,
      *     enrollmentExpiresAt: string|null,
      *     isEnrolled: bool
      * }
@@ -694,6 +770,7 @@ class HubClient
             'lastHeartbeatAttempt' => $this->lastHeartbeatAttempt?->format('c'),
             'lastSuccessfulHeartbeat' => $this->lastSuccessfulHeartbeat?->format('c'),
             'consecutiveFailures' => $this->consecutiveFailures,
+            'lastLatencyMs' => $this->lastLatencyMs,
             'enrollmentExpiresAt' => $this->getEnrollmentExpiry()?->format('c'),
             'isEnrolled' => $this->loadEnrollment() !== null,
         ];

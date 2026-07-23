@@ -107,6 +107,12 @@ final class HubServicesProvider implements ServiceProviderInterface
                 ->constructorParameter('httpClient', get(HttpClientInterface::class))
                 ->constructorParameter('publicUrl', $publicUrl)
                 ->constructorParameter('renewalThreshold', $renewalThreshold)
+                // S40: inject the cross-process state store so the heartbeat loop
+                // (in the phlix-hub-heartbeat fork) persists its live state to
+                // hub-heartbeat.state.json for the HTTP-worker health endpoints
+                // to read. Optional ctor param → PHP-DI would skip it during
+                // autowiring, so it MUST be bound explicitly.
+                ->constructorParameter('stateStore', get(RelayStateStore::class))
                 // Advertise this server's libraries in each heartbeat so the hub
                 // caches them (server_libraries) and the owner's dashboard can list
                 // them. Resolved lazily per heartbeat; failures degrade to empty.

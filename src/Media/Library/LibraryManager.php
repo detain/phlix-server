@@ -508,6 +508,12 @@ class LibraryManager
 
         $seriesPerDirectory = $library->type === 'series' && $library->seriesPerDirectory();
 
+        // S33: per-library toggle for TMDB box-set auto-collection generation.
+        // Default (flag absent) is enabled, preserving the historical
+        // unconditional behaviour; an explicit stored `false` skips the scanner's
+        // per-item collection-sync block for this library.
+        $autoCollectionsEnabled = $library->autoCollectionsEnabled();
+
         // When a progress sink is supplied, pre-count the media files across all
         // paths so the callback can report a real percentage (processed/total),
         // then stream one tick per processed file. The count walk is cheap (no
@@ -532,7 +538,14 @@ class LibraryManager
                 $this->logger->warning('Library path does not exist', ['path' => $path]);
                 continue;
             }
-            $this->scanner->scan($libraryId, $path, $library->type, $seriesPerDirectory, $onFile);
+            $this->scanner->scan(
+                $libraryId,
+                $path,
+                $library->type,
+                $seriesPerDirectory,
+                $onFile,
+                $autoCollectionsEnabled
+            );
         }
 
         $this->logger->info('Library scan complete', ['library_id' => $libraryId]);

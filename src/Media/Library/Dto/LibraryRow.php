@@ -90,7 +90,32 @@ final class LibraryRow
             'available' => ImageType::catalog(),
             'enabled' => $this->enabledImageTypes(),
         ];
+        // Surface the EFFECTIVE per-library auto-collections toggle (S33) so the
+        // library-detail payload always carries a concrete on/off value even for
+        // libraries that never stored the flag (default ON — see
+        // {@see self::autoCollectionsEnabled()}).
+        $row['auto_collections'] = ['enabled' => $this->autoCollectionsEnabled()];
         return $row;
+    }
+
+    /**
+     * Whether TMDB box-set auto-collection generation is enabled for this
+     * library (S33), read from the decoded `options.autoCollections.enabled`
+     * flag.
+     *
+     * Default when the flag is ABSENT (or malformed) is `true` — the historical
+     * unconditional behaviour — so existing libraries that never set the flag
+     * keep generating collections; only an explicit stored `false` disables it.
+     * The stored value is coerced with {@see self::optionIsTruthy()} so a bool,
+     * int, or "1"/"true"/"yes"/"on" string all read as enabled.
+     */
+    public function autoCollectionsEnabled(): bool
+    {
+        $block = $this->options['autoCollections'] ?? null;
+        if (!is_array($block) || !array_key_exists('enabled', $block)) {
+            return true;
+        }
+        return self::optionIsTruthy($block['enabled']);
     }
 
     /**

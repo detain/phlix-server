@@ -52,14 +52,20 @@ final class CollectionService
     /**
      * Fetches a TMDB collection and creates or updates the local record.
      *
+     * The TMDB API key is NOT a parameter here: it is resolved once by the
+     * injected {@see TmdbProvider} (constructed with the configured
+     * `metadata.tmdb.api_key`), so every request this method issues is already
+     * authenticated by that provider. An earlier signature took a `$tmdbApiKey`
+     * argument that the body never used — callers passed an empty string — which
+     * this method drops entirely.
+     *
      * @param int $collectionId TMDB collection ID
-     * @param string $tmdbApiKey TMDB API key for the request
      * @return array{id: int, tmdb_collection_id: int, name: string, overview: string|null,
      *     poster_url: string|null, backdrop_url: string|null}|null Collection info or null on failure
      *
      * @since 0.36.0
      */
-    public function getOrCreateCollection(int $collectionId, string $tmdbApiKey): ?array
+    public function getOrCreateCollection(int $collectionId): ?array
     {
         // Fetch collection metadata from TMDB
         $tmdbCollection = $this->tmdbProvider->getCollection($collectionId);
@@ -127,14 +133,27 @@ final class CollectionService
      * correct part order from TMDB. If the movie has no collection, any existing
      * collection membership is removed.
      *
+     * The TMDB API key is resolved by the injected {@see TmdbProvider} (from the
+     * configured `metadata.tmdb.api_key`), not passed in — an earlier signature
+     * took an unused `$tmdbApiKey` argument that callers filled with an empty
+     * string. When no key is configured the provider cannot answer, so this
+     * method skips cleanly (no HTTP, no DB writes) and reports success rather
+     * than churning failing requests during a scan.
+     *
      * @param string $movieItemId The local media_item UUID of the movie
-     * @param string $tmdbApiKey TMDB API key for the request
      * @return bool True if sync succeeded (even if movie has no collection), false on failure
      *
      * @since 0.36.0
      */
-    public function syncCollectionForMovie(string $movieItemId, string $tmdbApiKey): bool
+    public function syncCollectionForMovie(string $movieItemId): bool
     {
+        // No configured TMDB key → the provider cannot resolve collections. Skip
+        // cleanly (a no-op success) instead of issuing requests that would just
+        // fail; existing membership is left untouched rather than wrongly wiped.
+        if (!$this->tmdbProvider->hasApiKey()) {
+            return true;
+        }
+
         // Find the movie item and extract its TMDB ID from metadata_json
         $movie = $this->itemRepository->findById($movieItemId);
         if ($movie === null) {
@@ -170,7 +189,7 @@ final class CollectionService
         }
 
         // Fetch/create the collection
-        $collection = $this->getOrCreateCollection($collectionId, $tmdbApiKey);
+        $collection = $this->getOrCreateCollection($collectionId);
         if ($collection === null) {
             return false;
         }

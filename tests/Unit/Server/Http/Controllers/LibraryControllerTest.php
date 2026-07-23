@@ -468,6 +468,271 @@ class LibraryControllerTest extends TestCase
     }
 
     /**
+     * S33 create(): the per-library autoCollections toggle round-trips through the
+     * existing create endpoint, normalised to the canonical `{enabled: bool}` map
+     * inside the persisted options blob.
+     */
+    public function testCreatePersistsAutoCollectionsToggleIntoOptions(): void
+    {
+        $libraryManager = $this->createMock(LibraryManager::class);
+        $libraryManager->expects($this->once())
+            ->method('createLibrary')
+            ->with('Movies', 'movie', ['/vault1/movies'], ['autoCollections' => ['enabled' => false]])
+            ->willReturn('lib-new');
+
+        $scanJobs = $this->createMock(ScanJobRepository::class);
+        $scanJobs->method('enqueue')->willReturn('job-1');
+        $controller = new LibraryController($libraryManager, $scanJobs);
+
+        $request = new Request();
+        $request->userId = 'admin-1';
+        $request->body = [
+            'name' => 'Movies',
+            'type' => 'movie',
+            'paths' => ['/vault1/movies'],
+            'autoCollections' => false,
+        ];
+
+        $response = $controller->create($request, []);
+
+        $this->assertSame(201, $response->statusCode);
+    }
+
+    /**
+     * S33 update(): setting autoCollections MERGES into the existing options blob
+     * (canonical `{enabled: bool}`), PRESERVING other stored options — proving the
+     * update path does not strip/whitelist the key away.
+     */
+    public function testUpdateMergesAutoCollectionsIntoExistingOptions(): void
+    {
+        $libraryManager = $this->createMock(LibraryManager::class);
+        $libraryManager->expects($this->once())
+            ->method('getLibrary')
+            ->with('lib-1')
+            ->willReturn([
+                'id' => 'lib-1',
+                'name' => 'Movies',
+                'type' => 'movie',
+                'options' => ['scan_interval' => 3600, 'image_types' => ['poster' => true]],
+            ]);
+        $libraryManager->expects($this->once())
+            ->method('updateLibrary')
+            ->with('lib-1', $this->callback(static function (mixed $data): bool {
+                if (!is_array($data)) {
+                    return false;
+                }
+                // Top-level key stripped; merged options keep scan_interval AND
+                // image_types, and carry the canonical {enabled:false} map.
+                return !array_key_exists('autoCollections', $data)
+                    && is_array($data['options'] ?? null)
+                    && ($data['options']['scan_interval'] ?? null) === 3600
+                    && ($data['options']['image_types'] ?? null) === ['poster' => true]
+                    && ($data['options']['autoCollections'] ?? null) === ['enabled' => false];
+            }));
+
+        $scanJobs = $this->createMock(ScanJobRepository::class);
+        $controller = new LibraryController($libraryManager, $scanJobs);
+
+        $request = new Request();
+        $request->userId = 'admin-1';
+        $request->body = ['autoCollections' => ['enabled' => false]];
+
+        $response = $controller->update($request, ['id' => 'lib-1']);
+
+        $this->assertSame(200, $response->statusCode);
+    }
+
+    /**
+     * S33 update(): editing a DIFFERENT option (image_types) leaves a previously
+     * stored autoCollections flag intact — the merge starts from the full existing
+     * options blob, so the toggle is never silently wiped by an unrelated edit.
+     */
+    public function testUpdateImageTypesPreservesExistingAutoCollectionsFlag(): void
+    {
+        $libraryManager = $this->createMock(LibraryManager::class);
+        $libraryManager->expects($this->once())
+            ->method('getLibrary')
+            ->with('lib-1')
+            ->willReturn([
+                'id' => 'lib-1',
+                'name' => 'Movies',
+                'type' => 'movie',
+                'options' => ['autoCollections' => ['enabled' => false]],
+            ]);
+        $libraryManager->expects($this->once())
+            ->method('updateLibrary')
+            ->with('lib-1', $this->callback(static function (mixed $data): bool {
+                return is_array($data)
+                    && is_array($data['options'] ?? null)
+                    // The unrelated image_types edit did NOT drop autoCollections.
+                    && ($data['options']['autoCollections'] ?? null) === ['enabled' => false];
+            }));
+
+        $scanJobs = $this->createMock(ScanJobRepository::class);
+        $controller = new LibraryController($libraryManager, $scanJobs);
+
+        $request = new Request();
+        $request->userId = 'admin-1';
+        $request->body = ['image_types' => ['poster']];
+
+        $response = $controller->update($request, ['id' => 'lib-1']);
+
+        $this->assertSame(200, $response->statusCode);
+    }
+
+    /**
+     * S33 update(): a malformed autoCollections value (a map missing `enabled`)
+     * is rejected with 400 and never delegated to the manager.
+     */
+    public function testUpdateRejectsMalformedAutoCollections(): void
+    {
+        $libraryManager = $this->createMock(LibraryManager::class);
+        $libraryManager->method('getLibrary')->with('lib-1')->willReturn([
+            'id' => 'lib-1',
+            'name' => 'Movies',
+            'type' => 'movie',
+            'options' => [],
+        ]);
+        $libraryManager->expects($this->never())->method('updateLibrary');
+
+        $scanJobs = $this->createMock(ScanJobRepository::class);
+        $controller = new LibraryController($libraryManager, $scanJobs);
+
+        $request = new Request();
+        $request->userId = 'admin-1';
+        $request->body = ['autoCollections' => ['not_enabled' => true]];
+
+        $response = $controller->update($request, ['id' => 'lib-1']);
+
+        $this->assertSame(400, $response->statusCode);
+    }
+
+    /**
+     * S33 update(): a `{enabled: <value>}` map whose `enabled` value is a
+     * non-scalar (an object/map, a list) or a nonsensical non-bool scalar (a
+     * float) is malformed → 400, rather than being silently coerced to `false`
+     * by toBool(). The manager is never called.
+     *
+     * @dataProvider provideNonBoolAutoCollectionsEnabled
+     *
+     * @param mixed $enabledValue The malformed `enabled` value to reject.
+     */
+    public function testUpdateRejectsNonBoolAutoCollectionsEnabled(mixed $enabledValue): void
+    {
+        $libraryManager = $this->createMock(LibraryManager::class);
+        $libraryManager->method('getLibrary')->with('lib-1')->willReturn([
+            'id' => 'lib-1',
+            'name' => 'Movies',
+            'type' => 'movie',
+            'options' => [],
+        ]);
+        $libraryManager->expects($this->never())->method('updateLibrary');
+
+        $scanJobs = $this->createMock(ScanJobRepository::class);
+        $controller = new LibraryController($libraryManager, $scanJobs);
+
+        $request = new Request();
+        $request->userId = 'admin-1';
+        $request->body = ['autoCollections' => ['enabled' => $enabledValue]];
+
+        $response = $controller->update($request, ['id' => 'lib-1']);
+
+        $this->assertSame(400, $response->statusCode);
+    }
+
+    /**
+     * Malformed `enabled` values that must be rejected with 400.
+     *
+     * @return array<string, array{mixed}>
+     */
+    public static function provideNonBoolAutoCollectionsEnabled(): array
+    {
+        return [
+            'non-scalar map'  => [['x' => 1]],
+            'list'            => [[1, 2]],
+            'non-bool scalar' => [3.14],
+        ];
+    }
+
+    /**
+     * S33 create(): a valid `{enabled: bool}` map STILL succeeds and stores the
+     * canonical `{enabled: bool}` shape — proving the non-bool tightening did NOT
+     * over-reject a genuine boolean `enabled`.
+     *
+     * @dataProvider provideValidAutoCollectionsEnabledBool
+     *
+     * @param bool $enabled The valid boolean `enabled` value.
+     */
+    public function testCreateAcceptsValidBoolAutoCollectionsEnabled(bool $enabled): void
+    {
+        $libraryManager = $this->createMock(LibraryManager::class);
+        $libraryManager->expects($this->once())
+            ->method('createLibrary')
+            ->with('Movies', 'movie', ['/vault1/movies'], ['autoCollections' => ['enabled' => $enabled]])
+            ->willReturn('lib-new');
+
+        $scanJobs = $this->createMock(ScanJobRepository::class);
+        $scanJobs->method('enqueue')->willReturn('job-1');
+        $controller = new LibraryController($libraryManager, $scanJobs);
+
+        $request = new Request();
+        $request->userId = 'admin-1';
+        $request->body = [
+            'name' => 'Movies',
+            'type' => 'movie',
+            'paths' => ['/vault1/movies'],
+            'autoCollections' => ['enabled' => $enabled],
+        ];
+
+        $response = $controller->create($request, []);
+
+        $this->assertSame(201, $response->statusCode);
+    }
+
+    /**
+     * @return array<string, array{bool}>
+     */
+    public static function provideValidAutoCollectionsEnabledBool(): array
+    {
+        return [
+            'enabled true'  => [true],
+            'enabled false' => [false],
+        ];
+    }
+
+    /**
+     * S33 create(): a bare top-level boolean is ALSO an accepted form (documented
+     * shorthand for `{enabled: bool}`) and STILL stores the canonical
+     * `{enabled: bool}` shape — proving the tightening left the top-level bool path
+     * untouched.
+     */
+    public function testCreateAcceptsBareTopLevelBoolAutoCollections(): void
+    {
+        $libraryManager = $this->createMock(LibraryManager::class);
+        $libraryManager->expects($this->once())
+            ->method('createLibrary')
+            ->with('Movies', 'movie', ['/vault1/movies'], ['autoCollections' => ['enabled' => true]])
+            ->willReturn('lib-new');
+
+        $scanJobs = $this->createMock(ScanJobRepository::class);
+        $scanJobs->method('enqueue')->willReturn('job-1');
+        $controller = new LibraryController($libraryManager, $scanJobs);
+
+        $request = new Request();
+        $request->userId = 'admin-1';
+        $request->body = [
+            'name' => 'Movies',
+            'type' => 'movie',
+            'paths' => ['/vault1/movies'],
+            'autoCollections' => true,
+        ];
+
+        $response = $controller->create($request, []);
+
+        $this->assertSame(201, $response->statusCode);
+    }
+
+    /**
      * Negative: create() returns 400 when required fields are missing.
      */
     public function testCreateReturns400WhenRequiredFieldsMissing(): void

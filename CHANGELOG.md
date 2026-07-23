@@ -9,6 +9,34 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Added
 
+- **Relay tunnel TLS controls** (updates.md #38 / S38). Three new `config/relay.php`
+  keys plus matching environment variables let an operator opt the server↔hub relay
+  tunnel into TLS explicitly, independently of the server's public HTTP TLS:
+  - `relay_tls` / **`PHLIX_RELAY_TLS`** (default `false`) — when truthy (`1`/`true`),
+    the *derived* relay scheme becomes `wss://` and the connection is opened with
+    `transport='ssl'`. Mirrors the hub's `HUB_RELAY_TLS` flag; a TLS relay deploy
+    requires **both** `PHLIX_RELAY_TLS=1` on the server **and** `HUB_RELAY_TLS=true`
+    on the hub.
+  - `relay_tls_verify` / **`PHLIX_RELAY_TLS_VERIFY`** (default `true`/secure) — set to
+    `0` to accept a self-signed hub relay certificate (`verify_peer=false` +
+    `allow_self_signed=true`, mirroring the hub's permissive relay server context).
+  - `relay_tls_cafile` / **`PHLIX_RELAY_TLS_CAFILE`** (default
+    `/etc/ssl/certs/ca-certificates.crt`) — CA bundle used to verify the hub's relay
+    certificate when verification is on.
+
+  An explicit `hub_relay_ws_url` / `PHLIX_RELAY_HUB_WS_URL` remains the
+  highest-precedence override (and is no longer overwritten by `withAutoEnable()`);
+  when it points at a `wss://` URL it should be paired with `PHLIX_RELAY_TLS=1` so the
+  cert/verify keys apply and the start-time mismatch heads-up stays quiet.
+
+- **`RelayStateStore`** (updates.md #38 / S38). New `Phlix\Hub\RelayStateStore`
+  persists the relay tunnel's last connect state (connected/active, reconnect attempts,
+  active sessions, last disconnect time, last connect-error reason/time) to
+  `config/relay-tunnel.state.json` via atomic single-writer writes (unique `*.tmp` +
+  `LOCK_EX` + `0600` + `rename()`, mirroring `HubClient::storeEnrollment()`). This is an
+  internal groundwork mechanism consumed by the upcoming Network Health work (S40); the
+  relay fork writes it on connect/disconnect/reconnect and every connect-failure branch.
+
 - **DLNA inbound IP allowlist** (updates.md #35 / S50). The DLNA
   ContentDirectory (CDS) browse routes — which have NO authentication once
   `dlna.cds_enabled` is on — are now gated by a new
@@ -213,6 +241,23 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   with 404, and moving the route outside the admin group turns both gate tests red.
 
 ### Fixed
+
+- **Relay tunnel forced TLS regardless of scheme → silent hang against a plaintext
+  hub relay port** (updates.md #38 / S38). `openHubConnection()` previously set
+  `transport='ssl'` and attached an SSL context unconditionally, and `RelayConfig`
+  derived a `wss://` relay URL for any `https://` hub — so a default deploy tried to
+  do a TLS handshake against the hub's plaintext relay listener (`:8802`), which
+  produced no `onError`/`onClose` and simply deadlocked. The transport now keys off
+  the *resolved URL scheme*: a new pure `RelayConsumer::resolveHubTransport()` helper
+  derives `useTls = (scheme === 'wss')`, rewrites `wss://` → `ws://` for the Workerman
+  address (wss is not a registered transport), and only `openHubConnection()` when
+  `useTls` sets `transport='ssl'` + the SSL context. **The default derived relay
+  scheme is now plaintext `ws://`**, matching the hub's plaintext-by-default relay
+  listener — a change from the old always-`wss://` behavior. A TLS relay tunnel now
+  requires `PHLIX_RELAY_TLS=1` on the server together with `HUB_RELAY_TLS=true` on
+  the hub (see the new keys under Added). At boot, if the resolved relay URL is
+  `wss://` while `relay_tls` is off, a clear once-per-process `logger.hub` warning
+  explains the likely hang and the envs to set.
 
 - **`CollectionService` empty-TMDB-key smell** (S33). `getOrCreateCollection()` and
   `syncCollectionForMovie()` took a `$tmdbApiKey` argument the bodies never used —

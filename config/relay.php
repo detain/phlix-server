@@ -22,6 +22,13 @@ return [
     // The enrollment JWT is sent in the JSON HELLO body, not as an auth header.
     // When empty, the URL is derived from the enrollment's hub_base_url via
     // RelayConfig::withAutoEnable() at RelayConsumer start time.
+    //
+    // If you set an explicit wss:// URL here (or via PHLIX_RELAY_HUB_WS_URL),
+    // ALSO set relay_tls below (PHLIX_RELAY_TLS=1) so the intent is explicit and
+    // the cert/verify envs (relay_tls_verify / relay_tls_cafile) apply. The
+    // transport keys off the scheme, so a wss:// URL to a TLS hub relay port
+    // works either way, but pairing it with PHLIX_RELAY_TLS=1 keeps the config
+    // unambiguous and silences the start-time TLS-mismatch heads-up warning.
     'hub_relay_ws_url' => '',
 
     // Relay tunnel TLS (wss://). INDEPENDENT of the server's HTTP TLS and OFF by

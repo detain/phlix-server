@@ -573,9 +573,12 @@ final class RelayConsumer
             return;
         }
 
-        // 38.1: warn (once) + surface a reason when the resolved URL is wss://
-        // but relay TLS is not explicitly enabled — the classic silent-hang
-        // (TLS handshake to a plaintext hub relay port never completes).
+        // 38.1: log-only heads-up (once) when the resolved URL is wss:// but
+        // relay TLS is not explicitly enabled — the classic silent-hang risk
+        // (TLS handshake to a plaintext hub relay port never completes). This
+        // does NOT persist a down-reason: an explicit wss:// override with a
+        // TLS hub relay port is healthy, so a preemptive state write would be a
+        // false positive for the S40 health panel.
         $this->warnIfLikelyTlsMismatch($wsUrl);
 
         $enrollment = $this->hubClient->loadEnrollment();
@@ -825,16 +828,24 @@ final class RelayConsumer
     }
 
     /**
-     * 38.1: warn (once per process) + record a diagnostic reason when the
-     * resolved relay URL is `wss://` but relay TLS is not explicitly enabled.
+     * 38.1: warn (once per process) when the resolved relay URL is `wss://`
+     * but relay TLS is not explicitly enabled.
      *
-     * This is the classic silent-hang footgun: the hub relay listener is
-     * plaintext by default (`HUB_RELAY_TLS=false`), so a TLS ClientHello to it
-     * never gets a response — no `onError`, no `onClose`, just an endless
-     * reconnect loop. Because it hangs rather than failing, the reason is also
-     * persisted to the state store so the admin health panel (S40) can show
-     * WHY the tunnel is down even while the handshake is stalled. Cleared on a
-     * successful HELLO_ACK.
+     * This is a proactive operator heads-up for a possible footgun: the hub
+     * relay listener is plaintext by default (`HUB_RELAY_TLS=false`), so if the
+     * hub relay port is plaintext a TLS ClientHello never gets a response — no
+     * `onError`, no `onClose`, just an endless reconnect loop. After S38's
+     * scheme-derivation fix the only way to reach `wss:// + relayTls=false` is
+     * an explicit `PHLIX_RELAY_HUB_WS_URL=wss://…` override, and in that case
+     * `resolveHubTransport()` keys off the scheme and genuinely uses TLS — so
+     * the tunnel works fine when the hub relay port IS TLS.
+     *
+     * Because that override case is often healthy, this is LOG-ONLY: it does
+     * NOT persist a `lastConnectError` down-reason to the state store. The
+     * state store's `lastConnectError`/`lastConnectErrorAt` must reflect only
+     * ACTUAL connect failures/disconnects, never a preemptive heuristic, so the
+     * S40 Network Health panel is not misled into showing a "down reason" while
+     * the tunnel is actually up.
      *
      * @param string $wsUrl Resolved hub relay WS URL.
      *
@@ -859,16 +870,6 @@ final class RelayConsumer
             );
             $this->tlsMismatchWarned = true;
         }
-
-        $this->recordConnectError(
-            'wss:// relay URL with relay TLS disabled — TLS handshake to a likely-plaintext '
-            . 'hub relay port will hang. Set PHLIX_RELAY_TLS=1 + HUB_RELAY_TLS=true, or use ws://.',
-        );
-
-        // The hang produces no onError/onClose, so no later write would fire —
-        // persist the advisory now so the admin health panel (S40) can explain
-        // WHY the tunnel is stuck. Cleared on a successful HELLO_ACK.
-        $this->writeRelayState();
     }
 
     /**

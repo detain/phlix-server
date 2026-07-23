@@ -1728,7 +1728,7 @@ class RelayConsumerTest extends TestCase
         }
     }
 
-    public function test_relay_fork_persists_tls_mismatch_advisory(): void
+    public function test_relay_fork_does_not_persist_tls_mismatch_advisory(): void
     {
         $dir = sys_get_temp_dir() . '/phlix-relay-consumer-tlswarn-' . bin2hex(random_bytes(6));
         mkdir($dir, 0700, true);
@@ -1740,8 +1740,14 @@ class RelayConsumerTest extends TestCase
             // wss:// URL never reaches AsyncTcpConnection's protocol lookup.
             $hub = new FakeRelayConnection('ws://hub.example.com:8802');
 
-            // Explicit wss:// URL but relay TLS NOT enabled → the plaintext-port
-            // hang advisory must be recorded so the health panel can show it.
+            // Explicit wss:// URL but relay TLS NOT enabled. After S38's scheme
+            // derivation fix this branch is only reachable via an explicit
+            // wss:// override, and the transport still keys off the scheme
+            // (genuine TLS) — so the tunnel is HEALTHY when the hub relay port
+            // is TLS. The start-time heads-up is LOG-ONLY: it must NOT persist a
+            // spurious `lastConnectError` down-reason (a false positive that
+            // would mislead S40's Network Health panel into showing a "down
+            // reason" while the tunnel is actually up).
             $consumer = new RelayConsumer(
                 new RelayConfig(
                     enabled: true,
@@ -1760,10 +1766,21 @@ class RelayConsumerTest extends TestCase
 
             $consumer->start();
 
-            $state = $store->readRelayState();
-            $this->assertIsString($state['lastConnectError']);
-            $this->assertStringContainsString('wss://', $state['lastConnectError']);
-            $this->assertStringContainsString('PHLIX_RELAY_TLS', $state['lastConnectError']);
+            // The advisory branch fired (wss:// + relayTls=false), but it wrote
+            // NO preemptive down-reason: the state store carries no hang-advisory.
+            $afterStart = $store->readRelayState();
+            $this->assertArrayNotHasKey('lastConnectError', $afterStart);
+
+            // Complete a healthy handshake — the wss:// override to a TLS hub
+            // relay port works fine — and confirm the persisted state reflects an
+            // active tunnel with NO lingering/spurious connect-error down-reason.
+            $hub->fireConnect();
+            $hub->fireMessage($this->codec->encodeHelloAck('relay-session-1', 'tunnel-1'));
+
+            $active = $store->readRelayState();
+            $this->assertTrue($active['connected']);
+            $this->assertTrue($active['active']);
+            $this->assertNull($active['lastConnectError']);
         } finally {
             foreach (glob($dir . '/*') ?: [] as $f) {
                 @unlink($f);

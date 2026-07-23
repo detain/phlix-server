@@ -9,6 +9,18 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Added
 
+- **Nav entries hide without a matching library type** (updates.md / S25, Half B).
+  The web-ui now consumes `@phlix/ui` **v0.98.22**, which added the optional
+  `MenuItem.requiresLibraryType` field plus a fail-closed nav filter (Half A). The
+  server SPA menu in `web-ui/src/main.ts` tags its media-type entries with the
+  matching **singular** server library `type` ENUM value —
+  `Music → 'music'`, `Books → 'book'`, `Audiobooks → 'audiobook'`,
+  `Photos → 'photo'` — so each link appears only when a library of that type
+  exists (and stays hidden while the library list is still loading). Browse / For
+  You / Explore / SyncPlay / Search / Settings / Admin are untouched. The committed
+  `public/assets/app/` bundle was rebuilt so the deployed nav reflects the change;
+  no backend/API change.
+
 - **Per-library TMDB auto-collections toggle (backend)** (updates.md / S33). TMDB
   box-set auto-collection generation is now switchable **per library** instead of
   running unconditionally on every scan. The flag lives in the existing

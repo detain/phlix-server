@@ -170,4 +170,86 @@ final class RelayStateStoreTest extends TestCase
         @rmdir($nested);
         @rmdir($this->dir . '/nested');
     }
+
+    // ---------------------------------------------------------------------
+    // S39 operator kill-switch (relay-control.json).
+    // ---------------------------------------------------------------------
+
+    public function test_relay_disabled_defaults_to_false_when_no_control_file(): void
+    {
+        $store = new RelayStateStore($this->dir);
+        // No relay-control.json → not disabled (behaves as before the lever).
+        $this->assertFalse($store->isRelayDisabled());
+    }
+
+    public function test_set_relay_disabled_persists_and_reads_back_true(): void
+    {
+        $store = new RelayStateStore($this->dir);
+
+        $this->assertTrue($store->setRelayDisabled(true), 'write must report success');
+        $this->assertFileExists($this->dir . '/' . RelayStateStore::RELAY_CONTROL_FILE);
+        $this->assertTrue($store->isRelayDisabled());
+
+        // A fresh instance (mirrors the relay fork reading what the HTTP worker
+        // wrote in another process) sees the same persisted flag.
+        $freshInstance = new RelayStateStore($this->dir);
+        $this->assertTrue($freshInstance->isRelayDisabled());
+    }
+
+    public function test_set_relay_disabled_false_clears_the_kill_switch(): void
+    {
+        $store = new RelayStateStore($this->dir);
+        $store->setRelayDisabled(true);
+        $this->assertTrue($store->isRelayDisabled());
+
+        $this->assertTrue($store->setRelayDisabled(false));
+        $this->assertFalse($store->isRelayDisabled());
+    }
+
+    public function test_control_file_is_isolated_from_the_state_files(): void
+    {
+        $store = new RelayStateStore($this->dir);
+        $store->writeRelayState(['connected' => true]);
+        $store->setRelayDisabled(true);
+
+        // The control flag must not bleed into the tunnel-state file, nor vice
+        // versa — three single-writer files.
+        $this->assertTrue($store->readRelayState()['connected']);
+        $this->assertArrayNotHasKey('disabled', $store->readRelayState());
+
+        $controlRaw = file_get_contents($this->dir . '/' . RelayStateStore::RELAY_CONTROL_FILE);
+        $this->assertIsString($controlRaw);
+        /** @var array<string, mixed> $control */
+        $control = json_decode($controlRaw, true);
+        $this->assertArrayNotHasKey('connected', $control);
+        $this->assertTrue($control['disabled']);
+    }
+
+    public function test_control_file_is_owner_only_readable(): void
+    {
+        $store = new RelayStateStore($this->dir);
+        $store->setRelayDisabled(true);
+
+        $perms = fileperms($this->dir . '/' . RelayStateStore::RELAY_CONTROL_FILE) & 0777;
+        $this->assertSame(0600, $perms, 'control file must be chmod 0600');
+    }
+
+    public function test_set_relay_disabled_reports_failure_on_unwritable_location(): void
+    {
+        // configDir under an existing FILE → mkdir()/tmp write both fail; the
+        // load-bearing setter must report the failure (not silently swallow it).
+        $file = $this->dir . '/iam-a-file';
+        file_put_contents($file, 'x');
+
+        $store = new RelayStateStore($file . '/cannot');
+        $this->assertFalse($store->setRelayDisabled(true));
+    }
+
+    public function test_relay_disabled_false_for_unparseable_control_file(): void
+    {
+        file_put_contents($this->dir . '/' . RelayStateStore::RELAY_CONTROL_FILE, '{bad json');
+
+        $store = new RelayStateStore($this->dir);
+        $this->assertFalse($store->isRelayDisabled());
+    }
 }

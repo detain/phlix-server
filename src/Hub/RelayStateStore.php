@@ -20,10 +20,17 @@ namespace Phlix\Hub;
  * store is the cross-process bridge: each fork holds its own instance pointing
  * at the SAME `$configDir`, so the HTTP worker can read state the forks write.
  *
- * Two SINGLE-WRITER JSON files (one owner each — never shared between two writer
- * forks, to avoid multi-process write races):
+ * Three SINGLE-WRITER JSON files (one owner each — never shared between two
+ * writer processes, to avoid multi-process write races):
  *   - `relay-tunnel.state.json`  — sole writer = the relay fork (S38).
  *   - `hub-heartbeat.state.json` — sole writer = the heartbeat fork (S40).
+ *   - `relay-control.json`       — sole writer = the HTTP worker (S39): the
+ *     operator kill-switch persisted by the admin relay Enable/Disable controls;
+ *     the relay fork READS it at boot ({@see \Phlix\Hub\RelayConsumer} via
+ *     `start.php`) IN ADDITION to the `PHLIX_RELAY_DISABLED` env var, so the
+ *     toggle takes effect on the next reload. (HTTP worker writes, relay fork
+ *     reads — the mirror of the two state files above, preserving single-writer
+ *     discipline for every file.)
  *
  * Writes are ATOMIC (write to a unique `*.tmp` then `rename()`, `@chmod 0600`),
  * mirroring {@see HubClient::storeEnrollment()}. Reads are best-effort and
@@ -41,6 +48,12 @@ final class RelayStateStore
 
     /** Sole writer: the heartbeat fork ({@see HubClient} heartbeat loop). */
     public const HEARTBEAT_STATE_FILE = 'hub-heartbeat.state.json';
+
+    /**
+     * Sole writer: the HTTP worker (the admin relay Enable/Disable controls).
+     * Read by the relay fork at boot as an operator kill-switch (S39).
+     */
+    public const RELAY_CONTROL_FILE = 'relay-control.json';
 
     /**
      * @var string Directory the state files live in (same as hub-enrollment.json).
@@ -120,25 +133,67 @@ final class RelayStateStore
     }
 
     /**
+     * Persist the operator relay kill-switch (sole writer: the HTTP worker).
+     *
+     * `true` disables the relay tunnel; `false` clears the kill-switch. The
+     * relay fork honors this at boot ({@see isRelayDisabled()}) IN ADDITION to
+     * the `PHLIX_RELAY_DISABLED` env var, so the change takes effect on the next
+     * server reload rather than immediately (the tunnel runs in a separate fork
+     * with no live control channel).
+     *
+     * Unlike the diagnostic state writes, this is a LOAD-BEARING lever, so the
+     * caller is told whether the write actually persisted.
+     *
+     * @param bool $disabled `true` to disable the relay tunnel, `false` to enable.
+     *
+     * @return bool `true` when the flag was persisted, `false` on write failure.
+     *
+     * @since 0.20.0
+     */
+    public function setRelayDisabled(bool $disabled): bool
+    {
+        return $this->writeState(self::RELAY_CONTROL_FILE, ['disabled' => $disabled]);
+    }
+
+    /**
+     * Whether the operator relay kill-switch is set (best-effort, null-safe).
+     *
+     * Missing/unparseable control file → `false` (not disabled), so a fresh
+     * install with no persisted flag behaves exactly as before this lever
+     * existed.
+     *
+     * @return bool `true` when the persisted kill-switch disables the relay.
+     *
+     * @since 0.20.0
+     */
+    public function isRelayDisabled(): bool
+    {
+        $state = $this->readState(self::RELAY_CONTROL_FILE);
+        return ($state['disabled'] ?? false) === true;
+    }
+
+    /**
      * Atomically write a state file: stamp `updatedAt`, write a unique tmp file,
      * chmod 0600, then rename() over the target (atomic on the same filesystem).
      *
      * Best-effort: any failure (unencodable payload, unwritable dir, failed
-     * rename) is swallowed — persisted state is diagnostic, never load-bearing,
-     * so a write failure must never disrupt the resident worker.
+     * rename) is swallowed — the diagnostic state writes treat it as never
+     * load-bearing, so a write failure must never disrupt the resident worker.
+     * The boolean return lets the load-bearing kill-switch write
+     * ({@see setRelayDisabled()}) surface a genuine persist failure to the caller.
      *
-     * @param string               $file  State file name (a *_STATE_FILE const).
+     * @param string               $file  State file name (a *_FILE const).
      * @param array<string, mixed> $state State fields to persist.
      *
-     * @return void
+     * @return bool `true` when the file was written and renamed into place.
      */
-    private function writeState(string $file, array $state): void
+    private function writeState(string $file, array $state): bool
     {
         $state['updatedAt'] = (new \DateTimeImmutable())->format('c');
 
         $json = json_encode($state, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
         if ($json === false) {
-            return;
+            return false;
         }
 
         $path = $this->pathFor($file);
@@ -152,14 +207,17 @@ final class RelayStateStore
         $tmp = $path . '.' . getmypid() . '.tmp';
         if (@file_put_contents($tmp, $json, LOCK_EX) === false) {
             @unlink($tmp);
-            return;
+            return false;
         }
 
         @chmod($tmp, 0600);
 
         if (!@rename($tmp, $path)) {
             @unlink($tmp);
+            return false;
         }
+
+        return true;
     }
 
     /**

@@ -32,6 +32,11 @@ final class RelayConfig
     public const DEFAULT_HUB_RELAY_WS_PORT = 8802;
 
     /**
+     * Default CA bundle used to verify the hub's relay TLS certificate.
+     */
+    public const DEFAULT_TLS_CAFILE = '/etc/ssl/certs/ca-certificates.crt';
+
+    /**
      * @param bool   $enabled               Whether the relay tunnel is enabled.
      * @param string $hubWssUrl             Legacy hub relay endpoint template
      *                                      (e.g. wss://hub.example.com/api/v1/servers/{id}/relay).
@@ -51,6 +56,21 @@ final class RelayConfig
      * @param string $localHttpAddress      Address of this server's own local HTTP
      *                                      listener that relayed client bytes are piped
      *                                      to (default 127.0.0.1:8096).
+     * @param bool   $relayTls              Whether the relay tunnel uses TLS (wss://).
+     *                                      This is INDEPENDENT of the server's HTTP TLS
+     *                                      and mirrors the hub's HUB_RELAY_TLS default of
+     *                                      false — the hub relay listener is plaintext by
+     *                                      default, so the derived relay scheme must be
+     *                                      `ws://` unless TLS is explicitly enabled on both
+     *                                      ends. Ignored when $hubRelayWsUrl is set (that
+     *                                      explicit URL's scheme wins).
+     * @param bool   $relayTlsVerify       Whether to verify the hub's presented relay TLS
+     *                                      certificate against $relayTlsCafile. Default true
+     *                                      (secure). Set false to accept a self-signed hub
+     *                                      relay cert (verify_peer=false + allow_self_signed),
+     *                                      matching the hub's permissive relay listener.
+     * @param string $relayTlsCafile       CA bundle used to verify the hub's relay TLS
+     *                                      certificate (default = system bundle).
      */
     public function __construct(
         public readonly bool $enabled = false,
@@ -64,6 +84,9 @@ final class RelayConfig
         public readonly int $pingTimeout = 10,
         public readonly string $hubRelayWsUrl = '',
         public readonly string $localHttpAddress = '127.0.0.1:8096',
+        public readonly bool $relayTls = false,
+        public readonly bool $relayTlsVerify = true,
+        public readonly string $relayTlsCafile = self::DEFAULT_TLS_CAFILE,
     ) {
     }
 
@@ -89,6 +112,13 @@ final class RelayConfig
         $localAddress = '127.0.0.1:0';
         $hubRelayWsUrl = getenv('PHLIX_RELAY_HUB_WS_URL') ?: '';
         $localHttpAddress = getenv('PHLIX_RELAY_LOCAL_HTTP_ADDRESS') ?: '127.0.0.1:8096';
+        // Relay TLS is INDEPENDENT of HTTP TLS and OFF by default, mirroring the
+        // hub's HUB_RELAY_TLS default (its relay listener is plaintext by
+        // default). Verification stays ON by default (secure); disable it only
+        // to trust a self-signed hub relay cert.
+        $relayTls = self::getEnvBool('PHLIX_RELAY_TLS', false);
+        $relayTlsVerify = self::getEnvBool('PHLIX_RELAY_TLS_VERIFY', true);
+        $relayTlsCafile = getenv('PHLIX_RELAY_TLS_CAFILE') ?: self::DEFAULT_TLS_CAFILE;
 
         if ($overrides !== null) {
             $enabled = is_bool($overrides['enabled'] ?? null)
@@ -113,6 +143,12 @@ final class RelayConfig
                 ? $overrides['hub_relay_ws_url'] : $hubRelayWsUrl;
             $localHttpAddress = is_string($overrides['local_http_address'] ?? null)
                 ? $overrides['local_http_address'] : $localHttpAddress;
+            $relayTls = is_bool($overrides['relay_tls'] ?? null)
+                ? $overrides['relay_tls'] : $relayTls;
+            $relayTlsVerify = is_bool($overrides['relay_tls_verify'] ?? null)
+                ? $overrides['relay_tls_verify'] : $relayTlsVerify;
+            $relayTlsCafile = is_string($overrides['relay_tls_cafile'] ?? null)
+                ? $overrides['relay_tls_cafile'] : $relayTlsCafile;
         }
 
         return new self(
@@ -127,6 +163,9 @@ final class RelayConfig
             pingTimeout: $pingTimeout,
             hubRelayWsUrl: $hubRelayWsUrl,
             localHttpAddress: $localHttpAddress,
+            relayTls: $relayTls,
+            relayTlsVerify: $relayTlsVerify,
+            relayTlsCafile: $relayTlsCafile,
         );
     }
 
@@ -135,11 +174,19 @@ final class RelayConfig
      *
      * Relay auto-enables once the server is paired with a hub (P1): the
      * presence of a stored enrollment is sufficient — no `PHLIX_RELAY_ENABLED`
-     * env var is required. When a hubBaseUrl is provided (from enrollment), it
-     * always takes precedence and the relay WS URL is derived from it (host +
-     * the standard relay port 8802; scheme `wss` for an https hub, `ws`
-     * otherwise). This ensures enrolled servers always relay through the
-     * correct hub without any further configuration.
+     * env var is required.
+     *
+     * Precedence for the derived relay WS URL:
+     *   1. An explicit {@see $hubRelayWsUrl} (from `PHLIX_RELAY_HUB_WS_URL` /
+     *      `config/relay.php` `hub_relay_ws_url`) is HIGHEST precedence and is
+     *      never overwritten here.
+     *   2. Otherwise it is derived from $hubBaseUrl (host + the standard relay
+     *      port 8802). The scheme follows {@see $relayTls} — NOT the hub's HTTP
+     *      scheme — because relay TLS is a separate concern from HTTP TLS: the
+     *      hub relay listener is plaintext by default (HUB_RELAY_TLS=false), so
+     *      deriving `wss://` for every https hub deadlocks the handshake against
+     *      that plaintext port. Enable TLS explicitly (PHLIX_RELAY_TLS=1 here +
+     *      HUB_RELAY_TLS=true on the hub) to get `wss://`.
      *
      * @param string $hubBaseUrl The hub base URL from the stored enrollment
      *                           (e.g. https://hub.phlix.interserver.net).
@@ -152,10 +199,12 @@ final class RelayConfig
     {
         $hubRelayWsUrl = $this->hubRelayWsUrl;
 
-        if ($hubBaseUrl !== '') {
+        // Only derive when no explicit override is configured — the explicit
+        // URL (and its scheme) is highest precedence and must win.
+        if ($hubRelayWsUrl === '' && $hubBaseUrl !== '') {
             $parts = parse_url($hubBaseUrl);
             if (is_array($parts) && isset($parts['host']) && is_string($parts['host'])) {
-                $scheme = (isset($parts['scheme']) && $parts['scheme'] === 'https') ? 'wss' : 'ws';
+                $scheme = $this->relayTls ? 'wss' : 'ws';
                 $hubRelayWsUrl = $scheme . '://' . $parts['host'] . ':' . self::DEFAULT_HUB_RELAY_WS_PORT;
             }
         }
@@ -172,6 +221,9 @@ final class RelayConfig
             pingTimeout: $this->pingTimeout,
             hubRelayWsUrl: $hubRelayWsUrl,
             localHttpAddress: $this->localHttpAddress,
+            relayTls: $this->relayTls,
+            relayTlsVerify: $this->relayTlsVerify,
+            relayTlsCafile: $this->relayTlsCafile,
         );
     }
 
@@ -220,9 +272,12 @@ final class RelayConfig
      * query string, or Authorization header is needed on the upgrade.
      *
      * Resolution order:
-     *   1. Explicit {@see $hubRelayWsUrl} (e.g. `ws://hub.example.com:8802`).
-     *   2. Derived from {@see $hubWssUrl} host with the scheme normalised to
-     *      ws/wss and port forced to {@see DEFAULT_HUB_RELAY_WS_PORT}.
+     *   1. Explicit {@see $hubRelayWsUrl} (e.g. `ws://hub.example.com:8802`) —
+     *      returned verbatim, highest precedence (its scheme wins).
+     *   2. Derived from {@see $hubWssUrl} host with the scheme decided by
+     *      {@see $relayTls} (NOT the legacy template's scheme — relay TLS is
+     *      independent of HTTP TLS, see {@see withAutoEnable()}) and the port
+     *      forced to {@see DEFAULT_HUB_RELAY_WS_PORT}.
      *
      * Returns a Workerman `AsyncTcpConnection` address (`ws://host:port`
      * or `wss://host:port`); an empty string if no hub host can be derived.
@@ -246,7 +301,7 @@ final class RelayConfig
             return '';
         }
 
-        $scheme = (isset($parts['scheme']) && $parts['scheme'] === 'wss') ? 'wss' : 'ws';
+        $scheme = $this->relayTls ? 'wss' : 'ws';
 
         return $scheme . '://' . $parts['host'] . ':' . self::DEFAULT_HUB_RELAY_WS_PORT;
     }

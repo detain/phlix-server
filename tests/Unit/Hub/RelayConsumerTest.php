@@ -10,6 +10,7 @@ use Phlix\Hub\HubClient;
 use Phlix\Hub\RelayConfig;
 use Phlix\Hub\RelayConsumer;
 use Phlix\Hub\RelayMessageFramer;
+use Phlix\Hub\RelayStateStore;
 use Phlix\Hub\StoredEnrollment;
 use Phlix\Shared\Relay\RelayFrame;
 use Phlix\Shared\Relay\RelayFrameType;
@@ -825,11 +826,25 @@ class RelayConsumerTest extends TestCase
         $this->assertSame('ws://hub.example.com:8802', $config->buildHubRelayWsUrl());
     }
 
-    public function test_build_hub_relay_ws_url_derives_from_https_template(): void
+    public function test_build_hub_relay_ws_url_derives_plaintext_by_default(): void
     {
+        // S38: relay TLS is independent of HTTP TLS and OFF by default, so even
+        // an https/wss template derives a PLAINTEXT ws:// relay URL — the hub
+        // relay listener is plaintext by default and a wss handshake to it hangs.
         $config = new RelayConfig(
             enabled: true,
             hubWssUrl: 'wss://hub.example.com/api/v1/servers/{id}/relay',
+        );
+        $this->assertSame('ws://hub.example.com:8802', $config->buildHubRelayWsUrl());
+    }
+
+    public function test_build_hub_relay_ws_url_derives_wss_when_relay_tls_enabled(): void
+    {
+        // With relay TLS explicitly enabled the derived scheme becomes wss://.
+        $config = new RelayConfig(
+            enabled: true,
+            hubWssUrl: 'wss://hub.example.com/api/v1/servers/{id}/relay',
+            relayTls: true,
         );
         $this->assertSame('wss://hub.example.com:8802', $config->buildHubRelayWsUrl());
     }
@@ -1470,12 +1485,25 @@ class RelayConsumerTest extends TestCase
         return count($acc);
     }
 
-    public function test_relay_config_with_auto_enable_derives_ws_url(): void
+    public function test_relay_config_with_auto_enable_derives_plaintext_ws_url_by_default(): void
     {
+        // S38: relay TLS is INDEPENDENT of HTTP TLS and OFF by default, so even
+        // an https hub derives a plaintext ws:// relay URL (the hub relay port is
+        // plaintext by default; a wss handshake to it would hang forever).
         $config = new RelayConfig(enabled: false);
         $enabled = $config->withAutoEnable('https://hub.phlix.interserver.net');
 
         $this->assertTrue($enabled->enabled);
+        $this->assertSame('ws://hub.phlix.interserver.net:8802', $enabled->buildHubRelayWsUrl());
+    }
+
+    public function test_relay_config_with_auto_enable_derives_wss_when_relay_tls_enabled(): void
+    {
+        // With relay TLS explicitly enabled (PHLIX_RELAY_TLS=1) the derived
+        // scheme becomes wss:// even though it is decided independently of the
+        // hub's https scheme.
+        $config = new RelayConfig(enabled: false, relayTls: true);
+        $enabled = $config->withAutoEnable('https://hub.phlix.interserver.net');
         $this->assertSame('wss://hub.phlix.interserver.net:8802', $enabled->buildHubRelayWsUrl());
     }
 
@@ -1488,12 +1516,259 @@ class RelayConsumerTest extends TestCase
 
     public function test_relay_config_with_auto_enable_keeps_explicit_ws_url(): void
     {
-        // When hubBaseUrl is provided, withAutoEnable() always derives the relay URL from it,
-        // overriding any explicit hubRelayWsUrl. This is correct because the enrollment's
-        // hub_base_url is the authoritative source for hub location - a server enrolled
-        // with a hub should always relay through that hub, not a default localhost config.
+        // S38: an explicit hubRelayWsUrl (PHLIX_RELAY_HUB_WS_URL / config
+        // hub_relay_ws_url) is HIGHEST precedence and must NOT be overwritten by
+        // the URL derived from the enrollment's hub_base_url.
         $config = new RelayConfig(enabled: false, hubRelayWsUrl: 'ws://explicit:9999');
         $enabled = $config->withAutoEnable('https://hub.phlix.interserver.net');
-        $this->assertSame('wss://hub.phlix.interserver.net:8802', $enabled->buildHubRelayWsUrl());
+        $this->assertSame('ws://explicit:9999', $enabled->buildHubRelayWsUrl());
+    }
+
+    // ---------------------------------------------------------------------
+    // S38: transport decision (TLS-vs-scheme) — the pure helper.
+    // ---------------------------------------------------------------------
+
+    private function bareConsumer(RelayConfig $config): RelayConsumer
+    {
+        return new RelayConsumer(
+            $config,
+            $this->createMockHubClient(),
+            new StructuredLogger('relay', []),
+            'server-uuid-123',
+        );
+    }
+
+    /**
+     * @return array{address: string, useTls: bool, context: array<string, mixed>}
+     */
+    private function resolveTransport(RelayConfig $config, string $wsUrl): array
+    {
+        $m = new \ReflectionMethod(RelayConsumer::class, 'resolveHubTransport');
+        $m->setAccessible(true);
+        /** @var array{address: string, useTls: bool, context: array<string, mixed>} $result */
+        $result = $m->invoke($this->bareConsumer($config), $wsUrl);
+        return $result;
+    }
+
+    public function test_transport_plaintext_for_ws_scheme(): void
+    {
+        $t = $this->resolveTransport(new RelayConfig(), 'ws://hub.example.com:8802');
+
+        $this->assertFalse($t['useTls']);
+        $this->assertSame('ws://hub.example.com:8802', $t['address']);
+        $this->assertSame([], $t['context'], 'plaintext ws:// must attach no SSL context');
+    }
+
+    public function test_transport_tls_for_wss_scheme(): void
+    {
+        $t = $this->resolveTransport(new RelayConfig(), 'wss://hub.example.com:8802');
+
+        $this->assertTrue($t['useTls']);
+        // Workerman needs the ws:// address + transport=ssl for wss.
+        $this->assertSame('ws://hub.example.com:8802', $t['address']);
+        $this->assertArrayHasKey('ssl', $t['context']);
+        /** @var array<string, mixed> $ssl */
+        $ssl = $t['context']['ssl'];
+        $this->assertTrue($ssl['verify_peer'], 'verification must default ON (secure)');
+        $this->assertSame(RelayConfig::DEFAULT_TLS_CAFILE, $ssl['cafile']);
+        $this->assertArrayNotHasKey('allow_self_signed', $ssl);
+    }
+
+    public function test_transport_tls_permissive_when_verify_disabled(): void
+    {
+        $config = new RelayConfig(relayTlsVerify: false);
+        $t = $this->resolveTransport($config, 'wss://hub.example.com:8802');
+
+        $this->assertTrue($t['useTls']);
+        /** @var array<string, mixed> $ssl */
+        $ssl = $t['context']['ssl'];
+        $this->assertFalse($ssl['verify_peer']);
+        $this->assertTrue($ssl['allow_self_signed']);
+    }
+
+    public function test_transport_tls_uses_configured_cafile(): void
+    {
+        $config = new RelayConfig(relayTlsCafile: '/etc/custom/bundle.pem');
+        $t = $this->resolveTransport($config, 'wss://hub.example.com:8802');
+
+        /** @var array<string, mixed> $ssl */
+        $ssl = $t['context']['ssl'];
+        $this->assertSame('/etc/custom/bundle.pem', $ssl['cafile']);
+    }
+
+    // ---------------------------------------------------------------------
+    // S38: relay fork persists its state to the cross-process store.
+    // ---------------------------------------------------------------------
+
+    public function test_relay_fork_persists_active_then_disconnected_state(): void
+    {
+        $dir = sys_get_temp_dir() . '/phlix-relay-consumer-state-' . bin2hex(random_bytes(6));
+        mkdir($dir, 0700, true);
+
+        try {
+            $store = new RelayStateStore($dir);
+            $hub = new FakeRelayConnection('ws://hub.example.com:8802');
+
+            $consumer = new RelayConsumer(
+                new RelayConfig(
+                    enabled: true,
+                    hubRelayWsUrl: 'ws://hub.example.com:8802',
+                    localHttpAddress: '127.0.0.1:8096',
+                ),
+                $this->createMockHubClient(),
+                new StructuredLogger('relay', []),
+                'server-uuid-123',
+                hubConnectionFactory: static fn (string $url): AsyncTcpConnection => $hub,
+                localConnectionFactory: static fn (string $url): AsyncTcpConnection
+                    => new FakeRelayConnection($url),
+                httpDispatcher: null,
+                stateStore: $store,
+            );
+
+            $consumer->start();
+            $hub->fireConnect();
+            $hub->fireMessage($this->codec->encodeHelloAck('relay-session-1', 'tunnel-1'));
+
+            $active = $store->readRelayState();
+            $this->assertTrue($active['connected']);
+            $this->assertTrue($active['active']);
+            $this->assertNull($active['lastConnectError']);
+            $this->assertSame(0, $active['reconnectAttempts']);
+
+            // Simulate an unexpected tunnel close.
+            $hub->close();
+
+            $down = $store->readRelayState();
+            $this->assertFalse($down['connected']);
+            $this->assertFalse($down['active']);
+            $this->assertNotNull($down['lastDisconnectTime']);
+        } finally {
+            foreach (glob($dir . '/*') ?: [] as $f) {
+                @unlink($f);
+            }
+            @rmdir($dir);
+        }
+    }
+
+    public function test_relay_fork_persists_not_enrolled_reason(): void
+    {
+        $dir = sys_get_temp_dir() . '/phlix-relay-consumer-noenroll-' . bin2hex(random_bytes(6));
+        mkdir($dir, 0700, true);
+
+        try {
+            $store = new RelayStateStore($dir);
+
+            // HubClient that reports NO enrollment.
+            $hubClient = $this->createMock(HubClient::class);
+            $hubClient->method('loadEnrollment')->willReturn(null);
+
+            $consumer = new RelayConsumer(
+                new RelayConfig(
+                    enabled: true,
+                    hubRelayWsUrl: 'ws://hub.example.com:8802',
+                ),
+                $hubClient,
+                new StructuredLogger('relay', []),
+                'server-uuid-123',
+                hubConnectionFactory: static fn (string $url): AsyncTcpConnection
+                    => new FakeRelayConnection($url),
+                localConnectionFactory: static fn (string $url): AsyncTcpConnection
+                    => new FakeRelayConnection($url),
+                httpDispatcher: null,
+                stateStore: $store,
+            );
+
+            $consumer->start();
+
+            $state = $store->readRelayState();
+            $this->assertFalse($state['connected']);
+            $this->assertIsString($state['lastConnectError']);
+            $this->assertStringContainsString('not enrolled', $state['lastConnectError']);
+        } finally {
+            foreach (glob($dir . '/*') ?: [] as $f) {
+                @unlink($f);
+            }
+            @rmdir($dir);
+        }
+    }
+
+    public function test_relay_fork_persists_no_endpoint_reason(): void
+    {
+        $dir = sys_get_temp_dir() . '/phlix-relay-consumer-noendpoint-' . bin2hex(random_bytes(6));
+        mkdir($dir, 0700, true);
+
+        try {
+            $store = new RelayStateStore($dir);
+
+            // Enabled but with no resolvable relay URL at all.
+            $consumer = new RelayConsumer(
+                new RelayConfig(enabled: true),
+                $this->createMockHubClient(),
+                new StructuredLogger('relay', []),
+                'server-uuid-123',
+                hubConnectionFactory: static fn (string $url): AsyncTcpConnection
+                    => new FakeRelayConnection($url),
+                localConnectionFactory: static fn (string $url): AsyncTcpConnection
+                    => new FakeRelayConnection($url),
+                httpDispatcher: null,
+                stateStore: $store,
+            );
+
+            $consumer->start();
+
+            $state = $store->readRelayState();
+            $this->assertFalse($state['connected']);
+            $this->assertIsString($state['lastConnectError']);
+            $this->assertStringContainsString('no hub relay endpoint', $state['lastConnectError']);
+        } finally {
+            foreach (glob($dir . '/*') ?: [] as $f) {
+                @unlink($f);
+            }
+            @rmdir($dir);
+        }
+    }
+
+    public function test_relay_fork_persists_tls_mismatch_advisory(): void
+    {
+        $dir = sys_get_temp_dir() . '/phlix-relay-consumer-tlswarn-' . bin2hex(random_bytes(6));
+        mkdir($dir, 0700, true);
+
+        try {
+            $store = new RelayStateStore($dir);
+            // The real openHubConnection rewrites wss->ws before constructing the
+            // connection; here we hand back a pre-built ws:// fake so the raw
+            // wss:// URL never reaches AsyncTcpConnection's protocol lookup.
+            $hub = new FakeRelayConnection('ws://hub.example.com:8802');
+
+            // Explicit wss:// URL but relay TLS NOT enabled → the plaintext-port
+            // hang advisory must be recorded so the health panel can show it.
+            $consumer = new RelayConsumer(
+                new RelayConfig(
+                    enabled: true,
+                    hubRelayWsUrl: 'wss://hub.example.com:8802',
+                    relayTls: false,
+                ),
+                $this->createMockHubClient(),
+                new StructuredLogger('relay', []),
+                'server-uuid-123',
+                hubConnectionFactory: static fn (string $url): AsyncTcpConnection => $hub,
+                localConnectionFactory: static fn (string $url): AsyncTcpConnection
+                    => new FakeRelayConnection($url),
+                httpDispatcher: null,
+                stateStore: $store,
+            );
+
+            $consumer->start();
+
+            $state = $store->readRelayState();
+            $this->assertIsString($state['lastConnectError']);
+            $this->assertStringContainsString('wss://', $state['lastConnectError']);
+            $this->assertStringContainsString('PHLIX_RELAY_TLS', $state['lastConnectError']);
+        } finally {
+            foreach (glob($dir . '/*') ?: [] as $f) {
+                @unlink($f);
+            }
+            @rmdir($dir);
+        }
     }
 }

@@ -30,6 +30,7 @@ use Phlix\Hub\RelayApplication;
 use Phlix\Hub\RelayConfig;
 use Phlix\Hub\RelayConsumer;
 use Phlix\Hub\RelayMessageFramer;
+use Phlix\Hub\RelayStateStore;
 use Phlix\Server\Http\Controllers\HubJwksController;
 use Phlix\Server\Http\Controllers\HubTokenController;
 use Phlix\Server\Http\Middleware\HubJwtMiddleware;
@@ -186,16 +187,26 @@ final class HubServicesProvider implements ServiceProviderInterface
 
             RelayMessageFramer::class => autowire(),
 
+            // Cross-process state store (S38): the relay + heartbeat forks write
+            // their live state to single-writer JSON files under $configDir; the
+            // HTTP worker's health/admin surfaces read them (S39/S40). Same dir
+            // as hub-enrollment.json (already writable).
+            RelayStateStore::class => factory(
+                static fn (): RelayStateStore => new RelayStateStore($configDir)
+            ),
+
             RelayConsumer::class => factory(
                 static function (ContainerInterface $c): RelayConsumer {
                     $config = $c->get(RelayConfig::class);
                     $hubClient = $c->get(HubClient::class);
                     $logger = $c->get('logger.hub');
+                    $stateStore = $c->get(RelayStateStore::class);
 
                     if (
                         !$config instanceof RelayConfig
                         || !$hubClient instanceof HubClient
                         || !$logger instanceof StructuredLogger
+                        || !$stateStore instanceof RelayStateStore
                     ) {
                         throw new \RuntimeException('RelayConsumer dependencies misconfigured');
                     }
@@ -212,6 +223,10 @@ final class HubServicesProvider implements ServiceProviderInterface
                         $hubClient,
                         $logger,
                         $serverId,
+                        null,
+                        null,
+                        null,
+                        $stateStore,
                     );
                 }
             ),

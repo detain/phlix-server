@@ -851,6 +851,13 @@ try {
             }
         }
 
+        // S38: cross-process state store — this relay fork is the SOLE writer of
+        // relay-tunnel.state.json, which the HTTP worker's health/admin surfaces
+        // (S39/S40) read to reflect the real tunnel's state instead of the
+        // never-started container-local copy they hold.
+        /** @var \Phlix\Hub\RelayStateStore $relayStateStore */
+        $relayStateStore = $container->get(\Phlix\Hub\RelayStateStore::class);
+
         $consumer = new \Phlix\Hub\RelayConsumer(
             $relayConfig,
             $hubClient,
@@ -860,6 +867,7 @@ try {
             null,
             static fn (\Phlix\Server\Http\Request $req): \Phlix\Server\Http\Response
                 => $relayDispatcher->dispatch($req),
+            $relayStateStore,
         );
 
         // SV-4.2 ([S-F23], X1): wire the segment-process registry so HTTP_CANCEL

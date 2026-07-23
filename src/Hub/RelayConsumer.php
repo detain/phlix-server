@@ -163,6 +163,23 @@ final class RelayConsumer
     /** @var \DateTimeImmutable|null Timestamp of the last tunnel disconnect. */
     private ?\DateTimeImmutable $lastDisconnectTime = null;
 
+    /**
+     * @var string|null Human-readable reason the last connect attempt failed
+     *      (or a proactive advisory such as the plaintext-port TLS mismatch),
+     *      surfaced to the admin via {@see RelayStateStore}. Cleared on a
+     *      successful HELLO_ACK.
+     */
+    private ?string $lastConnectError = null;
+
+    /** @var \DateTimeImmutable|null When {@see $lastConnectError} was recorded. */
+    private ?\DateTimeImmutable $lastConnectErrorAt = null;
+
+    /**
+     * @var bool Whether the likely-plaintext-port TLS-mismatch warning has been
+     *      logged this process, so a reconnect loop does not spam the log.
+     */
+    private bool $tlsMismatchWarned = false;
+
     /** @var int Nanoseconds from hrtime(true) when the session started. */
     private int $sessionStartTime = 0;
 
@@ -264,6 +281,17 @@ final class RelayConsumer
     private $segmentRegistry = null;
 
     /**
+     * Cross-process state store. When set (relay fork), the tunnel's
+     * connected/active/error state is persisted so the HTTP-worker health and
+     * admin surfaces (S39/S40) can read the real fork's state — the container
+     * copy they hold is never started. Null in unit tests / the HTTP-worker
+     * copy that only reads.
+     *
+     * @var RelayStateStore|null
+     */
+    private ?RelayStateStore $stateStore = null;
+
+    /**
      * @param RelayConfig      $config                  Relay configuration.
      * @param HubClient        $hubClient               Hub client (for enrollment info).
      * @param StructuredLogger $logger                  Logger instance.
@@ -278,6 +306,10 @@ final class RelayConsumer
      *        Dispatcher for proxied HTTP_REQUEST frames (routes a synthetic request
      *        through the local app and returns the response). Null disables HTTP
      *        proxying (the server replies 503 to HTTP_REQUEST frames).
+     * @param RelayStateStore|null $stateStore
+     *        Cross-process state store; when set, the relay fork persists tunnel
+     *        state to `relay-tunnel.state.json` for the HTTP worker to read. Null
+     *        disables persistence (the container/HTTP-worker copy and unit tests).
      */
     public function __construct(
         RelayConfig $config,
@@ -287,6 +319,7 @@ final class RelayConsumer
         ?callable $hubConnectionFactory = null,
         ?callable $localConnectionFactory = null,
         ?callable $httpDispatcher = null,
+        ?RelayStateStore $stateStore = null,
     ) {
         $this->config = $config;
         $this->hubClient = $hubClient;
@@ -296,6 +329,7 @@ final class RelayConsumer
         $this->hubConnectionFactory = $hubConnectionFactory;
         $this->localConnectionFactory = $localConnectionFactory;
         $this->httpDispatcher = $httpDispatcher;
+        $this->stateStore = $stateStore;
     }
 
     /**
@@ -437,6 +471,46 @@ final class RelayConsumer
     }
 
     /**
+     * Record the reason the last connect attempt failed (or a proactive
+     * advisory), with a timestamp, for the admin health panel to surface.
+     *
+     * @param string $message Human-readable reason.
+     *
+     * @return void
+     *
+     * @since 0.20.0
+     */
+    private function recordConnectError(string $message): void
+    {
+        $this->lastConnectError = $message;
+        $this->lastConnectErrorAt = new \DateTimeImmutable();
+    }
+
+    /**
+     * Persist the current tunnel state to the cross-process state store.
+     *
+     * No-op when no store is wired (unit tests / the HTTP-worker copy). The
+     * relay fork is the SOLE writer of `relay-tunnel.state.json`; the HTTP
+     * worker only reads it (S39/S40).
+     *
+     * @return void
+     *
+     * @since 0.20.0
+     */
+    private function writeRelayState(): void
+    {
+        $this->stateStore?->writeRelayState([
+            'connected' => $this->isConnected(),
+            'active' => $this->isActive(),
+            'reconnectAttempts' => $this->reconnectAttempts,
+            'activeSessions' => $this->getActiveSessionCount(),
+            'lastDisconnectTime' => $this->getLastDisconnectTime(),
+            'lastConnectError' => $this->lastConnectError,
+            'lastConnectErrorAt' => $this->lastConnectErrorAt?->format('c'),
+        ]);
+    }
+
+    /**
      * Connect to the hub's server-tunnel WS endpoint.
      *
      * @return void
@@ -494,9 +568,15 @@ final class RelayConsumer
         ]);
         if ($wsUrl === '') {
             $this->logger->error('RelayConsumer: no hub relay WS endpoint configured');
+            $this->recordConnectError('no hub relay endpoint configured');
             $this->scheduleReconnect();
             return;
         }
+
+        // 38.1: warn (once) + surface a reason when the resolved URL is wss://
+        // but relay TLS is not explicitly enabled — the classic silent-hang
+        // (TLS handshake to a plaintext hub relay port never completes).
+        $this->warnIfLikelyTlsMismatch($wsUrl);
 
         $enrollment = $this->hubClient->loadEnrollment();
         $this->logger->debug('RelayConsumer::connect() loaded enrollment', [
@@ -504,6 +584,7 @@ final class RelayConsumer
         ]);
         if ($enrollment === null) {
             $this->logger->error('RelayConsumer: cannot connect without enrollment');
+            $this->recordConnectError('not enrolled (no stored hub enrollment)');
             $this->scheduleReconnect();
             return;
         }
@@ -536,6 +617,7 @@ final class RelayConsumer
                 'exception_line' => $e->getLine(),
                 'exception_trace' => $e->getTraceAsString(),
             ]);
+            $this->recordConnectError('failed to open hub connection: ' . $e->getMessage());
             $this->scheduleReconnect();
             return;
         }
@@ -592,6 +674,7 @@ final class RelayConsumer
                 'exception_line' => $e->getLine(),
                 'exception_trace' => $e->getTraceAsString(),
             ]);
+            $this->recordConnectError('connect() failed: ' . $e->getMessage());
             $this->scheduleReconnect();
         }
     }
@@ -642,34 +725,150 @@ final class RelayConsumer
             return $result;
         }
 
-        $context = [
-            'ssl' => [
-                'verify_peer' => true,
-                'verify_peer_name' => true,
-                'cafile' => '/etc/ssl/certs/ca-certificates.crt',
-                'SNI_enabled' => true,
-                'crypto_method' => STREAM_CRYPTO_METHOD_TLSv1_2_CLIENT | STREAM_CRYPTO_METHOD_TLSv1_3_CLIENT,
-            ],
-        ];
+        // 38.1/38.3: the transport decision (plaintext vs TLS + SSL context) is
+        // derived purely from the resolved URL scheme + config, so only a wss://
+        // URL gets an SSL context and transport='ssl'. A ws:// URL stays plain
+        // tcp — attaching TLS to a plaintext hub relay port is what deadlocked
+        // the handshake before.
+        $transport = $this->resolveHubTransport($wsUrl);
 
-        $hubWsUrl = $wsUrl;
-        $this->logger->debug('RelayConsumer: connecting with SSL verification enabled', [
-            'hub_url' => $hubWsUrl,
-            'verify_peer' => true,
+        $this->logger->debug('RelayConsumer::openHubConnection() creating new AsyncTcpConnection', [
+            'address' => $transport['address'],
+            'use_tls' => $transport['useTls'],
         ]);
 
-        $this->logger->debug('RelayConsumer::openHubConnection() creating new AsyncTcpConnection');
-        $wsUrlForConnection = str_replace('wss://', 'ws://', $wsUrl);
-        $connection = new AsyncTcpConnection($wsUrlForConnection, $context);
+        $connection = new AsyncTcpConnection($transport['address'], $transport['context']);
         $connection->protocol = \Workerman\Protocols\Websocket::class;
-        $connection->transport = 'ssl';
+        if ($transport['useTls']) {
+            $connection->transport = 'ssl';
+        }
+
         $this->logger->debug('RelayConsumer::openHubConnection() AsyncTcpConnection created', [
             'connection_class' => get_class($connection),
             'connection_id' => spl_object_id($connection),
             'connection_status' => $connection->getStatus(),
+            'use_tls' => $transport['useTls'],
         ]);
 
         return $connection;
+    }
+
+    /**
+     * Pure transport decision for the hub tunnel: map the resolved WS URL to the
+     * Workerman connection address, whether TLS is used, and the SSL context.
+     *
+     * Extracted so the TLS-vs-scheme choice can be asserted in a unit test
+     * without opening a live connection (38.1 acceptance).
+     *
+     * Workerman's {@see AsyncTcpConnection} needs the `ws://` scheme (its
+     * Websocket application protocol) with `transport='ssl'` for a wss tunnel —
+     * `wss://` is NOT a registered transport, so the scheme is rewritten to
+     * `ws://` for the ADDRESS and TLS is switched on via transport + context.
+     * A `ws://` URL yields no SSL context and no ssl transport (plain tcp).
+     *
+     * @param string $wsUrl Resolved hub relay WS URL (ws:// or wss://).
+     *
+     * @return array{address: string, useTls: bool, context: array<string, mixed>}
+     *
+     * @since 0.20.0
+     */
+    private function resolveHubTransport(string $wsUrl): array
+    {
+        $useTls = parse_url($wsUrl, PHP_URL_SCHEME) === 'wss';
+        $address = str_replace('wss://', 'ws://', $wsUrl);
+        $context = $useTls ? $this->buildSslContext() : [];
+
+        return [
+            'address' => $address,
+            'useTls' => $useTls,
+            'context' => $context,
+        ];
+    }
+
+    /**
+     * Build the SSL stream context for a wss:// hub tunnel (38.3).
+     *
+     * Default is SECURE: verify the hub's presented certificate against the
+     * configured CA bundle. When {@see RelayConfig::$relayTlsVerify} is off
+     * (`PHLIX_RELAY_TLS_VERIFY=0`) the context becomes permissive
+     * (`verify_peer=false` + `allow_self_signed=true`), mirroring the hub's own
+     * relay listener — for a self-signed hub relay cert. Production should use a
+     * CA-signed cert and leave verification on.
+     *
+     * @return array<string, mixed> A Workerman `['ssl' => [...]]` context.
+     *
+     * @since 0.20.0
+     */
+    private function buildSslContext(): array
+    {
+        if (!$this->config->relayTlsVerify) {
+            return [
+                'ssl' => [
+                    'verify_peer' => false,
+                    'verify_peer_name' => false,
+                    'allow_self_signed' => true,
+                    'SNI_enabled' => true,
+                    'crypto_method' => STREAM_CRYPTO_METHOD_TLSv1_2_CLIENT | STREAM_CRYPTO_METHOD_TLSv1_3_CLIENT,
+                ],
+            ];
+        }
+
+        return [
+            'ssl' => [
+                'verify_peer' => true,
+                'verify_peer_name' => true,
+                'cafile' => $this->config->relayTlsCafile,
+                'SNI_enabled' => true,
+                'crypto_method' => STREAM_CRYPTO_METHOD_TLSv1_2_CLIENT | STREAM_CRYPTO_METHOD_TLSv1_3_CLIENT,
+            ],
+        ];
+    }
+
+    /**
+     * 38.1: warn (once per process) + record a diagnostic reason when the
+     * resolved relay URL is `wss://` but relay TLS is not explicitly enabled.
+     *
+     * This is the classic silent-hang footgun: the hub relay listener is
+     * plaintext by default (`HUB_RELAY_TLS=false`), so a TLS ClientHello to it
+     * never gets a response — no `onError`, no `onClose`, just an endless
+     * reconnect loop. Because it hangs rather than failing, the reason is also
+     * persisted to the state store so the admin health panel (S40) can show
+     * WHY the tunnel is down even while the handshake is stalled. Cleared on a
+     * successful HELLO_ACK.
+     *
+     * @param string $wsUrl Resolved hub relay WS URL.
+     *
+     * @return void
+     *
+     * @since 0.20.0
+     */
+    private function warnIfLikelyTlsMismatch(string $wsUrl): void
+    {
+        if (parse_url($wsUrl, PHP_URL_SCHEME) !== 'wss' || $this->config->relayTls) {
+            return;
+        }
+
+        if (!$this->tlsMismatchWarned) {
+            $this->logger->warning(
+                'RelayConsumer: resolved a wss:// relay URL but relay TLS is not enabled '
+                . '(PHLIX_RELAY_TLS is off). If the hub relay port is plaintext (the default, '
+                . 'HUB_RELAY_TLS=false), the TLS handshake will hang and the tunnel will silently '
+                . 'reconnect forever. Either set PHLIX_RELAY_TLS=1 here AND HUB_RELAY_TLS=true on '
+                . 'the hub, or configure a ws:// relay URL.',
+                ['url' => $wsUrl],
+            );
+            $this->tlsMismatchWarned = true;
+        }
+
+        $this->recordConnectError(
+            'wss:// relay URL with relay TLS disabled — TLS handshake to a likely-plaintext '
+            . 'hub relay port will hang. Set PHLIX_RELAY_TLS=1 + HUB_RELAY_TLS=true, or use ws://.',
+        );
+
+        // The hang produces no onError/onClose, so no later write would fire —
+        // persist the advisory now so the admin health panel (S40) can explain
+        // WHY the tunnel is stuck. Cleared on a successful HELLO_ACK.
+        $this->writeRelayState();
     }
 
     /**
@@ -751,6 +950,10 @@ final class RelayConsumer
         $this->sessionStartTime = hrtime(true);
         $this->relaySessionId = is_string($ack['relay_session_id'] ?? null) ? $ack['relay_session_id'] : null;
         $this->sessionEndLogged = false;
+        // The tunnel is up — clear any stale connect-failure reason (incl. the
+        // TLS-mismatch advisory) so the admin health panel stops showing it.
+        $this->lastConnectError = null;
+        $this->lastConnectErrorAt = null;
 
         $this->logger->info('RelayConsumer: tunnel active', [
             'relay_session_id' => $this->relaySessionId,
@@ -758,6 +961,7 @@ final class RelayConsumer
         ]);
 
         $this->startHeartbeatTimer();
+        $this->writeRelayState();
     }
 
     /**
@@ -2064,6 +2268,11 @@ final class RelayConsumer
 
         $this->closeAllLocalConnections();
 
+        // Surface the down state (with lastDisconnectTime) before deciding on a
+        // reconnect, so the admin health panel reflects the disconnect even if
+        // the consumer is stopping and will not reconnect.
+        $this->writeRelayState();
+
         if (!$this->running) {
             return;
         }
@@ -2107,6 +2316,11 @@ final class RelayConsumer
             'max_delay' => $maxDelay,
             'jitter_factor' => $jitterFactor,
         ]);
+
+        // Persist the not-connected state + attempt count (and any recorded
+        // connect-failure reason) so the admin health panel can show why the
+        // tunnel is down / retrying.
+        $this->writeRelayState();
 
         try {
             // One-shot ($persistent = false): Workerman timers REPEAT by

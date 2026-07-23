@@ -319,11 +319,18 @@ final class AdminSettingsControllerTest extends TestCase
             // switch and ships FALSE — DLNA has no authentication at all.
             'dlna.cds_enabled'                          => 'bool',
             'dlna.friendly_name'                        => 'string',
+            // phlix-shared v0.45.0 (S50 / updates.md #35): the DLNA IP allowlist,
+            // consumed by DlnaAllowlistMiddleware. `allowed_cidrs` is array-typed
+            // in the schema → internal `json` (mapSchemaType('array')==='json',
+            // like scanner.ignore_patterns / subtitles.provider_priority);
+            // `restrict_to_lan` is a boolean → `bool`.
+            'dlna.allowed_cidrs'                        => 'json',
+            'dlna.restrict_to_lan'                      => 'bool',
         ];
 
         $actual = AdminSettingsController::allowedKeys();
 
-        $this->assertCount(70, $actual);
+        $this->assertCount(72, $actual);
         $this->assertEquals($expected, $actual);
     }
 
@@ -401,7 +408,7 @@ final class AdminSettingsControllerTest extends TestCase
 
         // schemaMeta() covers EVERY declared property, not just the typed ones
         // that reach allowedKeys().
-        $this->assertCount(70, $meta);
+        $this->assertCount(72, $meta);
         foreach (array_keys(AdminSettingsController::allowedKeys()) as $key) {
             $this->assertArrayHasKey($key, $meta, sprintf('%s must carry a meta block', $key));
         }

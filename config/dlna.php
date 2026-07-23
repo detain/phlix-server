@@ -86,6 +86,46 @@ return [
     'cds_enabled' => false,
 
     /**
+     * Inbound IP allowlist (CIDR notation) for the DLNA browse/stream endpoints.
+     *
+     * DLNA/UPnP carries no credentials (see the "NO AUTHENTICATION" warning in
+     * this file's header), so once `cds_enabled` is on,
+     * {@see \Phlix\Server\Http\Middleware\DlnaAllowlistMiddleware} is the ONLY
+     * thing standing between a caller and the whole library. Every request to a
+     * CDS route is matched against this list.
+     *
+     * Each entry is a CIDR block — `192.168.1.0/24`, `10.0.0.0/8`, a `/32`
+     * single host, or an IPv6 range such as `fd00::/8`. Parsing and matching
+     * REUSE {@see \Phlix\Common\Net\SsrfGuard} so the same well-tested CIDR
+     * logic guards inbound DLNA and outbound SSRF.
+     *
+     * An EMPTY list does NOT mean "allow everyone" — that would reinstate the
+     * exact exposure this key exists to prevent. When the list is empty (or a
+     * caller matches none of its entries) the effective policy is decided by
+     * `restrict_to_lan` below.
+     *
+     * @var list<string>
+     */
+    'allowed_cidrs' => [],
+
+    /**
+     * Default posture when `allowed_cidrs` is empty (or a caller matched none of
+     * its entries): restrict DLNA to the local network.
+     *
+     * When TRUE (the shipped default) only loopback and the private/local ranges
+     * — RFC1918 (10/8, 172.16/12, 192.168/16), IPv4 link-local (169.254/16),
+     * IPv6 loopback (::1), unique-local (fc00::/7) and link-local (fe80::/10) —
+     * may reach the CDS routes; anything else gets a 403. That is the right
+     * default for DLNA, which is a LAN protocol.
+     *
+     * When FALSE, `allowed_cidrs` becomes the ONLY gate: a caller must match an
+     * explicit entry. An empty `allowed_cidrs` together with FALSE therefore
+     * denies EVERYONE — a deliberate, fully-locked-down state, and still never
+     * "allow all."
+     */
+    'restrict_to_lan' => true,
+
+    /**
      * Name shown in a TV's source list.
      *
      * Only meaningful when `cds_enabled` is on: it is served in the device

@@ -9,6 +9,7 @@ use Phlix\Config\EffectiveConfig;
 use Phlix\Server\Http\Middleware\DlnaAllowlistMiddleware;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
+use Phlix\Server\Http\Router;
 use PHPUnit\Framework\TestCase;
 use Workerman\MySQL\Connection;
 
@@ -282,6 +283,98 @@ final class DlnaAllowlistMiddlewareTest extends TestCase
             $middleware($req),
             'A forged XFF from a public peer must not smuggle in a LAN identity.',
         );
+    }
+
+    /**
+     * SECURITY (positive control for the spoof test): a request arriving through
+     * a TRUSTED loopback reverse proxy (peer = 127.0.0.1, the shipped nginx /
+     * HAProxy topology) has its X-Forwarded-For honoured, so the REAL upstream
+     * client decides — a PUBLIC real client is DENIED even though the direct peer
+     * is loopback (which would otherwise be a LAN address).
+     *
+     * This is the load-bearing reason the middleware reads getTrustedClientIp()
+     * and not the raw peer: a naive `remoteIp` check would treat every request
+     * behind the loopback proxy as loopback/LAN and wave the whole internet in.
+     * This test FAILS if the middleware ever regresses to the raw peer address.
+     */
+    public function test_public_client_behind_trusted_loopback_proxy_is_denied(): void
+    {
+        $middleware = $this->withDefaults();
+
+        $req = new Request();
+        $req->remoteIp = '127.0.0.1';                 // trusted loopback proxy hop
+        $req->headers = ['X-Forwarded-For' => '8.8.8.8']; // real upstream client
+
+        $response = $middleware($req);
+        self::assertInstanceOf(
+            Response::class,
+            $response,
+            'A public real client behind the loopback proxy must be denied, not admitted as loopback.',
+        );
+        self::assertSame(403, $response->statusCode);
+    }
+
+    /**
+     * SECURITY (positive control): the same trusted-loopback-proxy path admits a
+     * LAN real client — X-Forwarded-For IS honoured when (and only when) the
+     * direct peer is a trusted proxy, so a genuine LAN device fronted by the
+     * reverse proxy still reaches the CDS endpoints.
+     */
+    public function test_lan_client_behind_trusted_loopback_proxy_is_admitted(): void
+    {
+        $middleware = $this->withDefaults();
+
+        $req = new Request();
+        $req->remoteIp = '127.0.0.1';                        // trusted loopback proxy hop
+        $req->headers = ['X-Forwarded-For' => '192.168.1.5']; // real upstream client (LAN)
+
+        self::assertNull(
+            $middleware($req),
+            'A LAN real client behind the trusted loopback proxy must be routed through.',
+        );
+    }
+
+    /**
+     * INTEGRATION: wired onto a real {@see Router} group EXACTLY as
+     * {@see \Phlix\Server\Core\Application::loadCdsRoutes()} attaches it — an
+     * empty-prefix group with `[$middleware]` — a peer OUTSIDE the allowlist gets
+     * a 403 and the CDS route handler NEVER runs; a LAN peer reaches the handler.
+     *
+     * This pins acceptance behaviour (1) at the route level, not just at
+     * __invoke: it proves the group middleware short-circuits dispatch before the
+     * ContentDirectory handler is ever invoked.
+     */
+    public function test_wired_on_a_router_group_blocks_off_lan_peer_before_the_handler(): void
+    {
+        $middleware = $this->withDefaults();
+
+        $handlerRuns = 0;
+        $router = new Router();
+        $router->group('', static function (Router $r) use (&$handlerRuns): void {
+            // Stand-in for a CDS route (e.g. /description.xml).
+            $r->get('/description.xml', static function () use (&$handlerRuns): Response {
+                $handlerRuns++;
+                return (new Response())->text('<root/>');
+            });
+        }, [$middleware]);
+
+        // Off-LAN peer → 403, handler must not run.
+        $public = new Request();
+        $public->method = 'GET';
+        $public->path = '/description.xml';
+        $public->remoteIp = '8.8.8.8';
+        $blocked = $router->dispatch($public);
+        self::assertSame(403, $blocked->statusCode, 'Off-LAN peer must be blocked on the CDS route.');
+        self::assertSame(0, $handlerRuns, 'The CDS handler must NOT run for a blocked peer.');
+
+        // LAN peer → route handler runs.
+        $lan = new Request();
+        $lan->method = 'GET';
+        $lan->path = '/description.xml';
+        $lan->remoteIp = '192.168.1.50';
+        $ok = $router->dispatch($lan);
+        self::assertSame(200, $ok->statusCode, 'LAN peer must reach the CDS route.');
+        self::assertSame(1, $handlerRuns, 'The CDS handler must run exactly once for a LAN peer.');
     }
 
     /**

@@ -278,4 +278,43 @@ final class SsrfGuardTest extends TestCase
         self::assertNull(SsrfGuard::embeddedIpv4('192.168.1.1'));
         self::assertNull(SsrfGuard::embeddedIpv4('2001:4860:4860::8888'));
     }
+
+    /**
+     * ROBUSTNESS: the public ipMatchesAnyCidr() matcher — the binary-prefix
+     * engine the inbound DLNA gate leans on — fails safe on every malformed CIDR
+     * spelling rather than throwing or wrongly matching.
+     *
+     * Each case DISCRIMINATES a distinct guard: a CIDR with no `/`, non-numeric
+     * prefix bits, out-of-range bits, and an unparseable subnet all return false;
+     * only a well-formed `/0` legitimately matches everything.
+     */
+    public function test_ip_matches_any_cidr_fails_safe_on_malformed_input(): void
+    {
+        // No slash → not a CIDR → no match.
+        self::assertFalse(SsrfGuard::ipMatchesAnyCidr('10.0.0.1', ['10.0.0.0']));
+        // Non-numeric prefix length → rejected.
+        self::assertFalse(SsrfGuard::ipMatchesAnyCidr('10.0.0.1', ['10.0.0.0/xx']));
+        // Prefix length beyond the address width → rejected.
+        self::assertFalse(SsrfGuard::ipMatchesAnyCidr('10.0.0.1', ['10.0.0.0/99']));
+        self::assertFalse(SsrfGuard::ipMatchesAnyCidr('fd00::1', ['fc00::/999']));
+        // Unparseable subnet (has a slash + numeric bits, but not an IP) → rejected.
+        self::assertFalse(SsrfGuard::ipMatchesAnyCidr('10.0.0.1', ['not-an-ip/8']));
+        // A well-formed /0 legitimately matches any same-family address.
+        self::assertTrue(SsrfGuard::ipMatchesAnyCidr('203.0.113.9', ['0.0.0.0/0']));
+        self::assertTrue(SsrfGuard::ipMatchesAnyCidr('2001:db8::1', ['::/0']));
+    }
+
+    /**
+     * ROBUSTNESS: filterCidrs() also drops an entry that HAS a slash but whose
+     * subnet part is not a valid IP address (distinct from the no-slash /
+     * blank cases already covered) — so a hand-edited garbage allowlist entry can
+     * never reach the matcher as a live CIDR.
+     */
+    public function test_filter_cidrs_drops_slash_entry_with_invalid_subnet(): void
+    {
+        self::assertSame(
+            ['192.168.0.0/16'],
+            SsrfGuard::filterCidrs(['999.999.999.999/24', 'garbage/16', '192.168.0.0/16']),
+        );
+    }
 }

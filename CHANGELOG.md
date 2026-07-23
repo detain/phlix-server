@@ -9,6 +9,45 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Added
 
+- **`GET /api/v1/media/most-watched` — public "Most Watched" trending rail**
+  (updates.md #31 / S31). Exposes the GLOBAL, all-time, cross-user most-watched
+  aggregate (the same list the admin Top Media report reads via
+  `StatsCollector::getTopMedia()`) to signed-in users as a home-rail. This is a
+  server-wide trending rail (most-watched across the WHOLE server), NOT a per-user
+  history — a deliberate product decision: everyone sees the same "popular on this
+  server" list. New `MostWatchedController::mostWatched()` takes an optional
+  `?limit=` (default 20, clamped to the `PageLimit::MAX` ceiling of 100 via
+  `Request::queryPageSize()`), hydrates the top IDs with a single
+  `ItemRepository::findByIds()` batch (order-preserving; silently drops
+  since-deleted rows), and returns the sibling `{items, total, limit, offset}`
+  envelope with `MediaItemShaper::shape()`-shaped rows (poster/artwork signed URLs
+  re-minted at response time). Registered on the shared `Application` router as a
+  STATIC route (matched before `WebPortalRouter`'s parametric `/api/v1/media/{id}`,
+  so no shadowing) and gated by `AuthMiddleware` to match the audience of
+  `GET /api/v1/media`. The admin-only `getTopMedia()` path
+  (`/api/v1/admin/stats/top-media`) is unchanged.
+
+- **`POST /api/v1/sessions/{id}/complete` — explicit playback finish signal**
+  (updates.md #30 / S30). Progress ticks (`reportProgress`) only ever leave a
+  `playback_state` row in `playing`/`paused`, so without an explicit finish signal a
+  finished title lingered in Continue Watching and its watch-time stats never
+  finalized (Top Users watch time showed dashes). The new
+  `SessionController::completePlayback()` gives `PlaybackController::markAsWatched()`
+  / `clearProgress()` their first live caller. Body: `media_item_id: string`
+  (required; `400` if missing/empty) and optional `reached_end: bool` (default
+  `true`). `reached_end:true` → `markAsWatched()` (row → `stopped`,
+  `position_ticks=0`, item leaves Continue Watching, stats recorded as completed —
+  finalizes `duration_seconds` + dispatches `PlaybackStopped` for
+  webhooks/Last.fm/Most Watched); `false` → `clearProgress()` (deletes the row,
+  recorded as not completed). Response `200 {message, reached_end}`; `404` unknown
+  session, `403` wrong owner. Auth mirrors the sibling `/progress` route (session
+  owner), registered next to `/progress` on the shared `Application` router (served
+  by the Workerman `HttpHandler` daemon). The web SPA full player (`Player.vue`) and
+  the persistent mini-player POST this on the media `ended` event. **Known
+  limitation / follow-up:** native clients (Roku / mobile / Tizen / Windows) do NOT
+  send this signal yet, so titles finished on those clients still linger in Continue
+  Watching and do not finalize watch-time until each is updated to call `/complete`.
+
 - **`plugins.catalog.channel` — plugin-catalog release channel (`stable` / `dev`).**
   Lets the OFFICIAL first-party plugin catalog (`detain/phlix-plugins`) track
   something other than a hard-pinned release tag, without losing the safe default.
@@ -151,6 +190,16 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   first Save overwrite all three secrets with the literal `***`.
 
 ### Fixed
+
+- **Playback stats now record each item's real `media_items.type` instead of hardcoding `movie`**
+  (updates.md #31 / S31). `PlaybackController::dispatchPlaybackStarted()` previously wrote a
+  literal `'movie'` type for every playback-start stats event, so Most Watched / Top Media and
+  every other type-partitioned stat mis-attributed episodes, tracks, etc. as movies. A new
+  private `lookupMediaType()` runs `SELECT type FROM media_items WHERE id = ? LIMIT 1` and records
+  the raw stored ENUM value verbatim (no remap — `photo` stays `photo`, honoring the 13-member
+  type ENUM), falling back to `'movie'` only when the row is missing/empty (the same default
+  `MediaItemShaper::shape()` coerces unknown types to). The lookup runs only on the stats path
+  (`statsCollector !== null && userId !== ''`), so a non-stats deployment pays no extra query.
 
 - **`playback_state` progress upserts now update in place instead of inserting a new row every ~15s**
   (updates.md #29 / S29). Every progress tick from `PlaybackController::reportProgress()` (and

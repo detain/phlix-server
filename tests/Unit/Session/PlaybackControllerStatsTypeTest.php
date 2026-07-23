@@ -59,6 +59,40 @@ final class PlaybackControllerStatsTypeTest extends TestCase
     }
 
     /**
+     * ENUM landmine: the stored media_items.type value is `photo` (NOT `image`)
+     * and must reach recordPlaybackStart() VERBATIM — no remap to `image`, no
+     * clobber to `movie`. Guards the 13-member type ENUM's exact passthrough.
+     */
+    public function testRecordsPhotoTypeVerbatim(): void
+    {
+        $db = $this->connectionReturningType([['type' => 'photo']]);
+
+        $sessionManager = $this->createMock(SessionManager::class);
+        $sessionManager->method('getSession')->willReturn([
+            'user_id'   => 'user-5',
+            'device_id' => 'device-5',
+        ]);
+
+        $stats = $this->createMock(StatsCollector::class);
+        $stats->expects($this->once())
+            ->method('recordPlaybackStart')
+            ->with(
+                $this->equalTo('user-5'),
+                $this->equalTo('media-photo-1'),
+                $this->equalTo('photo'),   // ← verbatim: not 'image', not 'movie'
+                $this->equalTo('device-5'),
+            )
+            ->willReturn('evt-5');
+
+        $dispatcher = $this->createMock(EventDispatcherInterface::class);
+        $dispatcher->method('dispatch')->willReturnArgument(0);
+
+        $controller = new PlaybackController($db, $sessionManager, null, $dispatcher, $stats);
+
+        $controller->reportProgress('sess-5', 'media-photo-1', 50, 1000, false);
+    }
+
+    /**
      * When the item row is missing (since-deleted), the type falls back to
      * 'movie' — the SAME default MediaItemShaper::shape() uses for an unknown
      * type — rather than inventing a new sentinel.
@@ -91,6 +125,41 @@ final class PlaybackControllerStatsTypeTest extends TestCase
         $controller = new PlaybackController($db, $sessionManager, null, $dispatcher, $stats);
 
         $controller->reportProgress('sess-9', 'gone-1', 0, 0, false);
+    }
+
+    /**
+     * A row that exists but has an empty `type` column is treated exactly like a
+     * missing row: the empty string is rejected by the `$type !== ''` guard and
+     * the fallback 'movie' is recorded rather than an empty type polluting stats.
+     */
+    public function testFallsBackToMovieWhenTypeIsEmptyString(): void
+    {
+        // Row present but type = '' → distinct branch of the `$type !== ''` guard.
+        $db = $this->connectionReturningType([['type' => '']]);
+
+        $sessionManager = $this->createMock(SessionManager::class);
+        $sessionManager->method('getSession')->willReturn([
+            'user_id'   => 'user-7',
+            'device_id' => 'device-7',
+        ]);
+
+        $stats = $this->createMock(StatsCollector::class);
+        $stats->expects($this->once())
+            ->method('recordPlaybackStart')
+            ->with(
+                $this->equalTo('user-7'),
+                $this->equalTo('blank-1'),
+                $this->equalTo('movie'),     // ← empty type coerced to the default
+                $this->equalTo('device-7'),
+            )
+            ->willReturn('evt-7');
+
+        $dispatcher = $this->createMock(EventDispatcherInterface::class);
+        $dispatcher->method('dispatch')->willReturnArgument(0);
+
+        $controller = new PlaybackController($db, $sessionManager, null, $dispatcher, $stats);
+
+        $controller->reportProgress('sess-7', 'blank-1', 10, 500, false);
     }
 
     /**

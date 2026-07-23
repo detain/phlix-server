@@ -69,8 +69,8 @@ final class MostWatchedControllerTest extends TestCase
     }
 
     /**
-     * A `?limit=` is validated + clamped and passed through getTopMedia()'s
-     * existing signature.
+     * A small `?limit=` is validated + honoured (below the ceiling) and passed
+     * through getTopMedia()'s existing signature.
      */
     public function testHonoursLimitQueryParam(): void
     {
@@ -94,6 +94,145 @@ final class MostWatchedControllerTest extends TestCase
         /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertSame(5, $body['limit']);
+    }
+
+    /**
+     * An oversized `?limit=` is CLAMPED to the hard server-side ceiling
+     * (PageLimit::MAX = 100) before it ever reaches getTopMedia(), so an
+     * unbounded request cannot exhaust a resident worker. The clamped value is
+     * both what getTopMedia() is asked for and what the envelope reports.
+     */
+    public function testClampsOverMaxLimitToCeiling(): void
+    {
+        $stats = $this->createMock(StatsCollector::class);
+        $stats->expects($this->once())
+            ->method('getTopMedia')
+            ->with(100) // 999 clamped down to PageLimit::MAX
+            ->willReturn([]);
+
+        $items = $this->createMock(ItemRepository::class);
+        $items->method('findByIds')->willReturn([]);
+
+        $controller = new MostWatchedController($stats, $items);
+
+        $request = new Request();
+        $request->query = ['limit' => '999'];
+
+        $response = $controller->mostWatched($request, []);
+
+        $this->assertSame(200, $response->statusCode);
+        /** @var array<string, mixed> $body */
+        $body = json_decode($response->body, true);
+        $this->assertSame(100, $body['limit']);
+    }
+
+    /**
+     * When the server has no playback stats yet, getTopMedia() returns nothing:
+     * the rail responds 200 with an EMPTY item list and total 0 (never a null or
+     * a partially-shaped payload), so the SPA renders an empty rail cleanly.
+     */
+    public function testReturnsEmptyRailWhenNoStats(): void
+    {
+        $stats = $this->createMock(StatsCollector::class);
+        $stats->expects($this->once())
+            ->method('getTopMedia')
+            ->with(20)
+            ->willReturn([]);
+
+        // With no IDs to hydrate, findByIds is called with an empty list.
+        $items = $this->createMock(ItemRepository::class);
+        $items->expects($this->once())
+            ->method('findByIds')
+            ->with([])
+            ->willReturn([]);
+
+        $controller = new MostWatchedController($stats, $items);
+
+        $response = $controller->mostWatched(new Request(), []);
+
+        $this->assertSame(200, $response->statusCode);
+        /** @var array<string, mixed> $body */
+        $body = json_decode($response->body, true);
+        $this->assertSame([], $body['items']);
+        $this->assertSame(0, $body['total']);
+        $this->assertSame(20, $body['limit']);
+        $this->assertSame(0, $body['offset']);
+    }
+
+    /**
+     * The play-count-descending order returned by getTopMedia() is preserved end
+     * to end: the IDs are extracted in that exact order, handed to findByIds() in
+     * that order, and the shaped rail comes back in that order (never re-sorted by
+     * id or hydration order). This is the invariant that makes it a *ranked* rail.
+     */
+    public function testPreservesPlayCountOrderIntoFindByIds(): void
+    {
+        $stats = $this->createMock(StatsCollector::class);
+        $stats->expects($this->once())
+            ->method('getTopMedia')
+            ->with(20)
+            ->willReturn([
+                ['media_item_id' => 'zeta',  'play_count' => 50],
+                ['media_item_id' => 'alpha', 'play_count' => 40],
+                ['media_item_id' => 'beta',  'play_count' => 30],
+            ]);
+
+        $items = $this->createMock(ItemRepository::class);
+        $items->expects($this->once())
+            ->method('findByIds')
+            // Exact ranked order, NOT alphabetical — proves order is preserved.
+            ->with(['zeta', 'alpha', 'beta'])
+            ->willReturn([
+                ['id' => 'zeta',  'name' => 'Z', 'type' => 'movie', 'metadata' => []],
+                ['id' => 'alpha', 'name' => 'A', 'type' => 'movie', 'metadata' => []],
+                ['id' => 'beta',  'name' => 'B', 'type' => 'movie', 'metadata' => []],
+            ]);
+
+        $controller = new MostWatchedController($stats, $items);
+
+        $response = $controller->mostWatched(new Request(), []);
+
+        $this->assertSame(200, $response->statusCode);
+        /** @var array<string, mixed> $body */
+        $body = json_decode($response->body, true);
+        $this->assertSame(
+            ['zeta', 'alpha', 'beta'],
+            array_column($body['items'], 'id')
+        );
+    }
+
+    /**
+     * Defensive ID extraction: a getTopMedia() row with a missing, empty, or
+     * non-string media_item_id is skipped, so findByIds() is only ever asked for
+     * the well-formed IDs and the rail never references a bogus row.
+     */
+    public function testSkipsRowsWithMissingOrEmptyMediaItemId(): void
+    {
+        $stats = $this->createMock(StatsCollector::class);
+        $stats->method('getTopMedia')->willReturn([
+            ['media_item_id' => 'good-1', 'play_count' => 9],
+            ['media_item_id' => '',       'play_count' => 8], // empty → skipped
+            ['play_count' => 7],                              // missing → skipped
+            ['media_item_id' => 'good-2', 'play_count' => 6],
+        ]);
+
+        $items = $this->createMock(ItemRepository::class);
+        $items->expects($this->once())
+            ->method('findByIds')
+            ->with(['good-1', 'good-2']) // only the valid IDs survive
+            ->willReturn([
+                ['id' => 'good-1', 'name' => 'One', 'type' => 'movie', 'metadata' => []],
+                ['id' => 'good-2', 'name' => 'Two', 'type' => 'movie', 'metadata' => []],
+            ]);
+
+        $controller = new MostWatchedController($stats, $items);
+
+        $response = $controller->mostWatched(new Request(), []);
+
+        $this->assertSame(200, $response->statusCode);
+        /** @var array<string, mixed> $body */
+        $body = json_decode($response->body, true);
+        $this->assertSame(['good-1', 'good-2'], array_column($body['items'], 'id'));
     }
 
     /**

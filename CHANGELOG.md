@@ -9,6 +9,37 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Added
 
+- **`user_identities` table + multi-identity auth foundation** (updates.md #54 / S46).
+  Internal schema plumbing for account-linking and multi-instance external auth —
+  **no user-facing behaviour change yet** (login is unchanged; linking arrives in a
+  later step). Details:
+  - **Migration `092_user_identities.sql`** creates a row-per-identity join table
+    `user_identities (id, user_id FK → users ON DELETE CASCADE, provider,
+    provider_instance NOT NULL DEFAULT '', external_id, provider_data JSON,
+    created_at, updated_at)` with `UNIQUE (provider, provider_instance, external_id)`
+    and an index on `user_id`. It **applies automatically** via the migration runner
+    on deploy — no manual step. `provider_instance` is `''` (a non-NULL sentinel, so
+    the multi-column UNIQUE actually enforces one identity per default instance) for
+    all single-instance identities; non-empty instance names are reserved for a later
+    multi-instance step.
+  - **Backfill** copies every existing external identity from `users` (where
+    `external_id IS NOT NULL`) into `user_identities`, **deriving the real provider**
+    (legacy `provider='external'` rows become `oidc`/`ldap` from the `external_id`
+    prefix; unknown prefixes fall through unchanged, never dropped) and collapsing any
+    pre-existing duplicate external accounts to a single identity row via
+    `INSERT IGNORE`. It is idempotent (per-user `NOT EXISTS` guard) so re-running after
+    a partial failure is safe. Existing external-identity users keep logging in exactly
+    as before — the backfill does not touch `users`.
+  - **New `Phlix\Auth\UserIdentityRepository`** (create / findByProviderExternalId /
+    findByUserId / delete / deleteById), wired via `AuthServicesProvider`.
+  - **`UserRepository::findOrCreateByExternalId()` now dual-writes** a matching
+    `user_identities` row (default-instance `''`) inside the SAME transaction that
+    creates a new external user, so the two stores can never diverge (a failure rolls
+    back the `users` row too). `users.provider` / `users.external_id` remain the
+    **authoritative login-lookup columns** — repointing login reads onto
+    `user_identities` is deferred to a later step. Returning-user (find) logins write
+    no new identity row.
+
 - **OIDC & LDAP external login are now wired end-to-end** (updates.md #37 / S44).
   The admin **Integrations → Auth providers** enable/disable toggles for OIDC and
   LDAP were hard-coded `501 Not Implemented` stubs and neither provider had a

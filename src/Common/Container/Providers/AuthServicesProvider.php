@@ -215,7 +215,13 @@ final class AuthServicesProvider implements ServiceProviderInterface
             // "Workerman Session Model"), so the shared oauth_state_store table
             // is mandatory for the PKCE/CSRF state to survive the round trip.
             \Phlix\Plugins\Oidc\Controller\OidcCallbackController::class => autowire()
-                ->constructorParameter('db', get(\Workerman\MySQL\Connection::class)),
+                ->constructorParameter('db', get(\Workerman\MySQL\Connection::class))
+                // S44 Finding 3: request-path self-heal of the per-worker
+                // provider registry from the persisted `auth.oidc.enabled` flag.
+                // PHP-DI skips optional ctor params during autowiring, so bind it
+                // explicitly — without it the controller can 503 on workers that
+                // booted before OIDC was enabled.
+                ->constructorParameter('bootstrapper', get(AuthProviderBootstrapper::class)),
 
             // `statsCollector` is wired so successful logins/logouts land in
             // stats_user_activity (the admin dashboard activity feed). PHP-DI
@@ -253,7 +259,13 @@ final class AuthServicesProvider implements ServiceProviderInterface
             // stay null and leave the surface unprotected.
             AuthController::class => autowire()
                 ->constructorParameter('registerLimiter', get(RateLimitProfiles::REGISTER))
-                ->constructorParameter('refreshLimiter', get(RateLimitProfiles::REFRESH)),
+                ->constructorParameter('refreshLimiter', get(RateLimitProfiles::REFRESH))
+                // S44 Finding 3: request-path self-heal of the per-worker provider
+                // registry from the persisted `auth.ldap.enabled` flag, so the
+                // `ldap:` login path doesn't 503 on workers that booted before LDAP
+                // was enabled. PHP-DI skips optional ctor params during autowiring,
+                // so bind it explicitly.
+                ->constructorParameter('providerBootstrapper', get(AuthProviderBootstrapper::class)),
 
             // WebAuthn — rpId/rpName/rpOrigin come from $appConfig['webauthn'].
             // Without this factory, php-di would try to autowire string scalars

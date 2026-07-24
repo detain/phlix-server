@@ -101,7 +101,7 @@ final class OidcPkceTest extends TestCase
         );
 
         $request = new Request();
-        $request->query = ['redirect_uri' => 'http://localhost/cb'];
+        $request->query = ['redirect_uri' => '/cb'];
 
         $response = $controller->authorize($request, []);
 
@@ -140,7 +140,7 @@ final class OidcPkceTest extends TestCase
         // Forge a state that references a sid the store has never seen.
         $stateValue = base64_encode((string) json_encode([
             'sid' => 'never-issued',
-            'redirect_uri' => 'http://localhost/cb',
+            'redirect_uri' => '/cb',
         ]));
 
         $request = new Request();
@@ -170,7 +170,7 @@ final class OidcPkceTest extends TestCase
 
         // No `sid` field — legacy state envelope shape.
         $stateValue = base64_encode((string) json_encode([
-            'redirect_uri' => 'http://localhost/cb',
+            'redirect_uri' => '/cb',
             'nonce' => 'something',
         ]));
 
@@ -202,7 +202,7 @@ final class OidcPkceTest extends TestCase
 
         $stateValue = base64_encode((string) json_encode([
             'sid' => 'sid-one',
-            'redirect_uri' => 'http://localhost/cb',
+            'redirect_uri' => '/cb',
         ]));
 
         $request1 = new Request();

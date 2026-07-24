@@ -66,7 +66,64 @@ final class AuthControllerLdapLoginTest extends TestCase
         $this->assertSame(401, $response->statusCode);
         /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
-        $this->assertSame('invalid_credentials', $body['error']);
+        // S44 Finding 5 — the raw provider error code is NOT echoed back; a
+        // single generic credential-rejection message is returned.
+        $this->assertSame('Invalid credentials', $body['error']);
+    }
+
+    /**
+     * S44 Finding 5 (LOW) — LdapProvider distinguishes `user_not_found` from
+     * `invalid_credentials`. Echoing either verbatim is a user-enumeration
+     * oracle. Both must produce the SAME generic 401 response so an attacker
+     * cannot tell a real account from a bad password.
+     */
+    public function test_ldap_login_does_not_leak_user_enumeration_oracle(): void
+    {
+        foreach (['user_not_found', 'invalid_credentials'] as $providerError) {
+            $authManager = $this->createMock(AuthManager::class);
+            $authManager->method('loginWithProvider')
+                ->willThrowException(new InvalidArgumentException($providerError));
+
+            $controller = new AuthController($authManager);
+
+            $request = new Request();
+            $request->body = ['username' => 'ldap:probe', 'password' => 'x'];
+
+            $response = $controller->login($request, []);
+
+            $this->assertSame(401, $response->statusCode, "for provider error: {$providerError}");
+            /** @var array<string, mixed> $body */
+            $body = json_decode($response->body, true);
+            $this->assertSame('Invalid credentials', $body['error'], "for provider error: {$providerError}");
+            // The raw provider code must never be reflected to the client.
+            $this->assertStringNotContainsString($providerError, $response->body);
+        }
+    }
+
+    /**
+     * S44 Finding 5 — a genuine LDAP config/connection failure (LdapProvider
+     * prefixes these `ldap_error:`) is a 500-class problem, NOT a bad password.
+     * It must surface as a 503 "unavailable", not be masked as a 401.
+     */
+    public function test_ldap_login_config_error_returns_503_not_401(): void
+    {
+        $authManager = $this->createMock(AuthManager::class);
+        $authManager->method('loginWithProvider')
+            ->willThrowException(new InvalidArgumentException("ldap_error: Can't contact LDAP server"));
+
+        $controller = new AuthController($authManager);
+
+        $request = new Request();
+        $request->body = ['username' => 'ldap:dave', 'password' => 'pw'];
+
+        $response = $controller->login($request, []);
+
+        $this->assertSame(503, $response->statusCode);
+        /** @var array<string, mixed> $body */
+        $body = json_decode($response->body, true);
+        $this->assertSame('provider_unavailable', $body['code']);
+        // The raw error detail must not leak to the client.
+        $this->assertStringNotContainsString('contact LDAP server', $response->body);
     }
 
     public function test_ldap_login_provider_unavailable_returns_503(): void

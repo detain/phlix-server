@@ -252,4 +252,81 @@ final class AuthProviderBootstrapperTest extends TestCase
         $this->assertFalse($boot->isToggleable('saml'));
         $this->assertFalse($boot->isToggleable(''));
     }
+
+    // -----------------------------------------------------------------------
+    // S44 Finding 3 — request-path self-heal (ensureProviderRegistered()).
+    // -----------------------------------------------------------------------
+
+    public function test_ensure_provider_registered_lazily_registers_when_flag_on(): void
+    {
+        // Flag ON + configured, but the provider is NOT yet in this worker's
+        // registry (it booted before OIDC was enabled).
+        $this->writeSettings(oidc: ['provider_url' => 'https://idp.test', 'client_id' => 'cid']);
+
+        $registry = new AuthProviderRegistry();
+        $boot = new AuthProviderBootstrapper(
+            $this->makeSettingsRepo(['oidc' => true]),
+            $registry,
+            new OidcPlugin(),
+            new LdapPlugin(),
+        );
+
+        $this->assertFalse($registry->hasProvider('oidc'));
+
+        $result = $boot->ensureProviderRegistered('oidc');
+
+        $this->assertTrue($result);
+        $this->assertTrue($registry->hasProvider('oidc'));
+    }
+
+    public function test_ensure_provider_registered_drops_stale_registration_when_flag_off(): void
+    {
+        // Flag OFF, but a stale 'ldap' provider is still live in this worker
+        // (it was disabled after this worker booted).
+        $registry = new AuthProviderRegistry();
+        $provider = $this->createMock(\Phlix\Shared\Auth\ProviderInterface::class);
+        $provider->method('name')->willReturn('ldap');
+        $registry->registerProvider($provider);
+        $this->assertTrue($registry->hasProvider('ldap'));
+
+        $boot = new AuthProviderBootstrapper(
+            $this->makeSettingsRepo(['ldap' => false]),
+            $registry,
+            new OidcPlugin(),
+            new LdapPlugin(),
+        );
+
+        $result = $boot->ensureProviderRegistered('ldap');
+
+        $this->assertFalse($result);
+        $this->assertFalse($registry->hasProvider('ldap'));
+    }
+
+    public function test_ensure_provider_registered_returns_false_when_enabled_but_unconfigured(): void
+    {
+        // Flag ON but no settings.json → cannot build → nothing registered.
+        $registry = new AuthProviderRegistry();
+        $boot = new AuthProviderBootstrapper(
+            $this->makeSettingsRepo(['oidc' => true]),
+            $registry,
+            new OidcPlugin(),
+            new LdapPlugin(),
+        );
+
+        $this->assertFalse($boot->ensureProviderRegistered('oidc'));
+        $this->assertFalse($registry->hasProvider('oidc'));
+    }
+
+    public function test_ensure_provider_registered_rejects_unknown_provider(): void
+    {
+        $registry = new AuthProviderRegistry();
+        $boot = new AuthProviderBootstrapper(
+            $this->makeSettingsRepo(['saml' => true]),
+            $registry,
+            new OidcPlugin(),
+            new LdapPlugin(),
+        );
+
+        $this->assertFalse($boot->ensureProviderRegistered('saml'));
+    }
 }

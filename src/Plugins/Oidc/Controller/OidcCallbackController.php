@@ -17,6 +17,8 @@ use Phlix\Plugins\Oidc\OidcProvider;
 use Phlix\Plugins\Oidc\OidcStateStore;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
+use Phlix\Server\Http\Controllers\AuthController;
+use Phlix\Auth\AuthProviderBootstrapper;
 use Phlix\Auth\AuthProviderRegistry;
 use Phlix\Auth\JwtHandler;
 use Phlix\Auth\UserRepository;
@@ -41,16 +43,26 @@ final class OidcCallbackController
     private JwtHandler $jwtHandler;
     private OidcStateStore $stateStore;
 
+    /**
+     * Request-path self-heal for the per-worker provider registry (Finding 3).
+     * Optional so existing direct-construction call sites (and the tests) keep
+     * working; the DI factory binds it explicitly. Null = no self-heal (the
+     * registry is used exactly as boot left it).
+     */
+    private ?AuthProviderBootstrapper $bootstrapper;
+
     public function __construct(
         AuthProviderRegistry $registry,
         UserRepository $userRepository,
         JwtHandler $jwtHandler,
         ?OidcStateStore $stateStore = null,
         ?Connection $db = null,
+        ?AuthProviderBootstrapper $bootstrapper = null,
     ) {
         $this->registry = $registry;
         $this->userRepository = $userRepository;
         $this->jwtHandler = $jwtHandler;
+        $this->bootstrapper = $bootstrapper;
 
         if ($stateStore !== null) {
             $this->stateStore = $stateStore;
@@ -84,6 +96,26 @@ final class OidcCallbackController
                 'message' => 'redirect_uri query parameter is required',
             ]);
         }
+
+        // Finding 1 (HIGH) — allowlist the return target BEFORE it is bound into
+        // the state envelope. The callback mints a real access + refresh token
+        // pair; if `redirect_uri` could name a foreign origin an attacker could
+        // phish this flow and have the victim's freshly-minted session 302'd to
+        // their own host (account takeover). Only a same-origin relative path is
+        // accepted (see isSafeRedirectTarget()).
+        if (!self::isSafeRedirectTarget($redirectUri)) {
+            return (new Response())->status(400)->json([
+                'error' => 'invalid_redirect_uri',
+                'message' => 'redirect_uri must be a same-origin relative path',
+            ]);
+        }
+
+        // Finding 3 (MEDIUM) — reconcile THIS worker's registry with the
+        // persisted `auth.oidc.enabled` flag on the request path. Without it,
+        // right after an admin enables OIDC only the serving worker has the
+        // provider; ~(N-1)/N of workers would 503 here until a restart. Reads
+        // settings only (no network I/O), same as the boot registration.
+        $this->bootstrapper?->ensureProviderRegistered(AuthProviderBootstrapper::OIDC);
 
         if (!$this->registry->hasProvider('oidc')) {
             return (new Response())->status(503)->json([
@@ -186,6 +218,17 @@ final class OidcCallbackController
         $redirectUri = is_string($stateArray['redirect_uri'] ?? null) ? $stateArray['redirect_uri'] : '';
         $stateId = is_string($stateArray['sid'] ?? null) ? $stateArray['sid'] : '';
 
+        // Finding 1 (HIGH), defense-in-depth — never trust the return target read
+        // back from the state envelope. Re-validate it against the same
+        // same-origin allowlist BEFORE it is used in ANY redirect below (the
+        // success 302 that carries the session cookies AND the error 302s).
+        if (!self::isSafeRedirectTarget($redirectUri)) {
+            return (new Response())->status(400)->json([
+                'error' => 'invalid_redirect_uri',
+                'message' => 'redirect_uri must be a same-origin relative path',
+            ]);
+        }
+
         if ($stateId === '') {
             return (new Response())->status(403)->json([
                 'error' => 'invalid_state',
@@ -210,6 +253,11 @@ final class OidcCallbackController
         $codeVerifier = $stored['code_verifier'];
         $expectedNonce = $stored['nonce'];
 
+        // Finding 3 (MEDIUM) — request-path self-heal (see authorize()): register
+        // an enabled+configured provider that this worker missed at boot, or drop
+        // a stale registration when the flag is now off, before the check below.
+        $this->bootstrapper?->ensureProviderRegistered(AuthProviderBootstrapper::OIDC);
+
         if (!$this->registry->hasProvider('oidc')) {
             return (new Response())->status(503)->json([
                 'error' => 'provider_not_configured',
@@ -231,6 +279,8 @@ final class OidcCallbackController
             ]);
 
             if ($result->isFailure()) {
+                // Generic error code only — the redirect target is same-origin
+                // (allowlisted above) but the error string still rides the URL.
                 $errorValue = is_string($result->error) ? $result->error : 'auth_failed';
                 $redirectUrl = $redirectUri . '?error=' . urlencode($errorValue);
                 return (new Response())->status(302)->header('Location', $redirectUrl);
@@ -258,19 +308,23 @@ final class OidcCallbackController
 
             $tokens = $this->createTokensForUser($userId);
 
-            $queryParams = http_build_query([
-                'token' => $tokens['access_token'],
-                'refresh' => $tokens['refresh_token'],
-            ]);
-            $redirectUrl = $redirectUri === '' ? '/?' . $queryParams : $redirectUri . '?' . $queryParams;
+            // Finding 1 (HIGH) — deliver the freshly-minted access + refresh
+            // tokens as HttpOnly+Secure+SameSite=Lax cookies (never in the URL,
+            // which would leak them via the Referer header, browser history and
+            // access logs) and 302 to the clean, allowlisted same-origin path
+            // WITHOUT any token query string. RequestAuthenticator reads the
+            // phlix_session cookie, so the SPA is authenticated on the next
+            // navigation with no client-side token handling.
+            $response = (new Response())->status(302)->header('Location', $redirectUri);
+            $this->attachAuthCookies($response, $tokens);
 
-            return (new Response())->status(302)->header('Location', $redirectUrl);
+            return $response;
         } catch (\Throwable $e) {
             LoggerFactory::get(LogChannels::AUTH)->error('OIDC callback failed', [
                 'error' => $e->getMessage(),
             ]);
 
-            $redirectUrl = $redirectUri === '' ? '/?error=internal' : $redirectUri . '?error=internal';
+            $redirectUrl = $redirectUri . '?error=internal';
             return (new Response())->status(302)->header('Location', $redirectUrl);
         }
     }
@@ -300,5 +354,88 @@ final class OidcCallbackController
             'access_token' => $accessToken,
             'refresh_token' => $refreshToken,
         ];
+    }
+
+    /**
+     * Queue the minted access + refresh tokens onto the 302 as auth cookies
+     * (Finding 1). Mirrors
+     * {@see \Phlix\Server\Http\Controllers\AuthController::attachAuthCookies()}
+     * so the OIDC browser flow sets the SAME cookies the local login sets —
+     * identical names ({@see AuthController::SESSION_COOKIE}/{@see
+     * AuthController::REFRESH_COOKIE}), HttpOnly so XSS cannot read them, Secure
+     * so they only ride HTTPS (opt-out via `PHLIX_COOKIE_INSECURE=1` for local
+     * HTTP dev), SameSite=Lax so the top-level IdP → callback navigation still
+     * carries them. Lifetimes come from the same {@see JwtHandler} that minted
+     * the tokens, never a literal, so a cookie's Max-Age can't drift from its
+     * JWT `exp`.
+     *
+     * @param array<string, string> $tokens access_token + refresh_token pair.
+     */
+    private function attachAuthCookies(Response $response, array $tokens): void
+    {
+        $secure = getenv('PHLIX_COOKIE_INSECURE') !== '1';
+
+        $response->cookie(
+            AuthController::SESSION_COOKIE,
+            $tokens['access_token'],
+            maxAge: $this->jwtHandler->accessTtl(),
+            secure: $secure,
+            httpOnly: true,
+            sameSite: 'Lax',
+        );
+        $response->cookie(
+            AuthController::REFRESH_COOKIE,
+            $tokens['refresh_token'],
+            maxAge: $this->jwtHandler->refreshTtl(),
+            secure: $secure,
+            httpOnly: true,
+            sameSite: 'Lax',
+        );
+    }
+
+    /**
+     * Allowlist for the post-login return target (Finding 1 — HIGH).
+     *
+     * The callback mints a real access + refresh token pair, so the return
+     * target must never point at a foreign origin: an attacker who set
+     * `redirect_uri=https://evil.example` could otherwise phish the IdP flow and
+     * receive the victim's session (account takeover; the refresh token is
+     * long-lived). We therefore accept ONLY a same-origin, relative path:
+     *
+     *   - non-empty, with no control characters (also blocks CR/LF injection
+     *     into the `Location:` response header);
+     *   - begins with a single '/'; and
+     *   - does NOT begin with '//' or '/\', the protocol-relative and
+     *     backslash-normalization forms that browsers resolve to an absolute,
+     *     potentially foreign, host.
+     *
+     * Absolute URLs (`https://…`, `javascript:`, …) and scheme-relative URLs are
+     * all rejected because their first character is not '/'. There is no
+     * configured cross-origin redirect allowlist for OIDC (the plugin
+     * settings.json only holds provider_url/client_id/scopes), so same-origin is
+     * the only accepted target.
+     */
+    private static function isSafeRedirectTarget(string $uri): bool
+    {
+        if ($uri === '') {
+            return false;
+        }
+
+        // Reject any control character (NUL/CR/LF/TAB/…): these enable Location
+        // header injection and browser-specific parsing bypasses.
+        if (preg_match('/[\x00-\x1F\x7F]/', $uri) === 1) {
+            return false;
+        }
+
+        // Must be a path rooted at '/', but not the protocol-relative ('//host')
+        // or backslash ('/\host') forms browsers treat as an absolute URL.
+        if ($uri[0] !== '/') {
+            return false;
+        }
+        if (str_starts_with($uri, '//') || str_starts_with($uri, '/\\')) {
+            return false;
+        }
+
+        return true;
     }
 }

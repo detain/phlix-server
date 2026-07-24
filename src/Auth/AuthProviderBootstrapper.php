@@ -132,6 +132,49 @@ class AuthProviderBootstrapper
     }
 
     /**
+     * Request-path self-heal (S44 Finding 3): reconcile a single provider's live
+     * registration in THIS worker with its persisted enable flag, then report
+     * whether it is usable.
+     *
+     * The {@see AuthProviderRegistry} is per-worker in-memory state, so a live
+     * admin enable/disable only mutates the serving worker; every other HTTP
+     * worker keeps its boot-time view until it restarts. That makes
+     * `/auth/oidc/authorize`, the OIDC callback, and `ldap:` logins 503 on
+     * ~(N-1)/N of workers right after an admin toggles a provider on — the exact
+     * opposite of "enabling results in a working login flow". Calling this on the
+     * request path makes the PERSISTED flag authoritative:
+     *
+     *   - flag ON  → lazily (re-)register the provider if this worker missed it
+     *     (reuses {@see self::registerProvider()}, which reads settings only — no
+     *     network I/O, same as the boot pass);
+     *   - flag OFF → drop any stale registration so a since-disabled provider in
+     *     this worker stops serving immediately.
+     *
+     * @param string $provider One of {@see self::TOGGLEABLE}.
+     * @return bool True when the provider is enabled, configured, and now
+     *              registered in this worker; false otherwise (unknown/disabled/
+     *              unconfigured).
+     */
+    public function ensureProviderRegistered(string $provider): bool
+    {
+        if (!$this->isToggleable($provider)) {
+            return false;
+        }
+
+        if ($this->isEnabled($provider)) {
+            return $this->registerProvider($provider);
+        }
+
+        // Flag OFF: a provider disabled after this worker booted may still be
+        // registered here — unregister it so it stops serving immediately.
+        if ($this->registry->hasProvider($provider)) {
+            $this->registry->unregisterProvider($provider);
+        }
+
+        return false;
+    }
+
+    /**
      * Persist a provider as enabled and register it into the current worker.
      *
      * @return bool True when the provider was (or already is) live in this

@@ -7,6 +7,7 @@ namespace Phlix\Tests\Unit\Server\Http\Controllers;
 use PHPUnit\Framework\TestCase;
 use Phlix\Auth\AuthProviderRegistry;
 use Phlix\Auth\UserIdentityRepository;
+use Phlix\Auth\UserRepository;
 use Phlix\Plugins\Ldap\LdapConnection;
 use Phlix\Plugins\Ldap\LdapProvider;
 use Phlix\Server\Http\Controllers\AccountLinkController;
@@ -82,6 +83,204 @@ final class AccountLinkControllerTest extends TestCase
         $this->assertSame('oidc.sub-123', $identity['external_id']);
         $this->assertSame('2026-07-24 10:00:00', $identity['linked_at']);
         $this->assertArrayNotHasKey('provider_data', $identity);
+    }
+
+    // -----------------------------------------------------------------------
+    // DELETE /auth/identities/{id}  (S47 unlink)
+    // -----------------------------------------------------------------------
+
+    public function test_unlink_requires_authentication(): void
+    {
+        $identities = $this->createMock(UserIdentityRepository::class);
+        $identities->expects($this->never())->method('findByUserId');
+        $identities->expects($this->never())->method('delete');
+        $identities->expects($this->never())->method('deleteById');
+
+        $controller = new AccountLinkController($identities, new AuthProviderRegistry());
+
+        $request = new Request(); // no userId
+
+        $response = $controller->unlink($request, ['id' => 'id-1']);
+
+        $this->assertSame(401, $response->statusCode);
+        /** @var array<string, mixed> $body */
+        $body = json_decode($response->body, true);
+        $this->assertSame('auth.required', $body['code']);
+    }
+
+    public function test_unlink_missing_id_returns_400(): void
+    {
+        $identities = $this->createMock(UserIdentityRepository::class);
+        $identities->expects($this->never())->method('delete');
+        $identities->expects($this->never())->method('deleteById');
+
+        $controller = new AccountLinkController($identities, new AuthProviderRegistry());
+
+        $request = new Request();
+        $request->userId = 'user-1';
+
+        $response = $controller->unlink($request, []); // no id param
+
+        $this->assertSame(400, $response->statusCode);
+        /** @var array<string, mixed> $body */
+        $body = json_decode($response->body, true);
+        $this->assertSame('missing_identity_id', $body['error']);
+    }
+
+    /**
+     * OWN-IDENTITY-ONLY: an id that is not in the CALLER's own identity list
+     * (another user's identity, or a non-existent one) yields a 404 and NEVER a
+     * cross-account delete.
+     */
+    public function test_unlink_foreign_or_unknown_id_returns_404_and_never_deletes(): void
+    {
+        $identities = $this->createMock(UserIdentityRepository::class);
+        // The caller owns ONE identity — but requests a DIFFERENT id.
+        $identities->method('findByUserId')->with('user-1')->willReturn([
+            [
+                'id' => 'mine',
+                'user_id' => 'user-1',
+                'provider' => 'oidc',
+                'provider_instance' => '',
+                'external_id' => 'oidc.mine',
+            ],
+        ]);
+        $identities->expects($this->never())->method('delete');
+        $identities->expects($this->never())->method('deleteById');
+
+        $controller = new AccountLinkController($identities, new AuthProviderRegistry());
+
+        $request = new Request();
+        $request->userId = 'user-1';
+
+        $response = $controller->unlink($request, ['id' => 'someone-elses']);
+
+        $this->assertSame(404, $response->statusCode);
+        /** @var array<string, mixed> $body */
+        $body = json_decode($response->body, true);
+        $this->assertSame('identity_not_found', $body['error']);
+    }
+
+    /**
+     * LAST-SIGN-IN-METHOD GUARD: removing the only identity when the account has
+     * NO local password would lock the user out — refuse with 409, delete nothing.
+     */
+    public function test_unlink_refuses_last_sign_in_method(): void
+    {
+        $identities = $this->createMock(UserIdentityRepository::class);
+        $identities->method('findByUserId')->with('user-1')->willReturn([
+            [
+                'id' => 'only-one',
+                'user_id' => 'user-1',
+                'provider' => 'oidc',
+                'provider_instance' => '',
+                'external_id' => 'oidc.only',
+            ],
+        ]);
+        $identities->expects($this->never())->method('delete');
+        $identities->expects($this->never())->method('deleteById');
+
+        // No local password → this identity is the account's ONLY sign-in method.
+        $userRepo = $this->createMock(UserRepository::class);
+        $userRepo->method('hasLocalPassword')->with('user-1')->willReturn(false);
+
+        $controller = new AccountLinkController($identities, new AuthProviderRegistry(), null, $userRepo);
+
+        $request = new Request();
+        $request->userId = 'user-1';
+
+        $response = $controller->unlink($request, ['id' => 'only-one']);
+
+        $this->assertSame(409, $response->statusCode);
+        /** @var array<string, mixed> $body */
+        $body = json_decode($response->body, true);
+        $this->assertSame('last_sign_in_method', $body['error']);
+    }
+
+    /**
+     * When the account keeps a LOCAL password, the sole external identity may be
+     * removed — the delete is scoped by user_id + the full identity key, so only
+     * that one row is affected (password + any others left intact).
+     */
+    public function test_unlink_succeeds_when_local_password_remains(): void
+    {
+        $identities = $this->createMock(UserIdentityRepository::class);
+        $identities->method('findByUserId')->with('user-1')->willReturn([
+            [
+                'id' => 'the-id',
+                'user_id' => 'user-1',
+                'provider' => 'oidc',
+                'provider_instance' => '',
+                'external_id' => 'oidc.sub-1',
+            ],
+        ]);
+        // Delete by the target's own row id — ownership was already established by
+        // resolving `the-id` from within this user's own findByUserId list.
+        $identities->expects($this->never())->method('delete');
+        $identities->expects($this->once())
+            ->method('deleteById')
+            ->with('the-id');
+
+        $userRepo = $this->createMock(UserRepository::class);
+        $userRepo->method('hasLocalPassword')->with('user-1')->willReturn(true);
+
+        $controller = new AccountLinkController($identities, new AuthProviderRegistry(), null, $userRepo);
+
+        $request = new Request();
+        $request->userId = 'user-1';
+
+        $response = $controller->unlink($request, ['id' => 'the-id']);
+
+        $this->assertSame(200, $response->statusCode);
+        /** @var array<string, mixed> $body */
+        $body = json_decode($response->body, true);
+        $this->assertTrue($body['success']);
+    }
+
+    /**
+     * With NO local password but ANOTHER identity still linked, removing one
+     * identity is safe (the other remains a sign-in method) — it succeeds and the
+     * delete targets exactly the requested identity.
+     */
+    public function test_unlink_succeeds_when_other_identity_remains_even_without_password(): void
+    {
+        $identities = $this->createMock(UserIdentityRepository::class);
+        $identities->method('findByUserId')->with('user-1')->willReturn([
+            [
+                'id' => 'github-id',
+                'user_id' => 'user-1',
+                'provider' => 'github',
+                'provider_instance' => '',
+                'external_id' => 'github.42',
+            ],
+            [
+                'id' => 'oidc-id',
+                'user_id' => 'user-1',
+                'provider' => 'oidc',
+                'provider_instance' => '',
+                'external_id' => 'oidc.sub-2',
+            ],
+        ]);
+        $identities->expects($this->never())->method('delete');
+        $identities->expects($this->once())
+            ->method('deleteById')
+            ->with('github-id');
+
+        // No password — but there is a second identity, so removal is safe.
+        $userRepo = $this->createMock(UserRepository::class);
+        $userRepo->method('hasLocalPassword')->with('user-1')->willReturn(false);
+
+        $controller = new AccountLinkController($identities, new AuthProviderRegistry(), null, $userRepo);
+
+        $request = new Request();
+        $request->userId = 'user-1';
+
+        $response = $controller->unlink($request, ['id' => 'github-id']);
+
+        $this->assertSame(200, $response->statusCode);
+        /** @var array<string, mixed> $body */
+        $body = json_decode($response->body, true);
+        $this->assertTrue($body['success']);
     }
 
     // -----------------------------------------------------------------------

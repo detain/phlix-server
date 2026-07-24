@@ -9,6 +9,48 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Added
 
+- **Unlink an identity, log in *via* a linked identity, and multi-provider
+  foundation** (updates.md #55 / S47). Completes the account-linking story started
+  in S45 and lays the multi-instance groundwork:
+  - **`DELETE /auth/identities/{id}`** (**authenticated**) — a user removes one of
+    their OWN linked external identities. The `{id}` is the `id` returned by
+    `GET /auth/identities`. Guards:
+    - **own-identity-only** — the target is resolved within the caller's own
+      identity list (keyed on the trusted session `user_id`), so an id owned by
+      another account (or a non-existent one) returns an indistinguishable
+      **`404 identity_not_found`**, never a cross-account delete;
+    - **never remove your last sign-in method** — a request that would leave the
+      account with **no local password AND no other linked identity** is refused
+      with **`409 last_sign_in_method`**, so a user cannot lock themselves out.
+    The local password and every OTHER linked identity are left untouched. Success
+    is `200 {success, message}` (missing/empty id → `400`, unauthenticated → `401`).
+  - **Login *via* a linked identity now works** — this **lifts the S45
+    limitation**. `UserRepository::findOrCreateByExternalId()` now resolves the
+    owning user through the `user_identities` table FIRST (`provider`,
+    default-instance `''`, `external_id`), so an identity you LINKED to an existing
+    account (S45) can now be used to log in and resolves that existing account
+    instead of wrongly creating a duplicate. The legacy `users.provider` /
+    `users.external_id` lookup remains as a belt-and-suspenders fallback for any
+    un-backfilled row, and the create path keeps the S46 dual-write, so **no
+    existing/legacy external user loses login**. New
+    `UserRepository::hasLocalPassword()` backs the unlink guard.
+  - **Multi-instance provider capability.** `AuthProviderRegistry` now keys on a
+    composite INSTANCE KEY (`AuthProviderRegistry::instanceKey()`): the default
+    instance (the `''` sentinel, matching `user_identities.provider_instance`) is
+    the family name verbatim, and a named instance is `family:instance`. This lets
+    two providers of the SAME family (e.g. two OIDC issuers) coexist in one worker's
+    registry without the previous duplicate-name throw — the platform-level
+    foundation for configuring multiple OIDC/OAuth providers. **No admin UI or
+    seeding of named instances ships in this step** (an operator/admin concern for a
+    later step); every pre-S47 single-instance caller is behaviour-unchanged because
+    the default-instance key equals the family name.
+  - **Centralized auth-provider route registration.** New
+    `AuthProviderRouteRegistrar` is the single, unit-tested site that wires every
+    external-auth route (OIDC authorize/callback + the `/auth/identities` group
+    incl. the new unlink), called once from `Application.php`. This closes the S44
+    class of bug where a fully-implemented provider (OIDC) shipped with its routes
+    never wired.
+
 - **Account linking — attach an OIDC/LDAP identity to your logged-in account**
   (updates.md #55 / S45). An already-signed-in local account can now link an
   external identity and list what is linked. Three new **authenticated** endpoints
@@ -48,11 +90,13 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
     never a mislabeled `409`.
   - **Storage.** A link is a `user_identities` row (S46 / migration 092) for the
     current `user_id`; `provider_instance` is the single-instance sentinel `''`.
-  - **Not yet available.** **Unlinking** an identity and **logging in *via* a
-    linked identity** (repointing the login read path onto `user_identities`) are
-    **deferred to a later step (S47)**, as is multi-instance (non-empty
-    `provider_instance`). S45 records and lists a link; a freshly-linked identity
-    becomes usable for login in that later release.
+  - **Now delivered in S47.** **Unlinking** an identity
+    (`DELETE /auth/identities/{id}`) and **logging in *via* a linked identity** (the
+    login read path now resolves through `user_identities`) shipped in **S47** (see
+    the S47 entry above) — a freshly-linked identity is now usable for login and
+    resolves your existing account. The multi-instance registry foundation (non-empty
+    `provider_instance`) also landed in S47, though configuring multiple named
+    provider instances from the admin console remains a later step.
 
 - **`user_identities` table + multi-identity auth foundation** (updates.md #54 / S46).
   Internal schema plumbing for account-linking and multi-instance external auth —

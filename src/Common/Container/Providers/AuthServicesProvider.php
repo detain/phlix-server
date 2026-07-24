@@ -238,12 +238,17 @@ final class AuthServicesProvider implements ServiceProviderInterface
                 // autowiring), so bind explicitly — without it a link flow 503s.
                 ->constructorParameter('identities', get(UserIdentityRepository::class)),
 
-            // S45: the authenticated account-linking endpoints (list identities +
-            // link LDAP). `bootstrapper` is an optional ctor param (PHP-DI skips
-            // optional params during autowiring), so bind it explicitly for the
-            // request-path LDAP self-heal; `identities` + `registry` autowire.
+            // S45/S47: the authenticated account-linking endpoints (list, link
+            // LDAP, and the S47 DELETE unlink). `bootstrapper` + `userRepository`
+            // are optional ctor params (PHP-DI skips optional params during
+            // autowiring), so bind them explicitly — `bootstrapper` for the
+            // request-path LDAP self-heal, `userRepository` for the unlink
+            // last-sign-in-method safety guard (without it that guard fails safe
+            // and would refuse removing the last identity). `identities` +
+            // `registry` autowire.
             \Phlix\Server\Http\Controllers\AccountLinkController::class => autowire()
-                ->constructorParameter('bootstrapper', get(AuthProviderBootstrapper::class)),
+                ->constructorParameter('bootstrapper', get(AuthProviderBootstrapper::class))
+                ->constructorParameter('userRepository', get(UserRepository::class)),
 
             // `statsCollector` is wired so successful logins/logouts land in
             // stats_user_activity (the admin dashboard activity feed). PHP-DI

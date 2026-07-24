@@ -100,13 +100,23 @@ final class ProviderManager
 
         [$providerName, $localUsername] = $prefix;
 
-        if (!$this->registry->hasProvider($providerName)) {
+        // S47 instance-awareness: a username prefix names a provider FAMILY
+        // (e.g. "oidc"/"ldap"), which dispatches to that family's DEFAULT
+        // instance. The registry keys the default instance under the family name
+        // verbatim ({@see AuthProviderRegistry::instanceKey()} with the ''
+        // sentinel), so the family name IS the lookup key here. Routing a
+        // username to a NON-default instance (e.g. picking okta-oidc over
+        // azure-oidc from the login form) is an operator/config concern deferred
+        // to S48 — this step only makes the registry able to HOLD both.
+        $instanceKey = AuthProviderRegistry::instanceKey($providerName);
+
+        if (!$this->registry->hasProvider($instanceKey)) {
             throw new AuthProviderNotFoundException(
                 "Provider '{$providerName}' is not registered."
             );
         }
 
-        $provider = $this->registry->getProvider($providerName);
+        $provider = $this->registry->getProvider($instanceKey);
 
         return $provider->authenticate($credentials);
     }

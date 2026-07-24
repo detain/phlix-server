@@ -430,50 +430,18 @@ class Application
         $this->router->get('/auth/logout', [$authController, 'logout']);
         $this->router->post('/auth/logout', [$authController, 'logout']);
 
-        // S44: OIDC authorization-code flow (unauthenticated — this IS the
-        // login entry). GET /auth/oidc/authorize redirects to the IdP;
-        // GET /auth/oidc/callback exchanges the code and mints a session. The
-        // OidcCallbackController was fully implemented but never routed; both
-        // methods 503 unless an OIDC provider is registered, which the per-worker
-        // AuthProviderBootstrapper boot step does when auth.oidc.enabled is set.
-        // Resolved lazily per request from the container so the (autowired) deps
-        // + DB-backed state store are built once the pool is ready.
+        // S44/S45/S47: every external-auth-provider route is wired in ONE place —
+        // {@see \Phlix\Server\Http\AuthProviderRouteRegistrar} — so a provider can
+        // never ship with its routes silently unregistered (the S44 dead-OIDC
+        // root cause). It registers the unauthenticated OIDC authorize/callback
+        // login flow AND the authenticated identity-management group (list, link
+        // OIDC/LDAP, and the S47 DELETE unlink), all behind AuthMiddleware where
+        // required. Controllers are `[Class, method]` handlers resolved lazily per
+        // request from the container so their injected deps (UserIdentityRepository,
+        // provider registry, DB-backed OIDC state store) are built once the pool
+        // is ready.
         if ($this->container !== null) {
-            $this->router->oidcAuth(\Phlix\Plugins\Oidc\Controller\OidcCallbackController::class);
-        }
-
-        // S45: account-linking endpoints for an already-logged-in user. These are
-        // AUTHENTICATED (AuthMiddleware) — the current user is read from the
-        // validated session:
-        //   GET  /auth/identities            → list this user's linked identities
-        //   GET  /auth/identities/link/oidc  → START an OIDC link (redirect to IdP;
-        //        the initiating user is bound into the SERVER-SIDE OIDC state, so
-        //        the unauthenticated /auth/oidc/callback can trust it — the link
-        //        branch there does the actual INSERT, never minting a login token)
-        //   POST /auth/identities/link/ldap  → link via a real LDAP bind
-        // Controllers are resolved from the container so their injected deps
-        // (UserIdentityRepository, provider registry, state store) are built once
-        // the pool is ready. The OIDC *callback* stays on the unauthenticated
-        // oidcAuth path above (the IdP redirect carries no session).
-        if ($this->container !== null) {
-            $this->router->group(
-                '',
-                function (Router $r): void {
-                    $r->get(
-                        '/auth/identities',
-                        [\Phlix\Server\Http\Controllers\AccountLinkController::class, 'listIdentities'],
-                    );
-                    $r->get(
-                        '/auth/identities/link/oidc',
-                        [\Phlix\Plugins\Oidc\Controller\OidcCallbackController::class, 'authorizeLink'],
-                    );
-                    $r->post(
-                        '/auth/identities/link/ldap',
-                        [\Phlix\Server\Http\Controllers\AccountLinkController::class, 'linkLdap'],
-                    );
-                },
-                [new \Phlix\Server\Http\Middleware\AuthMiddleware()],
-            );
+            (new \Phlix\Server\Http\AuthProviderRouteRegistrar())->register($this->router);
         }
 
         // Hub JWT exchange endpoint

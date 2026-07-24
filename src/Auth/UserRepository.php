@@ -806,6 +806,30 @@ class UserRepository
     }
 
     /**
+     * Whether the user has a usable LOCAL password sign-in method.
+     *
+     * `users.password_hash` is nullable since migration 091 (S44) — a
+     * purely-external account (created via OIDC/LDAP) has NULL here. S47's
+     * unlink safety guard uses this together with the count of remaining
+     * external identities to refuse removing a user's LAST sign-in method
+     * (which would lock them out).
+     *
+     * @param string $userId User UUID.
+     * @return bool True when a non-empty password hash is stored.
+     */
+    public function hasLocalPassword(string $userId): bool
+    {
+        $user = $this->findById($userId);
+        if ($user === null) {
+            return false;
+        }
+
+        $hash = UserRow::string($user, 'password_hash');
+
+        return $hash !== null && $hash !== '';
+    }
+
+    /**
      * Check if an email is already registered.
      *
      * @param string          $email     Email address to check
@@ -940,6 +964,39 @@ class UserRepository
         ?string $email = null,
         ?string $displayName = null
     ): string {
+        // S47 LOGIN-READ REPOINT (the riskiest change): resolve the owning user
+        // via the forward-looking `user_identities` join table (migration 092)
+        // FIRST, keyed on (provider, default-instance '', external_id).
+        //
+        // This is what makes an identity LINKED to an EXISTING account via S45
+        // usable for login. S45 linking writes a `user_identities` row but NEVER
+        // mutates `users`, so the legacy users-only lookup (the fallback below)
+        // could not see a linked identity — an OIDC/LDAP login for a linked
+        // identity would miss the owner and wrongly CREATE a duplicate account.
+        // Reading `user_identities` first resolves that linked identity to its
+        // real owner instead.
+        //
+        // BACKWARD COMPATIBILITY: S46's migration backfilled one identity row per
+        // pre-existing external user, so this read also resolves every user who
+        // could log in before the repoint. The `users`-table fallback below is
+        // belt-and-suspenders for any row a backfill somehow missed, so NO
+        // existing user loses login.
+        $identityRow = (new UserIdentityRepository($this->db))->findByProviderExternalId(
+            $provider,
+            '', // default single-instance sentinel (migration 092)
+            $externalId,
+        );
+        if ($identityRow !== null) {
+            $ownerId = $identityRow['user_id'] ?? null;
+            if (is_string($ownerId) && $ownerId !== '') {
+                return $ownerId;
+            }
+        }
+
+        // BACKWARD-COMPAT FALLBACK: the pre-S47 authoritative login columns.
+        // Same (provider, external_id) scoping the login path used before the
+        // repoint, so an un-backfilled external user still resolves and nobody
+        // loses login.
         $existingRow = UserRow::firstFromMixed(
             $this->db->query(
                 "SELECT * FROM users WHERE provider = ? AND external_id = ?",

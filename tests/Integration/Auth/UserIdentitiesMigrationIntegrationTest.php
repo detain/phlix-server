@@ -45,8 +45,10 @@ use Workerman\MySQL\Connection;
  *  4. Login is preserved: `users` is authoritative and untouched by 092, so
  *     existing external users still resolve via `findByExternalId`.
  *  5. First external login dual-writes BOTH a `users` row and a matching
- *     default-instance `user_identities` row in one transaction; a forced
- *     identity-insert conflict rolls the whole thing back (no orphan user).
+ *     default-instance `user_identities` row in one transaction; and, under the
+ *     S47 login-read repoint, a new external login for an external_id already
+ *     owned via a `user_identities` row RESOLVES that owner instead of creating a
+ *     duplicate (the former deterministic dual-write conflict is now superseded).
  *
  * The suite self-skips when no MySQL is reachable (same fsockopen guard as
  * {@see NextUpIntegrationTest} / {@see UserRepositoryExternalIdIntegrationTest})
@@ -390,17 +392,26 @@ final class UserIdentitiesMigrationIntegrationTest extends TestCase
     }
 
     /**
-     * Scenario 5 (atomicity): if the identity insert fails inside the dual-write
-     * transaction, the `users` (and `user_settings`) insert must roll back — no
-     * user is ever left WITHOUT its identity row.
+     * Scenario 5 (S47 supersedes the former deterministic dual-write conflict):
+     * a NEW 'oidc' login for an external_id already OWNED — via a
+     * `user_identities` row — by a legacy `provider='external'` user X must
+     * RESOLVE X, never create a duplicate.
      *
-     * We manufacture the conflict: a legacy `provider='external'` user X already
-     * owns the derived identity `(oidc, '', <ext>)`. A NEW 'oidc' login for the
-     * same external_id passes the `users` UNIQUE (provider differs from X) and so
-     * enters the create branch, but its identity insert collides with X's row →
-     * the whole transaction rolls back.
+     * Before S47, {@see UserRepository::findOrCreateByExternalId()} ignored
+     * `user_identities` on read, so this login entered the create branch and its
+     * identity INSERT collided with X's row, rolling the whole transaction back
+     * (this scenario used to assert that throw). S47's login-read REPOINT reads
+     * `user_identities` FIRST, so the same login now resolves X (its legitimate
+     * owner) and returns early — NO create branch, NO conflict, NO duplicate
+     * 'oidc' users row. That is the headline S47 guarantee (an existing identity
+     * is never turned into a duplicate account), proven here against real MySQL.
+     *
+     * The dual-write transaction wrapping is unchanged; its rollback atomicity is
+     * now reachable only via a genuine concurrent race (two first-logins for the
+     * SAME brand-new external_id), which is out of scope for a single-threaded
+     * integration test.
      */
-    public function testDualWriteRollsBackUserWhenIdentityInsertConflicts(): void
+    public function testS47RepointResolvesExistingIdentityOwnerInsteadOfConflicting(): void
     {
         $ext = 'oidc.atomic-F-' . $this->token;
 
@@ -415,19 +426,13 @@ final class UserIdentitiesMigrationIntegrationTest extends TestCase
 
         $repo = new UserRepository($this->conn());
 
-        $threw = false;
-        try {
-            // Create branch runs (no users row with provider='oidc' yet), then the
-            // identity insert conflicts with X's row.
-            $repo->findOrCreateByExternalId('oidc', $ext, null, 'Atomic F');
-        } catch (Throwable $e) {
-            $threw = true;
-        }
-        $this->assertTrue($threw, 'the conflicting identity insert must surface as a thrown error');
+        // S47 identity-first read resolves X — no throw, no create branch.
+        $resolved = $repo->findOrCreateByExternalId('oidc', $ext, null, 'Atomic F');
+        $this->assertSame($xId, $resolved, 'S47 must resolve the existing identity owner, never create a duplicate');
 
-        // The rolled-back user must NOT exist: no users row for (provider 'oidc', ext).
-        $orphan = $this->row('SELECT id FROM users WHERE provider = ? AND external_id = ?', ['oidc', $ext]);
-        $this->assertNull($orphan, 'the users row must have been rolled back with the failed identity insert');
+        // No duplicate: still no users row with provider='oidc' for this ext.
+        $dup = $this->row('SELECT id FROM users WHERE provider = ? AND external_id = ?', ['oidc', $ext]);
+        $this->assertNull($dup, 'the repoint must not create a duplicate oidc users row');
 
         // X and its single identity row are intact.
         $xRow = $this->row('SELECT id FROM users WHERE id = ?', [$xId]);

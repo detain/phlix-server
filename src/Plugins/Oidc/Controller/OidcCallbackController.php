@@ -73,6 +73,19 @@ final class OidcCallbackController
     private const string OIDC_PROVIDER = 'oidc';
     private const string DEFAULT_INSTANCE = '';
 
+    /**
+     * S47: the registry INSTANCE KEY for the built-in OIDC provider. The bundled
+     * OIDC login flow uses the family's DEFAULT instance, whose registry key is
+     * the family name verbatim ({@see AuthProviderRegistry::instanceKey()} with
+     * the '' sentinel), so this resolves to `'oidc'`. Routing to a named instance
+     * is an S48 config concern; centralising the key here means the callback no
+     * longer hard-codes the literal `'oidc'` in four places.
+     */
+    private static function oidcInstanceKey(): string
+    {
+        return AuthProviderRegistry::instanceKey(self::OIDC_PROVIDER, self::DEFAULT_INSTANCE);
+    }
+
     /** S45: safe same-origin fallback when a link flow omits redirect_uri. */
     private const string DEFAULT_LINK_REDIRECT = '/app';
 
@@ -211,14 +224,14 @@ final class OidcCallbackController
         // settings only (no network I/O), same as the boot registration.
         $this->bootstrapper?->ensureProviderRegistered(AuthProviderBootstrapper::OIDC);
 
-        if (!$this->registry->hasProvider('oidc')) {
+        if (!$this->registry->hasProvider(self::oidcInstanceKey())) {
             return (new Response())->status(503)->json([
                 'error' => 'provider_not_configured',
                 'message' => 'OIDC provider is not enabled',
             ]);
         }
 
-        $provider = $this->registry->getProvider('oidc');
+        $provider = $this->registry->getProvider(self::oidcInstanceKey());
         if (!$provider instanceof OidcProvider) {
             return (new Response())->status(503)->json([
                 'error' => 'invalid_provider_type',
@@ -362,7 +375,7 @@ final class OidcCallbackController
         // a stale registration when the flag is now off, before the check below.
         $this->bootstrapper?->ensureProviderRegistered(AuthProviderBootstrapper::OIDC);
 
-        if (!$this->registry->hasProvider('oidc')) {
+        if (!$this->registry->hasProvider(self::oidcInstanceKey())) {
             return (new Response())->status(503)->json([
                 'error' => 'provider_not_configured',
                 'message' => 'OIDC provider is not enabled',
@@ -370,7 +383,7 @@ final class OidcCallbackController
         }
 
         try {
-            $provider = $this->registry->getProvider('oidc');
+            $provider = $this->registry->getProvider(self::oidcInstanceKey());
             if (!$provider instanceof OidcProvider) {
                 throw new \RuntimeException('OIDC provider is not configured correctly');
             }

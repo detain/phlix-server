@@ -359,8 +359,10 @@ final class AuthProviderBootstrapperTest extends TestCase
                 return $this->hasProviderCalls++ > 0;
             }
 
-            public function registerProvider(\Phlix\Shared\Auth\ProviderInterface $provider): void
-            {
+            public function registerProvider(
+                \Phlix\Shared\Auth\ProviderInterface $provider,
+                string $instance = self::DEFAULT_INSTANCE
+            ): void {
                 throw new \RuntimeException(
                     "Auth provider '{$provider->name()}' is already registered."
                 );
@@ -394,8 +396,10 @@ final class AuthProviderBootstrapperTest extends TestCase
                 return false;
             }
 
-            public function registerProvider(\Phlix\Shared\Auth\ProviderInterface $provider): void
-            {
+            public function registerProvider(
+                \Phlix\Shared\Auth\ProviderInterface $provider,
+                string $instance = self::DEFAULT_INSTANCE
+            ): void {
                 throw new \RuntimeException('registry backing store unavailable');
             }
         };

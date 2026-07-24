@@ -457,8 +457,12 @@ final class OidcCallbackController
      * Conflict handling:
      *  - identity already linked to the SAME user → idempotent success (302).
      *  - identity linked to ANOTHER user → 409 (the DB UNIQUE index from
-     *    migration 092 is the race backstop: a duplicate-key throw on create()
-     *    is caught and mapped to 409, never a 500).
+     *    migration 092 is the race backstop: a duplicate-key throw on create() is
+     *    re-classified by re-reading and mapped to 409/idempotent success ONLY
+     *    when the identity genuinely exists).
+     *  - a NON-duplicate create() failure (transient DB fault, FK/constraint,
+     *    connection drop) is re-thrown so callback()'s central catch surfaces it
+     *    as a genuine server error (?error=internal), never a mislabeled 409.
      *
      * @param AuthResult $result The verified OIDC authentication result.
      * @param array<string, mixed> $context The server-side link context.
@@ -521,16 +525,30 @@ final class OidcCallbackController
                 $providerData,
             );
         } catch (\Throwable $e) {
-            // DB UNIQUE backstop (migration 092): a concurrent link of the SAME
-            // identity raced us between the check above and this INSERT. Re-read
-            // to classify — same user ⇒ idempotent success, otherwise conflict.
-            // Either way this is a 409-class outcome, NEVER a 500.
+            // create() failed — CLASSIFY the failure by re-reading. The row's
+            // actual presence is the authoritative signal (more reliable than
+            // parsing driver error codes, which the MySQL wrapper flattens to
+            // SQLSTATE 23000 across dup-key/FK/NOT-NULL alike):
+            //  - re-read non-null ⇒ a genuine duplicate raced the DB UNIQUE index
+            //    (migration 092): same user ⇒ idempotent success, else 409;
+            //  - re-read null ⇒ the INSERT did NOT land for a NON-duplicate reason
+            //    (transient DB fault, FK/constraint, connection drop) — a real
+            //    server error that must NOT be mislabeled as a 409 conflict.
             $raced = $this->identities->findByProviderExternalId(
                 self::OIDC_PROVIDER,
                 self::DEFAULT_INSTANCE,
                 $externalId,
             );
-            if ($raced !== null && ($raced['user_id'] ?? null) === $linkUserId) {
+            if ($raced === null) {
+                // Not a conflict. Re-throw so callback()'s central catch surfaces
+                // this as a genuine server error (error-level log + ?error=internal
+                // redirect), rather than masking it as a 409 conflict.
+                LoggerFactory::get(LogChannels::AUTH)->error('OIDC identity link create failed', [
+                    'error' => $e->getMessage(),
+                ]);
+                throw $e;
+            }
+            if (($raced['user_id'] ?? null) === $linkUserId) {
                 return $this->linkSuccessRedirect($redirectUri);
             }
             LoggerFactory::get(LogChannels::AUTH)->warning('OIDC identity link conflict', [

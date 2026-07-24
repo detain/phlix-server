@@ -339,6 +339,41 @@ final class AccountLinkControllerTest extends TestCase
         $this->assertSame('identity_already_linked', $body['error']);
     }
 
+    /**
+     * Round-1 Finding 1 (MEDIUM) — a NON-duplicate create() failure must NOT be
+     * mislabeled as a 409 conflict. When create() throws AND the post-throw
+     * re-read STILL returns null (the INSERT did not land for a non-duplicate
+     * reason — transient DB fault, FK/constraint, connection drop), the original
+     * exception is re-thrown so the central error mapper surfaces a 5xx.
+     *
+     * This is RED against the pre-fix broad-409 logic: that logic returned a 409
+     * `identity_already_linked` here (no exception), so `expectException` failed.
+     */
+    public function test_link_ldap_create_failure_with_empty_reread_rethrows_not_409(): void
+    {
+        $identities = $this->createMock(UserIdentityRepository::class);
+        // Pre-check AND the post-throw re-read both return null: nothing exists,
+        // so the create() failure was NOT a duplicate-key race.
+        $identities->method('findByProviderExternalId')->willReturn(null);
+        $identities->method('create')->willThrowException(
+            new \RuntimeException('SQLSTATE[HY000] [2002] transient connection error'),
+        );
+
+        $registry = new AuthProviderRegistry();
+        $registry->registerProvider($this->ldapProviderWithSuccessfulBind());
+
+        $controller = new AccountLinkController($identities, $registry);
+
+        $request = new Request();
+        $request->userId = 'user-1';
+        $request->body = ['username' => 'alice', 'password' => 'correct'];
+
+        // A genuine server error must surface (re-throw), NOT be masked as a 409.
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('transient connection error');
+        $controller->linkLdap($request, []);
+    }
+
     // -----------------------------------------------------------------------
     // Fixtures
     // -----------------------------------------------------------------------

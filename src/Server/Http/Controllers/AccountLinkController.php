@@ -43,7 +43,10 @@ use Phlix\Shared\Auth\AuthResult;
  * `user_id`; it never mutates `users`. Guards:
  *  - already linked to the SAME user → idempotent success (200);
  *  - linked to ANOTHER user → 409 (the DB UNIQUE index is the race backstop — a
- *    duplicate-key throw on create() is caught and mapped to 409, never a 500).
+ *    duplicate-key throw on create() is re-classified by re-reading and mapped
+ *    to 409/idempotent success ONLY when the identity genuinely exists; a
+ *    non-duplicate create() failure is re-thrown and surfaces as a 5xx, never a
+ *    mislabeled 409).
  *
  * `unlinkAccount()` and repointing the login read path onto `user_identities`
  * are S47 — deliberately out of scope here. The listing is shaped so S47's
@@ -224,15 +227,30 @@ final class AccountLinkController
                 $this->buildProviderData($result),
             );
         } catch (\Throwable $e) {
-            // DB UNIQUE backstop (migration 092): a concurrent link of the SAME
-            // identity raced us. Re-read to classify — same user ⇒ idempotent
-            // success, otherwise conflict. Never a 500.
+            // create() failed — CLASSIFY the failure by re-reading. The row's
+            // actual presence is the authoritative signal (more reliable than
+            // parsing driver error codes, which the MySQL wrapper flattens to
+            // SQLSTATE 23000 across dup-key/FK/NOT-NULL alike):
+            //  - re-read non-null ⇒ a genuine duplicate raced the DB UNIQUE index
+            //    (migration 092): same user ⇒ idempotent success, else 409;
+            //  - re-read null ⇒ the INSERT did NOT land for a NON-duplicate reason
+            //    (transient DB fault, FK/constraint, connection drop) — a real
+            //    server error that must NOT be mislabeled as a 409 conflict.
             $raced = $this->identities->findByProviderExternalId(
                 $provider,
                 self::DEFAULT_INSTANCE,
                 $externalId,
             );
-            if ($raced !== null && ($raced['user_id'] ?? null) === $userId) {
+            if ($raced === null) {
+                // Not a conflict. Re-throw so the central error mapper surfaces a
+                // 5xx (and log at error, not warning) rather than masking it.
+                LoggerFactory::get(LogChannels::AUTH)->error('identity link create failed', [
+                    'provider' => $provider,
+                    'error' => $e->getMessage(),
+                ]);
+                throw $e;
+            }
+            if (($raced['user_id'] ?? null) === $userId) {
                 return $this->linkSuccess($provider, false);
             }
             LoggerFactory::get(LogChannels::AUTH)->warning('identity link conflict', [

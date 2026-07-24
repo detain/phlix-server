@@ -442,6 +442,40 @@ class Application
             $this->router->oidcAuth(\Phlix\Plugins\Oidc\Controller\OidcCallbackController::class);
         }
 
+        // S45: account-linking endpoints for an already-logged-in user. These are
+        // AUTHENTICATED (AuthMiddleware) — the current user is read from the
+        // validated session:
+        //   GET  /auth/identities            → list this user's linked identities
+        //   GET  /auth/identities/link/oidc  → START an OIDC link (redirect to IdP;
+        //        the initiating user is bound into the SERVER-SIDE OIDC state, so
+        //        the unauthenticated /auth/oidc/callback can trust it — the link
+        //        branch there does the actual INSERT, never minting a login token)
+        //   POST /auth/identities/link/ldap  → link via a real LDAP bind
+        // Controllers are resolved from the container so their injected deps
+        // (UserIdentityRepository, provider registry, state store) are built once
+        // the pool is ready. The OIDC *callback* stays on the unauthenticated
+        // oidcAuth path above (the IdP redirect carries no session).
+        if ($this->container !== null) {
+            $this->router->group(
+                '',
+                function (Router $r): void {
+                    $r->get(
+                        '/auth/identities',
+                        [\Phlix\Server\Http\Controllers\AccountLinkController::class, 'listIdentities'],
+                    );
+                    $r->get(
+                        '/auth/identities/link/oidc',
+                        [\Phlix\Plugins\Oidc\Controller\OidcCallbackController::class, 'authorizeLink'],
+                    );
+                    $r->post(
+                        '/auth/identities/link/ldap',
+                        [\Phlix\Server\Http\Controllers\AccountLinkController::class, 'linkLdap'],
+                    );
+                },
+                [new \Phlix\Server\Http\Middleware\AuthMiddleware()],
+            );
+        }
+
         // Hub JWT exchange endpoint
         $this->router->post('/api/v1/auth/hub-token', function (Request $request, array $params): Response {
             $controller = $this->getHubTokenController();

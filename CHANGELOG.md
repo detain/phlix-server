@@ -5,9 +5,54 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] - 2026-07-20
+## [Unreleased] - 2026-07-24
 
 ### Added
+
+- **Account linking — attach an OIDC/LDAP identity to your logged-in account**
+  (updates.md #55 / S45). An already-signed-in local account can now link an
+  external identity and list what is linked. Three new **authenticated** endpoints
+  (registered in `Application.php`'s auth group; the current user is read from the
+  validated session, never from the request body):
+  - **`GET /auth/identities`** — list this user's linked external identities.
+    Returns `{identities: [{id, provider, provider_instance, external_id,
+    linked_at}]}`. `provider_data` is **deliberately never returned** and no
+    provider secrets are exposed.
+  - **`GET /auth/identities/link/oidc`** — start linking an OIDC identity. Runs the
+    same authorization-code + PKCE flow as OIDC login, but with a server-side
+    **link intent**: the initiating user's id is bound into the integrity-protected
+    **server-side** OIDC state context (`OidcStateStore` gained an optional
+    `context` carrying `intent=link` + `link_user_id`), **not** the client-visible
+    `state` param. The existing unauthenticated `GET /auth/oidc/callback` gained a
+    **link branch** that, when it sees `intent=link`, attaches the IdP-verified
+    `sub` (`external_id = oidc.<sub>`) to `link_user_id` and `302`s back to the
+    same-origin app with `?linked=oidc` — **no login session is minted** and the
+    callback ignores any client-claimed `external_id`.
+  - **`POST /auth/identities/link/ldap`** — link an LDAP identity. Body
+    `{username, password}`; only a **successful LDAP bind** links the
+    provider-returned `ldap.<dn>` to the current account. A failed bind links
+    nothing and returns a single generic `401` (no user-enumeration oracle); a
+    genuine directory/config failure returns `503`. Success returns `200`
+    `{success, provider, created, message}`.
+  - **Security model (the linchpin).** Linking **always** proves control of the
+    external identity via the real provider (a claimed identifier is never trusted:
+    OIDC via the IdP round-trip + id-token validation, LDAP via a live bind).
+    Linking **never** changes your primary login and **never** mints a new session,
+    and `users` is never mutated. An external identity already linked to a
+    **different** account is rejected with **`409 identity_already_linked`**; an
+    identity already linked to the **same** account is an idempotent success
+    (`created:false`). The `user_identities` DB UNIQUE index (migration 092) is the
+    race backstop — a duplicate-key throw on insert is re-classified by re-reading
+    the row and mapped to `409`/idempotent success **only** when the identity
+    genuinely exists; a non-duplicate insert failure is re-thrown as a real `5xx`,
+    never a mislabeled `409`.
+  - **Storage.** A link is a `user_identities` row (S46 / migration 092) for the
+    current `user_id`; `provider_instance` is the single-instance sentinel `''`.
+  - **Not yet available.** **Unlinking** an identity and **logging in *via* a
+    linked identity** (repointing the login read path onto `user_identities`) are
+    **deferred to a later step (S47)**, as is multi-instance (non-empty
+    `provider_instance`). S45 records and lists a link; a freshly-linked identity
+    becomes usable for login in that later release.
 
 - **`user_identities` table + multi-identity auth foundation** (updates.md #54 / S46).
   Internal schema plumbing for account-linking and multi-instance external auth —

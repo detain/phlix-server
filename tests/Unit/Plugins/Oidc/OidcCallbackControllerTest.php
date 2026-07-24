@@ -13,6 +13,7 @@ use PHPUnit\Framework\TestCase;
 use Phlix\Auth\AuthProviderBootstrapper;
 use Phlix\Auth\AuthProviderRegistry;
 use Phlix\Auth\JwtHandler;
+use Phlix\Auth\UserIdentityRepository;
 use Phlix\Auth\UserRepository;
 use Phlix\Plugins\Oidc\Controller\OidcCallbackController;
 use Phlix\Plugins\Oidc\IdTokenValidator;
@@ -508,6 +509,517 @@ final class OidcCallbackControllerTest extends TestCase
     }
 
     // -----------------------------------------------------------------------
+    // S45 — account-link flow (authorizeLink + callback link branch).
+    // -----------------------------------------------------------------------
+
+    public function test_authorize_link_requires_authenticated_user(): void
+    {
+        $controller = new OidcCallbackController(
+            new AuthProviderRegistry(),
+            $this->createMock(UserRepository::class),
+            $this->createMock(JwtHandler::class),
+        );
+
+        $request = new Request();
+        $request->query = ['redirect_uri' => '/app/settings'];
+        // No userId → unauthenticated.
+
+        $response = $controller->authorizeLink($request, []);
+
+        $this->assertSame(401, $response->statusCode);
+        /** @var array<string, mixed> $body */
+        $body = json_decode($response->body, true);
+        $this->assertSame('auth.required', $body['code']);
+    }
+
+    /**
+     * The initiating user id is bound into the SERVER-SIDE state store, NOT the
+     * client-visible `state` query parameter — the linchpin that stops a client
+     * from linking an external identity onto someone else's account.
+     */
+    public function test_authorize_link_binds_user_into_server_side_state_only(): void
+    {
+        $providerUrl = 'https://idp.link.test';
+        $registry = new AuthProviderRegistry();
+        $registry->registerProvider($this->realOidcProviderForAuthorize($providerUrl));
+
+        $stateStore = new InMemoryOidcStateStore();
+        $controller = new OidcCallbackController(
+            $registry,
+            $this->createMock(UserRepository::class),
+            $this->createMock(JwtHandler::class),
+            $stateStore,
+        );
+
+        $request = new Request();
+        $request->userId = 'link-user-42';
+        $request->query = ['redirect_uri' => '/app/settings/account'];
+
+        $response = $controller->authorizeLink($request, []);
+
+        $this->assertSame(302, $response->statusCode);
+        $location = $response->headers['Location'];
+        $this->assertStringContainsString($providerUrl . '/authorize', $location);
+
+        // Recover the client-visible `state` param from the authorize URL.
+        $queryString = (string) parse_url($location, PHP_URL_QUERY);
+        parse_str($queryString, $params);
+        $clientState = is_string($params['state'] ?? null) ? $params['state'] : '';
+        $this->assertNotSame('', $clientState);
+
+        // The client `state` must carry the opaque sid + redirect_uri ONLY — never
+        // the initiating user id.
+        $decoded = json_decode((string) base64_decode($clientState, true), true);
+        $this->assertIsArray($decoded);
+        $this->assertArrayHasKey('sid', $decoded);
+        $this->assertStringNotContainsString('link-user-42', $clientState);
+        $this->assertArrayNotHasKey('link_user_id', $decoded);
+
+        // But the SERVER-SIDE store DOES carry the trusted link context.
+        $sid = is_string($decoded['sid']) ? $decoded['sid'] : '';
+        $stored = $stateStore->consume($sid);
+        $this->assertIsArray($stored);
+        $this->assertArrayHasKey('context', $stored);
+        $this->assertSame('link', $stored['context']['intent']);
+        $this->assertSame('link-user-42', $stored['context']['link_user_id']);
+    }
+
+    /**
+     * Callback link branch: a valid link-intent state links the IdP-verified
+     * identity to the state's link_user_id and does NOT mint a login session or
+     * create a user.
+     */
+    public function test_callback_link_branch_links_verified_identity_no_tokens(): void
+    {
+        $providerUrl = 'https://idp.linkcb.test';
+        $clientId = 'client-id';
+        $nonce = 'link-nonce';
+
+        $registry = new AuthProviderRegistry();
+        $registry->registerProvider(
+            $this->realOidcProviderReturningSuccess($providerUrl, $clientId, $nonce)
+        );
+
+        // No login side effects may occur on a link.
+        $userRepository = $this->createMock(UserRepository::class);
+        $userRepository->expects($this->never())->method('findOrCreateByExternalId');
+        $jwtHandler = $this->createMock(JwtHandler::class);
+        $jwtHandler->expects($this->never())->method('createAccessToken');
+        $jwtHandler->expects($this->never())->method('createRefreshToken');
+
+        $identities = $this->createMock(UserIdentityRepository::class);
+        $identities->method('findByProviderExternalId')->willReturn(null);
+        $identities->expects($this->once())
+            ->method('create')
+            // The VERIFIED sub-derived external id, linked to the STATE's user.
+            ->with('link-user-7', 'oidc', '', 'oidc.oidc-subject-123', $this->anything())
+            ->willReturn('id-new');
+
+        $stateStore = new InMemoryOidcStateStore();
+        $stateStore->put('sid-link', 'verifier', $nonce, [
+            'intent' => 'link',
+            'link_user_id' => 'link-user-7',
+        ]);
+
+        $controller = new OidcCallbackController(
+            $registry,
+            $userRepository,
+            $jwtHandler,
+            $stateStore,
+            null,
+            null,
+            $identities,
+        );
+
+        $state = base64_encode((string) json_encode([
+            'sid' => 'sid-link',
+            'redirect_uri' => '/app/settings/account',
+        ], JSON_THROW_ON_ERROR));
+
+        $request = new Request();
+        $request->query = ['code' => 'auth-code', 'state' => $state];
+
+        $response = $controller->callback($request, []);
+
+        $this->assertSame(302, $response->statusCode);
+        $this->assertStringContainsString('/app/settings/account', $response->headers['Location']);
+        $this->assertStringContainsString('linked=oidc', $response->headers['Location']);
+        // No login cookies/tokens on a link.
+        $this->assertSame([], $response->cookies);
+        $this->assertStringNotContainsString('token', $response->headers['Location']);
+    }
+
+    /**
+     * SECURITY LINCHPIN: a client-supplied `external_id` in the callback query is
+     * IGNORED — the linked identity is the IdP-verified one.
+     */
+    public function test_callback_link_branch_ignores_client_supplied_external_id(): void
+    {
+        $providerUrl = 'https://idp.linksec.test';
+        $clientId = 'client-id';
+        $nonce = 'link-nonce';
+
+        $registry = new AuthProviderRegistry();
+        $registry->registerProvider(
+            $this->realOidcProviderReturningSuccess($providerUrl, $clientId, $nonce)
+        );
+
+        $identities = $this->createMock(UserIdentityRepository::class);
+        $identities->method('findByProviderExternalId')->willReturn(null);
+        $identities->expects($this->once())
+            ->method('create')
+            // Must be the VERIFIED id, never the attacker's 'oidc.victim'.
+            ->with('link-user-7', 'oidc', '', 'oidc.oidc-subject-123', $this->anything())
+            ->willReturn('id-new');
+
+        $stateStore = new InMemoryOidcStateStore();
+        $stateStore->put('sid-link', 'verifier', $nonce, [
+            'intent' => 'link',
+            'link_user_id' => 'link-user-7',
+        ]);
+
+        $controller = new OidcCallbackController(
+            $registry,
+            $this->createMock(UserRepository::class),
+            $this->createMock(JwtHandler::class),
+            $stateStore,
+            null,
+            null,
+            $identities,
+        );
+
+        $state = base64_encode((string) json_encode([
+            'sid' => 'sid-link',
+            'redirect_uri' => '/app',
+        ], JSON_THROW_ON_ERROR));
+
+        $request = new Request();
+        $request->query = [
+            'code' => 'auth-code',
+            'state' => $state,
+            // Hostile injected identity — must be ignored.
+            'external_id' => 'oidc.victim',
+            'link_user_id' => 'victim-user',
+        ];
+
+        $response = $controller->callback($request, []);
+
+        $this->assertSame(302, $response->statusCode);
+        $this->assertStringContainsString('linked=oidc', $response->headers['Location']);
+    }
+
+    public function test_callback_link_branch_conflict_when_owned_by_another_user(): void
+    {
+        $providerUrl = 'https://idp.linkconf.test';
+        $clientId = 'client-id';
+        $nonce = 'link-nonce';
+
+        $registry = new AuthProviderRegistry();
+        $registry->registerProvider(
+            $this->realOidcProviderReturningSuccess($providerUrl, $clientId, $nonce)
+        );
+
+        $identities = $this->createMock(UserIdentityRepository::class);
+        // The verified identity already belongs to a different account.
+        $identities->method('findByProviderExternalId')->willReturn([
+            'id' => 'existing',
+            'user_id' => 'another-user',
+            'external_id' => 'oidc.oidc-subject-123',
+        ]);
+        $identities->expects($this->never())->method('create');
+
+        $stateStore = new InMemoryOidcStateStore();
+        $stateStore->put('sid-link', 'verifier', $nonce, [
+            'intent' => 'link',
+            'link_user_id' => 'link-user-7',
+        ]);
+
+        $controller = new OidcCallbackController(
+            $registry,
+            $this->createMock(UserRepository::class),
+            $this->createMock(JwtHandler::class),
+            $stateStore,
+            null,
+            null,
+            $identities,
+        );
+
+        $state = base64_encode((string) json_encode([
+            'sid' => 'sid-link',
+            'redirect_uri' => '/app',
+        ], JSON_THROW_ON_ERROR));
+
+        $request = new Request();
+        $request->query = ['code' => 'auth-code', 'state' => $state];
+
+        $response = $controller->callback($request, []);
+
+        $this->assertSame(409, $response->statusCode);
+        /** @var array<string, mixed> $body */
+        $body = json_decode($response->body, true);
+        $this->assertSame('identity_already_linked', $body['error']);
+    }
+
+    public function test_callback_link_branch_idempotent_when_owned_by_same_user(): void
+    {
+        $providerUrl = 'https://idp.linkidem.test';
+        $clientId = 'client-id';
+        $nonce = 'link-nonce';
+
+        $registry = new AuthProviderRegistry();
+        $registry->registerProvider(
+            $this->realOidcProviderReturningSuccess($providerUrl, $clientId, $nonce)
+        );
+
+        $identities = $this->createMock(UserIdentityRepository::class);
+        $identities->method('findByProviderExternalId')->willReturn([
+            'id' => 'existing',
+            'user_id' => 'link-user-7',
+            'external_id' => 'oidc.oidc-subject-123',
+        ]);
+        $identities->expects($this->never())->method('create');
+
+        $stateStore = new InMemoryOidcStateStore();
+        $stateStore->put('sid-link', 'verifier', $nonce, [
+            'intent' => 'link',
+            'link_user_id' => 'link-user-7',
+        ]);
+
+        $controller = new OidcCallbackController(
+            $registry,
+            $this->createMock(UserRepository::class),
+            $this->createMock(JwtHandler::class),
+            $stateStore,
+            null,
+            null,
+            $identities,
+        );
+
+        $state = base64_encode((string) json_encode([
+            'sid' => 'sid-link',
+            'redirect_uri' => '/app',
+        ], JSON_THROW_ON_ERROR));
+
+        $request = new Request();
+        $request->query = ['code' => 'auth-code', 'state' => $state];
+
+        $response = $controller->callback($request, []);
+
+        $this->assertSame(302, $response->statusCode);
+        $this->assertStringContainsString('linked=oidc', $response->headers['Location']);
+    }
+
+    /**
+     * Round-1 Finding 1 (MEDIUM) — a NON-duplicate create() failure on the link
+     * path must NOT be mislabeled as a 409 conflict. When create() throws AND the
+     * post-throw re-read STILL returns null (the INSERT did not land for a
+     * non-duplicate reason), completeLink() re-throws; callback()'s central catch
+     * then surfaces it as a genuine server error (302 ?error=internal), never 409.
+     *
+     * RED against the pre-fix broad-409 logic (which returned a 409
+     * `identity_already_linked` on this null re-read).
+     */
+    public function test_callback_link_branch_create_failure_with_empty_reread_is_not_409(): void
+    {
+        $providerUrl = 'https://idp.linkfail.test';
+        $clientId = 'client-id';
+        $nonce = 'link-nonce';
+
+        $registry = new AuthProviderRegistry();
+        $registry->registerProvider(
+            $this->realOidcProviderReturningSuccess($providerUrl, $clientId, $nonce)
+        );
+
+        $identities = $this->createMock(UserIdentityRepository::class);
+        // Pre-check AND post-throw re-read both null → NOT a duplicate race.
+        $identities->method('findByProviderExternalId')->willReturn(null);
+        $identities->method('create')->willThrowException(
+            new \RuntimeException('SQLSTATE[HY000] [2002] transient connection error'),
+        );
+
+        $stateStore = new InMemoryOidcStateStore();
+        $stateStore->put('sid-link', 'verifier', $nonce, [
+            'intent' => 'link',
+            'link_user_id' => 'link-user-7',
+        ]);
+
+        $controller = new OidcCallbackController(
+            $registry,
+            $this->createMock(UserRepository::class),
+            $this->createMock(JwtHandler::class),
+            $stateStore,
+            null,
+            null,
+            $identities,
+        );
+
+        $state = base64_encode((string) json_encode([
+            'sid' => 'sid-link',
+            'redirect_uri' => '/app',
+        ], JSON_THROW_ON_ERROR));
+
+        $request = new Request();
+        $request->query = ['code' => 'auth-code', 'state' => $state];
+
+        $response = $controller->callback($request, []);
+
+        // A non-duplicate failure is a server error, NOT a 409 conflict.
+        $this->assertNotSame(409, $response->statusCode);
+        $this->assertSame(302, $response->statusCode);
+        $this->assertStringContainsString('error=internal', $response->headers['Location']);
+        $this->assertStringNotContainsString('linked=oidc', $response->headers['Location']);
+        // No login side effects on the failure path.
+        $this->assertSame([], $response->cookies);
+    }
+
+    /**
+     * Round-1 Finding 2 (mode-confusion) — a normal LOGIN-mode callback where the
+     * attacker injects intent=link / link_user_id into the CLIENT-visible state
+     * envelope AND the query must IGNORE them (intent/link_user_id are read ONLY
+     * from the server-side state store context). It performs a normal login
+     * (findOrCreate + token mint) and creates NO user_identities link.
+     *
+     * RED if a regression ever merged client `state` into the server `$context`.
+     */
+    public function test_callback_login_mode_ignores_client_injected_link_intent(): void
+    {
+        // Force the default (Secure) cookie env deterministically.
+        putenv('PHLIX_COOKIE_INSECURE');
+
+        $providerUrl = 'https://idp.modeconf.test';
+        $clientId = 'client-id';
+        $nonce = 'login-nonce';
+
+        $registry = new AuthProviderRegistry();
+        $registry->registerProvider(
+            $this->realOidcProviderReturningSuccess($providerUrl, $clientId, $nonce)
+        );
+
+        // A normal login MUST run: findOrCreate is called with the IdP-verified id.
+        $userRepository = $this->createMock(UserRepository::class);
+        $userRepository->expects($this->once())
+            ->method('findOrCreateByExternalId')
+            ->with('oidc', 'oidc.oidc-subject-123', 'oidc-user@example.com', 'OIDC User')
+            ->willReturn('login-user-1');
+
+        $jwtHandler = $this->createMock(JwtHandler::class);
+        $jwtHandler->method('createAccessToken')->with('login-user-1')->willReturn('access-xyz');
+        $jwtHandler->method('createRefreshToken')->with('login-user-1')->willReturn('refresh-xyz');
+        $jwtHandler->method('accessTtl')->willReturn(3600);
+        $jwtHandler->method('refreshTtl')->willReturn(604800);
+
+        // No link may EVER be created on a login-mode callback.
+        $identities = $this->createMock(UserIdentityRepository::class);
+        $identities->expects($this->never())->method('create');
+
+        // Server-side state has NO link context → this is LOGIN mode.
+        $stateStore = new InMemoryOidcStateStore();
+        $stateStore->put('sid-login', 'verifier', $nonce);
+
+        $controller = new OidcCallbackController(
+            $registry,
+            $userRepository,
+            $jwtHandler,
+            $stateStore,
+            null,
+            null,
+            $identities,
+        );
+
+        // The attacker injects link intent into the CLIENT-visible state envelope.
+        $state = base64_encode((string) json_encode([
+            'sid' => 'sid-login',
+            'redirect_uri' => '/app/home',
+            'intent' => 'link',
+            'link_user_id' => 'victim-user',
+        ], JSON_THROW_ON_ERROR));
+
+        $request = new Request();
+        $request->query = [
+            'code' => 'auth-code',
+            'state' => $state,
+            // …and via the raw query string too — both must be ignored.
+            'intent' => 'link',
+            'link_user_id' => 'victim-user',
+        ];
+
+        $response = $controller->callback($request, []);
+
+        // Normal login: 302 to the clean same-origin path with NO `linked` marker,
+        // and the session cookies set — the injected link intent was ignored.
+        $this->assertSame(302, $response->statusCode);
+        $this->assertSame('/app/home', $response->headers['Location']);
+        $this->assertStringNotContainsString('linked=', $response->headers['Location']);
+
+        $byName = [];
+        foreach ($response->cookies as $cookie) {
+            $byName[$cookie['name']] = $cookie;
+        }
+        $this->assertArrayHasKey('phlix_session', $byName);
+        $this->assertSame('access-xyz', $byName['phlix_session']['value']);
+        $this->assertArrayHasKey('phlix_refresh', $byName);
+    }
+
+    /**
+     * Round-1 Finding 3 (fail-closed) — when the server-side state says
+     * intent=link but link_user_id is missing/empty, completeLink() returns 400
+     * `invalid_link_state` and creates NO identity and mints NO tokens.
+     */
+    public function test_callback_link_branch_fails_closed_on_empty_link_user_id(): void
+    {
+        $providerUrl = 'https://idp.failclosed.test';
+        $clientId = 'client-id';
+        $nonce = 'link-nonce';
+
+        $registry = new AuthProviderRegistry();
+        $registry->registerProvider(
+            $this->realOidcProviderReturningSuccess($providerUrl, $clientId, $nonce)
+        );
+
+        // No login OR link side effects may occur.
+        $userRepository = $this->createMock(UserRepository::class);
+        $userRepository->expects($this->never())->method('findOrCreateByExternalId');
+        $jwtHandler = $this->createMock(JwtHandler::class);
+        $jwtHandler->expects($this->never())->method('createAccessToken');
+        $jwtHandler->expects($this->never())->method('createRefreshToken');
+
+        $identities = $this->createMock(UserIdentityRepository::class);
+        $identities->expects($this->never())->method('create');
+
+        // intent=link but link_user_id deliberately ABSENT → fail closed.
+        $stateStore = new InMemoryOidcStateStore();
+        $stateStore->put('sid-link', 'verifier', $nonce, [
+            'intent' => 'link',
+        ]);
+
+        $controller = new OidcCallbackController(
+            $registry,
+            $userRepository,
+            $jwtHandler,
+            $stateStore,
+            null,
+            null,
+            $identities,
+        );
+
+        $state = base64_encode((string) json_encode([
+            'sid' => 'sid-link',
+            'redirect_uri' => '/app',
+        ], JSON_THROW_ON_ERROR));
+
+        $request = new Request();
+        $request->query = ['code' => 'auth-code', 'state' => $state];
+
+        $response = $controller->callback($request, []);
+
+        $this->assertSame(400, $response->statusCode);
+        /** @var array<string, mixed> $body */
+        $body = json_decode($response->body, true);
+        $this->assertSame('invalid_link_state', $body['error']);
+        $this->assertSame([], $response->cookies);
+    }
+
+    // -----------------------------------------------------------------------
     // Test fixtures.
     // -----------------------------------------------------------------------
 
@@ -617,15 +1129,19 @@ final class OidcCallbackControllerTest extends TestCase
  */
 final class InMemoryOidcStateStore implements \Phlix\Plugins\Oidc\OidcStateStore
 {
-    /** @var array<string, array{code_verifier: string, nonce: string}> */
+    /** @var array<string, array{code_verifier: string, nonce: string, context?: array<string, mixed>}> */
     private array $entries = [];
 
-    public function put(string $state, string $codeVerifier, string $nonce): void
+    public function put(string $state, string $codeVerifier, string $nonce, ?array $context = null): void
     {
-        $this->entries[$state] = [
+        $entry = [
             'code_verifier' => $codeVerifier,
             'nonce' => $nonce,
         ];
+        if ($context !== null && $context !== []) {
+            $entry['context'] = $context;
+        }
+        $this->entries[$state] = $entry;
     }
 
     public function consume(string $state): ?array

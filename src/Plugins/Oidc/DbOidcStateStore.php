@@ -66,17 +66,26 @@ final class DbOidcStateStore implements OidcStateStore
      * @param string $state       Unique state identifier
      * @param string $codeVerifier PKCE code verifier
      * @param string $nonce        OIDC ID token nonce
+     * @param array<string, mixed>|null $context Optional server-side context
+     *                                          (e.g. S45 link intent) stored in
+     *                                          the same `data` JSON and returned
+     *                                          verbatim by {@see consume()}. Never
+     *                                          exposed to the client.
      *
      * @throws \RuntimeException If database insert fails
      */
-    public function put(string $state, string $codeVerifier, string $nonce): void
+    public function put(string $state, string $codeVerifier, string $nonce, ?array $context = null): void
     {
         $id = Uuid::v4();
         $expiresAt = time() + $this->ttlSeconds;
-        $data = json_encode([
+        $payload = [
             'code_verifier' => $codeVerifier,
             'nonce' => $nonce,
-        ]);
+        ];
+        if ($context !== null && $context !== []) {
+            $payload['context'] = $context;
+        }
+        $data = json_encode($payload);
 
         $result = $this->db->query(
             "INSERT INTO oauth_state_store (id, provider, state_value, data, expires_at)
@@ -119,7 +128,7 @@ final class DbOidcStateStore implements OidcStateStore
      *
      * @param string $state State value to look up
      *
-     * @return array{code_verifier: string, nonce: string}|null
+     * @return array{code_verifier: string, nonce: string, context?: array<string, mixed>}|null
      */
     private function fetchAndDelete(string $state): ?array
     {
@@ -163,10 +172,17 @@ final class DbOidcStateStore implements OidcStateStore
                 return null;
             }
 
-            return [
+            $entry = [
                 'code_verifier' => $codeVerifier,
                 'nonce' => $nonce,
             ];
+            if (isset($data['context']) && is_array($data['context'])) {
+                /** @var array<string, mixed> $context */
+                $context = $data['context'];
+                $entry['context'] = $context;
+            }
+
+            return $entry;
         } catch (\Throwable) {
             $this->db->rollBackTrans();
             return null;

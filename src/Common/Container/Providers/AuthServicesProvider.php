@@ -232,6 +232,17 @@ final class AuthServicesProvider implements ServiceProviderInterface
                 // PHP-DI skips optional ctor params during autowiring, so bind it
                 // explicitly — without it the controller can 503 on workers that
                 // booted before OIDC was enabled.
+                ->constructorParameter('bootstrapper', get(AuthProviderBootstrapper::class))
+                // S45: the account-link store the OIDC callback's link branch
+                // writes to. Optional ctor param (PHP-DI skips it during
+                // autowiring), so bind explicitly — without it a link flow 503s.
+                ->constructorParameter('identities', get(UserIdentityRepository::class)),
+
+            // S45: the authenticated account-linking endpoints (list identities +
+            // link LDAP). `bootstrapper` is an optional ctor param (PHP-DI skips
+            // optional params during autowiring), so bind it explicitly for the
+            // request-path LDAP self-heal; `identities` + `registry` autowire.
+            \Phlix\Server\Http\Controllers\AccountLinkController::class => autowire()
                 ->constructorParameter('bootstrapper', get(AuthProviderBootstrapper::class)),
 
             // `statsCollector` is wired so successful logins/logouts land in

@@ -68,6 +68,20 @@ final class AccountLinkController
     private const string DEFAULT_INSTANCE = '';
 
     /**
+     * S47: the registry INSTANCE KEY for the built-in LDAP provider. The bundled
+     * LDAP link flow uses the family's DEFAULT instance, whose registry key is the
+     * family name verbatim ({@see AuthProviderRegistry::instanceKey()} with the ''
+     * sentinel), so this resolves to `'ldap'` — behaviour-identical to the raw
+     * family string it replaces. Centralising the key here matches the instance-key
+     * pattern S47 applied to OIDC ({@see \Phlix\Plugins\Oidc\Controller\OidcCallbackController::oidcInstanceKey()})
+     * instead of hard-coding the literal family string at the registry lookups.
+     */
+    private static function ldapInstanceKey(): string
+    {
+        return AuthProviderRegistry::instanceKey(self::LDAP_PROVIDER, self::DEFAULT_INSTANCE);
+    }
+
+    /**
      * Request-path self-heal for the per-worker provider registry (S44 Finding 3).
      * Optional so direct-construction / unit tests keep working; the DI factory
      * binds it explicitly.
@@ -208,15 +222,14 @@ final class AccountLinkController
             ]);
         }
 
-        // DELETE is scoped by user_id (defence-in-depth on top of the ownership
-        // resolution above), plus the full identity key so exactly this one row
-        // is removed and no other identity/password is affected.
-        $this->identities->delete(
-            $userId,
-            is_string($target['provider'] ?? null) ? $target['provider'] : '',
-            is_string($target['provider_instance'] ?? null) ? $target['provider_instance'] : self::DEFAULT_INSTANCE,
-            is_string($target['external_id'] ?? null) ? $target['external_id'] : '',
-        );
+        // Delete by the target's own row id. Ownership is ALREADY established: the
+        // target was resolved from within the caller's OWN identity list
+        // (findByUserId keyed on the trusted session user_id) above, so its `id`
+        // is a row this user owns — a raw request id is NEVER deleted without that
+        // resolution. The row id is the PRIMARY KEY, so this removes exactly this
+        // one identity and no other identity/password is affected.
+        $targetId = is_string($target['id'] ?? null) ? $target['id'] : '';
+        $this->identities->deleteById($targetId);
 
         return (new Response())->status(200)->json([
             'success' => true,
@@ -258,10 +271,10 @@ final class AccountLinkController
         // network I/O.
         $this->bootstrapper?->ensureProviderRegistered(AuthProviderBootstrapper::LDAP);
 
-        if (!$this->registry->hasProvider(self::LDAP_PROVIDER)) {
+        if (!$this->registry->hasProvider(self::ldapInstanceKey())) {
             return $this->providerUnavailable();
         }
-        $provider = $this->registry->getProvider(self::LDAP_PROVIDER);
+        $provider = $this->registry->getProvider(self::ldapInstanceKey());
         if (!$provider instanceof LdapProvider) {
             return $this->providerUnavailable();
         }

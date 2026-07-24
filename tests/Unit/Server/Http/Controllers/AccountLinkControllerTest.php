@@ -94,6 +94,7 @@ final class AccountLinkControllerTest extends TestCase
         $identities = $this->createMock(UserIdentityRepository::class);
         $identities->expects($this->never())->method('findByUserId');
         $identities->expects($this->never())->method('delete');
+        $identities->expects($this->never())->method('deleteById');
 
         $controller = new AccountLinkController($identities, new AuthProviderRegistry());
 
@@ -111,6 +112,7 @@ final class AccountLinkControllerTest extends TestCase
     {
         $identities = $this->createMock(UserIdentityRepository::class);
         $identities->expects($this->never())->method('delete');
+        $identities->expects($this->never())->method('deleteById');
 
         $controller = new AccountLinkController($identities, new AuthProviderRegistry());
 
@@ -144,6 +146,7 @@ final class AccountLinkControllerTest extends TestCase
             ],
         ]);
         $identities->expects($this->never())->method('delete');
+        $identities->expects($this->never())->method('deleteById');
 
         $controller = new AccountLinkController($identities, new AuthProviderRegistry());
 
@@ -175,6 +178,7 @@ final class AccountLinkControllerTest extends TestCase
             ],
         ]);
         $identities->expects($this->never())->method('delete');
+        $identities->expects($this->never())->method('deleteById');
 
         // No local password → this identity is the account's ONLY sign-in method.
         $userRepo = $this->createMock(UserRepository::class);
@@ -210,10 +214,12 @@ final class AccountLinkControllerTest extends TestCase
                 'external_id' => 'oidc.sub-1',
             ],
         ]);
-        // Scoped delete: user_id + provider + instance + external_id (own-identity).
+        // Delete by the target's own row id — ownership was already established by
+        // resolving `the-id` from within this user's own findByUserId list.
+        $identities->expects($this->never())->method('delete');
         $identities->expects($this->once())
-            ->method('delete')
-            ->with('user-1', 'oidc', '', 'oidc.sub-1');
+            ->method('deleteById')
+            ->with('the-id');
 
         $userRepo = $this->createMock(UserRepository::class);
         $userRepo->method('hasLocalPassword')->with('user-1')->willReturn(true);
@@ -255,9 +261,10 @@ final class AccountLinkControllerTest extends TestCase
                 'external_id' => 'oidc.sub-2',
             ],
         ]);
+        $identities->expects($this->never())->method('delete');
         $identities->expects($this->once())
-            ->method('delete')
-            ->with('user-1', 'github', '', 'github.42');
+            ->method('deleteById')
+            ->with('github-id');
 
         // No password — but there is a second identity, so removal is safe.
         $userRepo = $this->createMock(UserRepository::class);

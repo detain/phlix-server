@@ -163,6 +163,110 @@ final class S47LoginRepointIntegrationTest extends TestCase
         $this->assertSame(1, $this->countUsers('oidc', $ext), 'the second login must not create a duplicate');
     }
 
+    /**
+     * (iv) USERS-FALLBACK resolution: a `users` row that exists but has NO
+     * corresponding `user_identities` row (an un-backfilled / legacy row — as if
+     * migration 092's backfill somehow missed it) still resolves via the
+     * belt-and-suspenders `users`-table fallback. The identity-first read MISSES
+     * (no identity row), so this proves the fallback keeps that user's login
+     * working and never creates a duplicate — the "no existing user loses login"
+     * guarantee for a row the backfill didn't cover.
+     */
+    public function testUnbackfilledUsersRowResolvesViaUsersFallback(): void
+    {
+        $repo = new UserRepository($this->conn());
+        $ext = 'oidc.fallback-' . $this->token;
+
+        // A pre-existing external user on the AUTHORITATIVE users columns, with NO
+        // user_identities row at all.
+        $userId = $this->seedExternalUser('oidc', $ext);
+        $this->assertSame(
+            0,
+            $this->countIdentities('oidc', '', $ext),
+            'precondition: no identity row exists — the identity-first read must miss',
+        );
+
+        $beforeCount = $this->totalUsers();
+        $resolved = $repo->findOrCreateByExternalId('oidc', $ext, 'fallback@example.test', 'Fallback');
+
+        $this->assertSame(
+            $userId,
+            $resolved,
+            'an un-backfilled users row must resolve via the users fallback, never create a duplicate',
+        );
+        $this->assertSame(
+            $beforeCount,
+            $this->totalUsers(),
+            'no new users row may be created when the fallback resolves',
+        );
+        $this->assertSame(
+            1,
+            $this->countUsers('oidc', $ext),
+            'exactly one users row for the (provider, external_id) key',
+        );
+    }
+
+    /**
+     * (v) LEGACY `provider='external'` prefix resolution (the trickiest legacy
+     * case): a users row saved by the PRE-S44 login path as provider='external'
+     * with external_id='oidc.<sub>'. Migration 092's backfill DERIVES
+     * provider='oidc' (from the `oidc.` prefix) for its user_identities row. An
+     * OIDC login for that external_id must resolve the SAME legacy user via that
+     * backfill-derived identity — NOT create a duplicate.
+     *
+     * This is the case the users-fallback ALONE cannot handle: the fallback is
+     * scoped `provider='oidc'` and would MISS the users row whose provider is
+     * still literally 'external'. Only the identity-first read resolves it, so
+     * this exercises the "no existing user loses login" guarantee end-to-end for
+     * the migrated legacy case.
+     */
+    public function testLegacyExternalProviderResolvesViaBackfilledIdentity(): void
+    {
+        $repo = new UserRepository($this->conn());
+        $ext = 'oidc.legacy-Z-' . $this->token;
+
+        // Legacy pre-S44 row: provider literally 'external', oidc.-prefixed id.
+        $legacyId = $this->seedExternalUser('external', $ext);
+
+        // Run migration 092's ACTUAL backfill → derives an (oidc, '', ext)
+        // identity row for the legacy user (real deploy behaviour).
+        $this->runBackfill();
+        $this->assertSame(
+            1,
+            $this->countIdentities('oidc', '', $ext),
+            'backfill must derive one oidc identity for the legacy external row',
+        );
+
+        // Sanity: the users-fallback ALONE would miss this — no users row has
+        // provider='oidc' for this external_id (it is still 'external'), so ONLY
+        // the identity-first read can resolve it.
+        $this->assertNull(
+            $repo->findByExternalId('oidc', $ext),
+            'precondition: no oidc users row exists — only the identity-first read can resolve this',
+        );
+
+        $beforeCount = $this->totalUsers();
+        $resolved = $repo->findOrCreateByExternalId('oidc', $ext, 'legacy@example.test', 'Legacy');
+
+        $this->assertSame(
+            $legacyId,
+            $resolved,
+            'an OIDC login must resolve the legacy external user via the backfilled identity, never a duplicate',
+        );
+        $this->assertSame(
+            $beforeCount,
+            $this->totalUsers(),
+            'no new users row may be created for a legacy user resolved via backfill',
+        );
+        // The legacy users row is untouched — the login read repoint never mutates it.
+        $this->assertSame('external', $this->readColumn($legacyId, 'provider'));
+        $this->assertSame(
+            1,
+            $this->countIdentities('oidc', '', $ext),
+            'resolution via the identity-first read must not write a second identity row',
+        );
+    }
+
     // ---- helpers -------------------------------------------------------------
 
     private function conn(): Connection
@@ -293,14 +397,28 @@ final class S47LoginRepointIntegrationTest extends TestCase
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci',
         );
 
-        $db->query($this->migration092Create());
+        $db->query($this->migration092Statement('create table'));
     }
 
     /**
-     * The VERBATIM `CREATE TABLE ... user_identities` statement (first statement)
-     * from migration 092, so the scratch schema matches production exactly.
+     * Run migration 092's ACTUAL `INSERT IGNORE ... SELECT ... FROM users`
+     * backfill statement (loaded verbatim from the file) against the seeded rows,
+     * so a legacy external user gets its provider-derived identity row exactly as
+     * a real deploy would (scenario v).
      */
-    private function migration092Create(): string
+    private function runBackfill(): void
+    {
+        $this->conn()->query($this->migration092Statement('insert ignore'));
+    }
+
+    /**
+     * The VERBATIM statement from migration 092 whose text contains `$needle`
+     * (case-insensitive) — e.g. the `CREATE TABLE ... user_identities` DDL or the
+     * `INSERT IGNORE` backfill — so both the scratch schema and the backfill match
+     * production exactly. The file has no `;` inside strings/comments (Reviewer
+     * verified), so a full-line-comment strip + split on `;` is safe.
+     */
+    private function migration092Statement(string $needle): string
     {
         $path = dirname(__DIR__, 3) . '/migrations/092_user_identities.sql';
         $sql = (string) file_get_contents($path);
@@ -322,7 +440,7 @@ final class S47LoginRepointIntegrationTest extends TestCase
         );
 
         foreach ($parts as $part) {
-            if (stripos($part, 'create table') !== false) {
+            if (stripos($part, $needle) !== false) {
                 return $part;
             }
         }

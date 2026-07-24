@@ -955,18 +955,38 @@ class UserRepository
         }
 
         $id = $this->generateUuid();
-        $username = $email ?? 'user_' . substr($externalId, 0, 16);
+
+        // Stable hash of the unique identity key (provider, external_id) —
+        // migration 009. Computed once and reused for BOTH the username and
+        // email fallbacks below so every email-less external user gets a
+        // distinct, deterministic value.
+        $identityHash = hash('sha256', $provider . "\0" . $externalId);
+
+        // `users.username` is NOT NULL + UNIQUE (migration 001). The old
+        // fallback 'user_' . substr($externalId, 0, 16) collides whenever two
+        // email-less external identities share the first 16 chars of their
+        // external_id — realistic for LDAP where external_id = 'ldap.' + DN
+        // (e.g. 'ldap.uid=john.smith,ou=people' vs
+        // 'ldap.uid=john.smart,ou=people' both truncate to 'ldap.uid=john.sm'),
+        // and possible for OIDC composite `sub` values. The second create then
+        // hits the UNIQUE index -> 500. Derive the fallback from the identity
+        // hash instead so each email-less external user gets a distinct,
+        // deterministic username ('user_' + 24 hex chars = 29 chars, well
+        // within VARCHAR(255) and the 3-50 local-registration bound, hex-only
+        // so it is always a valid username). A provider-supplied email (used as
+        // the username seed) still wins.
+        $username = $email ?? 'user_' . substr($identityHash, 0, 24);
 
         // `users.email` is NOT NULL + UNIQUE (migration 001), yet external
         // providers (OIDC/LDAP) may not supply an email. A shared '' placeholder
         // would make a SECOND email-less external user collide on the unique
-        // index. Derive a stable, per-identity placeholder from the unique
-        // identity key (provider, external_id) — migration 009 — so every
-        // email-less external user gets a distinct, deterministic value that is
-        // bounded well under VARCHAR(255) regardless of external_id length.
+        // index. Derive a stable, per-identity placeholder from the same
+        // identity hash so every email-less external user gets a distinct,
+        // deterministic value that is bounded well under VARCHAR(255)
+        // regardless of external_id length.
         $emailValue = ($email !== null && $email !== '')
             ? $email
-            : $provider . '+' . hash('sha256', $provider . "\0" . $externalId) . '@no-email.local';
+            : $provider . '+' . $identityHash . '@no-email.local';
 
         // password_hash stays NULL: an external identity has no local password,
         // and a fake '' hash could interfere with password verification.

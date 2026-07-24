@@ -259,6 +259,65 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   `wss://` while `relay_tls` is off, a clear once-per-process `logger.hub` warning
   explains the likely hang and the envs to set.
 
+- **Admin Relay Tunnel Enable/Disable/Ping/Status now reflect the REAL tunnel
+  instead of a never-started in-worker object** (updates.md #39 / S39). The four
+  `AdminHubController` relay endpoints (`GET /api/v1/admin/remote/relay/status`,
+  `POST …/relay/enable`, `…/relay/disable`, `…/relay/ping`) were operating on a
+  container-local `RelayConsumer`/`RelayApplication` copy that never runs (the real
+  tunnel is the forked `phlix-relay-tunnel` process) and probed liveness with a
+  blocking `exec('pgrep -f phlix-relay-tunnel')` + log-scrape inside the event loop.
+  That blocking subprocess I/O is **removed entirely** (the endpoints now read the
+  cross-process state files `RelayStateStore` maintains — `relay-tunnel.state.json`,
+  `hub-heartbeat.state.json`, `relay-control.json`), and the fake `{"success":true}`
+  no-ops are gone:
+  - **Enable/Disable are an honest, persisted kill-switch, effective on next server
+    reload** — not an instant in-process start/stop. Disable writes `disabled:true`
+    to `relay-control.json` (which the relay fork honors at boot in addition to the
+    `PHLIX_RELAY_DISABLED` env var); Enable clears it. Both return
+    `{success, disabled, enrolled, takesEffectOnReload:true, message}`. Enable
+    **cannot unset the `PHLIX_RELAY_DISABLED` env var**, so when the env kill-switch
+    is set the response stays `disabled:true` with an honest message; a persist
+    failure returns `500`.
+  - **Status** returns the real persisted `connected`/`active`/`enrolled` plus
+    `reconnectAttempts`, `activeSessions`, `lastDisconnectTime`, the last
+    `lastConnectError`/`lastConnectErrorAt` reason, the effective `disabled`
+    kill-switch, and `updatedAt` (fork-write staleness signal). Back-compat keys
+    `endpoint`/`establishedAt` are retained for the current UI.
+  - **Ping** reports the persisted latency: `{success, connected, active, latencyMs,
+    lastHeartbeatAt, latencySource:"persisted"}`, with `latencyMs:null` = "not
+    measured yet" (never a fabricated timing), and returns **`409`** (with
+    `lastConnectError`/`lastConnectErrorAt`) when the tunnel is not connected rather
+    than pretending to ping.
+
+  Kill-switch single-writer discipline is preserved: `relay-control.json` is written
+  only by the HTTP worker, read by the relay fork at boot; the fork writes the two
+  state files, the HTTP worker only reads them. Consumed by the reframed
+  `@phlix/ui` admin Remote Access panel (v0.98.29).
+
+- **Network Health now reflects real cross-process tunnel/heartbeat state; the
+  `/health/network` probe no longer side-effects a heartbeat** (updates.md #40 / S40).
+  `Admin\HealthController::relayHealth()` (`GET /api/v1/health/relay`) and
+  `networkHealth()` (`GET /api/v1/health/network`) previously read a never-started,
+  container-local `RelayConsumer`/`HubClient` copy — so the admin Network Health
+  panel always showed offline/0/null even on a healthy, enrolled, connected box.
+  Both endpoints now read the persisted cross-process snapshots via `RelayStateStore`
+  (`relay-tunnel.state.json` + `hub-heartbeat.state.json`, written by the
+  `phlix-relay-tunnel` and `phlix-hub-heartbeat` forks); `relayHealth` adds
+  additive `relay.lastConnectError`/`lastConnectErrorAt` and `hub.lastLatencyMs`
+  fields, and the heartbeat fork now records real round-trip latency each tick via
+  monotonic `hrtime(true)` in `HubClient::performHeartbeatTick()` (lighting up the
+  S39 Ping latency). Critically, **`/health/network` is now a cheap, side-effect-free
+  reachability probe**: the previous implementation fired a REAL
+  `POST /api/v1/servers/{id}/heartbeat` to the hub on **every** poll of the admin
+  network-health indicator (mutating hub state and hammering the hub as the poller
+  ran); it now just reads the latency/health snapshot the heartbeat fork already
+  persists. Status classification is unchanged (`healthy` <100ms, `degraded`
+  ≤500ms, otherwise `offline`; `offline` when not enrolled, no successful heartbeat
+  yet, or the heartbeat is currently failing). Single-writer discipline preserved —
+  only the heartbeat fork arms `HubClient::startHeartbeatLoop()` and writes
+  `hub-heartbeat.state.json`. Known follow-up: no `updatedAt`-staleness guard, so a
+  stale "healthy" snapshot could persist if the heartbeat fork itself hangs.
+
 - **`CollectionService` empty-TMDB-key smell** (S33). `getOrCreateCollection()` and
   `syncCollectionForMovie()` took a `$tmdbApiKey` argument the bodies never used —
   the scanner passed an empty string (`syncCollectionForMovie($id, '')`). The TMDB

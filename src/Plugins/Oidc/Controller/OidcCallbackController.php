@@ -21,9 +21,11 @@ use Phlix\Server\Http\Controllers\AuthController;
 use Phlix\Auth\AuthProviderBootstrapper;
 use Phlix\Auth\AuthProviderRegistry;
 use Phlix\Auth\JwtHandler;
+use Phlix\Auth\UserIdentityRepository;
 use Phlix\Auth\UserRepository;
 use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Common\Logger\LogChannels;
+use Phlix\Shared\Auth\AuthResult;
 use Workerman\MySQL\Connection;
 
 /**
@@ -51,6 +53,29 @@ final class OidcCallbackController
      */
     private ?AuthProviderBootstrapper $bootstrapper;
 
+    /**
+     * S45 account-linking store (migration 092). Optional so existing
+     * direct-construction call sites keep working; the DI factory binds it
+     * explicitly. When null the OIDC callback's link branch cannot persist a
+     * link and refuses with 503 rather than silently no-op'ing — but the plain
+     * login flow is unaffected (it never touches this repository).
+     */
+    private ?UserIdentityRepository $identities;
+
+    /**
+     * S45: the state-context `intent` marker for an account-link authorize flow.
+     * When the consumed state carries this intent the callback links the verified
+     * external identity to `link_user_id` instead of minting a login session.
+     */
+    private const string LINK_INTENT = 'link';
+
+    /** S45: provider family + default single-instance sentinel for OIDC links. */
+    private const string OIDC_PROVIDER = 'oidc';
+    private const string DEFAULT_INSTANCE = '';
+
+    /** S45: safe same-origin fallback when a link flow omits redirect_uri. */
+    private const string DEFAULT_LINK_REDIRECT = '/app';
+
     public function __construct(
         AuthProviderRegistry $registry,
         UserRepository $userRepository,
@@ -58,11 +83,13 @@ final class OidcCallbackController
         ?OidcStateStore $stateStore = null,
         ?Connection $db = null,
         ?AuthProviderBootstrapper $bootstrapper = null,
+        ?UserIdentityRepository $identities = null,
     ) {
         $this->registry = $registry;
         $this->userRepository = $userRepository;
         $this->jwtHandler = $jwtHandler;
         $this->bootstrapper = $bootstrapper;
+        $this->identities = $identities;
 
         if ($stateStore !== null) {
             $this->stateStore = $stateStore;
@@ -87,9 +114,76 @@ final class OidcCallbackController
      */
     public function authorize(Request $request, array $params): Response
     {
+        // Plain login flow — no link context; the callback will mint a session.
+        return $this->beginAuthorization($request, null);
+    }
+
+    /**
+     * Handle GET /auth/identities/link/oidc (AUTHENTICATED — S45).
+     *
+     * Initiates the SAME OIDC authorization-code + PKCE flow as {@see authorize()}
+     * but with the intent to LINK the verified external identity onto the
+     * already-logged-in local account, rather than logging a user in.
+     *
+     * ## Security linchpin
+     *
+     * The initiating user's id is read from {@see Request::$userId} — populated by
+     * the entry point from the validated Bearer token / session cookie and gated
+     * by {@see \Phlix\Server\Http\Middleware\AuthMiddleware} on the route — and
+     * bound into the SERVER-SIDE state context ({@see OidcStateStore::put()}),
+     * NOT into the client-visible `state` query parameter. The callback later
+     * reads `link_user_id` back from that server-side store (keyed by the one-shot
+     * `sid`), so a client can neither forge nor swap it. This is what prevents an
+     * attacker from linking their own external identity onto a victim's account.
+     *
+     * @param Request $request
+     * @param array<string, string> $params
+     * @return Response
+     */
+    public function authorizeLink(Request $request, array $params): Response
+    {
+        // Defence-in-depth: the route sits behind AuthMiddleware, but re-check
+        // here so a mis-wired route (or a direct unit-test call) can never begin a
+        // link flow without a bound user.
+        $userId = $request->userId;
+        if (!is_string($userId) || $userId === '') {
+            return (new Response())->status(401)->json([
+                'error' => 'Unauthorized',
+                'code' => 'auth.required',
+            ]);
+        }
+
+        return $this->beginAuthorization($request, [
+            'intent' => self::LINK_INTENT,
+            'link_user_id' => $userId,
+        ]);
+    }
+
+    /**
+     * Shared authorize machinery for both the login ({@see authorize()}) and the
+     * account-link ({@see authorizeLink()}) flows.
+     *
+     * The ONLY difference is `$linkContext`: when non-null it is persisted into
+     * the server-side state store (never the client `state`), so the callback can
+     * distinguish a link from a login and recover the trusted `link_user_id`.
+     *
+     * @param Request $request
+     * @param array<string, mixed>|null $linkContext Server-side link envelope, or
+     *                                              null for a plain login flow.
+     * @return Response
+     */
+    private function beginAuthorization(Request $request, ?array $linkContext): Response
+    {
         $query = $request->query;
+        $isLink = $linkContext !== null;
 
         $redirectUri = is_string($query['redirect_uri'] ?? null) ? $query['redirect_uri'] : '';
+        // A link flow is initiated from within the SPA by an already-authenticated
+        // user, so a missing return target is benign — default to a safe
+        // same-origin app path rather than 400. The login flow still requires one.
+        if ($redirectUri === '' && $isLink) {
+            $redirectUri = self::DEFAULT_LINK_REDIRECT;
+        }
         if ($redirectUri === '') {
             return (new Response())->status(400)->json([
                 'error' => 'missing_redirect_uri',
@@ -142,14 +236,15 @@ final class OidcCallbackController
 
         // Bundle the redirect_uri into the state envelope so the
         // callback knows where to land. The opaque `sid` is the lookup
-        // key for the server-side store that holds the code_verifier.
+        // key for the server-side store that holds the code_verifier
+        // (and, for a link flow, the trusted link_user_id + intent).
         $stateData = [
             'sid' => $stateId,
             'redirect_uri' => $redirectUri,
         ];
         $stateValue = base64_encode((string) json_encode($stateData));
 
-        $this->stateStore->put($stateId, $codeVerifier, $nonce);
+        $this->stateStore->put($stateId, $codeVerifier, $nonce, $linkContext);
 
         $authorizationUrl = $provider->buildAuthorizationUrl(
             $this->getCallbackUrl(),
@@ -253,6 +348,15 @@ final class OidcCallbackController
         $codeVerifier = $stored['code_verifier'];
         $expectedNonce = $stored['nonce'];
 
+        // S45 — recover the server-side link context (if any) that authorizeLink()
+        // stored alongside the PKCE verifier. It is trusted precisely because it
+        // came from the one-shot server-side store keyed by `sid`, NOT from the
+        // client-supplied `state` envelope. A present `intent=link` switches this
+        // callback from "mint a login session" to "link the verified identity to
+        // the stored link_user_id".
+        $context = isset($stored['context']) && is_array($stored['context']) ? $stored['context'] : [];
+        $isLinkFlow = ($context['intent'] ?? null) === self::LINK_INTENT;
+
         // Finding 3 (MEDIUM) — request-path self-heal (see authorize()): register
         // an enabled+configured provider that this worker missed at boot, or drop
         // a stale registration when the flag is now off, before the check below.
@@ -284,6 +388,15 @@ final class OidcCallbackController
                 $errorValue = is_string($result->error) ? $result->error : 'auth_failed';
                 $redirectUrl = $redirectUri . '?error=' . urlencode($errorValue);
                 return (new Response())->status(302)->header('Location', $redirectUrl);
+            }
+
+            // S45 — LINK branch. The OIDC auth above ran with the SAME S44
+            // validation (state + PKCE + id-token sig/iss/aud/exp/nonce), so
+            // $result->externalId is the IdP-verified `sub`. We link THAT to the
+            // trusted link_user_id from the server-side context — we do NOT mint
+            // tokens, create a user, or touch the `users` table.
+            if ($isLinkFlow) {
+                return $this->completeLink($result, $context, $redirectUri);
             }
 
             $userId = $result->userId;
@@ -327,6 +440,155 @@ final class OidcCallbackController
             $redirectUrl = $redirectUri . '?error=internal';
             return (new Response())->status(302)->header('Location', $redirectUrl);
         }
+    }
+
+    /**
+     * S45 — persist a verified OIDC identity as a link on the initiating user's
+     * account, then 302 back to the same-origin app path.
+     *
+     * Invariants (the account-takeover defences):
+     *  - `link_user_id` comes ONLY from the server-side state context (written by
+     *    the authenticated {@see authorizeLink()}), never from client input.
+     *  - the linked `external_id` comes ONLY from the IdP-verified `$result`
+     *    ({@see AuthResult::$externalId} = 'oidc.'+sub), never from a request
+     *    parameter — the callback ignores any client-claimed identity entirely.
+     *  - NO login tokens are minted and the `users` table is not mutated.
+     *
+     * Conflict handling:
+     *  - identity already linked to the SAME user → idempotent success (302).
+     *  - identity linked to ANOTHER user → 409 (the DB UNIQUE index from
+     *    migration 092 is the race backstop: a duplicate-key throw on create()
+     *    is caught and mapped to 409, never a 500).
+     *
+     * @param AuthResult $result The verified OIDC authentication result.
+     * @param array<string, mixed> $context The server-side link context.
+     * @param string $redirectUri Allowlisted same-origin return target.
+     * @return Response
+     */
+    private function completeLink(AuthResult $result, array $context, string $redirectUri): Response
+    {
+        $linkUserId = is_string($context['link_user_id'] ?? null) ? $context['link_user_id'] : '';
+        if ($linkUserId === '') {
+            // Should be unreachable — authorizeLink() always sets it. Refuse
+            // rather than link to an empty user.
+            return (new Response())->status(400)->json([
+                'error' => 'invalid_link_state',
+                'message' => 'Link request is missing the initiating user',
+            ]);
+        }
+
+        if ($this->identities === null) {
+            LoggerFactory::get(LogChannels::AUTH)->error('OIDC link attempted without identity repository');
+            return (new Response())->status(503)->json([
+                'error' => 'link_unavailable',
+                'message' => 'Account linking is not available',
+            ]);
+        }
+
+        // The identity to link is the IdP-verified subject — NEVER a client value.
+        $externalId = is_string($result->externalId) ? $result->externalId : '';
+        if ($externalId === '') {
+            return (new Response())->status(400)->json([
+                'error' => 'invalid_identity',
+                'message' => 'Provider did not return a verified identity',
+            ]);
+        }
+
+        // Already linked? (single-instance default sentinel '' for S45.)
+        $existing = $this->identities->findByProviderExternalId(
+            self::OIDC_PROVIDER,
+            self::DEFAULT_INSTANCE,
+            $externalId,
+        );
+        if ($existing !== null) {
+            $ownerId = is_string($existing['user_id'] ?? null) ? $existing['user_id'] : '';
+            if ($ownerId === $linkUserId) {
+                // Idempotent: this user already owns this identity.
+                return $this->linkSuccessRedirect($redirectUri);
+            }
+            // Owned by someone else — refuse (never re-home an identity).
+            return $this->identityConflict();
+        }
+
+        $providerData = $this->buildLinkProviderData($result);
+
+        try {
+            $this->identities->create(
+                $linkUserId,
+                self::OIDC_PROVIDER,
+                self::DEFAULT_INSTANCE,
+                $externalId,
+                $providerData,
+            );
+        } catch (\Throwable $e) {
+            // DB UNIQUE backstop (migration 092): a concurrent link of the SAME
+            // identity raced us between the check above and this INSERT. Re-read
+            // to classify — same user ⇒ idempotent success, otherwise conflict.
+            // Either way this is a 409-class outcome, NEVER a 500.
+            $raced = $this->identities->findByProviderExternalId(
+                self::OIDC_PROVIDER,
+                self::DEFAULT_INSTANCE,
+                $externalId,
+            );
+            if ($raced !== null && ($raced['user_id'] ?? null) === $linkUserId) {
+                return $this->linkSuccessRedirect($redirectUri);
+            }
+            LoggerFactory::get(LogChannels::AUTH)->warning('OIDC identity link conflict', [
+                'error' => $e->getMessage(),
+            ]);
+            return $this->identityConflict();
+        }
+
+        return $this->linkSuccessRedirect($redirectUri);
+    }
+
+    /**
+     * Build the (non-secret) provider metadata stored on a linked identity row.
+     * Deliberately narrow: the user's own email + display name for the settings
+     * UI. No tokens or secrets — and {@see \Phlix\Auth\UserIdentityRepository}'s
+     * listing never returns provider_data anyway.
+     *
+     * @param AuthResult $result The verified OIDC authentication result.
+     * @return array<string, string>|null
+     */
+    private function buildLinkProviderData(AuthResult $result): ?array
+    {
+        $data = [];
+        $email = $result->getEmail();
+        if (is_string($email) && $email !== '') {
+            $data['email'] = $email;
+        }
+        $name = $result->getDisplayName();
+        if (is_string($name) && $name !== '') {
+            $data['name'] = $name;
+        }
+
+        return $data === [] ? null : $data;
+    }
+
+    /**
+     * 302 back to the allowlisted same-origin path with a `linked=oidc` marker so
+     * the SPA can surface a success toast. No tokens ride the URL (the user is
+     * already logged in) and no cookies are set.
+     */
+    private function linkSuccessRedirect(string $redirectUri): Response
+    {
+        $separator = str_contains($redirectUri, '?') ? '&' : '?';
+        $location = $redirectUri . $separator . 'linked=' . self::OIDC_PROVIDER;
+
+        return (new Response())->status(302)->header('Location', $location);
+    }
+
+    /**
+     * 409 when the verified identity is already linked to a DIFFERENT account.
+     * A single generic message — we do not reveal which account owns it.
+     */
+    private function identityConflict(): Response
+    {
+        return (new Response())->status(409)->json([
+            'error' => 'identity_already_linked',
+            'message' => 'This external identity is already linked to another account',
+        ]);
     }
 
     /**

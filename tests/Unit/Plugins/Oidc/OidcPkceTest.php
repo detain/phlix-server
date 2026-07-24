@@ -248,15 +248,19 @@ final class OidcPkceTest extends TestCase
  */
 final class RecordingOidcStateStore implements OidcStateStore
 {
-    /** @var array<string, array{code_verifier: string, nonce: string}> */
+    /** @var array<string, array{code_verifier: string, nonce: string, context?: array<string, mixed>}> */
     public array $entries = [];
 
-    public function put(string $state, string $codeVerifier, string $nonce): void
+    public function put(string $state, string $codeVerifier, string $nonce, ?array $context = null): void
     {
-        $this->entries[$state] = [
+        $entry = [
             'code_verifier' => $codeVerifier,
             'nonce' => $nonce,
         ];
+        if ($context !== null && $context !== []) {
+            $entry['context'] = $context;
+        }
+        $this->entries[$state] = $entry;
     }
 
     public function consume(string $state): ?array

@@ -23,15 +23,19 @@ final class SessionOidcStateStore implements OidcStateStore
 {
     private const SESSION_KEY = 'oidc_pkce_state';
 
-    public function put(string $state, string $codeVerifier, string $nonce): void
+    public function put(string $state, string $codeVerifier, string $nonce, ?array $context = null): void
     {
         if (!isset($_SESSION[self::SESSION_KEY]) || !is_array($_SESSION[self::SESSION_KEY])) {
             $_SESSION[self::SESSION_KEY] = [];
         }
-        $_SESSION[self::SESSION_KEY][$state] = [
+        $entry = [
             'code_verifier' => $codeVerifier,
             'nonce' => $nonce,
         ];
+        if ($context !== null && $context !== []) {
+            $entry['context'] = $context;
+        }
+        $_SESSION[self::SESSION_KEY][$state] = $entry;
     }
 
     public function consume(string $state): ?array
@@ -39,7 +43,7 @@ final class SessionOidcStateStore implements OidcStateStore
         if (!isset($_SESSION[self::SESSION_KEY]) || !is_array($_SESSION[self::SESSION_KEY])) {
             return null;
         }
-        /** @var array<string, array{code_verifier?: string, nonce?: string}> $bucket */
+        /** @var array<string, array{code_verifier?: string, nonce?: string, context?: array<string, mixed>}> $bucket */
         $bucket = $_SESSION[self::SESSION_KEY];
         if (!isset($bucket[$state]) || !is_array($bucket[$state])) {
             return null;
@@ -55,9 +59,14 @@ final class SessionOidcStateStore implements OidcStateStore
             return null;
         }
 
-        return [
+        $result = [
             'code_verifier' => $verifier,
             'nonce' => $nonce,
         ];
+        if (isset($entry['context']) && is_array($entry['context'])) {
+            $result['context'] = $entry['context'];
+        }
+
+        return $result;
     }
 }

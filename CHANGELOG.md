@@ -9,6 +9,40 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Added
 
+- **OIDC & LDAP external login are now wired end-to-end** (updates.md #37 / S44).
+  The admin **Integrations → Auth providers** enable/disable toggles for OIDC and
+  LDAP were hard-coded `501 Not Implemented` stubs and neither provider had a
+  reachable login route. S44 makes both usable:
+  - **Enable-state = server settings flags.** `AuthProviderController::enableProvider()`
+    / `disableProvider()` now persist `auth.oidc.enabled` / `auth.ldap.enabled` via
+    `SettingsRepository` and (de)register the provider in the worker's
+    `AuthProviderRegistry` (new `AuthProviderBootstrapper`). Responses are honest:
+    `200` with `{enabled, live}`, `409 not_configured` when the provider has no saved
+    settings yet, `404 unknown_provider` for a non-toggleable name. Enabled+configured
+    providers register per-worker at boot (`start.php`, no boot-time network I/O) and
+    **self-heal on the request path**, so enabling takes effect without a full restart.
+  - **OIDC authorization-code flow** is served by `OidcCallbackController`, now routed
+    via `Router::oidcAuth()` in `Application.php` (unauthenticated):
+    `GET /auth/oidc/authorize` starts the flow (PKCE + `state` + `nonce`) and
+    `GET /auth/oidc/callback` validates the returned id-token (signature / `iss` /
+    `aud` / `exp`), mints a Phlix session, and 302s back to the caller. Register
+    `<your-server>/auth/oidc/callback` as the redirect URI at your IdP.
+  - **LDAP login** rides the existing `POST /auth/login`: send an `ldap:`-prefixed
+    username (e.g. `ldap:jdoe`) plus password to authenticate against the configured
+    directory (`AuthController::ldapLogin()` → `AuthManager::loginWithProvider()`).
+  - **Async OIDC HTTP.** New `Phlix\Plugins\Oidc\OidcHttpClient` (workerman/http-client
+    with a TLS-verifying cURL fallback) replaces blocking `file_get_contents`/`curl_exec`
+    in OIDC discovery, token exchange, userinfo, and JWKS fetches so the resident worker
+    no longer stalls. LDAP remains a bounded 5 s blocking call (ext-ldap is not
+    Swoole-hookable); the limitation is documented in `LdapConnection`.
+
+  Provider config (OIDC `provider_url` / `client_id` / `client_secret` / `scopes`;
+  LDAP `host` / `port` / `ssl` / `base_dn` / `bind_dn` / `bind_pw` / `user_filter` /
+  `admin_group`) is still edited through the existing OIDC/LDAP admin config UI
+  (`OidcAdminController` / `LdapAdminController`, `POST /api/v1/admin/auth-providers/{oidc,ldap}/config`);
+  DB-backed provider settings are a future step. See the SSO/external-auth guide in
+  phlix-docs.
+
 - **Relay tunnel TLS controls** (updates.md #38 / S38). Three new `config/relay.php`
   keys plus matching environment variables let an operator opt the server↔hub relay
   tunnel into TLS explicitly, independently of the server's public HTTP TLS:
@@ -242,6 +276,25 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- **External identities were stored with a hardcoded `provider='external'`**
+  (updates.md #37 / S44). `UserRepository::findOrCreateByExternalId()` ignored which
+  provider actually authenticated, so an OIDC `sub` and an LDAP DN could collide onto
+  the same account. It now takes a `$provider` argument (threaded from the
+  `AuthResult`), scopes the lookup by `(provider, external_id)`, and stores the real
+  provider (`oidc` / `ldap`) — two providers presenting the same identifier map to
+  distinct users. This is the foundation S45–S47 (account-linking / multi-identity)
+  build on.
+
+- **First OIDC/LDAP login 500'd because `users.password_hash` was `NOT NULL`**
+  (updates.md #37 / S44). External (passwordless) users are created with
+  `password_hash = NULL`, but the column had never been relaxed since migration 001.
+  New migration `091_users_password_hash_nullable.sql` (`ALTER TABLE users MODIFY
+  password_hash VARCHAR(255) NULL`) fixes it; it applies automatically via the
+  migration runner on upgrade (no manual step). External users with no email/username
+  from the IdP are still created — they get a deterministic placeholder derived from
+  `(provider, external_id)` so two email-less accounts can't collide on the unique
+  `email` / `username` columns.
+
 - **Relay tunnel forced TLS regardless of scheme → silent hang against a plaintext
   hub relay port** (updates.md #38 / S38). `openHubConnection()` previously set
   `transport='ssl'` and attached an SSL context unconditionally, and `RelayConfig`
@@ -329,6 +382,24 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   `MetadataHttpClient` — never a new inline/blocking call in the scan path.
 
 ### Security
+
+- **OIDC callback hardened against open-redirect / token exfiltration**
+  (updates.md #37 / S44). Wiring the previously-dead OIDC flow activated an unchecked
+  `redirect_uri`. The callback now allowlists the post-login landing target to a
+  **same-origin relative path only** (rejects absolute URLs, `//host`, `/\host`,
+  `javascript:`, and any control/CRLF characters) at both `authorize` and the final
+  302, so a crafted `redirect_uri` can't phish the flow to an attacker origin. The
+  minted session is delivered as **httpOnly + Secure + SameSite=Lax** cookies
+  (`phlix_session` / `phlix_refresh`) — tokens are never placed in the URL, query
+  string, or access logs.
+
+- **`ldap:`-prefixed logins are rate-limited and no longer enumerate accounts**
+  (updates.md #37 / S44). Provider logins (`AuthManager::loginWithProvider()`) now
+  share the same per-IP brute-force budget as local login (`checkRateLimit` / `record`
+  / `clear`), and a `RateLimitException` maps to `429` (not a misleading `503`).
+  Credential failures return a generic `401 "Invalid credentials"` (no user
+  enumeration); only genuine config/connection problems (`ldap_error:` prefixed)
+  return `503`.
 
 - **Credential-test responses can no longer echo a submitted plaintext credential.**
   `PluginAdminController::testCredentials()` hands operator-supplied secrets to

@@ -482,6 +482,30 @@ class Router
     }
 
     /**
+     * Registers the GitHub OAuth2 authentication routes (S48).
+     *
+     * GET /auth/github/authorize  — redirect to GitHub's authorize endpoint
+     * GET /auth/github/callback   — handle GitHub's OAuth callback
+     *
+     * @param string $controllerClass The GithubCallbackController class name
+     * @param string $authorizeMethod The authorize method name
+     * @param string $callbackMethod The callback method name
+     * @return self
+     *
+     * @since 0.102.0
+     */
+    public function githubAuth(
+        string $controllerClass,
+        string $authorizeMethod = 'authorize',
+        string $callbackMethod = 'callback'
+    ): self {
+        $this->get('/auth/github/authorize', [$controllerClass, $authorizeMethod]);
+        $this->get('/auth/github/callback', [$controllerClass, $callbackMethod]);
+
+        return $this;
+    }
+
+    /**
      * Registers the Trakt.tv OAuth authentication routes.
      *
      * GET /api/v1/oauth/trakt           — redirect to Trakt authorization

@@ -8,8 +8,10 @@ use PHPUnit\Framework\TestCase;
 use Phlix\Admin\SettingsRepository;
 use Phlix\Auth\AuthProviderBootstrapper;
 use Phlix\Auth\AuthProviderRegistry;
+use Phlix\Plugins\Github\Plugin as GithubPlugin;
 use Phlix\Plugins\Ldap\Plugin as LdapPlugin;
 use Phlix\Plugins\Oidc\Plugin as OidcPlugin;
+use Phlix\Tests\Unit\Plugins\Github\InMemoryPluginSettingsRepository;
 
 /**
  * @covers \Phlix\Auth\AuthProviderBootstrapper
@@ -81,10 +83,28 @@ final class AuthProviderBootstrapperTest extends TestCase
         return $repo;
     }
 
+    /**
+     * Build a GitHub plugin backed by an in-memory DB-settings store (S48). This
+     * exercises the getSettings()-yields path the S46 reviewer flagged: in
+     * production the store is a real DB query.
+     *
+     * @param array<string, mixed> $settings
+     */
+    private function makeGithubPlugin(array $settings = []): GithubPlugin
+    {
+        $store = new InMemoryPluginSettingsRepository();
+        if ($settings !== []) {
+            $store->save(GithubPlugin::PLUGIN_NAME, $settings);
+        }
+
+        return new GithubPlugin($store);
+    }
+
     public function test_flag_key_format(): void
     {
         $this->assertSame('auth.oidc.enabled', AuthProviderBootstrapper::flagKey('oidc'));
         $this->assertSame('auth.ldap.enabled', AuthProviderBootstrapper::flagKey('ldap'));
+        $this->assertSame('auth.github.enabled', AuthProviderBootstrapper::flagKey('github'));
     }
 
     public function test_is_enabled_reads_the_override(): void
@@ -415,5 +435,113 @@ final class AuthProviderBootstrapperTest extends TestCase
         $this->expectExceptionMessage('registry backing store unavailable');
 
         $boot->ensureProviderRegistered('oidc');
+    }
+
+    // -----------------------------------------------------------------------
+    // S48 — GitHub provider governance (DB-backed settings).
+    // -----------------------------------------------------------------------
+
+    public function test_github_is_toggleable(): void
+    {
+        $boot = new AuthProviderBootstrapper(
+            $this->makeSettingsRepo(),
+            new AuthProviderRegistry(),
+            new OidcPlugin(),
+            new LdapPlugin(),
+            $this->makeGithubPlugin(),
+        );
+
+        $this->assertTrue($boot->isToggleable('github'));
+    }
+
+    public function test_github_registers_when_enabled_and_configured_via_db_store(): void
+    {
+        $registry = new AuthProviderRegistry();
+        $boot = new AuthProviderBootstrapper(
+            $this->makeSettingsRepo(['github' => true]),
+            $registry,
+            new OidcPlugin(),
+            new LdapPlugin(),
+            $this->makeGithubPlugin(['client_id' => 'cid', 'client_secret' => 'sec']),
+        );
+
+        $boot->registerEnabledProviders();
+
+        $this->assertTrue($registry->hasProvider('github'));
+    }
+
+    public function test_github_not_registered_without_client_secret(): void
+    {
+        // GitHub OAuth Apps are confidential clients — a client_secret is required.
+        $registry = new AuthProviderRegistry();
+        $boot = new AuthProviderBootstrapper(
+            $this->makeSettingsRepo(['github' => true]),
+            $registry,
+            new OidcPlugin(),
+            new LdapPlugin(),
+            $this->makeGithubPlugin(['client_id' => 'cid']),
+        );
+
+        $this->assertFalse($boot->isConfigured('github'));
+
+        $boot->registerEnabledProviders();
+
+        $this->assertFalse($registry->hasProvider('github'));
+    }
+
+    public function test_github_build_returns_null_when_plugin_absent(): void
+    {
+        // Pre-S48-shaped construction (no GitHub plugin) must not fatal — github
+        // simply is not configurable.
+        $registry = new AuthProviderRegistry();
+        $boot = new AuthProviderBootstrapper(
+            $this->makeSettingsRepo(['github' => true]),
+            $registry,
+            new OidcPlugin(),
+            new LdapPlugin(),
+        );
+
+        $this->assertFalse($boot->isConfigured('github'));
+        $boot->registerEnabledProviders();
+        $this->assertFalse($registry->hasProvider('github'));
+    }
+
+    /**
+     * The S44 race-guard must still hold when the provider settings come from the
+     * DB store (the getSettings()-yields path activated by S48): a concurrent
+     * coroutine that loses the register race gets a benign no-throw, not a 500.
+     */
+    public function test_github_db_settings_lost_race_is_benign(): void
+    {
+        $racyRegistry = new class extends AuthProviderRegistry {
+            private int $hasProviderCalls = 0;
+
+            public function hasProvider(string $name): bool
+            {
+                return $this->hasProviderCalls++ > 0;
+            }
+
+            public function registerProvider(
+                \Phlix\Shared\Auth\ProviderInterface $provider,
+                string $instance = self::DEFAULT_INSTANCE
+            ): void {
+                throw new \RuntimeException(
+                    "Auth provider '{$provider->name()}' is already registered."
+                );
+            }
+        };
+
+        $boot = new AuthProviderBootstrapper(
+            $this->makeSettingsRepo(['github' => true]),
+            $racyRegistry,
+            new OidcPlugin(),
+            new LdapPlugin(),
+            $this->makeGithubPlugin(['client_id' => 'cid', 'client_secret' => 'sec']),
+        );
+
+        $result = $boot->ensureProviderRegistered('github');
+
+        $this->assertTrue($result);
+        $this->assertTrue($racyRegistry->hasProvider('github'));
     }
 }

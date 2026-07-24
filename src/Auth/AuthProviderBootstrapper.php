@@ -12,6 +12,8 @@ declare(strict_types=1);
 namespace Phlix\Auth;
 
 use Phlix\Admin\SettingsRepository;
+use Phlix\Plugins\Github\GithubOAuthProvider;
+use Phlix\Plugins\Github\Plugin as GithubPlugin;
 use Phlix\Plugins\Ldap\LdapProvider;
 use Phlix\Plugins\Ldap\Plugin as LdapPlugin;
 use Phlix\Plugins\Oidc\DiscoveryDocument;
@@ -65,19 +67,31 @@ class AuthProviderBootstrapper
     /** Provider name / settings-flag segment for LDAP. */
     public const LDAP = 'ldap';
 
+    /** Provider name / settings-flag segment for GitHub OAuth (S48). */
+    public const GITHUB = 'github';
+
     /**
      * The providers this bootstrapper governs. Anything else is not toggleable
      * through the auth-provider admin endpoints.
      *
      * @var list<string>
      */
-    public const TOGGLEABLE = [self::OIDC, self::LDAP];
+    public const TOGGLEABLE = [self::OIDC, self::LDAP, self::GITHUB];
 
+    /**
+     * @param GithubPlugin|null $githubPlugin S48 GitHub provider settings source.
+     *        Optional (nullable, last) so pre-S48 direct-construction / unit call
+     *        sites — which pass only OIDC + LDAP — keep working. Production DI
+     *        binds it explicitly (PHP-DI skips optional params during autowiring),
+     *        so GitHub is buildable at runtime; when null, GitHub simply cannot be
+     *        built and {@see self::buildGithubProvider()} returns null.
+     */
     public function __construct(
         private readonly SettingsRepository $settings,
         private readonly AuthProviderRegistry $registry,
         private readonly OidcPlugin $oidcPlugin,
         private readonly LdapPlugin $ldapPlugin,
+        private readonly ?GithubPlugin $githubPlugin = null,
     ) {
     }
 
@@ -249,6 +263,7 @@ class AuthProviderBootstrapper
         return match ($provider) {
             self::OIDC => $this->buildOidcProvider(),
             self::LDAP => $this->buildLdapProvider(),
+            self::GITHUB => $this->buildGithubProvider(),
             default => null,
         };
     }
@@ -320,5 +335,38 @@ class AuthProviderBootstrapper
             userFilter: $userFilter,
             adminGroup: $adminGroup,
         );
+    }
+
+    /**
+     * Build a {@see GithubOAuthProvider} from the GitHub plugin's saved settings
+     * (S48).
+     *
+     * "Configured" mirrors {@see \Phlix\Plugins\Github\Controller\GithubAdminController}:
+     * a client id AND a client secret are required — a GitHub OAuth App is a
+     * confidential client (no PKCE-only public flow), so both are mandatory before
+     * the provider can be brought live.
+     *
+     * Returns null when the GitHub plugin is unavailable (pre-S48 construction
+     * without the optional plugin) or not fully configured.
+     */
+    private function buildGithubProvider(): ?GithubOAuthProvider
+    {
+        if ($this->githubPlugin === null) {
+            return null;
+        }
+
+        $settings = $this->githubPlugin->getSettings();
+
+        $clientId = is_string($settings['client_id'] ?? null) ? $settings['client_id'] : '';
+        $clientSecret = is_string($settings['client_secret'] ?? null) ? $settings['client_secret'] : '';
+        if ($clientId === '' || $clientSecret === '') {
+            return null;
+        }
+
+        $scopes = is_string($settings['scopes'] ?? null) && $settings['scopes'] !== ''
+            ? $settings['scopes']
+            : GithubOAuthProvider::DEFAULT_SCOPES;
+
+        return new GithubOAuthProvider($clientId, $clientSecret, $scopes);
     }
 }

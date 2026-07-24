@@ -208,13 +208,47 @@ final class AuthServicesProvider implements ServiceProviderInterface
             AuthProviderRegistry::class => autowire(),
             ProviderManager::class => autowire(),
 
-            // S44: persists auth.oidc.enabled / auth.ldap.enabled and
-            // (re-)registers enabled+configured providers into the per-worker
-            // registry. Autowired — SettingsRepository, AuthProviderRegistry and
-            // the two no-arg plugin entry classes all resolve without hints.
-            AuthProviderBootstrapper::class => autowire(),
+            // S48: DB-backed settings store for the bundled auth-provider plugins
+            // (plugin_settings table, migration 093). Autowired — it needs only a
+            // Workerman MySQL Connection.
+            \Phlix\Plugins\Repository\PluginSettingsRepository::class => autowire(),
+
+            // S48: the bundled auth-provider plugin entry classes now read/write
+            // their config via the DB-backed PluginSettingsRepository. The `store`
+            // ctor param is OPTIONAL (so unit tests can `new Plugin()` and fall
+            // back to the file store), and PHP-DI skips optional params during
+            // autowiring — so it MUST be bound explicitly here, otherwise
+            // production would silently keep using settings.json.
+            \Phlix\Plugins\Oidc\Plugin::class => autowire()
+                ->constructorParameter('store', get(\Phlix\Plugins\Repository\PluginSettingsRepository::class)),
+            \Phlix\Plugins\Ldap\Plugin::class => autowire()
+                ->constructorParameter('store', get(\Phlix\Plugins\Repository\PluginSettingsRepository::class)),
+            \Phlix\Plugins\Github\Plugin::class => autowire()
+                ->constructorParameter('store', get(\Phlix\Plugins\Repository\PluginSettingsRepository::class)),
+
+            // S44/S48: persists auth.oidc/ldap/github.enabled and (re-)registers
+            // enabled+configured providers into the per-worker registry. The
+            // `githubPlugin` ctor param is optional (last), so PHP-DI skips it
+            // during autowiring — bind it explicitly so GitHub is buildable at
+            // runtime. OIDC/LDAP plugin params autowire via the explicit
+            // store-bound Plugin definitions above.
+            AuthProviderBootstrapper::class => autowire()
+                ->constructorParameter('githubPlugin', get(\Phlix\Plugins\Github\Plugin::class)),
 
             AuthProviderController::class => autowire(),
+
+            // S48: the GitHub OAuth2 authorize/callback + link controller. Same DI
+            // shape as OidcCallbackController — `db` builds the DB-backed OAuth2
+            // state store (shared oauth_state_store table; a per-worker in-memory
+            // store would lose PKCE/CSRF state across the resident workers),
+            // `bootstrapper` provides the request-path self-heal of the per-worker
+            // registry from the persisted `auth.github.enabled` flag, and
+            // `identities` backs the account-link branch. All three are optional
+            // ctor params PHP-DI would skip during autowiring, so bind explicitly.
+            \Phlix\Plugins\Github\Controller\GithubCallbackController::class => autowire()
+                ->constructorParameter('db', get(\Workerman\MySQL\Connection::class))
+                ->constructorParameter('bootstrapper', get(AuthProviderBootstrapper::class))
+                ->constructorParameter('identities', get(UserIdentityRepository::class)),
 
             // S44: the (previously dead) OIDC authorize/callback controller.
             // `db` is named explicitly so it constructs the DB-backed

@@ -83,20 +83,29 @@ final class UserRepositoryExternalIdTest extends TestCase
     {
         $db = $this->createMock(Connection::class);
 
-        $insertProvider = null;
-        $db->expects($this->exactly(3))
+        // S46 dual-write: the create path now also INSERTs a user_identities
+        // row, so the create path issues FOUR queries (SELECT users, INSERT
+        // users, INSERT user_settings, INSERT user_identities). Captured params
+        // are collected into one by-ref array so the closure stays single-line.
+        $seen = ['insertProvider' => null, 'identity' => null];
+        $db->expects($this->exactly(4))
             ->method('query')
-            ->willReturnCallback(function (string $sql, array $params = []) use (&$insertProvider) {
+            ->willReturnCallback(function (string $sql, array $params = []) use (&$seen) {
                 if (strpos($sql, 'SELECT * FROM users WHERE provider = ? AND external_id = ?') !== false) {
                     return [];
                 }
                 if (strpos($sql, 'INSERT INTO users') !== false) {
                     // (id, username, email, display_name, provider, external_id, password_hash)
-                    $insertProvider = $params[4];
+                    $seen['insertProvider'] = $params[4];
                     $this->assertSame('https://accounts.google.com/99999', $params[5]);
                     return [];
                 }
                 if (strpos($sql, 'INSERT INTO user_settings') !== false) {
+                    return [];
+                }
+                if (strpos($sql, 'INSERT INTO user_identities') !== false) {
+                    // (id, user_id, provider, provider_instance, external_id, provider_data)
+                    $seen['identity'] = $params;
                     return [];
                 }
                 return [];
@@ -110,9 +119,18 @@ final class UserRepositoryExternalIdTest extends TestCase
             'New User',
         );
 
-        $this->assertSame('oidc', $insertProvider);
+        $this->assertSame('oidc', $seen['insertProvider']);
         $this->assertStringContainsString('-', $userId);
         $this->assertNotEmpty($userId);
+
+        // The dual-written identity row is keyed to the same new user, carries
+        // the REAL provider, the '' default-instance sentinel (NOT NULL, so the
+        // UNIQUE index enforces — migration 092), and the identical external_id.
+        $this->assertNotNull($seen['identity']);
+        $this->assertSame($userId, $seen['identity'][1]);
+        $this->assertSame('oidc', $seen['identity'][2]);
+        $this->assertSame('', $seen['identity'][3]);
+        $this->assertSame('https://accounts.google.com/99999', $seen['identity'][4]);
     }
 
     /**
@@ -166,7 +184,8 @@ final class UserRepositoryExternalIdTest extends TestCase
         $expectedUsername = 'user_' . substr($identityHash, 0, 24);
         $expectedEmail = 'oidc+' . $identityHash . '@no-email.local';
 
-        $db->expects($this->exactly(3))
+        // S46 dual-write adds the fourth query (INSERT INTO user_identities).
+        $db->expects($this->exactly(4))
             ->method('query')
             ->willReturnCallback(function (string $sql, array $params = []) use ($expectedUsername, $expectedEmail) {
                 if (strpos($sql, 'SELECT * FROM users WHERE provider = ? AND external_id = ?') !== false) {
@@ -180,6 +199,15 @@ final class UserRepositoryExternalIdTest extends TestCase
                     $this->assertSame('https://idp.example.com/abc', $params[5]);
                     // password_hash stays NULL for external identities.
                     $this->assertNull($params[6]);
+                    return [];
+                }
+                if (strpos($sql, 'INSERT INTO user_identities') !== false) {
+                    // (id, user_id, provider, provider_instance, external_id, provider_data)
+                    $this->assertSame('oidc', $params[2]);
+                    // '' default-instance sentinel (NOT NULL — migration 092).
+                    $this->assertSame('', $params[3]);
+                    $this->assertSame('https://idp.example.com/abc', $params[4]);
+                    $this->assertNull($params[5]);
                     return [];
                 }
                 return [];

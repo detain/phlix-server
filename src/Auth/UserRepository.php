@@ -990,24 +990,58 @@ class UserRepository
 
         // password_hash stays NULL: an external identity has no local password,
         // and a fake '' hash could interfere with password verification.
-        $this->db->query(
-            "INSERT INTO users (id, username, email, display_name, provider, external_id, password_hash)
-             VALUES (?, ?, ?, ?, ?, ?, ?)",
-            [
+        //
+        // S46 DUAL-WRITE: the new external user is written to BOTH the
+        // authoritative login columns (`users.provider` / `users.external_id`,
+        // which remain the login read path — see findByExternalId) AND the new
+        // forward-looking `user_identities` table (migration 092;
+        // provider_instance = '' — the NOT NULL default-instance sentinel — for
+        // this single-instance identity, so the UNIQUE index enforces). All
+        // writes share ONE transaction so the two stores can never diverge: a
+        // failure rolls back the `users` row too, so we never leave a user
+        // WITHOUT its identity row. The identity INSERT goes through
+        // UserIdentityRepository on the SAME connection, so it participates in
+        // this transaction and reuses the exact INSERT S45 linking will use.
+        $this->db->beginTrans();
+
+        try {
+            $this->db->query(
+                "INSERT INTO users (id, username, email, display_name, provider, external_id, password_hash)
+                 VALUES (?, ?, ?, ?, ?, ?, ?)",
+                [
+                    $id,
+                    $username,
+                    $emailValue,
+                    $displayName ?? $username,
+                    $provider,
+                    $externalId,
+                    null,
+                ],
+            );
+
+            $this->db->query(
+                "INSERT INTO user_settings (user_id) VALUES (?)",
+                [$id],
+            );
+
+            (new UserIdentityRepository($this->db))->create(
                 $id,
-                $username,
-                $emailValue,
-                $displayName ?? $username,
                 $provider,
+                '',
                 $externalId,
                 null,
-            ],
-        );
+            );
 
-        $this->db->query(
-            "INSERT INTO user_settings (user_id) VALUES (?)",
-            [$id],
-        );
+            $this->db->commitTrans();
+        } catch (\Throwable $e) {
+            try {
+                $this->db->rollBackTrans();
+            } catch (\Throwable) {
+                // Best-effort rollback; re-throw the original failure below.
+            }
+
+            throw $e;
+        }
 
         return $id;
     }

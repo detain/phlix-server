@@ -14,6 +14,7 @@ namespace Phlix\Server\Http\Controllers;
 use Phlix\Auth\AuthProviderBootstrapper;
 use Phlix\Auth\AuthProviderRegistry;
 use Phlix\Auth\UserIdentityRepository;
+use Phlix\Auth\UserRepository;
 use Phlix\Common\Logger\LogChannels;
 use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Plugins\Ldap\LdapProvider;
@@ -48,9 +49,12 @@ use Phlix\Shared\Auth\AuthResult;
  *    non-duplicate create() failure is re-thrown and surfaces as a 5xx, never a
  *    mislabeled 409).
  *
- * `unlinkAccount()` and repointing the login read path onto `user_identities`
- * are S47 — deliberately out of scope here. The listing is shaped so S47's
- * unlink UI can consume it directly.
+ * ## S47 additions
+ *
+ * This controller now also serves the UNLINK endpoint
+ * ({@see self::unlink()}, DELETE /auth/identities/{id}) that pairs with S45's
+ * link. Repointing the login READ path onto `user_identities` lives in
+ * {@see \Phlix\Auth\UserRepository::findOrCreateByExternalId()} (S47 too).
  *
  * @package Phlix\Server\Http\Controllers
  * @since 0.100.0
@@ -70,12 +74,24 @@ final class AccountLinkController
      */
     private ?AuthProviderBootstrapper $bootstrapper;
 
+    /**
+     * S47 unlink safety guard: used to determine whether the caller still has a
+     * LOCAL password sign-in method before removing an external identity, so we
+     * never leave an account with NO way to log in. Optional so existing
+     * direct-construction / unit call sites keep working; the DI factory binds it
+     * explicitly. When null the guard fails SAFE (refuses to remove the last
+     * identity) rather than risk a lock-out.
+     */
+    private ?UserRepository $userRepository;
+
     public function __construct(
         private readonly UserIdentityRepository $identities,
         private readonly AuthProviderRegistry $registry,
         ?AuthProviderBootstrapper $bootstrapper = null,
+        ?UserRepository $userRepository = null,
     ) {
         $this->bootstrapper = $bootstrapper;
+        $this->userRepository = $userRepository;
     }
 
     /**
@@ -110,6 +126,102 @@ final class AccountLinkController
         }
 
         return (new Response())->json(['identities' => $identities]);
+    }
+
+    /**
+     * DELETE /auth/identities/{id} (AUTHENTICATED — S47).
+     *
+     * Unlinks (removes) one external identity from the current user's account.
+     * Pairs with S45's link + the {@see self::listIdentities()} listing (whose
+     * `id` field is the `{id}` path parameter here).
+     *
+     * ## Security — own-identity-only (the linchpin)
+     *
+     * A caller may only unlink an identity they actually OWN. Ownership is proven
+     * by resolving `{id}` within the CURRENT user's own identity list
+     * ({@see UserIdentityRepository::findByUserId()} keyed on the trusted session
+     * `user_id`) — an id that is not in that list (another user's identity, or a
+     * non-existent one) yields an indistinguishable 404, never a cross-account
+     * delete. The actual DELETE is then additionally scoped by `user_id`
+     * ({@see UserIdentityRepository::delete()}), so the removal can never touch
+     * another account even under a race.
+     *
+     * ## Safety — never remove the LAST sign-in method
+     *
+     * Removing an identity that would leave the account with NO password AND no
+     * other external identity would lock the user out. Such a request is refused
+     * (409). "Has password" comes from `users.password_hash`
+     * ({@see UserRepository::hasLocalPassword()}, nullable since migration 091);
+     * "other identities" is the count of the user's remaining identity rows.
+     *
+     * The local password and every OTHER identity are left untouched.
+     *
+     * @param Request $request
+     * @param array<string, string> $params Route params; `id` = identity row UUID.
+     * @return Response
+     */
+    public function unlink(Request $request, array $params): Response
+    {
+        $userId = $this->currentUserId($request);
+        if ($userId === null) {
+            return $this->unauthorized();
+        }
+
+        $identityId = $params['id'] ?? '';
+        if ($identityId === '') {
+            return (new Response())->status(400)->json([
+                'error' => 'missing_identity_id',
+                'message' => 'An identity id is required',
+            ]);
+        }
+
+        // Resolve the target WITHIN the caller's own identities — this is the
+        // own-identity-only scope: an id owned by someone else (or absent) is
+        // simply not in this list and yields a 404, never a cross-account delete.
+        $owned = $this->identities->findByUserId($userId);
+        $target = null;
+        foreach ($owned as $row) {
+            if (($row['id'] ?? null) === $identityId) {
+                $target = $row;
+                break;
+            }
+        }
+
+        if ($target === null) {
+            return (new Response())->status(404)->json([
+                'error' => 'identity_not_found',
+                'message' => 'No such linked identity',
+            ]);
+        }
+
+        // Last-sign-in-method guard. If removing this identity would leave the
+        // account with NO local password AND no other external identity, refuse —
+        // otherwise the user could lock themselves out.
+        $otherIdentityCount = count($owned) - 1;
+        $hasPassword = $this->userRepository !== null
+            ? $this->userRepository->hasLocalPassword($userId)
+            : false; // fail SAFE when the repository is unavailable
+        if (!$hasPassword && $otherIdentityCount <= 0) {
+            return (new Response())->status(409)->json([
+                'error' => 'last_sign_in_method',
+                'message' => 'Cannot remove your only sign-in method',
+            ]);
+        }
+
+        // DELETE is scoped by user_id (defence-in-depth on top of the ownership
+        // resolution above), plus the full identity key so exactly this one row
+        // is removed and no other identity/password is affected.
+        $this->identities->delete(
+            $userId,
+            is_string($target['provider'] ?? null) ? $target['provider'] : '',
+            is_string($target['provider_instance'] ?? null) ? $target['provider_instance'] : self::DEFAULT_INSTANCE,
+            is_string($target['external_id'] ?? null) ? $target['external_id'] : '',
+        );
+
+        return (new Response())->status(200)->json([
+            'success' => true,
+            'message' => 'Identity unlinked',
+        ]);
     }
 
     /**

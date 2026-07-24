@@ -23,6 +23,26 @@ use RuntimeException;
  * provider-prefixed usernames (e.g. "oidc:alice@example.com") to the
  * correct provider. Used by {@see ProviderManager} during authentication.
  *
+ * ## Instance-addressable keys (S47 multi-instance)
+ *
+ * A provider has a **family** ({@see ProviderInterface::name()}, e.g. `oidc`,
+ * `ldap`, `github`) which governs its BEHAVIOUR/dispatch, and an **instance**
+ * (e.g. `okta`, `azure`) which distinguishes two separately-configured
+ * providers of the SAME family. Before S47 the registry keyed purely on
+ * `name()`, so two `OidcProvider`s (both `name()==='oidc'`) collided on the
+ * dup-throw and could never coexist. The registry now keys on a composite
+ * INSTANCE KEY built by {@see self::instanceKey()}:
+ *
+ *   - default instance (`''`)      → key = the family name verbatim (`oidc`)
+ *   - named instance (`okta`)      → key = `family:instance` (`oidc:okta`)
+ *
+ * The default-instance key being IDENTICAL to the family name is what keeps
+ * every pre-S47 caller working unchanged: `registerProvider($p)` still keys on
+ * `name()`, and `getProvider('oidc')` / `hasProvider('oidc')` still resolve the
+ * default instance. The `''` sentinel matches
+ * `user_identities.provider_instance` (migration 092): a provider registered
+ * without an explicit instance is the DEFAULT instance of its family.
+ *
  * @package Phlix\Auth
  * @author Phlix Team
  * @version 1.0.0
@@ -33,7 +53,15 @@ use RuntimeException;
  */
 class AuthProviderRegistry
 {
-    /** @var array<string, ProviderInterface> */
+    /**
+     * The default single-instance sentinel. Matches
+     * `user_identities.provider_instance`'s `NOT NULL DEFAULT ''` (migration
+     * 092): a provider registered without an explicit instance IS the default
+     * instance, and its registry key is just the family name.
+     */
+    public const string DEFAULT_INSTANCE = '';
+
+    /** @var array<string, ProviderInterface> Keyed by instance key (see instanceKey()). */
     private array $providers = [];
 
     public function __construct()
@@ -41,43 +69,70 @@ class AuthProviderRegistry
     }
 
     /**
-     * Register a provider instance.
+     * Build the composite registry key for a (family, instance) pair.
      *
-     * @param ProviderInterface $provider The provider to register.
-     * @return void
+     * The default instance (`''`) maps to the family name verbatim so pre-S47
+     * single-instance callers are byte-for-byte unchanged; a named instance maps
+     * to `family:instance`.
      *
-     * @throws RuntimeException When a provider with the same name is already registered.
+     * @param string $family   Provider family (the value of {@see ProviderInterface::name()}).
+     * @param string $instance Configured-instance key, or '' for the default instance.
+     * @return string The composite instance key used to address the provider.
      */
-    public function registerProvider(ProviderInterface $provider): void
+    public static function instanceKey(string $family, string $instance = self::DEFAULT_INSTANCE): string
     {
-        $name = $provider->name();
-        if (isset($this->providers[$name])) {
-            throw new RuntimeException(
-                "Auth provider '{$name}' is already registered."
-            );
-        }
-        $this->providers[$name] = $provider;
+        return $instance === self::DEFAULT_INSTANCE ? $family : $family . ':' . $instance;
     }
 
     /**
-     * Remove a registered provider by name.
+     * Register a provider instance.
      *
-     * Idempotent: unregistering a name that is not present is a no-op. Used by
+     * The provider's {@see ProviderInterface::name()} supplies the family; the
+     * optional `$instance` distinguishes multiple configured providers of that
+     * same family (S47). Omitting `$instance` registers the DEFAULT instance,
+     * whose key is the family name — the exact pre-S47 behaviour.
+     *
+     * @param ProviderInterface $provider The provider to register.
+     * @param string $instance Configured-instance key (e.g. "okta"), or '' for
+     *                         the default single instance.
+     * @return void
+     *
+     * @throws RuntimeException When a provider with the same instance key is
+     *         already registered. Two DIFFERENT instances of the same family
+     *         (e.g. `oidc:okta` + `oidc:azure`, or `oidc` + `oidc:okta`) do NOT
+     *         collide; only a repeat of the SAME instance key throws.
+     */
+    public function registerProvider(ProviderInterface $provider, string $instance = self::DEFAULT_INSTANCE): void
+    {
+        $key = self::instanceKey($provider->name(), $instance);
+        if (isset($this->providers[$key])) {
+            throw new RuntimeException(
+                "Auth provider '{$key}' is already registered."
+            );
+        }
+        $this->providers[$key] = $provider;
+    }
+
+    /**
+     * Remove a registered provider by its instance key.
+     *
+     * Idempotent: unregistering a key that is not present is a no-op. Used by
      * the admin "disable provider" flow so that turning a provider off takes
      * immediate effect in the current worker (the persisted enable-flag governs
      * every other worker on its next {@see \Phlix\Auth\AuthProviderBootstrapper::registerEnabledProviders()}
      * boot pass, since the registry is per-worker in-memory state).
      *
-     * @param string $name Lowercase provider name.
+     * @param string $key Instance key (a family name for the default instance,
+     *                     or `family:instance` — see {@see self::instanceKey()}).
      * @return void
      */
-    public function unregisterProvider(string $name): void
+    public function unregisterProvider(string $key): void
     {
-        unset($this->providers[$name]);
+        unset($this->providers[$key]);
     }
 
     /**
-     * Return all registered providers.
+     * Return all registered providers, keyed by instance key.
      *
      * @return array<string, ProviderInterface>
      */
@@ -87,33 +142,55 @@ class AuthProviderRegistry
     }
 
     /**
-     * Return true when a provider with the given name is registered.
+     * Return every registered instance of a provider FAMILY, keyed by instance
+     * key. Family governs behaviour/dispatch, so this is how a family-level
+     * consumer enumerates its (possibly multiple, S47) instances.
      *
-     * @param string $name Lowercase provider name.
-     * @return bool
+     * @param string $family Provider family (the value of {@see ProviderInterface::name()}).
+     * @return array<string, ProviderInterface> Instance-key => provider (may be empty).
      */
-    public function hasProvider(string $name): bool
+    public function getProvidersByFamily(string $family): array
     {
-        return isset($this->providers[$name]);
+        $matches = [];
+        foreach ($this->providers as $key => $provider) {
+            if ($provider->name() === $family) {
+                $matches[$key] = $provider;
+            }
+        }
+
+        return $matches;
     }
 
     /**
-     * Return a registered provider by name.
+     * Return true when a provider with the given instance key is registered.
      *
-     * @param string $name Lowercase provider name.
+     * @param string $key Instance key (family name for the default instance, or
+     *                     `family:instance` — see {@see self::instanceKey()}).
+     * @return bool
+     */
+    public function hasProvider(string $key): bool
+    {
+        return isset($this->providers[$key]);
+    }
+
+    /**
+     * Return a registered provider by its instance key.
+     *
+     * @param string $key Instance key (family name for the default instance, or
+     *                     `family:instance` — see {@see self::instanceKey()}).
      * @return ProviderInterface
      *
-     * @throws AuthProviderNotFoundException When no provider is registered with that name.
+     * @throws AuthProviderNotFoundException When no provider is registered with that key.
      */
-    public function getProvider(string $name): ProviderInterface
+    public function getProvider(string $key): ProviderInterface
     {
-        if (!isset($this->providers[$name])) {
+        if (!isset($this->providers[$key])) {
             throw new AuthProviderNotFoundException(
-                "No auth provider registered with name '{$name}'."
+                "No auth provider registered with name '{$key}'."
             );
         }
 
-        return $this->providers[$name];
+        return $this->providers[$key];
     }
 
     /**

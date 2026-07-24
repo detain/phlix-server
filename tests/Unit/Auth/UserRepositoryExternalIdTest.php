@@ -83,12 +83,13 @@ final class UserRepositoryExternalIdTest extends TestCase
     {
         $db = $this->createMock(Connection::class);
 
-        // S46 dual-write: the create path now also INSERTs a user_identities
-        // row, so the create path issues FOUR queries (SELECT users, INSERT
-        // users, INSERT user_settings, INSERT user_identities). Captured params
-        // are collected into one by-ref array so the closure stays single-line.
+        // S47 login-read repoint + S46 dual-write: the create path now issues
+        // FIVE queries — the S47 identity-first SELECT (user_identities), then
+        // the users SELECT, INSERT users, INSERT user_settings, INSERT
+        // user_identities. Captured params are collected into one by-ref array so
+        // the closure stays single-line.
         $seen = ['insertProvider' => null, 'identity' => null];
-        $db->expects($this->exactly(4))
+        $db->expects($this->exactly(5))
             ->method('query')
             ->willReturnCallback(function (string $sql, array $params = []) use (&$seen) {
                 if (strpos($sql, 'SELECT * FROM users WHERE provider = ? AND external_id = ?') !== false) {
@@ -184,8 +185,10 @@ final class UserRepositoryExternalIdTest extends TestCase
         $expectedUsername = 'user_' . substr($identityHash, 0, 24);
         $expectedEmail = 'oidc+' . $identityHash . '@no-email.local';
 
-        // S46 dual-write adds the fourth query (INSERT INTO user_identities).
-        $db->expects($this->exactly(4))
+        // S47 login-read repoint adds the identity-first SELECT and S46 dual-write
+        // adds the INSERT INTO user_identities, so the create path issues FIVE
+        // queries.
+        $db->expects($this->exactly(5))
             ->method('query')
             ->willReturnCallback(function (string $sql, array $params = []) use ($expectedUsername, $expectedEmail) {
                 if (strpos($sql, 'SELECT * FROM users WHERE provider = ? AND external_id = ?') !== false) {
@@ -217,6 +220,115 @@ final class UserRepositoryExternalIdTest extends TestCase
         $userId = $repo->findOrCreateByExternalId('oidc', 'https://idp.example.com/abc', null, null);
 
         $this->assertNotEmpty($userId);
+    }
+
+    /**
+     * S47 login-read REPOINT: resolution consults `user_identities` FIRST. An
+     * identity linked to an existing account via S45 (a user_identities row that
+     * has NO matching users.provider/external_id row) must resolve that SAME
+     * account on login — never create a duplicate. Proven here by returning the
+     * identity row for the user_identities SELECT and asserting the users SELECT /
+     * any INSERT are NEVER reached.
+     */
+    public function test_find_or_create_resolves_via_user_identities_first(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->method('query')
+            ->willReturnCallback(function (string $sql, array $params = []) {
+                if (strpos($sql, 'FROM user_identities') !== false) {
+                    // The S47 identity-first lookup is keyed on
+                    // (provider, default-instance '', external_id).
+                    $this->assertSame('oidc', $params[0]);
+                    $this->assertSame('', $params[1]);
+                    $this->assertSame('oidc.sub-linked', $params[2]);
+                    return [[
+                        'id' => 'identity-row',
+                        'user_id' => 'owner-account',
+                        'provider' => 'oidc',
+                        'provider_instance' => '',
+                        'external_id' => 'oidc.sub-linked',
+                    ]];
+                }
+                // If the users fallback or any INSERT is reached the repoint is
+                // broken — a linked identity would create a duplicate account.
+                $this->fail('users fallback / INSERT must not run when the identity resolves: ' . $sql);
+            });
+
+        $repo = new UserRepository($db);
+        $userId = $repo->findOrCreateByExternalId('oidc', 'oidc.sub-linked', 'linked@example.com', 'Linked');
+
+        // Resolves the identity's OWNER, not a freshly-created user.
+        $this->assertSame('owner-account', $userId);
+    }
+
+    /**
+     * S47 backward-compat FALLBACK: an external user whose `user_identities` row
+     * was (for any reason) not backfilled still resolves via the legacy
+     * authoritative `users.provider`/`external_id` columns, so NO existing user
+     * loses login. The identity SELECT returns nothing; the users SELECT returns
+     * the pre-existing row.
+     */
+    public function test_find_or_create_falls_back_to_users_when_no_identity_row(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->method('query')
+            ->willReturnCallback(function (string $sql, array $params = []) {
+                if (strpos($sql, 'FROM user_identities') !== false) {
+                    return []; // not backfilled
+                }
+                if (strpos($sql, 'SELECT * FROM users WHERE provider = ? AND external_id = ?') !== false) {
+                    return [[
+                        'id' => 'legacy-user',
+                        'provider' => 'oidc',
+                        'external_id' => 'oidc.legacy',
+                    ]];
+                }
+                $this->fail('no INSERT expected — the users fallback resolved: ' . $sql);
+            });
+
+        $repo = new UserRepository($db);
+        $userId = $repo->findOrCreateByExternalId('oidc', 'oidc.legacy');
+
+        $this->assertSame('legacy-user', $userId);
+    }
+
+    /**
+     * S47 unlink guard input: hasLocalPassword() is true only when a non-empty
+     * password hash is stored (password_hash is nullable since migration 091).
+     */
+    public function test_has_local_password_true_when_hash_present(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturn([[
+            'id' => 'user-1',
+            'username' => 'alice',
+            'password_hash' => password_hash('secret', PASSWORD_ARGON2ID),
+        ]]);
+
+        $repo = new UserRepository($db);
+        $this->assertTrue($repo->hasLocalPassword('user-1'));
+    }
+
+    public function test_has_local_password_false_for_external_only_account(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturn([[
+            'id' => 'user-2',
+            'username' => 'ext',
+            'password_hash' => null, // purely-external account (OIDC/LDAP)
+        ]]);
+
+        $repo = new UserRepository($db);
+        $this->assertFalse($repo->hasLocalPassword('user-2'));
+    }
+
+    public function test_has_local_password_false_when_user_missing(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturn([]);
+
+        $repo = new UserRepository($db);
+        $this->assertFalse($repo->hasLocalPassword('nope'));
     }
 
     public function test_update_provider_data(): void

@@ -8,13 +8,25 @@
 -- on a single account (S45 linking, S47 multi-instance, S48 GitHub provider),
 -- identities move into their own row-per-identity table.
 --
--- `provider_instance` (NULLable) distinguishes two configured instances of the
--- same provider family (e.g. okta-oidc vs azure-oidc, or github vs
--- github-enterprise) — S47. It is NULL for the single-instance identities
--- backfilled here. NOTE (MySQL): a UNIQUE index treats NULLs as DISTINCT, so
--- NULL-instance rows never collide with one another on the instance column
--- alone; they only collide when (provider, external_id) ALSO match — which is
--- precisely the duplicate we want to reject.
+-- `provider_instance` distinguishes two configured instances of the same
+-- provider family (e.g. okta-oidc vs azure-oidc, or github vs
+-- github-enterprise) — S47. It is `NOT NULL DEFAULT ''`: the empty string is
+-- the sentinel for a single-instance / DEFAULT identity (the kind this
+-- migration backfills and that S45 first-login dual-writes). Real, non-empty
+-- instance names arrive with S47 and are ordinary values.
+--
+-- WHY NOT NULL (this is load-bearing — the UNIQUE below depends on it): in
+-- MySQL/InnoDB a multi-column UNIQUE index treats NULLs as DISTINCT. Two rows
+-- (oidc, NULL, X) and (oidc, NULL, X) are BOTH accepted, because NULL is never
+-- equal to NULL for the uniqueness comparison. So if `provider_instance` were
+-- NULL for every single-instance row (as an earlier draft of this migration
+-- had it), UNIQUE(provider, provider_instance, external_id) would NOT reject a
+-- duplicate (provider, external_id) — the exact duplicate that S45 linking and
+-- this backfill MUST reject (two local accounts linking the same external
+-- identity; a backfill inserting the same identity twice). Storing the non-NULL
+-- sentinel '' makes the comparison ('' = '') a real equality, so the UNIQUE
+-- index genuinely enforces one identity per (provider, default-instance,
+-- external_id). Non-empty S47 instance names are compared the same way.
 --
 -- LOGIN IS PRESERVED: this migration does NOT touch the `users` table.
 -- `users.provider` / `users.external_id` remain the authoritative login-lookup
@@ -35,7 +47,7 @@ CREATE TABLE IF NOT EXISTS user_identities (
     id CHAR(36) PRIMARY KEY,
     user_id CHAR(36) NOT NULL,
     provider VARCHAR(64) NOT NULL,
-    provider_instance VARCHAR(64) NULL,
+    provider_instance VARCHAR(64) NOT NULL DEFAULT '',
     external_id VARCHAR(255) NOT NULL,
     provider_data JSON NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -47,7 +59,7 @@ CREATE TABLE IF NOT EXISTS user_identities (
 
 -- Step 2: backfill one `user_identities` row per existing external-identity
 -- user. All pre-existing identities are single-instance, so provider_instance
--- is NULL.
+-- is the default-instance sentinel '' (NOT NULL — see the DDL note above).
 --
 -- PROVIDER DERIVATION for LEGACY rows: before S44 (bug #4),
 -- findOrCreateByExternalId hardcoded `users.provider = 'external'` for every
@@ -65,14 +77,33 @@ CREATE TABLE IF NOT EXISTS user_identities (
 -- carry the identical value for S47 to repoint reads onto it without breaking
 -- the round trip.
 --
--- IDEMPOTENT: `INSERT ... SELECT ... WHERE NOT EXISTS` so re-running after a
--- partial failure never duplicates. The NOT EXISTS is keyed on
--- (user_id, external_id, provider_instance IS NULL) — the backfill emits at
--- most one NULL-instance row per users row, and `users` already enforces
--- UNIQUE(provider, external_id), so this key uniquely identifies an
--- already-backfilled identity. (The UNIQUE(provider, provider_instance,
--- external_id) index is a second line of defence.)
-INSERT INTO user_identities (id, user_id, provider, provider_instance, external_id, provider_data)
+-- IDEMPOTENT + DUPLICATE-SAFE: two guards work together.
+--
+--  (1) `WHERE NOT EXISTS` (per user) — re-running after a partial failure never
+--      re-inserts a row this user already has. The NOT EXISTS is keyed on
+--      (user_id, external_id, provider_instance = '') — the backfill emits at
+--      most one default-instance row per users row, and `users` already
+--      enforces UNIQUE(provider, external_id).
+--
+--  (2) `INSERT IGNORE` — collapses LEGACY DUPLICATE external accounts to a
+--      single identity row. Now that the UNIQUE index actually enforces (the
+--      sentinel is the non-NULL ''), two DIFFERENT users can derive to the SAME
+--      identity key: a legacy `provider='external'` row with
+--      external_id='oidc.<sub>' and a post-S44 twin `provider='oidc'` row with
+--      the SAME external_id both derive to (oidc, '', 'oidc.<sub>').
+--      `users.UNIQUE(provider, external_id)` lets both users exist (the provider
+--      column differs), so a plain INSERT...SELECT would attempt two rows with
+--      the same identity key and FAIL the whole migration on the UNIQUE
+--      violation at deploy time. INSERT IGNORE keeps whichever row InnoDB
+--      reaches first and silently skips the duplicate, so AT MOST ONE
+--      user_identities row exists per (derived_provider, '', external_id). The
+--      "losing" account is NOT locked out: login still reads
+--      `users.provider`/`users.external_id` (S46 leaves `users` authoritative)
+--      and that users row is untouched. This is a pre-existing data-quality
+--      edge, realistically empty in production because the OIDC/LDAP login path
+--      was dead before S44 (so no post-S44 twin of a legacy 'external' row can
+--      have been created yet).
+INSERT IGNORE INTO user_identities (id, user_id, provider, provider_instance, external_id, provider_data)
 SELECT
     UUID() AS id,
     u.id AS user_id,
@@ -81,7 +112,7 @@ SELECT
         WHEN u.provider = 'external' AND u.external_id LIKE 'ldap.%' THEN 'ldap'
         ELSE u.provider
     END AS provider,
-    NULL AS provider_instance,
+    '' AS provider_instance,
     u.external_id AS external_id,
     u.provider_data AS provider_data
 FROM users u
@@ -92,5 +123,5 @@ WHERE u.external_id IS NOT NULL
         FROM user_identities ui
         WHERE ui.user_id = u.id
           AND ui.external_id = u.external_id
-          AND ui.provider_instance IS NULL
+          AND ui.provider_instance = ''
   );

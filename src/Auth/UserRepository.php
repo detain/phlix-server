@@ -995,7 +995,8 @@ class UserRepository
         // authoritative login columns (`users.provider` / `users.external_id`,
         // which remain the login read path — see findByExternalId) AND the new
         // forward-looking `user_identities` table (migration 092;
-        // provider_instance = NULL for this single-instance identity). All
+        // provider_instance = '' — the NOT NULL default-instance sentinel — for
+        // this single-instance identity, so the UNIQUE index enforces). All
         // writes share ONE transaction so the two stores can never diverge: a
         // failure rolls back the `users` row too, so we never leave a user
         // WITHOUT its identity row. The identity INSERT goes through
@@ -1026,7 +1027,7 @@ class UserRepository
             (new UserIdentityRepository($this->db))->create(
                 $id,
                 $provider,
-                null,
+                '',
                 $externalId,
                 null,
             );

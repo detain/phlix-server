@@ -27,18 +27,42 @@ final class UserIdentityRepositoryTest extends TestCase
             });
 
         $repo = new UserIdentityRepository($db);
-        $id = $repo->create('user-1', 'oidc', null, 'sub-123', null);
+        // '' is the NOT NULL default-instance sentinel (migration 092) — the
+        // value single-instance identities carry so the UNIQUE index enforces.
+        $id = $repo->create('user-1', 'oidc', '', 'sub-123', null);
 
         $this->assertNotNull($captured);
         // (id, user_id, provider, provider_instance, external_id, provider_data)
         $this->assertSame($id, $captured[0]);
         $this->assertSame('user-1', $captured[1]);
         $this->assertSame('oidc', $captured[2]);
-        $this->assertNull($captured[3]);
+        $this->assertSame('', $captured[3]);
         $this->assertSame('sub-123', $captured[4]);
         $this->assertNull($captured[5]);
         $this->assertNotEmpty($id);
         $this->assertStringContainsString('-', $id);
+    }
+
+    public function test_create_coerces_null_instance_to_empty_string_sentinel(): void
+    {
+        $db = $this->createMock(Connection::class);
+
+        $captured = null;
+        $db->expects($this->once())
+            ->method('query')
+            ->willReturnCallback(function (string $sql, array $params = []) use (&$captured) {
+                $captured = $params;
+                return [];
+            });
+
+        $repo = new UserIdentityRepository($db);
+        // A legacy/null default-instance argument must be stored as '' (never
+        // NULL) so the UNIQUE (provider, provider_instance, external_id) index
+        // actually rejects a duplicate single-instance identity.
+        $repo->create('user-1', 'oidc', null, 'sub-123', null);
+
+        $this->assertNotNull($captured);
+        $this->assertSame('', $captured[3]);
     }
 
     public function test_create_json_encodes_array_provider_data(): void
@@ -72,13 +96,14 @@ final class UserIdentityRepositoryTest extends TestCase
         });
 
         $repo = new UserIdentityRepository($db);
-        $repo->create('user-1', 'ldap', null, 'ldap.uid=alice', '{"already":"json"}');
+        $repo->create('user-1', 'ldap', '', 'ldap.uid=alice', '{"already":"json"}');
 
         $this->assertNotNull($captured);
+        $this->assertSame('', $captured[3]);
         $this->assertSame('{"already":"json"}', $captured[5]);
     }
 
-    public function test_find_by_provider_external_id_uses_is_null_for_null_instance(): void
+    public function test_find_by_provider_external_id_uses_equality_and_sentinel_for_default_instance(): void
     {
         $db = $this->createMock(Connection::class);
 
@@ -86,25 +111,28 @@ final class UserIdentityRepositoryTest extends TestCase
         $db->expects($this->once())
             ->method('query')
             ->willReturnCallback(function (string $sql, array $params = []) use (&$captured) {
-                $this->assertStringContainsString('provider_instance IS NULL', $sql);
-                $this->assertStringNotContainsString('provider_instance = ?', $sql);
+                // provider_instance is NOT NULL DEFAULT '' — always a plain
+                // equality, never an IS NULL special case.
+                $this->assertStringContainsString('provider_instance = ?', $sql);
+                $this->assertStringNotContainsString('IS NULL', $sql);
                 $captured = $params;
                 return [[
                     'id' => 'ident-1',
                     'user_id' => 'user-1',
                     'provider' => 'oidc',
-                    'provider_instance' => null,
+                    'provider_instance' => '',
                     'external_id' => 'sub-123',
                 ]];
             });
 
         $repo = new UserIdentityRepository($db);
+        // A null default-instance argument is coerced to the '' sentinel.
         $row = $repo->findByProviderExternalId('oidc', null, 'sub-123');
 
         $this->assertIsArray($row);
         $this->assertSame('ident-1', $row['id']);
-        // Only provider + external_id are bound when instance is NULL.
-        $this->assertSame(['oidc', 'sub-123'], $captured);
+        // The default single instance binds '' for provider_instance.
+        $this->assertSame(['oidc', '', 'sub-123'], $captured);
     }
 
     public function test_find_by_provider_external_id_binds_instance_when_present(): void
@@ -182,7 +210,7 @@ final class UserIdentityRepositoryTest extends TestCase
         $repo->deleteById('ident-9');
     }
 
-    public function test_delete_by_key_uses_is_null_for_null_instance(): void
+    public function test_delete_by_key_uses_equality_and_sentinel_for_default_instance(): void
     {
         $db = $this->createMock(Connection::class);
 
@@ -190,15 +218,18 @@ final class UserIdentityRepositoryTest extends TestCase
         $db->expects($this->once())
             ->method('query')
             ->willReturnCallback(function (string $sql, array $params = []) use (&$captured) {
-                $this->assertStringContainsString('provider_instance IS NULL', $sql);
+                // provider_instance is NOT NULL DEFAULT '' — plain equality only.
+                $this->assertStringContainsString('provider_instance = ?', $sql);
+                $this->assertStringNotContainsString('IS NULL', $sql);
                 $captured = $params;
                 return [];
             });
 
         $repo = new UserIdentityRepository($db);
+        // A null default-instance argument is coerced to the '' sentinel.
         $repo->delete('user-1', 'oidc', null, 'sub-123');
 
-        $this->assertSame(['user-1', 'oidc', 'sub-123'], $captured);
+        $this->assertSame(['user-1', 'oidc', '', 'sub-123'], $captured);
     }
 
     public function test_delete_by_key_binds_instance_when_present(): void

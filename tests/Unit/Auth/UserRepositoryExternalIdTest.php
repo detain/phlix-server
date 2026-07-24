@@ -124,12 +124,12 @@ final class UserRepositoryExternalIdTest extends TestCase
         $this->assertNotEmpty($userId);
 
         // The dual-written identity row is keyed to the same new user, carries
-        // the REAL provider, a NULL provider_instance (single-instance), and the
-        // identical external_id.
+        // the REAL provider, the '' default-instance sentinel (NOT NULL, so the
+        // UNIQUE index enforces — migration 092), and the identical external_id.
         $this->assertNotNull($seen['identity']);
         $this->assertSame($userId, $seen['identity'][1]);
         $this->assertSame('oidc', $seen['identity'][2]);
-        $this->assertNull($seen['identity'][3]);
+        $this->assertSame('', $seen['identity'][3]);
         $this->assertSame('https://accounts.google.com/99999', $seen['identity'][4]);
     }
 
@@ -204,7 +204,8 @@ final class UserRepositoryExternalIdTest extends TestCase
                 if (strpos($sql, 'INSERT INTO user_identities') !== false) {
                     // (id, user_id, provider, provider_instance, external_id, provider_data)
                     $this->assertSame('oidc', $params[2]);
-                    $this->assertNull($params[3]);
+                    // '' default-instance sentinel (NOT NULL — migration 092).
+                    $this->assertSame('', $params[3]);
                     $this->assertSame('https://idp.example.com/abc', $params[4]);
                     $this->assertNull($params[5]);
                     return [];

@@ -23,11 +23,21 @@ use Workerman\MySQL\Connection;
  * external `(provider, provider_instance, external_id)` triple, unique across
  * that triple.
  *
- * `provider_instance` is NULLable and identifies WHICH configured instance of a
- * provider family an identity belongs to (S47 multi-instance, e.g. okta-oidc vs
- * azure-oidc). It is NULL for the single-instance identities that migration
- * 092's backfill creates and that {@see UserRepository::findOrCreateByExternalId()}
- * dual-writes.
+ * `provider_instance` identifies WHICH configured instance of a provider family
+ * an identity belongs to (S47 multi-instance, e.g. okta-oidc vs azure-oidc). It
+ * is `NOT NULL DEFAULT ''`: the empty string is the sentinel for a
+ * single-instance / DEFAULT identity — the kind migration 092's backfill
+ * creates and that {@see UserRepository::findOrCreateByExternalId()} dual-writes.
+ *
+ * The sentinel is DELIBERATELY not NULL. A multi-column MySQL/InnoDB UNIQUE
+ * index treats NULLs as DISTINCT, so a NULLable `provider_instance` would let
+ * two `(provider, NULL, external_id)` rows coexist and the
+ * `UNIQUE (provider, provider_instance, external_id)` index (migration 092)
+ * would NOT reject a duplicate identity. Storing '' makes the uniqueness
+ * comparison real, so the DB genuinely enforces one identity per
+ * `(provider, default-instance, external_id)`. Because '' is the canonical
+ * default, this repository accepts `null` for a default-instance argument but
+ * COERCES it to '' before touching the DB (never emitting a NULL predicate).
  *
  * Consumers:
  *  - S45 account-linking endpoint ({@see create()} / {@see findByProviderExternalId()}).
@@ -67,8 +77,11 @@ class UserIdentityRepository
      *
      * @param string      $userId           Owning local user UUID (FK → users.id).
      * @param string      $provider         Provider family (e.g. "oidc", "ldap", "github").
-     * @param string|null $providerInstance Configured-instance key (e.g. "okta-oidc"),
-     *                                       or NULL for a single-instance provider.
+     * @param string|null $providerInstance Configured-instance key (e.g. "okta-oidc").
+     *                                       Pass '' (or null, which is coerced to '')
+     *                                       for a single-instance / default provider —
+     *                                       the column is NOT NULL, and '' is the
+     *                                       uniqueness-enforcing default sentinel.
      * @param string      $externalId       Provider's unique identifier for the user.
      * @param array<string, mixed>|string|null $providerData Provider metadata: an array
      *                                       is JSON-encoded, a string is stored verbatim
@@ -85,6 +98,12 @@ class UserIdentityRepository
     ): string {
         $id = Uuid::v4();
 
+        // provider_instance is NOT NULL DEFAULT '' (migration 092): a null
+        // default-instance argument maps to the '' sentinel so the UNIQUE index
+        // actually enforces (a NULL would make the index treat the row as
+        // distinct from every other single-instance identity).
+        $instance = $providerInstance ?? '';
+
         $this->db->query(
             "INSERT INTO user_identities
                 (id, user_id, provider, provider_instance, external_id, provider_data)
@@ -93,7 +112,7 @@ class UserIdentityRepository
                 $id,
                 $userId,
                 $provider,
-                $providerInstance,
+                $instance,
                 $externalId,
                 $this->encodeProviderData($providerData),
             ],
@@ -105,12 +124,14 @@ class UserIdentityRepository
     /**
      * Find an identity by its external `(provider, provider_instance, external_id)` key.
      *
-     * A NULL `$providerInstance` matches rows whose `provider_instance IS NULL`
-     * (single-instance identities) — SQL `= NULL` never matches, so the null
-     * case is expressed with `IS NULL`.
+     * `provider_instance` is NOT NULL DEFAULT '' (migration 092), so the lookup
+     * is always a plain `provider_instance = ?` equality — no `IS NULL` special
+     * case. A null default-instance argument is coerced to the '' sentinel, and
+     * real S47 instance names are ordinary non-empty values.
      *
      * @param string      $provider         Provider family.
-     * @param string|null $providerInstance Configured-instance key, or NULL.
+     * @param string|null $providerInstance Configured-instance key; '' or null (coerced
+     *                                       to '') selects the default single instance.
      * @param string      $externalId       Provider's unique identifier.
      *
      * @return array<string, mixed>|null Identity row, or null if not found.
@@ -120,19 +141,11 @@ class UserIdentityRepository
         ?string $providerInstance,
         string $externalId
     ): ?array {
-        if ($providerInstance === null) {
-            $result = $this->db->query(
-                "SELECT * FROM user_identities
-                 WHERE provider = ? AND provider_instance IS NULL AND external_id = ?",
-                [$provider, $externalId],
-            );
-        } else {
-            $result = $this->db->query(
-                "SELECT * FROM user_identities
-                 WHERE provider = ? AND provider_instance = ? AND external_id = ?",
-                [$provider, $providerInstance, $externalId],
-            );
-        }
+        $result = $this->db->query(
+            "SELECT * FROM user_identities
+             WHERE provider = ? AND provider_instance = ? AND external_id = ?",
+            [$provider, $providerInstance ?? '', $externalId],
+        );
 
         if (!is_array($result) || !isset($result[0]) || !is_array($result[0])) {
             return null;
@@ -188,12 +201,14 @@ class UserIdentityRepository
      * external_id)` key.
      *
      * Scoped by `user_id` as well so an unlink can only remove an identity the
-     * requesting user actually owns. A NULL `$providerInstance` matches
-     * `provider_instance IS NULL`.
+     * requesting user actually owns. `provider_instance` is NOT NULL DEFAULT ''
+     * (migration 092), so the match is always a plain `provider_instance = ?`
+     * equality; a null default-instance argument is coerced to the '' sentinel.
      *
      * @param string      $userId           Owning local user UUID.
      * @param string      $provider         Provider family.
-     * @param string|null $providerInstance Configured-instance key, or NULL.
+     * @param string|null $providerInstance Configured-instance key; '' or null (coerced
+     *                                       to '') targets the default single instance.
      * @param string      $externalId       Provider's unique identifier.
      *
      * @return void
@@ -204,19 +219,11 @@ class UserIdentityRepository
         ?string $providerInstance,
         string $externalId
     ): void {
-        if ($providerInstance === null) {
-            $this->db->query(
-                "DELETE FROM user_identities
-                 WHERE user_id = ? AND provider = ? AND provider_instance IS NULL AND external_id = ?",
-                [$userId, $provider, $externalId],
-            );
-        } else {
-            $this->db->query(
-                "DELETE FROM user_identities
-                 WHERE user_id = ? AND provider = ? AND provider_instance = ? AND external_id = ?",
-                [$userId, $provider, $providerInstance, $externalId],
-            );
-        }
+        $this->db->query(
+            "DELETE FROM user_identities
+             WHERE user_id = ? AND provider = ? AND provider_instance = ? AND external_id = ?",
+            [$userId, $provider, $providerInstance ?? '', $externalId],
+        );
     }
 
     /**

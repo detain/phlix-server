@@ -957,13 +957,26 @@ class UserRepository
         $id = $this->generateUuid();
         $username = $email ?? 'user_' . substr($externalId, 0, 16);
 
+        // `users.email` is NOT NULL + UNIQUE (migration 001), yet external
+        // providers (OIDC/LDAP) may not supply an email. A shared '' placeholder
+        // would make a SECOND email-less external user collide on the unique
+        // index. Derive a stable, per-identity placeholder from the unique
+        // identity key (provider, external_id) — migration 009 — so every
+        // email-less external user gets a distinct, deterministic value that is
+        // bounded well under VARCHAR(255) regardless of external_id length.
+        $emailValue = ($email !== null && $email !== '')
+            ? $email
+            : $provider . '+' . hash('sha256', $provider . "\0" . $externalId) . '@no-email.local';
+
+        // password_hash stays NULL: an external identity has no local password,
+        // and a fake '' hash could interfere with password verification.
         $this->db->query(
             "INSERT INTO users (id, username, email, display_name, provider, external_id, password_hash)
              VALUES (?, ?, ?, ?, ?, ?, ?)",
             [
                 $id,
                 $username,
-                $email ?? '',
+                $emailValue,
                 $displayName ?? $username,
                 $provider,
                 $externalId,

@@ -152,18 +152,30 @@ final class UserRepositoryExternalIdTest extends TestCase
     {
         $db = $this->createMock(Connection::class);
 
+        // When the provider supplies no email, the email column can NOT be a
+        // shared '' (users.email is NOT NULL + UNIQUE — migration 001 — so a
+        // SECOND email-less external user would collide on the unique index).
+        // The create path derives a stable, per-identity placeholder from the
+        // unique identity key (provider, external_id) via sha256 so each
+        // email-less user gets a distinct, deterministic, bounded value.
+        $expectedEmail = 'oidc+'
+            . hash('sha256', "oidc\0https://idp.example.com/abc")
+            . '@no-email.local';
+
         $db->expects($this->exactly(3))
             ->method('query')
-            ->willReturnCallback(function (string $sql, array $params = []) {
+            ->willReturnCallback(function (string $sql, array $params = []) use ($expectedEmail) {
                 if (strpos($sql, 'SELECT * FROM users WHERE provider = ? AND external_id = ?') !== false) {
                     return [];
                 }
                 if (strpos($sql, 'INSERT INTO users') !== false) {
                     $this->assertSame('user_https://idp.exam', $params[1]);
-                    $this->assertSame('', $params[2]);
+                    $this->assertSame($expectedEmail, $params[2]);
                     $this->assertSame('user_https://idp.exam', $params[3]);
                     $this->assertSame('oidc', $params[4]);
                     $this->assertSame('https://idp.example.com/abc', $params[5]);
+                    // password_hash stays NULL for external identities.
+                    $this->assertNull($params[6]);
                     return [];
                 }
                 return [];

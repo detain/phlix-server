@@ -20,6 +20,7 @@ use Phlix\Auth\DbLoginRateLimitStore;
 use Phlix\Auth\JwtHandler;
 use Phlix\Auth\ProviderManager;
 use Phlix\Auth\TokenTtlPolicy;
+use Phlix\Auth\UserIdentityRepository;
 use Phlix\Auth\UserProfileManager;
 use Phlix\Auth\UserRepository;
 use Phlix\Auth\WatchHistory;
@@ -187,6 +188,16 @@ final class AuthServicesProvider implements ServiceProviderInterface
             ),
 
             UserRepository::class => autowire(),
+
+            // S46: the `user_identities` join table (migration 092) repository.
+            // Autowired — it needs only a Workerman MySQL Connection, resolved
+            // the same way UserRepository's is. UserRepository dual-writes via a
+            // local `new UserIdentityRepository($this->db)` (so it shares the
+            // same connection/transaction and needs no ctor change), but this
+            // entry is the canonical DI home the S45 account-linking controller
+            // and S47 unlink will consume.
+            UserIdentityRepository::class => autowire(),
+
             // `settings` is named explicitly: PHP-DI skips optional ctor params
             // during autowiring, which would leave the profile cap pinned at
             // MAX_PROFILES_PER_USER and make `auth.max_profiles` inert.

@@ -903,6 +903,19 @@ class UserRepository
      * record with password_hash = NULL and the provider/external_id set.
      * On subsequent logins, returns the existing user record.
      *
+     * The existence lookup is scoped by BOTH `(provider, external_id)` — the
+     * same key as {@see self::findByExternalId()} and the `UNIQUE(provider,
+     * external_id)` index from migration 009. Scoping by `external_id` alone
+     * (the prior behaviour) risked cross-matching two different providers that
+     * happen to mint the same opaque id, and the row was always inserted with
+     * the literal `'external'` regardless of which provider actually
+     * authenticated — losing the ability to tell an OIDC identity from an LDAP
+     * one. Both are fixed here: the caller threads the REAL provider name
+     * (`oidc` / `ldap`), taken from {@see \Phlix\Shared\Auth\AuthResult::$attributes}`['provider']`.
+     *
+     * @param string $provider    Provider name that authenticated (e.g. "oidc",
+     *                             "ldap"). Stored verbatim in `users.provider`
+     *                             and used to scope the existence lookup.
      * @param string $externalId  Provider's unique identifier.
      * @param string|null $email  User's email (used as username seed).
      * @param string|null $displayName User's display name.
@@ -914,6 +927,7 @@ class UserRepository
      * @example
      * ```php
      * $userId = $repo->findOrCreateByExternalId(
+     *     'oidc',
      *     'https://accounts.google.com/12345',
      *     'alice@example.com',
      *     'Alice'
@@ -921,16 +935,15 @@ class UserRepository
      * ```
      */
     public function findOrCreateByExternalId(
+        string $provider,
         string $externalId,
         ?string $email = null,
         ?string $displayName = null
     ): string {
-        $provider = 'external';
-
         $existingRow = UserRow::firstFromMixed(
             $this->db->query(
-                "SELECT * FROM users WHERE external_id = ?",
-                [$externalId]
+                "SELECT * FROM users WHERE provider = ? AND external_id = ?",
+                [$provider, $externalId]
             )
         );
 
@@ -942,15 +955,48 @@ class UserRepository
         }
 
         $id = $this->generateUuid();
-        $username = $email ?? 'user_' . substr($externalId, 0, 16);
 
+        // Stable hash of the unique identity key (provider, external_id) —
+        // migration 009. Computed once and reused for BOTH the username and
+        // email fallbacks below so every email-less external user gets a
+        // distinct, deterministic value.
+        $identityHash = hash('sha256', $provider . "\0" . $externalId);
+
+        // `users.username` is NOT NULL + UNIQUE (migration 001). The old
+        // fallback 'user_' . substr($externalId, 0, 16) collides whenever two
+        // email-less external identities share the first 16 chars of their
+        // external_id — realistic for LDAP where external_id = 'ldap.' + DN
+        // (e.g. 'ldap.uid=john.smith,ou=people' vs
+        // 'ldap.uid=john.smart,ou=people' both truncate to 'ldap.uid=john.sm'),
+        // and possible for OIDC composite `sub` values. The second create then
+        // hits the UNIQUE index -> 500. Derive the fallback from the identity
+        // hash instead so each email-less external user gets a distinct,
+        // deterministic username ('user_' + 24 hex chars = 29 chars, well
+        // within VARCHAR(255) and the 3-50 local-registration bound, hex-only
+        // so it is always a valid username). A provider-supplied email (used as
+        // the username seed) still wins.
+        $username = $email ?? 'user_' . substr($identityHash, 0, 24);
+
+        // `users.email` is NOT NULL + UNIQUE (migration 001), yet external
+        // providers (OIDC/LDAP) may not supply an email. A shared '' placeholder
+        // would make a SECOND email-less external user collide on the unique
+        // index. Derive a stable, per-identity placeholder from the same
+        // identity hash so every email-less external user gets a distinct,
+        // deterministic value that is bounded well under VARCHAR(255)
+        // regardless of external_id length.
+        $emailValue = ($email !== null && $email !== '')
+            ? $email
+            : $provider . '+' . $identityHash . '@no-email.local';
+
+        // password_hash stays NULL: an external identity has no local password,
+        // and a fake '' hash could interfere with password verification.
         $this->db->query(
             "INSERT INTO users (id, username, email, display_name, provider, external_id, password_hash)
              VALUES (?, ?, ?, ?, ?, ?, ?)",
             [
                 $id,
                 $username,
-                $email ?? '',
+                $emailValue,
                 $displayName ?? $username,
                 $provider,
                 $externalId,

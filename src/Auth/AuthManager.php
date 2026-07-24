@@ -879,15 +879,29 @@ class AuthManager
      */
     public function loginWithProvider(string $username, array $credentials, string $deviceId): array
     {
-        if ($this->providerManager === null) {
+        $providerManager = $this->providerManager;
+        if ($providerManager === null) {
             throw new \RuntimeException(
                 'ProviderManager is not configured. External auth providers are unavailable.'
             );
         }
 
-        $result = $this->providerManager->authenticate($username, $credentials);
+        // S44 Finding 2 (HIGH) — the external-provider path (LDAP/OIDC) MUST be
+        // subject to the SAME per-IP brute-force throttle as the local password
+        // login(). Without this an `ldap:`-prefixed login (routed here) bypasses
+        // the rate limiter entirely, allowing unthrottled directory-credential
+        // guessing. Same store, same client-IP key and same limit as login(), so
+        // both surfaces share one budget. checkRateLimit() throws
+        // RateLimitException (→ central 429 mapping) when the IP is over budget.
+        // (Local var used so the method calls below don't re-widen the property.)
+        $clientIp = $this->getClientIp();
+        $this->checkRateLimit($clientIp);
+
+        $result = $providerManager->authenticate($username, $credentials);
 
         if ($result->isFailure()) {
+            // Count the failure against the brute-force budget, mirroring login().
+            $this->recordFailedAttempt($clientIp);
             $this->auditLogger->logFailedAuth($result->error ?? 'provider_auth_failed', [
                 'username' => $username,
                 'device_id' => $deviceId,
@@ -895,14 +909,25 @@ class AuthManager
             throw new \InvalidArgumentException($result->error ?? 'Authentication failed');
         }
 
+        // Successful provider auth — clear the IP's failed-attempt window, as
+        // login() does after a good password.
+        $this->clearRateLimit($clientIp);
+
         $userId = $result->userId;
 
         if ($userId === null) {
             $externalId = $result->externalId ?? '';
             $email = $result->getEmail();
             $displayName = $result->getDisplayName();
+            // Record the REAL provider that authenticated (OidcProvider/
+            // LdapProvider set attributes['provider']), not the old hardcoded
+            // 'external'. The provider column is the foundation S46/S47 build on.
+            $provider = is_string($result->attributes['provider'] ?? null)
+                ? $result->attributes['provider']
+                : 'external';
 
             $userId = $this->userRepository->findOrCreateByExternalId(
+                $provider,
                 $externalId,
                 $email,
                 $displayName,
@@ -918,7 +943,7 @@ class AuthManager
             'device_id' => $deviceId,
         ]);
 
-        $this->recordActivity($userId, 'login', $this->getClientIp());
+        $this->recordActivity($userId, 'login', $clientIp);
 
         $this->dispatchUserLoggedIn($userId, $deviceId);
 

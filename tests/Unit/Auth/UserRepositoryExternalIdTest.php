@@ -49,8 +49,11 @@ final class UserRepositoryExternalIdTest extends TestCase
     {
         $db = $this->createMock(Connection::class);
         $db->method('query')
-            ->willReturnCallback(function (string $sql) {
-                if (strpos($sql, 'SELECT * FROM users WHERE external_id = ?') !== false) {
+            ->willReturnCallback(function (string $sql, array $params = []) {
+                if (strpos($sql, 'SELECT * FROM users WHERE provider = ? AND external_id = ?') !== false) {
+                    // The lookup is scoped by BOTH provider and external_id.
+                    $this->assertSame('oidc', $params[0]);
+                    $this->assertSame('https://accounts.google.com/12345', $params[1]);
                     return [[
                         'id' => 'existing-user',
                         'username' => 'alice',
@@ -63,6 +66,7 @@ final class UserRepositoryExternalIdTest extends TestCase
 
         $repo = new UserRepository($db);
         $userId = $repo->findOrCreateByExternalId(
+            'oidc',
             'https://accounts.google.com/12345',
             'alice@example.com',
             'Alice',
@@ -71,17 +75,25 @@ final class UserRepositoryExternalIdTest extends TestCase
         $this->assertSame('existing-user', $userId);
     }
 
-    public function test_find_or_create_by_external_id_creates(): void
+    /**
+     * S44 provider-column fix: the INSERT must persist the REAL provider that
+     * authenticated (here 'oidc'), never the old hardcoded literal 'external'.
+     */
+    public function test_find_or_create_by_external_id_creates_with_real_provider(): void
     {
         $db = $this->createMock(Connection::class);
 
+        $insertProvider = null;
         $db->expects($this->exactly(3))
             ->method('query')
-            ->willReturnCallback(function (string $sql, array $params = []) {
-                if (strpos($sql, 'SELECT * FROM users WHERE external_id = ?') !== false) {
+            ->willReturnCallback(function (string $sql, array $params = []) use (&$insertProvider) {
+                if (strpos($sql, 'SELECT * FROM users WHERE provider = ? AND external_id = ?') !== false) {
                     return [];
                 }
                 if (strpos($sql, 'INSERT INTO users') !== false) {
+                    // (id, username, email, display_name, provider, external_id, password_hash)
+                    $insertProvider = $params[4];
+                    $this->assertSame('https://accounts.google.com/99999', $params[5]);
                     return [];
                 }
                 if (strpos($sql, 'INSERT INTO user_settings') !== false) {
@@ -92,12 +104,47 @@ final class UserRepositoryExternalIdTest extends TestCase
 
         $repo = new UserRepository($db);
         $userId = $repo->findOrCreateByExternalId(
+            'oidc',
             'https://accounts.google.com/99999',
             'newuser@example.com',
             'New User',
         );
 
+        $this->assertSame('oidc', $insertProvider);
         $this->assertStringContainsString('-', $userId);
+        $this->assertNotEmpty($userId);
+    }
+
+    /**
+     * S44 scoping fix: the existence lookup is keyed by (provider, external_id),
+     * so an external_id that exists under one provider does NOT cross-match a
+     * different provider — a new row is created for the second provider.
+     */
+    public function test_find_or_create_scopes_lookup_by_provider(): void
+    {
+        $db = $this->createMock(Connection::class);
+
+        $selectParams = null;
+        $db->method('query')
+            ->willReturnCallback(function (string $sql, array $params = []) use (&$selectParams) {
+                if (strpos($sql, 'SELECT * FROM users WHERE provider = ? AND external_id = ?') !== false) {
+                    $selectParams = $params;
+                    // No LDAP row exists for this external_id (only an OIDC one
+                    // would, but that must not be returned for provider 'ldap').
+                    return [];
+                }
+                return [];
+            });
+
+        $repo = new UserRepository($db);
+        $userId = $repo->findOrCreateByExternalId(
+            'ldap',
+            'ldap.uid=alice,dc=example,dc=com',
+        );
+
+        $this->assertNotNull($selectParams);
+        $this->assertSame('ldap', $selectParams[0]);
+        $this->assertSame('ldap.uid=alice,dc=example,dc=com', $selectParams[1]);
         $this->assertNotEmpty($userId);
     }
 
@@ -105,25 +152,41 @@ final class UserRepositoryExternalIdTest extends TestCase
     {
         $db = $this->createMock(Connection::class);
 
+        // When the provider supplies no email, NEITHER the username NOR the
+        // email column can be a shared/truncated value (both are NOT NULL +
+        // UNIQUE — migration 001 — so a SECOND email-less external user would
+        // collide on the unique index). The old username fallback
+        // 'user_' . substr($externalId, 0, 16) collided for external_ids that
+        // share a 16-char prefix (realistic for LDAP DNs); the create path now
+        // derives BOTH from a stable sha256 of the unique identity key
+        // (provider, external_id) so each email-less user gets a distinct,
+        // deterministic, bounded value. Compute the expectations with the SAME
+        // formula rather than a brittle literal.
+        $identityHash = hash('sha256', "oidc\0https://idp.example.com/abc");
+        $expectedUsername = 'user_' . substr($identityHash, 0, 24);
+        $expectedEmail = 'oidc+' . $identityHash . '@no-email.local';
+
         $db->expects($this->exactly(3))
             ->method('query')
-            ->willReturnCallback(function (string $sql, array $params = []) {
-                if (strpos($sql, 'SELECT * FROM users WHERE external_id = ?') !== false) {
+            ->willReturnCallback(function (string $sql, array $params = []) use ($expectedUsername, $expectedEmail) {
+                if (strpos($sql, 'SELECT * FROM users WHERE provider = ? AND external_id = ?') !== false) {
                     return [];
                 }
                 if (strpos($sql, 'INSERT INTO users') !== false) {
-                    $this->assertSame('user_https://idp.exam', $params[1]);
-                    $this->assertSame('', $params[2]);
-                    $this->assertSame('user_https://idp.exam', $params[3]);
-                    $this->assertSame('external', $params[4]);
+                    $this->assertSame($expectedUsername, $params[1]);
+                    $this->assertSame($expectedEmail, $params[2]);
+                    $this->assertSame($expectedUsername, $params[3]);
+                    $this->assertSame('oidc', $params[4]);
                     $this->assertSame('https://idp.example.com/abc', $params[5]);
+                    // password_hash stays NULL for external identities.
+                    $this->assertNull($params[6]);
                     return [];
                 }
                 return [];
             });
 
         $repo = new UserRepository($db);
-        $userId = $repo->findOrCreateByExternalId('https://idp.example.com/abc', null, null);
+        $userId = $repo->findOrCreateByExternalId('oidc', 'https://idp.example.com/abc', null, null);
 
         $this->assertNotEmpty($userId);
     }

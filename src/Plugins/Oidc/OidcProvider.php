@@ -38,17 +38,20 @@ final class OidcProvider implements ProviderInterface
     private string $clientSecret;
     private string $scopes;
     private ?JWKSet $jwkSet = null;
+    private OidcHttpClient $httpClient;
 
     public function __construct(
         DiscoveryDocument $discovery,
         string $clientId,
         string $clientSecret,
         string $scopes = 'openid profile email',
+        ?OidcHttpClient $httpClient = null,
     ) {
         $this->discovery = $discovery;
         $this->clientId = $clientId;
         $this->clientSecret = $clientSecret;
         $this->scopes = $scopes;
+        $this->httpClient = $httpClient ?? new OidcHttpClient();
     }
 
     /**
@@ -168,22 +171,20 @@ final class OidcProvider implements ProviderInterface
                 );
             }
 
-            $context = stream_context_create([
-                'http' => [
-                    'method' => 'GET',
-                    'header' => 'Authorization: Bearer ' . $accessToken,
-                    'timeout' => 10,
-                ],
+            // Non-blocking userinfo fetch — yields to the event loop instead of
+            // stalling the worker with file_get_contents().
+            $response = $this->httpClient->get($userinfoEndpoint, [
+                'Authorization' => 'Bearer ' . $accessToken,
+                'Accept' => 'application/json',
             ]);
-
-            $content = @file_get_contents($userinfoEndpoint, false, $context);
-            if ($content === false) {
+            if ($response === null) {
                 return new AuthResult(
                     success: false,
                     error: 'userinfo_request_failed',
                 );
             }
 
+            $content = (string) $response->getBody();
             $userinfo = json_decode($content, true);
             if (!is_array($userinfo)) {
                 return new AuthResult(
@@ -256,23 +257,18 @@ final class OidcProvider implements ProviderInterface
         }
         $postData = http_build_query($postParams);
 
-        $context = stream_context_create([
-            'http' => [
-                'method' => 'POST',
-                'header' => [
-                    'Content-Type: application/x-www-form-urlencoded',
-                    'Accept: application/json',
-                ],
-                'content' => $postData,
-                'timeout' => 10,
-            ],
+        // Non-blocking token exchange — yields to the event loop instead of
+        // stalling the worker with file_get_contents(). TLS verification is
+        // enforced inside OidcHttpClient.
+        $httpResponse = $this->httpClient->post($tokenEndpoint, $postData, [
+            'Content-Type' => 'application/x-www-form-urlencoded',
+            'Accept' => 'application/json',
         ]);
-
-        $content = @file_get_contents($tokenEndpoint, false, $context);
-        if ($content === false) {
+        if ($httpResponse === null) {
             throw new RuntimeException('Failed to connect to token endpoint: ' . $tokenEndpoint);
         }
 
+        $content = (string) $httpResponse->getBody();
         $response = json_decode($content, true);
         if (!is_array($response)) {
             throw new RuntimeException('Invalid token response');
@@ -347,7 +343,7 @@ final class OidcProvider implements ProviderInterface
     private function getJwks(): JWKSet
     {
         if ($this->jwkSet === null) {
-            $this->jwkSet = IdTokenValidator::fetchJwks($this->discovery);
+            $this->jwkSet = IdTokenValidator::fetchJwks($this->discovery, $this->httpClient);
         }
         return $this->jwkSet;
     }

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Phlix\Tests\Unit\Auth;
 
 use PHPUnit\Framework\TestCase;
+use Phlix\Auth\AuthProviderBootstrapper;
 use Phlix\Auth\AuthProviderRegistry;
 use Phlix\Shared\Auth\ProviderInterface;
 use Phlix\Server\Http\Controllers\AuthProviderController;
@@ -19,12 +20,15 @@ final class AuthProviderControllerTest extends TestCase
 {
     /** @var AuthProviderRegistry&MockObject */
     private AuthProviderRegistry $registry;
+    /** @var AuthProviderBootstrapper&MockObject */
+    private AuthProviderBootstrapper $bootstrapper;
     private AuthProviderController $controller;
 
     protected function setUp(): void
     {
         $this->registry = $this->createMock(AuthProviderRegistry::class);
-        $this->controller = new AuthProviderController($this->registry);
+        $this->bootstrapper = $this->createMock(AuthProviderBootstrapper::class);
+        $this->controller = new AuthProviderController($this->registry, $this->bootstrapper);
     }
 
     public function test_list_providers(): void
@@ -64,91 +68,96 @@ final class AuthProviderControllerTest extends TestCase
     }
 
     /**
-     * Enabling a provider must NOT claim success.
-     *
-     * There is no store for a provider's enabled state:
-     * `AuthProviderRegistry` keeps providers in a private in-memory array with
-     * no enabled flag and no unregister (`src/Auth/AuthProviderRegistry.php:37`),
-     * its only writers are the OIDC/LDAP plugins' `onEnable()`
-     * (`src/Plugins/Oidc/Plugin.php:95`, `src/Plugins/Ldap/Plugin.php:77`), and
-     * those run solely through `PluginLoader::bootstrapEnabled()`
-     * (`src/Plugins/PluginLoader.php:771`), which has ZERO callers.
-     *
-     * The handler used to answer 200 `{"enabled": true}` with the message
-     * "Provider 'oidc' is now enabled." having persisted and mutated nothing.
-     *
-     * The CONSEQUENCE asserted here is that an operator is never told a state
-     * change happened: the status is 501 and the body carries no `enabled`
-     * claim at all.
+     * S44: enabling a configured provider persists the flag, registers it in the
+     * current worker, and honestly reports `enabled: true` + `live: true`.
      */
-    public function test_enable_provider_reports_not_implemented(): void
+    public function test_enable_provider_configured_reports_enabled_and_live(): void
     {
-        $this->registry->method('hasProvider')->willReturn(true);
+        $this->bootstrapper->method('isToggleable')->with('oidc')->willReturn(true);
+        $this->bootstrapper->method('isConfigured')->with('oidc')->willReturn(true);
+        $this->bootstrapper->expects($this->once())->method('enable')->with('oidc')->willReturn(true);
 
         $request = $this->createMock(Request::class);
 
         $response = $this->controller->enableProvider($request, ['name' => 'oidc']);
 
-        $this->assertSame(501, $response->statusCode);
+        $this->assertSame(200, $response->statusCode);
         /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
-        $this->assertSame('not_implemented', $body['error']);
         $this->assertSame('oidc', $body['name']);
-        $this->assertArrayNotHasKey('enabled', $body);
-        $this->assertStringContainsString('not implemented', (string) $body['message']);
+        $this->assertTrue($body['enabled']);
+        $this->assertTrue($body['live']);
     }
 
     /**
-     * An unregistered provider gets the SAME 501, not a 404.
-     *
-     * The capability is missing for every provider, so a 404 would wrongly
-     * imply that a *registered* provider could be toggled.
+     * S44: enabling a provider that has NOT been configured yet is rejected with
+     * a 409 — the "Enabled" badge must mean "provider live", never a false claim.
      */
-    public function test_enable_provider_unknown_name_also_not_implemented(): void
+    public function test_enable_provider_not_configured_returns_409(): void
     {
-        $this->registry->method('hasProvider')->willReturn(false);
+        $this->bootstrapper->method('isToggleable')->with('oidc')->willReturn(true);
+        $this->bootstrapper->method('isConfigured')->with('oidc')->willReturn(false);
+        $this->bootstrapper->expects($this->never())->method('enable');
+
+        $request = $this->createMock(Request::class);
+
+        $response = $this->controller->enableProvider($request, ['name' => 'oidc']);
+
+        $this->assertSame(409, $response->statusCode);
+        /** @var array<string, mixed> $body */
+        $body = json_decode($response->body, true);
+        $this->assertSame('not_configured', $body['error']);
+        $this->assertSame('oidc', $body['name']);
+    }
+
+    /**
+     * A provider name that is not one of the toggleable built-ins is a 404 —
+     * distinct from the old blanket 501 that lied for every name.
+     */
+    public function test_enable_provider_unknown_name_returns_404(): void
+    {
+        $this->bootstrapper->method('isToggleable')->with('nonexistent')->willReturn(false);
+        $this->bootstrapper->expects($this->never())->method('enable');
 
         $request = $this->createMock(Request::class);
 
         $response = $this->controller->enableProvider($request, ['name' => 'nonexistent']);
 
-        $this->assertSame(501, $response->statusCode);
+        $this->assertSame(404, $response->statusCode);
         /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
-        $this->assertSame('not_implemented', $body['error']);
+        $this->assertSame('unknown_provider', $body['error']);
     }
 
     /**
-     * Disabling must not claim success either -- same evidence as
-     * {@see test_enable_provider_reports_not_implemented()}. The old handler's
-     * `enabled => false` was a *falsey* lie, so asserting the key is ABSENT
-     * (rather than asserting it is not true) is what discriminates.
+     * S44: disabling persists the flag off and honestly reports `enabled: false`.
      */
-    public function test_disable_provider_reports_not_implemented(): void
+    public function test_disable_provider_reports_disabled(): void
     {
-        $this->registry->method('hasProvider')->willReturn(true);
+        $this->bootstrapper->method('isToggleable')->with('ldap')->willReturn(true);
+        $this->bootstrapper->expects($this->once())->method('disable')->with('ldap');
 
         $request = $this->createMock(Request::class);
 
         $response = $this->controller->disableProvider($request, ['name' => 'ldap']);
 
-        $this->assertSame(501, $response->statusCode);
+        $this->assertSame(200, $response->statusCode);
         /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
-        $this->assertSame('not_implemented', $body['error']);
         $this->assertSame('ldap', $body['name']);
-        $this->assertArrayNotHasKey('enabled', $body);
+        $this->assertFalse($body['enabled']);
     }
 
-    public function test_disable_provider_unknown_name_also_not_implemented(): void
+    public function test_disable_provider_unknown_name_returns_404(): void
     {
-        $this->registry->method('hasProvider')->willReturn(false);
+        $this->bootstrapper->method('isToggleable')->with('unknown')->willReturn(false);
+        $this->bootstrapper->expects($this->never())->method('disable');
 
         $request = $this->createMock(Request::class);
 
         $response = $this->controller->disableProvider($request, ['name' => 'unknown']);
 
-        $this->assertSame(501, $response->statusCode);
+        $this->assertSame(404, $response->statusCode);
     }
 
     public function test_config_schema_returns_json_schema(): void

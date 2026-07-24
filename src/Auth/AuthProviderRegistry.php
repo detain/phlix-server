@@ -60,6 +60,23 @@ class AuthProviderRegistry
     }
 
     /**
+     * Remove a registered provider by name.
+     *
+     * Idempotent: unregistering a name that is not present is a no-op. Used by
+     * the admin "disable provider" flow so that turning a provider off takes
+     * immediate effect in the current worker (the persisted enable-flag governs
+     * every other worker on its next {@see \Phlix\Auth\AuthProviderBootstrapper::registerEnabledProviders()}
+     * boot pass, since the registry is per-worker in-memory state).
+     *
+     * @param string $name Lowercase provider name.
+     * @return void
+     */
+    public function unregisterProvider(string $name): void
+    {
+        unset($this->providers[$name]);
+    }
+
+    /**
      * Return all registered providers.
      *
      * @return array<string, ProviderInterface>

@@ -129,6 +129,7 @@ public/
 
 ### Authentication & Security
 - **JWT-based Authentication**: Stateless auth with access tokens (1 hour TTL) and refresh tokens (7 days TTL)
+- **External SSO — OIDC & LDAP**: Optional OpenID Connect and LDAP login backends, toggled per-provider from the admin **Integrations → Auth providers** page (persisted as the `auth.oidc.enabled` / `auth.ldap.enabled` server settings). OIDC uses the authorization-code flow with PKCE + `state` + `nonce` and id-token validation (`GET /auth/oidc/authorize` → `GET /auth/oidc/callback`; register `<your-server>/auth/oidc/callback` at your IdP). LDAP rides `POST /auth/login` with an `ldap:`-prefixed username (e.g. `ldap:jdoe`). Sessions are delivered as httpOnly + Secure + SameSite=Lax cookies; the OIDC post-login redirect is allowlisted to same-origin paths only. See the SSO/external-auth guide in phlix-docs.
 - **Secure Password Hashing**: Argon2ID for password storage
 - **Multi-Device Sessions**: Track and manage sessions across devices
 - **User Profiles**: Multiple profiles per account with parental controls

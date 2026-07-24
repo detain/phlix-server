@@ -14,6 +14,7 @@ namespace Phlix\Server\Http\Controllers;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
 use Phlix\Auth\AuthManager;
+use Phlix\Auth\AuthProviderBootstrapper;
 use Phlix\Auth\RateLimitException;
 use Phlix\Auth\SignupDisabledException;
 use Phlix\Auth\AccountInactiveException;
@@ -71,6 +72,17 @@ class AuthController
     private ?RateLimiterInterface $refreshLimiter;
 
     /**
+     * Request-path self-heal of the per-worker auth-provider registry from the
+     * persisted enable flags (S44 Finding 3). Optional so existing
+     * direct-construction call sites keep working; the DI factory binds it
+     * explicitly. Null = no self-heal (the LDAP path relies on the boot-time
+     * registration only).
+     *
+     * @var AuthProviderBootstrapper|null
+     */
+    private ?AuthProviderBootstrapper $providerBootstrapper;
+
+    /**
      * Creates a new AuthController instance.
      *
      * The rate limiters are optional so existing direct-construction call sites
@@ -82,15 +94,19 @@ class AuthController
      * @param AuthManager             $authManager    The authentication manager
      * @param RateLimiterInterface|null $registerLimiter Limiter guarding register()
      * @param RateLimiterInterface|null $refreshLimiter  Limiter guarding refresh()
+     * @param AuthProviderBootstrapper|null $providerBootstrapper Request-path
+     *        self-heal for the per-worker provider registry (LDAP login path).
      */
     public function __construct(
         AuthManager $authManager,
         ?RateLimiterInterface $registerLimiter = null,
         ?RateLimiterInterface $refreshLimiter = null,
+        ?AuthProviderBootstrapper $providerBootstrapper = null,
     ) {
         $this->authManager = $authManager;
         $this->registerLimiter = $registerLimiter;
         $this->refreshLimiter = $refreshLimiter;
+        $this->providerBootstrapper = $providerBootstrapper;
     }
 
     /**
@@ -221,6 +237,16 @@ class AuthController
 
         $deviceId = $request->getHeader('X-Device-Id') ?? 'unknown';
 
+        // S44: LDAP login path (Path A). An `ldap:`-prefixed identifier is
+        // routed through the external-provider flow (ProviderManager's prefix
+        // dispatch) rather than the local password store. The LDAP provider must
+        // be enabled + registered (see AuthProviderBootstrapper); when it is not,
+        // loginWithProvider() throws and we answer 503 rather than a misleading
+        // "invalid credentials".
+        if (str_starts_with($username, 'ldap:')) {
+            return $this->ldapLogin($username, $password, $deviceId, $isBrowser);
+        }
+
         try {
             $result = $this->authManager->login($username, $password, $deviceId);
             if ($isBrowser) {
@@ -242,6 +268,91 @@ class AuthController
                 return (new Response())->redirect('/login?error=' . rawurlencode($e->getMessage()));
             }
             return (new Response())->status(401)->json(['error' => $e->getMessage()]);
+        }
+    }
+
+    /**
+     * Authenticate an `ldap:`-prefixed identifier through the external-provider
+     * flow and mint a local session on success (S44, Path A).
+     *
+     * Delegates to {@see AuthManager::loginWithProvider()}, which uses
+     * {@see \Phlix\Auth\ProviderManager}'s prefix dispatch to reach the
+     * registered {@see \Phlix\Plugins\Ldap\LdapProvider}. The `ldap:` prefix is
+     * preserved on the identifier (so ProviderManager can parse it) while the
+     * bare username + password are passed as the provider credentials.
+     *
+     * @param string $identifier The full `ldap:<username>` login identifier.
+     * @param string $password   The submitted password.
+     * @param string $deviceId   Device identifier for token binding.
+     * @param bool   $isBrowser  Whether to reply with a cookie redirect (browser)
+     *                           or a JSON token blob (API client).
+     */
+    private function ldapLogin(string $identifier, string $password, string $deviceId, bool $isBrowser): Response
+    {
+        $localUsername = substr($identifier, strlen('ldap:'));
+
+        // S44 Finding 3 — reconcile THIS worker's provider registry with the
+        // persisted `auth.ldap.enabled` flag before attempting the login. The
+        // registry is per-worker in-memory state, so an admin who enables LDAP on
+        // one worker would otherwise get 503s on ~(N-1)/N of workers until a
+        // restart; conversely a since-disabled provider is dropped here. Reads
+        // settings only (no network I/O), same as the boot registration.
+        $this->providerBootstrapper?->ensureProviderRegistered(AuthProviderBootstrapper::LDAP);
+
+        try {
+            $result = $this->authManager->loginWithProvider(
+                'ldap:' . $localUsername,
+                ['username' => $localUsername, 'password' => $password],
+                $deviceId,
+            );
+
+            if ($isBrowser) {
+                return $this->browserAuthResponse($result, '/');
+            }
+            return (new Response())->json($result);
+        } catch (RateLimitException $e) {
+            // S44 Finding 2 — the brute-force throttle tripped inside
+            // loginWithProvider(). RateLimitException extends RuntimeException, so
+            // it MUST be caught (and re-thrown) before the RuntimeException handler
+            // below, otherwise it would be mislabelled as "provider unavailable"
+            // (503) instead of reaching the central 429 + Retry-After mapping.
+            throw $e;
+        } catch (InvalidArgumentException $e) {
+            // The provider rejected the login. S44 Finding 5 — LdapProvider
+            // distinguishes `user_not_found` from `invalid_credentials`; echoing
+            // that raw code back is a user-enumeration oracle. Return a single
+            // generic credential-rejection message instead (the real provider
+            // error is already logged server-side by AuthManager via AuditLogger).
+            // A genuine config/connection failure (LdapProvider prefixes these
+            // with `ldap_error:`) is a 500-class problem, not a bad password — so
+            // surface it as a 503 "unavailable" rather than masking it as 401.
+            if (str_starts_with($e->getMessage(), 'ldap_error:')) {
+                $msg = 'LDAP authentication is temporarily unavailable.';
+                if ($isBrowser) {
+                    return (new Response())->redirect('/login?error=' . rawurlencode($msg));
+                }
+                return (new Response())->status(503)->json([
+                    'error' => $msg,
+                    'code' => 'provider_unavailable',
+                ]);
+            }
+
+            $msg = 'Invalid credentials';
+            if ($isBrowser) {
+                return (new Response())->redirect('/login?error=' . rawurlencode($msg));
+            }
+            return (new Response())->status(401)->json(['error' => $msg]);
+        } catch (\RuntimeException $e) {
+            // The LDAP provider is not enabled/registered (or ProviderManager is
+            // unavailable) — AuthProviderNotFoundException extends RuntimeException.
+            $msg = 'LDAP authentication is not available.';
+            if ($isBrowser) {
+                return (new Response())->redirect('/login?error=' . rawurlencode($msg));
+            }
+            return (new Response())->status(503)->json([
+                'error' => $msg,
+                'code' => 'provider_unavailable',
+            ]);
         }
     }
 

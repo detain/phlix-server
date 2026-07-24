@@ -11,7 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Server\Http\Controllers;
 
-use Phlix\Auth\AuthProviderNotFoundException;
+use Phlix\Auth\AuthProviderBootstrapper;
 use Phlix\Auth\AuthProviderRegistry;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
@@ -28,6 +28,7 @@ use Phlix\Server\Http\Response;
  * @description Admin API for managing external authentication providers.
  *
  * @see AuthProviderRegistry Where providers are registered and stored.
+ * @see AuthProviderBootstrapper Where enable-state is persisted + applied.
  *
  * Endpoints:
  * - GET    /api/v1/admin/auth-providers           — list all registered providers
@@ -40,12 +41,17 @@ final class AuthProviderController
     /** @var AuthProviderRegistry The provider registry. */
     private AuthProviderRegistry $registry;
 
+    /** @var AuthProviderBootstrapper Persists enable-state and (de)registers providers. */
+    private AuthProviderBootstrapper $bootstrapper;
+
     /**
-     * @param AuthProviderRegistry $registry The auth provider registry.
+     * @param AuthProviderRegistry     $registry     The auth provider registry.
+     * @param AuthProviderBootstrapper $bootstrapper Enable-state store + (de)registration.
      */
-    public function __construct(AuthProviderRegistry $registry)
+    public function __construct(AuthProviderRegistry $registry, AuthProviderBootstrapper $bootstrapper)
     {
         $this->registry = $registry;
+        $this->bootstrapper = $bootstrapper;
     }
 
     /**
@@ -71,46 +77,14 @@ final class AuthProviderController
     }
 
     /**
-     * Message returned by {@see enableProvider()} / {@see disableProvider()}.
-     *
-     * ## Why these endpoints return 501 instead of doing the work
-     *
-     * There is no persistence mechanism for a provider's enabled state to write
-     * to, and no way to build one without inventing an architecture:
-     *
-     *  - {@see AuthProviderRegistry} keeps providers in a plain in-memory
-     *    `private array $providers` (`src/Auth/AuthProviderRegistry.php:37`).
-     *    It exposes `registerProvider()` / `hasProvider()` / `getProvider()`
-     *    and NOTHING else -- there is no enabled flag, no unregister, and no
-     *    store behind it. Nothing about it survives a worker restart.
-     *  - The only writers are the two built-in auth plugins' `onEnable()`:
-     *    `src/Plugins/Oidc/Plugin.php:95` and `src/Plugins/Ldap/Plugin.php:77`.
-     *    Both hold their own enable state; neither has an `onDisable()` body
-     *    (`src/Plugins/Oidc/Plugin.php:97`, `src/Plugins/Ldap/Plugin.php:81`
-     *    are empty).
-     *  - Those `onEnable()` hooks only ever run via
-     *    {@see \Phlix\Plugins\PluginLoader::bootstrapEnabled()}
-     *    (`src/Plugins/PluginLoader.php:771`), which has ZERO callers -- the
-     *    service provider that would call it documents the call site as a
-     *    "future commit"
-     *    (`src/Common/Container/Providers/PluginsProvider.php:47-54`).
-     *    So in the resident server the registry is EMPTY at runtime.
-     *
-     * Both handlers previously validated `hasProvider($name)` and then returned
-     * `['enabled' => true|false]` with "Provider 'x' is now enabled." while
-     * mutating and persisting nothing whatsoever. That is a fabricated success.
-     * Until a real enable-state store exists, saying so is the honest answer.
-     */
-    private const NOT_IMPLEMENTED_MESSAGE =
-        'Enabling and disabling auth providers is not implemented. Provider state is held '
-        . 'in memory only and is not persisted, so this endpoint cannot change it. Configure '
-        . 'OIDC and LDAP through their own settings endpoints instead.';
-
-    /**
      * Enable an auth provider.
      *
-     * Not implemented -- see {@see self::NOT_IMPLEMENTED_MESSAGE} for the
-     * evidence that no persistence path exists.
+     * Persists `auth.<name>.enabled = true` via {@see AuthProviderBootstrapper}
+     * and registers the provider into the current worker's registry so the login
+     * flow is live (the boot step re-registers it in every other worker on its
+     * next start/reload). A provider that is not yet configured (no saved
+     * settings) cannot be brought live, so enabling it is rejected with a clear
+     * message rather than reporting a false "enabled" state.
      *
      * @param Request $request
      * @param array<string, string> $params Must contain 'name'.
@@ -118,14 +92,35 @@ final class AuthProviderController
      */
     public function enableProvider(Request $request, array $params): Response
     {
-        return $this->notImplemented($params['name'] ?? '');
+        $name = strtolower($params['name'] ?? '');
+
+        if (!$this->bootstrapper->isToggleable($name)) {
+            return $this->unknownProvider($name);
+        }
+
+        if (!$this->bootstrapper->isConfigured($name)) {
+            return (new Response())->status(409)->json([
+                'error' => 'not_configured',
+                'name' => $name,
+                'message' => "Configure the '{$name}' provider before enabling it.",
+            ]);
+        }
+
+        $live = $this->bootstrapper->enable($name);
+
+        return (new Response())->json([
+            'name' => $name,
+            'enabled' => true,
+            'live' => $live,
+            'message' => "Provider '{$name}' is now enabled.",
+        ]);
     }
 
     /**
      * Disable an auth provider.
      *
-     * Not implemented -- see {@see self::NOT_IMPLEMENTED_MESSAGE} for the
-     * evidence that no persistence path exists.
+     * Persists `auth.<name>.enabled = false` and removes it from the current
+     * worker's registry. Other workers stop offering it on their next boot pass.
      *
      * @param Request $request
      * @param array<string, string> $params Must contain 'name'.
@@ -133,25 +128,33 @@ final class AuthProviderController
      */
     public function disableProvider(Request $request, array $params): Response
     {
-        return $this->notImplemented($params['name'] ?? '');
+        $name = strtolower($params['name'] ?? '');
+
+        if (!$this->bootstrapper->isToggleable($name)) {
+            return $this->unknownProvider($name);
+        }
+
+        $this->bootstrapper->disable($name);
+
+        return (new Response())->json([
+            'name' => $name,
+            'enabled' => false,
+            'message' => "Provider '{$name}' is now disabled.",
+        ]);
     }
 
     /**
-     * Build the 501 response shared by enable/disable.
-     *
-     * Returned unconditionally -- INCLUDING for a name that is not registered.
-     * The capability does not exist for any provider, so answering 404
-     * ("that provider is unknown") would imply a known provider could be
-     * toggled. It cannot.
+     * 404 for a provider name that is not one of the toggleable built-ins.
      *
      * @param string $name The requested provider name, echoed back for the UI.
      */
-    private function notImplemented(string $name): Response
+    private function unknownProvider(string $name): Response
     {
-        return (new Response())->status(501)->json([
-            'error' => 'not_implemented',
+        return (new Response())->status(404)->json([
+            'error' => 'unknown_provider',
             'name' => $name,
-            'message' => self::NOT_IMPLEMENTED_MESSAGE,
+            'message' => "No toggleable auth provider named '{$name}'. "
+                . 'Toggleable providers: ' . implode(', ', AuthProviderBootstrapper::TOGGLEABLE) . '.',
         ]);
     }
 

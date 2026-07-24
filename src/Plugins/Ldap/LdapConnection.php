@@ -15,6 +15,25 @@ use LdapRecord\Connection;
 use LdapRecord\LdapRecordException;
 use RuntimeException;
 
+/**
+ * Thin wrapper over an {@see \LdapRecord\Connection} for auth queries.
+ *
+ * ## Blocking I/O limitation (S44)
+ *
+ * Unlike the OIDC path — whose HTTP calls were moved onto the non-blocking
+ * {@see \Phlix\Plugins\Oidc\OidcHttpClient} cooperative-wait client — the LDAP
+ * connect/bind/search here is inherently BLOCKING. LdapRecord sits on PHP's
+ * `ext-ldap`, whose socket operations are NOT covered by the Swoole runtime
+ * hook, so there is no drop-in async client to yield to the event loop; a bind
+ * against an unreachable server blocks the calling worker for up to the socket
+ * timeout. This is bounded — every connection (both the service-bind connection
+ * in {@see self::createConnection()} and the per-user bind in
+ * {@see self::createUserConnection()}) sets a 5-second `timeout` — but it is a
+ * real, deliberate exception to the "all NEW I/O must be non-blocking" rule:
+ * faking async for ext-ldap would be dishonest. If LDAP latency ever becomes a
+ * problem under load, the correct fix is to move the bind onto a dedicated
+ * worker/queue rather than to pretend the current call is non-blocking.
+ */
 class LdapConnection
 {
     /**

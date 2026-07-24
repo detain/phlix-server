@@ -42,13 +42,17 @@ final class DiscoveryDocument
     /** @var array<string, mixed>|null The parsed discovery document */
     private ?array $document = null;
 
-    public function __construct(string $providerUrl, ?string $cacheDir = null)
+    /** @var OidcHttpClient Non-blocking HTTP client for the discovery fetch. */
+    private OidcHttpClient $httpClient;
+
+    public function __construct(string $providerUrl, ?string $cacheDir = null, ?OidcHttpClient $httpClient = null)
     {
         $this->providerUrl = rtrim($providerUrl, '/');
         $this->cacheDir = $cacheDir ?? sys_get_temp_dir() . '/phlix_oidc_cache';
         if (!is_dir($this->cacheDir)) {
             mkdir($this->cacheDir, 0755, true);
         }
+        $this->httpClient = $httpClient ?? new OidcHttpClient();
     }
 
     /**
@@ -194,23 +198,16 @@ final class DiscoveryDocument
     private function fetchDiscoveryDocument(): array
     {
         $url = $this->providerUrl . self::DISCOVERY_PATH;
-        $context = stream_context_create([
-            'http' => [
-                'method' => 'GET',
-                'timeout' => 10,
-                'ignore_errors' => true,
-            ],
-            'ssl' => [
-                'verify_peer' => true,
-                'verify_peer_name' => true,
-            ],
-        ]);
 
-        $content = @file_get_contents($url, false, $context);
-        if ($content === false) {
+        // Non-blocking: yields to the event loop while in flight instead of
+        // stalling the resident worker with file_get_contents(). TLS peer +
+        // host verification is enforced inside OidcHttpClient.
+        $response = $this->httpClient->get($url, ['Accept' => 'application/json']);
+        if ($response === null) {
             throw new RuntimeException('Failed to fetch OIDC discovery document from: ' . $url);
         }
 
+        $content = (string) $response->getBody();
         $decoded = json_decode($content, true);
         if (!is_array($decoded)) {
             throw new RuntimeException('OIDC discovery document is not valid JSON');

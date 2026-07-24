@@ -14,6 +14,7 @@ namespace Phlix\Common\Container\Providers;
 use DI\ContainerBuilder;
 use Phlix\Admin\SettingsRepository;
 use Phlix\Auth\AuthManager;
+use Phlix\Auth\AuthProviderBootstrapper;
 use Phlix\Auth\AuthProviderRegistry;
 use Phlix\Auth\DbLoginRateLimitStore;
 use Phlix\Auth\JwtHandler;
@@ -196,7 +197,31 @@ final class AuthServicesProvider implements ServiceProviderInterface
             AuthProviderRegistry::class => autowire(),
             ProviderManager::class => autowire(),
 
+            // S44: persists auth.oidc.enabled / auth.ldap.enabled and
+            // (re-)registers enabled+configured providers into the per-worker
+            // registry. Autowired — SettingsRepository, AuthProviderRegistry and
+            // the two no-arg plugin entry classes all resolve without hints.
+            AuthProviderBootstrapper::class => autowire(),
+
             AuthProviderController::class => autowire(),
+
+            // S44: the (previously dead) OIDC authorize/callback controller.
+            // `db` is named explicitly so it constructs the DB-backed
+            // DbOidcStateStore — PHP-DI skips optional ctor params during
+            // autowiring, which would otherwise leave $db null and fall back to
+            // the per-worker InMemoryOidcStateStore. Under Workerman a
+            // process-local OAuth-state store leaks/loses state across the
+            // resident workers and concurrent requests (see CLAUDE.md
+            // "Workerman Session Model"), so the shared oauth_state_store table
+            // is mandatory for the PKCE/CSRF state to survive the round trip.
+            \Phlix\Plugins\Oidc\Controller\OidcCallbackController::class => autowire()
+                ->constructorParameter('db', get(\Workerman\MySQL\Connection::class))
+                // S44 Finding 3: request-path self-heal of the per-worker
+                // provider registry from the persisted `auth.oidc.enabled` flag.
+                // PHP-DI skips optional ctor params during autowiring, so bind it
+                // explicitly — without it the controller can 503 on workers that
+                // booted before OIDC was enabled.
+                ->constructorParameter('bootstrapper', get(AuthProviderBootstrapper::class)),
 
             // `statsCollector` is wired so successful logins/logouts land in
             // stats_user_activity (the admin dashboard activity feed). PHP-DI
@@ -212,6 +237,12 @@ final class AuthServicesProvider implements ServiceProviderInterface
                 // (open|approval|disabled). PHP-DI skips optional ctor params
                 // with defaults during autowiring, so it must be named.
                 ->constructorParameter('settingsRepository', get(SettingsRepository::class))
+                // S44: bridge to the external-provider system so an `ldap:`-prefixed
+                // login reaches ProviderManager's prefix dispatch. PHP-DI skips
+                // optional ctor params during autowiring, so without naming it
+                // AuthManager::$providerManager stays null and loginWithProvider()
+                // throws "ProviderManager is not configured" — LDAP login would 500.
+                ->constructorParameter('providerManager', get(ProviderManager::class))
                 // SV-1.10: the central DB-backed login rate-limit store. Named
                 // for the same PHP-DI reason — without it, AuthManager falls back
                 // to the UNBOUNDED per-worker static array (no sweep/LRU/cap, and
@@ -228,7 +259,13 @@ final class AuthServicesProvider implements ServiceProviderInterface
             // stay null and leave the surface unprotected.
             AuthController::class => autowire()
                 ->constructorParameter('registerLimiter', get(RateLimitProfiles::REGISTER))
-                ->constructorParameter('refreshLimiter', get(RateLimitProfiles::REFRESH)),
+                ->constructorParameter('refreshLimiter', get(RateLimitProfiles::REFRESH))
+                // S44 Finding 3: request-path self-heal of the per-worker provider
+                // registry from the persisted `auth.ldap.enabled` flag, so the
+                // `ldap:` login path doesn't 503 on workers that booted before LDAP
+                // was enabled. PHP-DI skips optional ctor params during autowiring,
+                // so bind it explicitly.
+                ->constructorParameter('providerBootstrapper', get(AuthProviderBootstrapper::class)),
 
             // WebAuthn — rpId/rpName/rpOrigin come from $appConfig['webauthn'].
             // Without this factory, php-di would try to autowire string scalars

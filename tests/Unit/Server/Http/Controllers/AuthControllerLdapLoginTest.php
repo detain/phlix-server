@@ -7,6 +7,7 @@ namespace Phlix\Tests\Unit\Server\Http\Controllers;
 use InvalidArgumentException;
 use PHPUnit\Framework\TestCase;
 use Phlix\Auth\AuthManager;
+use Phlix\Auth\RateLimitException;
 use Phlix\Server\Http\Controllers\AuthController;
 use Phlix\Server\Http\Request;
 use RuntimeException;
@@ -145,6 +146,32 @@ final class AuthControllerLdapLoginTest extends TestCase
         /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertSame('provider_unavailable', $body['code']);
+    }
+
+    /**
+     * S44 Finding 2 (controller level) — the brute-force throttle inside
+     * loginWithProvider() throws RateLimitException, which extends
+     * RuntimeException. The `ldap:` login path MUST re-throw it (so it reaches
+     * the central 429 + Retry-After mapper) BEFORE its RuntimeException branch
+     * turns generic provider errors into a 503. This proves the catch ordering:
+     * a rate-limit trip is NOT swallowed as "provider unavailable".
+     */
+    public function test_ldap_login_rate_limit_exception_propagates_not_503(): void
+    {
+        $authManager = $this->createMock(AuthManager::class);
+        $authManager->method('loginWithProvider')
+            ->willThrowException(new RateLimitException(time() + 60, 0));
+
+        $controller = new AuthController($authManager);
+
+        $request = new Request();
+        $request->body = ['username' => 'ldap:eve', 'password' => 'pw'];
+
+        // The exception must escape the controller unchanged — not be caught and
+        // turned into a 503 provider_unavailable response.
+        $this->expectException(RateLimitException::class);
+
+        $controller->login($request, []);
     }
 
     public function test_non_ldap_login_still_uses_password_flow(): void

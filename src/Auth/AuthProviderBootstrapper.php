@@ -213,7 +213,26 @@ class AuthProviderBootstrapper
             return false;
         }
 
-        $this->registry->registerProvider($instance);
+        // Race-safe register (S44 review r2, Finding A). Under Swoole two
+        // concurrent coroutines in the SAME worker can both pass the
+        // hasProvider() fast-path above and both reach the registry: the
+        // settings read buildProvider() performs yields the event loop once
+        // S48 makes the enable-flag/settings store DB-backed. The registry's
+        // registerProvider() throws \RuntimeException on a duplicate instance
+        // key, so the loser would otherwise get an uncaught throw → 500 on a
+        // valid login. Swallow ONLY a genuine lost race — where the instance is
+        // present afterward — and re-raise any other RuntimeException so a real
+        // registration failure (not a duplicate) still surfaces.
+        $instanceKey = $instance->name();
+        try {
+            $this->registry->registerProvider($instance);
+        } catch (\RuntimeException $e) {
+            if (!$this->registry->hasProvider($instanceKey)) {
+                throw $e;
+            }
+            // else: a concurrent coroutine registered the same instance — the
+            // provider is now live, so treat the duplicate throw as benign.
+        }
 
         return true;
     }

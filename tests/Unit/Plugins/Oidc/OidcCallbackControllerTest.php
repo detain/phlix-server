@@ -348,6 +348,11 @@ final class OidcCallbackControllerTest extends TestCase
      */
     public function test_callback_happy_path_threads_provider_sets_cookies_same_origin(): void
     {
+        // Default (non-insecure) env: the session/refresh cookies MUST carry the
+        // Secure attribute. Force the default deterministically so a leaked
+        // PHLIX_COOKIE_INSECURE=1 from another test cannot mask a regression.
+        putenv('PHLIX_COOKIE_INSECURE');
+
         $providerUrl = 'https://idp.happy.test';
         $clientId = 'client-id';
         $nonce = 'happy-nonce';
@@ -400,12 +405,16 @@ final class OidcCallbackControllerTest extends TestCase
         $this->assertTrue($byName['phlix_session']['httpOnly']);
         $this->assertSame('Lax', $byName['phlix_session']['sameSite']);
         $this->assertSame(3600, $byName['phlix_session']['maxAge']);
+        // Secure MUST be set under the default env so the credential never
+        // rides plain HTTP (only PHLIX_COOKIE_INSECURE=1 drops it).
+        $this->assertTrue($byName['phlix_session']['secure']);
 
         $this->assertArrayHasKey('phlix_refresh', $byName);
         $this->assertSame('refresh-token-xyz', $byName['phlix_refresh']['value']);
         $this->assertTrue($byName['phlix_refresh']['httpOnly']);
         $this->assertSame('Lax', $byName['phlix_refresh']['sameSite']);
         $this->assertSame(604800, $byName['phlix_refresh']['maxAge']);
+        $this->assertTrue($byName['phlix_refresh']['secure']);
     }
 
     // -----------------------------------------------------------------------

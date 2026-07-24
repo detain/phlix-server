@@ -329,4 +329,87 @@ final class AuthProviderBootstrapperTest extends TestCase
 
         $this->assertFalse($boot->ensureProviderRegistered('saml'));
     }
+
+    // -----------------------------------------------------------------------
+    // S44 review r2, Finding A — race-safe registration.
+    //
+    // Two concurrent coroutines in the same worker can both pass the
+    // hasProvider() fast-path (the settings read yields once the store is
+    // DB-backed) and both call the registry, which throws \RuntimeException on
+    // a duplicate. The loser must NOT surface that throw as a 500.
+    // -----------------------------------------------------------------------
+
+    public function test_register_lost_race_is_benign_and_does_not_throw(): void
+    {
+        // Flag ON + configured, so registerProvider() gets past the fast-path,
+        // builds the provider, and reaches the registry.
+        $this->writeSettings(oidc: ['provider_url' => 'https://idp.test', 'client_id' => 'cid']);
+
+        // Registry double that models the lost race: the pre-build fast-path
+        // check misses, but by the time this coroutine calls registerProvider()
+        // the winning coroutine has already committed the same instance key, so
+        // the registry rejects the duplicate — yet hasProvider() is true after.
+        $racyRegistry = new class extends AuthProviderRegistry {
+            private int $hasProviderCalls = 0;
+
+            public function hasProvider(string $name): bool
+            {
+                // First call = the pre-build fast-path (race not yet lost → a
+                // miss); every later call reflects the winner having committed.
+                return $this->hasProviderCalls++ > 0;
+            }
+
+            public function registerProvider(\Phlix\Shared\Auth\ProviderInterface $provider): void
+            {
+                throw new \RuntimeException(
+                    "Auth provider '{$provider->name()}' is already registered."
+                );
+            }
+        };
+
+        $boot = new AuthProviderBootstrapper(
+            $this->makeSettingsRepo(['oidc' => true]),
+            $racyRegistry,
+            new OidcPlugin(),
+            new LdapPlugin(),
+        );
+
+        // No exception must escape, and the provider is reported as live.
+        $result = $boot->ensureProviderRegistered('oidc');
+
+        $this->assertTrue($result);
+        $this->assertTrue($racyRegistry->hasProvider('oidc'));
+    }
+
+    public function test_register_genuine_failure_still_propagates(): void
+    {
+        $this->writeSettings(oidc: ['provider_url' => 'https://idp.test', 'client_id' => 'cid']);
+
+        // Registry double that models a REAL failure (not a duplicate): the
+        // instance is never actually registered, so hasProvider() stays false
+        // even after registerProvider() throws — the throw MUST propagate.
+        $brokenRegistry = new class extends AuthProviderRegistry {
+            public function hasProvider(string $name): bool
+            {
+                return false;
+            }
+
+            public function registerProvider(\Phlix\Shared\Auth\ProviderInterface $provider): void
+            {
+                throw new \RuntimeException('registry backing store unavailable');
+            }
+        };
+
+        $boot = new AuthProviderBootstrapper(
+            $this->makeSettingsRepo(['oidc' => true]),
+            $brokenRegistry,
+            new OidcPlugin(),
+            new LdapPlugin(),
+        );
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('registry backing store unavailable');
+
+        $boot->ensureProviderRegistered('oidc');
+    }
 }

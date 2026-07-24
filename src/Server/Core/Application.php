@@ -430,6 +430,18 @@ class Application
         $this->router->get('/auth/logout', [$authController, 'logout']);
         $this->router->post('/auth/logout', [$authController, 'logout']);
 
+        // S44: OIDC authorization-code flow (unauthenticated — this IS the
+        // login entry). GET /auth/oidc/authorize redirects to the IdP;
+        // GET /auth/oidc/callback exchanges the code and mints a session. The
+        // OidcCallbackController was fully implemented but never routed; both
+        // methods 503 unless an OIDC provider is registered, which the per-worker
+        // AuthProviderBootstrapper boot step does when auth.oidc.enabled is set.
+        // Resolved lazily per request from the container so the (autowired) deps
+        // + DB-backed state store are built once the pool is ready.
+        if ($this->container !== null) {
+            $this->router->oidcAuth(\Phlix\Plugins\Oidc\Controller\OidcCallbackController::class);
+        }
+
         // Hub JWT exchange endpoint
         $this->router->post('/api/v1/auth/hub-token', function (Request $request, array $params): Response {
             $controller = $this->getHubTokenController();

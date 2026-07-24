@@ -243,6 +243,28 @@ $httpWorker->onWorkerStart = static function (Worker $w) use ($config, $publicRo
         );
     }
 
+    // S44 — register enabled external auth providers (OIDC/LDAP) into THIS HTTP
+    // worker's in-memory AuthProviderRegistry. The registry is per-worker state,
+    // so a provider enabled via the admin API in one worker is otherwise absent
+    // from the others until they restart; this boot pass re-attaches every
+    // provider whose `auth.<name>.enabled` server-setting is on AND whose plugin
+    // settings are complete. It reads settings + instantiates the provider only
+    // (OIDC discovery/JWKS are fetched lazily on first authenticate), so it does
+    // NO blocking I/O at boot. Scoped to the HTTP worker on purpose: provider
+    // login (AuthController / OidcCallbackController) is only reachable on the
+    // HTTP dispatch path — the WS/heartbeat/relay/managed-scan workers never run
+    // it, so registering there would only hold dead instances (the same
+    // rationale the plugin-bootstrap block uses to gate itself to library-scan).
+    // Non-fatal: a failure must never stop the worker from serving.
+    try {
+        $container->get(\Phlix\Auth\AuthProviderBootstrapper::class)->registerEnabledProviders();
+    } catch (\Throwable $e) {
+        LoggerFactory::get(LogChannels::AUTH)->error(
+            'auth provider boot registration failed (HTTP worker)',
+            ['worker_id' => $w->id ?? '?', 'error' => $e->getMessage()],
+        );
+    }
+
     // SV-0.1: probe hardware acceleration exactly once per worker at start (not
     // per request) and log the chosen accelerator a single time. Resolving the
     // FfmpegRunner runs the DI factory which calls setConfig() + the probe; the

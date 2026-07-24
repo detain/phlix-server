@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Phlix\Tests\Integration\Plugins;
 
 use DateTimeImmutable;
+use Phlix\Auth\AuthProviderBootstrapper;
 use Phlix\Auth\AuthProviderRegistry;
 use Phlix\Auth\UserProfileManager;
 use Phlix\Auth\UserRepository;
@@ -184,6 +185,7 @@ final class AdminRoutesTest extends TestCase
             $metricsController,
             $adminTranscodingController,
             $adminWebhooksController,
+            new SettingsRepository($this->createMock(Connection::class)),
         ) implements ContainerInterface {
             private Plugin $oidcPlugin;
             private LdapPlugin $ldapPlugin;
@@ -209,6 +211,7 @@ final class AdminRoutesTest extends TestCase
                 private readonly MetricsController $metricsController,
                 private readonly AdminTranscodingController $adminTranscodingController,
                 private readonly AdminWebhooksController $adminWebhooksController,
+                private readonly SettingsRepository $settingsRepository,
             ) {
                 $tempDir = sys_get_temp_dir() . '/phlix_oidc_test_' . uniqid('', true);
                 mkdir($tempDir, 0775, true);
@@ -234,9 +237,18 @@ final class AdminRoutesTest extends TestCase
                         $this->users,
                         $this->audit,
                     ),
-                    AuthProviderController::class => new AuthProviderController(
-                        new AuthProviderRegistry(),
-                    ),
+                    AuthProviderController::class => (function (): AuthProviderController {
+                        $registry = new AuthProviderRegistry();
+                        return new AuthProviderController(
+                            $registry,
+                            new AuthProviderBootstrapper(
+                                $this->settingsRepository,
+                                $registry,
+                                $this->oidcPlugin,
+                                $this->ldapPlugin,
+                            ),
+                        );
+                    })(),
                     OidcAdminController::class => new OidcAdminController(
                         $this->oidcPlugin,
                     ),

@@ -240,9 +240,16 @@ final class OidcCallbackController
             $externalId = is_string($result->externalId) ? $result->externalId : '';
             $email = $result->getEmail();
             $displayName = $result->getDisplayName();
+            // Thread the REAL provider that authenticated (OidcProvider sets
+            // attributes['provider'] = 'oidc') so the user row records 'oidc',
+            // never the old hardcoded 'external' — S46/S47 key on this column.
+            $provider = is_string($result->attributes['provider'] ?? null)
+                ? $result->attributes['provider']
+                : 'oidc';
 
             if ($userId === null) {
                 $userId = $this->userRepository->findOrCreateByExternalId(
+                    $provider,
                     $externalId,
                     $email,
                     $displayName,

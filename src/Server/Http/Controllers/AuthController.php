@@ -221,6 +221,16 @@ class AuthController
 
         $deviceId = $request->getHeader('X-Device-Id') ?? 'unknown';
 
+        // S44: LDAP login path (Path A). An `ldap:`-prefixed identifier is
+        // routed through the external-provider flow (ProviderManager's prefix
+        // dispatch) rather than the local password store. The LDAP provider must
+        // be enabled + registered (see AuthProviderBootstrapper); when it is not,
+        // loginWithProvider() throws and we answer 503 rather than a misleading
+        // "invalid credentials".
+        if (str_starts_with($username, 'ldap:')) {
+            return $this->ldapLogin($username, $password, $deviceId, $isBrowser);
+        }
+
         try {
             $result = $this->authManager->login($username, $password, $deviceId);
             if ($isBrowser) {
@@ -242,6 +252,57 @@ class AuthController
                 return (new Response())->redirect('/login?error=' . rawurlencode($e->getMessage()));
             }
             return (new Response())->status(401)->json(['error' => $e->getMessage()]);
+        }
+    }
+
+    /**
+     * Authenticate an `ldap:`-prefixed identifier through the external-provider
+     * flow and mint a local session on success (S44, Path A).
+     *
+     * Delegates to {@see AuthManager::loginWithProvider()}, which uses
+     * {@see \Phlix\Auth\ProviderManager}'s prefix dispatch to reach the
+     * registered {@see \Phlix\Plugins\Ldap\LdapProvider}. The `ldap:` prefix is
+     * preserved on the identifier (so ProviderManager can parse it) while the
+     * bare username + password are passed as the provider credentials.
+     *
+     * @param string $identifier The full `ldap:<username>` login identifier.
+     * @param string $password   The submitted password.
+     * @param string $deviceId   Device identifier for token binding.
+     * @param bool   $isBrowser  Whether to reply with a cookie redirect (browser)
+     *                           or a JSON token blob (API client).
+     */
+    private function ldapLogin(string $identifier, string $password, string $deviceId, bool $isBrowser): Response
+    {
+        $localUsername = substr($identifier, strlen('ldap:'));
+
+        try {
+            $result = $this->authManager->loginWithProvider(
+                'ldap:' . $localUsername,
+                ['username' => $localUsername, 'password' => $password],
+                $deviceId,
+            );
+
+            if ($isBrowser) {
+                return $this->browserAuthResponse($result, '/');
+            }
+            return (new Response())->json($result);
+        } catch (InvalidArgumentException $e) {
+            // Bad credentials / user not found — the provider rejected the login.
+            if ($isBrowser) {
+                return (new Response())->redirect('/login?error=' . rawurlencode($e->getMessage()));
+            }
+            return (new Response())->status(401)->json(['error' => $e->getMessage()]);
+        } catch (\RuntimeException $e) {
+            // The LDAP provider is not enabled/registered (or ProviderManager is
+            // unavailable) — AuthProviderNotFoundException extends RuntimeException.
+            $msg = 'LDAP authentication is not available.';
+            if ($isBrowser) {
+                return (new Response())->redirect('/login?error=' . rawurlencode($msg));
+            }
+            return (new Response())->status(503)->json([
+                'error' => $msg,
+                'code' => 'provider_unavailable',
+            ]);
         }
     }
 

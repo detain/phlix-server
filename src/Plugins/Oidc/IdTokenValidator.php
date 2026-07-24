@@ -271,13 +271,19 @@ final class IdTokenValidator
     }
 
     /**
-     * Fetch and cache JWKS from the discovery document using async HTTP.
+     * Fetch and cache JWKS from the discovery document using non-blocking HTTP.
      *
-     * @param DiscoveryDocument $discovery
+     * The fetch goes through {@see OidcHttpClient}, which yields to the event
+     * loop (cooperative-wait) instead of stalling the resident worker with a
+     * blocking `curl_exec()`. The optional client parameter is a test seam:
+     * production leaves it null and a real client is created.
+     *
+     * @param DiscoveryDocument   $discovery
+     * @param OidcHttpClient|null $httpClient Injected client (tests supply a double).
      * @return JWKSet
      * @throws RuntimeException
      */
-    public static function fetchJwks(DiscoveryDocument $discovery): JWKSet
+    public static function fetchJwks(DiscoveryDocument $discovery, ?OidcHttpClient $httpClient = null): JWKSet
     {
         $providerUrl = $discovery->getProviderUrl();
         $cacheKey = md5($providerUrl);
@@ -304,22 +310,17 @@ final class IdTokenValidator
             throw new RuntimeException('JWKS URI is empty');
         }
 
-        $ch = curl_init();
-        curl_setopt($ch, CURLOPT_URL, $jwksUri);
-        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-        curl_setopt($ch, CURLOPT_TIMEOUT, 10);
-        curl_setopt($ch, CURLOPT_HTTPHEADER, [
-            'User-Agent: PhlixMediaServer/1.0',
-            'Accept: application/json',
+        $client = $httpClient ?? new OidcHttpClient();
+        $response = $client->get($jwksUri, [
+            'User-Agent' => 'PhlixMediaServer/1.0',
+            'Accept' => 'application/json',
         ]);
 
-        $content = curl_exec($ch);
-        $curlError = curl_error($ch);
-
-        if ($content === false || $content === true) {
-            throw new RuntimeException('Failed to fetch JWKS from: ' . $jwksUri . ': ' . $curlError);
+        if ($response === null) {
+            throw new RuntimeException('Failed to fetch JWKS from: ' . $jwksUri);
         }
 
+        $content = (string) $response->getBody();
         $jwksData = json_decode($content, true);
         if (!is_array($jwksData) || !isset($jwksData['keys'])) {
             throw new RuntimeException('Invalid JWKS format');

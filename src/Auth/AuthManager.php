@@ -901,8 +901,15 @@ class AuthManager
             $externalId = $result->externalId ?? '';
             $email = $result->getEmail();
             $displayName = $result->getDisplayName();
+            // Record the REAL provider that authenticated (OidcProvider/
+            // LdapProvider set attributes['provider']), not the old hardcoded
+            // 'external'. The provider column is the foundation S46/S47 build on.
+            $provider = is_string($result->attributes['provider'] ?? null)
+                ? $result->attributes['provider']
+                : 'external';
 
             $userId = $this->userRepository->findOrCreateByExternalId(
+                $provider,
                 $externalId,
                 $email,
                 $displayName,

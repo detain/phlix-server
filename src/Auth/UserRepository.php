@@ -903,6 +903,19 @@ class UserRepository
      * record with password_hash = NULL and the provider/external_id set.
      * On subsequent logins, returns the existing user record.
      *
+     * The existence lookup is scoped by BOTH `(provider, external_id)` — the
+     * same key as {@see self::findByExternalId()} and the `UNIQUE(provider,
+     * external_id)` index from migration 009. Scoping by `external_id` alone
+     * (the prior behaviour) risked cross-matching two different providers that
+     * happen to mint the same opaque id, and the row was always inserted with
+     * the literal `'external'` regardless of which provider actually
+     * authenticated — losing the ability to tell an OIDC identity from an LDAP
+     * one. Both are fixed here: the caller threads the REAL provider name
+     * (`oidc` / `ldap`), taken from {@see \Phlix\Shared\Auth\AuthResult::$attributes}`['provider']`.
+     *
+     * @param string $provider    Provider name that authenticated (e.g. "oidc",
+     *                             "ldap"). Stored verbatim in `users.provider`
+     *                             and used to scope the existence lookup.
      * @param string $externalId  Provider's unique identifier.
      * @param string|null $email  User's email (used as username seed).
      * @param string|null $displayName User's display name.
@@ -914,6 +927,7 @@ class UserRepository
      * @example
      * ```php
      * $userId = $repo->findOrCreateByExternalId(
+     *     'oidc',
      *     'https://accounts.google.com/12345',
      *     'alice@example.com',
      *     'Alice'
@@ -921,16 +935,15 @@ class UserRepository
      * ```
      */
     public function findOrCreateByExternalId(
+        string $provider,
         string $externalId,
         ?string $email = null,
         ?string $displayName = null
     ): string {
-        $provider = 'external';
-
         $existingRow = UserRow::firstFromMixed(
             $this->db->query(
-                "SELECT * FROM users WHERE external_id = ?",
-                [$externalId]
+                "SELECT * FROM users WHERE provider = ? AND external_id = ?",
+                [$provider, $externalId]
             )
         );
 

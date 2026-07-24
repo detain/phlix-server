@@ -7,11 +7,14 @@ namespace Phlix\Tests\Unit\Common\Container\Providers;
 use DI\Container;
 use DI\ContainerBuilder;
 use Phlix\Auth\AuthManager;
+use Phlix\Auth\AuthProviderBootstrapper;
 use Phlix\Auth\RateLimitException;
 use Phlix\Auth\WebAuthn\WebAuthnManager;
 use Phlix\Common\Container\Providers\AuthServicesProvider;
 use Phlix\Common\RateLimit\RateLimitProfiles;
+use Phlix\Plugins\Oidc\Controller\OidcCallbackController;
 use Phlix\Server\Http\Controllers\AuthController;
+use Phlix\Server\Http\Controllers\AuthProviderController;
 use Phlix\Server\Http\Controllers\WebAuthnController;
 use Phlix\Server\Http\Request;
 use PHPUnit\Framework\Attributes\CoversClass;
@@ -103,6 +106,31 @@ final class AuthServicesProviderControllerWiringTest extends TestCase
 
         self::assertSame($container->get(RateLimitProfiles::WEBAUTHN_START), $startLimiter);
         self::assertSame($container->get(RateLimitProfiles::WEBAUTHN_FINISH), $finishLimiter);
+    }
+
+    /**
+     * S44: the enable-state + OIDC-route controllers autowire cleanly from the
+     * container. AuthProviderController now needs an AuthProviderBootstrapper,
+     * and the (previously dead) OidcCallbackController is bound with its
+     * DB-backed state-store `db` param. Resolving all three proves the DI graph
+     * has no missing binding.
+     */
+    public function testS44AuthProviderWiringResolves(): void
+    {
+        $container = $this->buildContainer($this->overLimitDb());
+
+        self::assertInstanceOf(
+            AuthProviderBootstrapper::class,
+            $container->get(AuthProviderBootstrapper::class),
+        );
+        self::assertInstanceOf(
+            AuthProviderController::class,
+            $container->get(AuthProviderController::class),
+        );
+        self::assertInstanceOf(
+            OidcCallbackController::class,
+            $container->get(OidcCallbackController::class),
+        );
     }
 
     /**

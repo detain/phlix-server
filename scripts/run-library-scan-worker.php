@@ -13,8 +13,22 @@
  * polls with a {@see \Workerman\Timer} (NEVER a blocking `sleep`) and runs the
  * existing {@see \Phlix\Media\Library\LibraryManager} scan per claimed job.
  *
- * Running this AND the `start.php`-embedded worker at the same time is safe —
- * `ScanJobRepository::claimNext()` is atomic and each worker is `count:1`.
+ * ⚠ **NEVER RUN THIS ALONGSIDE THE `start.php`-EMBEDDED WORKER (corrected
+ * 2026-07-25, S96(c)).** This header used to say doing so was "safe" because
+ * `ScanJobRepository::claimNext()` is an atomic conditional UPDATE. That is true of
+ * CLAIMING and false of the startup reaper: `LibraryScanWorker::start()` — called at
+ * line ~92 below, once per fork — calls `ScanJobRepository::reapStaleJobs()`, which
+ * fails EVERY `running` row in `library_scan_jobs` with no age guard and no
+ * `library_id` filter. That is correct only while nothing else is draining this
+ * queue (it is how a job orphaned by a crash stops spinning the scan UI forever).
+ * Boot a second consumer and it stamps the FIRST consumer's in-flight job
+ * `failed` with `error = 'Interrupted by server restart'` — a message that is a lie
+ * in that scenario — while that scan carries on unaware, because nothing re-reads the
+ * job row mid-scan. Same defect for `library-scan`'s `count`, which this script also
+ * honours: it MUST stay 1. Either run this script with the managed entry disabled in
+ * `config/process.php`, or run the managed worker and not this script — never both.
+ * See `config/process.php` and `LibraryScanWorker::start()` for the full invariant
+ * and for why an age guard was rejected rather than added.
  *
  * Usage:
  *   php scripts/run-library-scan-worker.php start          # foreground
@@ -89,6 +103,9 @@ $worker->onWorkerStart = static function (Worker $w) use ($config, $pollSeconds)
     $container = ContainerFactory::create($config);
     /** @var LibraryScanWorker $scanWorker */
     $scanWorker = $container->get(LibraryScanWorker::class);
+    // ⚠ start() reaps EVERY `running` scan job before it begins draining (see the
+    // header warning). If the managed worker in config/process.php is also up, this
+    // line fails ITS live job. One consumer only, count:1.
     $scanWorker->start($pollSeconds);
 };
 

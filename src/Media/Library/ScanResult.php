@@ -66,9 +66,21 @@ final class ScanResult
     /**
      * Gets a summary array of the scan result.
      *
-     * Consumed by `POST /api/v1/music/scan`
-     * ({@see \Phlix\Server\WebPortal\WebPortalRouter::scanMusicDirectory()}) and
-     * the Arr sync response, so `failed` is add-only: no existing key changed.
+     * Consumers, exhaustively (checked 2026-07-25 — an earlier version of this
+     * docblock also claimed "the Arr sync response", which is wrong: `Arr\
+     * SyncController::triggerSync()` serialises a TRaSH-Guides syncer result that
+     * happens to have its own `toArray()`, not a `ScanResult`):
+     *
+     *  - `POST /api/v1/music/scan`
+     *    ({@see \Phlix\Server\WebPortal\WebPortalRouter::scanMusicDirectory()}) —
+     *    returns this array verbatim as the response body;
+     *  - `php bin/phlix library:scan` ({@see \Phlix\Console\Commands\LibraryScanCommand})
+     *    — renders the same counters as a one-line operator summary.
+     *
+     * The async scan-job path does NOT use this method: it writes individual columns
+     * through {@see \Phlix\Media\Library\ScanJobRepository} (see
+     * {@see self::progressCounts()}). `failed` was add-only here: no existing key
+     * changed, so neither consumer's contract broke.
      *
      * @return array<string, int> Summary array
      */

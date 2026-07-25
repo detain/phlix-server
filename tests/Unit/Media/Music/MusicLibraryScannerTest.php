@@ -4,12 +4,16 @@ declare(strict_types=1);
 
 namespace Phlix\Tests\Unit\Media\Music;
 
+use Phlix\Common\Logger\LogChannels;
+use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Common\Logger\StructuredLogger;
 use Phlix\Media\Music\MusicLibraryScanner;
 use Phlix\Media\Transcoding\FfmpegRunner;
 use Phlix\Shared\Events\Library\MediaItemAdded;
 use PHPUnit\Framework\TestCase;
 use Psr\EventDispatcher\EventDispatcherInterface;
+use Psr\Log\LoggerInterface;
+use Psr\Log\NullLogger;
 use Workerman\MySQL\Connection;
 
 /**
@@ -700,9 +704,19 @@ final class MusicLibraryScannerTest extends TestCase
     private function taggedScanner(
         Connection $db,
         ?\Closure $tagger = null,
-        ?StructuredLogger $logger = null
+        ?LoggerInterface $logger = null
     ): TaggedScanner {
-        $scanner = new TaggedScanner($db, $this->createMock(FfmpegRunner::class), $logger);
+        // ⚠ A NullLogger, NOT the production fallback (review r1 MED-3, half ii).
+        // Since S96(a) the fallback is `LoggerFactory::get(MEDIA)`, and `LoggerFactory`
+        // caches its config path in a PROCESS-GLOBAL static — so as soon as any other
+        // test in the run calls `LoggerFactory::init(config/logger.php)` (19 of them
+        // do), every scanner built here starts writing into the working tree's real
+        // `.logs/app-*.log`. Measured on this file's synthetic trees: 27,094 lines /
+        // 4.33 MiB per run, none of it assertable. Tests that DO care about the log
+        // pass their own recording double, so this default weakens nothing; the
+        // production fallback is pinned separately by
+        // {@see self::testTheDefaultLoggerIsTheSharedMediaChannelLogger()}.
+        $scanner = new TaggedScanner($db, $this->createMock(FfmpegRunner::class), $logger ?? new NullLogger());
         $scanner->tagger = $tagger ?? static function (string $path): array {
             $albumDir = basename(dirname($path));
             return [
@@ -1604,6 +1618,39 @@ final class MusicLibraryScannerTest extends TestCase
         $this->assertGreaterThan(0, $logger->countMessages('Music directory scan complete'));
     }
 
+    /**
+     * With NO logger supplied, the scanner must use the SHARED media-channel logger —
+     * the one `config/logger.php` routes into `.logs/app.log` and `.logs/error.log`.
+     *
+     * This is the other half of S96(a), and it needs its own guard now that this file
+     * injects a {@see NullLogger} by default to stop the suite writing megabytes into
+     * the working tree (review r1 MED-3). Without it, "silence the tests" and "silence
+     * production" look identical: swapping the fallback in `createLogger()` for a
+     * NullLogger would make the whole suite pass while restoring the exact invisibility
+     * that let the empty music library survive four wrong diagnoses. Identity — not
+     * just "is a StructuredLogger" — because `LoggerFactory::get()` returns the one
+     * cached instance per channel, so this also proves the channel is MEDIA.
+     */
+    public function testTheDefaultLoggerIsTheSharedMediaChannelLogger(): void
+    {
+        $scanner = new MusicLibraryScanner(
+            $this->createMock(Connection::class),
+            $this->createMock(FfmpegRunner::class),
+        );
+
+        $property = new \ReflectionProperty(MusicLibraryScanner::class, 'logger');
+        $property->setAccessible(true);
+        $logger = $property->getValue($scanner);
+
+        $this->assertSame(
+            LoggerFactory::get(LogChannels::MEDIA),
+            $logger,
+            'a scanner built with no logger must log to the shared MEDIA channel. A NullLogger (or a '
+            . 'privately-built one) here is the S96(a) defect: the music scan goes silent exactly where '
+            . 'an operator looks, which is how the root cause stayed undiagnosed.',
+        );
+    }
+
     // -- S96(f): a scan that loses files says so -------------------------------
 
     /**
@@ -1647,7 +1694,9 @@ final class MusicLibraryScannerTest extends TestCase
         $this->assertArrayHasKey('failed', $result->toArray());
         $this->assertSame(1, $result->toArray()['failed']);
 
-        // And it is stated in the completion line, at WARNING so it is greppable.
+        // And it is stated in the completion line — at ERROR since review r1 MED-2, so
+        // it reaches `.logs/error.log` and not only `app.log`. The level itself is
+        // pinned by testEveryPathThatLosesFilesLogsAtErrorLevel().
         $this->assertSame(
             1,
             $logger->countMessages('Music directory scan complete with skipped files'),
@@ -1747,6 +1796,90 @@ final class MusicLibraryScannerTest extends TestCase
         // per-album line stays at `debug` and the operator-facing tally is the
         // once-per-scan `skipped_no_artist` in the summary above.
         $this->assertSame(2, $logger->countMessages('Skipping album with unknown artist'));
+        // MED-2: a POLICY skip is a WARNING, never an error — nothing malfunctioned and
+        // a rescan discards the same files again. Routing an untagged library into
+        // `.logs/error.log` would train the operator to ignore that file.
+        $this->assertSame(
+            1,
+            $logger->countAtLevel('warning', 'Music directory scan complete with skipped files'),
+            'a policy-only skip must summarise at WARNING',
+        );
+        $this->assertSame([], array_filter(
+            $logger->records,
+            static fn (array $r): bool => $r['level'] === 'error',
+        ), 'nothing failed, so this scan must emit no error-level record at all');
+    }
+
+    /**
+     * MED-2 (review r1): log LEVEL must track how much data was lost.
+     *
+     * The inversion this pins shut: losing a WHOLE ALBUM logged at `warning` while
+     * losing ONE FILE logged at `error`, and `config/logger.php:45-50` gates
+     * `.logs/error.log` at `error` — so the quietest signal got a clean dedicated file
+     * and the three loudest ones were buried in `app.log` alongside every per-entity
+     * `debug` line of the same scan. "Make a music scan debuggable" is the whole point
+     * of S96, and the level assignment worked against it.
+     *
+     * All four loss paths are asserted at `error`, on the actual failure shape each one
+     * needs (`returnFalseFor()` for the two "upsert returned null" branches, a throwing
+     * fault for the outer catch and the per-track catch), plus the summary line that an
+     * operator greps FIRST.
+     */
+    public function testEveryPathThatLosesFilesLogsAtErrorLevel(): void
+    {
+        // (1) Artist row cannot be written → the whole 5-file album is lost.
+        [$dirA, $taggerA] = $this->oneAlbumFixture(5);
+        $dbA = new MusicSchemaConnection();
+        $dbA->returnFalseFor('INSERT INTO music_artists');
+        $loggerA = new LogWriteFailureLogger();
+        $resultA = $this->taggedScanner($dbA, $taggerA, $loggerA)->scanDirectory($dirA, null, 'lib-s96');
+
+        $this->assertSame(5, $resultA->failed, 'the fixture must actually land on the artist branch');
+        $this->assertSame(
+            1,
+            $loggerA->countAtLevel('error', 'Failed to upsert artist'),
+            'losing an entire album must log at ERROR so it reaches .logs/error.log — at `warning` it '
+            . 'was buried in app.log while a ONE-FILE loss got the clean file to itself',
+        );
+        $this->assertSame(0, $loggerA->countAtLevel('warning', 'Failed to upsert artist'));
+        $this->assertSame(
+            1,
+            $loggerA->countAtLevel('error', 'Music directory scan complete with skipped files'),
+            'and so must the summary line, which is the one an operator greps first',
+        );
+
+        // (2) Album row cannot be written → same, one level down the hierarchy.
+        [$dirB, $taggerB] = $this->oneAlbumFixture(4);
+        $dbB = new MusicSchemaConnection();
+        $dbB->returnFalseFor('INSERT INTO music_albums');
+        $loggerB = new LogWriteFailureLogger();
+        $resultB = $this->taggedScanner($dbB, $taggerB, $loggerB)->scanDirectory($dirB, null, 'lib-s96');
+
+        $this->assertSame(4, $resultB->failed);
+        $this->assertSame(1, $loggerB->countAtLevel('error', 'Failed to upsert album'));
+        $this->assertSame(0, $loggerB->countAtLevel('warning', 'Failed to upsert album'));
+
+        // (3) One track throws → one file lost. Already ERROR before MED-2; it is the
+        //     REFERENCE level the two branches above now match, so it must not drift.
+        [$dirC, $taggerC] = $this->oneAlbumFixture(4);
+        $dbC = new MusicSchemaConnection();
+        $dbC->faultOnNth('INSERT INTO music_tracks', 2);
+        $loggerC = new LogWriteFailureLogger();
+        $resultC = $this->taggedScanner($dbC, $taggerC, $loggerC)->scanDirectory($dirC, null, 'lib-s96');
+
+        $this->assertSame(1, $resultC->failed);
+        $this->assertSame(1, $loggerC->countAtLevel('error', 'Skipping track after error during indexing'));
+        $this->assertSame(1, $loggerC->countAtLevel('error', 'Music directory scan complete with skipped files'));
+
+        // (4) The outer catch (the artist INSERT throws rather than returning false).
+        [$dirD, $taggerD] = $this->oneAlbumFixture(3);
+        $dbD = new MusicSchemaConnection();
+        $dbD->faultOnNth('INSERT INTO music_artists', 1);
+        $loggerD = new LogWriteFailureLogger();
+        $resultD = $this->taggedScanner($dbD, $taggerD, $loggerD)->scanDirectory($dirD, null, 'lib-s96');
+
+        $this->assertSame(3, $resultD->failed);
+        $this->assertSame(1, $loggerD->countAtLevel('error', 'Skipping album after error during indexing'));
     }
 
     // -- S96(b): the live counter snapshot on the progress sink ----------------
@@ -2121,6 +2254,9 @@ final class MusicSchemaConnection extends Connection
     /** @var list<array{needle:string, param:?string, occurrence:int, seen:int}> Injected faults. */
     private array $faults = [];
 
+    /** @var list<string> Statement substrings whose query() returns false (see returnFalseFor()). */
+    private array $falseOn = [];
+
     private int $autoInc = 0;
 
     private int $uuid = 0;
@@ -2143,6 +2279,22 @@ final class MusicSchemaConnection extends Connection
     public function faultOnNth(string $needle, int $occurrence, ?string $param = null): void
     {
         $this->faults[] = ['needle' => $needle, 'param' => $param, 'occurrence' => $occurrence, 'seen' => 0];
+    }
+
+    /**
+     * Make every statement containing `$needle` return `false` instead of throwing.
+     *
+     * A DIFFERENT failure shape from {@see self::faultOnNth()}, and the only way to
+     * reach two of the scanner's loss paths: `upsertArtist()`/`upsertAlbum()` return
+     * `null` on `if ($result === false)`, which makes `flushAlbum()` log
+     * "Failed to upsert artist"/"…album" and charge the WHOLE album — whereas a throw
+     * unwinds past those branches into the outer catch and logs
+     * "Skipping album after error during indexing" instead. Review r1 MED-2 is about
+     * the level of exactly those two branches, so the tests need to land on them.
+     */
+    public function returnFalseFor(string $needle): void
+    {
+        $this->falseOn[] = $needle;
     }
 
     /**
@@ -2260,7 +2412,9 @@ final class MusicSchemaConnection extends Connection
      * @param string $query SQL statement.
      * @param array<int, mixed>|null $params Bound parameters.
      * @param int $fetchmode PDO fetch mode (unused).
-     * @return array<int, mixed>|int|string Rows for SELECT, else an affected-row stand-in.
+     * @return array<int, mixed>|int|string|false Rows for SELECT, an affected-row
+     *         stand-in otherwise, or `false` when {@see self::returnFalseFor()} armed
+     *         this statement.
      */
     public function query($query = '', $params = null, $fetchmode = \PDO::FETCH_ASSOC)
     {
@@ -2270,6 +2424,12 @@ final class MusicSchemaConnection extends Connection
         $p = $params ?? [];
         $this->statements[] = $sql;
         $this->maybeFault($sql, $p);
+
+        foreach ($this->falseOn as $needle) {
+            if (str_contains($sql, $needle)) {
+                return false;
+            }
+        }
 
         if (str_starts_with($sql, 'SELECT')) {
             return $this->runSelect($sql, $p);
@@ -2577,6 +2737,15 @@ final class LogWriteFailureLogger extends StructuredLogger
     /** @var list<string> Every message logged, in order. */
     public array $messages = [];
 
+    /**
+     * @var list<array{level: string, message: string}> Every record with its PSR-3
+     *      level, in order. Recorded since review r1 MED-2: the SEVERITY is now part
+     *      of the contract (`config/logger.php` routes only `error`-and-above into
+     *      `.logs/error.log`), and a double that discarded the level — as this one
+     *      did — cannot tell a fix from a regression.
+     */
+    public array $records = [];
+
     /** Substring whose log write throws; '' never throws. */
     public string $throwOn = '';
 
@@ -2591,14 +2760,50 @@ final class LogWriteFailureLogger extends StructuredLogger
      */
     public function log($level, string|\Stringable $message, array $context = []): void
     {
-        unset($level, $context);
+        unset($context);
 
         $text = (string) $message;
         $this->messages[] = $text;
+        $this->records[] = ['level' => self::levelName($level), 'message' => $text];
 
         if ($this->throwOn !== '' && str_contains($text, $this->throwOn)) {
             throw new \RuntimeException('LOG WRITE FAILED: ' . $this->throwOn);
         }
+    }
+
+    /**
+     * Normalise whatever `StructuredLogger`'s level helpers pass through to a PSR-3
+     * level name. They hand over a Monolog {@see \Monolog\Level} enum.
+     *
+     * @param mixed $level
+     */
+    private static function levelName($level): string
+    {
+        if ($level instanceof \Monolog\Level) {
+            return $level->toPsrLogLevel();
+        }
+
+        return is_scalar($level) ? strtolower((string) $level) : 'unknown';
+    }
+
+    /**
+     * How many records at PSR-3 level `$level` contain `$needle` — or EQUAL it when
+     * `$exact`.
+     */
+    public function countAtLevel(string $level, string $needle, bool $exact = false): int
+    {
+        $n = 0;
+        foreach ($this->records as $record) {
+            if ($record['level'] !== $level) {
+                continue;
+            }
+            $hit = $exact ? $record['message'] === $needle : str_contains($record['message'], $needle);
+            if ($hit) {
+                $n++;
+            }
+        }
+
+        return $n;
     }
 
     /**

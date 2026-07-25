@@ -76,7 +76,13 @@ class AudiobookLibraryManager extends LibraryManager
      * @param string $libraryId The library's unique identifier
      * @param array<string> $paths Array of filesystem paths to scan
      * @param callable|null $onProgress Optional progress callback
-     * @return ScanResult Result containing scan statistics
+     * @return ScanResult Result containing scan statistics. `failed` is the number of
+     *         audiobooks whose `media_items` row could not be written (S96(f), review
+     *         r1 LOW-6): the count was already being computed here and then discarded,
+     *         so a rescan that lost files reported a clean `failed: 0` through
+     *         {@see ScanResult::toArray()} and `library_scan_jobs.items_failed`. This
+     *         path DOES know its per-file outcome, unlike {@see MediaScanner}, so
+     *         leaving it music-only was an inconsistency rather than a scope boundary.
      *
      * @since 0.18.0
      */
@@ -126,6 +132,11 @@ class AudiobookLibraryManager extends LibraryManager
         $result->scanned = $scanned;
         $result->added = $added;
         $result->updated = 0;
+        // S96(f) / review r1 LOW-6: report the failures instead of throwing the
+        // number away three lines after computing it. Every increment above is one
+        // audiobook the scan read and could not index, which is exactly this field's
+        // definition, and it is what reaches `library_scan_jobs.items_failed`.
+        $result->failed = $errors;
         $result->durationMs = $durationMs;
 
         return $result;

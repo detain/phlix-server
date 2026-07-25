@@ -38,8 +38,14 @@
 -- `LibraryScanWorker::scanProgressSink()` (live, throttled) and
 -- `ScanJobRepository::markCompleted()` (authoritative final value).
 --
--- NOTE: keep this statement free of semicolons inside string literals. The
--- migration runner strips comments then splits on `;`.
+-- NOTE (corrected 2026-07-25): the `COMMENT '...'` string below needs no special
+-- care. `MigrationRunner::splitStatements()` is a single-pass, quote- and
+-- comment-aware scanner that splits only on a `;` outside single/double-quoted
+-- strings, backticked identifiers and `--`/`#`/`/* */` comments - it was written
+-- precisely so a `COMMENT` literal survives. An earlier version of this header
+-- warned "keep this statement free of semicolons inside string literals"; that
+-- described a runner limitation which no longer exists, and repeating it would
+-- mislead the next migration author into a constraint they do not have.
 
 ALTER TABLE `library_scan_jobs`
     ADD COLUMN `items_failed` INT UNSIGNED NOT NULL DEFAULT 0

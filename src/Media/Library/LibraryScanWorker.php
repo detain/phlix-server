@@ -201,6 +201,20 @@ class LibraryScanWorker
                 // column doubles as the progress numerator (processed files), so
                 // writing a semantic "updated" count here would collapse the UI
                 // percentage at the very moment the job completes.
+                //
+                // ⚠ THIS IS THE ONE PLACE A SINGLE JOB ROW CHANGES THE MEANING OF
+                // `items_added` MID-LIFETIME (review r1 LOW-4). Above, the sink
+                // streamed the scanner's own new-LEAF count (for music: new tracks);
+                // here `rescanLibrary()` hands over a row-count DELTA over ALL
+                // `media_items` types, so it also counts the artist/album container
+                // rows. Usually the delta is the larger of the two, but not always —
+                // a `music_tracks` row added against a pre-existing `media_items` row
+                // (the S96(e) residue shape) makes it smaller, and a counter that goes
+                // 12 → 3 at completion reads as data disappearing. That is why
+                // `markCompleted()` writes these three counters through `GREATEST()`:
+                // the row is a high-water mark, so the two definitions can coexist
+                // without the number ever retracting. Unifying the definitions instead
+                // would mean changing `rescanLibrary()`'s public return semantics.
                 $finalCounts = [
                     'items_added' => $rescan->added,
                     'items_removed' => $rescan->removed,
@@ -262,6 +276,11 @@ class LibraryScanWorker
                 'type' => $type,
             ]);
         } catch (Throwable $e) {
+            // No final counters here: the throw destroyed the ScanResult, so the row
+            // keeps whatever the live sink last wrote — accurate to within
+            // PROGRESS_WRITE_EVERY files for music, still 0 for the scanner paths that
+            // report their added count only per completed path. See
+            // ScanJobRepository::markFailed() (review r1 LOW-7).
             $this->jobs->markFailed($jobId, $e->getMessage());
 
             $durationMs = (hrtime(true) - $startTime) / 1_000_000.0;

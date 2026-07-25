@@ -61,7 +61,15 @@ final class LibraryScanCommand extends Command
     }
 
     /**
-     * Run the scan / rescan and report completion.
+     * Run the scan / rescan and report completion, INCLUDING the counters.
+     *
+     * The counter line exists because of review r1 INFO-10: `items_failed` /
+     * {@see \Phlix\Media\Library\ScanResult::$failed} reaches the scan-status JSON and
+     * the app log, but the admin SPA's `ScanJob` interface does not list it, so nothing
+     * RENDERS it — leaving `curl`/`grep` as the only way to see that a scan lost files.
+     * This command already had the whole `ScanResult` in hand and was throwing it away,
+     * so it is the cheapest honest operator surface, and `failed` is called out
+     * explicitly rather than buried in a tuple.
      *
      * @return int {@see Command::SUCCESS} (0) on a completed scan, or
      *         {@see Command::FAILURE} (1) when the library is missing or the
@@ -75,11 +83,9 @@ final class LibraryScanCommand extends Command
 
         try {
             $manager = ($this->libraryManagerFactory)();
-            if ($rescan) {
-                $manager->rescanLibrary($libraryId);
-            } else {
-                $manager->scanLibrary($libraryId);
-            }
+            $result = $rescan
+                ? $manager->rescanLibrary($libraryId)
+                : $manager->scanLibrary($libraryId);
         } catch (Throwable $e) {
             $output->writeln('<error>Scan failed: ' . $e->getMessage() . '</error>');
 
@@ -91,6 +97,25 @@ final class LibraryScanCommand extends Command
             $rescan ? 'Rescan' : 'Scan',
             $libraryId
         ));
+        $output->writeln(sprintf(
+            '  scanned: %d   added: %d   updated: %d   removed: %d   failed: %d   (%d ms)',
+            $result->scanned,
+            $result->added,
+            $result->updated,
+            $result->removed,
+            $result->failed,
+            $result->durationMs
+        ));
+
+        if ($result->failed > 0) {
+            // Files the scan READ and could not index. Not a policy skip, and not fatal
+            // — the next clean scan re-adds them — so the command still exits 0; but it
+            // must not look like an unqualified success.
+            $output->writeln(sprintf(
+                '<comment>%d file(s) could not be indexed — see .logs/error.log for each one.</comment>',
+                $result->failed
+            ));
+        }
 
         return Command::SUCCESS;
     }

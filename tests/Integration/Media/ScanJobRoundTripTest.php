@@ -192,6 +192,54 @@ final class ScanJobRoundTripTest extends TestCase
         );
     }
 
+    /**
+     * Review r1 LOW-4: a completion stamp must not LOWER a counter the live sink has
+     * already written — verified against real MySQL, because `GREATEST()` is SQL a mock
+     * cannot evaluate (a `willReturnCallback` fake would happily "pass" with the
+     * function deleted).
+     *
+     * The shape this reproduces is the real one: a `rescan` streams the music scanner's
+     * new-TRACK count while it runs, then `markCompleted()` stamps
+     * `rescanLibrary()`'s all-types row-count delta — which can be smaller (e.g. a
+     * `music_tracks` row added against a pre-existing `media_items` row). Before the
+     * clamp, an operator saw `items_added` drop from 20 to 5 at the instant the job
+     * completed.
+     */
+    public function testMarkCompletedNeverLowersACounterTheSinkAlreadyWrote(): void
+    {
+        $this->assertNotNull($this->db);
+        $repo = new ScanJobRepository($this->db);
+
+        $jobId = $repo->enqueue($this->libraryId, 'rescan');
+        $repo->updateProgress($jobId, [
+            'items_found'   => 40,
+            'items_updated' => 40,
+            'items_added'   => 20,
+            'items_failed'  => 4,
+            'items_removed' => 7,
+        ]);
+
+        // Every cumulative value here is LOWER than what the sink observed.
+        $repo->markCompleted($jobId, [
+            'items_added'   => 5,
+            'items_failed'  => 1,
+            'items_removed' => 2,
+        ]);
+
+        $done = $repo->findById($jobId);
+        $this->assertIsArray($done);
+        $this->assertSame('completed', $done['status']);
+        $this->assertSame(20, $done['items_added'], 'items_added must not go 20 -> 5 at completion');
+        $this->assertSame(4, $done['items_failed'], 'a file that was observed lost stays lost');
+        $this->assertSame(7, $done['items_removed']);
+
+        // And a HIGHER final value still wins — the clamp raises, it does not freeze.
+        $repo->markCompleted($jobId, ['items_added' => 99]);
+        $raised = $repo->findById($jobId);
+        $this->assertIsArray($raised);
+        $this->assertSame(99, $raised['items_added']);
+    }
+
     private function isMysqlReachable(string $host, int $port): bool
     {
         $sock = @fsockopen($host, $port, $errno, $errstr, 1.0);

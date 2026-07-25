@@ -291,6 +291,64 @@ final class ScanJobRepositoryTest extends TestCase
         $this->assertSame(['job-1'], $captured['params']);
     }
 
+    /**
+     * Review r1 LOW-4: the cumulative counters may only be RAISED at completion.
+     *
+     * A `rescan` job row carries two different definitions of `items_added` over its
+     * lifetime — the live sink writes the scanner's new-leaf count, `markCompleted()`
+     * writes `rescanLibrary()`'s all-types row-count delta — and the delta is not always
+     * the larger of the two. Plain `items_added = ?` therefore let a completing job
+     * report FEWER items than it had already been observed to add, which reads as data
+     * disappearing at the exact moment the job finishes. `GREATEST` makes the three
+     * tallies high-water marks; `items_found`/`items_updated` are the progress
+     * denominator/numerator and must stay absolute, or a corrected total could never
+     * come down.
+     */
+    public function testMarkCompletedRaisesCumulativeCountersButNeverLowersThem(): void
+    {
+        $captured = ['sql' => '', 'params' => []];
+        $db = $this->createMock(Connection::class);
+        $db->expects($this->once())
+            ->method('query')
+            ->willReturnCallback(
+                static function (string $sql, ?array $params = null) use (&$captured) {
+                    $captured = ['sql' => $sql, 'params' => $params ?? []];
+                    return 1;
+                },
+            );
+
+        $repo = new ScanJobRepository($db);
+        $repo->markCompleted('job-1', [
+            'items_added'   => 3,
+            'items_removed' => 1,
+            'items_failed'  => 0,
+            'items_found'   => 12,
+            'items_updated' => 12,
+        ]);
+
+        foreach (['items_added', 'items_removed', 'items_failed'] as $column) {
+            $this->assertStringContainsString(
+                $column . ' = GREATEST(' . $column . ', ?)',
+                $captured['sql'],
+                $column . ' is a cumulative tally: a completion stamp must never retract what the live '
+                . 'progress sink already observed',
+            );
+        }
+
+        foreach (['items_found', 'items_updated'] as $column) {
+            $this->assertStringContainsString($column . ' = ?', $captured['sql']);
+            $this->assertStringNotContainsString(
+                'GREATEST(' . $column,
+                $captured['sql'],
+                $column . ' is the progress denominator/numerator, not a tally — clamping it would make a '
+                . 'downward correction impossible',
+            );
+        }
+
+        // Parameter order still follows COUNTER_COLUMNS, with the job id last.
+        $this->assertSame([12, 3, 12, 1, 0, 'job-1'], $captured['params']);
+    }
+
     public function testMarkFailedRecordsError(): void
     {
         $db = $this->createMock(Connection::class);

@@ -64,6 +64,70 @@ class AudiobookLibraryManagerTest extends TestCase
         $this->assertEquals('new-audiobook-id', $result['id']);
     }
 
+    /**
+     * S96(f) / review r1 LOW-6: a rescan that could not create an item must report it.
+     *
+     * `rescanLibrary()` has always counted these failures into a local `$errors` and
+     * then built its {@see \Phlix\Media\Library\ScanResult} without them, so the
+     * failure count was computed and discarded three lines apart. Once S96 added
+     * `failed` to `toArray()` and to `library_scan_jobs.items_failed`, that silence
+     * became an actively FALSE clean success on a path that — unlike the video
+     * scanner — genuinely knows its per-file outcome.
+     */
+    public function testRescanReportsFailedItemCreationsInScanResult(): void
+    {
+        $dir = sys_get_temp_dir() . '/phlix_audiobook_rescan_' . uniqid();
+        mkdir($dir, 0777, true);
+
+        try {
+            $scanner = $this->createMock(AudiobookScanner::class);
+            $itemRepo = $this->createMock(ItemRepository::class);
+            $progressStore = $this->createMock(AudiobookProgressStore::class);
+
+            $scanner->method('scanAudiobookLibrary')->willReturnCallback(
+                static function (string $libraryId, string $libraryPath): \Generator {
+                    unset($libraryId);
+                    foreach (['a', 'b', 'c'] as $name) {
+                        yield ['name' => $name, 'path' => $libraryPath . '/' . $name . '.m4b'];
+                    }
+                }
+            );
+
+            // The middle audiobook cannot be written; the other two land.
+            $calls = 0;
+            $itemRepo->method('create')->willReturnCallback(
+                static function () use (&$calls): string {
+                    $calls++;
+                    if ($calls === 2) {
+                        throw new \RuntimeException('INJECTED: item create failed');
+                    }
+
+                    return 'item-' . $calls;
+                }
+            );
+
+            $manager = new AudiobookLibraryManager($scanner, $itemRepo, $progressStore);
+            $result = $manager->rescanLibrary('lib-audiobook', [$dir]);
+
+            $this->assertSame(3, $result->scanned);
+            $this->assertSame(2, $result->added);
+            $this->assertSame(
+                1,
+                $result->failed,
+                'the failure was already counted internally; reporting 0 here is a FALSE clean success '
+                . 'that reaches both POST-scan responses and library_scan_jobs.items_failed'
+            );
+            $this->assertSame(1, $result->toArray()['failed']);
+            $this->assertSame(
+                $result->scanned,
+                $result->added + $result->updated + $result->failed,
+                'every audiobook read must be accounted for as added, updated or failed'
+            );
+        } finally {
+            @rmdir($dir);
+        }
+    }
+
     public function testGetProgressReturnsZeroForNewUser(): void
     {
         $db = $this->createMock(Connection::class);

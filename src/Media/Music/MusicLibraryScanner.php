@@ -571,10 +571,25 @@ class MusicLibraryScanner
             'duration_ms' => $result->durationMs,
         ];
 
-        if ($result->failed > 0 || $skippedNoArtist > 0) {
-            // WARNING, not info: a scan that did not index every file it read is
-            // exactly what an operator greps for, and `.logs/app.log` carries every
-            // level so this is now reachable at all (S96(a)).
+        // THREE levels, keyed on whether files were LOST or merely skipped by policy
+        // (review r1 MED-2 — this line used to be `warning` for both cases, so the
+        // one summary an operator actually reads never reached `.logs/error.log`,
+        // which `config/logger.php` gates at `error`):
+        //
+        //   failed > 0            → ERROR   the scan lost files. Same level as the
+        //                                   per-album/per-track loss lines, so the
+        //                                   summary and its causes land in the same
+        //                                   clean file.
+        //   skipped_no_artist > 0 → WARNING a documented scan POLICY discarded album
+        //                                   groups with no artist tag. Not an error:
+        //                                   nothing malfunctioned, a rescan drops the
+        //                                   same files again, and routing an untagged
+        //                                   library into error.log would train the
+        //                                   operator to ignore it.
+        //   otherwise             → INFO    "this scan lost nothing" stated positively.
+        if ($result->failed > 0) {
+            $this->logger->error('Music directory scan complete with skipped files', $summary);
+        } elseif ($skippedNoArtist > 0) {
             $this->logger->warning('Music directory scan complete with skipped files', $summary);
         } else {
             $this->logger->info('Music directory scan complete', $summary);
@@ -682,7 +697,14 @@ class MusicLibraryScanner
             if ($artistResult === null) {
                 // The whole album is lost with its artist, so charge every file.
                 $result->failed += count($files);
-                $this->logger->warning('Failed to upsert artist', [
+                // ⚠ ERROR, not warning (review r1 MED-2). `config/logger.php` routes
+                // only `error`-and-above to the dedicated `.logs/error.log`, so at
+                // `warning` the WHOLE-ALBUM losses were buried in app.log while the
+                // per-TRACK loss below (one file) got the clean file to itself — the
+                // severity ladder ran backwards against actual data loss. Level now
+                // tracks loss: every path that drops files logs at `error`, and
+                // `files_lost` says how many.
+                $this->logger->error('Failed to upsert artist', [
                     'artist' => $artistName,
                     'album' => $albumTitle,
                     'files_lost' => count($files),
@@ -705,7 +727,9 @@ class MusicLibraryScanner
             );
             if ($albumResult === null) {
                 $result->failed += count($files);
-                $this->logger->warning('Failed to upsert album', [
+                // ERROR for the same reason as the artist branch above (MED-2): this
+                // loses the entire album, so it must reach `.logs/error.log`.
+                $this->logger->error('Failed to upsert album', [
                     'album' => $albumTitle,
                     'artist' => $artistName,
                     'files_lost' => count($files),
@@ -1645,8 +1669,30 @@ class MusicLibraryScanner
             return 'skipped';
         }
 
-        $this->logger->debug('Upserted track', ['album_id' => $albumId, 'title' => $title,
-            'media_item_id' => $mediaItemId]);
+        // ⚠ DELIBERATELY NOT LOGGED — DO NOT RE-ADD A PER-TRACK LINE HERE
+        // (review r1 MED-3). There was a `logger->debug('Upserted track', …)` on this
+        // line. It was written when this logger wrote into a `sys_get_temp_dir()`
+        // directory nobody could read (S96(a)), so its volume was invisible; the moment
+        // (a) routed it to `.logs/app.log` (handler level `debug`) it became the
+        // dominant content of that file. Measured: 14,585 lines / ≈2.4 MiB from ONE
+        // unit-test file's synthetic trees, and ≈61k lines ≈ 10 MiB per full scan of
+        // the production library — ~89 % of everything the scan emits, burying the
+        // per-album and per-track LOSS lines this step exists to surface.
+        //
+        // Nothing diagnostic is lost. The one question it answered — "is this scan
+        // actually writing?" — is now answered authoritatively and continuously by
+        // `library_scan_jobs.items_added` (S96(b), streamed on the throttled progress
+        // write), by `current_path` for the walk position, and by the per-path
+        // completion summary; and the track itself is durably recorded in
+        // `music_tracks`, which is a better record than a log line about it.
+        //
+        // The per-ARTIST and per-ALBUM debug lines are kept on purpose: their
+        // cardinality is bounded by the library's album count (≈5k, ≈1.2 MiB) rather
+        // than its file count, and the album is the FLUSH UNIT S95 introduced, so one
+        // line per flush boundary is a proportionate trace at the same granularity as
+        // the loss lines. The rule this leaves behind: a per-entity line recording
+        // SUCCESS is redundant with the row it just committed; a per-entity line
+        // recording LOSS is the only record there is, and those all stay (at `error`).
 
         // F4: the only music-enrichment trigger after native providers were
         // removed — the musicbrainz plugin subscribes MediaItemAdded. Dispatched

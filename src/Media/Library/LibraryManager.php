@@ -708,8 +708,15 @@ class LibraryManager
     }
 
     /**
-     * Logs the music-scan completion line, at WARNING when files were lost so an
-     * operator greping `.logs/app.log` sees it (S96(a)+(f)).
+     * Logs the music-scan completion line, at ERROR when files were lost (S96(a)+(f)).
+     *
+     * ⚠ ERROR, not warning (review r1 MED-2). It was `warning`, which meant the
+     * library-wide "this scan lost files" line reached only `.logs/app.log` — the file
+     * that also carries every per-entity `debug` line the same scan emits — while
+     * `config/logger.php` gates the dedicated `.logs/error.log` at `error`. The level
+     * now tracks actual data loss, matching {@see MusicLibraryScanner}'s per-path
+     * summary and its per-album/per-track loss lines, so one grep of one clean file
+     * answers "did the last scan lose anything?".
      *
      * @param string     $libraryId Library UUID.
      * @param ScanResult $result    Library-wide counters.
@@ -726,7 +733,7 @@ class LibraryManager
         ];
 
         if ($result->failed > 0) {
-            $this->logger->warning('Music library scan complete with failed files', $context);
+            $this->logger->error('Music library scan complete with failed files', $context);
             return;
         }
 

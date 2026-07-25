@@ -250,6 +250,55 @@ final class LibraryManagerMusicScanTest extends TestCase
     }
 
     /**
+     * MED-2 (review r1): the library-wide music-scan summary logs at ERROR when the scan
+     * lost files, and at INFO when it did not.
+     *
+     * It was `warning` for the lossy case, which meant the one line that says
+     * "this library's scan lost files" reached only `.logs/app.log` — the same file that
+     * carries every per-entity `debug` line of the same scan — while `config/logger.php`
+     * gates the dedicated `.logs/error.log` at `error`. `MusicLibraryScanner` logs a
+     * per-PATH summary; this is its per-LIBRARY twin, and the two must not disagree
+     * about severity.
+     */
+    public function testTheLibraryWideSummaryLogsAtErrorWhenFilesWereLost(): void
+    {
+        foreach ([['failed' => 2, 'level' => 'error'], ['failed' => 0, 'level' => 'info']] as $case) {
+            $path = $this->tempDir('sev' . $case['failed']);
+
+            $music = $this->createMock(MusicLibraryService::class);
+            $music->method('countFiles')->willReturn(2);
+            $music->method('scanDirectory')->willReturnCallback(
+                static function () use ($case): ScanResult {
+                    $result = new ScanResult();
+                    $result->scanned = 2;
+                    $result->added = 2 - $case['failed'];
+                    $result->failed = $case['failed'];
+
+                    return $result;
+                },
+            );
+
+            $logger = $this->createMock(StructuredLogger::class);
+            // The lossy case must use `error` and NOT `warning`; the clean case `info`.
+            $logger->expects($this->once())
+                ->method($case['level'])
+                ->with($this->stringContains('Music library scan complete'));
+            $logger->expects($this->never())->method('warning');
+
+            $manager = new LibraryManager(
+                $this->createMock(Connection::class),
+                $this->createMock(MediaScanner::class),
+                $this->createMock(FolderWatcher::class),
+                $music,
+                $logger,
+            );
+
+            // No progress sink: that is the branch that calls logMusicScanComplete().
+            $this->invokeScanMusic($manager, $this->musicLibrary($path), null);
+        }
+    }
+
+    /**
      * A 3-parameter sink (every pre-S96 caller) must keep working: PHP ignores surplus
      * arguments to a user-defined function, and the manager's own wrapper defaults the
      * counts array. Pinned because the whole design of S96(b) rests on it — a 4th

@@ -100,6 +100,39 @@ class ScanJobRepository
         'items_failed',
     ];
 
+    /**
+     * Counter columns {@see self::markCompleted()} may only ever RAISE.
+     *
+     * These three are cumulative tallies of work a job did ("items added", "items
+     * pruned", "files lost"), as opposed to `items_found` (the progress DENOMINATOR)
+     * and `items_updated` (the progress NUMERATOR), which are absolute readings the
+     * final stamp is allowed to correct in either direction.
+     *
+     * ⚠ WHY (review r1 LOW-4): for a `rescan` ONE job row carries two different
+     * definitions of `items_added` over its lifetime. The live sink streams the
+     * scanner's own new-leaf count (for music, new TRACKS) while
+     * {@see LibraryManager::rescanLibrary()} finishes by computing a row-count DELTA
+     * over every `media_items` type. Usually the delta is the larger of the two (it
+     * also counts the artist/album container rows), but it can be SMALLER — e.g. when
+     * a `music_tracks` row is added against a `media_items` row that already existed —
+     * and an operator watching a job go 12 → 3 at the moment it completes reads that
+     * as data disappearing. `LibraryManager` already engineers around exactly this for
+     * the cross-path case ("a job row that goes 12 → 3 is worse than one that stays at
+     * 0"); `GREATEST` extends the same rule to the completion stamp, so these columns
+     * are high-water marks: "at least this many", never a retraction. Both readings are
+     * true statements about different things, and neither is worth un-reporting.
+     *
+     * Costs nothing: it is one SQL function inside the UPDATE that was already being
+     * issued — no extra statement, no read-modify-write, so no race either.
+     *
+     * @var list<string>
+     */
+    private const MONOTONIC_FINAL_COLUMNS = [
+        'items_added',
+        'items_removed',
+        'items_failed',
+    ];
+
     /** @var int Lower bound for {@see self::getHistoryForLibrary()} `$limit`. */
     private const HISTORY_LIMIT_MIN = 1;
 
@@ -254,6 +287,12 @@ class ScanJobRepository
      * Mark a job as `completed`, stamping `completed_at` and optionally
      * writing the final counter values.
      *
+     * The cumulative counters in {@see self::MONOTONIC_FINAL_COLUMNS} are written as
+     * `GREATEST(<column>, ?)` so a completion stamp can only ever RAISE what the live
+     * progress sink already observed — see that constant for why (review r1 LOW-4).
+     * `items_found`/`items_updated` are written verbatim: they are the progress
+     * denominator/numerator, i.e. absolute readings rather than tallies.
+     *
      * @param string                     $jobId       Job UUID.
      * @param array<string, int|string>  $finalCounts Optional final counter
      *                                                values; only recognised
@@ -268,7 +307,9 @@ class ScanJobRepository
 
         foreach (self::COUNTER_COLUMNS as $column) {
             if (array_key_exists($column, $finalCounts)) {
-                $assignments[] = $column . ' = ?';
+                $assignments[] = in_array($column, self::MONOTONIC_FINAL_COLUMNS, true)
+                    ? $column . ' = GREATEST(' . $column . ', ?)'
+                    : $column . ' = ?';
                 $params[]      = (int) $finalCounts[$column];
             }
         }
@@ -284,6 +325,25 @@ class ScanJobRepository
     /**
      * Mark a job as `failed`, recording the error message and stamping
      * `completed_at`.
+     *
+     * ⚠ **NO FINAL COUNTERS, BY NECESSITY — a failed job keeps whatever the live
+     * progress sink last wrote (review r1 LOW-7).** The counters are deliberately left
+     * alone rather than zeroed: there is no {@see ScanResult} to read at this point (the
+     * throw destroyed it), and the reaper path — {@see self::reapStaleJobs()}, which is
+     * how a job killed by a RESTART actually ends up `failed` — never runs in the
+     * process that owned the scan at all. What survives is therefore the truth as of the
+     * last throttled progress write, and how good that is depends on the library type:
+     *
+     *  - MUSIC: accurate to within `LibraryScanWorker::PROGRESS_WRITE_EVERY` files. This
+     *    is the case from the live incident (a 4 h scan killed by a restart reporting
+     *    `items_added: 0`) and S96(b) fixed it.
+     *  - VIDEO / PHOTO / BOOK / AUDIOBOOK: still `items_added: 0`. Those paths go
+     *    through {@see MediaScanner::scan()}, which knows its added count only when a
+     *    whole path is finished, so the 3-argument sink streams no counters and only
+     *    `markCompleted()` can fill them in — which a killed job never reaches. Closing
+     *    that needs a per-file OUTCOME in `MediaScanner`'s `$onFile` contract (it
+     *    currently reports the path only); tracked as a follow-up, deliberately not
+     *    redesigned here.
      *
      * @param string $jobId Job UUID.
      * @param string $error Failure message stored in the `error` column.

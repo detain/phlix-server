@@ -31,6 +31,57 @@ use Workerman\MySQL\Connection;
  */
 class StatsCollector
 {
+    /**
+     * Symbolic names of every WRITE routed through {@see write()}.
+     *
+     * The failure counters are keyed by these values (anything else folds into
+     * {@see OTHER_OPERATION}), which is what BOUNDS {@see $writeFailures} to a
+     * compile-time vocabulary. Nothing a request can influence ever becomes a
+     * key, so the map cannot grow in a resident worker.
+     *
+     * @var list<string>
+     */
+    private const WRITE_OPERATIONS = [
+        'playback_start',
+        'playback_end',
+        'library_change',
+        'user_activity',
+        'storage_snapshot',
+    ];
+
+    /** Counter bucket for an operation name outside {@see WRITE_OPERATIONS}. */
+    private const OTHER_OPERATION = 'other';
+
+    /**
+     * Minimum seconds between two logged failures for the SAME operation.
+     *
+     * `ItemRepository::recordChange()` calls {@see recordLibraryChange()} once per
+     * scanned item, so an unthrottled boundary emitted one `error` line per item —
+     * ~29,000 lines for the production music library's 29,245 tracks (S102 review
+     * r1 LOW-5). Suppressed failures are still COUNTED and the count is reported
+     * on the next line that does get through, so the condition stays visible
+     * without drowning the log.
+     */
+    private const FAILURE_LOG_INTERVAL_SECONDS = 60;
+
+    /**
+     * Per-operation write-failure counters, shared across every instance in this
+     * worker process.
+     *
+     * Static because the counter has to survive across the short-lived
+     * `StatsCollector` instances the DI container hands out, and because a
+     * process-wide count is the useful one. This is NOT request state: the keys
+     * are the fixed {@see WRITE_OPERATIONS} vocabulary (at most six entries) and
+     * the values are three ints, so it cannot leak memory in a resident worker.
+     *
+     * `logged_at_ns` uses `hrtime()`, never `time()`, so a clock adjustment
+     * cannot make the throttle window jump. (`hrtime(true)` is `int` on 64-bit
+     * builds and `float` on 32-bit ones, hence the union.)
+     *
+     * @var array<string, array{failures: int, suppressed: int, logged_at_ns: float|int}>
+     */
+    private static array $writeFailures = [];
+
     /** @var Connection Database connection for MySQL queries */
     private Connection $db;
 
@@ -150,12 +201,18 @@ class StatsCollector
      * as a visible error rather than as a silently empty chart, and none of them
      * sits on a playback path.
      *
-     * Failures are logged at **error** level, so they land in `.logs/error.log`
-     * (the error handler is untagged and therefore attaches to every channel)
-     * and are visible to anyone watching the error log — swallowed, but never
-     * silent. The SQL is included because these statements are static literals
-     * with bound parameters; the parameters themselves are NOT logged, since
-     * they carry user ids and client IPs.
+     * Failures are logged at **error** level, so they land in
+     * `.logs/error-YYYY-MM-DD.log` (the `error` handler is a `rotating_file`, so
+     * the configured `error.log` path is date-stamped on disk, and it is untagged
+     * and therefore attaches to every channel) and are visible to anyone watching
+     * the error log — swallowed, but never silent. The SQL is included because
+     * these statements are static literals with bound parameters; the parameters
+     * themselves are NOT logged, since they carry user ids and client IPs.
+     *
+     * Repeated failures are THROTTLED and COUNTED rather than logged one-per-event
+     * ({@see noteWriteFailure()}), and the running totals are readable through
+     * {@see writeFailureCounters()} so a persistently degraded stats subsystem is
+     * countable rather than only greppable.
      *
      * This mirrors the reasoning behind {@see isEnabled()}: guarding HERE rather
      * than at the ~52 call sites means the guarantee cannot be forgotten by a
@@ -175,17 +232,100 @@ class StatsCollector
             $this->db->query($sql, $params);
             return true;
         } catch (Throwable $e) {
-            LoggerFactory::get(LogChannels::APPLICATION)->error(
-                'Stats write failed and was contained; the triggering action is unaffected',
-                [
-                    'operation' => $operation,
-                    'exception' => $e::class,
-                    'error' => $e->getMessage(),
-                    'sql' => preg_replace('/\s+/', ' ', trim($sql)),
-                ]
-            );
+            $this->noteWriteFailure($operation, $e, $sql);
             return false;
         }
+    }
+
+    /**
+     * Count a contained write failure and log it, at most once per operation per
+     * {@see FAILURE_LOG_INTERVAL_SECONDS}.
+     *
+     * The first failure for an operation always logs immediately (so a broken
+     * subsystem is loud straight away); subsequent failures inside the window are
+     * counted into `suppressed` and reported on the next line that does get
+     * through. Both `failures_total` and `suppressed_since_last_log` are in the
+     * context, so the log itself answers "how bad is it?" rather than requiring a
+     * `wc -l` over identical lines.
+     *
+     * @param string    $operation Symbolic write name (see {@see WRITE_OPERATIONS}).
+     * @param Throwable $e         The contained failure.
+     * @param string    $sql       Static SQL statement (no bound parameters).
+     *
+     * @return void
+     *
+     * @since 1.9
+     */
+    private function noteWriteFailure(string $operation, Throwable $e, string $sql): void
+    {
+        $key = in_array($operation, self::WRITE_OPERATIONS, true) ? $operation : self::OTHER_OPERATION;
+        $state = self::$writeFailures[$key] ?? ['failures' => 0, 'suppressed' => 0, 'logged_at_ns' => 0];
+        $state['failures']++;
+
+        $nowNs = hrtime(true);
+        $windowNs = self::FAILURE_LOG_INTERVAL_SECONDS * 1_000_000_000;
+
+        if ($state['logged_at_ns'] !== 0 && ($nowNs - $state['logged_at_ns']) < $windowNs) {
+            $state['suppressed']++;
+            self::$writeFailures[$key] = $state;
+
+            return;
+        }
+
+        $suppressed = $state['suppressed'];
+        $state['suppressed'] = 0;
+        $state['logged_at_ns'] = $nowNs;
+        self::$writeFailures[$key] = $state;
+
+        LoggerFactory::get(LogChannels::APPLICATION)->error(
+            'Stats write failed and was contained; the triggering action is unaffected',
+            [
+                'operation' => $key,
+                'exception' => $e::class,
+                'error' => $e->getMessage(),
+                'sql' => preg_replace('/\s+/', ' ', trim($sql)),
+                'failures_total' => $state['failures'],
+                'suppressed_since_last_log' => $suppressed,
+            ]
+        );
+    }
+
+    /**
+     * Contained write failures so far in this worker, keyed by operation.
+     *
+     * Exposed so the condition is countable — a stats subsystem that has been
+     * failing every write for a week is otherwise invisible except as repeated
+     * log lines. `suppressed` is the number of failures counted but not logged
+     * since the last line that was emitted.
+     *
+     * @return array<string, array{failures: int, suppressed: int}>
+     *
+     * @since 1.9
+     */
+    public static function writeFailureCounters(): array
+    {
+        $out = [];
+        foreach (self::$writeFailures as $operation => $state) {
+            $out[$operation] = [
+                'failures' => $state['failures'],
+                'suppressed' => $state['suppressed'],
+            ];
+        }
+
+        return $out;
+    }
+
+    /**
+     * Clear the failure counters (test seam; also usable after an operator has
+     * acknowledged a fault).
+     *
+     * @return void
+     *
+     * @since 1.9
+     */
+    public static function resetWriteFailureCounters(): void
+    {
+        self::$writeFailures = [];
     }
 
     /**
@@ -357,29 +497,13 @@ class StatsCollector
     }
 
     /**
-     * Record a storage snapshot.
+     * Record ONE storage snapshot row.
      *
-     * ## Coarse buckets, not raw types (S102)
-     *
-     * Unlike {@see recordPlaybackStart()}, `stats_storage.media_type` is
-     * deliberately a COARSE column: five buckets
-     * ({@see StorageSnapshotHelper::BUCKETS}), because it has a real reader —
-     * `DashboardService::getStorageSummary()` groups by it and matches the result
-     * into a fixed `{movie,series,music,photo,book}_bytes` shape, so a raw
-     * 13-member type would land in that `match`'s `default => null` arm and its
-     * bytes would vanish from the dashboard totals. Widening this column would
-     * therefore BREAK a consumer; widening `stats_playback_events.media_type`
-     * (which has no readers) does not.
-     *
-     * So instead of widening, the fold is enforced here, at the only writer:
-     * `$mediaType` is normalised through
-     * {@see StorageSnapshotHelper::TYPE_TO_BUCKET}, which is exhaustive over
-     * {@see \Phlix\Media\MediaItemType::ALL}. The fold is idempotent — every
-     * bucket maps to itself — so the two existing callers
-     * ({@see StorageSnapshotHelper::bootstrapSnapshot()} and
-     * `Application::recordStorageSnapshots()`), which already pass bucket names,
-     * are unaffected, while a future caller handing over a raw `episode` gets a
-     * correct `series` row rather than MySQL error 1265.
+     * A single-entry call into {@see recordStorageSnapshots()}, which is where the
+     * fold, the per-bucket SUM and the unknown-type rejection live. Prefer the
+     * batch form whenever more than one media type is being recorded in the same
+     * snapshot run: two raw types folding to the same bucket must become ONE
+     * summed row, and only the batch form can see that.
      *
      * @param string $mediaType Bucket name, or any `media_items.type` value to fold
      * @param int $itemCount Number of items of this type
@@ -401,27 +525,160 @@ class StatsCollector
         int $transcodeCacheBytes = 0,
         ?string $libraryId = null
     ): void {
+        $this->recordStorageSnapshots(
+            [$mediaType => ['count' => $itemCount, 'bytes' => $totalBytes, 'cache' => $transcodeCacheBytes]],
+            $libraryId
+        );
+    }
+
+    /**
+     * Record one storage snapshot RUN: exactly one row per coarse bucket.
+     *
+     * ## Coarse buckets, not raw types (S102)
+     *
+     * Unlike {@see recordPlaybackStart()}, `stats_storage.media_type` is
+     * deliberately a COARSE column: five buckets
+     * ({@see StorageSnapshotHelper::BUCKETS}), because it has a real reader —
+     * `DashboardService::getStorageSummary()` groups by it and matches the result
+     * into a fixed `{movie,series,music,photo,book}_bytes` shape, so a raw
+     * 13-member type would land in that `match`'s `default => null` arm and its
+     * bytes would vanish from the dashboard totals. Widening this column would
+     * therefore BREAK a consumer; widening `stats_playback_events.media_type`
+     * (which has no readers) does not.
+     *
+     * So instead of widening, the fold is enforced here, at the only writer, via
+     * {@see StorageSnapshotHelper::TYPE_TO_BUCKET} (exhaustive over
+     * {@see \Phlix\Media\MediaItemType::ALL} and idempotent, since every bucket
+     * maps to itself).
+     *
+     * ## Why this is a BATCH (S102 review r1, MED-2)
+     *
+     * Folding alone is not enough: several raw types map to the SAME bucket
+     * (`series`/`season`/`episode` → `series`, five music types → `music`), and a
+     * fold applied one call at a time emitted one row PER CALL. All of those rows
+     * carry the same `NOW()` second, so `getStorageSummary()`'s
+     * `MAX(recorded_at)` join returned every one of them for the same bucket.
+     * Measured on real MySQL, writing all 13 types that way put only **31,000 of
+     * 91,000** bytes into the five headline totals — worse than the widening this
+     * design rejects. Summing per bucket BEFORE the INSERT means one snapshot run
+     * is one row per bucket, which is what the reader's grouping assumes.
+     *
+     * ## An unmapped type is DROPPED, loudly (S102 review r1, MED-3)
+     *
+     * A media type with no bucket is logged at **error** and written NOWHERE. It
+     * is deliberately NOT attributed to {@see \Phlix\Media\MediaItemType::FALLBACK}
+     * (`movie`): `migrations/086_stats_storage_book_bucket.sql:11-14` writes the
+     * rule down — *"counting their bytes as Music produces a wrong number that
+     * looks right, which is worse than a visibly missing one."* `FALLBACK` is
+     * right for a LABEL (`normalize()`, `shape()`, `lookupMediaType()`) and wrong
+     * for a byte accumulator. `TYPE_TO_BUCKET` is pinned exhaustive against
+     * `MediaItemType::ALL` by
+     * {@see \Phlix\Tests\Unit\Media\MediaItemTypeDriftTest}, so this branch is
+     * unreachable for any real column value.
+     *
+     * @param array<string, array{count: int, bytes: int, cache?: int}> $totals
+     *        Item counts and byte totals keyed by bucket name or raw
+     *        `media_items.type` value; `cache` (transcode cache bytes) defaults to 0.
+     * @param string|null $libraryId Library UUID if the run is scoped to one library
+     *
+     * @return void
+     *
+     * @example
+     * ```php
+     * $collector->recordStorageSnapshots([
+     *     'episode' => ['count' => 300, 'bytes' => 4_000],
+     *     'season'  => ['count' => 20,  'bytes' => 3_000],
+     * ]);
+     * // -> ONE `series` row: item_count 320, total_bytes 7_000
+     * ```
+     *
+     * @since 1.9
+     */
+    public function recordStorageSnapshots(array $totals, ?string $libraryId = null): void
+    {
         if (!$this->isEnabled()) {
             return;
         }
 
-        $id = $this->generateUuid();
-        $bucket = StorageSnapshotHelper::TYPE_TO_BUCKET[$mediaType]
-            ?? StorageSnapshotHelper::TYPE_TO_BUCKET[MediaItemType::FALLBACK];
-        if ($bucket !== $mediaType) {
-            LoggerFactory::get(LogChannels::APPLICATION)->warning(
-                'Storage snapshot media type folded to a stats_storage bucket',
-                ['received' => $mediaType, 'recorded_as' => $bucket]
+        foreach ($this->foldStorageTotals($totals) as $bucket => $summed) {
+            $this->write(
+                'storage_snapshot',
+                "INSERT INTO stats_storage
+                 (id, recorded_at, library_id, media_type, item_count, total_bytes, transcode_cache_bytes)
+                 VALUES (?, NOW(), ?, ?, ?, ?, ?)",
+                [
+                    $this->generateUuid(),
+                    $libraryId,
+                    $bucket,
+                    $summed['count'],
+                    $summed['bytes'],
+                    $summed['cache'],
+                ]
+            );
+        }
+    }
+
+    /**
+     * Fold raw `media_items.type` totals onto the coarse `stats_storage` buckets,
+     * SUMMING every type that lands in the same bucket.
+     *
+     * Types with no bucket are dropped and reported once per run at `error`
+     * level; folded types are reported once per run at `warning` level (one line
+     * per run rather than one per type, per S102 review r1 LOW-5).
+     *
+     * @param array<string, array{count: int, bytes: int, cache?: int}> $totals
+     *
+     * @return array<string, array{count: int, bytes: int, cache: int}> Keyed by bucket
+     *
+     * @since 1.9
+     */
+    private function foldStorageTotals(array $totals): array
+    {
+        /** @var array<string, array{count: int, bytes: int, cache: int}> $folded */
+        $folded = [];
+        /** @var array<string, string> $foldedFrom */
+        $foldedFrom = [];
+        /** @var array<string, int> $droppedBytes */
+        $droppedBytes = [];
+
+        foreach ($totals as $mediaType => $entry) {
+            $bucket = StorageSnapshotHelper::TYPE_TO_BUCKET[$mediaType] ?? null;
+
+            if ($bucket === null) {
+                $droppedBytes[$mediaType] = $entry['bytes'];
+                continue;
+            }
+
+            if ($bucket !== $mediaType) {
+                $foldedFrom[$mediaType] = $bucket;
+            }
+
+            if (!isset($folded[$bucket])) {
+                $folded[$bucket] = ['count' => 0, 'bytes' => 0, 'cache' => 0];
+            }
+            $folded[$bucket]['count'] += $entry['count'];
+            $folded[$bucket]['bytes'] += $entry['bytes'];
+            $folded[$bucket]['cache'] += $entry['cache'] ?? 0;
+        }
+
+        if ($droppedBytes !== []) {
+            LoggerFactory::get(LogChannels::APPLICATION)->error(
+                'Storage snapshot DROPPED media types with no stats_storage bucket; their bytes are '
+                . 'deliberately not attributed to another bucket, because a wrong number that looks '
+                . 'right is worse than a visibly missing one (migration 086). Give the type a bucket '
+                . 'in StorageSnapshotHelper::TYPE_TO_BUCKET.',
+                ['dropped_bytes_by_type' => $droppedBytes]
             );
         }
 
-        $this->write(
-            'storage_snapshot',
-            "INSERT INTO stats_storage
-             (id, recorded_at, library_id, media_type, item_count, total_bytes, transcode_cache_bytes)
-             VALUES (?, NOW(), ?, ?, ?, ?, ?)",
-            [$id, $libraryId, $bucket, $itemCount, $totalBytes, $transcodeCacheBytes]
-        );
+        if ($foldedFrom !== []) {
+            LoggerFactory::get(LogChannels::APPLICATION)->warning(
+                'Storage snapshot media types folded to stats_storage buckets',
+                ['folded' => $foldedFrom]
+            );
+        }
+
+        return $folded;
     }
 
     /**

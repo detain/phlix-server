@@ -49,15 +49,31 @@ class StorageSnapshotHelperTest extends TestCase
     /**
      * Build a DB mock whose type-count query returns the given rows.
      *
+     * `bootstrapSnapshot()` also asks `stats_storage` how old the newest snapshot
+     * is (see {@see StorageSnapshotHelper::bootstrapSnapshot()}), so the mock
+     * answers per statement rather than per call: by default it reports an EMPTY
+     * `stats_storage` (i.e. stale ⇒ record), and `$snapshotAgeSeconds` makes it
+     * report an existing snapshot of that age.
+     *
      * @param array<int, array{type: string, item_count: int}> $rows
+     * @param int|null $snapshotAgeSeconds Age of the newest stats_storage row, or
+     *        null for "table is empty".
      * @return Connection&\PHPUnit\Framework\MockObject\MockObject
      */
-    private function dbReturningTypeCounts(array $rows)
+    private function dbReturningTypeCounts(array $rows, ?int $snapshotAgeSeconds = null)
     {
         $db = $this->createMock(Connection::class);
-        $db->method('query')
-            ->with($this->stringContains('FROM media_items'))
-            ->willReturn($rows);
+        $db->method('query')->willReturnCallback(
+            static function (string $sql) use ($rows, $snapshotAgeSeconds): array {
+                if (str_contains($sql, 'FROM stats_storage')) {
+                    return $snapshotAgeSeconds === null
+                        ? [['newest' => null, 'age_seconds' => null]]
+                        : [['newest' => '2026-01-01 00:00:00', 'age_seconds' => $snapshotAgeSeconds]];
+                }
+
+                return $rows;
+            }
+        );
 
         return $db;
     }
@@ -210,19 +226,32 @@ class StorageSnapshotHelperTest extends TestCase
         }
     }
 
-    public function testBootstrapSnapshotRecordsOneSnapshotPerBucket(): void
+    /**
+     * ONE batch call carrying every bucket — not one call per bucket.
+     *
+     * `DashboardService::getStorageSummary()` SUMS the rows that share a
+     * `recorded_at` second, so a snapshot run must produce exactly one row per
+     * bucket (S102 review r1, MED-2). Recording bucket-by-bucket is what let
+     * several raw types collide inside one bucket.
+     */
+    public function testBootstrapSnapshotRecordsOneSnapshotPerBucketInASingleBatch(): void
     {
         $db = $this->dbReturningTypeCounts([
             ['type' => 'episode', 'item_count' => 300],
             ['type' => 'track', 'item_count' => 900],
         ]);
 
+        /** @var array<string, int> $recorded */
         $recorded = [];
         $collector = $this->createMock(StatsCollector::class);
-        $collector->method('recordStorageSnapshot')
+        $collector->expects($this->never())->method('recordStorageSnapshot');
+        $collector->expects($this->once())
+            ->method('recordStorageSnapshots')
             ->willReturnCallback(
-                function (string $mediaType, int $count, int $bytes) use (&$recorded): void {
-                    $recorded[$mediaType] = $count;
+                function (array $totals) use (&$recorded): void {
+                    foreach ($totals as $bucket => $entry) {
+                        $recorded[$bucket] = $entry['count'];
+                    }
                 }
             );
 
@@ -233,5 +262,40 @@ class StorageSnapshotHelperTest extends TestCase
         $this->assertSame(900, $recorded['music']);
         $this->assertSame(0, $recorded['photo']);
         $this->assertSame(0, $recorded['book']);
+    }
+
+    /**
+     * `public/index.php` calls `bootstrapSnapshot()` on EVERY PHP-FPM request. Its
+     * docblock always promised "if data is stale or missing", but nothing checked
+     * — so every request re-ran `du -sb` over both vault roots and wrote another
+     * five rows. Now that the dashboard SUMS same-second rows, a second run inside
+     * one `recorded_at` second would double the totals, so the promise has to be
+     * real (S102 review r1, MED-2).
+     */
+    public function testBootstrapSnapshotSkipsWhenTheNewestSnapshotIsFresh(): void
+    {
+        $db = $this->dbReturningTypeCounts(
+            [['type' => 'movie', 'item_count' => 10]],
+            60,
+        );
+
+        $collector = $this->createMock(StatsCollector::class);
+        $collector->expects($this->never())->method('recordStorageSnapshots');
+        $collector->expects($this->never())->method('recordStorageSnapshot');
+
+        StorageSnapshotHelper::bootstrapSnapshot($collector, $db);
+    }
+
+    public function testBootstrapSnapshotRecordsWhenTheNewestSnapshotIsStale(): void
+    {
+        $db = $this->dbReturningTypeCounts(
+            [['type' => 'movie', 'item_count' => 10]],
+            86_400,
+        );
+
+        $collector = $this->createMock(StatsCollector::class);
+        $collector->expects($this->once())->method('recordStorageSnapshots');
+
+        StorageSnapshotHelper::bootstrapSnapshot($collector, $db);
     }
 }

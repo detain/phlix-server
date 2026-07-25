@@ -14,6 +14,20 @@ use Workerman\MySQL\Connection;
 
 class StatsCollectorTest extends TestCase
 {
+    protected function setUp(): void
+    {
+        parent::setUp();
+        // The failure counters are process-wide (see StatsCollector::$writeFailures),
+        // so every test starts from a known state regardless of execution order.
+        StatsCollector::resetWriteFailureCounters();
+    }
+
+    protected function tearDown(): void
+    {
+        StatsCollector::resetWriteFailureCounters();
+        parent::tearDown();
+    }
+
     public function testRecordPlaybackStartCreatesEvent(): void
     {
         $db = $this->createMock(Connection::class);
@@ -130,8 +144,34 @@ class StatsCollectorTest extends TestCase
      * The boundary is deliberately narrow: READ failures still surface, because
      * they serve the admin dashboard, where a broken query must be a visible
      * error rather than a silently empty chart.
+     *
+     * All THREE reads are pinned (S102 review r1, LOW-4): pinning only
+     * `getTopMedia()` left the other two free to be wrapped in containment with
+     * no red test — the exact "boundary widened by accident" this test exists to
+     * prevent.
+     *
+     * @return array<string, array{0: callable(StatsCollector): mixed}>
      */
-    public function testReadFailuresStillPropagate(): void
+    public static function readMethodProvider(): array
+    {
+        return [
+            'getPlaybackStats' => [
+                static fn(StatsCollector $c): mixed => $c->getPlaybackStats(
+                    new DateTime('2024-01-01'),
+                    new DateTime('2024-01-31')
+                ),
+            ],
+            'getTopUsers' => [static fn(StatsCollector $c): mixed => $c->getTopUsers(10, null)],
+            'getTopMedia' => [static fn(StatsCollector $c): mixed => $c->getTopMedia(10, null)],
+        ];
+    }
+
+    /**
+     * @param callable(StatsCollector): mixed $read
+     *
+     * @dataProvider readMethodProvider
+     */
+    public function testReadFailuresStillPropagate(callable $read): void
     {
         $db = $this->createMock(Connection::class);
         $db->method('query')->willThrowException(new RuntimeException('read exploded'));
@@ -139,7 +179,24 @@ class StatsCollectorTest extends TestCase
         $collector = new StatsCollector($db);
 
         $this->expectException(RuntimeException::class);
-        $collector->getTopMedia(10, null);
+        $read($collector);
+    }
+
+    /**
+     * A contained read would also leave no trace in the write counters, so assert
+     * the failure never went through the WRITE boundary either.
+     */
+    public function testAReadFailureIsNotCountedAsAContainedWrite(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willThrowException(new RuntimeException('read exploded'));
+
+        try {
+            (new StatsCollector($db))->getTopUsers(10, null);
+            $this->fail('getTopUsers() must propagate');
+        } catch (RuntimeException) {
+            $this->assertSame([], StatsCollector::writeFailureCounters());
+        }
     }
 
     /**
@@ -161,6 +218,188 @@ class StatsCollectorTest extends TestCase
 
             (new StatsCollector($db))->recordStorageSnapshot($t, 1, 1024);
         }
+    }
+
+    /**
+     * S102 review r1 MED-2 — the fold must AGGREGATE, not emit a row per call.
+     *
+     * Several raw types share a bucket, and every row of one snapshot run carries
+     * the same `NOW()` second, so `getStorageSummary()`'s `MAX(recorded_at)` join
+     * returns all of them for that bucket. One summed row per bucket is what the
+     * reader's grouping assumes. Real-DB proof of the resulting totals:
+     * {@see \Phlix\Tests\Integration\Stats\PlaybackEventMediaTypeEnumTest::testTheDashboardRollUpsEqualTheRawBytesWritten}.
+     */
+    public function testRecordStorageSnapshotsSumsEveryTypeThatSharesABucket(): void
+    {
+        /** @var array<string, array{count: int, bytes: int, cache: int}> $written */
+        $written = [];
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(
+            function (string $sql, array $params) use (&$written): array {
+                $this->assertStringContainsString('INSERT INTO stats_storage', $sql);
+                $written[(string) $params[2]] = [
+                    'count' => (int) $params[3],
+                    'bytes' => (int) $params[4],
+                    'cache' => (int) $params[5],
+                ];
+
+                return [];
+            }
+        );
+
+        (new StatsCollector($db))->recordStorageSnapshots([
+            'series' => ['count' => 1, 'bytes' => 2_000, 'cache' => 1],
+            'season' => ['count' => 2, 'bytes' => 3_000, 'cache' => 2],
+            'episode' => ['count' => 3, 'bytes' => 4_000, 'cache' => 4],
+            'photo' => ['count' => 4, 'bytes' => 12_000],
+        ]);
+
+        $this->assertSame(['series', 'photo'], array_keys($written), 'One row per BUCKET, not per type');
+        $this->assertSame(['count' => 6, 'bytes' => 9_000, 'cache' => 7], $written['series']);
+        $this->assertSame(['count' => 4, 'bytes' => 12_000, 'cache' => 0], $written['photo']);
+    }
+
+    /**
+     * The whole 13-member vocabulary in one run: five rows, and not one byte lost.
+     */
+    public function testRecordStorageSnapshotsLosesNoBytesAcrossTheWholeVocabulary(): void
+    {
+        $totals = [];
+        $expectedTotal = 0;
+        foreach (MediaItemType::ALL as $index => $type) {
+            $bytes = 1_000 * ($index + 1);
+            $totals[$type] = ['count' => 1, 'bytes' => $bytes];
+            $expectedTotal += $bytes;
+        }
+        $this->assertSame(91_000, $expectedTotal, 'The review r1 fixture: 13 types, 91,000 bytes');
+
+        $writtenBytes = 0;
+        $rows = 0;
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(
+            function (string $sql, array $params) use (&$writtenBytes, &$rows): array {
+                $rows++;
+                $writtenBytes += (int) $params[4];
+
+                return [];
+            }
+        );
+
+        (new StatsCollector($db))->recordStorageSnapshots($totals);
+
+        $this->assertSame(5, $rows, 'One row per stats_storage bucket');
+        $this->assertSame(91_000, $writtenBytes, 'Every byte handed in must reach the table');
+    }
+
+    /**
+     * S102 review r1 MED-3 — an unmapped type must NOT be filed under `movie`.
+     *
+     * `migrations/086_stats_storage_book_bucket.sql:11-14` states the rule: "a
+     * wrong number that looks right is worse than a visibly missing one". Before
+     * this fix `recordStorageSnapshot('totally-unknown', 3, 999)` wrote
+     * `media_type=movie, total_bytes=999` with only an app.log warning.
+     */
+    public function testAnUnmappedStorageTypeIsDroppedRatherThanFiledUnderMovie(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->expects($this->never())->method('query');
+
+        (new StatsCollector($db))->recordStorageSnapshot('totally-unknown', 3, 999);
+    }
+
+    /**
+     * Dropping the unmapped type must not take the mapped ones with it.
+     */
+    public function testAnUnmappedTypeDoesNotStopTheRestOfTheRun(): void
+    {
+        /** @var list<string> $buckets */
+        $buckets = [];
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(
+            function (string $sql, array $params) use (&$buckets): array {
+                $buckets[] = (string) $params[2];
+
+                return [];
+            }
+        );
+
+        (new StatsCollector($db))->recordStorageSnapshots([
+            'movie' => ['count' => 1, 'bytes' => 1_000],
+            'podcast' => ['count' => 9, 'bytes' => 999],
+            'photo' => ['count' => 2, 'bytes' => 2_000],
+        ]);
+
+        $this->assertSame(['movie', 'photo'], $buckets);
+    }
+
+    /**
+     * S102 review r1 LOW-5 — a persistent write failure must be COUNTED and the
+     * log THROTTLED.
+     *
+     * `ItemRepository::recordChange()` calls `recordLibraryChange()` once per
+     * scanned item, so an un-throttled boundary wrote one `error` line per item:
+     * ~29,000 lines for the production music library, with nothing countable
+     * anywhere. First failure logs immediately; the rest are counted.
+     */
+    public function testRepeatedWriteFailuresAreCountedAndTheLogIsThrottled(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willThrowException(new RuntimeException('stats_library_changes is gone'));
+
+        $collector = new StatsCollector($db);
+        for ($i = 0; $i < 1_000; $i++) {
+            $collector->recordLibraryChange('item_added', 'media-' . $i);
+        }
+
+        $counters = StatsCollector::writeFailureCounters();
+
+        $this->assertArrayHasKey('library_change', $counters);
+        $this->assertSame(1_000, $counters['library_change']['failures'], 'Every failure must be counted');
+        $this->assertSame(
+            999,
+            $counters['library_change']['suppressed'],
+            'Exactly ONE of the 1,000 identical failures may reach the log inside the throttle window'
+        );
+    }
+
+    /**
+     * The counters are per operation, and bounded by the fixed write vocabulary —
+     * nothing a request controls can become a key, so the map cannot grow.
+     */
+    public function testFailureCountersAreKeyedPerOperationAndBounded(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willThrowException(new RuntimeException('everything is on fire'));
+
+        $collector = new StatsCollector($db);
+        $eventId = $collector->recordPlaybackStart('user-1', 'media-1', 'episode', 'device-1');
+        $collector->recordPlaybackEnd($eventId, 60, true);
+        $collector->recordLibraryChange('item_added', 'media-1');
+        $collector->recordUserActivity('user-1', 'login');
+        $collector->recordStorageSnapshot('movie', 1, 1);
+
+        $counters = StatsCollector::writeFailureCounters();
+
+        $this->assertSame(
+            ['playback_start', 'playback_end', 'library_change', 'user_activity', 'storage_snapshot'],
+            array_keys($counters)
+        );
+        foreach ($counters as $operation => $state) {
+            $this->assertSame(1, $state['failures'], $operation);
+            $this->assertSame(0, $state['suppressed'], $operation);
+        }
+    }
+
+    public function testResetClearsTheFailureCounters(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willThrowException(new RuntimeException('nope'));
+
+        (new StatsCollector($db))->recordUserActivity('user-1', 'login');
+        $this->assertNotSame([], StatsCollector::writeFailureCounters());
+
+        StatsCollector::resetWriteFailureCounters();
+        $this->assertSame([], StatsCollector::writeFailureCounters());
     }
 
     public function testRecordPlaybackEndCalculatesDuration(): void

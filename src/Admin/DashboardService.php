@@ -249,6 +249,22 @@ class DashboardService
      * Returns the most recent storage snapshot for each media type,
      * including item count, total bytes, and transcode cache usage.
      *
+     * ## Why the query AGGREGATES (S102 review r1, MED-2)
+     *
+     * The latest-snapshot join can legitimately return SEVERAL rows for the same
+     * `media_type` — one per `library_id` when a snapshot is recorded per library,
+     * and historically one per raw `media_items.type` folded into the same coarse
+     * bucket. The `match` below used to ASSIGN (`=`) while the query ordered by
+     * `total_bytes DESC`, so the SMALLEST colliding row won and the rest vanished
+     * from the headline totals: measured on real MySQL, 13 folded types worth
+     * 91,000 bytes produced five totals summing to 31,000. Both halves are now
+     * additive — `SUM(…) GROUP BY media_type` in SQL, and `+=` in PHP — so a
+     * bucket's bytes cannot be dropped by a duplicate row no matter which side
+     * produced it. `ORDER BY SUM(ss.total_bytes)` is spelled out rather than using
+     * the select alias, because an alias that shadows a real column name is
+     * exactly the kind of `GROUP BY`/`ORDER BY` ambiguity `ONLY_FULL_GROUP_BY`
+     * has bitten this repo with before.
+     *
      * @return array{
      *     movie_bytes: int,
      *     series_bytes: int,
@@ -273,10 +289,10 @@ class DashboardService
         $rows = $this->db->query(
             "SELECT
                 ss.media_type,
-                ss.item_count,
-                ss.total_bytes,
-                ss.transcode_cache_bytes,
-                ss.recorded_at
+                SUM(ss.item_count) AS item_count,
+                SUM(ss.total_bytes) AS total_bytes,
+                SUM(ss.transcode_cache_bytes) AS transcode_cache_bytes,
+                MAX(ss.recorded_at) AS recorded_at
              FROM stats_storage ss
              INNER JOIN (
                  SELECT
@@ -286,7 +302,8 @@ class DashboardService
                  GROUP BY media_type
              ) latest ON ss.media_type = latest.media_type
                  AND ss.recorded_at = latest.max_recorded_at
-              ORDER BY ss.total_bytes DESC"
+             GROUP BY ss.media_type
+             ORDER BY SUM(ss.total_bytes) DESC"
         );
 
         /** @var array{movie_bytes: int, series_bytes: int, music_bytes: int, photo_bytes: int, book_bytes: int, transcode_cache_bytes: int, items: array<int, array{media_type: string, item_count: int, total_bytes: int, transcode_cache_bytes: int, formatted_total: string, formatted_cache: string}>, formatted_transcode_cache: string} $result */
@@ -309,12 +326,14 @@ class DashboardService
                 && is_numeric($row['item_count']) ? (int)$row['item_count'] : 0;
             $mediaType = $this->toString($row['media_type']);
 
+            // ACCUMULATE, never assign: see the method docblock. A second row for
+            // the same bucket must add to the total, not replace it.
             match ($mediaType) {
-                'movie' => $result['movie_bytes'] = $totalBytes,
-                'series' => $result['series_bytes'] = $totalBytes,
-                'music' => $result['music_bytes'] = $totalBytes,
-                'photo' => $result['photo_bytes'] = $totalBytes,
-                'book' => $result['book_bytes'] = $totalBytes,
+                'movie' => $result['movie_bytes'] += $totalBytes,
+                'series' => $result['series_bytes'] += $totalBytes,
+                'music' => $result['music_bytes'] += $totalBytes,
+                'photo' => $result['photo_bytes'] += $totalBytes,
+                'book' => $result['book_bytes'] += $totalBytes,
                 default => null,
             };
 

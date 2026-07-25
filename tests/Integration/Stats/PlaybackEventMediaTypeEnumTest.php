@@ -4,9 +4,12 @@ declare(strict_types=1);
 
 namespace Phlix\Tests\Integration\Stats;
 
+use Phlix\Admin\DashboardService;
 use Phlix\Common\Database\ConnectionPool;
 use Phlix\Common\Uuid;
+use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\MediaItemType;
+use Phlix\Media\Streaming\StreamManager;
 use Phlix\Session\PlaybackController;
 use Phlix\Session\SessionManager;
 use Phlix\Stats\StatsCollector;
@@ -51,6 +54,7 @@ use Workerman\MySQL\Connection;
  * migration SQL.
  *
  * @covers \Phlix\Stats\StatsCollector
+ * @covers \Phlix\Admin\DashboardService
  */
 final class PlaybackEventMediaTypeEnumTest extends TestCase
 {
@@ -252,6 +256,155 @@ final class PlaybackEventMediaTypeEnumTest extends TestCase
     }
 
     /**
+     * S102 review r1 MED-3 — an unmapped type must be DROPPED, not misfiled.
+     *
+     * Pre-fix `recordStorageSnapshot('totally-unknown', 3, 999)` wrote
+     * `media_type=movie, total_bytes=999`: bytes attributed to a real bucket, with
+     * only an app.log warning. `migrations/086_stats_storage_book_bucket.sql:11-14`
+     * writes the rule down — a wrong number that looks right is worse than a
+     * visibly missing one.
+     */
+    public function testAnUnmappedStorageTypeWritesNoRowAtAll(): void
+    {
+        $before = $this->storageRowIds();
+
+        $this->collector()->recordStorageSnapshot('totally-unknown', 3, 999);
+
+        $this->assertSame(
+            [],
+            array_values(array_diff($this->storageRowIds(), $before)),
+            'An unmapped media type must not produce a stats_storage row at all — least of all a '
+            . '`movie` one carrying its bytes.',
+        );
+    }
+
+    /**
+     * S102 review r1 MED-2, READER half — colliding rows must SUM.
+     *
+     * Seeded with one explicit `recorded_at` shared by all 13 rows, which is
+     * exactly what a snapshot run used to produce: `stats_storage.recorded_at` is
+     * `DATETIME` (second precision) written with `NOW()`, and several raw types
+     * fold onto the same bucket. `getStorageSummary()` ASSIGNED (`=`) while
+     * ordering `BY total_bytes DESC`, so the SMALLEST colliding row won each
+     * bucket and the rest vanished: 91,000 bytes written became 31,000 in the five
+     * headline totals.
+     */
+    public function testTheDashboardRollUpsSumRowsThatShareARecordedAtSecond(): void
+    {
+        $recordedAt = '2031-02-03 04:05:06';
+        $written = 0;
+
+        foreach (MediaItemType::ALL as $index => $type) {
+            $bytes = 1_000 * ($index + 1);
+            $written += $bytes;
+            $this->seedStorageRow(StorageSnapshotHelper::TYPE_TO_BUCKET[$type], $bytes, $recordedAt);
+        }
+
+        $this->assertSame(91_000, $written, 'The review r1 fixture: 13 types, 91,000 bytes');
+
+        $summary = $this->dashboard()->getStorageSummary();
+
+        $this->assertSame(91_000, $this->rollUpTotal($summary), $this->rollUpMessage($summary));
+        // movie 1,000 + video 9,000
+        $this->assertSame(10_000, $summary['movie_bytes']);
+        // series 2,000 + season 3,000 + episode 4,000
+        $this->assertSame(9_000, $summary['series_bytes']);
+        // track 5,000 + music 6,000 + album 7,000 + artist 8,000 + audio 10,000
+        $this->assertSame(36_000, $summary['music_bytes']);
+        $this->assertSame(12_000, $summary['photo_bytes']);
+        // book 11,000 + audiobook 13,000
+        $this->assertSame(24_000, $summary['book_bytes']);
+    }
+
+    /**
+     * S102 review r1 MED-2, WRITER half — one batch call, one row per bucket, and
+     * the dashboard roll-ups equal the bytes handed in.
+     *
+     * This is the natural caller the docblock's promise was about: iterate the
+     * vocabulary and record it. Pre-fix that produced 13 rows sharing one
+     * `recorded_at` and lost 60,000 of 91,000 bytes.
+     */
+    public function testTheBatchWriterRoundTripsEveryByteToTheDashboard(): void
+    {
+        $before = $this->storageRowIds();
+
+        $totals = [];
+        $written = 0;
+        foreach (MediaItemType::ALL as $index => $type) {
+            $bytes = 1_000 * ($index + 1);
+            $written += $bytes;
+            $totals[$type] = ['count' => 1, 'bytes' => $bytes];
+        }
+        $this->assertSame(91_000, $written);
+
+        $this->collector()->recordStorageSnapshots($totals);
+
+        $new = array_values(array_diff($this->storageRowIds(), $before, $this->storageIds));
+        foreach ($new as $id) {
+            $this->storageIds[] = $id;
+        }
+        $this->assertCount(
+            5,
+            $new,
+            'One batch call must write exactly one row per stats_storage bucket, whatever the '
+            . 'number of raw types folded into it.',
+        );
+
+        $summary = $this->dashboard()->getStorageSummary();
+
+        $this->assertSame(91_000, $this->rollUpTotal($summary), $this->rollUpMessage($summary));
+        $this->assertSame(13, $this->latestItemCountTotal(), 'All 13 item counts must survive the fold');
+    }
+
+    /**
+     * The reviewer's EXACT fixture: 13 separate `recordStorageSnapshot()` calls,
+     * i.e. the ad-hoc pattern the public single-row API still allows. All 13 rows
+     * land in the same `NOW()` second, so this is the collision case end to end.
+     *
+     * Retried if the fixture straddles a second boundary (which would split the
+     * rows across two `recorded_at` values and make the assertion meaningless
+     * rather than wrong).
+     */
+    public function testThirteenIndividualCallsStillRollUpToEveryByte(): void
+    {
+        $written = 0;
+        $ids = [];
+
+        for ($attempt = 1; $attempt <= 3; $attempt++) {
+            $before = $this->storageRowIds();
+            $written = 0;
+            $collector = $this->collector();
+
+            foreach (MediaItemType::ALL as $index => $type) {
+                $bytes = 1_000 * ($index + 1);
+                $written += $bytes;
+                $collector->recordStorageSnapshot($type, 1, $bytes);
+            }
+
+            $ids = array_values(array_diff($this->storageRowIds(), $before, $this->storageIds));
+            foreach ($ids as $id) {
+                $this->storageIds[] = $id;
+            }
+
+            if ($this->distinctRecordedAt($ids) === 1) {
+                break;
+            }
+
+            // Straddled a second boundary: drop these rows and try again.
+            $this->purgeStorageIds($ids);
+            $ids = [];
+        }
+
+        $this->assertSame(91_000, $written);
+        $this->assertCount(13, $ids, 'One row per call');
+        $this->assertSame(1, $this->distinctRecordedAt($ids), 'All 13 rows must share one recorded_at second');
+
+        $summary = $this->dashboard()->getStorageSummary();
+
+        $this->assertSame(91_000, $this->rollUpTotal($summary), $this->rollUpMessage($summary));
+    }
+
+    /**
      * End to end at the seam that actually 500'd: a first progress report for an
      * `episode` drives `dispatchPlaybackStarted()`, which looks the type up out of
      * `media_items` and records it. Pre-fix this call threw a `PDOException`
@@ -303,6 +456,121 @@ final class PlaybackEventMediaTypeEnumTest extends TestCase
         $this->assertNotNull($db);
 
         return new StatsCollector($db);
+    }
+
+    /**
+     * A real `DashboardService` over the real connection — only the collaborators
+     * `getStorageSummary()` never touches are mocked, so the SQL under test is the
+     * production SQL.
+     */
+    private function dashboard(): DashboardService
+    {
+        $db = $this->db;
+        $this->assertNotNull($db);
+
+        return new DashboardService(
+            new StatsCollector($db),
+            $this->createMock(SessionManager::class),
+            $this->createMock(StreamManager::class),
+            $this->createMock(ItemRepository::class),
+            $db,
+        );
+    }
+
+    /**
+     * Insert one `stats_storage` row with an explicit `recorded_at`, bypassing the
+     * writer so the READER can be tested in isolation.
+     */
+    private function seedStorageRow(string $bucket, int $totalBytes, string $recordedAt): void
+    {
+        $db = $this->db;
+        $this->assertNotNull($db);
+
+        $id = Uuid::v4();
+        $db->query(
+            'INSERT INTO stats_storage (id, recorded_at, library_id, media_type, item_count, total_bytes,
+                                        transcode_cache_bytes)
+             VALUES (?, ?, NULL, ?, 1, ?, 0)',
+            [$id, $recordedAt, $bucket, $totalBytes],
+        );
+        $this->storageIds[] = $id;
+    }
+
+    /**
+     * Sum of the five headline byte totals the dashboard's Storage card renders.
+     *
+     * @param array{movie_bytes: int, series_bytes: int, music_bytes: int, photo_bytes: int, book_bytes: int, ...} $summary
+     */
+    private function rollUpTotal(array $summary): int
+    {
+        return $summary['movie_bytes']
+            + $summary['series_bytes']
+            + $summary['music_bytes']
+            + $summary['photo_bytes']
+            + $summary['book_bytes'];
+    }
+
+    /**
+     * @param array{movie_bytes: int, series_bytes: int, music_bytes: int, photo_bytes: int, book_bytes: int, ...} $summary
+     */
+    private function rollUpMessage(array $summary): string
+    {
+        return sprintf(
+            'The five dashboard roll-ups must equal the bytes written. Got movie=%d series=%d music=%d '
+            . 'photo=%d book=%d',
+            $summary['movie_bytes'],
+            $summary['series_bytes'],
+            $summary['music_bytes'],
+            $summary['photo_bytes'],
+            $summary['book_bytes'],
+        );
+    }
+
+    /**
+     * Total `item_count` across the rows the dashboard query actually reads.
+     */
+    private function latestItemCountTotal(): int
+    {
+        $total = 0;
+        foreach ($this->dashboard()->getStorageSummary()['items'] as $item) {
+            $total += $item['item_count'];
+        }
+
+        return $total;
+    }
+
+    /**
+     * How many distinct `recorded_at` values the given rows carry.
+     *
+     * @param list<string> $ids
+     */
+    private function distinctRecordedAt(array $ids): int
+    {
+        if ($ids === []) {
+            return 0;
+        }
+
+        $seen = [];
+        foreach ($ids as $id) {
+            $rows = $this->rows('SELECT recorded_at FROM stats_storage WHERE id = ?', [$id]);
+            $seen[(string) ($rows[0]['recorded_at'] ?? '')] = true;
+        }
+
+        return count($seen);
+    }
+
+    /**
+     * @param list<string> $ids
+     */
+    private function purgeStorageIds(array $ids): void
+    {
+        $db = $this->db;
+        $this->assertNotNull($db);
+
+        foreach ($ids as $id) {
+            $db->query('DELETE FROM stats_storage WHERE id = ?', [$id]);
+        }
+        $this->storageIds = array_values(array_diff($this->storageIds, $ids));
     }
 
     /**

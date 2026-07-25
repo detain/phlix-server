@@ -62,7 +62,18 @@ namespace Phlix\Media;
  *    and a UPnP class in {@see \Phlix\Media\Library\MediaItemShaper} /
  *    {@see \Phlix\Dlna\UpnpClassMap::TYPE_TO_CLASS}.
  *
- * The drift test names whichever of those steps you skipped.
+ * Do steps 1–2 without 3–4 and the drift test goes red, naming whichever step you
+ * skipped. Precisely what it reads, so the guarantee is not larger than the tool:
+ * it parses `CREATE TABLE` column definitions and `ALTER TABLE … MODIFY [COLUMN]`
+ * / `CHANGE [COLUMN] <old> <new>` clauses, with or without backticks, with or
+ * without a schema qualifier, in any position of a multi-clause `ALTER`, in any
+ * case, over any whitespace — every style present in this repo's migrations
+ * (`030`, `034`, `068`, `081`, `083`, `084`, `091`, `094`), each pinned by a case
+ * in `MediaItemTypeDriftTest::definitionStyleProvider()`. What it deliberately does
+ * NOT read is DDL built at runtime inside a `PREPARE`/`EXECUTE` string (the style
+ * of `migrations/011_music_library.sql:18`): such a statement is SKIPPED rather
+ * than half-parsed, so a member introduced ONLY that way would be invisible to the
+ * guard — write the widening as a plain statement.
  *
  * @package Phlix\Media
  * @since 1.9

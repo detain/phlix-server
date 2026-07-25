@@ -503,16 +503,45 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
     It is the one such column with a real reader — `DashboardService::getStorageSummary()`
     groups by it into a fixed `{movie,series,music,photo,book}_bytes` shape — so widening it
     would have dropped bytes into that `match`'s `default` arm and quietly broken the admin
-    dashboard. Instead `recordStorageSnapshot()` now folds whatever it is handed through
+    dashboard. Instead the snapshot writer folds whatever it is handed through
     `StorageSnapshotHelper::TYPE_TO_BUCKET` (exhaustive, and idempotent because every bucket
     maps to itself), so a caller passing a raw `episode` gets a correct `series` row rather
     than error 1265. Both existing callers already passed bucket names and are unaffected.
   - **Statistics can no longer break playback at all.** Every `StatsCollector` *write* now
     runs behind a containment boundary that logs the failure at `error` level (so it lands
-    in `.logs/error.log`) and swallows it — telemetry is strictly less important than the
-    action that triggered it, and `dispatchPlaybackStarted()` has no try/catch of its own.
+    in `.logs/error-YYYY-MM-DD.log` — the `error` handler is a `rotating_file`, so the
+    configured `error.log` path is date-stamped on disk) and swallows it — telemetry is
+    strictly less important than the action that triggered it, and
+    `dispatchPlaybackStarted()` has no try/catch of its own. Repeated failures are counted
+    per operation and the log is throttled to one line per operation per minute, with
+    `failures_total` / `suppressed_since_last_log` in the context and the running totals
+    readable via `StatsCollector::writeFailureCounters()`: `ItemRepository::recordChange()`
+    records one library change per scanned item, so an un-throttled boundary would have
+    written ~29,000 identical error lines during one music scan of the production library.
     *Reads* are deliberately left unguarded: they serve the admin dashboard, where a broken
     query must surface as a visible error rather than a silently empty chart.
+  - **The dashboard's five storage roll-ups now equal the bytes that were written.** Folding
+    raw types onto five buckets means several types share a bucket, and every row of one
+    snapshot run carries the same `NOW()` second — so `getStorageSummary()`'s
+    `MAX(recorded_at)` join legitimately returns *several* rows per bucket (also one per
+    `library_id`). It used to **assign** (`=`) each bucket's bytes while ordering by
+    `total_bytes DESC`, so the smallest colliding row won and the rest disappeared: 13 folded
+    types worth 91,000 bytes produced five totals summing to **31,000**. Both sides are now
+    additive — `SUM(…) GROUP BY media_type` in SQL and `+=` in PHP — and a snapshot run is
+    written as ONE batch (`StatsCollector::recordStorageSnapshots()`), which sums per bucket
+    before inserting so a run cannot produce two rows for the same bucket. Verified on real
+    MySQL: 13 types / 91,000 bytes in, 91,000 across the five roll-ups out.
+    `StorageSnapshotHelper::bootstrapSnapshot()` also finally honours its documented "if data
+    is stale or missing" contract (it was called on *every* PHP-FPM request, re-running
+    `du -sb` over both vault roots each time), because summing same-second rows would
+    otherwise double the totals when two snapshot runs land in one second.
+  - **An unrecognised media type is now dropped from the storage snapshot, loudly.** It used
+    to fall back to `movie`, i.e. unknown bytes were added to a real bucket with only a
+    warning in `app.log`. `migrations/086_stats_storage_book_bucket.sql` already wrote the
+    rule down — *"a wrong number that looks right is worse than a visibly missing one"* — so
+    the writer now logs at `error` and writes no row. `MediaItemType::FALLBACK` remains
+    correct for *labels* (`normalize()`, `shape()`, `lookupMediaType()`) and is no longer
+    used for a byte accumulator.
   - **Root cause was a duplicated type vocabulary, so that is what got fixed.** The
     13-member list had been re-typed by hand in four places, each carrying a comment asking
     the next author to keep it "in lockstep" — a convention that had already failed three
@@ -523,12 +552,21 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
     (`TYPE_TO_BUCKET`, `UpnpClassMap::TYPE_TO_CLASS`, `VALID_TYPES`) or any of the
     type-carrying columns disagree. The previous cross-checks compared the PHP copies only
     to each other, which is why all of them could agree while the actual column did not.
+    The parser reads `CREATE TABLE` column definitions and `ALTER TABLE … MODIFY [COLUMN]` /
+    `CHANGE [COLUMN] <old> <new>` clauses — backticked or bare, schema-qualified or not, in
+    any position of a multi-clause `ALTER`, any case, any whitespace — i.e. every style this
+    repo's migrations actually use, each pinned by its own test case. DDL assembled at
+    runtime inside a `PREPARE`/`EXECUTE` string (as `migrations/011` does) is deliberately
+    **skipped** rather than half-parsed, so a widening must be written as a plain statement
+    to be seen; parsing it naively yielded 24 empty-string "members" that the first version
+    of the guard accepted as success.
   - Proven against real MySQL 8.0 under `STRICT_TRANS_TABLES` (a mocked connection accepts
     any string for any column and cannot reproduce an ENUM rejection — the same class of
     miss as the LiveTv `RowQuery` and metrics `ONLY_FULL_GROUP_BY` defects): all 13 members
-    round-trip verbatim, an unknown type is coerced instead of rejected, a failing write is
-    contained, and a first progress report on an `episode` records `media_type=episode`
-    without throwing.
+    round-trip verbatim, an unknown playback type is coerced instead of rejected, an unknown
+    storage type writes no row at all, a failing write is contained, the storage roll-ups
+    equal the bytes written, and a first progress report on an `episode` records
+    `media_type=episode` without throwing.
 
 - **A `HEAD` on a media route put TWO conflicting `Content-Length` headers on the
   wire** (updates.md #44 / S52 review). Workerman's response encoder

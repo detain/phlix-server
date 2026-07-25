@@ -34,10 +34,41 @@ use ReflectionClass;
  * `media_items.type` that forgets any of its dependants is now a red test rather
  * than a runtime 500 discovered in production.
  *
+ * ## What the parser accepts (S102 review r1, HIGH-1)
+ *
+ * The first version of the parser required bare (un-backticked) identifiers and
+ * the literal `COLUMN` keyword, so it was BLIND to
+ * ``MODIFY COLUMN `type` …`` (migrations 030, 081, 084) and to `MODIFY type …`
+ * (migrations 068, 083, 091) — two styles already in this repo. A widening
+ * written in either style left the parser holding the PREVIOUS file's member
+ * list, so the comparisons below passed against a stale vocabulary and the alarm
+ * failed OPEN. {@see testTheParserSeesEveryDefinitionStyleThisRepoUses} now pins
+ * every style: optional backticks on table AND column, `MODIFY` with or without
+ * `COLUMN`, `CHANGE [COLUMN] <old> <new>`, a schema-qualified table, a
+ * multi-clause `ALTER` where the `MODIFY` is not the first clause, and a
+ * multi-line `ENUM(…)` body.
+ *
+ * ## Why the parser masks string literals first
+ *
+ * `migrations/011_music_library.sql:18` builds its `ALTER` inside a
+ * `PREPARE`/`EXECUTE` string with DOUBLED quotes (`''movie''`). A regex reading
+ * quotes directly parsed that as 24 EMPTY-STRING "members", and the old
+ * trustworthiness guard (`assertNotSame([], …)`) could not tell that garbage from
+ * a real result. So the parser now replaces every string literal with a
+ * placeholder BEFORE looking for clause structure: dynamic SQL contains no
+ * `ENUM(` at all once masked, which makes it skipped rather than half-parsed.
+ * Pinned by {@see testMigration011sDynamicAlterIsSkippedNotHalfParsed}.
+ *
  * @covers \Phlix\Media\MediaItemType
  */
 final class MediaItemTypeDriftTest extends TestCase
 {
+    /**
+     * Sentinel byte wrapping a masked string literal's index. Cannot occur in
+     * migration SQL, which is plain ASCII text.
+     */
+    private const LITERAL_MARK = "\x01";
+
     /**
      * Absolute path to the migrations directory.
      */
@@ -50,10 +81,7 @@ final class MediaItemTypeDriftTest extends TestCase
      * Resolve a column's EFFECTIVE ENUM members by replaying the migration SQL in
      * filename order and keeping the LAST definition found.
      *
-     * Matches both `CREATE TABLE` column lines and `ALTER TABLE … MODIFY COLUMN`,
-     * which between them are the only ways this repo defines an ENUM column.
-     *
-     * @param string $table  Table the column belongs to (used to scope CREATE TABLE bodies).
+     * @param string $table  Table the column belongs to.
      * @param string $column Column name.
      *
      * @return list<string> Members in column order; empty when no definition exists.
@@ -72,19 +100,9 @@ final class MediaItemTypeDriftTest extends TestCase
             if ($sql === false) {
                 continue;
             }
-            // Drop `--` comment lines so prose mentioning an ENUM (there is a lot
-            // of it in this repo's migrations) can never be mistaken for a
-            // definition.
-            $sql = (string) preg_replace('/^\s*--.*$/m', '', $sql);
 
-            foreach ($this->definitionsIn($sql, $table, $column) as $memberList) {
-                $found = [];
-                preg_match_all("/'([^']*)'/", $memberList, $found);
-                /** @var list<string> $captured */
-                $captured = $found[1];
-                if ($captured !== []) {
-                    $members = $captured;
-                }
+            foreach ($this->enumDefinitionsIn($sql, $table, $column) as $definition) {
+                $members = $definition;
             }
         }
 
@@ -92,46 +110,33 @@ final class MediaItemTypeDriftTest extends TestCase
     }
 
     /**
-     * Every raw ENUM member-list body defining `$table`.`$column` in one file, in
-     * source order.
+     * Every PLAUSIBLE ENUM member list defining `$table`.`$column` in one chunk of
+     * SQL, in source order.
      *
-     * @return list<string>
+     * Recognised:
+     * - `CREATE TABLE [IF NOT EXISTS] [schema.]<table> ( … <column> ENUM(…) … )`
+     * - `ALTER TABLE [schema.]<table> … MODIFY [COLUMN] <column> ENUM(…)`
+     * - `ALTER TABLE [schema.]<table> … CHANGE [COLUMN] <old> <column> ENUM(…)`
+     *
+     * Identifiers may be backtick-quoted, the table may be schema-qualified, the
+     * `ALTER` may carry other clauses before and after the one that matters, and
+     * whitespace/newlines/case are all irrelevant. A `CHANGE` that renames the
+     * column AWAY is deliberately not a definition of it.
+     *
+     * @return list<list<string>>
      */
-    private function definitionsIn(string $sql, string $table, string $column): array
+    private function enumDefinitionsIn(string $sql, string $table, string $column): array
     {
         $out = [];
 
-        // ALTER TABLE <table> [...] MODIFY COLUMN <column> ENUM(...)
-        $alter = [];
-        preg_match_all(
-            '/ALTER\s+TABLE\s+' . preg_quote($table, '/')
-            . '\s+MODIFY\s+COLUMN\s+' . preg_quote($column, '/')
-            . '\s+ENUM\s*\(([^)]*)\)/is',
-            $sql,
-            $alter
-        );
-        foreach ($alter[1] as $body) {
-            $out[] = $body;
-        }
+        foreach ($this->statementsIn($sql) as $statement) {
+            [$masked, $literals] = $this->maskStringLiterals($statement);
 
-        // CREATE TABLE <table> ( … <column> ENUM(...) … )
-        $create = [];
-        preg_match_all(
-            '/CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?' . preg_quote($table, '/')
-            . '\s*\((.*?)\n\s*\)\s*ENGINE/is',
-            $sql,
-            $create
-        );
-        foreach ($create[1] as $body) {
-            $col = [];
-            if (
-                preg_match(
-                    '/^\s*' . preg_quote($column, '/') . '\s+ENUM\s*\(([^)]*)\)/im',
-                    $body,
-                    $col
-                ) === 1
-            ) {
-                $out[] = $col[1];
+            foreach ($this->enumBodiesIn($masked, $table, $column) as $body) {
+                $members = $this->membersFrom($body, $literals);
+                if ($members !== null) {
+                    $out[] = $members;
+                }
             }
         }
 
@@ -139,26 +144,491 @@ final class MediaItemTypeDriftTest extends TestCase
     }
 
     /**
-     * The parser itself must be trustworthy — if it silently found nothing, every
-     * other assertion here would pass vacuously.
+     * The LAST definition of `$table`.`$column` in one chunk of SQL, or `[]`.
+     *
+     * @return list<string>
+     */
+    private function lastEnumDefinitionIn(string $sql, string $table, string $column): array
+    {
+        $definitions = $this->enumDefinitionsIn($sql, $table, $column);
+
+        return $definitions === [] ? [] : $definitions[count($definitions) - 1];
+    }
+
+    /**
+     * Split SQL into the statements the migration runner would execute.
+     *
+     * Deliberately mirrors `MigrationRunner::splitStatements()`: comments are
+     * dropped and `;` only ends a statement outside string literals and
+     * backtick-quoted identifiers, so the test sees the same statement boundaries
+     * production does.
+     *
+     * @return list<string>
+     */
+    private function statementsIn(string $sql): array
+    {
+        $statements = [];
+        $buffer = '';
+        // '' (top level), "'"/'"'/'`' (quoted), '--' (line comment), '/*' (block).
+        $context = '';
+        $len = strlen($sql);
+
+        for ($i = 0; $i < $len; $i++) {
+            $ch = $sql[$i];
+            $next = $i + 1 < $len ? $sql[$i + 1] : '';
+
+            if ($context === "'" || $context === '"' || $context === '`') {
+                $buffer .= $ch;
+                if ($ch === $context && $next === $context) {
+                    // Doubled quote — an escaped quote, still inside the literal.
+                    $buffer .= $next;
+                    $i++;
+                } elseif ($ch === '\\' && $context !== '`' && $next !== '') {
+                    $buffer .= $next;
+                    $i++;
+                } elseif ($ch === $context) {
+                    $context = '';
+                }
+                continue;
+            }
+
+            if ($context === '--') {
+                if ($ch === "\n") {
+                    $buffer .= $ch;
+                    $context = '';
+                }
+                continue;
+            }
+
+            if ($context === '/*') {
+                if ($ch === '*' && $next === '/') {
+                    $i++;
+                    $context = '';
+                }
+                continue;
+            }
+
+            if ($ch === '-' && $next === '-') {
+                $context = '--';
+                $i++;
+                continue;
+            }
+            if ($ch === '#') {
+                $context = '--';
+                continue;
+            }
+            if ($ch === '/' && $next === '*') {
+                $context = '/*';
+                $i++;
+                continue;
+            }
+            if ($ch === "'" || $ch === '"' || $ch === '`') {
+                $context = $ch;
+                $buffer .= $ch;
+                continue;
+            }
+            if ($ch === ';') {
+                $part = trim($buffer);
+                if ($part !== '') {
+                    $statements[] = $part;
+                }
+                $buffer = '';
+                continue;
+            }
+
+            $buffer .= $ch;
+        }
+
+        $part = trim($buffer);
+        if ($part !== '') {
+            $statements[] = $part;
+        }
+
+        return $statements;
+    }
+
+    /**
+     * Replace every string literal with a placeholder so clause structure can be
+     * matched without a literal's CONTENTS ever being mistaken for structure.
+     *
+     * This is what makes `migrations/011`'s prepared-statement `ALTER` invisible:
+     * the whole DDL lives inside one literal, so the masked statement contains no
+     * `ENUM(` and yields nothing, instead of 24 empty-string members.
+     *
+     * @return array{0: string, 1: list<string>} Masked SQL, decoded literals by index.
+     */
+    private function maskStringLiterals(string $statement): array
+    {
+        $masked = '';
+        /** @var list<string> $literals */
+        $literals = [];
+        $len = strlen($statement);
+
+        for ($i = 0; $i < $len; $i++) {
+            $ch = $statement[$i];
+
+            if ($ch !== "'" && $ch !== '"') {
+                $masked .= $ch;
+                continue;
+            }
+
+            $quote = $ch;
+            $value = '';
+            for ($i++; $i < $len; $i++) {
+                $c = $statement[$i];
+                if ($c === $quote) {
+                    if ($i + 1 < $len && $statement[$i + 1] === $quote) {
+                        $value .= $quote;
+                        $i++;
+                        continue;
+                    }
+                    break;
+                }
+                if ($c === '\\' && $i + 1 < $len) {
+                    $value .= $statement[$i + 1];
+                    $i++;
+                    continue;
+                }
+                $value .= $c;
+            }
+
+            $literals[] = $value;
+            $masked .= self::LITERAL_MARK . (count($literals) - 1) . self::LITERAL_MARK;
+        }
+
+        return [$masked, $literals];
+    }
+
+    /**
+     * Raw (masked) `ENUM(…)` bodies defining `$table`.`$column` in ONE statement.
+     *
+     * @return list<string>
+     */
+    private function enumBodiesIn(string $maskedStatement, string $table, string $column): array
+    {
+        $identifier = '`?[A-Za-z0-9_$]+`?';
+        $tableRef = '(?:' . $identifier . '\s*\.\s*)?`?' . preg_quote($table, '/') . '`?';
+        $col = '`?' . preg_quote($column, '/') . '`?';
+        $out = [];
+
+        $alter = [];
+        if (
+            preg_match(
+                '/\AALTER\s+(?:ONLINE\s+|IGNORE\s+)*TABLE\s+' . $tableRef . '\b(?<body>.*)\z/is',
+                $maskedStatement,
+                $alter
+            ) === 1
+        ) {
+            $clauses = [];
+            preg_match_all(
+                '/\bMODIFY(?:\s+COLUMN)?\s+' . $col . '\s+ENUM\s*\(([^)]*)\)'
+                . '|\bCHANGE(?:\s+COLUMN)?\s+' . $identifier . '\s+' . $col . '\s+ENUM\s*\(([^)]*)\)/is',
+                $alter['body'],
+                $clauses,
+                PREG_SET_ORDER
+            );
+            foreach ($clauses as $clause) {
+                // Exactly one of the two alternatives captured.
+                $out[] = ($clause[1] ?? '') !== '' ? $clause[1] : ($clause[2] ?? '');
+            }
+        }
+
+        $create = [];
+        if (
+            preg_match(
+                '/\ACREATE\s+(?:TEMPORARY\s+)?TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?' . $tableRef
+                . '\s*\((?<body>.*)\)/is',
+                $maskedStatement,
+                $create
+            ) === 1
+        ) {
+            $col_ = [];
+            if (
+                preg_match(
+                    '/(?:^|,)\s*' . $col . '\s+ENUM\s*\(([^)]*)\)/im',
+                    $create['body'],
+                    $col_
+                ) === 1
+            ) {
+                $out[] = $col_[1];
+            }
+        }
+
+        return $out;
+    }
+
+    /**
+     * Decode a masked `ENUM(…)` body into its members, or NULL when the body is
+     * not a plain quoted-member list.
+     *
+     * Returning NULL rather than a partial list is the LOW-8 fix: a body carrying
+     * anything other than string literals and separators (an expression, a
+     * placeholder-free token, a member that is empty or non-printable) is NOT
+     * treated as a definition at all, so garbage can never masquerade as a
+     * successfully parsed vocabulary.
+     *
+     * @param list<string> $literals
+     *
+     * @return list<string>|null
+     */
+    private function membersFrom(string $body, array $literals): ?array
+    {
+        $residue = preg_replace(
+            '/' . self::LITERAL_MARK . '\d+' . self::LITERAL_MARK . '|[\s,]+/',
+            '',
+            $body
+        );
+        if ($residue !== '') {
+            // Something other than quoted members and separators is in there.
+            return null;
+        }
+
+        $found = [];
+        preg_match_all('/' . self::LITERAL_MARK . '(\d+)' . self::LITERAL_MARK . '/', $body, $found);
+
+        $members = [];
+        foreach ($found[1] as $index) {
+            $value = $literals[(int) $index] ?? null;
+            if ($value === null || !$this->isPlausibleMember($value)) {
+                return null;
+            }
+            $members[] = $value;
+        }
+
+        return $members === [] ? null : $members;
+    }
+
+    /**
+     * Could `$value` be a real ENUM member? Rejects the empty string (the exact
+     * garbage `migrations/011`'s doubled quotes used to yield), leading
+     * whitespace, control bytes and implausibly long values.
+     */
+    private function isPlausibleMember(string $value): bool
+    {
+        return $value !== ''
+            && strlen($value) <= 64
+            && preg_match('/\A[\x21-\x7E][\x20-\x7E]*\z/', $value) === 1;
+    }
+
+    /**
+     * Every `ALTER`/`CREATE` style this repo actually uses must be VISIBLE to the
+     * parser. Each case widens `media_items.type` to a member the PHP side does
+     * not have, which is exactly the mutation the alarm exists to catch — so if
+     * the parser cannot see the style, the alarm fails open.
+     *
+     * @return array<string, array{0: string}>
+     */
+    public static function definitionStyleProvider(): array
+    {
+        return [
+            // migration 034 — the only style the original parser handled.
+            'MODIFY COLUMN, bare identifiers' => [
+                "ALTER TABLE media_items\n    MODIFY COLUMN type ENUM('movie', 'podcast') NOT NULL;",
+            ],
+            // migrations 030:16, 081:21, 084:39 — was INVISIBLE (review r1 HIGH-1).
+            'MODIFY COLUMN, backticked column' => [
+                "ALTER TABLE media_items\n    MODIFY COLUMN `type` ENUM('movie', 'podcast') NOT NULL;",
+            ],
+            // migrations 068:21, 083:25, 091:20 — was INVISIBLE (review r1 HIGH-1).
+            'MODIFY without the COLUMN keyword' => [
+                "ALTER TABLE media_items MODIFY type ENUM('movie', 'podcast') NOT NULL;",
+            ],
+            'MODIFY without COLUMN, backticked column' => [
+                "ALTER TABLE `media_items` MODIFY `type` ENUM('movie', 'podcast') NOT NULL;",
+            ],
+            // migration 084:38 backticks the table too.
+            'backticked table' => [
+                "ALTER TABLE `media_items` MODIFY COLUMN `type` ENUM('movie', 'podcast') NOT NULL;",
+            ],
+            'schema-qualified table' => [
+                "ALTER TABLE `phlix`.`media_items` MODIFY COLUMN `type` ENUM('movie', 'podcast') NOT NULL;",
+            ],
+            'schema-qualified table, no backticks' => [
+                "ALTER TABLE phlix.media_items MODIFY COLUMN type ENUM('movie', 'podcast') NOT NULL;",
+            ],
+            'CHANGE COLUMN renaming a column TO type' => [
+                "ALTER TABLE media_items CHANGE COLUMN item_type type ENUM('movie', 'podcast') NOT NULL;",
+            ],
+            'CHANGE without the COLUMN keyword' => [
+                "ALTER TABLE media_items CHANGE `item_type` `type` ENUM('movie', 'podcast') NOT NULL;",
+            ],
+            'multi-clause ALTER where MODIFY is not the first clause' => [
+                "ALTER TABLE media_items\n"
+                . "    ADD COLUMN probe_state VARCHAR(16) NULL,\n"
+                . "    MODIFY COLUMN `type` ENUM('movie', 'podcast') NOT NULL,\n"
+                . "    ADD INDEX idx_probe_state (probe_state);",
+            ],
+            // migration 084:39 spreads the member list over many lines.
+            'multi-line ENUM body' => [
+                "ALTER TABLE `media_items`\n    MODIFY COLUMN `type`\n        ENUM(\n"
+                . "            'movie',\n            'podcast'\n        ) NOT NULL;",
+            ],
+            'lower-case keywords' => [
+                "alter table media_items modify column `type` enum('movie', 'podcast') not null;",
+            ],
+            'CREATE TABLE column line' => [
+                "CREATE TABLE media_items (\n    id CHAR(36) NOT NULL,\n"
+                . "    type ENUM('movie', 'podcast') NOT NULL,\n    PRIMARY KEY (id)\n) ENGINE=InnoDB;",
+            ],
+            'CREATE TABLE IF NOT EXISTS, backticked column' => [
+                "CREATE TABLE IF NOT EXISTS `media_items` (\n    `id` CHAR(36) NOT NULL,\n"
+                . "    `type` ENUM('movie', 'podcast') NOT NULL,\n    PRIMARY KEY (`id`)\n) ENGINE=InnoDB;",
+            ],
+        ];
+    }
+
+    /**
+     * @dataProvider definitionStyleProvider
+     */
+    public function testTheParserSeesEveryDefinitionStyleThisRepoUses(string $sql): void
+    {
+        $this->assertSame(
+            ['movie', 'podcast'],
+            $this->lastEnumDefinitionIn($sql, 'media_items', 'type'),
+            'A widening written in this style must be VISIBLE to the drift alarm. When the parser '
+            . 'cannot see a definition it silently keeps the previous migration\'s member list, so '
+            . 'every assertion in this class then compares a STALE vocabulary and passes.'
+        );
+    }
+
+    /**
+     * SQL that does NOT define this column must not be mistaken for a definition
+     * — the parser failing CLOSED (a confusing false red) is as bad as failing
+     * open.
+     *
+     * @return array<string, array{0: string}>
+     */
+    public static function nonDefinitionProvider(): array
+    {
+        return [
+            'another table entirely' => [
+                "ALTER TABLE libraries MODIFY COLUMN type ENUM('movie', 'podcast') NOT NULL;",
+            ],
+            'a table whose name merely starts with ours' => [
+                "ALTER TABLE media_items_archive MODIFY COLUMN type ENUM('movie', 'podcast') NOT NULL;",
+            ],
+            'another column on our table' => [
+                "ALTER TABLE media_items MODIFY COLUMN sub_type ENUM('movie', 'podcast') NOT NULL;",
+            ],
+            'a column whose name merely starts with ours' => [
+                "ALTER TABLE media_items MODIFY COLUMN `type_legacy` ENUM('movie', 'podcast') NOT NULL;",
+            ],
+            'CHANGE renaming our column AWAY defines the NEW name, not ours' => [
+                "ALTER TABLE media_items CHANGE COLUMN type legacy_type ENUM('movie', 'podcast') NOT NULL;",
+            ],
+            'a non-ENUM MODIFY' => [
+                'ALTER TABLE media_items MODIFY COLUMN type VARCHAR(32) NOT NULL;',
+            ],
+            'prose in a comment' => [
+                "-- ALTER TABLE media_items MODIFY COLUMN type ENUM('movie', 'podcast') NOT NULL;\n"
+                . 'ALTER TABLE media_items ADD COLUMN probe_state VARCHAR(16) NULL;',
+            ],
+        ];
+    }
+
+    /**
+     * @dataProvider nonDefinitionProvider
+     */
+    public function testTheParserIgnoresSqlThatDoesNotDefineTheColumn(string $sql): void
+    {
+        $this->assertSame([], $this->enumDefinitionsIn($sql, 'media_items', 'type'));
+    }
+
+    /**
+     * LOW-8: dynamic SQL is SKIPPED, not half-parsed. `migrations/011` builds its
+     * `ALTER` inside a `PREPARE` string with doubled quotes; read naively that
+     * yields 24 empty-string "members", and the old `assertNotSame([], …)` guard
+     * could not tell the difference.
+     */
+    public function testMigration011sDynamicAlterIsSkippedNotHalfParsed(): void
+    {
+        $sql = file_get_contents(self::migrationsDir() . '/011_music_library.sql');
+        $this->assertIsString($sql);
+
+        $this->assertSame(
+            [],
+            $this->enumDefinitionsIn($sql, 'media_items', 'type'),
+            'Migration 011 builds its ALTER inside a PREPARE string with doubled quotes; it must '
+            . 'contribute NO definition rather than a list of empty strings.'
+        );
+    }
+
+    /**
+     * LOW-8, generalised: a member list that is not a plain list of quoted,
+     * printable, non-empty values is not a definition at all.
+     *
+     * @return array<string, array{0: string}>
+     */
+    public static function untrustworthyBodyProvider(): array
+    {
+        return [
+            'doubled quotes inside a prepared statement' => [
+                "SET @sql := (SELECT 'ALTER TABLE media_items MODIFY COLUMN type "
+                . "ENUM(''movie'', ''podcast'') NOT NULL');",
+            ],
+            'an empty member' => [
+                "ALTER TABLE media_items MODIFY COLUMN type ENUM('movie', '') NOT NULL;",
+            ],
+            'an expression instead of literals' => [
+                'ALTER TABLE media_items MODIFY COLUMN type ENUM(@a, @b) NOT NULL;',
+            ],
+            'a member carrying a control byte' => [
+                "ALTER TABLE media_items MODIFY COLUMN type ENUM('movie', \"pod\tcast\") NOT NULL;",
+            ],
+        ];
+    }
+
+    /**
+     * @dataProvider untrustworthyBodyProvider
+     */
+    public function testAnUntrustworthyMemberListIsRejectedRatherThanReturned(string $sql): void
+    {
+        $this->assertSame([], $this->enumDefinitionsIn($sql, 'media_items', 'type'));
+    }
+
+    /**
+     * The parser itself must be trustworthy — if it silently found nothing, or
+     * found garbage, every other assertion here would pass vacuously.
+     *
+     * Asserting a KNOWN member is present (rather than merely `!== []`) is the
+     * LOW-8 hardening: `assertNotSame([], …)` was satisfied by 24 empty strings.
      */
     public function testTheMigrationParserActuallyFindsTheKnownColumns(): void
     {
-        $this->assertNotSame(
-            [],
-            $this->enumMembersFromMigrations('media_items', 'type'),
-            'Parser found no media_items.type ENUM — the assertions below would be vacuous'
-        );
-        $this->assertNotSame(
-            [],
-            $this->enumMembersFromMigrations('stats_playback_events', 'media_type'),
-            'Parser found no stats_playback_events.media_type ENUM'
-        );
-        $this->assertNotSame(
-            [],
-            $this->enumMembersFromMigrations('stats_storage', 'media_type'),
-            'Parser found no stats_storage.media_type ENUM'
-        );
+        /** @var list<array{0: string, 1: string, 2: string, 3: int}> $cases */
+        $cases = [
+            ['media_items', 'type', 'movie', 13],
+            ['stats_playback_events', 'media_type', 'episode', 13],
+            ['stats_storage', 'media_type', 'book', 5],
+        ];
+
+        foreach ($cases as [$table, $column, $known, $atLeast]) {
+            $members = $this->enumMembersFromMigrations($table, $column);
+
+            $this->assertContains(
+                $known,
+                $members,
+                sprintf(
+                    'Parser did not find member "%s" in %s.%s — the assertions in this class would '
+                    . 'be vacuous. Parsed: %s',
+                    $known,
+                    $table,
+                    $column,
+                    json_encode($members)
+                )
+            );
+            $this->assertGreaterThanOrEqual(
+                $atLeast,
+                count($members),
+                sprintf('%s.%s parsed to implausibly few members', $table, $column)
+            );
+            foreach ($members as $member) {
+                $this->assertTrue(
+                    $this->isPlausibleMember($member),
+                    sprintf('%s.%s parsed a non-member value: %s', $table, $column, var_export($member, true))
+                );
+            }
+        }
     }
 
     /**
@@ -235,8 +705,8 @@ final class MediaItemTypeDriftTest extends TestCase
 
     /**
      * The storage fold must be exhaustive over the vocabulary: an unmapped type is
-     * dropped from the snapshot silently (how `track`, `book` and `audiobook`
-     * bytes all went missing before).
+     * now REFUSED by the writer (S102 review r1 MED-3) rather than misfiled, so a
+     * missing key means those bytes never reach the dashboard at all.
      */
     public function testStorageFoldCoversEveryType(): void
     {

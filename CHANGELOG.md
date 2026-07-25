@@ -553,13 +553,23 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
     **44,000 of the 91,000 bytes handed in**. The run's second is now computed once and bound
     through `FROM_UNIXTIME(?)` — a bound unix second rather than a PHP-formatted string, so
     the value is exactly what `NOW()` would have produced in the MySQL session's own time
-    zone. What ends a run is a *stall* of more than 5 s between two snapshot writes, not an
-    elapsed duration, so a run that measures every library with `du -sb` cannot be split into
-    generations by its own length: 13 calls a full second apart (13 s end to end) round-trip
-    all 91,000 bytes and 13 of 13 item counts, where the same run on the old write path
-    reported 48,000 and 5. The batch form was already immune by accident (one row per bucket
-    makes the per-type `MAX` a no-op); the guarantee is now structural for both forms, and
-    pinned by an integration test that crosses a second boundary on purpose and stamps nothing.
+    zone. What ends a run is a *stall* between two snapshot writes — a gap of **5 s or more**
+    (the comparison is `<`, so exactly 5.000000000 s already starts a new generation) — and
+    not an elapsed duration, so a run cannot be split into generations by its own length: 13
+    calls a full second apart (13 s end to end) round-trip all 91,000 bytes and 13 of 13 item
+    counts, where the same run on the old write path reported 48,000 and 5. The batch form was
+    already immune by accident (one row per bucket makes the per-type `MAX` a no-op); the
+    guarantee is now structural for both forms, pinned by an integration test that crosses a
+    second boundary on purpose and stamps nothing, and — since a stall boundary that no test
+    could see would be deleted by the next cleanup — by a unit test that discriminates
+    "continued" from "recomputed" with a sentinel stamp and brackets the window at 4.9 s / 5.0 s
+    with no database. Note what the gap window does *not* buy: it cannot tell a stalled run
+    from a busy one, because all it sees is the interval between two *writes*. For a
+    hypothetical per-library writer that interval **is** the next library's `du -sb` (measured
+    warm on the dev box: 332,652 inodes in 2.20 s, so ~756 k inodes already exceeds 5 s), so
+    such a writer must hand its whole run to one `recordStorageSnapshots()` call — which is
+    exactly what both current callers do, taking the stamp once before the write loop, so the
+    window is never consulted between one run's own rows.
   - **Each half of the reader's aggregation is pinned on its own.** `SUM(…) GROUP BY
     media_type` and the PHP `+=` arms hide each other — the `GROUP BY` collapses the result
     set so `+=` never sees a second row, and with `+=` present the `SUM` is invisible — so the

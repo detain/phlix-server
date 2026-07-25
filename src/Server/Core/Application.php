@@ -2732,6 +2732,13 @@ class Application
      * seconds, while ticks are {@see self::STORAGE_SNAPSHOT_INTERVAL} (6 h) apart —
      * so every tick is its own generation, as the reader requires.
      *
+     * It is also deliberately CONSTRUCTED there (`new StatsCollector($db)`) rather than
+     * resolved from the container: php-di hands out ONE `StatsCollector` per container,
+     * so a `$container->get(StatsCollector::class)` shared by two coroutines would merge
+     * their runs into a single `recorded_at` generation, which the dashboard reader then
+     * SUMS (measured 2× — S102 review r3, LOW-1a). Anything that moves this collection
+     * off the timer and into a task must keep building its own collector.
+     *
      * @param \Phlix\Stats\StatsCollector $collector Collector to write through.
      * @param \Workerman\MySQL\Connection $db        Live MySQL connection.
      * @param \Phlix\Common\Logger\StructuredLogger $logger Application logger.

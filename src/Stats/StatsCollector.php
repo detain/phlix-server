@@ -68,20 +68,44 @@ class StatsCollector
     private const FAILURE_LOG_INTERVAL_SECONDS = 60;
 
     /**
-     * How long a storage-snapshot run may STALL — i.e. the maximum gap between two
-     * consecutive storage writes — before the next write counts as a new run.
+     * Maximum gap between two consecutive storage writes for the second one to still
+     * count as part of the same run.
      *
-     * Deliberately a gap and not a total duration ({@see snapshotRunSecond()}): a run
-     * that measures every library's bytes with `du -sb` can take minutes in total
-     * while never pausing for seconds, and splitting such a run into generations is
-     * exactly the byte loss this stamp exists to prevent. Measured: 13
+     * The comparison is `<` ({@see snapshotRunSecond()}), so a gap of exactly
+     * 5.000000000 s already starts a NEW run — "5 s or more", not "more than 5 s".
+     * (S102 review r3, C1: the docs said the latter. The words were wrong, not the
+     * comparison, so the words were fixed.)
+     *
+     * Deliberately a gap and not a total duration: measured, 13
      * `recordStorageSnapshot()` calls a full second apart (13 s end to end) stay one
      * generation and round-trip all 91,000 bytes, where a 5-second TOTAL-duration
-     * window split them into three generations and lost 23,000.
+     * window split them into three generations and lost 23,000. Tiny next to the
+     * six-hourly cadence at which the two live callers record snapshots, so two runs
+     * cannot be merged in practice; enormous next to the milliseconds a batch or a
+     * 13-call loop actually takes.
      *
-     * Tiny next to the six-hourly cadence at which the two live callers record
-     * snapshots, so two runs cannot be merged in practice; enormous next to the
-     * milliseconds a batch or a 13-call loop actually takes.
+     * ## What 5 s does NOT buy, so nobody builds on it (S102 review r3, LOW-1b)
+     *
+     * This window cannot tell a STALLED run from a BUSY one. All it ever sees is the
+     * interval between two WRITES — and for a hypothetical per-library writer that
+     * interval IS the next library's `du -sb`. Measured on this box, warm cache:
+     * `du -sb` over 332,652 inodes took 2.20 s (≈151 k inodes/s), so roughly 756 k
+     * inodes warm — and far fewer cold — already exceeds 5 s. A three-library run at
+     * 30 s per `du` would become three generations, and the reader's per-`media_type`
+     * `MAX(recorded_at)` would then keep only the LAST library's rows: exactly the
+     * loss this stamp exists to prevent. So an earlier version of this docblock,
+     * which justified 5 s with "a run can take minutes in total while never pausing
+     * for seconds", was wrong: for a per-library writer the pause and the work are
+     * the same interval.
+     *
+     * It is INERT for the two live callers, and that is the only reason 5 s is
+     * defensible: both hand the whole run to ONE
+     * {@see recordStorageSnapshots()} call, which takes the stamp once
+     * (see the local `$recordedAt`) BEFORE its write loop — so the window is never
+     * consulted between one run's own rows. It only ever separates one CALL from the
+     * next. A future per-library writer must therefore NOT rely on this window to
+     * hold a run together: it has to pass the whole run through one
+     * `recordStorageSnapshots()` call, or carry its own explicit stamp.
      */
     private const SNAPSHOT_RUN_MAX_GAP_SECONDS = 5;
 
@@ -571,9 +595,9 @@ class StatsCollector
      *
      * Calling this in a LOOP is nonetheless safe now, including across a wall-clock
      * second boundary: every row of a run shares one `recorded_at`
-     * ({@see snapshotRunSecond()}, whose one bound is a STALL longer than
-     * {@see SNAPSHOT_RUN_MAX_GAP_SECONDS} between two calls), so the reader's
-     * per-`media_type` `MAX(recorded_at)` join sees all of them and sums them.
+     * ({@see snapshotRunSecond()}, whose one bound is a gap of
+     * {@see SNAPSHOT_RUN_MAX_GAP_SECONDS} seconds OR MORE between two calls), so the
+     * reader's per-`media_type` `MAX(recorded_at)` join sees all of them and sums them.
      * Before that stamp,
      * thirteen calls spread over three seconds lost 47,000 of 91,000 bytes with no
      * error anywhere (S102 review r2, MED-2). The rows are still one-per-call
@@ -666,6 +690,20 @@ class StatsCollector
      * {@see \Phlix\Tests\Unit\Media\MediaItemTypeDriftTest}, so this branch is
      * unreachable for any real column value.
      *
+     * ## The run stamp is taken BEFORE the fold can reject everything (r3, C2)
+     *
+     * `$recordedAt` is computed before {@see foldStorageTotals()} runs, so a call whose
+     * every type is unmapped writes ZERO rows and has still started (or extended) a
+     * run. Deliberate and harmless: the worst effect is that a real run starting a few
+     * seconds later inherits a stamp a few seconds old, which changes no reader —
+     * `getStorageSummary()` joins on `MAX(recorded_at)` per bucket and does not care
+     * which second inside the window a generation is labelled with. It is NOT reordered,
+     * because taking the stamp once, up front, into a LOCAL is what guarantees that a
+     * concurrent coroutine mutating the instance field mid-loop cannot tear one call's
+     * rows across two seconds; folding first would buy nothing observable and would move
+     * that hoist. Documented rather than "fixed" so the next reader does not read the
+     * ordering as an oversight.
+     *
      * @param array<string, array{count: int, bytes: int, cache?: int}> $totals
      *        Item counts and byte totals keyed by bucket name or raw
      *        `media_items.type` value; `cache` (transcode cache bytes) defaults to 0.
@@ -729,35 +767,76 @@ class StatsCollector
      * guarantee, and it stopped being true the moment a caller looped.)
      *
      * A run is therefore stamped once: the first storage write computes the second,
-     * and every write that follows within {@see SNAPSHOT_RUN_MAX_GAP_SECONDS} of the
-     * PREVIOUS one reuses that value. So the property holds however many calls the
-     * run is spread over and however long the run takes in total — what ends a run is
-     * a STALL longer than the gap window, not elapsed time. (Measured: 13 calls a
+     * and every write whose gap to the PREVIOUS one is strictly less than
+     * {@see SNAPSHOT_RUN_MAX_GAP_SECONDS} reuses that value. So the property holds
+     * however many calls the run is spread over and however long the run takes in
+     * total — what ends a run is a STALL, not elapsed time. (Measured: 13 calls a
      * second apart, 13 s end to end, one generation, 91,000 of 91,000 bytes. A
      * total-duration window instead of a gap window split that same run into three
      * generations and lost 23,000 — which is why this is a gap.) After such a stall
      * the next write starts a fresh generation, i.e. it degrades to the old
      * `NOW()`-per-INSERT behaviour rather than to something worse, and the stamp can
      * never be frozen indefinitely by a stopped caller.
+     *
+     * The boundary is `<`, so a gap of exactly 5.000000000 s ALREADY starts a new run
+     * — "5 s or more", not "more than 5 s" (S102 review r3, C1; unobservable at
+     * `hrtime()` granularity, but the docs used to state the opposite of the code).
+     * Bracketed by {@see \Phlix\Tests\Unit\Stats\StatsCollectorTest::testAStallLongerThanTheGapWindowStartsANewRun},
+     * which discriminates "continued" from "recomputed" with a sentinel stamp instead
+     * of comparing two `time()` reads that are equal either way — the r3 MED-1 hole
+     * that let the whole gap arm be deleted with a green suite.
+     *
      * `FROM_UNIXTIME(?)` — not a PHP-formatted string — is
      * what keeps the value identical to what `NOW()` would have produced: both are
      * evaluated in the MySQL session's time zone, so a PHP/MySQL time-zone
      * disagreement cannot offset a snapshot (which would then also poison
      * {@see StorageSnapshotHelper::bootstrapSnapshot()}'s staleness check).
      *
-     * ## Deliberately per-INSTANCE, not static
+     * ## How far the stamp can lag the wall clock: without bound (r3, LOW-1b)
      *
-     * A run is what ONE holder of a collector does, so the memo lives on the
-     * instance: two concurrent runs (two coroutines, two FPM processes) keep
-     * separate stamps and cannot be merged into one generation. The state is two
-     * scalars, carries no request data, and is overwritten rather than appended, so
-     * it cannot grow in a resident worker.
+     * There is no absolute cap. A caller that keeps writing more often than every
+     * {@see SNAPSHOT_RUN_MAX_GAP_SECONDS} extends the SAME generation indefinitely:
+     * measured, 12 writes one second apart left `recorded_at` **11 s** behind `NOW()`
+     * with all 12 rows on one second. Only a *stopped* caller cannot freeze it. That
+     * is by design — one generation per run is the whole point — but "the stamp can
+     * never be frozen for the life of a worker" (as an earlier S102 note put it) is
+     * false; the precise statement is the one above, about a stopped caller.
+     * Unreachable on the live paths, which write once per 6 h.
+     *
+     * ## Per-INSTANCE — which is NOT per-coroutine (r3, LOW-1a)
+     *
+     * A run is what ONE holder of a collector does, so the memo lives on the instance,
+     * not in a static: the state is two scalars, carries no request data, and is
+     * overwritten rather than appended, so it cannot grow in a resident worker. Two
+     * collector INSTANCES therefore keep separate stamps and cannot merge into one
+     * generation — that, and only that, is what
+     * {@see \Phlix\Tests\Unit\Stats\StatsCollectorTest::testTheRunStampDoesNotLeakBetweenCollectorInstances}
+     * establishes.
+     *
+     * ⚠ It does NOT follow that two coroutines get separate stamps.
+     * `Common\Container\Providers\AdminServicesProvider` registers
+     * `StatsCollector::class => autowire()`, and php-di's `autowire()` is a SINGLETON
+     * per container — two `$container->get(StatsCollector::class)` calls return the
+     * same object (measured: identical `spl_object_id`). So two coroutines that both
+     * resolve the collector from the container share ONE stamp and their runs merge
+     * into one generation, which the reader then SUMS: measured, two container-resolved
+     * runs a second apart reported 2,000 bytes for a real 1,000 (2×).
+     *
+     * Latent today, and only by luck of the caller list: the one container-resolved
+     * snapshot writer is `public/index.php`'s PHP-FPM bootstrap (one request per
+     * process, no coroutines), and the daemon timer CONSTRUCTS its own collector
+     * (`Server\Core\Application::startStorageSnapshotTimer()`). It becomes reachable the
+     * moment a Workerman task takes the snapshot with `$container->get(...)`, which is
+     * the obvious way to write it. Such a caller must construct its own collector (or
+     * carry its own stamp) — the DI registration itself is deliberately left alone here.
      *
      * ## Residual, and what it hands to the unique-index step
      *
      * Two runs by the SAME collector less than a gap window apart now share a second,
      * where before they had to collide on the same second — and the reader SUMS rows
-     * that share a second, so such a pair double-counts. Unreachable on the live paths
+     * that share a second, so such a pair double-counts. "The same collector" includes
+     * every coroutine holding the container's singleton, per the note above.
+     * Unreachable on the live paths
      * (`bootstrapSnapshot()` refuses inside 6 h, and the daemon timer is one
      * `count=1` worker on a 6 h interval), and the structural fix is the unique
      * index on `(recorded_at, media_type, library_id)` plus a SUMMING upsert, which

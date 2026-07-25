@@ -302,17 +302,30 @@ class StatsCollectorTest extends TestCase
      * the run is now stamped once and bound through `FROM_UNIXTIME(?)` — a bound
      * unix second rather than a PHP-formatted string, so the value is what `NOW()`
      * would have produced in the MySQL session's own time zone.
+     *
+     * ⚠ Nothing is asserted inside the `query` callback, and that is deliberate:
+     * {@see \Phlix\Stats\StatsCollector::write()} wraps every query in
+     * `catch (Throwable)`, and PHPUnit's `ExpectationFailedException` IS a `Throwable`,
+     * so an assertion that fails in there is CONTAINED by the telemetry boundary and
+     * degrades to "the write silently did not happen". (That is why reverting the stamp
+     * used to redden this test as *"actual size 0 matches expected size 7"* rather than
+     * naming the missing `FROM_UNIXTIME(?)`.) Record in the callback, assert outside it.
      */
     public function testEveryRowOfASnapshotRunCarriesTheSameRecordedAtSecond(): void
     {
-        /** @var list<int> $stamps */
+        /** @var list<int|null> $stamps */
         $stamps = [];
+        /** @var list<string> $statements */
+        $statements = [];
         $db = $this->createMock(Connection::class);
         $db->method('query')->willReturnCallback(
-            function (string $sql, array $params) use (&$stamps): array {
-                $this->assertStringContainsString('FROM_UNIXTIME(?)', $sql);
-                $this->assertStringNotContainsString('NOW()', $sql);
-                $stamps[] = (int) $params[6];
+            static function (string $sql, array $params) use (&$stamps, &$statements): array {
+                // `array_key_exists` rather than a blind `$params[6]`: on a write path
+                // that no longer binds the stamp the blind read raises "Undefined array
+                // key 6", which phpunit.xml's failOnWarning escalates — reddening this
+                // test for something other than the run stamp (S102 review r3).
+                $statements[] = $sql;
+                $stamps[] = array_key_exists(6, $params) ? (int) $params[6] : null;
 
                 return [];
             }
@@ -332,30 +345,118 @@ class StatsCollectorTest extends TestCase
         $collector->recordStorageSnapshot('track', 1, 7);
 
         $this->assertCount(7, $stamps);
-        $this->assertCount(1, array_unique($stamps), 'One run, one recorded_at: ' . implode(',', $stamps));
+        foreach ($statements as $index => $sql) {
+            $this->assertStringContainsString(
+                'FROM_UNIXTIME(?)',
+                $sql,
+                'Row ' . $index . ' must carry the run\'s BOUND second, not a fresh NOW()'
+            );
+            $this->assertStringNotContainsString('NOW()', $sql);
+        }
+        $this->assertNotContains(
+            null,
+            $stamps,
+            'Every storage INSERT binds the run stamp as its 7th parameter'
+        );
+        $this->assertCount(
+            1,
+            array_unique($stamps),
+            'One run, one recorded_at: ' . implode(',', array_map(strval(...), $stamps))
+        );
         $this->assertLessThanOrEqual(
             2,
-            abs(time() - $stamps[0]),
+            abs(time() - (int) $stamps[0]),
             'The stamp must be the run\'s own wall-clock second, not an arbitrary value'
         );
     }
 
     /**
-     * A run ends at a STALL, not at an elapsed duration — and it really does end, so
-     * a stopped caller can never freeze the stamp for the life of the worker.
+     * The gap window this test brackets, in seconds, written down INDEPENDENTLY of
+     * `StatsCollector::SNAPSHOT_RUN_MAX_GAP_SECONDS`.
      *
-     * The gap is rewound by reflection rather than slept through: the point is the
-     * window arithmetic, and a test that sleeps six seconds to prove it would be paid
-     * for on every run of the suite forever.
+     * Deliberately a literal and not a reflection read of the constant: a test that
+     * derives its expectation from the value under test follows every mutation of it
+     * and pins nothing. Widening the production constant must break this file.
      */
-    public function testAStallLongerThanTheGapWindowStartsANewRun(): void
+    private const DOCUMENTED_GAP_WINDOW_NS = 5_000_000_000;
+
+    /**
+     * Gaps to the previous storage write, and whether the run CONTINUES across them.
+     *
+     * The window is `<` ({@see \Phlix\Stats\StatsCollector::snapshotRunSecond()}), so
+     * exactly 5.000000000 s already starts a new run. 4.99 s and 4.999 s also continue
+     * when measured, but they are not asserted here: the headroom left for the probe
+     * itself (10 ms / 1 ms) is smaller than a scheduler hiccup on a loaded box, which
+     * would turn a correct implementation red. 4.9 s leaves 100 ms and is checked
+     * explicitly against the probe's own measured overhead below.
+     *
+     * @return array<string, array{0: float, 1: bool}>
+     */
+    public static function snapshotRunGapProvider(): array
     {
-        /** @var list<int> $stamps */
+        return [
+            'no gap at all — back-to-back writes' => [0.0, true],
+            '1 s after the previous write' => [1.0, true],
+            '4.5 s — half a second of window left' => [4.5, true],
+            '4.9 s — the tightest gap that still continues' => [4.9, true],
+            'exactly 5.000000000 s — the boundary itself ENDS the run' => [5.0, false],
+            '5.1 s' => [5.1, false],
+            '6 s' => [6.0, false],
+            '1 minute' => [60.0, false],
+            '6 h — the live daemon tick cadence' => [21_600.0, false],
+        ];
+    }
+
+    /**
+     * S102 review r3 MED-1 — a run ends at a STALL, and THIS is the test that proves it.
+     *
+     * ## Why the previous version of this test proved nothing
+     *
+     * It rewound `snapshotRunLastWriteNs` by 6 s but not the clock, then asserted
+     * `assertGreaterThanOrEqual($stamps[1], $stamps[2])`. A *continuing* run and a
+     * *recomputed* one both return the same `time()` second within one test, so that
+     * assertion held either way. Measured consequence: the entire gap arm could be
+     * deleted (`$continuingARun = $this->snapshotRunSecond !== 0;` — a run that NEVER
+     * expires) and the whole suite stayed green at `OK (116 tests, 608 assertions)`;
+     * `SNAPSHOT_RUN_MAX_GAP_SECONDS` could be widened 5 → 86400 (a run lasts a DAY) and
+     * the suite stayed green at `OK (202 tests, 897 assertions)`. That matters because
+     * `Application::startStorageSnapshotTimer()` holds ONE collector for the worker's
+     * whole life: with the arm gone, every 6-hourly tick reuses the BOOT second and the
+     * reader SUMS every generation together — measured, three runs 1 s apart on one
+     * collector made the dashboard report 45,000 for a real 15,000 (3.00×), rising to
+     * ~5× after a day of ticks. A mechanism no test can see is a mechanism the next
+     * cleanup deletes.
+     *
+     * ## The discriminator: a sentinel no recomputation can produce
+     *
+     * `snapshotRunSecond` is set to `time() - 12345` before the gap is rewound. If the
+     * next write CONTINUES the run it returns that sentinel; if it RECOMPUTES it returns
+     * a fresh `time()`. The two are then distinguishable with no sleeping and no clock
+     * manipulation. The gap itself is rewound by reflection rather than slept through:
+     * the point is the window arithmetic, and a test that slept 6 s to prove it would be
+     * paid for on every run of the suite forever.
+     *
+     * @dataProvider snapshotRunGapProvider
+     */
+    public function testAStallLongerThanTheGapWindowStartsANewRun(
+        float $gapSeconds,
+        bool $expectSameRun
+    ): void {
+        /** @var list<int|null> $stamps */
         $stamps = [];
+        /** @var list<string> $statements */
+        $statements = [];
         $db = $this->createMock(Connection::class);
         $db->method('query')->willReturnCallback(
-            static function (string $sql, array $params) use (&$stamps): array {
-                $stamps[] = (int) $params[6];
+            static function (string $sql, array $params) use (&$stamps, &$statements): array {
+                // Recorded, never asserted: StatsCollector::write() catches Throwable, and
+                // an ExpectationFailedException IS one, so an assertion in here would be
+                // swallowed by the telemetry boundary. `array_key_exists` rather than a
+                // blind `$params[6]` because that read raises "Undefined array key 6" on a
+                // write path with no bound stamp, and failOnWarning would then redden this
+                // test for something other than a stall (S102 review r3, requirement 3).
+                $statements[] = $sql;
+                $stamps[] = array_key_exists(6, $params) ? (int) $params[6] : null;
 
                 return [];
             }
@@ -366,45 +467,159 @@ class StatsCollectorTest extends TestCase
         $second = new \ReflectionProperty(StatsCollector::class, 'snapshotRunSecond');
 
         $collector->recordStorageSnapshot('movie', 1, 1);
-        $firstRun = (int) $second->getValue($collector);
 
-        // Still inside the window: same run.
+        $this->assertCount(1, $statements, 'The first storage write must reach the connection');
+        $this->assertStringContainsString(
+            'FROM_UNIXTIME(?)',
+            $statements[0],
+            'The run stamp must be BOUND as a unix second, not re-evaluated as NOW() per row — '
+            . 'with NOW() there is no run and therefore nothing that can stall'
+        );
+        $this->assertNotContains(
+            null,
+            $stamps,
+            'The 7th bound parameter IS the run stamp; without it there is no run to stall'
+        );
+
+        $firstRun = (int) $second->getValue($collector);
+        $this->assertNotSame(0, $firstRun, 'Precondition: the first storage write opens a run');
+
+        // A second write with no gap at all is the same run — the "continue" arm exists.
         $collector->recordStorageSnapshot('series', 1, 2);
         $this->assertSame($firstRun, (int) $second->getValue($collector));
-
-        // Rewind the last write past the gap window, then write again.
-        $lastWrite->setValue(
-            $collector,
-            (int) $lastWrite->getValue($collector) - 6_000_000_000
-        );
-        $collector->recordStorageSnapshot('music', 1, 3);
-
         $this->assertSame($stamps[0], $stamps[1], 'The first two writes are one run');
-        $this->assertNotSame(0, (int) $second->getValue($collector));
-        $this->assertGreaterThanOrEqual(
-            $stamps[1],
+
+        // A value no recomputation can produce, so "reused" and "recomputed" differ.
+        $sentinel = time() - 12_345;
+        $second->setValue($collector, $sentinel);
+
+        $gapNs = (int) round($gapSeconds * 1_000_000_000);
+        $startNs = hrtime(true);
+        $lastWrite->setValue($collector, $startNs - $gapNs);
+        $collector->recordStorageSnapshot('music', 1, 3);
+        $overheadNs = hrtime(true) - $startNs;
+
+        $this->assertCount(3, $stamps, 'Three writes, three stamps');
+
+        if ($expectSameRun) {
+            // The collector saw a gap in [$gapNs, $gapNs + $overheadNs]. Assert the case
+            // was UNAMBIGUOUSLY inside the window, so a pathologically slow box produces
+            // this message instead of a false verdict on the arithmetic.
+            $this->assertLessThan(
+                self::DOCUMENTED_GAP_WINDOW_NS - $gapNs,
+                $overheadNs,
+                sprintf(
+                    'Probe overhead %.3f ms pushed a %.3f s gap onto the far side of the %.0f s '
+                    . 'window; the case is ambiguous, not wrong',
+                    $overheadNs / 1_000_000,
+                    $gapSeconds,
+                    self::DOCUMENTED_GAP_WINDOW_NS / 1_000_000_000
+                )
+            );
+            $this->assertSame(
+                $sentinel,
+                $stamps[2],
+                sprintf(
+                    'A gap of %.3f s is inside the %.0f s window, so the write must REUSE the run '
+                    . 'stamp; a fresh value here means the run expired early',
+                    $gapSeconds,
+                    self::DOCUMENTED_GAP_WINDOW_NS / 1_000_000_000
+                )
+            );
+            $this->assertSame($sentinel, (int) $second->getValue($collector), 'The run was not restarted');
+
+            return;
+        }
+
+        $this->assertNotSame(
+            $sentinel,
             $stamps[2],
-            'After a stall the stamp is recomputed, so it can only move forward'
+            sprintf(
+                'A gap of %.3f s is %.0f s or more, so the run has STALLED and the stamp must be '
+                . 'RECOMPUTED. Reusing it means a run never expires: one long-lived collector then '
+                . 'stamps every tick with its boot second and the dashboard SUMS every generation '
+                . '(measured 3.00x for three runs, ~5x after a day of 6-hourly ticks)',
+                $gapSeconds,
+                self::DOCUMENTED_GAP_WINDOW_NS / 1_000_000_000
+            )
         );
-        $this->assertLessThanOrEqual(2, abs(time() - $stamps[2]));
+        $this->assertLessThanOrEqual(
+            2,
+            abs(time() - $stamps[2]),
+            'A recomputed stamp is the new run\'s own wall-clock second'
+        );
+        $this->assertSame($stamps[2], (int) $second->getValue($collector), 'The new stamp is memoised');
     }
 
     /**
      * The run stamp is per INSTANCE, so two collectors are two runs and cannot be
-     * merged into one `recorded_at` generation — which is what keeps two concurrent
-     * snapshot writers (two coroutines, two FPM processes) independent.
+     * merged into one `recorded_at` generation.
+     *
+     * ⚠ Per-INSTANCE is what this proves, and per-instance is NOT per-coroutine:
+     * `AdminServicesProvider` registers `StatsCollector::class => autowire()` and
+     * php-di's `autowire()` is a singleton per container, so two coroutines that both
+     * resolve the collector from the container hold the SAME instance and DO share a
+     * stamp (S102 review r3, LOW-1a — documented on
+     * {@see \Phlix\Stats\StatsCollector::snapshotRunSecond()}; the DI registration is
+     * out of S102's scope). Nothing here should be read as a coroutine guarantee.
+     *
+     * The second collector's stamp is checked against a SENTINEL planted on the first,
+     * not merely against 0: "the other one is still zero" also holds when the stamp
+     * mechanism is absent entirely, whereas inheriting the sentinel is specifically
+     * what a shared (static) memo would do.
      */
     public function testTheRunStampDoesNotLeakBetweenCollectorInstances(): void
     {
         $reflection = new \ReflectionProperty(StatsCollector::class, 'snapshotRunSecond');
+        $lastWrite = new \ReflectionProperty(StatsCollector::class, 'snapshotRunLastWriteNs');
+
+        /** @var list<int|null> $otherStamps */
+        $otherStamps = [];
+        $otherDb = $this->createMock(Connection::class);
+        $otherDb->method('query')->willReturnCallback(
+            static function (string $sql, array $params) use (&$otherStamps): array {
+                // Recorded, not asserted — StatsCollector::write() would contain the
+                // ExpectationFailedException. See the stall test above.
+                $otherStamps[] = array_key_exists(6, $params) ? (int) $params[6] : null;
+
+                return [];
+            }
+        );
 
         $first = new StatsCollector($this->createMock(Connection::class));
-        $second = new StatsCollector($this->createMock(Connection::class));
+        $second = new StatsCollector($otherDb);
 
         $first->recordStorageSnapshot('movie', 1, 1);
 
-        $this->assertNotSame(0, $reflection->getValue($first), 'The writing collector has a run');
+        $this->assertNotSame(
+            0,
+            $reflection->getValue($first),
+            'The writing collector has a run (with no run stamp at all there is nothing to leak, so '
+            . 'this test would otherwise pass vacuously)'
+        );
         $this->assertSame(0, $reflection->getValue($second), 'A second collector must start with none');
+
+        // Give the first collector a live run carrying an impossible stamp; the second
+        // collector's own first write must not pick it up.
+        $sentinel = time() - 12_345;
+        $reflection->setValue($first, $sentinel);
+        $lastWrite->setValue($first, hrtime(true));
+
+        $second->recordStorageSnapshot('movie', 1, 1);
+
+        $this->assertSame(
+            $sentinel,
+            (int) $reflection->getValue($first),
+            'The first collector keeps its own run'
+        );
+        $this->assertNotSame(
+            $sentinel,
+            $otherStamps[0],
+            'A run stamp must never leak from one collector instance to another — that is what '
+            . 'keeps two concurrent snapshot writers (two FPM processes, or two coroutines each '
+            . 'constructing its own collector) independent generations'
+        );
+        $this->assertLessThanOrEqual(2, abs(time() - $otherStamps[0]), 'The second collector stamped its own run');
     }
 
     /**

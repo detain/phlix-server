@@ -37,20 +37,26 @@ use Workerman\MySQL\Connection;
  * them (they took an int PK where every client sends a name). They are kept rather
  * than deleted because they are the only references left to the `MusicAlbum` /
  * `MusicTrack` / `MusicAlbumWithTracks` DTOs, so removing them turns a one-file
- * change into a THREE-class deletion that also has to decide the
- * `MusicTrack::$mediaItemId` type bug below AND `phlix-contracts`' `src/Music.ts`,
- * which still mirrors those DTO shapes — i.e. a cross-repo sweep, not a fix round.
+ * change into a THREE-class deletion that also has to decide `phlix-contracts`'
+ * `src/Music.ts`, which still mirrors those DTO shapes — i.e. a cross-repo sweep,
+ * not a fix round.
  * ⚠ `MusicArtist` and `MusicArtistWithAlbums` are NOT in that set and must not be
  * deleted with them: {@see getAllArtists()} constructs both on every served
  * `GET /api/v1/music/artists` request (S99 review r2, LOW-4 — the earlier wording
  * called it a four-class deletion and named a live DTO as dead).
  *
- * ⚠ **Fix this before reviving any of them:** `MusicTrack::$mediaItemId` is typed
- * `int` while `music_tracks.media_item_id` is `CHAR(36)`, so `MusicTrack::fromRow()`
- * fails `is_numeric()` on every UUID and stores `0`. Any DTO-based read is
- * therefore unable to produce a playable track id. The array-returning reads this
- * class serves the API from (`getAllTracks()`, `findTrackByMediaItemId()`,
- * `getTracksByAlbumIds()`) are unaffected — they carry the raw UUID.
+ * ✅ **FIXED in S121 — the `media_item_id` coercion bug this docblock used to warn
+ * about is gone.** All three DTOs typed `media_item_id` as an `int` and coerced it
+ * with `is_numeric()`, which is false for every `CHAR(36)` UUID, so
+ * `MusicArtist`/`MusicAlbum` silently produced `null` and `MusicTrack` produced
+ * `0` — i.e. no DTO-based read could produce a playable track id. It is now
+ * `?string`, coerced by a per-class `mediaItemIdFromRow()` (all three fixed
+ * together, not just the `MusicTrack` one that was written down). The
+ * array-returning reads this class serves the API from (`getAllTracks()`,
+ * `findTrackByMediaItemId()`, `getTracksByAlbumIds()`) never had the bug — they
+ * carry the raw UUID. ⚠ `phlix-contracts`' `src/Music.ts` still declares
+ * `mediaItemId: number` and is a separate, cross-repo follow-up; nothing reads it
+ * today, and no served payload emits the field.
  *
  * @author Phlix Development Team
  * @version 1.0.0
@@ -238,8 +244,10 @@ class MusicLibraryService
      *
      * ⚠ DEAD as of S99 — no `src/` caller; retained deliberately (see the class
      * docblock). The API serves album detail from {@see findAlbumByTitle()} +
-     * {@see getTracksByAlbumIds()} instead, because this method's `MusicTrack`
-     * DTOs cannot carry the UUID a client needs to play a track.
+     * {@see getTracksByAlbumIds()} instead, because that path is batched AND
+     * row-capped and this one is neither. (Until S121 there was a second reason —
+     * `MusicTrack` could not carry the UUID a client needs to play a track. That
+     * one is fixed: `MusicTrack::$mediaItemId` is now the `?string` UUID.)
      *
      * @param int $id Album ID
      * @return MusicAlbumWithTracks|null Album data with tracks or null if not found

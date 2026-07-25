@@ -15,7 +15,7 @@ namespace Phlix\Media\Music;
  * MusicAlbum represents a music album in the library.
  *
  * @property int         $id                   Unique identifier
- * @property int|null   $mediaItemId          FK to media_items.id for artwork/metadata
+ * @property string|null $mediaItemId          FK to media_items.id (CHAR(36) UUID) for artwork/metadata
  * @property int         $artistId             FK to music_artists.id
  * @property string      $title                Album title
  * @property string|null $sortTitle            Title for alphabetical sorting
@@ -36,7 +36,7 @@ final readonly class MusicAlbum
         public int $id,
         public int $artistId,
         public string $title,
-        public ?int $mediaItemId = null,
+        public ?string $mediaItemId = null,
         public ?string $sortTitle = null,
         public ?int $year = null,
         public int $totalTracks = 0,
@@ -68,8 +68,7 @@ final readonly class MusicAlbum
         $id = isset($row['id']) && is_numeric($row['id']) ? (int)$row['id'] : 0;
         $artistId = isset($row['artist_id']) && is_numeric($row['artist_id']) ? (int)$row['artist_id'] : 0;
         $title = isset($row['title']) && is_string($row['title']) ? $row['title'] : '';
-        $mediaItemId = isset($row['media_item_id']) && is_numeric($row['media_item_id']) ? (int)$row['media_item_id'] :
-            null;
+        $mediaItemId = self::mediaItemIdFromRow($row);
         $sortTitle = isset($row['sort_title']) && is_string($row['sort_title']) ? $row['sort_title'] : null;
         $year = isset($row['year']) && is_numeric($row['year']) ? (int)$row['year'] : null;
         $totalTracks = isset($row['total_tracks']) && is_numeric($row['total_tracks']) ? (int)$row['total_tracks'] : 0;
@@ -113,6 +112,36 @@ final readonly class MusicAlbum
             'created_at' => $this->createdAt?->format('Y-m-d H:i:s'),
             'updated_at' => $this->updatedAt?->format('Y-m-d H:i:s'),
         ];
+    }
+
+    /**
+     * Coerces `music_albums.media_item_id` — a `CHAR(36)` UUID — into `?string`.
+     *
+     * ⚠ This replaces `is_numeric($row['media_item_id']) ? (int)… : null`, which
+     * is **false for every UUID**, so the field was silently ALWAYS `null` (S121).
+     * Confirmed against real MySQL: the column is `char(36)` (migration 070) and
+     * `workerman/mysql` hands it back as a PHP `string`, while the sibling
+     * `id` / `artist_id` columns really are `int unsigned` — which is why they keep
+     * their `is_numeric()` guards and this one must not.
+     *
+     * `null` is a LEGITIMATE value here, not merely a parse failure: the column is
+     * NULLable and the music scanner writes NULL when its `createMediaItem()` mint
+     * fails, backfilling the row on a later pass. So an absent key, a SQL NULL and
+     * an empty string all collapse to `null` — never to `''`, which would read as
+     * a present-but-unusable id.
+     *
+     * The identical helper exists on {@see MusicArtist} and {@see MusicTrack};
+     * `grep -rn mediaItemIdFromRow src/` must return all three, or a sweep was
+     * partial.
+     *
+     * @param array<string, mixed> $row Database row
+     * @return string|null The UUID, or null when the column is absent/NULL/empty
+     */
+    private static function mediaItemIdFromRow(array $row): ?string
+    {
+        $value = $row['media_item_id'] ?? null;
+
+        return is_string($value) && $value !== '' ? $value : null;
     }
 
     /**

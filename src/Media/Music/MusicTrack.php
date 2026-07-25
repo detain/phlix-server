@@ -15,7 +15,7 @@ namespace Phlix\Media\Music;
  * MusicTrack represents a music track in the library.
  *
  * @property int         $id                     Unique identifier
- * @property int         $mediaItemId            FK to media_items.id for stream/metadata
+ * @property string|null $mediaItemId            FK to media_items.id (CHAR(36) UUID) for stream/metadata
  * @property int         $albumId                FK to music_albums.id
  * @property int         $artistId               FK to music_artists.id (denormalized for queries)
  * @property string      $title                  Track title
@@ -33,7 +33,7 @@ final readonly class MusicTrack
 {
     public function __construct(
         public int $id,
-        public int $mediaItemId,
+        public ?string $mediaItemId,
         public int $albumId,
         public int $artistId,
         public string $title,
@@ -54,8 +54,7 @@ final readonly class MusicTrack
     public static function fromRow(array $row): self
     {
         $id = isset($row['id']) && is_numeric($row['id']) ? (int)$row['id'] : 0;
-        $mediaItemId = isset($row['media_item_id']) && is_numeric($row['media_item_id']) ? (int)$row['media_item_id'] :
-            0;
+        $mediaItemId = self::mediaItemIdFromRow($row);
         $albumId = isset($row['album_id']) && is_numeric($row['album_id']) ? (int)$row['album_id'] : 0;
         $artistId = isset($row['artist_id']) && is_numeric($row['artist_id']) ? (int)$row['artist_id'] : 0;
         $title = isset($row['title']) && is_string($row['title']) ? $row['title'] : '';
@@ -100,6 +99,38 @@ final readonly class MusicTrack
             'created_at' => $this->createdAt?->format('Y-m-d H:i:s'),
             'updated_at' => $this->updatedAt?->format('Y-m-d H:i:s'),
         ];
+    }
+
+    /**
+     * Coerces `music_tracks.media_item_id` — a `CHAR(36)` UUID — into `?string`.
+     *
+     * ⚠ This replaces `is_numeric($row['media_item_id']) ? (int)… : 0`, which is
+     * **false for every UUID**, so the field was silently ALWAYS `0` — the defect
+     * `MusicLibraryService`'s class docblock has described since S99 (S121).
+     * Confirmed against real MySQL: the column is `char(36)` (migration 070) and
+     * `workerman/mysql` hands it back as a PHP `string`, while the sibling
+     * `id` / `album_id` / `artist_id` columns really are `int unsigned` — which is
+     * why they keep their `is_numeric()` guards and this one must not.
+     *
+     * `music_tracks.media_item_id` is `NOT NULL`, so `null` here does not mean "no
+     * artwork yet" (as it legitimately does on {@see MusicArtist} /
+     * {@see MusicAlbum}, whose columns are NULLable): it means the row handed to
+     * `fromRow()` did not carry the column at all. It is still modelled as `null`
+     * rather than `''` because `''` would read as a present-but-unusable id and
+     * would silently build a broken `/media//stream` URL.
+     *
+     * The identical helper exists on {@see MusicArtist} and {@see MusicAlbum};
+     * `grep -rn mediaItemIdFromRow src/` must return all three, or a sweep was
+     * partial.
+     *
+     * @param array<string, mixed> $row Database row
+     * @return string|null The UUID, or null when the column is absent/NULL/empty
+     */
+    private static function mediaItemIdFromRow(array $row): ?string
+    {
+        $value = $row['media_item_id'] ?? null;
+
+        return is_string($value) && $value !== '' ? $value : null;
     }
 
     /**

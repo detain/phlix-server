@@ -258,7 +258,16 @@ class MusicLibraryScanner
      *    keys and tracks are find-or-create on `(media_items.path, library_id)`, so
      *    a second pass adds only what is missing and re-adds nothing.
      *  - **Memory is flat**, not proportional to the tree: at most
-     *    `MAX_OPEN_ALBUMS × MAX_TRACKS_PER_FLUSH` buffered files at any instant.
+     *    `MAX_OPEN_ALBUMS × MAX_TRACKS_PER_FLUSH` = 32 × 250 = 8,000 buffered
+     *    files at any instant. One buffered entry
+     *    (`['file' => SplFileInfo, 'meta' => [...]]`) measures **1,463 bytes**
+     *    retained on PHP 8.3.6 with ~60-character paths, so the real ceiling is
+     *    **≈11.1 MB** (11,656,488 B measured with 7,968 entries open) — and it is
+     *    reached ONLY by the pathological shape where 32 album keys are interleaved
+     *    right up to the per-album chunk limit. Flat in library size, against one
+     *    such entry per FILE for the whole-tree map this replaced (≈89 MB for the
+     *    61,135-file path that motivated the step). Pinned by
+     *    {@see \Phlix\Tests\Unit\Media\Music\MusicLibraryScannerTest::testMemoryStaysBoundedAcrossALargeTree()}.
      *
      * **No transactions, on purpose.** Per-album transactions would buy nothing
      * here (each album is a handful of autocommitted statements and partial
@@ -372,7 +381,8 @@ class MusicLibraryScanner
 
             $open[$key]['files'][] = ['file' => $file, 'meta' => $metadata];
 
-            // Touch: least-recently-used goes to the front of $recency.
+            // Touch: re-inserting moves the MOST-recently-used key to the END of
+            // $recency, so array_key_first() below yields the least-recently-used.
             unset($recency[$key]);
             $recency[$key] = true;
 
@@ -426,7 +436,10 @@ class MusicLibraryScanner
      * walk. The DB layer throws on error (it does not return `false`), so without
      * the catch one unexpected row would kill the rest of the library index — and
      * with incremental flushing that would now also discard albums the walk has
-     * not reached yet.
+     * not reached yet. The granularity is deliberately per TRACK, and
+     * `total_tracks` is refreshed from a `finally`, so a bad file costs exactly
+     * that file and never leaves the album's advertised count below the rows it
+     * actually has.
      *
      * @param array{artist:string, album:string, year:?int,
      *     files:list<array{file:SplFileInfo, meta:array<string, mixed>}>} $albumData
@@ -498,27 +511,53 @@ class MusicLibraryScanner
             $albumMediaItemId = $albumResult['media_item_id'];
 
             // Upsert tracks (metadata already read during the walk — no re-probe).
-            foreach ($files as $fileInfo) {
-                $trackResult = $this->upsertTrack(
-                    $albumId,
-                    $albumMediaItemId,
-                    $artistId,
-                    $fileInfo['file'],
-                    $fileInfo['meta'],
-                    $libraryId
-                );
-                if ($trackResult === 'added') {
-                    $result->added++;
-                } elseif ($trackResult === 'updated') {
-                    $result->updated++;
-                }
-            }
+            try {
+                foreach ($files as $fileInfo) {
+                    // Per-TRACK guard. Without it one unreadable/constraint-
+                    // violating file aborted the whole album, silently abandoning
+                    // every track after it (measured: 2 of 3 written), and the
+                    // album's total_tracks was left at whatever the row already
+                    // held. A bad file must cost exactly that file.
+                    try {
+                        $trackResult = $this->upsertTrack(
+                            $albumId,
+                            $albumMediaItemId,
+                            $artistId,
+                            $fileInfo['file'],
+                            $fileInfo['meta'],
+                            $libraryId
+                        );
+                    } catch (\Throwable $trackError) {
+                        $this->logger->error('Skipping track after error during indexing', [
+                            'album' => $albumTitle,
+                            'artist' => $artistName,
+                            'path' => $fileInfo['file']->getPathname(),
+                            'error' => $trackError->getMessage(),
+                        ]);
+                        continue;
+                    }
 
-            // Recompute total_tracks from what is actually persisted. This is the
-            // single writer of that column, and it is what makes a chunked or
-            // re-opened album end up with the right count instead of the size of
-            // whichever batch happened to be flushed last.
-            $this->refreshAlbumTrackTotal($albumId);
+                    if ($trackResult === 'added') {
+                        $result->added++;
+                    } elseif ($trackResult === 'updated') {
+                        $result->updated++;
+                    }
+                }
+            } finally {
+                // Recompute total_tracks from what is actually persisted. This is
+                // the single writer of that column, and it is what makes a chunked
+                // or re-opened album end up with the right count instead of the
+                // size of whichever batch happened to be flushed last.
+                //
+                // In a `finally` on purpose: as the LAST statement of the `try` it
+                // was skipped whenever the loop threw, which left an album that
+                // HAS track rows advertising total_tracks = 0 — and
+                // MusicLibraryService::getArtistWithAlbums() sums that column, so
+                // the artist page reported 0 tracks for a populated album and
+                // nothing ever healed it. The column must never be less true than
+                // the rows.
+                $this->refreshAlbumTrackTotal($albumId);
+            }
         } catch (\Throwable $e) {
             $this->logger->error('Skipping album after error during indexing', [
                 'album' => $albumTitle,
@@ -928,8 +967,19 @@ class MusicLibraryScanner
         // Generate sort name
         $sortName = $this->generateSortName($name);
 
-        // Create media_item for artwork/metadata
-        $mediaItemId = $this->createMediaItem('artist', $name, null, $libraryId);
+        // Adopt an orphan from an interrupted scan before minting a new
+        // media_item, or the orphan leaks forever and every rescan adds another —
+        // see findAdoptableArtistMediaItemId() for the window and the measurement.
+        //
+        // KNOWN GAP, pre-existing and OWNED BY S96 (not S95): createMediaItem()
+        // swallows its own Throwable and returns '', so a transient failure here
+        // inserts the music_artists row with media_item_id = NULL — and because the
+        // natural-key branch above returns whatever is stored, no later scan ever
+        // backfills it (verified: still NULL after two clean rescans). That artist
+        // stays artwork-less and invisible to any media_items-driven path. Deliberately
+        // left unchanged here; S95 does not alter this behaviour.
+        $mediaItemId = $this->findAdoptableArtistMediaItemId($name, $libraryId)
+            ?? $this->createMediaItem('artist', $name, null, $libraryId);
 
         // Insert new artist
         $result = $this->db->query(
@@ -1015,8 +1065,11 @@ class MusicLibraryScanner
         // Generate sort title
         $sortTitle = $this->generateSortName($title);
 
-        // Create media_item for artwork/metadata
-        $mediaItemId = $this->createMediaItem('album', $title, null, $libraryId);
+        // Adopt an orphan from an interrupted scan before minting a new media_item
+        // (see findAdoptableAlbumMediaItemId()). The same S96-owned NULL
+        // media_item_id gap documented in upsertArtist() applies here verbatim.
+        $mediaItemId = $this->findAdoptableAlbumMediaItemId($title, $libraryId)
+            ?? $this->createMediaItem('album', $title, null, $libraryId);
 
         // Insert new album. total_tracks defaults to 0 and is set by
         // refreshAlbumTrackTotal() once this flush's tracks are persisted.
@@ -1182,11 +1235,93 @@ class MusicLibraryScanner
      */
     private function findExistingTrackMediaItemId(string $path, ?string $libraryId): ?string
     {
-        $rows = $this->db->query(
+        return $this->firstMediaItemId($this->db->query(
             "SELECT id FROM media_items WHERE type = 'track' AND path = ? AND library_id <=> ? LIMIT 1",
             [$path, $libraryId]
-        );
+        ));
+    }
 
+    /**
+     * Finds an ORPHANED artist `media_items` row this scanner already minted for
+     * `$name` — one that no `music_artists` row points at — so it can be adopted
+     * instead of leaked.
+     *
+     * WHY THIS EXISTS. {@see self::upsertArtist()} writes the `media_items` row one
+     * autocommitted statement BEFORE the matching `music_artists` row. A worker
+     * restart inside that one-statement window leaves a `media_items` row with no
+     * sibling, and the upsert finds-or-creates on the NATURAL key (`name`), so
+     * without this lookup the next scan mints a SECOND row and the first is never
+     * reclaimed — measured: two clean rescans left 2 artist `media_items` for 1
+     * `music_artists` row. Incremental flushing opens that window once per album
+     * across a multi-hour scan instead of once per never-durable walk, so the
+     * residue would accumulate. `media_items` counts BY TYPE are what the music
+     * read path and the stats maps report, so the leak is user-visible.
+     *
+     * This deliberately mirrors {@see self::findExistingTrackMediaItemId()} plus
+     * {@see self::upsertTrack()}'s reuse branch, which is why the track window is
+     * already self-healing.
+     *
+     * @param string $name Artist name, as stored in `media_items.name`.
+     * @param string|null $libraryId Owning library UUID (null-safe matched).
+     * @return string|null An adoptable media_items UUID, or null when none exists.
+     */
+    private function findAdoptableArtistMediaItemId(string $name, ?string $libraryId): ?string
+    {
+        return $this->firstMediaItemId($this->db->query(
+            "SELECT mi.id
+               FROM media_items mi
+               LEFT JOIN music_artists ma ON ma.media_item_id = mi.id
+              WHERE mi.type = 'artist' AND mi.name = ? AND mi.path = ''
+                AND mi.library_id <=> ? AND ma.id IS NULL
+              LIMIT 1",
+            [$name, $libraryId]
+        ));
+    }
+
+    /**
+     * Finds an ORPHANED album `media_items` row this scanner already minted for
+     * `$title` — one that no `music_albums` row points at — so it can be adopted
+     * instead of leaked. The artist/`music_artists` counterpart is
+     * {@see self::findAdoptableArtistMediaItemId()}, which documents the window
+     * and the measurement.
+     *
+     * Two different artists can legitimately share an album title, and an album's
+     * `media_items` row carries nothing artist-specific (no `parent_id` — S97 owns
+     * that question), so adopting "some" orphan of that title is indistinguishable
+     * from minting a fresh one, and the row count stays exact either way.
+     *
+     * @param string $title Album title, as stored in `media_items.name`.
+     * @param string|null $libraryId Owning library UUID (null-safe matched).
+     * @return string|null An adoptable media_items UUID, or null when none exists.
+     */
+    private function findAdoptableAlbumMediaItemId(string $title, ?string $libraryId): ?string
+    {
+        return $this->firstMediaItemId($this->db->query(
+            "SELECT mi.id
+               FROM media_items mi
+               LEFT JOIN music_albums ma ON ma.media_item_id = mi.id
+              WHERE mi.type = 'album' AND mi.name = ? AND mi.path = ''
+                AND mi.library_id <=> ? AND ma.id IS NULL
+              LIMIT 1",
+            [$title, $libraryId]
+        ));
+    }
+
+    /**
+     * Extracts the `id` of the first returned row as a non-empty string.
+     *
+     * The `IS NULL` half of the two adoption lookups above is NOT optional:
+     * `music_artists.media_item_id` and `music_albums.media_item_id` are both
+     * `NULL UNIQUE` (migration 065), so adopting a row another music row already
+     * references would fail that INSERT on a duplicate key and lose the whole
+     * album. `path = ''` keeps the lookups to rows THIS scanner minted — it stores
+     * no path for artists and albums, unlike tracks.
+     *
+     * @param mixed $rows Whatever the DB layer returned for a `SELECT id …`.
+     * @return string|null The id, or null when the query matched nothing.
+     */
+    private function firstMediaItemId(mixed $rows): ?string
+    {
         if (is_array($rows) && count($rows) > 0 && is_array($rows[0])) {
             $id = $rows[0]['id'] ?? null;
             if (is_string($id) && $id !== '') {

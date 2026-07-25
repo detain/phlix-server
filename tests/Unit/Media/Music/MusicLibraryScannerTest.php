@@ -24,6 +24,18 @@ use Workerman\MySQL\Connection;
  */
 final class MusicLibraryScannerTest extends TestCase
 {
+    /**
+     * Retained bytes per buffered file, for the memory ceiling below.
+     *
+     * MEASURED, not guessed: one `['file' => SplFileInfo, 'meta' => [...]]` entry
+     * costs **1,463 B** on PHP 8.3.6 with ~60-character paths — 11,656,488 B
+     * observed with 7,968 entries buffered simultaneously. 1,700 leaves ~16 %
+     * headroom for a different PHP build or a longer temp path without letting a
+     * genuine regression through: the pre-S95 whole-tree map needs ~19.5 MB on this
+     * fixture, ~44 % over the resulting ceiling.
+     */
+    private const BYTES_PER_BUFFERED_FILE = 1700;
+
     /** @var list<string> Temp files/dirs to remove in tearDown. */
     private array $cleanup = [];
 
@@ -642,6 +654,41 @@ final class MusicLibraryScannerTest extends TestCase
     }
 
     /**
+     * Builds the WORST-CASE buffer fixture for
+     * {@see self::testMemoryStaysBoundedAcrossALargeTree()}.
+     *
+     * `interleaved/` = 32 album keys × 249 files (one short of
+     * MAX_TRACKS_PER_FLUSH, so no key ever chunk-flushes and the 32-album window
+     * never overflows) → all 7,968 entries buffered at once, whatever order
+     * `readdir()` yields. `tail/` = one album key per file, which forces an
+     * eviction per file and is what makes an unbounded map exceed the ceiling.
+     *
+     * @return array{0: string, 1: int, 2: int} `[root, totalFiles, simultaneouslyBufferedEntries]`
+     */
+    private function buildWorstCaseBufferTree(): array
+    {
+        $keys = 32;
+        $perKey = 249;          // MAX_TRACKS_PER_FLUSH (250) minus one
+        $buffered = $keys * $perKey;
+        $tail = 6032;
+
+        $root = $this->tempDir();
+        foreach (['interleaved', 'tail'] as $sub) {
+            mkdir($root . '/' . $sub, 0777, true);
+            $this->cleanup[] = $root . '/' . $sub;
+        }
+
+        for ($i = 0; $i < $buffered; $i++) {
+            $this->touchFile($root . '/interleaved', sprintf('i%05d.mp3', $i));
+        }
+        for ($i = 0; $i < $tail; $i++) {
+            $this->touchFile($root . '/tail', sprintf('t%05d.mp3', $i));
+        }
+
+        return [$root, $buffered + $tail, $buffered];
+    }
+
+    /**
      * A scanner whose tag reader is replaced by a pure function of the path, so a
      * large synthetic tree costs no getID3 or ffprobe work at all.
      *
@@ -723,49 +770,93 @@ final class MusicLibraryScannerTest extends TestCase
     }
 
     /**
-     * Memory must not scale with the size of the tree.
+     * Memory must not scale with the size of the tree, and the documented ceiling
+     * must be the one the WORST case actually reaches.
      *
      * The pre-S95 map retained one `['file' => SplFileInfo, 'meta' => [...]]` entry
-     * per audio file for the whole walk. Measured on this build that entry costs
-     * ~1,334 bytes, so a 6,000-file tree held ≈ 8 MB (and the user's 60,085-file
-     * path ≈ 80 MB). The bounded window retains at most
-     * MAX_OPEN_ALBUMS (32) × 20 tracks = 640 entries ≈ 0.9 MB here, no matter how
-     * many files follow.
+     * per audio file for the whole walk, so a 14,000-file tree held ≈ 20 MB and the
+     * 61,135-file path that motivated this step ≈ 89 MB. The window retains at most
+     * MAX_OPEN_ALBUMS (32) × MAX_TRACKS_PER_FLUSH (250) entries no matter how many
+     * files follow.
+     *
+     * The fixture exercises that ceiling head-on instead of a shape that stays far
+     * below it (300 albums × 20 tracks only ever buffers 32 × 20 = 640 entries — a
+     * 3 MB assertion then passes for the wrong reason):
+     *
+     *  - `interleaved/` holds 32 album keys × 249 files. 249 is one short of
+     *    MAX_TRACKS_PER_FLUSH, so NO key can chunk-flush and the 32-album window
+     *    never overflows — every one of the 7,968 entries is buffered at once. That
+     *    is independent of the order `readdir()` hands the files over, which is what
+     *    keeps this deterministic.
+     *  - `tail/` gives every file its own album key, forcing an eviction per file.
+     *    It is what makes the pre-S95 whole-tree map blow the ceiling while the
+     *    bounded window does not move.
+     *
+     * `RecursiveIteratorIterator` walks one directory at a time, so the peak is the
+     * same whichever of the two it happens to visit first.
      */
     public function testMemoryStaysBoundedAcrossALargeTree(): void
     {
-        [$dir, $total] = $this->buildAlbumTree(300, 20);
-        $this->assertSame(6000, $total);
+        [$dir, $total, $buffered] = $this->buildWorstCaseBufferTree();
+        $this->assertSame(14000, $total);
+        $this->assertSame(7968, $buffered, '32 keys x 249 files stay buffered simultaneously');
 
         $db = new CountingConnection();
-        $scanner = $this->taggedScanner($db);
+        $scanner = $this->taggedScanner($db, static function (string $path): array {
+            $base = basename($path, '.mp3');
+            // 'i…' → one of 32 interleaved albums; 't…' → a unique album per file.
+            $n = (int) substr($base, 1);
+            $slot = $base[0] === 'i' ? 'inter-' . ($n % 32) : 'tail-' . $n;
+            return [
+                'artist' => 'Artist ' . $slot,
+                'album' => 'Album ' . $slot,
+                'title' => $base,
+                'track_number' => 1,
+                'disc_number' => 1,
+                'duration_secs' => 200,
+                'year' => 2001,
+                'genre' => 'Rock',
+            ];
+        });
 
         gc_collect_cycles();
         $baseline = memory_get_usage();
         $peak = 0;
 
-        $scanner->scanDirectory($dir, static function (int $processed, int $t) use ($baseline, &$peak): void {
-            if ($processed % 250 !== 0 && $processed !== $t) {
-                return;
-            }
+        // Sampled on EVERY tick: the worst case is reached at file 7,968, which no
+        // fixed stride is guaranteed to land on.
+        $scanner->scanDirectory($dir, static function () use ($baseline, &$peak): void {
             $peak = max($peak, memory_get_usage() - $baseline);
         }, 'lib-s95');
 
+        $ceiling = 32 * 250 * self::BYTES_PER_BUFFERED_FILE;
         $this->assertLessThan(
-            3 * 1024 * 1024,
+            $ceiling,
             $peak,
             sprintf(
-                'Walk-time memory must stay bounded; peaked at %d bytes over %d files. '
+                'Walk-time memory must stay within MAX_OPEN_ALBUMS x MAX_TRACKS_PER_FLUSH entries; '
+                . 'peaked at %d bytes (%.0f B/entry over %d buffered) across %d files, ceiling %d. '
                 . 'The pre-S95 whole-tree map would hold ~%d bytes here.',
                 $peak,
+                $peak / $buffered,
+                $buffered,
                 $total,
-                $total * 1334,
+                $ceiling,
+                $total * self::BYTES_PER_BUFFERED_FILE,
             ),
         );
 
+        // The bound is only meaningful if the fixture really did fill the window:
+        // a peak far below it would mean the worst case was never assembled.
+        $this->assertGreaterThan(
+            $buffered * 1000,
+            $peak,
+            'the fixture must actually buffer 7,968 entries — otherwise the ceiling proves nothing',
+        );
+
         // Sanity: it really did index the whole tree while staying flat.
-        $this->assertSame(300, $db->inserts['music_albums'] ?? 0);
-        $this->assertSame(6000, $db->inserts['music_tracks'] ?? 0);
+        $this->assertSame(32 + ($total - $buffered), $db->inserts['music_albums'] ?? 0);
+        $this->assertSame($total, $db->inserts['music_tracks'] ?? 0);
     }
 
     /**
@@ -983,8 +1074,6 @@ final class TaggedScanner extends MusicLibraryScanner
  * thousands of retained arrays — enough to swamp the very memory measurement
  * {@see MusicLibraryScannerTest::testMemoryStaysBoundedAcrossALargeTree()} makes.
  * The parent constructor is bypassed so nothing connects to a database.
- *
- * @phpstan-ignore-next-line
  */
 final class CountingConnection extends Connection
 {

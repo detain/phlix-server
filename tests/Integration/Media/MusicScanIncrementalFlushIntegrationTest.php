@@ -39,33 +39,48 @@ use Workerman\MySQL\Connection;
  * CI applies all migrations to the `phlix_test` MySQL service before the suite;
  * locally, with no reachable MySQL, it self-skips.
  *
- * RUNTIME NOTE: this class issues roughly 2,300 autocommitted statements, so its
- * wall-clock is dominated by the server's per-commit fsync, not by PHP. Measured
- * on one box: 106 s with `innodb_flush_log_at_trx_commit=1`/`sync_binlog=1`, and
- * 2.3 s with both relaxed — a 45x spread on identical assertions. If it ever needs
- * to be cheaper, lower {@see self::ALBUMS}; the only constraint is that it must
- * stay comfortably above `MusicLibraryScanner::MAX_OPEN_ALBUMS` (32), or no album
- * is ever evicted and the mid-walk flush this class exists to prove never fires.
+ * RUNTIME NOTE: this class's wall-clock is dominated by the server's per-commit
+ * fsync, not by PHP — each autocommitted statement costs ~44 ms under CI's durable
+ * `mysql:8.0` defaults versus ~0.02 ms with `innodb_flush_log_at_trx_commit=0`/
+ * `sync_binlog=0`, a ~45x spread on identical assertions. Runtime is therefore
+ * linear in {@see self::ALBUMS}, which is why it is 40 and not 60 (measured: 68 s
+ * at 60 against ~89 s for the entire 6,989-test suite; 40 gives back ~a third of
+ * that while still evicting 8 albums before the walk ends).
+ *
+ * ⚠ THE FLOOR IS 34, NOT 33 — do not "just stay above MAX_OPEN_ALBUMS (32)".
+ * Measured on durable-default MySQL 8.0.46, first-durable-statement tick by ALBUMS:
+ * 32 → never (terminal flush only); 33 → tick 66 of 66, so eviction fires but the
+ * `assertLessThan($total, …)` guard below silently stops proving "before the walk
+ * completes"; 34 → 66 of 68, the hard minimum; 40 → 66 of 80. Nor may
+ * {@see self::TRACKS_PER_ALBUM} drop below 2, or the `total_tracks` assertions
+ * degenerate to single-row checks. {@see self::INTERRUPT_AT} and
+ * {@see self::FLUSHED_BEFORE_INTERRUPT} are derived from ALBUMS — see their
+ * arithmetic before changing it.
  *
  * @covers \Phlix\Media\Music\MusicLibraryScanner
  */
 final class MusicScanIncrementalFlushIntegrationTest extends TestCase
 {
-    /** Albums in the synthetic tree. Comfortably over MAX_OPEN_ALBUMS (32). */
-    private const ALBUMS = 60;
+    /**
+     * Albums in the synthetic tree: 80 files, 8 of them evicted mid-walk.
+     *
+     * 34 is the hard floor and 60 was needless CI time — see the class docblock.
+     */
+    private const ALBUMS = 40;
 
-    /** Audio files per album directory. */
+    /** Audio files per album directory. Never below 2 (see the class docblock). */
     private const TRACKS_PER_ALBUM = 2;
 
     /**
      * File at which {@see self::testInterruptedScanRetainsRowsAndRescanResumesWithoutDuplicating()}
-     * simulates the worker restart. By then 50 albums have been opened, so
-     * 50 − MAX_OPEN_ALBUMS(32) = 18 have been evicted and written.
+     * simulates the worker restart. The sink throws on entry to this file, so the
+     * albums opened are those of files 1..75 = ceil(75 / TRACKS_PER_ALBUM) = 38, of
+     * which 38 − MAX_OPEN_ALBUMS(32) = 6 have been evicted and written.
      */
-    private const INTERRUPT_AT = 100;
+    private const INTERRUPT_AT = 76;
 
     /** Albums (and therefore artists) written before the simulated interruption. */
-    private const FLUSHED_BEFORE_INTERRUPT = 18;
+    private const FLUSHED_BEFORE_INTERRUPT = 6;
 
     private ?Connection $db = null;
 
@@ -143,7 +158,7 @@ final class MusicScanIncrementalFlushIntegrationTest extends TestCase
      * one tick later, at 66 — the sibling unit test watches the statement stream
      * instead and therefore sees it at 65.
      *
-     * On the pre-S95 code this poll never succeeds — not once in 120 ticks — so
+     * On the pre-S95 code this poll never succeeds — not once in 80 ticks — so
      * `$firstDurableTick` stays NULL and the first assertion fails.
      */
     public function testRowsBecomeDurableBeforeTheWalkCompletes(): void

@@ -268,4 +268,55 @@ final class LibraryRootJailTest extends TestCase
         self::assertTrue($jail->allows($this->tmp . '/library/Movies/inside.mkv'));
         self::assertNotSame([], $jail->roots());
     }
+
+    /**
+     * CONSEQUENCE: the cache EXPIRES, so a library added while the worker is up
+     * starts being served within a minute instead of 404ing until the next restart.
+     *
+     * The cache-hit test above pins only half the contract, and the two failure
+     * modes it cannot see are opposite and both real: a jail that never re-reads
+     * makes a newly-added library permanently unservable, and one that re-reads on
+     * every call issues a query per Range request — hundreds per playback — inside a
+     * resident worker. This drives the TTL boundary directly (by ageing `cachedAt`
+     * through reflection rather than sleeping, so the test stays instant and does
+     * not block the event loop) and asserts EXACTLY one re-read, plus that the new
+     * root is what the second read returns.
+     */
+    public function test_the_root_cache_is_refreshed_exactly_once_after_the_ttl(): void
+    {
+        $first = [['paths' => json_encode([$this->tmp . '/library'])]];
+        $second = [['paths' => json_encode([$this->tmp . '/library', $this->tmp . '/library-private'])]];
+
+        $db = $this->createMock(Connection::class);
+        $db->expects(self::exactly(2))
+            ->method('query')
+            ->willReturnOnConsecutiveCalls($first, $second);
+
+        $jail = new LibraryRootJail($db);
+
+        // Read 1 populates the cache; the repeat is a hit (still one query).
+        self::assertSame([$this->tmp . '/library/'], $jail->roots());
+        self::assertSame([$this->tmp . '/library/'], $jail->roots());
+
+        // Age the cache past its TTL without sleeping.
+        $ttl = (new \ReflectionClass(LibraryRootJail::class))->getConstant('CACHE_TTL_SECONDS');
+        self::assertIsInt($ttl);
+        $cachedAt = new \ReflectionProperty(LibraryRootJail::class, 'cachedAt');
+        $cachedAt->setValue($jail, time() - $ttl - 1);
+
+        // Read 2 re-reads and picks up the newly-added library …
+        self::assertSame(
+            [$this->tmp . '/library/', $this->tmp . '/library-private/'],
+            $jail->roots(),
+            'A library added after the TTL window must become visible.',
+        );
+        self::assertTrue($jail->allows($this->tmp . '/library-private/sibling.mkv'));
+
+        // … and then caches again, so the mock's exactly(2) also proves it did not
+        // start re-reading on every call.
+        self::assertSame(
+            [$this->tmp . '/library/', $this->tmp . '/library-private/'],
+            $jail->roots(),
+        );
+    }
 }

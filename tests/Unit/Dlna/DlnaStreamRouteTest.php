@@ -265,10 +265,18 @@ final class DlnaStreamRouteTest extends TestCase
     }
 
     /**
-     * CONSEQUENCE: HEAD is routable and reports the size — renderers probe with
-     * HEAD before opening a resource.
+     * CONSEQUENCE: HEAD is routable and the bytes that reach the renderer declare
+     * the size exactly once — renderers probe with HEAD before opening a resource,
+     * so this is the first reply a device ever sees for an item.
+     *
+     * Asserted on the ENCODED OUTPUT of the full dispatch path, not on
+     * `Response::$headers`: Workerman's encoder appends its own
+     * `Content-Length: strlen($body)` after the caller's headers, so a header-array
+     * assertion here stayed green while the wire carried
+     * `Content-Length: 16` … `Content-Length: 0` — invalid per RFC 9110 §8.6, with
+     * the useless value last. See {@see \Phlix\Server\Workerman\BodylessResponse}.
      */
-    public function test_head_is_routable_and_reports_the_size(): void
+    public function test_head_is_routable_and_reports_the_size_exactly_once_on_the_wire(): void
     {
         $this->bootstrapDlnaConfig(['cds_enabled' => true, 'allowed_cidrs' => [], 'restrict_to_lan' => true]);
 
@@ -276,7 +284,16 @@ final class DlnaStreamRouteTest extends TestCase
         $response = $booted['app']->dispatch($this->streamRequest('192.168.1.50', 'HEAD'));
 
         self::assertSame(200, $response->statusCode);
-        self::assertSame((string) strlen(self::BODY), $response->headers['Content-Length'] ?? null);
+
+        $wire = (string) $response->toWorkermanResponse();
+        self::assertSame(
+            1,
+            substr_count($wire, 'Content-Length:'),
+            "A HEAD reply must carry exactly ONE Content-Length. Encoded bytes were:\n" . $wire,
+        );
+        self::assertStringContainsString('Content-Length: ' . strlen(self::BODY) . "\r\n", $wire);
+        self::assertStringNotContainsString('Content-Length: 0', $wire);
+        self::assertStringNotContainsString(self::BODY, $wire, 'A HEAD reply must not carry the bytes.');
     }
 
     /**

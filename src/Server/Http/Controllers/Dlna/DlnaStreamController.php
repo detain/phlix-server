@@ -56,6 +56,24 @@ use Phlix\Server\Http\Response;
  * inherent to a protocol with no authentication, not an oversight: it is why
  * `dlna.cds_enabled` ships OFF and why the allowlist defaults to LAN-only.
  *
+ * This gap pre-dates S52 — DLNA *browse* has never applied a rating filter
+ * (`grep -rn RatingGate src/Dlna/` finds nothing) — but S52 makes it actionable,
+ * so it is disclosed where an OPERATOR will actually see it rather than only
+ * here: `config/dlna.php`'s header, the CHANGELOG, and the `dlna.cds_enabled`
+ * `helpText` in the shared settings schema (which is the string the admin UI
+ * renders next to the switch). A docblock is not a disclosure.
+ *
+ * ## Residual TOCTOU on the served path
+ *
+ * The jail decision is made on the canonicalised path here, but Workerman
+ * re-`stat`s and `fopen`s that path STRING at send time
+ * (`vendor/workerman/workerman/src/Protocols/Http.php:407-435`), so a symlink
+ * swapped into place inside that window would be served un-jailed. Closing it
+ * would require handing the event loop an already-open descriptor, which
+ * Workerman's `withFile()` does not accept. It requires local write access
+ * inside a library directory — i.e. an actor who can already replace the media
+ * file itself — so it is accepted and recorded rather than papered over.
+ *
  * ## Direct play only
  *
  * S52 serves the source file as-is. It does not start a transcode: the only
@@ -143,7 +161,14 @@ final class DlnaStreamController
         // Direct-play gate keyed on the CONTAINER (the extension), not on the
         // row's `type`: a row typed `movie` whose file is a .iso must not be
         // served as video/mp4.
-        if (DlnaMimeTypes::forPath($path) === DlnaMimeTypes::FALLBACK) {
+        //
+        // Read from the CANONICAL path, never from the raw `media_items.path`.
+        // Those two disagree whenever the stored path is a symlink, and the bytes
+        // come from the canonical one — so gating on the raw path would serve
+        // `Film.mp4 → Disc.iso` as `video/mp4`, reaching the exact failure this
+        // gate exists to prevent by a different route.
+        $item['path'] = $real;
+        if (DlnaMimeTypes::forPath($real) === DlnaMimeTypes::FALLBACK) {
             return (new Response())
                 ->status(415)
                 ->text('Unsupported media type for direct play');
@@ -155,12 +180,16 @@ final class DlnaStreamController
         // A junk explicit `mime_type` falls back to the container's own type.
         $mime = DlnaMimeTypes::forItem($item);
         if (!DlnaMimeTypes::isMediaType($mime)) {
-            $mime = DlnaMimeTypes::forPath($path);
+            $mime = DlnaMimeTypes::forPath($real);
         }
 
+        // A failing filesize() here realistically means the file vanished between
+        // is_file() above and this call, so answer it as "gone" — the same 404
+        // every other unservable state gets — rather than a 500 that reports a
+        // server fault for a client-visible race.
         $fileSize = filesize($real);
         if ($fileSize === false) {
-            return (new Response())->status(500)->text('Could not determine file size');
+            return $this->notFound();
         }
         $fileSize = (int) $fileSize;
 
@@ -168,6 +197,15 @@ final class DlnaStreamController
         // and whether byte seeking is offered. Answered explicitly (rather than
         // via Router::dispatch()'s GET→HEAD fallback, which suppresses the
         // file-backed body and would therefore report Content-Length: 0).
+        //
+        // The `Content-Length` set here is the size a GET would return, per RFC
+        // 9110 §9.3.2. It survives to the wire as the ONLY Content-Length because
+        // {@see \Phlix\Server\Http\Response::toWorkermanResponse()} renders an
+        // empty-bodied reply through {@see \Phlix\Server\Workerman\BodylessResponse};
+        // Workerman's own encoder appends a contradictory `Content-Length: 0` after
+        // it, which RFC 9110 §8.6 makes invalid and which is exactly the outcome
+        // this arm exists to avoid. Asserted on the ENCODED BYTES, not on the
+        // header array — a header-array assertion cannot see that defect at all.
         if ($request->method === 'HEAD') {
             return (new Response())
                 ->status(200)
@@ -227,8 +265,15 @@ final class DlnaStreamController
      * The single "no" answer for every not-found / not-permitted-path case.
      *
      * One indistinguishable reply for "no such id", "row has no file", "file
-     * missing" and "path outside the library roots", carrying no filesystem
-     * detail — an unauthenticated caller learns nothing about the host from it.
+     * missing", "file vanished mid-request" and "path outside the library roots",
+     * carrying no filesystem detail — an unauthenticated caller learns nothing
+     * about the host from it.
+     *
+     * The one deliberate exception is the `415`: a renderer has to be told the
+     * difference between "no such object" and "this container is not served", so
+     * the 415 is an existence oracle by design. It is only reachable by a caller
+     * the allowlist already admitted, and that caller can enumerate every id via
+     * CDS Browse anyway, so it discloses nothing new.
      */
     private function notFound(): Response
     {

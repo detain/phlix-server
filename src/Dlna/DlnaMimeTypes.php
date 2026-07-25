@@ -36,8 +36,23 @@ namespace Phlix\Dlna;
  *   bytes under a guessed type.
  * - {@see self::forItem()} is the row-level resolution used when building DIDL:
  *   an explicit `mime_type` wins, then the extension, then a coarse
- *   media-type fallback. This preserves {@see LibraryBridge}'s historical
- *   behaviour exactly.
+ *   media-type fallback. That RESOLUTION ORDER is {@see LibraryBridge}'s
+ *   historical one, unchanged.
+ *
+ * ## The table is a SUPERSET, so some DIDL mime values changed
+ *
+ * {@see self::EXTENSION_MAP} is deliberately NOT byte-identical to the table
+ * {@see LibraryBridge::determineMimeType()} used to own: that one listed only
+ * mp4/m4v/mkv/webm/avi + mp3/aac/flac/wav/ogg + jpg/jpeg/png/gif, and everything
+ * else fell through to the coarse `type` arm. About twenty containers therefore
+ * now resolve to their real type instead of a guess — `mov`, `wmv`, `flv`, `mpg`,
+ * `mpeg`, `m2v`, `ts`, `m2ts`, `mts`, `3gp`, `ogv`, `m4a`, `m4b`, `opus`, `wma`,
+ * `aiff`, `aif`, `oga`, `bmp`, `webp`, `tif`, `tiff` — so e.g. a `.mov` typed
+ * `movie` reports `video/quicktime` rather than `video/mp4`, and a `.m4a` typed
+ * `music` reports `audio/mp4` rather than `audio/mpeg`. That is a visible change
+ * in the Browse response and it is an intentional improvement (the old values were
+ * wrong, and a renderer that trusts them fails mid-decode), but it is a change:
+ * nothing pinned the old values, and it is called out in the CHANGELOG.
  *
  * The `type` fallback arms are deliberately NOT exhaustive over the 13-member
  * `media_items.type` ENUM here — making them exhaustive (and dropping the dead
@@ -150,9 +165,11 @@ final class DlnaMimeTypes
 
         $type = is_string($item['type'] ?? null) ? $item['type'] : '';
 
-        // Historical LibraryBridge behaviour, preserved verbatim. `'image'` is a
-        // legacy alias the scanner never emits (the ENUM member is `photo`) and
-        // is removed in S53 together with getProtocolInfo()'s dead arm.
+        // LibraryBridge's historical last-resort arm, kept as it was. It now fires
+        // far less often, because EXTENSION_MAP above is a superset of the table
+        // that used to precede it (see the class docblock). `'image'` is a legacy
+        // alias the scanner never emits (the ENUM member is `photo`) and is
+        // removed in S53 together with getProtocolInfo()'s dead arm.
         return match ($type) {
             'video', 'movie' => 'video/mp4',
             'audio', 'music' => 'audio/mpeg',

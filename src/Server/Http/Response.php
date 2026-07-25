@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Server\Http;
 
+use Phlix\Server\Workerman\BodylessResponse;
 use Workerman\Protocols\Http\Response as WorkermanResponse;
 
 /**
@@ -562,11 +563,25 @@ class Response
     /**
      * Convert to a Workerman HTTP response — used when this server runs
      * as a long-running Workerman worker (see {@see \Phlix\Server\Core\Application::boot()}).
+     *
+     * An empty-bodied response is rendered by {@see BodylessResponse}, which is
+     * Workerman's `Response` in every respect EXCEPT that it will not append its
+     * own `Content-Length: 0` over a `Content-Length` the caller already set. That
+     * is the `HEAD` case — RFC 9110 §9.3.2 requires a `HEAD` reply to carry the
+     * length the equivalent `GET` would have returned while forbidding a body —
+     * and Workerman's unconditional append otherwise puts two contradictory
+     * `Content-Length` fields on the wire, which RFC 9110 §8.6 makes invalid. See
+     * {@see BodylessResponse} for the rendered bytes. An empty-bodied response
+     * that does NOT declare a length (a 204, a 304, a redirect, a 416) is
+     * delegated straight back to the parent encoder, so it is byte-identical to
+     * before.
      */
     public function toWorkermanResponse(): WorkermanResponse
     {
         $body = $this->headOnly ? '' : $this->body;
-        $wr = new WorkermanResponse($this->statusCode, $this->headers, $body);
+        $wr = $body === ''
+            ? new BodylessResponse($this->statusCode, $this->headers, $body)
+            : new WorkermanResponse($this->statusCode, $this->headers, $body);
 
         // Workerman's Response::cookie() builds a proper Set-Cookie
         // header and supports stacking multiple cookies — match the

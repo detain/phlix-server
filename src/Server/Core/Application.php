@@ -2967,10 +2967,22 @@ class Application
                 } catch (\Throwable $streamError) {
                     // Browse still works without it; say so instead of leaving an
                     // operator to wonder why every <res> URL 404s.
-                    \Phlix\Common\Logger\LoggerFactory::get(\Phlix\Common\Logger\LogChannels::DLNA)->error(
-                        'DLNA stream route not registered; renderers will be unable to play any item',
-                        ['error' => $streamError->getMessage(), 'exception' => $streamError::class],
-                    );
+                    //
+                    // The log call is itself guarded: it runs INSIDE a
+                    // Router::group() closure, and a throw escaping from here
+                    // would abandon the group. Router::group() now restores its
+                    // prefix/middleware in a `finally`, so the allowlist can no
+                    // longer leak onto the ~15 loaders that follow — this catch is
+                    // the second half of that belt-and-braces pair, keeping a
+                    // logging failure from taking down route registration at all.
+                    try {
+                        \Phlix\Common\Logger\LoggerFactory::get(\Phlix\Common\Logger\LogChannels::DLNA)->error(
+                            'DLNA stream route not registered; renderers will be unable to play any item',
+                            ['error' => $streamError->getMessage(), 'exception' => $streamError::class],
+                        );
+                    } catch (\Throwable) {
+                        // Nowhere left to report to.
+                    }
                 }
             }, [$allowlistMiddleware]);
         } catch (\Throwable $e) {

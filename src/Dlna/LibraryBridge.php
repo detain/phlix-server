@@ -379,6 +379,13 @@ class LibraryBridge
      * expect in `<res protocolInfo>` and the `Content-Type` the bytes arrive with
      * could silently diverge, which makes a renderer refuse the item.
      *
+     * NOT a pure refactor: the resolution ORDER is unchanged, but
+     * {@see DlnaMimeTypes::EXTENSION_MAP} is a SUPERSET of the table this method
+     * used to hold, so the `mime_type` this returns changed for roughly twenty
+     * containers (`.mov` → `video/quicktime` instead of `video/mp4`, `.m4a` →
+     * `audio/mp4` instead of `audio/mpeg`, and so on). See that class's docblock
+     * for the full list and the reasoning.
+     *
      * @param array<string, mixed> $item Media item
      * @return string MIME type
      *

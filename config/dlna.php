@@ -31,6 +31,25 @@ declare(strict_types=1);
  * warning in its helpText. It is the right choice for a trusted home LAN and
  * the wrong one for a shared or untrusted network.
  *
+ * ## ⚠️ PARENTAL CONTROLS DO NOT APPLY TO DLNA
+ *
+ * A consequence of the above that deserves saying on its own, because it is the
+ * one an operator is most likely to be surprised by: **parental controls and
+ * per-profile stream limits do not apply to DLNA.** There is no signed-in user on
+ * a DLNA request, so there is no profile, so there is no rating filter and no
+ * stream cap to enforce — {@see \Phlix\Media\Library\RatingGate} is applied on the
+ * authenticated `/media/{id}/stream` path and structurally cannot be applied
+ * here. Any device the allowlist permits can BROWSE and PLAY content that a
+ * profile's rating filter would hide inside the app.
+ *
+ * This is not new in 1.7.0 — DLNA browse has never filtered by rating — but 1.7.0
+ * added `/dlna/stream/{id}`, which makes it playable rather than merely listed.
+ * There is no per-profile fix available (there is no profile); a SERVER-WIDE
+ * `dlna.max_rating` that excludes over-cap items from DLNA browse entirely is the
+ * enforceable form, and it is not implemented yet. Until it is, treat
+ * `cds_enabled` as "publish this library, unfiltered, to every device on the
+ * allowlist".
+ *
  * ## History — this used to be broken rather than disabled
  *
  * Before 1.3.0 the browse service was not wired at ALL:
@@ -75,11 +94,19 @@ return [
     /**
      * Serve the DLNA ContentDirectory browse/stream endpoints.
      *
-     * OFF BY DEFAULT AND INTENTIONALLY SO — see the "NO AUTHENTICATION"
-     * warning in this file's header. Enforced in
+     * OFF BY DEFAULT AND INTENTIONALLY SO — see the "NO AUTHENTICATION" and
+     * "PARENTAL CONTROLS DO NOT APPLY" warnings in this file's header. Enforced in
      * {@see \Phlix\Server\Core\Application::loadCdsRoutes()}, which registers
-     * `/dlna/description.xml`, `/dlna/content_directory`, `/cds/control` and
-     * `/scpd/{service}.xml` only when this is true.
+     * `/dlna/description.xml`, `/dlna/content_directory`, `/cds/control`,
+     * `/scpd/{service}.xml` and — since 1.7.0 — the media byte route
+     * `/dlna/stream/{mediaItemId}` only when this is true.
+     *
+     * That byte route is what makes this switch a MEDIA exposure and not just a
+     * metadata one: before 1.7.0 browse listed items whose `<res>` URL 404'd, so
+     * nothing could actually be played. It is gated by the same
+     * `allowed_cidrs`/`restrict_to_lan` allowlist as every other path here, and by
+     * nothing else — there is no token on it, by design, because a DLNA renderer
+     * cannot present one.
      *
      * Read per worker start, so it applies on a graceful reload.
      */

@@ -248,18 +248,49 @@ final class DlnaStreamControllerTest extends TestCase
      * body — many renderers HEAD before opening a resource, and a
      * `Content-Length: 0` there makes them give up.
      *
-     * DISCRIMINATING: relying on Router::dispatch()'s GET→HEAD fallback (which
-     * suppresses the file-backed body without computing its length) reports 0.
+     * ## Asserted on the ENCODED BYTES, deliberately
+     *
+     * This test used to read `Response::$headers`, and that is why it passed while
+     * the wire was broken: Workerman's encoder appends its OWN
+     * `Content-Length: strlen($body)` after every header the caller set
+     * (`vendor/workerman/workerman/src/Protocols/Http/Response.php:580-583`), so
+     * the reply shipped `Content-Length: 26` … `Content-Length: 0`, with the bogus
+     * value LAST. The headers array showed only the correct one. A header-array
+     * assertion cannot observe this class of defect AT ALL, so the assertion has
+     * to be made one layer down, on what actually leaves the socket.
+     *
+     * RFC 9110 §8.6 makes a message with conflicting `Content-Length` invalid:
+     * recipients must reject it and hardened proxies drop it as a smuggling
+     * defence — which breaks precisely the probe this arm exists to serve.
+     *
+     * DISCRIMINATING: reverting to a plain `WorkermanResponse` makes
+     * `Content-Length:` appear twice and this test fails; relying on
+     * `Router::dispatch()`'s GET→HEAD fallback (which suppresses the file-backed
+     * body without computing its length) reports 0 and it fails too.
      */
-    public function test_head_reports_the_size_without_a_body(): void
+    public function test_head_puts_exactly_one_real_content_length_on_the_wire(): void
     {
-        $response = $this->handle($this->controller($this->row()), $this->request('HEAD'));
+        $response = $this->controller($this->row())->handle(
+            $this->request('HEAD'),
+            ['mediaItemId' => 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'],
+        );
 
-        self::assertSame(200, $response->statusCode);
-        self::assertSame('26', $response->headers['Content-Length'] ?? null);
-        self::assertSame('bytes', $response->headers['Accept-Ranges'] ?? null);
-        self::assertSame('video/x-matroska', $response->headers['Content-Type'] ?? null);
-        self::assertSame('', $response->body);
+        $wire = (string) $response->toWorkermanResponse();
+
+        self::assertSame(
+            1,
+            substr_count($wire, 'Content-Length:'),
+            "A HEAD reply must carry exactly ONE Content-Length. Encoded bytes were:\n" . $wire,
+        );
+        self::assertStringContainsString("HTTP/1.1 200 OK\r\n", $wire);
+        self::assertStringContainsString("Content-Length: 26\r\n", $wire);
+        self::assertStringNotContainsString('Content-Length: 0', $wire);
+        self::assertStringContainsString("Accept-Ranges: bytes\r\n", $wire);
+        self::assertStringContainsString("Content-Type: video/x-matroska\r\n", $wire);
+
+        // …and no body at all after the header terminator (RFC 9110 §9.3.2).
+        $parts = explode("\r\n\r\n", $wire, 2);
+        self::assertSame('', $parts[1] ?? 'HEADER TERMINATOR MISSING', 'A HEAD reply must have no body.');
     }
 
     /**
@@ -409,6 +440,57 @@ final class DlnaStreamControllerTest extends TestCase
 
         self::assertSame(415, $response->statusCode);
         self::assertSame('Unsupported media type for direct play', $response->body);
+    }
+
+    /**
+     * SECURITY / CONSEQUENCE: the direct-play gate reads the CANONICAL path, so a
+     * symlink cannot smuggle an unsupported container past it.
+     *
+     * `Film.mp4 → Disc.iso` inside a library root is exactly the case where the
+     * stored path and the bytes disagree: the jail resolves the symlink and admits
+     * the target (it is inside the root), and the bytes served are the `.iso`'s. A
+     * gate reading the RAW `media_items.path` sees `.mp4`, so it serves an ISO
+     * image labelled `video/mp4` and the renderer fails mid-decode — the very
+     * failure the gate's own comment claims to prevent, reached by symlink instead
+     * of by the row's `type`.
+     *
+     * DISCRIMINATING: reverting the gate to `forPath($path)` returns 200 with
+     * `Content-Type: video/mp4` and this fails on both counts.
+     */
+    public function test_a_symlink_to_an_unsupported_container_is_still_415(): void
+    {
+        $isoPath = $this->tmp . '/library/Disc.iso';
+        file_put_contents($isoPath, 'iso-bytes');
+        $linkPath = $this->tmp . '/library/Film.mp4';
+        self::assertTrue(symlink($isoPath, $linkPath), 'Fixture requires symlink support.');
+
+        $response = $this->handle($this->controller($this->row(['path' => $linkPath])), $this->request());
+
+        self::assertSame(415, $response->statusCode, 'The container that is SERVED is what must be gated.');
+        self::assertSame('Unsupported media type for direct play', $response->body);
+        self::assertNotSame('video/mp4', $response->headers['Content-Type'] ?? null);
+    }
+
+    /**
+     * CONSEQUENCE (the inverse control): a symlink to a container this server DOES
+     * direct-play is served, and typed from the TARGET, not from the link name.
+     *
+     * Without this the test above would also pass against a controller that
+     * rejected every symlink outright, which would break the perfectly ordinary
+     * "library of symlinks into a NAS" layout.
+     */
+    public function test_a_symlink_to_a_supported_container_is_served_as_the_target_type(): void
+    {
+        $targetPath = $this->tmp . '/library/Real.webm';
+        file_put_contents($targetPath, self::BODY);
+        $linkPath = $this->tmp . '/library/Alias.mp4';
+        self::assertTrue(symlink($targetPath, $linkPath), 'Fixture requires symlink support.');
+
+        $response = $this->handle($this->controller($this->row(['path' => $linkPath])), $this->request());
+
+        self::assertSame(200, $response->statusCode);
+        self::assertSame(self::BODY, $response->body);
+        self::assertSame('video/webm', $response->headers['Content-Type'] ?? null);
     }
 
     /**

@@ -113,15 +113,17 @@ final class MusicDtoMediaItemIdIntegrationTest extends TestCase
             );
         }
 
-        // ⚠ Deliberately NOT `markTestSkipped()` here, which is what the other 23
+        // ⚠ Deliberately NOT `markTestSkipped()` here, which is what the other 22
         // `markTestSkipped`-inside-`catch` integration sites do (S121 review r1
-        // finding 3, r2 findings 1/2/6/7). `isMysqlReachable()` above has already
-        // proven a listener ACCEPTED a TCP connection on $host:$port, so reaching the
-        // catch below does not mean "no MySQL on this box" — it means a reachable
-        // server would not serve us: wrong credentials, missing database, bad config.
+        // finding 3, r2 findings 1/2/6/7, r3 finding 7 — 22 sites across 21 files,
+        // brace-matched with token_get_all, not grepped; `PathHashIndexUsageTest` has
+        // two. An earlier "23" here was one high, and S126's scope depends on the
+        // number). `isMysqlReachable()` above has already proven a listener ACCEPTED a
+        // TCP connection on $host:$port, so reaching the catch below does not mean "no
+        // MySQL on this box" — it means whatever is on that port would not serve us.
         // Skipping that reports success without ever touching a database, in the one
         // environment (CI) where this test is the only thing proving the column type.
-        // Genuine absence is still a skip, handled one block up. The other 23 sites
+        // Genuine absence is still a skip, handled one block up. The other 22 sites
         // are deliberately untouched; unifying them is step S126.
         //
         // ⚠⚠ The `SELECT 1` is LOAD-BEARING, not a sanity check (r2 finding 1).
@@ -138,22 +140,39 @@ final class MusicDtoMediaItemIdIntegrationTest extends TestCase
         //     denied` escaping from seedFixtures(); pool 0 → named RuntimeException.
         //   with the round-trip:    BOTH modes → named RuntimeException.
         //
-        // A healthy database is unaffected in either mode (`OK (4 tests, 117
-        // assertions)`), so this cannot redden a healthy CI.
+        // A healthy database is unaffected in either mode — `OK (4 tests, 141
+        // assertions)` (117 before the identifier allow-list in `idOf()` added 24; r3
+        // finding 2 caught this figure going stale inside the very comment that was
+        // rewritten to stop stale claims) — so this cannot redden a healthy CI.
         try {
             ConnectionPool::init(dirname(__DIR__, 3) . '/config/database.php');
             $db = ConnectionPool::getConnection('mysql');
-            // Forces the lazy pooled connection to open for real. `query()` must
-            // start with SELECT (workerman/mysql) and this binds no parameters.
+            // Forces the lazy pooled connection to open for real, and binds nothing.
+            //
+            // `SELECT` is chosen because it RETURNS ROWS, not because `query()`
+            // requires it (r3 finding 3 — the older "query() must start with SELECT"
+            // note here was wrong, and this same file pushes INSERT/DELETE through
+            // `query()` below). What workerman/mysql actually does
+            // (`vendor/workerman/mysql/src/Connection.php:1852-1869`): it ALWAYS
+            // executes the statement, then switches on the first keyword only to pick
+            // a return value — `select`/`show` → `fetchAll()`, `update`/`delete`/
+            // `replace` → `rowCount()`, `insert` → `lastInsertId()`, and **anything
+            // else → `null`**. So the real, narrower constraint worth remembering is
+            // that a statement outside that keyword set (`SET`, `CREATE`, `TRUNCATE`,
+            // `BEGIN`, …) runs but is indistinguishable from a no-op by its return
+            // value. A round-trip here would work with any statement; `SELECT 1` also
+            // proves a result set came back, and is side-effect-free.
             $db->query('SELECT 1');
             $this->db = $db;
         } catch (Throwable $e) {
             throw new RuntimeException(
                 sprintf(
-                    'MySQL on %s:%d accepted a TCP connection but would not serve a query (%s). The SERVER '
-                    . 'is present, so this is a broken DB_*/config setup — including a database that does '
-                    . 'not exist yet — rather than "no MySQL on this box", and it is reported instead of '
-                    . 'skipped. Check DB_USER/DB_PASSWORD/DB_DATABASE and run scripts/run-migrations.php.',
+                    'Something on %s:%d accepted a TCP connection but no query could be run over it (%s). '
+                    . 'That is NOT "no MySQL on this box", so it is reported instead of skipped. Most often '
+                    . 'it is a DB_* / config problem — wrong credentials, or a database that does not exist '
+                    . 'yet: check DB_USER/DB_PASSWORD/DB_DATABASE and run scripts/run-migrations.php. This '
+                    . 'guard cannot tell that apart from a transient condition (a non-MySQL listener on the '
+                    . 'port, or a connect timeout on a loaded box), so read the driver message above first.',
                     $host,
                     $port,
                     $e->getMessage(),
@@ -429,20 +448,26 @@ final class MusicDtoMediaItemIdIntegrationTest extends TestCase
      * and the *value* is always bound, so this is inert today; the allow-list exists
      * so it stays inert if this helper is ever copied or handed external input.
      *
-     * @param 'music_albums'|'music_artists'|'music_tracks' $table
-     * @param 'media_item_id'|'name'|'title'               $column
+     * The allow-lists are **exactly** the two call sites and nothing more (r3 finding
+     * 6 — they previously also admitted `music_tracks`/`title`, which nobody passes;
+     * and because `phpstan.neon.dist` is `paths: [src]`, the `@param` unions below are
+     * never checked at level 9, so the runtime allow-list is the only enforcement —
+     * step **S128**). A new caller must widen both deliberately.
+     *
+     * @param 'music_albums'|'music_artists' $table
+     * @param 'media_item_id'|'name'         $column
      */
     private function idOf(string $table, string $column, string $value): int
     {
         $this->assertContains(
             $table,
-            ['music_artists', 'music_albums', 'music_tracks'],
-            'idOf() interpolates $table into SQL, so it accepts only this fixture\'s own tables',
+            ['music_artists', 'music_albums'],
+            'idOf() interpolates $table into SQL, so it accepts only the two tables its callers pass',
         );
         $this->assertContains(
             $column,
-            ['media_item_id', 'name', 'title'],
-            'idOf() interpolates $column into SQL, so it accepts only this fixture\'s own columns',
+            ['media_item_id', 'name'],
+            'idOf() interpolates $column into SQL, so it accepts only the two columns its callers pass',
         );
 
         $db = $this->db;

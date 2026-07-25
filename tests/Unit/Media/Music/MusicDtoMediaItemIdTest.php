@@ -7,12 +7,16 @@ namespace Phlix\Tests\Unit\Media\Music;
 use Phlix\Media\Music\MusicAlbum;
 use Phlix\Media\Music\MusicArtist;
 use Phlix\Media\Music\MusicTrack;
+use FilesystemIterator;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
+use RecursiveDirectoryIterator;
+use RecursiveIteratorIterator;
 use ReflectionClass;
 use ReflectionNamedType;
 use ReflectionProperty;
 use RuntimeException;
+use SplFileInfo;
 
 /**
  * Pins `media_item_id` on the three music DTOs (S121).
@@ -209,9 +213,18 @@ final class MusicDtoMediaItemIdTest extends TestCase
     }
 
     /**
-     * EVERY class under `src/Media/Music/` that DECLARES a `mediaItemId` property,
-     * discovered by globbing the directory and reflecting it — deliberately NOT a
-     * hand-written list.
+     * Every class **whose file is named after it** under `src/Media/Music/`
+     * (recursively) that DECLARES a `mediaItemId` property — discovered by walking
+     * the directory and reflecting it, deliberately NOT a hand-written list.
+     *
+     * ⚠ Read that qualifier literally; it is measured, not hedging. The sweep derives
+     * one FQCN per file from the file's own path, so a class that is **not** the
+     * PSR-4 class of its file is invisible to it: r3 finding 5 planted a file
+     * declaring a second, differently-named class with the pre-S121
+     * `public ?int $mediaItemId` and the suite stayed green. PSR-4 makes that shape
+     * abnormal (and `phpcs`/autoloading would not find such a class either), so it is
+     * documented rather than chased here; a token/AST-level sweep is the shape that
+     * would close it, together with the scanner's two inline copies — **S127**.
      *
      * ⚠ **Why mechanical.** S121's whole cause was a partial sweep: the coercion bug
      * was written down for `MusicTrack` alone and the two sibling DTOs were missed.
@@ -220,12 +233,16 @@ final class MusicDtoMediaItemIdTest extends TestCase
      * nothing here would go red. Globbing means the alarm covers classes that do not
      * exist yet.
      *
-     * Measured before adopting the blanket rule: of the 11 files in that directory,
-     * all 11 resolve to classes and exactly 3 declare a `mediaItemId` property
+     * Measured before adopting the blanket rule: of the 11 files in that tree, all 11
+     * resolve to classes and exactly 3 declare a `mediaItemId` property
      * (`MusicArtist`, `MusicAlbum`, `MusicTrack`), all `?string`. There is **no**
      * class there for which a different `mediaItemId` type would be legitimate, so
      * this sweep carries **no exclusion list** — if one is ever needed, it must be
-     * added here with a stated reason rather than by narrowing the glob.
+     * added here with a stated reason rather than by narrowing the walk.
+     *
+     * Innocent additions verified NOT to break it (r3, on PHP 8.3.6): pure and backed
+     * enums, an abstract class without the property, a class whose constructor
+     * requires arguments (nothing is instantiated), and interface/trait files.
      *
      * Inherited properties are skipped (`getDeclaringClass()` check) so the
      * assertion lands once, on the class that actually declares the type. A file
@@ -242,20 +259,57 @@ final class MusicDtoMediaItemIdTest extends TestCase
      */
     public static function musicClassesDeclaringMediaItemIdProvider(): array
     {
-        $dir = dirname(__DIR__, 4) . '/src/Media/Music';
-        $files = glob($dir . '/*.php');
+        // ⚠⚠ MEMOISED, and that is a CORRECTNESS requirement, not an optimisation
+        // (S121 review r3 finding 1). Composer's loader includes a candidate file
+        // with a plain `include` and `loadClass()` reports success even when the file
+        // defines nothing matching the FQCN, while `findFile()` caches no negative
+        // result for a file that EXISTS — so every further autoload attempt for that
+        // FQCN RE-EXECUTES the file. A second execution of a file that declares a
+        // differently-named class, or any non-class symbol, is a PHP FATAL
+        // ("Cannot declare class …, because the name is already in use" / "Cannot
+        // redeclare …"), which kills the whole runner: exit 255, PHPUnit banner only,
+        // 0 of 7,511 tests run and no attribution. This provider is invoked TWICE per
+        // run (PHPUnit's data-provider resolution, plus the explicit call in
+        // testTheSweepDiscoversExactlyTheThreeKnownMusicDtos()), so without the memo
+        // the second invocation retries the failed autoload and detonates instead of
+        // reporting. Both this memo AND the `$autoload = false` flags below are
+        // required — r3 measured that either one alone still fatals.
+        //
+        // On the resident-memory rules: this is test-only code that never runs in a
+        // Workerman worker, and the memo is bounded — one array of at most the number
+        // of music classes, plus one string — never keyed by request data. It is not
+        // the unbounded-static-array shape those rules ban.
+        /** @var array<string, array{class-string}>|null $memo */
+        static $memo = null;
+        /** @var string|null $memoError */
+        static $memoError = null;
 
-        if ($files === false || $files === []) {
-            throw new RuntimeException(
-                'media_item_id sweep found no PHP files under ' . $dir
-                . ' — the discovery glob is broken, so the sweep proves nothing. Fix the path.',
-            );
+        if ($memoError !== null) {
+            throw new RuntimeException($memoError);
+        }
+        if ($memo !== null) {
+            return $memo;
+        }
+
+        $dir = dirname(__DIR__, 4) . '/src/Media/Music';
+        // RECURSIVE (r3 finding 4): a plain `*.php` glob missed a DTO in a
+        // subdirectory — measured, `src/Media/Music/Sub/MusicHiddenDto.php` with the
+        // pre-S121 `?int` left the suite green. PSR-4 maps a subdirectory to a
+        // namespace segment, so the FQCN is derived from the path RELATIVE to $dir.
+        $files = self::phpFilesUnder($dir);
+
+        if ($files === []) {
+            $memoError = 'media_item_id sweep found no PHP files under ' . $dir
+                . ' — the discovery glob is broken, so the sweep proves nothing. Fix the path.';
+
+            throw new RuntimeException($memoError);
         }
 
         $found = [];
         foreach ($files as $file) {
+            $relative = substr($file, strlen($dir) + 1, -strlen('.php'));
             /** @var class-string $fqcn */
-            $fqcn = 'Phlix\\Media\\Music\\' . basename($file, '.php');
+            $fqcn = 'Phlix\\Media\\Music\\' . str_replace('/', '\\', $relative);
 
             // ⚠ A file this sweep cannot LOAD must be a hard, named failure, never a
             // silent `continue` (S121 review r2 finding 3). A skipped file is exactly
@@ -269,18 +323,27 @@ final class MusicDtoMediaItemIdTest extends TestCase
             // in the repo, workflows or scripts calls setClassMapAuthoritative), so
             // the PSR-4 fallback always resolves a new file — but the guard must not
             // depend on a config it does not own.
-            if (!class_exists($fqcn) && !interface_exists($fqcn) && !trait_exists($fqcn)) {
-                throw new RuntimeException(sprintf(
+            //
+            // ⚠ The `false` second argument is the other half of r3 finding 1: it
+            // DISABLES autoloading for these two probes. `class_exists($fqcn)` above
+            // has already run the autoloader, so the file is either loaded or
+            // unresolvable; re-entering the autoloader here would re-`include` a file
+            // that defined nothing matching and turn a reportable condition into a
+            // fatal. Never drop the `false`.
+            if (!class_exists($fqcn) && !interface_exists($fqcn, false) && !trait_exists($fqcn, false)) {
+                $memoError = sprintf(
                     'media_item_id sweep could not load %s from %s. It is REFUSING to skip the file: a '
                     . 'silently omitted class is a partial sweep, which is the exact defect S121 fixed, and '
                     . 'it would let a music DTO keep the pre-S121 is_numeric()/int coercion undetected. '
-                    . 'Usual causes: the class name does not match the file name, the namespace is not '
-                    . 'Phlix\\Media\\Music, or the autoloader cannot resolve the file (e.g. a '
-                    . 'classmap-authoritative install, which disables the PSR-4 fallback this sweep relies '
-                    . 'on — run `composer dump-autoload`).',
+                    . 'Usual causes: the class name does not match the file name, the file declares no '
+                    . 'class at all, the namespace does not match the path under src/Media/Music, or the '
+                    . 'autoloader cannot resolve the file (e.g. a classmap-authoritative install, which '
+                    . 'disables the PSR-4 fallback this sweep relies on — run `composer dump-autoload`).',
                     $fqcn,
                     $file,
-                ));
+                );
+
+                throw new RuntimeException($memoError);
             }
 
             if (!class_exists($fqcn)) {
@@ -301,6 +364,37 @@ final class MusicDtoMediaItemIdTest extends TestCase
         }
 
         ksort($found);
+        $memo = $found;
+
+        return $found;
+    }
+
+    /**
+     * Every `*.php` under `$dir`, recursively, sorted so the sweep order is stable.
+     *
+     * Recursion is what closes r3 finding 4: PSR-4 maps `src/Media/Music/Sub/X.php`
+     * to `Phlix\Media\Music\Sub\X`, so a DTO in a subdirectory is a real music DTO
+     * that a non-recursive `glob()` silently missed.
+     *
+     * @return list<string> Absolute paths, `/`-separated.
+     */
+    private static function phpFilesUnder(string $dir): array
+    {
+        if (!is_dir($dir)) {
+            return [];
+        }
+
+        $found = [];
+        $iterator = new RecursiveIteratorIterator(
+            new RecursiveDirectoryIterator($dir, FilesystemIterator::SKIP_DOTS),
+        );
+        foreach ($iterator as $entry) {
+            if ($entry instanceof SplFileInfo && $entry->isFile() && $entry->getExtension() === 'php') {
+                $found[] = $entry->getPathname();
+            }
+        }
+
+        sort($found);
 
         return $found;
     }

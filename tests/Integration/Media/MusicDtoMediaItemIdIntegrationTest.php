@@ -156,8 +156,11 @@ final class MusicDtoMediaItemIdIntegrationTest extends TestCase
             // (`vendor/workerman/mysql/src/Connection.php:1852-1869`): it ALWAYS
             // executes the statement, then switches on the first keyword only to pick
             // a return value — `select`/`show` → `fetchAll()`, `update`/`delete`/
-            // `replace` → `rowCount()`, `insert` → `lastInsertId()`, and **anything
-            // else → `null`**. So the real, narrower constraint worth remembering is
+            // `replace` → `rowCount()`, `insert` → `lastInsertId()` **only when
+            // `rowCount() > 0`** (`:1861-1864`; a 0-row insert falls through to the
+            // `return null` at `:1869`, so an `INSERT IGNORE` that hits a duplicate is
+            // indistinguishable from a no-op — r4 finding 3), and **anything else →
+            // `null`**. So the real, narrower constraint worth remembering is
             // that a statement outside that keyword set (`SET`, `CREATE`, `TRUNCATE`,
             // `BEGIN`, …) runs but is indistinguishable from a no-op by its return
             // value. A round-trip here would work with any statement; `SELECT 1` also

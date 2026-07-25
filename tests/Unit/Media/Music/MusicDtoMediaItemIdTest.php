@@ -226,6 +226,14 @@ final class MusicDtoMediaItemIdTest extends TestCase
      * documented rather than chased here; a token/AST-level sweep is the shape that
      * would close it, together with the scanner's two inline copies — **S127**.
      *
+     * ⚠ That qualifier is about the CONTENTS of a file and says nothing about a class
+     * that is perfectly PSR-4 — which is why it did not cover r4 finding 1, where a
+     * legitimate `src/Media/Music/Dto/MusicTrack.php` was dropped because the result
+     * set was keyed by SHORT name. The keys are now fully qualified; the notes at the
+     * `$found[$canonical]` assignment record the measurements. When you widen what
+     * this walk reaches, re-derive what the old narrowness was holding up — that has
+     * been the failure mode of every round of this step.
+     *
      * ⚠ **Why mechanical.** S121's whole cause was a partial sweep: the coercion bug
      * was written down for `MusicTrack` alone and the two sibling DTOs were missed.
      * A hardcoded three-name provider reproduces exactly that hazard — a fourth
@@ -255,7 +263,11 @@ final class MusicDtoMediaItemIdTest extends TestCase
      * copies are inline locals, so the drift shape that produced two of the five
      * sites is doc-only. Closing that is step **S127** — see the DTO docblocks.
      *
-     * @return array<string, array{class-string}>
+     * Keys are the classes' FULLY-QUALIFIED names — they become the PHPUnit data-set
+     * names — sorted with `ksort()`; each value is that same FQCN, as the single test
+     * argument.
+     *
+     * @return array<class-string, array{class-string}>
      */
     public static function musicClassesDeclaringMediaItemIdProvider(): array
     {
@@ -275,11 +287,18 @@ final class MusicDtoMediaItemIdTest extends TestCase
         // reporting. Both this memo AND the `$autoload = false` flags below are
         // required — r3 measured that either one alone still fatals.
         //
+        // With both in place the throw below surfaces as a PHPUnit *error* and the
+        // runner exits **2** — measured, and the whole point of the design: a
+        // non-zero exit is what reddens CI. (Fix r3's proof table recorded "exit 0"
+        // for those builds; that was a `… | tail -N; echo $?` artefact reporting
+        // `tail`'s status, corrected by review r4 finding 2. A guard that printed a
+        // named message and let the pipeline pass would be cosmetic.)
+        //
         // On the resident-memory rules: this is test-only code that never runs in a
         // Workerman worker, and the memo is bounded — one array of at most the number
         // of music classes, plus one string — never keyed by request data. It is not
         // the unbounded-static-array shape those rules ban.
-        /** @var array<string, array{class-string}>|null $memo */
+        /** @var array<class-string, array{class-string}>|null $memo */
         static $memo = null;
         /** @var string|null $memoError */
         static $memoError = null;
@@ -352,14 +371,56 @@ final class MusicDtoMediaItemIdTest extends TestCase
             }
 
             $reflection = new ReflectionClass($fqcn);
+            // The class's OWN canonical name, not the path-derived $fqcn. PHP class
+            // names are case-insensitive, so a file whose name differs from its class
+            // only in case (`Dto/musictrack.php` declaring `MusicTrack`) still resolves
+            // through `class_exists()`, and then $fqcn carries the FILE's spelling
+            // while reflection carries the CLASS's. Keying and comparing on the
+            // canonical name is what stops that pair being seen as two classes, and it
+            // is also what makes the `getDeclaringClass()` check below correct in that
+            // case: comparing it against $fqcn instead made the case-variant file's
+            // `mediaItemId` look inherited and SILENTLY dropped it (measured RED-on-fix
+            // in r4).
+            $canonical = $reflection->getName();
             foreach ($reflection->getProperties() as $property) {
                 if ($property->getName() !== 'mediaItemId') {
                     continue;
                 }
-                if ($property->getDeclaringClass()->getName() !== $fqcn) {
+                if ($property->getDeclaringClass()->getName() !== $canonical) {
                     continue;
                 }
-                $found[$reflection->getShortName()] = [$fqcn];
+                // ⚠⚠ KEYED BY FULLY-QUALIFIED NAME, never by `getShortName()`
+                // (S121 review r4 finding 1). The short name was unique only while
+                // this walk was FLAT; the recursion added in r3 made
+                // `src/Media/Music/Dto/MusicTrack.php` and
+                // `src/Media/Music/MusicTrack.php` two different classes with ONE key,
+                // so the loser was overwritten and vanished from the sweep. Measured:
+                // a brand-new `Dto/MusicTrack` carrying the pre-S121
+                // `public ?int $mediaItemId` left the suite GREEN, i.e. a bad DTO
+                // passed — the exact partial-sweep failure S121 exists to remove — and
+                // in the other sort direction (`Sub/MusicTrack`) the REAL
+                // `Phlix\Media\Music\MusicTrack` was the one substituted out, with the
+                // set-equality test below unable to see it because the key set had not
+                // changed. The FQCN is unique per file by construction, so every
+                // discovered class now gets its own data set and its own type
+                // assertion. Keep the expectation in
+                // testTheSweepDiscoversExactlyTheThreeKnownMusicDtos() expressed in
+                // the same terms.
+                if (isset($found[$canonical])) {
+                    $memoError = sprintf(
+                        'media_item_id sweep reached %s twice, from %s and from an earlier file under %s. '
+                        . 'Two files resolving to ONE class means the sweep can only report one of them, so '
+                        . 'it is refusing to silently keep the last one (that overwrite is r4 finding 1). '
+                        . 'Usual cause: two files whose names differ only in case, PHP class names being '
+                        . 'case-insensitive. Delete or rename one of them.',
+                        $canonical,
+                        $file,
+                        $dir,
+                    );
+
+                    throw new RuntimeException($memoError);
+                }
+                $found[$canonical] = [$canonical];
             }
         }
 
@@ -406,15 +467,28 @@ final class MusicDtoMediaItemIdTest extends TestCase
      * become wrong, so this test fails and forces the docs to be updated with it.
      * It also catches a silently-empty glob, which would make the provider-driven
      * test above pass vacuously.
+     *
+     * ⚠ The expectation is FULLY-QUALIFIED, in the same terms as the provider's keys
+     * (r4 finding 1). With short names, a new `Phlix\Media\Music\Dto\MusicTrack`
+     * could replace `Phlix\Media\Music\MusicTrack` under the single key `MusicTrack`
+     * and this set stayed unchanged — the substitution was invisible to the one test
+     * whose job is to see set changes. Namespaced keys make any added, removed OR
+     * substituted class a failure here.
      */
     public function testTheSweepDiscoversExactlyTheThreeKnownMusicDtos(): void
     {
         $this->assertSame(
-            ['MusicAlbum', 'MusicArtist', 'MusicTrack'],
+            [
+                'Phlix\\Media\\Music\\MusicAlbum',
+                'Phlix\\Media\\Music\\MusicArtist',
+                'Phlix\\Media\\Music\\MusicTrack',
+            ],
             array_keys(self::musicClassesDeclaringMediaItemIdProvider()),
             'The set of src/Media/Music classes declaring a `mediaItemId` property changed. If a class was '
             . 'ADDED, give it the ?string CHAR(36) coercion and update the "FIVE sites" note in all three DTO '
-            . 'docblocks; if one was removed, update the same note. Do not just edit this list.',
+            . 'docblocks; if one was removed, update the same note. Names are fully qualified on purpose — a '
+            . 'class in a subdirectory is a real music DTO, not a duplicate of the same-named one above it. '
+            . 'Do not just edit this list.',
         );
     }
 

@@ -2422,9 +2422,19 @@ final class MusicLibraryScannerTest extends TestCase
      * | anything else | `null` |
      *
      * All four rows were measured against real MySQL 8.0.46 through `PhlixMySQLConnection`
-     * (reviews r3/r4). The last assertion is the structural half: the double now REFUSES to
-     * be armed with an affected-row count for a keyword that cannot report one, so the r4
-     * defect cannot be written in the opposite direction either.
+     * (reviews r3/r4/r5). ⚠ **EVERY ROW OF THAT TABLE IS ASSERTED HERE, not just the three
+     * keywords this file happens to issue (review r5 LOW-1).** Fix r4 asserted three and cited
+     * this test as pinning the whole table — and `SHOW` was in fact WRONG in the double
+     * (`int 1`, because the dispatch had no `show` arm and fell through to `runUpdate()`) while
+     * the client returns an array. A signpost that claims more than it checks is what let this
+     * defect class recur three times, so the claim and the assertions are now the same size.
+     *
+     * The last two assertions are the "anything else" row, and the second of them is the one
+     * that matters for production: `Connection.php:1854` splits with **`explode(" ", …)`**, so
+     * an `UPDATE` whose keyword is followed by a newline instead of a single space is NOT
+     * recognised as an update and the client returns **`null`** — measured on real MySQL at r5.
+     * That is precisely why BOTH halves of the backfill guard are required, and why
+     * `statementWroteNothing()` must not be deleted there as dead code.
      */
     public function testTheSchemaDoubleModelsTheClientsPerKeywordReturnDomain(): void
     {
@@ -2433,6 +2443,12 @@ final class MusicLibraryScannerTest extends TestCase
         $this->assertIsArray(
             $db->query('SELECT id FROM music_artists WHERE name = ?', ['nobody']),
             'a SELECT returns fetchAll() — a list, empty when nothing matched, never null',
+        );
+        $this->assertIsArray(
+            $db->query('SHOW TABLES'),
+            'a SHOW shares the SELECT arm (Connection.php:1857) and returns a list too. The double '
+            . 'returned int 1 here until review r5 — there was no `show` arm at all, so it fell '
+            . 'through to runUpdate()',
         );
         $this->assertIsString(
             $db->query(
@@ -2450,6 +2466,30 @@ final class MusicLibraryScannerTest extends TestCase
             . 'INSERT contract (null) on an UPDATE, so the int-0 arm production really takes was '
             . 'exercised by nothing in the repo',
         );
+        $this->assertIsInt(
+            $db->query('DELETE FROM music_tracks WHERE id = ?', [1]),
+            'a DELETE shares that same rowCount() arm (Connection.php:1859). Unasserted until r5, '
+            . 'which proved the hole: regressing DELETE to the INSERT contract (null) left this '
+            . 'whole file GREEN',
+        );
+        $this->assertIsInt(
+            $db->query('REPLACE INTO music_tracks (media_item_id) VALUES (?)', ['mi-keyword-contract']),
+            'and so does a REPLACE — the third keyword on that arm, and the one whose needle also '
+            . 'contains INTO, so it must not be mistaken for an INSERT',
+        );
+        $this->assertNull(
+            $db->query('TRUNCATE TABLE music_artists'),
+            'anything else returns null (Connection.php:1866) — indistinguishable from a no-op, '
+            . 'which is why production must treat null as "wrote nothing"',
+        );
+        $this->assertNull(
+            $db->query("UPDATE\nmusic_artists SET media_item_id = ? WHERE id = ?", ['mi-x', 1]),
+            'and THIS is the "anything else" row that can bite an UPDATE: Connection.php:1854 splits '
+            . 'the statement with explode(" "), so a keyword followed by a newline is never '
+            . 'recognised and the client returns null (measured on real MySQL 8.0.46 at r5). '
+            . 'Reformatting the backfill match arms into a heredoc would move that site from the int '
+            . 'arm to the null arm — so statementWroteNothing() is NOT dead code there',
+        );
 
         $armed = new MusicSchemaConnection();
         $armed->returnAffectedRowsFor('UPDATE music_artists SET media_item_id', 0);
@@ -2458,22 +2498,155 @@ final class MusicLibraryScannerTest extends TestCase
             $armed->query('UPDATE music_artists SET media_item_id = ? WHERE id = ?', ['mi-x', 1]),
             'and the armed "wrote nothing" value for an UPDATE is int 0, not null',
         );
+    }
 
-        // No assertion inside the try — the outcome is asserted afterwards, so nothing can
-        // be swallowed by the catch.
-        $rejected = null;
-        try {
-            $armed->returnAffectedRowsFor('INSERT INTO music_tracks', 0);
-        } catch (\InvalidArgumentException $e) {
-            $rejected = $e->getMessage();
+    /**
+     * The double REFUSES to model a shape the real client cannot produce — twice over.
+     *
+     * Review r4 armed the INSERT contract on an UPDATE; the fix added an arm-time refusal and
+     * claimed the inverse defect was "no longer expressible". Review r5 measured **four**
+     * bypasses of that refusal (it read only the first `" \t\n"`-delimited token of the needle,
+     * while the needle is matched at dispatch with `str_contains()`), one of which armed an
+     * **INSERT** with `int 0` — the exact class this round exists to prevent. So both layers
+     * are asserted here:
+     *
+     * 1. **arm time** — the needle must not mention `insert`/`select`/`show`, and must mention
+     *    `update`/`delete`/`replace`. All four r5 bypasses are checked, together with the
+     *    needle the scanner really uses, which must still be accepted.
+     * 2. **dispatch time** — the honest residue of (1): `'INTO metadata_updates'` mentions
+     *    `update` inside an identifier, so it IS armable, and `str_contains()` then matches an
+     *    `INSERT`. `keywordFaithful()` sees the statement rather than the needle and throws,
+     *    which is what makes the shape genuinely unproducible.
+     *
+     * No assertion sits inside any `try` — every outcome is captured into a variable and
+     * asserted afterwards, because `ExpectationFailedException` is itself a `RuntimeException`
+     * and would be swallowed by a `catch` that is looking for the double's own throw.
+     */
+    public function testTheDoubleRefusesAnAffectedRowCountForAKeywordThatCannotReportOne(): void
+    {
+        $armed = new MusicSchemaConnection();
+
+        $refusals = [];
+        $needles = [
+            // The r4 refusal caught these three (leading keyword, any case, any leading space).
+            'INSERT INTO music_tracks' => 'insert',
+            '  insert into music_tracks' => 'insert',
+            'SELECT id' => 'select',
+            // The four r5 measured BYPASSES. The first is the dangerous one: it armed an
+            // INSERT with int 0, a shape the client cannot produce, with no throw at all.
+            'INTO media_items' => 'no-keyword',
+            '/* hint */ INSERT INTO music_tracks' => 'insert',
+            "INSERT\r\nINTO music_tracks" => 'insert',
+            'WITH c AS (SELECT 1) SELECT * FROM c' => 'select',
+        ];
+
+        foreach ($needles as $needle => $expected) {
+            try {
+                $armed->returnAffectedRowsFor((string) $needle, 0);
+                $refusals[$expected][] = 'ACCEPTED';
+            } catch (\InvalidArgumentException $e) {
+                $refusals[$expected][] = $e->getMessage();
+            }
         }
 
-        $this->assertIsString(
-            $rejected,
-            'the double must REFUSE an affected-row count for an INSERT: that arm would model a shape '
-            . 'the client cannot produce, which is review r4\'s finding written the other way round',
+        $accepted = null;
+        try {
+            $armed->returnAffectedRowsFor('UPDATE music_artists SET media_item_id', 0);
+            $accepted = 'accepted';
+        } catch (\InvalidArgumentException $e) {
+            $accepted = 'REFUSED: ' . $e->getMessage();
+        }
+
+        $this->assertSame(
+            'accepted',
+            $accepted,
+            'the needle the backfill test really uses must still be armable — a refusal that '
+            . 'refuses everything would be worse than none',
         );
-        $this->assertStringContainsString('does NOT report an affected-row count', $rejected);
+        $this->assertNotContains(
+            'ACCEPTED',
+            array_merge(...array_values($refusals)),
+            'every one of the seven needles above must be refused, including the four review r5 '
+            . 'measured slipping through the first-token check',
+        );
+        // The two refusal reasons must be DISTINGUISHABLE, not two spellings of one message:
+        // the per-keyword detail (what the client returns instead) is the whole point.
+        $this->assertStringContainsString(
+            'lastInsertId() as a string',
+            $refusals['insert'][0],
+            'the INSERT refusal must say what the client returns for an INSERT instead',
+        );
+        $this->assertStringContainsString(
+            'fetchAll()',
+            $refusals['select'][0],
+            'and the SELECT refusal must name fetchAll() — a message identical for both keywords '
+            . 'would leave the per-keyword table unpinned in exactly the way that keeps failing',
+        );
+        $this->assertStringContainsString(
+            'mentions no UPDATE, DELETE or REPLACE',
+            $refusals['no-keyword'][0],
+            'and a needle naming no affected-row keyword at all must be refused for THAT reason — '
+            . 'this is the r5 bypass that armed an INSERT with int 0',
+        );
+
+        // Layer 2: the residue of a substring check, closed where the statement is visible.
+        $sneaky = new MusicSchemaConnection();
+        $sneaky->returnAffectedRowsFor('INTO metadata_updates', 3);
+        $atDispatch = null;
+        try {
+            $sneaky->query('INSERT INTO metadata_updates (media_item_id) VALUES (?)', ['mi-x']);
+            $atDispatch = 'RETURNED an int for an INSERT';
+        } catch (\LogicException $e) {
+            $atDispatch = $e->getMessage();
+        }
+
+        $this->assertStringContainsString(
+            'the real client returns string for it',
+            $atDispatch,
+            'a needle mentioning `update` only inside an identifier is armable, so the arm-time '
+            . 'refusal alone is not a firewall; keywordFaithful() must refuse the int at dispatch',
+        );
+    }
+
+    /**
+     * `MusicSchemaConnection::query()` must keep funnelling EVERY return through the
+     * keyword-fidelity check.
+     *
+     * Review r5's last defeat of the per-keyword pin was to add a NEW arming method with its
+     * own dispatch loop and an early `return`, plus a test authored against it: `int 0` for an
+     * `INSERT` — unproducible by the real client — and the suite stayed
+     * `OK (51 tests, 429 assertions)`. An arm added inside `resolveQueryReturn()` is now
+     * validated by `keywordFaithful()` automatically; the only remaining escape is an early
+     * `return` in `query()` itself, which is what this test forbids.
+     *
+     * ⚠ **KNOWN LIMIT, recorded so round 6 does not over-trust this:** a test that defines its
+     * OWN double class instead of using this one is outside anything either mechanism can see.
+     * The `T_RETURN` count is deliberately token-based, so comments and docblocks mentioning
+     * the word cannot affect it.
+     */
+    public function testEveryQueryReturnFunnelsThroughTheKeywordFidelityCheck(): void
+    {
+        $method = new \ReflectionMethod(MusicSchemaConnection::class, 'query');
+        $file = (string) $method->getFileName();
+        $lines = (array) file($file);
+        $body = implode('', array_slice($lines, $method->getStartLine() - 1, $method->getEndLine()
+            - $method->getStartLine() + 1));
+
+        $returns = 0;
+        foreach (token_get_all('<?php ' . $body) as $token) {
+            if (is_array($token) && $token[0] === T_RETURN) {
+                $returns++;
+            }
+        }
+
+        $this->assertSame(
+            1,
+            $returns,
+            'query() must have exactly ONE return — `return $this->keywordFaithful($sql, '
+            . '$this->resolveQueryReturn($sql, $p));` — so that no arm can hand a value back '
+            . 'without its shape being checked against the statement keyword. Add new arms to '
+            . 'resolveQueryReturn(), never to query().',
+        );
     }
 
     /**
@@ -2757,6 +2930,18 @@ final class MusicSchemaConnection extends Connection
      * statements, and `RecursiveDirectoryIterator` yields directories in `readdir()`
      * order, so counting occurrences alone would fault whichever artist happened to be
      * walked third rather than the one the test is about.
+     *
+     * ⚠ **A FAULT ARM IS A `Connection`-DOUBLE ARM TOO — COUNT IT (review r5 INFO-2).** The
+     * fix-r4 audit header said "13 `Connection`-double arms added by this branch"; that was the
+     * count of *return-value* arms only. This method adds **6** more on the same double, so the
+     * complete figure at `1ed09c76` is **19**. The fidelity verdict is unchanged, because
+     * `execute()` re-throws at `Connection.php:1773-1775` / `:1777-1783` and is called at
+     * `:1852` — BEFORE the keyword dispatch at `:1854-1856` — so "throws" is
+     * keyword-independent and faithful for every keyword, and it is
+     * the one shape {@see self::keywordFaithful()} therefore never has to judge. (Shape
+     * divergence, inert: this double throws `\RuntimeException`, the client a `PDOException`;
+     * production catches `\Throwable`.) Five program rounds in a row have quoted a count that
+     * was a lower bound — state the method you counted with, not just the number.
      */
     public function faultOnNth(string $needle, int $occurrence, ?string $param = null): void
     {
@@ -2808,14 +2993,26 @@ final class MusicSchemaConnection extends Connection
      * | `select`, `show` | `fetchAll()` | — (a `list`, or THROWS) | the `runSelect()` handlers |
      * | anything else | — | **`null`**, indistinguishable from a no-op | `returnNullFor()` |
      *
+     * ⚠ **THAT TABLE IS NOW IMPLEMENTED BY THIS DOUBLE, NOT MERELY DOCUMENTED BY IT (review
+     * r5 LOW-1).** Until r5 the dispatch had arms for `SELECT` and `INSERT` and sent everything
+     * else to `runUpdate()`, so the double returned `int 1` for a `SHOW` (client: an array) and
+     * for `TRUNCATE`/`SET` (client: `null`) — it contradicted two rows of the very table fix r4
+     * cited it as pinning. {@see self::keywordOf()} now derives the keyword exactly as the
+     * driver does and {@see self::resolveQueryReturn()} branches on all four rows, including
+     * the `default`.
+     *
      * So arming `returnNullFor()` on an `UPDATE`/`DELETE`/`REPLACE` needle models **no real
-     * MySQL outcome at all** — measured at review r4: 0 rows matched → `int 0`, 1 row
-     * matched → `int 1`, 1 row matched but unchanged → `int 0`, bad column → THROWS. It is
-     * still worth pinning as DEFENCE-IN-DEPTH, because two doubles in this repo do return
-     * `null` for an UPDATE — a bare `createMock(Connection::class)` (its default return for
-     * every method) and the keyword-miss branch at `Connection.php:1866` — and production
-     * must treat both as "not applied". Label it that way when you use it; do not call it
-     * the real client's behaviour.
+     * MySQL outcome for a well-formed single-line statement** — measured at review r4: 0 rows
+     * matched → `int 0`, 1 row matched → `int 1`, 1 row matched but unchanged → `int 0`, bad
+     * column → THROWS. It is still worth pinning as DEFENCE-IN-DEPTH, and it is deliberately
+     * exempt from {@see self::keywordFaithful()}, because THREE real sources hand back `null`
+     * for an UPDATE: a bare `createMock(Connection::class)` (its default return for every
+     * method), the keyword-miss branch at `Connection.php:1866`, and — measured on real MySQL
+     * 8.0.46 at review r5 — **the real client itself** whenever the `UPDATE` keyword is not
+     * followed by a single space (`"UPDATE\nmusic_artists SET …"`, a tab, or a leading block
+     * comment), because `Connection.php:1854` splits with `explode(" ", …)`. Production must
+     * treat all of them as "not applied". Label it defence-in-depth when you use it on a
+     * verbatim single-line UPDATE; the client's normal answer there is an `int`.
      *
      * `returnFalseFor()` stays — it is what r2's S3/S4 scenarios model and it keeps the
      * `false` arm (a different client / a bare PHPUnit mock) pinned independently.
@@ -2838,31 +3035,75 @@ final class MusicSchemaConnection extends Connection
      * value does not change → `int 0`, an unknown column → THROWS. `null` never appears.
      * Before this arm existed, `backfillMusicMediaItemId()`'s only pinned outcome was the
      * `null` one, so deleting `|| (is_int($affected) && $affected < 1)` from
-     * `MusicLibraryScanner.php:1644` — the half that actually fires in production — left the
-     * FULL suite byte-identical to baseline, assertion count included.
+     * {@see \Phlix\Media\Music\MusicLibraryScanner::backfillMusicMediaItemId()}'s guard
+     * (`if (self::statementWroteNothing($affected) || (is_int($affected) && $affected < 1))`,
+     * cited by snippet because the line moves) — the half that actually fires in production —
+     * left the FULL suite byte-identical to baseline, assertion count included.
      *
      * Returns BEFORE the table handlers, exactly like {@see self::returnNullFor()}, so the
      * in-memory row is not mutated either — which is what "affected 0 rows" means.
      *
+     * ⚠ **THE REFUSAL BELOW IS A `str_contains()` CHECK ON THE NEEDLE, MATCHING HOW THE NEEDLE
+     * ITSELF IS MATCHED AT DISPATCH (review r5 LOW-2), AND IT IS STILL NOT A FIREWALL ON ITS
+     * OWN.** Review r4 claimed the inverse defect was "no longer expressible"; r5 measured four
+     * bypasses of the then first-token check and disproved it. Both directions are now checked
+     * here — the needle must NOT mention `insert`/`select`/`show`, and it MUST mention
+     * `update`/`delete`/`replace` — which closes all four (`'INTO media_items'`, a needle whose
+     * `INSERT` follows a leading block comment, `"INSERT\r\nINTO …"`, and
+     * `'WITH c AS (SELECT 1) SELECT …'`).
+     * What REMAINS expressible: a needle that mentions an affected-row keyword only inside an
+     * identifier (`'INTO metadata_updates'`) is armed here and can still match an `INSERT`,
+     * because a needle is a substring, not a statement. That residue is closed one layer down
+     * by {@see self::keywordFaithful()}, which sees the real statement and throws. Both layers
+     * are pinned by
+     * `MusicLibraryScannerTest::testTheDoubleRefusesAnAffectedRowCountForAKeywordThatCannotReportOne()`.
+     *
      * @param string $needle   Statement substring to arm.
      * @param int    $affected The `rowCount()` the client should report.
      *
-     * @throws \InvalidArgumentException When `$needle` starts with a keyword whose real
-     *         return domain is NOT an affected-row count. Deliberately narrow: it can only
-     *         judge a needle that begins with the statement keyword (which every needle in
-     *         this file does), and its whole job is to stop the r4 defect being written in
-     *         the opposite direction.
+     * @throws \InvalidArgumentException When `$needle` mentions a keyword whose real return
+     *         domain is NOT an affected-row count, or mentions no affected-row keyword at all.
      */
     public function returnAffectedRowsFor(string $needle, int $affected): void
     {
-        $keyword = strtolower(strtok(ltrim($needle), " \t\n") ?: '');
-        if (in_array($keyword, ['insert', 'select', 'show'], true)) {
+        $lower = strtolower($needle);
+        $cannotReport = [
+            'insert' => 'lastInsertId() as a string, or null when it wrote nothing',
+            'select' => 'fetchAll()',
+            'show' => 'fetchAll()',
+        ];
+
+        foreach ($cannotReport as $foreign => $realReturn) {
+            if (!str_contains($lower, $foreign)) {
+                continue;
+            }
+
             throw new \InvalidArgumentException(sprintf(
-                'A %s does NOT report an affected-row count: Connection::query() returns %s for it. '
-                . 'Use returnNullFor()/the runSelect() handlers instead — see returnNullFor()\'s '
-                . 'per-keyword table.',
-                strtoupper($keyword),
-                $keyword === 'insert' ? 'lastInsertId() as a string, or null when it wrote nothing' : 'fetchAll()',
+                'The needle "%s" mentions %s, and a %s does NOT report an affected-row count: '
+                . 'Connection::query() returns %s for it. Use returnNullFor()/the runSelect() '
+                . 'handlers instead — see returnNullFor()\'s per-keyword table.',
+                $needle,
+                strtoupper($foreign),
+                strtoupper($foreign),
+                $realReturn,
+            ));
+        }
+
+        $reportsAffectedRows = false;
+        foreach (['update', 'delete', 'replace'] as $armable) {
+            if (str_contains($lower, $armable)) {
+                $reportsAffectedRows = true;
+                break;
+            }
+        }
+
+        if (!$reportsAffectedRows) {
+            throw new \InvalidArgumentException(sprintf(
+                'The needle "%s" mentions no UPDATE, DELETE or REPLACE, so nothing in it does '
+                . 'report an affected-row count — and because a needle is matched with '
+                . 'str_contains(), it could arm a statement of ANY keyword. Name the keyword you '
+                . 'mean; see returnNullFor()\'s per-keyword table.',
+                $needle,
             ));
         }
 
@@ -2984,12 +3225,21 @@ final class MusicSchemaConnection extends Connection
      * @param string $query SQL statement.
      * @param array<int, mixed>|null $params Bound parameters.
      * @param int $fetchmode PDO fetch mode (unused).
-     * @return array<int, mixed>|int|string|false|null Rows for SELECT, the insert id as a
-     *         STRING for an INSERT (`'0'` for `media_items` — UUID PK, no AUTO_INCREMENT),
-     *         an affected-row count for an UPDATE — armable via
-     *         {@see self::returnAffectedRowsFor()} — `false` when
-     *         {@see self::returnFalseFor()} armed this statement, or `null` when
+     * @return array<int, mixed>|int|string|false|null Rows for SELECT/SHOW, the insert id as
+     *         a STRING for an INSERT (`'0'` for `media_items` — UUID PK, no AUTO_INCREMENT),
+     *         an affected-row count (int) for an UPDATE/DELETE/REPLACE — armable via
+     *         {@see self::returnAffectedRowsFor()} — `null` for ANY OTHER leading keyword
+     *         (including an UPDATE the driver fails to recognise, see {@see self::keywordOf()}),
+     *         `false` when {@see self::returnFalseFor()} armed this statement, or `null` when
      *         {@see self::returnNullFor()} did.
+     *
+     * ⚠ **THIS METHOD HAS EXACTLY ONE `return`, AND IT MUST STAY THAT WAY.** Every armed
+     * value and every dispatch result funnels through {@see self::keywordFaithful()}, which
+     * is what makes "a double models a shape the real client cannot produce" — the defect
+     * class that hit this step in r3, r4 and r5 — impossible to add by writing a NEW arm.
+     * An early `return` here would route around that check, so the single-return structure is
+     * itself pinned by
+     * `MusicLibraryScannerTest::testEveryQueryReturnFunnelsThroughTheKeywordFidelityCheck()`.
      */
     public function query($query = '', $params = null, $fetchmode = \PDO::FETCH_ASSOC)
     {
@@ -3000,6 +3250,49 @@ final class MusicSchemaConnection extends Connection
         $this->statements[] = $sql;
         $this->maybeFault($sql, $p);
 
+        return $this->keywordFaithful($sql, $this->resolveQueryReturn($sql, $p));
+    }
+
+    /**
+     * The leading statement keyword, derived EXACTLY the way the real driver derives it.
+     *
+     * `Connection::query()` does `trim($query)`, then **`explode(" ", $query)`** — a split on
+     * the SPACE character only — then `strtolower(trim($rawStatement[0]))`
+     * (`vendor/workerman/mysql/src/Connection.php:1835`, `:1854`, `:1856`). So the keyword is
+     * only recognised when it is followed by a **single space**, and this is mirrored rather
+     * than approximated because the difference is observable and was measured against real
+     * MySQL 8.0.46 at review r5:
+     *
+     * | statement | `keywordOf()` | client returns |
+     * |---|---|---|
+     * | `UPDATE music_artists SET …` | `update` | `int` (`rowCount()`) |
+     * | `   update music_artists SET …` | `update` | `int` |
+     * | `UPDATE\nmusic_artists SET …` | `update\nmusic_artists` | **`null`** |
+     * | `UPDATE\tmusic_artists SET …` | `update\tmusic_artists` | **`null`** |
+     * | a leading block comment, then `UPDATE …` | the comment opener | **`null`** |
+     *
+     * That is why {@see \Phlix\Media\Music\MusicLibraryScanner::statementWroteNothing()} is
+     * NOT dead code at the backfill site: reformatting that `UPDATE` into a heredoc would
+     * move it from the int arm to the `null` arm. Pinned by
+     * `MusicLibraryScannerTest::testTheSchemaDoubleModelsTheClientsPerKeywordReturnDomain()`.
+     */
+    private function keywordOf(string $sql): string
+    {
+        return strtolower(trim(explode(' ', trim($sql))[0]));
+    }
+
+    /**
+     * Picks the value to return, from the arms first and the table handlers second.
+     *
+     * Every `return` in here is validated by {@see self::keywordFaithful()} before it leaves
+     * {@see self::query()} — so this is the right place to add a new arm, and the wrong place
+     * to try to smuggle one in.
+     *
+     * @param array<int, mixed> $p
+     * @return array<int, mixed>|int|string|false|null
+     */
+    private function resolveQueryReturn(string $sql, array $p): array|int|string|false|null
+    {
         foreach ($this->falseOn as $needle) {
             if (str_contains($sql, $needle)) {
                 return false;
@@ -3024,14 +3317,62 @@ final class MusicSchemaConnection extends Connection
             }
         }
 
-        if (str_starts_with($sql, 'SELECT')) {
-            return $this->runSelect($sql, $p);
-        }
-        if (str_starts_with($sql, 'INSERT')) {
-            return $this->runInsert($sql, $p);
+        // Keyword dispatch, mirroring Connection.php:1857-1869 — including the `default`,
+        // which is the driver's "anything else" row and returns null just as it does.
+        return match ($this->keywordOf($sql)) {
+            'select', 'show' => $this->runSelect($sql, $p),
+            'insert' => $this->runInsert($sql, $p),
+            'update', 'delete', 'replace' => $this->runUpdate($sql, $p),
+            default => null,
+        };
+    }
+
+    /**
+     * REFUSES, at dispatch time, to hand back a shape the real client cannot produce.
+     *
+     * The arm-time refusal in {@see self::returnAffectedRowsFor()} is a needle check, and a
+     * needle is matched with `str_contains()`, so it can never be complete: a needle that
+     * merely CONTAINS `update` (`'INTO metadata_updates'`) passes it and can then match an
+     * `INSERT`. This is the check that closes that gap, because it sees the statement itself.
+     *
+     * `false` and `null` are exempt ON PURPOSE and are the only exemptions: they are the two
+     * documented non-client sentinels this double models — `false` for a different client / a
+     * bare PHPUnit mock ({@see self::returnFalseFor()}), `null` both as the real INSERT
+     * "wrote nothing" and as the value a bare `createMock(Connection::class)` and
+     * `Connection.php:1866` hand back for every keyword ({@see self::returnNullFor()}).
+     *
+     * @param array<int, mixed>|int|string|false|null $value
+     * @return array<int, mixed>|int|string|false|null
+     */
+    private function keywordFaithful(string $sql, array|int|string|false|null $value): array|int|string|false|null
+    {
+        if ($value === false || $value === null) {
+            return $value;
         }
 
-        return $this->runUpdate($sql, $p);
+        $keyword = $this->keywordOf($sql);
+        $permitted = match ($keyword) {
+            'select', 'show' => 'array',
+            'insert' => 'string',
+            'update', 'delete', 'replace' => 'int',
+            default => 'null',
+        };
+
+        if (get_debug_type($value) !== $permitted) {
+            throw new \LogicException(sprintf(
+                'This double just returned %s for a statement whose leading keyword is "%s", and '
+                . 'the real client returns %s for it (Connection.php:1857-1869). A double that '
+                . 'models a shape the client cannot produce leaves the arm production really takes '
+                . 'pinned by nothing — that is review r3/r4/r5\'s finding, three rounds running. '
+                . 'Statement: %s',
+                get_debug_type($value),
+                $keyword,
+                $permitted,
+                substr($sql, 0, 80),
+            ));
+        }
+
+        return $value;
     }
 
     /** @return string */

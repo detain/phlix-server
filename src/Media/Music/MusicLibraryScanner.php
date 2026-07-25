@@ -295,11 +295,21 @@ class MusicLibraryScanner
      * for "wrote nothing"), `select`/`show` → `fetchAll()`, anything else → `null`. Five of
      * this helper's six call sites are insert results; the sixth
      * ({@see self::backfillMusicMediaItemId()}, the `UPDATE … SET media_item_id`) is an
-     * UPDATE, where **`null` is unreachable** and the `is_int($affected) && $affected < 1`
-     * half of that site's guard is the only half production can trip. The helper is still
-     * correct there (a bare `createMock(Connection::class)` really does return `null` for
-     * every method), but it is NOT sufficient on its own — see the comment at that site.
-     * Assume nothing about a keyword you have not measured.
+     * UPDATE, where the `is_int($affected) && $affected < 1` half of that site's guard is the
+     * half production trips **for the statement as written today**.
+     *
+     * ⚠ **AND `null` IS NOT UNREACHABLE FOR AN UPDATE — THAT CLAIM (fix r4's) WAS TOO STRONG
+     * (review r5).** The keyword is only recognised when it is followed by a **single space**:
+     * `Connection::query()` splits with `explode(" ", $query)` (`:1854`) and lowercases only
+     * that first *space*-delimited token (`:1856`). Measured against real MySQL 8.0.46 at r5 —
+     * `"UPDATE\nmusic_artists SET …"` → **`null`**, `"UPDATE\tmusic_artists SET …"` →
+     * **`null`**, a leading block comment then `UPDATE …` → **`null`**, while the verbatim
+     * single-line statement → `int 0`/`int 1`. So reformatting that `UPDATE` into a heredoc
+     * would silently move the site onto the `null` arm. That is exactly why the helper is
+     * needed there and must NOT be deleted as dead code — and equally why it is not
+     * sufficient on its own. See the comment at that site; both halves are required, and each
+     * is pinned separately. Assume nothing about a keyword — or a whitespace layout — you
+     * have not measured.
      *
      * ⚠ **Six OTHER sites in `src/` consume an insert result with the same `=== false`
      * check this replaced, and they are NOT fixed here** — `StreamSessionService`,
@@ -1652,22 +1662,36 @@ class MusicLibraryScanner
             // "Backfilled a NULL media_item_id" at `info` for a heal that never happened —
             // the exact inverse of the r2 HIGH finding, on the same file.
             //
-            // ⚠ **DO NOT DELETE THE `is_int(...)` HALF AS REDUNDANT — IT IS THE ONLY HALF
-            // THIS STATEMENT CAN REACH (review r4).** The return domain is per statement
+            // ⚠ **DO NOT DELETE THE `is_int(...)` HALF AS REDUNDANT — IT IS THE HALF THIS
+            // STATEMENT REACHES AS WRITTEN (review r4).** The return domain is per statement
             // KEYWORD: `Connection::query()` returns `rowCount()` when the leading keyword
             // is `update` (`vendor/workerman/mysql/src/Connection.php:1859-1860`, after
-            // `trim()` at `:1835`), so this UPDATE reports "wrote nothing" as **`int 0`**,
-            // never `null`. Measured against real MySQL 8.0.46: the row the
-            // `AND media_item_id IS NULL` predicate excludes → `int 0`; a row it lets
-            // through → `int 1`; a re-run → `int 0`; a matched row whose value does not
-            // change → `int 0`; an unknown column → THROWS. `statementWroteNothing()` still
-            // earns its place as defence-in-depth — a bare `createMock(Connection::class)`
-            // and the keyword-miss branch at `Connection.php:1866` both hand back `null` —
-            // but deleting the int half restores a false `info` heal on every row the
-            // predicate excludes. BOTH arms are pinned, each on its own, by
+            // `trim()` at `:1835`), so this UPDATE reports "wrote nothing" as **`int 0`**.
+            // Measured against real MySQL 8.0.46: the row the `AND media_item_id IS NULL`
+            // predicate excludes → `int 0`; a row it lets through → `int 1`; a re-run →
+            // `int 0`; a matched row whose value does not change → `int 0`; an unknown
+            // column → THROWS.
+            //
+            // ⚠ **AND DO NOT DELETE `statementWroteNothing()` AS DEAD CODE EITHER: `null` IS
+            // REACHABLE HERE (review r5 corrects fix r4's "never `null`").** The keyword is
+            // recognised only when it is followed by a SINGLE SPACE — `Connection.php:1854`
+            // splits with `explode(" ", $query)` — so the moment the `$sql` above is
+            // reformatted (a heredoc, a leading comment, a tab) the statement misses the
+            // `update` branch and the client returns `null` from `:1866`. Measured on real
+            // MySQL 8.0.46 at r5: `"UPDATE\nmusic_artists SET …"` → `null`, `"UPDATE\t…"` →
+            // `null`, a leading block comment → `null`. A bare `createMock(Connection::class)`
+            // hands back `null` too. So **BOTH halves are load-bearing**: drop the int half
+            // and every row the predicate excludes gets a false `info` heal today; drop the
+            // `null` half and the next reformat of those `match` arms reintroduces the r2 HIGH
+            // finding silently.
+            //
+            // Each arm is pinned on its own by
             // `MusicLibraryScannerTest::testABackfillUpdateThatWroteNothingIsNotReportedAsHealed()`
-            // (scenario (A) = `int 0`, scenario (B) = `null`); the per-keyword table itself is
-            // pinned by `…::testTheSchemaDoubleModelsTheClientsPerKeywordReturnDomain()`.
+            // (scenario (A) = `int 0`, scenario (B) = `null`), and every row of the per-keyword
+            // table — `select`/`show` → list, `insert` → string, `update`/`delete`/`replace` →
+            // int, anything else (INCLUDING a reformatted `UPDATE`) → `null` — by
+            // `…::testTheSchemaDoubleModelsTheClientsPerKeywordReturnDomain()`, which asserts
+            // all four rows since r5 (it asserted three while claiming four).
             if (self::statementWroteNothing($affected) || (is_int($affected) && $affected < 1)) {
                 // Not applied — either the statement wrote nothing or another writer got
                 // there first. Report NULL and let the next scan try again.

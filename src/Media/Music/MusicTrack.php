@@ -150,6 +150,15 @@ final readonly class MusicTrack
      * `src/Media/Music/` and reflects EVERY class declaring a `mediaItemId`
      * property, so a fourth DTO cannot land with the old coercion unnoticed.
      *
+     * 🔴 **But that backstop covers 3 of the 5 sites, NOT all five.** It can only see
+     * classes that declare a `mediaItemId` **property**; the scanner's two copies are
+     * inline **local variables**, which is precisely the shape that produced two of
+     * the five sites — so **those two are pinned by NO test at all** and this docblock
+     * plus the grep recipe above are their only protection. Do not read "mechanical
+     * backstop" as covering them. Closing that gap needs a source-text or AST guard
+     * written against the POST-S96 scanner (S96 rewrites that file by ~448 lines, so
+     * writing one now would guarantee rework); it is filed as step **S127**.
+     *
      * @param array<string, mixed> $row Database row
      * @return string|null The UUID, or null when the column is absent/NULL/empty
      */

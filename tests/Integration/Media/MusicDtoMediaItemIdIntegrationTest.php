@@ -113,28 +113,47 @@ final class MusicDtoMediaItemIdIntegrationTest extends TestCase
             );
         }
 
-        // ⚠ Deliberately NOT `markTestSkipped()` here, which is what the 22 sibling
-        // integration tests do (S121 review r1 finding 3). `isMysqlReachable()` above
-        // has already proven a listener ACCEPTED a TCP connection on $host:$port, so
-        // reaching this catch does not mean "no database on this box" — it means a
-        // reachable server refused us: wrong credentials, missing database, bad
-        // config. Skipping that is a silent green, and it is reachable, not
-        // theoretical: measured on a scratch MySQL with a deliberately wrong
-        // password, the sibling shape yields `Tests: 4, Assertions: 0, Skipped: 4`
-        // — a real-DB test reporting success while never touching a database, in the
-        // one environment (CI) where it is the only thing proving the column type.
-        // The genuine "no MySQL here" case is still a skip; it is handled one block
-        // up. An unmigrated-but-reachable schema already surfaces as 4 real errors
-        // from seedFixtures(), so this closes the last silent path.
+        // ⚠ Deliberately NOT `markTestSkipped()` here, which is what the other 23
+        // `markTestSkipped`-inside-`catch` integration sites do (S121 review r1
+        // finding 3, r2 findings 1/2/6/7). `isMysqlReachable()` above has already
+        // proven a listener ACCEPTED a TCP connection on $host:$port, so reaching the
+        // catch below does not mean "no MySQL on this box" — it means a reachable
+        // server would not serve us: wrong credentials, missing database, bad config.
+        // Skipping that reports success without ever touching a database, in the one
+        // environment (CI) where this test is the only thing proving the column type.
+        // Genuine absence is still a skip, handled one block up. The other 23 sites
+        // are deliberately untouched; unifying them is step S126.
+        //
+        // ⚠⚠ The `SELECT 1` is LOAD-BEARING, not a sanity check (r2 finding 1).
+        // `config/database.php` resolves `pool_enabled = true` BY DEFAULT, and
+        // `PooledMySQLConnection::__construct()` deliberately does NOT call
+        // `parent::__construct()` — it opens no socket, leasing one lazily on the
+        // first `query()`. So without a real round-trip inside this `try`, nothing
+        // here could fail and the named exception below was dead code in exactly the
+        // configuration CI and local dev use; only `DB_POOL_ENABLED=0` (which builds
+        // a `PhlixMySQLConnection`, whose parent ctor connects eagerly) ever reached
+        // it. Measured with a deliberately wrong password on a scratch MySQL:
+        //
+        //   without the round-trip: pool default → `PDOException … [1045] Access
+        //     denied` escaping from seedFixtures(); pool 0 → named RuntimeException.
+        //   with the round-trip:    BOTH modes → named RuntimeException.
+        //
+        // A healthy database is unaffected in either mode (`OK (4 tests, 117
+        // assertions)`), so this cannot redden a healthy CI.
         try {
             ConnectionPool::init(dirname(__DIR__, 3) . '/config/database.php');
-            $this->db = ConnectionPool::getConnection('mysql');
+            $db = ConnectionPool::getConnection('mysql');
+            // Forces the lazy pooled connection to open for real. `query()` must
+            // start with SELECT (workerman/mysql) and this binds no parameters.
+            $db->query('SELECT 1');
+            $this->db = $db;
         } catch (Throwable $e) {
             throw new RuntimeException(
                 sprintf(
-                    'MySQL on %s:%d accepted a TCP connection but the client could not connect (%s). '
-                    . 'This is a broken DB_*/config setup, not an absent database, so it is reported instead '
-                    . 'of skipped. Check DB_USER/DB_PASSWORD/DB_DATABASE and run scripts/run-migrations.php.',
+                    'MySQL on %s:%d accepted a TCP connection but would not serve a query (%s). The SERVER '
+                    . 'is present, so this is a broken DB_*/config setup — including a database that does '
+                    . 'not exist yet — rather than "no MySQL on this box", and it is reported instead of '
+                    . 'skipped. Check DB_USER/DB_PASSWORD/DB_DATABASE and run scripts/run-migrations.php.',
                     $host,
                     $port,
                     $e->getMessage(),
@@ -403,9 +422,29 @@ final class MusicDtoMediaItemIdIntegrationTest extends TestCase
      * Resolves an AUTO_INCREMENT id by unique lookup. `LAST_INSERT_ID()` is not
      * safe here: the pooled connection may hand a different socket to the
      * follow-up query.
+     *
+     * `$table`/`$column` are SQL **identifiers**, which cannot be bound as
+     * parameters, so they are interpolated — and therefore allow-listed below
+     * (S121 review r2 finding 10). Every current caller passes a hardcoded literal
+     * and the *value* is always bound, so this is inert today; the allow-list exists
+     * so it stays inert if this helper is ever copied or handed external input.
+     *
+     * @param 'music_albums'|'music_artists'|'music_tracks' $table
+     * @param 'media_item_id'|'name'|'title'               $column
      */
     private function idOf(string $table, string $column, string $value): int
     {
+        $this->assertContains(
+            $table,
+            ['music_artists', 'music_albums', 'music_tracks'],
+            'idOf() interpolates $table into SQL, so it accepts only this fixture\'s own tables',
+        );
+        $this->assertContains(
+            $column,
+            ['media_item_id', 'name', 'title'],
+            'idOf() interpolates $column into SQL, so it accepts only this fixture\'s own columns',
+        );
+
         $db = $this->db;
         $this->assertNotNull($db);
 

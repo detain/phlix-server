@@ -228,7 +228,15 @@ final class MusicDtoMediaItemIdTest extends TestCase
      * added here with a stated reason rather than by narrowing the glob.
      *
      * Inherited properties are skipped (`getDeclaringClass()` check) so the
-     * assertion lands once, on the class that actually declares the type.
+     * assertion lands once, on the class that actually declares the type. A file
+     * that cannot be LOADED is a hard named failure rather than a skip — see the
+     * comment at the `class_exists()` check for why, and r2 finding 3 for the
+     * measurement that a silent skip makes the set-equality test below pass.
+     *
+     * ⚠ **This covers 3 of the 5 predicate sites and cannot cover the other 2.** It
+     * reflects classes declaring a `mediaItemId` **property**; the scanner's two
+     * copies are inline locals, so the drift shape that produced two of the five
+     * sites is doc-only. Closing that is step **S127** — see the DTO docblocks.
      *
      * @return array<string, array{class-string}>
      */
@@ -248,7 +256,35 @@ final class MusicDtoMediaItemIdTest extends TestCase
         foreach ($files as $file) {
             /** @var class-string $fqcn */
             $fqcn = 'Phlix\\Media\\Music\\' . basename($file, '.php');
+
+            // ⚠ A file this sweep cannot LOAD must be a hard, named failure, never a
+            // silent `continue` (S121 review r2 finding 3). A skipped file is exactly
+            // a partial sweep — the defect S121 exists to remove — and it degrades
+            // invisibly: r2 proved that with `setClassMapAuthoritative(true)` forced
+            // on the loader, an un-dumped 4th DTO becomes unloadable, the discovered
+            // set silently shrinks back to the three known names, and the
+            // set-equality test below then PASSES with the bad class sitting on disk.
+            // That state is unreachable in this repo today (composer.json sets
+            // `optimize-autoloader` but never `classmap-authoritative`, and nothing
+            // in the repo, workflows or scripts calls setClassMapAuthoritative), so
+            // the PSR-4 fallback always resolves a new file — but the guard must not
+            // depend on a config it does not own.
+            if (!class_exists($fqcn) && !interface_exists($fqcn) && !trait_exists($fqcn)) {
+                throw new RuntimeException(sprintf(
+                    'media_item_id sweep could not load %s from %s. It is REFUSING to skip the file: a '
+                    . 'silently omitted class is a partial sweep, which is the exact defect S121 fixed, and '
+                    . 'it would let a music DTO keep the pre-S121 is_numeric()/int coercion undetected. '
+                    . 'Usual causes: the class name does not match the file name, the namespace is not '
+                    . 'Phlix\\Media\\Music, or the autoloader cannot resolve the file (e.g. a '
+                    . 'classmap-authoritative install, which disables the PSR-4 fallback this sweep relies '
+                    . 'on — run `composer dump-autoload`).',
+                    $fqcn,
+                    $file,
+                ));
+            }
+
             if (!class_exists($fqcn)) {
+                // Loadable, but an interface or trait: no instance property to type.
                 continue;
             }
 

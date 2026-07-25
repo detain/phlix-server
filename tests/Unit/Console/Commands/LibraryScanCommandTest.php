@@ -29,7 +29,10 @@ class LibraryScanCommandTest extends TestCase
     public function testScanCallsScanLibrary(): void
     {
         $manager = $this->createMock(LibraryManager::class);
-        $manager->expects($this->once())->method('scanLibrary')->with('lib-1');
+        // scanLibrary() returns a ScanResult since S96(b); ScanResult is final, so
+        // PHPUnit cannot auto-generate a return value and the stub must be explicit.
+        $manager->expects($this->once())->method('scanLibrary')->with('lib-1')
+            ->willReturn(new ScanResult());
         $manager->expects($this->never())->method('rescanLibrary');
 
         $tester = $this->tester($manager);

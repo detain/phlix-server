@@ -1456,9 +1456,13 @@ final class MusicLibraryScannerTest extends TestCase
      * the rest of the scan, which is what covers the committed-but-reported-failed
      * variant. The orphan in that variant is not reclaimed by THIS scan either way,
      * because `music_artists` now holds a row for the name and every later lookup
-     * short-circuits on that natural key with `media_item_id = NULL` — that residue is
-     * S96(e)'s backfill, and when S96(e) lands it will reclaim through these very
-     * adoption lookups, so it needs the flag to be open exactly here.
+     * short-circuits on that natural key with `media_item_id = NULL`. Reclaiming THAT
+     * residue is S96(e)'s backfill, which runs from inside the natural-key branch and
+     * issues these very adoption lookups — which is why the flag has to be open
+     * exactly here. Each artist appears once in this fixture, so the backfill has no
+     * second encounter to fire on and the NULL below is still expected;
+     * {@see self::testANullArtistMediaItemIdIsBackfilledWhenTheArtistRecurs()} is where
+     * the healing itself is pinned.
      */
     public function testAMintThatIsNotConfirmedReEnablesAdoptionForTheRestOfTheScan(): void
     {
@@ -1500,6 +1504,423 @@ final class MusicLibraryScannerTest extends TestCase
             }
         }
         $this->assertSame(1, $nullLinked, 'exactly one music_artists row keeps the S96(e) NULL media_item_id');
+    }
+
+    // -- S96(a): the log reaches the app log, and leaks no temp directory ------
+
+    /**
+     * Constructing the scanner must create NO directory under `sys_get_temp_dir()`.
+     *
+     * `createLogger()` used to `mkdir()` a `phlix_music_scanner_<uniqid>` directory on
+     * EVERY construction and point a private `StructuredLogger` at a log file inside
+     * it. Two failures in one: the file was invisible to operators (the `phlix-server`
+     * unit runs with `PrivateTmp`, so it lived in a per-unit mount namespace, was
+     * unreadable without `nsenter`-ing the MainPID, and was destroyed on restart), and
+     * the directories accumulated — 66 counted on production, 6,346 on the dev box.
+     * That invisible log is why the empty music library survived four wrong diagnoses.
+     *
+     * Six production sites construct this class with no logger at all
+     * (`Application.php` x5, `NewsletterSender`), so "no logger" is the common case,
+     * not an edge one.
+     */
+    public function testConstructingTheScannerCreatesNoTemporaryLogDirectory(): void
+    {
+        $pattern = sys_get_temp_dir() . '/phlix_music_scanner_*';
+        $before = glob($pattern);
+        $this->assertIsArray($before);
+
+        // Three, so a per-construction leak cannot hide behind a coincidence.
+        for ($i = 0; $i < 3; $i++) {
+            new MusicLibraryScanner(
+                $this->createMock(Connection::class),
+                $this->createMock(FfmpegRunner::class),
+            );
+        }
+
+        $after = glob($pattern);
+        $this->assertIsArray($after);
+        $this->assertSame(
+            count($before),
+            count($after),
+            'the scanner must not mkdir a private log directory: on production those land inside the '
+            . "unit's PrivateTmp, where no operator can read them, and they leak one per instantiation",
+        );
+    }
+
+    /**
+     * A caller-supplied PSR-3 logger must actually be USED.
+     *
+     * The old `createLogger()` accepted only a `StructuredLogger` and silently threw
+     * every other `LoggerInterface` away, falling through to the temp-directory logger.
+     * Combined with `MediaServicesProvider` passing no logger at all, that made the
+     * "fallback" the only live path. This asserts the injected logger receives the
+     * scan's own lines — the property `MediaServicesProvider`'s
+     * `constructorParameter('logger', get('logger.media'))` relies on.
+     */
+    public function testAnInjectedPlainPsrLoggerReceivesTheScanLines(): void
+    {
+        $dir = $this->tempDir();
+        $this->touchFile($dir, '01-song.mp3');
+
+        $logger = new RecordingPsrLogger();
+        $scanner = new TaggedScanner(
+            $this->createMock(Connection::class),
+            $this->createMock(FfmpegRunner::class),
+            $logger,
+        );
+        $scanner->tagger = static fn(string $path): array => [
+            'artist' => 'Injected Logger Artist',
+            'album' => 'Album',
+            'title' => basename($path, '.mp3'),
+            'track_number' => 1,
+            'disc_number' => 1,
+            'duration_secs' => 10,
+            'year' => 2000,
+            'genre' => null,
+        ];
+
+        $scanner->scanDirectory($dir, null, 'lib-s96');
+
+        $this->assertGreaterThan(
+            0,
+            $logger->countMessages('Starting music directory scan'),
+            'a caller-supplied PSR-3 logger must receive the scan log lines. Zero here means the scanner '
+            . 'discarded it and wrote into its own temp directory instead — the S96(a) defect.',
+        );
+        $this->assertGreaterThan(0, $logger->countMessages('Music directory scan complete'));
+    }
+
+    // -- S96(f): a scan that loses files says so -------------------------------
+
+    /**
+     * One failing track increments `ScanResult::$failed` by exactly one.
+     *
+     * S95 left this measurable ONLY by the file's absence: with its `finally`
+     * recomputing `total_tracks` from the rows that exist, a 4-track album that lost
+     * its 2nd file reported `scanned=4 added=3` with `music_tracks=3`,
+     * `total_tracks=3` and zero inconsistencies — the database was perfectly
+     * self-consistent while the library was one file short.
+     */
+    public function testAFailedTrackIsCountedInScanResultFailed(): void
+    {
+        [$dir, $tagger] = $this->oneAlbumFixture(4);
+
+        $db = new MusicSchemaConnection();
+        $db->faultOnNth('INSERT INTO music_tracks', 2);
+
+        $logger = new LogWriteFailureLogger();
+        $scanner = $this->taggedScanner($db, $tagger, $logger);
+
+        $result = $scanner->scanDirectory($dir, null, 'lib-s96');
+
+        $this->assertSame(3, $result->added);
+        $this->assertSame(
+            1,
+            $result->failed,
+            'the lost file must be counted. 0 here is the S96(f) defect: `scanned=4 added=3` with a '
+            . 'self-consistent database and no counter anywhere saying a file was skipped',
+        );
+        $this->assertSame(4, $result->scanned, 'it did read all four files');
+        $this->assertSame(
+            $result->scanned,
+            $result->added + $result->updated + $result->failed,
+            'every file read is accounted for as added, updated or failed — no silent remainder',
+        );
+        $this->assertCount(3, $db->tracks, 'and the counter agrees with the rows that really landed');
+
+        // The counter reaches the API surface too: POST /api/v1/music/scan returns
+        // exactly this array.
+        $this->assertArrayHasKey('failed', $result->toArray());
+        $this->assertSame(1, $result->toArray()['failed']);
+
+        // And it is stated in the completion line, at WARNING so it is greppable.
+        $this->assertSame(
+            1,
+            $logger->countMessages('Music directory scan complete with skipped files'),
+            'a scan that lost files must not log the same clean "scan complete" line as one that did not',
+        );
+        $this->assertSame(0, $logger->countMessages('Music directory scan complete', true));
+    }
+
+    /**
+     * When the whole album is lost — here because its artist row could not be written —
+     * every one of its files is charged to `failed`, not just one.
+     *
+     * The throw unwinds into `flushAlbum()`'s outer catch, which is the path that used
+     * to log "Skipping album …" into `PrivateTmp` and report nothing at all.
+     */
+    public function testAnAlbumLostToAFailedArtistWriteChargesEveryFileToFailed(): void
+    {
+        [$dir, $tagger] = $this->oneAlbumFixture(5);
+
+        $db = new MusicSchemaConnection();
+        $db->faultOnNth('INSERT INTO music_artists', 1);
+
+        $logger = new LogWriteFailureLogger();
+        $scanner = $this->taggedScanner($db, $tagger, $logger);
+
+        $result = $scanner->scanDirectory($dir, null, 'lib-s96');
+
+        $this->assertSame(0, $result->added);
+        $this->assertCount(0, $db->tracks);
+        $this->assertSame(
+            5,
+            $result->failed,
+            'all five files were lost with the album, so all five must be counted',
+        );
+        $this->assertSame(1, $logger->countMessages('Skipping album after error during indexing'));
+    }
+
+    /**
+     * A track that fails part-way through an album must not be double-counted by the
+     * outer catch, and a clean scan must report exactly zero.
+     *
+     * This is the over-counting guard for `$handled`: if the outer catch charged
+     * `count($files)` unconditionally the first assertion would read 4 instead of 1.
+     */
+    public function testACleanScanReportsZeroFailedAndFailuresAreNotDoubleCounted(): void
+    {
+        [$dir, $tagger] = $this->oneAlbumFixture(4);
+
+        $db = new MusicSchemaConnection();
+        $db->faultOnNth('INSERT INTO music_tracks', 2);
+        $scanner = $this->taggedScanner($db, $tagger, new LogWriteFailureLogger());
+        $this->assertSame(1, $scanner->scanDirectory($dir, null, 'lib-s96')->failed);
+
+        [$cleanDir, $total] = $this->buildAlbumTree(3, 2);
+        $cleanDb = new MusicSchemaConnection();
+        $cleanLogger = new LogWriteFailureLogger();
+        $clean = $this->taggedScanner($cleanDb, null, $cleanLogger)->scanDirectory($cleanDir, null, 'lib-s96');
+
+        $this->assertSame($total, $clean->added);
+        $this->assertSame(0, $clean->failed, 'nothing failed, so the counter must be 0');
+        $this->assertSame(1, $cleanLogger->countMessages('Music directory scan complete', true));
+        $this->assertSame(0, $cleanLogger->countMessages('Music directory scan complete with skipped files'));
+    }
+
+    /**
+     * Files dropped by the "unknown artist" rule are NOT failures.
+     *
+     * That rule is a documented scan POLICY (a whole album group is discarded when its
+     * artist tag is missing) with its own follow-up step, and a rescan drops the same
+     * files again. Folding it into `items_failed` would make every untagged library
+     * look like it is erroring. It is still reported — as `skipped_no_artist` in the
+     * completion line, once per scan rather than once per album, so an untagged
+     * library costs one log line and not thousands.
+     */
+    public function testUnknownArtistFilesAreReportedAsSkippedNotFailed(): void
+    {
+        $dir = $this->tempDir();
+        $this->touchFile($dir, 'mystery-a.mp3');
+        $this->touchFile($dir, 'mystery-b.mp3');
+
+        $db = new MusicSchemaConnection();
+        $logger = new LogWriteFailureLogger();
+        // ffprobe returns nothing → filename fallback → artist null → 'Unknown Artist'.
+        $scanner = new MusicLibraryScanner($db, $this->ffmpegReturning([]), $logger);
+
+        $result = $scanner->scanDirectory($dir, null, 'lib-s96');
+
+        $this->assertSame(0, $result->added);
+        $this->assertSame(0, $result->failed, 'a policy skip is not an error and must not alarm items_failed');
+        $this->assertSame(
+            1,
+            $logger->countMessages('Music directory scan complete with skipped files'),
+            'but the operator must still be told: two files were read and none indexed',
+        );
+        // Two, not one: with no album tag either, the album title falls back to the
+        // FILENAME, so each untagged file is its own album group. That is also why the
+        // per-album line stays at `debug` and the operator-facing tally is the
+        // once-per-scan `skipped_no_artist` in the summary above.
+        $this->assertSame(2, $logger->countMessages('Skipping album with unknown artist'));
+    }
+
+    // -- S96(b): the live counter snapshot on the progress sink ----------------
+
+    /**
+     * The progress sink receives the live `added`/`updated`/`failed` snapshot as its
+     * 4th argument, and it MOVES during the walk.
+     *
+     * This is what makes `library_scan_jobs.items_added` answer "is this scan writing
+     * anything?" instead of reading 0 for four hours. Without it the only way to tell
+     * was to compare `music_artists.created_at` timestamps against the walk order —
+     * which is literally how the production investigation had to proceed.
+     */
+    public function testTheProgressSinkCarriesTheLiveCounterSnapshot(): void
+    {
+        // 40 albums x 2 tracks: the 33rd album evicts at file 65, so writes begin
+        // long before the walk ends and the snapshot must be non-zero by then.
+        [$dir, $total] = $this->buildAlbumTree(40, 2);
+        $this->assertSame(80, $total);
+
+        $db = new MusicSchemaConnection();
+        $scanner = $this->taggedScanner($db);
+
+        $snapshots = [];
+        $scanner->scanDirectory(
+            $dir,
+            static function (int $processed, int $totalFiles, string $path, array $counts = []) use (&$snapshots): void {
+                $snapshots[$processed] = $counts;
+            },
+            'lib-s96',
+        );
+
+        $this->assertCount($total, $snapshots, 'one snapshot per file, exactly as before');
+
+        $first = $snapshots[1] ?? null;
+        $this->assertIsArray($first);
+        $this->assertSame(
+            ['added' => 0, 'updated' => 0, 'failed' => 0],
+            $first,
+            'the snapshot must carry all three counters, zeroed, from the very first tick',
+        );
+
+        $last = $snapshots[$total] ?? null;
+        $this->assertIsArray($last);
+        $this->assertGreaterThan(
+            0,
+            $last['added'],
+            'by the LAST file the scan has already written rows, so a live counter must be non-zero. '
+            . '0 here means items_added stays 0 for the whole walk — the S96(b) defect',
+        );
+        $this->assertSame(0, $last['failed']);
+        // Monotonic: a counter that went backwards would make the job row lie.
+        $previous = 0;
+        foreach ($snapshots as $counts) {
+            $this->assertGreaterThanOrEqual($previous, $counts['added']);
+            $previous = $counts['added'];
+        }
+    }
+
+    // -- S96(e): a NULL media_item_id is healed, not kept forever --------------
+
+    /**
+     * A `music_artists` row whose `media_item_id` is NULL must be BACKFILLED when the
+     * scanner meets that artist again.
+     *
+     * How the NULL happens: `createMediaItem()` swallows its own Throwable and returns
+     * `''`, so ONE transient failure writes the `music_artists` row with a NULL link.
+     * Before this fix nothing ever repaired it — the natural-key branch returned the
+     * stored NULL and short-circuited before the adoption lookup, so the S95 reviewer
+     * measured it still NULL after two clean rescans. `NULL UNIQUE` (migration 065)
+     * means nothing fails loudly either; the artist just stays artwork-less and
+     * invisible to every `media_items`-driven surface.
+     */
+    public function testANullArtistMediaItemIdIsBackfilledWhenTheArtistRecurs(): void
+    {
+        $root = $this->tempDir();
+        foreach (['album-a', 'album-b'] as $sub) {
+            mkdir($root . '/' . $sub, 0777, true);
+            $this->cleanup[] = $root . '/' . $sub;
+            $this->touchFile($root . '/' . $sub, '01-t.mp3');
+        }
+
+        $db = new MusicSchemaConnection();
+        // The shape a previous scan left behind.
+        $artistId = $db->plantArtistWithNullMediaItem('Poisoned Artist');
+
+        $logger = new LogWriteFailureLogger();
+        $scanner = $this->taggedScanner($db, static fn(string $path): array => [
+            'artist' => 'Poisoned Artist',
+            'album' => basename(dirname($path)),
+            'title' => basename($path, '.mp3'),
+            'track_number' => 1,
+            'disc_number' => 1,
+            'duration_secs' => 100,
+            'year' => 2000,
+            'genre' => null,
+        ], $logger);
+
+        $scanner->scanDirectory($root, null, 'lib-s96');
+
+        $healed = $db->artists['poisoned artist']['media_item_id'] ?? null;
+        $this->assertIsString(
+            $healed,
+            'the NULL media_item_id must be backfilled. NULL here is the S96(e) defect: every later scan '
+            . 'finds this row by its natural key and returns the NULL without ever repairing it',
+        );
+        $this->assertNotSame('', $healed);
+        $this->assertSame($artistId, $db->artists['poisoned artist']['id'], 'the SAME row was healed, not replaced');
+        $this->assertContains($healed, $db->mediaItemIds('artist'), 'and the media_items row really exists');
+        $this->assertSame([], $db->orphanedMusicMediaItems(), 'nothing was left unreferenced');
+        $this->assertSame(1, $logger->countMessages('Backfilled a NULL media_item_id on a music row'));
+    }
+
+    /**
+     * The backfill ADOPTS an existing orphan rather than minting a rival.
+     *
+     * This is case (c) of `findAdoptableArtistMediaItemId()`'s residue list — an
+     * orphan from a mint the server COMMITTED but `createMediaItem()` reported as
+     * failed. It was unreclaimable BY CONSTRUCTION: the `music_artists` row holds the
+     * natural key with a NULL link, so every later scan short-circuited before the
+     * adoption lookup could run. Driving the lookup from INSIDE that branch is the
+     * only route to it.
+     */
+    public function testTheBackfillAdoptsAnExistingOrphanInsteadOfMintingARival(): void
+    {
+        [$dir, $tagger] = $this->oneAlbumFixture(1, 'Committed Orphan Artist', 'Some Album');
+
+        $db = new MusicSchemaConnection();
+        $orphanId = $db->plantOrphan('artist', 'Committed Orphan Artist', 'lib-s96');
+        $db->plantArtistWithNullMediaItem('Committed Orphan Artist');
+
+        $scanner = $this->taggedScanner($db, $tagger);
+        $scanner->scanDirectory($dir, null, 'lib-s96');
+
+        $this->assertSame(
+            $orphanId,
+            $db->artists['committed orphan artist']['media_item_id'] ?? null,
+            'the committed-but-unreferenced media_items row must be adopted by the row that should own it',
+        );
+        $this->assertSame(
+            [$orphanId],
+            $db->mediaItemIds('artist'),
+            'and NO second artist media_items row may be minted — that is the leak this closes',
+        );
+    }
+
+    /**
+     * The album twin: a `music_albums` row with a NULL `media_item_id` is healed on the
+     * next encounter, through the same helper and the artist-scoped adoption predicate.
+     */
+    public function testANullAlbumMediaItemIdIsBackfilledOnTheNextScan(): void
+    {
+        [$dir, $tagger] = $this->oneAlbumFixture(2, 'Album Backfill Artist', 'Poisoned Album');
+
+        $db = new MusicSchemaConnection();
+        $artistId = $db->plantArtistWithNullMediaItem('Album Backfill Artist');
+        $albumId = $db->plantAlbumWithNullMediaItem($artistId, 'Poisoned Album');
+
+        $scanner = $this->taggedScanner($db, $tagger);
+        $scanner->scanDirectory($dir, null, 'lib-s96');
+
+        $healed = $db->albums[$albumId]['media_item_id'] ?? null;
+        $this->assertIsString($healed, 'the album row must be healed too, not only the artist row');
+        $this->assertNotSame('', $healed);
+        $this->assertContains($healed, $db->mediaItemIds('album'));
+        $this->assertCount(1, $db->albums, 'the SAME album row was healed, not duplicated');
+        $this->assertSame([], $db->orphanedMusicMediaItems());
+    }
+
+    /**
+     * A healthy library pays NOTHING for the backfill: it is reached only when a
+     * stored `media_item_id` is genuinely NULL.
+     *
+     * Worth pinning because the adoption lookups this helper calls scan an unindexed
+     * `media_items.name` — measured at 5.078 ms per artist, ~31 s over a first scan of
+     * the production library — which is exactly why S95 put a one-per-scan gate in
+     * front of them. A backfill that ran unconditionally would hand that cost back.
+     */
+    public function testTheBackfillIssuesNoStatementsWhenNoLinkIsNull(): void
+    {
+        [$dir, $tagger] = $this->oneAlbumFixture(2, 'Healthy Artist', 'Healthy Album');
+
+        $db = new MusicSchemaConnection();
+        $scanner = $this->taggedScanner($db, $tagger);
+        $scanner->scanDirectory($dir, null, 'lib-s96');
+
+        $this->assertSame(0, $db->countStatements('UPDATE music_artists SET media_item_id'));
+        $this->assertSame(0, $db->countStatements('UPDATE music_albums SET media_item_id'));
     }
 }
 
@@ -1698,6 +2119,40 @@ final class MusicSchemaConnection extends Connection
     public function faultOnNth(string $needle, int $occurrence, ?string $param = null): void
     {
         $this->faults[] = ['needle' => $needle, 'param' => $param, 'occurrence' => $occurrence, 'seen' => 0];
+    }
+
+    /**
+     * Plant a `music_artists` row whose `media_item_id` is NULL — the S96(e) shape a
+     * previous scan left behind when `createMediaItem()` reported failure.
+     *
+     * `NULL UNIQUE` (migration 065) makes this perfectly legal, which is why nothing
+     * ever failed loudly.
+     */
+    public function plantArtistWithNullMediaItem(string $name): int
+    {
+        $this->autoInc++;
+        $this->artists[strtolower($name)] = [
+            'id' => $this->autoInc,
+            'name' => $name,
+            'media_item_id' => null,
+        ];
+
+        return $this->autoInc;
+    }
+
+    /** The album twin of {@see self::plantArtistWithNullMediaItem()}. */
+    public function plantAlbumWithNullMediaItem(int $artistId, string $title): int
+    {
+        $this->autoInc++;
+        $this->albums[$this->autoInc] = [
+            'id' => $this->autoInc,
+            'artist_id' => $artistId,
+            'title' => $title,
+            'media_item_id' => null,
+            'total_tracks' => 0,
+        ];
+
+        return $this->autoInc;
     }
 
     /** Plant an orphaned `media_items` row of `$type` that no music_* row references. */
@@ -2019,6 +2474,42 @@ final class MusicSchemaConnection extends Connection
      */
     private function runUpdate(string $sql, array $p): int
     {
+        // S96(e) backfill. Honours the `AND media_item_id IS NULL` guard exactly, and
+        // returns the AFFECTED-ROW count — 0 when the guard excludes the row — because
+        // that is what the scanner reads to decide whether the row now references the
+        // id it just minted. A fake that always returned 1 would keep passing after
+        // the guard was deleted from the SQL.
+        if (str_contains($sql, 'UPDATE music_artists SET media_item_id')) {
+            $guarded = str_contains($sql, 'media_item_id IS NULL');
+            foreach ($this->artists as $key => $artist) {
+                if ($artist['id'] !== (int) ($p[1] ?? 0)) {
+                    continue;
+                }
+                if ($guarded && $artist['media_item_id'] !== null) {
+                    return 0;
+                }
+                $this->artists[$key]['media_item_id'] = is_string($p[0] ?? null) ? $p[0] : null;
+
+                return 1;
+            }
+
+            return 0;
+        }
+
+        if (str_contains($sql, 'UPDATE music_albums SET media_item_id')) {
+            $guarded = str_contains($sql, 'media_item_id IS NULL');
+            $albumId = (int) ($p[1] ?? 0);
+            if (!isset($this->albums[$albumId])) {
+                return 0;
+            }
+            if ($guarded && $this->albums[$albumId]['media_item_id'] !== null) {
+                return 0;
+            }
+            $this->albums[$albumId]['media_item_id'] = is_string($p[0] ?? null) ? $p[0] : null;
+
+            return 1;
+        }
+
         // refreshAlbumTrackTotal(): derive the count from the rows that really
         // exist, exactly as the correlated subquery does.
         if (str_contains($sql, 'total_tracks = (SELECT COUNT(*)')) {
@@ -2084,6 +2575,52 @@ final class LogWriteFailureLogger extends StructuredLogger
         if ($this->throwOn !== '' && str_contains($text, $this->throwOn)) {
             throw new \RuntimeException('LOG WRITE FAILED: ' . $this->throwOn);
         }
+    }
+
+    /**
+     * How many recorded messages contain `$needle` — or EQUAL it when `$exact`.
+     *
+     * The exact form exists because S96(f) added a second completion line whose text
+     * starts with the first one ("Music directory scan complete" vs "… complete with
+     * skipped files"), so a substring count cannot tell the clean case from the lossy
+     * one, and telling them apart is the whole point of the pair.
+     */
+    public function countMessages(string $needle, bool $exact = false): int
+    {
+        $n = 0;
+        foreach ($this->messages as $message) {
+            $hit = $exact ? $message === $needle : str_contains($message, $needle);
+            if ($hit) {
+                $n++;
+            }
+        }
+
+        return $n;
+    }
+}
+
+/**
+ * A plain PSR-3 logger — NOT a `StructuredLogger` subclass — that records what it is
+ * handed.
+ *
+ * The distinction is the test: `createLogger()` used to accept only a
+ * `StructuredLogger` and silently discard every other `LoggerInterface`, so a double
+ * that inherited from `StructuredLogger` could not detect the defect at all.
+ */
+final class RecordingPsrLogger extends \Psr\Log\AbstractLogger
+{
+    /** @var list<string> Every message logged, in order. */
+    public array $messages = [];
+
+    /**
+     * @param mixed $level
+     * @param array<string, mixed> $context
+     */
+    public function log($level, string|\Stringable $message, array $context = []): void
+    {
+        unset($level, $context);
+
+        $this->messages[] = (string) $message;
     }
 
     /** How many recorded messages contain `$needle`. */

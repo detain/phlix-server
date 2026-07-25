@@ -81,6 +81,15 @@ class ScanJobRepository
      * `$counts` array keys. Only these keys are honoured; anything else in a
      * caller-supplied array is ignored so the SQL column set stays fixed.
      *
+     * `items_failed` (migration 095, S96(f)) is the count of files a scan could not
+     * index. It exists because a partially-failed scan was previously indistinguishable
+     * from a clean one from the outside: {@see ScanResult} had no failure field, the
+     * job row had no failed-file column, and the scanner's own error log went into the
+     * unit's `PrivateTmp`. ⚠ NOTE THE ASYMMETRY WITH `items_updated`, which is the
+     * PROCESSED-FILE count (the progress numerator the admin UI divides by
+     * `items_found`), NOT {@see ScanResult::$updated} — see
+     * {@see LibraryScanWorker::scanProgressSink()}.
+     *
      * @var list<string>
      */
     private const COUNTER_COLUMNS = [
@@ -88,6 +97,7 @@ class ScanJobRepository
         'items_added',
         'items_updated',
         'items_removed',
+        'items_failed',
     ];
 
     /** @var int Lower bound for {@see self::getHistoryForLibrary()} `$limit`. */
@@ -197,9 +207,9 @@ class ScanJobRepository
      * Update the progress counters (and optional current path) of a job.
      *
      * Only the supplied counter keys (`items_found`, `items_added`,
-     * `items_updated`, `items_removed`) are written; unknown keys are ignored.
-     * When neither a recognised counter nor `$currentPath` is supplied the
-     * call is a no-op (no SQL is issued).
+     * `items_updated`, `items_removed`, `items_failed`) are written; unknown keys
+     * are ignored. When neither a recognised counter nor `$currentPath` is supplied
+     * the call is a no-op (no SQL is issued).
      *
      * @param string                     $jobId       Job UUID.
      * @param array<string, int|string> $counts      Map of counter column →
@@ -296,6 +306,15 @@ class ScanJobRepository
      * legitimately be `running` — any such row is orphaned by a restart/crash of
      * the process that owned it and would otherwise sit `running` forever (and
      * keep a UI spinner alive). Call this once at worker startup to reap them.
+     *
+     * ⚠ **UNSCOPED BY DESIGN, AND ONLY SAFE FROM THAT ONE CALL SITE (S96(c)).** There
+     * is no `library_id` filter and no age guard: this fails EVERY `running` row in
+     * the table. Calling it from anywhere that is not a single-consumer worker's
+     * startup — an HTTP handler, a second concurrently-draining worker process, a
+     * `count > 1` fork — fails a job that IS still running, while its scan carries on
+     * unaware (nothing re-reads the job row mid-scan). {@see LibraryScanWorker::start()}
+     * documents the exact invariant this rests on and why an age guard was rejected
+     * rather than added.
      *
      * @param string $error Failure message stored on each reaped row.
      *
@@ -475,6 +494,7 @@ class ScanJobRepository
             'items_added'   => $this->intColumn($row['items_added'] ?? null),
             'items_updated' => $this->intColumn($row['items_updated'] ?? null),
             'items_removed' => $this->intColumn($row['items_removed'] ?? null),
+            'items_failed'  => $this->intColumn($row['items_failed'] ?? null),
             'current_path'  => $this->nullableString($row['current_path'] ?? null),
             'error'         => $this->nullableString($row['error'] ?? null),
             'queued_at'     => $this->nullableString($row['queued_at'] ?? null),

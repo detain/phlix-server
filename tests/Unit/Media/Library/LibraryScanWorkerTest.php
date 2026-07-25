@@ -62,7 +62,8 @@ class LibraryScanWorkerTest extends TestCase
 
         $libraries = $this->createMock(LibraryManager::class);
         $libraries->expects($this->once())->method('scanLibrary')
-            ->with('lib-1', $this->isType('callable'));
+            ->with('lib-1', $this->isType('callable'))
+            ->willReturn(new ScanResult());
         $libraries->expects($this->never())->method('rescanLibrary');
 
         $worker = new LibraryScanWorker($jobs, $libraries, $this->makeUnusedMatcher(), $this->makeLogger());
@@ -88,6 +89,90 @@ class LibraryScanWorkerTest extends TestCase
             ->with('lib-2', $this->isType('array'), $this->isType('callable'))
             ->willReturn(new ScanResult());
         $libraries->expects($this->never())->method('scanLibrary');
+
+        $worker = new LibraryScanWorker($jobs, $libraries, $this->makeUnusedMatcher(), $this->makeLogger());
+
+        $this->assertTrue($worker->runOnce());
+    }
+
+    /**
+     * S96(b): a `scan` job stamps the scanner's OWN final counters onto the job row
+     * through `markCompleted()`'s `$finalCounts` — the parameter that existed since
+     * step 1.1a and had no caller at all, which is why `items_added` was 0 on every
+     * successful scan for the life of the feature.
+     *
+     * `items_updated` must NOT appear: that column is the progress NUMERATOR
+     * (processed files) the admin UI divides by `items_found`, so writing
+     * `ScanResult::$updated` into it would drop the percentage to ~0 % exactly when
+     * the job completes.
+     */
+    public function testScanJobStampsFinalAddedAndFailedCounters(): void
+    {
+        $scan = new ScanResult();
+        $scan->added = 29;
+        $scan->updated = 4;
+        $scan->failed = 3;
+
+        $jobs = $this->createMock(ScanJobRepository::class);
+        $jobs->expects($this->once())
+            ->method('claimNext')
+            ->willReturn(['id' => 'job-fc', 'library_id' => 'lib-fc', 'type' => 'scan']);
+        $jobs->expects($this->once())
+            ->method('markCompleted')
+            ->with('job-fc', ['items_added' => 29, 'items_failed' => 3]);
+
+        $libraries = $this->createMock(LibraryManager::class);
+        $libraries->expects($this->once())->method('scanLibrary')->willReturn($scan);
+
+        $worker = new LibraryScanWorker($jobs, $libraries, $this->makeUnusedMatcher(), $this->makeLogger());
+
+        $this->assertTrue($worker->runOnce());
+    }
+
+    /**
+     * S96(b): a `rescan` job additionally stamps `items_removed`, the prune count
+     * `rescanLibrary()` has always computed and the worker has always thrown away —
+     * so a rescan that pruned rows reported `0 removed`.
+     */
+    public function testRescanJobStampsRemovedAndFailedCounters(): void
+    {
+        $rescan = new ScanResult();
+        $rescan->added = 7;
+        $rescan->removed = 5;
+        $rescan->failed = 2;
+
+        $jobs = $this->createMock(ScanJobRepository::class);
+        $jobs->expects($this->once())
+            ->method('claimNext')
+            ->willReturn(['id' => 'job-rc', 'library_id' => 'lib-rc', 'type' => 'rescan']);
+        $jobs->expects($this->once())
+            ->method('markCompleted')
+            ->with('job-rc', ['items_added' => 7, 'items_removed' => 5, 'items_failed' => 2]);
+
+        $libraries = $this->createMock(LibraryManager::class);
+        $libraries->expects($this->once())->method('rescanLibrary')->willReturn($rescan);
+
+        $worker = new LibraryScanWorker($jobs, $libraries, $this->makeUnusedMatcher(), $this->makeLogger());
+
+        $this->assertTrue($worker->runOnce());
+    }
+
+    /**
+     * A job type that reports through `updateProgress()` (here `prune`) must stamp NO
+     * counters at `markCompleted()` — an empty `$finalCounts` — or the final UPDATE
+     * would clobber the count it just wrote.
+     */
+    public function testNonScanJobStampsNoFinalCounters(): void
+    {
+        $jobs = $this->createMock(ScanJobRepository::class);
+        $jobs->expects($this->once())
+            ->method('claimNext')
+            ->willReturn(['id' => 'job-pn', 'library_id' => 'lib-pn', 'type' => 'prune']);
+        $jobs->expects($this->once())->method('updateProgress')->with('job-pn', ['items_removed' => 3]);
+        $jobs->expects($this->once())->method('markCompleted')->with('job-pn', []);
+
+        $libraries = $this->createMock(LibraryManager::class);
+        $libraries->expects($this->once())->method('pruneLibrary')->willReturn(3);
 
         $worker = new LibraryScanWorker($jobs, $libraries, $this->makeUnusedMatcher(), $this->makeLogger());
 
@@ -143,22 +228,75 @@ class LibraryScanWorkerTest extends TestCase
         $libraries = $this->createMock(LibraryManager::class);
         $libraries->expects($this->once())
             ->method('scanLibrary')
-            ->willReturnCallback(static function (string $lib, ?callable $onProgress = null): void {
+            ->willReturnCallback(static function (string $lib, ?callable $onProgress = null): ScanResult {
                 if ($onProgress === null) {
-                    return;
+                    return new ScanResult();
                 }
                 for ($i = 1; $i <= 30; $i++) {
                     $onProgress($i, 30, "/media/file-$i.mkv");
                 }
+                return new ScanResult();
             });
 
         $worker = new LibraryScanWorker($jobs, $libraries, $this->makeUnusedMatcher(), $this->makeLogger());
         $this->assertTrue($worker->runOnce());
 
         // Throttled to one write per 25 files (at 25) plus the final file (30).
+        // A 3-argument sink call (the video scanner, which has no per-file
+        // added/failed counter) must leave items_added/items_failed OUT of the
+        // payload entirely rather than writing a false 0 over a real count.
         $this->assertSame([
             ['items_found' => 30, 'items_updated' => 25],
             ['items_found' => 30, 'items_updated' => 30],
+        ], $writes);
+    }
+
+    /**
+     * S96(b): when the scanner passes its live counter snapshot as the sink's 4th
+     * argument, `items_added` and `items_failed` are folded into the SAME throttled
+     * UPDATE — no extra statement, because the throttle exists to bound job-row
+     * writes on a 61k-file library.
+     *
+     * This is the mid-scan half of the fix: before it, `items_added` stayed 0 for the
+     * whole 4-hour walk, so "is this scan writing anything?" was unanswerable from the
+     * job row.
+     */
+    public function testScanJobStreamsLiveAddedAndFailedCountsFromTheSink(): void
+    {
+        $writes = [];
+        $jobs = $this->createMock(ScanJobRepository::class);
+        $jobs->expects($this->once())
+            ->method('claimNext')
+            ->willReturn(['id' => 'job-live', 'library_id' => 'lib-live', 'type' => 'scan']);
+        $jobs->method('updateProgress')->willReturnCallback(
+            function (string $jobId, array $counts, ?string $cur = null) use (&$writes): void {
+                $writes[] = $counts;
+            },
+        );
+
+        $libraries = $this->createMock(LibraryManager::class);
+        $libraries->expects($this->once())
+            ->method('scanLibrary')
+            ->willReturnCallback(static function (string $lib, ?callable $onProgress = null): ScanResult {
+                if ($onProgress !== null) {
+                    // 30 files walked; by file 25 the scanner had written 20 tracks
+                    // and lost 1, and by file 30, 24 and 2.
+                    for ($i = 1; $i <= 30; $i++) {
+                        $counts = $i < 30
+                            ? ['added' => 20, 'updated' => 3, 'failed' => 1]
+                            : ['added' => 24, 'updated' => 4, 'failed' => 2];
+                        $onProgress($i, 30, "/music/file-$i.flac", $counts);
+                    }
+                }
+                return new ScanResult();
+            });
+
+        $worker = new LibraryScanWorker($jobs, $libraries, $this->makeUnusedMatcher(), $this->makeLogger());
+        $this->assertTrue($worker->runOnce());
+
+        $this->assertSame([
+            ['items_found' => 30, 'items_updated' => 25, 'items_added' => 20, 'items_failed' => 1],
+            ['items_found' => 30, 'items_updated' => 30, 'items_added' => 24, 'items_failed' => 2],
         ], $writes);
     }
 
@@ -268,7 +406,8 @@ class LibraryScanWorkerTest extends TestCase
         $jobs->expects($this->once())->method('markCompleted')->with('job-5');
 
         $libraries = $this->createMock(LibraryManager::class);
-        $libraries->expects($this->once())->method('scanLibrary')->with('lib-5');
+        $libraries->expects($this->once())->method('scanLibrary')->with('lib-5')
+            ->willReturn(new ScanResult());
         $libraries->expects($this->never())->method('rescanLibrary');
 
         $worker = new LibraryScanWorker($jobs, $libraries, $this->makeUnusedMatcher(), $this->makeLogger());

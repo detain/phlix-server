@@ -62,11 +62,17 @@ final class LibraryManagerMusicScanTest extends TestCase
      * @param LibraryRow     $library
      * @param callable|null  $onProgress
      */
-    private function invokeScanMusic(LibraryManager $manager, LibraryRow $library, ?callable $onProgress): void
-    {
+    private function invokeScanMusic(
+        LibraryManager $manager,
+        LibraryRow $library,
+        ?callable $onProgress
+    ): ScanResult {
         $method = new \ReflectionMethod(LibraryManager::class, 'scanMusicLibrary');
         $method->setAccessible(true);
-        $method->invoke($manager, $library->id, $library, $onProgress);
+        $result = $method->invoke($manager, $library->id, $library, $onProgress);
+        self::assertInstanceOf(ScanResult::class, $result);
+
+        return $result;
     }
 
     private function musicLibrary(string ...$paths): LibraryRow
@@ -169,5 +175,115 @@ final class LibraryManagerMusicScanTest extends TestCase
 
         // Total denominator is 4 (missing path contributes 0).
         $this->assertSame([[4, 4, $pathA . '/last']], $ticks);
+    }
+
+    /**
+     * S96(b): the library-wide counters are SUMMED across paths, and the live snapshot
+     * the sink receives is offset by the same running base as `processed`.
+     *
+     * Without the offset, `items_added` would jump backwards to the second path's own
+     * `added` the moment that path starts — a job row that goes 12 → 3 is worse than
+     * one that stays at 0, because it looks like rows are being lost.
+     */
+    public function testCountersAreSummedAndTheLiveSnapshotIsOffsetAcrossPaths(): void
+    {
+        $pathA = $this->tempDir('ca');
+        $pathB = $this->tempDir('cb');
+
+        $music = $this->createMock(MusicLibraryService::class);
+        $music->method('countFiles')->willReturnCallback(
+            static fn (string $p): int => $p === $pathA ? 2 : 2,
+        );
+        $music->method('scanDirectory')->willReturnCallback(
+            static function (string $p, ?callable $cb) use ($pathA): ScanResult {
+                $result = new ScanResult();
+                if ($p === $pathA) {
+                    // Path A: both files added, one failure on the way.
+                    if ($cb !== null) {
+                        $cb(1, 2, $p . '/f1', ['added' => 0, 'updated' => 0, 'failed' => 0]);
+                        $cb(2, 2, $p . '/f2', ['added' => 1, 'updated' => 0, 'failed' => 1]);
+                    }
+                    $result->scanned = 2;
+                    $result->added = 2;
+                    $result->failed = 1;
+
+                    return $result;
+                }
+                // Path B reports its OWN counters, starting again from zero.
+                if ($cb !== null) {
+                    $cb(1, 2, $p . '/g1', ['added' => 0, 'updated' => 0, 'failed' => 0]);
+                    $cb(2, 2, $p . '/g2', ['added' => 1, 'updated' => 1, 'failed' => 0]);
+                }
+                $result->scanned = 2;
+                $result->added = 3;
+                $result->updated = 1;
+
+                return $result;
+            },
+        );
+
+        $manager = $this->makeManager($music);
+
+        $live = [];
+        $result = $this->invokeScanMusic($manager, $this->musicLibrary($pathA, $pathB), function (
+            int $processed,
+            int $total,
+            string $path,
+            array $counts = []
+        ) use (&$live): void {
+            $live[] = [$processed, $counts];
+        });
+
+        // Path B's snapshots carry path A's completed totals as their base.
+        $this->assertSame([
+            [1, ['added' => 0, 'updated' => 0, 'failed' => 0]],
+            [2, ['added' => 1, 'updated' => 0, 'failed' => 1]],
+            [3, ['added' => 2, 'updated' => 0, 'failed' => 1]],
+            [4, ['added' => 3, 'updated' => 1, 'failed' => 1]],
+        ], $live);
+
+        // And the returned totals are the sums, which is what markCompleted() stamps.
+        $this->assertSame(5, $result->added);
+        $this->assertSame(1, $result->updated);
+        $this->assertSame(1, $result->failed);
+        $this->assertSame(4, $result->scanned);
+    }
+
+    /**
+     * A 3-parameter sink (every pre-S96 caller) must keep working: PHP ignores surplus
+     * arguments to a user-defined function, and the manager's own wrapper defaults the
+     * counts array. Pinned because the whole design of S96(b) rests on it — a 4th
+     * argument was chosen over a second callback so no extra DB write is needed.
+     */
+    public function testAThreeParameterSinkStillWorks(): void
+    {
+        $pathA = $this->tempDir('legacy');
+
+        $music = $this->createMock(MusicLibraryService::class);
+        $music->method('countFiles')->willReturn(1);
+        $music->method('scanDirectory')->willReturnCallback(
+            static function (string $p, ?callable $cb): ScanResult {
+                if ($cb !== null) {
+                    $cb(1, 1, $p . '/only.mp3', ['added' => 1, 'updated' => 0, 'failed' => 0]);
+                }
+                $result = new ScanResult();
+                $result->added = 1;
+
+                return $result;
+            },
+        );
+
+        $manager = $this->makeManager($music);
+
+        $ticks = [];
+        $this->invokeScanMusic($manager, $this->musicLibrary($pathA), function (
+            int $processed,
+            int $total,
+            string $path
+        ) use (&$ticks): void {
+            $ticks[] = [$processed, $total, $path];
+        });
+
+        $this->assertSame([[1, 1, $pathA . '/only.mp3']], $ticks);
     }
 }

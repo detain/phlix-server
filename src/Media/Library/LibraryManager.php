@@ -471,8 +471,34 @@ class LibraryManager
     /**
      * Initiates a scan of all paths in the library to discover media files.
      *
+     * **Returns a {@see ScanResult} (S96(b)).** It used to return `void`, so
+     * {@see LibraryScanWorker} had nothing to write and `library_scan_jobs
+     * .items_added` stayed 0 for every successful scan — the reason "is this scan
+     * writing anything?" had to be answered by reading `music_artists.created_at`
+     * timestamps. Only the counters each scanner actually knows are filled:
+     *
+     *  - `added` — from {@see MediaScanner::scan()} (video/series/photo/book/
+     *    audiobook) or summed over the per-path {@see ScanResult}s of the music
+     *    scanner. For a music library that is new TRACKS; container artist/album rows
+     *    are not counted (contrast {@see self::rescanLibrary()}, whose `added` is a
+     *    row-count delta over ALL types — the two answers differ by design and both
+     *    are documented where they are written).
+     *  - `failed` — files a scanner could not index ({@see ScanResult::$failed});
+     *    music only today, since the video scanner has no per-file failure counter.
+     *  - `scanned` — files walked, when a progress sink made the count available.
+     *
+     * `updated`/`removed` are deliberately left at 0: this method neither prunes nor
+     * has a definition of "updated" the video path can supply, and
+     * {@see LibraryScanWorker} must never write `items_updated` from here — that
+     * column doubles as the progress NUMERATOR, so overwriting it with a semantic
+     * "updated" count would drop the UI percentage to ~0 % at completion.
+     *
      * @param string $libraryId The library's unique identifier
-     * @return void
+     * @param callable|null $onProgress Optional
+     *        `(int $processed, int $total, string $currentPath, array $counts): void`
+     *        sink. The 4th argument is the live counter snapshot for scanners that
+     *        report one (music); a 3-parameter sink is unaffected.
+     * @return ScanResult Counters this scan can honestly report (see above).
      * @throws \InvalidArgumentException If the library does not exist
      *
      * @example
@@ -480,7 +506,7 @@ class LibraryManager
      * $manager->scanLibrary('abc-123');
      * ```
      */
-    public function scanLibrary(string $libraryId, ?callable $onProgress = null): void
+    public function scanLibrary(string $libraryId, ?callable $onProgress = null): ScanResult
     {
         $library = $this->fetchLibraryRow($libraryId);
         if ($library === null) {
@@ -489,28 +515,29 @@ class LibraryManager
 
         $this->logger->info('Starting library scan', ['library_id' => $libraryId, 'name' => $library->name]);
 
+        $result = new ScanResult();
+
         // Route music libraries through MusicLibraryManager for tag harvesting
         if ($library->type === 'music') {
-            $this->scanMusicLibrary($libraryId, $library, $onProgress);
-            return;
+            return $this->scanMusicLibrary($libraryId, $library, $onProgress);
         }
 
         // Route photo libraries through PhotoLibraryManager for EXIF extraction
         if ($library->type === 'photo') {
-            $this->scanPhotoLibrary($libraryId, $library);
-            return;
+            $result->added = $this->scanPhotoLibrary($libraryId, $library);
+            return $result;
         }
 
         // Route book libraries through BookLibraryManager for EPUB/PDF/CBZ extraction
         if ($library->type === 'book') {
-            $this->scanBookLibrary($libraryId, $library);
-            return;
+            $result->added = $this->scanBookLibrary($libraryId, $library);
+            return $result;
         }
 
         // Route audiobook libraries through AudiobookScanner for M4B chapter extraction
         if ($library->type === 'audiobook') {
-            $this->scanAudiobookLibrary($libraryId, $library);
-            return;
+            $result->added = $this->scanAudiobookLibrary($libraryId, $library);
+            return $result;
         }
 
         $seriesPerDirectory = $library->type === 'series' && $library->seriesPerDirectory();
@@ -526,6 +553,7 @@ class LibraryManager
         // then stream one tick per processed file. The count walk is cheap (no
         // DB / metadata) relative to the scan itself.
         $onFile = null;
+        $processed = 0;
         if ($onProgress !== null) {
             $total = 0;
             foreach ($library->paths as $path) {
@@ -533,7 +561,6 @@ class LibraryManager
                     $total += $this->scanner->countFiles($path, $library->type);
                 }
             }
-            $processed = 0;
             $onFile = function (string $currentPath) use (&$processed, $total, $onProgress): void {
                 $processed++;
                 $onProgress($processed, $total, $currentPath);
@@ -545,7 +572,7 @@ class LibraryManager
                 $this->logger->warning('Library path does not exist', ['path' => $path]);
                 continue;
             }
-            $this->scanner->scan(
+            $result->added += $this->scanner->scan(
                 $libraryId,
                 $path,
                 $library->type,
@@ -555,10 +582,18 @@ class LibraryManager
             );
         }
 
-        $this->logger->info('Library scan complete', ['library_id' => $libraryId]);
+        $result->scanned = $processed;
+
+        $this->logger->info('Library scan complete', [
+            'library_id' => $libraryId,
+            'added' => $result->added,
+            'scanned' => $result->scanned,
+        ]);
 
         // Scan for theme media after library content scan
         $this->scanThemeMedia($libraryId);
+
+        return $result;
     }
 
     /**
@@ -571,14 +606,26 @@ class LibraryManager
      * per-path ticks can be offset into a single library-wide `processed/total`
      * percentage — matching the video path and the shape the scan-job row expects.
      *
+     * **The library-wide counters are accumulated the same way the percentage is
+     * (S96(b)).** Each `scanDirectory()` call reports counters for ITS path only, so
+     * a two-path library would otherwise make `items_added` jump backwards to 0 when
+     * the second path starts. The returned per-path {@see ScanResult}s are summed
+     * into the value this method returns, and the live 4th-argument snapshot the
+     * scanner streams is offset by the same running base before it is forwarded.
+     *
      * @param string        $libraryId  The library's unique identifier
      * @param LibraryRow    $library    The library data
-     * @param callable|null $onProgress Optional `(int $processed, int $total, string $currentPath): void` sink.
-     * @return void
+     * @param callable|null $onProgress Optional
+     *        `(int $processed, int $total, string $currentPath, array $counts): void` sink.
+     * @return ScanResult Summed counters across every scanned path.
      */
-    private function scanMusicLibrary(string $libraryId, LibraryRow $library, ?callable $onProgress = null): void
-    {
+    private function scanMusicLibrary(
+        string $libraryId,
+        LibraryRow $library,
+        ?callable $onProgress = null
+    ): ScanResult {
         $paths = $library->paths;
+        $result = new ScanResult();
 
         if ($onProgress === null) {
             foreach ($paths as $path) {
@@ -586,10 +633,10 @@ class LibraryManager
                     $this->logger->warning('Music library path does not exist', ['path' => $path]);
                     continue;
                 }
-                $this->musicLibraryService->scanDirectory($path, null, $libraryId);
+                $this->accumulate($result, $this->musicLibraryService->scanDirectory($path, null, $libraryId));
             }
-            $this->logger->info('Music library scan complete', ['library_id' => $libraryId]);
-            return;
+            $this->logMusicScanComplete($libraryId, $result);
+            return $result;
         }
 
         // Pre-count each path once: the sum is the denominator, and each path's
@@ -606,14 +653,23 @@ class LibraryManager
         $onScanProgress = function (
             int $processedInPath,
             int $totalInPath,
-            string $currentPath
+            string $currentPath,
+            array $pathCounts = []
         ) use (
             &$base,
+            $result,
             $total,
             $onProgress
         ): void {
             unset($totalInPath);
-            $onProgress($base + $processedInPath, $total, $currentPath);
+            // Offset the path-local counters by everything already scanned, exactly
+            // as $base offsets $processedInPath.
+            $live = [
+                'added' => $result->added + (int) ($pathCounts['added'] ?? 0),
+                'updated' => $result->updated + (int) ($pathCounts['updated'] ?? 0),
+                'failed' => $result->failed + (int) ($pathCounts['failed'] ?? 0),
+            ];
+            $onProgress($base + $processedInPath, $total, $currentPath, $live);
         };
 
         foreach ($paths as $i => $path) {
@@ -621,11 +677,60 @@ class LibraryManager
                 $this->logger->warning('Music library path does not exist', ['path' => $path]);
                 continue;
             }
-            $this->musicLibraryService->scanDirectory($path, $onScanProgress, $libraryId);
+            $this->accumulate(
+                $result,
+                $this->musicLibraryService->scanDirectory($path, $onScanProgress, $libraryId)
+            );
             $base += $counts[$i];
         }
 
-        $this->logger->info('Music library scan complete', ['library_id' => $libraryId]);
+        $this->logMusicScanComplete($libraryId, $result);
+
+        return $result;
+    }
+
+    /**
+     * Adds one path's counters into the library-wide total.
+     *
+     * `durationMs` is deliberately NOT summed — the caller times the whole scan.
+     *
+     * @param ScanResult $total Accumulator, mutated in place.
+     * @param ScanResult $one   One path's result.
+     * @return void
+     */
+    private function accumulate(ScanResult $total, ScanResult $one): void
+    {
+        $total->scanned += $one->scanned;
+        $total->added += $one->added;
+        $total->updated += $one->updated;
+        $total->removed += $one->removed;
+        $total->failed += $one->failed;
+    }
+
+    /**
+     * Logs the music-scan completion line, at WARNING when files were lost so an
+     * operator greping `.logs/app.log` sees it (S96(a)+(f)).
+     *
+     * @param string     $libraryId Library UUID.
+     * @param ScanResult $result    Library-wide counters.
+     * @return void
+     */
+    private function logMusicScanComplete(string $libraryId, ScanResult $result): void
+    {
+        $context = [
+            'library_id' => $libraryId,
+            'scanned' => $result->scanned,
+            'added' => $result->added,
+            'updated' => $result->updated,
+            'failed' => $result->failed,
+        ];
+
+        if ($result->failed > 0) {
+            $this->logger->warning('Music library scan complete with failed files', $context);
+            return;
+        }
+
+        $this->logger->info('Music library scan complete', $context);
     }
 
     /**
@@ -633,12 +738,14 @@ class LibraryManager
      *
      * @param string $libraryId The library's unique identifier
      * @param LibraryRow $library The library data
-     * @return void
+     * @return int Number of items added (S96(b) — reaches `items_added`).
      *
      * @since 0.16.0
      */
-    private function scanPhotoLibrary(string $libraryId, LibraryRow $library): void
+    private function scanPhotoLibrary(string $libraryId, LibraryRow $library): int
     {
+        $added = 0;
+
         foreach ($library->paths as $path) {
             if (!is_dir($path)) {
                 $this->logger->warning('Photo library path does not exist', ['path' => $path]);
@@ -647,10 +754,14 @@ class LibraryManager
             // Photo scanning is handled by PhotoLibraryManager which uses
             // PhotoScanner for EXIF metadata extraction.
             // For now, fall back to basic scanning.
-            $this->scanner->scan($libraryId, $path, 'image');
+            // NB: 'image' is the SCANNER's library-type label; the media_items.type
+            // ENUM member is `photo` (see the type-ENUM landmine).
+            $added += $this->scanner->scan($libraryId, $path, 'image');
         }
 
-        $this->logger->info('Photo library scan complete', ['library_id' => $libraryId]);
+        $this->logger->info('Photo library scan complete', ['library_id' => $libraryId, 'added' => $added]);
+
+        return $added;
     }
 
     /**
@@ -658,12 +769,14 @@ class LibraryManager
      *
      * @param string $libraryId The library's unique identifier
      * @param LibraryRow $library The library data
-     * @return void
+     * @return int Number of items added (S96(b) — reaches `items_added`).
      *
      * @since 0.17.0
      */
-    private function scanBookLibrary(string $libraryId, LibraryRow $library): void
+    private function scanBookLibrary(string $libraryId, LibraryRow $library): int
     {
+        $added = 0;
+
         // Book scanning is handled by BookScanner for EPUB content.opf,
         // PDF metadata, and CBZ ComicInfo.xml extraction.
         foreach ($library->paths as $path) {
@@ -672,10 +785,12 @@ class LibraryManager
                 continue;
             }
             // Use book type for scanner
-            $this->scanner->scan($libraryId, $path, 'book');
+            $added += $this->scanner->scan($libraryId, $path, 'book');
         }
 
-        $this->logger->info('Book library scan complete', ['library_id' => $libraryId]);
+        $this->logger->info('Book library scan complete', ['library_id' => $libraryId, 'added' => $added]);
+
+        return $added;
     }
 
     /**
@@ -683,12 +798,14 @@ class LibraryManager
      *
      * @param string $libraryId The library's unique identifier
      * @param LibraryRow $library The library data
-     * @return void
+     * @return int Number of items added (S96(b) — reaches `items_added`).
      *
      * @since 0.18.0
      */
-    private function scanAudiobookLibrary(string $libraryId, LibraryRow $library): void
+    private function scanAudiobookLibrary(string $libraryId, LibraryRow $library): int
     {
+        $added = 0;
+
         // Audiobook scanning is handled by AudiobookScanner for M4B chpl atom
         // chapter extraction and metadata harvesting.
         foreach ($library->paths as $path) {
@@ -697,10 +814,12 @@ class LibraryManager
                 continue;
             }
             // Use audiobook type for scanner
-            $this->scanner->scan($libraryId, $path, 'audiobook');
+            $added += $this->scanner->scan($libraryId, $path, 'audiobook');
         }
 
-        $this->logger->info('Audiobook library scan complete', ['library_id' => $libraryId]);
+        $this->logger->info('Audiobook library scan complete', ['library_id' => $libraryId, 'added' => $added]);
+
+        return $added;
     }
 
     /**
@@ -734,8 +853,13 @@ class LibraryManager
      *
      * @param string        $libraryId  The library's unique identifier
      * @param array<string> $paths      Ignored by the base manager (see above)
-     * @param callable|null $onProgress Optional `(processed, total, path)` sink
-     * @return ScanResult Result containing scan statistics
+     * @param callable|null $onProgress Optional `(processed, total, path, counts)` sink
+     * @return ScanResult Result containing scan statistics. ⚠ `added`/`updated` here
+     *         are ROW-COUNT DELTAS over every `media_items` type (so for music they
+     *         include artist and album container rows), unlike
+     *         {@see self::scanLibrary()}'s `added`, which is the scanner's own count
+     *         of new leaf items. `failed` is passed straight through from the inner
+     *         scan.
      *
      * @throws \InvalidArgumentException If the library does not exist
      */
@@ -758,7 +882,7 @@ class LibraryManager
         // NON-DESTRUCTIVE rescan: re-scan from the filesystem WITHOUT deleting
         // first. Surviving files keep their existing rows (and UUIDs) via the
         // scanner's upsert-by-path, so all cascading user data is preserved.
-        $this->scanLibrary($libraryId, $onProgress);
+        $scan = $this->scanLibrary($libraryId, $onProgress);
 
         // Prune only items whose source file is gone from disk, plus any now-empty
         // series/season containers — but ONLY when the library storage is actually
@@ -776,6 +900,10 @@ class LibraryManager
         $result->added = max(0, $after - $survivors);
         $result->updated = min($survivors, $after);
         $result->removed = $removed;
+        // S96(f): carried straight through from the inner scan — a rescan that
+        // skipped files must not report clean success just because the row-count
+        // deltas above happen to balance.
+        $result->failed = $scan->failed;
         $result->durationMs = (int) ((microtime(true) - $startTime) * 1000);
 
         return $result;

@@ -172,6 +172,38 @@ final class ManagedWorkersConfigTest extends TestCase
         }
     }
 
+    /**
+     * S96(c): `library-scan` MUST stay `count: 1`.
+     *
+     * {@see \Phlix\Media\Library\LibraryScanWorker::start()} calls
+     * {@see \Phlix\Media\Library\ScanJobRepository::reapStaleJobs()}, which fails EVERY
+     * `running` row in `library_scan_jobs` — no `library_id` filter, no age guard. That
+     * is correct for a single consumer (a row left `running` by a crash would otherwise
+     * spin the scan UI forever, which is the music-scan-hang incident) and WRONG the
+     * moment a second consumer exists: `start.php` calls `start()` once per fork, so
+     * `count: 2` has fork #2 fail fork #1's just-claimed job while its scan keeps
+     * running, silently, because nothing re-reads the job row mid-scan.
+     *
+     * The invariant used to live only in a code comment — and `config/process.php`
+     * actively asserted the opposite ("Running both run paths at once is SAFE"),
+     * reasoning from `claimNext()`'s atomicity, which says nothing about the reaper.
+     * This test is what makes raising the count fail out loud instead of quietly
+     * killing live scans.
+     */
+    public function test_library_scan_count_must_stay_one_for_the_unscoped_reaper(): void
+    {
+        $proc = $this->processConfig();
+
+        $this->assertArrayHasKey('library-scan', $proc);
+        $this->assertSame(
+            1,
+            $proc['library-scan']['count'] ?? null,
+            'library-scan must be count:1. LibraryScanWorker::start() reaps EVERY running scan job at '
+            . 'startup, so a second consumer fails the first one\'s in-flight job. Bounding that safely '
+            . 'needs per-job worker ownership (an owner id / heartbeat column), not a bigger count.',
+        );
+    }
+
     public function test_managed_worker_classes_exist_and_expose_start_int(): void
     {
         foreach ($this->managedWorkers() as $key => $class) {

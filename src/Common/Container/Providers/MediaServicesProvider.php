@@ -356,7 +356,18 @@ final class MediaServicesProvider implements ServiceProviderInterface
             // same shared EventDispatcher the plugins subscribe to (and the video
             // MediaScanner publishes on) is injected, so a track added by the
             // library-scan worker reaches the plugin listener.
+            //
+            // ⚠ S96(a) — `logger` IS THE ONE THAT COST FOUR WRONG DIAGNOSES. Omitting
+            // it here is exactly what sent every music-scan log line into
+            // `sys_get_temp_dir()/phlix_music_scanner_<uniqid>/music_scanner.log`
+            // inside the systemd unit's `PrivateTmp` (unreadable without nsenter,
+            // destroyed on restart, and one leaked directory per instantiation — 66 on
+            // production). The scanner no longer has that fallback at all, but this
+            // parameter must still be NAMED: PHP-DI skips defaulted optional ctor
+            // params, so without it the scanner would build its own MEDIA logger via
+            // LoggerFactory instead of sharing this container's instance.
             MusicLibraryScanner::class => autowire()
+                ->constructorParameter('logger', get('logger.media'))
                 ->constructorParameter('eventDispatcher', get(EventDispatcherInterface::class))
                 ->constructorParameter('ignorePatterns', get(ScanIgnorePatterns::class)),
 

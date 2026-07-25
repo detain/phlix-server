@@ -139,6 +139,59 @@ final class ScanJobRoundTripTest extends TestCase
         $this->assertSame($jobId, $history[0]['id']);
     }
 
+    /**
+     * S96(f): `items_failed` round-trips against the REAL migration-095 column.
+     *
+     * A mock cannot prove this — the column has to exist, be `INT UNSIGNED NOT NULL
+     * DEFAULT 0` (so an untouched row reads 0 rather than NULL), and accept both the
+     * throttled progress write and the authoritative final write. Mock-DB tests are
+     * exactly what hid this repo's earlier real-SQL defects.
+     *
+     * It also pins the reason the column exists: before it, a scan that skipped files
+     * had NOWHERE to say so. `ScanResult` had no failure field, the job row had no
+     * counter, and the scanner's `logger->error` went into the unit's `PrivateTmp`.
+     */
+    public function testItemsFailedRoundTripsThroughProgressAndCompletion(): void
+    {
+        $this->assertNotNull($this->db);
+        $repo = new ScanJobRepository($this->db);
+
+        $jobId = $repo->enqueue($this->libraryId, 'scan');
+        $fresh = $repo->findById($jobId);
+        $this->assertIsArray($fresh);
+        $this->assertSame(0, $fresh['items_failed'], 'a brand-new job row must read 0, never NULL');
+
+        // Mid-scan: the throttled sink writes the live counters.
+        $repo->updateProgress($jobId, [
+            'items_found'   => 80,
+            'items_updated' => 25,
+            'items_added'   => 20,
+            'items_failed'  => 1,
+        ], '/tmp/phlix-scanjob-test/track.flac');
+
+        $mid = $repo->findById($jobId);
+        $this->assertIsArray($mid);
+        $this->assertSame(20, $mid['items_added'], 'items_added must be truthful DURING the scan');
+        $this->assertSame(1, $mid['items_failed']);
+
+        // Completion: the authoritative final values via markCompleted()'s
+        // $finalCounts — a parameter that had no caller at all before S96.
+        $repo->markCompleted($jobId, ['items_added' => 77, 'items_failed' => 3, 'items_removed' => 2]);
+
+        $done = $repo->findById($jobId);
+        $this->assertIsArray($done);
+        $this->assertSame('completed', $done['status']);
+        $this->assertSame(77, $done['items_added']);
+        $this->assertSame(3, $done['items_failed']);
+        $this->assertSame(2, $done['items_removed']);
+        $this->assertSame(
+            25,
+            $done['items_updated'],
+            'items_updated is the PROGRESS numerator and must be left exactly as the sink wrote it — '
+            . 'writing a semantic "updated items" count here would collapse the UI percentage at completion',
+        );
+    }
+
     private function isMysqlReachable(string $host, int $port): bool
     {
         $sock = @fsockopen($host, $port, $errno, $errstr, 1.0);

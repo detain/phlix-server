@@ -1,0 +1,47 @@
+-- Migration 095: add `library_scan_jobs.items_failed`.
+--
+-- WHY (S96(f) - live investigation): a partially-failed scan reported clean
+-- success everywhere an operator can look. `ScanResult` had no failure field, so
+-- `POST /api/v1/music/scan` could not report one; the job row had no failed-file
+-- counter, so neither could the admin scan-status endpoint; and the scanner's own
+-- `logger->error('Skipping track after error during indexing')` went into a
+-- `sys_get_temp_dir()` directory INSIDE the phlix-server unit's `PrivateTmp` -
+-- unreadable without nsenter-ing the MainPID, and destroyed on restart (that is
+-- S96(a), fixed in the same step).
+--
+-- Measured before the fix, faulting the 2nd `INSERT INTO music_tracks` of a
+-- 4-track album: `ScanResult: scanned=4 added=3 updated=0` with `music_tracks=3`,
+-- `total_tracks=3` and ZERO mismatches - i.e. the database was perfectly
+-- self-consistent while the library was one file short. S95 is what made it that
+-- silent: before its `finally` recomputed `music_albums.total_tracks` from the rows
+-- that really exist, the same failure left `total_tracks=0` against non-zero track
+-- rows, which was wrong but at least DB-VISIBLE. This column restores a signal.
+--
+-- SEMANTICS: files a scan could not index because something threw or a write
+-- failed. NOT files a scan policy deliberately skipped (hidden files,
+-- `scanner.ignore_patterns`, a non-audio extension, the scanner's unknown-artist
+-- rule) - those never reach the counter, and the unknown-artist tally is reported
+-- in the scan-completion log line instead. Exposure is bounded to ONE scan cycle
+-- (the next clean scan re-adds the file), so a non-zero value is an observability
+-- signal, not a data-loss alarm.
+--
+-- SHAPE: mirrors the four existing counters from migration 027 exactly -
+-- `INT UNSIGNED NOT NULL DEFAULT 0` - so every already-stored row reads 0 and no
+-- consumer of the row shape can break on a NULL.
+--
+-- IDEMPOTENT: MySQL 8.0 has no `ADD COLUMN IF NOT EXISTS`, but the migration
+-- runner downgrades duplicate-column (error 1060) to an "already applied" note
+-- (see MigrationRunner::isAlreadyAppliedNote), so replaying this file is safe.
+--
+-- CONSUMERS: `ScanJobRepository::COUNTER_COLUMNS` + `::decodeRow()` (the write and
+-- read halves), fed from `ScanResult::$failed` via
+-- `LibraryScanWorker::scanProgressSink()` (live, throttled) and
+-- `ScanJobRepository::markCompleted()` (authoritative final value).
+--
+-- NOTE: keep this statement free of semicolons inside string literals. The
+-- migration runner strips comments then splits on `;`.
+
+ALTER TABLE `library_scan_jobs`
+    ADD COLUMN `items_failed` INT UNSIGNED NOT NULL DEFAULT 0
+        COMMENT 'files the scan could not index (errors only, not policy skips)'
+        AFTER `items_removed`;

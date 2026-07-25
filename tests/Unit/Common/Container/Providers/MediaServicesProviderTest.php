@@ -14,6 +14,7 @@ use Phlix\Media\Markers\MarkerService;
 use Phlix\Media\Markers\PlaybackMarkerService;
 use Phlix\Media\Metadata\MetadataManager;
 use Phlix\Media\Metadata\Resolution\PriorityConfig;
+use Phlix\Media\Music\MusicLibraryScanner;
 use Phlix\Media\Streaming\HlsStreamer;
 use Phlix\Media\Streaming\QualitySelector;
 use Phlix\Playlists\SmartPlaylistController;
@@ -90,6 +91,45 @@ final class MediaServicesProviderTest extends TestCase
 
         // Verify the binding chain: PlaybackMarkerService -> MarkerService -> MarkerCandidateRepository -> ItemRepository
         $this->assertTrue($container->has(ItemRepository::class));
+    }
+
+    /**
+     * S96(a): the music scanner's `logger` constructor parameter MUST be named in the
+     * container definition.
+     *
+     * PHP-DI SKIPS defaulted optional constructor parameters during autowiring, so
+     * omitting this is what made every music-scan log line land in
+     * `sys_get_temp_dir()/phlix_music_scanner_<uniqid>/music_scanner.log` — inside the
+     * `phlix-server` unit's `PrivateTmp`, unreadable without `nsenter`-ing the MainPID,
+     * destroyed on restart, and leaking one directory per instantiation (66 counted on
+     * production). That invisible log is the direct reason the empty Music library
+     * survived four wrong diagnoses.
+     *
+     * `has()` cannot catch this — the entry exists either way — so this asserts the
+     * DEFINITION, which is the only thing that differs. `eventDispatcher` and
+     * `ignorePatterns` are asserted alongside it because they are the same
+     * skipped-optional-parameter trap and the class docblock pins all three.
+     */
+    public function test_music_scanner_definition_names_the_media_logger(): void
+    {
+        $builder = new ContainerBuilder();
+        $builder->useAutowiring(true);
+
+        (new MediaServicesProvider())->register($builder, []);
+
+        $container = $builder->build();
+        $this->assertTrue($container->has(MusicLibraryScanner::class));
+
+        $definition = $container->debugEntry(MusicLibraryScanner::class);
+
+        $this->assertStringContainsString(
+            '$logger = get(logger.media)',
+            $definition,
+            'MusicLibraryScanner must be wired to the shared MEDIA-channel logger. Without the named '
+            . 'parameter PHP-DI skips it, and the scanner logs where no operator can read it (S96(a)).',
+        );
+        $this->assertStringContainsString('$eventDispatcher = get(', $definition);
+        $this->assertStringContainsString('$ignorePatterns = get(', $definition);
     }
 
     /**

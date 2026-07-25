@@ -2328,7 +2328,8 @@ final class MusicLibraryScannerTest extends TestCase
     }
 
     /**
-     * A backfill UPDATE that wrote nothing must NOT be reported as a heal.
+     * A backfill UPDATE that wrote nothing must NOT be reported as a heal — on BOTH of the
+     * guard's arms, and the FIRST scenario is the only one production can actually reach.
      *
      * Review r3 finding 4: `backfillMusicMediaItemId()`'s guard was
      * `$affected === false || (is_int($affected) && $affected < 1)` — written before the
@@ -2336,33 +2337,143 @@ final class MusicLibraryScannerTest extends TestCase
      * `null === false` is false and `is_int(null)` is false, so a `null` fell through to
      * `$referenced = true` and logged *"Backfilled a NULL media_item_id on a music row"* at
      * `info` for a row that is still NULL. That is the inverse of the r2 HIGH finding (a
-     * success reported for work that did not happen) in the same file, and it is reachable
-     * today by any test that hands the scanner a bare `createMock(Connection::class)`, whose
-     * default `query()` return is `null`.
+     * success reported for work that did not happen) in the same file.
+     *
+     * ⚠ **Review r4: fix r3 pinned only the arm real MySQL CANNOT return here.** It armed
+     * the double with `null`, which is the measured 0-row shape for an **INSERT** and for
+     * nothing else — `Connection::query()` returns `rowCount()` for a statement whose
+     * leading keyword is `update`, so this statement's "wrote nothing" is **`int 0`**
+     * (measured r4: guard-excluded row → `int 0`, healable row → `int 1`, re-run → `int 0`,
+     * matched-but-unchanged → `int 0`, bad column → THROWS). With only the `null` arm
+     * pinned, deleting `|| (is_int($affected) && $affected < 1)` from
+     * `MusicLibraryScanner.php:1644` left the FULL suite byte-identical to baseline,
+     * assertion count included. Scenario (A) below is that pin; scenario (B) keeps the
+     * `null` arm, honestly labelled as defence-in-depth against the two doubles that DO
+     * return `null` for an UPDATE.
      */
     public function testABackfillUpdateThatWroteNothingIsNotReportedAsHealed(): void
     {
-        [$dir, $tagger] = $this->oneAlbumFixture(1, 'Null Update Artist', 'Some Album');
+        // (A) THE PRODUCTION-REACHABLE ARM. The client reports "wrote nothing" for an
+        //     UPDATE as an affected-row count of 0 — measured, not assumed — which reaches
+        //     the guard's `is_int($affected) && $affected < 1` half and nothing else.
+        [$dir, $tagger] = $this->oneAlbumFixture(1, 'Zero Rows Artist', 'Some Album');
 
         $db = new MusicSchemaConnection();
-        $db->plantArtistWithNullMediaItem('Null Update Artist');
-        // The UPDATE reports "wrote nothing" the way the real client does.
-        $db->returnNullFor('UPDATE music_artists SET media_item_id');
+        $db->plantArtistWithNullMediaItem('Zero Rows Artist');
+        $db->returnAffectedRowsFor('UPDATE music_artists SET media_item_id', 0);
 
         $logger = new LogWriteFailureLogger();
         $this->taggedScanner($db, $tagger, $logger)->scanDirectory($dir, null, 'lib-s96');
 
         $this->assertNull(
-            $db->artists['null update artist']['media_item_id'],
-            'the row really is still NULL — the UPDATE wrote nothing',
+            $db->artists['zero rows artist']['media_item_id'],
+            'the row really is still NULL — the UPDATE matched 0 rows',
         );
         $this->assertSame(
             0,
             $logger->countMessages('Backfilled a NULL media_item_id on a music row'),
-            'so nothing may claim it was healed. 1 here is the permissive-direction defect: an `info` '
-            . 'line asserting a repair that did not happen, which is worse than silence because it '
-            . 'sends the next operator looking somewhere else',
+            'so nothing may claim it was healed. 1 here means the `is_int($affected) && $affected < 1` '
+            . 'half of the guard is gone — the ONLY half a real UPDATE can trip — and every row the '
+            . '`AND media_item_id IS NULL` predicate excludes now gets a false `info` heal line',
         );
+
+        // (B) DEFENCE IN DEPTH, NOT THE REAL CLIENT. `null` is unreachable for this
+        //     statement (see returnNullFor()'s per-keyword table), but a bare
+        //     `createMock(Connection::class)` returns it for every method and
+        //     `Connection.php:1866` returns it for any unrecognised leading keyword, so
+        //     `statementWroteNothing()` must still catch it here.
+        [$dirB, $taggerB] = $this->oneAlbumFixture(1, 'Null Update Artist', 'Some Album');
+
+        $dbB = new MusicSchemaConnection();
+        $dbB->plantArtistWithNullMediaItem('Null Update Artist');
+        $dbB->returnNullFor('UPDATE music_artists SET media_item_id');
+
+        $loggerB = new LogWriteFailureLogger();
+        $this->taggedScanner($dbB, $taggerB, $loggerB)->scanDirectory($dirB, null, 'lib-s96');
+
+        $this->assertNull(
+            $dbB->artists['null update artist']['media_item_id'],
+            'the row really is still NULL — the UPDATE wrote nothing',
+        );
+        $this->assertSame(
+            0,
+            $loggerB->countMessages('Backfilled a NULL media_item_id on a music row'),
+            'and a `null` from a bare mock must not be read as a heal either — this is the arm '
+            . '`statementWroteNothing()` contributes at this site',
+        );
+    }
+
+    /**
+     * The double's `query()` must return what the REAL client returns FOR THAT KEYWORD.
+     *
+     * Review r4's finding was not a production defect — it was a double that modelled the
+     * INSERT contract on an UPDATE, so the arm production really takes was pinned by
+     * nothing. That is the third occurrence of the same class in this step (r3 MED-1: the
+     * double could only produce `false`; fix r3: the doubles learned `null` — then armed
+     * `null` on an UPDATE too), and the reason it keeps recurring is that the return domain
+     * is a property of the STATEMENT KEYWORD, not of the client. So the mapping is asserted
+     * directly, per keyword, rather than left to the next reader to infer:
+     *
+     * | keyword | `Connection::query()` (`vendor/workerman/mysql/src/Connection.php:1854-1869`) |
+     * |---|---|
+     * | `select`/`show` | `fetchAll()` → a `list` |
+     * | `insert` | `lastInsertId()` as a STRING, or `null` when `rowCount() === 0` |
+     * | `update`/`delete`/`replace` | `rowCount()` → an `int` |
+     * | anything else | `null` |
+     *
+     * All four rows were measured against real MySQL 8.0.46 through `PhlixMySQLConnection`
+     * (reviews r3/r4). The last assertion is the structural half: the double now REFUSES to
+     * be armed with an affected-row count for a keyword that cannot report one, so the r4
+     * defect cannot be written in the opposite direction either.
+     */
+    public function testTheSchemaDoubleModelsTheClientsPerKeywordReturnDomain(): void
+    {
+        $db = new MusicSchemaConnection();
+
+        $this->assertIsArray(
+            $db->query('SELECT id FROM music_artists WHERE name = ?', ['nobody']),
+            'a SELECT returns fetchAll() — a list, empty when nothing matched, never null',
+        );
+        $this->assertIsString(
+            $db->query(
+                'INSERT INTO music_artists (name, media_item_id, created_at) VALUES (?, ?, NOW())',
+                ['Keyword Contract Artist', null],
+            ),
+            'a 1-row INSERT returns lastInsertId() as a STRING (int 1 was fix-r3 finding 1)',
+        );
+        $this->assertIsInt(
+            $db->query('UPDATE music_artists SET media_item_id = ? WHERE id = ? AND media_item_id IS NULL', [
+                'mi-keyword-contract',
+                1,
+            ]),
+            'an UPDATE returns rowCount() — an INT. This is the row fix r3 got wrong: it armed the '
+            . 'INSERT contract (null) on an UPDATE, so the int-0 arm production really takes was '
+            . 'exercised by nothing in the repo',
+        );
+
+        $armed = new MusicSchemaConnection();
+        $armed->returnAffectedRowsFor('UPDATE music_artists SET media_item_id', 0);
+        $this->assertSame(
+            0,
+            $armed->query('UPDATE music_artists SET media_item_id = ? WHERE id = ?', ['mi-x', 1]),
+            'and the armed "wrote nothing" value for an UPDATE is int 0, not null',
+        );
+
+        // No assertion inside the try — the outcome is asserted afterwards, so nothing can
+        // be swallowed by the catch.
+        $rejected = null;
+        try {
+            $armed->returnAffectedRowsFor('INSERT INTO music_tracks', 0);
+        } catch (\InvalidArgumentException $e) {
+            $rejected = $e->getMessage();
+        }
+
+        $this->assertIsString(
+            $rejected,
+            'the double must REFUSE an affected-row count for an INSERT: that arm would model a shape '
+            . 'the client cannot produce, which is review r4\'s finding written the other way round',
+        );
+        $this->assertStringContainsString('does NOT report an affected-row count', $rejected);
     }
 
     /**
@@ -2622,6 +2733,12 @@ final class MusicSchemaConnection extends Connection
     /** @var list<string> Statement substrings whose query() returns NULL (see returnNullFor()). */
     private array $nullOn = [];
 
+    /**
+     * @var list<array{needle:string, affected:int}> Statement substrings whose query()
+     *      returns an AFFECTED-ROW COUNT (see returnAffectedRowsFor()).
+     */
+    private array $affectedOn = [];
+
     private int $autoInc = 0;
 
     private int $uuid = 0;
@@ -2665,7 +2782,8 @@ final class MusicSchemaConnection extends Connection
     /**
      * Make every statement containing `$needle` return **`null`** instead of throwing.
      *
-     * ⚠ **THIS IS THE ONE THAT MODELS THE REAL CLIENT (review r3 finding 1).**
+     * ⚠ **THIS IS THE ONE THAT MODELS THE REAL CLIENT FOR AN `INSERT` — AND ONLY FOR AN
+     * `INSERT` (review r3 finding 1, narrowed by review r4).**
      * `MusicLibraryScanner::statementWroteNothing()`'s measured contract (real MySQL
      * 8.0.46 through `PhlixMySQLConnection`) is three-outcome: a 1-row INSERT returns
      * `lastInsertId()` **as a string**, a 0-row INSERT returns **`null`**, and any real
@@ -2677,12 +2795,78 @@ final class MusicSchemaConnection extends Connection
      * baseline. The mocks were still modelling the OLD, unreachable `=== false` contract
      * that the fix had replaced.
      *
+     * ⚠ **THE RETURN DOMAIN IS PER STATEMENT KEYWORD, NOT PER CLIENT (review r4).** Fix r3
+     * transplanted the INSERT contract onto an **UPDATE**, where it does not hold, and the
+     * arm that UPDATE really produces was left dead in test. `Connection::query()`
+     * (`vendor/workerman/mysql/src/Connection.php:1854-1869`) `trim()`s the SQL, lowercases
+     * the leading word and branches on it — so:
+     *
+     * | leading keyword | driver call | "wrote nothing" is | arm it with |
+     * |---|---|---|---|
+     * | `insert` | `lastInsertId()` (only when `rowCount() > 0`) | **`null`** | `returnNullFor()` |
+     * | `update`, `delete`, `replace` | `rowCount()` | **`int 0`** | {@see self::returnAffectedRowsFor()} |
+     * | `select`, `show` | `fetchAll()` | — (a `list`, or THROWS) | the `runSelect()` handlers |
+     * | anything else | — | **`null`**, indistinguishable from a no-op | `returnNullFor()` |
+     *
+     * So arming `returnNullFor()` on an `UPDATE`/`DELETE`/`REPLACE` needle models **no real
+     * MySQL outcome at all** — measured at review r4: 0 rows matched → `int 0`, 1 row
+     * matched → `int 1`, 1 row matched but unchanged → `int 0`, bad column → THROWS. It is
+     * still worth pinning as DEFENCE-IN-DEPTH, because two doubles in this repo do return
+     * `null` for an UPDATE — a bare `createMock(Connection::class)` (its default return for
+     * every method) and the keyword-miss branch at `Connection.php:1866` — and production
+     * must treat both as "not applied". Label it that way when you use it; do not call it
+     * the real client's behaviour.
+     *
      * `returnFalseFor()` stays — it is what r2's S3/S4 scenarios model and it keeps the
      * `false` arm (a different client / a bare PHPUnit mock) pinned independently.
      */
     public function returnNullFor(string $needle): void
     {
         $this->nullOn[] = $needle;
+    }
+
+    /**
+     * Make every statement containing `$needle` return an **affected-row count** —
+     * the shape the real client returns for `UPDATE`/`DELETE`/`REPLACE`.
+     *
+     * ⚠ **`$affected = 0` IS "WROTE NOTHING" FOR THESE KEYWORDS, and it is the ONLY
+     * production-reachable way to say so (review r4).** Measured against real MySQL 8.0.46
+     * through `PhlixMySQLConnection`, for the scanner's verbatim backfill statement
+     * `UPDATE music_artists SET media_item_id = ? WHERE id = ? AND media_item_id IS NULL`:
+     * the row the `AND media_item_id IS NULL` guard excludes → **`int 0`**, a row it lets
+     * through → `int 1`, a re-run of the same statement → `int 0` again, a matched row whose
+     * value does not change → `int 0`, an unknown column → THROWS. `null` never appears.
+     * Before this arm existed, `backfillMusicMediaItemId()`'s only pinned outcome was the
+     * `null` one, so deleting `|| (is_int($affected) && $affected < 1)` from
+     * `MusicLibraryScanner.php:1644` — the half that actually fires in production — left the
+     * FULL suite byte-identical to baseline, assertion count included.
+     *
+     * Returns BEFORE the table handlers, exactly like {@see self::returnNullFor()}, so the
+     * in-memory row is not mutated either — which is what "affected 0 rows" means.
+     *
+     * @param string $needle   Statement substring to arm.
+     * @param int    $affected The `rowCount()` the client should report.
+     *
+     * @throws \InvalidArgumentException When `$needle` starts with a keyword whose real
+     *         return domain is NOT an affected-row count. Deliberately narrow: it can only
+     *         judge a needle that begins with the statement keyword (which every needle in
+     *         this file does), and its whole job is to stop the r4 defect being written in
+     *         the opposite direction.
+     */
+    public function returnAffectedRowsFor(string $needle, int $affected): void
+    {
+        $keyword = strtolower(strtok(ltrim($needle), " \t\n") ?: '');
+        if (in_array($keyword, ['insert', 'select', 'show'], true)) {
+            throw new \InvalidArgumentException(sprintf(
+                'A %s does NOT report an affected-row count: Connection::query() returns %s for it. '
+                . 'Use returnNullFor()/the runSelect() handlers instead — see returnNullFor()\'s '
+                . 'per-keyword table.',
+                strtoupper($keyword),
+                $keyword === 'insert' ? 'lastInsertId() as a string, or null when it wrote nothing' : 'fetchAll()',
+            ));
+        }
+
+        $this->affectedOn[] = ['needle' => $needle, 'affected' => $affected];
     }
 
     /**
@@ -2802,7 +2986,8 @@ final class MusicSchemaConnection extends Connection
      * @param int $fetchmode PDO fetch mode (unused).
      * @return array<int, mixed>|int|string|false|null Rows for SELECT, the insert id as a
      *         STRING for an INSERT (`'0'` for `media_items` — UUID PK, no AUTO_INCREMENT),
-     *         an affected-row count for an UPDATE, `false` when
+     *         an affected-row count for an UPDATE — armable via
+     *         {@see self::returnAffectedRowsFor()} — `false` when
      *         {@see self::returnFalseFor()} armed this statement, or `null` when
      *         {@see self::returnNullFor()} did.
      */
@@ -2821,12 +3006,21 @@ final class MusicSchemaConnection extends Connection
             }
         }
 
-        // The REAL "wrote nothing" signal — checked before the table handlers so the
-        // in-memory row is not written either, exactly like a statement that affected
-        // zero rows. See returnNullFor() for why this arm has to exist.
+        // The real "wrote nothing" signal FOR AN INSERT — checked before the table
+        // handlers so the in-memory row is not written either, exactly like a statement
+        // that affected zero rows. See returnNullFor() for why this arm has to exist and
+        // for the keywords it does NOT model.
         foreach ($this->nullOn as $needle) {
             if (str_contains($sql, $needle)) {
                 return null;
+            }
+        }
+
+        // The real "wrote nothing" signal for an UPDATE/DELETE/REPLACE: an affected-row
+        // count of 0. Same placement, same reason. See returnAffectedRowsFor().
+        foreach ($this->affectedOn as $armed) {
+            if (str_contains($sql, $armed['needle'])) {
+                return $armed['affected'];
             }
         }
 

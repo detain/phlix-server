@@ -288,6 +288,19 @@ class MusicLibraryScanner
      * an `AUTO_INCREMENT` table — so the `'0'` warning above is falsifiable on a DB-less
      * box too, not only against real MySQL.
      *
+     * ⚠ **THE THREE-OUTCOME TABLE ABOVE IS THE `INSERT` CONTRACT. IT IS NOT THE ONLY
+     * CONTRACT (review r4).** `Connection::query()` picks its return by the statement's
+     * leading keyword (`vendor/workerman/mysql/src/Connection.php:1854-1869`): `insert` →
+     * `lastInsertId()`/`null`, `update`/`delete`/`replace` → `rowCount()` (an **int**, `0`
+     * for "wrote nothing"), `select`/`show` → `fetchAll()`, anything else → `null`. Five of
+     * this helper's six call sites are insert results; the sixth
+     * ({@see self::backfillMusicMediaItemId()}, the `UPDATE … SET media_item_id`) is an
+     * UPDATE, where **`null` is unreachable** and the `is_int($affected) && $affected < 1`
+     * half of that site's guard is the only half production can trip. The helper is still
+     * correct there (a bare `createMock(Connection::class)` really does return `null` for
+     * every method), but it is NOT sufficient on its own — see the comment at that site.
+     * Assume nothing about a keyword you have not measured.
+     *
      * ⚠ **Six OTHER sites in `src/` consume an insert result with the same `=== false`
      * check this replaced, and they are NOT fixed here** — `StreamSessionService`,
      * `DbLoginRateLimitStore`, `DbOidcStateStore`, `DbOAuth2StateStore`,
@@ -1637,10 +1650,24 @@ class MusicLibraryScanner
             // PERMISSIVE direction: `null === false` is false and `is_int(null)` is false,
             // so a `null` fell straight through to `$referenced = true` and logged
             // "Backfilled a NULL media_item_id" at `info` for a heal that never happened —
-            // the exact inverse of the r2 HIGH finding, on the same file. The `is_int(...)`
-            // half stays because an UPDATE reports its AFFECTED-ROW count as an int, and 0
-            // there means "the `AND media_item_id IS NULL` guard excluded the row", which is
-            // also "not applied".
+            // the exact inverse of the r2 HIGH finding, on the same file.
+            //
+            // ⚠ **DO NOT DELETE THE `is_int(...)` HALF AS REDUNDANT — IT IS THE ONLY HALF
+            // THIS STATEMENT CAN REACH (review r4).** The return domain is per statement
+            // KEYWORD: `Connection::query()` returns `rowCount()` when the leading keyword
+            // is `update` (`vendor/workerman/mysql/src/Connection.php:1859-1860`, after
+            // `trim()` at `:1835`), so this UPDATE reports "wrote nothing" as **`int 0`**,
+            // never `null`. Measured against real MySQL 8.0.46: the row the
+            // `AND media_item_id IS NULL` predicate excludes → `int 0`; a row it lets
+            // through → `int 1`; a re-run → `int 0`; a matched row whose value does not
+            // change → `int 0`; an unknown column → THROWS. `statementWroteNothing()` still
+            // earns its place as defence-in-depth — a bare `createMock(Connection::class)`
+            // and the keyword-miss branch at `Connection.php:1866` both hand back `null` —
+            // but deleting the int half restores a false `info` heal on every row the
+            // predicate excludes. BOTH arms are pinned, each on its own, by
+            // `MusicLibraryScannerTest::testABackfillUpdateThatWroteNothingIsNotReportedAsHealed()`
+            // (scenario (A) = `int 0`, scenario (B) = `null`); the per-keyword table itself is
+            // pinned by `…::testTheSchemaDoubleModelsTheClientsPerKeywordReturnDomain()`.
             if (self::statementWroteNothing($affected) || (is_int($affected) && $affected < 1)) {
                 // Not applied — either the statement wrote nothing or another writer got
                 // there first. Report NULL and let the next scan try again.

@@ -538,6 +538,8 @@ class LibraryManagerTest extends TestCase
                             'duration_seconds' => 7200,
                             'overview' => 'provider synopsis',
                             'poster_url' => 'https://image.tmdb.org/p.jpg',
+                            'backdrop_url' => 'https://image.tmdb.org/t/p/w500/bg.jpg',
+                            'backdrop_srcset' => '/api/v1/artwork/i1/bg-780.jpg 780w',
                             'genres' => ['Action'],
                             'official_rating' => 'PG-13',
                             'cast' => ['Somebody'],
@@ -577,8 +579,23 @@ class LibraryManagerTest extends TestCase
         $meta = $captured['i1']['metadata_json'];
         $this->assertIsArray($meta);
 
-        // Provider fields stripped.
-        foreach (['overview', 'poster_url', 'genres', 'official_rating', 'cast', 'vote_average', 'still_url'] as $k) {
+        // Provider fields stripped. `backdrop_srcset` is in the list on purpose:
+        // MediaItemShaper::shape() PREFERS a stored srcset over deriving one, so
+        // stripping `backdrop_url` while leaving it behind would emit a null
+        // `backdrop_url` beside a live srcset pointing at artwork `clear_artwork`
+        // may already have deleted (and per HTML a bare `srcset` is honoured).
+        $stripped = [
+            'overview',
+            'poster_url',
+            'backdrop_url',
+            'backdrop_srcset',
+            'genres',
+            'official_rating',
+            'cast',
+            'vote_average',
+            'still_url',
+        ];
+        foreach ($stripped as $k) {
             $this->assertArrayNotHasKey($k, $meta, "provider key {$k} should be stripped");
         }
         // Filesystem/probe-derived basics preserved.

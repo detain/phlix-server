@@ -88,6 +88,15 @@ final class MediaItemShaper
     private const UNSAFE_URL_CHARS = "\"'<>`\\";
 
     /**
+     * A srcset candidate descriptor: a width (`780w`) or a pixel density (`2x`,
+     * `1.5x`). Those are the ONLY two forms the HTML spec allows, so anything else
+     * in the descriptor slot is markup or garbage. Enforced by
+     * {@see self::safeImageSrcset()}, which validates the descriptor half of every
+     * candidate as well as the URL half.
+     */
+    private const SRCSET_DESCRIPTOR = '/^(?:\d+w|\d+(?:\.\d+)?x)$/';
+
+    /**
      * Shapes a raw media item row into the media-item schema format.
      *
      * @param array<string, mixed> $item Raw hydrated media item (with parsed `metadata`).
@@ -296,9 +305,15 @@ final class MediaItemShaper
         $merged['studio'] = is_string($metadata['studio'] ?? null) && $metadata['studio'] !== ''
             ? $metadata['studio']
             : null;
-        $backdropUrl = is_string($metadata['backdrop_url'] ?? null) && $metadata['backdrop_url'] !== ''
-            ? $metadata['backdrop_url']
-            : null;
+        // Same scheme allowlist as the list shape (shape():174). The detail page is
+        // where this value is actually painted as a full-bleed background AND a
+        // hero `<img>`, and it is fanned out into `backdrop_url_large` (width-swapped
+        // to `/original`) plus THREE srcset candidates — so an unvalidated
+        // `javascript:`/`data:` URI or an attribute-breakout payload here is a wider
+        // surface than the list one, not a narrower one. safeImageUrl() is the
+        // identity function on every URL that passes, so every legitimate row is
+        // value-identical to before.
+        $backdropUrl = self::safeImageUrl($metadata['backdrop_url'] ?? null);
         // Re-mint the signature on the way out (same expiry fix as poster_url in
         // shape()): a locally-cached backdrop is a signed `/api/v1/artwork/{id}?size=…`
         // URL stored at scan time whose token is expired hours later — authless
@@ -542,6 +557,20 @@ final class MediaItemShaper
      * leading space and return null. Browsers trim whitespace in `src`, so nothing
      * visibly broke — the srcset just disappeared.
      *
+     * TWO things a future author must know about that trim:
+     *
+     *  - It uses PHP's DEFAULT charlist, `" \t\n\r\0\x0B"` — so an edge NUL or
+     *    vertical tab is SILENTLY STRIPPED, not rejected. {@see self::safeImageUrl()}
+     *    therefore screens those two bytes off BEFORE calling this helper, so its
+     *    "any control byte → null" contract stays literally true.
+     *  - Only the READ path trims. The write path deliberately does not
+     *    ({@see MetadataValue::asNullableString()} returns the value verbatim), so
+     *    a stored value and its shaped value can differ by padding. That is safe
+     *    ONLY because nothing in this repo compares a stored `metadata_json` value
+     *    against a shaped one, and no shaped value is ever persisted — every
+     *    {@see MediaItemShaper} call site is a response builder. Do not add such a
+     *    comparison without trimming on both sides.
+     *
      * @param mixed $value Raw value.
      * @return string|null Trimmed non-empty string, or null.
      */
@@ -576,11 +605,25 @@ final class MediaItemShaper
      * control byte (raw newlines/tabs are the classic `jav&#x0a;ascript:`
      * obfuscation, and browsers strip them before parsing the scheme).
      *
+     * "Anything carrying a control byte" is EXACT, and that is why the control-byte
+     * screen below happens in two steps. Leading/trailing SPACE/TAB/CR/LF are the
+     * only tolerated padding and are stripped by {@see self::nonemptyString()} —
+     * but PHP's default `trim()` charlist ALSO eats `"\0"` and `"\x0B"`, so
+     * `"https://x/a.jpg\0"` would be silently sanitised into an accepted URL and
+     * the post-trim `[\x00-\x1f\x7f]` check would never see the NUL. Every control
+     * byte OTHER than those four padding bytes is therefore rejected up front, on
+     * the RAW value, before any trimming happens.
+     *
      * @param mixed $value Raw metadata image-URL value.
      * @return string|null The trimmed URL when it passes, else null.
      */
     private static function safeImageUrl(mixed $value): ?string
     {
+        // Pre-trim: any control byte except the SPACE/TAB/CR/LF padding that
+        // nonemptyString() is allowed to strip (see the docblock).
+        if (is_string($value) && preg_match('/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/', $value) === 1) {
+            return null;
+        }
         $url = self::nonemptyString($value);
         if ($url === null) {
             return null;
@@ -600,16 +643,34 @@ final class MediaItemShaper
     }
 
     /**
-     * Filter a stored `srcset` value to one whose every candidate URL passes
-     * {@see self::safeImageUrl()}, or null.
+     * Filter a stored `srcset` value to one built ONLY from validated bytes, or
+     * null.
      *
-     * A stored srcset is emitted verbatim on every row, so it gets the same
-     * allowlist as the single URL. ONE unsafe candidate rejects the WHOLE value —
-     * the caller then derives a ladder or emits null — rather than shipping a
-     * half-sanitised srcset.
+     * A stored srcset lands in an HTML attribute on every row, so BOTH halves of
+     * every `"<url> <descriptor>"` candidate are checked: the URL against
+     * {@see self::safeImageUrl()} (scheme allowlist + breakout characters +
+     * control bytes) and the descriptor against {@see self::SRCSET_DESCRIPTOR}.
+     * Validating the URL alone is NOT enough — `strrpos()`-style splitting hands
+     * everything after the last space back untouched, so a space-free payload
+     * parked in the descriptor slot (`…/bg.jpg 780w"><svg/onload=alert(1)>`) would
+     * ride through while the otherwise-identical payload that happens to contain a
+     * space is caught. Whether an injection is blocked must not depend on its
+     * spacing.
+     *
+     * The return value is therefore RECONSTRUCTED — `implode(', ')` over
+     * `$url . ' ' . $descriptor` pairs that each passed a check — never the raw
+     * input string. Nothing unvalidated can survive, and a URL carrying an
+     * INTERIOR space (`…/bg jpg 780w`, which a browser would read as one URL plus
+     * TWO descriptors — the malformed shape
+     * {@see \Phlix\Media\Metadata\BackdropSrcset::parse()} guards on the derived
+     * path) splits into three tokens and is rejected.
+     *
+     * ONE bad candidate rejects the WHOLE value — the caller then derives a ladder
+     * or emits null — rather than shipping a half-sanitised srcset whose advertised
+     * width ladder silently depends on which candidates were poisoned.
      *
      * @param mixed $value Raw stored srcset value.
-     * @return string|null The trimmed srcset when every candidate is safe, else null.
+     * @return string|null The re-imploded srcset when every candidate is safe, else null.
      */
     private static function safeImageSrcset(mixed $value): ?string
     {
@@ -618,22 +679,35 @@ final class MediaItemShaper
             return null;
         }
 
+        $safe = [];
         foreach (explode(',', $srcset) as $candidate) {
             $candidate = trim($candidate);
             if ($candidate === '') {
                 return null;
             }
-            // `"<url> <descriptor>"` — a srcset URL carries no space, so the
-            // descriptor is the trailing token (the same split
-            // {@see SignedUrl::refreshArtworkSrcset()} uses). A bare URL is fine.
-            $space = strrpos($candidate, ' ');
-            $url = $space === false ? $candidate : substr($candidate, 0, $space);
-            if (self::safeImageUrl($url) === null) {
+            // `"<url> <descriptor>"`, or a bare URL (legal per the HTML spec). A
+            // srcset URL can carry no whitespace at all, so a candidate splits
+            // into AT MOST two tokens; three means an interior space in the URL
+            // or a second descriptor, and both are malformed.
+            $parts = preg_split('/\s+/', $candidate);
+            if ($parts === false || count($parts) > 2) {
                 return null;
             }
+            $url = self::safeImageUrl($parts[0]);
+            if ($url === null) {
+                return null;
+            }
+            if (!isset($parts[1])) {
+                $safe[] = $url;
+                continue;
+            }
+            if (preg_match(self::SRCSET_DESCRIPTOR, $parts[1]) !== 1) {
+                return null;
+            }
+            $safe[] = $url . ' ' . $parts[1];
         }
 
-        return $srcset;
+        return implode(', ', $safe);
     }
 
     /**

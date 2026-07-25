@@ -867,6 +867,152 @@ final class MediaItemShaperTest extends TestCase
     }
 
     /**
+     * The DESCRIPTOR half of a stored srcset candidate is validated too, and the
+     * emitted value is REBUILT from validated pairs rather than passed through.
+     *
+     * Validating only the URL half is a hole you can drive markup through: splitting
+     * a candidate at its last space hands everything after that space back
+     * untouched, so whether a payload is blocked comes down to whether it happens to
+     * contain a space — `…1280w"><img src=x onerror=…>` is caught (the space pushes
+     * the quote into the URL half) while the equivalent space-free
+     * `…780w"><svg/onload=alert(1)>` sails through and lands verbatim in an HTML
+     * attribute on every row. Injection must never depend on spacing.
+     *
+     * Also covers the malformed-but-not-hostile shape: a candidate URL with an
+     * INTERIOR space parses in a browser as one URL plus TWO descriptors
+     * (`…/bg jpg 780w` → url `…/bg`, descriptors `jpg` and `780w`).
+     * `BackdropSrcset::parse()` guards exactly this on the derived path.
+     *
+     * @dataProvider unsafeBackdropSrcsetProvider
+     */
+    public function testShapeRejectsAStoredBackdropSrcsetWithABadDescriptorOrSpacedUrl(
+        string $stored,
+        string $why,
+    ): void {
+        $shaped = MediaItemShaper::shape([
+            'id' => 'm',
+            'name' => 'M',
+            'type' => 'movie',
+            'metadata' => [
+                'backdrop_url' => 'https://image.tmdb.org/t/p/w500/bg.jpg',
+                'backdrop_srcset' => $stored,
+            ],
+        ]);
+
+        // The stored value is dropped WHOLE and the derived TMDB ladder is used.
+        $this->assertSame(
+            'https://image.tmdb.org/t/p/w780/bg.jpg 780w, '
+            . 'https://image.tmdb.org/t/p/w1280/bg.jpg 1280w',
+            $shaped['backdrop_srcset'],
+            $why,
+        );
+    }
+
+    /**
+     * @return iterable<string, array{string, string}>
+     */
+    public static function unsafeBackdropSrcsetProvider(): iterable
+    {
+        // SPACE-FREE breakout payloads parked in the descriptor slot — the class the
+        // last-space split could never catch.
+        yield 'space-free svg onload after the descriptor' => [
+            'https://image.tmdb.org/t/p/w780/bg.jpg 780w"><svg/onload=alert(1)>',
+            'a space-free payload after the descriptor must not ride through',
+        ];
+        yield 'space-free single-quote handler after the descriptor' => [
+            "https://image.tmdb.org/t/p/w780/bg.jpg 780w'onerror=alert(1)",
+            'a quote in the descriptor breaks out of the attribute too',
+        ];
+        yield 'space-free template/script breakout' => [
+            'https://image.tmdb.org/t/p/w780/bg.jpg '
+            . '"></template><script>alert(document.domain)</script>',
+            'markup in the descriptor slot is still markup',
+        ];
+        yield 'javascript uri as the descriptor' => [
+            'https://image.tmdb.org/t/p/w780/bg.jpg javascript:alert(1)',
+            'a descriptor is only <int>w or <float>x',
+        ];
+        yield 'descriptor with no unit' => [
+            'https://image.tmdb.org/t/p/w780/bg.jpg 780',
+            'a bare number is not a valid descriptor',
+        ];
+        yield 'poisoned candidate after a clean one' => [
+            'https://image.tmdb.org/t/p/w780/bg.jpg 780w, '
+            . 'https://image.tmdb.org/t/p/w1280/bg.jpg 1280w"><svg/onload=alert(1)>',
+            'one bad candidate rejects the whole value',
+        ];
+        // Malformed rather than hostile: interior whitespace in the URL half.
+        yield 'interior space in the candidate url' => [
+            'https://image.tmdb.org/t/p/w780/bg jpg 780w',
+            'a browser would read this as one url plus two descriptors',
+        ];
+        yield 'two descriptors on one candidate' => [
+            'https://image.tmdb.org/t/p/w780/bg.jpg 780w 2x',
+            'a candidate carries at most one descriptor',
+        ];
+    }
+
+    /**
+     * …and the descriptor check must not over-reject: every legitimate candidate
+     * form survives, and the rebuilt value is the same set of pairs (normalised to
+     * `", "` separators).
+     *
+     * @dataProvider legitimateBackdropSrcsetProvider
+     */
+    public function testShapeKeepsEveryLegitimateStoredBackdropSrcsetForm(string $stored, string $expected): void
+    {
+        $shaped = MediaItemShaper::shape([
+            'id' => 'm',
+            'name' => 'M',
+            'type' => 'movie',
+            // A non-TMDB backdrop, so NOTHING is derivable — the assertion can only
+            // pass if the stored value itself was accepted.
+            'metadata' => [
+                'backdrop_url' => 'https://assets.fanart.tv/fanart/movies/1/bg.jpg',
+                'backdrop_srcset' => $stored,
+            ],
+        ]);
+
+        $this->assertSame($expected, $shaped['backdrop_srcset']);
+    }
+
+    /**
+     * @return iterable<string, array{string, string}>
+     */
+    public static function legitimateBackdropSrcsetProvider(): iterable
+    {
+        yield 'width descriptors' => [
+            '/api/v1/artwork/m/bg-780.jpg 780w, /api/v1/artwork/m/bg-1280.jpg 1280w',
+            '/api/v1/artwork/m/bg-780.jpg 780w, /api/v1/artwork/m/bg-1280.jpg 1280w',
+        ];
+        yield 'pixel-density descriptors' => [
+            'https://assets.fanart.tv/1x.jpg 1x, https://assets.fanart.tv/2x.jpg 2x',
+            'https://assets.fanart.tv/1x.jpg 1x, https://assets.fanart.tv/2x.jpg 2x',
+        ];
+        yield 'fractional density descriptor' => [
+            'https://assets.fanart.tv/15x.jpg 1.5x',
+            'https://assets.fanart.tv/15x.jpg 1.5x',
+        ];
+        yield 'bare url with no descriptor' => [
+            'https://assets.fanart.tv/bg.jpg',
+            'https://assets.fanart.tv/bg.jpg',
+        ];
+        yield 'query strings survive' => [
+            'https://assets.fanart.tv/bg.jpg?v=2&w=3 780w',
+            'https://assets.fanart.tv/bg.jpg?v=2&w=3 780w',
+        ];
+        // Sloppy but legal separators are normalised, not rejected.
+        yield 'comma with no space' => [
+            'https://assets.fanart.tv/a.jpg 780w,https://assets.fanart.tv/b.jpg 1280w',
+            'https://assets.fanart.tv/a.jpg 780w, https://assets.fanart.tv/b.jpg 1280w',
+        ];
+        yield 'double space before the descriptor' => [
+            'https://assets.fanart.tv/a.jpg  780w',
+            'https://assets.fanart.tv/a.jpg 780w',
+        ];
+    }
+
+    /**
      * URL scheme allowlist on the new list keys. `metadata_json.backdrop_url` is
      * provider-, `.nfo`- or plugin-supplied, and this step emits it (plus a srcset
      * built FROM it) on up to PageLimit::MAX rows, so a non-`http(s)`/non-relative
@@ -915,6 +1061,27 @@ final class MediaItemShaperTest extends TestCase
         yield 'backslash' => ['https://example.com\\bg.jpg', 'backslashes are normalised to / by browsers'];
         yield 'tab inside the url' => ["https://example.com/\tbg.jpg", 'control bytes are stripped by browsers'];
         yield 'no scheme at all' => ['image.tmdb.org/t/p/w500/bg.jpg', 'a bare host is not a usable image URL'];
+        // PHP's DEFAULT trim() charlist is " \t\n\r\0\x0B", so a NUL or vertical tab
+        // at either END would be silently STRIPPED by the padding trim and never
+        // reach the [\x00-\x1f\x7f] check — the allowlist's "any control byte →
+        // null" contract has to hold for those two bytes as well, so they are
+        // screened off BEFORE trimming.
+        yield 'trailing NUL' => [
+            "https://image.tmdb.org/t/p/w500/bg.jpg\0",
+            'an edge NUL must be rejected, not silently trimmed away',
+        ];
+        yield 'leading NUL' => [
+            "\0https://image.tmdb.org/t/p/w500/bg.jpg",
+            'an edge NUL must be rejected, not silently trimmed away',
+        ];
+        yield 'trailing vertical tab' => [
+            "https://image.tmdb.org/t/p/w500/bg.jpg\x0B",
+            'a vertical tab is in trim()\'s default charlist too',
+        ];
+        yield 'trailing form feed' => [
+            "https://image.tmdb.org/t/p/w500/bg.jpg\x0C",
+            'a form feed is NOT trimmed, and is still a control byte',
+        ];
     }
 
     /**
@@ -1090,6 +1257,58 @@ final class MediaItemShaperTest extends TestCase
         ], []);
 
         $this->assertSame('https://image.tmdb.org/t/p/original/bg.jpg', $shaped['backdrop_url']);
+    }
+
+    /**
+     * The DETAIL shape's `backdrop_url` gets the SAME scheme allowlist as the list
+     * shape's — it was the wide-open half of the same key in the same file, and it is
+     * the half that matters most: the detail page paints this value as a full-bleed
+     * page background AND a hero `<img>`, and `shapeDetail()` additionally
+     * width-swaps it into `backdrop_url_large` and seeds all THREE hero srcset
+     * candidates from it. One unvalidated payload was therefore emitted five times
+     * over in the one response that renders it largest.
+     *
+     * @dataProvider unsafeBackdropUrlProvider
+     */
+    public function testShapeDetailRejectsUnsafeBackdropUrlSchemes(string $stored, string $why): void
+    {
+        $shaped = MediaItemShaper::shapeDetail([
+            'id' => 'm',
+            'name' => 'M',
+            'type' => 'movie',
+            'metadata' => ['backdrop_url' => $stored],
+        ], []);
+
+        $this->assertNull($shaped['backdrop_url'], $why);
+        $this->assertNull(
+            $shaped['backdrop_url_large'],
+            $why . ' (and is never width-swapped to /original)',
+        );
+        $this->assertNull(
+            $shaped['backdrop_srcset'],
+            $why . ' (and seeds none of the three hero candidates)',
+        );
+    }
+
+    /**
+     * The other half of routing the detail value through the shared helper: a
+     * whitespace-padded stored URL is TRIMMED there too, so the hero `/original`
+     * variant and the 3-step srcset survive the padding instead of silently
+     * vanishing (the `^`-anchored TMDB regex rejects a leading space).
+     */
+    public function testShapeDetailTrimsAPaddedBackdropUrlAndKeepsTheHeroLadder(): void
+    {
+        $shaped = MediaItemShaper::shapeDetail([
+            'id' => 'm',
+            'name' => 'M',
+            'type' => 'movie',
+            'metadata' => ['backdrop_url' => "  https://image.tmdb.org/t/p/w500/bg.jpg\n"],
+        ], []);
+
+        $this->assertSame('https://image.tmdb.org/t/p/w500/bg.jpg', $shaped['backdrop_url']);
+        $this->assertSame('https://image.tmdb.org/t/p/original/bg.jpg', $shaped['backdrop_url_large']);
+        $this->assertIsString($shaped['backdrop_srcset']);
+        $this->assertStringContainsString('/original/bg.jpg 1920w', $shaped['backdrop_srcset']);
     }
 
     public function testShapeDetailReMintsExpiredInternalBackdropUrl(): void

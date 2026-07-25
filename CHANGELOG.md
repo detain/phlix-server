@@ -34,11 +34,23 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   to 100 rows per response, so `javascript:`/`data:` URIs, protocol-relative
   `//host/…` and values carrying an attribute-breakout character (`"`, `'`, `<`,
   `>`, backtick, backslash) or a raw control byte now become `null` instead of
-  being echoed — and, in the srcset's case, width-swapped and embedded. One
-  unsafe candidate rejects a whole stored srcset. Stored URLs are also **trimmed**
-  before parsing: a whitespace-padded URL previously reached the client verbatim
-  *and* silently lost its width ladder, because the `^`-anchored TMDB regex
-  rejects the leading space.
+  being echoed — and, in the srcset's case, width-swapped and embedded. The same
+  allowlist is now applied to the **detail** shape's `backdrop_url`
+  (`shapeDetail()`), which was previously unvalidated even though it is the value
+  a client paints as a full-bleed background and fans out into
+  `backdrop_url_large` plus three srcset candidates. A stored srcset is validated
+  on **both** halves of every candidate — the URL against the allowlist and the
+  descriptor against `<int>w` / `<float>x` — and the emitted value is
+  **reconstructed** from those validated pairs rather than passed through, so a
+  space-free payload parked after the descriptor (`…/bg.jpg 780w"><svg/onload=…>`)
+  and a URL carrying an interior space (which a browser reads as one URL plus two
+  descriptors) are both rejected. One bad candidate rejects a whole stored srcset.
+  Stored URLs are also **trimmed** before parsing: a whitespace-padded URL
+  previously reached the client verbatim *and* silently lost its width ladder,
+  because the `^`-anchored TMDB regex rejects the leading space. Only leading and
+  trailing space/tab/CR/LF count as padding — any other control byte, including an
+  edge NUL or vertical tab that PHP's default `trim()` would silently swallow, is
+  rejected before trimming.
 
   **`/original` is deliberately NOT advertised on list rows, and the detail-only
   `backdrop_url_large` is NOT emitted there.** `GET /api/v1/media` returns up to
@@ -50,9 +62,15 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   **Measured payload cost, per encoder.** On the wire — the figure that actually
   matters — the resident `HttpHandler` gzips JSON at level 6 whenever the client
   sends `Accept-Encoding: gzip`, so a realistic 100-row page (80 % of rows
-  carrying a backdrop) grows by **≈ 2.7–3.0 KiB, i.e. about +30 bytes per item**
-  (two independent measurements; the exact figure moves with how compressible the
-  rest of the page is). Uncompressed, `Response::json()` encodes with
+  carrying a backdrop) grows by **on the order of 2 KiB — under 3 KiB in every
+  measurement taken** (three independent synthetic pages: +2 999, +2 745 and
+  +1 779 bytes, i.e. +30, +27 and +18 bytes per item). Read that as an order of
+  magnitude, not a bracket: the gzip delta **scales with how compressible the rest
+  of the page is**, because the more filler a page carries the better gzip folds
+  the repeated TMDB URL prefixes into it — the three page baselines (13 413 /
+  7 199 / 6 894 bytes) order exactly as their deltas do. The uncompressed
+  per-item figures that follow are the authoritative, reproducible numbers.
+  Uncompressed, `Response::json()` encodes with
   `JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES`, and the in-page cost there is
   **+270 bytes per item** with a TMDB backdrop (+26.4 KiB per 100-item page),
   **+153 bytes** with a fanart.tv backdrop (no width ladder, so `backdrop_srcset`
@@ -64,10 +82,12 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   resident worker, which serves production, does.) No image resizer is introduced
   (that is S71–S73); only existing TMDB size variants are used.
 
-  `shapeDetail()` is unchanged — it still overwrites both keys with the hero
-  budget (stored URL + `/original` + the 3-step srcset) after calling `shape()`,
-  so the detail/player response is **value-identical (key order shifts)**: every
-  value is exactly what it was and the response length is unchanged, but because
+  `shapeDetail()`'s size budget is unchanged — it still overwrites both keys with
+  the hero budget (stored URL + `/original` + the 3-step srcset) after calling
+  `shape()`, now with the stored URL run through the same allowlist, which is the
+  identity function on every URL that passes. So for every legitimate row the
+  detail/player response is **value-identical (key order shifts)**: every value is
+  exactly what it was and the response length is unchanged, but because
   the keys now arrive through `array_merge()` they sit earlier in the JSON object
   than before. Object key order carries no meaning for a JSON consumer — the
   `md5` of the raw response differs, the `md5` of the `ksort`ed response does

@@ -9,6 +9,55 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Added
 
+- **Sign in with GitHub, and DB-backed provider settings** (updates.md #54 / S48).
+  The first concrete non-OIDC OAuth2 provider, proving the S44–S47 foundation:
+  - **`GithubOAuthProvider` + `GET /auth/github/authorize` and
+    `GET /auth/github/callback`** (both unauthenticated — the GitHub redirect carries
+    no Phlix session). Plain authorization-code + **PKCE**, no OIDC discovery and no
+    `id_token` assumption, profile via `GET https://api.github.com/user` (default
+    scopes `read:user user:email`), and account resolution through the S46/S47
+    `user_identities` path so a GitHub identity is scoped to `provider='github'`.
+    Enabled by the `auth.github.enabled` server setting like the other bundled
+    providers and registered per worker by `AuthProviderBootstrapper`; linking an
+    existing account uses `GET /auth/identities/link/github` (unlink stays the
+    provider-generic `DELETE /auth/identities/{id}`). The shared
+    `Phlix\Plugins\OAuth2\AbstractOAuth2Provider` base carries the reusable OAuth2 +
+    PKCE machinery, so the next provider family is a subclass rather than a copy.
+  - **Provider settings now live in the DATABASE, not `settings.json`** — new
+    **`plugin_settings`** table (migration **`093_plugin_settings.sql`**: one row per
+    plugin, `plugin_name` PK + `settings_json`) behind a `PluginSettingsStore`
+    interface, consumed through the `PluginDbSettings` trait. Resident Workerman
+    workers may run on a read-only/ephemeral filesystem and a per-plugin file is
+    invisible to the other workers, so a shared row is the correct home. **No
+    operator action is needed on upgrade:** a plugin with no row yet performs a
+    ONE-TIME lazy import of its legacy `settings.json`, and the file store remains
+    the fallback when no DB store is injected (unit tests / no DB). Deliberately NOT
+    the catalog `plugins` table — a catalog row would double-register the bundled
+    providers. Migration 093 is `CREATE TABLE IF NOT EXISTS` and is **idempotent on
+    the paths that bypass the `schema_migrations` checksum ledger** too (a raw
+    `mysql <` replay, or a database whose ledger row was lost) — verified on a
+    scratch MySQL 8.0 to re-apply with 0 errors and to leave existing settings rows
+    untouched.
+  - **Admin config endpoints for GitHub** — `GET`/`POST
+    /api/v1/admin/auth-providers/github/config` plus `GET
+    .../github/schema` (admin-only), alongside the provider-generic
+    `POST /api/v1/admin/auth-providers/github/{enable,disable}`. The read endpoint
+    never echoes `client_secret`, and `configured` means *id AND secret present* —
+    the same bar `AuthProviderBootstrapper` uses to build the provider, so the UI
+    cannot report "configured" and then have `enable` answer `409 not_configured`.
+    **There is no GitHub card in the admin SPA yet**, so configure it through these
+    endpoints (see the SSO guide in phlix-docs for copy-paste calls).
+  - **OAuth2 state is browser-bound.** `DbOAuth2StateStore` (the `oauth_state_store`
+    table, 600 s TTL, atomic one-shot consume — never `$_SESSION`, which is
+    process-global under Workerman) plus `StateCorrelation`: a 32-byte secret in an
+    HttpOnly + Secure + SameSite=Lax cookie (`phlix_oauth_github` /
+    `phlix_oauth_oidc`) whose SHA-256 is the only copy persisted in the state
+    context, compared with `hash_equals()` **before** any token exchange, account link
+    or session-cookie mint. This closes a login-CSRF / session-fixation path where an
+    attacker ran the authorize leg and then had a victim's browser deliver the
+    callback (`SameSite=Lax` does not restrict `Set-Cookie`). Applied to the OIDC flow
+    too.
+
 - **DLNA renderers can finally play something: `GET|HEAD /dlna/stream/{mediaItemId}`**
   (updates.md #44 / S52). Until now DLNA *browse* worked while DLNA *playback* could
   not, by construction: every byte-serving route in Phlix demands a session or an
@@ -460,6 +509,51 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Changed
 
+- **The OAuth2/OIDC `redirect_uri` is now always ABSOLUTE, and is derived only from a
+  `Host` that matches `PHLIX_DOMAIN`** (updates.md #54 / S48). Both browser flows used
+  to send a path-only `redirect_uri` (`/auth/oidc/callback`), which providers reject
+  with `redirect_uri_mismatch` — GitHub and any spec-strict OIDC IdP match the value's
+  scheme, host **and port** against a registered absolute URI. The callback URL is now
+  resolved in two steps: the provider's own `redirect_uri` setting when it is a valid
+  absolute http(s) URL, else `<scheme>://<Host><callback path>` **only** when the
+  request's `Host` — port included — is the configured `PHLIX_DOMAIN`. A `Host` is
+  client-supplied, so deriving from an unvouched-for one could have handed a
+  wildcard-registered IdP an attacker's `redirect_uri`.
+
+  **Upgrade note — this fails CLOSED.** If neither `PHLIX_DOMAIN` nor an absolute
+  per-provider `redirect_uri` is configured, `/auth/github/authorize` and
+  `/auth/oidc/authorize` answer **`503 callback_url_not_configured`** — issuing no
+  state row and no cookie — instead of sending a value the provider would reject. Set
+  **`PHLIX_DOMAIN`** to this server's public `host[:port]` (`scripts/install.sh
+  --domain <domain>` writes it, and the systemd unit reads it from the env file), or
+  set the provider's `redirect_uri` setting to the absolute URL registered with the
+  provider. Reaching authorize over anything else — a LAN IP, `localhost`, the hub
+  relay hostname, or a different port on the same hostname — now `503`s **by design**.
+  The response body is deliberately generic because the route is unauthenticated; the
+  AUTH-channel log line names which condition fired, the presented `Host`, the
+  configured domain and both remedies. `error: callback_url_not_configured` is the
+  stable machine-readable code.
+
+  **The port is part of the compared origin**, with the scheme's DEFAULT port
+  normalised away on both sides: `PHLIX_DOMAIN=media.example.com` accepts
+  `Host: media.example.com` **and** `Host: media.example.com:443` under https (a
+  reverse proxy really does forward the latter), while
+  `PHLIX_DOMAIN=media.example.com:8443` accepts only that exact `host:port`. Mixed
+  pairs are distinct origins and refused (`https://host:80`, `http://host:443`).
+  **One behavioural delta to know:** phlix-server also binds `0.0.0.0:8096`, so a
+  client that BYPASSES the reverse proxy presents `Host: <domain>:8096` and now gets
+  the `503` instead of a derived `https://<domain>:8096/auth/…/callback`. Nothing
+  completable is lost — the callback registered with the OAuth App / IdP is the
+  proxied form, so the provider would have answered `redirect_uri_mismatch` for the
+  ported value anyway; the failure moves earlier and names the fix. Set the
+  provider's absolute `redirect_uri` if you genuinely serve auth on that port.
+
+  In-flight upgrade window: a state row minted under the older bare-host rule whose
+  `callback_url` carries a port `PHLIX_DOMAIN` does not name is no longer replayable,
+  so that one login attempt ends in the `503` and the retry (through the proxy)
+  succeeds. Bounded by the 600 s state TTL, and only for a login started on a
+  non-registered origin.
+
 - **DLNA browse now reports the real container MIME for ~20 more formats**
   (updates.md #44 / S52). The extension→MIME table that produced the DIDL
   `<res protocolInfo>` value lived in three places (`LibraryBridge`,
@@ -477,6 +571,35 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   visible change in the Browse response.
 
 ### Fixed
+
+- **An auth-provider settings save no longer WIPES the keys it did not send**
+  (updates.md #54 / S48). A provider settings save is a wholesale replace of the
+  stored document, and both admin controllers built that document from the request
+  body alone — so a client that did not know about a field silently deleted it. This
+  is the exact shape that **wiped live Trakt OAuth tokens on production** during a
+  plugin update, and it was live, not theoretical: the admin SPA's OIDC form posts
+  `provider_url`/`client_id`/`client_secret`/`scopes` and knows nothing about
+  `redirect_uri`, so one click on Save would have erased a `redirect_uri` configured
+  through the API — which, with the change above, hard-`503`s every OIDC login.
+
+  The invariant is now explicit in `GithubAdminController` and `OidcAdminController`,
+  for every optional key (`scopes`, `redirect_uri`): **a key ABSENT from the request
+  body is PRESERVED; only an explicitly empty value clears it.** Absent is never a
+  deletion. (`client_secret` already behaved this way — blank keeps the stored
+  secret.) A rejected save (`invalid_redirect_uri`, `missing_client_id`, …) mutates
+  nothing, and repeated partial saves do not erode the row. Guarded by
+  `AuthProviderSettingsPreservationRealDbIntegrationTest`, which drives both real
+  controllers through the real repository against real MySQL and reads
+  `plugin_settings.settings_json` straight back out of the table; reverting either
+  key on either controller to a wholesale replace fails it with a message naming the
+  incident.
+
+  **Not fixed, documented instead:** `LdapAdminController::saveSettings()` still
+  rebuilds its document from the request body alone (only `bind_pw` is kept on
+  blank), so a *scripted* partial save resets an omitted `port`/`ssl`/`bind_dn`/
+  `user_filter`/`admin_group` to its default. The admin console's LDAP form always
+  posts the complete set, so no shipped client is affected; API callers must send the
+  full map. Noted in the class docblock and in the SSO guide.
 
 - **A `HEAD` on a media route put TWO conflicting `Content-Length` headers on the
   wire** (updates.md #44 / S52 review). Workerman's response encoder

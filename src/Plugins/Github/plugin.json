@@ -1,15 +1,10 @@
 {
-    "name": "phlix-plugin-oidc",
+    "name": "phlix-plugin-github",
     "version": "1.0.0",
-    "phlix_min_server_version": "0.11.0",
+    "phlix_min_server_version": "0.102.0",
     "type": "auth-provider",
-    "entry": "Phlix\\Plugins\\Oidc\\Plugin",
+    "entry": "Phlix\\Plugins\\Github\\Plugin",
     "settings": {
-        "provider_url": {
-            "type": "string",
-            "required": true,
-            "secret": false
-        },
         "client_id": {
             "type": "string",
             "required": true,
@@ -23,7 +18,8 @@
         "scopes": {
             "type": "string",
             "required": false,
-            "default": "openid profile email"
+            "default": "read:user user:email",
+            "secret": false
         },
         "redirect_uri": {
             "type": "string",

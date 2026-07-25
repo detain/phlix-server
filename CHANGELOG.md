@@ -518,11 +518,33 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   route maps, both middleware short-circuits, and the fallback), so the framing is a
   property of the framework rather than a convention. It cannot flag a GET — the method
   test is the whole body — and it is idempotent, so the DLNA controller keeps its own
-  explicit set as defence in depth for callers that are not `Router::dispatch()`. No
-  live wire bytes change (the only HEAD-registered route already set the flag); pinned
-  by `RouterTest` tests that register a HEAD route which does **not** set the flag and
-  assert on the **encoded bytes** that exactly one `Content-Length` reaches the wire,
-  with a control showing the framework encoder emits two for the same shape.
+  explicit set as defence in depth for callers that are not `Router::dispatch()`.
+  **One live reply does change on the wire, for the better:** the DLNA stream route is
+  registered inside a group carrying `DlnaAllowlistMiddleware`, and that gate's refusal
+  is now flagged too, so an off-LAN `HEAD /dlna/stream/{id}` answers
+  `403 … Content-Length: 0` with **no** body (101 B) where it previously shipped its
+  104-byte `{"code":"dlna.forbidden"}` JSON alongside `Content-Length: 104` (207 B).
+  RFC 9110 §9.3.2 forbids content in a `HEAD` response, so the new bytes are the
+  conforming ones — but a `HEAD` probe can no longer read *why* it was refused (use a
+  `GET`), and the `Content-Length: 0` under-reports what the equivalent `GET` would
+  return, exactly as the pre-existing `withFile()`-on-a-HEAD case does. The
+  HEAD-registered stream route's own 200 reply is unchanged (its controller already set
+  the flag), as is every 204/304/redirect/416. Pinned by `RouterTest` tests that
+  register a HEAD route which does **not** set the flag and assert on the **encoded
+  bytes** that exactly one `Content-Length` reaches the wire, with a control showing
+  the framework encoder emits two for the same shape — including all three arms r1
+  found unpinned (`dispatch()`'s static short-circuit and both halves of the parametric
+  GET→HEAD fallback, the live path for `/api/v1/media/{id}`, `/hls/{job}/{seg}` and
+  `/stream/theme-media/{libraryId}/audio`, where an unflagged reply measured
+  4,377 B with two lengths against 113 B with one).
+  **Bounded, not covered:** a *global* middleware registered on `Application` runs
+  before the router, so a `HEAD` it short-circuits is never flagged and still ships its
+  body. Today only `AccessScheduleMiddleware` can do that and its refusals declare no
+  `Content-Length` of their own, so the reply is the recoverable "body on a HEAD" shape
+  rather than the unrecoverable two-length one — the same shape as `Router::notFound()`
+  and `HttpHandler`'s SPA/static/404 replies, all of which move together in a separate
+  change. `ApplicationHeadOnlyBoundaryTest` pins that boundary from both sides so it
+  cannot drift, and `Application::dispatch()`'s docblock states it.
 
 - **`Router::group()` could leak its middleware onto every later route** if the group
   callback threw. The prefix/middleware restore had no `finally`, and `addRoute()`

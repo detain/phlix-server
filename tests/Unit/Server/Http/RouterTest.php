@@ -481,6 +481,177 @@ class RouterTest extends TestCase
     }
 
     /**
+     * THE UNPINNED FALLBACK ARM, executed (S105 review r1, finding MED-1):
+     * `dispatchAsHead()`'s PARAMETRIC handler return — the live GET→HEAD path for
+     * every parametric GET route reached by a `HEAD` (`/api/v1/media/{id}`,
+     * `/hls/{job}/{seg}`, `/stream/theme-media/{libraryId}/audio`, …) — was pinned
+     * by NOTHING: r1 deleted its `markHeadOnly()` call and the whole 6,984-test
+     * suite stayed green while a `HEAD` began shipping
+     * `Content-Length: 4242 … Content-Length: 4242` **plus 4,242 body bytes**
+     * (4,377 B on the wire instead of 113 B) — i.e. the exact two-`Content-Length`
+     * defect this step exists to make structurally impossible, surviving inside the
+     * step itself.
+     *
+     * The route below is shaped exactly like
+     * `ThemeMusicStreamController::streamAudio()`: registered for **GET only**, so a
+     * `HEAD` can reach it ONLY through `dispatch()`'s fallback guard; **parametric**,
+     * so it misses `dispatchAsHead()`'s O(1) static lookup and lands on the handler
+     * arm; and its handler declares the real `Content-Length` **and** returns the
+     * buffered body while never touching `headOnly`.
+     *
+     * @covers \Phlix\Server\Http\Router::dispatch
+     * @covers \Phlix\Server\Http\Router::dispatchAsHead
+     * @covers \Phlix\Server\Http\Router::markHeadOnly
+     */
+    public function testTheGetToHeadFallbackFlagsAParametricRouteHandlerOnTheWire(): void
+    {
+        $body = str_repeat('A', 4242);
+        $headers = [
+            'Content-Type' => 'audio/mpeg',
+            'Accept-Ranges' => 'bytes',
+            'Content-Length' => '4242',
+        ];
+
+        $this->router->get('/stream/theme-media/{libraryId}/audio', function ($req, $params) use ($headers, $body) {
+            $response = (new Response())->status(200);
+            foreach ($headers as $name => $value) {
+                $response->header($name, $value);
+            }
+
+            return $response->body($body);
+        });
+
+        $response = $this->router->dispatch($this->makeRequest('HEAD', '/stream/theme-media/lib-1/audio'));
+
+        // Asserted as WHOLE BYTES, deliberately literal rather than derived: these
+        // are the bytes measured on the fixed router, and a dependency bump that
+        // moves them is a framing change that must be looked at, not absorbed.
+        $wire = (string) $response->toWorkermanResponse();
+        $this->assertSame(
+            "HTTP/1.1 200 OK\r\n"
+            . "Content-Type: audio/mpeg\r\n"
+            . "Accept-Ranges: bytes\r\n"
+            . "Content-Length: 4242\r\n"
+            . "Connection: keep-alive\r\n"
+            . "\r\n",
+            $wire,
+            "the GET->HEAD fallback must render a parametric route head-only. Encoded bytes were:\n" . $wire,
+        );
+        $this->assertSame(113, strlen($wire), 'a correct HEAD reply for this shape is 113 bytes');
+        $this->assertSame(1, substr_count($wire, 'Content-Length:'), 'exactly ONE Content-Length (RFC 9110 §8.6)');
+        $this->assertSame('', explode("\r\n\r\n", $wire, 2)[1] ?? 'TERMINATOR MISSING', 'a HEAD carries no body');
+        $this->assertTrue($response->headOnly, 'the fallback arm must flag the reply head-only');
+
+        // CONTROL — the same shape unflagged is exactly what r1 measured with this
+        // call site deleted: 4,377 B, two Content-Length fields, and the whole body.
+        $unflagged = (string) new WorkermanResponse(200, $headers, $body);
+        $this->assertSame(4377, strlen($unflagged), 'premise: unflagged, this shape is 4377 bytes');
+        $this->assertSame(2, substr_count($unflagged, 'Content-Length:'), 'premise: two lengths reach the wire');
+        $this->assertStringEndsWith($body, $unflagged, 'premise: unflagged, the body ships on a HEAD');
+    }
+
+    /**
+     * Same finding, the fallback's OTHER unpinned arm (S105 review r1, MED-1):
+     * a middleware SHORT-CIRCUIT on the parametric GET→HEAD fallback
+     * (`dispatchAsHead()`'s first parametric return). Deleting its
+     * `markHeadOnly()` call also left the full suite green — together with the
+     * handler arm above, the ENTIRE parametric fallback arm was untested.
+     *
+     * The gate is shaped like `DlnaAllowlistMiddleware`: a 403 JSON refusal that
+     * declares no `Content-Length` of its own, so the flag's whole effect is
+     * dropping the body (and letting Workerman state `Content-Length: 0`) — which
+     * is what RFC 9110 §9.3.2 requires of a `HEAD` reply.
+     *
+     * @covers \Phlix\Server\Http\Router::dispatch
+     * @covers \Phlix\Server\Http\Router::dispatchAsHead
+     * @covers \Phlix\Server\Http\Router::markHeadOnly
+     */
+    public function testTheGetToHeadFallbackFlagsAParametricMiddlewareShortCircuitOnTheWire(): void
+    {
+        $payload = [
+            'error' => 'DLNA access is not permitted from this network address.',
+            'code'  => 'dlna.forbidden',
+        ];
+        $gate = fn($req) => (new Response())->status(403)->json($payload);
+
+        // GET-ONLY registration inside a gated group: no HEAD route exists at all,
+        // so the HEAD below can only arrive via dispatch()'s fallback guard.
+        $this->router->group('/dlna', function (Router $r): void {
+            $r->get('/stream/{id}', fn($req, $params) => (new Response())->status(200));
+        }, [$gate]);
+
+        $response = $this->router->dispatch($this->makeRequest('HEAD', '/dlna/stream/abc123'));
+
+        $wire = (string) $response->toWorkermanResponse();
+        $json = (string) json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
+
+        // A refusal that set no length of its own is rendered by the FRAMEWORK
+        // encoder with an EMPTY body, so the expectation is derived from Workerman
+        // itself — the property is "same reply, no body".
+        $this->assertSame(
+            (string) new WorkermanResponse(403, ['Content-Type' => 'application/json'], ''),
+            $wire,
+            "a gated HEAD must ship the refusal head-only. Encoded bytes were:\n" . $wire,
+        );
+        $this->assertSame(1, substr_count($wire, 'Content-Length:'), 'exactly ONE Content-Length');
+        $this->assertStringNotContainsString('dlna.forbidden', $wire, 'the JSON body must not reach a HEAD client');
+        $this->assertSame(403, $response->statusCode);
+        $this->assertTrue($response->headOnly, 'the fallback middleware arm must flag the reply head-only');
+
+        // CONTROL — unflagged, the same refusal ships its whole body.
+        $unflagged = (string) new WorkermanResponse(403, ['Content-Type' => 'application/json'], $json);
+        $this->assertStringEndsWith($json, $unflagged, 'premise: unflagged, the refusal body ships on a HEAD');
+        $this->assertGreaterThan(strlen($wire), strlen($unflagged), 'premise: the flag is what removes the body');
+    }
+
+    /**
+     * The third unpinned site (S105 review r1, MED-1) and the only one NEW in this
+     * step: `dispatch()`'s **static** middleware short-circuit. A HEAD-registered
+     * path with no `{param}` behind a short-circuiting gate returns from
+     * `$staticRoutes['HEAD']`, an arm the existing short-circuit test never reaches
+     * (its static case arrives through the GET→HEAD fallback instead, which is a
+     * different `markHeadOnly()` call).
+     *
+     * @covers \Phlix\Server\Http\Router::dispatch
+     * @covers \Phlix\Server\Http\Router::markHeadOnly
+     */
+    public function testAStaticHeadRegisteredRouteBehindAGateIsFlaggedOnTheWire(): void
+    {
+        $payload = ['error' => 'DLNA access is not permitted from this network address.'];
+        $gate = fn($req) => (new Response())->status(403)->json($payload);
+
+        // Registered for HEAD IN ITS OWN RIGHT and static, so $staticRoutes['HEAD']
+        // is hit directly and the gate short-circuits inside dispatch().
+        $this->router->group('/dlna', function (Router $r): void {
+            $r->match(['GET', 'HEAD'], '/control', fn($req, $params) => (new Response())->status(200));
+        }, [$gate]);
+
+        $response = $this->router->dispatch($this->makeRequest('HEAD', '/dlna/control'));
+
+        $wire = (string) $response->toWorkermanResponse();
+        $this->assertSame(
+            (string) new WorkermanResponse(403, ['Content-Type' => 'application/json'], ''),
+            $wire,
+            "the STATIC short-circuit arm must ship the refusal head-only. Encoded bytes were:\n" . $wire,
+        );
+        $this->assertSame(1, substr_count($wire, 'Content-Length:'), 'exactly ONE Content-Length');
+        $this->assertStringNotContainsString('not permitted', $wire, 'the JSON body must not reach a HEAD client');
+        $this->assertSame(403, $response->statusCode);
+        $this->assertTrue($response->headOnly, 'the static short-circuit arm must flag the reply head-only');
+
+        // The same route on a GET keeps the framework encoder byte for byte, so this
+        // test cannot pass by flagging everything.
+        $get = $this->router->dispatch($this->makeRequest('GET', '/dlna/control'));
+        $json = (string) json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
+        $this->assertFalse($get->headOnly, 'a gated GET must never be flagged head-only');
+        $this->assertSame(
+            (string) new WorkermanResponse(403, ['Content-Type' => 'application/json'], $json),
+            (string) $get->toWorkermanResponse(),
+            'a gated GET must be byte-identical to the framework encoder, body included',
+        );
+    }
+
+    /**
      * The other half of the invariant: `markHeadOnly()` must NEVER flag a
      * non-HEAD reply. A GET whose handler declared a stale non-zero
      * `Content-Length` and produced an empty body must keep the FRAMEWORK encoder,

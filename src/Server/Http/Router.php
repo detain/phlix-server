@@ -453,6 +453,25 @@ class Router
      * `HEAD` to an unregistered path. That body-on-a-HEAD-404 is pre-existing
      * behaviour on both entrypoints and belongs to its own change.
      *
+     * ## The BOUNDARY of the guarantee — read this before trusting it
+     *
+     * The guarantee covers exactly what this router returns from a matched route.
+     * A **global** middleware registered on {@see \Phlix\Server\Core\Application}
+     * (`Application::middleware()`) runs *outside* the router: when it
+     * short-circuits, its response is returned from `Application::dispatch()` /
+     * `Application::run()` without this method ever being reached, so it is NOT
+     * flagged. Today the only global middleware that can short-circuit is
+     * {@see \Phlix\Server\Http\Middleware\AccessScheduleMiddleware}, whose three
+     * refusals are `->status(403)->json([...])` and therefore declare **no**
+     * `Content-Length` — so that path cannot produce the two-`Content-Length`
+     * framing defect this method exists to prevent; it produces the weaker,
+     * recoverable "body on a HEAD" shape that `notFound()` above also has, and it is
+     * fixed in the same follow-up change. Deliberately bounded rather than closed
+     * here so that every site of that one shape moves together. Pinned by
+     * `ApplicationHeadOnlyBoundaryTest`, which fails if a global middleware ever
+     * starts declaring a `Content-Length` on a short-circuit — that WOULD be the
+     * framing defect and must be fixed at once.
+     *
      * @param Request  $request  The dispatched request (only `method` is read).
      * @param Response $response The response about to be returned.
      * @return Response The same instance, for use in a `return` expression.

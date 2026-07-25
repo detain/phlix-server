@@ -295,9 +295,10 @@ final class AbrLadderTest extends TestCase
      * S49: the re-encoded (non-copy) Original also duplicates the top rung here,
      * and is now KEPT (it needs its own media_voriginal.m3u8 — see
      * {@see \Phlix\Media\Streaming\LadderResult::streamVariants()}). The gradient
-     * protection therefore lives entirely in the RUNG set: those are what the
-     * master's SV-4.6 switchable filter emits, and they must still be strictly
-     * descending and duplicate-free. This test is the regression guard that
+     * protection therefore lives entirely in the RUNG set: for THIS fixture the
+     * rungs are exactly what the master's SV-4.6 switchable filter emits (the
+     * duplicate Original is withheld from the levels), and they must still be
+     * strictly descending and duplicate-free. This test is the regression guard that
      * removing the Original fold did not re-open the duplicate-level defect.
      *
      * The clamp budget is the source's H.264 EQUIVALENT (1.2 Mbps HEVC x1.5 =
@@ -324,7 +325,8 @@ final class AbrLadderTest extends TestCase
         }
         self::assertDescendingDistinctBandwidths($result->renditions);
 
-        // The ABR-SWITCHABLE set = the rungs (SV-4.6 excludes copy + original):
+        // The ABR-SWITCHABLE set here = the rungs (SV-4.6 excludes every copy, plus
+        // this fixture's Original because it duplicates the top rung):
         // strictly descending, no two sharing a BANDWIDTH. This is the property the
         // v7 fold was introduced to protect and that S49 must not regress.
         $bandwidths = array_map(static fn (Rendition $r): int => $r->bandwidth(), $result->renditions);

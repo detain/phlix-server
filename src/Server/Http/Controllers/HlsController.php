@@ -31,10 +31,13 @@ use Phlix\Media\Transcoding\TranscodeManager;
  *     `media_v{V}.m3u8` (e.g. `media_v1080p.m3u8`, `media_voriginal.m3u8`) listing
  *     `seg-v{V}-NNNNN.ts` segments, where `{V}` is the rendition id from `AbrLadder`
  *     (`240p`…`2160p`, `original` — lowercase letters + digits only). `master.m3u8`
- *     lists one `#EXT-X-STREAM-INF` per ABR-SWITCHABLE variant, which is the ladder
- *     rungs only: `original` always has a playlist but is never an ABR level (SV-4.6
- *     — the client selects it explicitly), so `media_voriginal.m3u8` is served on
- *     direct request and does not appear in the master.
+ *     lists one `#EXT-X-STREAM-INF` per ABR-SWITCHABLE variant (SV-4.6,
+ *     {@see \Phlix\Media\Transcoding\TranscodeManager}): every variant except a
+ *     stream-COPY one and except a transcode `original` that duplicates the top
+ *     rung's frame+BANDWIDTH. Those two keep their own media playlist and are served
+ *     on direct request without appearing in the master, so `media_voriginal.m3u8`
+ *     may or may not be a master level depending on the source — but it always
+ *     exists on disk (S49).
  *
  * The `seg-…\.ts` segments are transcoded ON DEMAND the first time each is fetched
  * (an `-ss` fast-seek encode), which lets the player seek anywhere — including past
@@ -204,13 +207,21 @@ class HlsController
         // S49 removed the fold ({@see \Phlix\Media\Streaming\LadderResult::streamVariants()}):
         // every v9+ job writes a real `media_voriginal.m3u8`, so the `!is_file()`
         // guard below is never true for one and this alias never engages. It is
-        // retained for exactly one release so that pre-v9 job directories still on
-        // disk — reachable by any already-issued signed URL until the cache sweep
-        // ages them out — keep playing instead of hard-failing. REMOVE IT (with
-        // {@see resolveTopVariantPlaylist()} and their tests) in a follow-up once
-        // no pre-v9 job can still be served. Applied ONLY to the `original` alias,
-        // and only when that playlist is genuinely absent — a truly unknown rung
-        // still 404s.
+        // retained only so that pre-v9 job directories still on disk — reachable by
+        // any already-issued signed URL — keep playing instead of hard-failing. That
+        // window is bounded: `sweepSegmentCache()` deletes a whole pre-v9 job dir
+        // after `SEGMENT_CACHE_MAX_AGE` idle (3 h by default) or under the LRU size
+        // budget, and once swept, the `ensurePlaylistRegenerated()` call above
+        // regenerates a real Original playlist even for a pre-v9 row (its persisted
+        // ladder always carried `original`).
+        //
+        // SCHEDULED REMOVAL — tracked as part of **S59** (the transcode cluster's
+        // dead-code cleanup step, which lands several steps after S49 deploys):
+        // delete this block, {@see resolveTopVariantPlaylist()} and the two
+        // `testLegacyPreV9…` tests in `HlsControllerTest`.
+        //
+        // Applied ONLY to the `original` alias, and only when that playlist is
+        // genuinely absent — a truly unknown rung still 404s.
         if ($file === 'media_voriginal.m3u8' && !is_file("{$dir}/{$file}")) {
             $topVariant = $this->resolveTopVariantPlaylist($dir);
             if ($topVariant !== null) {
@@ -240,8 +251,9 @@ class HlsController
      * used as the serve-time alias for a FOLDED `original` variant playlist.
      *
      * LEGACY (pre-v9 jobs only) — see the call site in {@see serveFile()}: S49
-     * removed the fold, so no job created after it can reach this method. Delete
-     * with its call site once pre-v9 job directories can no longer be served.
+     * removed the fold, so no job created after it can reach this method. Delete it
+     * with its call site in **S59** (the transcode cluster's dead-code cleanup step),
+     * by which point no pre-v9 job directory can still be served.
      *
      * The master playlist lists one `#EXT-X-STREAM-INF:...BANDWIDTH=N` line per
      * rung, each immediately followed by its `media_v{id}.m3u8` URI (highest-first

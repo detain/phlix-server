@@ -62,8 +62,10 @@ final class LadderResultTest extends TestCase
         // folded away. It stays a first-class variant so it gets its own
         // media_voriginal.m3u8 and "Original" is selectable for exactly the titles
         // that used to 404 on it. The duplicate-BANDWIDTH problem the old fold
-        // existed to solve is now handled downstream, by excluding `original` from
-        // the MASTER's switchable ABR set (TranscodeManager's SV-4.6 filter).
+        // existed to solve is now handled downstream, by keeping a DUPLICATE
+        // `original` out of the MASTER's switchable ABR set only (TranscodeManager's
+        // SV-4.6 filter / switchableVariants()) — a non-duplicate one is still a
+        // legitimate master level.
         $r1080 = $this->rung('1080p', 1920, 1080);           // 5_478_000
         $r720 = $this->rung('720p', 1280, 720);
         $dupe = $this->bestAvailableOriginal();              // 1920x1080 @ 5_478_000

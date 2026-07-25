@@ -320,9 +320,10 @@ class TranscodeManager
      * re-encoded "Original" duplicating the top rung is gone
      * ({@see \Phlix\Media\Streaming\LadderResult::streamVariants()}), so every job
      * now writes a real `media_voriginal.m3u8`; the duplicate-BANDWIDTH protection
-     * moved into the master's SV-4.6 switchable filter ({@see writeVodPlaylists()}),
-     * which now excludes `original` as well as copy variants. A pre-v9 job's job
-     * DIRECTORY is missing that media playlist and its persisted ladder was written
+     * moved to the master's SV-4.6 switchable filter ({@see switchableVariants()}),
+     * which withholds that duplicate from the ADVERTISED LEVELS only. The master's
+     * level set itself is unchanged from v8 — a pre-v9 job's DIRECTORY is simply
+     * missing the Original media playlist, and its persisted ladder was written
      * under the old rules, so it must not be reused.
      */
     private const JOB_KEY_VERSION = 'v9';
@@ -1657,9 +1658,10 @@ class TranscodeManager
      * Searches the clamped rungs (`renditions`) first, then the `original`
      * descriptor. `original` resolves regardless of `is_copy`:
      * {@see \Phlix\Media\Streaming\LadderResult::streamVariants()} now ALWAYS emits
-     * it into the master (stream-copy when the source is HLS-safe, else a genuine
-     * transcode at source resolution), so `seg-voriginal-*` requests must always
-     * be servable.
+     * it into the job's STREAM-VARIANT set (stream-copy when the source is HLS-safe,
+     * else a genuine transcode at source resolution) and it therefore always has a
+     * media playlist, so `seg-voriginal-*` requests must always be servable — even
+     * for the variants {@see switchableVariants()} keeps out of the MASTER.
      *
      * @param array<mixed>  $decoded LadderResult::toArray() shape: `{renditions:[...], original:{...}}`.
      * @param string|null   $variant Requested Rendition id.
@@ -1806,6 +1808,19 @@ class TranscodeManager
             isOriginal: ($rendition['is_original'] ?? false) === true,
             isCopy: ($rendition['is_copy'] ?? false) === true,
         );
+    }
+
+    /**
+     * True when a persisted rendition `id` is safe to interpolate into a playlist
+     * filename / master URI: a non-empty `[a-z0-9]+` token, the same allowlist the
+     * segment serve path enforces on `seg-v{id}-NNNNN.ts`
+     * ({@see \Phlix\Server\Http\Controllers\HlsController::serveFile()}). Every id
+     * {@see \Phlix\Media\Streaming\AbrLadder} emits satisfies it; a corrupt or
+     * hand-edited `variants` blob cannot escape the job directory through it.
+     */
+    private static function isUsableRenditionId(mixed $id): bool
+    {
+        return is_string($id) && preg_match('/^[a-z0-9]+$/', $id) === 1;
     }
 
     /**
@@ -2311,10 +2326,11 @@ class TranscodeManager
      * {@see \Phlix\Media\Streaming\LadderResult::streamVariants()} — one
      * `media_v{id}.m3u8` per variant (segment TIMING is IDENTICAL across variants;
      * only the encode target differs), plus a master listing the ABR-SWITCHABLE
-     * subset of them (the ladder rungs — see the SV-4.6 filter below; `original` has
-     * its own playlist but is not an ABR level). Legacy path (`$variants === null`):
-     * the single-variant `master.m3u8` + `media_0.m3u8` write, byte-identical to
-     * pre-A5.
+     * subset of them ({@see switchableVariants()}: every variant except a copy and
+     * except a transcode `original` that duplicates the top rung — both of which
+     * still get their own playlist for explicit selection). Legacy path
+     * (`$variants === null`): the single-variant `master.m3u8` + `media_0.m3u8`
+     * write, byte-identical to pre-A5.
      *
      * Multi-audio path (P3B-S3): when `$audioTracks` is non-empty, emits ALL
      * `#EXT-X-MEDIA:TYPE=AUDIO` renditions under ONE shared `GROUP-ID="aud"` in
@@ -2355,32 +2371,8 @@ class TranscodeManager
         // P3B-S3 multi-audio: emit audio groups + audio-only playlists when available.
         $hasMultiAudio = is_array($audioTracks) && count($audioTracks) > 1;
 
-        // SV-4.6: the master's switchable ABR set is the ladder RUNGS only — every
-        // `original` variant is excluded, for two distinct reasons:
-        //
-        //  - A COPY original's segment boundaries can drift off the uniform
-        //    timeline (input-side `-ss` seeking without `-force_key_frames` means
-        //    copy segments start at source GOP boundaries, not nominal segment
-        //    boundaries), which would break ABR switching mid-stream.
-        //  - A TRANSCODE original is frequently the SAME frame at effectively the
-        //    same BANDWIDTH as the top rung (a low-bitrate source caps them both to
-        //    the source bitrate). Advertising both would give the player two
-        //    identical-BANDWIDTH `#EXT-X-STREAM-INF` levels that it simply merges,
-        //    leaving ABR with no gradient to climb — the v7 defect that
-        //    LadderResult::streamVariants() used to "fix" by dropping the original
-        //    from the variant list entirely (and so never writing its playlist).
-        //    S49 moved that responsibility HERE, where it belongs: which variants
-        //    are ABR-switchable is a master-playlist concern, independent of which
-        //    variants exist.
-        //
-        // Every excluded variant still gets its own media playlist below, so the
-        // player can select "Original" manually (the client resolves it by
-        // height-matching a same-height rung, then loads media_voriginal.m3u8
-        // directly — see phlix-ui quality.ts levelIndexForVariant()).
-        $switchableVariants = array_values(array_filter(
-            $variants,
-            static fn (\Phlix\Media\Streaming\Rendition $v): bool => !$v->isCopy && !$v->isOriginal
-        ));
+        // SV-4.6: restrict the master's switchable ABR set — see switchableVariants().
+        $switchableVariants = self::switchableVariants($variants);
 
         // Degenerate case: if NOTHING is switchable, fall back to all variants
         // (shouldn't happen in practice — AbrLadder always emits ≥1 transcode rung
@@ -2413,6 +2405,65 @@ class TranscodeManager
                 $this->buildMediaPlaylist($duration, $segSeconds, $variant->id)
             );
         }
+    }
+
+    /**
+     * SV-4.6 — the ABR-SWITCHABLE subset of a job's stream variants: exactly the
+     * `#EXT-X-STREAM-INF` levels the master playlist advertises.
+     *
+     * Two (and ONLY two) kinds of variant are withheld from the master. Both keep
+     * their own `media_v{id}.m3u8`, which is what makes them explicitly selectable:
+     *
+     *  - A COPY variant, ALWAYS. Its segment boundaries can drift off the uniform
+     *    timeline (input-side `-ss` seeking with no `-force_key_frames`, so copy
+     *    segments start at source GOP boundaries rather than nominal ones), which
+     *    would break ABR switching mid-stream.
+     *  - A TRANSCODE `original` that {@see Rendition::duplicatesForAbr()} the top
+     *    rung — same frame, effectively the same BANDWIDTH, hence the same CODECS.
+     *    That happens whenever a low-bitrate source caps both to the source bitrate,
+     *    and advertising both would give the player two indistinguishable levels it
+     *    simply merges, leaving ABR no gradient to climb (the v7 defect).
+     *
+     * A transcode `original` that is NOT such a duplicate IS advertised — it is a
+     * genuine, ABR-safe extra top level (it goes through
+     * {@see segmentParamsForRendition()}'s non-copy branch, so it gets the same
+     * `-force_key_frames` and the same uniform boundaries as every rung), and it is
+     * the master's top level for the large class of sources whose original height
+     * matches no canonical rung (2.39:1 crops, DCI-2K, …). S49 fix round 1: an
+     * earlier revision excluded EVERY `original` here, which silently removed that
+     * top level, halved the auto-ABR ceiling for ordinary non-copy sources, and —
+     * because `phlix-ui` resolves "Original" by matching a master level of the same
+     * height — HID the very quality option S49 exists to restore. The rule below
+     * reproduces the pre-S49 master level set exactly, while still writing the
+     * Original media playlist that S49 added.
+     *
+     * @param list<Rendition> $variants Stream variants, highest-first, `original` first.
+     *
+     * @return list<Rendition> The subset to advertise, in the caller's order.
+     */
+    private static function switchableVariants(array $variants): array
+    {
+        // The top rung = the highest-BANDWIDTH variant that is neither a copy nor
+        // the `original` — i.e. `LadderResult::renditions[0]`, the same reference
+        // the pre-S49 fold compared against.
+        $topRung = null;
+        foreach ($variants as $variant) {
+            if (!$variant->isCopy && !$variant->isOriginal) {
+                $topRung = $variant;
+                break;
+            }
+        }
+
+        return array_values(array_filter(
+            $variants,
+            static function (\Phlix\Media\Streaming\Rendition $v) use ($topRung): bool {
+                if ($v->isCopy) {
+                    return false;
+                }
+
+                return !($v->isOriginal && $topRung !== null && $v->duplicatesForAbr($topRung));
+            }
+        ));
     }
 
     /**
@@ -4022,26 +4073,42 @@ class TranscodeManager
             // even for a never-folded stream-COPY original that the ladder had
             // always emitted correctly on first write.
             //
-            // A descriptor with no usable `id` is skipped rather than hydrated: its
-            // media playlist would be written as the meaningless `media_v.m3u8` and
-            // referenced as such from the master.
+            // A descriptor whose `id` is not a plain `[a-z0-9]+` token is skipped
+            // rather than hydrated: the id is interpolated straight into a path
+            // (`media_v{id}.m3u8`) and into a master URI, so an empty or
+            // hand-edited/corrupt id would write `media_v.m3u8` at best and outside
+            // the job dir at worst. This is the SAME allowlist the serve side applies
+            // to `seg-v{id}-NNNNN.ts` ({@see \Phlix\Server\Http\Controllers\HlsController::serveFile()}),
+            // and every id `AbrLadder` produces (`240p`…`2160p`, `{h}p`, `original`)
+            // satisfies it.
             $variants = [];
             $originalArr = $decoded['original'] ?? null;
-            if (is_array($originalArr) && is_string($originalArr['id'] ?? null) && $originalArr['id'] !== '') {
+            if (is_array($originalArr) && self::isUsableRenditionId($originalArr['id'] ?? null)) {
                 $variants[] = self::renditionFromArray($originalArr);
             }
             foreach ($renditionArrays as $rArr) {
-                if (!is_array($rArr) || !is_string($rArr['id'] ?? null) || $rArr['id'] === '') {
+                if (!is_array($rArr) || !self::isUsableRenditionId($rArr['id'] ?? null)) {
                     continue;
                 }
                 $variants[] = self::renditionFromArray($rArr);
             }
 
-            // Top variant drives the master playlist metadata.
-            $topVariant = $variants[0] ?? null;
-            $width = $topVariant?->width;
-            $height = $topVariant?->height;
-            $bandwidth = $topVariant?->bandwidth();
+            // Nothing usable in the persisted ladder: writing the playlists anyway
+            // would emit a master with ZERO `#EXT-X-STREAM-INF` levels — an
+            // unplayable file whose mere existence then short-circuits every later
+            // call to this method (see the docblock), i.e. a permanent failure. Fail
+            // honestly instead and leave the directory empty so a later attempt (or a
+            // fresh job) can still succeed.
+            if ($variants === []) {
+                return false;
+            }
+
+            // Top variant drives the master playlist metadata (the guard above
+            // guarantees there is one, so no null-safety dance is needed).
+            $topVariant = $variants[0];
+            $width = $topVariant->width;
+            $height = $topVariant->height;
+            $bandwidth = $topVariant->bandwidth();
 
             // Audio tracks live INSIDE the persisted ladder JSON (`variants`), keyed
             // `audio_tracks` — see the ensureHlsJob() write path. They are NOT a

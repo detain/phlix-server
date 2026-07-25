@@ -40,8 +40,12 @@ final readonly class LadderResult
      * source resolution (see {@see AbrLadder::build()}). It is never dropped, so
      * every job — including a HEVC/AC-3 one whose "Original" re-encode lands on
      * the same frame and bandwidth as its top rung — always publishes a real,
-     * servable `media_voriginal.m3u8` and always offers "Original" in a client's
-     * quality picker (S49).
+     * servable `media_voriginal.m3u8` for a client to request explicitly (S49).
+     * Whether it is ALSO an ABR level in the master is a separate, downstream
+     * decision (see below); and whether a client SURFACES it in its quality picker
+     * is the client's own gate — `phlix-ui` resolves "Original" by matching a
+     * master level of the same height, so a variant absent from the master with a
+     * height no rung shares can still be hidden there.
      *
      * S49 HISTORY / DO NOT REINTRODUCE. Until v8 this method FOLDED a re-encoded
      * (non-copy) "Original" whose frame + BANDWIDTH duplicated the top rung,
@@ -52,9 +56,10 @@ final readonly class LadderResult
      * ever written and "Original" 404'd for every HEVC/non-AAC title. The
      * duplicate-level defect is now handled where it belongs — in
      * {@see \Phlix\Media\Transcoding\TranscodeManager}'s SV-4.6 filter, which
-     * excludes BOTH copy and `original` variants from the master's switchable ABR
-     * set while still writing each one's media playlist. Do not re-add a filter
-     * here: this list decides which variants EXIST, not which are ABR-switchable.
+     * keeps a COPY original and a DUPLICATE transcode original out of the master's
+     * switchable ABR set (and only those) while still writing every variant's media
+     * playlist. Do not re-add a filter here: this list decides which variants
+     * EXIST, not which are ABR-switchable.
      *
      * @return list<Rendition>
      */

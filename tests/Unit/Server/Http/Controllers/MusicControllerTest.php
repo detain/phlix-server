@@ -127,6 +127,7 @@ class MusicControllerTest extends TestCase
         $this->assertSame(2, $body['artists'][0]['album_count']);
         $this->assertSame(10, $body['artists'][0]['track_count']);
         $this->assertSame(['Album 1', 'Album 2'], $body['artists'][0]['albums']);
+        $this->assertFalse($body['artists'][0]['albums_truncated']);
         // The permanently-zero `total` is now counted from music_artists.
         $this->assertSame(2197, $body['total']);
     }
@@ -236,6 +237,135 @@ class MusicControllerTest extends TestCase
         $this->assertSame(3, $body['artist']['album_count']);
         $this->assertSame(25, $body['artist']['track_count']);
         $this->assertSame(['Album A', 'Album B', 'Album C'], $body['artist']['albums']);
+        $this->assertFalse($body['artist']['albums_truncated'], 'A complete discography must not be flagged');
+    }
+
+    /**
+     * S99 review r2, MED-1: the artists LISTING caps each artist's embedded album
+     * titles at {@see MusicLibraryService::MAX_EMBEDDED_ROWS_PER_PARENT}, and the
+     * live library has three artists above that (142 / 109 / 104 albums). A client
+     * rendering `albums` beside "142 albums" must be able to tell that the list is
+     * short — the same contract `tracks_truncated` gives the album listing.
+     *
+     * @test
+     */
+    public function testTruncatedArtistAlbumListIsFlaggedAndKeepsTheTrueCount(): void
+    {
+        // Production's Michael Jackson shape: 142 albums, 100 titles returned.
+        $titles = [];
+        for ($i = 1; $i <= MusicLibraryService::MAX_EMBEDDED_ROWS_PER_PARENT; $i++) {
+            $titles[] = sprintf('Album %03d', $i);
+        }
+
+        $this->musicLibrary->method('getAllArtists')->willReturn([
+            new MusicArtistWithAlbums(
+                artist: new MusicArtist(id: 3, name: 'Michael Jackson'),
+                albumCount: 142,
+                trackCount: 1200,
+            ),
+        ]);
+        $this->musicLibrary->method('getAlbumTitlesByArtistIds')->willReturn([3 => $titles]);
+
+        /** @var array{artists: list<array<string, mixed>>} $body */
+        $body = json_decode($this->controller->listArtists(new Request(), [])->body, true);
+
+        $artist = $body['artists'][0];
+        $this->assertCount(100, $artist['albums'], 'The capped list is what was fetched');
+        $this->assertSame(142, $artist['album_count'], 'album_count must stay the TRUE total');
+        $this->assertTrue($artist['albums_truncated'], 'Truncation must be visible to the client');
+    }
+
+    /**
+     * The complement: a complete album list must NOT be flagged, or the flag is
+     * noise. Includes the exactly-at-the-window boundary, where the list is
+     * complete and must stay unflagged.
+     *
+     * @test
+     */
+    public function testCompleteArtistAlbumListIsNotFlaggedAsTruncated(): void
+    {
+        $titles = [];
+        for ($i = 1; $i <= MusicLibraryService::MAX_EMBEDDED_ROWS_PER_PARENT; $i++) {
+            $titles[] = sprintf('Album %03d', $i);
+        }
+
+        $this->musicLibrary->method('getAllArtists')->willReturn([
+            new MusicArtistWithAlbums(new MusicArtist(id: 3, name: 'Exactly A Hundred'), 100, 900),
+            new MusicArtistWithAlbums(new MusicArtist(id: 4, name: 'Only Two'), 2, 20),
+            new MusicArtistWithAlbums(new MusicArtist(id: 5, name: 'No Albums At All'), 0, 0),
+        ]);
+        $this->musicLibrary->method('getAlbumTitlesByArtistIds')->willReturn([
+            3 => $titles,
+            4 => ['One', 'Two'],
+        ]);
+
+        /** @var array{artists: list<array<string, mixed>>} $body */
+        $body = json_decode($this->controller->listArtists(new Request(), [])->body, true);
+
+        $this->assertFalse($body['artists'][0]['albums_truncated'], 'Exactly at the window is COMPLETE');
+        $this->assertCount(100, $body['artists'][0]['albums']);
+        $this->assertFalse($body['artists'][1]['albums_truncated']);
+        // An artist with no albums must not read as "there are more" (0 < 0).
+        $this->assertFalse($body['artists'][2]['albums_truncated']);
+        $this->assertSame([], $body['artists'][2]['albums']);
+    }
+
+    /**
+     * The artist DETAIL view asks for one artist, so it must raise the per-artist
+     * window to the absolute batch ceiling — exactly as `getAlbum()` does for
+     * tracks. Before S99 review r2 it passed the default 100 and returned 100 of
+     * Michael Jackson's 142 albums on the one endpoint that must not truncate.
+     *
+     * @test
+     */
+    public function testGetArtistRaisesThePerArtistAlbumWindowToTheBatchCeiling(): void
+    {
+        $this->musicLibrary->method('findArtistByName')->willReturn([
+            'id' => 9,
+            'name' => 'Michael Jackson',
+            'image_url' => null,
+            'album_count' => 142,
+            'track_count' => 1200,
+        ]);
+        $this->musicLibrary->expects($this->once())
+            ->method('getAlbumTitlesByArtistIds')
+            ->with([9], MusicLibraryService::MAX_EMBEDDED_ROWS)
+            ->willReturn([9 => array_map(static fn(int $i): string => 'Album ' . $i, range(1, 142))]);
+
+        /** @var array{artist: array<string, mixed>} $body */
+        $body = json_decode($this->controller->getArtist(new Request(), ['mbid' => 'Michael Jackson'])->body, true);
+
+        $this->assertCount(142, $body['artist']['albums'], 'Artist detail must not truncate a discography');
+        $this->assertFalse($body['artist']['albums_truncated']);
+    }
+
+    /**
+     * And the detail endpoint still flags truncation when even the raised window
+     * cannot carry the whole discography, so the invariant holds on both shapes.
+     *
+     * @test
+     */
+    public function testArtistDetailStillFlagsTruncationAboveTheBatchCeiling(): void
+    {
+        $this->musicLibrary->method('findArtistByName')->willReturn([
+            'id' => 9,
+            'name' => 'Absurd Discography',
+            'image_url' => null,
+            'album_count' => MusicLibraryService::MAX_EMBEDDED_ROWS + 100,
+            'track_count' => 99999,
+        ]);
+        $this->musicLibrary->method('getAlbumTitlesByArtistIds')->willReturn([
+            9 => array_map(
+                static fn(int $i): string => 'Album ' . $i,
+                range(1, MusicLibraryService::MAX_EMBEDDED_ROWS),
+            ),
+        ]);
+
+        /** @var array{artist: array<string, mixed>} $body */
+        $body = json_decode($this->controller->getArtist(new Request(), ['mbid' => 'x'])->body, true);
+
+        $this->assertCount(MusicLibraryService::MAX_EMBEDDED_ROWS, $body['artist']['albums']);
+        $this->assertTrue($body['artist']['albums_truncated']);
     }
 
     /**

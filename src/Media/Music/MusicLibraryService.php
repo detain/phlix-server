@@ -35,11 +35,15 @@ use Workerman\MySQL\Connection;
  * `getArtistWithAlbums(int)`, `searchArtists()` and `getRecentlyAdded()` have zero
  * `src/` callers — S99 deleted the `WebPortalRouter` music GET handlers that used
  * them (they took an int PK where every client sends a name). They are kept rather
- * than deleted because they are the ONLY references left to the `MusicArtist` /
- * `MusicAlbum` / `MusicTrack` / `MusicAlbumWithTracks` DTOs, so removing them turns
- * a one-file change into a four-class deletion that also has to decide the
+ * than deleted because they are the only references left to the `MusicAlbum` /
+ * `MusicTrack` / `MusicAlbumWithTracks` DTOs, so removing them turns a one-file
+ * change into a THREE-class deletion that also has to decide the
  * `MusicTrack::$mediaItemId` type bug below AND `phlix-contracts`' `src/Music.ts`,
  * which still mirrors those DTO shapes — i.e. a cross-repo sweep, not a fix round.
+ * ⚠ `MusicArtist` and `MusicArtistWithAlbums` are NOT in that set and must not be
+ * deleted with them: {@see getAllArtists()} constructs both on every served
+ * `GET /api/v1/music/artists` request (S99 review r2, LOW-4 — the earlier wording
+ * called it a four-class deletion and named a live DTO as dead).
  *
  * ⚠ **Fix this before reviving any of them:** `MusicTrack::$mediaItemId` is typed
  * `int` while `music_tracks.media_item_id` is `CHAR(36)`, so `MusicTrack::fromRow()`
@@ -90,9 +94,33 @@ class MusicLibraryService
      * 2,000 was chosen against measured production data, not guessed: the live
      * library's worst 100-album window holds **989** tracks (5,091 albums /
      * 29,245 tracks, max 125 tracks in any one album), and its worst 100-artist
-     * window holds **400** album titles — so today's library never truncates,
-     * while a pathological one is capped at ~860 KB / ~2,000 HMAC mints instead
-     * of being unbounded.
+     * window holds **400** album titles — **396** once the per-parent window
+     * below is applied. So **this batch ceiling never engages on today's library**
+     * (the per-parent window does: see {@see MAX_EMBEDDED_ROWS_PER_PARENT}), while
+     * a pathological one is capped at ~1.4 MB / ~2,000 HMAC mints instead of being
+     * unbounded.
+     *
+     * ⚠ **What it bounds, and what it does NOT** (S99 review r2, LOW-3). It bounds
+     * the response body, the HMAC count and PHP memory — all three measured on a
+     * 100-album × 300-track (30,000-row) fixture with production's average name
+     * lengths: **2,000 rows / 1,415.84 KB / ~10 ms of HMAC**, against 30,000 rows /
+     * ~20 MB / ~155 ms unbounded. It does **not** bound the DATABASE read:
+     * `ROW_NUMBER()` is computed over the full partition inside a derived table, so
+     * `WHERE r.rn <= ?` and `LIMIT ?` are applied only AFTER MySQL has materialized
+     * every matching row. At that 30,000-row fan-out the windowed query costs about
+     * the same as the unbounded one it replaced — it returns 2,000 rows instead of
+     * 30,000 and is still no cheaper (measured twice, in opposite directions: median
+     * **171 ms vs 150 ms** over 5 alternating samples here, 179–184 ms vs 229 ms in
+     * review r2) — plus an internal temp table proportional to the whole fan-out.
+     * Latent today —
+     * production's real 989 rows cost ~9 ms — but if it ever matters the DB-side
+     * bound is a per-album lateral/derived rewrite, not a bigger constant.
+     *
+     * NB the KB figure is the wire body: `Response::json()` encodes with
+     * `JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES` (`Response.php:135`), which is
+     * ~1.7× a compact encode of the same payload (measured 827 KB compact). An
+     * earlier "~860 KB" here was a compact-encode figure and understated the bytes
+     * that actually cross the relay.
      */
     public const MAX_EMBEDDED_ROWS = 2000;
 
@@ -103,8 +131,19 @@ class MusicLibraryService
      * per album / per artist rather than "the first N rows of the batch" — a
      * plain batch `LIMIT` would let the first few albums eat the whole budget
      * and hand the tail of the page an EMPTY track list, which reads as a
-     * broken album rather than a truncated one. Covers 5,089 of production's
-     * 5,091 albums and 2,196 of its 2,197 artists in full.
+     * broken album rather than a truncated one.
+     *
+     * ⚠ **This one DOES truncate production today** (S99 review r2, MED-2 — an
+     * earlier note here claimed "today's library never truncates", which is true of
+     * {@see MAX_EMBEDDED_ROWS} and false of this window). It covers **5,089 of
+     * production's 5,091 albums** and **2,194 of its 2,197 artists** in full;
+     * the exceptions are 2 albums (`~`, Elton John, 125 tracks;
+     * `Hello World - The Motown Solo Collection (3CD Set)`, Michael Jackson, 109)
+     * and 3 artists (Michael Jackson 142 albums, Def Leppard 109, Green Day 104).
+     * Nothing about that is silent: the list endpoints carry `tracks_truncated` /
+     * `albums_truncated` beside the TRUE `track_count` / `album_count`, and the two
+     * DETAIL endpoints raise the window to {@see MAX_EMBEDDED_ROWS} so a long
+     * compilation or discography comes back whole.
      */
     public const MAX_EMBEDDED_ROWS_PER_PARENT = 100;
 
@@ -524,14 +563,29 @@ class MusicLibraryService
      * reason: clamping the artist page to 100 says nothing about how many albums
      * those artists hold. `ROW_NUMBER()` windows the list per artist and the outer
      * `ORDER BY rn` makes truncation round-robin, so a long discography can never
-     * starve a later artist of its titles. Production's worst 100-artist window is
-     * 400 titles (max 142 for one artist), i.e. today nothing truncates.
+     * starve a later artist of its titles.
+     *
+     * Production's worst 100-artist window is 400 titles, so the 2,000-row batch
+     * ceiling never engages — but the **per-artist window does**: three artists hold
+     * more than {@see MAX_EMBEDDED_ROWS_PER_PARENT} albums (Michael Jackson 142,
+     * Def Leppard 109, Green Day 104). That is surfaced, not silent — the caller
+     * compares `count()` against the TRUE `album_count` and the response carries
+     * `albums_truncated` — and `MusicController::getArtist()` passes
+     * {@see MAX_EMBEDDED_ROWS} so artist DETAIL returns the whole discography.
+     *
+     * Like {@see getTracksByAlbumIds()}, the window is computed over the full
+     * partition inside a derived table, so the cap bounds the RESPONSE, not the
+     * database read (see {@see MAX_EMBEDDED_ROWS}).
      *
      * @param list<int> $artistIds Artist ids to fetch titles for (empty = no query).
      * @param int $perArtistLimit Titles per artist (clamped to
-     *        `[1, self::MAX_EMBEDDED_ROWS]`).
+     *        `[1, self::MAX_EMBEDDED_ROWS]`). The artist DETAIL endpoint passes
+     *        {@see MAX_EMBEDDED_ROWS} because it asks for exactly one artist and
+     *        must not truncate a long discography.
      * @return array<int, list<string>> Map of artist id to its album titles,
-     *         each list ordered by title.
+     *         each list ordered by title. The list is NOT de-duplicated, so its
+     *         `count()` is comparable to `album_count` even when an artist has two
+     *         albums with the same title.
      */
     public function getAlbumTitlesByArtistIds(
         array $artistIds,
@@ -874,6 +928,11 @@ class MusicLibraryService
      * - a per-album window (`ROW_NUMBER() OVER (PARTITION BY t.album_id)`), so
      *   the cap is per album rather than "the first N rows of the batch";
      * - an absolute batch ceiling of {@see MAX_EMBEDDED_ROWS}.
+     *
+     * Both bound the response, the HMAC count and PHP memory — **not** the database
+     * read: the window is computed over the full partition inside a derived table,
+     * so `WHERE r.rn <= ?` and `LIMIT ?` only apply after MySQL has materialized the
+     * whole fan-out. See {@see MAX_EMBEDDED_ROWS} for the measurements.
      *
      * The outer `ORDER BY r.rn` makes the ceiling degrade ROUND-ROBIN — every
      * album gets its track 1 before any album gets its track 2 — because a plain

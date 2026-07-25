@@ -79,6 +79,14 @@ class MusicController
      * exactly what the aggregate-across-all-libraries clients already expect
      * (there is no `library_id` parameter on any `/music/*` route).
      *
+     * Each artist embeds its album TITLES, fetched for the whole page in ONE
+     * batched, ROW-CAPPED query — see
+     * {@see MusicLibraryService::MAX_EMBEDDED_ROWS}. As on `/albums`, when the cap
+     * bites `album_count` stays the true total and `albums_truncated` is `true`, so
+     * a short `albums` list is never silent. It DOES bite on the live library: three
+     * artists hold more than {@see MusicLibraryService::MAX_EMBEDDED_ROWS_PER_PARENT}
+     * albums (142 / 109 / 104).
+     *
      * @param Request $request The HTTP request with optional query params:
      *   - limit: Maximum artists to return (default and hard cap: {@see PageLimit::MAX})
      *   - offset: Pagination offset (default: 0)
@@ -94,6 +102,7 @@ class MusicController
      *       "image_url": null,
      *       "album_count": 5,
      *       "track_count": 42,
+     *       "albums_truncated": false,
      *       "albums": ["Album 1", "Album 2"]
      *     }
      *   ],
@@ -121,13 +130,13 @@ class MusicController
 
         $shaped = [];
         foreach ($artists as $artistData) {
-            $shaped[] = [
-                'name' => $artistData->artist->name,
-                'image_url' => $artistData->artist->imageUrl,
-                'album_count' => $artistData->albumCount,
-                'track_count' => $artistData->trackCount,
-                'albums' => $albumTitles[$artistData->artist->id] ?? [],
-            ];
+            $shaped[] = $this->formatArtist(
+                $artistData->artist->name,
+                $artistData->artist->imageUrl,
+                $artistData->albumCount,
+                $artistData->trackCount,
+                $albumTitles[$artistData->artist->id] ?? [],
+            );
         }
 
         return (new Response())->json([
@@ -156,6 +165,7 @@ class MusicController
      *     "image_url": null,
      *     "album_count": 5,
      *     "track_count": 42,
+     *     "albums_truncated": false,
      *     "albums": ["Album 1", "Album 2"]
      *   }
      * }
@@ -176,16 +186,24 @@ class MusicController
             return (new Response())->status(404)->json(['error' => 'Artist not found']);
         }
 
-        $albumTitles = $this->musicLibrary->getAlbumTitlesByArtistIds([$artist['id']]);
+        // One artist, so the per-artist window is raised to the absolute batch
+        // ceiling — exactly as getAlbum() does for tracks: the detail view is the
+        // endpoint that must not truncate a long discography (the list view is the
+        // one under fan-out pressure). Without this the live library's three
+        // >100-album artists returned 100 of 142 / 109 / 104 albums HERE too.
+        $albumTitles = $this->musicLibrary->getAlbumTitlesByArtistIds(
+            [$artist['id']],
+            MusicLibraryService::MAX_EMBEDDED_ROWS,
+        );
 
         return (new Response())->json([
-            'artist' => [
-                'name' => $artist['name'],
-                'image_url' => $artist['image_url'],
-                'album_count' => $artist['album_count'],
-                'track_count' => $artist['track_count'],
-                'albums' => $albumTitles[$artist['id']] ?? [],
-            ],
+            'artist' => $this->formatArtist(
+                $artist['name'],
+                $artist['image_url'],
+                $artist['album_count'],
+                $artist['track_count'],
+                $albumTitles[$artist['id']] ?? [],
+            ),
         ]);
     }
 
@@ -580,6 +598,52 @@ class MusicController
         $trimmed = trim($value ?? '');
 
         return $trimmed === '' ? null : $trimmed;
+    }
+
+    /**
+     * Formats one artist (plus its already-fetched album titles) for API response.
+     *
+     * ONE shape for both `/artists` and `/artists/{name}` — the two used to be
+     * hand-rolled separately and drifted: the list applied the per-artist window
+     * while the detail did too (where the album twin deliberately does not), and
+     * NEITHER surfaced the truncation. Sharing the shape is what keeps
+     * `albums_truncated` from being present on one endpoint and absent on the other.
+     *
+     * `album_count` is the artist's TRUE album count and `albums` is the
+     * row-capped embedded list ({@see MusicLibraryService::MAX_EMBEDDED_ROWS}), so
+     * `albums_truncated` tells a client the two disagree instead of leaving it to
+     * read a 100-title list beside "142 albums" as complete. The two numbers count
+     * the SAME population, which is what makes the flag trustworthy:
+     * `album_count` is `COUNT(DISTINCT al.id)` over
+     * `music_artists LEFT JOIN music_albums ON artist_id`, and
+     * {@see MusicLibraryService::getAlbumTitlesByArtistIds()} selects
+     * `FROM music_albums WHERE artist_id IN (…)` with NO join at all — so unlike
+     * the album/track pair there is not even a filtering join that could drop a
+     * counted row and fake a truncation, and `music_albums.artist_id` is
+     * `NOT NULL` with an `ON DELETE CASCADE` FK (migration 065) so it cannot dangle.
+     *
+     * @param string $name Artist display name (its client-visible identity).
+     * @param string|null $imageUrl Artist image, if any.
+     * @param int $albumCount TRUE album count for the artist.
+     * @param int $trackCount TRUE track count for the artist.
+     * @param list<string> $albumTitles Row-capped embedded album titles.
+     * @return array<string, mixed> Formatted artist for response
+     */
+    private function formatArtist(
+        string $name,
+        ?string $imageUrl,
+        int $albumCount,
+        int $trackCount,
+        array $albumTitles,
+    ): array {
+        return [
+            'name' => $name,
+            'image_url' => $imageUrl,
+            'album_count' => $albumCount,
+            'track_count' => $trackCount,
+            'albums_truncated' => count($albumTitles) < $albumCount,
+            'albums' => $albumTitles,
+        ];
     }
 
     /**

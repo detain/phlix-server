@@ -73,8 +73,26 @@ final class MusicApiReadPathIntegrationTest extends TestCase
     /**
      * Tracks per album in that fixture. 100 x 25 = 2,500 embedded rows — denser
      * than production's worst 100-album window (989), so the ceiling binds.
+     *
+     * ⚠ EQUAL sizes are the DEGENERATE case (S99 review r2, LOW-6): every album
+     * reaches the same `rn`, which is why the round-robin and a flat batch `LIMIT`
+     * look alike here. The skewed shape that actually discriminates lives in
+     * {@see testSkewedAlbumSizesShareTheCeilingRoundRobinAndKeepPlayOrder}.
      */
     private const BULK_TRACKS_PER_ALBUM = 25;
+
+    /**
+     * The skewed fan-out fixture: production's real shape (a handful of long
+     * compilations beside a crowd of singles), sized so the arithmetic is exact.
+     * 1x125 + 20x100 + 79x1 = 2,204 real tracks over {@see PageLimit::MAX} albums.
+     */
+    private const SKEW_TRACK_COUNTS = [125, 100, 1];
+
+    /** How many albums carry each of {@see SKEW_TRACK_COUNTS}. */
+    private const SKEW_ALBUM_COUNTS = [1, 20, 79];
+
+    /** Discs are 50 tracks wide in the skewed fixture, so `disc_number` matters. */
+    private const SKEW_TRACKS_PER_DISC = 50;
 
     private ?Connection $db = null;
 
@@ -447,8 +465,11 @@ final class MusicApiReadPathIntegrationTest extends TestCase
      *    the tail of the page;
      * 3. `track_count` remains the TRUE indexed count and `tracks_truncated` is set,
      *    so a short list is never silent;
-     * 4. below the ceiling nothing is truncated at all — i.e. production's real
-     *    worst case (989) is untouched by this change.
+     * 4. below the ceiling nothing is truncated at all — i.e. the 2,000-row BATCH
+     *    ceiling never engages on production's real worst 100-album window (989
+     *    tracks). NB the 100-per-album window is a different bound and does engage:
+     *    two live albums hold >100 tracks (125 and 109), which is what
+     *    `tracks_truncated` is for.
      */
     public function testAlbumListEmbeddedTrackFanOutIsCappedAndTruncationIsVisible(): void
     {
@@ -530,6 +551,186 @@ final class MusicApiReadPathIntegrationTest extends TestCase
         }
         $this->assertSame(79 * self::BULK_TRACKS_PER_ALBUM, $underEmbedded);
         $this->assertLessThan(MusicLibraryService::MAX_EMBEDDED_ROWS, $underEmbedded);
+    }
+
+    /**
+     * S99 review r2, LOW-6: the fan-out test above seeds 100 albums of 25 tracks
+     * each, and with EQUAL sizes every album reaches the same `rn` — so a flat batch
+     * `LIMIT` and a per-album window are indistinguishable in the "no album is
+     * empty" dimension, and `ORDER BY t.id` is indistinguishable from
+     * `ORDER BY t.disc_number, t.track_number, t.id` because the fixture inserts
+     * tracks in play order. Neither property was actually pinned.
+     *
+     * This data set is production's real shape and is built to discriminate:
+     *
+     * - **Skewed:** 1 album of 125 tracks + 20 of 100 + 79 of 1 = 2,204 tracks over
+     *   a full 100-album page, so the round-robin arithmetic is exact and asymmetric
+     *   ({@see SKEW_TRACK_COUNTS}).
+     * - **Adversarially ordered:** the LONGEST albums hold the LOWEST `album_id`s,
+     *   so a flat `LIMIT` over `ORDER BY album_id` spends the entire 2,000-row budget
+     *   on them and leaves the 79 singles EMPTY.
+     * - **Tracks inserted in REVERSE play order,** so `music_tracks.id` order
+     *   disagrees with `disc_number, track_number` order and a window that sorts by
+     *   `id` returns each album's LAST tracks instead of its first.
+     */
+    public function testSkewedAlbumSizesShareTheCeilingRoundRobinAndKeepPlayOrder(): void
+    {
+        $db = $this->db;
+        $this->assertNotNull($db);
+
+        $skewArtist = $this->prefix . '0 Skew';
+        $trueCounts = $this->seedSkewedAlbums($skewArtist);
+        $this->assertSame(
+            self::SKEW_TRACK_COUNTS[0]
+            + (self::SKEW_ALBUM_COUNTS[1] * self::SKEW_TRACK_COUNTS[1])
+            + self::SKEW_ALBUM_COUNTS[2],
+            array_sum($trueCounts),
+            'Fixture arithmetic: 125 + 20x100 + 79x1 = 2,204 real tracks',
+        );
+
+        $payload = $this->json($this->controller()->listAlbums(
+            $this->request(['artist' => $skewArtist, 'limit' => (string) PageLimit::MAX]),
+            [],
+        ));
+
+        /** @var list<array<string, mixed>> $albums */
+        $albums = is_array($payload['albums'] ?? null) ? $payload['albums'] : [];
+        $this->assertCount(PageLimit::MAX, $albums, 'The whole 100-album page must come back');
+
+        // Play order per album, computed independently of the endpoint: ONE query,
+        // grouped in PHP (never one query per album).
+        $expectedOrder = $this->playOrderByAlbum(array_keys($trueCounts));
+
+        $embedded = 0;
+        $emptyAlbums = 0;
+        /** @var list<int> $perAlbum */
+        $perAlbum = [];
+        foreach ($albums as $album) {
+            /** @var list<array<string, mixed>> $tracks */
+            $tracks = is_array($album['tracks'] ?? null) ? $album['tracks'] : [];
+            $embedded += count($tracks);
+            $perAlbum[] = count($tracks);
+            if (count($tracks) === 0) {
+                $emptyAlbums++;
+            }
+
+            $title = (string) ($album['name'] ?? '');
+            $albumId = $this->skewAlbumIdByTitle($trueCounts, $title);
+            $trueCount = $trueCounts[$albumId];
+
+            $this->assertSame($trueCount, $album['track_count'], 'track_count must stay the TRUE indexed count');
+            $this->assertSame(
+                count($tracks) < $trueCount,
+                $album['tracks_truncated'],
+                sprintf(
+                    '%s: tracks_truncated must mean count(%d) < track_count(%d)',
+                    $title,
+                    count($tracks),
+                    $trueCount,
+                ),
+            );
+
+            // The embedded list must be a PREFIX of disc/track/id order — this is
+            // what fails if the window sorts by `id` (the fixture inserts in reverse).
+            $names = array_map(static fn(array $t): string => (string) $t['name'], $tracks);
+            $this->assertSame(
+                array_slice($expectedOrder[$albumId], 0, count($names)),
+                $names,
+                $title . ': the embedded list must be the FIRST tracks in disc/track order',
+            );
+        }
+
+        // Round-robin, with unequal sizes: rn=1 gives all 100 albums a track, rn
+        // 2..91 give 21 rows each (100 + 21x90 = 1,990), then 10 rows of rn=92 fill
+        // the budget to exactly 2,000. So 79 albums keep their single track WHOLE
+        // and the 21 long ones split the remainder 91/92.
+        $this->assertSame(0, $emptyAlbums, 'Round-robin truncation must never leave an album with zero tracks');
+        $this->assertSame(MusicLibraryService::MAX_EMBEDDED_ROWS, $embedded, 'The ceiling must bind exactly');
+
+        $distribution = array_count_values($perAlbum);
+        ksort($distribution);
+        $this->assertSame([1 => 79, 91 => 11, 92 => 10], $distribution, 'The ceiling must be shared round-robin');
+
+        // And the DETAIL endpoint returns the 125-track compilation WHOLE, in order.
+        $longestTitle = sprintf('Skew Album %03d', 1);
+        $detail = $this->json($this->controller()->getAlbum(
+            $this->request(['artist' => $skewArtist]),
+            ['mbid' => $longestTitle],
+        ));
+        /** @var list<array<string, mixed>> $detailTracks */
+        $detailTracks = is_array($detail['album']['tracks'] ?? null) ? $detail['album']['tracks'] : [];
+        $this->assertCount(self::SKEW_TRACK_COUNTS[0], $detailTracks, 'Album detail must not truncate');
+        $this->assertFalse($detail['album']['tracks_truncated']);
+        $longestId = $this->skewAlbumIdByTitle($trueCounts, $longestTitle);
+        $this->assertSame(
+            $expectedOrder[$longestId],
+            array_map(static fn(array $t): string => (string) $t['name'], $detailTracks),
+            'Album detail must return the whole list in disc/track order',
+        );
+    }
+
+    /**
+     * S99 review r2, MED-1: the artists endpoints embed each artist's album TITLES
+     * under the same per-parent window, and the live library has three artists above
+     * it (Michael Jackson 142 albums, Def Leppard 109, Green Day 104). The LIST must
+     * flag the short list; the DETAIL must not truncate at all.
+     *
+     * The flag is only trustworthy because both numbers count the same population:
+     * `album_count` is `COUNT(DISTINCT al.id)` over
+     * `music_artists LEFT JOIN music_albums`, and `getAlbumTitlesByArtistIds()`
+     * selects `FROM music_albums WHERE artist_id IN (…)` with no join at all. This
+     * test pins that equality against real rows at 142 / 100 / 2 / 0 albums.
+     */
+    public function testArtistAlbumListIsCappedAndFlaggedWhileArtistDetailIsWhole(): void
+    {
+        $prolific = $this->prefix . '0 Prolific';
+        $albumCount = 142;                                  // production's worst artist
+        $this->seedBulkAlbums($prolific, $albumCount, 0);
+
+        // --- the LIST: capped, flagged, and still carries the TRUE count ------
+        $payload = $this->json($this->controller()->listArtists($this->request(), []));
+        /** @var list<array<string, mixed>> $artists */
+        $artists = is_array($payload['artists'] ?? null) ? $payload['artists'] : [];
+
+        $byName = [];
+        foreach ($artists as $artist) {
+            $byName[(string) $artist['name']] = $artist;
+        }
+        $this->assertArrayHasKey($prolific, $byName, 'The seeded artist must be on page 1');
+
+        $row = $byName[$prolific];
+        $this->assertSame($albumCount, $row['album_count'], 'album_count must be the TRUE total');
+        $this->assertCount(
+            MusicLibraryService::MAX_EMBEDDED_ROWS_PER_PARENT,
+            $row['albums'],
+            'The listing caps embedded album titles per artist',
+        );
+        $this->assertTrue($row['albums_truncated'], 'A capped discography must advertise the truncation');
+        // Capped means the FIRST titles by (title, id), not an arbitrary 100.
+        $this->assertSame(
+            array_map(static fn(int $i): string => sprintf('Bulk Album %03d', $i), range(1, 100)),
+            $row['albums'],
+        );
+
+        // An artist whose discography fits is NOT flagged (or the flag is noise).
+        $alpha = $byName[$this->prefix . 'A Alpha'] ?? null;
+        $this->assertIsArray($alpha);
+        $this->assertSame(2, $alpha['album_count']);
+        $this->assertFalse($alpha['albums_truncated']);
+
+        // --- the DETAIL: the endpoint that must not truncate ------------------
+        $detail = $this->json($this->controller()->getArtist($this->request(), ['mbid' => $prolific]));
+        /** @var array<string, mixed> $artist */
+        $artist = is_array($detail['artist'] ?? null) ? $detail['artist'] : [];
+        $this->assertSame($albumCount, $artist['album_count']);
+        $this->assertCount($albumCount, $artist['albums'], 'Artist detail must return the WHOLE discography');
+        $this->assertFalse($artist['albums_truncated'], 'A complete list must not be flagged');
+
+        $alphaDetail = $this->json(
+            $this->controller()->getArtist($this->request(), ['mbid' => $this->prefix . 'A Alpha']),
+        );
+        $this->assertFalse($alphaDetail['artist']['albums_truncated']);
+        $this->assertSame(['Aardvark Album', 'Zed Album'], $alphaDetail['artist']['albums']);
     }
 
     /**
@@ -909,6 +1110,162 @@ final class MusicApiReadPathIntegrationTest extends TestCase
             }
         }
         $flush();
+    }
+
+    /**
+     * Seeds the skewed fan-out fixture: one artist, 100 albums of VERY unequal
+     * length, tracks inserted in REVERSE play order.
+     *
+     * Album titles ascend with insertion order, so `ORDER BY title` == `ORDER BY id`
+     * and the longest albums hold the lowest ids — the ordering under which a flat
+     * batch `LIMIT` starves the short albums instead of sharing round-robin.
+     *
+     * @param string $artistName Fully prefixed artist name.
+     * @return array<int, int> Map of album id => its TRUE track count, in title order.
+     */
+    private function seedSkewedAlbums(string $artistName): array
+    {
+        $db = $this->db;
+        $this->assertNotNull($db);
+
+        $db->query('INSERT INTO music_artists (name) VALUES (?)', [$artistName]);
+        $artistId = $this->lookupId('music_artists', 'name', $artistName);
+        $this->artistIds[] = $artistId;
+
+        /** @var list<int> $plan Track count per album, in insertion (= title) order. */
+        $plan = [];
+        foreach (self::SKEW_TRACK_COUNTS as $bucket => $tracks) {
+            for ($k = 0; $k < self::SKEW_ALBUM_COUNTS[$bucket]; $k++) {
+                $plan[] = $tracks;
+            }
+        }
+
+        // Albums, 100 rows per statement.
+        foreach (array_chunk($plan, 100, true) as $chunk) {
+            $tuples = [];
+            $params = [];
+            foreach ($chunk as $index => $tracks) {
+                $tuples[] = '(?, ?, ?, ?)';
+                array_push($params, $artistId, sprintf('Skew Album %03d', $index + 1), 2001, $tracks);
+            }
+            $db->query(
+                'INSERT INTO music_albums (artist_id, title, year, total_tracks) VALUES ' . implode(',', $tuples),
+                $params,
+            );
+        }
+
+        /** @var array<int, int> $trueCounts album id => true track count */
+        $trueCounts = [];
+        $rows = $db->query('SELECT id FROM music_albums WHERE artist_id = ? ORDER BY title', [$artistId]);
+        $this->assertIsArray($rows);
+        $this->assertCount(count($plan), $rows);
+        $albumIds = [];
+        foreach ($rows as $i => $row) {
+            $this->assertIsArray($row);
+            $albumIds[$i] = (int) $row['id'];
+            $trueCounts[(int) $row['id']] = $plan[$i];
+        }
+        // The discriminating property: longest album => lowest id.
+        $this->assertSame(min($albumIds), $albumIds[0], 'The 125-track album must hold the LOWEST album id');
+
+        $media = [];
+        $tracks = [];
+        $flush = function () use ($db, &$media, &$tracks): void {
+            if (count($media) > 0) {
+                $db->query(
+                    "INSERT INTO media_items (id, library_id, name, type, path, metadata_json) VALUES "
+                    . implode(',', array_fill(0, intdiv(count($media), 5), "(?, ?, ?, 'track', ?, ?)")),
+                    $media,
+                );
+                $media = [];
+            }
+            if (count($tracks) > 0) {
+                $db->query(
+                    "INSERT INTO music_tracks
+                        (media_item_id, album_id, artist_id, title, track_number, disc_number, duration_secs)
+                     VALUES " . implode(',', array_fill(0, intdiv(count($tracks), 7), '(?, ?, ?, ?, ?, ?, ?)')),
+                    $tracks,
+                );
+                $tracks = [];
+            }
+        };
+
+        foreach ($albumIds as $index => $albumId) {
+            // REVERSE: highest disc/track first, so auto-increment id order is the
+            // exact opposite of play order.
+            for ($t = $plan[$index]; $t >= 1; $t--) {
+                $disc = 1 + intdiv($t - 1, self::SKEW_TRACKS_PER_DISC);
+                $trackNumber = $t - (($disc - 1) * self::SKEW_TRACKS_PER_DISC);
+                $mediaItemId = Uuid::v4();
+                $name = sprintf('%sskew-%03d-%03d', $this->prefix, $index + 1, $t);
+                array_push(
+                    $media,
+                    $mediaItemId,
+                    $this->libraryId,
+                    $name,
+                    '/s99-music-it/' . $mediaItemId . '.flac',
+                    (string) json_encode(['sub_type' => 'track', 'name' => $name]),
+                );
+                array_push($tracks, $mediaItemId, $albumId, $artistId, $name, $trackNumber, $disc, 200);
+                if (count($tracks) >= 350) {
+                    $flush();
+                }
+            }
+        }
+        $flush();
+
+        return $trueCounts;
+    }
+
+    /**
+     * Play order (`disc_number, track_number, id`) per album, in ONE query.
+     *
+     * Computed straight from `music_tracks` so the expectation is independent of the
+     * endpoint under test.
+     *
+     * @param list<int> $albumIds
+     * @return array<int, list<string>> album id => track titles in play order
+     */
+    private function playOrderByAlbum(array $albumIds): array
+    {
+        $db = $this->db;
+        $this->assertNotNull($db);
+
+        $placeholders = implode(',', array_fill(0, count($albumIds), '?'));
+        $rows = $db->query(
+            "SELECT album_id, title FROM music_tracks
+             WHERE album_id IN ({$placeholders})
+             ORDER BY album_id, disc_number, track_number, id",
+            $albumIds,
+        );
+        $this->assertIsArray($rows);
+
+        /** @var array<int, list<string>> $byAlbum */
+        $byAlbum = [];
+        foreach ($albumIds as $id) {
+            $byAlbum[$id] = [];
+        }
+        foreach ($rows as $row) {
+            $this->assertIsArray($row);
+            $byAlbum[(int) $row['album_id']][] = (string) $row['title'];
+        }
+
+        return $byAlbum;
+    }
+
+    /**
+     * Resolve `Skew Album NNN` back to its album id via the seeded map.
+     *
+     * @param array<int, int> $trueCounts album id => true track count (title order)
+     */
+    private function skewAlbumIdByTitle(array $trueCounts, string $title): int
+    {
+        $index = (int) substr($title, -3);
+        $this->assertGreaterThan(0, $index, 'Unexpected skew album title: ' . $title);
+
+        $ids = array_keys($trueCounts);
+
+        return $ids[$index - 1];
     }
 
     private function artist(string $name): int

@@ -1,0 +1,2 @@
+function e(e){return{id:e.id,name:e.title,type:`movie`,poster_url:e.posterUrl??null,genres:[],year:e.year??null,rating:null,runtime:null,overview:null,actors:[],director:null,created_at:null,updated_at:null,sort_title:e.title,poster_srcset:null}}async function t(t,n={},r){let i={limit:String(n.limit??20)},a=await t.get(`/api/v1/me/recommendations`,i,r);return(Array.isArray(a.recommendations)?a.recommendations:[]).map(e)}export{t};
+//# sourceMappingURL=recommendations-DMDaEMq9-DTARxtqx.js.map

@@ -245,6 +245,25 @@ class MusicLibraryScanner
      * would process — using the SAME extension + skip filters — so a caller can
      * pre-compute the progress denominator without reading any tags.
      *
+     * **S96(d) — YES, THE TREE IS WALKED TWICE, AND THAT IS THE RIGHT TRADE.
+     * MEASURED, DO NOT "OPTIMISE" IT AWAY.** This walk costs **0.0069 ms/file**
+     * (median of 5 runs over a warm 10,000-file synthetic tree on PHP 8.3.6): ≈0.4 s
+     * for the 61,135-file production music path, against a scan that took **4 h 09 m**
+     * to its first durable write — about 0.003 % of the job. Removing the second walk
+     * needs one of three things, and every one of them costs more than it saves:
+     *
+     *  1. materialise the file list so the walk happens once — which reintroduces the
+     *     one-entry-per-file retention S95 removed (measured 1,463 B/entry ⇒ ≈89 MB
+     *     for that path, unbounded in library size);
+     *  2. drop the denominator and stream progress without a total — which is the
+     *     percentage the admin scan UI renders, i.e. the thing that made a stalled
+     *     scan visible at all;
+     *  3. cache a previous run's count — stale by construction, and no help at all on
+     *     a FIRST scan, which is the case that hurt.
+     *
+     * No tags are read here (no getID3, no ffprobe), which is what makes it cheap:
+     * the expensive part of a music scan is tag probing, not directory traversal.
+     *
      * @param string $path Root path to count under.
      * @return int Number of scannable audio files (0 when the path is unreadable).
      */

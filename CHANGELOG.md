@@ -672,6 +672,95 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- **`media_item_id` was silently ALWAYS dropped on all three music DTOs** (S121).
+  `MusicArtist::fromRow()`, `MusicAlbum::fromRow()` and `MusicTrack::fromRow()` each
+  coerced `media_item_id` through
+  `is_numeric($row['media_item_id']) ? (int)… : <fallback>`, while the column is a
+  **`CHAR(36)` UUID** in all three tables. `is_numeric()` is false for every UUID, so
+  the field was the fallback no matter what the row held: **`null`** on artist/album,
+  **`0`** on track. The coercion matches the columns' *pre-070* shape — they were
+  `INT UNSIGNED` when the music DTOs landed (2026-07-09) and migration **070**
+  converted all three to `CHAR(36)` the next day, because `media_items.id` is a UUID —
+  and it was never updated with them. Confirmed against real MySQL 8.0 rather than
+  inferred: `information_schema` reads `music_artists.media_item_id char(36) YES`,
+  `music_albums char(36) YES`, `music_tracks char(36) NO`, and `workerman/mysql` hands
+  the value back as a PHP `string`.
+
+  All three DTOs now declare `public ?string $mediaItemId` and coerce through a
+  private `mediaItemIdFromRow(): ?string`:
+  - a **non-string** (`int`, `float`, `bool`) or the **empty string** becomes `null`;
+  - **any other non-empty string passes through unchanged** — including `'0'` and a
+    truncated UUID. Format validation is deliberately not the DTO's job; the FK to
+    `media_items` is.
+  - **`?string` on the NOT NULL `music_tracks.media_item_id` is deliberate.**
+    `fromRow()` never throws — it is also fed hand-built, cached and JSON rows, not
+    just real `SELECT`s — so an absent column must still produce a value, and `null`
+    is the only one that cannot be mistaken for an id. The old `0` fallback could be:
+    `0` is a plausible-looking id that survives the `!== null` / `?? …` /
+    `is_string()` tests callers actually write, which is exactly how a dropped field
+    stayed invisible. So `null` on a track means "the SELECT did not carry the
+    column", not "no artwork yet" — the latter is what it legitimately means on
+    artist/album, whose columns are NULLable and which the scanner writes as NULL when
+    its `createMediaItem()` mint fails, backfilling on a later pass.
+  - The sibling `id` / `artist_id` / `album_id` / `year` / `total_tracks` /
+    `total_discs` / `track_number` / `disc_number` / `duration_secs` columns really are
+    `int unsigned` and **keep** their `is_numeric()` guards.
+
+  **No served payload changed** — re-verified, not assumed. `MusicController` formats
+  artists through `formatArtist()`
+  (`name`/`image_url`/`album_count`/`track_count`/`albums_truncated`/`albums`), and the
+  one route that could have nested a DTO's `toArray()` —
+  `MusicArtistWithAlbums::toArray()`, which nests `MusicArtist::toArray()` and so would
+  emit the field — has had no caller in `src/` since S99 removed the music GET handlers. So this closes a latent
+  trap on a **live** read path — `getAllArtists()` builds `MusicArtist::fromRow()` off
+  `SELECT a.*` on every `GET /api/v1/music/artists` — without widening any response.
+  The stale note in `MusicLibraryService`'s class docblock, which had described this
+  exact bug for **`MusicTrack` only** since S99, is replaced by a "fixed in S121" block
+  that states the asymmetric `null`-vs-`0` fallback correctly.
+
+  **Guarded mechanically, because a hand-written list is what created the bug** — the
+  defect was written down for `MusicTrack` alone and both siblings were missed.
+  `tests/Unit/Media/Music/MusicDtoMediaItemIdTest.php` therefore names no DTO: it walks
+  `src/Media/Music/` **recursively**, derives each file's PSR-4 FQCN, and reflects
+  **every** class that declares a `mediaItemId` property, asserting the declared type is
+  `?string` — so a fourth music DTO landing with the old `is_numeric()`/`int` coercion
+  goes red on its own, and the accompanying set-equality test forces these docblocks to
+  be updated with it. The walk **fails loudly instead of skipping**, in two shapes: a
+  file it cannot load raises a named `RuntimeException` quoting the unresolved class and
+  its path plus the usual causes, and two files resolving to **one** class identity
+  (filenames differing only in case, a `class_alias()`, a namespace that does not match
+  the directory, a symlink) raise one naming **both** colliding paths and inferring the
+  cause from them rather than asserting it. Either surfaces as a PHPUnit error with a
+  non-zero exit — a silently skipped file would be precisely the partial sweep this step
+  exists to remove. Two companions pin the behaviour itself:
+  `MusicDtoFromRowCoercionTest` covers the value space the predicate has to survive
+  (non-strings → `null`; `'0'` and `'123'` unchanged, asserted with `assertSame` so
+  neither an `!empty()` rewrite nor a re-added `(int)` cast survives; plus
+  `parseDateTime()`'s four outcomes), and `MusicDtoMediaItemIdIntegrationTest` reads a
+  minted UUID back out of all three tables against real MySQL in **both** pooled and
+  unpooled connection modes. 62 tests across the three files.
+
+  **Not fixed, documented instead** (each recorded in the DTO docblocks):
+  - **Two of the five copies of this coercion predicate are pinned by no test.** The
+    same predicate is inlined as a *local variable* in `MusicLibraryScanner`'s
+    `upsertArtist()` and `upsertAlbum()` — `grep -rn "media_item_id'\] !== ''" src/`
+    finds exactly those two and none of the DTOs — and a guard that reflects
+    *properties* structurally cannot see a local. Filed as **S127**; deferred rather
+    than bodged because S96 rewrites that file, so any source-text guard written now
+    would be rework.
+  - **Whitespace is not normalised.** There is no `trim()`, so `' '` returns `' '` and
+    a padded UUID keeps its padding; the two mutants that would add one leave both unit
+    test files green. It is the one input where the "make 'no id' detectable" goal
+    fails, and it is disclosed rather than closed because the driver cannot produce it —
+    MySQL strips a `CHAR` value's trailing pad spaces, so an all-space column reads back
+    as `''`.
+  - **`parseDateTime()` still fabricates a timestamp from `''`** (it returns *now*) and
+    returns `null` for a `DateTimeImmutable`, because its guard is `instanceof
+    \DateTime`. Pre-existing, byte-untouched by this change, filed as **S143**.
+  - **The TypeScript contract still disagrees.** `phlix-contracts`' `src/Music.ts`
+    types `mediaItemId` as a `number`. No client reads the field today; filed as
+    **S123** rather than edited from a `phlix-server` branch.
+
 - **An auth-provider settings save no longer WIPES the keys it did not send**
   (updates.md #54 / S48). A provider settings save is a wholesale replace of the
   stored document, and both admin controllers built that document from the request

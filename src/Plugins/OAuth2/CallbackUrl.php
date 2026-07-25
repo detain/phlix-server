@@ -119,10 +119,26 @@ namespace Phlix\Plugins\OAuth2;
  * A port that is the DEFAULT for the resolved scheme (`:443` under https, `:80`
  * under http) is normalised away on BOTH sides, so it neither blocks a match nor
  * leaks into the derived URL — the provider has the default-port form registered.
+ * That normalisation is load-bearing in production, not cosmetic: see
+ * {@see self::stripDefaultPort()} for the verified reason (a real front-end does
+ * present `Host: <domain>:443`) and do not remove it.
  *
  * The derived value is re-validated here in every case (no control characters, no
  * credentials/@, host charset restricted, numeric in-range port) before it is
  * used in a URL.
+ *
+ * ## Reaching the app directly on its listen port now fails closed
+ *
+ * phlix-server also binds `0.0.0.0:8096`, so a client that bypasses the reverse
+ * proxy presents `Host: <domain>:8096` — a DIFFERENT origin from the proxied
+ * `<domain>`/`<domain>:443` pair, so it answers `503 callback_url_not_configured`
+ * instead of deriving `https://<domain>:8096/auth/{provider}/callback`. That is the
+ * intended outcome: the callback registered with the OAuth App / IdP is the
+ * proxied form, so the provider would have rejected the ported value with
+ * `redirect_uri_mismatch`. The failure simply moves earlier and says what to fix.
+ * An operator who genuinely serves auth on that port sets the provider's absolute
+ * `redirect_uri` setting (resolution step 1), which is the escape hatch for every
+ * non-canonical origin.
  *
  * @package Phlix\Plugins\OAuth2
  * @since 0.102.0
@@ -169,11 +185,25 @@ final class CallbackUrl
      * allowlist somebody else's domain on an unconfigured box (review r2, NEW-1).
      * Garbage in the env (a URL, a path, an out-of-range port) is treated as
      * "unconfigured" rather than as an allowlist that can never match — either way
-     * the outcome is the actionable 503, never a derived URL.
+     * the outcome is the actionable 503, never a derived URL. Seven malformed
+     * shapes are pinned by
+     * `GithubCallbackControllerTest::test_a_garbage_phlix_domain_fails_closed_like_an_unset_one`
+     * (OIDC twin covers five of them), each asserted to produce the 503 with no
+     * `Location`, no correlation cookie and no state row:
+     * `https://phlix.test/`, `phlix.test/app`, `phlix.test:`, `phlix.test.`,
+     * `phlix.test:99999`, `phlix.test:https`, `'   '`.
      *
      * Any `:port` the operator configured is KEPT (review r3 finding 3): the port
      * belongs to the origin this gate exists to pin, so it is part of the compared
      * value rather than stripped.
+     *
+     * Note for test authors: the PHPUnit suite is hermetic with respect to an
+     * ambient `PHLIX_DOMAIN` — every test that depends on the value sets it in
+     * `setUp()` and restores the ambient value in `tearDown()`, and the
+     * no-allowlist cases pass `''` explicitly rather than relying on the env being
+     * unset. Verified at individual-test granularity: running the whole suite with
+     * and without `PHLIX_DOMAIN` exported yields identical per-test assertion
+     * counts. Keep it that way — do not read this env in a test without restoring it.
      */
     public static function configuredHost(): string
     {
@@ -420,6 +450,39 @@ final class CallbackUrl
      * Drop a `:port` suffix that is the DEFAULT for the given scheme, so
      * `example.com:443` under https (and `example.com:80` under http) compares —
      * and renders — as `example.com`.
+     *
+     * ## DO NOT "simplify" this away — it is what keeps production logging in
+     *
+     * This helper looks like cosmetic tidying next to {@see self::authorityKey()}.
+     * It is not: without it, whole-authority comparison (review r3 finding 3) would
+     * refuse every request whose `Host` carries an explicit `:443`, and real
+     * front-ends send exactly that. Verified read-only against the live deployment
+     * (S48 TestEngineer, 2026-07-25) — HAProxy 3.2.9 in front of phlix-server:
+     *
+     *  - it performs NO `Host` rewriting anywhere (no `set-header Host`,
+     *    `replace-header Host`, `reqirep`, `add-header Host`, `set-uri`) — the
+     *    `server phlix 127.0.0.1:8096` line is a TCP target, not a `Host` override —
+     *    so the app sees the `Host` the browser sent;
+     *  - its routing ACL is an EXACT `hdr(host) -i <domain>` equality match, and
+     *    HAProxy normalises the scheme's default port BEFORE that ACL, so
+     *    `Host: <domain>:443` is routed to the application just like the bare
+     *    `Host: <domain>` (probed: both reach the app; `Host: <domain>:8096` is
+     *    answered by HAProxy's 404 default backend and never reaches the app).
+     *
+     * So `<domain>` and `<domain>:443` are BOTH authorities the application really
+     * receives. With this normalisation both derive the registered, portless
+     * callback URL. Remove it and every `Host: <domain>:443` request answers
+     * `503 callback_url_not_configured` — i.e. an intermittent, front-end-dependent
+     * total login outage. Pinned by
+     * `CallbackUrlTest::test_the_production_haproxy_authority_still_derives_the_registered_callback`
+     * (neutering this method to `return $host` turns 13 tests RED).
+     *
+     * The one deliberate consequence: a client that BYPASSES the proxy and talks to
+     * the app's own listen port sends `Host: <domain>:8096`, which is a different
+     * origin and now fails closed instead of deriving a `:8096` callback. Nothing
+     * completable is lost — the provider has the `:443` form registered, so it
+     * would have answered `redirect_uri_mismatch` anyway; the failure just moves
+     * earlier and names the remedy. See the class docblock's escape hatch.
      */
     private static function stripDefaultPort(string $host, string $scheme): string
     {

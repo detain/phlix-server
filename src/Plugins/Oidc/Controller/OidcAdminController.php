@@ -19,7 +19,41 @@ use Phlix\Server\Http\Response;
 /**
  * Admin API controller for OIDC provider settings.
  *
- * Handles saving and loading OIDC configuration.
+ * Handles saving and loading OIDC configuration. As of S48 the values live in the
+ * DB-backed `plugin_settings` store (migration `093_plugin_settings.sql`) rather
+ * than a `settings.json` file — see {@see \Phlix\Plugins\PluginDbSettings}. The
+ * client secret is write-only: it is stripped from the read response, and a blank
+ * secret on save keeps the stored one.
+ *
+ * ## The absent-key contract (read this before touching {@see saveSettings()})
+ *
+ * The underlying store is a WHOLESALE REPLACE
+ * ({@see \Phlix\Plugins\Repository\PluginSettingsRepository::save()}), so this
+ * controller — not the store — is what stops a partial payload from erasing
+ * configuration. The invariant, for EVERY optional key (`scopes`, `redirect_uri`):
+ *
+ *   **a key ABSENT from the request body is PRESERVED; only an explicitly empty
+ *   (or non-string) value clears it.**
+ *
+ * Absent is never a deletion. This is a live scenario, not a hypothetical one: the
+ * shipped admin SPA's OIDC form posts `provider_url`/`client_id`/`client_secret`/
+ * `scopes` and knows nothing about `redirect_uri`, so without this rule one click
+ * on Save would wipe a `redirect_uri` configured through the API — and since S48
+ * fix r3 a lost `redirect_uri` makes every OIDC login answer
+ * `503 callback_url_not_configured`. It is also the exact shape that wiped live
+ * Trakt OAuth tokens on production during a plugin update. `array_key_exists()` —
+ * not `isset()`/`??`, which cannot tell "absent" from "sent as empty" — is how the
+ * distinction is made. `AuthProviderSettingsPreservationRealDbIntegrationTest`
+ * drives this controller against real MySQL and reads
+ * `plugin_settings.settings_json` back out of the table; reverting either key to a
+ * wholesale replace turns it RED with a message naming the incident.
+ *
+ * Unlike {@see \Phlix\Plugins\Github\Controller\GithubAdminController} this
+ * controller does not call {@see \Phlix\Auth\AuthProviderBootstrapper::refresh()}
+ * after a save; the saving worker picks the new settings up through the
+ * settings-fingerprint check in `ensureProviderRegistered()`, which runs on the
+ * request path of every `/auth/oidc/authorize` and callback, so no restart is
+ * needed either way.
  *
  * @package Phlix\Plugins\Oidc\Controller
  * @since 0.11.0
@@ -76,6 +110,14 @@ final class OidcAdminController
 
     /**
      * Save OIDC settings.
+     *
+     * Body: `provider_url` (required, https — or `http://localhost` for
+     * development), `client_id` (required), `client_secret` (optional — blank keeps
+     * the stored one), `scopes` (optional), `redirect_uri` (optional, must be an
+     * absolute http(s) URL). Any optional key omitted from the body keeps its
+     * stored value — see the class docblock's absent-key contract. `400` on
+     * `missing_provider_url` / `missing_client_id` / `invalid_provider_url` /
+     * `invalid_redirect_uri`, and a rejected save mutates nothing.
      *
      * @param Request $request
      * @param array<string, string> $params

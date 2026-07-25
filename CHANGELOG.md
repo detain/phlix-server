@@ -33,7 +33,20 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
     ONE-TIME lazy import of its legacy `settings.json`, and the file store remains
     the fallback when no DB store is injected (unit tests / no DB). Deliberately NOT
     the catalog `plugins` table — a catalog row would double-register the bundled
-    providers.
+    providers. Migration 093 is `CREATE TABLE IF NOT EXISTS` and is **idempotent on
+    the paths that bypass the `schema_migrations` checksum ledger** too (a raw
+    `mysql <` replay, or a database whose ledger row was lost) — verified on a
+    scratch MySQL 8.0 to re-apply with 0 errors and to leave existing settings rows
+    untouched.
+  - **Admin config endpoints for GitHub** — `GET`/`POST
+    /api/v1/admin/auth-providers/github/config` plus `GET
+    .../github/schema` (admin-only), alongside the provider-generic
+    `POST /api/v1/admin/auth-providers/github/{enable,disable}`. The read endpoint
+    never echoes `client_secret`, and `configured` means *id AND secret present* —
+    the same bar `AuthProviderBootstrapper` uses to build the provider, so the UI
+    cannot report "configured" and then have `enable` answer `409 not_configured`.
+    **There is no GitHub card in the admin SPA yet**, so configure it through these
+    endpoints (see the SSO guide in phlix-docs for copy-paste calls).
   - **OAuth2 state is browser-bound.** `DbOAuth2StateStore` (the `oauth_state_store`
     table, 600 s TTL, atomic one-shot consume — never `$_SESSION`, which is
     process-global under Workerman) plus `StateCorrelation`: a 32-byte secret in an
@@ -457,7 +470,56 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   configured domain and both remedies. `error: callback_url_not_configured` is the
   stable machine-readable code.
 
+  **The port is part of the compared origin**, with the scheme's DEFAULT port
+  normalised away on both sides: `PHLIX_DOMAIN=media.example.com` accepts
+  `Host: media.example.com` **and** `Host: media.example.com:443` under https (a
+  reverse proxy really does forward the latter), while
+  `PHLIX_DOMAIN=media.example.com:8443` accepts only that exact `host:port`. Mixed
+  pairs are distinct origins and refused (`https://host:80`, `http://host:443`).
+  **One behavioural delta to know:** phlix-server also binds `0.0.0.0:8096`, so a
+  client that BYPASSES the reverse proxy presents `Host: <domain>:8096` and now gets
+  the `503` instead of a derived `https://<domain>:8096/auth/…/callback`. Nothing
+  completable is lost — the callback registered with the OAuth App / IdP is the
+  proxied form, so the provider would have answered `redirect_uri_mismatch` for the
+  ported value anyway; the failure moves earlier and names the fix. Set the
+  provider's absolute `redirect_uri` if you genuinely serve auth on that port.
+
+  In-flight upgrade window: a state row minted under the older bare-host rule whose
+  `callback_url` carries a port `PHLIX_DOMAIN` does not name is no longer replayable,
+  so that one login attempt ends in the `503` and the retry (through the proxy)
+  succeeds. Bounded by the 600 s state TTL, and only for a login started on a
+  non-registered origin.
+
 ### Fixed
+
+- **An auth-provider settings save no longer WIPES the keys it did not send**
+  (updates.md #54 / S48). A provider settings save is a wholesale replace of the
+  stored document, and both admin controllers built that document from the request
+  body alone — so a client that did not know about a field silently deleted it. This
+  is the exact shape that **wiped live Trakt OAuth tokens on production** during a
+  plugin update, and it was live, not theoretical: the admin SPA's OIDC form posts
+  `provider_url`/`client_id`/`client_secret`/`scopes` and knows nothing about
+  `redirect_uri`, so one click on Save would have erased a `redirect_uri` configured
+  through the API — which, with the change above, hard-`503`s every OIDC login.
+
+  The invariant is now explicit in `GithubAdminController` and `OidcAdminController`,
+  for every optional key (`scopes`, `redirect_uri`): **a key ABSENT from the request
+  body is PRESERVED; only an explicitly empty value clears it.** Absent is never a
+  deletion. (`client_secret` already behaved this way — blank keeps the stored
+  secret.) A rejected save (`invalid_redirect_uri`, `missing_client_id`, …) mutates
+  nothing, and repeated partial saves do not erode the row. Guarded by
+  `AuthProviderSettingsPreservationRealDbIntegrationTest`, which drives both real
+  controllers through the real repository against real MySQL and reads
+  `plugin_settings.settings_json` straight back out of the table; reverting either
+  key on either controller to a wholesale replace fails it with a message naming the
+  incident.
+
+  **Not fixed, documented instead:** `LdapAdminController::saveSettings()` still
+  rebuilds its document from the request body alone (only `bind_pw` is kept on
+  blank), so a *scripted* partial save resets an omitted `port`/`ssl`/`bind_dn`/
+  `user_filter`/`admin_group` to its default. The admin console's LDAP form always
+  posts the complete set, so no shipped client is affected; API callers must send the
+  full map. Noted in the class docblock and in the SSO guide.
 
 - **External identities were stored with a hardcoded `provider='external'`**
   (updates.md #37 / S44). `UserRepository::findOrCreateByExternalId()` ignored which

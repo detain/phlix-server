@@ -22,24 +22,34 @@ use Phlix\Plugins\Oidc\Plugin as OidcPlugin;
 use Phlix\Shared\Auth\ProviderInterface;
 
 /**
- * Persists the enable-state of the built-in OIDC/LDAP auth providers and
+ * Persists the enable-state of the built-in OIDC / LDAP / GitHub auth providers and
  * (re-)registers the enabled + configured ones into the per-worker
  * {@see AuthProviderRegistry}.
  *
  * ## Why a dedicated settings flag, not the plugin pipeline
  *
  * The generic plugin-enable pipeline ({@see \Phlix\Plugins\PluginLoader::bootstrapEnabled()})
- * only iterates rows in the `plugins` DB table, and the bundled `src/Plugins/Oidc`
- * + `src/Plugins/Ldap` are never seeded into that table (there is no built-in
- * plugin seeding — the catalog only installs downloadable plugins into
- * `var/plugins`). They also carry their own `settings.json` config surface
- * ({@see OidcPlugin}/{@see LdapPlugin}), NOT the DB-backed plugin settings store.
- * Turning them into real catalog plugins is a larger migration (S48). Until then
- * the honest, minimal enable-state store is two boolean server settings written
- * through the existing {@see SettingsRepository}:
+ * only iterates rows in the `plugins` DB table, and the bundled `src/Plugins/Oidc`,
+ * `src/Plugins/Ldap` + `src/Plugins/Github` are never seeded into that table (there
+ * is no built-in plugin seeding — the catalog only installs downloadable plugins
+ * into `var/plugins`), and they must not be: a catalog row would double-register the
+ * provider (`bootstrapEnabled()` → `onEnable()` → `registerProvider()` **and**
+ * {@see self::registerEnabledProviders()}) and list a bundled provider in the
+ * catalog UI as an uninstallable download. So the enable-state store is one boolean
+ * server setting per provider, written through the existing
+ * {@see SettingsRepository}:
  *
  *   - `auth.oidc.enabled`
  *   - `auth.ldap.enabled`
+ *   - `auth.github.enabled`   (S48)
+ *
+ * Their CONFIGURATION, by contrast, is DB-backed as of S48: one row per plugin in
+ * the dedicated `plugin_settings` table (migration `093_plugin_settings.sql`) read
+ * through {@see \Phlix\Plugins\Repository\PluginSettingsRepository} and the
+ * {@see \Phlix\Plugins\PluginDbSettings} trait — **not** `settings.json`, which now
+ * survives only as a one-time lazy import source and as the no-DB fallback for unit
+ * tests. Enable-flags stayed in {@see SettingsRepository} deliberately: they are
+ * server settings, and moving them would have re-entangled the two stores.
  *
  * ## Per-worker registration
  *
@@ -49,8 +59,11 @@ use Phlix\Shared\Auth\ProviderInterface;
  * configured provider after a restart/graceful reload. A live admin
  * enable/disable ({@see self::enable()}/{@see self::disable()}) additionally
  * mutates the current worker's registry so the change is effective immediately
- * in at least that worker; the persisted flag governs every other worker on its
- * next boot pass.
+ * in at least that worker; every OTHER worker reconciles on its next request-path
+ * {@see self::ensureProviderRegistered()} — which also notices a CONFIG change made
+ * elsewhere by comparing a content fingerprint of the persisted settings
+ * ({@see self::settingsFingerprint()}) — so neither an enable/disable nor a
+ * settings save needs a restart.
  *
  * Not `final`: it is a collaborator of {@see \Phlix\Server\Http\Controllers\AuthProviderController}
  * and the start.php boot step, so tests substitute a double (mirroring the

@@ -27,6 +27,26 @@ use Phlix\Server\Http\Response;
  * {@see \Phlix\Plugins\Oidc\Controller\OidcAdminController}: the client secret is
  * never echoed back, and an empty secret on save keeps the existing one.
  *
+ * ## The absent-key contract (read this before touching {@see saveSettings()})
+ *
+ * The underlying store is a WHOLESALE REPLACE
+ * ({@see \Phlix\Plugins\Repository\PluginSettingsRepository::save()}), so this
+ * controller — not the store — is what stops a partial payload from erasing
+ * configuration. The invariant, for EVERY optional key:
+ *
+ *   **a key ABSENT from the request body is PRESERVED; only an explicitly empty
+ *   (or non-string) value clears it.**
+ *
+ * Absent is never a deletion. Dropping merely-absent keys is the exact shape that
+ * wiped live Trakt OAuth tokens on production during a plugin update, and since
+ * S48 fix r3 a lost `redirect_uri` makes every GitHub login answer
+ * `503 callback_url_not_configured`. `array_key_exists()` — not `isset()`/`??`,
+ * which cannot tell "absent" from "sent as empty" — is how the distinction is made.
+ * `AuthProviderSettingsPreservationRealDbIntegrationTest` drives this controller
+ * against real MySQL and reads `plugin_settings.settings_json` back out of the
+ * table; reverting either key to a wholesale replace turns it RED with a message
+ * naming the incident.
+ *
  * A successful save immediately REFRESHES the live provider in this worker
  * ({@see AuthProviderBootstrapper::refresh()}); every other worker notices on its
  * next request-path {@see AuthProviderBootstrapper::ensureProviderRegistered()}
@@ -107,6 +127,13 @@ final class GithubAdminController
 
     /**
      * POST replacement GitHub settings.
+     *
+     * Body: `client_id` (required), `client_secret` (optional — blank keeps the
+     * stored one), `scopes` (optional), `redirect_uri` (optional, must be an
+     * absolute http(s) URL). Any optional key omitted from the body keeps its
+     * stored value — see the class docblock's absent-key contract. `400` on a
+     * missing `client_id` (`missing_client_id`) or a relative/invalid
+     * `redirect_uri` (`invalid_redirect_uri`), and a rejected save mutates nothing.
      *
      * @param Request $request
      * @param array<string, string> $params

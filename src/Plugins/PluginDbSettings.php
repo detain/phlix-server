@@ -126,9 +126,19 @@ trait PluginDbSettings
     }
 
     /**
-     * Persist a replacement settings map (wholesale).
+     * Persist a replacement settings map (WHOLESALE REPLACE).
      *
-     * @param array<string, mixed> $settings
+     * The supplied map becomes the entire stored document on both back ends (DB row
+     * and legacy file): any key not present is DELETED. Callers must therefore read
+     * {@see self::getSettings()} first and re-emit every key they want to keep —
+     * **an absent key is a "leave it alone", never a deletion.** The admin
+     * controllers implement that contract with `array_key_exists()` per optional
+     * key; see
+     * {@see \Phlix\Plugins\Repository\PluginSettingsRepository::save()} for why it
+     * matters (this is the shape that wiped live Trakt OAuth tokens on production,
+     * and post-S48 a lost `redirect_uri` hard-503s every GitHub/OIDC login).
+     *
+     * @param array<string, mixed> $settings The COMPLETE settings map, not a patch.
      */
     public function saveSettings(array $settings): void
     {

@@ -129,7 +129,9 @@ public/
 
 ### Authentication & Security
 - **JWT-based Authentication**: Stateless auth with access tokens (1 hour TTL) and refresh tokens (7 days TTL)
-- **External SSO — OIDC & LDAP**: Optional OpenID Connect and LDAP login backends, toggled per-provider from the admin **Integrations → Auth providers** page (persisted as the `auth.oidc.enabled` / `auth.ldap.enabled` server settings). OIDC uses the authorization-code flow with PKCE + `state` + `nonce` and id-token validation (`GET /auth/oidc/authorize` → `GET /auth/oidc/callback`; register `<your-server>/auth/oidc/callback` at your IdP). LDAP rides `POST /auth/login` with an `ldap:`-prefixed username (e.g. `ldap:jdoe`). Sessions are delivered as httpOnly + Secure + SameSite=Lax cookies; the OIDC post-login redirect is allowlisted to same-origin paths only. **Account linking** lets an already-signed-in user attach an external identity to their account — `GET /auth/identities` lists linked identities, `GET /auth/identities/link/oidc` starts an OIDC link (verified via the IdP round-trip), and `POST /auth/identities/link/ldap` links via a live LDAP bind, and `DELETE /auth/identities/{id}` unlinks one (own-identity-only, and refused with `409` if it would remove your last sign-in method); linking always proves control of the identity, never mints a new session, and rejects an identity already linked to another account with `409`. A linked identity is now usable for login (it resolves your existing account instead of creating a duplicate), and the auth provider registry supports multiple instances of the same family (e.g. two OIDC issuers; configuring named instances from the admin console is a later step). See the SSO/external-auth guide in phlix-docs.
+- **External SSO — OIDC, LDAP & GitHub**: Optional OpenID Connect, LDAP and GitHub OAuth2 login backends, toggled per-provider from the admin **Integrations → Auth providers** page (persisted as the `auth.oidc.enabled` / `auth.ldap.enabled` / `auth.github.enabled` server settings). OIDC uses the authorization-code flow with PKCE + `state` + `nonce` and id-token validation (`GET /auth/oidc/authorize` → `GET /auth/oidc/callback`). **GitHub** is plain OAuth2 + PKCE with no OIDC discovery and no `id_token` (`GET /auth/github/authorize` → `GET /auth/github/callback`), identifying the user from `GET https://api.github.com/user` (default scopes `read:user user:email`) and keying the identity on GitHub's stable numeric id (`github.<id>`), never the renameable login or the e-mail. LDAP rides `POST /auth/login` with an `ldap:`-prefixed username (e.g. `ldap:jdoe`). Sessions are delivered as httpOnly + Secure + SameSite=Lax cookies; the OIDC/GitHub post-login redirect is allowlisted to same-origin paths only, and the OAuth `state` is additionally bound to the browser that started the flow by a short-lived HttpOnly correlation cookie (`phlix_oauth_oidc` / `phlix_oauth_github`). **Account linking** lets an already-signed-in user attach an external identity to their account — `GET /auth/identities` lists linked identities, `GET /auth/identities/link/oidc` and `GET /auth/identities/link/github` start a verified OAuth round-trip link, `POST /auth/identities/link/ldap` links via a live LDAP bind, and `DELETE /auth/identities/{id}` unlinks one (own-identity-only, and refused with `409` if it would remove your last sign-in method); linking always proves control of the identity, never mints a new session, and rejects an identity already linked to another account with `409`. A linked identity is usable for login (it resolves your existing account instead of creating a duplicate), and the auth provider registry supports multiple instances of the same family (e.g. two OIDC issuers; configuring named instances from the admin console is a later step).
+  - **Provider configuration is DB-backed** (migration `093_plugin_settings.sql`, table `plugin_settings`) rather than a per-plugin `settings.json`; an existing file is imported once, automatically, on first read — no operator action on upgrade. The OIDC and GitHub settings saves **preserve any optional key absent from the request body** (only an explicitly empty value clears one), so a partial payload cannot wipe a field it does not know about. (The LDAP save still rebuilds its document from the body alone apart from `bind_pw` — send it the complete map.)
+  - **The provider `redirect_uri` is always absolute and is pinned to `PHLIX_DOMAIN`.** Register `https://<your PHLIX_DOMAIN>/auth/oidc/callback` (or `/auth/github/callback`) at the IdP / OAuth App. If neither `PHLIX_DOMAIN` nor an absolute per-provider `redirect_uri` setting is configured, `/auth/{provider}/authorize` **fails closed** with `503 callback_url_not_configured`. See [Environment variables](#environment-variables) and the SSO/external-auth guide in phlix-docs for the full setup, including the GitHub provider (which has admin **API** endpoints but no admin-SPA card yet).
 - **Secure Password Hashing**: Argon2ID for password storage
 - **Multi-Device Sessions**: Track and manage sessions across devices
 - **User Profiles**: Multiple profiles per account with parental controls
@@ -415,6 +417,7 @@ the streaming and auth-hardening features and all have safe defaults.
 | `RATE_LIMIT_<SURFACE>_MAX` | per-surface default | Max attempts per window for an auth surface before it rate-limits. `<SURFACE>` is one of `REGISTER`, `REFRESH`, `WEBAUTHN_START`, `WEBAUTHN_FINISH`, `JWKS`, `WS_CONNECT` (defaults: register 5, refresh 30, webauthn_start/finish 10, jwks 120, ws_connect 30). See `config/server.php` → `rate_limit`. |
 | `RATE_LIMIT_<SURFACE>_WINDOW` | per-surface default | Window length in seconds for the matching surface (defaults: register 600, refresh 60, webauthn_start/finish 60, jwks 60, ws_connect 60). |
 | `TRUSTED_PROXIES` | loopback only (`127.0.0.1`, `::1`) | Comma-separated IP/CIDR list of reverse-proxy hops. Used to derive the **real** client IP from `X-Forwarded-For`/`X-Real-IP` for rate-limit keys. **This must reflect your nginx/HAProxy hops** — if a non-loopback proxy fronts the server and is not listed here, IP-keyed limits will bucket every request under the proxy address (or trust a client-forged header). The stock install fronts Phlix over loopback, so the default is correct there. |
+| `PHLIX_DOMAIN` | _unset_ | This server's **public authority** — `host` or `host:port`, no scheme and no path (e.g. `media.example.com`, `media.example.com:8443`). `scripts/install.sh --domain <domain>` writes it to the env file the systemd unit reads. Two uses: it is the base domain `config/hub.php` composes into `hub.domain`/`hub.public_url`, and it is the **allowlist for deriving the OAuth2/OIDC `redirect_uri`** — `/auth/{oidc,github}/authorize` builds `<scheme>://<Host><callback path>` only when the request's `Host` (port included, with the scheme's default `:443`/`:80` normalised away) equals this value. **Unset or malformed ⇒ nothing is derived and the flow fails closed** with `503 callback_url_not_configured`; a garbage value (a full URL, a trailing path or `.`, an out-of-range or non-numeric port, whitespace) is treated as *unconfigured*, never as an allowlist that cannot match. The escape hatch is a per-provider absolute `redirect_uri` setting, which keeps first priority and works with `PHLIX_DOMAIN` unset. |
 | `PHLIX_DEBUG_EVENTS` | `0` (off) | Diagnostic toggle. When truthy (`1`/`true`/`yes`/`on`) it (1) wraps the PSR-14 dispatcher in a debug decorator that logs every dispatched event class, and (2) enables the `events` log handler so those records are written to `.logs/events.log`. When off, `events.log` stays empty and no per-event debug logging happens. Leave off in production. `events.log` only ever receives `EVENTS`-channel records; `plugins.log` only `PLUGINS`-channel records; `app.log`/`error.log` still capture everything / all errors. See `config/logger.php`. |
 
 > **Rate limiting.** The auth surfaces above (`register` / `refresh` / WebAuthn
@@ -483,6 +486,18 @@ the streaming and auth-hardening features and all have safe defaults.
 | DELETE | `/api/v1/admin/users/{id}` | Delete a user — admin-only |
 | POST | `/api/v1/admin/users/{id}/set-admin` | Promote or demote a user — admin-only |
 | POST | `/api/v1/admin/users/{id}/reset-password` | Reset a user's password (returns new password) — admin-only |
+| GET | `/auth/oidc/authorize` · `/auth/github/authorize` | Start an external login (**unauthenticated**). Redirects to the IdP / GitHub with PKCE + `state`, sets the browser-binding correlation cookie, and stores the resolved absolute `redirect_uri` in the server-side state. `503 provider_not_configured` when the provider is not enabled+configured; `503 callback_url_not_configured` when no absolute callback URL can be resolved (see `PHLIX_DOMAIN`) |
+| GET | `/auth/oidc/callback` · `/auth/github/callback` | Provider redirect target (**unauthenticated**). One-shot `state` consume, correlation-cookie check (`403` on mismatch), token exchange with the *same* `redirect_uri` replayed from state, then session cookies + a `302` to the same-origin `redirect_uri`. Also handles the account-link branch |
+| GET | `/auth/identities` | List the current user's linked external identities — auth required |
+| GET | `/auth/identities/link/oidc` · `/auth/identities/link/github` | Start a verified OAuth link onto the current account — auth required |
+| POST | `/auth/identities/link/ldap` | Link an LDAP identity via a live bind (body `{username, password}`) — auth required |
+| DELETE | `/auth/identities/{id}` | Unlink one of the current user's identities (`404` if not yours, `409 last_sign_in_method` if it is your last) — auth required |
+| GET | `/api/v1/admin/auth-providers` | List registered auth providers — admin-only |
+| POST | `/api/v1/admin/auth-providers/{name}/enable` \| `/disable` | Enable/disable `oidc`, `ldap` or `github` (`409 not_configured` if it has no saved config) — admin-only |
+| GET/POST | `/api/v1/admin/auth-providers/oidc/config` | Read / save OIDC config (`provider_url`, `client_id`, `client_secret` write-only, `scopes`, `redirect_uri`). An absent optional key is **preserved**, not cleared — admin-only |
+| GET/POST | `/api/v1/admin/auth-providers/ldap/config` | Read / save LDAP config; `POST .../ldap/test` dry-runs a bind — admin-only |
+| GET/POST | `/api/v1/admin/auth-providers/github/config` | Read / save GitHub config (`client_id`, `client_secret` write-only, `scopes`, `redirect_uri`); `configured` means id **and** secret are present. An absent optional key is **preserved** — admin-only |
+| GET | `/api/v1/admin/auth-providers/{oidc,ldap,github}/schema` | JSON schema for the provider's config form — admin-only |
 
 **Rate limiting.** `POST /auth/register`, `POST /auth/refresh`, the WebAuthn
 login `start`/`finish` endpoints, and the public JWKS endpoint reply
@@ -543,6 +558,33 @@ always-`true` behavior.
 ./vendor/bin/phpunit --testsuite Unit
 ./vendor/bin/phpunit --testsuite Integration
 ```
+
+**Real-database integration tests self-skip.** Tests under `tests/Integration/`
+that need a live MySQL probe the configured host first and skip when it is
+unreachable, so `./vendor/bin/phpunit` is green on a machine with no database —
+it just reports more skips. To actually exercise them, point the suite at a
+throwaway MySQL that has had `php scripts/run-migrations.php` applied:
+
+```bash
+DB_HOST=127.0.0.1 DB_PORT=3306 DB_DATABASE=phlix_test DB_USER=root DB_PASSWORD=root \
+  ./vendor/bin/phpunit --no-coverage
+```
+
+CI does exactly this (`.github/workflows/phpunit.yml` provisions a `mysql:8.0`
+service and runs the migrations before the suite), so these tests are not
+decorative. Note that the network-dependent group is excluded by `phpunit.xml`
+on purpose: `Phlix\Plugins\OAuth2\OAuth2HttpClient` (the live OAuth2 transport)
+is driven by a fake in every provider test and is effectively uncovered — closing
+that gap needs a live HTTP fixture.
+
+**Keep the suite hermetic w.r.t. the environment.** `PHLIX_DOMAIN` changes real
+behaviour (it is the OAuth callback-URL allowlist — see
+[Environment variables](#environment-variables)), so every test that depends on
+it sets it in `setUp()` and restores the ambient value in `tearDown()`, and the
+"no allowlist" cases pass `''` explicitly instead of relying on the env being
+unset. Running the whole suite with and without `PHLIX_DOMAIN` exported yields
+identical per-test assertion counts; if you add a test that reads an env var,
+restore it.
 
 ### Code Standards
 

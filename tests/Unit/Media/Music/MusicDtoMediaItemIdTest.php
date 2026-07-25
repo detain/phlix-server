@@ -415,17 +415,23 @@ final class MusicDtoMediaItemIdTest extends TestCase
                     // ⚠ Name BOTH colliding paths, and INFER the cause from them rather
                     // than assert one (S121 review r5 INFO-1). The first version printed
                     // only the current $file plus the search directory and always blamed
-                    // "names differing only in case". For a `class_alias()` collision the
-                    // path that old message NAMED — $file, the CURRENT one — was the REAL
-                    // class's own file, so it fingered a perfectly correct file — measured:
-                    // a probe aliasing MusicTrack from Aaa/Alias.php read "reached
-                    // …\MusicTrack twice, from …/src/Media/Music/MusicTrack.php and from an
-                    // earlier file under …", never mentioning Aaa/Alias.php at all. Which
-                    // SORTED position either file lands in depends on walk order, so
-                    // neither this comment nor the message below claims one (S121 review
-                    // r6). A guard that fires loudly but blames an innocent file is the
-                    // kind the next reader deletes as broken, which is exactly the failure
-                    // mode this sweep exists to stop.
+                    // "names differing only in case". For the `class_alias()` collision
+                    // measured below (that probe, and that probe only), the path the old
+                    // message NAMED — $file, the CURRENT one — was the REAL class's own
+                    // file, so it fingered a perfectly correct file: a probe aliasing
+                    // MusicTrack from Aaa/Alias.php read "reached …\MusicTrack twice, from
+                    // …/src/Media/Music/MusicTrack.php and from an earlier file under …",
+                    // never mentioning Aaa/Alias.php at all. That report generalises no
+                    // further than that one ordering. Which of the pair $file is, is
+                    // decided by walk order alone: r6's mirror probe (Zzz/Alias.php, which
+                    // sorts AFTER MusicTrack.php) made $file the ALIAS, so for THAT
+                    // ordering the old message's one named path would have been the
+                    // REDUNDANT file instead. Which SORTED position either file lands in
+                    // therefore depends on walk order, so neither this comment nor the
+                    // message below claims one (S121 review r6/r7). A guard that fires
+                    // loudly but blames an innocent file is the kind the next reader
+                    // deletes as broken, which is exactly the failure mode this sweep
+                    // exists to stop.
                     $first = $firstFile[$canonical];
                     $cause = strtolower($first) === strtolower($file)
                         // Measured discriminator, not a guess: the case-variant shape is

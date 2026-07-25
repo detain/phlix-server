@@ -145,6 +145,29 @@ final readonly class MusicAlbum
      * `media_items` is). What IS measured: MySQL strips a `CHAR` value's trailing
      * pad spaces on read, so an all-space value arrives as `''` and is rejected here.
      *
+     * 🟡 **RESIDUAL, disclosed rather than closed (S121 review r8 INFO-2): whitespace
+     * is neither normalised nor pinned.** There is no `trim()` here, so `' '` returns
+     * `' '`, `"\0"` returns `"\0"`, and a padded `' <uuid> '` keeps its padding
+     * byte-for-byte. Measured: the two mutants that would add one —
+     * `is_string($value) && trim($value) !== ''` and `? trim($value) : null` — leave
+     * BOTH S121 unit test files green (`MusicDtoFromRowCoercionTest` `OK (31, 51)`,
+     * `MusicDtoMediaItemIdTest` `OK (27, 56)`, exit 0 each), so nothing in the suite
+     * would notice either edit. This is the ONE input where the "make 'no id'
+     * detectable" goal stated above does NOT hold: `' '` is a non-null, non-empty
+     * string, so it survives `!== null`, `?? …` and `is_string()` exactly as `''`
+     * would.
+     *
+     * It is disclosed rather than fixed because the driver cannot deliver it. MySQL
+     * strips only the TRAILING pad spaces (paragraph above), so an all-space column
+     * reads back as `''`; a LEADING space is not stripped, but `CHAR(36)` cannot hold
+     * a space plus a full 36-character UUID, so a padded value in this column is
+     * already not a mintable `media_items.id` — i.e. the junk this helper deliberately
+     * does not validate. That leaves hand-built, cached and JSON rows as the only
+     * route in, the same not-from-the-driver route as the pinned int `0`. **Adding
+     * `trim()` here would be a behaviour change and is deliberately NOT part of
+     * S121** — r8 rated it non-blocking INFO. A data set asserting today's behaviour
+     * (`' '` → `' '`) is what would kill both mutants if it is ever worth pinning.
+     *
      * ⚠ **The sweep is FIVE sites, not three — one grep is a false all-clear.**
      * `grep -rn mediaItemIdFromRow src/` finds only these three DTO helpers. The
      * same predicate is ALSO inlined twice in `MusicLibraryScanner`, inside
@@ -170,6 +193,7 @@ final readonly class MusicAlbum
      *
      * @param array<string, mixed> $row Database row
      * @return string|null The UUID, or null when the column is absent/NULL/empty
+     *                     (whitespace-only is NOT "empty" here — it passes through)
      */
     private static function mediaItemIdFromRow(array $row): ?string
     {

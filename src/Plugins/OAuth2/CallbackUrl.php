@@ -32,12 +32,13 @@ namespace Phlix\Plugins\OAuth2;
  *     working Trakt flow uses, {@see \Phlix\Server\Http\Controllers\TraktOAuthController});
  *  2. otherwise derive `<scheme>://<Host><callback path>` from the request — but
  *     ONLY when the request's `Host` matches the operator-configured public
- *     hostname ({@see self::configuredHost()}) — so a single-hostname deployment
- *     works with no configuration at all;
+ *     hostname ({@see self::configuredHost()}), so a single-hostname deployment
+ *     that ran `scripts/install.sh --domain` needs no per-plugin configuration;
  *  3. otherwise `null` — the caller answers 503 with an actionable code rather
  *     than sending a value the provider is guaranteed to reject.
  *
- * A path-only value is NEVER produced.
+ * A path-only value is NEVER produced, and neither is a value derived from an
+ * unvouched-for `Host`.
  *
  * ## The Host allowlist (review r2, NEW-1 — MED)
  *
@@ -68,10 +69,38 @@ namespace Phlix\Plugins\OAuth2;
  * `503 callback_url_not_configured`, which an operator fixes by setting the
  * provider's `redirect_uri` setting (resolution step 1, unaffected).
  *
- * When `PHLIX_DOMAIN` is unset (a dev box / an install that never ran
- * `--domain`) there is no allowlist to enforce and the pre-r2 behaviour is kept:
- * gating on the `config/hub.php` fallback literal (`phlix.media`) would 503 every
- * login on such a box, which is strictly worse than the risk it removes.
+ * ## Fail CLOSED when there is no allowlist (review r3)
+ *
+ * Review r2's first cut treated an unset `PHLIX_DOMAIN` as "no allowlist" and
+ * kept deriving from any syntactically valid `Host`. That left the attack above
+ * **fully open on every deployment that never ran `install.sh --domain`** — i.e.
+ * exactly the population least likely to notice. So the rule is now:
+ *
+ *   **no configured public hostname ⇒ NO derivation at all** ⇒ `resolve()`
+ *   returns null ⇒ the caller answers `503 callback_url_not_configured` with an
+ *   actionable message (set `PHLIX_DOMAIN`, or set the plugin's absolute
+ *   `redirect_uri` setting — resolution step 1, which keeps first priority and
+ *   works with `PHLIX_DOMAIN` unset).
+ *
+ * This cannot regress a working deployment, which is what makes fail-closed the
+ * cheap choice here: review r1 finding 1 established that the *relative*
+ * `redirect_uri` these flows sent before S48's fix round makes them fail against
+ * any real provider (`redirect_uri_mismatch`, the browser never returns). GitHub
+ * auth is brand new in S48 and OIDC has been broken against a real IdP since S44
+ * wired it, so there is no population of working end-to-end deployments to
+ * break. Fail-closed costs nobody a working login; fail-open costs everyone who
+ * has not set one env var.
+ *
+ * ## Accepted behaviour change (documented so it is not a surprise)
+ *
+ * With `PHLIX_DOMAIN` set, reaching `/auth/{provider}/authorize` over anything
+ * OTHER than that hostname — a LAN IP (`https://192.168.1.10:8096/…`), `localhost`, or the
+ * relay/hub hostname — now answers `503 callback_url_not_configured` instead of
+ * deriving a callback from it. Such a flow could never have completed anyway: the
+ * provider has the registered domain, not the LAN IP, so it would have answered
+ * `redirect_uri_mismatch`. An operator who genuinely serves auth on a second
+ * hostname sets that provider's `redirect_uri` setting to the absolute URL they
+ * registered with the provider (resolution step 1, unaffected by the allowlist).
  *
  * The derived value is re-validated here in every case (no control characters, no
  * credentials/@, host charset restricted, numeric in-range port) before it is
@@ -110,17 +139,19 @@ final class CallbackUrl
     }
 
     /**
-     * The operator-configured public hostname derivation is allowed for, or '' when
-     * none is configured (no allowlist → derive from any syntactically valid Host).
+     * The ONE public hostname a request-derived callback URL may use, or '' when
+     * none is configured — in which case NOTHING may be derived (fail closed; see
+     * the class docblock).
      *
      * Read from `PHLIX_DOMAIN` — set by `scripts/install.sh --domain` and the SAME
      * env value `config/hub.php` composes into `hub.domain`/`hub.public_url`. The
      * env is read rather than `$config['hub']['domain']` deliberately:
      * `config/hub.php:42` substitutes the literal `phlix.media` when the env is
-     * empty, so the config value is NEVER empty and gating on it would 503 every
-     * login on an unconfigured box (review r2, NEW-1). Garbage in the env is
-     * ignored (treated as "unconfigured") rather than producing an allowlist that
-     * can never match.
+     * empty, so the config value is NEVER empty and gating on it would silently
+     * allowlist somebody else's domain on an unconfigured box (review r2, NEW-1).
+     * Garbage in the env (a URL, a path, an out-of-range port) is treated as
+     * "unconfigured" rather than as an allowlist that can never match — either way
+     * the outcome is the actionable 503, never a derived URL.
      */
     public static function configuredHost(): string
     {
@@ -148,7 +179,8 @@ final class CallbackUrl
      *                                    `/auth/github/callback`.
      * @param string      $allowedHost    The ONLY hostname a `Host`-derived value may
      *                                    use ({@see self::configuredHost()}); '' =
-     *                                    no allowlist configured. Required, not
+     *                                    nothing may be derived at all (fail
+     *                                    closed — review r3). Required, not
      *                                    defaulted, so a new call site cannot
      *                                    silently opt out of the r2 NEW-1 gate.
      */
@@ -175,11 +207,16 @@ final class CallbackUrl
      * reachable input; re-running the authorize-time rules on the way out is cheap
      * now that they exist, and it also hardens the legacy-row fallback. A value is
      * replayable when it is absolute AND either byte-identical to the configured
-     * setting or (with an allowlist in force) hosted on the allowlisted hostname.
+     * setting or hosted on the allowlisted hostname — mirroring the two ways
+     * {@see self::resolve()} can produce one. With no allowlist configured only the
+     * configured setting can match, exactly as on the authorize leg (fail closed,
+     * review r3); an in-flight state row that predates this rule falls back to a
+     * fresh resolve, which answers the actionable 503.
      *
      * @param string $url         The state-carried callback URL.
      * @param string $configured  The `redirect_uri` plugin setting (may be '').
-     * @param string $allowedHost {@see self::configuredHost()}; '' = no allowlist.
+     * @param string $allowedHost {@see self::configuredHost()}; '' = only the
+     *                            configured setting is replayable.
      */
     public static function isReplayable(string $url, string $configured, string $allowedHost): bool
     {
@@ -190,7 +227,7 @@ final class CallbackUrl
             return true;
         }
         if ($allowedHost === '') {
-            return true;
+            return false;
         }
 
         $host = parse_url($url, PHP_URL_HOST);
@@ -199,9 +236,27 @@ final class CallbackUrl
     }
 
     /**
+     * A log-safe rendering of a client-supplied `Host` header, for the actionable
+     * 503's log line.
+     *
+     * `Host` is attacker-controlled, so it is stripped of everything outside
+     * printable US-ASCII (a CR/LF would otherwise let a forged Host forge whole log
+     * lines) and length-capped.
+     */
+    public static function sanitizeHostForLog(?string $host): string
+    {
+        if (!is_string($host) || trim($host) === '') {
+            return '(none)';
+        }
+        $clean = preg_replace('/[^\x21-\x7E]/', '', $host) ?? '';
+
+        return $clean === '' ? '(unprintable)' : substr($clean, 0, 128);
+    }
+
+    /**
      * Build `<scheme>://<host><path>` from the request's `Host` header, or null
-     * when there is no usable host — or when an allowlist is configured and the
-     * presented host is not it (review r2, NEW-1).
+     * when no public hostname is configured, when there is no usable host, or when
+     * the presented host is not the configured one (review r2 NEW-1 / r3).
      */
     private static function fromHost(
         ?string $host,
@@ -209,6 +264,16 @@ final class CallbackUrl
         string $callbackPath,
         string $allowedHost,
     ): ?string {
+        // FAIL CLOSED (review r3). No configured public hostname ⇒ there is nothing
+        // to vouch for the client-supplied Host with, so refuse to derive at all
+        // rather than reopening the NEW-1 phishing chain on every box that never ran
+        // `install.sh --domain`. The caller answers 503 callback_url_not_configured,
+        // which the operator fixes with PHLIX_DOMAIN or an explicit `redirect_uri`
+        // setting. See the class docblock for why this breaks no working deployment.
+        if ($allowedHost === '') {
+            return null;
+        }
+
         $host = is_string($host) ? trim($host) : '';
         $bare = self::stripPort($host);
         if ($host === '' || !self::isValidHost($bare)) {
@@ -220,7 +285,7 @@ final class CallbackUrl
         // NEW-1 — a client-supplied Host may only be turned into a redirect_uri
         // when it IS the operator's public hostname. Otherwise fall through to
         // null so the caller answers 503 callback_url_not_configured.
-        if ($allowedHost !== '' && strcasecmp($bare, $allowedHost) !== 0) {
+        if (strcasecmp($bare, $allowedHost) !== 0) {
             return null;
         }
 

@@ -38,11 +38,30 @@ final class GithubCallbackControllerTest extends TestCase
     private const string HOST = 'phlix.test';
     private const string DERIVED_CALLBACK = 'https://phlix.test/auth/github/callback';
 
+    /** The ambient PHLIX_DOMAIN, restored after every test. */
+    private string|false $originalDomain = false;
+
     protected function setUp(): void
     {
         parent::setUp();
         LoggerFactory::reset();
         LoggerFactory::init(__DIR__ . '/../../../../config/logger.php');
+        // Review r3 — a Host-derived callback is only produced when the operator
+        // configured a public hostname (PHLIX_DOMAIN); with it unset the flow fails
+        // CLOSED. These tests exercise a CONFIGURED box, so set it to the Host they
+        // send. The fail-closed behaviour has its own test, which unsets it.
+        $this->originalDomain = getenv('PHLIX_DOMAIN');
+        putenv('PHLIX_DOMAIN=' . self::HOST);
+    }
+
+    protected function tearDown(): void
+    {
+        if (is_string($this->originalDomain) && $this->originalDomain !== '') {
+            putenv('PHLIX_DOMAIN=' . $this->originalDomain);
+        } else {
+            putenv('PHLIX_DOMAIN');
+        }
+        parent::tearDown();
     }
 
     private function registryWithProvider(FakeOAuth2HttpClient $http): AuthProviderRegistry
@@ -471,43 +490,103 @@ final class GithubCallbackControllerTest extends TestCase
 
     public function test_authorize_refuses_to_derive_a_callback_from_a_foreign_host(): void
     {
-        $original = getenv('PHLIX_DOMAIN');
-        try {
-            putenv('PHLIX_DOMAIN=' . self::HOST);
+        // setUp() has PHLIX_DOMAIN = self::HOST.
+        $store = new InMemoryOAuth2StateStore();
+        $controller = new GithubCallbackController(
+            $this->registryWithProvider(new FakeOAuth2HttpClient()),
+            $this->createMock(UserRepository::class),
+            $this->createMock(JwtHandler::class),
+            $store,
+        );
 
-            $store = new InMemoryOAuth2StateStore();
-            $controller = new GithubCallbackController(
-                $this->registryWithProvider(new FakeOAuth2HttpClient()),
-                $this->createMock(UserRepository::class),
-                $this->createMock(JwtHandler::class),
-                $store,
-            );
+        $request = new Request();
+        // A forged Host from a non-browser client.
+        $request->headers['Host'] = 'evil.example';
+        $request->query = ['redirect_uri' => '/app'];
 
-            $request = new Request();
-            // A forged Host from a non-browser client.
-            $request->headers['Host'] = 'evil.example';
-            $request->query = ['redirect_uri' => '/app'];
+        $response = $controller->authorize($request, []);
 
-            $response = $controller->authorize($request, []);
+        $this->assertSame(503, $response->statusCode);
+        $this->assertSame('callback_url_not_configured', $this->errorCode($response));
+        $this->assertArrayNotHasKey('Location', $response->headers);
+        $this->assertSame([], $response->cookies, 'no state may be issued for a forged Host');
 
-            $this->assertSame(503, $response->statusCode);
-            $this->assertSame('callback_url_not_configured', $this->errorCode($response));
-            $this->assertArrayNotHasKey('Location', $response->headers);
-            $this->assertSame([], $response->cookies, 'no state may be issued for a forged Host');
+        // …while the operator's real hostname still works.
+        $ok = $controller->authorize($this->authorizeRequest('/app'), []);
+        $this->assertSame(302, $ok->statusCode);
+        $params = [];
+        parse_str((string) parse_url($ok->headers['Location'] ?? '', PHP_URL_QUERY), $params);
+        $this->assertSame(self::DERIVED_CALLBACK, $params['redirect_uri'] ?? null);
+    }
 
-            // …while the operator's real hostname still works.
-            $ok = $controller->authorize($this->authorizeRequest('/app'), []);
-            $this->assertSame(302, $ok->statusCode);
-            $params = [];
-            parse_str((string) parse_url($ok->headers['Location'] ?? '', PHP_URL_QUERY), $params);
-            $this->assertSame(self::DERIVED_CALLBACK, $params['redirect_uri'] ?? null);
-        } finally {
-            if (is_string($original) && $original !== '') {
-                putenv('PHLIX_DOMAIN=' . $original);
-            } else {
-                putenv('PHLIX_DOMAIN');
-            }
-        }
+    // -----------------------------------------------------------------------
+    // Review r3 — FAIL CLOSED. r2 made an unset PHLIX_DOMAIN mean "no allowlist",
+    // which left the NEW-1 phishing chain fully open on every unconfigured box.
+    // With no public hostname configured and no explicit redirect_uri setting the
+    // flow must refuse to start: 503, no state row, no correlation cookie.
+    // -----------------------------------------------------------------------
+
+    public function test_authorize_fails_closed_when_no_domain_and_no_redirect_uri_are_configured(): void
+    {
+        putenv('PHLIX_DOMAIN'); // unset (an install that never ran `--domain`)
+
+        $store = new CountingOAuth2StateStore();
+        $controller = new GithubCallbackController(
+            $this->registryWithProvider(new FakeOAuth2HttpClient()),
+            $this->createMock(UserRepository::class),
+            $this->createMock(JwtHandler::class),
+            $store,
+        );
+
+        $response = $controller->authorize($this->authorizeRequest('/app'), []);
+
+        $this->assertSame(503, $response->statusCode);
+        $this->assertSame('callback_url_not_configured', $this->errorCode($response));
+        $this->assertArrayNotHasKey('Location', $response->headers);
+        $this->assertSame([], $response->cookies, 'no correlation cookie may be issued');
+        $this->assertSame(0, $store->puts, 'no state row may be issued');
+
+        // The 503 must be ACTIONABLE — it is the operator's only clue.
+        /** @var array<string, mixed> $body */
+        $body = json_decode($response->body, true);
+        $message = is_string($body['message'] ?? null) ? $body['message'] : '';
+        $this->assertStringContainsString('PHLIX_DOMAIN', $message);
+        $this->assertStringContainsString('redirect_uri', $message);
+    }
+
+    /**
+     * The escape hatch: an explicit absolute `redirect_uri` setting keeps FIRST
+     * priority and still works with PHLIX_DOMAIN unset, so fail-closed can never
+     * lock an operator out.
+     */
+    public function test_configured_redirect_uri_still_works_without_a_configured_domain(): void
+    {
+        putenv('PHLIX_DOMAIN');
+
+        $configured = 'https://media.example.org:8443/auth/github/callback';
+        $store = new CountingOAuth2StateStore();
+        $controller = new GithubCallbackController(
+            $this->registryWithProvider(new FakeOAuth2HttpClient()),
+            $this->createMock(UserRepository::class),
+            $this->createMock(JwtHandler::class),
+            $store,
+            null,
+            null,
+            null,
+            $this->pluginWithSettings([
+                'client_id' => 'cid',
+                'client_secret' => 'sec',
+                'redirect_uri' => $configured,
+            ]),
+        );
+
+        $response = $controller->authorize($this->authorizeRequest('/app'), []);
+
+        $this->assertSame(302, $response->statusCode);
+        $params = [];
+        parse_str((string) parse_url($response->headers['Location'] ?? '', PHP_URL_QUERY), $params);
+        $this->assertSame($configured, $params['redirect_uri'] ?? null);
+        $this->assertSame(1, $store->puts, 'the flow must still start normally');
     }
 
     // -----------------------------------------------------------------------

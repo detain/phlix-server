@@ -80,7 +80,13 @@ final class CallbackUrlTest extends TestCase
     {
         $this->assertSame(
             'https://request-host.example/auth/github/callback',
-            CallbackUrl::resolve('/auth/github/callback', 'request-host.example', null, '/auth/github/callback', ''),
+            CallbackUrl::resolve(
+                '/auth/github/callback',
+                'request-host.example',
+                null,
+                '/auth/github/callback',
+                'request-host.example',
+            ),
         );
     }
 
@@ -88,7 +94,7 @@ final class CallbackUrlTest extends TestCase
     {
         $this->assertSame(
             'https://phlix.example:8443/auth/oidc/callback',
-            CallbackUrl::resolve('', 'phlix.example:8443', null, '/auth/oidc/callback', ''),
+            CallbackUrl::resolve('', 'phlix.example:8443', null, '/auth/oidc/callback', 'phlix.example'),
         );
     }
 
@@ -96,26 +102,29 @@ final class CallbackUrlTest extends TestCase
     {
         $this->assertSame(
             'http://phlix.example/auth/oidc/callback',
-            CallbackUrl::resolve('', 'phlix.example', 'http', '/auth/oidc/callback', ''),
+            CallbackUrl::resolve('', 'phlix.example', 'http', '/auth/oidc/callback', 'phlix.example'),
         );
         // A proxy chain may append hops — the first one wins.
         $this->assertSame(
             'https://phlix.example/auth/oidc/callback',
-            CallbackUrl::resolve('', 'phlix.example', 'https, http', '/auth/oidc/callback', ''),
+            CallbackUrl::resolve('', 'phlix.example', 'https, http', '/auth/oidc/callback', 'phlix.example'),
         );
         // Garbage is ignored (defaults to https).
         $this->assertSame(
             'https://phlix.example/auth/oidc/callback',
-            CallbackUrl::resolve('', 'phlix.example', 'gopher', '/auth/oidc/callback', ''),
+            CallbackUrl::resolve('', 'phlix.example', 'gopher', '/auth/oidc/callback', 'phlix.example'),
         );
     }
 
     /**
+     * An allowlist IS configured here, so these assert the HOST-SHAPE rules (and
+     * not merely the fail-closed rule the empty-allowlist tests below cover).
+     *
      * @dataProvider unusableHosts
      */
     public function test_returns_null_when_no_absolute_url_can_be_built(?string $host): void
     {
-        $this->assertNull(CallbackUrl::resolve('', $host, null, '/auth/github/callback', ''));
+        $this->assertNull(CallbackUrl::resolve('', $host, null, '/auth/github/callback', 'phlix.example'));
     }
 
     /**
@@ -210,23 +219,67 @@ final class CallbackUrlTest extends TestCase
         );
     }
 
+    // -----------------------------------------------------------------------
+    // Review r3 — FAIL CLOSED with no configured domain.
+    //
+    // r2's first cut treated an unset PHLIX_DOMAIN as "no allowlist" and kept
+    // deriving from any Host, which left the NEW-1 hole fully open on every box
+    // that never ran `install.sh --domain`. No configured hostname now means NO
+    // derivation at all; the caller answers an actionable 503. This regresses no
+    // working deployment: the pre-S48 relative redirect_uri already made these
+    // flows fail against every real provider (r1 finding 1), so there is no
+    // population of working end-to-end logins to break.
+    // -----------------------------------------------------------------------
+
     /**
-     * With NO configured domain (a dev box, or an install that never ran
-     * `--domain`) the pre-r2 behaviour is kept: 503-ing every login there would be
-     * strictly worse than the risk removed.
+     * @dataProvider anyValidHost
      */
-    public function test_no_configured_domain_keeps_deriving_from_any_valid_host(): void
+    public function test_no_configured_domain_derives_nothing(string $host): void
+    {
+        $this->assertNull(
+            CallbackUrl::resolve('', $host, null, '/auth/oidc/callback', ''),
+            'with no configured public hostname NOTHING may be derived from a client-supplied Host',
+        );
+    }
+
+    /**
+     * @return array<string, array{0: string}>
+     */
+    public static function anyValidHost(): array
+    {
+        return [
+            'plain dns name' => ['whatever.example'],
+            'with port' => ['whatever.example:8443'],
+            'localhost' => ['localhost:8096'],
+            'ipv4 literal' => ['10.0.0.5'],
+            'attacker host' => ['evil.example'],
+        ];
+    }
+
+    /**
+     * …and the escape hatch: the EXPLICIT `redirect_uri` setting keeps first
+     * priority and still works with PHLIX_DOMAIN unset, so an operator is never
+     * locked out — that is what makes fail-closed affordable.
+     */
+    public function test_a_configured_absolute_value_still_works_without_a_configured_domain(): void
     {
         $this->assertSame(
-            'https://whatever.example/auth/oidc/callback',
-            CallbackUrl::resolve('', 'whatever.example', null, '/auth/oidc/callback', ''),
+            'https://media.example.org:8443/auth/oidc/callback',
+            CallbackUrl::resolve(
+                'https://media.example.org:8443/auth/oidc/callback',
+                'whatever.example',
+                null,
+                '/auth/oidc/callback',
+                '',
+            ),
         );
     }
 
     /**
      * `configuredHost()` reads PHLIX_DOMAIN (the env `config/hub.php` derives
-     * `hub.domain` from) and treats a missing/garbage value as "no allowlist" —
-     * never as an allowlist that can never match.
+     * `hub.domain` from) and treats a missing/garbage value as "no hostname
+     * configured" — which now means no derivation at all, never an allowlist that
+     * can never match.
      */
     public function test_configured_host_reads_phlix_domain(): void
     {
@@ -242,7 +295,7 @@ final class CallbackUrlTest extends TestCase
             $this->assertSame('', CallbackUrl::configuredHost());
 
             putenv('PHLIX_DOMAIN=https://media.example.org/');
-            $this->assertSame('', CallbackUrl::configuredHost(), 'garbage = no allowlist');
+            $this->assertSame('', CallbackUrl::configuredHost(), 'garbage = nothing may be derived');
 
             putenv('PHLIX_DOMAIN');
             $this->assertSame('', CallbackUrl::configuredHost());
@@ -280,7 +333,42 @@ final class CallbackUrlTest extends TestCase
             'https://sso.example.org/auth/oidc/callback',
             'phlix.example',
         ));
-        // No allowlist configured → absolute is the bar (pre-r2 behaviour).
-        $this->assertTrue(CallbackUrl::isReplayable('https://anything.example/cb', '', ''));
+    }
+
+    /**
+     * Review r3 — the replay path fails closed too: with no configured hostname the
+     * ONLY replayable value is the configured setting, mirroring what resolve() can
+     * produce. (An in-flight state row carrying a derived URL therefore falls back
+     * to a fresh resolve → the actionable 503, for at most one 600 s TTL.)
+     */
+    public function test_replay_without_a_configured_domain_accepts_only_the_configured_value(): void
+    {
+        $this->assertFalse(
+            CallbackUrl::isReplayable('https://anything.example/cb', '', ''),
+            'an absolute-but-unvouched-for URL must not be replayed as redirect_uri',
+        );
+        $this->assertTrue(CallbackUrl::isReplayable(
+            'https://media.example.org/auth/oidc/callback',
+            'https://media.example.org/auth/oidc/callback',
+            '',
+        ));
+    }
+
+    /**
+     * The refusal is LOGGED with the presented Host, which is attacker-controlled —
+     * so a CR/LF (which would otherwise forge whole log lines) must not survive.
+     */
+    public function test_host_is_sanitised_before_it_reaches_a_log_line(): void
+    {
+        $this->assertSame('(none)', CallbackUrl::sanitizeHostForLog(null));
+        $this->assertSame('(none)', CallbackUrl::sanitizeHostForLog(''));
+        $this->assertSame('(none)', CallbackUrl::sanitizeHostForLog("\r\n\t"));
+        $this->assertSame('(unprintable)', CallbackUrl::sanitizeHostForLog("\x01\x7F"));
+        $this->assertSame('evil.example', CallbackUrl::sanitizeHostForLog('evil.example'));
+        $this->assertSame(
+            'evil.exampleINJECTED:forged',
+            CallbackUrl::sanitizeHostForLog("evil.example\r\nINJECTED: forged"),
+        );
+        $this->assertSame(128, strlen(CallbackUrl::sanitizeHostForLog(str_repeat('a', 500))));
     }
 }

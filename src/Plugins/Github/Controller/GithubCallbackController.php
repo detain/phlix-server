@@ -115,6 +115,19 @@ final class GithubCallbackController
     /** The state-context key holding the authorize-time absolute redirect_uri. */
     private const string CALLBACK_URL_KEY = 'callback_url';
 
+    /**
+     * The ACTIONABLE body of the `callback_url_not_configured` 503 (review r3).
+     *
+     * The flow fails CLOSED whenever no absolute callback URL can be produced, so
+     * this text is the operator's only clue — it must name both remedies. The log
+     * line beside it says WHICH of the two conditions fired.
+     */
+    private const string CALLBACK_URL_HELP = 'No GitHub callback URL is available. '
+        . 'Set PHLIX_DOMAIN to this server\'s public hostname (scripts/install.sh --domain '
+        . '<domain>) so the callback can be derived from the request, or set an absolute '
+        . 'redirect_uri (e.g. https://<domain>/auth/github/callback) in the GitHub provider '
+        . 'settings — it must match the callback URL registered with the GitHub OAuth App.';
+
     public function __construct(
         AuthProviderRegistry $registry,
         UserRepository $userRepository,
@@ -243,10 +256,9 @@ final class GithubCallbackController
         // verbatim at token exchange.
         $callbackUrl = $this->resolveCallbackUrl($request);
         if ($callbackUrl === null) {
-            return (new Response())->status(503)->json([
-                'error' => 'callback_url_not_configured',
-                'message' => 'Set an absolute redirect_uri in the GitHub provider settings',
-            ]);
+            // Fail CLOSED: no state row is written and no correlation cookie is
+            // issued, so nothing about this request survives it (review r3).
+            return $this->callbackUrlNotConfigured($request);
         }
 
         // RFC 7636 PKCE — generated per request (GitHub ignores it today, but it
@@ -391,10 +403,7 @@ final class GithubCallbackController
         $callbackUrl = $this->replayCallbackUrl($context, $configuredRedirectUri)
             ?? $this->resolveCallbackUrl($request, $configuredRedirectUri);
         if ($callbackUrl === null) {
-            return $this->clearCorrelation((new Response())->status(503)->json([
-                'error' => 'callback_url_not_configured',
-                'message' => 'Set an absolute redirect_uri in the GitHub provider settings',
-            ]));
+            return $this->clearCorrelation($this->callbackUrlNotConfigured($request));
         }
 
         // Request-path self-heal (see beginAuthorization()).
@@ -736,7 +745,15 @@ final class GithubCallbackController
      * Finding 1) always fails with `redirect_uri_mismatch`. Precedence:
      * the operator-configured `redirect_uri` plugin setting, else the request's
      * own scheme+Host — the latter ONLY when that Host is the operator's
-     * configured public hostname (review r2 NEW-1). See {@see CallbackUrl}.
+     * configured public hostname (review r2 NEW-1), and NOT AT ALL when no public
+     * hostname is configured (review r3 — fail closed). See {@see CallbackUrl}.
+     *
+     * Accepted consequence, documented so it is not a surprise: with `PHLIX_DOMAIN`
+     * set, hitting `/auth/github/authorize` over a LAN IP, `localhost` or the relay
+     * hostname now answers {@see callbackUrlNotConfigured()} instead of deriving.
+     * That flow could never have completed anyway — the GitHub OAuth App has the
+     * registered domain, not the LAN IP — and the `redirect_uri` setting covers an
+     * operator who really does serve auth on a second hostname.
      *
      * @param string|null $configured Pre-read `redirect_uri` setting, so the
      *        callback path performs ONE settings read instead of two (NEW-6).
@@ -750,6 +767,36 @@ final class GithubCallbackController
             self::CALLBACK_PATH,
             CallbackUrl::configuredHost(),
         );
+    }
+
+    /**
+     * The `503 callback_url_not_configured` answer, with a log line naming WHICH
+     * condition fired so the operator knows which remedy applies (review r3).
+     *
+     * Emitted on both legs. On the authorize leg this is reached BEFORE the state
+     * row and the correlation cookie are created, so a refused request leaves no
+     * trace and cannot be resumed.
+     */
+    private function callbackUrlNotConfigured(Request $request): Response
+    {
+        $allowedHost = CallbackUrl::configuredHost();
+        LoggerFactory::get(LogChannels::AUTH)->warning(
+            'GitHub sign-in refused: no absolute callback URL could be resolved',
+            [
+                'reason' => $allowedHost === ''
+                    ? 'PHLIX_DOMAIN is not set, so no callback may be derived from the request Host'
+                    : 'the request Host is not the configured PHLIX_DOMAIN',
+                'request_host' => CallbackUrl::sanitizeHostForLog($request->getHeader('Host')),
+                'phlix_domain' => $allowedHost,
+                'remedy' => 'set PHLIX_DOMAIN (scripts/install.sh --domain) or an absolute '
+                    . 'redirect_uri in the GitHub provider settings',
+            ],
+        );
+
+        return (new Response())->status(503)->json([
+            'error' => 'callback_url_not_configured',
+            'message' => self::CALLBACK_URL_HELP,
+        ]);
     }
 
     /**

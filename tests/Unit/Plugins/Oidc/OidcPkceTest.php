@@ -30,7 +30,13 @@ use PHPUnit\Framework\TestCase;
  */
 final class OidcPkceTest extends TestCase
 {
+    /** The Host the authorize requests here send, and the configured domain. */
+    private const string HOST = 'phlix.test';
+
     private string $cacheDir = '';
+
+    /** The ambient PHLIX_DOMAIN, restored after every test. */
+    private string|false $originalDomain = false;
 
     protected function setUp(): void
     {
@@ -40,10 +46,20 @@ final class OidcPkceTest extends TestCase
         DiscoveryDocument::clearMemoryCache();
         LoggerFactory::reset();
         LoggerFactory::init(__DIR__ . '/../../../../config/logger.php');
+        // S48 review r3 — `redirect_uri` is only derived from the request Host when
+        // the operator configured a public hostname; with PHLIX_DOMAIN unset the
+        // authorize leg fails CLOSED (503). These tests model a configured box.
+        $this->originalDomain = getenv('PHLIX_DOMAIN');
+        putenv('PHLIX_DOMAIN=' . self::HOST);
     }
 
     protected function tearDown(): void
     {
+        if (is_string($this->originalDomain) && $this->originalDomain !== '') {
+            putenv('PHLIX_DOMAIN=' . $this->originalDomain);
+        } else {
+            putenv('PHLIX_DOMAIN');
+        }
         parent::tearDown();
         if (is_dir($this->cacheDir)) {
             foreach ((array) glob($this->cacheDir . '/*') as $file) {
@@ -101,7 +117,7 @@ final class OidcPkceTest extends TestCase
         );
 
         $request = new Request();
-        $request->headers['Host'] = 'phlix.test';
+        $request->headers['Host'] = self::HOST;
         $request->query = ['redirect_uri' => '/cb'];
 
         $response = $controller->authorize($request, []);

@@ -335,6 +335,21 @@ class AuthProviderBootstrapper
      *
      * Returns '' when the provider has no settings source, which simply disables
      * the check (the pre-review behaviour).
+     *
+     * ## DO NOT memoise this read (review r2, NEW-6 — deliberately left as is)
+     *
+     * The `$plugin->getSettings()` call below IS the cross-worker freshness
+     * mechanism this whole method exists for. Caching it in worker-global state
+     * (`static`, or a property on this long-lived bootstrapper) would make the
+     * fingerprint answer from the same worker's stale copy and silently re-break
+     * review r1 finding 3: a settings save on ANOTHER worker would again be
+     * invisible forever, and this worker would keep serving the superseded provider
+     * instance. It is one indexed single-row read per authorize; a legitimate
+     * optimisation would be REQUEST-scoped memoisation via `support\Context` (never
+     * a static — that is a resident-memory leak and cross-request state leakage),
+     * threaded down from the controller so the fingerprint and
+     * `resolveCallbackUrl()` share one read. That is real plumbing, tracked
+     * separately — not a drive-by cache.
      */
     private function settingsFingerprint(string $provider): string
     {

@@ -40,7 +40,13 @@ final class OidcCallbackControllerTest extends TestCase
     /** The cookie the OIDC flow binds its issued state to (distinct from GitHub's). */
     private const string CORRELATION_COOKIE = 'phlix_oauth_oidc';
 
+    /** The Host every request in this file sends, and the configured domain. */
+    private const string HOST = 'phlix.test';
+
     private string $cacheDir;
+
+    /** The ambient PHLIX_DOMAIN, restored after every test. */
+    private string|false $originalDomain = false;
 
     protected function setUp(): void
     {
@@ -51,10 +57,21 @@ final class OidcCallbackControllerTest extends TestCase
         // The JWKS cache is a static keyed on provider URL and would otherwise
         // leak a signing key between the happy-path tests here.
         IdTokenValidator::clearJwksCache();
+        // Review r3 — a Host-derived callback is only produced when the operator
+        // configured a public hostname (PHLIX_DOMAIN); with it unset the flow fails
+        // CLOSED. These tests exercise a CONFIGURED box, so set it to the Host they
+        // send. The fail-closed behaviour has its own tests, which unset it.
+        $this->originalDomain = getenv('PHLIX_DOMAIN');
+        putenv('PHLIX_DOMAIN=' . self::HOST);
     }
 
     protected function tearDown(): void
     {
+        if (is_string($this->originalDomain) && $this->originalDomain !== '') {
+            putenv('PHLIX_DOMAIN=' . $this->originalDomain);
+        } else {
+            putenv('PHLIX_DOMAIN');
+        }
         parent::tearDown();
         if (is_dir($this->cacheDir)) {
             $files = glob($this->cacheDir . '/*') ?: [];
@@ -1524,47 +1541,119 @@ final class OidcCallbackControllerTest extends TestCase
 
     public function test_authorize_refuses_to_derive_a_callback_from_a_foreign_host(): void
     {
-        $original = getenv('PHLIX_DOMAIN');
-        try {
-            putenv('PHLIX_DOMAIN=phlix.test');
+        // setUp() has PHLIX_DOMAIN = self::HOST.
+        $stateStore = new InMemoryOidcStateStore();
+        $controller = new OidcCallbackController(
+            $this->makeRegistryWithCachedDiscovery(),
+            $this->createMock(UserRepository::class),
+            $this->createMock(JwtHandler::class),
+            $stateStore,
+        );
 
-            $stateStore = new InMemoryOidcStateStore();
-            $controller = new OidcCallbackController(
-                $this->makeRegistryWithCachedDiscovery(),
-                $this->createMock(UserRepository::class),
-                $this->createMock(JwtHandler::class),
-                $stateStore,
-            );
+        $request = new Request();
+        $request->headers['Host'] = 'evil.example';
+        $request->query = ['redirect_uri' => '/app'];
 
-            $request = new Request();
-            $request->headers['Host'] = 'evil.example';
-            $request->query = ['redirect_uri' => '/app'];
+        $response = $controller->authorize($request, []);
 
-            $response = $controller->authorize($request, []);
+        $this->assertSame(503, $response->statusCode);
+        /** @var array<string, mixed> $body */
+        $body = json_decode($response->body, true);
+        $this->assertSame('callback_url_not_configured', $body['error'] ?? null);
+        $this->assertArrayNotHasKey('Location', $response->headers);
+        $this->assertSame([], $response->cookies, 'no state may be issued for a forged Host');
+        $this->assertSame(0, $stateStore->puts, 'no state row may be issued for a forged Host');
 
-            $this->assertSame(503, $response->statusCode);
-            /** @var array<string, mixed> $body */
-            $body = json_decode($response->body, true);
-            $this->assertSame('callback_url_not_configured', $body['error'] ?? null);
-            $this->assertArrayNotHasKey('Location', $response->headers);
-            $this->assertSame([], $response->cookies, 'no state may be issued for a forged Host');
+        // The operator's real hostname still derives normally.
+        $ok = new Request();
+        $ok->headers['Host'] = self::HOST;
+        $ok->query = ['redirect_uri' => '/app'];
+        $okResponse = $controller->authorize($ok, []);
+        $this->assertSame(302, $okResponse->statusCode);
+        $params = [];
+        parse_str((string) parse_url($okResponse->headers['Location'] ?? '', PHP_URL_QUERY), $params);
+        $this->assertSame('https://phlix.test/auth/oidc/callback', $params['redirect_uri'] ?? null);
+    }
 
-            // The operator's real hostname still derives normally.
-            $ok = new Request();
-            $ok->headers['Host'] = 'phlix.test';
-            $ok->query = ['redirect_uri' => '/app'];
-            $okResponse = $controller->authorize($ok, []);
-            $this->assertSame(302, $okResponse->statusCode);
-            $params = [];
-            parse_str((string) parse_url($okResponse->headers['Location'] ?? '', PHP_URL_QUERY), $params);
-            $this->assertSame('https://phlix.test/auth/oidc/callback', $params['redirect_uri'] ?? null);
-        } finally {
-            if (is_string($original) && $original !== '') {
-                putenv('PHLIX_DOMAIN=' . $original);
-            } else {
-                putenv('PHLIX_DOMAIN');
-            }
-        }
+    // -----------------------------------------------------------------------
+    // Review r3 — FAIL CLOSED. r2 made an unset PHLIX_DOMAIN mean "no allowlist",
+    // which left the NEW-1 phishing chain fully open on every unconfigured box.
+    // With no public hostname configured and no explicit redirect_uri setting the
+    // flow must refuse to start: 503, no state row, no correlation cookie.
+    // -----------------------------------------------------------------------
+
+    public function test_authorize_fails_closed_when_no_domain_and_no_redirect_uri_are_configured(): void
+    {
+        putenv('PHLIX_DOMAIN'); // unset (an install that never ran `--domain`)
+
+        $stateStore = new InMemoryOidcStateStore();
+        $controller = new OidcCallbackController(
+            $this->makeRegistryWithCachedDiscovery(),
+            $this->createMock(UserRepository::class),
+            $this->createMock(JwtHandler::class),
+            $stateStore,
+        );
+
+        $request = new Request();
+        $request->headers['Host'] = self::HOST;
+        $request->query = ['redirect_uri' => '/app'];
+
+        $response = $controller->authorize($request, []);
+
+        $this->assertSame(503, $response->statusCode);
+        /** @var array<string, mixed> $body */
+        $body = json_decode($response->body, true);
+        $this->assertSame('callback_url_not_configured', $body['error'] ?? null);
+        $this->assertArrayNotHasKey('Location', $response->headers);
+        $this->assertSame([], $response->cookies, 'no correlation cookie may be issued');
+        $this->assertSame(0, $stateStore->puts, 'no state row may be issued');
+
+        // The 503 must be ACTIONABLE — it is the operator's only clue.
+        $message = is_string($body['message'] ?? null) ? $body['message'] : '';
+        $this->assertStringContainsString('PHLIX_DOMAIN', $message);
+        $this->assertStringContainsString('redirect_uri', $message);
+    }
+
+    /**
+     * The escape hatch: an explicit absolute `redirect_uri` setting keeps FIRST
+     * priority and still works with PHLIX_DOMAIN unset, so fail-closed can never
+     * lock an operator out.
+     */
+    public function test_configured_redirect_uri_still_works_without_a_configured_domain(): void
+    {
+        putenv('PHLIX_DOMAIN');
+
+        $configured = 'https://media.example.org:8443/auth/oidc/callback';
+        $settings = new \Phlix\Tests\Unit\Plugins\Github\InMemoryPluginSettingsRepository();
+        $settings->save('oidc', [
+            'provider_url' => 'https://example.com',
+            'client_id' => 'client-id',
+            'redirect_uri' => $configured,
+        ]);
+
+        $stateStore = new InMemoryOidcStateStore();
+        $controller = new OidcCallbackController(
+            $this->makeRegistryWithCachedDiscovery(),
+            $this->createMock(UserRepository::class),
+            $this->createMock(JwtHandler::class),
+            $stateStore,
+            null,
+            null,
+            null,
+            new \Phlix\Plugins\Oidc\Plugin($settings),
+        );
+
+        $request = new Request();
+        $request->headers['Host'] = self::HOST;
+        $request->query = ['redirect_uri' => '/app'];
+
+        $response = $controller->authorize($request, []);
+
+        $this->assertSame(302, $response->statusCode);
+        $params = [];
+        parse_str((string) parse_url($response->headers['Location'] ?? '', PHP_URL_QUERY), $params);
+        $this->assertSame($configured, $params['redirect_uri'] ?? null);
+        $this->assertSame(1, $stateStore->puts, 'the flow must still start normally');
     }
 
     // -----------------------------------------------------------------------
@@ -1703,11 +1792,18 @@ final class OidcCallbackControllerTest extends TestCase
  */
 final class InMemoryOidcStateStore implements \Phlix\Plugins\Oidc\OidcStateStore
 {
+    /**
+     * How many state rows were written — the positive assertion behind the review
+     * r3 fail-closed tests ("no state row is issued when the flow is refused").
+     */
+    public int $puts = 0;
+
     /** @var array<string, array{code_verifier: string, nonce: string, context?: array<string, mixed>}> */
     private array $entries = [];
 
     public function put(string $state, string $codeVerifier, string $nonce, ?array $context = null): void
     {
+        $this->puts++;
         $entry = [
             'code_verifier' => $codeVerifier,
             'nonce' => $nonce,

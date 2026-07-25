@@ -11,10 +11,13 @@ declare(strict_types=1);
 
 namespace Phlix\Plugins\Oidc\Controller;
 
+use Phlix\Plugins\OAuth2\CallbackUrl;
+use Phlix\Plugins\OAuth2\StateCorrelation;
 use Phlix\Plugins\Oidc\DbOidcStateStore;
 use Phlix\Plugins\Oidc\InMemoryOidcStateStore;
 use Phlix\Plugins\Oidc\OidcProvider;
 use Phlix\Plugins\Oidc\OidcStateStore;
+use Phlix\Plugins\Oidc\Plugin as OidcPlugin;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
 use Phlix\Server\Http\Controllers\AuthController;
@@ -34,6 +37,18 @@ use Workerman\MySQL\Connection;
  * Routes:
  * - GET  /auth/oidc/authorize  → redirect to provider authorization endpoint
  * - GET  /auth/oidc/callback   → handle callback from provider
+ *
+ * ## Browser binding (S48 review r2)
+ *
+ * The issued `state` is bound to the INITIATING BROWSER by a short-lived HttpOnly
+ * correlation cookie ({@see StateCorrelation}, cookie {@see self::CORRELATION_COOKIE}),
+ * exactly as the GitHub flow does. Neither PKCE nor the `nonce` provides this:
+ * both bind the exchange to an authorize request that, in the session-fixation
+ * attack, the ATTACKER owns — so both match for them. Without the cookie an
+ * attacker could complete the whole flow with their own IdP account and then have
+ * a victim's browser issue the callback, silently handing the victim a session for
+ * the attacker's identity. The check runs BEFORE the token exchange, before any
+ * user creation, before the link branch and before any session cookie is minted.
  *
  * @package Phlix\Plugins\Oidc\Controller
  * @since 0.11.0
@@ -63,6 +78,27 @@ final class OidcCallbackController
     private ?UserIdentityRepository $identities;
 
     /**
+     * S48 review r1 Finding 1 — settings source for the operator-configured
+     * ABSOLUTE `redirect_uri` ({@see resolveCallbackUrl()}). Optional so existing
+     * direct-construction call sites keep working; production DI binds it.
+     */
+    private ?OidcPlugin $plugin;
+
+    /** This server's OIDC callback path (the tail of the absolute redirect_uri). */
+    private const string CALLBACK_PATH = '/auth/oidc/callback';
+
+    /**
+     * Browser-binding cookie for the issued OIDC state (review r2). DISTINCT from
+     * the GitHub flow's `phlix_oauth_github` so two concurrent flows cannot clobber
+     * each other's binding. HttpOnly + Secure + SameSite=Lax, TTL = the state-row
+     * TTL ({@see StateCorrelation}).
+     */
+    private const string CORRELATION_COOKIE = 'phlix_oauth_oidc';
+
+    /** The state-context key holding the authorize-time absolute redirect_uri. */
+    private const string CALLBACK_URL_KEY = 'callback_url';
+
+    /**
      * S45: the state-context `intent` marker for an account-link authorize flow.
      * When the consumed state carries this intent the callback links the verified
      * external identity to `link_user_id` instead of minting a login session.
@@ -89,6 +125,20 @@ final class OidcCallbackController
     /** S45: safe same-origin fallback when a link flow omits redirect_uri. */
     private const string DEFAULT_LINK_REDIRECT = '/app';
 
+    /**
+     * The PUBLIC body of the `callback_url_not_configured` 503.
+     *
+     * Deliberately generic (review r3, finding 6): `/auth/oidc/authorize` is
+     * reachable unauthenticated, so the response must not hand an anonymous visitor
+     * this server's deployment shape (`PHLIX_DOMAIN`, `scripts/install.sh`, which of
+     * the two conditions fired). The machine-readable `error` code
+     * `callback_url_not_configured` is the stable contract; the full operator
+     * remedy lives in the AUTH-channel log line
+     * ({@see self::callbackUrlNotConfigured()}).
+     */
+    private const string CALLBACK_URL_UNAVAILABLE = 'Single sign-on is not fully configured '
+        . 'on this server. Ask the administrator to check the server log.';
+
     public function __construct(
         AuthProviderRegistry $registry,
         UserRepository $userRepository,
@@ -97,12 +147,14 @@ final class OidcCallbackController
         ?Connection $db = null,
         ?AuthProviderBootstrapper $bootstrapper = null,
         ?UserIdentityRepository $identities = null,
+        ?OidcPlugin $plugin = null,
     ) {
         $this->registry = $registry;
         $this->userRepository = $userRepository;
         $this->jwtHandler = $jwtHandler;
         $this->bootstrapper = $bootstrapper;
         $this->identities = $identities;
+        $this->plugin = $plugin;
 
         if ($stateStore !== null) {
             $this->stateStore = $stateStore;
@@ -239,6 +291,18 @@ final class OidcCallbackController
             ]);
         }
 
+        // S48 review r1 Finding 1 (HIGH) — every IdP matches `redirect_uri`
+        // against a REGISTERED ABSOLUTE redirect URI, so a path-only value can
+        // never match and the flow dies at the authorize page. Resolve an
+        // absolute URL and bind it into the state so the token exchange replays
+        // the identical value.
+        $callbackUrl = $this->resolveCallbackUrl($request);
+        if ($callbackUrl === null) {
+            // Fail CLOSED: no state row is written and no correlation cookie is
+            // issued, so nothing about this request survives it (review r3).
+            return $this->callbackUrlNotConfigured($request);
+        }
+
         // RFC 7636 PKCE — generate a per-request code_verifier (S256).
         $codeVerifier = OidcProvider::generateCodeVerifier();
         $codeChallenge = OidcProvider::computeCodeChallenge($codeVerifier);
@@ -257,18 +321,31 @@ final class OidcCallbackController
         ];
         $stateValue = base64_encode((string) json_encode($stateData));
 
-        $this->stateStore->put($stateId, $codeVerifier, $nonce, $linkContext);
+        // Review r2 — bind the state to THIS browser (session fixation). Only the
+        // SHA-256 of the correlation secret is persisted, so a database read cannot
+        // forge a matching cookie. Covers the LINK path too (this method serves
+        // both legs).
+        $correlation = StateCorrelation::issue();
+
+        $context = $linkContext ?? [];
+        $context[StateCorrelation::CONTEXT_KEY] = StateCorrelation::fingerprint($correlation);
+        $context[self::CALLBACK_URL_KEY] = $callbackUrl;
+
+        $this->stateStore->put($stateId, $codeVerifier, $nonce, $context);
 
         $authorizationUrl = $provider->buildAuthorizationUrl(
-            $this->getCallbackUrl(),
+            $callbackUrl,
             $stateValue,
             $nonce,
             $codeChallenge,
         );
 
-        return (new Response())
+        $response = (new Response())
             ->status(302)
             ->header('Location', $authorizationUrl);
+        StateCorrelation::attach($response, self::CORRELATION_COOKIE, $correlation);
+
+        return $response;
     }
 
     /**
@@ -349,8 +426,11 @@ final class OidcCallbackController
         // CSRF / replay attempt — reject with 403.
         $stored = $this->stateStore->consume($stateId);
         if ($stored === null) {
+            // `sid` comes out of the client's base64-JSON `state` with no shape
+            // validation, so it is fully attacker-chosen — same class of input as the
+            // `Host` header and bounded the same way (review r3, finding 2).
             LoggerFactory::get(LogChannels::AUTH)->warning('OIDC state mismatch', [
-                'sid' => $stateId,
+                'sid' => CallbackUrl::sanitizeForLog($stateId),
             ]);
             return (new Response())->status(403)->json([
                 'error' => 'invalid_state',
@@ -370,16 +450,44 @@ final class OidcCallbackController
         $context = isset($stored['context']) && is_array($stored['context']) ? $stored['context'] : [];
         $isLinkFlow = ($context['intent'] ?? null) === self::LINK_INTENT;
 
+        // Review r2 — the state must have been issued to THIS browser. Runs BEFORE
+        // the token exchange, findOrCreateByExternalId(), completeLink() and
+        // attachAuthCookies(), so no session can be minted for a flow this browser
+        // did not start. (The nonce does NOT cover this: it binds the id_token to
+        // an authorize request the attacker owns.)
+        if (!StateCorrelation::matches($request, self::CORRELATION_COOKIE, $context)) {
+            LoggerFactory::get(LogChannels::AUTH)->warning('OIDC state not bound to this browser', [
+                'sid' => CallbackUrl::sanitizeForLog($stateId),
+            ]);
+            return $this->clearCorrelation((new Response())->status(403)->json([
+                'error' => 'invalid_state',
+                'message' => 'State parameter was not issued to this browser session',
+            ]));
+        }
+
+        // S48 review r1 Finding 1 — replay the EXACT absolute redirect_uri the
+        // authorize step sent (the IdP rejects the exchange when they differ).
+        // Review r2 NEW-8: re-validate it on the way out (defence in depth — only
+        // server code writes that key); a value that no longer passes falls back to
+        // a fresh resolve, the same path a state row issued before this field
+        // existed takes.
+        $configuredRedirectUri = $this->configuredRedirectUri();
+        $callbackUrl = $this->replayCallbackUrl($context, $configuredRedirectUri)
+            ?? $this->resolveCallbackUrl($request, $configuredRedirectUri);
+        if ($callbackUrl === null) {
+            return $this->clearCorrelation($this->callbackUrlNotConfigured($request));
+        }
+
         // Finding 3 (MEDIUM) — request-path self-heal (see authorize()): register
         // an enabled+configured provider that this worker missed at boot, or drop
         // a stale registration when the flag is now off, before the check below.
         $this->bootstrapper?->ensureProviderRegistered(AuthProviderBootstrapper::OIDC);
 
         if (!$this->registry->hasProvider(self::oidcInstanceKey())) {
-            return (new Response())->status(503)->json([
+            return $this->clearCorrelation((new Response())->status(503)->json([
                 'error' => 'provider_not_configured',
                 'message' => 'OIDC provider is not enabled',
-            ]);
+            ]));
         }
 
         try {
@@ -390,7 +498,7 @@ final class OidcCallbackController
 
             $result = $provider->authenticate([
                 'code' => $code,
-                'redirect_uri' => $this->getCallbackUrl(),
+                'redirect_uri' => $callbackUrl,
                 'nonce' => $expectedNonce,
                 'code_verifier' => $codeVerifier,
             ]);
@@ -400,7 +508,9 @@ final class OidcCallbackController
                 // (allowlisted above) but the error string still rides the URL.
                 $errorValue = is_string($result->error) ? $result->error : 'auth_failed';
                 $redirectUrl = $redirectUri . '?error=' . urlencode($errorValue);
-                return (new Response())->status(302)->header('Location', $redirectUrl);
+                return $this->clearCorrelation(
+                    (new Response())->status(302)->header('Location', $redirectUrl),
+                );
             }
 
             // S45 — LINK branch. The OIDC auth above ran with the SAME S44
@@ -441,7 +551,9 @@ final class OidcCallbackController
             // WITHOUT any token query string. RequestAuthenticator reads the
             // phlix_session cookie, so the SPA is authenticated on the next
             // navigation with no client-side token handling.
-            $response = (new Response())->status(302)->header('Location', $redirectUri);
+            $response = $this->clearCorrelation(
+                (new Response())->status(302)->header('Location', $redirectUri),
+            );
             $this->attachAuthCookies($response, $tokens);
 
             return $response;
@@ -451,8 +563,19 @@ final class OidcCallbackController
             ]);
 
             $redirectUrl = $redirectUri . '?error=internal';
-            return (new Response())->status(302)->header('Location', $redirectUrl);
+            return $this->clearCorrelation(
+                (new Response())->status(302)->header('Location', $redirectUrl),
+            );
         }
+    }
+
+    /**
+     * Expire the spent correlation cookie (review r2 NEW-10) on every response
+     * returned after the one-shot state was consumed.
+     */
+    private function clearCorrelation(Response $response): Response
+    {
+        return StateCorrelation::clear($response, self::CORRELATION_COOKIE);
     }
 
     /**
@@ -607,7 +730,7 @@ final class OidcCallbackController
         $separator = str_contains($redirectUri, '?') ? '&' : '?';
         $location = $redirectUri . $separator . 'linked=' . self::OIDC_PROVIDER;
 
-        return (new Response())->status(302)->header('Location', $location);
+        return $this->clearCorrelation((new Response())->status(302)->header('Location', $location));
     }
 
     /**
@@ -616,20 +739,115 @@ final class OidcCallbackController
      */
     private function identityConflict(): Response
     {
-        return (new Response())->status(409)->json([
+        return $this->clearCorrelation((new Response())->status(409)->json([
             'error' => 'identity_already_linked',
             'message' => 'This external identity is already linked to another account',
+        ]));
+    }
+
+    /**
+     * The ABSOLUTE OIDC callback URL to advertise as `redirect_uri`, or null when
+     * neither the operator setting nor the request yields one.
+     *
+     * S48 review r1 Finding 1 (HIGH): this used to return the relative
+     * `/auth/oidc/callback`, which no IdP can match against its registered
+     * redirect URI — the S44 flow could not complete against a real provider.
+     * Precedence: the operator-configured `redirect_uri` OIDC plugin setting,
+     * else the request's own scheme+Host — the latter ONLY when that Host is the
+     * operator's configured public hostname, and NOT AT ALL when no public hostname
+     * is configured (review r3 — fail closed). That HOST ALLOWLIST is review r2
+     * NEW-1: a wildcard-registered IdP (Keycloak et al) would happily deliver a
+     * victim's `code` to an attacker-supplied Host, which the correlation cookie
+     * cannot defend because the attacker runs the authorize leg. See
+     * {@see CallbackUrl}.
+     *
+     * Accepted consequence, documented so it is not a surprise: with `PHLIX_DOMAIN`
+     * set, hitting `/auth/oidc/authorize` over a LAN IP, `localhost` or the relay
+     * hostname now answers {@see callbackUrlNotConfigured()} instead of deriving.
+     * That flow could never have completed anyway — the IdP has the registered
+     * domain, not the LAN IP — and the `redirect_uri` setting covers an operator who
+     * really does serve auth on a second hostname.
+     *
+     * @param string|null $configured Pre-read `redirect_uri` setting, so the
+     *        callback path performs ONE settings read instead of two.
+     */
+    private function resolveCallbackUrl(Request $request, ?string $configured = null): ?string
+    {
+        return CallbackUrl::resolve(
+            $configured ?? $this->configuredRedirectUri(),
+            $request->getHeader('Host'),
+            $request->getHeader('X-Forwarded-Proto'),
+            self::CALLBACK_PATH,
+            CallbackUrl::configuredHost(),
+        );
+    }
+
+    /**
+     * The `503 callback_url_not_configured` answer.
+     *
+     * The RESPONSE is generic (finding 6 — the route is unauthenticated); the LOG
+     * line carries the whole actionable story: which of the two conditions fired,
+     * the presented Host, the configured domain and both remedies.
+     *
+     * Emitted on both legs. On the authorize leg this is reached BEFORE the state
+     * row and the correlation cookie are created, so a refused request leaves no
+     * trace and cannot be resumed.
+     */
+    private function callbackUrlNotConfigured(Request $request): Response
+    {
+        $allowedHost = CallbackUrl::configuredHost();
+        LoggerFactory::get(LogChannels::AUTH)->warning(
+            'OIDC sign-in refused: no absolute callback URL could be resolved',
+            [
+                'reason' => $allowedHost === ''
+                    ? 'PHLIX_DOMAIN is not set, so no callback may be derived from the request Host'
+                    : 'the request Host is not the configured PHLIX_DOMAIN (the port is compared too)',
+                'request_host' => CallbackUrl::sanitizeHostForLog($request->getHeader('Host')),
+                'phlix_domain' => $allowedHost,
+                'remedy' => 'set PHLIX_DOMAIN to this server\'s public host[:port] '
+                    . '(scripts/install.sh --domain <domain>), or set an absolute redirect_uri '
+                    . '(https://<domain>' . self::CALLBACK_PATH . ') in the OIDC provider settings '
+                    . '— it must match a redirect URI registered with the identity provider',
+            ],
+        );
+
+        return (new Response())->status(503)->json([
+            'error' => 'callback_url_not_configured',
+            'message' => self::CALLBACK_URL_UNAVAILABLE,
         ]);
     }
 
     /**
-     * Get the callback URL for this server.
+     * The state-carried authorize-time callback URL, re-validated (review r2
+     * NEW-8), or null when the state carries none / it no longer passes.
      *
-     * @return string
+     * @param array<string, mixed> $context    The trusted server-side state context.
+     * @param string               $configured The `redirect_uri` setting (pre-read).
      */
-    private function getCallbackUrl(): string
+    private function replayCallbackUrl(array $context, string $configured): ?string
     {
-        return '/auth/oidc/callback';
+        $stored = is_string($context[self::CALLBACK_URL_KEY] ?? null) ? $context[self::CALLBACK_URL_KEY] : '';
+        if ($stored === '') {
+            return null;
+        }
+
+        return CallbackUrl::isReplayable($stored, $configured, CallbackUrl::configuredHost())
+            ? $stored
+            : null;
+    }
+
+    /**
+     * The operator-configured absolute `redirect_uri` plugin setting, or '' when
+     * unset / no settings source is wired.
+     */
+    private function configuredRedirectUri(): string
+    {
+        if ($this->plugin === null) {
+            return '';
+        }
+        $settings = $this->plugin->getSettings();
+
+        return is_string($settings['redirect_uri'] ?? null) ? $settings['redirect_uri'] : '';
     }
 
     /**

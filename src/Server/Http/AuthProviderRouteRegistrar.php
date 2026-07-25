@@ -13,6 +13,7 @@ namespace Phlix\Server\Http;
 
 use Phlix\Server\Http\Controllers\AccountLinkController;
 use Phlix\Server\Http\Middleware\AuthMiddleware;
+use Phlix\Plugins\Github\Controller\GithubCallbackController;
 use Phlix\Plugins\Oidc\Controller\OidcCallbackController;
 
 /**
@@ -70,6 +71,12 @@ final class AuthProviderRouteRegistrar
         //    behind AuthMiddleware. (S44.)
         $router->oidcAuth(OidcCallbackController::class);
 
+        // S48 GitHub OAuth2 login entry. Same rationale as OIDC: the GitHub
+        // redirect to /auth/github/callback carries no Phlix session (the link
+        // intent is recovered from the server-side OAuth2 state store), so both
+        // routes are unauthenticated.
+        $router->githubAuth(GithubCallbackController::class);
+
         // 2. AUTHENTICATED identity-management endpoints. The current user is
         //    read from the validated session by AuthMiddleware:
         //      GET    /auth/identities            list this user's identities (S45)
@@ -86,6 +93,11 @@ final class AuthProviderRouteRegistrar
                 $r->delete('/auth/identities/{id}', [AccountLinkController::class, 'unlink']);
                 $r->get('/auth/identities/link/oidc', [OidcCallbackController::class, 'authorizeLink']);
                 $r->post('/auth/identities/link/ldap', [AccountLinkController::class, 'linkLdap']);
+                // S48: start a GitHub link (the callback stays on the unauthenticated
+                // /auth/github/callback path; the link intent is recovered from the
+                // server-side OAuth2 state store). Unlink is provider-generic via the
+                // DELETE /auth/identities/{id} route above.
+                $r->get('/auth/identities/link/github', [GithubCallbackController::class, 'authorizeLink']);
             },
             [new AuthMiddleware()],
         );

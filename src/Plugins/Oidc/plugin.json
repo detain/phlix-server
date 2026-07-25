@@ -24,6 +24,11 @@
             "type": "string",
             "required": false,
             "default": "openid profile email"
+        },
+        "redirect_uri": {
+            "type": "string",
+            "required": false,
+            "secret": false
         }
     },
     "events": []

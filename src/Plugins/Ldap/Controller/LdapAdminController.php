@@ -15,6 +15,43 @@ use Phlix\Plugins\Ldap\Plugin;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
 
+/**
+ * Admin API controller for LDAP provider settings.
+ *
+ * As of S48 the values live in the DB-backed `plugin_settings` store (migration
+ * `093_plugin_settings.sql`) rather than a `settings.json` file — see
+ * {@see \Phlix\Plugins\PluginDbSettings}. `bind_pw` is write-only: it is stripped
+ * from the read response by {@see Plugin::maskSecrets()}, and a blank value on save
+ * keeps the stored password. It is NOT encrypted at rest, so a database dump
+ * contains that credential.
+ *
+ * ## KNOWN GAP — this controller does NOT preserve absent keys
+ *
+ * The store is a wholesale replace
+ * ({@see \Phlix\Plugins\Repository\PluginSettingsRepository::save()}), and
+ * {@see self::saveSettings()} rebuilds the whole document from the request body
+ * with hardcoded fallbacks. So a partial payload RESETS every optional key it
+ * omits — `port` → 389, `ssl` → false, `bind_dn`/`admin_group` → `''`,
+ * `user_filter` → `(uid={{username}})` — rather than preserving it. Only `bind_pw`
+ * is kept (the blank-keeps-existing branch).
+ *
+ * S48 closed exactly this shape on
+ * {@see \Phlix\Plugins\Oidc\Controller\OidcAdminController} and
+ * {@see \Phlix\Plugins\Github\Controller\GithubAdminController} (it is the shape
+ * that wiped live Trakt OAuth tokens on production), but LDAP was OUT OF SCOPE for
+ * that step and is deliberately left as is rather than changed unreviewed. It is
+ * not currently exploitable by a shipped client: the admin SPA's LDAP form always
+ * posts the complete set of fields. It would bite a scripted caller — and note that
+ * two of the resets are security-relevant (`ssl` → false downgrades to a plaintext
+ * bind; a reset `user_filter` breaks Active Directory logins).
+ *
+ * If you make this consistent with the other two, use `array_key_exists()` per
+ * optional key (never `isset()`/`??`, which cannot tell "absent" from "sent
+ * empty"), and mirror the coverage in
+ * `tests/Integration/Plugins/AuthProviderSettingsPreservationRealDbIntegrationTest.php`.
+ *
+ * @package Phlix\Plugins\Ldap\Controller
+ */
 final class LdapAdminController
 {
     private Plugin $plugin;
@@ -46,6 +83,14 @@ final class LdapAdminController
     }
 
     /**
+     * Save LDAP settings.
+     *
+     * ⚠ Send the COMPLETE settings map: unlike the OIDC/GitHub equivalents this
+     * method does not preserve keys the body omits — see the class docblock's
+     * "KNOWN GAP". `host` and `base_dn` are required (`400 missing_host` /
+     * `missing_base_dn`), `port` must be 1-65535 (`400 invalid_port`), and a blank
+     * `bind_pw` keeps the stored password.
+     *
      * @param Request $request
      * @param array<string, string> $params
      * @return Response

@@ -2055,6 +2055,25 @@ class Application
      * into a {@see Request} (via {@see Request::fromWorkerman()}) and
      * sending the response back over the connection.
      *
+     * ## `HEAD` replies: this layer is OUTSIDE the router's guarantee
+     *
+     * {@see Router::markHeadOnly()} flags every `HEAD` reply the router returns from
+     * a matched route, which is what keeps a single `Content-Length` on the wire
+     * (RFC 9110 §8.6). The middleware chain built here runs *before* the router, so a
+     * global middleware that SHORT-CIRCUITS (returns a {@see Response} instead of
+     * calling `$next`) never reaches that flag and its reply therefore still ships
+     * its body on a `HEAD`. That is bounded, not unnoticed: the only global
+     * middleware that can short-circuit today is
+     * {@see \Phlix\Server\Http\Middleware\AccessScheduleMiddleware}, whose three
+     * refusals declare no `Content-Length` of their own, so Workerman's generated one
+     * is the only one on the wire — the recoverable "body on a HEAD" shape
+     * (RFC 9110 §9.3.2), not the unrecoverable two-length one, and it moves together
+     * with the other sites of that shape ({@see Router::notFound()},
+     * {@see \Phlix\Server\Workerman\HttpHandler}'s SPA/static/404 replies). A global
+     * middleware that declares its own `Content-Length` on a short-circuit WOULD ship
+     * two; `ApplicationHeadOnlyBoundaryTest` pins both halves of that so neither can
+     * drift silently.
+     *
      * @param Request $request The HTTP request to dispatch.
      *
      * @return Response The response produced by the matching route's
@@ -2115,7 +2134,9 @@ class Application
             return $this->router->dispatch($request);
         };
 
-        // Apply global middleware in reverse order (so first registered runs first)
+        // Apply global middleware in reverse order (so first registered runs first).
+        // Same HEAD boundary as {@see self::dispatch()} — a global middleware that
+        // short-circuits returns before Router::markHeadOnly() can flag the reply.
         $handler = $finalHandler;
         foreach (array_reverse($this->middleware) as $currentHandler) {
             $nextHandler = $handler;
@@ -2929,6 +2950,61 @@ class Application
                 // CDS control endpoint (legacy path)
                 $cdsControlController = new \Phlix\Server\Http\Controllers\Dlna\CdsControlController($cdsServer);
                 $r->post(\Phlix\Dlna\DlnaRoutes::CDS_CONTROL, [$cdsControlController, 'handle']);
+
+                // S52: the media byte stream a renderer actually plays.
+                //
+                // MUST live inside THIS group. A DLNA renderer cannot present a
+                // Bearer token or a signed URL, so the route carries no auth —
+                // which makes the group's DlnaAllowlistMiddleware the only gate
+                // it has. Serving it from HttpHandler instead (as
+                // /media/{id}/stream is, before the router runs) would give it
+                // ZERO allowlist enforcement: an unauthenticated whole-library
+                // read for anything that can reach the port. Registering it here
+                // also means the `dlna.cds_enabled` guard above keeps the route
+                // from existing at all while DLNA is off.
+                //
+                // HEAD is registered explicitly alongside GET: renderers HEAD
+                // before opening a resource, and Router::dispatch()'s GET→HEAD
+                // fallback suppresses the file-backed body (so it would report
+                // Content-Length: 0).
+                try {
+                    $streamItems = $container->get(\Phlix\Media\Library\ItemRepository::class);
+                    $streamJail = $container->get(\Phlix\Media\Library\LibraryRootJail::class);
+                    if (
+                        $streamItems instanceof \Phlix\Media\Library\ItemRepository
+                        && $streamJail instanceof \Phlix\Media\Library\LibraryRootJail
+                    ) {
+                        $streamController = new \Phlix\Server\Http\Controllers\Dlna\DlnaStreamController(
+                            $streamItems,
+                            $streamJail,
+                            \Phlix\Common\Logger\LoggerFactory::get(\Phlix\Common\Logger\LogChannels::DLNA),
+                        );
+                        $r->match(
+                            ['GET', 'HEAD'],
+                            \Phlix\Dlna\DlnaRoutes::STREAM_PATTERN,
+                            [$streamController, 'handle'],
+                        );
+                    }
+                } catch (\Throwable $streamError) {
+                    // Browse still works without it; say so instead of leaving an
+                    // operator to wonder why every <res> URL 404s.
+                    //
+                    // The log call is itself guarded: it runs INSIDE a
+                    // Router::group() closure, and a throw escaping from here
+                    // would abandon the group. Router::group() now restores its
+                    // prefix/middleware in a `finally`, so the allowlist can no
+                    // longer leak onto the ~15 loaders that follow — this catch is
+                    // the second half of that belt-and-braces pair, keeping a
+                    // logging failure from taking down route registration at all.
+                    try {
+                        \Phlix\Common\Logger\LoggerFactory::get(\Phlix\Common\Logger\LogChannels::DLNA)->error(
+                            'DLNA stream route not registered; renderers will be unable to play any item',
+                            ['error' => $streamError->getMessage(), 'exception' => $streamError::class],
+                        );
+                    } catch (\Throwable) {
+                        // Nowhere left to report to.
+                    }
+                }
             }, [$allowlistMiddleware]);
         } catch (\Throwable $e) {
             // LOG, do not swallow. This bare catch previously said only

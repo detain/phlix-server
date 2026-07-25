@@ -357,51 +357,46 @@ final class PlaybackEventMediaTypeEnumTest extends TestCase
     }
 
     /**
-     * The reviewer's EXACT fixture: 13 separate `recordStorageSnapshot()` calls,
-     * i.e. the ad-hoc pattern the public single-row API still allows. All 13 rows
-     * land in the same `NOW()` second, so this is the collision case end to end.
+     * The reviewer's EXACT fixture, through the public single-row API: 13 separate
+     * `recordStorageSnapshot()` calls, i.e. the ad-hoc pattern that API still
+     * allows. Each call writes its own row, several of them into the same bucket,
+     * which is the collision the roll-ups used to lose 60,000 of 91,000 bytes to.
      *
-     * Retried if the fixture straddles a second boundary (which would split the
-     * rows across two `recorded_at` values and make the assertion meaningless
-     * rather than wrong).
+     * The 13 rows are then stamped with ONE `recorded_at` before reading. That is
+     * NOT cosmetic: `recorded_at` is second-precision and each call is a separate
+     * `NOW()`, so on a loaded box the run spreads over two or three seconds
+     * (measured: 3) and `getStorageSummary()`'s `MAX(recorded_at)` join then only
+     * sees the last second's rows — which would make the assertion flaky rather
+     * than wrong. Stamping reproduces, deterministically, the single-second run the
+     * reviewer measured on an idle scratch DB.
      */
     public function testThirteenIndividualCallsStillRollUpToEveryByte(): void
     {
+        $before = $this->storageRowIds();
+        $collector = $this->collector();
+
         $written = 0;
-        $ids = [];
-
-        for ($attempt = 1; $attempt <= 3; $attempt++) {
-            $before = $this->storageRowIds();
-            $written = 0;
-            $collector = $this->collector();
-
-            foreach (MediaItemType::ALL as $index => $type) {
-                $bytes = 1_000 * ($index + 1);
-                $written += $bytes;
-                $collector->recordStorageSnapshot($type, 1, $bytes);
-            }
-
-            $ids = array_values(array_diff($this->storageRowIds(), $before, $this->storageIds));
-            foreach ($ids as $id) {
-                $this->storageIds[] = $id;
-            }
-
-            if ($this->distinctRecordedAt($ids) === 1) {
-                break;
-            }
-
-            // Straddled a second boundary: drop these rows and try again.
-            $this->purgeStorageIds($ids);
-            $ids = [];
+        foreach (MediaItemType::ALL as $index => $type) {
+            $bytes = 1_000 * ($index + 1);
+            $written += $bytes;
+            $collector->recordStorageSnapshot($type, 1, $bytes);
         }
 
-        $this->assertSame(91_000, $written);
-        $this->assertCount(13, $ids, 'One row per call');
-        $this->assertSame(1, $this->distinctRecordedAt($ids), 'All 13 rows must share one recorded_at second');
+        $ids = array_values(array_diff($this->storageRowIds(), $before, $this->storageIds));
+        foreach ($ids as $id) {
+            $this->storageIds[] = $id;
+        }
+
+        $this->assertSame(91_000, $written, 'The review r1 fixture: 13 types, 91,000 bytes');
+        $this->assertCount(13, $ids, 'One row per call — the writer must not drop a single type');
+
+        $this->stampRecordedAt($ids, '2031-02-03 04:05:06');
+        $this->assertSame(1, $this->distinctRecordedAt($ids));
 
         $summary = $this->dashboard()->getStorageSummary();
 
         $this->assertSame(91_000, $this->rollUpTotal($summary), $this->rollUpMessage($summary));
+        $this->assertSame(13, $this->latestItemCountTotal(), 'All 13 item counts must survive');
     }
 
     /**
@@ -560,17 +555,19 @@ final class PlaybackEventMediaTypeEnumTest extends TestCase
     }
 
     /**
+     * Force the given rows onto ONE `recorded_at`, i.e. the single-second snapshot
+     * run that a `NOW()`-per-INSERT writer produces on an idle box.
+     *
      * @param list<string> $ids
      */
-    private function purgeStorageIds(array $ids): void
+    private function stampRecordedAt(array $ids, string $recordedAt): void
     {
         $db = $this->db;
         $this->assertNotNull($db);
 
         foreach ($ids as $id) {
-            $db->query('DELETE FROM stats_storage WHERE id = ?', [$id]);
+            $db->query('UPDATE stats_storage SET recorded_at = ? WHERE id = ?', [$recordedAt, $id]);
         }
-        $this->storageIds = array_values(array_diff($this->storageIds, $ids));
     }
 
     /**

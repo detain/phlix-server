@@ -246,8 +246,15 @@ class MusicLibraryScanner
      * **THE MEASURED CONTRACT (real MySQL 8.0.46, `PhlixMySQLConnection`, review r2
      * F1).** This method exists because the file used to contradict itself:
      * {@see self::flushAlbum()}'s docblock asserted "the DB layer throws on error (it
-     * does not return `false`)" while three call sites branched on `=== false`. Both
-     * halves were half-right, and the truth is a three-outcome contract:
+     * does not return `false`)" while **five** call sites in **four** methods branched on
+     * `=== false` — {@see self::upsertArtist()}, {@see self::upsertAlbum()},
+     * {@see self::upsertTrack()} (twice) and {@see self::createMediaItem()}, counted at
+     * `master` `ffc41739` (`:1083`, `:1206`, `:1324`, `:1341`, `:1712`), all five now on
+     * this helper. Earlier prose in this docblock and in the worklog said "three" and
+     * "all four" (review r3 finding 6); the substance was right and only the count was
+     * wrong, but this is the file's third doc-accuracy finding, so the number is now the
+     * measured one. Both halves of the original contradiction were half-right, and the
+     * truth is a three-outcome contract:
      *
      * | outcome of the statement | `query()` returns |
      * |---|---|

@@ -196,11 +196,19 @@ class MusicController
      *
      * Returns a JSON array of albums with track counts and artist info. Each album
      * embeds its track list (the browse fast-path every client relies on), fetched
-     * for the whole page in ONE batched query.
+     * for the whole page in ONE batched, ROW-CAPPED query — see
+     * {@see MusicLibraryService::MAX_EMBEDDED_ROWS}. When the cap bites, the album's
+     * `track_count` stays the true total and `tracks_truncated` is `true`, so a
+     * short `tracks` list is never silent.
+     *
+     * `?artist=` filters server-side. Without it a client can only fetch page 1 and
+     * filter locally, and page 1 of the live library spans just 23 of its 2,197
+     * artists — so the great majority of artists drilled down to an empty list.
      *
      * @param Request $request The HTTP request with optional query params:
      *   - limit: Maximum albums to return (default and hard cap: {@see PageLimit::MAX})
      *   - offset: Pagination offset (default: 0)
+     *   - artist: Exact artist name (case-insensitive) to restrict the page to
      * @param array<string, string> $params Route parameters (unused)
      * @return Response JSON response with albums array
      *
@@ -214,12 +222,14 @@ class MusicController
      *       "year": 2020,
      *       "album_art_url": null,
      *       "track_count": 12,
+     *       "tracks_truncated": false,
      *       "tracks": [...]
      *     }
      *   ],
      *   "total": 5091,
      *   "limit": 100,
-     *   "offset": 0
+     *   "offset": 0,
+     *   "artist": null
      * }
      * ```
      */
@@ -229,26 +239,35 @@ class MusicController
 
         $limit = $request->queryPageSize('limit', PageLimit::MAX);
         $offset = $request->queryOffset();
+        $artist = $this->filterValue($request->queryString('artist'));
 
-        $albumRows = $this->musicLibrary->getAllAlbums($limit, $offset);
+        $albumRows = $this->musicLibrary->getAllAlbums($limit, $offset, $artist);
 
         $albumIds = [];
         foreach ($albumRows as $row) {
             $albumIds[] = $this->toInt($row['id'] ?? 0);
         }
         $tracksByAlbum = $this->musicLibrary->getTracksByAlbumIds($albumIds);
+        $trackCounts = $this->musicLibrary->getTrackCountsByAlbumIds($albumIds);
 
         $shaped = [];
         foreach ($albumRows as $row) {
             $albumId = $this->toInt($row['id'] ?? 0);
-            $shaped[] = $this->formatAlbum($row, $tracksByAlbum[$albumId] ?? []);
+            $shaped[] = $this->formatAlbum(
+                $row,
+                $tracksByAlbum[$albumId] ?? [],
+                $trackCounts[$albumId] ?? 0,
+            );
         }
 
         return (new Response())->json([
             'albums' => $shaped,
-            'total' => $this->musicLibrary->getAlbumsCount(),
+            'total' => $this->musicLibrary->getAlbumsCount($artist),
             'limit' => $limit,
             'offset' => $offset,
+            // Echo the applied filter so a client can tell a server-side filter
+            // from a server that ignored the parameter.
+            'artist' => $artist,
         ]);
     }
 
@@ -257,7 +276,15 @@ class MusicController
      *
      * GET /music/albums/{mbid}
      *
-     * @param Request $request The HTTP request
+     * ⚠ **A title is not an identity.** 2,622 of the live library's 5,091 albums
+     * share a title with another album (`Featuring Freshness` ×35), so `?artist=`
+     * is what makes this lookup exact; without it the server returns a
+     * DETERMINISTIC first match (see
+     * {@see MusicLibraryService::findAlbumByTitle()}), which is reproducible but
+     * not necessarily the album the user clicked.
+     *
+     * @param Request $request The HTTP request, optional query param:
+     *   - artist: Exact artist name (case-insensitive) disambiguating a shared title
      * @param array<string, string> $params Route parameters including 'mbid' (the album TITLE —
      *   albums have no client-visible PK, so the title is the identity)
      * @return Response JSON response with album details and track listing, or 404 if not found
@@ -271,6 +298,7 @@ class MusicController
      *     "year": 2020,
      *     "album_art_url": null,
      *     "track_count": 12,
+     *     "tracks_truncated": false,
      *     "tracks": [
      *       {"id": "...", "name": "Track 1", "track_number": 1, ...}
      *     ]
@@ -280,24 +308,36 @@ class MusicController
      */
     public function getAlbum(Request $request, array $params): Response
     {
-        unset($request);
-
         $albumName = $params['mbid'] ?? '';
 
         if ($albumName === '') {
             return (new Response())->status(400)->json(['error' => 'Album name is required']);
         }
 
-        $album = $this->musicLibrary->findAlbumByTitle($albumName);
+        $album = $this->musicLibrary->findAlbumByTitle(
+            $albumName,
+            $this->filterValue($request->queryString('artist')),
+        );
         if ($album === null) {
             return (new Response())->status(404)->json(['error' => 'Album not found']);
         }
 
         $albumId = $this->toInt($album['id'] ?? 0);
-        $tracksByAlbum = $this->musicLibrary->getTracksByAlbumIds([$albumId]);
+        // One album, so the per-album window is raised to the absolute batch
+        // ceiling: the detail view is the endpoint that must not truncate a long
+        // compilation (the list view is the one under fan-out pressure).
+        $tracksByAlbum = $this->musicLibrary->getTracksByAlbumIds(
+            [$albumId],
+            MusicLibraryService::MAX_EMBEDDED_ROWS,
+        );
+        $trackCounts = $this->musicLibrary->getTrackCountsByAlbumIds([$albumId]);
 
         return (new Response())->json([
-            'album' => $this->formatAlbum($album, $tracksByAlbum[$albumId] ?? []),
+            'album' => $this->formatAlbum(
+                $album,
+                $tracksByAlbum[$albumId] ?? [],
+                $trackCounts[$albumId] ?? 0,
+            ),
         ]);
     }
 
@@ -530,17 +570,37 @@ class MusicController
     }
 
     /**
+     * Narrows an optional query-string filter to a non-empty string, or null.
+     *
+     * `?artist=` absent and `?artist=` empty must both mean "no filter", never
+     * "match the artist whose name is the empty string".
+     */
+    private function filterValue(?string $value): ?string
+    {
+        $trimmed = trim($value ?? '');
+
+        return $trimmed === '' ? null : $trimmed;
+    }
+
+    /**
      * Formats an album row (plus its already-fetched tracks) for API response.
      *
      * Key names are contract: clients read `name` (NOT `title` — the album title
      * doubles as the drill-down key), `artist`, `year`, `track_count` and the
      * embedded `tracks` list.
      *
+     * `track_count` is the album's TRUE indexed track count and `tracks` is the
+     * row-capped embedded list ({@see MusicLibraryService::MAX_EMBEDDED_ROWS}), so
+     * `tracks_truncated` tells a client the two disagree instead of leaving it to
+     * infer a short list is a complete one.
+     *
      * @param array<string, mixed> $album Album row from {@see MusicLibraryService::getAllAlbums()}
      * @param list<array<string, mixed>> $trackRows This album's joined track rows
+     * @param int $trackCount True indexed track count from
+     *        {@see MusicLibraryService::getTrackCountsByAlbumIds()}
      * @return array<string, mixed> Formatted album for response
      */
-    private function formatAlbum(array $album, array $trackRows): array
+    private function formatAlbum(array $album, array $trackRows, int $trackCount): array
     {
         $tracks = [];
         foreach ($trackRows as $row) {
@@ -552,7 +612,8 @@ class MusicController
             'artist' => $this->toStringOrNull($album['artist_name'] ?? null),
             'year' => $this->toIntOrNull($album['year'] ?? null),
             'album_art_url' => $this->toStringOrNull($album['album_art_url'] ?? null),
-            'track_count' => $this->toInt($album['track_count'] ?? 0),
+            'track_count' => $trackCount,
+            'tracks_truncated' => count($tracks) < $trackCount,
             'tracks' => $tracks,
         ];
     }

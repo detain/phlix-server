@@ -123,4 +123,262 @@ final class MusicLibraryServiceTest extends TestCase
         // Pagination is still clamped and bound positionally.
         $this->assertSame([25, 5], $captured['params']);
     }
+
+    /**
+     * HIGH-1 (S99 review r1): the album listing embeds each album's tracks, and
+     * that batch had NO `LIMIT`. Clamping the album page to 100 bounds nothing —
+     * 100 albums may hold 30,000 tracks, each costing an `hash_hmac()` mint on the
+     * event loop and all of it buffered whole by two shared hub workers.
+     *
+     * Pins BOTH bounds and the round-robin ordering that makes the batch ceiling
+     * degrade fairly (a plain `LIMIT` over `ORDER BY album_id` would hand the tail
+     * of the page an EMPTY track list, which reads as a broken album).
+     */
+    public function testGetTracksByAlbumIdsWindowsPerAlbumAndCapsTheBatch(): void
+    {
+        $captured = $this->captureQuery(
+            fn(MusicLibraryService $s): mixed => $s->getTracksByAlbumIds([1, 2, 3])
+        );
+
+        $sql = $captured['sql'];
+
+        $this->assertMatchesRegularExpression(
+            '/ROW_NUMBER\(\)\s+OVER\s*\(\s*PARTITION\s+BY\s+t\.album_id\s+ORDER\s+BY\s+'
+            . 't\.disc_number,\s*t\.track_number,\s*t\.id\s*\)\s+AS\s+rn/i',
+            $sql,
+            'Tracks must be windowed PER ALBUM, not capped across the whole batch'
+        );
+        $this->assertMatchesRegularExpression('/WHERE\s+r\.rn\s*<=\s*\?/i', $sql, 'The per-album cap must be bound');
+        $this->assertMatchesRegularExpression(
+            '/ORDER\s+BY\s+r\.rn,\s*r\.album_id\s+LIMIT\s+\?/i',
+            $sql,
+            'The batch ceiling must be applied round-robin (ORDER BY rn), never per album order'
+        );
+
+        // 3 albums x 100 per album = 300, under the 2,000 absolute ceiling.
+        $this->assertSame([1, 2, 3, 100, 300], $captured['params']);
+    }
+
+    /**
+     * The batch ceiling is absolute: it must bind, not merely exist.
+     *
+     * @dataProvider embeddedTrackBoundProvider
+     * @param list<int> $albumIds
+     */
+    public function testGetTracksByAlbumIdsBoundsAreAbsolute(
+        array $albumIds,
+        int $perAlbumLimit,
+        int $expectedPerAlbum,
+        int $expectedBatch
+    ): void {
+        $captured = $this->captureQuery(
+            fn(MusicLibraryService $s): mixed => $s->getTracksByAlbumIds($albumIds, $perAlbumLimit)
+        );
+
+        /** @var list<int> $params */
+        $params = is_array($captured['params']) ? $captured['params'] : [];
+        $bound = array_slice($params, -2);
+
+        $this->assertSame(
+            [$expectedPerAlbum, $expectedBatch],
+            $bound,
+            'Per-album window and batch ceiling must both be clamped before binding'
+        );
+        $this->assertLessThanOrEqual(
+            MusicLibraryService::MAX_EMBEDDED_ROWS,
+            $bound[1],
+            'No caller may raise the batch above MAX_EMBEDDED_ROWS'
+        );
+    }
+
+    /**
+     * @return array<string, array{0: list<int>, 1: int, 2: int, 3: int}>
+     */
+    public static function embeddedTrackBoundProvider(): array
+    {
+        $hundredAlbums = range(1, 100);
+
+        return [
+            // A full PageLimit::MAX album page x the per-album window = 10,000
+            // rows, so the absolute ceiling is what actually binds.
+            'full album page' => [$hundredAlbums, 100, 100, MusicLibraryService::MAX_EMBEDDED_ROWS],
+            // The album DETAIL endpoint asks for one album with the window raised.
+            'single album detail' => [
+                [7],
+                MusicLibraryService::MAX_EMBEDDED_ROWS,
+                MusicLibraryService::MAX_EMBEDDED_ROWS,
+                MusicLibraryService::MAX_EMBEDDED_ROWS,
+            ],
+            // A caller cannot opt out of either bound.
+            'absurd per-album limit' => [
+                $hundredAlbums,
+                5000000,
+                MusicLibraryService::MAX_EMBEDDED_ROWS,
+                MusicLibraryService::MAX_EMBEDDED_ROWS,
+            ],
+            'int max per-album limit' => [
+                [7],
+                PHP_INT_MAX,
+                MusicLibraryService::MAX_EMBEDDED_ROWS,
+                MusicLibraryService::MAX_EMBEDDED_ROWS,
+            ],
+            'zero becomes one' => [[7], 0, 1, 1],
+            'negative becomes one' => [[7], -5, 1, 1],
+        ];
+    }
+
+    /**
+     * Same fan-out class, second door: the artists listing embeds each artist's
+     * album titles, which was likewise unbounded.
+     */
+    public function testGetAlbumTitlesByArtistIdsWindowsPerArtistAndCapsTheBatch(): void
+    {
+        $captured = $this->captureQuery(
+            fn(MusicLibraryService $s): mixed => $s->getAlbumTitlesByArtistIds([4, 5])
+        );
+
+        $this->assertMatchesRegularExpression(
+            '/ROW_NUMBER\(\)\s+OVER\s*\(\s*PARTITION\s+BY\s+al\.artist_id/i',
+            $captured['sql'],
+            'Album titles must be windowed PER ARTIST'
+        );
+        $this->assertMatchesRegularExpression(
+            '/ORDER\s+BY\s+r\.rn,\s*r\.artist_id\s+LIMIT\s+\?/i',
+            $captured['sql'],
+        );
+        $this->assertSame([4, 5, 100, 200], $captured['params']);
+    }
+
+    /**
+     * MED-2: `?artist=` must filter in SQL. The page-1-and-filter-locally
+     * behaviour it replaces is why 77 of the 100 artists on screen drilled down to
+     * an empty album list — page 1 of `/albums` spans 23 of 2,197 artists.
+     *
+     * LOW-10: and the album page must NOT aggregate the whole track table any
+     * more (`134 ms` per browse measured on production).
+     */
+    public function testGetAllAlbumsFiltersByArtistAndDropsTheTrackAggregate(): void
+    {
+        $filtered = $this->captureQuery(
+            fn(MusicLibraryService $s): mixed => $s->getAllAlbums(100, 0, 'Pink Floyd')
+        );
+
+        $this->assertMatchesRegularExpression('/WHERE\s+ar\.name\s*=\s*\?/i', $filtered['sql']);
+        $this->assertSame(['Pink Floyd', 100, 0], $filtered['params']);
+
+        // The ORDER BY must be a TOTAL order, or a duplicated title can show the
+        // same album on two pages (2,622 of 5,091 production albums share a title).
+        $this->assertMatchesRegularExpression(
+            '/ORDER\s+BY\s+ar\.name,\s*al\.title,\s*al\.id/i',
+            $filtered['sql'],
+        );
+
+        // No `LEFT JOIN music_tracks … GROUP BY` aggregate: the track counts come
+        // from the batched, indexed getTrackCountsByAlbumIds() instead.
+        $this->assertStringNotContainsString('music_tracks', $filtered['sql']);
+        $this->assertStringNotContainsString('GROUP BY', $filtered['sql']);
+
+        $unfiltered = $this->captureQuery(fn(MusicLibraryService $s): mixed => $s->getAllAlbums(10, 20));
+        $this->assertStringNotContainsString('WHERE', $unfiltered['sql']);
+        $this->assertSame([10, 20], $unfiltered['params']);
+    }
+
+    /**
+     * `total` must describe the same set the page came from, or a filtered page
+     * reports the whole library's album count.
+     */
+    public function testGetAlbumsCountHonoursTheArtistFilter(): void
+    {
+        $filtered = $this->captureQuery(
+            fn(MusicLibraryService $s): mixed => $s->getAlbumsCount('Pink Floyd')
+        );
+        $this->assertMatchesRegularExpression('/WHERE\s+ar\.name\s*=\s*\?/i', $filtered['sql']);
+        $this->assertSame(['Pink Floyd'], $filtered['params']);
+
+        $all = $this->captureQuery(fn(MusicLibraryService $s): mixed => $s->getAlbumsCount());
+        $this->assertStringContainsString('FROM music_albums', $all['sql']);
+        $this->assertStringNotContainsString('WHERE', $all['sql']);
+    }
+
+    /**
+     * MED-3: `music_albums.title` has no unique key and 2,622 of production's
+     * 5,091 albums share a title (`Featuring Freshness` ×35), so the lookup must
+     * (a) accept an artist to disambiguate and (b) be deterministic without one —
+     * `ORDER BY ar.name, al.title` alone left all 35 rows tied.
+     */
+    public function testFindAlbumByTitleIsDeterministicAndArtistScopable(): void
+    {
+        $plain = $this->captureQuery(
+            fn(MusicLibraryService $s): mixed => $s->findAlbumByTitle('Featuring Freshness')
+        );
+
+        $this->assertMatchesRegularExpression(
+            '/ORDER\s+BY\s+ar\.name,\s*al\.title,\s*al\.id\s+LIMIT\s+1/i',
+            $plain['sql'],
+            'Without al.id the winner among duplicate titles is up to InnoDB'
+        );
+        $this->assertSame(['Featuring Freshness'], $plain['params']);
+
+        $scoped = $this->captureQuery(
+            fn(MusicLibraryService $s): mixed => $s->findAlbumByTitle('Featuring Freshness', 'The Right Artist')
+        );
+        $this->assertMatchesRegularExpression(
+            '/WHERE\s+al\.title\s*=\s*\?\s+AND\s+ar\.name\s*=\s*\?/i',
+            $scoped['sql'],
+        );
+        $this->assertSame(['Featuring Freshness', 'The Right Artist'], $scoped['params']);
+    }
+
+    /**
+     * The batched track counter replaces the album query's aggregate, so it must
+     * be ONE grouped query over the page's ids (never one query per album).
+     */
+    public function testGetTrackCountsByAlbumIdsIsOneGroupedIndexedQuery(): void
+    {
+        $captured = $this->captureQuery(
+            fn(MusicLibraryService $s): mixed => $s->getTrackCountsByAlbumIds([3, 4, 4, 0, -1])
+        );
+
+        $this->assertMatchesRegularExpression(
+            '/WHERE\s+album_id\s+IN\s*\(\?,\?\)\s+GROUP\s+BY\s+album_id/i',
+            $captured['sql'],
+            'Non-positive and duplicate ids must be filtered out before binding'
+        );
+        $this->assertSame([3, 4], $captured['params']);
+    }
+
+    /**
+     * Runs one service call against a mocked connection and returns the SQL and
+     * bound parameters it emitted.
+     *
+     * @param callable(MusicLibraryService): mixed $call
+     * @return array{sql: string, params: mixed}
+     */
+    private function captureQuery(callable $call): array
+    {
+        /** @var array{sql: string, params: mixed}|null $captured */
+        $captured = null;
+
+        $db = $this->createMock(Connection::class);
+        $db->expects($this->once())
+            ->method('query')
+            ->willReturnCallback(
+                /**
+                 * @return list<array<string, mixed>>
+                 */
+                function (mixed $sql = '', mixed $params = null) use (&$captured): array {
+                    $captured = [
+                        'sql' => is_string($sql) ? $sql : '',
+                        'params' => $params,
+                    ];
+                    return [];
+                }
+            );
+
+        $call(new MusicLibraryService($db, $this->createMock(MusicLibraryScanner::class)));
+
+        $this->assertIsArray($captured);
+
+        return $captured;
+    }
 }

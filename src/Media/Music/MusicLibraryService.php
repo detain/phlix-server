@@ -30,6 +30,24 @@ use Workerman\MySQL\Connection;
  * `getAlbums()` / `getTracks()` did before S99 repointed
  * {@see \Phlix\Server\Http\Controllers\MusicController} at this service.
  *
+ * **Seven methods here are DEAD but retained on purpose** (S99 review r1, LOW-8):
+ * `getArtist(int)`, `getAlbum(int)`, `getTrack(int)`, `getAlbumTracks(int)`,
+ * `getArtistWithAlbums(int)`, `searchArtists()` and `getRecentlyAdded()` have zero
+ * `src/` callers — S99 deleted the `WebPortalRouter` music GET handlers that used
+ * them (they took an int PK where every client sends a name). They are kept rather
+ * than deleted because they are the ONLY references left to the `MusicArtist` /
+ * `MusicAlbum` / `MusicTrack` / `MusicAlbumWithTracks` DTOs, so removing them turns
+ * a one-file change into a four-class deletion that also has to decide the
+ * `MusicTrack::$mediaItemId` type bug below AND `phlix-contracts`' `src/Music.ts`,
+ * which still mirrors those DTO shapes — i.e. a cross-repo sweep, not a fix round.
+ *
+ * ⚠ **Fix this before reviving any of them:** `MusicTrack::$mediaItemId` is typed
+ * `int` while `music_tracks.media_item_id` is `CHAR(36)`, so `MusicTrack::fromRow()`
+ * fails `is_numeric()` on every UUID and stores `0`. Any DTO-based read is
+ * therefore unable to produce a playable track id. The array-returning reads this
+ * class serves the API from (`getAllTracks()`, `findTrackByMediaItemId()`,
+ * `getTracksByAlbumIds()`) are unaffected — they carry the raw UUID.
+ *
  * @author Phlix Development Team
  * @version 1.0.0
  * @description Service for accessing and managing music library data
@@ -55,6 +73,40 @@ class MusicLibraryService
      */
     private const TRACK_COLUMNS = 't.*, ar.name AS artist_name, al.title AS album_name, '
         . 'al.year AS album_year';
+
+    /**
+     * Absolute ceiling on the child rows ONE batched embedded-list query returns.
+     *
+     * The listing endpoints embed a child list per parent row
+     * ({@see getTracksByAlbumIds()} per album, {@see getAlbumTitlesByArtistIds()}
+     * per artist). Clamping the PARENT page to {@see PageLimit::MAX} bounds
+     * nothing about the children: 100 albums may legitimately hold 30,000 tracks,
+     * and `/api/v1/music` is not in the hub's `STREAMING_BODY_PREFIXES`, so the
+     * whole JSON body is buffered in memory by the relay worker AND the HTTP
+     * worker — both resident Workerman processes shared with every other tenant.
+     * Every embedded track also costs one `hash_hmac()` signed URL on the event
+     * loop ({@see \Phlix\Server\Http\Controllers\MusicController::formatTrack()}).
+     *
+     * 2,000 was chosen against measured production data, not guessed: the live
+     * library's worst 100-album window holds **989** tracks (5,091 albums /
+     * 29,245 tracks, max 125 tracks in any one album), and its worst 100-artist
+     * window holds **400** album titles — so today's library never truncates,
+     * while a pathological one is capped at ~860 KB / ~2,000 HMAC mints instead
+     * of being unbounded.
+     */
+    public const MAX_EMBEDDED_ROWS = 2000;
+
+    /**
+     * Default per-parent window inside a batched embedded list.
+     *
+     * Applied as `ROW_NUMBER() OVER (PARTITION BY <parent>)`, so the cap is
+     * per album / per artist rather than "the first N rows of the batch" — a
+     * plain batch `LIMIT` would let the first few albums eat the whole budget
+     * and hand the tail of the page an EMPTY track list, which reads as a
+     * broken album rather than a truncated one. Covers 5,089 of production's
+     * 5,091 albums and 2,196 of its 2,197 artists in full.
+     */
+    public const MAX_EMBEDDED_ROWS_PER_PARENT = 100;
 
     /** @var Connection Database connection */
     private Connection $db;
@@ -110,6 +162,9 @@ class MusicLibraryService
     /**
      * Gets an artist by their ID.
      *
+     * ⚠ DEAD as of S99 — no `src/` caller; retained deliberately (see the class
+     * docblock, "Seven methods here are DEAD but retained on purpose").
+     *
      * @param int $id Artist ID
      * @return MusicArtist|null Artist data or null if not found
      *
@@ -141,6 +196,11 @@ class MusicLibraryService
 
     /**
      * Gets an album by its ID, including its tracks.
+     *
+     * ⚠ DEAD as of S99 — no `src/` caller; retained deliberately (see the class
+     * docblock). The API serves album detail from {@see findAlbumByTitle()} +
+     * {@see getTracksByAlbumIds()} instead, because this method's `MusicTrack`
+     * DTOs cannot carry the UUID a client needs to play a track.
      *
      * @param int $id Album ID
      * @return MusicAlbumWithTracks|null Album data with tracks or null if not found
@@ -195,7 +255,11 @@ class MusicLibraryService
     }
 
     /**
-     * Gets a track by its ID.
+     * Gets a track by its ID (the internal `music_tracks.id`, NOT the public UUID).
+     *
+     * ⚠ DEAD as of S99 — no `src/` caller; retained deliberately (see the class
+     * docblock). The API keys tracks by `media_items.id`, i.e.
+     * {@see findTrackByMediaItemId()}.
      *
      * @param int $id Track ID
      * @return MusicTrack|null Track data or null if not found
@@ -229,6 +293,10 @@ class MusicLibraryService
     /**
      * Searches for artists by name.
      *
+     * ⚠ DEAD as of S99 — no `src/` caller; retained deliberately (see the class
+     * docblock). Note it is also UNBOUNDED (no `LIMIT`), so it must gain a
+     * {@see PageLimit} clamp before it is ever wired to a route.
+     *
      * @param string $query Search query
      * @return MusicArtist[] Matching artists
      *
@@ -259,6 +327,11 @@ class MusicLibraryService
 
     /**
      * Gets artists with recently added albums.
+     *
+     * ⚠ DEAD as of S99 — no `src/` caller; retained deliberately (see the class
+     * docblock). Its hand-rolled `max(1, min(100, …))` clamp is left as-is rather
+     * than routed through {@see PageLimit} precisely because nothing calls it:
+     * the live listings were unified in this round instead.
      *
      * @param int $limit Maximum number of artists to return (default 20)
      * @return array{artists: MusicArtist[], albums: MusicAlbum[], tracks: MusicTrack[]}
@@ -320,7 +393,7 @@ class MusicLibraryService
     /**
      * Gets all artists with their album counts.
      *
-     * @param int $limit Maximum number of artists to return (default 50)
+     * @param int $limit Maximum number of artists to return (clamped by {@see PageLimit}).
      * @param int $offset Number of artists to skip (default 0)
      * @return MusicArtistWithAlbums[] Artists with album data
      *
@@ -334,8 +407,12 @@ class MusicLibraryService
      */
     public function getAllArtists(int $limit = 50, int $offset = 0): array
     {
-        $limit = max(1, min(100, $limit));
-        $offset = max(0, $offset);
+        // ONE clamp policy for all three listings (S99 review r1, LOW-5): this
+        // used to hand-roll `max(1, min(100, …))` while getAllAlbums() used
+        // PageLimit, so a future change to PageLimit::MAX would have moved one
+        // and silently left the others behind.
+        $limit = PageLimit::clamp($limit, PageLimit::MAX);
+        $offset = PageLimit::clampOffset($offset);
 
         $result = $this->db->query(
             "SELECT a.*,
@@ -443,22 +520,45 @@ class MusicLibraryService
      * against a resident-memory worker (see CLAUDE.md "Batch Queries for N+1
      * Prevention").
      *
+     * **Row-capped**, exactly like {@see getTracksByAlbumIds()} and for the same
+     * reason: clamping the artist page to 100 says nothing about how many albums
+     * those artists hold. `ROW_NUMBER()` windows the list per artist and the outer
+     * `ORDER BY rn` makes truncation round-robin, so a long discography can never
+     * starve a later artist of its titles. Production's worst 100-artist window is
+     * 400 titles (max 142 for one artist), i.e. today nothing truncates.
+     *
      * @param list<int> $artistIds Artist ids to fetch titles for (empty = no query).
-     * @return array<int, list<string>> Map of artist id to its album titles.
+     * @param int $perArtistLimit Titles per artist (clamped to
+     *        `[1, self::MAX_EMBEDDED_ROWS]`).
+     * @return array<int, list<string>> Map of artist id to its album titles,
+     *         each list ordered by title.
      */
-    public function getAlbumTitlesByArtistIds(array $artistIds): array
-    {
+    public function getAlbumTitlesByArtistIds(
+        array $artistIds,
+        int $perArtistLimit = self::MAX_EMBEDDED_ROWS_PER_PARENT
+    ): array {
         $ids = array_values(array_unique(array_filter($artistIds, static fn(int $id): bool => $id > 0)));
         if (count($ids) === 0) {
             return [];
         }
 
+        $perArtist = max(1, min($perArtistLimit, self::MAX_EMBEDDED_ROWS));
+        $batchLimit = min(count($ids) * $perArtist, self::MAX_EMBEDDED_ROWS);
+
         $placeholders = implode(',', array_fill(0, count($ids), '?'));
         $result = $this->db->query(
-            "SELECT artist_id, title FROM music_albums
-             WHERE artist_id IN ({$placeholders})
-             ORDER BY artist_id, title",
-            $ids
+            "SELECT r.artist_id, r.title FROM (
+                 SELECT al.artist_id, al.title,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY al.artist_id ORDER BY al.title, al.id
+                        ) AS rn
+                 FROM music_albums al
+                 WHERE al.artist_id IN ({$placeholders})
+             ) r
+             WHERE r.rn <= ?
+             ORDER BY r.rn, r.artist_id
+             LIMIT ?",
+            array_merge($ids, [$perArtist, $batchLimit])
         );
 
         if (!is_array($result)) {
@@ -484,6 +584,11 @@ class MusicLibraryService
 
     /**
      * Gets an artist with their albums.
+     *
+     * ⚠ DEAD as of S99 — no `src/` caller; retained deliberately (see the class
+     * docblock). The API serves artist detail from {@see findArtistByName()} +
+     * {@see getAlbumTitlesByArtistIds()}. Note the album fan-out here is also
+     * UNBOUNDED, so it needs the {@see MAX_EMBEDDED_ROWS} treatment before use.
      *
      * @param int $id Artist ID
      * @return MusicArtistWithAlbums|null Artist with albums or null if not found
@@ -537,39 +642,63 @@ class MusicLibraryService
     }
 
     /**
-     * Gets a page of albums joined with their artist name and indexed track count.
+     * Gets a page of albums joined with their artist name, optionally one artist only.
      *
      * Returns raw arrays (not DTOs) because the API response needs the joined
      * `artist_name` alias, which no single-table DTO carries — the same reason
      * {@see getAllTracks()} returns rows.
      *
-     * `track_count` counts the `music_tracks` rows that actually exist rather than
-     * echoing `music_albums.total_tracks` (a tag-declared total that can exceed
-     * what was indexed), so a client never renders more rows than it can play.
+     * **`$artistName` is the drill-down filter** (`GET /api/v1/music/albums?artist=`,
+     * S99 review r1 MED-2). Without it a client has to fetch page 1 of the whole
+     * album list and filter locally, which on the live library means page 1 spans
+     * only 23 of 2,197 artists — so 77 of the 100 artists on screen drilled down to
+     * an empty album list. Filtering here resolves the artist through
+     * `music_artists.uk_name` and the albums through `music_albums.idx_artist`:
+     * measured on production, **0.95 ms filtered vs 134 ms unfiltered**.
+     *
+     * **Track counts are NOT joined here** (S99 review r1, LOW-10). The previous
+     * `LEFT JOIN music_tracks … GROUP BY` forced MySQL to aggregate all 29,245
+     * track rows into a temporary table before it could sort and take 100 albums:
+     * measured **134 ms** on production, and identical at `OFFSET 4900`, i.e. per
+     * browse request on a resident event loop. The same page costs **41 ms** without
+     * the aggregate, and {@see getTrackCountsByAlbumIds()} then counts only the
+     * page's own albums off `idx_album`.
      *
      * Ordering matches {@see getAllTracks()}'s first two keys (`ar.name, al.title`),
      * i.e. the DISPLAY columns — deliberately NOT `sort_title` (see the ordering
      * follow-up in `plan_updates_worklog.md`: `sort_*` has no readers and MySQL
-     * sorts NULLs first).
+     * sorts NULLs first). `al.id` is appended as a tiebreaker so paging is stable:
+     * 2,622 of production's 5,091 albums share a title with another album, and an
+     * ambiguous sort key can otherwise show the same row on two pages.
      *
      * @param int $limit Maximum number of albums to return (clamped by {@see PageLimit}).
      * @param int $offset Number of albums to skip.
-     * @return array<array<string, mixed>> Album rows with `artist_name` + `track_count`.
+     * @param string|null $artistName Exact artist name (case-insensitive) to
+     *        restrict the page to; null/'' = every artist.
+     * @return array<array<string, mixed>> Album rows with `artist_name`.
      */
-    public function getAllAlbums(int $limit = 100, int $offset = 0): array
+    public function getAllAlbums(int $limit = 100, int $offset = 0, ?string $artistName = null): array
     {
         $limit = PageLimit::clamp($limit, PageLimit::MAX);
         $offset = PageLimit::clampOffset($offset);
 
+        $where = '';
+        /** @var list<string|int> $params */
+        $params = [];
+        if ($artistName !== null && $artistName !== '') {
+            $where = ' WHERE ar.name = ?';
+            $params[] = $artistName;
+        }
+        $params[] = $limit;
+        $params[] = $offset;
+
         $result = $this->db->query(
-            "SELECT al.*, ar.name AS artist_name, COUNT(t.id) AS track_count
+            "SELECT al.*, ar.name AS artist_name
              FROM music_albums al
-             JOIN music_artists ar ON ar.id = al.artist_id
-             LEFT JOIN music_tracks t ON t.album_id = al.id
-             GROUP BY al.id, ar.name
-             ORDER BY ar.name, al.title
+             JOIN music_artists ar ON ar.id = al.artist_id" . $where . "
+             ORDER BY ar.name, al.title, al.id
              LIMIT ? OFFSET ?",
-            [$limit, $offset]
+            $params
         );
 
         if (!is_array($result)) {
@@ -583,13 +712,77 @@ class MusicLibraryService
     }
 
     /**
-     * Gets the total number of albums.
+     * Gets the total number of albums, or of one artist's albums.
      *
+     * @param string|null $artistName Exact artist name (case-insensitive) to count
+     *        within, matching {@see getAllAlbums()}'s filter so `total` describes
+     *        the same set the page came from; null/'' = every album.
      * @return int Total album count
      */
-    public function getAlbumsCount(): int
+    public function getAlbumsCount(?string $artistName = null): int
     {
-        return $this->countRows('music_albums');
+        if ($artistName === null || $artistName === '') {
+            return $this->countRows('music_albums');
+        }
+
+        return $this->firstCount($this->db->query(
+            "SELECT COUNT(*) as cnt
+             FROM music_albums al
+             JOIN music_artists ar ON ar.id = al.artist_id
+             WHERE ar.name = ?",
+            [$artistName]
+        ));
+    }
+
+    /**
+     * Counts the indexed tracks of a batch of albums, keyed by album id.
+     *
+     * ONE indexed query for a whole page (`idx_album`), replacing the aggregate
+     * {@see getAllAlbums()} used to carry — see that method's LOW-10 note.
+     *
+     * Counts the `music_tracks` rows that actually exist rather than echoing
+     * `music_albums.total_tracks` (a tag-declared total that can exceed what was
+     * indexed), so a client never renders more rows than it can play. It is also
+     * the TRUE total the embedded, row-capped track list is compared against to
+     * expose truncation ({@see getTracksByAlbumIds()}).
+     *
+     * Needs no row cap: the result is at most one row per requested album id.
+     *
+     * @param list<int> $albumIds Album ids to count tracks for (empty = no query).
+     * @return array<int, int> Map of album id to its indexed track count.
+     */
+    public function getTrackCountsByAlbumIds(array $albumIds): array
+    {
+        $ids = array_values(array_unique(array_filter($albumIds, static fn(int $id): bool => $id > 0)));
+        if (count($ids) === 0) {
+            return [];
+        }
+
+        $placeholders = implode(',', array_fill(0, count($ids), '?'));
+        $result = $this->db->query(
+            "SELECT album_id, COUNT(*) AS track_count FROM music_tracks
+             WHERE album_id IN ({$placeholders})
+             GROUP BY album_id",
+            $ids
+        );
+
+        if (!is_array($result)) {
+            return [];
+        }
+
+        $counts = [];
+        foreach ($result as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            $albumId = is_numeric($row['album_id'] ?? null) ? (int) $row['album_id'] : 0;
+            if ($albumId === 0) {
+                continue;
+            }
+            $counts[$albumId] = is_numeric($row['track_count'] ?? null) ? (int) $row['track_count'] : 0;
+        }
+
+        return $counts;
     }
 
     /**
@@ -602,25 +795,48 @@ class MusicLibraryService
      * case-insensitive via the `utf8mb4_unicode_ci` collation, preserving the
      * `strcasecmp()` behaviour of the pre-S99 handler.
      *
-     * `music_albums.title` is NOT unique (two artists may ship the same title), so
-     * the first row in `artist name, title` order wins — the same
-     * first-match-wins semantics the pre-S99 handler had.
+     * **A title is not an identity, and this method no longer pretends otherwise**
+     * (S99 review r1, MED-3). `music_albums.title` carries only the non-unique
+     * `idx_title`, and on the live library **2,622 of 5,091 albums (51.5%) share a
+     * title with another album** — `Featuring Freshness` appears 35 times. Two
+     * things follow:
+     *
+     * 1. `$artistName` disambiguates (`GET /api/v1/music/albums/{title}?artist=`).
+     *    With it the lookup is exact for every album whose (artist, title) pair is
+     *    unique, which is the whole library bar same-artist re-releases.
+     * 2. Without it the winner is DETERMINISTIC rather than arbitrary: lowest
+     *    `al.id` among the alphabetically-first `artist_name`. Before this round the
+     *    `ORDER BY ar.name, al.title` left all 35 `Featuring Freshness` rows tied,
+     *    so which one came back was up to InnoDB. It is still not necessarily the
+     *    album the user clicked — that needs `?artist=` (or an album id, deferred
+     *    to S108, which is already re-keying music away from path segments) — but
+     *    it is now reproducible and documented instead of silently random.
+     *
+     * Track counts come from {@see getTrackCountsByAlbumIds()} (one source, see
+     * {@see getAllAlbums()}'s LOW-10 note), so this row carries no `track_count`.
      *
      * @param string $title Exact album title (case-insensitive).
-     * @return array<string, mixed>|null Album row with `artist_name` + `track_count`, or null.
+     * @param string|null $artistName Exact artist name (case-insensitive) to
+     *        disambiguate a shared title; null/'' = deterministic first match.
+     * @return array<string, mixed>|null Album row with `artist_name`, or null.
      */
-    public function findAlbumByTitle(string $title): ?array
+    public function findAlbumByTitle(string $title, ?string $artistName = null): ?array
     {
+        $where = 'WHERE al.title = ?';
+        $params = [$title];
+        if ($artistName !== null && $artistName !== '') {
+            $where .= ' AND ar.name = ?';
+            $params[] = $artistName;
+        }
+
         $result = $this->db->query(
-            "SELECT al.*, ar.name AS artist_name, COUNT(t.id) AS track_count
+            "SELECT al.*, ar.name AS artist_name
              FROM music_albums al
              JOIN music_artists ar ON ar.id = al.artist_id
-             LEFT JOIN music_tracks t ON t.album_id = al.id
-             WHERE al.title = ?
-             GROUP BY al.id, ar.name
-             ORDER BY ar.name, al.title
+             " . $where . "
+             ORDER BY ar.name, al.title, al.id
              LIMIT 1",
-            [$title]
+            $params
         );
 
         if (!is_array($result) || count($result) === 0) {
@@ -639,34 +855,74 @@ class MusicLibraryService
     }
 
     /**
-     * Gets the tracks of a batch of albums, keyed by album id.
+     * Gets the tracks of a batch of albums, keyed by album id — batched AND capped.
      *
      * ONE query for a whole page of albums (the albums API embeds each album's
      * track list), so browsing never degrades into an N+1. Rows carry the same
-     * joined shape as {@see getAllTracks()} — `artist_name`, `album_name`,
-     * `album_year` and the streamable `media_items.path` — so one formatter can
-     * shape both endpoints.
+     * joined shape as {@see getAllTracks()} — `artist_name`, `album_name` and
+     * `album_year`. Like every track read here it deliberately carries NO
+     * `media_items.path`: see {@see TRACK_COLUMNS}, which does not select it.
+     *
+     * **The row cap is a security bound, not a nicety** (S99 review r1, HIGH-1).
+     * `listAlbums` clamps the ALBUM page to {@see PageLimit::MAX}; that says
+     * nothing about how many tracks those albums hold, and this query had no
+     * `LIMIT` at all — 100 albums holding 30,000 tracks meant 30,000 rows,
+     * 30,000 `hash_hmac()` mints on the event loop and ~12 MB of JSON buffered
+     * whole in BOTH shared hub workers (`/api/v1/music` is not in the hub's
+     * `STREAMING_BODY_PREFIXES`). Two bounds now apply:
+     *
+     * - a per-album window (`ROW_NUMBER() OVER (PARTITION BY t.album_id)`), so
+     *   the cap is per album rather than "the first N rows of the batch";
+     * - an absolute batch ceiling of {@see MAX_EMBEDDED_ROWS}.
+     *
+     * The outer `ORDER BY r.rn` makes the ceiling degrade ROUND-ROBIN — every
+     * album gets its track 1 before any album gets its track 2 — because a plain
+     * `LIMIT` over `ORDER BY album_id` would hand the tail of the page an empty
+     * list, and an album with zero embedded tracks reads to a client as broken
+     * rather than truncated. Grouping below therefore still yields each album's
+     * rows in disc/track order (`rn` ascending IS that order).
+     *
+     * Truncation is never silent: the caller compares `count()` against the true
+     * {@see getTrackCountsByAlbumIds()} value and the response carries both
+     * `track_count` and `tracks_truncated`.
      *
      * @param list<int> $albumIds Album ids to fetch tracks for (empty = no query).
+     * @param int $perAlbumLimit Tracks per album (clamped to
+     *        `[1, self::MAX_EMBEDDED_ROWS]`). The album DETAIL endpoint passes
+     *        {@see MAX_EMBEDDED_ROWS} because it asks for exactly one album and
+     *        must not truncate a long compilation (production's longest album has
+     *        125 tracks).
      * @return array<int, list<array<string, mixed>>> Map of album id to its track rows,
      *         each list ordered by disc then track number.
      */
-    public function getTracksByAlbumIds(array $albumIds): array
-    {
+    public function getTracksByAlbumIds(
+        array $albumIds,
+        int $perAlbumLimit = self::MAX_EMBEDDED_ROWS_PER_PARENT
+    ): array {
         $ids = array_values(array_unique(array_filter($albumIds, static fn(int $id): bool => $id > 0)));
         if (count($ids) === 0) {
             return [];
         }
 
+        $perAlbum = max(1, min($perAlbumLimit, self::MAX_EMBEDDED_ROWS));
+        $batchLimit = min(count($ids) * $perAlbum, self::MAX_EMBEDDED_ROWS);
+
         $placeholders = implode(',', array_fill(0, count($ids), '?'));
         $result = $this->db->query(
-            "SELECT " . self::TRACK_COLUMNS . "
-             FROM music_tracks t
-             JOIN music_albums al ON al.id = t.album_id
-             JOIN music_artists ar ON ar.id = t.artist_id
-             WHERE t.album_id IN ({$placeholders})
-             ORDER BY t.album_id, t.disc_number, t.track_number",
-            $ids
+            "SELECT r.* FROM (
+                 SELECT " . self::TRACK_COLUMNS . ",
+                        ROW_NUMBER() OVER (
+                            PARTITION BY t.album_id ORDER BY t.disc_number, t.track_number, t.id
+                        ) AS rn
+                 FROM music_tracks t
+                 JOIN music_albums al ON al.id = t.album_id
+                 JOIN music_artists ar ON ar.id = t.artist_id
+                 WHERE t.album_id IN ({$placeholders})
+             ) r
+             WHERE r.rn <= ?
+             ORDER BY r.rn, r.album_id
+             LIMIT ?",
+            array_merge($ids, [$perAlbum, $batchLimit])
         );
 
         if (!is_array($result)) {
@@ -685,6 +941,8 @@ class MusicLibraryService
             }
             /** @var array<string, mixed> $typedRow */
             $typedRow = $row;
+            // `rn` is the windowing artefact, not part of the row contract.
+            unset($typedRow['rn']);
             $byAlbum[$albumId][] = $typedRow;
         }
 
@@ -693,6 +951,10 @@ class MusicLibraryService
 
     /**
      * Gets all tracks for an album.
+     *
+     * ⚠ DEAD as of S99 — no `src/` caller; retained deliberately (see the class
+     * docblock). The API embeds album tracks via {@see getTracksByAlbumIds()},
+     * which is batched AND row-capped; this one is neither.
      *
      * @param int $albumId Album ID
      * @return MusicTrack[] Tracks ordered by disc number and track number
@@ -722,14 +984,15 @@ class MusicLibraryService
      *
      * Returns raw arrays with artist_name and album_name included for the API response.
      *
-     * @param int $limit Maximum number of tracks to return (default 100)
+     * @param int $limit Maximum number of tracks to return (clamped by {@see PageLimit}).
      * @param int $offset Number of tracks to skip (default 0)
      * @return array<array<string, mixed>> Tracks ordered by artist, album, disc, track number
      */
     public function getAllTracks(int $limit = 100, int $offset = 0): array
     {
-        $limit = max(1, min(100, $limit));
-        $offset = max(0, $offset);
+        // One clamp policy for all three listings — see getAllArtists().
+        $limit = PageLimit::clamp($limit, PageLimit::MAX);
+        $offset = PageLimit::clampOffset($offset);
 
         $result = $this->db->query(
             // NB: the album's column is `title` (music_albums has NO `name`
@@ -830,8 +1093,17 @@ class MusicLibraryService
             return 0;
         }
 
-        $result = $this->db->query("SELECT COUNT(*) as cnt FROM {$table}");
+        return $this->firstCount($this->db->query("SELECT COUNT(*) as cnt FROM {$table}"));
+    }
 
+    /**
+     * Reads the `cnt` column out of a single-row `SELECT COUNT(*) as cnt` result.
+     *
+     * @param mixed $result Whatever the driver returned for the count query.
+     * @return int Row count, or 0 when the count row is unavailable.
+     */
+    private function firstCount(mixed $result): int
+    {
         if (!is_array($result) || count($result) === 0) {
             return 0;
         }

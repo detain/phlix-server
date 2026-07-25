@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Phlix\Tests\Integration\Media;
 
 use Phlix\Common\Database\ConnectionPool;
+use Phlix\Common\Http\PageLimit;
 use Phlix\Common\Uuid;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Music\MusicLibraryScanner;
@@ -61,6 +62,19 @@ final class MusicApiReadPathIntegrationTest extends TestCase
 
     /** The page size the pre-S99 track lookup linear-scanned. */
     private const LEGACY_SCAN_PAGE = 1000;
+
+    /**
+     * Albums in the HIGH-1 fan-out fixture. A full {@see PageLimit::MAX} page, so
+     * the round-robin share of {@see MusicLibraryService::MAX_EMBEDDED_ROWS} is a
+     * whole number and the assertions can be exact.
+     */
+    private const BULK_ALBUMS = 100;
+
+    /**
+     * Tracks per album in that fixture. 100 x 25 = 2,500 embedded rows — denser
+     * than production's worst 100-album window (989), so the ceiling binds.
+     */
+    private const BULK_TRACKS_PER_ALBUM = 25;
 
     private ?Connection $db = null;
 
@@ -311,6 +325,7 @@ final class MusicApiReadPathIntegrationTest extends TestCase
         $this->assertSame($this->prefix . 'A Alpha', $aardvark['artist']);
         $this->assertSame(1999, $aardvark['year']);
         $this->assertSame(2, $aardvark['track_count'], 'track_count counts indexed music_tracks rows');
+        $this->assertFalse($aardvark['tracks_truncated'], 'A complete embedded list must not be flagged');
         $this->assertIsArray($aardvark['tracks']);
         $this->assertCount(2, $aardvark['tracks']);
 
@@ -414,6 +429,234 @@ final class MusicApiReadPathIntegrationTest extends TestCase
         $this->assertSame(404, $response->statusCode);
     }
 
+    /**
+     * HIGH-1 (S99 review r1) against real rows: `/api/v1/music/albums` embeds each
+     * album's tracks, and that batch had NO `LIMIT`. Clamping the ALBUM page to 100
+     * bounds nothing — 100 albums can hold any number of tracks — and every embedded
+     * track costs one `hash_hmac()` mint on the event loop while the whole body is
+     * buffered by both shared hub workers (`/api/v1/music` is not in the hub's
+     * `STREAMING_BODY_PREFIXES`).
+     *
+     * The fixture is deliberately DENSER than production's worst 100-album window
+     * (2,500 tracks vs the live library's 989) so the ceiling actually binds, and the
+     * test pins all four properties that make the bound safe:
+     *
+     * 1. the total is capped at {@see MusicLibraryService::MAX_EMBEDDED_ROWS};
+     * 2. truncation is round-robin — NO album comes back with an empty track list,
+     *    which is what a plain `LIMIT` over `ORDER BY album_id` would have done to
+     *    the tail of the page;
+     * 3. `track_count` remains the TRUE indexed count and `tracks_truncated` is set,
+     *    so a short list is never silent;
+     * 4. below the ceiling nothing is truncated at all — i.e. production's real
+     *    worst case (989) is untouched by this change.
+     */
+    public function testAlbumListEmbeddedTrackFanOutIsCappedAndTruncationIsVisible(): void
+    {
+        $bulkArtist = $this->prefix . '0 Bulk';
+        $this->seedBulkAlbums($bulkArtist, self::BULK_ALBUMS, self::BULK_TRACKS_PER_ALBUM);
+
+        // --- 1..3: the full page exceeds the ceiling -------------------------
+        $payload = $this->json($this->controller()->listAlbums(
+            $this->request(['artist' => $bulkArtist, 'limit' => (string) self::BULK_ALBUMS]),
+            [],
+        ));
+
+        /** @var list<array<string, mixed>> $albums */
+        $albums = is_array($payload['albums'] ?? null) ? $payload['albums'] : [];
+        $this->assertCount(self::BULK_ALBUMS, $albums, 'The whole album page must come back');
+
+        $embedded = 0;
+        $emptyAlbums = 0;
+        foreach ($albums as $album) {
+            /** @var list<array<string, mixed>> $tracks */
+            $tracks = is_array($album['tracks'] ?? null) ? $album['tracks'] : [];
+            $embedded += count($tracks);
+            if (count($tracks) === 0) {
+                $emptyAlbums++;
+            }
+
+            $this->assertSame(
+                self::BULK_TRACKS_PER_ALBUM,
+                $album['track_count'],
+                'track_count must stay the TRUE indexed count, not the capped list length',
+            );
+            $this->assertTrue(
+                $album['tracks_truncated'],
+                'A capped album must advertise the truncation',
+            );
+            // Round-robin fair share: 2,000 rows / 100 albums = 20 each.
+            $this->assertCount(
+                intdiv(MusicLibraryService::MAX_EMBEDDED_ROWS, self::BULK_ALBUMS),
+                $tracks,
+                'The batch ceiling must be shared evenly across the page',
+            );
+            // And each album keeps its FIRST tracks, in play order.
+            $this->assertSame(
+                range(1, intdiv(MusicLibraryService::MAX_EMBEDDED_ROWS, self::BULK_ALBUMS)),
+                array_map(static fn(array $t): int => (int) $t['track_number'], $tracks),
+            );
+        }
+
+        $this->assertSame(
+            MusicLibraryService::MAX_EMBEDDED_ROWS,
+            $embedded,
+            sprintf(
+                'The embedded track fan-out must be capped at %d rows (fixture holds %d)',
+                MusicLibraryService::MAX_EMBEDDED_ROWS,
+                self::BULK_ALBUMS * self::BULK_TRACKS_PER_ALBUM,
+            ),
+        );
+        $this->assertSame(0, $emptyAlbums, 'Truncation must never leave an album with zero tracks');
+
+        // --- 4: below the ceiling, nothing is truncated ----------------------
+        // 79 albums x 25 = 1,975 rows, i.e. just under the ceiling and just over
+        // production's worst real 100-album window (989 tracks).
+        $under = $this->json($this->controller()->listAlbums(
+            $this->request(['artist' => $bulkArtist, 'limit' => '79']),
+            [],
+        ));
+
+        /** @var list<array<string, mixed>> $underAlbums */
+        $underAlbums = is_array($under['albums'] ?? null) ? $under['albums'] : [];
+        $this->assertCount(79, $underAlbums);
+
+        $underEmbedded = 0;
+        foreach ($underAlbums as $album) {
+            /** @var list<array<string, mixed>> $tracks */
+            $tracks = is_array($album['tracks'] ?? null) ? $album['tracks'] : [];
+            $underEmbedded += count($tracks);
+            $this->assertFalse($album['tracks_truncated'], 'Under the ceiling nothing may be flagged');
+            $this->assertCount(self::BULK_TRACKS_PER_ALBUM, $tracks);
+        }
+        $this->assertSame(79 * self::BULK_TRACKS_PER_ALBUM, $underEmbedded);
+        $this->assertLessThan(MusicLibraryService::MAX_EMBEDDED_ROWS, $underEmbedded);
+    }
+
+    /**
+     * MED-2 (S99 review r1) against real rows: `?artist=` filters SERVER-side.
+     *
+     * `phlix-ui`'s `MusicLibraryPage` fetches page 1 of `/albums` and filters it in
+     * the browser, and page 1 of the live library spans only 23 of its 2,197
+     * artists — so 77 of the 100 artists on screen drill down to an EMPTY album
+     * list. This test reproduces exactly that: an artist whose albums sit beyond
+     * page 1 is invisible to a client-side filter, and reachable with `?artist=`.
+     */
+    public function testAlbumsAreReachableByArtistEvenWhenTheyFallBeyondPageOne(): void
+    {
+        // 120 track-less albums under an artist sorting FIRST fill page 1 (LIMIT 100).
+        $bulkArtist = $this->prefix . '0 Bulk';
+        $this->seedBulkAlbums($bulkArtist, 120, 0);
+
+        // The victim: an artist sorting LAST, whose albums are therefore off page 1.
+        $lateArtist = $this->prefix . 'zz Late Artist';
+        $lateId = $this->artist('zz Late Artist');
+        $this->album($lateId, 'Late Album One', 1);
+        $this->album($lateId, 'Late Album Two', 1);
+
+        // 1) What a client-side filter sees: page 1 does NOT contain the artist.
+        $pageOne = $this->json($this->controller()->listAlbums($this->request(), []));
+        /** @var list<array<string, mixed>> $pageOneAlbums */
+        $pageOneAlbums = is_array($pageOne['albums'] ?? null) ? $pageOne['albums'] : [];
+        $this->assertCount(PageLimit::MAX, $pageOneAlbums, 'Page 1 must be full for this to be a real test');
+        $this->assertSame(
+            [],
+            array_values(array_filter(
+                $pageOneAlbums,
+                static fn(array $a): bool => ($a['artist'] ?? null) === $lateArtist,
+            )),
+            'The late artist must be beyond page 1 — this is the empty drill-down',
+        );
+
+        // 2) What the server-side filter returns: exactly that artist's albums.
+        $filtered = $this->json($this->controller()->listAlbums(
+            $this->request(['artist' => $lateArtist]),
+            [],
+        ));
+
+        /** @var list<array<string, mixed>> $filteredAlbums */
+        $filteredAlbums = is_array($filtered['albums'] ?? null) ? $filtered['albums'] : [];
+        $this->assertCount(2, $filteredAlbums, 'Both of the late artist\'s albums must come back');
+        $this->assertSame(
+            ['Late Album One', 'Late Album Two'],
+            array_map(static fn(array $a): string => (string) $a['name'], $filteredAlbums),
+        );
+        foreach ($filteredAlbums as $album) {
+            $this->assertSame($lateArtist, $album['artist']);
+        }
+
+        // `total` describes the FILTERED set, so a pager cannot mis-size itself.
+        $this->assertSame(2, $filtered['total']);
+        $this->assertSame($lateArtist, $filtered['artist'], 'The applied filter is echoed');
+        $this->assertGreaterThan(2, $pageOne['total'], 'Unfiltered total still counts every album');
+        $this->assertNull($pageOne['artist']);
+
+        // Case-insensitive, like every other music name lookup.
+        $shouted = $this->json($this->controller()->listAlbums(
+            $this->request(['artist' => strtoupper($lateArtist)]),
+            [],
+        ));
+        $this->assertCount(2, is_array($shouted['albums'] ?? null) ? $shouted['albums'] : []);
+    }
+
+    /**
+     * MED-3 (S99 review r1) against real rows: `music_albums.title` is NOT unique
+     * (2,622 of production's 5,091 albums share a title, `Featuring Freshness` ×35),
+     * so `/albums/{title}` must be deterministic without an artist and EXACT with
+     * one.
+     *
+     * The fixture is built to discriminate: the album belonging to the
+     * alphabetically-LATER artist is inserted FIRST, so it holds the lower
+     * `music_albums.id`. A lookup that just takes whatever InnoDB hands back first
+     * returns the wrong one; the documented rule (first `artist_name`, then lowest
+     * `al.id`) returns the earlier artist's album.
+     */
+    public function testDuplicateAlbumTitleResolvesDeterministicallyAndByArtist(): void
+    {
+        $sharedTitle = 'Featuring Freshness';
+
+        // Inserted first => lower album id, but sorts LAST by artist name.
+        $secondArtist = $this->artist('M2 Second');
+        $secondAlbumId = $this->album($secondArtist, $sharedTitle, 1);
+        $this->track($secondAlbumId, $secondArtist, 'Second Artist Track', 1, 1, 222);
+
+        $firstArtist = $this->artist('M1 First');
+        $firstAlbumId = $this->album($firstArtist, $sharedTitle, 1);
+        $this->track($firstAlbumId, $firstArtist, 'First Artist Track', 1, 1, 111);
+
+        $this->assertLessThan(
+            $firstAlbumId,
+            $secondAlbumId,
+            'Fixture must give the later-sorting artist the LOWER album id',
+        );
+
+        $controller = $this->controller();
+
+        // 1) No artist: deterministic, documented winner (first artist_name).
+        $first = $this->json($controller->getAlbum($this->request(), ['mbid' => $sharedTitle]));
+        $this->assertSame($this->prefix . 'M1 First', $first['album']['artist']);
+        $this->assertSame(111, $first['album']['tracks'][0]['duration_secs']);
+
+        // Repeatable, which is the property that was missing.
+        $again = $this->json($controller->getAlbum($this->request(), ['mbid' => $sharedTitle]));
+        $this->assertSame($first['album'], $again['album'], 'The winner must not vary between calls');
+
+        // 2) With ?artist=: the CORRECT album, not the deterministic default.
+        $scoped = $this->json($controller->getAlbum(
+            $this->request(['artist' => $this->prefix . 'M2 Second']),
+            ['mbid' => $sharedTitle],
+        ));
+        $this->assertSame($this->prefix . 'M2 Second', $scoped['album']['artist']);
+        $this->assertSame(222, $scoped['album']['tracks'][0]['duration_secs']);
+        $this->assertSame(1, $scoped['album']['track_count']);
+
+        // 3) A title that exists under a DIFFERENT artist still 404s when scoped.
+        $wrong = $controller->getAlbum(
+            $this->request(['artist' => $this->prefix . 'A Alpha']),
+            ['mbid' => $sharedTitle],
+        );
+        $this->assertSame(404, $wrong->statusCode, 'The artist scope must actually restrict the lookup');
+    }
+
     // -------------------------------------------------------------------------
     // Harness
     // -------------------------------------------------------------------------
@@ -430,11 +673,14 @@ final class MusicApiReadPathIntegrationTest extends TestCase
         );
     }
 
-    private function request(): Request
+    /**
+     * @param array<string, string> $query Extra/overriding query parameters.
+     */
+    private function request(array $query = []): Request
     {
         $request = new Request();
         $request->method = 'GET';
-        $request->query = ['limit' => '100', 'offset' => '0'];
+        $request->query = array_merge(['limit' => '100', 'offset' => '0'], $query);
 
         return $request;
     }
@@ -566,6 +812,103 @@ final class MusicApiReadPathIntegrationTest extends TestCase
             99,
             321,
         );
+    }
+
+    /**
+     * Seeds one artist with `$albums` albums of `$tracksPerAlbum` tracks each.
+     *
+     * Batched inserts throughout (never one statement per row): the fan-out test
+     * needs 2,500 track rows to push the embedded-track batch past its ceiling, and
+     * a per-row loop would dominate the suite's runtime.
+     *
+     * @param string $artistName Fully prefixed artist name.
+     * @param int $albums How many albums to create.
+     * @param int $tracksPerAlbum Tracks per album (0 = albums only, which is all
+     *        the `?artist=` paging test needs).
+     */
+    private function seedBulkAlbums(string $artistName, int $albums, int $tracksPerAlbum): void
+    {
+        $db = $this->db;
+        $this->assertNotNull($db);
+
+        $db->query("INSERT INTO music_artists (name) VALUES (?)", [$artistName]);
+        $artistId = $this->lookupId('music_artists', 'name', $artistName);
+        $this->artistIds[] = $artistId;
+
+        // Albums, 100 rows per statement.
+        for ($start = 1; $start <= $albums; $start += 100) {
+            $params = [];
+            $tuples = [];
+            for ($i = $start; $i < $start + 100 && $i <= $albums; $i++) {
+                $tuples[] = '(?, ?, ?, ?)';
+                array_push($params, $artistId, sprintf('Bulk Album %03d', $i), 2001, $tracksPerAlbum);
+            }
+            $db->query(
+                'INSERT INTO music_albums (artist_id, title, year, total_tracks) VALUES '
+                . implode(',', $tuples),
+                $params,
+            );
+        }
+
+        if ($tracksPerAlbum === 0) {
+            return;
+        }
+
+        /** @var array<int, int> $albumIds title index => album id */
+        $albumIds = [];
+        $rows = $db->query(
+            'SELECT id, title FROM music_albums WHERE artist_id = ? ORDER BY title',
+            [$artistId],
+        );
+        $this->assertIsArray($rows);
+        foreach ($rows as $row) {
+            $this->assertIsArray($row);
+            $albumIds[] = (int) $row['id'];
+        }
+        $this->assertCount($albums, $albumIds);
+
+        // media_items + music_tracks, 50 rows per statement each.
+        $mediaBatch = [];
+        $trackBatch = [];
+        $flush = function () use ($db, &$mediaBatch, &$trackBatch): void {
+            if (count($mediaBatch) > 0) {
+                $db->query(
+                    "INSERT INTO media_items (id, library_id, name, type, path, metadata_json) VALUES "
+                    . implode(',', array_fill(0, intdiv(count($mediaBatch), 5), "(?, ?, ?, 'track', ?, ?)")),
+                    $mediaBatch,
+                );
+                $mediaBatch = [];
+            }
+            if (count($trackBatch) > 0) {
+                $db->query(
+                    "INSERT INTO music_tracks
+                        (media_item_id, album_id, artist_id, title, track_number, disc_number, duration_secs)
+                     VALUES " . implode(',', array_fill(0, intdiv(count($trackBatch), 7), '(?, ?, ?, ?, ?, ?, ?)')),
+                    $trackBatch,
+                );
+                $trackBatch = [];
+            }
+        };
+
+        foreach ($albumIds as $albumIndex => $albumId) {
+            for ($t = 1; $t <= $tracksPerAlbum; $t++) {
+                $mediaItemId = Uuid::v4();
+                $name = sprintf('%sbulk-%03d-%02d', $this->prefix, $albumIndex + 1, $t);
+                array_push(
+                    $mediaBatch,
+                    $mediaItemId,
+                    $this->libraryId,
+                    $name,
+                    '/s99-music-it/' . $mediaItemId . '.flac',
+                    (string) json_encode(['sub_type' => 'track', 'name' => $name]),
+                );
+                array_push($trackBatch, $mediaItemId, $albumId, $artistId, $name, $t, 1, 200);
+                if (count($trackBatch) >= 350) {
+                    $flush();
+                }
+            }
+        }
+        $flush();
     }
 
     private function artist(string $name): int

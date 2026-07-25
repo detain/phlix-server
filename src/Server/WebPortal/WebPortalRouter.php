@@ -367,9 +367,21 @@ class WebPortalRouter
             // They were unreachable — HttpHandler runs Application::dispatch()
             // first and only falls through to this router on a 404, and
             // Application::loadMusicRoutes() registers all seven music paths to
-            // MusicController — and they were contract-incompatible anyway
-            // (getMusicArtist/getMusicAlbum took an int PK where every client
-            // sends a name/title, and there was no `/albums` list route at all).
+            // MusicController — and every one of them was ALSO
+            // contract-incompatible, though for three different reasons (S99
+            // review r1, LOW-7 — do not collapse these into "they took an int
+            // PK", which was true of only two):
+            //   * getMusicArtist / getMusicAlbum took an int PK where every
+            //     client sends a name/title, so `(int)'Pink Floyd'` = 0 → 404;
+            //   * getMusicArtists DID read the real music_* tables but returned
+            //     MusicArtistWithAlbums::toArray(), i.e. a NESTED
+            //     `{artist:{…},album_count,…}` envelope in which phlix-ui's
+            //     normalizeMusicArtist (which reads top-level `name`) sees
+            //     undefined and renders 'Unknown Artist';
+            //   * getMusicTracks also read the real tables but emitted `id` =
+            //     music_tracks.id (the internal int PK) with `stream_url: null`,
+            //     so playback 404'd;
+            //   * and there was no `/albums` list route here at all.
             // `POST /api/v1/music/scan` STAYS: Application registers no POST
             // music route, so this is the only registration of that path.
             $r->post('/api/v1/music/scan', [$this, 'scanMusicDirectory']);

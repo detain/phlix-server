@@ -72,6 +72,11 @@ class MusicControllerTest extends TestCase
     }
 
     /**
+     * One album row exactly as {@see MusicLibraryService::getAllAlbums()} returns
+     * it. Deliberately carries NO `track_count`: that column moved out of the
+     * album query into the batched {@see MusicLibraryService::getTrackCountsByAlbumIds()}
+     * (S99 review r1 LOW-10 — the joined aggregate cost 134 ms per browse on prod).
+     *
      * @return array<string, mixed>
      */
     private function albumRow(int $id = 7): array
@@ -87,7 +92,6 @@ class MusicControllerTest extends TestCase
             'total_discs' => 1,
             'album_art_url' => 'https://art.example/cover.jpg',
             'artist_name' => 'Real Artist',
-            'track_count' => 12,
         ];
     }
 
@@ -159,12 +163,23 @@ class MusicControllerTest extends TestCase
         $request->query['limit'] = '5000';
         $request->query['offset'] = '25';
 
+        // Captured rather than asserted only via ->with(), so a broken clamp
+        // reports the actual limit instead of "did not perform any assertions".
+        $bound = [];
         $this->musicLibrary->expects($this->once())
             ->method('getAllArtists')
-            ->with(100, 25)
-            ->willReturn([]);
+            ->willReturnCallback(function (mixed $limit = null, mixed $offset = null) use (&$bound): array {
+                $bound = ['limit' => $limit, 'offset' => $offset];
+                return [];
+            });
 
         $response = $this->controller->listArtists($request, []);
+
+        $this->assertSame(
+            ['limit' => 100, 'offset' => 25],
+            $bound,
+            'getAllArtists() must be called with the clamped page size and offset',
+        );
 
         /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
@@ -230,6 +245,7 @@ class MusicControllerTest extends TestCase
     {
         $this->musicLibrary->method('getAllAlbums')->willReturn([$this->albumRow()]);
         $this->musicLibrary->method('getTracksByAlbumIds')->willReturn([7 => [$this->trackRow()]]);
+        $this->musicLibrary->method('getTrackCountsByAlbumIds')->willReturn([7 => 1]);
         $this->musicLibrary->method('getAlbumsCount')->willReturn(5091);
 
         $response = $this->controller->listAlbums(new Request(), []);
@@ -244,7 +260,8 @@ class MusicControllerTest extends TestCase
         $this->assertSame('Real Album', $body['albums'][0]['name']);
         $this->assertSame('Real Artist', $body['albums'][0]['artist']);
         $this->assertSame(2020, $body['albums'][0]['year']);
-        $this->assertSame(12, $body['albums'][0]['track_count']);
+        $this->assertSame(1, $body['albums'][0]['track_count']);
+        $this->assertFalse($body['albums'][0]['tracks_truncated']);
         $this->assertSame('https://art.example/cover.jpg', $body['albums'][0]['album_art_url']);
         $this->assertCount(1, $body['albums'][0]['tracks']);
         $this->assertSame(5091, $body['total']);
@@ -263,8 +280,135 @@ class MusicControllerTest extends TestCase
             ->method('getTracksByAlbumIds')
             ->with([1, 2])
             ->willReturn([]);
+        // The true track counts are ONE batched query too, never one per album.
+        $this->musicLibrary->expects($this->once())
+            ->method('getTrackCountsByAlbumIds')
+            ->with([1, 2])
+            ->willReturn([1 => 0, 2 => 0]);
 
         $this->assertEquals(200, $this->controller->listAlbums(new Request(), [])->statusCode);
+    }
+
+    /**
+     * HIGH-1: an album whose embedded track list was cut by the row cap must SAY
+     * so. `track_count` stays the true indexed total and `tracks_truncated` is
+     * `true`, so a client can never mistake a capped list for a complete one.
+     *
+     * @test
+     */
+    public function testTruncatedEmbeddedTrackListIsFlaggedAndKeepsTheTrueCount(): void
+    {
+        $rows = [];
+        for ($i = 1; $i <= 20; $i++) {
+            $rows[] = $this->trackRow('media-uuid-' . $i, $i);
+        }
+
+        $this->musicLibrary->method('getAllAlbums')->willReturn([$this->albumRow(7)]);
+        $this->musicLibrary->method('getTracksByAlbumIds')->willReturn([7 => $rows]);
+        // The album really holds 125 tracks; only 20 came back.
+        $this->musicLibrary->method('getTrackCountsByAlbumIds')->willReturn([7 => 125]);
+
+        /** @var array{albums: list<array<string, mixed>>} $body */
+        $body = json_decode($this->controller->listAlbums(new Request(), [])->body, true);
+
+        $album = $body['albums'][0];
+        $this->assertCount(20, $album['tracks'], 'The capped list is what was fetched');
+        $this->assertSame(125, $album['track_count'], 'track_count must stay the TRUE total');
+        $this->assertTrue($album['tracks_truncated'], 'Truncation must be visible to the client');
+    }
+
+    /**
+     * The complement: a complete list must NOT be flagged, or the flag is noise.
+     *
+     * @test
+     */
+    public function testCompleteEmbeddedTrackListIsNotFlaggedAsTruncated(): void
+    {
+        $this->musicLibrary->method('getAllAlbums')->willReturn([$this->albumRow(7)]);
+        $this->musicLibrary->method('getTracksByAlbumIds')->willReturn([
+            7 => [$this->trackRow('a', 1), $this->trackRow('b', 2)],
+        ]);
+        $this->musicLibrary->method('getTrackCountsByAlbumIds')->willReturn([7 => 2]);
+
+        /** @var array{albums: list<array<string, mixed>>} $body */
+        $body = json_decode($this->controller->listAlbums(new Request(), [])->body, true);
+
+        $this->assertFalse($body['albums'][0]['tracks_truncated']);
+        $this->assertSame(2, $body['albums'][0]['track_count']);
+    }
+
+    /**
+     * MED-2: `?artist=` must reach the SERVER-side query — both the page and its
+     * `total` — and be echoed back. Filtering client-side instead is what left 77
+     * of the 100 visible artists drilling down to an empty album list, because page
+     * 1 of `/albums` spans only 23 of production's 2,197 artists.
+     *
+     * @test
+     */
+    public function testListAlbumsAppliesTheArtistFilterServerSide(): void
+    {
+        $request = new Request();
+        $request->query['artist'] = 'Pink Floyd';
+
+        $this->musicLibrary->expects($this->once())
+            ->method('getAllAlbums')
+            ->with(PageLimit::MAX, 0, 'Pink Floyd')
+            ->willReturn([$this->albumRow(7)]);
+        $this->musicLibrary->method('getTracksByAlbumIds')->willReturn([]);
+        $this->musicLibrary->method('getTrackCountsByAlbumIds')->willReturn([7 => 0]);
+        // `total` must describe the FILTERED set, not the whole library.
+        $this->musicLibrary->expects($this->once())
+            ->method('getAlbumsCount')
+            ->with('Pink Floyd')
+            ->willReturn(15);
+
+        /** @var array<string, mixed> $body */
+        $body = json_decode($this->controller->listAlbums($request, [])->body, true);
+
+        $this->assertSame(15, $body['total']);
+        $this->assertSame('Pink Floyd', $body['artist'], 'The applied filter must be echoed');
+    }
+
+    /**
+     * An absent or blank `?artist=` means "every artist", never "the artist whose
+     * name is the empty string" (which would return an empty library).
+     *
+     * @test
+     * @dataProvider blankArtistFilterProvider
+     */
+    public function testBlankArtistFilterMeansNoFilter(?string $raw): void
+    {
+        $request = new Request();
+        if ($raw !== null) {
+            $request->query['artist'] = $raw;
+        }
+
+        $this->musicLibrary->expects($this->once())
+            ->method('getAllAlbums')
+            ->with(PageLimit::MAX, 0, null)
+            ->willReturn([]);
+        $this->musicLibrary->expects($this->once())
+            ->method('getAlbumsCount')
+            ->with(null)
+            ->willReturn(5091);
+
+        /** @var array<string, mixed> $body */
+        $body = json_decode($this->controller->listAlbums($request, [])->body, true);
+
+        $this->assertNull($body['artist']);
+        $this->assertSame(5091, $body['total']);
+    }
+
+    /**
+     * @return array<string, array{0: string|null}>
+     */
+    public static function blankArtistFilterProvider(): array
+    {
+        return [
+            'absent' => [null],
+            'empty string' => [''],
+            'whitespace only' => ['   '],
+        ];
     }
 
     /**
@@ -274,11 +418,12 @@ class MusicControllerTest extends TestCase
     {
         $this->musicLibrary->expects($this->once())
             ->method('findAlbumByTitle')
-            ->with('My Album')
+            ->with('My Album', null)
             ->willReturn($this->albumRow(7));
         $this->musicLibrary->method('getTracksByAlbumIds')->willReturn([
             7 => [$this->trackRow('track-1', 1), $this->trackRow('track-2', 2)],
         ]);
+        $this->musicLibrary->method('getTrackCountsByAlbumIds')->willReturn([7 => 2]);
 
         $response = $this->controller->getAlbum(new Request(), ['mbid' => 'My Album']);
 
@@ -292,6 +437,50 @@ class MusicControllerTest extends TestCase
         // Embedded album tracks carry the media-item UUID as their id.
         $this->assertSame('track-1', $body['album']['tracks'][0]['id']);
         $this->assertSame('Real Track Title', $body['album']['tracks'][0]['name']);
+    }
+
+    /**
+     * MED-3: `/albums/{title}?artist=` must reach the lookup. A title is not an
+     * identity — 2,622 of production's 5,091 albums share one — so without this the
+     * endpoint can only return a deterministic first match, not the right album.
+     *
+     * @test
+     */
+    public function testGetAlbumPassesTheArtistDisambiguatorToTheLookup(): void
+    {
+        $request = new Request();
+        $request->query['artist'] = 'The Right Artist';
+
+        $this->musicLibrary->expects($this->once())
+            ->method('findAlbumByTitle')
+            ->with('Featuring Freshness', 'The Right Artist')
+            ->willReturn($this->albumRow(7));
+        $this->musicLibrary->method('getTracksByAlbumIds')->willReturn([]);
+        $this->musicLibrary->method('getTrackCountsByAlbumIds')->willReturn([7 => 0]);
+
+        $response = $this->controller->getAlbum($request, ['mbid' => 'Featuring Freshness']);
+
+        $this->assertEquals(200, $response->statusCode);
+    }
+
+    /**
+     * The album DETAIL view asks for one album, so it must raise the per-album
+     * window to the absolute batch ceiling: it is the endpoint that must not
+     * truncate a long compilation (production's longest album has 125 tracks),
+     * while the LIST endpoint is the one under fan-out pressure.
+     *
+     * @test
+     */
+    public function testGetAlbumRaisesThePerAlbumTrackWindowToTheBatchCeiling(): void
+    {
+        $this->musicLibrary->method('findAlbumByTitle')->willReturn($this->albumRow(7));
+        $this->musicLibrary->expects($this->once())
+            ->method('getTracksByAlbumIds')
+            ->with([7], MusicLibraryService::MAX_EMBEDDED_ROWS)
+            ->willReturn([]);
+        $this->musicLibrary->method('getTrackCountsByAlbumIds')->willReturn([7 => 0]);
+
+        $this->assertSame(200, $this->controller->getAlbum(new Request(), ['mbid' => 'x'])->statusCode);
     }
 
     /**
@@ -353,6 +542,7 @@ class MusicControllerTest extends TestCase
         $this->musicLibrary->method('findTrackByMediaItemId')->willReturn($this->trackRow());
         $this->musicLibrary->method('getAllAlbums')->willReturn([$this->albumRow(7)]);
         $this->musicLibrary->method('getTracksByAlbumIds')->willReturn([7 => [$this->trackRow()]]);
+        $this->musicLibrary->method('getTrackCountsByAlbumIds')->willReturn([7 => 1]);
 
         /** @var array{tracks: list<array<string, mixed>>} $list */
         $list = json_decode($this->controller->listTracks(new Request(), [])->body, true);
@@ -374,6 +564,11 @@ class MusicControllerTest extends TestCase
      * reaches this controller from the internet; unclamped it would hydrate 5M rows
      * (and mint an HMAC per row) inside a resident worker shared by every tenant.
      *
+     * The limit each listing actually BOUND is captured and asserted by value, not
+     * just matched by `->with()`: a mock expectation mismatch reports "did not
+     * perform any assertions" (Risky), which fails CI but tells whoever broke the
+     * clamp nothing about the number that reached the query (S99 review r1, LOW-11).
+     *
      * @test
      * @dataProvider absurdLimitProvider
      */
@@ -382,18 +577,24 @@ class MusicControllerTest extends TestCase
         $request = new Request();
         $request->query['limit'] = $rawLimit;
 
+        /** @var array<string, int|null> $boundLimit */
+        $boundLimit = ['getAllTracks' => null, 'getAllAlbums' => null, 'getAllArtists' => null];
+        $capture = static function (string $method) use (&$boundLimit): callable {
+            return static function (mixed $limit = null) use ($method, &$boundLimit): array {
+                $boundLimit[$method] = is_int($limit) ? $limit : null;
+                return [];
+            };
+        };
+
         $this->musicLibrary->expects($this->once())
             ->method('getAllTracks')
-            ->with(PageLimit::MAX, 0)
-            ->willReturn([]);
+            ->willReturnCallback($capture('getAllTracks'));
         $this->musicLibrary->expects($this->once())
             ->method('getAllAlbums')
-            ->with(PageLimit::MAX, 0)
-            ->willReturn([]);
+            ->willReturnCallback($capture('getAllAlbums'));
         $this->musicLibrary->expects($this->once())
             ->method('getAllArtists')
-            ->with(PageLimit::MAX, 0)
-            ->willReturn([]);
+            ->willReturnCallback($capture('getAllArtists'));
 
         foreach (['listTracks', 'listAlbums', 'listArtists'] as $method) {
             /** @var array<string, mixed> $body */
@@ -401,7 +602,21 @@ class MusicControllerTest extends TestCase
             $this->assertSame(
                 PageLimit::MAX,
                 $body['limit'],
-                sprintf('%s must clamp ?limit=%s to PageLimit::MAX', $method, $rawLimit),
+                sprintf('%s must echo the clamped ?limit=%s as PageLimit::MAX', $method, $rawLimit),
+            );
+        }
+
+        foreach ($boundLimit as $serviceMethod => $bound) {
+            $this->assertSame(
+                PageLimit::MAX,
+                $bound,
+                sprintf(
+                    '%s() must receive %d for ?limit=%s, got %s — an unclamped LIMIT reaches SQL',
+                    $serviceMethod,
+                    PageLimit::MAX,
+                    $rawLimit,
+                    var_export($bound, true),
+                ),
             );
         }
     }

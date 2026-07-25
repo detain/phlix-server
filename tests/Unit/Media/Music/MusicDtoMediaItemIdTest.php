@@ -9,8 +9,10 @@ use Phlix\Media\Music\MusicArtist;
 use Phlix\Media\Music\MusicTrack;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
+use ReflectionClass;
 use ReflectionNamedType;
 use ReflectionProperty;
+use RuntimeException;
 
 /**
  * Pins `media_item_id` on the three music DTOs (S121).
@@ -207,26 +209,94 @@ final class MusicDtoMediaItemIdTest extends TestCase
     }
 
     /**
+     * EVERY class under `src/Media/Music/` that DECLARES a `mediaItemId` property,
+     * discovered by globbing the directory and reflecting it — deliberately NOT a
+     * hand-written list.
+     *
+     * ⚠ **Why mechanical.** S121's whole cause was a partial sweep: the coercion bug
+     * was written down for `MusicTrack` alone and the two sibling DTOs were missed.
+     * A hardcoded three-name provider reproduces exactly that hazard — a fourth
+     * music DTO could land tomorrow with the old `is_numeric()`/`int` coercion and
+     * nothing here would go red. Globbing means the alarm covers classes that do not
+     * exist yet.
+     *
+     * Measured before adopting the blanket rule: of the 11 files in that directory,
+     * all 11 resolve to classes and exactly 3 declare a `mediaItemId` property
+     * (`MusicArtist`, `MusicAlbum`, `MusicTrack`), all `?string`. There is **no**
+     * class there for which a different `mediaItemId` type would be legitimate, so
+     * this sweep carries **no exclusion list** — if one is ever needed, it must be
+     * added here with a stated reason rather than by narrowing the glob.
+     *
+     * Inherited properties are skipped (`getDeclaringClass()` check) so the
+     * assertion lands once, on the class that actually declares the type.
+     *
+     * @return array<string, array{class-string}>
+     */
+    public static function musicClassesDeclaringMediaItemIdProvider(): array
+    {
+        $dir = dirname(__DIR__, 4) . '/src/Media/Music';
+        $files = glob($dir . '/*.php');
+
+        if ($files === false || $files === []) {
+            throw new RuntimeException(
+                'media_item_id sweep found no PHP files under ' . $dir
+                . ' — the discovery glob is broken, so the sweep proves nothing. Fix the path.',
+            );
+        }
+
+        $found = [];
+        foreach ($files as $file) {
+            /** @var class-string $fqcn */
+            $fqcn = 'Phlix\\Media\\Music\\' . basename($file, '.php');
+            if (!class_exists($fqcn)) {
+                continue;
+            }
+
+            $reflection = new ReflectionClass($fqcn);
+            foreach ($reflection->getProperties() as $property) {
+                if ($property->getName() !== 'mediaItemId') {
+                    continue;
+                }
+                if ($property->getDeclaringClass()->getName() !== $fqcn) {
+                    continue;
+                }
+                $found[$reflection->getShortName()] = [$fqcn];
+            }
+        }
+
+        ksort($found);
+
+        return $found;
+    }
+
+    /**
+     * The doc-sync half of the sweep. The three DTO docblocks state "the sweep is
+     * FIVE sites, not three" and name the three helpers; if a fourth music class
+     * ever declares `mediaItemId`, that wording — and the `grep` recipes beside it —
+     * become wrong, so this test fails and forces the docs to be updated with it.
+     * It also catches a silently-empty glob, which would make the provider-driven
+     * test above pass vacuously.
+     */
+    public function testTheSweepDiscoversExactlyTheThreeKnownMusicDtos(): void
+    {
+        $this->assertSame(
+            ['MusicAlbum', 'MusicArtist', 'MusicTrack'],
+            array_keys(self::musicClassesDeclaringMediaItemIdProvider()),
+            'The set of src/Media/Music classes declaring a `mediaItemId` property changed. If a class was '
+            . 'ADDED, give it the ?string CHAR(36) coercion and update the "FIVE sites" note in all three DTO '
+            . 'docblocks; if one was removed, update the same note. Do not just edit this list.',
+        );
+    }
+
+    /**
      * The type declaration is the other half of the fix: with `?int` still on the
      * property, a correct `?string` coercion would throw a `TypeError` instead of
      * failing an assertion. Asserting the declared type makes a partial revert
      * fail with a NAMED message rather than an opaque error.
      *
-     * @return array<string, array{class-string}>
-     */
-    public static function dtoClassProvider(): array
-    {
-        return [
-            'MusicArtist' => [MusicArtist::class],
-            'MusicAlbum' => [MusicAlbum::class],
-            'MusicTrack' => [MusicTrack::class],
-        ];
-    }
-
-    /**
      * @param class-string $dtoClass
      */
-    #[DataProvider('dtoClassProvider')]
+    #[DataProvider('musicClassesDeclaringMediaItemIdProvider')]
     public function testMediaItemIdIsDeclaredAsANullableString(string $dtoClass): void
     {
         $type = (new ReflectionProperty($dtoClass, 'mediaItemId'))->getType();

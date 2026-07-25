@@ -112,12 +112,37 @@ final readonly class MusicArtist
      * `null` is a LEGITIMATE value here, not merely a parse failure: the column is
      * NULLable and the music scanner writes NULL when its `createMediaItem()` mint
      * fails, backfilling the row on a later pass. So an absent key, a SQL NULL and
-     * an empty string all collapse to `null` — never to `''`, which would read as
-     * a present-but-unusable id.
+     * an empty string all collapse to `null` — never to `''`.
      *
-     * The identical helper exists on {@see MusicAlbum} and {@see MusicTrack};
-     * `grep -rn mediaItemIdFromRow src/` must return all three, or a sweep was
-     * partial.
+     * **Why `null` and not `''`, stated precisely.** It is NOT that `''` would be
+     * caught by anything: at PHPStan level 9 a `string|null` flows silently through
+     * `"…{$id}…"`, `'…' . $id`, and `sprintf('%s', $id)` alike (only a strict
+     * `string` parameter fires), and `null` interpolates to exactly the same empty
+     * segment `''` would. The real reason is semantic: `''` is a non-null string, so
+     * it SURVIVES the `!== null` / `?? …` / `is_string()` tests callers actually
+     * write and then propagates as though it were an id, whereas `null` is filtered
+     * by those same tests. Choosing `null` makes "no id" detectable; `''` would make
+     * it undetectable.
+     *
+     * `''` is not the only junk a `CHAR(36)` column can hold — it can hold any
+     * 1–36-character string, e.g. `'0'` or a truncated UUID, and this helper accepts
+     * all of them (format validation is deliberately NOT the DTO's job; the FK to
+     * `media_items` is). What IS measured: MySQL strips a `CHAR` value's trailing
+     * pad spaces on read, so an all-space value arrives as `''` and is rejected here.
+     *
+     * ⚠ **The sweep is FIVE sites, not three — one grep is a false all-clear.**
+     * `grep -rn mediaItemIdFromRow src/` finds only these three DTO helpers. The
+     * same predicate is ALSO inlined twice in `MusicLibraryScanner`, inside
+     * `upsertArtist()` and `upsertAlbum()`; find those with
+     * `grep -rn "media_item_id'\] !== ''" src/`, which matches exactly those two and
+     * none of these three. (No line numbers on purpose — that file is being
+     * rewritten.) A reader who runs only the first grep, counts three and calls the
+     * sweep complete has repeated the mistake that CREATED S121: the defect was
+     * written down for `MusicTrack` alone and both siblings were missed. The
+     * mechanical backstop is
+     * {@see \Phlix\Tests\Unit\Media\Music\MusicDtoMediaItemIdTest}, which globs
+     * `src/Media/Music/` and reflects EVERY class declaring a `mediaItemId`
+     * property, so a fourth DTO cannot land with the old coercion unnoticed.
      *
      * @param array<string, mixed> $row Database row
      * @return string|null The UUID, or null when the column is absent/NULL/empty

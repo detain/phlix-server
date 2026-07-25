@@ -9,6 +9,7 @@ use Phlix\Common\Uuid;
 use Phlix\Media\Music\MusicLibraryScanner;
 use Phlix\Media\Music\MusicLibraryService;
 use PHPUnit\Framework\TestCase;
+use RuntimeException;
 use Throwable;
 use Workerman\MySQL\Connection;
 
@@ -35,8 +36,22 @@ use Workerman\MySQL\Connection;
  * null must stay null, not become `''`.
  *
  * CI applies all migrations to the `phlix_test` MySQL service before the suite;
- * locally, with no reachable MySQL, it self-skips — the same guard
- * {@see MusicTracksQueryIntegrationTest} uses.
+ * locally, with no reachable MySQL, it self-skips — the same `isMysqlReachable()`
+ * guard {@see MusicTracksQueryIntegrationTest} uses. It does **not** copy that
+ * sibling's second guard: see the comment in {@see setUp()} for why a
+ * reachable-but-unusable database is raised rather than skipped.
+ *
+ * **On S120 (assertions swallowed by a `catch`).** This class DOES contain one
+ * `try`/`catch` — around `ConnectionPool::init()` + `getConnection()` in
+ * {@see setUp()} — so the "no try/catch anywhere" claim first made for this file was
+ * wrong. The S120 conclusion is unaffected and was re-audited: **zero assertions
+ * execute inside that block**, no assertion in this class runs inside a callback that
+ * production invokes under `catch (\Throwable)`/`catch (\RuntimeException)`, and the
+ * only closures in the read path under test are `array_map` shapers whose results are
+ * asserted outside them. So no `ExpectationFailedException` can be swallowed and no
+ * test here is vacuous — proven by mutation, not by inspection: planting the original
+ * `is_numeric()` predicate reddens 2 of these 4 tests and planting a `''` fallback
+ * reddens a 3rd, each with its named message.
  *
  * @covers \Phlix\Media\Music\MusicArtist
  * @covers \Phlix\Media\Music\MusicAlbum
@@ -98,11 +113,35 @@ final class MusicDtoMediaItemIdIntegrationTest extends TestCase
             );
         }
 
+        // ⚠ Deliberately NOT `markTestSkipped()` here, which is what the 22 sibling
+        // integration tests do (S121 review r1 finding 3). `isMysqlReachable()` above
+        // has already proven a listener ACCEPTED a TCP connection on $host:$port, so
+        // reaching this catch does not mean "no database on this box" — it means a
+        // reachable server refused us: wrong credentials, missing database, bad
+        // config. Skipping that is a silent green, and it is reachable, not
+        // theoretical: measured on a scratch MySQL with a deliberately wrong
+        // password, the sibling shape yields `Tests: 4, Assertions: 0, Skipped: 4`
+        // — a real-DB test reporting success while never touching a database, in the
+        // one environment (CI) where it is the only thing proving the column type.
+        // The genuine "no MySQL here" case is still a skip; it is handled one block
+        // up. An unmigrated-but-reachable schema already surfaces as 4 real errors
+        // from seedFixtures(), so this closes the last silent path.
         try {
             ConnectionPool::init(dirname(__DIR__, 3) . '/config/database.php');
             $this->db = ConnectionPool::getConnection('mysql');
         } catch (Throwable $e) {
-            $this->markTestSkipped('Could not connect to MySQL: ' . $e->getMessage());
+            throw new RuntimeException(
+                sprintf(
+                    'MySQL on %s:%d accepted a TCP connection but the client could not connect (%s). '
+                    . 'This is a broken DB_*/config setup, not an absent database, so it is reported instead '
+                    . 'of skipped. Check DB_USER/DB_PASSWORD/DB_DATABASE and run scripts/run-migrations.php.',
+                    $host,
+                    $port,
+                    $e->getMessage(),
+                ),
+                0,
+                $e,
+            );
         }
 
         $this->assertNotNull($this->db);

@@ -46,17 +46,21 @@ use Workerman\MySQL\Connection;
  * called it a four-class deletion and named a live DTO as dead).
  *
  * ✅ **FIXED in S121 — the `media_item_id` coercion bug this docblock used to warn
- * about is gone.** All three DTOs typed `media_item_id` as an `int` and coerced it
- * with `is_numeric()`, which is false for every `CHAR(36)` UUID, so
- * `MusicArtist`/`MusicAlbum` silently produced `null` and `MusicTrack` produced
- * `0` — i.e. no DTO-based read could produce a playable track id. It is now
- * `?string`, coerced by a per-class `mediaItemIdFromRow()` (all three fixed
- * together, not just the `MusicTrack` one that was written down). The
+ * about is gone.** All three DTOs coerced `media_item_id` with `is_numeric()`, which
+ * is false for every `CHAR(36)` UUID, so the field was silently ALWAYS the fallback.
+ * The two halves were NOT identical, and the difference is the point:
+ * `MusicArtist`/`MusicAlbum` declared `?int` and fell back to **`null`** — a dropped
+ * field, visibly absent — while `MusicTrack` declared a non-nullable `int` and fell
+ * back to **`0`**, a *plausible-looking* id that no caller would recognise as
+ * missing, so no DTO-based read could produce a playable track id. All three are now
+ * `?string`, coerced by a per-class `mediaItemIdFromRow()` (fixed together, not just
+ * the `MusicTrack` one that happened to be written down here — that partial
+ * write-up is why the two siblings went unnoticed for a whole step). The
  * array-returning reads this class serves the API from (`getAllTracks()`,
  * `findTrackByMediaItemId()`, `getTracksByAlbumIds()`) never had the bug — they
  * carry the raw UUID. ⚠ `phlix-contracts`' `src/Music.ts` still declares
- * `mediaItemId: number` and is a separate, cross-repo follow-up; nothing reads it
- * today, and no served payload emits the field.
+ * `mediaItemId: number` and is a separate, cross-repo follow-up (filed as S123);
+ * nothing reads it today, and no served payload emits the field.
  *
  * @author Phlix Development Team
  * @version 1.0.0

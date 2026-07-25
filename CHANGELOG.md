@@ -566,10 +566,11 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
     with no database. Note what the gap window does *not* buy: it cannot tell a stalled run
     from a busy one, because all it sees is the interval between two *writes*. For a
     hypothetical per-library writer that interval **is** the next library's `du -sb` (measured
-    warm on the dev box: 332,652 inodes in 2.20 s, so ~756 k inodes already exceeds 5 s), so
-    such a writer must hand its whole run to one `recordStorageSnapshots()` call — which is
-    exactly what both current callers do, taking the stamp once before the write loop, so the
-    window is never consulted between one run's own rows.
+    warm on the dev box at 151–257 k inodes/s depending on load, so 5 s buys only ~0.75–1.3 M
+    inodes — and a six-hourly snapshot always meets a *cold* cache), so such a writer must hand
+    its whole run to one `recordStorageSnapshots()` call — which is exactly what both current
+    callers do, taking the stamp once before the write loop, so the window is never consulted
+    between one run's own rows.
   - **Each half of the reader's aggregation is pinned on its own.** `SUM(…) GROUP BY
     media_type` and the PHP `+=` arms hide each other — the `GROUP BY` collapses the result
     set so `+=` never sees a second row, and with `+=` present the `SUM` is invisible — so the

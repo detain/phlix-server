@@ -88,15 +88,17 @@ class StatsCollector
      *
      * This window cannot tell a STALLED run from a BUSY one. All it ever sees is the
      * interval between two WRITES — and for a hypothetical per-library writer that
-     * interval IS the next library's `du -sb`. Measured on this box, warm cache:
-     * `du -sb` over 332,652 inodes took 2.20 s (≈151 k inodes/s), so roughly 756 k
-     * inodes warm — and far fewer cold — already exceeds 5 s. A three-library run at
-     * 30 s per `du` would become three generations, and the reader's per-`media_type`
-     * `MAX(recorded_at)` would then keep only the LAST library's rows: exactly the
-     * loss this stamp exists to prevent. So an earlier version of this docblock,
-     * which justified 5 s with "a run can take minutes in total while never pausing
-     * for seconds", was wrong: for a per-library writer the pause and the work are
-     * the same interval.
+     * interval IS the next library's `du -sb`. Measured twice on the dev box with a
+     * WARM page cache: ~333 k inodes in 2.20 s (151 k inodes/s, three other MySQL
+     * containers running) and in 1.30 s (257 k inodes/s, quieter), so 5 s buys only
+     * something like 0.75–1.3 M inodes even warm — and a snapshot on a 6-HOURLY
+     * cadence always meets a COLD cache, where a seek-bound or network-backed vault
+     * is slower again. A three-library run at 30 s per `du` would become three
+     * generations, and the reader's per-`media_type` `MAX(recorded_at)` would then
+     * keep only the LAST library's rows: exactly the loss this stamp exists to
+     * prevent. So an earlier version of this docblock, which justified 5 s with "a run
+     * can take minutes in total while never pausing for seconds", was wrong: for a
+     * per-library writer the pause and the work are the same interval.
      *
      * It is INERT for the two live callers, and that is the only reason 5 s is
      * defensible: both hand the whole run to ONE

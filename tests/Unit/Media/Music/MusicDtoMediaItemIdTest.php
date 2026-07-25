@@ -416,13 +416,16 @@ final class MusicDtoMediaItemIdTest extends TestCase
                     // than assert one (S121 review r5 INFO-1). The first version printed
                     // only the current $file plus the search directory and always blamed
                     // "names differing only in case". For a `class_alias()` collision the
-                    // sorted-first path is the REAL class's own file, so the message
-                    // fingered a perfectly correct file — measured: a probe aliasing
-                    // MusicTrack from Aaa/Alias.php read "reached …\MusicTrack twice, from
-                    // …/src/Media/Music/MusicTrack.php and from an earlier file under …",
-                    // never mentioning Aaa/Alias.php at all. A guard that fires loudly but
-                    // blames an innocent file is the kind the next reader deletes as
-                    // broken, which is exactly the failure mode this sweep exists to stop.
+                    // path that old message NAMED — $file, the CURRENT one — was the REAL
+                    // class's own file, so it fingered a perfectly correct file — measured:
+                    // a probe aliasing MusicTrack from Aaa/Alias.php read "reached
+                    // …\MusicTrack twice, from …/src/Media/Music/MusicTrack.php and from an
+                    // earlier file under …", never mentioning Aaa/Alias.php at all. Which
+                    // SORTED position either file lands in depends on walk order, so
+                    // neither this comment nor the message below claims one (S121 review
+                    // r6). A guard that fires loudly but blames an innocent file is the
+                    // kind the next reader deletes as broken, which is exactly the failure
+                    // mode this sweep exists to stop.
                     $first = $firstFile[$canonical];
                     $cause = strtolower($first) === strtolower($file)
                         // Measured discriminator, not a guess: the case-variant shape is

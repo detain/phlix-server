@@ -460,11 +460,18 @@ class MusicLibraryService
         $offset = max(0, $offset);
 
         $result = $this->db->query(
-            "SELECT t.*, ar.name AS artist_name, al.name AS album_name
+            // NB: the album's column is `title` (music_albums has NO `name`
+            // column — see migration 065); only music_artists has `name`.
+            // Selecting `al.name` made every /api/v1/music/tracks call fail with
+            // "Unknown column 'al.name' in 'field list'" (SQLSTATE 42S22). The
+            // `AS album_name` output alias is part of the API contract
+            // (WebPortalRouter::getMusicTracks reads $row['album_name']) and
+            // must stay.
+            "SELECT t.*, ar.name AS artist_name, al.title AS album_name
              FROM music_tracks t
              JOIN music_albums al ON al.id = t.album_id
              JOIN music_artists ar ON ar.id = t.artist_id
-             ORDER BY ar.name, al.name, t.disc_number, t.track_number
+             ORDER BY ar.name, al.title, t.disc_number, t.track_number
              LIMIT ? OFFSET ?",
             [$limit, $offset]
         );

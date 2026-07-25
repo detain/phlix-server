@@ -27,11 +27,17 @@ use Phlix\Media\Transcoding\TranscodeManager;
  * player knows the full duration and seekable range up front. Two job shapes exist:
  *
  *   - Legacy single-variant: `master.m3u8` + `media_0.m3u8` listing `seg-NNNNN.ts`.
- *   - Multi-variant ABR ladder (A5): `master.m3u8` lists one `#EXT-X-STREAM-INF` per
- *     rung, each pointing at a per-variant media playlist `media_v{V}.m3u8` (e.g.
- *     `media_v1080p.m3u8`, `media_voriginal.m3u8`) that lists `seg-v{V}-NNNNN.ts`
- *     segments, where `{V}` is the rendition id from `AbrLadder` (`240p`…`2160p`,
- *     `original` — lowercase letters + digits only).
+ *   - Multi-variant ABR ladder (A5): every variant gets its own media playlist
+ *     `media_v{V}.m3u8` (e.g. `media_v1080p.m3u8`, `media_voriginal.m3u8`) listing
+ *     `seg-v{V}-NNNNN.ts` segments, where `{V}` is the rendition id from `AbrLadder`
+ *     (`240p`…`2160p`, `original` — lowercase letters + digits only). `master.m3u8`
+ *     lists one `#EXT-X-STREAM-INF` per ABR-SWITCHABLE variant (SV-4.6,
+ *     {@see \Phlix\Media\Transcoding\TranscodeManager}): every variant except a
+ *     stream-COPY one and except a transcode `original` that duplicates the top
+ *     rung's frame+BANDWIDTH. Those two keep their own media playlist and are served
+ *     on direct request without appearing in the master, so `media_voriginal.m3u8`
+ *     may or may not be a master level depending on the source — but it always
+ *     exists on disk (S49).
  *
  * The `seg-…\.ts` segments are transcoded ON DEMAND the first time each is fetched
  * (an `-ss` fast-seek encode), which lets the player seek anywhere — including past
@@ -188,17 +194,34 @@ class HlsController
             $this->transcodeManager?->ensurePlaylistRegenerated($jobId);
         }
 
-        // Robustness for the FOLDED "original" variant (v7 ABR ladder): when the
-        // re-encoded "Original" rung is byte-identical to the top ladder rung the
-        // ladder DROPS it from the master (see {@see \Phlix\Media\Streaming\LadderResult::streamVariants()}),
-        // so `media_voriginal.m3u8` is never produced. An older/other client that
-        // requests it directly (e.g. a persisted "Original" quality preference)
-        // would 404 → fatal playback error. Transparently resolve the folded
-        // `original` alias to the TOP available rung's playlist (served in place,
-        // no redirect — playlists are `no-cache`, so this is cache-safe). This is
-        // purely a serve-time alias: the ladder folding and master playlist are
-        // unchanged. Applied ONLY to the `original` alias, and only when that
-        // playlist is genuinely absent — a truly unknown rung still 404s.
+        // LEGACY (pre-v9 jobs only) — DEAD for every job created after S49.
+        //
+        // The v7/v8 ABR ladder FOLDED a re-encoded "Original" that was
+        // byte-identical to the top rung, and because the playlist writer iterates
+        // exactly that list, `media_voriginal.m3u8` was then never produced. A
+        // client requesting it directly (e.g. a persisted "Original" quality
+        // preference) got a 404 → fatal playback error, so this serve-time alias
+        // resolves it to the TOP available rung's playlist instead (served in
+        // place, no redirect — playlists are `no-cache`, so this is cache-safe).
+        //
+        // S49 removed the fold ({@see \Phlix\Media\Streaming\LadderResult::streamVariants()}):
+        // every v9+ job writes a real `media_voriginal.m3u8`, so the `!is_file()`
+        // guard below is never true for one and this alias never engages. It is
+        // retained only so that pre-v9 job directories still on disk — reachable by
+        // any already-issued signed URL — keep playing instead of hard-failing. That
+        // window is bounded: `sweepSegmentCache()` deletes a whole pre-v9 job dir
+        // after `SEGMENT_CACHE_MAX_AGE` idle (3 h by default) or under the LRU size
+        // budget, and once swept, the `ensurePlaylistRegenerated()` call above
+        // regenerates a real Original playlist even for a pre-v9 row (its persisted
+        // ladder always carried `original`).
+        //
+        // SCHEDULED REMOVAL — tracked as part of **S59** (the transcode cluster's
+        // dead-code cleanup step, which lands several steps after S49 deploys):
+        // delete this block, {@see resolveTopVariantPlaylist()} and the two
+        // `testLegacyPreV9…` tests in `HlsControllerTest`.
+        //
+        // Applied ONLY to the `original` alias, and only when that playlist is
+        // genuinely absent — a truly unknown rung still 404s.
         if ($file === 'media_voriginal.m3u8' && !is_file("{$dir}/{$file}")) {
             $topVariant = $this->resolveTopVariantPlaylist($dir);
             if ($topVariant !== null) {
@@ -226,6 +249,11 @@ class HlsController
     /**
      * Resolve the TOP (highest-BANDWIDTH) per-variant media playlist for a job,
      * used as the serve-time alias for a FOLDED `original` variant playlist.
+     *
+     * LEGACY (pre-v9 jobs only) — see the call site in {@see serveFile()}: S49
+     * removed the fold, so no job created after it can reach this method. Delete it
+     * with its call site in **S59** (the transcode cluster's dead-code cleanup step),
+     * by which point no pre-v9 job directory can still be served.
      *
      * The master playlist lists one `#EXT-X-STREAM-INF:...BANDWIDTH=N` line per
      * rung, each immediately followed by its `media_v{id}.m3u8` URI (highest-first

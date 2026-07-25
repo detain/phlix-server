@@ -166,6 +166,76 @@ class TranscodeManagerTest extends TestCase
         return $id;
     }
 
+    /**
+     * The master playlist's ADVERTISED LEVEL SET, in master order: one
+     * `{id, bandwidth, resolution}` per `#EXT-X-STREAM-INF` + URI pair, with the id
+     * taken from the `media_v{id}.m3u8` URI that follows it.
+     *
+     * This is the client-visible ABR contract — which qualities a player can adapt
+     * across, and (because `phlix-ui` resolves "Original" by matching a level of the
+     * same height) which qualities its menu can even offer. S49 fix round 1 pins it
+     * per source shape so a future re-fold cannot silently drop the top level again.
+     *
+     * @param string $dir Job directory containing `master.m3u8`.
+     *
+     * @return list<array{id: string, bandwidth: int, resolution: string}>
+     */
+    private function masterLevels(string $dir): array
+    {
+        $master = (string) file_get_contents("{$dir}/master.m3u8");
+        $lines = array_values(array_filter(
+            array_map('trim', explode("\n", $master)),
+            static fn (string $l): bool => $l !== ''
+        ));
+
+        $levels = [];
+        foreach ($lines as $i => $line) {
+            if (!str_starts_with($line, '#EXT-X-STREAM-INF:')) {
+                continue;
+            }
+            $uri = $lines[$i + 1] ?? '';
+            $this->assertMatchesRegularExpression(
+                '/^media_v[a-z0-9]+\.m3u8$/',
+                $uri,
+                'every STREAM-INF must be followed by its per-variant media playlist URI'
+            );
+            $this->assertSame(1, preg_match('/BANDWIDTH=(\d+)/', $line, $bw), $line);
+            $this->assertSame(1, preg_match('/RESOLUTION=(\d+x\d+)/', $line, $res), $line);
+            $levels[] = [
+                'id' => (string) preg_replace('/^media_v|\.m3u8$/', '', $uri),
+                'bandwidth' => (int) $bw[1],
+                'resolution' => $res[1],
+            ];
+        }
+
+        return $levels;
+    }
+
+    /**
+     * Runs `ensureHlsJob('media-1', 'web')` against a mocked probe of the given
+     * source shape and returns the job directory the playlists were written to.
+     *
+     * @param array<string, mixed> $video A probe video-stream shape.
+     * @param array<string, mixed> $audio A probe audio-stream shape.
+     */
+    private function ensureJobForSource(array $video, array $audio, string $duration = '25.0'): string
+    {
+        $captured = [];
+        $db = $this->mockDb([], 0, ['path' => '/m.mkv'], [], $captured);
+        $ff = $this->createMock(FfmpegRunner::class);
+        $ff->method('probe')->willReturn([
+            'streams' => [
+                ['codec_type' => 'video'] + $video,
+                ['codec_type' => 'audio'] + $audio,
+            ],
+            'format' => ['duration' => $duration],
+        ]);
+
+        $this->manager($db, $ff)->ensureHlsJob('media-1', 'web');
+
+        return $this->capturedJobInsert($captured)['hls_dir'];
+    }
+
     public function testEnsureHlsJobReusesExistingValidJob(): void
     {
         $existingDir = $this->segmentDir . '/existing-job';
@@ -593,11 +663,12 @@ class TranscodeManagerTest extends TestCase
         $this->assertStringContainsString('seg-v720p-00000.ts', $media);
         $this->assertStringContainsString('seg-v720p-00004.ts', $media);
         $this->assertStringNotContainsString('seg-v720p-00005.ts', $media);
-        // The master lists non-copy variants only (SV-4.6: copy variants like
-        // "original" are excluded from the switchable ABR set because their
-        // segment boundaries may drift from the uniform timeline due to input-side
-        // -ss seeking without -force_key_frames). All variants (including copy)
-        // still get their own media playlist written for manual quality selection.
+        // The master lists non-copy variants only (SV-4.6: a copy variant — here
+        // the "original", since a 720p H.264+AAC source is copy-eligible — is
+        // excluded from the switchable ABR set because its segment boundaries may
+        // drift from the uniform timeline due to input-side -ss seeking without
+        // -force_key_frames). All variants (including copy) still get their own
+        // media playlist written for explicit quality selection.
         $master = (string) file_get_contents("{$dir}/master.m3u8");
         $this->assertGreaterThanOrEqual(2, substr_count($master, '#EXT-X-STREAM-INF:'));
         $this->assertStringContainsString('media_v720p.m3u8', $master);
@@ -607,6 +678,368 @@ class TranscodeManagerTest extends TestCase
         $this->assertStringContainsString('/hls/', $result['master_url']);
         // No legacy single-variant artefacts written for a multi-variant job.
         $this->assertFileDoesNotExist("{$dir}/media_0.m3u8");
+    }
+
+    /**
+     * S49 ACCEPTANCE — the exact live shape from the bug report: a HEVC video with
+     * AC-3 audio, whose transcode "Original" collapses onto the top ladder rung
+     * (1.2 Mbps source → both capped to the same 2,054,000 BANDWIDTH at the same
+     * 1920x1080 frame). Until v8 the ladder FOLDED that Original out of
+     * `streamVariants()`, and because `writeVodPlaylists()` iterates exactly that
+     * list, `media_voriginal.m3u8` was never written — every request for it 404'd
+     * (masked only by HlsController's serve-time top-rung alias).
+     *
+     * It must now be a real, complete VOD media playlist on disk naming
+     * `seg-voriginal-NNNNN.ts` segments.
+     */
+    public function testEnsureHlsJobWritesOriginalPlaylistForHevcAc3SourceThatUsedToFold(): void
+    {
+        $captured = [];
+        $db = $this->mockDb([], 0, ['path' => '/m.mkv'], [], $captured);
+        $ff = $this->createMock(FfmpegRunner::class);
+        $ff->method('probe')->willReturn([
+            'streams' => [
+                [
+                    'codec_type' => 'video',
+                    'codec_name' => 'hevc',
+                    'width' => 1920,
+                    'height' => 1080,
+                    'bit_rate' => '1200000',
+                ],
+                ['codec_type' => 'audio', 'codec_name' => 'ac3', 'channels' => 6, 'bit_rate' => '448000'],
+            ],
+            // 25s at 6s segments → 5 segments (0..4).
+            'format' => ['duration' => '25.0'],
+        ]);
+
+        $this->manager($db, $ff)->ensureHlsJob('media-1', 'web');
+
+        // Pin the fixture: this source really is the duplicate-BANDWIDTH case, i.e.
+        // exactly what the old fold dropped. If AbrLadder's clamp maths ever moves
+        // so that it stops colliding, this test silently stops covering S49.
+        $ladder = (new AbrLadder())->build(
+            new SourceProfile(1920, 1080, 'hevc', 1_200_000, 'ac3', 448_000),
+            'web'
+        );
+        $this->assertFalse($ladder->original->isCopy, 'HEVC/AC-3 → transcode (non-copy) Original');
+        $this->assertSame(
+            $ladder->renditions[0]->bandwidth(),
+            $ladder->original->bandwidth(),
+            'fixture must be the collapsed/duplicate-BANDWIDTH case'
+        );
+        $this->assertSame($ladder->renditions[0]->height, $ladder->original->height);
+
+        $dir = $this->capturedJobInsert($captured)['hls_dir'];
+
+        // THE ACCEPTANCE CRITERION: a real Original media playlist exists.
+        $this->assertFileExists("{$dir}/media_voriginal.m3u8");
+        $original = (string) file_get_contents("{$dir}/media_voriginal.m3u8");
+        $this->assertStringContainsString('#EXT-X-PLAYLIST-TYPE:VOD', $original);
+        $this->assertStringContainsString('#EXT-X-ENDLIST', $original);
+        $this->assertStringContainsString('seg-voriginal-00000.ts', $original);
+        $this->assertStringContainsString('seg-voriginal-00004.ts', $original);
+        $this->assertStringNotContainsString('seg-voriginal-00005.ts', $original);
+
+        // …and it is NOT advertised as a switchable ABR level in the master (SV-4.6),
+        // which is what keeps the duplicate-BANDWIDTH defect from returning.
+        $master = (string) file_get_contents("{$dir}/master.m3u8");
+        $this->assertStringNotContainsString('media_voriginal.m3u8', $master);
+        // The pruned rung gradient is still advertised (1080p/480p/360p/240p).
+        $this->assertStringContainsString('media_v1080p.m3u8', $master);
+        $this->assertStringContainsString('media_v240p.m3u8', $master);
+    }
+
+    /**
+     * S49 REGRESSION GUARD (the v7 defect). Removing the Original fold must NOT
+     * reintroduce two identical-BANDWIDTH `#EXT-X-STREAM-INF` levels in the master:
+     * a player merges those and ABR is left with nothing to climb to. Same
+     * low-bitrate HEVC source as above — the one whose 1080p/720p rungs both cap to
+     * the source bitrate and whose Original duplicates the top rung.
+     */
+    public function testMasterHasNoDuplicateBandwidthLevelsForLowBitrateSource(): void
+    {
+        $captured = [];
+        $db = $this->mockDb([], 0, ['path' => '/m.mkv'], [], $captured);
+        $ff = $this->createMock(FfmpegRunner::class);
+        $ff->method('probe')->willReturn([
+            'streams' => [
+                [
+                    'codec_type' => 'video',
+                    'codec_name' => 'hevc',
+                    'width' => 1920,
+                    'height' => 1080,
+                    'bit_rate' => '1200000',
+                ],
+                ['codec_type' => 'audio', 'codec_name' => 'ac3', 'channels' => 6, 'bit_rate' => '448000'],
+            ],
+            'format' => ['duration' => '25.0'],
+        ]);
+
+        $this->manager($db, $ff)->ensureHlsJob('media-1', 'web');
+        $master = (string) file_get_contents($this->capturedJobInsert($captured)['hls_dir'] . '/master.m3u8');
+
+        $this->assertGreaterThanOrEqual(2, preg_match_all('/BANDWIDTH=(\d+)/', $master, $bw));
+        $bandwidths = array_map('intval', $bw[1]);
+        $this->assertSame(
+            $bandwidths,
+            array_values(array_unique($bandwidths)),
+            'no two master levels may share a BANDWIDTH (the v7 duplicate-level defect)'
+        );
+        $descending = $bandwidths;
+        rsort($descending);
+        $this->assertSame($descending, $bandwidths, 'master levels stay strictly descending');
+        // The 720p rung collapsed onto 1080p's bandwidth and is correctly pruned.
+        $this->assertStringNotContainsString('media_v720p.m3u8', $master);
+    }
+
+    /**
+     * S49 fix round 1 — THE regression this round exists to prevent (HIGH-2).
+     *
+     * A transcode "Original" that is NOT a duplicate of the top rung is a genuine,
+     * ABR-safe extra top LEVEL and must stay in the master. An interim revision of
+     * S49 excluded every `original` from the switchable set, which silently halved
+     * the auto-ABR ceiling for ordinary non-copy sources (this fixture: 10.0 Mbps →
+     * 5.478 Mbps) and, because `phlix-ui` resolves "Original" by matching a master
+     * level of the same height, could hide the very option S49 restores.
+     *
+     * Pins the whole advertised level set — ids + BANDWIDTH + RESOLUTION, in order.
+     */
+    public function testMasterAdvertisesNonDuplicateTranscodeOriginalAsItsTopLevel(): void
+    {
+        $dir = $this->ensureJobForSource(
+            ['codec_name' => 'hevc', 'width' => 1920, 'height' => 1080, 'bit_rate' => '8000000'],
+            ['codec_name' => 'aac', 'channels' => 2, 'bit_rate' => '128000'],
+        );
+
+        // Pin the fixture: HEVC ⇒ transcode (non-copy) Original, and it is NOT a
+        // duplicate of the top rung, so it is a legitimate distinct level.
+        $ladder = (new AbrLadder())->build(
+            new SourceProfile(1920, 1080, 'hevc', 8_000_000, 'aac', 128_000),
+            'web'
+        );
+        $this->assertFalse($ladder->original->isCopy);
+        $this->assertFalse(
+            $ladder->original->duplicatesForAbr($ladder->renditions[0]),
+            'fixture must NOT be the duplicate-BANDWIDTH case'
+        );
+
+        $this->assertSame(
+            [
+                ['id' => 'original', 'bandwidth' => 10_000_000, 'resolution' => '1920x1080'],
+                ['id' => '1080p', 'bandwidth' => 5_478_000, 'resolution' => '1920x1080'],
+                ['id' => '720p', 'bandwidth' => 3_124_000, 'resolution' => '1280x720'],
+                ['id' => '480p', 'bandwidth' => 1_626_000, 'resolution' => '854x480'],
+                ['id' => '360p', 'bandwidth' => 984_000, 'resolution' => '640x360'],
+                ['id' => '240p', 'bandwidth' => 556_000, 'resolution' => '426x240'],
+            ],
+            $this->masterLevels($dir),
+            'the non-duplicate transcode Original is the master\'s top ABR level'
+        );
+        $this->assertFileExists("{$dir}/media_voriginal.m3u8");
+    }
+
+    /**
+     * S49 fix round 1 (HIGH-1) — the same rule for a source whose original height
+     * matches NO canonical rung: a 2048×1080 DCI-2K master. Its Original clamps to
+     * `1920x1012` while the 1080 rung is dropped for width, so the top rung is
+     * `720p`. If the Original is not a master level, `phlix-ui`'s
+     * `levelIndexForVariant()` finds neither an equal-height nor a taller level and
+     * HIDES "Original" — the file exists but is unreachable from the menu.
+     */
+    public function testMasterAdvertisesAnamorphicTranscodeOriginalAboveEveryRung(): void
+    {
+        $dir = $this->ensureJobForSource(
+            ['codec_name' => 'hevc', 'width' => 2048, 'height' => 1080, 'bit_rate' => '9000000'],
+            ['codec_name' => 'ac3', 'channels' => 6, 'bit_rate' => '448000'],
+        );
+
+        $this->assertSame(
+            [
+                ['id' => 'original', 'bandwidth' => 10_000_000, 'resolution' => '1920x1012'],
+                ['id' => '720p', 'bandwidth' => 3_124_000, 'resolution' => '1366x720'],
+                ['id' => '480p', 'bandwidth' => 1_626_000, 'resolution' => '910x480'],
+                ['id' => '360p', 'bandwidth' => 984_000, 'resolution' => '682x360'],
+                ['id' => '240p', 'bandwidth' => 556_000, 'resolution' => '456x240'],
+            ],
+            $this->masterLevels($dir),
+            'a DCI-2K Original stays the master\'s top level (nothing else covers 1012px)'
+        );
+        $this->assertFileExists("{$dir}/media_voriginal.m3u8");
+    }
+
+    /**
+     * S49 fix round 1 — the OTHER half of the SV-4.6 rule, pinned so a future
+     * loosening cannot re-admit it: a stream-COPY Original is never an ABR level
+     * (its segment boundaries can drift off the uniform timeline), but it still gets
+     * its own media playlist for explicit selection. Note the copy's BANDWIDTH
+     * (8,128,000) is well ABOVE the 1080p rung, so its absence is the copy rule at
+     * work, not the duplicate rule.
+     */
+    public function testMasterOmitsCopyOriginalFromLevelsButStillWritesItsPlaylist(): void
+    {
+        $dir = $this->ensureJobForSource(
+            ['codec_name' => 'h264', 'width' => 1920, 'height' => 1080, 'bit_rate' => '8000000'],
+            ['codec_name' => 'aac', 'channels' => 2, 'bit_rate' => '128000'],
+        );
+
+        $ladder = (new AbrLadder())->build(
+            new SourceProfile(1920, 1080, 'h264', 8_000_000, 'aac', 128_000),
+            'web'
+        );
+        $this->assertTrue($ladder->original->isCopy, 'H.264 + AAC within the cap ⇒ copy Original');
+        $this->assertSame(8_128_000, $ladder->original->bandwidth());
+
+        $this->assertSame(
+            [
+                ['id' => '1080p', 'bandwidth' => 5_478_000, 'resolution' => '1920x1080'],
+                ['id' => '720p', 'bandwidth' => 3_124_000, 'resolution' => '1280x720'],
+                ['id' => '480p', 'bandwidth' => 1_626_000, 'resolution' => '854x480'],
+                ['id' => '360p', 'bandwidth' => 984_000, 'resolution' => '640x360'],
+                ['id' => '240p', 'bandwidth' => 556_000, 'resolution' => '426x240'],
+            ],
+            $this->masterLevels($dir),
+            'a copy Original is never an ABR level'
+        );
+        $this->assertFileExists("{$dir}/media_voriginal.m3u8");
+    }
+
+    /**
+     * S49 fix round 1 — the duplicate case, as an exact level set (the loose
+     * uniqueness assertions live in
+     * {@see testMasterHasNoDuplicateBandwidthLevelsForLowBitrateSource}). A 1.2 Mbps
+     * HEVC source caps its Original AND its 1080p rung to the same 2,054,000 at the
+     * same frame, so the Original is withheld from the LEVELS (a player would merge
+     * two indistinguishable levels — the v7 defect) while still getting a playlist.
+     */
+    public function testMasterOmitsDuplicateTranscodeOriginalFromLevels(): void
+    {
+        $dir = $this->ensureJobForSource(
+            ['codec_name' => 'hevc', 'width' => 1920, 'height' => 1080, 'bit_rate' => '1200000'],
+            ['codec_name' => 'ac3', 'channels' => 6, 'bit_rate' => '448000'],
+        );
+
+        $this->assertSame(
+            [
+                ['id' => '1080p', 'bandwidth' => 2_054_000, 'resolution' => '1920x1080'],
+                ['id' => '480p', 'bandwidth' => 1_626_000, 'resolution' => '854x480'],
+                ['id' => '360p', 'bandwidth' => 984_000, 'resolution' => '640x360'],
+                ['id' => '240p', 'bandwidth' => 556_000, 'resolution' => '426x240'],
+            ],
+            $this->masterLevels($dir),
+            'a transcode Original that duplicates the top rung is withheld from the levels'
+        );
+        $this->assertFileExists("{$dir}/media_voriginal.m3u8");
+    }
+
+    /**
+     * S49 (the undocumented AC blocker): after an LRU eviction of the job directory
+     * ({@see TranscodeManager::sweepSegmentCache()}) the regenerated playlist set
+     * must be the SAME set `ensureHlsJob()` wrote — including `media_voriginal.m3u8`
+     * and the multi-audio group. `ensurePlaylistRegenerated()` used to rebuild the
+     * variant list from the persisted `renditions` ONLY (losing the Original even
+     * for a never-folded stream-COPY original) and to read audio tracks from a
+     * `transcode_jobs.audio_tracks` column that does not exist (losing every
+     * `media_a{N}.m3u8`). Both are read from the persisted ladder JSON now.
+     */
+    public function testEnsurePlaylistRegeneratedRestoresOriginalAndAudioPlaylists(): void
+    {
+        $ladder = (new AbrLadder())->build(
+            new SourceProfile(1920, 1080, 'hevc', 1_200_000, 'ac3', 448_000),
+            'web'
+        );
+        $ladderArray = $ladder->toArray();
+        $ladderArray['audio_tracks'] = [
+            [
+                'index' => 0,
+                'stream_index' => 1,
+                'language' => 'eng',
+                'label' => 'English',
+                'default' => true,
+                'codec' => 'ac3',
+            ],
+            [
+                'index' => 1,
+                'stream_index' => 2,
+                'language' => 'fra',
+                'label' => 'French',
+                'default' => false,
+                'codec' => 'ac3',
+            ],
+        ];
+        $captured = [];
+        $db = $this->mockDb([], 0, [], [
+            'id' => 'job-evicted',
+            'status' => 'completed',
+            'variants' => (string) json_encode($ladderArray),
+            'duration_seconds' => 25,
+            'segment_seconds' => 6,
+        ], $captured);
+        $ff = $this->createMock(FfmpegRunner::class);
+
+        // The whole directory was swept away — nothing on disk at all.
+        $dir = $this->segmentDir . '/job-evicted';
+        $this->assertDirectoryDoesNotExist($dir);
+
+        $this->assertTrue($this->manager($db, $ff)->ensurePlaylistRegenerated('job-evicted'));
+
+        // The Original playlist is back, complete, with its own segment names.
+        $this->assertFileExists("{$dir}/media_voriginal.m3u8");
+        $original = (string) file_get_contents("{$dir}/media_voriginal.m3u8");
+        $this->assertStringContainsString('seg-voriginal-00000.ts', $original);
+        $this->assertStringContainsString('#EXT-X-ENDLIST', $original);
+        // Every rung is back too.
+        foreach ($ladder->renditions as $rung) {
+            $this->assertFileExists("{$dir}/media_v{$rung->id}.m3u8");
+        }
+        // The multi-audio group survives regeneration (audio_tracks lives in the
+        // ladder JSON, never in a `transcode_jobs` column).
+        $master = (string) file_get_contents("{$dir}/master.m3u8");
+        $this->assertStringContainsString('#EXT-X-MEDIA:TYPE=AUDIO', $master);
+        $this->assertStringContainsString('GROUP-ID="aud"', $master);
+        $this->assertFileExists("{$dir}/media_a0.m3u8");
+        $this->assertFileExists("{$dir}/media_a1.m3u8");
+        // …and the master still excludes the Original from the switchable set.
+        $this->assertStringNotContainsString('media_voriginal.m3u8', $master);
+    }
+
+    /**
+     * S49 fix round 1 (the two regeneration LOWs): a persisted ladder with no usable
+     * rendition id must FAIL, not write a level-less master.
+     *
+     * A rendition id is interpolated straight into `media_v{id}.m3u8` and into the
+     * master's URI, so it is validated against the same `^[a-z0-9]+$` allowlist the
+     * segment serve path uses — a corrupt/hand-edited blob can neither escape the job
+     * directory nor produce a `media_v.m3u8`. And when nothing survives that check,
+     * writing the playlists anyway would emit a master with ZERO `#EXT-X-STREAM-INF`
+     * lines whose mere existence then short-circuits every later regeneration attempt
+     * — a permanent, unplayable job. It returns false and writes nothing instead.
+     */
+    public function testEnsurePlaylistRegeneratedFailsInsteadOfWritingALevellessMaster(): void
+    {
+        $captured = [];
+        $db = $this->mockDb([], 0, [], [
+            'id' => 'job-junk',
+            'status' => 'completed',
+            'variants' => (string) json_encode([
+                'renditions' => [
+                    ['id' => '', 'width' => 1920, 'height' => 1080, 'bitrate' => 5_478_000],
+                    ['id' => '../../escape', 'width' => 1920, 'height' => 1080, 'bitrate' => 5_478_000],
+                    ['id' => 'MiXeD', 'width' => 1280, 'height' => 720, 'bitrate' => 3_124_000],
+                ],
+                'original' => ['id' => '../evil', 'width' => 1920, 'height' => 1080, 'bitrate' => 9_000_000],
+            ]),
+            'duration_seconds' => 25,
+            'segment_seconds' => 6,
+        ], $captured);
+        $ff = $this->createMock(FfmpegRunner::class);
+
+        $this->assertFalse($this->manager($db, $ff)->ensurePlaylistRegenerated('job-junk'));
+
+        $dir = $this->segmentDir . '/job-junk';
+        $this->assertFileDoesNotExist("{$dir}/master.m3u8");
+        // Nothing was written for any of the rejected ids, inside the dir or above it.
+        $this->assertSame([], glob("{$dir}/*.m3u8") ?: []);
+        $this->assertFileDoesNotExist($this->segmentDir . '/evil.m3u8');
     }
 
     public function testEnsureHlsJobPersistsProbedDurationToMediaItem(): void
@@ -2171,9 +2604,11 @@ class TranscodeManagerTest extends TestCase
             'web'
         )->streamVariants();
 
-        // SV-4.6: Copy variants (e.g. "original") are excluded from the switchable
-        // ABR set in the master playlist because their segment boundaries may drift
-        // from the uniform timeline (input-side -ss seeking without -force_key_frames).
+        // SV-4.6: a copy variant (here the "original" — this 1920x1080 H.264+AAC
+        // source is copy-eligible) is excluded from the switchable ABR set in the
+        // master playlist because its segment boundaries may drift from the uniform
+        // timeline (input-side -ss seeking without -force_key_frames). A non-copy
+        // Original would be advertised; see testMasterAdvertises* for that case.
         // Use array_values to re-index since array_filter preserves original keys.
         $switchableVariants = array_values(array_filter(
             $variants,
@@ -4044,7 +4479,7 @@ class TranscodeManagerTest extends TestCase
 
         $this->manager($db, $ff)->ensureHlsJob('media-1', 'web');
 
-        $expectedKey = sha1('media-1|web|v8');
+        $expectedKey = sha1('media-1|web|v9');
         $reuseKey = null;
         $insertKey = null;
         foreach ($captured as [$sql, $params]) {
@@ -4225,6 +4660,43 @@ class TranscodeManagerTest extends TestCase
             $entryId = $this->variantId($entry);
             $this->assertSame("/hls/seg-job/media_v{$entryId}.m3u8", $entry['url']);
         }
+    }
+
+    public function testGetJobVariantsIncludesOriginalThatDuplicatesTopRung(): void
+    {
+        // S49, fold site 2 (the array-level mirror): the persisted `original` of a
+        // low-bitrate HEVC/AC-3 job is the SAME frame at the SAME BANDWIDTH as its
+        // top rung. getJobVariants() used to drop it (originalDuplicatesTopRung()),
+        // so the client's quality menu had no "Original" for exactly the titles
+        // whose Original playlist is now written. It must be listed first.
+        $ladder = (new AbrLadder())->build(
+            new SourceProfile(1920, 1080, 'hevc', 1_200_000, 'ac3', 448_000),
+            'web'
+        );
+        $this->assertFalse($ladder->original->isCopy);
+        $this->assertSame(
+            $ladder->renditions[0]->bandwidth(),
+            $ladder->original->bandwidth(),
+            'fixture must be the duplicate-BANDWIDTH case the array-level fold dropped'
+        );
+        $captured = [];
+        $db = $this->mockDb([], 0, [], [
+            'id' => 'seg-job',
+            'variants' => (string) json_encode($ladder->toArray()),
+        ], $captured);
+        $ff = $this->createMock(FfmpegRunner::class);
+
+        $variants = $this->manager($db, $ff)->getJobVariants('seg-job');
+
+        $this->assertNotNull($variants);
+        $this->assertSame('original', $variants[0]['id']);
+        $this->assertFalse($variants[0]['is_copy']);
+        $this->assertSame('/hls/seg-job/media_voriginal.m3u8', $variants[0]['url']);
+        // Membership + order still equals streamVariants() exactly.
+        $this->assertSame(
+            array_map(static fn ($r): string => $r->id, $ladder->streamVariants()),
+            array_map($this->variantId(...), $variants)
+        );
     }
 
     public function testGetJobVariantsReturnsNullForLegacyJob(): void

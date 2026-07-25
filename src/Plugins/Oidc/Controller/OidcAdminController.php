@@ -28,9 +28,26 @@ final class OidcAdminController
 {
     private Plugin $plugin;
 
+    /**
+     * Scopes applied when none are stored/supplied. Mirrors
+     * {@see \Phlix\Auth\AuthProviderBootstrapper::buildOidcProvider()}'s fallback.
+     */
+    private const string DEFAULT_SCOPES = 'openid profile email';
+
     public function __construct(Plugin $plugin)
     {
         $this->plugin = $plugin;
+    }
+
+    /**
+     * Normalise a scopes value: a non-blank string wins, anything else falls back
+     * to {@see self::DEFAULT_SCOPES}.
+     */
+    private static function defaultedScopes(mixed $scopes): string
+    {
+        return is_string($scopes) && trim($scopes) !== ''
+            ? trim($scopes)
+            : self::DEFAULT_SCOPES;
     }
 
     /**
@@ -49,7 +66,7 @@ final class OidcAdminController
         return (new Response())->json([
             'provider_url' => $settings['provider_url'] ?? '',
             'client_id' => $settings['client_id'] ?? '',
-            'scopes' => $settings['scopes'] ?? 'openid profile email',
+            'scopes' => self::defaultedScopes($settings['scopes'] ?? null),
             // S48 review r1 Finding 1 — the ABSOLUTE callback URL registered with
             // the IdP. Empty = derive it from the request's scheme + Host.
             'redirect_uri' => $settings['redirect_uri'] ?? '',
@@ -71,7 +88,6 @@ final class OidcAdminController
         $providerUrl = is_string($body['provider_url'] ?? null) ? $body['provider_url'] : '';
         $clientId = is_string($body['client_id'] ?? null) ? $body['client_id'] : '';
         $clientSecret = is_string($body['client_secret'] ?? null) ? $body['client_secret'] : '';
-        $scopes = is_string($body['scopes'] ?? null) ? $body['scopes'] : 'openid profile email';
 
         if ($providerUrl === '') {
             return (new Response())->status(400)->json([
@@ -95,6 +111,14 @@ final class OidcAdminController
         }
 
         $existingSettings = $this->plugin->getSettings();
+
+        // Review r2 NEW-3 — same wholesale-replace trap as `redirect_uri` below: an
+        // ABSENT `scopes` key must PRESERVE the operator's custom scopes rather than
+        // reset them to the default (an older/partial client would otherwise wipe
+        // them). Explicitly empty (or non-string) = reset to the default.
+        $scopes = self::defaultedScopes(
+            array_key_exists('scopes', $body) ? $body['scopes'] : ($existingSettings['scopes'] ?? null),
+        );
 
         // S48 review r1 Finding 1 — optional operator-configured ABSOLUTE
         // redirect_uri. It must exactly match a redirect URI registered with the
@@ -173,7 +197,7 @@ final class OidcAdminController
                 'scopes' => [
                     'type' => 'string',
                     'description' => 'OAuth scopes to request',
-                    'default' => 'openid profile email',
+                    'default' => self::DEFAULT_SCOPES,
                 ],
                 'redirect_uri' => [
                     'type' => 'string',

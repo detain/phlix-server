@@ -267,31 +267,46 @@ class AuthProviderBootstrapper
         // DB authoritative: identical fingerprint → cheap no-op; changed → rebuild.
         $fingerprint = $this->settingsFingerprint($provider);
 
-        if ($this->registry->hasProvider($provider)) {
-            if (($this->builtFrom[$provider] ?? null) === $fingerprint) {
-                return true;
-            }
-            $this->registry->unregisterProvider($provider);
-            unset($this->builtFrom[$provider]);
+        if (
+            $this->registry->hasProvider($provider)
+            && ($this->builtFrom[$provider] ?? null) === $fingerprint
+        ) {
+            return true;
         }
 
+        // BUILD FIRST, THEN SWAP (S48 review r2, NEW-5). The previous order —
+        // unregister, build, register — left the registry EMPTY across the settings
+        // read inside buildProvider(), which YIELDS the event loop under Swoole.
+        // A concurrent coroutine that had already passed its own
+        // ensureProviderRegistered() and was sitting at resolveProvider() would then
+        // observe hasProvider() === false and answer 503 provider_not_configured on
+        // a perfectly valid login — the same failure class as the S44 cross-worker
+        // 503. Building before touching the registry closes the window: the
+        // unregister+register pair below performs no I/O, so it cannot yield.
         $instance = $this->buildProvider($provider);
         if ($instance === null) {
+            // Not (or no longer) configured: drop any registration built from the
+            // superseded settings so this worker stops serving it.
+            if ($this->registry->hasProvider($provider)) {
+                $this->registry->unregisterProvider($provider);
+            }
+            unset($this->builtFrom[$provider]);
+
             return false;
         }
 
-        // Race-safe register (S44 review r2, Finding A). Under Swoole two
-        // concurrent coroutines in the SAME worker can both pass the
-        // hasProvider() fast-path above and both reach the registry: the
-        // settings read buildProvider() performs yields the event loop once
-        // S48 makes the enable-flag/settings store DB-backed. The registry's
-        // registerProvider() throws \RuntimeException on a duplicate instance
-        // key, so the loser would otherwise get an uncaught throw → 500 on a
-        // valid login. Swallow ONLY a genuine lost race — where the instance is
+        // Race-safe swap (S44 review r2, Finding A). Under Swoole two concurrent
+        // coroutines in the SAME worker can both pass the fast-path above and both
+        // reach the registry: the settings read buildProvider() performs yields the
+        // event loop once S48 makes the enable-flag/settings store DB-backed. The
+        // registry's registerProvider() throws \RuntimeException on a duplicate
+        // instance key, so the loser would otherwise get an uncaught throw → 500 on
+        // a valid login. Swallow ONLY a genuine lost race — where the instance is
         // present afterward — and re-raise any other RuntimeException so a real
         // registration failure (not a duplicate) still surfaces.
         $instanceKey = $instance->name();
         try {
+            $this->registry->unregisterProvider($instanceKey);
             $this->registry->registerProvider($instance);
         } catch (\RuntimeException $e) {
             if (!$this->registry->hasProvider($instanceKey)) {
@@ -311,9 +326,15 @@ class AuthProviderBootstrapper
      * config change made by another worker (Finding 3).
      *
      * Content-hashed rather than timestamped, so a no-op save does not churn the
-     * registry (and an OIDC rebuild does not needlessly drop the cached
-     * discovery/JWKS). Returns '' when the provider has no settings source, which
-     * simply disables the check (the pre-review behaviour).
+     * registry — i.e. it avoids the needless rebuild (and the NEW-5 swap) on every
+     * request. It is NOT about the OIDC discovery/JWKS caches, as this comment
+     * previously claimed (review r2, NEW-4): both of those are STATIC
+     * ({@see \Phlix\Plugins\Oidc\DiscoveryDocument}'s memory+disk cache and
+     * {@see \Phlix\Plugins\Oidc\IdTokenValidator}'s JWKS cache), so a rebuilt
+     * OidcProvider refills them with no network I/O regardless.
+     *
+     * Returns '' when the provider has no settings source, which simply disables
+     * the check (the pre-review behaviour).
      */
     private function settingsFingerprint(string $provider): string
     {

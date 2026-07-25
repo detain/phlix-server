@@ -202,6 +202,53 @@ final class GithubAdminControllerTest extends TestCase
         $this->assertSame('', $plugin->getSettings()['redirect_uri'] ?? null);
     }
 
+    // -----------------------------------------------------------------------
+    // Review r2 NEW-3 — the wholesale-replace trap applies to `scopes` too.
+    // -----------------------------------------------------------------------
+
+    /**
+     * An older/partial client that posts no `scopes` must not silently RESET an
+     * operator's custom scopes to DEFAULT_SCOPES (the same trap that once wiped
+     * Trakt's stored OAuth tokens in production).
+     */
+    public function test_save_without_the_scopes_key_preserves_custom_scopes(): void
+    {
+        $plugin = $this->plugin([
+            'client_id' => 'cid',
+            'client_secret' => 'sec',
+            'scopes' => 'read:user user:email repo',
+        ]);
+        $controller = new GithubAdminController($plugin);
+
+        $controller->saveSettings($this->post(['client_id' => 'cid']), []);
+
+        $this->assertSame('read:user user:email repo', $plugin->getSettings()['scopes'] ?? null);
+    }
+
+    public function test_explicitly_empty_scopes_resets_to_the_default(): void
+    {
+        $plugin = $this->plugin([
+            'client_id' => 'cid',
+            'client_secret' => 'sec',
+            'scopes' => 'read:user user:email repo',
+        ]);
+        $controller = new GithubAdminController($plugin);
+
+        $controller->saveSettings($this->post(['client_id' => 'cid', 'scopes' => '  ']), []);
+
+        $this->assertSame(GithubOAuthProvider::DEFAULT_SCOPES, $plugin->getSettings()['scopes'] ?? null);
+    }
+
+    public function test_save_with_scopes_stores_them_trimmed(): void
+    {
+        $plugin = $this->plugin(['client_id' => 'cid', 'client_secret' => 'sec']);
+        $controller = new GithubAdminController($plugin);
+
+        $controller->saveSettings($this->post(['client_id' => 'cid', 'scopes' => ' read:user ']), []);
+
+        $this->assertSame('read:user', $plugin->getSettings()['scopes'] ?? null);
+    }
+
     public function test_schema_declares_the_secret_write_only_and_requires_it(): void
     {
         $controller = new GithubAdminController($this->plugin());

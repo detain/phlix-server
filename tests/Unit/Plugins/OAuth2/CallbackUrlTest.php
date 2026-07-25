@@ -71,6 +71,7 @@ final class CallbackUrlTest extends TestCase
                 'request-host.example',
                 null,
                 '/auth/github/callback',
+                '',
             ),
         );
     }
@@ -79,7 +80,7 @@ final class CallbackUrlTest extends TestCase
     {
         $this->assertSame(
             'https://request-host.example/auth/github/callback',
-            CallbackUrl::resolve('/auth/github/callback', 'request-host.example', null, '/auth/github/callback'),
+            CallbackUrl::resolve('/auth/github/callback', 'request-host.example', null, '/auth/github/callback', ''),
         );
     }
 
@@ -87,7 +88,7 @@ final class CallbackUrlTest extends TestCase
     {
         $this->assertSame(
             'https://phlix.example:8443/auth/oidc/callback',
-            CallbackUrl::resolve('', 'phlix.example:8443', null, '/auth/oidc/callback'),
+            CallbackUrl::resolve('', 'phlix.example:8443', null, '/auth/oidc/callback', ''),
         );
     }
 
@@ -95,17 +96,17 @@ final class CallbackUrlTest extends TestCase
     {
         $this->assertSame(
             'http://phlix.example/auth/oidc/callback',
-            CallbackUrl::resolve('', 'phlix.example', 'http', '/auth/oidc/callback'),
+            CallbackUrl::resolve('', 'phlix.example', 'http', '/auth/oidc/callback', ''),
         );
         // A proxy chain may append hops — the first one wins.
         $this->assertSame(
             'https://phlix.example/auth/oidc/callback',
-            CallbackUrl::resolve('', 'phlix.example', 'https, http', '/auth/oidc/callback'),
+            CallbackUrl::resolve('', 'phlix.example', 'https, http', '/auth/oidc/callback', ''),
         );
         // Garbage is ignored (defaults to https).
         $this->assertSame(
             'https://phlix.example/auth/oidc/callback',
-            CallbackUrl::resolve('', 'phlix.example', 'gopher', '/auth/oidc/callback'),
+            CallbackUrl::resolve('', 'phlix.example', 'gopher', '/auth/oidc/callback', ''),
         );
     }
 
@@ -114,7 +115,7 @@ final class CallbackUrlTest extends TestCase
      */
     public function test_returns_null_when_no_absolute_url_can_be_built(?string $host): void
     {
-        $this->assertNull(CallbackUrl::resolve('', $host, null, '/auth/github/callback'));
+        $this->assertNull(CallbackUrl::resolve('', $host, null, '/auth/github/callback', ''));
     }
 
     /**
@@ -130,5 +131,156 @@ final class CallbackUrlTest extends TestCase
             'bad port' => ['phlix.example:notaport'],
             'out of range port' => ['phlix.example:99999'],
         ];
+    }
+
+    // -----------------------------------------------------------------------
+    // Review r2 NEW-1 (MED) — the Host-derived form needs a host ALLOWLIST.
+    //
+    // A wildcard-registered OIDC IdP (Keycloak et al) WILL deliver a victim's
+    // `code` to an attacker-supplied Host, and the browser-binding correlation
+    // cookie cannot defend it (the attacker runs the authorize leg). So a forged
+    // Host must never become a redirect_uri.
+    // -----------------------------------------------------------------------
+
+    /**
+     * @dataProvider mismatchedHosts
+     */
+    public function test_a_host_that_is_not_the_configured_domain_derives_nothing(string $host): void
+    {
+        $this->assertNull(
+            CallbackUrl::resolve('', $host, null, '/auth/oidc/callback', 'phlix.example'),
+            'a Host outside the configured domain must NOT produce a derived redirect_uri',
+        );
+    }
+
+    /**
+     * @return array<string, array{0: string}>
+     */
+    public static function mismatchedHosts(): array
+    {
+        return [
+            'foreign host' => ['evil.example'],
+            'foreign host with port' => ['evil.example:8443'],
+            'sub-domain of the attacker' => ['phlix.example.evil.example'],
+            'sub-domain of the real domain' => ['sso.phlix.example'],
+            'suffix trick' => ['notphlix.example'],
+            'ipv4 literal' => ['10.0.0.5'],
+        ];
+    }
+
+    /**
+     * @dataProvider matchingHosts
+     */
+    public function test_the_configured_domain_still_derives(string $host, string $expected): void
+    {
+        $this->assertSame(
+            $expected,
+            CallbackUrl::resolve('', $host, null, '/auth/oidc/callback', 'phlix.example'),
+        );
+    }
+
+    /**
+     * @return array<string, array{0: string, 1: string}>
+     */
+    public static function matchingHosts(): array
+    {
+        return [
+            'exact' => ['phlix.example', 'https://phlix.example/auth/oidc/callback'],
+            'case insensitive' => ['PHLIX.Example', 'https://PHLIX.Example/auth/oidc/callback'],
+            'with port' => ['phlix.example:8443', 'https://phlix.example:8443/auth/oidc/callback'],
+        ];
+    }
+
+    /**
+     * The allowlist must NOT break the explicit configuration path: an operator
+     * whose provider setting names another host keeps working (that value is the
+     * one registered with the provider).
+     */
+    public function test_the_allowlist_does_not_affect_a_configured_absolute_value(): void
+    {
+        $this->assertSame(
+            'https://sso.example.org/auth/oidc/callback',
+            CallbackUrl::resolve(
+                'https://sso.example.org/auth/oidc/callback',
+                'evil.example',
+                null,
+                '/auth/oidc/callback',
+                'phlix.example',
+            ),
+        );
+    }
+
+    /**
+     * With NO configured domain (a dev box, or an install that never ran
+     * `--domain`) the pre-r2 behaviour is kept: 503-ing every login there would be
+     * strictly worse than the risk removed.
+     */
+    public function test_no_configured_domain_keeps_deriving_from_any_valid_host(): void
+    {
+        $this->assertSame(
+            'https://whatever.example/auth/oidc/callback',
+            CallbackUrl::resolve('', 'whatever.example', null, '/auth/oidc/callback', ''),
+        );
+    }
+
+    /**
+     * `configuredHost()` reads PHLIX_DOMAIN (the env `config/hub.php` derives
+     * `hub.domain` from) and treats a missing/garbage value as "no allowlist" —
+     * never as an allowlist that can never match.
+     */
+    public function test_configured_host_reads_phlix_domain(): void
+    {
+        $original = getenv('PHLIX_DOMAIN');
+        try {
+            putenv('PHLIX_DOMAIN=Media.Example.ORG');
+            $this->assertSame('media.example.org', CallbackUrl::configuredHost());
+
+            putenv('PHLIX_DOMAIN=media.example.org:8443');
+            $this->assertSame('media.example.org', CallbackUrl::configuredHost());
+
+            putenv('PHLIX_DOMAIN=  ');
+            $this->assertSame('', CallbackUrl::configuredHost());
+
+            putenv('PHLIX_DOMAIN=https://media.example.org/');
+            $this->assertSame('', CallbackUrl::configuredHost(), 'garbage = no allowlist');
+
+            putenv('PHLIX_DOMAIN');
+            $this->assertSame('', CallbackUrl::configuredHost());
+        } finally {
+            if (is_string($original) && $original !== '') {
+                putenv('PHLIX_DOMAIN=' . $original);
+            } else {
+                putenv('PHLIX_DOMAIN');
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Review r2 NEW-8 — the state-carried callback_url is re-validated on replay.
+    // -----------------------------------------------------------------------
+
+    public function test_replay_requires_an_absolute_url(): void
+    {
+        $this->assertFalse(CallbackUrl::isReplayable('/auth/oidc/callback', '', ''));
+        $this->assertFalse(CallbackUrl::isReplayable('', '', ''));
+        $this->assertFalse(CallbackUrl::isReplayable("https://phlix.example/cb\r\nX: 1", '', ''));
+    }
+
+    public function test_replay_honours_the_host_allowlist(): void
+    {
+        $this->assertTrue(
+            CallbackUrl::isReplayable('https://phlix.example/auth/oidc/callback', '', 'phlix.example'),
+        );
+        $this->assertFalse(
+            CallbackUrl::isReplayable('https://evil.example/auth/oidc/callback', '', 'phlix.example'),
+        );
+        // The operator-configured value is always replayable, whatever its host.
+        $this->assertTrue(CallbackUrl::isReplayable(
+            'https://sso.example.org/auth/oidc/callback',
+            'https://sso.example.org/auth/oidc/callback',
+            'phlix.example',
+        ));
+        // No allowlist configured → absolute is the bar (pre-r2 behaviour).
+        $this->assertTrue(CallbackUrl::isReplayable('https://anything.example/cb', '', ''));
     }
 }

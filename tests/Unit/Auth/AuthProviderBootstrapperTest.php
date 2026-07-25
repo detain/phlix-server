@@ -618,6 +618,110 @@ final class AuthProviderBootstrapperTest extends TestCase
     }
 
     /**
+     * S48 review r2, NEW-5 — a REBUILD must never leave the registry empty across
+     * the settings read, because that read YIELDS the event loop under Swoole and a
+     * concurrent coroutine sitting at resolveProvider() would answer
+     * `503 provider_not_configured` on a valid login.
+     *
+     * The store's `get()` IS the yield point, so it is where a concurrent
+     * coroutine's view is sampled. RED against the pre-fix
+     * unregister→build→register order (the second sample was `false`).
+     */
+    public function test_rebuild_never_leaves_the_registry_without_the_provider(): void
+    {
+        $backing = new InMemoryPluginSettingsRepository();
+        $backing->save(GithubPlugin::PLUGIN_NAME, ['client_id' => 'cid', 'client_secret' => 'old-secret']);
+
+        $registry = new AuthProviderRegistry();
+
+        // Records what a CONCURRENT coroutine would see at every yield point.
+        $store = new class ($backing, $registry) implements \Phlix\Plugins\Repository\PluginSettingsStore {
+            /** @var list<bool> */
+            public array $visibleDuringReads = [];
+
+            public function __construct(
+                private readonly InMemoryPluginSettingsRepository $inner,
+                private readonly AuthProviderRegistry $registry,
+            ) {
+            }
+
+            public function get(string $pluginName): ?array
+            {
+                // A settings read is a DB round trip: the event loop yields here.
+                $this->visibleDuringReads[] = $this->registry->hasProvider('github');
+
+                return $this->inner->get($pluginName);
+            }
+
+            public function save(string $pluginName, array $settings): void
+            {
+                $this->inner->save($pluginName, $settings);
+            }
+
+            public function exists(string $pluginName): bool
+            {
+                return $this->inner->exists($pluginName);
+            }
+        };
+
+        $boot = new AuthProviderBootstrapper(
+            $this->makeSettingsRepo(['github' => true]),
+            $registry,
+            new OidcPlugin(),
+            new LdapPlugin(),
+            new GithubPlugin($store),
+        );
+
+        $this->assertTrue($boot->ensureProviderRegistered('github'));
+        $stale = $registry->getProvider('github');
+
+        // Another worker rewrites the row → this worker must REBUILD.
+        $backing->save(GithubPlugin::PLUGIN_NAME, ['client_id' => 'cid', 'client_secret' => 'new-secret']);
+        $store->visibleDuringReads = [];
+
+        $this->assertTrue($boot->ensureProviderRegistered('github'));
+
+        $this->assertNotSame($stale, $registry->getProvider('github'), 'the rebuild must have happened');
+        $this->assertNotSame([], $store->visibleDuringReads, 'the rebuild must have read settings');
+        foreach ($store->visibleDuringReads as $index => $visible) {
+            $this->assertTrue(
+                $visible,
+                "the registry must never be empty across a settings read (read #{$index}) — "
+                . 'a concurrent request would 503 on a valid login',
+            );
+        }
+    }
+
+    /**
+     * The swap must still DROP a provider that became unconfigured: if the rebuild
+     * cannot produce an instance, the stale registration goes away rather than
+     * lingering with superseded credentials.
+     */
+    public function test_rebuild_drops_the_provider_when_it_becomes_unconfigured(): void
+    {
+        $store = new InMemoryPluginSettingsRepository();
+        $store->save(GithubPlugin::PLUGIN_NAME, ['client_id' => 'cid', 'client_secret' => 'sec']);
+
+        $registry = new AuthProviderRegistry();
+        $boot = new AuthProviderBootstrapper(
+            $this->makeSettingsRepo(['github' => true]),
+            $registry,
+            new OidcPlugin(),
+            new LdapPlugin(),
+            new GithubPlugin($store),
+        );
+
+        $this->assertTrue($boot->ensureProviderRegistered('github'));
+        $this->assertTrue($registry->hasProvider('github'));
+
+        // The operator clears the secret → no longer buildable.
+        $store->save(GithubPlugin::PLUGIN_NAME, ['client_id' => 'cid']);
+
+        $this->assertFalse($boot->ensureProviderRegistered('github'));
+        $this->assertFalse($registry->hasProvider('github'));
+    }
+
+    /**
      * The S44 race-guard must still hold when the provider settings come from the
      * DB store (the getSettings()-yields path activated by S48): a concurrent
      * coroutine that loses the register race gets a benign no-throw, not a 500.

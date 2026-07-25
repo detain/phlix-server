@@ -66,9 +66,7 @@ final class GithubAdminController
 
         return (new Response())->json([
             'client_id' => is_string($settings['client_id'] ?? null) ? $settings['client_id'] : '',
-            'scopes' => is_string($settings['scopes'] ?? null) && $settings['scopes'] !== ''
-                ? $settings['scopes']
-                : GithubOAuthProvider::DEFAULT_SCOPES,
+            'scopes' => self::defaultedScopes($settings['scopes'] ?? null),
             // Review r1 Finding 1 — the ABSOLUTE callback URL registered with the
             // GitHub OAuth App. Empty = derive it from the request scheme + Host.
             'redirect_uri' => is_string($settings['redirect_uri'] ?? null) ? $settings['redirect_uri'] : '',
@@ -79,6 +77,17 @@ final class GithubAdminController
             // Computed from the UNMASKED settings (maskSecrets() drops the secret).
             'configured' => self::isConfigured($stored),
         ]);
+    }
+
+    /**
+     * Normalise a scopes value: a non-blank string wins, anything else falls back
+     * to {@see GithubOAuthProvider::DEFAULT_SCOPES}.
+     */
+    private static function defaultedScopes(mixed $scopes): string
+    {
+        return is_string($scopes) && trim($scopes) !== ''
+            ? trim($scopes)
+            : GithubOAuthProvider::DEFAULT_SCOPES;
     }
 
     /**
@@ -109,9 +118,6 @@ final class GithubAdminController
 
         $clientId = is_string($body['client_id'] ?? null) ? trim($body['client_id']) : '';
         $clientSecret = is_string($body['client_secret'] ?? null) ? $body['client_secret'] : '';
-        $scopes = is_string($body['scopes'] ?? null) && trim($body['scopes']) !== ''
-            ? trim($body['scopes'])
-            : GithubOAuthProvider::DEFAULT_SCOPES;
 
         if ($clientId === '') {
             return (new Response())->status(400)->json([
@@ -121,6 +127,14 @@ final class GithubAdminController
         }
 
         $existing = $this->plugin->getSettings();
+
+        // Review r2 NEW-3 — same wholesale-replace trap as `redirect_uri` below: an
+        // ABSENT `scopes` key must PRESERVE the operator's custom scopes rather than
+        // silently reset them to the default (an older/partial client would
+        // otherwise wipe them). Explicitly empty (or non-string) = reset to default.
+        $scopes = self::defaultedScopes(
+            array_key_exists('scopes', $body) ? $body['scopes'] : ($existing['scopes'] ?? null),
+        );
 
         // Review r1 Finding 1 — an operator-configured redirect_uri must be
         // ABSOLUTE: GitHub compares its scheme/host/port with the OAuth App's

@@ -437,7 +437,7 @@ final class GithubCallbackControllerTest extends TestCase
 
         $this->assertSame(403, $response->statusCode);
         $this->assertSame('invalid_state', $this->errorCode($response));
-        $this->assertSame([], $response->cookies);
+        $this->assertNoSessionCookies($response);
         $this->assertSame([], $http->requests, 'no code must be exchanged for an unbound state');
     }
 
@@ -460,7 +460,139 @@ final class GithubCallbackControllerTest extends TestCase
         );
 
         $this->assertSame(403, $response->statusCode);
-        $this->assertSame([], $response->cookies);
+        $this->assertNoSessionCookies($response);
+    }
+
+    // -----------------------------------------------------------------------
+    // Review r2 NEW-1 (MED) — the Host-derived redirect_uri needs a host
+    // ALLOWLIST (PHLIX_DOMAIN). This asserts the CONTROLLER wiring; the rule
+    // itself is covered by CallbackUrlTest.
+    // -----------------------------------------------------------------------
+
+    public function test_authorize_refuses_to_derive_a_callback_from_a_foreign_host(): void
+    {
+        $original = getenv('PHLIX_DOMAIN');
+        try {
+            putenv('PHLIX_DOMAIN=' . self::HOST);
+
+            $store = new InMemoryOAuth2StateStore();
+            $controller = new GithubCallbackController(
+                $this->registryWithProvider(new FakeOAuth2HttpClient()),
+                $this->createMock(UserRepository::class),
+                $this->createMock(JwtHandler::class),
+                $store,
+            );
+
+            $request = new Request();
+            // A forged Host from a non-browser client.
+            $request->headers['Host'] = 'evil.example';
+            $request->query = ['redirect_uri' => '/app'];
+
+            $response = $controller->authorize($request, []);
+
+            $this->assertSame(503, $response->statusCode);
+            $this->assertSame('callback_url_not_configured', $this->errorCode($response));
+            $this->assertArrayNotHasKey('Location', $response->headers);
+            $this->assertSame([], $response->cookies, 'no state may be issued for a forged Host');
+
+            // …while the operator's real hostname still works.
+            $ok = $controller->authorize($this->authorizeRequest('/app'), []);
+            $this->assertSame(302, $ok->statusCode);
+            $params = [];
+            parse_str((string) parse_url($ok->headers['Location'] ?? '', PHP_URL_QUERY), $params);
+            $this->assertSame(self::DERIVED_CALLBACK, $params['redirect_uri'] ?? null);
+        } finally {
+            if (is_string($original) && $original !== '') {
+                putenv('PHLIX_DOMAIN=' . $original);
+            } else {
+                putenv('PHLIX_DOMAIN');
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Review r2 NEW-10 — the spent correlation cookie is expired once the
+    // one-shot state has been consumed.
+    // -----------------------------------------------------------------------
+
+    public function test_successful_callback_expires_the_correlation_cookie(): void
+    {
+        $http = $this->httpReturningProfile(9001, 'clear@example.com');
+
+        $store = new InMemoryOAuth2StateStore();
+        $this->seedState($store, 'sid-clear');
+
+        $userRepo = $this->createMock(UserRepository::class);
+        $userRepo->method('findOrCreateByExternalId')->willReturn('user-clear');
+        $jwt = $this->createMock(JwtHandler::class);
+        $jwt->method('createAccessToken')->willReturn('a');
+        $jwt->method('createRefreshToken')->willReturn('r');
+        $jwt->method('accessTtl')->willReturn(60);
+        $jwt->method('refreshTtl')->willReturn(60);
+
+        $controller = new GithubCallbackController(
+            $this->registryWithProvider($http),
+            $userRepo,
+            $jwt,
+            $store,
+        );
+
+        $response = $controller->callback($this->callbackRequest('sid-clear', '/app'), []);
+
+        $this->assertSame(302, $response->statusCode);
+        $byName = [];
+        foreach ($response->cookies as $cookie) {
+            $byName[$cookie['name']] = $cookie;
+        }
+        $this->assertArrayHasKey(self::CORRELATION_COOKIE, $byName);
+        $this->assertSame('', $byName[self::CORRELATION_COOKIE]['value']);
+        $this->assertSame(0, $byName[self::CORRELATION_COOKIE]['maxAge']);
+        // …and the session still lands.
+        $this->assertSame('a', $byName[AuthController::SESSION_COOKIE]['value'] ?? null);
+    }
+
+    // -----------------------------------------------------------------------
+    // Review r2 NEW-7 — the USERNAME twin of Finding 4 must be actionable too.
+    // -----------------------------------------------------------------------
+
+    /**
+     * `findOrCreateByExternalId()` seeds `username = $email`, so a local account
+     * whose USERNAME is the GitHub e-mail (with a different e-mail column) trips
+     * UNIQUE(username). That must produce the same actionable code as the e-mail
+     * collision, not an opaque `internal` dead end.
+     */
+    public function test_duplicate_username_returns_email_already_registered(): void
+    {
+        $http = $this->httpReturningProfile(883, 'taken-as-username@example.com');
+
+        $store = new InMemoryOAuth2StateStore();
+        $this->seedState($store, 'sid-dupe-username');
+
+        $userRepo = $this->createMock(UserRepository::class);
+        $userRepo->method('findOrCreateByExternalId')
+            ->willThrowException(new \RuntimeException("Duplicate entry '…' for key 'username'"));
+        // The e-mail column is free — only the USERNAME collides.
+        $userRepo->method('emailExists')->willReturn(false);
+        $userRepo->expects($this->once())
+            ->method('usernameExists')
+            ->with('taken-as-username@example.com')
+            ->willReturn(true);
+
+        $jwt = $this->createMock(JwtHandler::class);
+        $jwt->expects($this->never())->method('createAccessToken');
+
+        $controller = new GithubCallbackController(
+            $this->registryWithProvider($http),
+            $userRepo,
+            $jwt,
+            $store,
+        );
+
+        $response = $controller->callback($this->callbackRequest('sid-dupe-username', '/app'), []);
+
+        $this->assertSame(302, $response->statusCode);
+        $this->assertSame('/app?error=email_already_registered', $response->headers['Location'] ?? '');
+        $this->assertNoSessionCookies($response);
     }
 
     // -----------------------------------------------------------------------
@@ -623,7 +755,7 @@ final class GithubCallbackControllerTest extends TestCase
 
         $this->assertSame(302, $response->statusCode);
         $this->assertSame('/app/settings/account?linked=github', $response->headers['Location'] ?? '');
-        $this->assertSame([], $response->cookies, 'a link must never mint session cookies');
+        $this->assertNoSessionCookies($response, 'a link must never mint session cookies');
     }
 
     public function test_link_conflict_returns_409(): void
@@ -654,7 +786,7 @@ final class GithubCallbackControllerTest extends TestCase
 
         $this->assertSame(409, $response->statusCode);
         $this->assertSame('identity_already_linked', $this->errorCode($response));
-        $this->assertSame([], $response->cookies);
+        $this->assertNoSessionCookies($response);
     }
 
     public function test_link_idempotent_when_already_owned_by_the_same_user(): void
@@ -744,7 +876,7 @@ final class GithubCallbackControllerTest extends TestCase
 
         $this->assertSame(302, $response->statusCode);
         $this->assertSame('/app?error=internal', $response->headers['Location'] ?? '');
-        $this->assertSame([], $response->cookies);
+        $this->assertNoSessionCookies($response);
     }
 
     public function test_link_without_identity_repository_refuses_with_503(): void
@@ -801,7 +933,7 @@ final class GithubCallbackControllerTest extends TestCase
 
         $this->assertSame(302, $response->statusCode);
         $this->assertSame('/app?error=email_already_registered', $response->headers['Location'] ?? '');
-        $this->assertSame([], $response->cookies);
+        $this->assertNoSessionCookies($response);
     }
 
     /**
@@ -901,6 +1033,26 @@ final class GithubCallbackControllerTest extends TestCase
 
         $this->assertSame(400, $response->statusCode);
         $this->assertSame('access_denied', $this->errorCode($response));
+    }
+
+    /**
+     * No SESSION credential may ride this response.
+     *
+     * Stricter than the `assertSame([], $response->cookies)` it replaces: the only
+     * cookie tolerated is the review-r2 NEW-10 EXPIRY of the correlation cookie
+     * (empty value + Max-Age 0), and a real session/refresh cookie still fails.
+     */
+    private function assertNoSessionCookies(\Phlix\Server\Http\Response $response, string $message = ''): void
+    {
+        foreach ($response->cookies as $cookie) {
+            $this->assertSame(
+                self::CORRELATION_COOKIE,
+                $cookie['name'],
+                $message !== '' ? $message : 'unexpected cookie on this response',
+            );
+            $this->assertSame('', $cookie['value'], 'the correlation cookie must be CLEARED, not re-set');
+            $this->assertSame(0, $cookie['maxAge']);
+        }
     }
 
     /**

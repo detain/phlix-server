@@ -25,6 +25,7 @@ use Phlix\Plugins\OAuth2\DbOAuth2StateStore;
 use Phlix\Plugins\OAuth2\InMemoryOAuth2StateStore;
 use Phlix\Plugins\OAuth2\OAuth2StateStore;
 use Phlix\Plugins\OAuth2\Pkce;
+use Phlix\Plugins\OAuth2\StateCorrelation;
 use Phlix\Server\Http\Controllers\AuthController;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
@@ -45,8 +46,7 @@ use Workerman\MySQL\Connection;
  *  - the issued state is additionally BOUND TO THE INITIATING BROWSER by a
  *    short-lived HttpOnly correlation cookie, so a third party cannot feed a
  *    completed callback to a victim's browser and hand them a session for
- *    someone else's account ({@see attachCorrelationCookie()}, review r1
- *    Finding 2);
+ *    someone else's account ({@see StateCorrelation}, review r1 Finding 2);
  *  - a same-origin redirect ALLOWLIST on the return target ({@see isSafeRedirectTarget()});
  *  - session delivery as HttpOnly+Secure cookies, never tokens in the URL;
  *  - provider-scoped account resolution
@@ -54,15 +54,18 @@ use Workerman\MySQL\Connection;
  *  - request-path self-heal of the per-worker provider registry;
  *  - an ABSOLUTE `redirect_uri` ({@see resolveCallbackUrl()}) which is captured
  *    into the server-side state at authorize time and replayed verbatim at token
- *    exchange, so the two values can never disagree (review r1 Finding 1).
+ *    exchange, so the two values can never disagree (review r1 Finding 1), with a
+ *    HOST ALLOWLIST on the request-derived form (review r2 NEW-1) and a
+ *    re-validation of the replayed value (NEW-8).
  *
  * Error codes handed back to the SPA come from a FIXED internal set
  * ({@see normalizeProviderError()}/{@see classifyAuthFailure()}); provider-supplied
  * error text is never reflected. `error=email_already_registered` means a local
- * account already owns the GitHub e-mail: the user must sign in with that account
- * and link GitHub through `GET /auth/identities/link/github` (we deliberately do
- * NOT match accounts on e-mail — GitHub e-mails are not necessarily verified and
- * that would be an account-takeover primitive).
+ * account already owns the GitHub e-mail — as its `email` or as its `username`
+ * (review r2 NEW-7): the user must sign in with that account and link GitHub
+ * through `GET /auth/identities/link/github` (we deliberately do NOT match
+ * accounts on e-mail — GitHub e-mails are not necessarily verified and that would
+ * be an account-takeover primitive).
  *
  * The account-link branch mirrors the OIDC one: `link_user_id` comes ONLY from
  * the server-side state context (written by the authenticated {@see authorizeLink()}),
@@ -104,13 +107,10 @@ final class GithubCallbackController
     /**
      * Browser-binding cookie for the issued OAuth state (review r1 Finding 2).
      * HttpOnly + Secure + SameSite=Lax, and short-lived: it only has to survive
-     * the round trip to GitHub.
+     * the round trip to GitHub. The mechanics live in {@see StateCorrelation};
+     * OIDC uses the same helper under its own cookie name.
      */
     private const string CORRELATION_COOKIE = 'phlix_oauth_github';
-    private const int CORRELATION_TTL_SECONDS = 600;
-
-    /** The state-context key holding the hash of the correlation cookie value. */
-    private const string CORRELATION_KEY = 'correlation';
 
     /** The state-context key holding the authorize-time absolute redirect_uri. */
     private const string CALLBACK_URL_KEY = 'callback_url';
@@ -264,10 +264,10 @@ final class GithubCallbackController
         // Finding 2 (MED) — bind the state to THIS browser. Only the hash of the
         // correlation secret is persisted, so a database read cannot forge a
         // matching cookie.
-        $correlation = bin2hex(random_bytes(32));
+        $correlation = StateCorrelation::issue();
 
         $context = $linkContext ?? [];
-        $context[self::CORRELATION_KEY] = hash('sha256', $correlation);
+        $context[StateCorrelation::CONTEXT_KEY] = StateCorrelation::fingerprint($correlation);
         $context[self::CALLBACK_URL_KEY] = $callbackUrl;
 
         $this->stateStore->put($stateId, $codeVerifier, $context);
@@ -279,7 +279,7 @@ final class GithubCallbackController
         );
 
         $response = (new Response())->status(302)->header('Location', $authorizationUrl);
-        $this->attachCorrelationCookie($response, $correlation);
+        StateCorrelation::attach($response, self::CORRELATION_COOKIE, $correlation);
 
         return $response;
     }
@@ -371,29 +371,30 @@ final class GithubCallbackController
         // account and then have a victim's browser issue the resulting callback,
         // which would hand the victim a session for the ATTACKER's account
         // (SameSite=Lax does not restrict Set-Cookie).
-        if (!self::correlationMatches($request, $context)) {
+        if (!StateCorrelation::matches($request, self::CORRELATION_COOKIE, $context)) {
             LoggerFactory::get(LogChannels::AUTH)->warning('GitHub state not bound to this browser', [
                 'sid' => $stateId,
             ]);
-            return (new Response())->status(403)->json([
+            return $this->clearCorrelation((new Response())->status(403)->json([
                 'error' => 'invalid_state',
                 'message' => 'State parameter was not issued to this browser session',
-            ]);
+            ]));
         }
 
         // Finding 1 (HIGH) — replay the EXACT absolute redirect_uri the authorize
-        // step sent (GitHub rejects the exchange when the two differ). Falling
-        // back to a fresh resolve only matters for a state row issued before this
-        // field existed.
-        $callbackUrl = is_string($context[self::CALLBACK_URL_KEY] ?? null)
-            && $context[self::CALLBACK_URL_KEY] !== ''
-                ? $context[self::CALLBACK_URL_KEY]
-                : $this->resolveCallbackUrl($request);
+        // step sent (GitHub rejects the exchange when the two differ). NEW-8:
+        // re-validate it on the way out (only server code writes that key, so this
+        // is defence in depth); a value that no longer passes falls back to a fresh
+        // resolve, which is also the path a state row issued before this field
+        // existed takes.
+        $configuredRedirectUri = $this->configuredRedirectUri();
+        $callbackUrl = $this->replayCallbackUrl($context, $configuredRedirectUri)
+            ?? $this->resolveCallbackUrl($request, $configuredRedirectUri);
         if ($callbackUrl === null) {
-            return (new Response())->status(503)->json([
+            return $this->clearCorrelation((new Response())->status(503)->json([
                 'error' => 'callback_url_not_configured',
                 'message' => 'Set an absolute redirect_uri in the GitHub provider settings',
-            ]);
+            ]));
         }
 
         // Request-path self-heal (see beginAuthorization()).
@@ -401,10 +402,10 @@ final class GithubCallbackController
 
         $provider = $this->resolveProvider();
         if ($provider === null) {
-            return (new Response())->status(503)->json([
+            return $this->clearCorrelation((new Response())->status(503)->json([
                 'error' => 'provider_not_configured',
                 'message' => 'GitHub provider is not enabled',
-            ]);
+            ]));
         }
 
         try {
@@ -446,7 +447,13 @@ final class GithubCallbackController
                     // ACTIONABLE code instead of an opaque `internal`, so the user
                     // is told to sign in and link at /auth/identities/link/github.
                     // We never resolve the login onto that account by e-mail.
-                    if ($this->emailAlreadyRegistered($email)) {
+                    //
+                    // Review r2 NEW-7: the USERNAME twin counts too —
+                    // UserRepository::findOrCreateByExternalId() seeds
+                    // `username = $email`, so a local account whose *username* is
+                    // this e-mail (with a different e-mail column) hits
+                    // UNIQUE(username) and would otherwise dead-end on `internal`.
+                    if ($this->identifierAlreadyRegistered($email)) {
                         LoggerFactory::get(LogChannels::AUTH)->warning(
                             'GitHub login blocked: e-mail already belongs to a local account',
                             ['external_id' => $externalId],
@@ -461,8 +468,12 @@ final class GithubCallbackController
             $tokens = $this->createTokensForUser($userId);
 
             // Deliver the session as HttpOnly cookies and 302 to the clean,
-            // allowlisted same-origin path with NO token query string.
-            $response = (new Response())->status(302)->header('Location', $redirectUri);
+            // allowlisted same-origin path with NO token query string. The
+            // now-spent correlation cookie is expired on the same response
+            // (NEW-10).
+            $response = $this->clearCorrelation(
+                (new Response())->status(302)->header('Location', $redirectUri),
+            );
             $this->attachAuthCookies($response, $tokens);
 
             return $response;
@@ -476,60 +487,35 @@ final class GithubCallbackController
     }
 
     /**
-     * Whether the consumed state was issued to the browser making this callback.
-     *
-     * The correlation secret is delivered as an HttpOnly cookie at authorize time
-     * and only its SHA-256 lives in the state row, so neither a leaked state blob
-     * nor a database read lets a third party satisfy this check.
-     *
-     * @param array<string, mixed> $context The trusted server-side state context.
+     * Expire the spent correlation cookie (review r2 NEW-10). Applied to every
+     * response returned AFTER the one-shot state was consumed — the binding has
+     * served its purpose at that point, so leaving the cookie for the remaining
+     * TTL only invites a confusing 403 on a later, unrelated flow.
      */
-    private static function correlationMatches(Request $request, array $context): bool
+    private function clearCorrelation(Response $response): Response
     {
-        $expected = is_string($context[self::CORRELATION_KEY] ?? null)
-            ? $context[self::CORRELATION_KEY]
-            : '';
-        if ($expected === '') {
-            return false;
-        }
-
-        $presented = $request->getCookie(self::CORRELATION_COOKIE);
-        if (!is_string($presented) || $presented === '') {
-            return false;
-        }
-
-        return hash_equals($expected, hash('sha256', $presented));
+        return StateCorrelation::clear($response, self::CORRELATION_COOKIE);
     }
 
     /**
-     * Attach the short-lived, HttpOnly browser-binding cookie to the authorize
-     * redirect. Same Secure/SameSite policy as the session cookies.
+     * Whether a local account already owns this e-mail — as its `email` OR as its
+     * `username` (the r2 NEW-7 twin: {@see UserRepository::findOrCreateByExternalId()}
+     * seeds `username = $email`). The classification for Finding 4. Read-only and
+     * failure-tolerant: any error here means "not the duplicate case", so the
+     * caller re-throws the original create failure.
      */
-    private function attachCorrelationCookie(Response $response, string $correlation): void
-    {
-        $response->cookie(
-            self::CORRELATION_COOKIE,
-            $correlation,
-            maxAge: self::CORRELATION_TTL_SECONDS,
-            secure: getenv('PHLIX_COOKIE_INSECURE') !== '1',
-            httpOnly: true,
-            sameSite: 'Lax',
-        );
-    }
-
-    /**
-     * Whether a local account already owns this e-mail — the classification for
-     * Finding 4. Read-only and failure-tolerant: any error here means "not the
-     * duplicate case", so the caller re-throws the original create failure.
-     */
-    private function emailAlreadyRegistered(?string $email): bool
+    private function identifierAlreadyRegistered(?string $email): bool
     {
         if (!is_string($email) || $email === '') {
             return false;
         }
 
         try {
-            return $this->userRepository->emailExists($email);
+            if ($this->userRepository->emailExists($email)) {
+                return true;
+            }
+
+            return $this->userRepository->usernameExists($email);
         } catch (\Throwable) {
             return false;
         }
@@ -539,14 +525,19 @@ final class GithubCallbackController
      * 302 back to the allowlisted same-origin target with a fixed internal error
      * code, using the correct query separator (Finding 9 — the old code appended
      * `'?error='` unconditionally, producing `/app?a=1?error=…`).
+     *
+     * Every call site is downstream of the state consume, so the spent correlation
+     * cookie is expired here too (NEW-10).
      */
     private function errorRedirect(string $redirectUri, string $code): Response
     {
         $separator = str_contains($redirectUri, '?') ? '&' : '?';
 
-        return (new Response())
-            ->status(302)
-            ->header('Location', $redirectUri . $separator . 'error=' . urlencode($code));
+        return $this->clearCorrelation(
+            (new Response())
+                ->status(302)
+                ->header('Location', $redirectUri . $separator . 'error=' . urlencode($code)),
+        );
     }
 
     /**
@@ -714,13 +705,15 @@ final class GithubCallbackController
 
     /**
      * 302 back to the allowlisted same-origin path with a `linked=github` marker.
+     * Only reachable from the post-consume link branch, so the spent correlation
+     * cookie is expired here too (NEW-10).
      */
     private function linkSuccessRedirect(string $redirectUri): Response
     {
         $separator = str_contains($redirectUri, '?') ? '&' : '?';
         $location = $redirectUri . $separator . 'linked=' . self::GITHUB_PROVIDER;
 
-        return (new Response())->status(302)->header('Location', $location);
+        return $this->clearCorrelation((new Response())->status(302)->header('Location', $location));
     }
 
     /**
@@ -728,10 +721,10 @@ final class GithubCallbackController
      */
     private function identityConflict(): Response
     {
-        return (new Response())->status(409)->json([
+        return $this->clearCorrelation((new Response())->status(409)->json([
             'error' => 'identity_already_linked',
             'message' => 'This external identity is already linked to another account',
-        ]);
+        ]));
     }
 
     /**
@@ -742,22 +735,54 @@ final class GithubCallbackController
      * callback URL, so a path-only value (what this returned before review r1
      * Finding 1) always fails with `redirect_uri_mismatch`. Precedence:
      * the operator-configured `redirect_uri` plugin setting, else the request's
-     * own scheme+Host. See {@see CallbackUrl}.
+     * own scheme+Host — the latter ONLY when that Host is the operator's
+     * configured public hostname (review r2 NEW-1). See {@see CallbackUrl}.
+     *
+     * @param string|null $configured Pre-read `redirect_uri` setting, so the
+     *        callback path performs ONE settings read instead of two (NEW-6).
      */
-    private function resolveCallbackUrl(Request $request): ?string
+    private function resolveCallbackUrl(Request $request, ?string $configured = null): ?string
     {
-        $configured = '';
-        if ($this->plugin !== null) {
-            $settings = $this->plugin->getSettings();
-            $configured = is_string($settings['redirect_uri'] ?? null) ? $settings['redirect_uri'] : '';
-        }
-
         return CallbackUrl::resolve(
-            $configured,
+            $configured ?? $this->configuredRedirectUri(),
             $request->getHeader('Host'),
             $request->getHeader('X-Forwarded-Proto'),
             self::CALLBACK_PATH,
+            CallbackUrl::configuredHost(),
         );
+    }
+
+    /**
+     * The state-carried authorize-time callback URL, re-validated (review r2
+     * NEW-8), or null when the state carries none / it no longer passes.
+     *
+     * @param array<string, mixed> $context    The trusted server-side state context.
+     * @param string               $configured The `redirect_uri` setting (pre-read).
+     */
+    private function replayCallbackUrl(array $context, string $configured): ?string
+    {
+        $stored = is_string($context[self::CALLBACK_URL_KEY] ?? null) ? $context[self::CALLBACK_URL_KEY] : '';
+        if ($stored === '') {
+            return null;
+        }
+
+        return CallbackUrl::isReplayable($stored, $configured, CallbackUrl::configuredHost())
+            ? $stored
+            : null;
+    }
+
+    /**
+     * The operator-configured absolute `redirect_uri` plugin setting, or '' when
+     * unset / no settings source is wired.
+     */
+    private function configuredRedirectUri(): string
+    {
+        if ($this->plugin === null) {
+            return '';
+        }
+        $settings = $this->plugin->getSettings();
+
+        return is_string($settings['redirect_uri'] ?? null) ? $settings['redirect_uri'] : '';
     }
 
     /**

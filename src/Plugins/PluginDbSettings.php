@@ -50,6 +50,24 @@ trait PluginDbSettings
     protected ?PluginSettingsStore $settingsStore = null;
 
     /**
+     * Per-instance latch: the one-time legacy `settings.json` import has already
+     * been attempted for this (worker-resident) plugin object (review r2, NEW-6).
+     *
+     * Without it every OAuth authorize/callback and every `ldap:` login on a box
+     * with NO settings row re-ran {@see loadFileSettings()} — an `is_file()` (plus a
+     * `file_get_contents()` when present) blocking syscall on the event-loop request
+     * path. A single bool, so it cannot grow in resident memory, and it holds no
+     * request state.
+     *
+     * Consequence, deliberately accepted: a `settings.json` that appears at runtime
+     * AFTER a worker has already read an empty store is not picked up until that
+     * worker restarts. Operators configure providers through the admin API (which
+     * writes the DB store), so the legacy file only matters at upgrade time — before
+     * any request has been served.
+     */
+    private bool $legacyImportAttempted = false;
+
+    /**
      * The `plugin_settings.plugin_name` key this plugin persists under.
      */
     abstract protected function settingsStoreKey(): string;
@@ -89,6 +107,13 @@ trait PluginDbSettings
         if ($stored !== null) {
             return $stored;
         }
+
+        // NEW-6 — the import is one-time by definition; do not re-stat the legacy
+        // file on every subsequent request that finds the store still empty.
+        if ($this->legacyImportAttempted) {
+            return [];
+        }
+        $this->legacyImportAttempted = true;
 
         // One-time migration: no DB row yet — import a legacy settings.json so no
         // operator loses their configured provider settings, then serve it.

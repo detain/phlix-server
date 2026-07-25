@@ -325,6 +325,11 @@ final class MusicDtoMediaItemIdTest extends TestCase
         }
 
         $found = [];
+        // The path each canonical name was FIRST reached from, so the collision throw
+        // below can name BOTH offending files instead of one plus a directory
+        // (S121 review r5 INFO-1). Written in lockstep with $found, one line apart.
+        /** @var array<class-string, string> $firstFile */
+        $firstFile = [];
         foreach ($files as $file) {
             $relative = substr($file, strlen($dir) + 1, -strlen('.php'));
             /** @var class-string $fqcn */
@@ -407,20 +412,44 @@ final class MusicDtoMediaItemIdTest extends TestCase
                 // testTheSweepDiscoversExactlyTheThreeKnownMusicDtos() expressed in
                 // the same terms.
                 if (isset($found[$canonical])) {
+                    // ⚠ Name BOTH colliding paths, and INFER the cause from them rather
+                    // than assert one (S121 review r5 INFO-1). The first version printed
+                    // only the current $file plus the search directory and always blamed
+                    // "names differing only in case". For a `class_alias()` collision the
+                    // sorted-first path is the REAL class's own file, so the message
+                    // fingered a perfectly correct file — measured: a probe aliasing
+                    // MusicTrack from Aaa/Alias.php read "reached …\MusicTrack twice, from
+                    // …/src/Media/Music/MusicTrack.php and from an earlier file under …",
+                    // never mentioning Aaa/Alias.php at all. A guard that fires loudly but
+                    // blames an innocent file is the kind the next reader deletes as
+                    // broken, which is exactly the failure mode this sweep exists to stop.
+                    $first = $firstFile[$canonical];
+                    $cause = strtolower($first) === strtolower($file)
+                        // Measured discriminator, not a guess: the case-variant shape is
+                        // the one where the two PATHS are equal case-insensitively.
+                        ? 'Those two paths differ only in CASE, and PHP class names are case-insensitive, so '
+                            . 'both files resolve to this one class. Delete or rename one of them.'
+                        : 'Those two paths are NOT case variants of each other, so the cause is inside one of '
+                            . 'them: a class_alias(), a namespace that does not match the directory, a second '
+                            . 'class declared in a file named after a different one, or a symlink to the other '
+                            . 'file. `grep -nE "class_alias|^namespace|class " <both paths>` tells them apart. '
+                            . 'Delete or rename whichever file is REDUNDANT — this sweep cannot tell which one '
+                            . 'that is, and either path may be the legitimate home, so read both before '
+                            . 'editing either.';
                     $memoError = sprintf(
-                        'media_item_id sweep reached %s twice, from %s and from an earlier file under %s. '
-                        . 'Two files resolving to ONE class means the sweep can only report one of them, so '
-                        . 'it is refusing to silently keep the last one (that overwrite is r4 finding 1). '
-                        . 'Usual cause: two files whose names differ only in case, PHP class names being '
-                        . 'case-insensitive. Delete or rename one of them.',
+                        'media_item_id sweep reached %s twice, from %s and from %s. Two files resolving to '
+                        . 'ONE class means the sweep can only report one of them, so it is refusing to '
+                        . 'silently keep the last one (that overwrite is r4 finding 1). %s',
                         $canonical,
+                        $first,
                         $file,
-                        $dir,
+                        $cause,
                     );
 
                     throw new RuntimeException($memoError);
                 }
                 $found[$canonical] = [$canonical];
+                $firstFile[$canonical] = $file;
             }
         }
 

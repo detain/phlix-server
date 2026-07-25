@@ -4042,38 +4042,27 @@ class Application
     /**
      * Returns a MusicController instance.
      *
+     * S99: the controller reads the normalized `music_*` tables through
+     * {@see \Phlix\Media\Music\MusicLibraryService}, so it no longer needs the
+     * `MusicLibraryManager` / `LibraryManager` / `AudioScanner` /
+     * `MetadataManager` graph this factory used to build — those fed the
+     * `media_items.metadata_json` read path, which the music scanner never
+     * populates. This is the ONLY construction site for MusicController
+     * (`public/index.php` dispatches WebPortalRouter, not this router, and no DI
+     * provider registers the class), so the two-argument signature is mirrored
+     * here and nowhere else.
+     *
      * @return \Phlix\Server\Http\Controllers\MusicController The controller instance.
      */
     private function getMusicController(): \Phlix\Server\Http\Controllers\MusicController
     {
         $db = $this->createDatabaseConnection();
-        $itemRepo = new \Phlix\Media\Library\ItemRepository($db);
         $musicScanner = new \Phlix\Media\Music\MusicLibraryScanner($db, new \Phlix\Media\Transcoding\FfmpegRunner());
         $musicLibraryService = new \Phlix\Media\Music\MusicLibraryService($db, $musicScanner);
-        $libraryManager = new \Phlix\Media\Library\LibraryManager(
-            $db,
-            new \Phlix\Media\Library\MediaScanner(
-                $db,
-                $itemRepo
-            ),
-            new \Phlix\Media\Library\FolderWatcher(),
-            $musicLibraryService
-        );
         $sessionManager = new \Phlix\Session\SessionManager($db);
-        $audioScanner = new \Phlix\Media\Library\AudioScanner($db, $itemRepo);
-        $metadataManager = new \Phlix\Media\Metadata\MetadataManager(
-            $itemRepo
-        );
-        $musicManager = new \Phlix\Media\Library\MusicLibraryManager(
-            $audioScanner,
-            $metadataManager,
-            $itemRepo,
-            $db
-        );
 
         return new \Phlix\Server\Http\Controllers\MusicController(
-            $musicManager,
-            $libraryManager,
+            $musicLibraryService,
             $sessionManager
         );
     }

@@ -275,6 +275,13 @@ class MusicLibraryScanner
      * a nested `START TRANSACTION` inside a caller that already opened one — a
      * failure mode this codebase has already hit in production.
      *
+     * **Orphan adoption is gated by ONE query per scan.** The per-entity lookups
+     * that reclaim a previous scan's orphaned artist/album `media_items` rows
+     * ({@see self::findAdoptableArtistMediaItemId()}) hit an unindexed
+     * `media_items.name`, so they are only issued when
+     * {@see self::hasAdoptableMusicMediaItem()} has established that this library
+     * has at least one adoptable row at all — see that method for the measurement.
+     *
      * @param string        $path       Root path to scan
      * @param callable|null $onProgress Optional `(int $processed, int $total, string $currentPath): void`
      *                                  sink, ticked once per audio file during the tag-reading pass.
@@ -317,6 +324,26 @@ class MusicLibraryScanner
 
         // Progress denominator. Only paid for when a sink is wired.
         $total = $onProgress !== null ? $this->countAudioFiles($path) : 0;
+
+        // ONE query decides whether this scan needs the per-entity orphan-adoption
+        // lookups at all. On a healthy library the answer is "no" and every artist
+        // and album then skips an unindexed `media_items.name` probe.
+        //
+        // FAIL SAFE, not fail fast: this runs outside every catch in the walk, so a
+        // transient error here would otherwise abort a multi-hour scan that has
+        // nothing wrong with it (measured — a fault injected on this statement was
+        // the ONE position of a 40-statement fault sweep that escaped
+        // scanDirectory()). Degrading to "do the per-entity lookups" costs time and
+        // nothing else.
+        try {
+            $mayAdopt = $this->hasAdoptableMusicMediaItem($libraryId);
+        } catch (\Throwable $gateError) {
+            $this->logger->warning('Orphan-adoption gate failed; using the per-entity lookups', [
+                'path' => $path,
+                'error' => $gateError->getMessage(),
+            ]);
+            $mayAdopt = true;
+        }
 
         // Track artist/album IDs to handle the hierarchy. Bounded (see the
         // MAX_*_CACHE constants) because they now live for the whole walk.
@@ -388,7 +415,7 @@ class MusicLibraryScanner
 
             // Bound 1 — a single album may not buffer without limit.
             if (count($open[$key]['files']) >= self::MAX_TRACKS_PER_FLUSH) {
-                $this->flushAlbum($open[$key], $artistCache, $albumCache, $libraryId, $result);
+                $this->flushAlbum($open[$key], $artistCache, $albumCache, $libraryId, $result, $mayAdopt);
                 unset($open[$key], $recency[$key]);
                 continue;
             }
@@ -400,14 +427,14 @@ class MusicLibraryScanner
                 if (!is_string($oldest) || !isset($open[$oldest])) {
                     break;
                 }
-                $this->flushAlbum($open[$oldest], $artistCache, $albumCache, $libraryId, $result);
+                $this->flushAlbum($open[$oldest], $artistCache, $albumCache, $libraryId, $result, $mayAdopt);
                 unset($open[$oldest], $recency[$oldest]);
             }
         }
 
         // Terminal flush: whatever the walk left open.
         foreach (array_keys($open) as $key) {
-            $this->flushAlbum($open[$key], $artistCache, $albumCache, $libraryId, $result);
+            $this->flushAlbum($open[$key], $artistCache, $albumCache, $libraryId, $result, $mayAdopt);
             unset($open[$key], $recency[$key]);
         }
 
@@ -447,6 +474,11 @@ class MusicLibraryScanner
      * @param array<string, array{id:int, media_item_id:string|null}> $albumCache
      * @param string|null $libraryId Owning library UUID.
      * @param ScanResult  $result    Accumulates added/updated counts.
+     * @param bool $mayAdopt Whether this library has any orphaned artist/album
+     *        `media_items` row worth looking for — decided ONCE per scan by
+     *        {@see self::hasAdoptableMusicMediaItem()} and threaded through as an
+     *        argument rather than kept on `$this`, so nothing about one scan can
+     *        leak into another in a resident worker.
      * @return void
      */
     private function flushAlbum(
@@ -454,7 +486,8 @@ class MusicLibraryScanner
         array &$artistCache,
         array &$albumCache,
         ?string $libraryId,
-        ScanResult $result
+        ScanResult $result,
+        bool $mayAdopt
     ): void {
         $artistName = $albumData['artist'];
         $albumTitle = $albumData['album'];
@@ -484,7 +517,7 @@ class MusicLibraryScanner
             });
 
             // Upsert artist and get media_item_id
-            $artistResult = $this->upsertArtist($artistName, $artistCache, $libraryId);
+            $artistResult = $this->upsertArtist($artistName, $artistCache, $libraryId, $mayAdopt);
             if ($artistResult === null) {
                 $this->logger->warning('Failed to upsert artist', ['artist' => $artistName]);
                 return;
@@ -500,7 +533,8 @@ class MusicLibraryScanner
                 $albumTitle,
                 $year,
                 $albumCache,
-                $libraryId
+                $libraryId,
+                $mayAdopt
             );
             if ($albumResult === null) {
                 $this->logger->warning('Failed to upsert album', ['album' => $albumTitle]);
@@ -932,10 +966,18 @@ class MusicLibraryScanner
      * @param string $name Artist name
      * @param array<string, array{id:int, media_item_id:string|null}> $cache Artist cache to avoid duplicate queries
      * @param string|null $libraryId Owning library UUID stamped onto a new media_item.
+     * @param bool $mayAdopt Whether the one-per-scan gate found an adoptable
+     *        orphan ({@see self::hasAdoptableMusicMediaItem()}). FALSE skips the
+     *        unindexed adoption lookup; defaults to TRUE so an omission degrades to
+     *        "correct but slower", never to "leaks an orphan".
      * @return array{id: int, media_item_id: string|null}|null Artist ID and media_item_id or null on failure
      */
-    private function upsertArtist(string $name, array &$cache, ?string $libraryId = null): ?array
-    {
+    private function upsertArtist(
+        string $name,
+        array &$cache,
+        ?string $libraryId = null,
+        bool $mayAdopt = true
+    ): ?array {
         // Check cache first (Early Exit)
         $cacheKey = strtolower($name);
         if (isset($cache[$cacheKey])) {
@@ -970,6 +1012,11 @@ class MusicLibraryScanner
         // Adopt an orphan from an interrupted scan before minting a new
         // media_item, or the orphan leaks forever and every rescan adds another —
         // see findAdoptableArtistMediaItemId() for the window and the measurement.
+        // Gated on $mayAdopt: the lookup scans an unindexed `media_items.name`, so
+        // on a library with no orphans at all it is pure cost (measured: 5.078 ms per
+        // artist — 31 s to 98 s over a first scan of the 7k-entity prod music
+        // library) and hasAdoptableMusicMediaItem() has already ruled it out with a
+        // single 158 ms query.
         //
         // KNOWN GAP, pre-existing and OWNED BY S96 (not S95): createMediaItem()
         // swallows its own Throwable and returns '', so a transient failure here
@@ -978,7 +1025,7 @@ class MusicLibraryScanner
         // backfills it (verified: still NULL after two clean rescans). That artist
         // stays artwork-less and invisible to any media_items-driven path. Deliberately
         // left unchanged here; S95 does not alter this behaviour.
-        $mediaItemId = $this->findAdoptableArtistMediaItemId($name, $libraryId)
+        $mediaItemId = ($mayAdopt ? $this->findAdoptableArtistMediaItemId($name, $libraryId) : null)
             ?? $this->createMediaItem('artist', $name, null, $libraryId);
 
         // Insert new artist
@@ -1007,11 +1054,18 @@ class MusicLibraryScanner
      * Upserts an album into the database with a corresponding media_item.
      *
      * @param int $artistId Artist ID
-     * @param string|null $artistMediaItemId Artist's media_item_id for linking
+     * @param string|null $artistMediaItemId Artist's `media_items` id. NOT written
+     *        to the album row (S97 owns the `parent_id` hierarchy); used only to
+     *        keep orphan adoption from crossing artists — see
+     *        {@see self::findAdoptableAlbumMediaItemId()}.
      * @param string $title Album title
      * @param int|null $year Release year
      * @param array<string, array{id:int, media_item_id:string|null}> $cache Album cache key by "artistId|title"
      * @param string|null $libraryId Owning library UUID stamped onto a new media_item.
+     * @param bool $mayAdopt Whether the one-per-scan gate found an adoptable
+     *        orphan ({@see self::hasAdoptableMusicMediaItem()}). FALSE skips the
+     *        unindexed adoption lookup; defaults to TRUE so an omission degrades to
+     *        "correct but slower", never to "leaks an orphan".
      * @return array{id: int, media_item_id: string|null}|null Album ID and media_item_id or null on failure
      */
     private function upsertAlbum(
@@ -1020,10 +1074,9 @@ class MusicLibraryScanner
         string $title,
         ?int $year,
         array &$cache,
-        ?string $libraryId = null
+        ?string $libraryId = null,
+        bool $mayAdopt = true
     ): ?array {
-        unset($artistMediaItemId);
-
         // Check cache first (Early Exit)
         $cacheKey = $artistId . '|' . strtolower($title);
         if (isset($cache[$cacheKey])) {
@@ -1066,9 +1119,14 @@ class MusicLibraryScanner
         $sortTitle = $this->generateSortName($title);
 
         // Adopt an orphan from an interrupted scan before minting a new media_item
-        // (see findAdoptableAlbumMediaItemId()). The same S96-owned NULL
-        // media_item_id gap documented in upsertArtist() applies here verbatim.
-        $mediaItemId = $this->findAdoptableAlbumMediaItemId($title, $libraryId)
+        // (see findAdoptableAlbumMediaItemId()), gated on the one-per-scan orphan
+        // probe exactly as in upsertArtist() — 4.03 ms per album otherwise (17.1 ms
+        // as the reviewer measured it), paid once per album for the whole library.
+        // The same S96-owned NULL media_item_id gap documented in upsertArtist()
+        // applies here verbatim.
+        $mediaItemId = ($mayAdopt
+            ? $this->findAdoptableAlbumMediaItemId($title, $libraryId, $artistMediaItemId)
+            : null)
             ?? $this->createMediaItem('album', $title, null, $libraryId);
 
         // Insert new album. total_tracks defaults to 0 and is set by
@@ -1261,6 +1319,32 @@ class MusicLibraryScanner
      * {@see self::upsertTrack()}'s reuse branch, which is why the track window is
      * already self-healing.
      *
+     * MATCHING IS COLLATION-INSENSITIVE, AND THAT IS THE DECISION. `media_items.name`
+     * is `utf8mb4_unicode_ci`, so `mi.name = ?` adopts across case and accent:
+     * an orphan named `Björk` IS adopted for the tag `Bjork`, as are `ABBA`/`abba`.
+     * That is deliberate — `music_artists`' `UNIQUE KEY uk_name (name)` (migration
+     * 065) is over a column of the same collation, so the schema already treats both
+     * spellings as ONE artist and the natural-key branch in
+     * {@see self::upsertArtist()} would have found the row had it existed;
+     * requiring a binary match here would leak the orphan instead. The one
+     * consequence to know about: `media_items.name` then keeps the EARLIER spelling
+     * while `music_artists.name` holds the later one, so the generic
+     * `media_items`-driven surfaces (`/api/v1/media?type=artist`, the DLNA bridge)
+     * can display a different variant from the music read path. Same for albums.
+     *
+     * RESIDUE THIS DOES NOT RECLAIM — the leak is closed for the window it names,
+     * not universally: (a) `LIMIT 1` adopts exactly ONE orphan per natural key, so
+     * if two orphans somehow share a name the second stays unreferenced forever —
+     * every later scan short-circuits on the natural-key branch before reaching this
+     * lookup (measured: `media_items[artist] = 2` against `music_artists = 1` after
+     * two clean rescans). The scanner alone cannot produce that state — an
+     * interruption re-adopts the SAME orphan rather than minting a second. (b) The
+     * lookup is scoped `mi.library_id <=> ?` while `music_artists` has NO
+     * `library_id`, so an orphan minted in library L1 is leaked permanently once ANY
+     * other library creates the `music_artists` row for that name (measured: scan L2,
+     * then rescan L1 → `media_items[artist] = 2` against `music_artists = 1`). That
+     * needs two music libraries sharing an artist, which prod does not have.
+     *
      * @param string $name Artist name, as stored in `media_items.name`.
      * @param string|null $libraryId Owning library UUID (null-safe matched).
      * @return string|null An adoptable media_items UUID, or null when none exists.
@@ -1282,35 +1366,110 @@ class MusicLibraryScanner
      * Finds an ORPHANED album `media_items` row this scanner already minted for
      * `$title` — one that no `music_albums` row points at — so it can be adopted
      * instead of leaked. The artist/`music_artists` counterpart is
-     * {@see self::findAdoptableArtistMediaItemId()}, which documents the window
-     * and the measurement.
+     * {@see self::findAdoptableArtistMediaItemId()}, which documents the window, the
+     * measurement, the collation rule and the residue this does not reclaim; all of
+     * it applies here verbatim.
      *
-     * Two different artists can legitimately share an album title, and an album's
-     * `media_items` row carries nothing artist-specific (no `parent_id` — S97 owns
-     * that question), so adopting "some" orphan of that title is indistinguishable
-     * from minting a fresh one, and the row count stays exact either way.
+     * ⚠ THE ARTIST CONSTRAINT IS LOAD-BEARING FOR S97, NOT DECORATION. Two artists
+     * can legitimately share an album title (`Greatest Hits`). Today an album's
+     * `media_items` row carries nothing artist-specific — `path = ''`,
+     * `metadata_json = {sub_type, name}`, and **this scanner never writes
+     * `parent_id`** (S97 owns that hierarchy) — so `title` alone picks a row that is
+     * indistinguishable from a freshly minted one and the counts stay exact
+     * (measured: two artists × `Greatest Hits` → 2 albums / 2 `media_items[album]`).
+     * The moment S97 starts parenting these rows that stops being true: a
+     * title-only predicate would hand artist B an album row parented to artist A,
+     * and `ma.id IS NULL` cannot catch it because the row genuinely is unreferenced.
+     * Hence `parent_id IS NULL OR parent_id = <this artist>`: it is exactly today's
+     * behaviour while every orphan is unparented, and it fails SAFE (mint a fresh
+     * row, no mis-parenting) as soon as S97 sets the column. **The constraint S97
+     * must honour: an album `media_items` row may only be adopted by the artist it
+     * is parented to.**
      *
      * @param string $title Album title, as stored in `media_items.name`.
      * @param string|null $libraryId Owning library UUID (null-safe matched).
+     * @param string|null $artistMediaItemId This album's artist's `media_items` id;
+     *        an orphan already parented to a DIFFERENT artist is not adoptable.
+     *        NULL (the artist's own media_item failed — S96(e)) restricts adoption
+     *        to unparented orphans.
      * @return string|null An adoptable media_items UUID, or null when none exists.
      */
-    private function findAdoptableAlbumMediaItemId(string $title, ?string $libraryId): ?string
-    {
+    private function findAdoptableAlbumMediaItemId(
+        string $title,
+        ?string $libraryId,
+        ?string $artistMediaItemId
+    ): ?string {
         return $this->firstMediaItemId($this->db->query(
             "SELECT mi.id
                FROM media_items mi
                LEFT JOIN music_albums ma ON ma.media_item_id = mi.id
               WHERE mi.type = 'album' AND mi.name = ? AND mi.path = ''
                 AND mi.library_id <=> ? AND ma.id IS NULL
+                AND (mi.parent_id IS NULL OR mi.parent_id = ?)
               LIMIT 1",
-            [$title, $libraryId]
+            [$title, $libraryId, $artistMediaItemId]
         ));
+    }
+
+    /**
+     * Answers, in ONE query per scan, whether this library holds any orphaned
+     * artist/album `media_items` row at all — i.e. whether the per-entity adoption
+     * lookups are worth issuing.
+     *
+     * WHY THIS GATE EXISTS. `media_items` has no b-tree index on `name` (migration
+     * 001 gives it only `FULLTEXT idx_name`), so
+     * {@see self::findAdoptableArtistMediaItemId()} and
+     * {@see self::findAdoptableAlbumMediaItemId()} degrade to a scan of the whole
+     * `type` partition. Measured on a prod-shaped population (2,153 `artist` +
+     * 5,091 `album` + 29,245 `track` rows in one library, warm, MySQL 8.0.46,
+     * durable defaults) — **5.078 ms per artist and 4.03 ms per album**, so a first
+     * scan of that library spends `2,153 × 5.078 + 5,091 × 4.03 ≈ **31.4 s**` on
+     * adoption alone; the S95 reviewer measured the same artist figure (5.2 ms) and
+     * a slower album one (17.1 ms → ≈98 s) on a loaded box, so treat 31 s as the
+     * floor, not the ceiling. Either way it grows as O(n²) in albums and is spent for
+     * NOTHING whenever there are no orphans, which is the normal case.
+     *
+     * This probe replaces all of it with **one** statement per scan: **158.4 ms** on
+     * the same population (the clean case is its worst case — it must prove the
+     * absence of an orphan, so it visits every artist/album row), i.e. a 190×
+     * reduction, and one `scanDirectory()` call per library PATH rather than per
+     * entity. It is deliberately the simple form: the optimizer picks `idx_library`
+     * over `idx_media_items_library_type` here, and rewriting it as a `UNION ALL` of
+     * two single-`type` branches measured 42.8 ms — kept in reserve rather than
+     * shipped, because 116 ms once per path is nothing against the 31 s it saves and
+     * the readable predicate is the one people will have to maintain.
+     *
+     * ACCEPTED BEHAVIOUR. The answer is taken once, before the walk: an orphan
+     * created *by this scan's own crash* is irrelevant (the scan is over) and an
+     * orphan created by a CONCURRENT writer is not reclaimed until the next scan —
+     * one scan cycle later, exactly like every other adoption. `library_id <=> NULL`
+     * matches nothing (the column is NOT NULL), so the legacy no-library scan path
+     * skips both lookups outright, which is what it effectively did anyway.
+     *
+     * @param string|null $libraryId Owning library UUID (null-safe matched).
+     * @return bool TRUE when at least one adoptable artist/album row exists.
+     */
+    private function hasAdoptableMusicMediaItem(?string $libraryId): bool
+    {
+        // An 'artist' row can only ever be referenced from music_artists and an
+        // 'album' row only from music_albums, so requiring BOTH sides to be NULL is
+        // simply "unreferenced by either", in one pass over the type partition.
+        return $this->firstMediaItemId($this->db->query(
+            "SELECT mi.id
+               FROM media_items mi
+               LEFT JOIN music_artists ar ON ar.media_item_id = mi.id
+               LEFT JOIN music_albums al ON al.media_item_id = mi.id
+              WHERE mi.type IN ('artist', 'album') AND mi.path = ''
+                AND mi.library_id <=> ? AND ar.id IS NULL AND al.id IS NULL
+              LIMIT 1",
+            [$libraryId]
+        )) !== null;
     }
 
     /**
      * Extracts the `id` of the first returned row as a non-empty string.
      *
-     * The `IS NULL` half of the two adoption lookups above is NOT optional:
+     * The `IS NULL` half of the adoption lookups above is NOT optional:
      * `music_artists.media_item_id` and `music_albums.media_item_id` are both
      * `NULL UNIQUE` (migration 065), so adopting a row another music row already
      * references would fail that INSERT on a duplicate key and lose the whole

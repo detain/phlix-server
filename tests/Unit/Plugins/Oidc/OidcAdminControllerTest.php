@@ -185,6 +185,127 @@ final class OidcAdminControllerTest extends TestCase
         $this->assertSame('original-secret', $savedSettings['client_secret']);
     }
 
+    // -----------------------------------------------------------------------
+    // Review r2 NEW-2 — the OIDC half of the r1-Finding-1 redirect_uri save
+    // semantics had ZERO tests (the GitHub twin had three). Mirrors
+    // GithubAdminControllerTest::test_save_*redirect_uri*.
+    // -----------------------------------------------------------------------
+
+    public function test_save_rejects_a_relative_redirect_uri(): void
+    {
+        $request = new Request();
+        $request->body = [
+            'provider_url' => 'https://idp.example.com',
+            'client_id' => 'cid',
+            'redirect_uri' => '/auth/oidc/callback',
+        ];
+
+        $response = $this->controller->saveSettings($request, []);
+
+        $this->assertSame(400, $response->statusCode);
+        /** @var array<string, mixed> $body */
+        $body = json_decode($response->body, true);
+        $this->assertSame('invalid_redirect_uri', $body['error']);
+        // Nothing may be persisted by a rejected save.
+        $this->assertSame([], $this->plugin->getSettings());
+    }
+
+    public function test_save_stores_and_returns_an_absolute_redirect_uri(): void
+    {
+        $request = new Request();
+        $request->body = [
+            'provider_url' => 'https://idp.example.com',
+            'client_id' => 'cid',
+            'redirect_uri' => 'https://phlix.example/auth/oidc/callback',
+        ];
+
+        $this->assertSame(200, $this->controller->saveSettings($request, [])->statusCode);
+
+        /** @var array<string, mixed> $body */
+        $body = json_decode($this->controller->getSettings(new Request(), [])->body, true);
+        $this->assertSame('https://phlix.example/auth/oidc/callback', $body['redirect_uri']);
+    }
+
+    /**
+     * A save that omits `redirect_uri` entirely must PRESERVE the stored value —
+     * `saveSettings()` is a wholesale replace, so an older client would otherwise
+     * silently wipe the operator's configured callback URL.
+     */
+    public function test_save_without_the_redirect_uri_key_preserves_the_stored_value(): void
+    {
+        $this->plugin->saveSettings([
+            'provider_url' => 'https://idp.example.com',
+            'client_id' => 'cid',
+            'redirect_uri' => 'https://phlix.example/auth/oidc/callback',
+        ]);
+
+        $request = new Request();
+        $request->body = ['provider_url' => 'https://idp.example.com', 'client_id' => 'cid'];
+        $this->controller->saveSettings($request, []);
+
+        $this->assertSame(
+            'https://phlix.example/auth/oidc/callback',
+            $this->plugin->getSettings()['redirect_uri'] ?? null,
+        );
+    }
+
+    public function test_explicitly_empty_redirect_uri_clears_it(): void
+    {
+        $this->plugin->saveSettings([
+            'provider_url' => 'https://idp.example.com',
+            'client_id' => 'cid',
+            'redirect_uri' => 'https://phlix.example/auth/oidc/callback',
+        ]);
+
+        $request = new Request();
+        $request->body = [
+            'provider_url' => 'https://idp.example.com',
+            'client_id' => 'cid',
+            'redirect_uri' => '',
+        ];
+        $this->controller->saveSettings($request, []);
+
+        $this->assertSame('', $this->plugin->getSettings()['redirect_uri'] ?? null);
+    }
+
+    // -----------------------------------------------------------------------
+    // Review r2 NEW-3 — the same wholesale-replace trap for `scopes`.
+    // -----------------------------------------------------------------------
+
+    public function test_save_without_the_scopes_key_preserves_custom_scopes(): void
+    {
+        $this->plugin->saveSettings([
+            'provider_url' => 'https://idp.example.com',
+            'client_id' => 'cid',
+            'scopes' => 'openid profile email groups',
+        ]);
+
+        $request = new Request();
+        $request->body = ['provider_url' => 'https://idp.example.com', 'client_id' => 'cid'];
+        $this->controller->saveSettings($request, []);
+
+        $this->assertSame('openid profile email groups', $this->plugin->getSettings()['scopes'] ?? null);
+    }
+
+    public function test_explicitly_empty_scopes_resets_to_the_default(): void
+    {
+        $this->plugin->saveSettings([
+            'provider_url' => 'https://idp.example.com',
+            'client_id' => 'cid',
+            'scopes' => 'openid profile email groups',
+        ]);
+
+        $request = new Request();
+        $request->body = [
+            'provider_url' => 'https://idp.example.com',
+            'client_id' => 'cid',
+            'scopes' => '',
+        ];
+        $this->controller->saveSettings($request, []);
+
+        $this->assertSame('openid profile email', $this->plugin->getSettings()['scopes'] ?? null);
+    }
+
     public function test_get_schema_returns_valid_json_schema(): void
     {
         $request = new Request();

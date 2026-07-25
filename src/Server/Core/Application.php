@@ -2929,6 +2929,49 @@ class Application
                 // CDS control endpoint (legacy path)
                 $cdsControlController = new \Phlix\Server\Http\Controllers\Dlna\CdsControlController($cdsServer);
                 $r->post(\Phlix\Dlna\DlnaRoutes::CDS_CONTROL, [$cdsControlController, 'handle']);
+
+                // S52: the media byte stream a renderer actually plays.
+                //
+                // MUST live inside THIS group. A DLNA renderer cannot present a
+                // Bearer token or a signed URL, so the route carries no auth —
+                // which makes the group's DlnaAllowlistMiddleware the only gate
+                // it has. Serving it from HttpHandler instead (as
+                // /media/{id}/stream is, before the router runs) would give it
+                // ZERO allowlist enforcement: an unauthenticated whole-library
+                // read for anything that can reach the port. Registering it here
+                // also means the `dlna.cds_enabled` guard above keeps the route
+                // from existing at all while DLNA is off.
+                //
+                // HEAD is registered explicitly alongside GET: renderers HEAD
+                // before opening a resource, and Router::dispatch()'s GET→HEAD
+                // fallback suppresses the file-backed body (so it would report
+                // Content-Length: 0).
+                try {
+                    $streamItems = $container->get(\Phlix\Media\Library\ItemRepository::class);
+                    $streamJail = $container->get(\Phlix\Media\Library\LibraryRootJail::class);
+                    if (
+                        $streamItems instanceof \Phlix\Media\Library\ItemRepository
+                        && $streamJail instanceof \Phlix\Media\Library\LibraryRootJail
+                    ) {
+                        $streamController = new \Phlix\Server\Http\Controllers\Dlna\DlnaStreamController(
+                            $streamItems,
+                            $streamJail,
+                            \Phlix\Common\Logger\LoggerFactory::get(\Phlix\Common\Logger\LogChannels::DLNA),
+                        );
+                        $r->match(
+                            ['GET', 'HEAD'],
+                            \Phlix\Dlna\DlnaRoutes::STREAM_PATTERN,
+                            [$streamController, 'handle'],
+                        );
+                    }
+                } catch (\Throwable $streamError) {
+                    // Browse still works without it; say so instead of leaving an
+                    // operator to wonder why every <res> URL 404s.
+                    \Phlix\Common\Logger\LoggerFactory::get(\Phlix\Common\Logger\LogChannels::DLNA)->error(
+                        'DLNA stream route not registered; renderers will be unable to play any item',
+                        ['error' => $streamError->getMessage(), 'exception' => $streamError::class],
+                    );
+                }
             }, [$allowlistMiddleware]);
         } catch (\Throwable $e) {
             // LOG, do not swallow. This bare catch previously said only

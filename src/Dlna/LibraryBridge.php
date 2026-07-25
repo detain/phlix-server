@@ -373,6 +373,12 @@ class LibraryBridge
     /**
      * Determine MIME type based on item type and path.
      *
+     * Delegates to {@see DlnaMimeTypes}, which is the ONE table the whole DLNA
+     * surface reads. This method used to own a private copy of it, and the
+     * {@see ContentDirectory} owned a second — so the MIME a renderer was told to
+     * expect in `<res protocolInfo>` and the `Content-Type` the bytes arrive with
+     * could silently diverge, which makes a renderer refuse the item.
+     *
      * @param array<string, mixed> $item Media item
      * @return string MIME type
      *
@@ -380,37 +386,7 @@ class LibraryBridge
      */
     private function determineMimeType(array $item): string
     {
-        // First check if we have an explicit mime type
-        $mimeType = $item['mime_type'] ?? null;
-        if (is_string($mimeType) && $mimeType !== '') {
-            return $mimeType;
-        }
-
-        // Fall back to extension-based detection
-        $path = $item['path'] ?? '';
-        $extension = is_string($path) ? pathinfo($path, PATHINFO_EXTENSION) : '';
-        $type = is_string($item['type'] ?? null) ? $item['type'] : '';
-
-        return match (strtolower($extension)) {
-            'mp4', 'm4v' => 'video/mp4',
-            'mkv' => 'video/x-matroska',
-            'webm' => 'video/webm',
-            'avi' => 'video/x-msvideo',
-            'mp3' => 'audio/mpeg',
-            'aac' => 'audio/aac',
-            'flac' => 'audio/flac',
-            'wav' => 'audio/wav',
-            'ogg' => 'audio/ogg',
-            'jpg', 'jpeg' => 'image/jpeg',
-            'png' => 'image/png',
-            'gif' => 'image/gif',
-            default => match ($type) {
-                'video', 'movie' => 'video/mp4',
-                'audio', 'music' => 'audio/mpeg',
-                'image', 'photo' => 'image/jpeg',
-                default => 'application/octet-stream',
-            },
-        };
+        return DlnaMimeTypes::forItem($item);
     }
 
     /**

@@ -29,6 +29,7 @@ use Phlix\Server\Http\Controllers\PluginAdminController;
 use Phlix\Server\Http\Controllers\PluginCatalogController;
 use Phlix\Server\Http\Controllers\Stats\MetricsController;
 use Phlix\Server\Http\Controllers\Stats\StatsController;
+use Phlix\Plugins\Github\Controller\GithubAdminController;
 use Phlix\Plugins\Ldap\Controller\LdapAdminController;
 use Phlix\Plugins\Oidc\Controller\OidcAdminController;
 use Phlix\Server\Http\Middleware\AdminMiddleware;
@@ -155,6 +156,13 @@ final class AdminRoutes
                 $r->post('/auth-providers/ldap/config', [$ldapAdminController, 'saveSettings']);
                 $r->post('/auth-providers/ldap/test', [$ldapAdminController, 'testConnection']);
                 $r->get('/auth-providers/ldap/schema', [$ldapAdminController, 'getSchema']);
+
+                /** @var GithubAdminController $githubAdminController */
+                $githubAdminController = $container->get(GithubAdminController::class);
+
+                $r->get('/auth-providers/github/config', [$githubAdminController, 'getSettings']);
+                $r->post('/auth-providers/github/config', [$githubAdminController, 'saveSettings']);
+                $r->get('/auth-providers/github/schema', [$githubAdminController, 'getSchema']);
 
                 /** @var StatsController $statsController */
                 $statsController = $container->get(StatsController::class);

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Phlix\Tests\Unit\Server\Http;
 
 use PHPUnit\Framework\TestCase;
+use Phlix\Plugins\Github\Controller\GithubCallbackController;
 use Phlix\Plugins\Oidc\Controller\OidcCallbackController;
 use Phlix\Server\Http\AuthProviderRouteRegistrar;
 use Phlix\Server\Http\Request;
@@ -37,6 +38,7 @@ final class AuthProviderRouteRegistrarTest extends TestCase
             'unlink identity'  => ['DELETE', '/auth/identities/some-id'],
             'link oidc'        => ['GET', '/auth/identities/link/oidc'],
             'link ldap'        => ['POST', '/auth/identities/link/ldap'],
+            'link github'      => ['GET', '/auth/identities/link/github'],
         ];
     }
 
@@ -111,6 +113,55 @@ final class AuthProviderRouteRegistrarTest extends TestCase
 
         // 299 sentinel means the route resolved to our fake controller (i.e. it
         // is registered and NOT behind auth).
+        $this->assertSame(299, $response->statusCode, "$method $path should be registered unauthenticated");
+    }
+
+    /**
+     * The UNAUTHENTICATED GitHub login flow (authorize + callback) is registered
+     * (S48). Same proof technique as the OIDC test above.
+     *
+     * @return array<string, array{0: string, 1: string}>
+     */
+    public static function githubLoginRoutes(): array
+    {
+        return [
+            'authorize' => ['GET', '/auth/github/authorize'],
+            'callback'  => ['GET', '/auth/github/callback'],
+        ];
+    }
+
+    /**
+     * @dataProvider githubLoginRoutes
+     */
+    public function test_github_login_routes_are_registered_unauthenticated(string $method, string $path): void
+    {
+        $fake = new class {
+            public function authorize(Request $request, array $params): Response
+            {
+                return (new Response())->status(299)->json(['hit' => 'authorize']);
+            }
+
+            public function callback(Request $request, array $params): Response
+            {
+                return (new Response())->status(299)->json(['hit' => 'callback']);
+            }
+        };
+
+        $container = $this->createMock(ContainerInterface::class);
+        $container->method('has')->willReturn(true);
+        $container->method('get')->willReturnCallback(
+            static fn (string $id): object => $id === GithubCallbackController::class ? $fake : new \stdClass(),
+        );
+
+        $router = new Router($container);
+        (new AuthProviderRouteRegistrar())->register($router);
+
+        $request = new Request();
+        $request->method = $method;
+        $request->path = $path;
+
+        $response = $router->dispatch($request);
+
         $this->assertSame(299, $response->statusCode, "$method $path should be registered unauthenticated");
     }
 }

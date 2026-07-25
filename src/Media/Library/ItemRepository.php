@@ -33,6 +33,20 @@ use Workerman\MySQL\Connection;
  */
 class ItemRepository
 {
+    /**
+     * Absolute row ceiling for a single listing query (S99 hardening).
+     *
+     * A last-resort backstop against an unclamped caller-supplied `?limit=`
+     * reaching a `LIMIT ?` in a resident Workerman worker. This is NOT the API
+     * page-size policy — that is {@see PageLimit::MAX} (100), applied at every
+     * request boundary. This ceiling only has to sit *below* "OOM the worker"
+     * while staying *above* the largest legitimate internal page
+     * ({@see \Phlix\Server\Http\Controllers\PhotoController} asks for 10,000
+     * photos for the slideshow), so lowering it to PageLimit::MAX would silently
+     * truncate those callers.
+     */
+    private const ABSOLUTE_ROW_CEILING = 10000;
+
     /** @var Connection Database connection */
     private Connection $db;
 
@@ -804,8 +818,19 @@ class ItemRepository
             }
         }
 
-        $bindings[] = $limit;
-        $bindings[] = $offset;
+        // SECURITY (S99): backstop the row cap in the repository, not just at the
+        // endpoints. Every request-driven caller already clamps to
+        // PageLimit::MAX ({@see \Phlix\Server\Http\Controllers\MediaItemController::index()},
+        // {@see \Phlix\Server\WebPortal\WebPortalRouter::getLibraryItems()}), but an
+        // unclamped `?limit=` reaching this `LIMIT ?` can OOM the resident
+        // Workerman worker serving every other user — and the hub relay's
+        // browse-scope gate never inspects the query string, so the blast radius is
+        // now internet-facing. The ceiling is deliberately NOT PageLimit::MAX:
+        // PhotoController::getSlideshow() and PhotoLibraryManager legitimately ask
+        // for 10,000 rows, and silently truncating them to 100 would break the
+        // slideshow. This only rejects the absurd.
+        $bindings[] = min(max(1, $limit), self::ABSOLUTE_ROW_CEILING);
+        $bindings[] = $this->normalizeOffset($offset);
 
         $results = $this->db->query(
             "SELECT * FROM media_items WHERE {$where} ORDER BY " . self::titleOrder() .

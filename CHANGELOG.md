@@ -9,6 +9,155 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Added
 
+- **Row-sized backdrop on the media LIST shape** (S101, unblocks phlix-ui S69's
+  wide-backdrop library view). `MediaItemShaper::shape()` — the single shaping
+  point behind `GET /api/v1/media` and every other list surface (most-watched,
+  continue-watching, chapter search, user-data, watch history) — now emits two new
+  keys:
+  - **`backdrop_url`** — the item's landscape backdrop, TMDB-width-swapped from
+    the stored `/w500` up to **`/w780`**. Non-TMDB backdrops (fanart.tv, a
+    locally-cached file) have no width ladder and pass through exactly as stored;
+    `null` when the item has no backdrop art.
+  - **`backdrop_srcset`** — a stored `metadata_json.backdrop_srcset` when
+    `ArtworkStorage` has cached one (the same precedence `poster_srcset` already
+    uses, so a locally-cached backdrop keeps its ladder instead of losing it for
+    not being a TMDB URL), otherwise exactly **two** derived candidates,
+    `w780 780w, w1280 1280w`. `w780` covers a full-bleed phone row at 2× DPR
+    (390 CSS px × 2) and a 780 CSS px row at 1×; `w1280` covers a ~1280–1400 CSS
+    px desktop row at 1× and is the largest TMDB step below `/original`. `null`
+    when there is neither a stored srcset nor a TMDB width ladder → the client
+    uses `backdrop_url`.
+
+  Both keys pass a **URL scheme allowlist** — absolute `http`/`https` and
+  app-relative paths (`/api/v1/artwork/{id}?size=…`) only. `metadata_json` image
+  URLs are provider-, `.nfo`- or plugin-supplied, and this step emits them on up
+  to 100 rows per response, so `javascript:`/`data:` URIs, protocol-relative
+  `//host/…` and values carrying an attribute-breakout character (`"`, `'`, `<`,
+  `>`, backtick, backslash) or a raw control byte now become `null` instead of
+  being echoed — and, in the srcset's case, width-swapped and embedded. The same
+  allowlist is now applied to the **detail** shape's `backdrop_url`
+  (`shapeDetail()`), which was previously unvalidated even though it is the value
+  a client paints as a full-bleed background and fans out into
+  `backdrop_url_large` plus three srcset candidates. A stored srcset is validated
+  on **both** halves of every candidate — the URL against the allowlist and the
+  descriptor against `<int>w` / `<float>x` — and the emitted value is
+  **reconstructed** from those validated pairs rather than passed through, so a
+  space-free payload parked after the descriptor (`…/bg.jpg 780w"><svg/onload=…>`)
+  and a URL carrying an interior space (which a browser reads as one URL plus two
+  descriptors) are both rejected. One bad candidate rejects a whole stored srcset.
+  Stored URLs are also **trimmed** before parsing: a whitespace-padded URL
+  previously reached the client verbatim *and* silently lost its width ladder,
+  because the `^`-anchored TMDB regex rejects the leading space. Only leading and
+  trailing space/tab/CR/LF count as padding — any other control byte, including an
+  edge NUL or vertical tab that PHP's default `trim()` would silently swallow, is
+  rejected before trimming.
+
+  **`/original` is deliberately NOT advertised on list rows, and the detail-only
+  `backdrop_url_large` is NOT emitted there.** `GET /api/v1/media` returns up to
+  `PageLimit::MAX` (100) rows per page; a TMDB `/original` backdrop is a
+  3840×2160-class JPEG (typically 1.5–4 MB), so a single page of hero-sized
+  backdrops would be 150–400 MB of image traffic for a ~300 px-tall strip that can
+  never use 2160 lines of detail.
+
+  **Measured payload cost, per encoder.** On the wire — the figure that actually
+  matters — the resident `HttpHandler` gzips JSON at level 6 whenever the client
+  sends `Accept-Encoding: gzip`, so a realistic 100-row page (80 % of rows
+  carrying a backdrop) grows by **on the order of 2 KiB — under 3 KiB in every
+  measurement taken** (three independent synthetic pages: +2 999, +2 745 and
+  +1 779 bytes, i.e. +30, +27 and +18 bytes per item). Read that as an order of
+  magnitude, not a bracket: the gzip delta **scales with how compressible the rest
+  of the page is**, because the more filler a page carries the better gzip folds
+  the repeated TMDB URL prefixes into it — the three page baselines (13 413 /
+  7 199 / 6 894 bytes) order exactly as their deltas do. The uncompressed
+  per-item figures that follow are the authoritative, reproducible numbers.
+  Uncompressed, `Response::json()` encodes with
+  `JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES`, and the in-page cost there is
+  **+270 bytes per item** with a TMDB backdrop (+26.4 KiB per 100-item page),
+  **+153 bytes** with a fanart.tv backdrop (no width ladder, so `backdrop_srcset`
+  is `null`) and **+71 bytes** for an item with no backdrop at all — the common
+  case for music/photo/book rows. The same three cases in *compact* encoding are
+  +242 / +125 / +43 bytes. Had `shapeDetail()`'s three fields simply been copied
+  instead, the pretty in-page cost would have been **+450 bytes per item (+43.9
+  KiB per page)**, 1.7× this shape. (`public/index.php` does not gzip; the
+  resident worker, which serves production, does.) No image resizer is introduced
+  (that is S71–S73); only existing TMDB size variants are used.
+
+  `shapeDetail()`'s size budget is unchanged — it still overwrites both keys with
+  the hero budget (stored URL + `/original` + the 3-step srcset) after calling
+  `shape()`, now with the stored URL run through the same allowlist, which is the
+  identity function on every URL that passes. So for every legitimate **clean** row
+  the detail/player response is **value-identical (key order shifts)**: every value
+  is exactly what it was and the response length is unchanged, but because
+  the keys now arrive through `array_merge()` they sit earlier in the JSON object
+  than before. Object key order carries no meaning for a JSON consumer — the
+  `md5` of the raw response differs, the `md5` of the `ksort`ed response does
+  not. "Clean" is the one carve-out, and it is the trimming described above rather
+  than a loss: a **whitespace-padded** stored `backdrop_url` used to ship verbatim
+  with `backdrop_url_large`/`backdrop_srcset` `null`, and now ships trimmed with the
+  `/original` + 3-step ladder it had silently lost. Both HTTP entry points
+  (`public/index.php` and the resident `HttpHandler`) resolve the same
+  `WebPortalRouter` and therefore both emit the new keys; no constructor or DI
+  wiring changed. Signed-URL freshness follows the established pattern: both
+  values run through `SignedUrl::refreshArtworkUrl()`/`refreshArtworkSrcset()` at
+  **response** time, so once backdrops are cached locally (S72) a stored scan-time
+  signature can never be served expired. Types with no landscape art
+  (track/music/album/artist/photo/book/audiobook) carry no
+  `metadata_json.backdrop_url` and degrade to `null` on both keys — there is no
+  `type` allowlist, because fanart.tv genuinely supplies artist/album backgrounds.
+  New `BackdropSrcset::rowUrl()` / `::rowSrcset()` carry the row budget, and the
+  hero and row budgets now share ONE width ladder and ONE srcset code path — the
+  hero srcset is literally the row srcset with the `/original` candidate appended
+  (`forBackdropUrl()` delegates to `rowSrcset()`), so the two can never drift.
+
+- **Sign in with GitHub, and DB-backed provider settings** (updates.md #54 / S48).
+  The first concrete non-OIDC OAuth2 provider, proving the S44–S47 foundation:
+  - **`GithubOAuthProvider` + `GET /auth/github/authorize` and
+    `GET /auth/github/callback`** (both unauthenticated — the GitHub redirect carries
+    no Phlix session). Plain authorization-code + **PKCE**, no OIDC discovery and no
+    `id_token` assumption, profile via `GET https://api.github.com/user` (default
+    scopes `read:user user:email`), and account resolution through the S46/S47
+    `user_identities` path so a GitHub identity is scoped to `provider='github'`.
+    Enabled by the `auth.github.enabled` server setting like the other bundled
+    providers and registered per worker by `AuthProviderBootstrapper`; linking an
+    existing account uses `GET /auth/identities/link/github` (unlink stays the
+    provider-generic `DELETE /auth/identities/{id}`). The shared
+    `Phlix\Plugins\OAuth2\AbstractOAuth2Provider` base carries the reusable OAuth2 +
+    PKCE machinery, so the next provider family is a subclass rather than a copy.
+  - **Provider settings now live in the DATABASE, not `settings.json`** — new
+    **`plugin_settings`** table (migration **`093_plugin_settings.sql`**: one row per
+    plugin, `plugin_name` PK + `settings_json`) behind a `PluginSettingsStore`
+    interface, consumed through the `PluginDbSettings` trait. Resident Workerman
+    workers may run on a read-only/ephemeral filesystem and a per-plugin file is
+    invisible to the other workers, so a shared row is the correct home. **No
+    operator action is needed on upgrade:** a plugin with no row yet performs a
+    ONE-TIME lazy import of its legacy `settings.json`, and the file store remains
+    the fallback when no DB store is injected (unit tests / no DB). Deliberately NOT
+    the catalog `plugins` table — a catalog row would double-register the bundled
+    providers. Migration 093 is `CREATE TABLE IF NOT EXISTS` and is **idempotent on
+    the paths that bypass the `schema_migrations` checksum ledger** too (a raw
+    `mysql <` replay, or a database whose ledger row was lost) — verified on a
+    scratch MySQL 8.0 to re-apply with 0 errors and to leave existing settings rows
+    untouched.
+  - **Admin config endpoints for GitHub** — `GET`/`POST
+    /api/v1/admin/auth-providers/github/config` plus `GET
+    .../github/schema` (admin-only), alongside the provider-generic
+    `POST /api/v1/admin/auth-providers/github/{enable,disable}`. The read endpoint
+    never echoes `client_secret`, and `configured` means *id AND secret present* —
+    the same bar `AuthProviderBootstrapper` uses to build the provider, so the UI
+    cannot report "configured" and then have `enable` answer `409 not_configured`.
+    **There is no GitHub card in the admin SPA yet**, so configure it through these
+    endpoints (see the SSO guide in phlix-docs for copy-paste calls).
+  - **OAuth2 state is browser-bound.** `DbOAuth2StateStore` (the `oauth_state_store`
+    table, 600 s TTL, atomic one-shot consume — never `$_SESSION`, which is
+    process-global under Workerman) plus `StateCorrelation`: a 32-byte secret in an
+    HttpOnly + Secure + SameSite=Lax cookie (`phlix_oauth_github` /
+    `phlix_oauth_oidc`) whose SHA-256 is the only copy persisted in the state
+    context, compared with `hash_equals()` **before** any token exchange, account link
+    or session-cookie mint. This closes a login-CSRF / session-fixation path where an
+    attacker ran the authorize leg and then had a victim's browser deliver the
+    callback (`SameSite=Lax` does not restrict `Set-Cookie`). Applied to the OIDC flow
+    too.
+
 - **DLNA renderers can finally play something: `GET|HEAD /dlna/stream/{mediaItemId}`**
   (updates.md #44 / S52). Until now DLNA *browse* worked while DLNA *playback* could
   not, by construction: every byte-serving route in Phlix demands a session or an
@@ -460,6 +609,51 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Changed
 
+- **The OAuth2/OIDC `redirect_uri` is now always ABSOLUTE, and is derived only from a
+  `Host` that matches `PHLIX_DOMAIN`** (updates.md #54 / S48). Both browser flows used
+  to send a path-only `redirect_uri` (`/auth/oidc/callback`), which providers reject
+  with `redirect_uri_mismatch` — GitHub and any spec-strict OIDC IdP match the value's
+  scheme, host **and port** against a registered absolute URI. The callback URL is now
+  resolved in two steps: the provider's own `redirect_uri` setting when it is a valid
+  absolute http(s) URL, else `<scheme>://<Host><callback path>` **only** when the
+  request's `Host` — port included — is the configured `PHLIX_DOMAIN`. A `Host` is
+  client-supplied, so deriving from an unvouched-for one could have handed a
+  wildcard-registered IdP an attacker's `redirect_uri`.
+
+  **Upgrade note — this fails CLOSED.** If neither `PHLIX_DOMAIN` nor an absolute
+  per-provider `redirect_uri` is configured, `/auth/github/authorize` and
+  `/auth/oidc/authorize` answer **`503 callback_url_not_configured`** — issuing no
+  state row and no cookie — instead of sending a value the provider would reject. Set
+  **`PHLIX_DOMAIN`** to this server's public `host[:port]` (`scripts/install.sh
+  --domain <domain>` writes it, and the systemd unit reads it from the env file), or
+  set the provider's `redirect_uri` setting to the absolute URL registered with the
+  provider. Reaching authorize over anything else — a LAN IP, `localhost`, the hub
+  relay hostname, or a different port on the same hostname — now `503`s **by design**.
+  The response body is deliberately generic because the route is unauthenticated; the
+  AUTH-channel log line names which condition fired, the presented `Host`, the
+  configured domain and both remedies. `error: callback_url_not_configured` is the
+  stable machine-readable code.
+
+  **The port is part of the compared origin**, with the scheme's DEFAULT port
+  normalised away on both sides: `PHLIX_DOMAIN=media.example.com` accepts
+  `Host: media.example.com` **and** `Host: media.example.com:443` under https (a
+  reverse proxy really does forward the latter), while
+  `PHLIX_DOMAIN=media.example.com:8443` accepts only that exact `host:port`. Mixed
+  pairs are distinct origins and refused (`https://host:80`, `http://host:443`).
+  **One behavioural delta to know:** phlix-server also binds `0.0.0.0:8096`, so a
+  client that BYPASSES the reverse proxy presents `Host: <domain>:8096` and now gets
+  the `503` instead of a derived `https://<domain>:8096/auth/…/callback`. Nothing
+  completable is lost — the callback registered with the OAuth App / IdP is the
+  proxied form, so the provider would have answered `redirect_uri_mismatch` for the
+  ported value anyway; the failure moves earlier and names the fix. Set the
+  provider's absolute `redirect_uri` if you genuinely serve auth on that port.
+
+  In-flight upgrade window: a state row minted under the older bare-host rule whose
+  `callback_url` carries a port `PHLIX_DOMAIN` does not name is no longer replayable,
+  so that one login attempt ends in the `503` and the retry (through the proxy)
+  succeeds. Bounded by the 600 s state TTL, and only for a login started on a
+  non-registered origin.
+
 - **DLNA browse now reports the real container MIME for ~20 more formats**
   (updates.md #44 / S52). The extension→MIME table that produced the DIDL
   `<res protocolInfo>` value lived in three places (`LibraryBridge`,
@@ -478,6 +672,35 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- **An auth-provider settings save no longer WIPES the keys it did not send**
+  (updates.md #54 / S48). A provider settings save is a wholesale replace of the
+  stored document, and both admin controllers built that document from the request
+  body alone — so a client that did not know about a field silently deleted it. This
+  is the exact shape that **wiped live Trakt OAuth tokens on production** during a
+  plugin update, and it was live, not theoretical: the admin SPA's OIDC form posts
+  `provider_url`/`client_id`/`client_secret`/`scopes` and knows nothing about
+  `redirect_uri`, so one click on Save would have erased a `redirect_uri` configured
+  through the API — which, with the change above, hard-`503`s every OIDC login.
+
+  The invariant is now explicit in `GithubAdminController` and `OidcAdminController`,
+  for every optional key (`scopes`, `redirect_uri`): **a key ABSENT from the request
+  body is PRESERVED; only an explicitly empty value clears it.** Absent is never a
+  deletion. (`client_secret` already behaved this way — blank keeps the stored
+  secret.) A rejected save (`invalid_redirect_uri`, `missing_client_id`, …) mutates
+  nothing, and repeated partial saves do not erode the row. Guarded by
+  `AuthProviderSettingsPreservationRealDbIntegrationTest`, which drives both real
+  controllers through the real repository against real MySQL and reads
+  `plugin_settings.settings_json` straight back out of the table; reverting either
+  key on either controller to a wholesale replace fails it with a message naming the
+  incident.
+
+  **Not fixed, documented instead:** `LdapAdminController::saveSettings()` still
+  rebuilds its document from the request body alone (only `bind_pw` is kept on
+  blank), so a *scripted* partial save resets an omitted `port`/`ssl`/`bind_dn`/
+  `user_filter`/`admin_group` to its default. The admin console's LDAP form always
+  posts the complete set, so no shipped client is affected; API callers must send the
+  full map. Noted in the class docblock and in the SSO guide.
+
 - **A `HEAD` on a media route put TWO conflicting `Content-Length` headers on the
   wire** (updates.md #44 / S52 review). Workerman's response encoder
   (`Protocols/Http/Response::__toString()`) appends its own
@@ -489,15 +712,62 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   renderers probe a resource with `HEAD` *before* they open it, so the reply meant to
   advertise the size was the one that broke. New `Phlix\Server\Workerman\BodylessResponse`
   narrows `__toString()` to leave a caller-supplied `Content-Length` alone on an empty
-  body (and delegates to Workerman untouched for everything else);
+  body (and delegates to Workerman untouched for everything else). It is reached two
+  different ways, because the two affected routes are dispatched by different code:
   `Response::toWorkermanResponse()` selects it for `HEAD` replies **only** — never for
   a GET that merely came out empty, whose stale length would be a keep-alive framing
-  desync rather than a fix — which fixes `HEAD /dlna/stream/{id}` and the pre-existing
-  twin on `HEAD /media/{id}/stream`. Every other reply, 204/304/redirect/416 included,
-  is byte-identical to before. Pinned by assertions on the **encoded bytes**, with the
-  expected bytes *derived from* Workerman's own encoder so a future dependency bump
-  cannot make the narrowed copy diverge silently — the previous tests inspected the
-  header *array*, which cannot observe this defect at all.
+  desync rather than a fix — which is what fixes `HEAD /dlna/stream/{id}`; the
+  pre-existing twin on `HEAD /media/{id}/stream` is fixed by **naming the class
+  directly** in `HttpHandler::serveMediaStream()`, which runs *before*
+  `Application::dispatch()` and returns Workerman responses, so it never builds a
+  Phlix `Response` and has no `headOnly` flag to select on. Every other reply,
+  204/304/redirect/416 included, is byte-identical to before. Pinned by assertions on
+  the **encoded bytes**, with the expected bytes *derived from* Workerman's own encoder
+  so a future dependency bump cannot make the narrowed copy diverge silently — the
+  previous tests inspected the header *array*, which cannot observe this defect at all.
+
+- **A route registered for `HEAD` in its own right relied on its handler remembering
+  to flag the reply** (S52 post-merge review, finding 1). `Response::$headOnly` is what
+  selects the narrowed encoder above, and it was set **only** by
+  `Router::dispatchAsHead()` — the GET→HEAD *fallback*. A route registered as
+  `match(['GET', 'HEAD'], …)` (which is how the DLNA stream route is registered, so
+  that a file-backed body is not suppressed to `Content-Length: 0`) never reaches that
+  method, so the router set nothing and correctness depended on each controller setting
+  the flag by hand. The one such route today does, but the next one to declare a
+  `Content-Length` on its HEAD arm and forget the flag would have shipped
+  `Content-Length: 123456789` followed by `Content-Length: 0` again with the whole
+  suite green. `Router::dispatch()` now flags **every** response it returns for a
+  `HEAD` request (`markHeadOnly()`, the single writer of the flag in the class: both
+  route maps, both middleware short-circuits, and the fallback), so the framing is a
+  property of the framework rather than a convention. It cannot flag a GET — the method
+  test is the whole body — and it is idempotent, so the DLNA controller keeps its own
+  explicit set as defence in depth for callers that are not `Router::dispatch()`.
+  **One live reply does change on the wire, for the better:** the DLNA stream route is
+  registered inside a group carrying `DlnaAllowlistMiddleware`, and that gate's refusal
+  is now flagged too, so an off-LAN `HEAD /dlna/stream/{id}` answers
+  `403 … Content-Length: 0` with **no** body (101 B) where it previously shipped its
+  104-byte `{"code":"dlna.forbidden"}` JSON alongside `Content-Length: 104` (207 B).
+  RFC 9110 §9.3.2 forbids content in a `HEAD` response, so the new bytes are the
+  conforming ones — but a `HEAD` probe can no longer read *why* it was refused (use a
+  `GET`), and the `Content-Length: 0` under-reports what the equivalent `GET` would
+  return, exactly as the pre-existing `withFile()`-on-a-HEAD case does. The
+  HEAD-registered stream route's own 200 reply is unchanged (its controller already set
+  the flag), as is every 204/304/redirect/416. Pinned by `RouterTest` tests that
+  register a HEAD route which does **not** set the flag and assert on the **encoded
+  bytes** that exactly one `Content-Length` reaches the wire, with a control showing
+  the framework encoder emits two for the same shape — including all three arms r1
+  found unpinned (`dispatch()`'s static short-circuit and both halves of the parametric
+  GET→HEAD fallback, the live path for `/api/v1/media/{id}`, `/hls/{job}/{seg}` and
+  `/stream/theme-media/{libraryId}/audio`, where an unflagged reply measured
+  4,377 B with two lengths against 113 B with one).
+  **Bounded, not covered:** a *global* middleware registered on `Application` runs
+  before the router, so a `HEAD` it short-circuits is never flagged and still ships its
+  body. Today only `AccessScheduleMiddleware` can do that and its refusals declare no
+  `Content-Length` of their own, so the reply is the recoverable "body on a HEAD" shape
+  rather than the unrecoverable two-length one — the same shape as `Router::notFound()`
+  and `HttpHandler`'s SPA/static/404 replies, all of which move together in a separate
+  change. `ApplicationHeadOnlyBoundaryTest` pins that boundary from both sides so it
+  cannot drift, and `Application::dispatch()`'s docblock states it.
 
 - **`Router::group()` could leak its middleware onto every later route** if the group
   callback threw. The prefix/middleware restore had no `finally`, and `addRoute()`

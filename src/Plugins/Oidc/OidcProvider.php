@@ -19,6 +19,7 @@ use Phlix\Plugins\Oidc\DiscoveryDocument;
 use Phlix\Plugins\Oidc\IdTokenValidator;
 use Phlix\Plugins\Oidc\OidcUserInfo;
 use Phlix\Plugins\Oidc\OidcValidationException;
+use Phlix\Plugins\OAuth2\Pkce;
 use RuntimeException;
 
 /**
@@ -388,29 +389,23 @@ final class OidcProvider implements ProviderInterface
     /**
      * Generate a cryptographically-random RFC 7636 PKCE `code_verifier`.
      *
-     * Returns a 64-character string drawn from the unreserved-character
-     * set (hex digits), well within the 43–128 char window required by
-     * the spec. Callers should persist this value server-side keyed by
-     * the corresponding `state` and replay it on the token exchange.
+     * Delegates to the shared {@see Pkce} helper (extracted in S48 so the
+     * OAuth2 base + GitHub reuse the same, already-tested implementation). The
+     * public signature is preserved for existing callers (OidcCallbackController,
+     * OidcPkceTest).
      */
     public static function generateCodeVerifier(): string
     {
-        return bin2hex(random_bytes(32));
+        return Pkce::generateCodeVerifier();
     }
 
     /**
      * Compute the RFC 7636 S256 `code_challenge` for a verifier.
+     *
+     * Delegates to the shared {@see Pkce} helper.
      */
     public static function computeCodeChallenge(string $codeVerifier): string
     {
-        return self::base64UrlEncode(hash('sha256', $codeVerifier, true));
-    }
-
-    /**
-     * URL-safe base64 encoding without padding, per RFC 7636 §4.2.
-     */
-    private static function base64UrlEncode(string $bytes): string
-    {
-        return rtrim(strtr(base64_encode($bytes), '+/', '-_'), '=');
+        return Pkce::computeCodeChallenge($codeVerifier);
     }
 }

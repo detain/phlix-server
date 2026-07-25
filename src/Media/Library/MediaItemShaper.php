@@ -80,6 +80,52 @@ final class MediaItemShaper
     ];
 
     /**
+     * Characters that can break out of an HTML attribute (or smuggle markup) and
+     * so may never appear in an image URL this server hands to a client:
+     * double/single quote, `<`, `>`, backtick, backslash. Enforced by
+     * {@see self::safeImageUrl()}.
+     */
+    private const UNSAFE_URL_CHARS = "\"'<>`\\";
+
+    /**
+     * A srcset candidate descriptor: a width (`780w`) or a pixel density (`2x`,
+     * `1.5x`). Those are the ONLY two forms the HTML spec allows, so anything else
+     * in the descriptor slot is markup or garbage. Enforced by
+     * {@see self::safeImageSrcset()}, which validates the descriptor half of every
+     * candidate as well as the URL half.
+     *
+     * The pattern is the HTML grammar, deliberately, so it stays reusable:
+     *
+     *  - **Width** — a valid non-negative integer plus lowercase `w`. Leading zeros
+     *    are legal (`0780w` is 780), but an all-zero width is NOT: the HTML
+     *    descriptor parser treats `0w` as a parse error and conformant browsers DROP
+     *    the candidate, which is why this repo's own srcset writer refuses to emit
+     *    one ({@see \Phlix\Media\Storage\ArtworkStorage::srcset()} skips the
+     *    `original` variant for exactly that reason). Reader and writer therefore
+     *    agree. Spelled `(?!0+w)` rather than `\d*[1-9]\d*w` on purpose — the latter
+     *    backtracks QUADRATICALLY on a long all-digit descriptor (measured: 122 ms
+     *    for 20 000 digits, versus 0.03 ms here), and this runs in the resident
+     *    worker's event loop on up to {@see \Phlix\Common\Http\PageLimit::MAX} rows.
+     *  - **Density** — a valid floating-point number plus lowercase `x`. That
+     *    production admits a leading-dot mantissa (`.5x`) and an exponent
+     *    (`1e2x`, `1E-2x`) as well as the everyday `2x`/`1.5x`, so the exotic forms
+     *    are accepted too even though no writer here produces one.
+     *
+     * Everything else is rejected, including the near-misses: uppercase `780W`/`2X`
+     * (the spec fixes both units lowercase), a signed `+2x`/`-2x`, a bare `2.x`, an
+     * exponent on a width (`1e2w`), a lone future-compat `780h`, full-width digits,
+     * and a unit-less `780`. `0x` is left accepted — unlike `0w` the spec does not
+     * call a zero density a descriptor parse error, and no writer emits one.
+     *
+     * Anchored `\z`, not `$`: `$` also matches before a trailing newline, so `$`
+     * would let `"780w\n"` through. That is unreachable via
+     * {@see self::safeImageSrcset()} (its tokens come from a `preg_split('/\s+/')`,
+     * so they cannot contain whitespace) but this const reads as a general statement
+     * of the grammar and must be safe for the next caller that is not.
+     */
+    private const SRCSET_DESCRIPTOR = '/^(?:(?!0+w)\d+w|(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?x)\z/';
+
+    /**
      * Shapes a raw media item row into the media-item schema format.
      *
      * @param array<string, mixed> $item Raw hydrated media item (with parsed `metadata`).
@@ -143,6 +189,42 @@ final class MediaItemShaper
             $posterSrcset = SignedUrl::refreshArtworkSrcset($posterSrcset);
         }
 
+        // Row-sized backdrop for a wide-backdrop / hero-strip LIST view. Only
+        // items that actually carry `metadata_json.backdrop_url` get one — types
+        // with no landscape art (track/music/album/artist/photo/book) simply have
+        // no such key and degrade to null rather than a broken URL. There is NO
+        // type allowlist on purpose: fanart.tv genuinely supplies artist/album
+        // backgrounds, so gating on `type` would throw away real artwork.
+        //
+        // Deliberately NOT the detail treatment: shapeDetail() prefers TMDB
+        // `/original` (`backdrop_url_large`) because it paints ONE full-bleed hero
+        // per page. This is up to PageLimit::MAX rows per response, so the row
+        // ladder tops out at w1280 and `backdrop_url_large` is NOT emitted here.
+        //
+        // Both keys go through self::safeImageUrl(), a scheme allowlist: `http`,
+        // `https` and app-relative paths (`/api/v1/artwork/…`) only. `metadata_json`
+        // is provider- OR `.nfo`/plugin-supplied, so it is partly controllable by
+        // whoever writes files into a library, and this step multiplies the exposure
+        // from one URL per hero response to three strings on up to PageLimit::MAX
+        // rows. `javascript:`/`data:` URIs and attribute-breakout payloads therefore
+        // become null instead of being echoed (and, worse, width-swapped INTO the
+        // srcset).
+        $storedBackdrop = self::safeImageUrl($metadata['backdrop_url'] ?? null);
+        // TMDB URLs step up from the stored /w500 to /w780; non-TMDB (fanart.tv,
+        // locally-cached) URLs have no width ladder and pass through as stored.
+        $backdropUrl = BackdropSrcset::rowUrl($storedBackdrop) ?? $storedBackdrop;
+        // Prefer a STORED backdrop_srcset over deriving one — the exact pattern
+        // poster_srcset uses above. This matters the moment S72 caches backdrops
+        // as `/api/v1/artwork/{id}?size=…`: a local artwork URL is not a TMDB URL,
+        // so BackdropSrcset::rowSrcset() cannot build a ladder for it and the
+        // responsive candidates this step exists to add would silently become null
+        // for EVERY cached backdrop. Whatever ArtworkStorage wrote wins, validated
+        // candidate-by-candidate by the same allowlist.
+        $backdropSrcset = self::safeImageSrcset($metadata['backdrop_srcset'] ?? null);
+        if ($backdropSrcset === null) {
+            $backdropSrcset = BackdropSrcset::rowSrcset($storedBackdrop);
+        }
+
         return [
             'id' => $id,
             'name' => $name,
@@ -158,6 +240,20 @@ final class MediaItemShaper
             // When ArtworkStorage has cached the poster (SV-3.4), this carries
             // the local srcset pointing to /api/v1/artwork/{id}?size=...
             'poster_srcset' => $posterSrcset,
+            // Landscape backdrop for a wide-backdrop/hero-strip row renderer,
+            // sized for a row (TMDB /w780) — NOT the detail page's /original.
+            // Null when the item has no backdrop art. Re-minted at RESPONSE time
+            // (see the poster_url note above): once backdrops are cached locally
+            // this is a signed `/api/v1/artwork/{id}?size=…` URL whose stored
+            // scan-time signature is long expired, and an authless <img> would
+            // 401 on it. External TMDB/fanart URLs pass through untouched.
+            'backdrop_url' => SignedUrl::refreshArtworkUrl($backdropUrl),
+            // A stored (ArtworkStorage) srcset when there is one, else exactly TWO
+            // derived responsive candidates (w780, w1280) so a row strip is crisp
+            // from a 2×-DPR phone up to a ~1400 CSS px desktop row without ever
+            // advertising `/original`. Null when neither exists (a non-TMDB
+            // backdrop with no cached variants) → the client uses `backdrop_url`.
+            'backdrop_srcset' => SignedUrl::refreshArtworkSrcset($backdropSrcset),
             'genres' => $metadata['genres'] ?? [],
             'year' => isset($metadata['year']) && is_numeric($metadata['year']) ? (int) $metadata['year'] : null,
             'rating' => $rating,
@@ -238,14 +334,28 @@ final class MediaItemShaper
         $merged['studio'] = is_string($metadata['studio'] ?? null) && $metadata['studio'] !== ''
             ? $metadata['studio']
             : null;
-        $backdropUrl = is_string($metadata['backdrop_url'] ?? null) && $metadata['backdrop_url'] !== ''
-            ? $metadata['backdrop_url']
-            : null;
+        // Same scheme allowlist as the list shape (shape():174). The detail page is
+        // where this value is actually painted as a full-bleed background AND a
+        // hero `<img>`, and it is fanned out into `backdrop_url_large` (width-swapped
+        // to `/original`) plus THREE srcset candidates — so an unvalidated
+        // `javascript:`/`data:` URI or an attribute-breakout payload here is a wider
+        // surface than the list one, not a narrower one. safeImageUrl() is the
+        // identity function on every URL that passes, so every legitimate row is
+        // value-identical to before.
+        $backdropUrl = self::safeImageUrl($metadata['backdrop_url'] ?? null);
         // Re-mint the signature on the way out (same expiry fix as poster_url in
         // shape()): a locally-cached backdrop is a signed `/api/v1/artwork/{id}?size=…`
         // URL stored at scan time whose token is expired hours later — authless
         // clients (console `<img>`) then 401. External TMDB backdrops pass through
         // untouched.
+        //
+        // NOTE: shape() already emitted a ROW-sized `backdrop_url`/`backdrop_srcset`
+        // (TMDB /w780 + a w780/w1280 pair) for the list renderers. These three lines
+        // deliberately OVERWRITE them with the hero budget — the stored URL as-is
+        // plus `/original` — because the detail page paints ONE full-bleed
+        // background where `/original` is worth its bytes. Do not "de-duplicate"
+        // this into a single shared value: the whole point is that a 100-row list
+        // page must never advertise `/original`.
         $merged['backdrop_url'] = SignedUrl::refreshArtworkUrl($backdropUrl);
         // Full-bleed background variants (TMDB width swap). `backdrop_url_large`
         // is the `/original` full-resolution asset for the page background;
@@ -463,17 +573,174 @@ final class MediaItemShaper
     }
 
     /**
-     * Filter a value to a non-empty string, or null.
+     * Filter a value to a non-empty, TRIMMED string, or null.
      *
      * Unlike the null-coalescing operator (??), this also rejects empty strings,
      * so AniList cover_image_large: "" falls through to the next fallback.
+     *
+     * The value is returned TRIMMED, not verbatim: a stored URL padded with
+     * whitespace (`" https://image.tmdb.org/t/p/w500/bg.jpg"`, or one with a
+     * trailing newline) otherwise reached the client as-is AND silently lost its
+     * responsive ladder, because the `^`-anchored TMDB regexes in
+     * {@see \Phlix\Media\Metadata\BackdropSrcset} / {@see PosterSrcset} reject the
+     * leading space and return null. Browsers trim whitespace in `src`, so nothing
+     * visibly broke — the srcset just disappeared.
+     *
+     * TWO things a future author must know about that trim:
+     *
+     *  - It uses PHP's DEFAULT charlist, `" \t\n\r\0\x0B"` — so an edge NUL or
+     *    vertical tab is SILENTLY STRIPPED, not rejected. {@see self::safeImageUrl()}
+     *    therefore screens those two bytes off BEFORE calling this helper, so its
+     *    "any control byte → null" contract stays literally true.
+     *  - Only the READ path trims. The write path deliberately does not
+     *    ({@see MetadataValue::asNullableString()} returns the value verbatim), so
+     *    a stored value and its shaped value can differ by padding. That is safe
+     *    ONLY because nothing in this repo compares a stored `metadata_json` value
+     *    against a shaped one, and no shaped value is ever persisted — every
+     *    {@see MediaItemShaper} call site is a response builder. Do not add such a
+     *    comparison without trimming on both sides.
      *
      * @param mixed $value Raw value.
      * @return string|null Trimmed non-empty string, or null.
      */
     private static function nonemptyString(mixed $value): ?string
     {
-        return is_string($value) && trim($value) !== '' ? $value : null;
+        if (!is_string($value)) {
+            return null;
+        }
+        $trimmed = trim($value);
+
+        return $trimmed === '' ? null : $trimmed;
+    }
+
+    /**
+     * Filter a raw metadata value to an image URL that is SAFE to emit, or null.
+     *
+     * A scheme allowlist, because `metadata_json` image URLs are provider-, `.nfo`-
+     * or plugin-supplied — i.e. partly controllable by whoever writes files into a
+     * library — and are emitted on up to {@see \Phlix\Common\Http\PageLimit::MAX}
+     * rows per listing response. Accepted:
+     *
+     *  - absolute `http://` / `https://` (TMDB, fanart.tv, artworks.thetvdb.com, …);
+     *  - app-relative paths beginning with a single `/` (`/api/v1/artwork/{id}?size=…`
+     *    — the locally-cached shape S72 introduces — and any other server-relative
+     *    artwork path).
+     *
+     * Rejected to null: every other scheme (`javascript:`, `data:`, `vbscript:`,
+     * `file:`), protocol-relative `//host/…`, anything carrying an
+     * attribute-breakout character ({@see self::UNSAFE_URL_CHARS}) — which is what
+     * kills the `…/w500/bg.jpg"><script>…` shape that would otherwise be
+     * width-swapped and embedded into `backdrop_srcset` — and anything carrying a
+     * control byte (raw newlines/tabs are the classic `jav&#x0a;ascript:`
+     * obfuscation, and browsers strip them before parsing the scheme).
+     *
+     * "Anything carrying a control byte" is exact for every control byte EXCEPT the
+     * leading/trailing SPACE/TAB/CR/LF padding that {@see self::nonemptyString()} is
+     * allowed to strip: `"https://x/a.jpg\t"` is ACCEPTED, as the clean URL, and a
+     * trailing TAB is a control byte. That carve-out is the whole point — a padded
+     * stored URL is sanitised rather than dropped, so it keeps its width ladder.
+     *
+     * It is also why the control-byte screen below happens in two steps. PHP's
+     * default `trim()` charlist covers those four padding bytes but ALSO eats `"\0"`
+     * and `"\x0B"`, so `"https://x/a.jpg\0"` would be silently sanitised into an
+     * accepted URL and the post-trim `[\x00-\x1f\x7f]` check would never see the
+     * NUL. Every control byte OTHER than the four padding bytes is therefore
+     * rejected up front, on the RAW value, before any trimming happens.
+     *
+     * @param mixed $value Raw metadata image-URL value.
+     * @return string|null The trimmed URL when it passes, else null.
+     */
+    private static function safeImageUrl(mixed $value): ?string
+    {
+        // Pre-trim: any control byte except the SPACE/TAB/CR/LF padding that
+        // nonemptyString() is allowed to strip (see the docblock).
+        if (is_string($value) && preg_match('/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/', $value) === 1) {
+            return null;
+        }
+        $url = self::nonemptyString($value);
+        if ($url === null) {
+            return null;
+        }
+        if (strpbrk($url, self::UNSAFE_URL_CHARS) !== false) {
+            return null;
+        }
+        if (preg_match('/[\x00-\x1f\x7f]/', $url) === 1) {
+            return null;
+        }
+        if (str_starts_with($url, '/')) {
+            // Server-relative artwork path — but never protocol-relative `//host`.
+            return str_starts_with($url, '//') ? null : $url;
+        }
+
+        return preg_match('#^https?://#i', $url) === 1 ? $url : null;
+    }
+
+    /**
+     * Filter a stored `srcset` value to one built ONLY from validated bytes, or
+     * null.
+     *
+     * A stored srcset lands in an HTML attribute on every row, so BOTH halves of
+     * every `"<url> <descriptor>"` candidate are checked: the URL against
+     * {@see self::safeImageUrl()} (scheme allowlist + breakout characters +
+     * control bytes) and the descriptor against {@see self::SRCSET_DESCRIPTOR}.
+     * Validating the URL alone is NOT enough — `strrpos()`-style splitting hands
+     * everything after the last space back untouched, so a space-free payload
+     * parked in the descriptor slot (`…/bg.jpg 780w"><svg/onload=alert(1)>`) would
+     * ride through while the otherwise-identical payload that happens to contain a
+     * space is caught. Whether an injection is blocked must not depend on its
+     * spacing.
+     *
+     * The return value is therefore RECONSTRUCTED — `implode(', ')` over
+     * `$url . ' ' . $descriptor` pairs that each passed a check — never the raw
+     * input string. Nothing unvalidated can survive, and a URL carrying an
+     * INTERIOR space (`…/bg jpg 780w`, which a browser would read as one URL plus
+     * TWO descriptors — the malformed shape
+     * {@see \Phlix\Media\Metadata\BackdropSrcset::parse()} guards on the derived
+     * path) splits into three tokens and is rejected.
+     *
+     * ONE bad candidate rejects the WHOLE value — the caller then derives a ladder
+     * or emits null — rather than shipping a half-sanitised srcset whose advertised
+     * width ladder silently depends on which candidates were poisoned.
+     *
+     * @param mixed $value Raw stored srcset value.
+     * @return string|null The re-imploded srcset when every candidate is safe, else null.
+     */
+    private static function safeImageSrcset(mixed $value): ?string
+    {
+        $srcset = self::nonemptyString($value);
+        if ($srcset === null) {
+            return null;
+        }
+
+        $safe = [];
+        foreach (explode(',', $srcset) as $candidate) {
+            $candidate = trim($candidate);
+            if ($candidate === '') {
+                return null;
+            }
+            // `"<url> <descriptor>"`, or a bare URL (legal per the HTML spec). A
+            // srcset URL can carry no whitespace at all, so a candidate splits
+            // into AT MOST two tokens; three means an interior space in the URL
+            // or a second descriptor, and both are malformed.
+            $parts = preg_split('/\s+/', $candidate);
+            if ($parts === false || count($parts) > 2) {
+                return null;
+            }
+            $url = self::safeImageUrl($parts[0]);
+            if ($url === null) {
+                return null;
+            }
+            if (!isset($parts[1])) {
+                $safe[] = $url;
+                continue;
+            }
+            if (preg_match(self::SRCSET_DESCRIPTOR, $parts[1]) !== 1) {
+                return null;
+            }
+            $safe[] = $url . ' ' . $parts[1];
+        }
+
+        return implode(', ', $safe);
     }
 
     /**

@@ -1601,6 +1601,50 @@ class ItemRepositoryTest extends TestCase
         return $captured;
     }
 
+    /**
+     * SECURITY (S99): the bound `LIMIT ?` must be capped in the repository too, not
+     * only at the request boundary — an absurd caller-supplied page size reaching
+     * this query can OOM the resident Workerman worker that is serving every other
+     * user, and the hub relay's browse-scope gate never inspects the query string.
+     *
+     * The ceiling must NOT be PageLimit::MAX: PhotoController's slideshow
+     * legitimately asks for 10,000 rows, so clamping to 100 here would silently
+     * truncate it.
+     *
+     * @dataProvider getByTypeLimitProvider
+     */
+    public function testGetByTypeClampsTheBoundRowLimit(int $requested, int $expected): void
+    {
+        $captured = ['sql' => '', 'params' => []];
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(function (string $sql, $p = []) use (&$captured) {
+            $captured = ['sql' => $sql, 'params' => is_array($p) ? $p : []];
+            return [];
+        });
+
+        (new ItemRepository($db))->getByType('lib-1', 'movie', $requested, -5);
+
+        // Bindings are [libraryId, type, limit, offset].
+        $this->assertSame($expected, $captured['params'][2] ?? null);
+        // A negative offset can never reach the query either.
+        $this->assertSame(0, $captured['params'][3] ?? null);
+    }
+
+    /**
+     * @return array<string, array{0: int, 1: int}>
+     */
+    public static function getByTypeLimitProvider(): array
+    {
+        return [
+            'normal page passes through' => [100, 100],
+            'photo slideshow page is preserved' => [10000, 10000],
+            'absurd limit is capped' => [5000000, 10000],
+            'PHP_INT_MAX is capped' => [PHP_INT_MAX, 10000],
+            'zero becomes one' => [0, 1],
+            'negative becomes one' => [-42, 1],
+        ];
+    }
+
     public function testGetByTypeWithoutCapIsUnfiltered(): void
     {
         // Default call (no cap) preserves today's behaviour exactly.

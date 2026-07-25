@@ -170,6 +170,67 @@ class WebPortalRouterMediaTest extends TestCase
         $this->assertNull($body['items'][1]['poster_srcset']);
     }
 
+    /**
+     * S101 — `GET /api/v1/media` rows carry a ROW-sized backdrop so a
+     * wide-backdrop list renderer has something to paint (it previously fell back
+     * to a blurred poster because the LIST shape had no backdrop key at all).
+     *
+     * Driven through `dispatch()` on purpose: that is the ONE seam both HTTP entry
+     * points share — `public/index.php` (CGI/dev path, line ~240) and
+     * `Phlix\Server\Workerman\HttpHandler` (resident path, line ~269) each resolve
+     * the SAME `WebPortalRouter` from the container and call `dispatch()`. Proving
+     * the key here proves it on both paths.
+     */
+    public function testDispatchMediaListingCarriesRowSizedBackdropOnBothEntryPoints(): void
+    {
+        $itemRepo = $this->createMock(ItemRepository::class);
+        $itemRepo->method('query')->willReturn([
+            'items' => [
+                [
+                    'id' => 'tmdb-1',
+                    'name' => 'Tmdb Movie',
+                    'type' => 'movie',
+                    'path' => '/movies/a.mkv',
+                    // Backdrops are STORED at TMDB /w500.
+                    'metadata' => ['backdrop_url' => 'https://image.tmdb.org/t/p/w500/bg.jpg'],
+                ],
+                [
+                    'id' => 'track-1',
+                    'name' => 'Blue in Green',
+                    'type' => 'track',
+                    'path' => '/music/a.flac',
+                    'metadata' => [],
+                ],
+            ],
+            'total' => 2,
+            'limit' => 50,
+            'offset' => 0,
+        ]);
+
+        $request = new Request();
+        $request->method = 'GET';
+        $request->path = '/api/v1/media';
+        $request->userId = 'user-1';
+
+        $response = $this->makeRouter($itemRepo)->dispatch($request);
+        $this->assertSame(200, $response->statusCode);
+        $body = $this->decodeBody($response->body);
+
+        // Row with a backdrop: /w780 base + a two-candidate srcset.
+        $this->assertSame('https://image.tmdb.org/t/p/w780/bg.jpg', $body['items'][0]['backdrop_url']);
+        $this->assertSame(
+            'https://image.tmdb.org/t/p/w780/bg.jpg 780w, https://image.tmdb.org/t/p/w1280/bg.jpg 1280w',
+            $body['items'][0]['backdrop_srcset'],
+        );
+        // A 100-row page must never advertise the multi-megabyte hero asset.
+        $this->assertArrayNotHasKey('backdrop_url_large', $body['items'][0]);
+        $this->assertStringNotContainsString('/original/', (string) $body['items'][0]['backdrop_srcset']);
+        // A type with no landscape art degrades to null on BOTH keys, which stay
+        // present so every row has the same shape.
+        $this->assertNull($body['items'][1]['backdrop_url']);
+        $this->assertNull($body['items'][1]['backdrop_srcset']);
+    }
+
     public function testGetMediaWithSearchParam(): void
     {
         $itemRepo = $this->createMock(ItemRepository::class);

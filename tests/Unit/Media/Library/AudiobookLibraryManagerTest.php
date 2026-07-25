@@ -118,6 +118,23 @@ class AudiobookLibraryManagerTest extends TestCase
                 . 'that reaches both POST-scan responses and library_scan_jobs.items_failed'
             );
             $this->assertSame(1, $result->toArray()['failed']);
+            // Review r2 F6: durationMs comes from a MONOTONIC hrtime() pair. A plain
+            // "clock went backwards" cannot be tested without moving the system clock, but
+            // the realistic regression can: editing one of the two timing lines and not the
+            // other mixes units (nanoseconds against seconds) and produces a wildly negative
+            // number, which `library:scan` would then print to an operator.
+            $this->assertGreaterThanOrEqual(
+                0,
+                $result->durationMs,
+                'durationMs must be a sane elapsed millisecond count — a negative value means the start '
+                . 'and end timestamps came from different clocks/units'
+            );
+            $this->assertLessThan(
+                600000,
+                $result->durationMs,
+                'a three-item in-memory rescan cannot take ten minutes; a huge value here is the same '
+                . 'mixed-unit bug with the operands the other way round'
+            );
             $this->assertSame(
                 $result->scanned,
                 $result->added + $result->updated + $result->failed,

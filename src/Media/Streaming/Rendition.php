@@ -55,11 +55,17 @@ final readonly class Rendition
      * Two ends of one adaptive ladder are only useful to a player when their
      * advertised BANDWIDTHs differ enough to be a real quality choice. This is
      * the minimum STEP the ladder enforces between adjacent RETAINED rungs — a
-     * rung must be at least (1 − this) below the one above it — and, symmetric,
-     * the tolerance below which a re-encoded "Original" of the SAME frame is a
-     * byte-identical duplicate of the top rung. 0.85 ⇒ a ≥15 % bandwidth drop is
-     * required for a rung to add value; anything closer is a source-bitrate-cap
-     * collapse (see {@see AbrLadder}) that gives ABR nothing to climb to.
+     * rung must be at least (1 − this) below the one above it. 0.85 ⇒ a ≥15 %
+     * bandwidth drop is required for a rung to add value; anything closer is a
+     * source-bitrate-cap collapse (see {@see AbrLadder}'s gradient pruning) that
+     * gives ABR nothing to climb to.
+     *
+     * S49: this tolerance is NO LONGER used to fold a re-encoded "Original" into
+     * the top rung it duplicates. "Original" is always its own variant with its
+     * own media playlist; the duplicate-BANDWIDTH problem is solved instead by
+     * excluding `original` from the master's switchable set (SV-4.6, see
+     * {@see \Phlix\Media\Transcoding\TranscodeManager}), so the gradient below
+     * still holds for the rungs a player actually adapts across.
      */
     public const ABR_DUPLICATE_TOLERANCE = 0.85;
 
@@ -115,26 +121,6 @@ final readonly class Rendition
     public function bufsize(): int
     {
         return $this->maxrate() * self::BUFSIZE_MULTIPLIER;
-    }
-
-    /**
-     * True when this rendition and `$other` are the SAME frame (identical
-     * width×height) at an effectively identical BANDWIDTH — i.e. within
-     * {@see self::ABR_DUPLICATE_TOLERANCE} of each other. Such a pair are
-     * byte-identical ABR variants that must not both be advertised (a player
-     * would just merge them and ABR gains no distinct rung). Used to fold a
-     * re-encoded "Original" into the top ladder rung it duplicates.
-     */
-    public function duplicatesForAbr(self $other): bool
-    {
-        if ($this->width !== $other->width || $this->height !== $other->height) {
-            return false;
-        }
-
-        $low = min($this->bitrate, $other->bitrate);
-        $high = max($this->bitrate, $other->bitrate);
-
-        return $high > 0 && $low >= (int) floor($high * self::ABR_DUPLICATE_TOLERANCE);
     }
 
     /**

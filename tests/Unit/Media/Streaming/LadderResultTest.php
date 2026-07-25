@@ -10,7 +10,7 @@ use Phlix\Media\Streaming\Rendition;
 
 /**
  * Unit tests for {@see LadderResult} — the immutable ladder output and its
- * de-duplicating {@see LadderResult::streamVariants()} / {@see LadderResult::toArray()}.
+ * {@see LadderResult::streamVariants()} / {@see LadderResult::toArray()} views.
  */
 final class LadderResultTest extends TestCase
 {
@@ -54,20 +54,50 @@ final class LadderResultTest extends TestCase
         self::assertSame($best, $variants[0], 'a distinct transcode Original is the highest master variant');
     }
 
-    public function testStreamVariantsFoldsNonCopyOriginalThatDuplicatesTopRung(): void
+    public function testStreamVariantsKeepsNonCopyOriginalThatDuplicatesTopRung(): void
     {
-        // A re-encoded (non-copy) Original byte-identical to the top rung — SAME
-        // frame at the SAME source-capped BANDWIDTH (the low-bitrate collapse) —
-        // is folded: only the rung is emitted, never two identical-BANDWIDTH
-        // variants that a player would merge and that give ABR nothing to climb.
+        // S49 (inverted from the pre-v9 assertion): a re-encoded (non-copy) Original
+        // whose frame AND BANDWIDTH coincide with the top rung — the low-bitrate
+        // source-cap collapse, e.g. a 1.2 Mbps HEVC/AC-3 1080p title — is NO LONGER
+        // folded away. It stays a first-class variant so it gets its own
+        // media_voriginal.m3u8 and "Original" is selectable for exactly the titles
+        // that used to 404 on it. The duplicate-BANDWIDTH problem the old fold
+        // existed to solve is now handled downstream, by excluding `original` from
+        // the MASTER's switchable ABR set (TranscodeManager's SV-4.6 filter).
         $r1080 = $this->rung('1080p', 1920, 1080);           // 5_478_000
         $r720 = $this->rung('720p', 1280, 720);
         $dupe = $this->bestAvailableOriginal();              // 1920x1080 @ 5_478_000
 
         $variants = (new LadderResult([$r1080, $r720], $dupe))->streamVariants();
 
-        self::assertSame([$r1080, $r720], $variants, 'the duplicate Original is folded into the top rung');
-        self::assertNotContains($dupe, $variants);
+        self::assertSame([$dupe, $r1080, $r720], $variants, 'the Original is never dropped');
+        self::assertSame($dupe, $variants[0]);
+        self::assertSame(
+            $r1080->bitrate,
+            $dupe->bitrate,
+            'the fixture really is the duplicate-BANDWIDTH case the old fold removed',
+        );
+    }
+
+    public function testStreamVariantsAlwaysPrependsOriginalWhateverTheLadder(): void
+    {
+        // Belt-and-braces on the S49 invariant: whatever the rung set, the emitted
+        // variant list is exactly [original, ...renditions] — no filtering step may
+        // creep back into this method (it decides which variants EXIST, and every
+        // entry gets a media playlist written for it).
+        $cases = [
+            'duplicate bandwidth' => $this->bestAvailableOriginal(),
+            'distinct bandwidth' => $this->distinctNonCopyOriginal(),
+            'stream copy' => $this->copyOriginal(),
+        ];
+        $rungs = [$this->rung('1080p', 1920, 1080), $this->rung('720p', 1280, 720)];
+
+        foreach ($cases as $label => $original) {
+            $variants = (new LadderResult($rungs, $original))->streamVariants();
+
+            self::assertSame([$original, ...$rungs], $variants, $label);
+            self::assertCount(3, $variants, $label);
+        }
     }
 
     public function testStreamVariantsKeepsCopyOriginalEvenWhenItMatchesTopRung(): void

@@ -106,6 +106,13 @@ class LibraryManager
         'poster_path',
         'poster_srcset',
         'backdrop_url',
+        // Must be stripped alongside `backdrop_url`: `MediaItemShaper::shape()`
+        // PREFERS a stored `backdrop_srcset` over deriving one, so leaving it behind
+        // would emit `backdrop_url = null` next to a live srcset still pointing at
+        // artwork `clear_artwork` may already have deleted — and per HTML a bare
+        // `srcset` is honoured, so the client would render the stale candidate
+        // instead of the no-artwork fallback.
+        'backdrop_srcset',
         'backdrop_path',
         'logo_url',
         'logo_path',

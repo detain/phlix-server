@@ -93,8 +93,37 @@ final class MediaItemShaper
      * in the descriptor slot is markup or garbage. Enforced by
      * {@see self::safeImageSrcset()}, which validates the descriptor half of every
      * candidate as well as the URL half.
+     *
+     * The pattern is the HTML grammar, deliberately, so it stays reusable:
+     *
+     *  - **Width** — a valid non-negative integer plus lowercase `w`. Leading zeros
+     *    are legal (`0780w` is 780), but an all-zero width is NOT: the HTML
+     *    descriptor parser treats `0w` as a parse error and conformant browsers DROP
+     *    the candidate, which is why this repo's own srcset writer refuses to emit
+     *    one ({@see \Phlix\Media\Storage\ArtworkStorage::srcset()} skips the
+     *    `original` variant for exactly that reason). Reader and writer therefore
+     *    agree. Spelled `(?!0+w)` rather than `\d*[1-9]\d*w` on purpose — the latter
+     *    backtracks QUADRATICALLY on a long all-digit descriptor (measured: 122 ms
+     *    for 20 000 digits, versus 0.03 ms here), and this runs in the resident
+     *    worker's event loop on up to {@see \Phlix\Common\Http\PageLimit::MAX} rows.
+     *  - **Density** — a valid floating-point number plus lowercase `x`. That
+     *    production admits a leading-dot mantissa (`.5x`) and an exponent
+     *    (`1e2x`, `1E-2x`) as well as the everyday `2x`/`1.5x`, so the exotic forms
+     *    are accepted too even though no writer here produces one.
+     *
+     * Everything else is rejected, including the near-misses: uppercase `780W`/`2X`
+     * (the spec fixes both units lowercase), a signed `+2x`/`-2x`, a bare `2.x`, an
+     * exponent on a width (`1e2w`), a lone future-compat `780h`, full-width digits,
+     * and a unit-less `780`. `0x` is left accepted — unlike `0w` the spec does not
+     * call a zero density a descriptor parse error, and no writer emits one.
+     *
+     * Anchored `\z`, not `$`: `$` also matches before a trailing newline, so `$`
+     * would let `"780w\n"` through. That is unreachable via
+     * {@see self::safeImageSrcset()} (its tokens come from a `preg_split('/\s+/')`,
+     * so they cannot contain whitespace) but this const reads as a general statement
+     * of the grammar and must be safe for the next caller that is not.
      */
-    private const SRCSET_DESCRIPTOR = '/^(?:\d+w|\d+(?:\.\d+)?x)$/';
+    private const SRCSET_DESCRIPTOR = '/^(?:(?!0+w)\d+w|(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?x)\z/';
 
     /**
      * Shapes a raw media item row into the media-item schema format.
@@ -605,14 +634,18 @@ final class MediaItemShaper
      * control byte (raw newlines/tabs are the classic `jav&#x0a;ascript:`
      * obfuscation, and browsers strip them before parsing the scheme).
      *
-     * "Anything carrying a control byte" is EXACT, and that is why the control-byte
-     * screen below happens in two steps. Leading/trailing SPACE/TAB/CR/LF are the
-     * only tolerated padding and are stripped by {@see self::nonemptyString()} —
-     * but PHP's default `trim()` charlist ALSO eats `"\0"` and `"\x0B"`, so
-     * `"https://x/a.jpg\0"` would be silently sanitised into an accepted URL and
-     * the post-trim `[\x00-\x1f\x7f]` check would never see the NUL. Every control
-     * byte OTHER than those four padding bytes is therefore rejected up front, on
-     * the RAW value, before any trimming happens.
+     * "Anything carrying a control byte" is exact for every control byte EXCEPT the
+     * leading/trailing SPACE/TAB/CR/LF padding that {@see self::nonemptyString()} is
+     * allowed to strip: `"https://x/a.jpg\t"` is ACCEPTED, as the clean URL, and a
+     * trailing TAB is a control byte. That carve-out is the whole point — a padded
+     * stored URL is sanitised rather than dropped, so it keeps its width ladder.
+     *
+     * It is also why the control-byte screen below happens in two steps. PHP's
+     * default `trim()` charlist covers those four padding bytes but ALSO eats `"\0"`
+     * and `"\x0B"`, so `"https://x/a.jpg\0"` would be silently sanitised into an
+     * accepted URL and the post-trim `[\x00-\x1f\x7f]` check would never see the
+     * NUL. Every control byte OTHER than the four padding bytes is therefore
+     * rejected up front, on the RAW value, before any trimming happens.
      *
      * @param mixed $value Raw metadata image-URL value.
      * @return string|null The trimmed URL when it passes, else null.

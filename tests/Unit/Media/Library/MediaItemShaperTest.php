@@ -950,6 +950,15 @@ final class MediaItemShaperTest extends TestCase
             'https://image.tmdb.org/t/p/w780/bg.jpg 780w 2x',
             'a candidate carries at most one descriptor',
         ];
+        // Not hostile either — just a descriptor the READER must refuse because the
+        // WRITER already does. A zero width is a descriptor parse error per the HTML
+        // spec (conformant browsers drop the candidate), which is exactly why
+        // ArtworkStorage::srcset() skips the digit-less `original` variant instead of
+        // emitting `…?size=original 0w`.
+        yield 'zero width descriptor' => [
+            'https://image.tmdb.org/t/p/w780/bg.jpg 0w',
+            'a 0w candidate is a parse error the writer refuses to emit',
+        ];
     }
 
     /**
@@ -1010,6 +1019,64 @@ final class MediaItemShaperTest extends TestCase
             'https://assets.fanart.tv/a.jpg  780w',
             'https://assets.fanart.tv/a.jpg 780w',
         ];
+        // Exotic but spec-valid densities: a descriptor is a "valid floating-point
+        // number" + `x`, and that production admits a leading-dot mantissa and an
+        // exponent. No writer here emits either, so these guard the descriptor
+        // grammar against being tightened into an over-rejection.
+        yield 'leading-dot density descriptor' => [
+            'https://assets.fanart.tv/half.jpg .5x',
+            'https://assets.fanart.tv/half.jpg .5x',
+        ];
+        yield 'exponent density descriptor' => [
+            'https://assets.fanart.tv/e2.jpg 1e2x',
+            'https://assets.fanart.tv/e2.jpg 1e2x',
+        ];
+    }
+
+    /**
+     * The emitted srcset is REBUILT from parts that each passed a validator — the raw
+     * stored string is never handed back.
+     *
+     * That property, not the two validators, is what makes a space-free payload in
+     * the descriptor slot unreachable: even if a future edit loosened a validator,
+     * only bytes the URL allowlist or {@see MediaItemShaper::SRCSET_DESCRIPTOR}
+     * explicitly admitted can reach a client, because the separator between the two
+     * halves is DISCARDED and a single space written in its place.
+     *
+     * A TAB (and a vertical tab) separator is the cheapest witness: legal input — any
+     * whitespace run splits a candidate per the HTML spec — and a byte that simply
+     * cannot appear in the output unless the raw candidate was passed through. Named
+     * for the property rather than filed as another whitespace-normalisation row on
+     * purpose: this is the assertion that fails if the reconstruction is replaced by
+     * a pass-through, and a future reader must not mistake it for formatting
+     * pedantry and delete it.
+     */
+    public function testShapeRebuildsAStoredBackdropSrcsetFromValidatedPartsRatherThanPassingItThrough(): void
+    {
+        $shaped = MediaItemShaper::shape([
+            'id' => 'm',
+            'name' => 'M',
+            'type' => 'movie',
+            // Non-TMDB backdrop, so NOTHING is derivable — this can only pass if the
+            // STORED value was accepted and then rebuilt.
+            'metadata' => [
+                'backdrop_url' => 'https://assets.fanart.tv/fanart/movies/1/bg.jpg',
+                'backdrop_srcset' => "https://assets.fanart.tv/a.jpg\t780w, "
+                    . "https://assets.fanart.tv/b.jpg\x0B1280w",
+            ],
+        ]);
+
+        $this->assertSame(
+            'https://assets.fanart.tv/a.jpg 780w, https://assets.fanart.tv/b.jpg 1280w',
+            $shaped['backdrop_srcset'],
+            'every separator byte must be rebuilt from the validated pair, not echoed',
+        );
+        $this->assertIsString($shaped['backdrop_srcset']);
+        $this->assertSame(
+            0,
+            preg_match('/[\x00-\x1f\x7f]/', $shaped['backdrop_srcset']),
+            'no raw byte from the stored value may survive into the emitted srcset',
+        );
     }
 
     /**

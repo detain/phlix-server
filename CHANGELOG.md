@@ -85,14 +85,17 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   `shapeDetail()`'s size budget is unchanged — it still overwrites both keys with
   the hero budget (stored URL + `/original` + the 3-step srcset) after calling
   `shape()`, now with the stored URL run through the same allowlist, which is the
-  identity function on every URL that passes. So for every legitimate row the
-  detail/player response is **value-identical (key order shifts)**: every value is
-  exactly what it was and the response length is unchanged, but because
+  identity function on every URL that passes. So for every legitimate **clean** row
+  the detail/player response is **value-identical (key order shifts)**: every value
+  is exactly what it was and the response length is unchanged, but because
   the keys now arrive through `array_merge()` they sit earlier in the JSON object
   than before. Object key order carries no meaning for a JSON consumer — the
   `md5` of the raw response differs, the `md5` of the `ksort`ed response does
-  not. Both HTTP entry points (`public/index.php` and the resident
-  `HttpHandler`) resolve the same
+  not. "Clean" is the one carve-out, and it is the trimming described above rather
+  than a loss: a **whitespace-padded** stored `backdrop_url` used to ship verbatim
+  with `backdrop_url_large`/`backdrop_srcset` `null`, and now ships trimmed with the
+  `/original` + 3-step ladder it had silently lost. Both HTTP entry points
+  (`public/index.php` and the resident `HttpHandler`) resolve the same
   `WebPortalRouter` and therefore both emit the new keys; no constructor or DI
   wiring changed. Signed-URL freshness follows the established pattern: both
   values run through `SignedUrl::refreshArtworkUrl()`/`refreshArtworkSrcset()` at

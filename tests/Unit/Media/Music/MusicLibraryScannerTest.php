@@ -2329,7 +2329,8 @@ final class MusicLibraryScannerTest extends TestCase
 
     /**
      * A backfill UPDATE that wrote nothing must NOT be reported as a heal — on BOTH of the
-     * guard's arms, and the FIRST scenario is the only one production can actually reach.
+     * guard's arms, and the FIRST scenario is the one production reaches with the statement as
+     * it is written today.
      *
      * Review r3 finding 4: `backfillMusicMediaItemId()`'s guard was
      * `$affected === false || (is_int($affected) && $affected < 1)` — written before the
@@ -2345,11 +2346,18 @@ final class MusicLibraryScannerTest extends TestCase
      * leading keyword is `update`, so this statement's "wrote nothing" is **`int 0`**
      * (measured r4: guard-excluded row → `int 0`, healable row → `int 1`, re-run → `int 0`,
      * matched-but-unchanged → `int 0`, bad column → THROWS). With only the `null` arm
-     * pinned, deleting `|| (is_int($affected) && $affected < 1)` from
-     * `MusicLibraryScanner.php:1644` left the FULL suite byte-identical to baseline,
-     * assertion count included. Scenario (A) below is that pin; scenario (B) keeps the
-     * `null` arm, honestly labelled as defence-in-depth against the two doubles that DO
-     * return `null` for an UPDATE.
+     * pinned, deleting `|| (is_int($affected) && $affected < 1)` from the guard in
+     * `backfillMusicMediaItemId()` left the FULL suite byte-identical to baseline, assertion
+     * count included. Scenario (A) below is that pin; scenario (B) keeps the `null` arm.
+     *
+     * ⚠ **Review r5: scenario (B) is NOT purely hypothetical, and calling it "the arm the real
+     * client cannot reach" was itself an over-claim.** `Connection.php:1854` splits the
+     * statement with `explode(" ", …)`, so the real client returns `null` for an `UPDATE`
+     * whose keyword is followed by anything but a single space — measured on real MySQL 8.0.46:
+     * `"UPDATE\nmusic_artists SET …"`, `"UPDATE\t…"` and a leading block comment all → `null`.
+     * Reformatting the `match` arms that build `$sql` into a heredoc is all it would take. So
+     * (B) is defence-in-depth against a bare `createMock(Connection::class)` AND a live
+     * reachable client answer, and both arms are load-bearing.
      */
     public function testABackfillUpdateThatWroteNothingIsNotReportedAsHealed(): void
     {
@@ -2373,15 +2381,19 @@ final class MusicLibraryScannerTest extends TestCase
             0,
             $logger->countMessages('Backfilled a NULL media_item_id on a music row'),
             'so nothing may claim it was healed. 1 here means the `is_int($affected) && $affected < 1` '
-            . 'half of the guard is gone — the ONLY half a real UPDATE can trip — and every row the '
-            . '`AND media_item_id IS NULL` predicate excludes now gets a false `info` heal line',
+            . 'half of the guard is gone — the half a real UPDATE trips AS THE STATEMENT IS WRITTEN '
+            . 'TODAY (r5: `null` becomes reachable the moment it is reformatted, because '
+            . 'Connection.php:1854 splits on spaces only) — and every row the `AND media_item_id IS '
+            . 'NULL` predicate excludes now gets a false `info` heal line',
         );
 
-        // (B) DEFENCE IN DEPTH, NOT THE REAL CLIENT. `null` is unreachable for this
-        //     statement (see returnNullFor()'s per-keyword table), but a bare
-        //     `createMock(Connection::class)` returns it for every method and
-        //     `Connection.php:1866` returns it for any unrecognised leading keyword, so
-        //     `statementWroteNothing()` must still catch it here.
+        // (B) THE OTHER ARM. `null` is not what the client returns for this statement AS
+        //     WRITTEN (see returnNullFor()'s per-keyword table), but it is NOT unreachable
+        //     either (r5): a bare `createMock(Connection::class)` returns it for every method,
+        //     `Connection.php:1866` returns it for any unrecognised leading keyword, and
+        //     "unrecognised" includes an `UPDATE` reformatted so the keyword is not followed
+        //     by a single space — measured on real MySQL. So `statementWroteNothing()` must
+        //     catch it here, and is not dead code.
         [$dirB, $taggerB] = $this->oneAlbumFixture(1, 'Null Update Artist', 'Some Album');
 
         $dbB = new MusicSchemaConnection();

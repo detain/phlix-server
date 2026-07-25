@@ -235,6 +235,16 @@ class Router
     /**
      * Creates a route group with shared prefix and middleware.
      *
+     * The prefix/middleware restore runs in a `finally`, so a throw from inside
+     * `$callback` cannot leave this router mid-group. It used to be able to, and
+     * the consequence was a security one rather than a cosmetic one: the leaked
+     * `groupMiddleware` is copied by {@see self::addRoute()} onto **every** route
+     * registered afterwards, so one throw inside (say)
+     * {@see \Phlix\Server\Core\Application::loadCdsRoutes()} would silently attach
+     * the DLNA IP allowlist to the ~15 route loaders that run after it — and those
+     * endpoints would start refusing every non-LAN caller. The exception itself
+     * still propagates; only the router's own bookkeeping is made unconditional.
+     *
      * @param string $prefix Common path prefix for all routes in the group
      * @param callable $callback Callback that registers routes in the group
      * @param list<callable> $middleware Optional middleware for all routes in the group
@@ -256,10 +266,12 @@ class Router
         $this->groupPrefix = $prefix;
         $this->groupMiddleware = array_merge($this->groupMiddleware, $middleware);
 
-        $callback($this);
-
-        $this->groupPrefix = $previousPrefix;
-        $this->groupMiddleware = $previousMiddleware;
+        try {
+            $callback($this);
+        } finally {
+            $this->groupPrefix = $previousPrefix;
+            $this->groupMiddleware = $previousMiddleware;
+        }
 
         return $this;
     }

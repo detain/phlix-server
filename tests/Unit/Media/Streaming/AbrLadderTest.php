@@ -287,10 +287,19 @@ final class AbrLadderTest extends TestCase
 
     /**
      * A LOW-bitrate (~1.2 Mbps) 1080p HEVC source: the source-bitrate cap
-     * collapses the upper rungs toward one identical BANDWIDTH, and the
-     * re-encoded (non-copy) Original duplicates the top rung. The ladder must NOT
-     * advertise several identical-BANDWIDTH variants — it must fold the native
-     * rung and prune any collapsed rungs to a genuine descending gradient.
+     * collapses the upper rungs toward one identical BANDWIDTH. The ladder must
+     * prune those collapsed rungs to a genuine descending gradient, so the set the
+     * master advertises as ABR-switchable never contains two identical-BANDWIDTH
+     * levels a player would merge (the v7 defect).
+     *
+     * S49: the re-encoded (non-copy) Original also duplicates the top rung here,
+     * and is now KEPT (it needs its own media_voriginal.m3u8 — see
+     * {@see \Phlix\Media\Streaming\LadderResult::streamVariants()}). The gradient
+     * protection therefore lives entirely in the RUNG set: for THIS fixture the
+     * rungs are exactly what the master's SV-4.6 switchable filter emits (the
+     * duplicate Original is withheld from the levels), and they must still be
+     * strictly descending and duplicate-free. This test is the regression guard that
+     * removing the Original fold did not re-open the duplicate-level defect.
      *
      * The clamp budget is the source's H.264 EQUIVALENT (1.2 Mbps HEVC x1.5 =
      * 1.8 Mbps), not its raw figure: every rung is re-encoded to H.264, so
@@ -316,22 +325,31 @@ final class AbrLadderTest extends TestCase
         }
         self::assertDescendingDistinctBandwidths($result->renditions);
 
-        // No two RETAINED rungs share a BANDWIDTH.
+        // The ABR-SWITCHABLE set here = the rungs (SV-4.6 excludes every copy, plus
+        // this fixture's Original because it duplicates the top rung):
+        // strictly descending, no two sharing a BANDWIDTH. This is the property the
+        // v7 fold was introduced to protect and that S49 must not regress.
         $bandwidths = array_map(static fn (Rendition $r): int => $r->bandwidth(), $result->renditions);
         self::assertSame($bandwidths, array_unique($bandwidths), 'no two rungs share a BANDWIDTH');
+        self::assertSame($bandwidths, self::sortedDescending($bandwidths), 'rungs are strictly descending');
 
-        // The non-copy Original re-encode is byte-identical to the 1080p rung, so
-        // the master emits ONE 1080p variant, not a duplicate native+1080p pair.
+        // The non-copy Original re-encode is byte-identical to the 1080p rung and is
+        // STILL emitted as its own variant (S49) — that is what earns it a real
+        // media_voriginal.m3u8 for a HEVC/AC-3-class title.
         self::assertFalse($result->original->isCopy, 'HEVC source → transcode Original');
-        $variants = $result->streamVariants();
-        self::assertSame([1080, 480, 360, 240], array_map(static fn (Rendition $r): int => $r->height, $variants));
-        $variantBandwidths = array_map(static fn (Rendition $r): int => $r->bandwidth(), $variants);
-        self::assertSame($variantBandwidths, array_unique($variantBandwidths), 'master has no duplicate BANDWIDTH');
         self::assertSame(
-            $variantBandwidths,
-            self::sortedDescending($variantBandwidths),
-            'master is strictly descending',
+            $result->renditions[0]->bandwidth(),
+            $result->original->bandwidth(),
+            'this fixture really is the duplicate-BANDWIDTH case the old fold dropped',
         );
+        $variants = $result->streamVariants();
+        self::assertSame(
+            [1080, 1080, 480, 360, 240],
+            array_map(static fn (Rendition $r): int => $r->height, $variants),
+            'Original (1080p) + the pruned rung gradient',
+        );
+        self::assertSame($result->original, $variants[0], 'Original is never dropped, whatever its bandwidth');
+        self::assertTrue($variants[0]->isOriginal);
     }
 
     /**
@@ -352,7 +370,7 @@ final class AbrLadderTest extends TestCase
         self::assertDescendingDistinctBandwidths($result->renditions);
 
         // The transcode Original (~8 Mbps) is genuinely above the 1080p rung
-        // (~5 Mbps) → kept as a distinct highest master variant.
+        // (~5 Mbps) → kept as the distinct highest stream variant.
         self::assertFalse($result->original->isCopy);
         $variants = $result->streamVariants();
         self::assertSame(
@@ -361,11 +379,15 @@ final class AbrLadderTest extends TestCase
             'Original (1080p) + full rung ladder',
         );
         $variantBandwidths = array_map(static fn (Rendition $r): int => $r->bandwidth(), $variants);
-        self::assertSame($variantBandwidths, array_unique($variantBandwidths), 'master has no duplicate BANDWIDTH');
+        self::assertSame(
+            $variantBandwidths,
+            array_unique($variantBandwidths),
+            'variant list has no duplicate BANDWIDTH',
+        );
         self::assertSame(
             $variantBandwidths,
             self::sortedDescending($variantBandwidths),
-            'master is strictly descending',
+            'variant list is strictly descending',
         );
     }
 

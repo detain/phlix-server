@@ -58,6 +58,70 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
     callback (`SameSite=Lax` does not restrict `Set-Cookie`). Applied to the OIDC flow
     too.
 
+- **DLNA renderers can finally play something: `GET|HEAD /dlna/stream/{mediaItemId}`**
+  (updates.md #44 / S52). Until now DLNA *browse* worked while DLNA *playback* could
+  not, by construction: every byte-serving route in Phlix demands a session or an
+  HMAC-signed URL, and a DLNA renderer is a dumb HTTP client that can present
+  neither — it fetches exactly the URL the ContentDirectory advertised. This adds the
+  one route that carries no token.
+  - **Gated by the DLNA IP allowlist and by nothing else.** The route is registered
+    *inside* `loadCdsRoutes()`'s existing middleware group, so
+    `DlnaAllowlistMiddleware` (`dlna.allowed_cidrs` / `dlna.restrict_to_lan`,
+    default: loopback + RFC1918/ULA/link-local only) is evaluated per request on it,
+    exactly as on the SOAP endpoints. An off-allowlist caller gets **403** before the
+    handler runs. It is deliberately NOT served from `HttpHandler` like
+    `/media/{id}/stream` is — that path dispatches before the router and router
+    middleware cannot reach it, so a route built that way would have had **no**
+    allowlist enforcement at all.
+  - **`dlna.cds_enabled` still ships OFF**, and while it is off the route is not
+    registered, so it **404s rather than 403s**. Turning DLNA on is what exposes
+    media; nothing changes for an install that leaves it alone. Note that this
+    changes what that switch *means*: before 1.7.0 it exposed metadata whose `<res>`
+    URLs 404'd, so nothing was playable.
+  - **Range requests** (`bytes=A-B`, `bytes=A-`, `bytes=-N`) are honoured so a
+    renderer's scrub bar works: 206 + `Content-Range`, an over-long last-byte-pos
+    clamped to EOF per RFC 7233 §2.1, an unsatisfiable range **416** with
+    `Content-Range: bytes */size`, multi-range falling back to a whole-file 200,
+    and `Accept-Ranges: bytes` on every served reply. Bytes stream through the
+    Workerman event loop (`withFile()`, chunked above 2 MB), so a multi-GB file never
+    lands in worker heap.
+  - **Direct play only.** The source file is served as-is; a container this server
+    does not recognise is answered **415** rather than bytes under a guessed type. No
+    transcode is started, deliberately: the only on-demand pipeline is HLS
+    (`.m3u8` + MPEG-TS), which no DLNA renderer speaks, so triggering one would swap
+    a dead URL for an unplayable one. Not direct-playable today: `.iso`, `.vob`,
+    `.divx`, `.asf`, `.rmvb`, `.mpv`, extension-less files, and all book/audiobook
+    items. A listed container whose *codecs* the device cannot decode (HEVC/10-bit,
+    AC-3/DTS/TrueHD, PGS subtitles) is still served and will fail on the device —
+    withholding those from `<res>` is a follow-up.
+  - **Path safety.** The route takes an id, never a path; the id must match
+    `/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/` before it is used for anything; the path
+    comes only from the `media_items` row and is `realpath()`'d before any filesystem
+    access; and a new `LibraryRootJail` requires the canonical result to sit inside a
+    configured library root (trailing-separator-exact, so `/media/movies-private`
+    never matches `/media/movies`, and canonical-first, so a symlink out of a library
+    is refused). It **fails closed** — no resolvable roots denies everything. Every
+    refusal is one indistinguishable `404` with no filesystem detail in the body or
+    headers; the only deliberate exception is the 415, which a renderer needs told
+    apart from "no such object".
+  - **The relay tunnel cannot reach any of it.** `RelayRequestDispatcher` now hard-
+    denies `/dlna/*`, `/cds/*`, `/scpd/*` and `/description.xml` with a 404.
+    `RelayConsumer` stamps `127.0.0.1` as the peer IP on every relayed frame (a
+    relayed request has no meaningful TCP peer) and loopback is on the LAN allowlist,
+    so without this a request arriving from the internet over the tunnel would have
+    been handed the LAN policy and admitted with no token. A DLNA renderer is by
+    definition on the local network and never arrives via the relay, so nothing
+    legitimate is lost.
+  - ⚠️ **Parental controls and per-profile stream limits DO NOT apply to DLNA.**
+    There is no signed-in user on a DLNA request, so there is no profile, so there is
+    no rating filter and no stream cap to enforce: any device the allowlist permits
+    can browse and play content a profile's rating filter would hide in the app. This
+    is not new — DLNA browse has never filtered by rating — but this release makes it
+    *playable* rather than merely listed. There is no per-profile fix (there is no
+    profile); a **server-wide** `dlna.max_rating` excluding over-cap items from DLNA
+    browse is the enforceable form and is not implemented yet. Documented at the
+    switch in `config/dlna.php`.
+
 - **Unlink an identity, log in *via* a linked identity, and multi-provider
   foundation** (updates.md #55 / S47). Completes the account-linking story started
   in S45 and lays the multi-instance groundwork:
@@ -490,6 +554,22 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   succeeds. Bounded by the 600 s state TTL, and only for a login started on a
   non-registered origin.
 
+- **DLNA browse now reports the real container MIME for ~20 more formats**
+  (updates.md #44 / S52). The extension→MIME table that produced the DIDL
+  `<res protocolInfo>` value lived in three places (`LibraryBridge`,
+  `ContentDirectory`, and it was about to be copied a fourth time for the stream
+  route), which is how the MIME a renderer is told to expect and the `Content-Type`
+  the bytes arrive with could silently diverge — a renderer that sees the two
+  disagree refuses the item. There is now one table, `Phlix\Dlna\DlnaMimeTypes`, and
+  it is a **superset** of the old one, so the advertised `mime_type` changes for
+  `mov`, `wmv`, `flv`, `mpg`, `mpeg`, `m2v`, `ts`, `m2ts`, `mts`, `3gp`, `ogv`,
+  `m4a`, `m4b`, `opus`, `wma`, `aiff`, `aif`, `oga`, `bmp`, `webp`, `tif`, `tiff`.
+  Examples: a `.mov` typed `movie` was advertised `video/mp4` and is now
+  `video/quicktime`; a `.m4a` typed `music` was `audio/mpeg` and is now `audio/mp4`.
+  The resolution ORDER (explicit `mime_type` → extension → coarse `type` fallback) is
+  unchanged. The old values were simply wrong, so this is an improvement, but it is a
+  visible change in the Browse response.
+
 ### Fixed
 
 - **An auth-provider settings save no longer WIPES the keys it did not send**
@@ -520,6 +600,102 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   `user_filter`/`admin_group` to its default. The admin console's LDAP form always
   posts the complete set, so no shipped client is affected; API callers must send the
   full map. Noted in the class docblock and in the SSO guide.
+
+- **A `HEAD` on a media route put TWO conflicting `Content-Length` headers on the
+  wire** (updates.md #44 / S52 review). Workerman's response encoder
+  (`Protocols/Http/Response::__toString()`) appends its own
+  `Content-Length: strlen($body)` **unconditionally** and **last**, so a handler that
+  correctly set the real size on a bodyless `HEAD` reply emitted
+  `Content-Length: <size>` followed by `Content-Length: 0`. RFC 9110 §8.6 makes such a
+  message invalid — recipients must reject it, hardened proxies (HAProxy) drop it as a
+  request-smuggling defence, and clients disagree about which value wins. DLNA
+  renderers probe a resource with `HEAD` *before* they open it, so the reply meant to
+  advertise the size was the one that broke. New `Phlix\Server\Workerman\BodylessResponse`
+  narrows `__toString()` to leave a caller-supplied `Content-Length` alone on an empty
+  body (and delegates to Workerman untouched for everything else);
+  `Response::toWorkermanResponse()` selects it for `HEAD` replies **only** — never for
+  a GET that merely came out empty, whose stale length would be a keep-alive framing
+  desync rather than a fix — which fixes `HEAD /dlna/stream/{id}` and the pre-existing
+  twin on `HEAD /media/{id}/stream`. Every other reply, 204/304/redirect/416 included,
+  is byte-identical to before. Pinned by assertions on the **encoded bytes**, with the
+  expected bytes *derived from* Workerman's own encoder so a future dependency bump
+  cannot make the narrowed copy diverge silently — the previous tests inspected the
+  header *array*, which cannot observe this defect at all.
+
+- **`Router::group()` could leak its middleware onto every later route** if the group
+  callback threw. The prefix/middleware restore had no `finally`, and `addRoute()`
+  copies the current group middleware onto every route registered afterwards — so one
+  throw inside `loadCdsRoutes()` would have silently attached the DLNA **IP
+  allowlist** to the ~15 route loaders that run after it, and those endpoints would
+  have begun refusing every non-LAN caller. Low probability, wide blast radius; the
+  restore is now unconditional and the log call inside that catch is itself guarded.
+  Pinned by tests that register a throwing group (flat and nested) and assert both
+  that a route registered afterwards carries no leaked middleware and that a nested
+  group restores the *outer* prefix and middleware rather than clearing them.
+
+- **"Original" quality was silently unavailable for every HEVC / non-AAC title**
+  (updates.md #30 / S49). The v7 ABR ladder FOLDED the `original` rendition out of
+  `LadderResult::streamVariants()` whenever a re-encoded (non-copy) Original was the
+  same frame at effectively the same BANDWIDTH as the top ladder rung — which is the
+  normal outcome for a low-bitrate source, since the ladder caps every rung at the
+  source bitrate. `TranscodeManager::writeVodPlaylists()` iterates exactly that list,
+  so a folded Original never got a media playlist written at all: `media_voriginal.m3u8`
+  simply did not exist, and "Original" was either missing from the quality menu or a
+  404 (masked only by a serve-time alias that quietly served the top rung's playlist
+  instead). Every job now always publishes a real Original variant:
+  - `LadderResult::streamVariants()` always returns `[original, ...renditions]`; the
+    fold is gone from the variant list.
+  - `TranscodeManager::getJobVariants()` no longer mirrors that fold (its private
+    `originalDuplicatesTopRung()` helper is removed), so the client `variants[]`
+    payload always advertises `{id: 'original', …}` with its own media-playlist url.
+  - The duplicate-BANDWIDTH problem the fold existed to prevent is now solved where
+    it belongs — in the master playlist. `writeVodPlaylists()`'s SV-4.6 switchable
+    filter (`TranscodeManager::switchableVariants()`, still using
+    `Rendition::duplicatesForAbr()`) withholds a variant from the ABR-switchable
+    `#EXT-X-STREAM-INF` set in exactly two cases: a stream-COPY variant, always (its
+    segment boundaries can drift off the uniform timeline), and a TRANSCODE `original`
+    that duplicates the top rung's frame + BANDWIDTH, which is the low-bitrate
+    collapse a player would merge into one level. Both still get their own media
+    playlist, which is what makes "Original" explicitly selectable.
+    **The master's advertised level set is therefore unchanged from v8**: a transcode
+    `original` that is NOT such a duplicate stays the master's top level, exactly as
+    before — including the large class of sources whose original height matches no
+    canonical rung (2.39:1 crops, DCI-2K). An interim revision of this change excluded
+    every `original` from the switchable set; that dropped the master's top level for
+    those sources (e.g. a 1920×1080 HEVC @8 Mbps master went from `original` at
+    10.0 Mbps down to `1080p` at 5.478 Mbps, halving the auto-ABR ceiling) and is NOT
+    what shipped. Four tests now pin the full level set — ids + BANDWIDTH +
+    RESOLUTION — per source shape (copy / distinct transcode / anamorphic / duplicate).
+  - `TranscodeManager::ensurePlaylistRegenerated()` rebuilt its variant list from the
+    persisted `renditions` **only**, so an LRU cache eviction destroyed
+    `media_voriginal.m3u8` permanently — even for a never-folded stream-COPY Original
+    that had been written correctly. It now reproduces the same `original`-first set
+    `ensureHlsJob()` wrote. The same method also read audio tracks from a
+    `transcode_jobs.audio_tracks` column that has never existed in any migration
+    (`JOB_ROW_COLUMNS` cannot select it), so multi-audio jobs regenerated with no
+    `#EXT-X-MEDIA` audio group and no `media_a{N}.m3u8` playlists; they are read from
+    the persisted ladder JSON now.
+  - `TranscodeManager::ensurePlaylistRegenerated()` also now validates each persisted
+    rendition id against the same `^[a-z0-9]+$` allowlist the segment serve path uses
+    (the id is interpolated into `media_v{id}.m3u8` and into the master's URI), and
+    returns `false` instead of writing a master with zero `#EXT-X-STREAM-INF` levels
+    when nothing in a corrupt ladder survives that check — such a file would otherwise
+    short-circuit every later regeneration attempt and permanently break the job.
+  - `JOB_KEY_VERSION` **v8 → v9** so pre-existing jobs (whose directories lack the
+    Original playlist) are not reused and age out via the cache sweep. `HlsController`'s
+    folded-original serve-time alias is retained for pre-v9 job directories still on
+    disk (bounded by the cache sweep's idle TTL, 3 h by default) so already-issued
+    signed URLs keep playing; its removal is tracked as part of **S59**.
+  - **No client change was required, because the master's advertised level set is
+    unchanged** (see above): `quality.ts`/`QualityMenu.vue` resolve "Original" by
+    matching a master level of the same height and then load `media_voriginal.m3u8`
+    directly, which is precisely the file that now exists. That client gate does have a
+    pre-existing blind spot this change neither introduces nor fixes — a stream-COPY
+    Original is (as before) never a master level, so when its height matches no level
+    and exceeds them all (e.g. a 1920×800 H.264/AAC source against a 720p top rung)
+    the menu still hides "Original" even though the playlist is now guaranteed to
+    exist. Hardening that gate to key off the server's `variants[]` entry rather than
+    level height-matching is tracked as a `phlix-ui` follow-up.
 
 - **External identities were stored with a hardcoded `provider='external'`**
   (updates.md #37 / S44). `UserRepository::findOrCreateByExternalId()` ignored which

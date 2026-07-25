@@ -50,6 +50,34 @@ final class DlnaRoutes
     public const SCPD_TEMPLATE = '/scpd/%s.xml';
 
     /**
+     * Router pattern for the authless (allowlist-gated) media byte stream.
+     *
+     * Registered by {@see \Phlix\Server\Core\Application::loadCdsRoutes()} inside
+     * the same middleware group as every other path here, and served by
+     * {@see \Phlix\Server\Http\Controllers\Dlna\DlnaStreamController}. The
+     * placeholder name must match the controller's `mediaItemId` route param.
+     */
+    public const STREAM_PATTERN = '/dlna/stream/{mediaItemId}';
+
+    /** `sprintf` template behind {@see self::stream()}. */
+    public const STREAM_TEMPLATE = '/dlna/stream/%s';
+
+    /**
+     * The stream path for one media item — the ONE place that URL is built.
+     *
+     * S53 points `<res>` at `{baseUrl}` + this, so a renderer fetches exactly the
+     * path {@see self::STREAM_PATTERN} registers. Deliberately NOT part of
+     * {@see self::all()}: that list is the control/SCPD surface the device
+     * description advertises, and this is neither.
+     *
+     * @param string $mediaItemId A `media_items.id`.
+     */
+    public static function stream(string $mediaItemId): string
+    {
+        return sprintf(self::STREAM_TEMPLATE, rawurlencode($mediaItemId));
+    }
+
+    /**
      * Eventing (GENA SUBSCRIBE) is NOT implemented.
      *
      * UPnP allows an empty `eventSubURL` to signal that a service publishes no

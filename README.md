@@ -692,7 +692,27 @@ Full operator + contributor docs live in the
 
 ## License
 
-Proprietary - All rights reserved.
+[Mozilla Public License 2.0](LICENSE) — see [`LICENSE`](LICENSE) for the full text.
+
+MPL-2.0 is **per-file weak copyleft**. In short:
+
+- You can use Phlix Server in a larger project, including a commercial or
+  closed-source one.
+- If you **modify** a file that is part of Phlix Server, you must make that
+  file's source available under the MPL-2.0.
+- New files you add alongside it can be licensed however you like.
+
+"Phlix" is a trademark — see [`TRADEMARK.md`](TRADEMARK.md) for what that does
+and doesn't restrict.
+
+### Third-party components
+
+Phlix Server depends on two LGPL-3.0 libraries — [Smarty](https://www.smarty.net/)
+(`smarty/smarty`) and [Tukio](https://github.com/Crell/Tukio) (`crell/tukio`) — plus
+a number of MIT-licensed packages. MPL-2.0 lists the GPL family as Secondary
+Licenses (MPL-2.0 §1.12, §3.3), so those are compatible. If you redistribute
+Phlix Server, you must still meet each dependency's own terms; `composer licenses`
+lists them.
 
 ## Support
 

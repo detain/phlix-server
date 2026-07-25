@@ -241,6 +241,42 @@ class MusicLibraryScanner
     }
 
     /**
+     * Did an `INSERT` issued through {@see Connection::query()} write no row?
+     *
+     * **THE MEASURED CONTRACT (real MySQL 8.0.46, `PhlixMySQLConnection`, review r2
+     * F1).** This method exists because the file used to contradict itself:
+     * {@see self::flushAlbum()}'s docblock asserted "the DB layer throws on error (it
+     * does not return `false`)" while three call sites branched on `=== false`. Both
+     * halves were half-right, and the truth is a three-outcome contract:
+     *
+     * | outcome of the statement | `query()` returns |
+     * |---|---|
+     * | INSERT wrote 1 row | `lastInsertId()` **as a string** |
+     * | INSERT wrote 0 rows (e.g. `INSERT IGNORE` that ignored) | **`null`** |
+     * | any real SQL error (dup key, bad ENUM, unknown column) | **THROWS** `PDOException` |
+     *
+     * So: the "throws on error" half is CORRECT — `Connection::execute()` re-throws
+     * (`vendor/workerman/mysql/src/Connection.php:1777-1783`), which is why r2's S4
+     * control scenario is charged correctly by the per-track `catch`. The `=== false`
+     * half was WRONG twice over: this client never returns `false`, and the check
+     * therefore missed the one falsy value it CAN return, `null`.
+     *
+     * ⚠ **DO NOT "SIMPLIFY" THIS TO `if (!$result)`.** `media_items` has a UUID primary
+     * key and no `AUTO_INCREMENT`, so a SUCCESSFUL insert there returns the string
+     * `'0'` — measured, not theorised — which is falsy in PHP. A truthiness test would
+     * report every successful `media_items` write as a failure. `false` is kept in the
+     * comparison for a different client (or a test double) that reports failure that
+     * way; it costs nothing and it is what r2's S3 scenario models.
+     *
+     * @param mixed $result Whatever `query()` returned for an INSERT.
+     * @return bool True when the statement demonstrably wrote nothing.
+     */
+    private static function statementWroteNothing(mixed $result): bool
+    {
+        return $result === false || $result === null;
+    }
+
+    /**
      * Counts the audio files under a path that {@see self::scanDirectory()}
      * would process — using the SAME extension + skip filters — so a caller can
      * pre-compute the progress denominator without reading any tags.
@@ -607,13 +643,24 @@ class MusicLibraryScanner
      * which is what makes a music scan resumable.
      *
      * Defensive by design: a single malformed album or track must not abort the
-     * walk. The DB layer throws on error (it does not return `false`), so without
-     * the catch one unexpected row would kill the rest of the library index — and
-     * with incremental flushing that would now also discard albums the walk has
-     * not reached yet. The granularity is deliberately per TRACK, and
+     * walk. A real SQL error THROWS (measured — see
+     * {@see self::statementWroteNothing()} for the full three-outcome contract and for
+     * why this docblock's old flat claim "it does not return `false`" was only
+     * half-right), so without the catch one unexpected row would kill the rest of the
+     * library index — and with incremental flushing that would now also discard albums
+     * the walk has not reached yet. The granularity is deliberately per TRACK, and
      * `total_tracks` is refreshed from a `finally`, so a bad file costs exactly
      * that file and never leaves the album's advertised count below the rows it
      * actually has.
+     *
+     * ⚠ **A THROW IS NOT THE ONLY WAY TO LOSE A FILE (review r2 F1, HIGH).** Two loss
+     * shapes never reach the `catch` at all: `createMediaItem()` swallows its own
+     * `\Throwable` and returns `''`, and an INSERT can report that it wrote nothing.
+     * {@see self::upsertTrack()} now returns `'failed'` for both, distinct from the
+     * BENIGN `'skipped'` it returns for an unchanged row, and the track loop charges
+     * `'failed'` to {@see ScanResult::$failed} and logs the path at `error`. Before
+     * that split, a scan that lost every file it read was indistinguishable from a
+     * clean rescan of an unchanged library.
      *
      * @param array{artist:string, album:string, year:?int,
      *     files:list<array{file:SplFileInfo, meta:array<string, mixed>}>} $albumData
@@ -778,7 +825,30 @@ class MusicLibraryScanner
                         $result->added++;
                     } elseif ($trackResult === 'updated') {
                         $result->updated++;
+                    } elseif ($trackResult === 'failed') {
+                        // ⚠ THE r2 HIGH FINDING. This branch did not exist: upsertTrack()
+                        // returned 'skipped' for a LOST file and for a BENIGN unchanged
+                        // one alike, so nothing was charged and the scan closed at `info`
+                        // with items_failed = 0. Measured before the split: five files
+                        // lost reported `scanned=5 added=0 updated=0 failed=0`, which is
+                        // byte-identical to a rescan of an unchanged library.
+                        //
+                        // The log line lives HERE rather than in upsertTrack() because
+                        // this is where the PATH is in hand: `createMediaItem()`'s own
+                        // error line carries only the type and the title, so on the S2
+                        // shape an operator could not tell WHICH file was dropped, and on
+                        // the "wrote nothing" shape there was no line at any level.
+                        $result->failed++;
+                        $this->logger->error('Track was not indexed', [
+                            'album' => $albumTitle,
+                            'artist' => $artistName,
+                            'path' => $fileInfo['file']->getPathname(),
+                            'reason' => 'the media_item or music_tracks row was not written',
+                        ]);
                     }
+                    // NB: 'skipped' is the remaining case and is deliberately charged to
+                    // NOTHING — it means the row already exists and nothing changed, i.e.
+                    // every file of every unchanged library on every rescan.
                 }
             } finally {
                 // Recompute total_tracks from what is actually persisted. This is
@@ -1288,7 +1358,12 @@ class MusicLibraryScanner
                 [$name, $sortName, $mediaItemId !== '' ? $mediaItemId : null]
             );
 
-            if ($result === false) {
+            // Same contract as everywhere else in this class (r2 F1): a real error
+            // throws, and `null` is the client's "wrote nothing" signal. Falling through
+            // on `null` would read `lastInsertId()` for a row that does not exist and
+            // hand back a bogus artist id, which every track of the album would then
+            // reference. Returning null charges the whole album, once, at `error`.
+            if (self::statementWroteNothing($result)) {
                 return null;
             }
 
@@ -1427,7 +1502,8 @@ class MusicLibraryScanner
                 [$artistId, $mediaItemId !== '' ? $mediaItemId : null, $title, $sortTitle, $year]
             );
 
-            if ($result === false) {
+            // See upsertArtist() — a `null` return here would mint a bogus album id.
+            if (self::statementWroteNothing($result)) {
                 return null;
             }
 
@@ -1570,7 +1646,23 @@ class MusicLibraryScanner
      * @param SplFileInfo $file Audio file info
      * @param array<string, mixed> $metadata Tags already read during grouping (no re-probe)
      * @param string|null $libraryId Owning library UUID (stamped on a new media_item + event).
-     * @return string 'added', 'updated', or 'skipped'
+     *
+     * @return string One of FOUR outcomes. ⚠ `'skipped'` and `'failed'` used to be the
+     *         SAME value, and that collision was review r2's HIGH finding: a scan that
+     *         silently lost five files was byte-identical to a benign rescan of an
+     *         unchanged library on every surface S96 built (`scanned=5 added=0
+     *         updated=0 failed=0`, summary at `info`, `items_failed = 0`), which is
+     *         exactly what migration 095 exists to make impossible.
+     *
+     *          - `'added'`   a new `media_items` + `music_tracks` pair was written;
+     *          - `'updated'` an existing row was refreshed in place;
+     *          - `'skipped'` BENIGN no-op — the row exists and nothing changed. This is
+     *                        the common case on every rescan, so it must never be
+     *                        charged to {@see ScanResult::$failed} (an unchanged
+     *                        library would otherwise report every file as an error);
+     *          - `'failed'`  the file was NOT indexed: it has no `music_tracks` row and
+     *                        the scan lost it. {@see self::flushAlbum()} charges exactly
+     *                        one file and logs the path at `error`.
      */
     private function upsertTrack(
         int $albumId,
@@ -1648,13 +1740,18 @@ class MusicLibraryScanner
                 [$existingMediaItemId, $albumId, $artistId, $title, $trackNumber, $discNumber, $durationSecs]
             );
 
-            return $result === false ? 'skipped' : 'updated';
+            // `'failed'`, NOT `'skipped'` (r2 HIGH): the media_item exists but the
+            // track row does not, so this file is still not indexed.
+            return self::statementWroteNothing($result) ? 'failed' : 'updated';
         }
 
         // Genuinely new track: mint the media_item, insert, and announce it.
         $mediaItemId = $this->createMediaItem('track', $title, $path, $libraryId);
         if ($mediaItemId === '') {
-            return 'skipped';
+            // THE production-reachable loss shape (r2's S2). createMediaItem() catches
+            // its own \Throwable, so a DB error there never reaches flushAlbum()'s
+            // per-track catch — this return is the only signal that a file was lost.
+            return 'failed';
         }
 
         // Insert new track
@@ -1665,8 +1762,10 @@ class MusicLibraryScanner
             [$mediaItemId, $albumId, $artistId, $title, $trackNumber, $discNumber, $durationSecs]
         );
 
-        if ($result === false) {
-            return 'skipped';
+        if (self::statementWroteNothing($result)) {
+            // The media_item was minted but the track row was not written, so the file
+            // is not in the library. Charged, not silently dropped (r2 HIGH / S3).
+            return 'failed';
         }
 
         // ⚠ DELIBERATELY NOT LOGGED — DO NOT RE-ADD A PER-TRACK LINE HERE
@@ -1679,12 +1778,30 @@ class MusicLibraryScanner
         // the production library — ~89 % of everything the scan emits, burying the
         // per-album and per-track LOSS lines this step exists to surface.
         //
-        // Nothing diagnostic is lost. The one question it answered — "is this scan
-        // actually writing?" — is now answered authoritatively and continuously by
-        // `library_scan_jobs.items_added` (S96(b), streamed on the throttled progress
-        // write), by `current_path` for the walk position, and by the per-path
-        // completion summary; and the track itself is durably recorded in
-        // `music_tracks`, which is a better record than a log line about it.
+        // Nothing diagnostic is lost ON THE PATH THAT HAS A JOB ROW — and review r2 F4
+        // is right that the claim has to be scoped, because two live callers have no job
+        // row at all. Precisely:
+        //
+        //  * WITH a scan job (the admin UI, the `library-scan` worker — i.e. every scan a
+        //    user can start from the app): "is this scan writing?" is answered
+        //    authoritatively and continuously by `library_scan_jobs.items_added`, and the
+        //    walk position by `current_path`, both written every
+        //    `LibraryScanWorker::PROGRESS_WRITE_EVERY` = 25 files. A stall localises to
+        //    within 25 files AND NAMES A FILE — strictly better than the deleted line,
+        //    which named a file only after it had already succeeded.
+        //  * WITHOUT a sink — `POST /api/v1/music/scan` (`WebPortalRouter::
+        //    scanMusicDirectory()`) and `php bin/phlix library:scan` — there is no job
+        //    row, so the finest granularity left is ONE ALBUM: the per-artist/per-album
+        //    `debug` lines below, ≈8.6 files per line at production ratios (61,135 files
+        //    across ≈4,959 albums + 2,153 artists). That localises a stall to an album,
+        //    not to a file. Both callers are synchronous and operator-initiated, and both
+        //    now print/return the counters when they finish, so the case this costs is
+        //    narrow: a getID3-over-sshfs stall (the S122 shape) started from one of those
+        //    two entry points. The fix for that is to pass a sink from those callers, not
+        //    to restore a 61k-line-per-scan success log — recorded as the follow-up.
+        //
+        // In every case the track itself is durably recorded in `music_tracks`, which is
+        // a better record than a log line about it.
         //
         // The per-ARTIST and per-ALBUM debug lines are kept on purpose: their
         // cardinality is bounded by the library's album count (≈5k, ≈1.2 MiB) rather
@@ -2059,7 +2176,12 @@ class MusicLibraryScanner
                 [$id, $libraryId, $type, $name, $path ?? '', json_encode($metadata)]
             );
 
-            if ($result === false) {
+            // ⚠ `statementWroteNothing()`, not `!$result`: a successful INSERT into
+            // `media_items` returns the string `'0'` (UUID primary key, no
+            // AUTO_INCREMENT — measured), so a truthiness test here would report every
+            // successful mint as a failure. It also catches the `null` this client
+            // really can return, which the old `=== false` could not (r2 F1).
+            if (self::statementWroteNothing($result)) {
                 $this->logger->error('Failed to create media_item', ['type' => $type, 'name' => $name]);
                 return '';
             }

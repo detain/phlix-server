@@ -94,7 +94,8 @@ class BookLibraryManager
      */
     public function rescanLibrary(string $libraryId, array $paths = [], ?callable $onProgress = null): ScanResult
     {
-        $startTime = microtime(true);
+        // hrtime(), not microtime() — monotonic elapsed interval (review r2 F6).
+        $startTime = hrtime(true);
 
         // Remove existing items
         $this->itemRepo->deleteByLibrary($libraryId);
@@ -132,7 +133,7 @@ class BookLibraryManager
             }
         }
 
-        $durationMs = (int)((microtime(true) - $startTime) * 1000);
+        $durationMs = (int) ((hrtime(true) - $startTime) / 1_000_000.0);
 
         $result = new ScanResult();
         $result->scanned = $scanned;

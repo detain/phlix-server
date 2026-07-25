@@ -874,7 +874,8 @@ class LibraryManager
     {
         // Base manager derives paths from the library row inside scanLibrary().
         unset($paths);
-        $startTime = microtime(true);
+        // hrtime(), not microtime() — monotonic elapsed interval (review r2 F6).
+        $startTime = hrtime(true);
 
         // Resolve the library's configured root paths up front so pruning can
         // verify storage is actually present before deleting anything (see
@@ -911,7 +912,7 @@ class LibraryManager
         // skipped files must not report clean success just because the row-count
         // deltas above happen to balance.
         $result->failed = $scan->failed;
-        $result->durationMs = (int) ((microtime(true) - $startTime) * 1000);
+        $result->durationMs = (int) ((hrtime(true) - $startTime) / 1_000_000.0);
 
         return $result;
     }

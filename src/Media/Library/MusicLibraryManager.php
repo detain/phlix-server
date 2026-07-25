@@ -12,10 +12,11 @@ declare(strict_types=1);
 namespace Phlix\Media\Library;
 
 use Phlix\Common\Logger\LogChannels;
-use Phlix\Common\Logger\StructuredLogger;
+use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Media\Library\Dto\LibraryRow;
 use Phlix\Media\Metadata\MetadataManager;
 use Psr\EventDispatcher\EventDispatcherInterface;
+use Psr\Log\LoggerInterface;
 use Workerman\MySQL\Connection;
 
 /**
@@ -35,8 +36,17 @@ use Workerman\MySQL\Connection;
  */
 class MusicLibraryManager
 {
-    /** @var StructuredLogger Logger instance for structured logging */
-    private StructuredLogger $logger;
+    /**
+     * @var LoggerInterface Logger instance.
+     *
+     * Typed on the PSR-3 interface, not on `StructuredLogger` — the same fix S96(a)
+     * applied to {@see \Phlix\Media\Music\MusicLibraryScanner}, for the same reason
+     * (review r2 F2 found this class to be a SECOND, unfixed copy of that defect). The
+     * narrow type is half of the mechanism: it forced every caller that holds a plain
+     * PSR-3 logger to pass `null` instead, which sent this class down the private
+     * temp-dir branch. Only PSR-3 methods are used here.
+     */
+    private LoggerInterface $logger;
 
     /** @var Connection Database connection */
     private Connection $db;
@@ -57,7 +67,11 @@ class MusicLibraryManager
      * @param MetadataManager $metadata Manager for metadata enrichment
      * @param ItemRepository $item_repo Repository for media item operations
      * @param Connection $db Database connection for library queries
-     * @param StructuredLogger|null $logger Optional custom logger
+     * @param LoggerInterface|null $logger Optional custom logger. WIDENED from
+     *        `?StructuredLogger` (review r2 F2): the narrow type made
+     *        {@see \Phlix\Media\Music\MusicLibraryType::getLibraryManager()} discard any
+     *        other PSR-3 logger and pass `null`, which is what put this subsystem's log
+     *        into a private temp directory.
      * @param EventDispatcherInterface|null $eventDispatcher Optional PSR-14 dispatcher
      */
     public function __construct(
@@ -65,7 +79,7 @@ class MusicLibraryManager
         MetadataManager $metadata,
         ItemRepository $item_repo,
         Connection $db,
-        ?StructuredLogger $logger = null,
+        ?LoggerInterface $logger = null,
         ?EventDispatcherInterface $eventDispatcher = null
     ) {
         unset($eventDispatcher); // Reserved for future event-driven scan hooks.
@@ -77,31 +91,33 @@ class MusicLibraryManager
     }
 
     /**
-     * Creates a default structured logger for the music subsystem.
+     * The shared MEDIA-channel logger — NOT a private one in a temp directory.
      *
-     * @return StructuredLogger A configured logger instance writing to temp directory
+     * ⚠ **THIS WAS A SECOND, UNFIXED COPY OF THE S96(a) DEFECT (review r2 F2), and it
+     * is why the step's acceptance criterion "no new `/tmp/phlix_music_*` dirs are
+     * created" was objectively UNMET.** The old body did
+     * `mkdir(sys_get_temp_dir() . '/phlix_music_' . uniqid())` on EVERY construction and
+     * pointed a private `StructuredLogger` at `music_manager.log` inside it — same
+     * mechanism, same subsystem, and matching the criterion's own glob. S96(a) fixed the
+     * copy in `MusicLibraryScanner`; the reviewer's controlled measurement showed the
+     * scanner leaking **+0** dirs per suite run while this class leaked **+11** (1,859
+     * already on the dev box). Both halves of the defect were present here too: the
+     * temp-dir mint AND a `?StructuredLogger` parameter that made the only caller
+     * discard any other PSR-3 logger.
+     *
+     * Production exposure was dormant rather than absent — `MusicLibraryType::
+     * getLibraryManager()` has no caller today — but `LibraryTypeInterface` is the
+     * declared plugin contract for library types, so the day anything wires it, this
+     * subsystem's logging would have gone back inside the unit's `PrivateTmp`.
+     *
+     * @return LoggerInterface The shared MEDIA channel logger. `config/logger.php`
+     *         routes it to `.logs/app.log` at every level and `.logs/error.log` for
+     *         errors — an install-dir path, readable without `nsenter`, surviving a
+     *         restart, and creating no directory at all.
      */
-    private function createDefaultLogger(): StructuredLogger
+    private function createDefaultLogger(): LoggerInterface
     {
-        $tempDir = sys_get_temp_dir() . '/phlix_music_' . uniqid();
-        mkdir($tempDir, 0755, true);
-
-        $config = [
-            'handlers' => [
-                'stream' => [
-                    'type' => 'stream',
-                    'path' => $tempDir . '/music_manager.log',
-                    'level' => 'debug',
-                ],
-            ],
-            'processors' => [
-                'context' => true,
-                'request_id' => false,
-                'user_id' => false,
-            ],
-        ];
-
-        return new StructuredLogger(LogChannels::MEDIA, $config);
+        return LoggerFactory::get(LogChannels::MEDIA);
     }
 
     /**
@@ -127,7 +143,8 @@ class MusicLibraryManager
         }
 
         $result = new ScanResult();
-        $startTime = microtime(true);
+        // hrtime(), not microtime() — monotonic elapsed interval (review r2 F6).
+        $startTime = hrtime(true);
 
         $this->logger->info('Starting music library rescan', [
             'library_id' => $libraryId,
@@ -167,7 +184,7 @@ class MusicLibraryManager
             }
         }
 
-        $result->durationMs = (int)((microtime(true) - $startTime) * 1000);
+        $result->durationMs = (int) ((hrtime(true) - $startTime) / 1_000_000.0);
 
         $this->logger->info('Music library rescan complete', [
             'library_id' => $libraryId,

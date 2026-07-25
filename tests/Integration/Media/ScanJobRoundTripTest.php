@@ -198,12 +198,19 @@ final class ScanJobRoundTripTest extends TestCase
      * cannot evaluate (a `willReturnCallback` fake would happily "pass" with the
      * function deleted).
      *
-     * The shape this reproduces is the real one: a `rescan` streams the music scanner's
-     * new-TRACK count while it runs, then `markCompleted()` stamps
-     * `rescanLibrary()`'s all-types row-count delta — which can be smaller (e.g. a
-     * `music_tracks` row added against a pre-existing `media_items` row). Before the
-     * clamp, an operator saw `items_added` drop from 20 to 5 at the instant the job
-     * completed.
+     * The shape this reproduces is the real one: a `rescan` streams a LOWER BOUND on
+     * "media_items rows this job created" (music streams new TRACK rows, not the
+     * artist/album containers) and `markCompleted()` then stamps the exact all-types
+     * row-count delta. Before the clamp, an operator saw `items_added` drop from 20 to 5
+     * at the instant the job completed.
+     *
+     * Review r2 F5 narrowed the clamp to `items_added` + `items_failed`, so this test also
+     * pins the EXCLUSION of `items_removed` — deliberately, because that behaviour is
+     * only safe given a fact about the callers rather than about this method: no code path
+     * ever writes `items_removed` live and then stamps a different value at completion
+     * (`prune`/`delete_all` write it through `updateProgress()` and reach
+     * `markCompleted()` with an empty `$finalCounts`; `rescan`'s live sink never writes
+     * the key). If that ever changes, this assertion is the one that has to be revisited.
      */
     public function testMarkCompletedNeverLowersACounterTheSinkAlreadyWrote(): void
     {
@@ -219,7 +226,7 @@ final class ScanJobRoundTripTest extends TestCase
             'items_removed' => 7,
         ]);
 
-        // Every cumulative value here is LOWER than what the sink observed.
+        // Every value here is LOWER than what the sink observed.
         $repo->markCompleted($jobId, [
             'items_added'   => 5,
             'items_failed'  => 1,
@@ -231,7 +238,13 @@ final class ScanJobRoundTripTest extends TestCase
         $this->assertSame('completed', $done['status']);
         $this->assertSame(20, $done['items_added'], 'items_added must not go 20 -> 5 at completion');
         $this->assertSame(4, $done['items_failed'], 'a file that was observed lost stays lost');
-        $this->assertSame(7, $done['items_removed']);
+        $this->assertSame(
+            2,
+            $done['items_removed'],
+            'items_removed is NOT clamped (r2 F5): it is written verbatim. Reaching this state needs a '
+            . 'live write followed by a lower final stamp, which no job type does — prune/delete_all '
+            . 'stamp no final counters at all and rescan never streams this key',
+        );
 
         // And a HIGHER final value still wins — the clamp raises, it does not freeze.
         $repo->markCompleted($jobId, ['items_added' => 99]);

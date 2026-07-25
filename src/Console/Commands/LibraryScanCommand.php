@@ -17,6 +17,7 @@ use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputArgument;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Input\InputOption;
+use Symfony\Component\Console\Output\ConsoleOutputInterface;
 use Symfony\Component\Console\Output\OutputInterface;
 use Throwable;
 
@@ -32,6 +33,23 @@ use Throwable;
 #[AsCommand(name: 'library:scan', description: 'Scan (or rescan) a media library for new content')]
 final class LibraryScanCommand extends Command
 {
+    /**
+     * Exit code for a scan that COMPLETED but could not index every file it read.
+     *
+     * Distinct from {@see Command::FAILURE} (1), which means the scan did not run at all
+     * (unknown library, manager threw). A wrapper needs to tell those apart: 1 says "try
+     * again / fix the config", 2 says "the library is now missing N files".
+     *
+     * ⚠ Review r2 F7 asked for callers to be checked before changing this from 0. There
+     * are NONE: `grep -rn "library:scan"` across the repo finds no systemd unit (
+     * `scripts/install.sh` installs only `phlix-server.service`, which runs `start.php`),
+     * no cron entry, nothing in `docker/docker-entrypoint.sh` or `docker/supervisord.conf`,
+     * and nothing in `.github/workflows/*` — only `CHANGELOG.md`/docs prose. So no caller
+     * depended on exit 0 for a lossy scan, and silently returning success to a cron job
+     * that just lost files is the worse default.
+     */
+    private const EXIT_FILES_LOST = 2;
+
     /** @var callable(): LibraryManager Lazy factory for the backing manager. */
     private $libraryManagerFactory;
 
@@ -71,9 +89,16 @@ final class LibraryScanCommand extends Command
      * so it is the cheapest honest operator surface, and `failed` is called out
      * explicitly rather than buried in a tuple.
      *
-     * @return int {@see Command::SUCCESS} (0) on a completed scan, or
-     *         {@see Command::FAILURE} (1) when the library is missing or the
-     *         manager throws (e.g. unknown library id).
+     * **Machine-readable too (review r2 F7).** The counters go to stdout, the lossy-scan
+     * warning goes to **stderr**, and a lossy scan exits {@see self::EXIT_FILES_LOST}, so
+     * a cron/CI wrapper that inspects only the exit status or only stderr still learns
+     * that files were lost. Previously both signals were on stdout behind exit 0, i.e.
+     * invisible to every non-human caller.
+     *
+     * @return int {@see Command::SUCCESS} (0) on a clean scan,
+     *         {@see self::EXIT_FILES_LOST} (2) when the scan completed but could not index
+     *         every file it read, or {@see Command::FAILURE} (1) when the scan did not run
+     *         (unknown library id, or the manager threw).
      */
     protected function execute(InputInterface $input, OutputInterface $output): int
     {
@@ -108,13 +133,16 @@ final class LibraryScanCommand extends Command
         ));
 
         if ($result->failed > 0) {
-            // Files the scan READ and could not index. Not a policy skip, and not fatal
-            // — the next clean scan re-adds them — so the command still exits 0; but it
-            // must not look like an unqualified success.
-            $output->writeln(sprintf(
+            // Files the scan READ and could not index. Not a policy skip, and recoverable
+            // (the next clean scan re-adds them), but it is data missing from the library
+            // right now — so it goes to STDERR and the command exits non-zero (r2 F7).
+            $errOutput = $output instanceof ConsoleOutputInterface ? $output->getErrorOutput() : $output;
+            $errOutput->writeln(sprintf(
                 '<comment>%d file(s) could not be indexed — see .logs/error.log for each one.</comment>',
                 $result->failed
             ));
+
+            return self::EXIT_FILES_LOST;
         }
 
         return Command::SUCCESS;

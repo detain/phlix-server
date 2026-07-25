@@ -66,21 +66,29 @@ final class ScanResult
     /**
      * Gets a summary array of the scan result.
      *
-     * Consumers, exhaustively (checked 2026-07-25 — an earlier version of this
-     * docblock also claimed "the Arr sync response", which is wrong: `Arr\
-     * SyncController::triggerSync()` serialises a TRaSH-Guides syncer result that
-     * happens to have its own `toArray()`, not a `ScanResult`):
+     * **There is exactly ONE production consumer of THIS METHOD**
+     * ({@see \Phlix\Server\WebPortal\WebPortalRouter::scanMusicDirectory()}, `:2918`),
+     * which returns the array verbatim as the body of `POST /api/v1/music/scan`.
+     * Established by `grep -rn "result->toArray()" src/ bin/ scripts/ public/`, whose
+     * only other two hits are different classes that happen to share the method name
+     * (`Hub/SubdomainClient.php:202`, `Arr/SyncController.php:116` — a TRaSH-Guides
+     * syncer result).
      *
-     *  - `POST /api/v1/music/scan`
-     *    ({@see \Phlix\Server\WebPortal\WebPortalRouter::scanMusicDirectory()}) —
-     *    returns this array verbatim as the response body;
-     *  - `php bin/phlix library:scan` ({@see \Phlix\Console\Commands\LibraryScanCommand})
-     *    — renders the same counters as a one-line operator summary.
+     * ⚠ This is the THIRD version of this list, so it is worth saying how the first two
+     * were wrong and what the rule is. v1 claimed "and the Arr sync response" — a
+     * different class. v2 (review r1's fix) replaced that with "and `php bin/phlix
+     * library:scan`" — also wrong, and review r2 caught it: the command reads
+     * `$result->scanned`, `->added`, … as PROPERTIES and never calls `toArray()`
+     * (`grep toArray src/Console/Commands/LibraryScanCommand.php` → no hit). **Reading
+     * the object is not consuming this method's array**, and only the latter can be
+     * broken by changing a key. The other two surfaces read the object directly:
      *
-     * The async scan-job path does NOT use this method: it writes individual columns
-     * through {@see \Phlix\Media\Library\ScanJobRepository} (see
-     * {@see self::progressCounts()}). `failed` was add-only here: no existing key
-     * changed, so neither consumer's contract broke.
+     *  - `php bin/phlix library:scan` — property access, so it is affected by a renamed
+     *    or removed PROPERTY, not by this array's keys;
+     *  - the async scan-job path — individual COLUMNS via
+     *    {@see \Phlix\Media\Library\ScanJobRepository} (see {@see self::progressCounts()}).
+     *
+     * `failed` was add-only, so the one real consumer's contract did not break.
      *
      * @return array<string, int> Summary array
      */

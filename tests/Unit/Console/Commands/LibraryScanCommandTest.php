@@ -77,16 +77,53 @@ class LibraryScanCommandTest extends TestCase
         $manager->method('scanLibrary')->willReturn($result);
 
         $tester = $this->tester($manager);
-        $exitCode = $tester->execute(['libraryId' => 'lib-3']);
-        $display = $tester->getDisplay();
+        $exitCode = $tester->execute(['libraryId' => 'lib-3'], ['capture_stderr_separately' => true]);
 
-        // A lossy scan is still a completed scan: the exit code must stay 0 (the next
-        // clean scan re-adds the file), but it must not read as an unqualified success.
-        $this->assertSame(Command::SUCCESS, $exitCode);
-        $this->assertStringContainsString('scanned: 10', $display);
-        $this->assertStringContainsString('added: 7', $display);
-        $this->assertStringContainsString('failed: 2', $display);
-        $this->assertStringContainsString('2 file(s) could not be indexed', $display);
+        // Review r2 F7: a lossy scan must be visible to a NON-HUMAN caller too. It used to
+        // print to stdout behind exit 0, so a cron/CI wrapper inspecting the exit status or
+        // stderr saw an unqualified success while the library was missing files.
+        $this->assertSame(
+            2,
+            $exitCode,
+            'a scan that lost files must exit non-zero (2 = completed-with-loss, distinct from 1 = '
+            . 'did-not-run), so cron/CI notices'
+        );
+        $this->assertStringContainsString('scanned: 10', $tester->getDisplay());
+        $this->assertStringContainsString('added: 7', $tester->getDisplay());
+        $this->assertStringContainsString('failed: 2', $tester->getDisplay());
+        $this->assertStringContainsString(
+            '2 file(s) could not be indexed',
+            $tester->getErrorOutput(),
+            'the warning belongs on STDERR — a wrapper that only reads stderr must still see it'
+        );
+        $this->assertStringNotContainsString(
+            'could not be indexed',
+            $tester->getDisplay(),
+            'and it must not ALSO go to stdout, or piping stdout into a parser picks up prose'
+        );
+    }
+
+    /**
+     * The lossy exit code must not be the same as the did-not-run one, or a wrapper
+     * cannot tell "fix your config" from "your library just lost files".
+     */
+    public function testTheLossyExitCodeIsDistinctFromTheFailureExitCode(): void
+    {
+        $lossy = new ScanResult();
+        $lossy->scanned = 1;
+        $lossy->failed = 1;
+
+        $manager = $this->createMock(LibraryManager::class);
+        $manager->method('scanLibrary')->willReturn($lossy);
+        $lossyCode = $this->tester($manager)->execute(['libraryId' => 'lib-5']);
+
+        $throwing = $this->createMock(LibraryManager::class);
+        $throwing->method('scanLibrary')->willThrowException(new InvalidArgumentException('nope'));
+        $failureCode = $this->tester($throwing)->execute(['libraryId' => 'lib-6']);
+
+        $this->assertSame(Command::FAILURE, $failureCode);
+        $this->assertNotSame($failureCode, $lossyCode);
+        $this->assertNotSame(Command::SUCCESS, $lossyCode);
     }
 
     public function testCleanScanDoesNotWarnAboutFailures(): void

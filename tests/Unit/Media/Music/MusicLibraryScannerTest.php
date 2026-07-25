@@ -1590,9 +1590,28 @@ final class MusicLibraryScannerTest extends TestCase
         $dir = $this->tempDir();
         $this->touchFile($dir, '01-song.mp3');
 
-        $logger = new RecordingPsrLogger();
+        // A MOCK of the INTERFACE, not a bespoke double: it is provably not a
+        // `StructuredLogger`, which is the whole discrimination, and it removes the ninth
+        // class from this file (review r2 F9 — PSR-12 "each class must be in a file by
+        // itself"). The callback only RECORDS; every assertion is in the test body, so
+        // nothing can be swallowed by a `catch` inside the scanner (the S120 hazard).
+        $messages = [];
+        $record = static function (string|\Stringable $message) use (&$messages): void {
+            $messages[] = (string) $message;
+        };
+        $logger = $this->createMock(LoggerInterface::class);
+        $logger->method('info')->willReturnCallback($record);
+        $logger->method('warning')->willReturnCallback($record);
+        $logger->method('error')->willReturnCallback($record);
+        $logger->method('debug')->willReturnCallback($record);
+
+        // A schema-aware double, not a bare Connection mock: since review r2 F1 an INSERT
+        // that reports writing nothing is correctly treated as a LOST file, so a mock whose
+        // query() returns null would make this fixture take the failure path and close with
+        // the "…with skipped files" summary. This test is about the logger, so the scan
+        // itself must succeed.
         $scanner = new TaggedScanner(
-            $this->createMock(Connection::class),
+            new MusicSchemaConnection(),
             $this->createMock(FfmpegRunner::class),
             $logger,
         );
@@ -1609,13 +1628,18 @@ final class MusicLibraryScannerTest extends TestCase
 
         $scanner->scanDirectory($dir, null, 'lib-s96');
 
-        $this->assertGreaterThan(
-            0,
-            $logger->countMessages('Starting music directory scan'),
-            'a caller-supplied PSR-3 logger must receive the scan log lines. Zero here means the scanner '
-            . 'discarded it and wrote into its own temp directory instead — the S96(a) defect.',
+        $this->assertContains(
+            'Starting music directory scan',
+            $messages,
+            'a caller-supplied PSR-3 logger must receive the scan log lines. Absent here means the '
+            . 'scanner discarded it and wrote into its own temp directory instead — the S96(a) defect.',
         );
-        $this->assertGreaterThan(0, $logger->countMessages('Music directory scan complete'));
+        $this->assertContains(
+            'Music directory scan complete',
+            $messages,
+            'the CLEAN summary, exactly: this fixture indexes its one file successfully, so the lossy '
+            . '"…with skipped files" variant here would mean the scan silently failed',
+        );
     }
 
     /**
@@ -1685,6 +1709,143 @@ final class MusicLibraryScannerTest extends TestCase
     }
 
     // -- S96(f): a scan that loses files says so -------------------------------
+
+    /**
+     * **THE r2 HIGH REGRESSION GUARD: a total silent loss must not look like a benign
+     * rescan of an unchanged library.**
+     *
+     * Before the `'skipped'` / `'failed'` split, `upsertTrack()` returned `'skipped'`
+     * both when a file was LOST (no `media_items` row, no `music_tracks` row) and when
+     * it was simply UNCHANGED — so `flushAlbum()` charged neither, and review r2
+     * measured the two cases as byte-identical on every surface S96 built:
+     *
+     * ```
+     * S3 every music_tracks INSERT wrote nothing  scanned=5 added=0 updated=0 failed=0  INFO
+     * S6 second scan, nothing changed (benign)    scanned=5 added=0 updated=0 failed=0  INFO
+     * ```
+     *
+     * `items_failed` is migration 095's entire reason to exist and the step's acceptance
+     * criterion is that a scan which skipped files reports a non-zero count somewhere an
+     * operator can see. For this shape the count was zero everywhere. This test asserts
+     * the two scenarios and then asserts they DIFFER — the discrimination is the point,
+     * so a fix that merely made both louder would not satisfy it.
+     */
+    public function testATotalSilentLossIsDistinguishableFromABenignUnchangedRescan(): void
+    {
+        // --- S3: every music_tracks INSERT reports that it wrote nothing.
+        [$lossyDir, $tagger] = $this->oneAlbumFixture(5);
+        $lossyDb = new MusicSchemaConnection();
+        $lossyDb->returnFalseFor('INSERT INTO music_tracks');
+        $lossyLog = new LogWriteFailureLogger();
+        $lossy = $this->taggedScanner($lossyDb, $tagger, $lossyLog)->scanDirectory($lossyDir, null, 'lib-s96');
+
+        $this->assertCount(0, $lossyDb->tracks, 'the fixture must really lose every file');
+        $this->assertSame(0, $lossy->added);
+        $this->assertSame(
+            5,
+            $lossy->failed,
+            'all five lost files must be charged. 0 here is the r2 HIGH defect: upsertTrack() returned '
+            . "'skipped' for a LOST file, exactly as it does for an unchanged one, so nothing was charged",
+        );
+        $this->assertSame(
+            5,
+            $lossyLog->countAtLevel('error', 'Track was not indexed'),
+            'and each lost file must name itself at ERROR — this shape used to emit NO log line at any level',
+        );
+        $this->assertSame(
+            1,
+            $lossyLog->countAtLevel('error', 'Music directory scan complete with skipped files'),
+            'the summary must say the scan lost files, at ERROR so it reaches .logs/error.log',
+        );
+
+        // --- S6: a second scan of an unchanged library. Every file takes the BENIGN
+        //     'skipped' path, which must stay charged to nothing.
+        [$benignDir, $benignTagger] = $this->oneAlbumFixture(5);
+        $benignDb = new MusicSchemaConnection();
+        $first = $this->taggedScanner($benignDb, $benignTagger, new LogWriteFailureLogger())
+            ->scanDirectory($benignDir, null, 'lib-s96');
+        $this->assertSame(5, $first->added, 'the first scan must actually index the album');
+
+        $benignLog = new LogWriteFailureLogger();
+        $benign = $this->taggedScanner($benignDb, $benignTagger, $benignLog)
+            ->scanDirectory($benignDir, null, 'lib-s96');
+
+        $this->assertSame(0, $benign->added);
+        $this->assertSame(0, $benign->updated);
+        $this->assertSame(
+            0,
+            $benign->failed,
+            'an UNCHANGED library must report zero failures — charging every benign skip would make '
+            . 'every rescan of every healthy library look like a total loss, which is the opposite error',
+        );
+        $this->assertSame(0, $benignLog->countAtLevel('error', 'Track was not indexed'));
+        $this->assertSame(1, $benignLog->countMessages('Music directory scan complete', true));
+        $this->assertCount(5, $benignDb->tracks, 'and the rows are still there — nothing was lost');
+
+        // --- THE DISCRIMINATION. Same `scanned`, same `added`, same `updated`: before
+        //     the split these two ScanResults were equal, so no consumer could tell a
+        //     library that lost everything from one that changed nothing.
+        $this->assertSame($lossy->scanned, $benign->scanned, 'both read the same number of files');
+        $this->assertSame($lossy->added, $benign->added, 'and both added nothing');
+        $this->assertNotSame(
+            $benign->toArray(),
+            $lossy->toArray(),
+            'the API response for a total loss must differ from the one for an unchanged library. '
+            . 'Equal arrays here mean POST /api/v1/music/scan, library_scan_jobs.items_failed and '
+            . '`library:scan` are all still reporting a silent total loss as a clean success',
+        );
+        $this->assertNotSame($benign->failed, $lossy->failed, 'items_failed is what tells them apart');
+    }
+
+    /**
+     * The PRODUCTION-REACHABLE half of the r2 HIGH finding (its S2 scenario).
+     *
+     * `createMediaItem()` catches its own `\Throwable` and returns `''`, so a DB error
+     * while minting a track's `media_items` row NEVER reaches `flushAlbum()`'s per-track
+     * `catch` — the only signal is `upsertTrack()`'s return value. This is the shape that
+     * needs no modelled `false` at all: a duplicate key, a bad ENUM value or a lost
+     * connection all land here.
+     *
+     * It also pins the log content: `createMediaItem()`'s own error line carries the type
+     * and title but NOT the path, so without the `Track was not indexed` line an operator
+     * could see that something failed and still not know which file to look at.
+     */
+    public function testAFileLostToAFailedMediaItemMintIsChargedAndNamed(): void
+    {
+        [$dir, $tagger] = $this->oneAlbumFixture(5);
+
+        $db = new MusicSchemaConnection();
+        // Fault ONLY the track's media_items INSERT (the param narrowing matches the
+        // bound `type` value), leaving the artist and album mints healthy.
+        $db->faultOnNth('INSERT INTO media_items', 1, 'track');
+        $logger = new LogWriteFailureLogger();
+
+        $result = $this->taggedScanner($db, $tagger, $logger)->scanDirectory($dir, null, 'lib-s96');
+
+        $this->assertSame(4, $result->added, 'the other four files still land');
+        $this->assertCount(4, $db->tracks);
+        $this->assertSame(
+            1,
+            $result->failed,
+            'the file whose media_item could not be minted is LOST and must be charged: it has no '
+            . 'media_items row and no music_tracks row, and createMediaItem() swallowed the throw',
+        );
+        $this->assertSame(1, $logger->countAtLevel('error', 'Failed to create media_item'));
+
+        $named = 0;
+        foreach ($logger->records as $record) {
+            if ($record['level'] === 'error' && str_contains($record['message'], 'Track was not indexed')) {
+                $named++;
+            }
+        }
+        $this->assertSame(
+            1,
+            $named,
+            'exactly one lost file, named at ERROR. createMediaItem()\'s own line has no path in it, '
+            . 'so this is the only line that tells an operator WHICH file was dropped',
+        );
+        $this->assertSame(1, $logger->countAtLevel('error', 'Music directory scan complete with skipped files'));
+    }
 
     /**
      * One failing track increments `ScanResult::$failed` by exactly one.
@@ -2853,44 +3014,6 @@ final class LogWriteFailureLogger extends StructuredLogger
         foreach ($this->messages as $message) {
             $hit = $exact ? $message === $needle : str_contains($message, $needle);
             if ($hit) {
-                $n++;
-            }
-        }
-
-        return $n;
-    }
-}
-
-/**
- * A plain PSR-3 logger — NOT a `StructuredLogger` subclass — that records what it is
- * handed.
- *
- * The distinction is the test: `createLogger()` used to accept only a
- * `StructuredLogger` and silently discard every other `LoggerInterface`, so a double
- * that inherited from `StructuredLogger` could not detect the defect at all.
- */
-final class RecordingPsrLogger extends \Psr\Log\AbstractLogger
-{
-    /** @var list<string> Every message logged, in order. */
-    public array $messages = [];
-
-    /**
-     * @param mixed $level
-     * @param array<string, mixed> $context
-     */
-    public function log($level, string|\Stringable $message, array $context = []): void
-    {
-        unset($level, $context);
-
-        $this->messages[] = (string) $message;
-    }
-
-    /** How many recorded messages contain `$needle`. */
-    public function countMessages(string $needle): int
-    {
-        $n = 0;
-        foreach ($this->messages as $message) {
-            if (str_contains($message, $needle)) {
                 $n++;
             }
         }

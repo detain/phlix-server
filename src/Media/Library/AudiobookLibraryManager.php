@@ -88,7 +88,12 @@ class AudiobookLibraryManager extends LibraryManager
      */
     public function rescanLibrary(string $libraryId, array $paths = [], ?callable $onProgress = null): ScanResult
     {
-        $startTime = microtime(true);
+        // hrtime(), not microtime() (review r2 F6): CLAUDE.md's explicit rule for
+        // ELAPSED intervals. An NTP correction or a manual clock change during a long
+        // audiobook rescan makes a microtime() delta jump or go negative, and the
+        // ScanResult::durationMs it feeds is now printed to an operator by
+        // `php bin/phlix library:scan`.
+        $startTime = hrtime(true);
 
         // Remove existing items
         $this->itemRepo->deleteByLibrary($libraryId);
@@ -126,7 +131,7 @@ class AudiobookLibraryManager extends LibraryManager
             }
         }
 
-        $durationMs = (int)((microtime(true) - $startTime) * 1000);
+        $durationMs = (int) ((hrtime(true) - $startTime) / 1_000_000.0);
 
         $result = new ScanResult();
         $result->scanned = $scanned;

@@ -90,6 +90,15 @@ class ScanJobRepository
      * `items_found`), NOT {@see ScanResult::$updated} — see
      * {@see LibraryScanWorker::scanProgressSink()}.
      *
+     * **THE ONE DEFINITION OF `items_added` (review r2 F5).** It is "`media_items` rows
+     * this job created". Mid-scan the live sink writes a LOWER BOUND on that number —
+     * for music, new TRACK rows only, because the artist/album container rows are not in
+     * the scanner's own `added` tally — and at completion a `rescan` replaces it with the
+     * exact all-types row-count delta. Same quantity, coarser then finer, which is why
+     * the final stamp is allowed to raise it and not to lower it (see
+     * {@see self::MONOTONIC_FINAL_COLUMNS}). This matters to a reader of
+     * {@see self::decodeRow()} because the admin SPA renders the column.
+     *
      * @var list<string>
      */
     private const COUNTER_COLUMNS = [
@@ -101,35 +110,53 @@ class ScanJobRepository
     ];
 
     /**
-     * Counter columns {@see self::markCompleted()} may only ever RAISE.
+     * Counter columns {@see self::markCompleted()} may only ever RAISE, never lower.
      *
-     * These three are cumulative tallies of work a job did ("items added", "items
-     * pruned", "files lost"), as opposed to `items_found` (the progress DENOMINATOR)
-     * and `items_updated` (the progress NUMERATOR), which are absolute readings the
-     * final stamp is allowed to correct in either direction.
+     * Both are cumulative tallies of work a job did, as opposed to `items_found` (the
+     * progress DENOMINATOR) and `items_updated` (the progress NUMERATOR), which are
+     * absolute readings the final stamp must be able to correct in either direction.
      *
-     * ⚠ WHY (review r1 LOW-4): for a `rescan` ONE job row carries two different
-     * definitions of `items_added` over its lifetime. The live sink streams the
-     * scanner's own new-leaf count (for music, new TRACKS) while
-     * {@see LibraryManager::rescanLibrary()} finishes by computing a row-count DELTA
-     * over every `media_items` type. Usually the delta is the larger of the two (it
-     * also counts the artist/album container rows), but it can be SMALLER — e.g. when
-     * a `music_tracks` row is added against a `media_items` row that already existed —
-     * and an operator watching a job go 12 → 3 at the moment it completes reads that
-     * as data disappearing. `LibraryManager` already engineers around exactly this for
-     * the cross-path case ("a job row that goes 12 → 3 is worse than one that stays at
-     * 0"); `GREATEST` extends the same rule to the completion stamp, so these columns
-     * are high-water marks: "at least this many", never a retraction. Both readings are
-     * true statements about different things, and neither is worth un-reporting.
+     * ⚠ **WHY, AND WHY THIS SET SHRANK (review r1 LOW-4 → review r2 F5).** r1 found that
+     * a `rescan`'s `items_added` could move BACKWARDS at completion, and r2 objected that
+     * clamping it takes the maximum of two incommensurable metrics. The arithmetic
+     * settles it, so it is written down rather than argued:
      *
-     * Costs nothing: it is one SQL function inside the UPDATE that was already being
-     * issued — no extra statement, no read-modify-write, so no race either.
+     *   `rescanLibrary()` computes `added = after − survivors` with
+     *   `survivors = before − removed`, and `after = before + newRows − removed`. Those
+     *   reduce to **`added = newRows`** exactly — every `media_items` row the job
+     *   created, containers included. The live sink's music value is `new TRACK rows`,
+     *   and a track is only counted `'added'` after its own `media_items` row is minted,
+     *   so `liveAdded ≤ newRows` ALWAYS. The two are therefore not rival metrics: the
+     *   live one is a **lower bound** on the final one (see
+     *   {@see self::COUNTER_COLUMNS} for the single definition), and `GREATEST` picks the
+     *   exact value in every normal case.
+     *
+     * So the clamp is not a routine max — it is a guard for the one shape where the
+     * inequality can invert (a concurrent deleter shrinking `after`, or a future change
+     * to either metric), where a visible 12 → 3 retraction is strictly worse than
+     * reporting the lower bound. `items_failed` is monotonic by nature within a job.
+     *
+     * **`items_removed` was REMOVED from this set: its clamp was provably inert.** The
+     * only writers are `updateProgress()` in the `prune` and `delete_all` branches, and
+     * BOTH leave `$finalCounts` empty, so `markCompleted()` never clamps them; the only
+     * branch that puts `items_removed` in `$finalCounts` is `rescan`, whose live sink
+     * never writes that key (`scanProgressSink()`'s payload is
+     * `items_found`/`items_updated`/`items_added`/`items_failed` only). The prior value
+     * at clamp time is therefore always the column default 0, and `GREATEST(0, x) = x`.
+     * Keeping it implied a protection that could not fire.
+     *
+     * **No NULL hazard.** `GREATEST(NULL, 5)` is `NULL` in MySQL, but all five `items_*`
+     * columns are `int unsigned NOT NULL DEFAULT 0` (verified against
+     * `information_schema` on a real 8.0.46 server) and the bound parameter is always
+     * `(int) $finalCounts[$column]`, so neither side can be NULL.
+     *
+     * Costs nothing: one SQL function inside the UPDATE that was already being issued —
+     * no extra statement, no read-modify-write, so no race either.
      *
      * @var list<string>
      */
     private const MONOTONIC_FINAL_COLUMNS = [
         'items_added',
-        'items_removed',
         'items_failed',
     ];
 
@@ -538,6 +565,22 @@ class ScanJobRepository
      * fields are normalised to strings, and the nullable text/timestamp
      * columns are preserved as a string or null. Mirrors the null-safety of
      * {@see \Phlix\Admin\SettingsRepository::getOverride()}.
+     *
+     * ⚠ **WHAT THE COUNTERS MEAN, since this array IS the admin API payload**
+     * (`GET /api/v1/libraries/{id}/scan-status`, rendered by the SPA — review r2 F5 asked
+     * for this to be stated where a consumer reads it):
+     *
+     *  - `items_found`   files the walk discovered — the progress DENOMINATOR;
+     *  - `items_updated` files PROCESSED so far — the progress NUMERATOR, **not**
+     *    {@see ScanResult::$updated}. The SPA computes
+     *    `items_updated / items_found` as the percentage;
+     *  - `items_added`   `media_items` rows this job created. While the job runs this is a
+     *    LOWER BOUND (music streams new tracks only, not the artist/album containers); at
+     *    completion a `rescan` raises it to the exact all-types delta. It never goes down
+     *    ({@see self::MONOTONIC_FINAL_COLUMNS});
+     *  - `items_removed` rows pruned because their file is gone from disk;
+     *  - `items_failed`  files the scan READ and could not index (errors only — never a
+     *    policy skip, and never an unchanged file).
      *
      * @param array<array-key, mixed> $row Raw row as returned by the driver.
      *

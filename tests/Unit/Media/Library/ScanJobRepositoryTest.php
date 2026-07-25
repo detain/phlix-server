@@ -292,17 +292,23 @@ final class ScanJobRepositoryTest extends TestCase
     }
 
     /**
-     * Review r1 LOW-4: the cumulative counters may only be RAISED at completion.
+     * Review r1 LOW-4 + review r2 F5: the cumulative counters may only be RAISED at
+     * completion — and the set is exactly `items_added` + `items_failed`.
      *
-     * A `rescan` job row carries two different definitions of `items_added` over its
-     * lifetime — the live sink writes the scanner's new-leaf count, `markCompleted()`
-     * writes `rescanLibrary()`'s all-types row-count delta — and the delta is not always
-     * the larger of the two. Plain `items_added = ?` therefore let a completing job
-     * report FEWER items than it had already been observed to add, which reads as data
-     * disappearing at the exact moment the job finishes. `GREATEST` makes the three
-     * tallies high-water marks; `items_found`/`items_updated` are the progress
-     * denominator/numerator and must stay absolute, or a corrected total could never
-     * come down.
+     * A `rescan` job row carries the same quantity at two resolutions over its lifetime:
+     * the live sink writes a lower bound (`new TRACK rows` for music), `markCompleted()`
+     * writes `rescanLibrary()`'s exact all-types row-count delta. Plain
+     * `items_added = ?` let a completing job report FEWER items than it had already been
+     * observed to add in the one shape where that inequality inverts, which reads as data
+     * disappearing at the exact moment the job finishes.
+     *
+     * The two exclusions are asserted as deliberately as the inclusions:
+     * `items_found`/`items_updated` are the progress denominator/numerator and must stay
+     * absolute or a corrected total could never come down; `items_removed` was dropped
+     * from the clamp in r2 F5 because no code path ever gives it a prior value to clamp
+     * against (`prune`/`delete_all` write it via `updateProgress()` and then reach
+     * `markCompleted()` with an EMPTY `$finalCounts`; `rescan`'s live sink never writes
+     * the key at all), so the clamp implied a protection that could not fire.
      */
     public function testMarkCompletedRaisesCumulativeCountersButNeverLowersThem(): void
     {
@@ -326,7 +332,7 @@ final class ScanJobRepositoryTest extends TestCase
             'items_updated' => 12,
         ]);
 
-        foreach (['items_added', 'items_removed', 'items_failed'] as $column) {
+        foreach (['items_added', 'items_failed'] as $column) {
             $this->assertStringContainsString(
                 $column . ' = GREATEST(' . $column . ', ?)',
                 $captured['sql'],
@@ -335,13 +341,14 @@ final class ScanJobRepositoryTest extends TestCase
             );
         }
 
-        foreach (['items_found', 'items_updated'] as $column) {
+        foreach (['items_found', 'items_updated', 'items_removed'] as $column) {
             $this->assertStringContainsString($column . ' = ?', $captured['sql']);
             $this->assertStringNotContainsString(
                 'GREATEST(' . $column,
                 $captured['sql'],
-                $column . ' is the progress denominator/numerator, not a tally — clamping it would make a '
-                . 'downward correction impossible',
+                $column . ' must NOT be clamped: found/updated are the progress denominator/numerator, so '
+                . 'clamping them would make a downward correction impossible, and items_removed has no '
+                . 'prior value to clamp against on any code path (r2 F5)',
             );
         }
 

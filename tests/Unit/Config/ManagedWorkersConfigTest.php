@@ -190,7 +190,7 @@ final class ManagedWorkersConfigTest extends TestCase
      * This test is what makes raising the count fail out loud instead of quietly
      * killing live scans.
      */
-    public function test_library_scan_count_must_stay_one_for_the_unscoped_reaper(): void
+    public function testLibraryScanCountMustStayOneForTheUnscopedReaper(): void
     {
         $proc = $this->processConfig();
 
@@ -222,7 +222,7 @@ final class ManagedWorkersConfigTest extends TestCase
      * The needles below are the two RETRACTED claims, quoted here only so this test
      * can detect their return.
      */
-    public function test_the_standalone_scan_worker_script_forbids_a_second_consumer(): void
+    public function testTheStandaloneScanWorkerScriptForbidsASecondConsumer(): void
     {
         $root = dirname(__DIR__, 3);
         $paths = [

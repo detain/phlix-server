@@ -1427,6 +1427,25 @@ class MusicLibraryScanner
      * other library creates the `music_artists` row for that name (measured: scan L2,
      * then rescan L1 → `media_items[artist] = 2` against `music_artists = 1`). That
      * needs two music libraries sharing an artist, which prod does not have.
+     * (c) An orphan from a mint the server COMMITTED but
+     * {@see self::createMediaItem()} REPORTED as failed (it swallows its own
+     * Throwable and returns `''`). This one is unreclaimable BY CONSTRUCTION, not
+     * merely unreclaimed: the `music_artists` row is written for the natural key with
+     * `media_item_id = NULL`, so the natural-key branch of {@see self::upsertArtist()}
+     * finds that row on every later encounter, returns its NULL, and short-circuits
+     * BEFORE this lookup is reached — no scan, however clean, can route to the
+     * adoption path for that name again. {@see self::upsertArtist()}'s `finally` does
+     * still fire here, but what it re-opens is the `$mayAdopt` FLAG (so the rest of
+     * the scan keeps hunting for OTHER orphans); it does not reclaim THIS row.
+     * Measured with a commit-then-throw fault at every statement position of a
+     * two-artists / one-album-title fixture: an orphan is left at 3 of 27 positions
+     * and survives two clean rescans. Not a regression — master behaves the same.
+     * **Owned by S96(e)**, whose `media_item_id IS NULL` backfill is expected to
+     * reclaim it *through this very lookup*, driven from outside the natural-key
+     * short-circuit; that is also the forward-looking reason the flag must be
+     * re-opened in this case. The album twin is the same mechanism with
+     * `music_albums` + {@see self::upsertAlbum()}, and was measured on both sides
+     * (2 of the 3 positions are artist mints, 1 is an album mint).
      *
      * @param string $name Artist name, as stored in `media_items.name`.
      * @param string|null $libraryId Owning library UUID (null-safe matched).
@@ -1552,9 +1571,20 @@ class MusicLibraryScanner
      *  3. **A CONCURRENT writer** — not reclaimed until the next scan, one cycle
      *     later, exactly like every other adoption.
      *  4. **A failed mint whose row the server nevertheless committed**
-     *     (`createMediaItem()` reports '' but the INSERT landed) — covered by the same
-     *     `finally` as (1), because "referenced" is defined as *the `music_*` row
-     *     carries the minted id*, not merely *the INSERT succeeded*.
+     *     (`createMediaItem()` reports '' but the INSERT landed) — the same `finally`
+     *     as (1) DOES fire, because "referenced" is defined as *the `music_*` row
+     *     carries the minted id*, not merely *the INSERT succeeded*. ⚠ Be precise
+     *     about what that buys, because an earlier revision of this item said only
+     *     "covered by the same `finally` as (1)" and that collapsed two true halves
+     *     into one false claim. The `finally` re-opens the `$mayAdopt` FLAG, so the
+     *     rest of the scan resumes looking for orphans — which is what keeps the gate
+     *     safe. It does NOT reclaim THIS row, and nothing else does either: the
+     *     `music_*` row now holds the natural key with `media_item_id = NULL`, so
+     *     every later lookup short-circuits on the natural key before the adoption
+     *     query is reached (measured: an orphan is left at 3 of 27 commit-then-throw
+     *     positions and survives two clean rescans). That residue is **S96(e)**'s —
+     *     see case (c) of the RESIDUE list in
+     *     {@see self::findAdoptableArtistMediaItemId()}.
      *
      * Note that the track path needs none of this: an orphaned `track` row is found
      * by PATH ({@see self::findExistingTrackMediaItemId()}), which is indexed, never

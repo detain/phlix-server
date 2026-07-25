@@ -741,12 +741,315 @@ final class MediaItemShaperTest extends TestCase
             $signer->verify('/api/v1/artwork/m', $q['exp'], $q['sig']),
             'the re-minted list backdrop_url verifies with a fresh signature'
         );
-        // An internal artwork URL has no TMDB width ladder, so no srcset is
-        // synthesised for it (S72 will supply local variants).
+        // An internal artwork URL has no TMDB width ladder, so nothing can be
+        // DERIVED for it — and this row stores no `backdrop_srcset`, so there is
+        // nothing to prefer either. Null is the correct answer here; when S72
+        // stores local variants they are honoured, see
+        // testShapeKeepsAStoredBackdropSrcsetForACachedArtworkBackdrop().
         $this->assertNull($shaped['backdrop_srcset']);
 
         putenv('PHLIX_SIGNED_URL_SECRET');
         SignedUrl::resetSharedForTesting();
+    }
+
+    /**
+     * The responsive ladder must SURVIVE S72. Once backdrops are cached locally the
+     * stored `metadata_json.backdrop_url` is `/api/v1/artwork/{id}?size=…`, which is
+     * not a TMDB URL, so nothing can be derived from it — the shape must therefore
+     * prefer the STORED `metadata_json.backdrop_srcset` ArtworkStorage wrote, exactly
+     * like `poster_srcset` does. Without that preference `backdrop_srcset` is
+     * permanently null for every cached backdrop and the ladder this step adds
+     * silently vanishes. Each candidate is re-signed, the descriptors survive.
+     */
+    public function testShapeKeepsAStoredBackdropSrcsetForACachedArtworkBackdrop(): void
+    {
+        putenv('PHLIX_SIGNED_URL_SECRET=shaper-stored-backdrop-srcset-secret');
+        SignedUrl::resetSharedForTesting();
+        $signer = SignedUrl::fromEnv();
+
+        $expiredExp = time() - 3600;
+        $staleSig = $signer->signature('/api/v1/artwork/m', $expiredExp);
+        $stale = static fn(string $size): string =>
+            '/api/v1/artwork/m?size=' . $size . '&exp=' . $expiredExp . '&sig=' . $staleSig;
+
+        $shaped = MediaItemShaper::shape([
+            'id' => 'm',
+            'name' => 'Cached Backdrop Film',
+            'type' => 'movie',
+            'metadata' => [
+                'backdrop_url' => $stale('w780'),
+                'backdrop_srcset' => $stale('w780') . ' 780w, ' . $stale('w1280') . ' 1280w',
+            ],
+        ]);
+
+        $srcset = $shaped['backdrop_srcset'];
+        $this->assertIsString($srcset, 'a cached backdrop must NOT lose its responsive ladder');
+        $candidates = explode(', ', $srcset);
+        $this->assertCount(2, $candidates);
+        // Descriptors intact, both sizes preserved, every signature freshly minted.
+        $this->assertStringEndsWith(' 780w', $candidates[0]);
+        $this->assertStringEndsWith(' 1280w', $candidates[1]);
+        $this->assertStringNotContainsString($staleSig, $srcset, 'every stale signature is re-minted');
+        foreach (['w780' => $candidates[0], 'w1280' => $candidates[1]] as $size => $candidate) {
+            $url = substr($candidate, 0, (int) strrpos($candidate, ' '));
+            parse_str((string) parse_url($url, PHP_URL_QUERY), $q);
+            /** @var array<string, string> $q */
+            $this->assertSame($size, $q['size'], 'the size descriptor is preserved');
+            $this->assertGreaterThan(time(), (int) $q['exp']);
+            $this->assertTrue(
+                $signer->verify('/api/v1/artwork/m', $q['exp'], $q['sig']),
+                'each re-minted candidate verifies with a fresh signature'
+            );
+        }
+
+        putenv('PHLIX_SIGNED_URL_SECRET');
+        SignedUrl::resetSharedForTesting();
+    }
+
+    /**
+     * A stored `backdrop_srcset` WINS over one derivable from a TMDB URL — the
+     * stored value is what ArtworkStorage actually cached, so it is the truth.
+     * Mirrors the `poster_srcset` precedence.
+     */
+    public function testShapePrefersAStoredBackdropSrcsetOverTheDerivedTmdbLadder(): void
+    {
+        $shaped = MediaItemShaper::shape([
+            'id' => 'm',
+            'name' => 'M',
+            'type' => 'movie',
+            'metadata' => [
+                'backdrop_url' => 'https://image.tmdb.org/t/p/w500/bg.jpg',
+                'backdrop_srcset' => '/artwork/local/bg-780.jpg 780w',
+            ],
+        ]);
+
+        $this->assertSame('/artwork/local/bg-780.jpg 780w', $shaped['backdrop_srcset']);
+        // …while `backdrop_url` still comes from `backdrop_url` (width-swapped).
+        $this->assertSame('https://image.tmdb.org/t/p/w780/bg.jpg', $shaped['backdrop_url']);
+    }
+
+    /**
+     * A stored `backdrop_srcset` is emitted verbatim on up to PageLimit::MAX rows,
+     * so it gets the same scheme allowlist as the single URL: ONE unsafe candidate
+     * rejects the whole stored value, and the shape falls back to the derived
+     * ladder (or null) rather than shipping a half-sanitised srcset.
+     */
+    public function testShapeRejectsAStoredBackdropSrcsetCarryingAnUnsafeCandidate(): void
+    {
+        $shaped = MediaItemShaper::shape([
+            'id' => 'm',
+            'name' => 'M',
+            'type' => 'movie',
+            'metadata' => [
+                'backdrop_url' => 'https://image.tmdb.org/t/p/w500/bg.jpg',
+                'backdrop_srcset' => '/artwork/local/bg-780.jpg 780w, javascript:alert(1) 1280w',
+            ],
+        ]);
+
+        // Falls back to the DERIVED TMDB ladder — the poisoned value never ships.
+        $this->assertSame(
+            'https://image.tmdb.org/t/p/w780/bg.jpg 780w, '
+            . 'https://image.tmdb.org/t/p/w1280/bg.jpg 1280w',
+            $shaped['backdrop_srcset'],
+        );
+
+        // With nothing derivable either, it degrades to null.
+        $nonTmdb = MediaItemShaper::shape([
+            'id' => 'm2',
+            'name' => 'M2',
+            'type' => 'movie',
+            'metadata' => [
+                'backdrop_url' => 'https://assets.fanart.tv/fanart/movies/1/bg.jpg',
+                'backdrop_srcset' => 'https://assets.fanart.tv/1.jpg 780w, data:image/png;base64,AAA 1280w',
+            ],
+        ]);
+        $this->assertNull($nonTmdb['backdrop_srcset']);
+    }
+
+    /**
+     * URL scheme allowlist on the new list keys. `metadata_json.backdrop_url` is
+     * provider-, `.nfo`- or plugin-supplied, and this step emits it (plus a srcset
+     * built FROM it) on up to PageLimit::MAX rows, so a non-`http(s)`/non-relative
+     * value must become null rather than being echoed — and a TMDB URL carrying an
+     * attribute-breakout payload must never be width-swapped INTO the srcset.
+     *
+     * @dataProvider unsafeBackdropUrlProvider
+     */
+    public function testShapeRejectsUnsafeBackdropUrlSchemes(string $stored, string $why): void
+    {
+        $shaped = MediaItemShaper::shape([
+            'id' => 'm',
+            'name' => 'M',
+            'type' => 'movie',
+            'metadata' => ['backdrop_url' => $stored],
+        ]);
+
+        $this->assertNull($shaped['backdrop_url'], $why);
+        $this->assertNull($shaped['backdrop_srcset'], $why . ' (and no srcset is built from it)');
+    }
+
+    /**
+     * @return iterable<string, array{string, string}>
+     */
+    public static function unsafeBackdropUrlProvider(): iterable
+    {
+        yield 'javascript scheme' => ['javascript:alert(1)', 'javascript: URIs are never emitted'];
+        yield 'javascript uppercase' => ['JAVASCRIPT:alert(1)', 'the scheme check is case-insensitive'];
+        yield 'javascript newline-obfuscated' => [
+            "jav\nascript:alert(1)",
+            'browsers strip control bytes before parsing the scheme',
+        ];
+        yield 'data uri' => ['data:image/png;base64,AAAA', 'data: URIs are never emitted'];
+        yield 'vbscript scheme' => ['vbscript:msgbox(1)', 'only http/https are allowed'];
+        yield 'file scheme' => ['file:///etc/passwd', 'only http/https are allowed'];
+        yield 'protocol-relative' => ['//image.tmdb.org/t/p/w500/bg.jpg', 'protocol-relative URLs are rejected'];
+        yield 'attribute breakout on a real TMDB url' => [
+            'https://image.tmdb.org/t/p/w500/bg.jpg"><script>alert(1)</script>',
+            'a quote/angle-bracket payload must not be width-swapped into the srcset',
+        ];
+        yield 'single-quote breakout' => [
+            "https://image.tmdb.org/t/p/w500/bg.jpg' onerror='alert(1)",
+            'single quotes break out of an attribute too',
+        ];
+        yield 'backtick' => ['https://example.com/`bg.jpg', 'backticks are an attribute delimiter in old IE'];
+        yield 'backslash' => ['https://example.com\\bg.jpg', 'backslashes are normalised to / by browsers'];
+        yield 'tab inside the url' => ["https://example.com/\tbg.jpg", 'control bytes are stripped by browsers'];
+        yield 'no scheme at all' => ['image.tmdb.org/t/p/w500/bg.jpg', 'a bare host is not a usable image URL'];
+    }
+
+    /**
+     * The allowlist must not break a single legitimate backdrop shape: TMDB,
+     * fanart.tv, thetvdb, plain `http://`, a server-relative artwork path, and the
+     * `/api/v1/artwork/{id}` form S72 introduces.
+     *
+     * @dataProvider legitimateBackdropUrlProvider
+     */
+    public function testShapeKeepsEveryLegitimateBackdropUrlShape(string $stored, string $expected): void
+    {
+        $shaped = MediaItemShaper::shape([
+            'id' => 'm',
+            'name' => 'M',
+            'type' => 'movie',
+            'metadata' => ['backdrop_url' => $stored],
+        ]);
+
+        $this->assertSame($expected, $shaped['backdrop_url']);
+    }
+
+    /**
+     * @return iterable<string, array{string, string}>
+     */
+    public static function legitimateBackdropUrlProvider(): iterable
+    {
+        // TMDB is the only shape that gets width-swapped; the rest pass through.
+        yield 'tmdb https' => [
+            'https://image.tmdb.org/t/p/w500/bg.jpg',
+            'https://image.tmdb.org/t/p/w780/bg.jpg',
+        ];
+        yield 'tmdb http' => [
+            'http://image.tmdb.org/t/p/w500/bg.jpg',
+            'http://image.tmdb.org/t/p/w780/bg.jpg',
+        ];
+        yield 'fanart.tv' => [
+            'https://assets.fanart.tv/fanart/movies/550/moviebackground/fight-club-5234.jpg',
+            'https://assets.fanart.tv/fanart/movies/550/moviebackground/fight-club-5234.jpg',
+        ];
+        yield 'thetvdb' => [
+            'https://artworks.thetvdb.com/banners/series/81189/backgrounds/61027.jpg',
+            'https://artworks.thetvdb.com/banners/series/81189/backgrounds/61027.jpg',
+        ];
+        yield 'server-relative artwork path' => [
+            '/artwork/abc/backdrop.jpg',
+            '/artwork/abc/backdrop.jpg',
+        ];
+        yield 'query string preserved' => [
+            'https://example.com/bg.jpg?v=2',
+            'https://example.com/bg.jpg?v=2',
+        ];
+    }
+
+    /**
+     * The future S72 shape — `/api/v1/artwork/{id}?size=…` — must pass the allowlist
+     * AND still be re-signed (it is the one shape that gets a fresh token).
+     */
+    public function testShapeAllowsAndSignsTheInternalArtworkBackdropShape(): void
+    {
+        putenv('PHLIX_SIGNED_URL_SECRET=shaper-allowlist-artwork-secret');
+        SignedUrl::resetSharedForTesting();
+        $signer = SignedUrl::fromEnv();
+
+        $shaped = MediaItemShaper::shape([
+            'id' => 'm',
+            'name' => 'M',
+            'type' => 'movie',
+            'metadata' => ['backdrop_url' => '/api/v1/artwork/m?size=w780'],
+        ]);
+
+        $url = $shaped['backdrop_url'];
+        $this->assertIsString($url);
+        $this->assertStringStartsWith('/api/v1/artwork/m?size=w780&exp=', $url);
+        parse_str((string) parse_url($url, PHP_URL_QUERY), $q);
+        /** @var array<string, string> $q */
+        $this->assertTrue($signer->verify('/api/v1/artwork/m', $q['exp'], $q['sig']));
+
+        putenv('PHLIX_SIGNED_URL_SECRET');
+        SignedUrl::resetSharedForTesting();
+    }
+
+    /**
+     * A whitespace-padded stored URL must be TRIMMED before parsing. Untrimmed, the
+     * `^`-anchored TMDB regex rejects the leading space, so the client got the
+     * padded URL verbatim AND lost the whole width ladder (`backdrop_srcset` null)
+     * — an invisible regression, because browsers trim `src` themselves.
+     *
+     * @dataProvider paddedBackdropUrlProvider
+     */
+    public function testShapeTrimsAPaddedBackdropUrlAndKeepsItsSrcset(string $stored): void
+    {
+        $shaped = MediaItemShaper::shape([
+            'id' => 'm',
+            'name' => 'M',
+            'type' => 'movie',
+            'metadata' => ['backdrop_url' => $stored],
+        ]);
+
+        $this->assertSame('https://image.tmdb.org/t/p/w780/bg.jpg', $shaped['backdrop_url']);
+        $this->assertSame(
+            'https://image.tmdb.org/t/p/w780/bg.jpg 780w, '
+            . 'https://image.tmdb.org/t/p/w1280/bg.jpg 1280w',
+            $shaped['backdrop_srcset'],
+            'the width ladder must survive the padding',
+        );
+    }
+
+    /**
+     * @return iterable<string, array{string}>
+     */
+    public static function paddedBackdropUrlProvider(): iterable
+    {
+        yield 'leading space' => [' https://image.tmdb.org/t/p/w500/bg.jpg'];
+        yield 'trailing space' => ['https://image.tmdb.org/t/p/w500/bg.jpg '];
+        yield 'both' => ["  https://image.tmdb.org/t/p/w500/bg.jpg\t"];
+        yield 'trailing newline' => ["https://image.tmdb.org/t/p/w500/bg.jpg\n"];
+        yield 'trailing CRLF' => ["https://image.tmdb.org/t/p/w500/bg.jpg\r\n"];
+    }
+
+    /**
+     * The same trim applies to `poster_url` (a shared helper), so a padded poster
+     * keeps its srcset too.
+     */
+    public function testShapeTrimsAPaddedPosterUrlAndKeepsItsSrcset(): void
+    {
+        $shaped = MediaItemShaper::shape([
+            'id' => 'm',
+            'name' => 'M',
+            'type' => 'movie',
+            'metadata' => ['poster_url' => "  https://image.tmdb.org/t/p/w500/p.jpg\n"],
+        ]);
+
+        $this->assertSame('https://image.tmdb.org/t/p/w500/p.jpg', $shaped['poster_url']);
+        $this->assertIsString($shaped['poster_srcset']);
+        $this->assertStringContainsString('/w780/p.jpg 780w', $shaped['poster_srcset']);
     }
 
     /**
@@ -1207,12 +1510,22 @@ final class MediaItemShaperTest extends TestCase
         $this->assertNull($result);
     }
 
-    public function testNonemptyStringReturnsOriginalStringForNonEmptyStrings(): void
+    /**
+     * The helper now returns the value TRIMMED, not verbatim. It previously pinned
+     * the padded string, which is exactly how a whitespace-padded stored URL kept
+     * reaching clients while silently losing its `srcset` — the `^`-anchored TMDB
+     * regexes reject the leading space (see
+     * testShapeTrimsAPaddedBackdropUrlAndKeepsItsSrcset()).
+     */
+    public function testNonemptyStringReturnsTheTrimmedStringForNonEmptyStrings(): void
     {
         $this->assertSame('hello', $this->invokeNonemptyString('hello'));
-        $this->assertSame('  trimmed  ', $this->invokeNonemptyString('  trimmed  '));
+        $this->assertSame('trimmed', $this->invokeNonemptyString('  trimmed  '));
+        $this->assertSame('trimmed', $this->invokeNonemptyString("trimmed\n"));
         $this->assertSame('a', $this->invokeNonemptyString('a'));
         $this->assertSame('0', $this->invokeNonemptyString('0'));
+        // Interior whitespace is untouched — only the ends are trimmed.
+        $this->assertSame('two words', $this->invokeNonemptyString('  two words  '));
     }
 
     public function testNonemptyStringReturnsNullForNullInput(): void

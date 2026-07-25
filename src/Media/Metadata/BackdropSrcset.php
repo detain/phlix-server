@@ -42,42 +42,51 @@ namespace Phlix\Media\Metadata;
  *    ladder therefore tops out at `w1280`, the largest TMDB step below
  *    `/original`.
  *
+ * The two budgets share ONE width ladder ({@see self::WIDTHS}) and ONE srcset
+ * code path: the hero srcset IS the row srcset with the `/original` candidate
+ * appended ({@see self::forBackdropUrl()} delegates to {@see self::rowSrcset()}),
+ * so tuning the ladder can never move one budget without the other.
+ *
  * @see PosterSrcset The poster-side counterpart this mirrors.
  */
 final class BackdropSrcset
 {
     /**
-     * TMDB backdrop widths to advertise for a full-bleed background. Spans a
-     * tablet-width backdrop through a large desktop / 4K hero image.
+     * The ONE TMDB backdrop width ladder, shared by BOTH size budgets (hero and
+     * list row — see the class docblock). TMDB's whole backdrop ladder is
+     * `w300, w780, w1280, original`, so these are the only two steps that land
+     * in range:
+     *
+     *  - `w780` — a full-bleed phone row at 2× DPR (390 CSS px × 2 = 780), a
+     *    780 CSS px row at 1×, and the tablet step of a full-bleed background.
+     *  - `w1280` — a wide desktop row (≈1280–1400 CSS px) at 1×, a ~640 CSS px
+     *    row at 2×, and the crispest step available without `/original`.
+     *
+     * `w300` is excluded (too small for even a phone row at 1×). `original` is
+     * deliberately NOT a member: it is appended by {@see self::forBackdropUrl()}
+     * alone, which is exactly what makes the hero ladder "this list PLUS
+     * `/original`". Keep this list SHORT — it is serialised once per row on the
+     * main library listing.
      *
      * @var list<int>
      */
     private const WIDTHS = [780, 1280];
 
     /**
-     * TMDB backdrop widths advertised for a LIST-ROW backdrop strip — TMDB's
-     * whole backdrop ladder is `w300, w780, w1280, original`, so these are the
-     * only two steps that land in row range:
-     *
-     *  - `w780` — a full-bleed phone row at 2× DPR (390 CSS px × 2 = 780) and a
-     *    780 CSS px row at 1×.
-     *  - `w1280` — a wide desktop row (≈1280–1400 CSS px) at 1×, a ~640 CSS px
-     *    row at 2×, and the crispest step available without `/original`.
-     *
-     * `w300` is excluded (too small for even a phone row at 1×) and `original`
-     * is excluded on purpose — see the class docblock. Keep this list SHORT: it
-     * is serialised once per row on the main library listing.
-     *
-     * @var list<int>
+     * Nominal width descriptor for the `/original` candidate that only the HERO
+     * srcset carries ({@see self::forBackdropUrl()}). TMDB's `original` is the
+     * full-resolution asset (typically ≥1920px wide for backdrops), so this is
+     * advertised as the top width step.
      */
-    private const ROW_WIDTHS = [780, 1280];
+    private const ORIGINAL_WIDTH = 1920;
 
     /**
      * Width used for the single-URL list-row base ({@see self::rowUrl()}) — the
      * `src` a non-`srcset` client (Roku, the console TUI's `<img>` loader) ends
-     * up fetching. The smallest ROW_WIDTHS step, so the fallback is cheap.
+     * up fetching. Derived from the smallest {@see self::WIDTHS} step (so the
+     * fallback is cheap, and so it cannot drift from the ladder).
      */
-    private const ROW_WIDTH = 780;
+    private const ROW_WIDTH = self::WIDTHS[0];
 
     /**
      * Anchored to the TMDB image host + `/t/p/<size>/` so only genuine TMDB
@@ -87,29 +96,27 @@ final class BackdropSrcset
     private const TMDB_URL = '#^(https?://image\.tmdb\.org/t/p)/(?:w\d+|original)/(\S+)$#';
 
     /**
-     * Build a width-descriptor `srcset` string (w780, w1280, original) for a
-     * TMDB backdrop URL, or null when the URL is absent or not a TMDB image URL.
+     * Build the HERO width-descriptor `srcset` string (w780, w1280, original) for
+     * a TMDB backdrop URL, or null when the URL is absent or not a TMDB image URL.
      *
-     * The `original` candidate is advertised at a nominal 1920w so the browser
-     * treats it as the largest step; TMDB's `original` is the full-resolution
-     * asset (typically ≥1920px wide for backdrops).
+     * This is EXACTLY {@see self::rowSrcset()} plus the `/original` candidate, and
+     * it is written as delegation on purpose: the hero and row ladders must never
+     * drift apart, and `/original` is the ONLY difference between the two budgets
+     * (see the class docblock). The `original` candidate is advertised at a
+     * nominal {@see self::ORIGINAL_WIDTH} so the browser treats it as the largest
+     * step.
      */
     public static function forBackdropUrl(?string $backdropUrl): ?string
     {
-        $parts = self::parse($backdropUrl);
-        if ($parts === null) {
+        $rowSrcset = self::rowSrcset($backdropUrl);
+        $original = self::largeUrl($backdropUrl);
+        // Both derive from the same parse(), so they are null together; the
+        // explicit pair-check keeps the concatenation below provably string-typed.
+        if ($rowSrcset === null || $original === null) {
             return null;
         }
-        [$base, $file] = $parts;
 
-        $candidates = [];
-        foreach (self::WIDTHS as $width) {
-            $candidates[] = sprintf('%s/w%d/%s %dw', $base, $width, $file, $width);
-        }
-        // `original` is the full asset; advertise it as the top width step.
-        $candidates[] = sprintf('%s/original/%s 1920w', $base, $file);
-
-        return implode(', ', $candidates);
+        return $rowSrcset . sprintf(', %s %dw', $original, self::ORIGINAL_WIDTH);
     }
 
     /**
@@ -133,8 +140,9 @@ final class BackdropSrcset
      * for a LIST-row backdrop strip, or null when the URL is absent or not a TMDB
      * image URL (the client then uses {@see self::rowUrl()}'s single URL).
      *
-     * Deliberately NOT {@see self::forBackdropUrl()}: that one advertises
-     * `/original` because it serves ONE hero image per page. This serves up to
+     * This is the SINGLE ladder-building code path: {@see self::forBackdropUrl()}
+     * calls it and appends `/original` for the hero budget. It advertises
+     * `/original` itself NEVER, because it serves up to
      * {@see \Phlix\Common\Http\PageLimit::MAX} rows per response — see the class
      * docblock for the payload argument.
      */
@@ -147,7 +155,7 @@ final class BackdropSrcset
         [$base, $file] = $parts;
 
         $candidates = [];
-        foreach (self::ROW_WIDTHS as $width) {
+        foreach (self::WIDTHS as $width) {
             $candidates[] = sprintf('%s/w%d/%s %dw', $base, $width, $file, $width);
         }
 

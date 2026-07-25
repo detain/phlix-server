@@ -18,27 +18,61 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
     the stored `/w500` up to **`/w780`**. Non-TMDB backdrops (fanart.tv, a
     locally-cached file) have no width ladder and pass through exactly as stored;
     `null` when the item has no backdrop art.
-  - **`backdrop_srcset`** — exactly **two** candidates, `w780 780w, w1280 1280w`.
-    `w780` covers a full-bleed phone row at 2× DPR (390 CSS px × 2) and a 780 CSS
-    px row at 1×; `w1280` covers a ~1280–1400 CSS px desktop row at 1× and is the
-    largest TMDB step below `/original`. `null` for non-TMDB backdrops → the
-    client uses `backdrop_url`.
+  - **`backdrop_srcset`** — a stored `metadata_json.backdrop_srcset` when
+    `ArtworkStorage` has cached one (the same precedence `poster_srcset` already
+    uses, so a locally-cached backdrop keeps its ladder instead of losing it for
+    not being a TMDB URL), otherwise exactly **two** derived candidates,
+    `w780 780w, w1280 1280w`. `w780` covers a full-bleed phone row at 2× DPR
+    (390 CSS px × 2) and a 780 CSS px row at 1×; `w1280` covers a ~1280–1400 CSS
+    px desktop row at 1× and is the largest TMDB step below `/original`. `null`
+    when there is neither a stored srcset nor a TMDB width ladder → the client
+    uses `backdrop_url`.
+
+  Both keys pass a **URL scheme allowlist** — absolute `http`/`https` and
+  app-relative paths (`/api/v1/artwork/{id}?size=…`) only. `metadata_json` image
+  URLs are provider-, `.nfo`- or plugin-supplied, and this step emits them on up
+  to 100 rows per response, so `javascript:`/`data:` URIs, protocol-relative
+  `//host/…` and values carrying an attribute-breakout character (`"`, `'`, `<`,
+  `>`, backtick, backslash) or a raw control byte now become `null` instead of
+  being echoed — and, in the srcset's case, width-swapped and embedded. One
+  unsafe candidate rejects a whole stored srcset. Stored URLs are also **trimmed**
+  before parsing: a whitespace-padded URL previously reached the client verbatim
+  *and* silently lost its width ladder, because the `^`-anchored TMDB regex
+  rejects the leading space.
 
   **`/original` is deliberately NOT advertised on list rows, and the detail-only
   `backdrop_url_large` is NOT emitted there.** `GET /api/v1/media` returns up to
   `PageLimit::MAX` (100) rows per page; a TMDB `/original` backdrop is a
   3840×2160-class JPEG (typically 1.5–4 MB), so a single page of hero-sized
   backdrops would be 150–400 MB of image traffic for a ~300 px-tall strip that can
-  never use 2160 lines of detail. Measured JSON cost of the new keys: **+263
-  bytes per item** with a TMDB backdrop (+25.7 KiB per 100-item page) and **+43
-  bytes** for an item without one — versus +443 bytes/item (+43.3 KiB/page) had
-  `shapeDetail()`'s three fields simply been copied. No image resizer is
-  introduced (that is S71–S73); only existing TMDB size variants are used.
+  never use 2160 lines of detail.
+
+  **Measured payload cost, per encoder.** On the wire — the figure that actually
+  matters — the resident `HttpHandler` gzips JSON at level 6 whenever the client
+  sends `Accept-Encoding: gzip`, so a realistic 100-row page (80 % of rows
+  carrying a backdrop) grows by **≈ 2.7–3.0 KiB, i.e. about +30 bytes per item**
+  (two independent measurements; the exact figure moves with how compressible the
+  rest of the page is). Uncompressed, `Response::json()` encodes with
+  `JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES`, and the in-page cost there is
+  **+270 bytes per item** with a TMDB backdrop (+26.4 KiB per 100-item page),
+  **+153 bytes** with a fanart.tv backdrop (no width ladder, so `backdrop_srcset`
+  is `null`) and **+71 bytes** for an item with no backdrop at all — the common
+  case for music/photo/book rows. The same three cases in *compact* encoding are
+  +242 / +125 / +43 bytes. Had `shapeDetail()`'s three fields simply been copied
+  instead, the pretty in-page cost would have been **+450 bytes per item (+43.9
+  KiB per page)**, 1.7× this shape. (`public/index.php` does not gzip; the
+  resident worker, which serves production, does.) No image resizer is introduced
+  (that is S71–S73); only existing TMDB size variants are used.
 
   `shapeDetail()` is unchanged — it still overwrites both keys with the hero
   budget (stored URL + `/original` + the 3-step srcset) after calling `shape()`,
-  so the detail/player response is byte-identical. Both HTTP entry points
-  (`public/index.php` and the resident `HttpHandler`) resolve the same
+  so the detail/player response is **value-identical (key order shifts)**: every
+  value is exactly what it was and the response length is unchanged, but because
+  the keys now arrive through `array_merge()` they sit earlier in the JSON object
+  than before. Object key order carries no meaning for a JSON consumer — the
+  `md5` of the raw response differs, the `md5` of the `ksort`ed response does
+  not. Both HTTP entry points (`public/index.php` and the resident
+  `HttpHandler`) resolve the same
   `WebPortalRouter` and therefore both emit the new keys; no constructor or DI
   wiring changed. Signed-URL freshness follows the established pattern: both
   values run through `SignedUrl::refreshArtworkUrl()`/`refreshArtworkSrcset()` at
@@ -47,8 +81,10 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   (track/music/album/artist/photo/book/audiobook) carry no
   `metadata_json.backdrop_url` and degrade to `null` on both keys — there is no
   `type` allowlist, because fanart.tv genuinely supplies artist/album backgrounds.
-  New `BackdropSrcset::rowUrl()` / `::rowSrcset()` hold the row ladder next to the
-  existing hero ladder.
+  New `BackdropSrcset::rowUrl()` / `::rowSrcset()` carry the row budget, and the
+  hero and row budgets now share ONE width ladder and ONE srcset code path — the
+  hero srcset is literally the row srcset with the `/original` candidate appended
+  (`forBackdropUrl()` delegates to `rowSrcset()`), so the two can never drift.
 
 - **DLNA renderers can finally play something: `GET|HEAD /dlna/stream/{mediaItemId}`**
   (updates.md #44 / S52). Until now DLNA *browse* worked while DLNA *playback* could

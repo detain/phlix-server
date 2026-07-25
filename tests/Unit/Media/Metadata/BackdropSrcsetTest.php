@@ -159,4 +159,71 @@ final class BackdropSrcsetTest extends TestCase
             $this->assertMatchesRegularExpression('/ \d+w$/', $candidate);
         }
     }
+
+    /**
+     * The two size budgets share ONE width ladder: the hero srcset is EXACTLY the
+     * row srcset plus the `/original` candidate. Pinned structurally (not as two
+     * hard-coded strings) so tuning the ladder can never move one budget without
+     * the other — the drift the duplicated `WIDTHS`/`ROW_WIDTHS` pair invited.
+     *
+     * @dataProvider ladderUrlProvider
+     */
+    public function testTheHeroSrcsetIsExactlyTheRowSrcsetPlusOriginal(string $url): void
+    {
+        $row = BackdropSrcset::rowSrcset($url);
+        $hero = BackdropSrcset::forBackdropUrl($url);
+        $large = BackdropSrcset::largeUrl($url);
+
+        $this->assertIsString($row);
+        $this->assertIsString($hero);
+        $this->assertIsString($large);
+        $this->assertSame($row . ', ' . $large . ' 1920w', $hero);
+        // …and the shared ladder therefore has the same steps in both, in order.
+        $rowWidths = self::descriptors($row);
+        $this->assertSame($rowWidths, array_slice(self::descriptors($hero), 0, count($rowWidths)));
+    }
+
+    /**
+     * The single-URL row base is the SMALLEST step of the shared ladder, so a
+     * non-`srcset` client fetches the cheapest candidate rather than a size that
+     * is not on the ladder at all.
+     *
+     * @dataProvider ladderUrlProvider
+     */
+    public function testRowUrlUsesTheSmallestStepOfTheSharedLadder(string $url): void
+    {
+        $row = BackdropSrcset::rowSrcset($url);
+        $rowUrl = BackdropSrcset::rowUrl($url);
+
+        $this->assertIsString($row);
+        $this->assertIsString($rowUrl);
+        $first = explode(', ', $row)[0];
+        $this->assertSame($rowUrl . ' ' . self::descriptors($row)[0] . 'w', $first);
+    }
+
+    /**
+     * @return iterable<string, array{string}>
+     */
+    public static function ladderUrlProvider(): iterable
+    {
+        yield 'stored w500' => ['https://image.tmdb.org/t/p/w500/bg123.jpg'];
+        yield 'already original' => ['https://image.tmdb.org/t/p/original/bg123.jpg'];
+        yield 'http scheme, nested path' => ['http://image.tmdb.org/t/p/w1280/a/b/c.jpg'];
+    }
+
+    /**
+     * The numeric `w` descriptors of a srcset, in order.
+     *
+     * @return list<int>
+     */
+    private static function descriptors(string $srcset): array
+    {
+        $out = [];
+        foreach (explode(', ', $srcset) as $candidate) {
+            $descriptor = substr($candidate, (int) strrpos($candidate, ' ') + 1);
+            $out[] = (int) rtrim($descriptor, 'w');
+        }
+
+        return $out;
+    }
 }

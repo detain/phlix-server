@@ -1651,6 +1651,39 @@ final class MusicLibraryScannerTest extends TestCase
         );
     }
 
+    /**
+     * MED-3 (review r1): the scan must NOT log once per track, and must still log once
+     * per album/artist.
+     *
+     * S96(a) routed this logger into `.logs/app.log` (handler level `debug`), which
+     * turned an invisible per-track line into ~89 % of everything the scan writes there
+     * — measured 61,135 of 68,247 lines for the production library, burying the loss
+     * lines the step exists to surface. Both halves of the decision are pinned here
+     * because both are easy to undo by accident: re-adding a per-track line restores the
+     * volume, and deleting the per-album lines would leave a successful scan with no
+     * write trace at all at any level. The album is S95's flush unit, so one line per
+     * flush boundary is the granularity that stays.
+     */
+    public function testTheScanLogsPerAlbumButNotPerTrack(): void
+    {
+        [$dir, $tagger] = $this->oneAlbumFixture(3);
+
+        $logger = new LogWriteFailureLogger();
+        $result = $this->taggedScanner(new MusicSchemaConnection(), $tagger, $logger)
+            ->scanDirectory($dir, null, 'lib-s96');
+
+        $this->assertSame(3, $result->added, 'the fixture must really index three tracks');
+        $this->assertSame(
+            0,
+            $logger->countMessages('Upserted track'),
+            'a per-TRACK success line scales with file count and is redundant with both the '
+            . 'music_tracks row it announces and the live items_added counter — it made app.log '
+            . 'unreadable, which defeats the point of routing the log there at all',
+        );
+        $this->assertSame(1, $logger->countMessages('Upserted album'), 'the per-album trace stays');
+        $this->assertSame(1, $logger->countMessages('Upserted artist'), 'the per-artist trace stays');
+    }
+
     // -- S96(f): a scan that loses files says so -------------------------------
 
     /**

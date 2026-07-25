@@ -275,12 +275,18 @@ class MusicLibraryScanner
      * a nested `START TRANSACTION` inside a caller that already opened one — a
      * failure mode this codebase has already hit in production.
      *
-     * **Orphan adoption is gated by ONE query per scan.** The per-entity lookups
-     * that reclaim a previous scan's orphaned artist/album `media_items` rows
-     * ({@see self::findAdoptableArtistMediaItemId()}) hit an unindexed
-     * `media_items.name`, so they are only issued when
+     * **Orphan adoption is gated by ONE query per scan, and the gate FAILS OPEN.**
+     * The per-entity lookups that reclaim a previous scan's orphaned artist/album
+     * `media_items` rows ({@see self::findAdoptableArtistMediaItemId()}) hit an
+     * unindexed `media_items.name`, so they are only issued when
      * {@see self::hasAdoptableMusicMediaItem()} has established that this library
      * has at least one adoptable row at all — see that method for the measurement.
+     * Because that answer is taken BEFORE the walk, `$mayAdopt` is threaded by
+     * REFERENCE all the way down to {@see self::upsertArtist()} /
+     * {@see self::upsertAlbum()}, which set it back to TRUE the moment they leave a
+     * minted `media_items` row unreferenced — otherwise a caught mid-walk write
+     * failure would leak that row permanently the next time the same artist or
+     * album title recurs in the SAME scan.
      *
      * @param string        $path       Root path to scan
      * @param callable|null $onProgress Optional `(int $processed, int $total, string $currentPath): void`
@@ -328,6 +334,13 @@ class MusicLibraryScanner
         // ONE query decides whether this scan needs the per-entity orphan-adoption
         // lookups at all. On a healthy library the answer is "no" and every artist
         // and album then skips an unindexed `media_items.name` probe.
+        //
+        // NOT a one-way decision: $mayAdopt is passed BY REFERENCE from here down
+        // through flushAlbum() into upsertArtist()/upsertAlbum(), which flip it back
+        // to true as soon as one of them leaves a freshly minted media_items row
+        // unreferenced. It only ever moves false -> true (an orphan that exists stays
+        // adoptable until something adopts it), so the worst case is the pre-gate
+        // cost, never a leak.
         //
         // FAIL SAFE, not fail fast: this runs outside every catch in the walk, so a
         // transient error here would otherwise abort a multi-hour scan that has
@@ -478,7 +491,13 @@ class MusicLibraryScanner
      *        `media_items` row worth looking for — decided ONCE per scan by
      *        {@see self::hasAdoptableMusicMediaItem()} and threaded through as an
      *        argument rather than kept on `$this`, so nothing about one scan can
-     *        leak into another in a resident worker.
+     *        leak into another in a resident worker. BY REFERENCE: this method's own
+     *        catch below is what lets the scan continue after a failed write, so it
+     *        is also what can leave an orphan mid-walk;
+     *        {@see self::upsertArtist()} / {@see self::upsertAlbum()} set the flag
+     *        back to true in that case and it must reach
+     *        {@see self::scanDirectory()}'s local, or the rest of the scan keeps
+     *        adoption switched off and leaks the row for good.
      * @return void
      */
     private function flushAlbum(
@@ -487,7 +506,7 @@ class MusicLibraryScanner
         array &$albumCache,
         ?string $libraryId,
         ScanResult $result,
-        bool $mayAdopt
+        bool &$mayAdopt
     ): void {
         $artistName = $albumData['artist'];
         $albumTitle = $albumData['album'];
@@ -969,14 +988,16 @@ class MusicLibraryScanner
      * @param bool $mayAdopt Whether the one-per-scan gate found an adoptable
      *        orphan ({@see self::hasAdoptableMusicMediaItem()}). FALSE skips the
      *        unindexed adoption lookup; defaults to TRUE so an omission degrades to
-     *        "correct but slower", never to "leaks an orphan".
+     *        "correct but slower", never to "leaks an orphan". BY REFERENCE, and set
+     *        to TRUE here whenever this call leaves a minted `media_items` row that
+     *        no `music_artists` row points at — see the `finally` below.
      * @return array{id: int, media_item_id: string|null}|null Artist ID and media_item_id or null on failure
      */
     private function upsertArtist(
         string $name,
         array &$cache,
         ?string $libraryId = null,
-        bool $mayAdopt = true
+        bool &$mayAdopt = true
     ): ?array {
         // Check cache first (Early Exit)
         $cacheKey = strtolower($name);
@@ -1025,29 +1046,63 @@ class MusicLibraryScanner
         // backfills it (verified: still NULL after two clean rescans). That artist
         // stays artwork-less and invisible to any media_items-driven path. Deliberately
         // left unchanged here; S95 does not alter this behaviour.
-        $mediaItemId = ($mayAdopt ? $this->findAdoptableArtistMediaItemId($name, $libraryId) : null)
-            ?? $this->createMediaItem('artist', $name, null, $libraryId);
+        $adopted = $mayAdopt ? $this->findAdoptableArtistMediaItemId($name, $libraryId) : null;
+        $mediaItemId = $adopted ?? $this->createMediaItem('artist', $name, null, $libraryId);
 
-        // Insert new artist
-        $result = $this->db->query(
-            "INSERT INTO music_artists (name, sort_name, media_item_id) VALUES (?, ?, ?)",
-            [$name, $sortName, $mediaItemId !== '' ? $mediaItemId : null]
-        );
+        // THE ORPHAN WINDOW, and why the `finally` below is not decoration. When we
+        // minted (rather than adopted) the row, `media_items` now holds an artist row
+        // that NOTHING references, and it stays that way until the INSERT below has
+        // both succeeded AND carried the minted id. Every way out of that window
+        // leaves the orphan behind:
+        //
+        //   * the INSERT throws            -> flushAlbum()'s outer catch logs
+        //                                     "Skipping album …" and THE SCAN CARRIES ON;
+        //   * the INSERT returns false     -> `return null` below, also non-fatal;
+        //   * createMediaItem() reported
+        //     failure for a row the server
+        //     actually committed           -> media_item_id is bound NULL, so even a
+        //                                     successful INSERT does not reference it.
+        //
+        // Since hasAdoptableMusicMediaItem() decided $mayAdopt BEFORE the walk, none
+        // of those would re-enable adoption on their own — and the next time this same
+        // artist name comes round (prod averages ≈2.3 albums per artist, so that is
+        // the normal case, not a corner) the natural-key SELECT above is still empty,
+        // a SECOND media_items row is minted, and the first becomes unreachable
+        // FOREVER: every later scan short-circuits on the natural key before the
+        // adoption lookup. Measured on real MySQL: media_items[artist] = 2 against
+        // music_artists = 1, surviving two clean rescans. So fail the gate OPEN.
+        $referenced = false;
 
-        if ($result === false) {
-            return null;
+        try {
+            // Insert new artist
+            $result = $this->db->query(
+                "INSERT INTO music_artists (name, sort_name, media_item_id) VALUES (?, ?, ?)",
+                [$name, $sortName, $mediaItemId !== '' ? $mediaItemId : null]
+            );
+
+            if ($result === false) {
+                return null;
+            }
+
+            // The music_artists row exists AND points at the id we minted; nothing
+            // after this statement can orphan it.
+            $referenced = $mediaItemId !== '';
+
+            $id = (int)$this->db->lastInsertId();
+
+            $this->logger->debug('Upserted artist', ['id' => $id, 'name' => $name, 'media_item_id' => $mediaItemId]);
+
+            return $this->cacheRemember(
+                $cache,
+                $cacheKey,
+                ['id' => $id, 'media_item_id' => $mediaItemId !== '' ? $mediaItemId : null],
+                self::MAX_ARTIST_CACHE
+            );
+        } finally {
+            if ($adopted === null && !$referenced) {
+                $mayAdopt = true;
+            }
         }
-
-        $id = (int)$this->db->lastInsertId();
-
-        $this->logger->debug('Upserted artist', ['id' => $id, 'name' => $name, 'media_item_id' => $mediaItemId]);
-
-        return $this->cacheRemember(
-            $cache,
-            $cacheKey,
-            ['id' => $id, 'media_item_id' => $mediaItemId !== '' ? $mediaItemId : null],
-            self::MAX_ARTIST_CACHE
-        );
     }
 
     /**
@@ -1065,7 +1120,10 @@ class MusicLibraryScanner
      * @param bool $mayAdopt Whether the one-per-scan gate found an adoptable
      *        orphan ({@see self::hasAdoptableMusicMediaItem()}). FALSE skips the
      *        unindexed adoption lookup; defaults to TRUE so an omission degrades to
-     *        "correct but slower", never to "leaks an orphan".
+     *        "correct but slower", never to "leaks an orphan". BY REFERENCE, and set
+     *        to TRUE here whenever this call leaves a minted `media_items` row that
+     *        no `music_albums` row points at — see the `finally` below and the same
+     *        window documented at length in {@see self::upsertArtist()}.
      * @return array{id: int, media_item_id: string|null}|null Album ID and media_item_id or null on failure
      */
     private function upsertAlbum(
@@ -1075,7 +1133,7 @@ class MusicLibraryScanner
         ?int $year,
         array &$cache,
         ?string $libraryId = null,
-        bool $mayAdopt = true
+        bool &$mayAdopt = true
     ): ?array {
         // Check cache first (Early Exit)
         $cacheKey = $artistId . '|' . strtolower($title);
@@ -1124,33 +1182,48 @@ class MusicLibraryScanner
         // as the reviewer measured it), paid once per album for the whole library.
         // The same S96-owned NULL media_item_id gap documented in upsertArtist()
         // applies here verbatim.
-        $mediaItemId = ($mayAdopt
+        $adopted = $mayAdopt
             ? $this->findAdoptableAlbumMediaItemId($title, $libraryId, $artistMediaItemId)
-            : null)
-            ?? $this->createMediaItem('album', $title, null, $libraryId);
+            : null;
+        $mediaItemId = $adopted ?? $this->createMediaItem('album', $title, null, $libraryId);
 
-        // Insert new album. total_tracks defaults to 0 and is set by
-        // refreshAlbumTrackTotal() once this flush's tracks are persisted.
-        $result = $this->db->query(
-            "INSERT INTO music_albums (artist_id, media_item_id, title, sort_title, year)
-             VALUES (?, ?, ?, ?, ?)",
-            [$artistId, $mediaItemId !== '' ? $mediaItemId : null, $title, $sortTitle, $year]
-        );
+        // Same orphan window as upsertArtist(), same fail-open, and it is reachable
+        // WITHOUT any artist recurring: MAX_TRACKS_PER_FLUSH chunks one oversized
+        // album into several flushes of the SAME album key inside ONE scan, so a
+        // failed first `INSERT INTO music_albums` is met again a few hundred files
+        // later. Read upsertArtist()'s block for the full enumeration.
+        $referenced = false;
 
-        if ($result === false) {
-            return null;
+        try {
+            // Insert new album. total_tracks defaults to 0 and is set by
+            // refreshAlbumTrackTotal() once this flush's tracks are persisted.
+            $result = $this->db->query(
+                "INSERT INTO music_albums (artist_id, media_item_id, title, sort_title, year)
+                 VALUES (?, ?, ?, ?, ?)",
+                [$artistId, $mediaItemId !== '' ? $mediaItemId : null, $title, $sortTitle, $year]
+            );
+
+            if ($result === false) {
+                return null;
+            }
+
+            $referenced = $mediaItemId !== '';
+
+            $id = (int)$this->db->lastInsertId();
+
+            $this->logger->debug('Upserted album', ['id' => $id, 'title' => $title, 'artist_id' => $artistId]);
+
+            return $this->cacheRemember(
+                $cache,
+                $cacheKey,
+                ['id' => $id, 'media_item_id' => $mediaItemId !== '' ? $mediaItemId : null],
+                self::MAX_ALBUM_CACHE
+            );
+        } finally {
+            if ($adopted === null && !$referenced) {
+                $mayAdopt = true;
+            }
         }
-
-        $id = (int)$this->db->lastInsertId();
-
-        $this->logger->debug('Upserted album', ['id' => $id, 'title' => $title, 'artist_id' => $artistId]);
-
-        return $this->cacheRemember(
-            $cache,
-            $cacheKey,
-            ['id' => $id, 'media_item_id' => $mediaItemId !== '' ? $mediaItemId : null],
-            self::MAX_ALBUM_CACHE
-        );
     }
 
     /**
@@ -1337,8 +1410,18 @@ class MusicLibraryScanner
      * if two orphans somehow share a name the second stays unreferenced forever —
      * every later scan short-circuits on the natural-key branch before reaching this
      * lookup (measured: `media_items[artist] = 2` against `music_artists = 1` after
-     * two clean rescans). The scanner alone cannot produce that state — an
-     * interruption re-adopts the SAME orphan rather than minting a second. (b) The
+     * two clean rescans). ⚠ Getting there takes something other than this scanner
+     * running normally — but NOT for the reason an earlier revision of this paragraph
+     * gave ("the scanner alone cannot produce that state; an interruption re-adopts
+     * the SAME orphan rather than minting a second"). That was wrong: a write failure
+     * between the mint and the `music_artists` INSERT is CAUGHT, the scan carries on,
+     * and it meets the same artist again a few albums later. What actually holds the
+     * property is that adoption is forced back ON for the rest of the scan the moment
+     * a mint is left unreferenced ({@see self::upsertArtist()}'s `finally`) and
+     * re-probed at the start of the next one
+     * ({@see self::hasAdoptableMusicMediaItem()}), so the second encounter ADOPTS the
+     * first orphan instead of minting a rival. A concurrent writer, manual surgery,
+     * or case (b) below can still produce it. (b) The
      * lookup is scoped `mi.library_id <=> ?` while `music_artists` has NO
      * `library_id`, so an orphan minted in library L1 is leaked permanently once ANY
      * other library creates the `music_artists` row for that name (measured: scan L2,
@@ -1384,7 +1467,14 @@ class MusicLibraryScanner
      * behaviour while every orphan is unparented, and it fails SAFE (mint a fresh
      * row, no mis-parenting) as soon as S97 sets the column. **The constraint S97
      * must honour: an album `media_items` row may only be adopted by the artist it
-     * is parented to.**
+     * is parented to — AND `parent_id` must be written by the SAME `INSERT` that
+     * creates the row, never by a second statement afterwards.** The ordering half is
+     * not a style preference: between those two statements the row exists with
+     * `parent_id IS NULL`, the live first branch of
+     * `(mi.parent_id IS NULL OR mi.parent_id = ?)` matches it, and it is handed to
+     * whichever artist reaches it first — exactly the cross-artist mis-parenting this
+     * predicate exists to prevent, and `ma.id IS NULL` cannot flag it because the row
+     * genuinely is unreferenced.
      *
      * @param string $title Album title, as stored in `media_items.name`.
      * @param string|null $libraryId Owning library UUID (null-safe matched).
@@ -1439,12 +1529,41 @@ class MusicLibraryScanner
      * shipped, because 116 ms once per path is nothing against the 31 s it saves and
      * the readable predicate is the one people will have to maintain.
      *
-     * ACCEPTED BEHAVIOUR. The answer is taken once, before the walk: an orphan
-     * created *by this scan's own crash* is irrelevant (the scan is over) and an
-     * orphan created by a CONCURRENT writer is not reclaimed until the next scan —
-     * one scan cycle later, exactly like every other adoption. `library_id <=> NULL`
-     * matches nothing (the column is NOT NULL), so the legacy no-library scan path
-     * skips both lookups outright, which is what it effectively did anyway.
+     * THE ANSWER IS TAKEN ONCE, BEFORE THE WALK — SO IT MUST BE ABLE TO FAIL OPEN.
+     * Enumerating what can create an orphan *after* this query has run, because
+     * getting that list wrong is precisely how the gate first shipped with a hole:
+     *
+     *  1. **This scan's own CAUGHT write failure — the one that matters.**
+     *     {@see self::upsertArtist()} / {@see self::upsertAlbum()} mint the
+     *     `media_items` row one autocommitted statement BEFORE the matching `music_*`
+     *     row, and a failure in between is caught by {@see self::flushAlbum()}, which
+     *     logs "Skipping album …" and lets THE SCAN CARRY ON. The same artist name
+     *     (≈2.3 albums per artist on prod) or the same chunked album key then recurs
+     *     later in the SAME scan, finds nothing on the natural key, and — with
+     *     adoption still switched off — mints a rival row while the first becomes
+     *     permanently unreachable. Both methods therefore set `$mayAdopt` back to TRUE
+     *     by reference, up through `flushAlbum()` into
+     *     {@see self::scanDirectory()}'s local, whenever they leave a minted row
+     *     unreferenced. That is what makes taking the answer once safe; without it,
+     *     measured on real MySQL: `media_items[artist] = 2` against
+     *     `music_artists = 1`, surviving two clean rescans.
+     *  2. **This scan's own CRASH** — irrelevant, the scan is over, and the next scan
+     *     re-probes this gate.
+     *  3. **A CONCURRENT writer** — not reclaimed until the next scan, one cycle
+     *     later, exactly like every other adoption.
+     *  4. **A failed mint whose row the server nevertheless committed**
+     *     (`createMediaItem()` reports '' but the INSERT landed) — covered by the same
+     *     `finally` as (1), because "referenced" is defined as *the `music_*` row
+     *     carries the minted id*, not merely *the INSERT succeeded*.
+     *
+     * Note that the track path needs none of this: an orphaned `track` row is found
+     * by PATH ({@see self::findExistingTrackMediaItemId()}), which is indexed, never
+     * gated, and reused by {@see self::upsertTrack()} — the track window is
+     * self-healing on every pass.
+     *
+     * `library_id <=> NULL` matches nothing (the column is NOT NULL), so the legacy
+     * no-library scan path skips both lookups outright, which is what it effectively
+     * did anyway.
      *
      * @param string|null $libraryId Owning library UUID (null-safe matched).
      * @return bool TRUE when at least one adoptable artist/album row exists.

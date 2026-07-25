@@ -1043,13 +1043,22 @@ final class MusicLibraryScannerTest extends TestCase
      * ABANDONED part-way — which is why the call sits in a `finally` and not at the
      * tail of the `try`.
      *
-     * The abort is modelled the only way it can still happen once every
+     * The abort is modelled the only way it can still be CONSTRUCTED once every
      * `upsertTrack()` has its own catch: the track INSERT fails AND the write of the
-     * "skipping track" log record fails too (a full log volume). Reverting the call
-     * to the tail of the `try` — the exact pre-fix shape — skips it on that path and
-     * leaves an album that HAS a track row advertising `total_tracks = 0`, which
+     * "skipping track" log record fails too. ⚠ That second half is **not reachable in
+     * production today** and this test does not claim it is — `StructuredLogger` wraps
+     * every routed handler in a `WhatFailureGroupHandler`
+     * ({@see \Phlix\Common\Logger\StructuredLogger}, deliberately, for the PHP 8.5 +
+     * Swoole `set_error_handler` hazard), so a log write cannot propagate (verified
+     * three ways in review r3: unwritable path, path-is-a-directory, `/dev/full`
+     * ENOSPC — no throw in any). The `finally` is therefore defence-in-depth with no
+     * live trigger, and this is the pin that keeps it: reverting the call to the tail
+     * of the `try` — the exact pre-fix shape — skips it on that path and leaves an
+     * album that HAS a track row advertising `total_tracks = 0`, which
      * `MusicLibraryService::getArtistWithAlbums()` sums into "0 tracks" on the artist
-     * page, and nothing ever heals it.
+     * page, and nothing ever heals it. Any future statement added to the inner `try`
+     * that CAN throw (or any logger without that wrapper) makes the trigger live
+     * again, which is exactly why the `finally` stays.
      */
     public function testAlbumTrackTotalIsRefreshedEvenWhenTheTrackLoopIsAbandoned(): void
     {
@@ -1267,6 +1276,168 @@ final class MusicLibraryScannerTest extends TestCase
         $this->assertCount(3, $db->mediaItemIds('album'));
         $this->assertCount(6, $db->mediaItemIds('track'));
     }
+
+    /**
+     * The gate must FAIL OPEN mid-walk: a caught write failure that orphans an artist
+     * `media_items` row has to re-enable adoption for the REST OF THE SAME SCAN.
+     *
+     * 50 albums, one file each, all artists distinct except albums 3 and 50, which
+     * share one. The library starts clean, so `hasAdoptableMusicMediaItem()` answers
+     * "nothing to adopt" and `$mayAdopt` starts FALSE. The shared artist's first
+     * `INSERT INTO music_artists` then fails: its `media_items` row is already
+     * committed, `flushAlbum()` catches, logs "Skipping album …" and **the scan carries
+     * on** — so that row is an orphan while the walk is still running. When the same
+     * artist comes round again the natural-key `SELECT` is still empty, and if the
+     * one-per-scan answer were final the scanner would mint a SECOND row and the first
+     * would be unreachable FOREVER (every later scan short-circuits on the natural key
+     * before the adoption lookup — measured on real MySQL: `media_items[artist] = 2`
+     * against `music_artists = 1`, surviving two clean rescans).
+     *
+     * This also pins the plumbing, not just the flip: `$mayAdopt` is written inside
+     * `upsertArtist()` and consumed there too, two by-reference hops from
+     * `scanDirectory()`'s local (`upsertArtist` ← `flushAlbum` ← `scanDirectory`). If
+     * any hop is by VALUE the counted adoption lookup below stays at 0 while every
+     * other assertion still passes.
+     */
+    public function testAnArtistOrphanedMidWalkIsAdoptedWhenTheSameArtistRecursInTheSameScan(): void
+    {
+        $root = $this->tempDir();
+        for ($a = 1; $a <= 50; $a++) {
+            $albumDir = $root . sprintf('/album-%02d', $a);
+            mkdir($albumDir, 0777, true);
+            $this->cleanup[] = $albumDir;
+            $this->touchFile($albumDir, '01-t.mp3');
+        }
+
+        $tagger = static function (string $path): array {
+            $n = (int) substr(basename(dirname($path)), -2);
+
+            return [
+                // Albums 3 and 50 are the SAME artist — prod averages ≈2.3 albums
+                // per artist, so a recurring artist is the normal case.
+                'artist' => in_array($n, [3, 50], true) ? 'Shared Artist' : sprintf('Artist %02d', $n),
+                'album' => sprintf('Album %02d', $n),
+                'title' => basename($path, '.mp3'),
+                'track_number' => 1,
+                'disc_number' => 1,
+                'duration_secs' => 100,
+                'year' => 2001,
+                'genre' => null,
+            ];
+        };
+
+        $db = new MusicSchemaConnection();
+        $db->faultOnNth('INSERT INTO music_artists', 1, 'Shared Artist');
+
+        $logger = new LogWriteFailureLogger();
+        $scanner = $this->taggedScanner($db, $tagger, $logger);
+
+        $scanner->scanDirectory($root, null, 'lib-s95');
+
+        // Preconditions: the library really was clean (one gate query, answered "no"),
+        // and the modelled failure really did happen and really was survived.
+        $this->assertSame(1, $db->countStatements('LEFT JOIN music_artists ar'), 'the gate is asked exactly once');
+        $this->assertSame(1, $logger->countMessages('Skipping album after error during indexing'));
+        $this->assertCount(49, $db->albums, 'the faulted album is skipped; the other 49 are indexed');
+
+        // THE POINT: the orphan was re-adopted inside the same scan, so there is
+        // exactly ONE artist media_items row for the shared artist and nothing is left
+        // dangling. Without the fail-open flip: 50 artist rows for 49 artists, one of
+        // them unreferenced and unreachable for good.
+        $this->assertSame(
+            [],
+            $db->orphanedMusicMediaItems(),
+            'a caught mid-walk write failure must not leave an unreferenced artist/album media_items row: '
+            . 'the gate has to fail OPEN so the next encounter with the same name adopts it',
+        );
+        $this->assertCount(49, $db->mediaItemIds('artist'), '49 distinct artists must own exactly 49 rows');
+        $this->assertCount(49, $db->artists);
+        $referencedIds = array_values(array_map(
+            static fn(array $artist): string => (string) $artist['media_item_id'],
+            $db->artists,
+        ));
+        $mintedIds = $db->mediaItemIds('artist');
+        sort($referencedIds);
+        sort($mintedIds);
+        $this->assertSame(
+            $mintedIds,
+            $referencedIds,
+            'every artist media_items row must be pointed at by exactly one music_artists row',
+        );
+
+        // The plumbing proof: adoption was switched back ON at the CONSUMPTION site
+        // even though the gate said "clean".
+        $this->assertGreaterThan(
+            0,
+            $db->countStatements('LEFT JOIN music_artists ma'),
+            'the per-artist adoption lookup must run again after the scan orphaned a row — '
+            . '0 here means the flip never reached upsertArtist() (a by-value hop)',
+        );
+    }
+
+    /**
+     * The album half of the same window, and it needs no recurring artist at all:
+     * `MAX_TRACKS_PER_FLUSH` (250) chunks one oversized album into TWO flushes of the
+     * SAME album key inside ONE scan, so 251 files plus a failed first
+     * `INSERT INTO music_albums` deterministically meets the orphaned album
+     * `media_items` row again while the walk is still running.
+     *
+     * Same failure shape as the artist case: the album's `media_items` row is
+     * committed, the `music_albums` INSERT fails, `flushAlbum()` catches and the scan
+     * continues. With the one-per-scan answer treated as final, the second chunk mints
+     * a second album row and the first is orphaned permanently (measured on real
+     * MySQL: `media_items[album] = 2` against `music_albums = 1`, surviving two clean
+     * rescans).
+     */
+    public function testAnAlbumOrphanedByAChunkedFlushIsAdoptedByTheNextChunkOfTheSameScan(): void
+    {
+        // 251 = MAX_TRACKS_PER_FLUSH + 1: one chunk flush plus the terminal flush.
+        [$dir, $tagger] = $this->oneAlbumFixture(251, 'Chunked Artist', 'Chunked Album');
+
+        $db = new MusicSchemaConnection();
+        $db->faultOnNth('INSERT INTO music_albums', 1);
+
+        $logger = new LogWriteFailureLogger();
+        $scanner = $this->taggedScanner($db, $tagger, $logger);
+
+        $result = $scanner->scanDirectory($dir, null, 'lib-s95');
+
+        // Preconditions: clean library (gate asked once, answered "no"), the album was
+        // really flushed twice, and the first flush was really abandoned.
+        $this->assertSame(1, $db->countStatements('LEFT JOIN music_artists ar'), 'the gate is asked exactly once');
+        $this->assertSame(
+            2,
+            $db->countStatements('INSERT INTO music_albums'),
+            '251 files must produce TWO flushes of the one album key',
+        );
+        $this->assertSame(1, $logger->countMessages('Skipping album after error during indexing'));
+        $this->assertSame(1, $result->added, 'the 250 tracks of the abandoned chunk are lost; the 251st is written');
+
+        // THE POINT: the second chunk adopted the row the first one orphaned.
+        $this->assertSame(
+            [],
+            $db->orphanedMusicMediaItems(),
+            'the album media_items row orphaned by the first chunk must be adopted by the second, '
+            . 'not left behind while a rival row is minted',
+        );
+        $this->assertCount(1, $db->mediaItemIds('album'), 'one album must own exactly one album media_items row');
+        $this->assertCount(1, $db->albums);
+        $albumId = array_key_first($db->albums);
+        $this->assertIsInt($albumId);
+        $this->assertSame(
+            $db->mediaItemIds('album')[0],
+            $db->albums[$albumId]['media_item_id'],
+            'the surviving music_albums row must point AT the adopted row',
+        );
+
+        // The plumbing proof, at the album consumption site this time.
+        $this->assertGreaterThan(
+            0,
+            $db->countStatements('LEFT JOIN music_albums ma'),
+            'the per-album adoption lookup must run again after the scan orphaned a row — '
+            . '0 here means the flip never reached upsertAlbum() (a by-value hop)',
+        );
+    }
 }
 
 /**
@@ -1439,11 +1610,8 @@ final class MusicSchemaConnection extends Connection
     /** @var list<string> Every statement, in order. */
     public array $statements = [];
 
-    /** @var array<string, int> needle => 1-based occurrence that must throw. */
+    /** @var list<array{needle:string, param:?string, occurrence:int, seen:int}> Injected faults. */
     private array $faults = [];
-
-    /** @var array<string, int> needle => occurrences seen so far. */
-    private array $seen = [];
 
     private int $autoInc = 0;
 
@@ -1454,10 +1622,19 @@ final class MusicSchemaConnection extends Connection
     {
     }
 
-    /** Make the `$occurrence`-th statement containing `$needle` throw. */
-    public function faultOnNth(string $needle, int $occurrence): void
+    /**
+     * Make the `$occurrence`-th statement containing `$needle` throw.
+     *
+     * `$param` narrows the match to statements that also BIND a parameter containing
+     * that string, which is what makes "fail this one artist's insert" expressible: a
+     * 50-album fixture issues 49 byte-identical `INSERT INTO music_artists`
+     * statements, and `RecursiveDirectoryIterator` yields directories in `readdir()`
+     * order, so counting occurrences alone would fault whichever artist happened to be
+     * walked third rather than the one the test is about.
+     */
+    public function faultOnNth(string $needle, int $occurrence, ?string $param = null): void
     {
-        $this->faults[$needle] = $occurrence;
+        $this->faults[] = ['needle' => $needle, 'param' => $param, 'occurrence' => $occurrence, 'seen' => 0];
     }
 
     /** Plant an orphaned `media_items` row of `$type` that no music_* row references. */
@@ -1502,6 +1679,24 @@ final class MusicSchemaConnection extends Connection
         return $out;
     }
 
+    /**
+     * Every artist/album `media_items` row that no `music_*` row points at — i.e. the
+     * leak this scanner must not produce.
+     *
+     * @return list<string>
+     */
+    public function orphanedMusicMediaItems(): array
+    {
+        $out = [];
+        foreach ($this->mediaItems as $row) {
+            if (in_array($row['type'], ['artist', 'album'], true) && !$this->isReferenced($row['id'])) {
+                $out[] = $row['id'];
+            }
+        }
+
+        return $out;
+    }
+
     /** Is this `media_items` id referenced by any `music_artists`/`music_albums` row? */
     public function isReferenced(string $mediaItemId): bool
     {
@@ -1532,7 +1727,7 @@ final class MusicSchemaConnection extends Connection
         $sql = ltrim((string) $query);
         $p = $params ?? [];
         $this->statements[] = $sql;
-        $this->maybeFault($sql);
+        $this->maybeFault($sql, $p);
 
         if (str_starts_with($sql, 'SELECT')) {
             return $this->runSelect($sql, $p);
@@ -1550,17 +1745,42 @@ final class MusicSchemaConnection extends Connection
         return (string) $this->autoInc;
     }
 
-    private function maybeFault(string $sql): void
+    /**
+     * @param array<int, mixed> $p Bound parameters of the statement.
+     */
+    private function maybeFault(string $sql, array $p): void
     {
-        foreach ($this->faults as $needle => $occurrence) {
-            if (!str_contains($sql, $needle)) {
+        foreach ($this->faults as $i => $fault) {
+            if (!str_contains($sql, $fault['needle'])) {
                 continue;
             }
-            $this->seen[$needle] = ($this->seen[$needle] ?? 0) + 1;
-            if ($this->seen[$needle] === $occurrence) {
-                throw new \RuntimeException(sprintf('INJECTED FAULT: %s #%d', $needle, $occurrence));
+            if ($fault['param'] !== null && !$this->paramsContain($p, $fault['param'])) {
+                continue;
+            }
+            $this->faults[$i]['seen']++;
+            if ($this->faults[$i]['seen'] === $fault['occurrence']) {
+                throw new \RuntimeException(sprintf(
+                    'INJECTED FAULT: %s%s #%d',
+                    $fault['needle'],
+                    $fault['param'] !== null ? ' [' . $fault['param'] . ']' : '',
+                    $fault['occurrence'],
+                ));
             }
         }
+    }
+
+    /**
+     * @param array<int, mixed> $p Bound parameters.
+     */
+    private function paramsContain(array $p, string $needle): bool
+    {
+        foreach ($p as $value) {
+            if (is_scalar($value) && str_contains((string) $value, $needle)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
@@ -1760,11 +1980,19 @@ final class MusicSchemaConnection extends Connection
  * A {@see StructuredLogger} whose write can be made to FAIL.
  *
  * Every PSR-3 level funnels through `log()`, so overriding that one method both
- * records what the scanner logged and lets a test model "the failure handler
- * itself failed" — a real possibility (a full log volume) and the only way an
- * exception can still escape `flushAlbum()`'s track loop now that every
- * `upsertTrack()` call has its own catch. The parent constructor is bypassed, so
- * no Monolog handler and no log file is created.
+ * records what the scanner logged and lets a test model "the failure handler itself
+ * failed" — the only remaining way an exception can escape `flushAlbum()`'s track loop
+ * now that every `upsertTrack()` call has its own catch.
+ *
+ * ⚠ That is a MODELLED failure, not a live one. A real `StructuredLogger` cannot throw
+ * on a write: it wraps every routed handler in a `WhatFailureGroupHandler`
+ * ({@see \Phlix\Common\Logger\StructuredLogger}) precisely so a handler exception can
+ * never propagate — measured three ways in review r3 (unwritable path, path is a
+ * directory, `/dev/full` ENOSPC: no throw in any of them). So the `finally` this double
+ * exercises is defence-in-depth against a future throwing statement in that loop, and
+ * this double is how it stays pinned rather than evidence that a log volume filling up
+ * would trip it today. The parent constructor is bypassed, so no Monolog handler and no
+ * log file is created.
  */
 final class LogWriteFailureLogger extends StructuredLogger
 {

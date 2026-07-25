@@ -1,0 +1,49 @@
+-- Migration 094: widen stats_playback_events.media_type to the FULL
+-- `media_items.type` vocabulary (13 members).
+--
+-- WHY (S102 · live production bug): `PlaybackController::dispatchPlaybackStarted()`
+-- passes `lookupMediaType()`, which returns the RAW `media_items.type` value, into
+-- `StatsCollector::recordPlaybackStart()`. But migration 019 declared this column
+-- as ENUM('movie','series','music','photo') -- only FOUR of the thirteen members.
+-- Under STRICT_TRANS_TABLES every other value is MySQL error 1265 "Data truncated
+-- for column 'media_type'", raised as a PDOException that escaped all the way out
+-- of the HTTP worker. Production corroborates: all 235 stored rows are `movie`,
+-- and every episode / track / photo play since S31 threw instead of recording.
+--
+-- WHY WIDEN RATHER THAN FOLD: this column has NO readers. Every query touching
+-- `stats_playback_events` (StatsCollector::getPlaybackStats/getTopUsers/getTopMedia,
+-- NewsletterGenerator, DashboardService::getRecentPlaybackEvents) aggregates by
+-- date / user / media_item_id and never selects or groups by `media_type`, so
+-- widening the vocabulary cannot change any consumer's output shape. Folding the
+-- 13 members down to 4 buckets would instead permanently destroy the per-type
+-- resolution S31 was written to capture (episode -> series, track -> music,
+-- audiobook -> book are all one-way). Contrast `stats_storage.media_type`, which
+-- IS read -- `DashboardService::getStorageSummary()` groups by it and matches into
+-- a fixed five-key shape -- and therefore deliberately STAYS coarse, fed through
+-- `StorageSnapshotHelper::TYPE_TO_BUCKET` (migration 086).
+--
+-- CANNOT TRUNCATE: the new member list is a strict SUPERSET of the old one
+-- ('movie','series','music','photo' are all still present, and `photo` keeps its
+-- ordinal position relative to nothing that is stored), so every already-stored
+-- value remains valid. Verified against a real MySQL 8.0 with 235 seeded `movie`
+-- rows: the ALTER completes with `0 rows affected` and no warnings.
+--
+-- ORDER: members are listed in `media_items.type` column order (migrations 001 ->
+-- 011 -> 034) so both columns share one ordinal numbering. ENUM ordinals are
+-- positional in MySQL, so this is the only ordering that lets the two columns be
+-- compared or copied without surprises.
+--
+-- IDEMPOTENT: re-running MODIFY COLUMN with an identical definition is a no-op,
+-- so this migration is safe to replay (the runner does not record a migration
+-- that failed part-way, so a re-run must be safe).
+--
+-- CONSUMER: `Phlix\Media\MediaItemType::ALL` is the single source of truth for
+-- this list. `Phlix\Tests\Unit\Media\MediaItemTypeDriftTest` parses THIS FILE and
+-- fails if the two ever disagree.
+--
+-- NOTE: keep this statement free of semicolons inside string literals. The
+-- migration runner strips comments then splits on `;` (see MigrationRunner::
+-- splitStatements), so a `;` inside a string literal would shred the ALTER.
+
+ALTER TABLE stats_playback_events
+    MODIFY COLUMN media_type ENUM('movie', 'series', 'season', 'episode', 'track', 'music', 'album', 'artist', 'video', 'audio', 'book', 'photo', 'audiobook') NOT NULL;

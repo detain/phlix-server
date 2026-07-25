@@ -478,6 +478,58 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- **Every episode / track / photo play threw an uncaught `PDOException` in the HTTP
+  worker** (S102). `PlaybackController::dispatchPlaybackStarted()` passes the RAW
+  `media_items.type` value into `StatsCollector::recordPlaybackStart()` — correct, and the
+  entire point of S31 — but migration 019 had declared
+  `stats_playback_events.media_type` as `ENUM('movie','series','music','photo')`: **four**
+  of the column's **thirteen** members. Under `STRICT_TRANS_TABLES` every other value is
+  MySQL error **1265 "Data truncated for column 'media_type'"**, which the driver raises as
+  a `PDOException` that nothing on the path caught. Production corroborates exactly that:
+  **all 235** stored rows were `movie`, and every non-movie play since S31 threw instead of
+  recording.
+  - **Migration 094 widens the column to the full 13-member vocabulary**, in
+    `media_items.type` column order so both share one ordinal numbering. Widening (rather
+    than folding the 13 types down to 4) is safe *and* correct here because the column has
+    **no readers** — every query over `stats_playback_events`
+    (`getPlaybackStats`/`getTopUsers`/`getTopMedia`, `NewsletterGenerator`,
+    `DashboardService::getRecentPlaybackEvents`) aggregates by date / user / media item and
+    never selects or groups by `media_type` — so no consumer's output shape changes, while
+    folding would have permanently destroyed the per-type resolution S31 exists to capture
+    (`episode`→`series`, `track`→`music`, `audiobook`→`book` are all one-way). The new
+    member list is a strict superset of the old one, so no stored value can be truncated;
+    verified against real MySQL 8.0 with 235 seeded `movie` rows.
+  - **`stats_storage.media_type` deliberately stays coarse** and is fixed the *other* way.
+    It is the one such column with a real reader — `DashboardService::getStorageSummary()`
+    groups by it into a fixed `{movie,series,music,photo,book}_bytes` shape — so widening it
+    would have dropped bytes into that `match`'s `default` arm and quietly broken the admin
+    dashboard. Instead `recordStorageSnapshot()` now folds whatever it is handed through
+    `StorageSnapshotHelper::TYPE_TO_BUCKET` (exhaustive, and idempotent because every bucket
+    maps to itself), so a caller passing a raw `episode` gets a correct `series` row rather
+    than error 1265. Both existing callers already passed bucket names and are unaffected.
+  - **Statistics can no longer break playback at all.** Every `StatsCollector` *write* now
+    runs behind a containment boundary that logs the failure at `error` level (so it lands
+    in `.logs/error.log`) and swallows it — telemetry is strictly less important than the
+    action that triggered it, and `dispatchPlaybackStarted()` has no try/catch of its own.
+    *Reads* are deliberately left unguarded: they serve the admin dashboard, where a broken
+    query must surface as a visible error rather than a silently empty chart.
+  - **Root cause was a duplicated type vocabulary, so that is what got fixed.** The
+    13-member list had been re-typed by hand in four places, each carrying a comment asking
+    the next author to keep it "in lockstep" — a convention that had already failed three
+    times (this bug; `book`/`audiobook` bytes missing from the dashboard, migration 086;
+    `track` missing from the Music totals). New `Phlix\Media\MediaItemType` holds the list
+    **once**, `MediaItemShaper::VALID_TYPES` is now an alias of it, and a new drift test
+    **parses the migration SQL** and fails the build when the constant, any consumer map
+    (`TYPE_TO_BUCKET`, `UpnpClassMap::TYPE_TO_CLASS`, `VALID_TYPES`) or any of the
+    type-carrying columns disagree. The previous cross-checks compared the PHP copies only
+    to each other, which is why all of them could agree while the actual column did not.
+  - Proven against real MySQL 8.0 under `STRICT_TRANS_TABLES` (a mocked connection accepts
+    any string for any column and cannot reproduce an ENUM rejection — the same class of
+    miss as the LiveTv `RowQuery` and metrics `ONLY_FULL_GROUP_BY` defects): all 13 members
+    round-trip verbatim, an unknown type is coerced instead of rejected, a failing write is
+    contained, and a first progress report on an `episode` records `media_type=episode`
+    without throwing.
+
 - **A `HEAD` on a media route put TWO conflicting `Content-Length` headers on the
   wire** (updates.md #44 / S52 review). Workerman's response encoder
   (`Protocols/Http/Response::__toString()`) appends its own

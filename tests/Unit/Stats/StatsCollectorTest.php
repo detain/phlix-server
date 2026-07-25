@@ -5,8 +5,11 @@ declare(strict_types=1);
 namespace Phlix\Tests\Unit\Stats;
 
 use DateTime;
+use PDOException;
 use PHPUnit\Framework\TestCase;
+use Phlix\Media\MediaItemType;
 use Phlix\Stats\StatsCollector;
+use RuntimeException;
 use Workerman\MySQL\Connection;
 
 class StatsCollectorTest extends TestCase
@@ -37,6 +40,127 @@ class StatsCollectorTest extends TestCase
             '/^[0-9a-f]{4}[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}[0-9a-f]{4}[0-9a-f]{4}$/',
             $eventId
         );
+    }
+
+    /**
+     * S102: the raw `media_items.type` value is bound VERBATIM — the column now
+     * carries all 13 members (migration 094), so nothing folds `episode` into
+     * `series`. This pins the SQL shape for runs with no database; the real
+     * INSERT is proven in
+     * {@see \Phlix\Tests\Integration\Stats\PlaybackEventMediaTypeEnumTest}.
+     */
+    public function testRecordPlaybackStartBindsEveryMediaTypeVerbatim(): void
+    {
+        foreach (MediaItemType::ALL as $type) {
+            $db = $this->createMock(Connection::class);
+            $db->expects($this->once())
+                ->method('query')
+                ->with(
+                    $this->stringContains('INSERT INTO stats_playback_events'),
+                    $this->callback(static fn(array $params): bool => $params[3] === $type)
+                );
+
+            (new StatsCollector($db))->recordPlaybackStart('user-1', 'media-1', $type, 'device-1');
+        }
+    }
+
+    /**
+     * S102: a value the column ENUM does not contain would be MySQL error 1265,
+     * so it is coerced to the shared fallback instead of losing the event.
+     * `image` is the classic wrong value here — a scanner label that has never
+     * been a `media_items.type` member.
+     */
+    public function testRecordPlaybackStartCoercesATypeOutsideTheEnum(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->expects($this->once())
+            ->method('query')
+            ->with(
+                $this->stringContains('INSERT INTO stats_playback_events'),
+                $this->callback(static fn(array $params): bool => $params[3] === MediaItemType::FALLBACK)
+            );
+
+        (new StatsCollector($db))->recordPlaybackStart('user-1', 'media-1', 'image', 'device-1');
+    }
+
+    /**
+     * S102 — THE BOUNDARY. Recording statistics is telemetry: it must never be
+     * able to break the user action that triggered it. Before the fix the
+     * driver's exception escaped `recordPlaybackStart()` and, since
+     * `PlaybackController::dispatchPlaybackStarted()` has no try/catch, escaped
+     * the HTTP worker as well — a 500 on every episode play.
+     *
+     * @return array<string, array{0: \Throwable}>
+     */
+    public static function writeFailureProvider(): array
+    {
+        return [
+            'error 1265 (the S102 production failure)' => [
+                new PDOException("SQLSTATE[01000]: Warning: 1265 Data truncated for column 'media_type' at row 1"),
+            ],
+            'connection lost' => [new RuntimeException('MySQL server has gone away')],
+            'engine-level error' => [new \Error('driver blew up')],
+        ];
+    }
+
+    /**
+     * @dataProvider writeFailureProvider
+     */
+    public function testAFailingWriteIsContainedAndNeverPropagates(\Throwable $failure): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willThrowException($failure);
+
+        $collector = new StatsCollector($db);
+
+        // Every WRITE path has to be contained, not just the one that broke.
+        $eventId = $collector->recordPlaybackStart('user-1', 'media-1', 'episode', 'device-1');
+        $this->assertNotSame('', $eventId, 'A contained write must still return a usable event id');
+
+        $collector->recordPlaybackEnd($eventId, 60, true);
+        $collector->recordLibraryChange('item_added', 'media-1');
+        $collector->recordUserActivity('user-1', 'login');
+        $collector->recordStorageSnapshot('movie', 1, 1);
+
+        // Reaching here at all IS the assertion: nothing propagated.
+        $this->assertTrue(true);
+    }
+
+    /**
+     * The boundary is deliberately narrow: READ failures still surface, because
+     * they serve the admin dashboard, where a broken query must be a visible
+     * error rather than a silently empty chart.
+     */
+    public function testReadFailuresStillPropagate(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willThrowException(new RuntimeException('read exploded'));
+
+        $collector = new StatsCollector($db);
+
+        $this->expectException(RuntimeException::class);
+        $collector->getTopMedia(10, null);
+    }
+
+    /**
+     * S102: `stats_storage.media_type` stays COARSE (it has a real reader in
+     * `DashboardService::getStorageSummary()`), so the writer folds whatever it
+     * is handed onto a bucket. The fold is idempotent, so the two existing
+     * callers — which already pass bucket names — are unaffected.
+     */
+    public function testRecordStorageSnapshotFoldsRawTypesToBuckets(): void
+    {
+        foreach (['episode' => 'series', 'track' => 'music', 'audiobook' => 'book', 'movie' => 'movie'] as $t => $b) {
+            $db = $this->createMock(Connection::class);
+            $db->expects($this->once())
+                ->method('query')
+                ->with(
+                    $this->stringContains('INSERT INTO stats_storage'),
+                    $this->callback(static fn(array $params): bool => $params[2] === $b)
+                );
+
+            (new StatsCollector($db))->recordStorageSnapshot($t, 1, 1024);
+        }
     }
 
     public function testRecordPlaybackEndCalculatesDuration(): void

@@ -12,7 +12,11 @@ declare(strict_types=1);
 namespace Phlix\Stats;
 
 use DateTimeInterface;
+use Phlix\Common\Logger\LogChannels;
+use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Common\Uuid;
+use Phlix\Media\MediaItemType;
+use Throwable;
 use Workerman\MySQL\Connection;
 
 /**
@@ -121,18 +125,90 @@ class StatsCollector
     }
 
     /**
+     * Run one telemetry WRITE, containing any failure inside the stats subsystem.
+     *
+     * ## Why this boundary exists (S102)
+     *
+     * Statistics are telemetry: recording them is strictly less important than
+     * the user action that triggered them. Before this method every `record*()`
+     * call let the driver's exception escape straight to the caller — and
+     * `PlaybackController::dispatchPlaybackStarted()` has no try/catch, so a
+     * single bad column value took playback-start down with it. In production
+     * that is exactly what happened: `media_type = 'episode'` against migration
+     * 019's four-member ENUM raised
+     * `SQLSTATE[01000]: Warning: 1265 Data truncated for column 'media_type'`,
+     * which surfaced as an unhandled `PDOException` in the HTTP worker on EVERY
+     * episode play. Widening the ENUM fixes that one value; this boundary makes
+     * the whole class of failure (a stats table missing, a column drifted, the
+     * connection dropped) non-fatal to playback.
+     *
+     * ## Deliberately narrow
+     *
+     * Only WRITES are wrapped. The read/aggregation methods
+     * ({@see getPlaybackStats()}, {@see getTopUsers()}, {@see getTopMedia()})
+     * are NOT: they serve the admin dashboard, where a broken query must surface
+     * as a visible error rather than as a silently empty chart, and none of them
+     * sits on a playback path.
+     *
+     * Failures are logged at **error** level, so they land in `.logs/error.log`
+     * (the error handler is untagged and therefore attaches to every channel)
+     * and are visible to anyone watching the error log — swallowed, but never
+     * silent. The SQL is included because these statements are static literals
+     * with bound parameters; the parameters themselves are NOT logged, since
+     * they carry user ids and client IPs.
+     *
+     * This mirrors the reasoning behind {@see isEnabled()}: guarding HERE rather
+     * than at the ~52 call sites means the guarantee cannot be forgotten by a
+     * future caller.
+     *
+     * @param string             $operation Symbolic name of the write, for the log.
+     * @param string             $sql       Static SQL statement.
+     * @param array<int, mixed>  $params    Bound parameters.
+     *
+     * @return bool True when the write landed, false when it was contained.
+     *
+     * @since 1.9
+     */
+    private function write(string $operation, string $sql, array $params): bool
+    {
+        try {
+            $this->db->query($sql, $params);
+            return true;
+        } catch (Throwable $e) {
+            LoggerFactory::get(LogChannels::APPLICATION)->error(
+                'Stats write failed and was contained; the triggering action is unaffected',
+                [
+                    'operation' => $operation,
+                    'exception' => $e::class,
+                    'error' => $e->getMessage(),
+                    'sql' => preg_replace('/\s+/', ' ', trim($sql)),
+                ]
+            );
+            return false;
+        }
+    }
+
+    /**
      * Record a playback start event.
+     *
+     * `$mediaType` is stored VERBATIM: `stats_playback_events.media_type` carries
+     * the full 13-member `media_items.type` vocabulary (migration 094), so an
+     * `episode` play is recorded as `episode` rather than folded into `series`.
+     * A value outside {@see MediaItemType::ALL} would be rejected by the column
+     * (MySQL error 1265 under `STRICT_TRANS_TABLES`), so it is coerced to
+     * {@see MediaItemType::FALLBACK} and logged as a warning — a future ENUM
+     * member shows up in the log instead of losing the whole event.
      *
      * @param string $userId User UUID starting playback
      * @param string $mediaItemId Media item UUID being played
-     * @param string $mediaType Media type (movie, series, music, photo)
+     * @param string $mediaType Raw `media_items.type` value; see MediaItemType::ALL
      * @param string|null $deviceId Optional device identifier
      *
      * @return string Event ID for later completion via recordPlaybackEnd
      *
      * @example
      * ```php
-     * $eventId = $collector->recordPlaybackStart('user-123', 'media-456', 'movie', 'device-789');
+     * $eventId = $collector->recordPlaybackStart('user-123', 'media-456', 'episode', 'device-789');
      * ```
      */
     public function recordPlaybackStart(
@@ -150,12 +226,25 @@ class StatsCollector
             return $eventId;
         }
         $clientIp = null;
+        $storedType = MediaItemType::normalize($mediaType);
+        if ($storedType !== $mediaType) {
+            LoggerFactory::get(LogChannels::APPLICATION)->warning(
+                'Playback stats received a media type outside the media_items.type ENUM; '
+                . 'recording it under the fallback type instead',
+                [
+                    'received' => $mediaType,
+                    'recorded_as' => $storedType,
+                    'media_item_id' => $mediaItemId,
+                ]
+            );
+        }
 
-        $this->db->query(
+        $this->write(
+            'playback_start',
             "INSERT INTO stats_playback_events
              (id, user_id, media_item_id, media_type, started_at, device_id, client_ip)
              VALUES (?, ?, ?, ?, NOW(), ?, ?)",
-            [$eventId, $userId, $mediaItemId, $mediaType, $deviceId, $clientIp]
+            [$eventId, $userId, $mediaItemId, $storedType, $deviceId, $clientIp]
         );
 
         return $eventId;
@@ -181,7 +270,8 @@ class StatsCollector
             return;
         }
 
-        $this->db->query(
+        $this->write(
+            'playback_end',
             "UPDATE stats_playback_events
              SET ended_at = NOW(), duration_seconds = ?, completed = ?
              WHERE id = ?",
@@ -219,7 +309,8 @@ class StatsCollector
         $id = $this->generateUuid();
         $detailsJson = $details !== [] ? json_encode($details) : null;
 
-        $this->db->query(
+        $this->write(
+            'library_change',
             "INSERT INTO stats_library_changes
              (id, change_type, media_item_id, library_id, user_id, changed_at, details_json)
              VALUES (?, ?, ?, ?, ?, NOW(), ?)",
@@ -256,7 +347,8 @@ class StatsCollector
         $userAgent = null;
         $detailsJson = $details !== [] ? json_encode($details) : null;
 
-        $this->db->query(
+        $this->write(
+            'user_activity',
             "INSERT INTO stats_user_activity
              (id, user_id, activity_type, occurred_at, ip_address, user_agent, details_json)
              VALUES (?, ?, ?, NOW(), ?, ?, ?)",
@@ -267,7 +359,29 @@ class StatsCollector
     /**
      * Record a storage snapshot.
      *
-     * @param string $mediaType Media type (movie, series, music, photo)
+     * ## Coarse buckets, not raw types (S102)
+     *
+     * Unlike {@see recordPlaybackStart()}, `stats_storage.media_type` is
+     * deliberately a COARSE column: five buckets
+     * ({@see StorageSnapshotHelper::BUCKETS}), because it has a real reader —
+     * `DashboardService::getStorageSummary()` groups by it and matches the result
+     * into a fixed `{movie,series,music,photo,book}_bytes` shape, so a raw
+     * 13-member type would land in that `match`'s `default => null` arm and its
+     * bytes would vanish from the dashboard totals. Widening this column would
+     * therefore BREAK a consumer; widening `stats_playback_events.media_type`
+     * (which has no readers) does not.
+     *
+     * So instead of widening, the fold is enforced here, at the only writer:
+     * `$mediaType` is normalised through
+     * {@see StorageSnapshotHelper::TYPE_TO_BUCKET}, which is exhaustive over
+     * {@see \Phlix\Media\MediaItemType::ALL}. The fold is idempotent — every
+     * bucket maps to itself — so the two existing callers
+     * ({@see StorageSnapshotHelper::bootstrapSnapshot()} and
+     * `Application::recordStorageSnapshots()`), which already pass bucket names,
+     * are unaffected, while a future caller handing over a raw `episode` gets a
+     * correct `series` row rather than MySQL error 1265.
+     *
+     * @param string $mediaType Bucket name, or any `media_items.type` value to fold
      * @param int $itemCount Number of items of this type
      * @param int $totalBytes Total bytes used by this media type
      * @param int $transcodeCacheBytes Transcode cache bytes used
@@ -292,12 +406,21 @@ class StatsCollector
         }
 
         $id = $this->generateUuid();
+        $bucket = StorageSnapshotHelper::TYPE_TO_BUCKET[$mediaType]
+            ?? StorageSnapshotHelper::TYPE_TO_BUCKET[MediaItemType::FALLBACK];
+        if ($bucket !== $mediaType) {
+            LoggerFactory::get(LogChannels::APPLICATION)->warning(
+                'Storage snapshot media type folded to a stats_storage bucket',
+                ['received' => $mediaType, 'recorded_as' => $bucket]
+            );
+        }
 
-        $this->db->query(
+        $this->write(
+            'storage_snapshot',
             "INSERT INTO stats_storage
              (id, recorded_at, library_id, media_type, item_count, total_bytes, transcode_cache_bytes)
              VALUES (?, NOW(), ?, ?, ?, ?, ?)",
-            [$id, $libraryId, $mediaType, $itemCount, $totalBytes, $transcodeCacheBytes]
+            [$id, $libraryId, $bucket, $itemCount, $totalBytes, $transcodeCacheBytes]
         );
     }
 

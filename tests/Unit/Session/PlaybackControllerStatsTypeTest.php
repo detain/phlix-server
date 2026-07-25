@@ -163,6 +163,52 @@ final class PlaybackControllerStatsTypeTest extends TestCase
     }
 
     /**
+     * S102 — playback must survive a broken stats subsystem.
+     *
+     * `dispatchPlaybackStarted()` has no try/catch, so before the boundary landed
+     * inside {@see StatsCollector} the driver's exception propagated out of
+     * `reportProgress()` and into the HTTP worker. Here the collector is REAL
+     * (not a mock) over a connection that throws exactly the production error, so
+     * the containment is exercised end to end without needing a database — the
+     * real-schema half of the proof is
+     * {@see \Phlix\Tests\Integration\Stats\PlaybackEventMediaTypeEnumTest}.
+     */
+    public function testAFailingStatsWriteDoesNotBreakProgressReporting(): void
+    {
+        $db = $this->connectionReturningType([['type' => 'episode']]);
+
+        $sessionManager = $this->createMock(SessionManager::class);
+        $sessionManager->method('getSession')->willReturn([
+            'user_id'   => 'user-102',
+            'device_id' => 'device-102',
+        ]);
+
+        // A connection that fails EVERY stats write with the exact production error.
+        $statsDb = $this->createMock(Connection::class);
+        $statsDb->method('query')->willThrowException(new \PDOException(
+            "SQLSTATE[01000]: Warning: 1265 Data truncated for column 'media_type' at row 1"
+        ));
+
+        $dispatcher = $this->createMock(EventDispatcherInterface::class);
+        $dispatcher->expects($this->once())->method('dispatch')->willReturnArgument(0);
+
+        $controller = new PlaybackController(
+            $db,
+            $sessionManager,
+            null,
+            $dispatcher,
+            new StatsCollector($statsDb),
+        );
+
+        // No expectException(): reporting progress must complete, and the
+        // PlaybackStarted event must still be dispatched (asserted above) — the
+        // stats failure may not swallow the rest of the method either.
+        $controller->reportProgress('sess-102', 'media-ep-102', 100, 2000, false);
+
+        $this->assertTrue(true, 'reportProgress() completed despite the stats write failing');
+    }
+
+    /**
      * Build a Connection stub whose media_items type-lookup returns $typeRows and
      * whose playback_state status lookup returns [] (so the first report is treated
      * as a fresh start).

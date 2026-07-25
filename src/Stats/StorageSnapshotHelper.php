@@ -60,18 +60,23 @@ final class StorageSnapshotHelper
     ];
 
     /**
-     * EXHAUSTIVE fold of the `media_items.type` ENUM (migrations 001 → 011 →
-     * 034, 13 members) onto {@see BUCKETS}.
+     * EXHAUSTIVE fold of the `media_items.type` ENUM onto {@see BUCKETS}.
      *
-     * Every member MUST appear here. A type missing from this map is dropped
-     * from the snapshot entirely — silently, since the row simply never
-     * reaches a bucket — which is exactly how `track` (the type the music
-     * scanner actually writes, see {@see \Phlix\Media\Library\AudioScanner})
-     * came to be excluded from the Music totals, and how `book`/`audiobook`
-     * were excluded from everything.
+     * Every member of {@see \Phlix\Media\MediaItemType::ALL} MUST appear here as
+     * a key. A type missing from this map is dropped from the snapshot entirely
+     * — silently, since the row simply never reaches a bucket — which is exactly
+     * how `track` (the type the music scanner actually writes, see
+     * {@see \Phlix\Media\Library\AudioScanner}) came to be excluded from the
+     * Music totals, and how `book`/`audiobook` were excluded from everything.
      *
-     * Keep in lockstep with {@see \Phlix\Media\Library\MediaItemShaper} —
-     * both enumerate the same column ENUM.
+     * The key set is pinned against `MediaItemType::ALL` by
+     * {@see \Phlix\Tests\Unit\Media\MediaItemTypeDriftTest}, which also reads the
+     * real ENUMs out of the migration SQL — so adding a 14th member without
+     * giving it a bucket here is a red test, not a silent under-report.
+     *
+     * The fold is IDEMPOTENT: every bucket maps to itself, so it is safe to apply
+     * to an already-folded value. {@see \Phlix\Stats\StatsCollector::recordStorageSnapshot()}
+     * relies on that when it normalises whatever a caller hands it.
      *
      * @var array<string, string>
      */

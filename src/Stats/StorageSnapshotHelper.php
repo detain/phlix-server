@@ -60,18 +60,25 @@ final class StorageSnapshotHelper
     ];
 
     /**
-     * EXHAUSTIVE fold of the `media_items.type` ENUM (migrations 001 → 011 →
-     * 034, 13 members) onto {@see BUCKETS}.
+     * EXHAUSTIVE fold of the `media_items.type` ENUM onto {@see BUCKETS}.
      *
-     * Every member MUST appear here. A type missing from this map is dropped
-     * from the snapshot entirely — silently, since the row simply never
-     * reaches a bucket — which is exactly how `track` (the type the music
-     * scanner actually writes, see {@see \Phlix\Media\Library\AudioScanner})
-     * came to be excluded from the Music totals, and how `book`/`audiobook`
-     * were excluded from everything.
+     * Every member of {@see \Phlix\Media\MediaItemType::ALL} MUST appear here as
+     * a key. A type missing from this map is dropped from the snapshot entirely
+     * — here silently, since the row simply never reaches a bucket, and with an
+     * `error` log line in
+     * {@see \Phlix\Stats\StatsCollector::recordStorageSnapshots()} — which is
+     * exactly how `track` (the type the music scanner actually writes, see
+     * {@see \Phlix\Media\Library\AudioScanner}) came to be excluded from the
+     * Music totals, and how `book`/`audiobook` were excluded from everything.
      *
-     * Keep in lockstep with {@see \Phlix\Media\Library\MediaItemShaper} —
-     * both enumerate the same column ENUM.
+     * The key set is pinned against `MediaItemType::ALL` by
+     * {@see \Phlix\Tests\Unit\Media\MediaItemTypeDriftTest}, which also reads the
+     * real ENUMs out of the migration SQL — so adding a 14th member without
+     * giving it a bucket here is a red test, not a silent under-report.
+     *
+     * The fold is IDEMPOTENT: every bucket maps to itself, so it is safe to apply
+     * to an already-folded value. {@see \Phlix\Stats\StatsCollector::recordStorageSnapshot()}
+     * relies on that when it normalises whatever a caller hands it.
      *
      * @var array<string, string>
      */
@@ -116,6 +123,16 @@ final class StorageSnapshotHelper
      * @var list<string>
      */
     private const VAULT_ROOTS = ['/vault1', '/vault2'];
+
+    /**
+     * How old the newest `stats_storage` row may be before
+     * {@see bootstrapSnapshot()} records a fresh one.
+     *
+     * Deliberately the same 6 hours as `Application::STORAGE_SNAPSHOT_INTERVAL`
+     * (private there, so it cannot be referenced): the FPM fallback should refresh
+     * at the daemon's cadence, not on every request.
+     */
+    private const SNAPSHOT_MAX_AGE_SECONDS = 21600;
 
     /**
      * Build the per-bucket item counts and byte totals for one snapshot.
@@ -196,6 +213,25 @@ final class StorageSnapshotHelper
      * filesystem at /vault1 and /vault2 to get real storage sizes and
      * queries the database for item counts, then records a snapshot.
      *
+     * ## The staleness check (S102 review r1, MED-2)
+     *
+     * "If data is stale or missing" was the documented contract but was never
+     * implemented — `public/index.php:111` calls this on EVERY request, so every
+     * PHP-FPM request re-ran `du -sb` over both vault roots and wrote another five
+     * rows. That was survivable while `DashboardService::getStorageSummary()`
+     * ASSIGNED each bucket's bytes (a duplicate run in the same second overwrote
+     * itself with an identical value), but the summary now SUMS colliding rows —
+     * which it must, to stop a folded bucket losing bytes — so two runs inside one
+     * `recorded_at` second would double the dashboard's totals. Honouring the
+     * documented contract is therefore part of that fix, not an extra: one
+     * snapshot per {@see SNAPSHOT_MAX_AGE_SECONDS}, matching the daemon's own
+     * cadence.
+     *
+     * A residual race remains (two concurrent requests can both observe stale data
+     * and both write); closing it properly needs a unique index on
+     * `(recorded_at, media_type, library_id)` plus an upsert, i.e. a migration, so
+     * it is deliberately left to a follow-up rather than smuggled into this step.
+     *
      * @param StatsCollector $collector Collector to write through
      * @param Connection     $db        Live MySQL connection
      *
@@ -207,8 +243,60 @@ final class StorageSnapshotHelper
         StatsCollector $collector,
         Connection $db
     ): void {
-        foreach (self::collectBuckets($db) as $mediaType => $totals) {
-            $collector->recordStorageSnapshot($mediaType, $totals['count'], $totals['bytes']);
+        if (!self::snapshotIsStale($db)) {
+            return;
         }
+
+        // One batch call, so several raw types folding onto the same bucket become
+        // ONE summed row instead of several rows sharing a `recorded_at` second.
+        $collector->recordStorageSnapshots(self::collectBuckets($db));
+    }
+
+    /**
+     * Is the newest `stats_storage` row missing or older than
+     * {@see SNAPSHOT_MAX_AGE_SECONDS}?
+     *
+     * Fails OPEN (returns true) on any unexpected result shape: recording a
+     * possibly-redundant snapshot is much cheaper than a dashboard that is
+     * permanently empty because a read went sideways.
+     *
+     * That promise includes a newest row dated in the FUTURE (S102 review r2,
+     * LOW-5). `TIMESTAMPDIFF(SECOND, MAX(recorded_at), NOW())` goes NEGATIVE when
+     * the clock has stepped backwards since a write, or when one stray row carries a
+     * future date, and a plain `>=` then reads that row as "fresh" — forever, so
+     * this fallback would never refresh again (measured: one row dated +1 day →
+     * `bootstrapSnapshot()` wrote nothing at all). The age is therefore compared by
+     * ABSOLUTE distance: a row far from now in either direction is stale, which
+     * fails open exactly as documented, while the seconds of jitter a clock
+     * adjustment can leave behind stay inside the window.
+     *
+     * @param Connection $db Live MySQL connection
+     *
+     * @return bool True when a fresh snapshot should be recorded
+     *
+     * @since 1.9
+     */
+    private static function snapshotIsStale(Connection $db): bool
+    {
+        /** @var mixed $rows */
+        $rows = $db->query(
+            'SELECT MAX(recorded_at) AS newest,
+                    TIMESTAMPDIFF(SECOND, MAX(recorded_at), NOW()) AS age_seconds
+             FROM stats_storage'
+        );
+
+        if (!is_array($rows) || !isset($rows[0]) || !is_array($rows[0])) {
+            return true;
+        }
+
+        /** @var array<string, mixed> $row */
+        $row = $rows[0];
+        if (($row['newest'] ?? null) === null) {
+            return true;
+        }
+
+        $age = $row['age_seconds'] ?? null;
+
+        return !is_numeric($age) || abs((int) $age) >= self::SNAPSHOT_MAX_AGE_SECONDS;
     }
 }

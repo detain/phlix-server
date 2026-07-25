@@ -283,7 +283,11 @@ final class PathHashIndexUsageTest extends TestCase
      * is an ENUM (migrations 001 → 011 → 034) whose image member is `photo` —
      * there is no `image` member, so seeding `'image'` makes MySQL reject the
      * INSERT with error 1265 ("Data truncated for column 'type'") under strict
-     * mode. `MediaItemShaper::VALID_TYPES` lists `image` and is NOT the schema.
+     * mode. `image` is a scanner-side argument label only. The single source of
+     * truth for the member list is now `Phlix\Media\MediaItemType::ALL`, which
+     * `MediaItemShaper::VALID_TYPES` aliases and which
+     * `Phlix\Tests\Unit\Media\MediaItemTypeDriftTest` pins against the ENUM parsed
+     * out of the migration SQL (S102).
      */
     public function testFindByPathAndFindPathsMapResolveNullHashTypesByRawPath(): void
     {

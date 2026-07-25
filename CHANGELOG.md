@@ -701,6 +701,149 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   posts the complete set, so no shipped client is affected; API callers must send the
   full map. Noted in the class docblock and in the SSO guide.
 
+- **Every episode / track / photo play threw an uncaught `PDOException` in the HTTP
+  worker** (S102). `PlaybackController::dispatchPlaybackStarted()` passes the RAW
+  `media_items.type` value into `StatsCollector::recordPlaybackStart()` — correct, and the
+  entire point of S31 — but migration 019 had declared
+  `stats_playback_events.media_type` as `ENUM('movie','series','music','photo')`: **four**
+  of the column's **thirteen** members. Under `STRICT_TRANS_TABLES` every other value is
+  MySQL error **1265 "Data truncated for column 'media_type'"**, which the driver raises as
+  a `PDOException` that nothing on the path caught. Production corroborates exactly that:
+  **all 235** stored rows were `movie`, and every non-movie play since S31 threw instead of
+  recording.
+  - **Migration 094 widens the column to the full 13-member vocabulary**, in
+    `media_items.type` column order so both share one ordinal numbering. Widening (rather
+    than folding the 13 types down to 4) is safe *and* correct here because the column has
+    **no readers** — every query over `stats_playback_events`
+    (`getPlaybackStats`/`getTopUsers`/`getTopMedia`, `NewsletterGenerator`,
+    `DashboardService::getRecentPlaybackEvents`) aggregates by date / user / media item and
+    never selects or groups by `media_type` — so no consumer's output shape changes, while
+    folding would have permanently destroyed the per-type resolution S31 exists to capture
+    (`episode`→`series`, `track`→`music`, `audiobook`→`book` are all one-way). The new
+    member list is a strict superset of the old one, so no stored value can be truncated;
+    verified against real MySQL 8.0 with 235 seeded `movie` rows.
+  - **`stats_storage.media_type` deliberately stays coarse** and is fixed the *other* way.
+    It is the one such column with a real reader — `DashboardService::getStorageSummary()`
+    groups by it into a fixed `{movie,series,music,photo,book}_bytes` shape — so widening it
+    would have dropped bytes into that `match`'s `default` arm and quietly broken the admin
+    dashboard. Instead the snapshot writer folds whatever it is handed through
+    `StorageSnapshotHelper::TYPE_TO_BUCKET` (exhaustive, and idempotent because every bucket
+    maps to itself), so a caller passing a raw `episode` gets a correct `series` row rather
+    than error 1265. Both existing callers already passed bucket names and are unaffected.
+  - **Statistics can no longer break playback at all.** Every `StatsCollector` *write* now
+    runs behind a containment boundary that logs the failure at `error` level (so it lands
+    in `.logs/error-YYYY-MM-DD.log` — the `error` handler is a `rotating_file`, so the
+    configured `error.log` path is date-stamped on disk) and swallows it — telemetry is
+    strictly less important than the action that triggered it, and
+    `dispatchPlaybackStarted()` has no try/catch of its own. Repeated failures are counted
+    per operation and the log is throttled to one line per operation **per exception class**
+    per minute, with `failures_total` / `suppressed_since_last_log` /
+    `operation_failures_total` in the context and the running totals (still keyed per
+    operation) readable via `StatsCollector::writeFailureCounters()`. The exception class is
+    part of the window key because keying on the operation alone suppressed a *new kind* of
+    failure for an already-failing operation: once `library_change` had logged a
+    `RuntimeException`, a `PDOException "MySQL server has gone away"` in the same 60 s window
+    was counted but its message never reached the log. A repeat is noise; a different class
+    is news. `ItemRepository::recordChange()`
+    records one library change per scanned item, so an un-throttled boundary would have
+    written ~29,000 identical error lines during one music scan of the production library.
+    *Reads* are deliberately left unguarded: they serve the admin dashboard, where a broken
+    query must surface as a visible error rather than a silently empty chart.
+  - **The dashboard's five storage roll-ups now equal the bytes that were written.** Folding
+    raw types onto five buckets means several types share a bucket, and every row of one
+    snapshot run carries the same `NOW()` second — so `getStorageSummary()`'s
+    `MAX(recorded_at)` join legitimately returns *several* rows per bucket (also one per
+    `library_id`). It used to **assign** (`=`) each bucket's bytes while ordering by
+    `total_bytes DESC`, so the smallest colliding row won and the rest disappeared: 13 folded
+    types worth 91,000 bytes produced five totals summing to **31,000**. Both sides are now
+    additive — `SUM(…) GROUP BY media_type` in SQL and `+=` in PHP — and a snapshot run is
+    written as ONE batch (`StatsCollector::recordStorageSnapshots()`), which sums per bucket
+    before inserting so a run cannot produce two rows for the same bucket. Verified on real
+    MySQL: 13 types / 91,000 bytes in, 91,000 across the five roll-ups out.
+    `StorageSnapshotHelper::bootstrapSnapshot()` also finally honours its documented "if data
+    is stale or missing" contract (it was called on *every* PHP-FPM request, re-running
+    `du -sb` over both vault roots each time), because summing same-second rows would
+    otherwise double the totals when two snapshot runs land in one second. That staleness
+    check compares the age by ABSOLUTE distance, so a newest row dated in the *future* (a
+    clock that stepped backwards, or one stray row) reads as stale rather than as "fresh
+    forever" — measured pre-fix: one row dated +1 day and the fallback never refreshed again.
+  - **A snapshot run now carries ONE `recorded_at`, so a looping caller cannot lose bytes to
+    a wall-clock second boundary.** `recorded_at` is a second-precision `DATETIME` and the
+    dashboard joins on `MAX(recorded_at)` *per `media_type`*, so a run whose rows straddle two
+    seconds silently loses every bucket that received rows in more than one of them. With a
+    fresh `NOW()` per INSERT that was decided by luck: measured on a loaded box, 13
+    `recordStorageSnapshot()` calls spread over three seconds and the dashboard reported
+    **44,000 of the 91,000 bytes handed in**. The run's second is now computed once and bound
+    through `FROM_UNIXTIME(?)` — a bound unix second rather than a PHP-formatted string, so
+    the value is exactly what `NOW()` would have produced in the MySQL session's own time
+    zone. What ends a run is a *stall* between two snapshot writes — a gap of **5 s or more**
+    (the comparison is `<`, so exactly 5.000000000 s already starts a new generation) — and
+    not an elapsed duration, so a run cannot be split into generations by its own length: 13
+    calls a full second apart (13 s end to end) round-trip all 91,000 bytes and 13 of 13 item
+    counts, where the same run on the old write path reported 48,000 and 5. The batch form was
+    already immune by accident (one row per bucket makes the per-type `MAX` a no-op); the
+    guarantee is now structural for both forms, pinned by an integration test that crosses a
+    second boundary on purpose and stamps nothing, and — since a stall boundary that no test
+    could see would be deleted by the next cleanup — by a unit test that discriminates
+    "continued" from "recomputed" with a sentinel stamp and brackets the window at 4.9 s / 5.0 s
+    with no database. Note what the gap window does *not* buy: it cannot tell a stalled run
+    from a busy one, because all it sees is the interval between two *writes*. For a
+    hypothetical per-library writer that interval **is** the next library's `du -sb` (measured
+    warm on the dev box at 151–257 k inodes/s depending on load, so 5 s buys only ~0.75–1.3 M
+    inodes — and a six-hourly snapshot always meets a *cold* cache), so such a writer must hand
+    its whole run to one `recordStorageSnapshots()` call — which is exactly what both current
+    callers do, taking the stamp once before the write loop, so the window is never consulted
+    between one run's own rows.
+  - **Each half of the reader's aggregation is pinned on its own.** `SUM(…) GROUP BY
+    media_type` and the PHP `+=` arms hide each other — the `GROUP BY` collapses the result
+    set so `+=` never sees a second row, and with `+=` present the `SUM` is invisible — so the
+    whole suite stayed green with *either* reverted, and only the simultaneous revert failed.
+    That matters because per-library snapshots will legitimately produce several rows per
+    bucket and "the SQL already groups" is a plausible reason to simplify the arms back to
+    `=`, which would render three 1 TB libraries as 1 TB. The `+=` half now has a
+    database-free test (two `movie` rows, 1,000 + 2,000, must be 3,000) and the SQL half a
+    real-MySQL one (two rows per bucket in one second must come back as five `items` rows).
+  - **An unrecognised media type is now dropped from the storage snapshot, loudly.** It used
+    to fall back to `movie`, i.e. unknown bytes were added to a real bucket with only a
+    warning in `app.log`. `migrations/086_stats_storage_book_bucket.sql` already wrote the
+    rule down — *"a wrong number that looks right is worse than a visibly missing one"* — so
+    the writer now logs at `error` and writes no row. `MediaItemType::FALLBACK` remains
+    correct for *labels* (`normalize()`, `shape()`, `lookupMediaType()`) and is no longer
+    used for a byte accumulator.
+  - **Root cause was a duplicated type vocabulary, so that is what got fixed.** The
+    13-member list had been re-typed by hand in four places, each carrying a comment asking
+    the next author to keep it "in lockstep" — a convention that had already failed three
+    times (this bug; `book`/`audiobook` bytes missing from the dashboard, migration 086;
+    `track` missing from the Music totals). New `Phlix\Media\MediaItemType` holds the list
+    **once**, `MediaItemShaper::VALID_TYPES` is now an alias of it, and a new drift test
+    **parses the migration SQL** and fails the build when the constant, any consumer map
+    (`TYPE_TO_BUCKET`, `UpnpClassMap::TYPE_TO_CLASS`, `VALID_TYPES`) or any of the
+    type-carrying columns disagree. The previous cross-checks compared the PHP copies only
+    to each other, which is why all of them could agree while the actual column did not.
+    The parser reads `CREATE TABLE` column definitions and `ALTER TABLE … MODIFY [COLUMN]` /
+    `CHANGE [COLUMN] <old> <new>` / `ADD [COLUMN]` clauses — backticked or bare,
+    schema-qualified or not, in any position of a multi-clause `ALTER`, any case, any
+    whitespace — i.e. every style this repo's migrations actually use, each pinned by its own
+    test case. `ADD [COLUMN]` is included because it was the one style that could redefine a
+    tracked column while leaving the alarm green (as `DROP COLUMN` + `ADD COLUMN`), and
+    because `users.status` — defined that way by `migrations/037` — was the single ENUM column
+    of the 29 in a fully migrated schema the parser could not read. Three blind spots are
+    deliberate and now documented on `MediaItemType`: DDL assembled at runtime inside a
+    `PREPARE`/`EXECUTE` string (as `migrations/011` does) is **skipped** rather than
+    half-parsed, so a widening must be written as a plain statement to be seen (parsing it
+    naively yielded 24 empty-string "members" that the first version of the guard accepted as
+    success); a bare `DROP COLUMN` with no re-`ADD` cannot widen an ENUM; and
+    `migrations/*.php` files are not read at all — which is safe because `MigrationRunner`
+    likewise globs `*.sql` only, and a test now reddens if any `.php` migration ever contains
+    an `ENUM(` definition.
+  - Proven against real MySQL 8.0 under `STRICT_TRANS_TABLES` (a mocked connection accepts
+    any string for any column and cannot reproduce an ENUM rejection — the same class of
+    miss as the LiveTv `RowQuery` and metrics `ONLY_FULL_GROUP_BY` defects): all 13 members
+    round-trip verbatim, an unknown playback type is coerced instead of rejected, an unknown
+    storage type writes no row at all, a failing write is contained, the storage roll-ups
+    equal the bytes written, and a first progress report on an `episode` records
+    `media_type=episode` without throwing.
+
 - **A `HEAD` on a media route put TWO conflicting `Content-Length` headers on the
   wire** (updates.md #44 / S52 review). Workerman's response encoder
   (`Protocols/Http/Response::__toString()`) appends its own

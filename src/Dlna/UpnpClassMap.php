@@ -44,12 +44,12 @@ final class UpnpClassMap
     public const FALLBACK = 'object.item';
 
     /**
-     * EXHAUSTIVE map of the 13-member `media_items.type` ENUM (migrations
-     * 001 → 011 → 034) to UPnP classes.
+     * EXHAUSTIVE map of the `media_items.type` ENUM to UPnP classes.
      *
-     * Keep in lockstep with {@see \Phlix\Media\Library\MediaItemShaper} and
-     * {@see \Phlix\Stats\StorageSnapshotHelper::TYPE_TO_BUCKET} — all three
-     * enumerate the same column.
+     * Every member of {@see \Phlix\Media\MediaItemType::ALL} MUST appear here as
+     * a key; the key set is pinned against that constant (and against the ENUM
+     * parsed out of the migration SQL) by
+     * {@see \Phlix\Tests\Unit\Media\MediaItemTypeDriftTest}.
      *
      * @var array<string, string>
      */

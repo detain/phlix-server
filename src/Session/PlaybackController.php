@@ -14,6 +14,7 @@ namespace Phlix\Session;
 use Phlix\Common\Uuid;
 use Phlix\Common\Util\RowMap;
 use Phlix\Media\Library\MediaItemShaper;
+use Phlix\Media\MediaItemType;
 use Phlix\Stats\StatsCollector;
 use Phlix\Shared\Events\Playback\PlaybackPaused;
 use Phlix\Shared\Events\Playback\PlaybackResumed;
@@ -554,12 +555,17 @@ class PlaybackController
      * REAL type (episode/track/photo/…), letting Top Media / Most Watched
      * aggregate correctly. The value is the raw ENUM stored on the row — NEVER
      * remapped (`media_items.type` uses `photo`, not `image`, and the 13 members
-     * must pass through verbatim).
+     * must pass through verbatim). `stats_playback_events.media_type` carries the
+     * same 13 members as of migration 094, so nothing downstream needs to fold
+     * it. (Before 094 that column held only four, and every episode play died on
+     * MySQL error 1265 — see {@see \Phlix\Media\MediaItemType}.)
      *
-     * Falls back to `'movie'` when the row is missing or the column is empty —
-     * the SAME default {@see \Phlix\Media\Library\MediaItemShaper::shape()} uses
-     * for an unknown/absent type, so a since-deleted item stays consistent with
-     * the rest of the pipeline rather than inventing a new sentinel.
+     * Falls back to {@see \Phlix\Media\MediaItemType::FALLBACK} (`'movie'`) when
+     * the row is missing, the column is empty, or the value is somehow not a
+     * column member — the SAME default
+     * {@see \Phlix\Media\Library\MediaItemShaper::shape()} uses for an
+     * unknown/absent type, so a since-deleted item stays consistent with the rest
+     * of the pipeline rather than inventing a new sentinel.
      *
      * @param string $mediaItemId Media item UUID being played.
      *
@@ -572,9 +578,8 @@ class PlaybackController
             [$mediaItemId]
         );
         $rows = RowMap::listFromMixed($result);
-        $type = $rows[0]['type'] ?? null;
 
-        return is_string($type) && $type !== '' ? $type : 'movie';
+        return MediaItemType::normalize($rows[0]['type'] ?? null);
     }
 
     /**

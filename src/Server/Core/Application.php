@@ -2740,6 +2740,26 @@ class Application
      *
      * Failures are logged and swallowed so a snapshot run can never take down the worker.
      *
+     * The whole run is written through ONE
+     * {@see \Phlix\Stats\StatsCollector::recordStorageSnapshots()} call so a bucket
+     * can only ever get a single row per run — the dashboard summary SUMS rows that
+     * share a `recorded_at` second, so several rows for one bucket would inflate it
+     * (S102 review r1, MED-2).
+     *
+     * The `$collector` is deliberately the SAME instance across the initial run and
+     * every timer tick ({@see startStorageSnapshotTimer()}). That is safe because a
+     * run's shared `recorded_at` stamp
+     * ({@see \Phlix\Stats\StatsCollector::snapshotRunSecond()}) expires after
+     * seconds, while ticks are {@see self::STORAGE_SNAPSHOT_INTERVAL} (6 h) apart —
+     * so every tick is its own generation, as the reader requires.
+     *
+     * It is also deliberately CONSTRUCTED there (`new StatsCollector($db)`) rather than
+     * resolved from the container: php-di hands out ONE `StatsCollector` per container,
+     * so a `$container->get(StatsCollector::class)` shared by two coroutines would merge
+     * their runs into a single `recorded_at` generation, which the dashboard reader then
+     * SUMS (measured 2× — S102 review r3, LOW-1a). Anything that moves this collection
+     * off the timer and into a task must keep building its own collector.
+     *
      * @param \Phlix\Stats\StatsCollector $collector Collector to write through.
      * @param \Workerman\MySQL\Connection $db        Live MySQL connection.
      * @param \Phlix\Common\Logger\StructuredLogger $logger Application logger.
@@ -2754,9 +2774,7 @@ class Application
         try {
             $buckets = \Phlix\Stats\StorageSnapshotHelper::collectBuckets($db);
 
-            foreach ($buckets as $mediaType => $totals) {
-                $collector->recordStorageSnapshot($mediaType, $totals['count'], $totals['bytes']);
-            }
+            $collector->recordStorageSnapshots($buckets);
 
             $context = [];
             foreach ($buckets as $mediaType => $totals) {

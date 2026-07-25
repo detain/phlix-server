@@ -52,6 +52,11 @@ class ApplicationStorageSnapshotTest extends TestCase
         return $db;
     }
 
+    /**
+     * ONE batch call carrying every bucket — not one call per bucket. The
+     * dashboard summary SUMS rows sharing a `recorded_at` second, so a run must
+     * emit exactly one row per bucket (S102 review r1, MED-2).
+     */
     public function testRecordsOneSnapshotPerBucketWithTheSharedFold(): void
     {
         $db = $this->dbReturningTypeCounts([
@@ -65,10 +70,14 @@ class ApplicationStorageSnapshotTest extends TestCase
         /** @var array<string, int> $recorded */
         $recorded = [];
         $collector = $this->createMock(StatsCollector::class);
-        $collector->method('recordStorageSnapshot')
+        $collector->expects($this->never())->method('recordStorageSnapshot');
+        $collector->expects($this->once())
+            ->method('recordStorageSnapshots')
             ->willReturnCallback(
-                function (string $mediaType, int $count) use (&$recorded): void {
-                    $recorded[$mediaType] = $count;
+                function (array $totals) use (&$recorded): void {
+                    foreach ($totals as $bucket => $entry) {
+                        $recorded[$bucket] = $entry['count'];
+                    }
                 }
             );
 

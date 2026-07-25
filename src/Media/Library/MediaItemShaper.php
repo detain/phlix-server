@@ -12,6 +12,7 @@ declare(strict_types=1);
 namespace Phlix\Media\Library;
 
 use Phlix\Auth\SignedUrl;
+use Phlix\Media\MediaItemType;
 use Phlix\Media\Metadata\BackdropSrcset;
 use Phlix\Media\Metadata\Dto\MetadataValue;
 use Phlix\Media\Metadata\PosterSrcset;
@@ -32,29 +33,21 @@ final class MediaItemShaper
 {
     /**
      * Media-item `type` enum — the EXACT members of the `media_items.type`
-     * column ENUM as built up by migrations 001 → 011 (`track`/`music`/`album`/
-     * `artist`/`video`/`audio`/`book`/`photo`) → 034 (`audiobook`). Keep this in
-     * lockstep with that column: {@see shape()} coerces any value NOT listed
-     * here to `'movie'`, so a member missing from this list silently mislabels
-     * real rows (a `photo` reported to clients as a movie).
+     * column ENUM. {@see shape()} coerces any value NOT listed here to
+     * `'movie'`, so a member missing from this list silently mislabels real rows
+     * (a `photo` reported to clients as a movie).
+     *
+     * The list is no longer re-typed here: it is aliased to
+     * {@see \Phlix\Media\MediaItemType::ALL}, the single source of truth read
+     * straight out of the column definition in
+     * `migrations/034_media_items_type_audiobook.sql`. Four hand-maintained
+     * copies of this vocabulary had already drifted apart (S102), so the
+     * hardcoded copy that used to live here is gone by design — do not
+     * reintroduce one.
      *
      * @var list<string>
      */
-    private const VALID_TYPES = [
-        'movie',
-        'series',
-        'season',
-        'episode',
-        'track',
-        'music',
-        'album',
-        'artist',
-        'video',
-        'audio',
-        'book',
-        'photo',
-        'audiobook',
-    ];
+    private const VALID_TYPES = MediaItemType::ALL;
 
     /**
      * Content-rating enum (schema-constrained). The MPAA movie ratings PLUS the

@@ -4,19 +4,13 @@ declare(strict_types=1);
 
 namespace Phlix\Tests\Integration\Media;
 
-use Phlix\Auth\AuthManager;
 use Phlix\Common\Database\ConnectionPool;
 use Phlix\Common\Uuid;
-use Phlix\Media\Library\ItemRepository;
-use Phlix\Media\Library\LibraryManager;
-use Phlix\Media\Markers\MarkerService;
-use Phlix\Media\Markers\PlaybackMarkerService;
 use Phlix\Media\Music\MusicLibraryScanner;
 use Phlix\Media\Music\MusicLibraryService;
-use Phlix\Session\PlaybackController;
-use Phlix\Session\SessionManager;
+use Phlix\Server\Http\Controllers\MusicController;
 use Phlix\Server\Http\Request;
-use Phlix\Server\WebPortal\WebPortalRouter;
+use Phlix\Session\SessionManager;
 use PHPUnit\Framework\TestCase;
 use Throwable;
 use Workerman\MySQL\Connection;
@@ -28,8 +22,8 @@ use Workerman\MySQL\Connection;
  * The shipped query selected AND ordered by `al.name`, but `music_albums` has
  * a `title` column and no `name` column at all (migration 065), so every single
  * call to the endpoint died with `SQLSTATE[42S22] Unknown column 'al.name' in
- * 'field list'` — and because `WebPortalRouter::getMusicTracks()` has no
- * try/catch, that surfaced as an unguarded HTTP 500.
+ * 'field list'` — and because the tracks handler has no try/catch, that surfaced
+ * as an unguarded HTTP 500.
  *
  * A mocked `Connection` cannot catch a wrong column name — it happily returns
  * whatever rows the test feeds it, which is precisely how this defect shipped
@@ -148,8 +142,8 @@ final class MusicTracksQueryIntegrationTest extends TestCase
 
     /**
      * Every row carries the joined `artist_name`/`album_name` aliases plus the
-     * `music_tracks` columns `WebPortalRouter::getMusicTracks()` shapes for the
-     * client. Renaming an alias would silently blank a field on every card.
+     * `music_tracks` columns {@see MusicController} shapes for the client.
+     * Renaming an alias would silently blank a field on every card.
      */
     public function testEveryRowCarriesTheKeysTheApiResponseShapeReads(): void
     {
@@ -200,30 +194,30 @@ final class MusicTracksQueryIntegrationTest extends TestCase
     }
 
     /**
-     * The S94 acceptance criterion at the seam that actually 500'd:
-     * `WebPortalRouter::getMusicTracks()` has no try/catch, so the SQL error
-     * escaped as an unguarded HTTP 500. Assert the handler answers **200** with
-     * the client-shaped, correctly-ordered rows.
+     * The S94 acceptance criterion at the seam that actually 500'd: the tracks
+     * handler has no try/catch, so the SQL error escaped as an unguarded HTTP 500.
+     * Assert the handler answers **200** with the client-shaped, correctly-ordered
+     * rows.
+     *
+     * S99 moved that seam: `GET /api/v1/music/tracks` is served by
+     * {@see MusicController::listTracks()} (the `WebPortalRouter` copy this test
+     * used to call was shadowed by `Application`'s registration and has been
+     * deleted), and the endpoint now reads this same `getAllTracks()` query — so
+     * S94's `al.title` fix is finally on the served path.
      */
     public function testTheTracksEndpointHandlerAnswers200WithOrderedRows(): void
     {
-        $router = new WebPortalRouter(
-            $this->createMock(LibraryManager::class),
-            $this->createMock(ItemRepository::class),
-            $this->createMock(SessionManager::class),
-            $this->createMock(PlaybackController::class),
-            $this->createMock(AuthManager::class),
-            $this->createMock(PlaybackMarkerService::class),
-            $this->createMock(MarkerService::class),
-            musicLibraryService: $this->service(),
-        );
+        $db = $this->db;
+        $this->assertNotNull($db);
+
+        $controller = new MusicController($this->service(), new SessionManager($db));
 
         $request = new Request();
         $request->method = 'GET';
         $request->path = '/api/v1/music/tracks';
         $request->query = ['limit' => '100', 'offset' => '0'];
 
-        $response = $router->getMusicTracks($request, []);
+        $response = $controller->listTracks($request, []);
 
         $this->assertSame(200, $response->statusCode, 'GET /api/v1/music/tracks must not 500');
 

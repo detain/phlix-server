@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Media\Music;
 
+use Phlix\Common\Http\PageLimit;
 use Phlix\Media\Library\ScanResult;
 use Workerman\MySQL\Connection;
 
@@ -19,6 +20,15 @@ use Workerman\MySQL\Connection;
  *
  * This service manages the music_artists, music_albums, and music_tracks tables
  * and provides methods for querying artists, albums, tracks, and performing scans.
+ *
+ * **This is the ONE read path for the `/api/v1/music/*` API** (S99). The music
+ * scanner writes every tag it harvests into these normalized tables and stamps
+ * only `{"name","sub_type"}` into `media_items.metadata_json`, so any reader that
+ * goes looking for `metadata_json.$.artist` / `.album` / `.year` finds nothing and
+ * silently degrades to `'Unknown Artist'` / `'Unknown Album'` / `null`. That is
+ * exactly what {@see \Phlix\Media\Library\MusicLibraryManager}'s `getArtists()` /
+ * `getAlbums()` / `getTracks()` did before S99 repointed
+ * {@see \Phlix\Server\Http\Controllers\MusicController} at this service.
  *
  * @author Phlix Development Team
  * @version 1.0.0
@@ -30,6 +40,22 @@ use Workerman\MySQL\Connection;
  */
 class MusicLibraryService
 {
+    /**
+     * The SELECT list every track read shares.
+     *
+     * Aliases are API contract — {@see \Phlix\Server\Http\Controllers\MusicController}
+     * shapes `artist` / `album` / `year` / `path` from `artist_name` /
+     * `album_name` / `album_year` / `path`, so renaming one silently blanks a
+     * field on every track card. `t.*` carries the `media_item_id` UUID that IS
+     * the track's public id.
+     *
+     * The `media_items` join is what supplies `path`; it can never drop a row
+     * because `music_tracks.media_item_id` is `NOT NULL` and FK-constrained
+     * (`ON DELETE CASCADE`) to `media_items.id`.
+     */
+    private const TRACK_COLUMNS = 't.*, ar.name AS artist_name, al.title AS album_name, '
+        . 'al.year AS album_year, mi.path AS path';
+
     /** @var Connection Database connection */
     private Connection $db;
 
@@ -351,18 +377,109 @@ class MusicLibraryService
      */
     public function getArtistsCount(): int
     {
-        $result = $this->db->query("SELECT COUNT(*) as cnt FROM music_artists");
+        return $this->countRows('music_artists');
+    }
+
+    /**
+     * Finds one artist by their exact display name, with album/track counts.
+     *
+     * The name-keyed counterpart of {@see getAllArtists()}: `music_artists` has an
+     * AUTO_INCREMENT PK the clients never see, so `GET /api/v1/music/artists/{mbid}`
+     * passes the artist **name** as the identity (see `phlix-ui` `client.ts`
+     * `getArtist(mbid)` and the `/app/music/artist/:name` route). Matching is
+     * case-insensitive because `music_artists.name` is `utf8mb4_unicode_ci`, which
+     * preserves the `strcasecmp()` behaviour of the pre-S99 handler.
+     *
+     * Counts use the same `COUNT(DISTINCT …)` expressions as {@see getAllArtists()}
+     * so a list row and a detail row can never disagree.
+     *
+     * @param string $name Exact artist display name (case-insensitive).
+     * @return array{id: int, name: string, image_url: string|null, album_count: int, track_count: int}|null
+     *         Artist summary row, or null when no artist carries that name.
+     *
+     * @example
+     * ```php
+     * $artist = $service->findArtistByName('Pink Floyd');
+     * ```
+     */
+    public function findArtistByName(string $name): ?array
+    {
+        $result = $this->db->query(
+            "SELECT a.id, a.name, a.image_url,
+                    COUNT(DISTINCT al.id) AS album_count,
+                    COUNT(DISTINCT t.id) AS track_count
+             FROM music_artists a
+             LEFT JOIN music_albums al ON al.artist_id = a.id
+             LEFT JOIN music_tracks t ON t.album_id = al.id
+             WHERE a.name = ?
+             GROUP BY a.id, a.name, a.image_url
+             LIMIT 1",
+            [$name]
+        );
 
         if (!is_array($result) || count($result) === 0) {
-            return 0;
+            return null;
         }
 
         $firstRow = $result[0];
         if (!is_array($firstRow)) {
-            return 0;
+            return null;
         }
 
-        return isset($firstRow['cnt']) && is_numeric($firstRow['cnt']) ? (int)$firstRow['cnt'] : 0;
+        return [
+            'id' => is_numeric($firstRow['id'] ?? null) ? (int) $firstRow['id'] : 0,
+            'name' => is_string($firstRow['name'] ?? null) ? $firstRow['name'] : '',
+            'image_url' => is_string($firstRow['image_url'] ?? null) ? $firstRow['image_url'] : null,
+            'album_count' => is_numeric($firstRow['album_count'] ?? null) ? (int) $firstRow['album_count'] : 0,
+            'track_count' => is_numeric($firstRow['track_count'] ?? null) ? (int) $firstRow['track_count'] : 0,
+        ];
+    }
+
+    /**
+     * Gets the album titles for a batch of artists, keyed by artist id.
+     *
+     * ONE query for the whole page — the artists API response carries an `albums`
+     * array of titles per artist, and asking per artist would be a textbook N+1
+     * against a resident-memory worker (see CLAUDE.md "Batch Queries for N+1
+     * Prevention").
+     *
+     * @param list<int> $artistIds Artist ids to fetch titles for (empty = no query).
+     * @return array<int, list<string>> Map of artist id to its album titles.
+     */
+    public function getAlbumTitlesByArtistIds(array $artistIds): array
+    {
+        $ids = array_values(array_unique(array_filter($artistIds, static fn(int $id): bool => $id > 0)));
+        if (count($ids) === 0) {
+            return [];
+        }
+
+        $placeholders = implode(',', array_fill(0, count($ids), '?'));
+        $result = $this->db->query(
+            "SELECT artist_id, title FROM music_albums
+             WHERE artist_id IN ({$placeholders})
+             ORDER BY artist_id, title",
+            $ids
+        );
+
+        if (!is_array($result)) {
+            return [];
+        }
+
+        /** @var array<int, list<string>> $byArtist */
+        $byArtist = [];
+        foreach ($result as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            $artistId = is_numeric($row['artist_id'] ?? null) ? (int) $row['artist_id'] : 0;
+            $title = is_string($row['title'] ?? null) ? $row['title'] : '';
+            if ($artistId === 0) {
+                continue;
+            }
+            $byArtist[$artistId][] = $title;
+        }
+
+        return $byArtist;
     }
 
     /**
@@ -420,6 +537,162 @@ class MusicLibraryService
     }
 
     /**
+     * Gets a page of albums joined with their artist name and indexed track count.
+     *
+     * Returns raw arrays (not DTOs) because the API response needs the joined
+     * `artist_name` alias, which no single-table DTO carries — the same reason
+     * {@see getAllTracks()} returns rows.
+     *
+     * `track_count` counts the `music_tracks` rows that actually exist rather than
+     * echoing `music_albums.total_tracks` (a tag-declared total that can exceed
+     * what was indexed), so a client never renders more rows than it can play.
+     *
+     * Ordering matches {@see getAllTracks()}'s first two keys (`ar.name, al.title`),
+     * i.e. the DISPLAY columns — deliberately NOT `sort_title` (see the ordering
+     * follow-up in `plan_updates_worklog.md`: `sort_*` has no readers and MySQL
+     * sorts NULLs first).
+     *
+     * @param int $limit Maximum number of albums to return (clamped by {@see PageLimit}).
+     * @param int $offset Number of albums to skip.
+     * @return array<array<string, mixed>> Album rows with `artist_name` + `track_count`.
+     */
+    public function getAllAlbums(int $limit = 100, int $offset = 0): array
+    {
+        $limit = PageLimit::clamp($limit, PageLimit::MAX);
+        $offset = PageLimit::clampOffset($offset);
+
+        $result = $this->db->query(
+            "SELECT al.*, ar.name AS artist_name, COUNT(t.id) AS track_count
+             FROM music_albums al
+             JOIN music_artists ar ON ar.id = al.artist_id
+             LEFT JOIN music_tracks t ON t.album_id = al.id
+             GROUP BY al.id, ar.name
+             ORDER BY ar.name, al.title
+             LIMIT ? OFFSET ?",
+            [$limit, $offset]
+        );
+
+        if (!is_array($result)) {
+            return [];
+        }
+
+        /** @var array<array<string, mixed>> $rows */
+        $rows = $result;
+
+        return $rows;
+    }
+
+    /**
+     * Gets the total number of albums.
+     *
+     * @return int Total album count
+     */
+    public function getAlbumsCount(): int
+    {
+        return $this->countRows('music_albums');
+    }
+
+    /**
+     * Finds one album by its exact title, joined with its artist name.
+     *
+     * The title-keyed counterpart of {@see getAllAlbums()}: albums have an
+     * AUTO_INCREMENT PK the clients never see, so `GET /api/v1/music/albums/{mbid}`
+     * passes the album **title** as the identity (see `phlix-ui` `client.ts`
+     * `getAlbum(mbid)` and the `/app/music/album/:name` route). Matching is
+     * case-insensitive via the `utf8mb4_unicode_ci` collation, preserving the
+     * `strcasecmp()` behaviour of the pre-S99 handler.
+     *
+     * `music_albums.title` is NOT unique (two artists may ship the same title), so
+     * the first row in `artist name, title` order wins — the same
+     * first-match-wins semantics the pre-S99 handler had.
+     *
+     * @param string $title Exact album title (case-insensitive).
+     * @return array<string, mixed>|null Album row with `artist_name` + `track_count`, or null.
+     */
+    public function findAlbumByTitle(string $title): ?array
+    {
+        $result = $this->db->query(
+            "SELECT al.*, ar.name AS artist_name, COUNT(t.id) AS track_count
+             FROM music_albums al
+             JOIN music_artists ar ON ar.id = al.artist_id
+             LEFT JOIN music_tracks t ON t.album_id = al.id
+             WHERE al.title = ?
+             GROUP BY al.id, ar.name
+             ORDER BY ar.name, al.title
+             LIMIT 1",
+            [$title]
+        );
+
+        if (!is_array($result) || count($result) === 0) {
+            return null;
+        }
+
+        $firstRow = $result[0];
+        if (!is_array($firstRow)) {
+            return null;
+        }
+
+        /** @var array<string, mixed> $typedRow */
+        $typedRow = $firstRow;
+
+        return $typedRow;
+    }
+
+    /**
+     * Gets the tracks of a batch of albums, keyed by album id.
+     *
+     * ONE query for a whole page of albums (the albums API embeds each album's
+     * track list), so browsing never degrades into an N+1. Rows carry the same
+     * joined shape as {@see getAllTracks()} — `artist_name`, `album_name`,
+     * `album_year` and the streamable `media_items.path` — so one formatter can
+     * shape both endpoints.
+     *
+     * @param list<int> $albumIds Album ids to fetch tracks for (empty = no query).
+     * @return array<int, list<array<string, mixed>>> Map of album id to its track rows,
+     *         each list ordered by disc then track number.
+     */
+    public function getTracksByAlbumIds(array $albumIds): array
+    {
+        $ids = array_values(array_unique(array_filter($albumIds, static fn(int $id): bool => $id > 0)));
+        if (count($ids) === 0) {
+            return [];
+        }
+
+        $placeholders = implode(',', array_fill(0, count($ids), '?'));
+        $result = $this->db->query(
+            "SELECT " . self::TRACK_COLUMNS . "
+             FROM music_tracks t
+             JOIN music_albums al ON al.id = t.album_id
+             JOIN music_artists ar ON ar.id = t.artist_id
+             JOIN media_items mi ON mi.id = t.media_item_id
+             WHERE t.album_id IN ({$placeholders})
+             ORDER BY t.album_id, t.disc_number, t.track_number",
+            $ids
+        );
+
+        if (!is_array($result)) {
+            return [];
+        }
+
+        /** @var array<int, list<array<string, mixed>>> $byAlbum */
+        $byAlbum = [];
+        foreach ($result as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            $albumId = is_numeric($row['album_id'] ?? null) ? (int) $row['album_id'] : 0;
+            if ($albumId === 0) {
+                continue;
+            }
+            /** @var array<string, mixed> $typedRow */
+            $typedRow = $row;
+            $byAlbum[$albumId][] = $typedRow;
+        }
+
+        return $byAlbum;
+    }
+
+    /**
      * Gets all tracks for an album.
      *
      * @param int $albumId Album ID
@@ -465,12 +738,13 @@ class MusicLibraryService
             // Selecting `al.name` made every /api/v1/music/tracks call fail with
             // "Unknown column 'al.name' in 'field list'" (SQLSTATE 42S22). The
             // `AS album_name` output alias is part of the API contract
-            // (WebPortalRouter::getMusicTracks reads $row['album_name']) and
+            // (MusicController::formatTrack reads $row['album_name']) and
             // must stay.
-            "SELECT t.*, ar.name AS artist_name, al.title AS album_name
+            "SELECT " . self::TRACK_COLUMNS . "
              FROM music_tracks t
              JOIN music_albums al ON al.id = t.album_id
              JOIN music_artists ar ON ar.id = t.artist_id
+             JOIN media_items mi ON mi.id = t.media_item_id
              ORDER BY ar.name, al.title, t.disc_number, t.track_number
              LIMIT ? OFFSET ?",
             [$limit, $offset]
@@ -487,13 +761,79 @@ class MusicLibraryService
     }
 
     /**
+     * Finds one track by the `media_items` UUID the API exposes as its id.
+     *
+     * `music_tracks.id` is an internal AUTO_INCREMENT PK; every client keys tracks
+     * by the `media_items` UUID (`GET /api/v1/music/tracks/{id}`, the signed
+     * `/media/{id}/stream` URL, and `sessions.current_media_id` for now-playing),
+     * and `music_tracks.media_item_id` is `UNIQUE`, so this is a single-row index
+     * lookup. It replaces the pre-S99
+     * {@see \Phlix\Server\Http\Controllers\MusicController} helper that linear-scanned
+     * the first 1,000 rows of each library and therefore 404'd — i.e. refused to
+     * play — every track past the 1,000th.
+     *
+     * @param string $mediaItemId `media_items.id` UUID of the track.
+     * @return array<string, mixed>|null Joined track row, or null when unknown.
+     */
+    public function findTrackByMediaItemId(string $mediaItemId): ?array
+    {
+        if ($mediaItemId === '') {
+            return null;
+        }
+
+        $result = $this->db->query(
+            "SELECT " . self::TRACK_COLUMNS . "
+             FROM music_tracks t
+             JOIN music_albums al ON al.id = t.album_id
+             JOIN music_artists ar ON ar.id = t.artist_id
+             JOIN media_items mi ON mi.id = t.media_item_id
+             WHERE t.media_item_id = ?
+             LIMIT 1",
+            [$mediaItemId]
+        );
+
+        if (!is_array($result) || count($result) === 0) {
+            return null;
+        }
+
+        $firstRow = $result[0];
+        if (!is_array($firstRow)) {
+            return null;
+        }
+
+        /** @var array<string, mixed> $typedRow */
+        $typedRow = $firstRow;
+
+        return $typedRow;
+    }
+
+    /**
      * Gets the total number of tracks.
      *
      * @return int Total track count
      */
     public function getTracksCount(): int
     {
-        $result = $this->db->query("SELECT COUNT(*) as cnt FROM music_tracks");
+        return $this->countRows('music_tracks');
+    }
+
+    /**
+     * Counts every row of one of this service's own tables.
+     *
+     * `$table` is never caller-supplied — the three call sites pass a literal
+     * `music_*` name — so there is no interpolation hazard here; the guard below
+     * makes that structural rather than a matter of trust.
+     *
+     * @param string $table One of the `music_*` table names.
+     * @return int Row count, or 0 when the count row is unavailable.
+     */
+    private function countRows(string $table): int
+    {
+        if (!in_array($table, ['music_artists', 'music_albums', 'music_tracks'], true)) {
+            return 0;
+        }
+
+        $result = $this->db->query("SELECT COUNT(*) as cnt FROM {$table}");
 
         if (!is_array($result) || count($result) === 0) {
             return 0;

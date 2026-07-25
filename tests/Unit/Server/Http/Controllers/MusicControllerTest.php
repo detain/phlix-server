@@ -5,40 +5,90 @@ declare(strict_types=1);
 namespace Phlix\Tests\Unit\Server\Http\Controllers;
 
 use PHPUnit\Framework\TestCase;
+use Phlix\Auth\SignedUrl;
+use Phlix\Media\Music\MusicArtist;
+use Phlix\Media\Music\MusicArtistWithAlbums;
+use Phlix\Media\Music\MusicLibraryService;
 use Phlix\Server\Http\Controllers\MusicController;
 use Phlix\Server\Http\Request;
-use Phlix\Media\Library\MusicLibraryManager;
-use Phlix\Media\Library\LibraryManager;
 use Phlix\Session\SessionManager;
-use Phlix\Auth\SignedUrl;
 use PHPUnit\Framework\MockObject\MockObject;
 
 /**
  * Unit tests for MusicController.
+ *
+ * S99: the controller reads the normalized `music_*` tables through
+ * {@see MusicLibraryService}, so these tests mock that service. They pin the
+ * RESPONSE SHAPE every client depends on (name-keyed artist/album identity, the
+ * `media_items` UUID as the track id, the signed `stream_url`); the proof that the
+ * underlying SQL returns real artist/album/year values against real MySQL — which
+ * a mocked connection structurally cannot show — lives in
+ * {@see \Phlix\Tests\Integration\Media\MusicApiReadPathIntegrationTest}.
  *
  * @covers \Phlix\Server\Http\Controllers\MusicController
  */
 class MusicControllerTest extends TestCase
 {
     private MusicController $controller;
-    /** @var MusicLibraryManager&MockObject */
-    private MusicLibraryManager $musicManager;
-    /** @var LibraryManager&MockObject */
-    private LibraryManager $libraryManager;
+    /** @var MusicLibraryService&MockObject */
+    private MusicLibraryService $musicLibrary;
     /** @var SessionManager&MockObject */
     private SessionManager $sessionManager;
 
     protected function setUp(): void
     {
-        $this->musicManager = $this->createMock(MusicLibraryManager::class);
-        $this->libraryManager = $this->createMock(LibraryManager::class);
+        $this->musicLibrary = $this->createMock(MusicLibraryService::class);
         $this->sessionManager = $this->createMock(SessionManager::class);
 
         $this->controller = new MusicController(
-            $this->musicManager,
-            $this->libraryManager,
+            $this->musicLibrary,
             $this->sessionManager
         );
+    }
+
+    /**
+     * One joined track row exactly as {@see MusicLibraryService} returns it
+     * (`t.*` plus the `artist_name` / `album_name` / `album_year` / `path`
+     * aliases).
+     *
+     * @return array<string, mixed>
+     */
+    private function trackRow(string $mediaItemId = 'media-uuid-1', int $trackNumber = 1): array
+    {
+        return [
+            'id' => 4242,
+            'media_item_id' => $mediaItemId,
+            'album_id' => 7,
+            'artist_id' => 3,
+            'title' => 'Real Track Title',
+            'track_number' => $trackNumber,
+            'disc_number' => 1,
+            'duration_secs' => 245,
+            'artist_name' => 'Real Artist',
+            'album_name' => 'Real Album',
+            'album_year' => 2020,
+            'path' => '/music/real.flac',
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function albumRow(int $id = 7): array
+    {
+        return [
+            'id' => $id,
+            'artist_id' => 3,
+            'media_item_id' => 'album-uuid',
+            'title' => 'Real Album',
+            'sort_title' => 'Real Album',
+            'year' => 2020,
+            'total_tracks' => 12,
+            'total_discs' => 1,
+            'album_art_url' => 'https://art.example/cover.jpg',
+            'artist_name' => 'Real Artist',
+            'track_count' => 12,
+        ];
     }
 
     /**
@@ -48,28 +98,78 @@ class MusicControllerTest extends TestCase
     {
         $request = new Request();
 
-        $this->libraryManager->method('getAllLibraries')->willReturn([
-            ['id' => 'lib-1', 'name' => 'Music', 'type' => 'music'],
+        $this->musicLibrary->method('getAllArtists')->willReturn([
+            new MusicArtistWithAlbums(
+                artist: new MusicArtist(id: 3, name: 'Real Artist', imageUrl: 'https://img/a.jpg'),
+                albumCount: 2,
+                trackCount: 10,
+            ),
         ]);
-
-        $this->musicManager->method('getArtists')->willReturn([
-            [
-                'name' => 'Test Artist',
-                'album_count' => 2,
-                'track_count' => 10,
-                'albums' => ['Album 1', 'Album 2'],
-            ],
+        $this->musicLibrary->method('getAlbumTitlesByArtistIds')->willReturn([
+            3 => ['Album 1', 'Album 2'],
         ]);
+        $this->musicLibrary->method('getArtistsCount')->willReturn(2197);
 
         $response = $this->controller->listArtists($request, []);
 
         $this->assertEquals(200, $response->statusCode);
 
-        /** @var array{artists: list<array<string, mixed>>} $body */
+        /** @var array{artists: list<array<string, mixed>>, total: int} $body */
         $body = json_decode($response->body, true);
         $this->assertArrayHasKey('artists', $body);
         $this->assertCount(1, $body['artists']);
-        $this->assertEquals('Test Artist', $body['artists'][0]['name']);
+        $this->assertSame('Real Artist', $body['artists'][0]['name']);
+        $this->assertSame('https://img/a.jpg', $body['artists'][0]['image_url']);
+        $this->assertSame(2, $body['artists'][0]['album_count']);
+        $this->assertSame(10, $body['artists'][0]['track_count']);
+        $this->assertSame(['Album 1', 'Album 2'], $body['artists'][0]['albums']);
+        // The permanently-zero `total` is now counted from music_artists.
+        $this->assertSame(2197, $body['total']);
+    }
+
+    /**
+     * The artists listing must resolve album titles for the WHOLE page in one
+     * batched call — never one query per artist (N+1 in a resident worker).
+     *
+     * @test
+     */
+    public function testListArtistsBatchesAlbumTitlesForThePage(): void
+    {
+        $this->musicLibrary->method('getAllArtists')->willReturn([
+            new MusicArtistWithAlbums(new MusicArtist(id: 1, name: 'A'), 1, 1),
+            new MusicArtistWithAlbums(new MusicArtist(id: 2, name: 'B'), 1, 1),
+            new MusicArtistWithAlbums(new MusicArtist(id: 3, name: 'C'), 1, 1),
+        ]);
+        $this->musicLibrary->expects($this->once())
+            ->method('getAlbumTitlesByArtistIds')
+            ->with([1, 2, 3])
+            ->willReturn([]);
+
+        $response = $this->controller->listArtists(new Request(), []);
+
+        $this->assertEquals(200, $response->statusCode);
+    }
+
+    /**
+     * @test
+     */
+    public function testListArtistsClampsAndEchoesPagination(): void
+    {
+        $request = new Request();
+        $request->query['limit'] = '5000';
+        $request->query['offset'] = '25';
+
+        $this->musicLibrary->expects($this->once())
+            ->method('getAllArtists')
+            ->with(100, 25)
+            ->willReturn([]);
+
+        $response = $this->controller->listArtists($request, []);
+
+        /** @var array<string, mixed> $body */
+        $body = json_decode($response->body, true);
+        $this->assertSame(100, $body['limit']);
+        $this->assertSame(25, $body['offset']);
     }
 
     /**
@@ -77,15 +177,9 @@ class MusicControllerTest extends TestCase
      */
     public function testGetArtistReturns404WhenNotFound(): void
     {
-        $request = new Request();
+        $this->musicLibrary->method('findArtistByName')->willReturn(null);
 
-        $this->libraryManager->method('getAllLibraries')->willReturn([
-            ['id' => 'lib-1', 'name' => 'Music', 'type' => 'music'],
-        ]);
-
-        $this->musicManager->method('getArtists')->willReturn([]);
-
-        $response = $this->controller->getArtist($request, ['mbid' => 'NonExistent']);
+        $response = $this->controller->getArtist(new Request(), ['mbid' => 'NonExistent']);
 
         $this->assertEquals(404, $response->statusCode);
 
@@ -95,26 +189,28 @@ class MusicControllerTest extends TestCase
     }
 
     /**
+     * `/artists/{mbid}` is NAME-keyed — the route param is the artist's display
+     * name, which is what `phlix-ui` puts in the URL.
+     *
      * @test
      */
-    public function testGetArtistReturnsJsonWhenFound(): void
+    public function testGetArtistLooksTheArtistUpByName(): void
     {
-        $request = new Request();
-
-        $this->libraryManager->method('getAllLibraries')->willReturn([
-            ['id' => 'lib-1', 'name' => 'Music', 'type' => 'music'],
-        ]);
-
-        $this->musicManager->method('getArtists')->willReturn([
-            [
+        $this->musicLibrary->expects($this->once())
+            ->method('findArtistByName')
+            ->with('Found Artist')
+            ->willReturn([
+                'id' => 9,
                 'name' => 'Found Artist',
+                'image_url' => null,
                 'album_count' => 3,
                 'track_count' => 25,
-                'albums' => ['Album A', 'Album B', 'Album C'],
-            ],
+            ]);
+        $this->musicLibrary->method('getAlbumTitlesByArtistIds')->willReturn([
+            9 => ['Album A', 'Album B', 'Album C'],
         ]);
 
-        $response = $this->controller->getArtist($request, ['mbid' => 'Found Artist']);
+        $response = $this->controller->getArtist(new Request(), ['mbid' => 'Found Artist']);
 
         $this->assertEquals(200, $response->statusCode);
 
@@ -122,6 +218,9 @@ class MusicControllerTest extends TestCase
         $body = json_decode($response->body, true);
         $this->assertArrayHasKey('artist', $body);
         $this->assertEquals('Found Artist', $body['artist']['name']);
+        $this->assertSame(3, $body['artist']['album_count']);
+        $this->assertSame(25, $body['artist']['track_count']);
+        $this->assertSame(['Album A', 'Album B', 'Album C'], $body['artist']['albums']);
     }
 
     /**
@@ -129,31 +228,43 @@ class MusicControllerTest extends TestCase
      */
     public function testListAlbumsReturnsJson(): void
     {
-        $request = new Request();
+        $this->musicLibrary->method('getAllAlbums')->willReturn([$this->albumRow()]);
+        $this->musicLibrary->method('getTracksByAlbumIds')->willReturn([7 => [$this->trackRow()]]);
+        $this->musicLibrary->method('getAlbumsCount')->willReturn(5091);
 
-        $this->libraryManager->method('getAllLibraries')->willReturn([
-            ['id' => 'lib-1', 'name' => 'Music', 'type' => 'music'],
-        ]);
-
-        $this->musicManager->method('getAlbums')->willReturn([
-            [
-                'name' => 'Test Album',
-                'artist' => 'Test Artist',
-                'year' => 2021,
-                'track_count' => 12,
-                'tracks' => [],
-            ],
-        ]);
-
-        $response = $this->controller->listAlbums($request, []);
+        $response = $this->controller->listAlbums(new Request(), []);
 
         $this->assertEquals(200, $response->statusCode);
 
-        /** @var array{albums: list<array<string, mixed>>} $body */
+        /** @var array{albums: list<array<string, mixed>>, total: int} $body */
         $body = json_decode($response->body, true);
         $this->assertArrayHasKey('albums', $body);
         $this->assertCount(1, $body['albums']);
-        $this->assertEquals('Test Album', $body['albums'][0]['name']);
+        // `name` (not `title`) is the contract key — it doubles as the drill-down id.
+        $this->assertSame('Real Album', $body['albums'][0]['name']);
+        $this->assertSame('Real Artist', $body['albums'][0]['artist']);
+        $this->assertSame(2020, $body['albums'][0]['year']);
+        $this->assertSame(12, $body['albums'][0]['track_count']);
+        $this->assertSame('https://art.example/cover.jpg', $body['albums'][0]['album_art_url']);
+        $this->assertCount(1, $body['albums'][0]['tracks']);
+        $this->assertSame(5091, $body['total']);
+    }
+
+    /**
+     * @test
+     */
+    public function testListAlbumsBatchesTrackFetchForThePage(): void
+    {
+        $this->musicLibrary->method('getAllAlbums')->willReturn([
+            $this->albumRow(1),
+            $this->albumRow(2),
+        ]);
+        $this->musicLibrary->expects($this->once())
+            ->method('getTracksByAlbumIds')
+            ->with([1, 2])
+            ->willReturn([]);
+
+        $this->assertEquals(200, $this->controller->listAlbums(new Request(), [])->statusCode);
     }
 
     /**
@@ -161,36 +272,42 @@ class MusicControllerTest extends TestCase
      */
     public function testGetAlbumReturnsJsonWithTracks(): void
     {
-        $request = new Request();
-
-        $this->libraryManager->method('getAllLibraries')->willReturn([
-            ['id' => 'lib-1', 'name' => 'Music', 'type' => 'music'],
+        $this->musicLibrary->expects($this->once())
+            ->method('findAlbumByTitle')
+            ->with('My Album')
+            ->willReturn($this->albumRow(7));
+        $this->musicLibrary->method('getTracksByAlbumIds')->willReturn([
+            7 => [$this->trackRow('track-1', 1), $this->trackRow('track-2', 2)],
         ]);
 
-        $albumTracks = [
-            ['id' => 'track-1', 'name' => 'Track 1', 'path' => '/music/track1.mp3', 'metadata' => []],
-            ['id' => 'track-2', 'name' => 'Track 2', 'path' => '/music/track2.mp3', 'metadata' => []],
-        ];
-
-        $this->musicManager->method('getAlbums')->willReturn([
-            [
-                'name' => 'My Album',
-                'artist' => 'My Artist',
-                'year' => 2022,
-                'track_count' => 2,
-                'tracks' => $albumTracks,
-            ],
-        ]);
-
-        $response = $this->controller->getAlbum($request, ['mbid' => 'My Album']);
+        $response = $this->controller->getAlbum(new Request(), ['mbid' => 'My Album']);
 
         $this->assertEquals(200, $response->statusCode);
 
         /** @var array{album: array{name: mixed, tracks: array<mixed>}} $body */
         $body = json_decode($response->body, true);
         $this->assertArrayHasKey('album', $body);
-        $this->assertEquals('My Album', $body['album']['name']);
+        $this->assertEquals('Real Album', $body['album']['name']);
         $this->assertCount(2, $body['album']['tracks']);
+        // Embedded album tracks carry the media-item UUID as their id.
+        $this->assertSame('track-1', $body['album']['tracks'][0]['id']);
+        $this->assertSame('Real Track Title', $body['album']['tracks'][0]['name']);
+    }
+
+    /**
+     * @test
+     */
+    public function testGetAlbumReturns404WhenNotFound(): void
+    {
+        $this->musicLibrary->method('findAlbumByTitle')->willReturn(null);
+
+        $response = $this->controller->getAlbum(new Request(), ['mbid' => 'Nope']);
+
+        $this->assertEquals(404, $response->statusCode);
+
+        /** @var array<string, mixed> $body */
+        $body = json_decode($response->body, true);
+        $this->assertEquals('Album not found', $body['error']);
     }
 
     /**
@@ -198,28 +315,10 @@ class MusicControllerTest extends TestCase
      */
     public function testListTracksReturnsJson(): void
     {
-        $request = new Request();
+        $this->musicLibrary->method('getAllTracks')->willReturn([$this->trackRow()]);
+        $this->musicLibrary->method('getTracksCount')->willReturn(29245);
 
-        $this->libraryManager->method('getAllLibraries')->willReturn([
-            ['id' => 'lib-1', 'name' => 'Music', 'type' => 'music'],
-        ]);
-
-        $this->musicManager->method('getTracks')->willReturn([
-            [
-                'id' => 'track-1',
-                'name' => 'First Track',
-                'path' => '/music/track1.mp3',
-                'metadata' => [
-                    'title' => 'First Track',
-                    'artist' => 'Test Artist',
-                    'album' => 'Test Album',
-                    'duration_secs' => 180,
-                    'track_number' => 1,
-                ],
-            ],
-        ]);
-
-        $response = $this->controller->listTracks($request, []);
+        $response = $this->controller->listTracks(new Request(), []);
 
         $this->assertEquals(200, $response->statusCode);
 
@@ -228,6 +327,37 @@ class MusicControllerTest extends TestCase
         $this->assertArrayHasKey('tracks', $body);
         $this->assertArrayHasKey('limit', $body);
         $this->assertArrayHasKey('offset', $body);
+        $this->assertCount(1, $body['tracks']);
+
+        // Every field the pre-S99 metadata_json read path served as its default.
+        $track = $body['tracks'][0];
+        $this->assertSame('media-uuid-1', $track['id']);
+        $this->assertSame('Real Track Title', $track['name']);
+        $this->assertSame('Real Artist', $track['artist']);
+        $this->assertSame('Real Album', $track['album']);
+        $this->assertSame(2020, $track['year']);
+        $this->assertSame(245, $track['duration_secs']);
+        $this->assertSame(1, $track['track_number']);
+        $this->assertSame('/music/real.flac', $track['path']);
+    }
+
+    /**
+     * `total` must be a real count. The pre-S99 handler summed
+     * `libraries.item_count`, a column the schema does not have, so `?? 0` fired
+     * unconditionally and `total` was 0 for every caller, forever.
+     *
+     * @test
+     */
+    public function testListTracksTotalIsCountedFromTheMusicTables(): void
+    {
+        $this->musicLibrary->method('getAllTracks')->willReturn([$this->trackRow()]);
+        $this->musicLibrary->expects($this->once())->method('getTracksCount')->willReturn(29245);
+
+        /** @var array<string, mixed> $body */
+        $body = json_decode($this->controller->listTracks(new Request(), [])->body, true);
+
+        $this->assertSame(29245, $body['total']);
+        $this->assertNotSame(0, $body['total']);
     }
 
     /**
@@ -239,13 +369,10 @@ class MusicControllerTest extends TestCase
         $request->query['limit'] = '50';
         $request->query['offset'] = '100';
 
-        $this->libraryManager->method('getAllLibraries')->willReturn([
-            ['id' => 'lib-1', 'name' => 'Music', 'type' => 'music', 'item_count' => 200],
-        ]);
-
-        $this->musicManager->expects($this->once())
-            ->method('getTracks')
-            ->with('lib-1', 50, 100);
+        $this->musicLibrary->expects($this->once())
+            ->method('getAllTracks')
+            ->with(50, 100)
+            ->willReturn([$this->trackRow()]);
 
         $response = $this->controller->listTracks($request, []);
 
@@ -253,6 +380,9 @@ class MusicControllerTest extends TestCase
         $body = json_decode($response->body, true);
         $this->assertEquals(50, $body['limit']);
         $this->assertEquals(100, $body['offset']);
+        // Rows arrive already paged by SQL; the pre-S99 handler array_slice()d them
+        // by $offset a SECOND time, so any non-zero offset returned an empty page.
+        $this->assertCount(1, $body['tracks']);
     }
 
     /**
@@ -267,37 +397,28 @@ class MusicControllerTest extends TestCase
             [
                 'id' => 'session-456',
                 'user_id' => 'user-123',
-                'current_media_id' => 'track-1',
+                'current_media_id' => 'media-uuid-1',
                 'position_ticks' => 450000000,
                 'playback_state' => 'playing',
             ],
         ]);
 
-        // Mock track lookup
-        $this->libraryManager->method('getAllLibraries')->willReturn([
-            ['id' => 'lib-1', 'name' => 'Music', 'type' => 'music'],
-        ]);
-
-        $this->musicManager->method('getTracks')->willReturn([
-            [
-                'id' => 'track-1',
-                'name' => 'Playing Now',
-                'path' => '/music/playing.mp3',
-                'metadata' => [
-                    'title' => 'Playing Now',
-                    'artist' => 'Current Artist',
-                    'duration_secs' => 200,
-                ],
-            ],
-        ]);
+        // `current_media_id` IS a media_items UUID → the keyed track lookup.
+        $this->musicLibrary->expects($this->once())
+            ->method('findTrackByMediaItemId')
+            ->with('media-uuid-1')
+            ->willReturn($this->trackRow());
 
         $response = $this->controller->nowPlaying($request, []);
 
         $this->assertEquals(200, $response->statusCode);
 
-        /** @var array<string, mixed> $body */
+        /** @var array{now_playing: array<string, mixed>} $body */
         $body = json_decode($response->body, true);
         $this->assertArrayHasKey('now_playing', $body);
+        $this->assertIsArray($body['now_playing']['track']);
+        $this->assertSame('Real Artist', $body['now_playing']['track']['artist']);
+        $this->assertSame('session-456', $body['now_playing']['session_id']);
     }
 
     /**
@@ -305,10 +426,7 @@ class MusicControllerTest extends TestCase
      */
     public function testNowPlayingReturnsNullWhenNoUser(): void
     {
-        $request = new Request();
-        // No userId set
-
-        $response = $this->controller->nowPlaying($request, []);
+        $response = $this->controller->nowPlaying(new Request(), []);
 
         $this->assertEquals(200, $response->statusCode);
 
@@ -339,9 +457,7 @@ class MusicControllerTest extends TestCase
      */
     public function testGetArtistReturns400WhenMbidMissing(): void
     {
-        $request = new Request();
-
-        $response = $this->controller->getArtist($request, []);
+        $response = $this->controller->getArtist(new Request(), []);
 
         $this->assertEquals(400, $response->statusCode);
 
@@ -355,9 +471,7 @@ class MusicControllerTest extends TestCase
      */
     public function testGetAlbumReturns400WhenMbidMissing(): void
     {
-        $request = new Request();
-
-        $response = $this->controller->getAlbum($request, []);
+        $response = $this->controller->getAlbum(new Request(), []);
 
         $this->assertEquals(400, $response->statusCode);
 
@@ -371,15 +485,9 @@ class MusicControllerTest extends TestCase
      */
     public function testGetTrackReturns404WhenNotFound(): void
     {
-        $request = new Request();
+        $this->musicLibrary->method('findTrackByMediaItemId')->willReturn(null);
 
-        $this->libraryManager->method('getAllLibraries')->willReturn([
-            ['id' => 'lib-1', 'name' => 'Music', 'type' => 'music'],
-        ]);
-
-        $this->musicManager->method('getTracks')->willReturn([]);
-
-        $response = $this->controller->getTrack($request, ['id' => 'non-existent-id']);
+        $response = $this->controller->getTrack(new Request(), ['id' => 'non-existent-id']);
 
         $this->assertEquals(404, $response->statusCode);
 
@@ -393,17 +501,36 @@ class MusicControllerTest extends TestCase
      */
     public function testGetTrackReturns400WhenIdMissing(): void
     {
-        $request = new Request();
-
-        $response = $this->controller->getTrack($request, []);
+        $response = $this->controller->getTrack(new Request(), []);
 
         $this->assertEquals(400, $response->statusCode);
+    }
+
+    /**
+     * The track lookup must be a KEYED lookup on the media-item UUID. The pre-S99
+     * helper paged the first 1,000 rows of each library and compared ids in PHP,
+     * so track 1,001+ was unplayable (404).
+     *
+     * @test
+     */
+    public function testGetTrackResolvesByMediaItemIdRatherThanScanningAPage(): void
+    {
+        $this->musicLibrary->expects($this->once())
+            ->method('findTrackByMediaItemId')
+            ->with('track-42')
+            ->willReturn($this->trackRow('track-42'));
+        $this->musicLibrary->expects($this->never())->method('getAllTracks');
+
+        $response = $this->controller->getTrack(new Request(), ['id' => 'track-42']);
+
+        $this->assertEquals(200, $response->statusCode);
     }
 
     /**
      * X8: getTrack (via formatTrack) must mint a signed stream_url pointing at
      * the generic Range-safe GET /media/{trackId}/stream endpoint, so the UI
      * can direct-play music tracks (mirrors the AudiobookController convention).
+     * The signed path must carry the MEDIA-ITEM UUID, not music_tracks.id.
      *
      * @test
      */
@@ -411,26 +538,9 @@ class MusicControllerTest extends TestCase
     {
         SignedUrl::resetSharedForTesting();
 
-        $request = new Request();
+        $this->musicLibrary->method('findTrackByMediaItemId')->willReturn($this->trackRow('track-42'));
 
-        $this->libraryManager->method('getAllLibraries')->willReturn([
-            ['id' => 'lib-1', 'name' => 'Music', 'type' => 'music'],
-        ]);
-
-        $this->musicManager->method('getTracks')->willReturn([
-            [
-                'id' => 'track-42',
-                'name' => 'Signed Track',
-                'path' => '/music/signed.flac',
-                'metadata' => [
-                    'title' => 'Signed Track',
-                    'artist' => 'Signer',
-                    'duration_secs' => 240,
-                ],
-            ],
-        ]);
-
-        $response = $this->controller->getTrack($request, ['id' => 'track-42']);
+        $response = $this->controller->getTrack(new Request(), ['id' => 'track-42']);
 
         $this->assertEquals(200, $response->statusCode);
 

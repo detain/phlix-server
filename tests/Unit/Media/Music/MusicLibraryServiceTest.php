@@ -70,9 +70,10 @@ final class MusicLibraryServiceTest extends TestCase
      * {@see \Phlix\Tests\Integration\Media\MusicTracksQueryIntegrationTest}.
      *
      * Also pins the `AS album_name` output alias, which is API contract:
-     * {@see \Phlix\Server\WebPortal\WebPortalRouter::getMusicTracks()} reads
-     * `$row['album_name']`, so renaming the alias would silently blank the
-     * album on every track card.
+     * {@see \Phlix\Server\Http\Controllers\MusicController} reads
+     * `$row['album_name']` (S99 — before that it was the now-deleted
+     * `WebPortalRouter::getMusicTracks()`), so renaming the alias would silently
+     * blank the album on every track card.
      */
     public function testGetAllTracksSelectsAndOrdersByTheAlbumTitleColumn(): void
     {

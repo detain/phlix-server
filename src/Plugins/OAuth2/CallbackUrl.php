@@ -82,14 +82,18 @@ namespace Phlix\Plugins\OAuth2;
  *   `redirect_uri` setting — resolution step 1, which keeps first priority and
  *   works with `PHLIX_DOMAIN` unset).
  *
- * This cannot regress a working deployment, which is what makes fail-closed the
- * cheap choice here: review r1 finding 1 established that the *relative*
- * `redirect_uri` these flows sent before S48's fix round makes them fail against
- * any real provider (`redirect_uri_mismatch`, the browser never returns). GitHub
- * auth is brand new in S48 and OIDC has been broken against a real IdP since S44
- * wired it, so there is no population of working end-to-end deployments to
- * break. Fail-closed costs nobody a working login; fail-open costs everyone who
- * has not set one env var.
+ * Fail-closed is the cheap choice here because there is almost nothing to
+ * regress: review r1 finding 1 established that the *relative* `redirect_uri`
+ * these flows sent before S48's fix round is rejected by any spec-strict provider
+ * (`redirect_uri_mismatch`, the browser never returns), and GitHub auth is brand
+ * new in S48. **One honest exception** (review r3, finding 1 — do not repeat the
+ * earlier "nothing could have been working" overclaim): an IdP that resolves a
+ * RELATIVE `redirect_uri` against the client's registered root URL — Keycloak
+ * does — could have completed the pre-S48 OIDC flow, and now needs `PHLIX_DOMAIN`
+ * to match the browsed hostname (or an absolute `redirect_uri` setting) or it
+ * answers the 503. `scripts/install.sh` has written `PHLIX_DOMAIN` since
+ * 2026-05-26, so for an installed box that is a one-line configuration step, not
+ * a dead end. See `CHANGELOG.md` `[Unreleased]`.
  *
  * ## Accepted behaviour change (documented so it is not a surprise)
  *
@@ -101,6 +105,20 @@ namespace Phlix\Plugins\OAuth2;
  * `redirect_uri_mismatch`. An operator who genuinely serves auth on a second
  * hostname sets that provider's `redirect_uri` setting to the absolute URL they
  * registered with the provider (resolution step 1, unaffected by the allowlist).
+ *
+ * ## The PORT is part of the origin (review r3, finding 3 — LOW)
+ *
+ * The allowlist compares the whole `host[:port]` AUTHORITY, not the bare host, so
+ * the gate pins the origin it claims to pin:
+ *
+ *  - `PHLIX_DOMAIN=media.example.com` accepts `Host: media.example.com` and
+ *    REFUSES `Host: media.example.com:1337` — which previously produced
+ *    `redirect_uri=https://media.example.com:1337/auth/github/callback`;
+ *  - `PHLIX_DOMAIN=media.example.com:8443` accepts only that exact `host:port`.
+ *
+ * A port that is the DEFAULT for the resolved scheme (`:443` under https, `:80`
+ * under http) is normalised away on BOTH sides, so it neither blocks a match nor
+ * leaks into the derived URL — the provider has the default-port form registered.
  *
  * The derived value is re-validated here in every case (no control characters, no
  * credentials/@, host charset restricted, numeric in-range port) before it is
@@ -139,9 +157,9 @@ final class CallbackUrl
     }
 
     /**
-     * The ONE public hostname a request-derived callback URL may use, or '' when
-     * none is configured — in which case NOTHING may be derived (fail closed; see
-     * the class docblock).
+     * The ONE public authority (`host` or `host:port`) a request-derived callback
+     * URL may use, or '' when none is configured — in which case NOTHING may be
+     * derived (fail closed; see the class docblock).
      *
      * Read from `PHLIX_DOMAIN` — set by `scripts/install.sh --domain` and the SAME
      * env value `config/hub.php` composes into `hub.domain`/`hub.public_url`. The
@@ -152,6 +170,10 @@ final class CallbackUrl
      * Garbage in the env (a URL, a path, an out-of-range port) is treated as
      * "unconfigured" rather than as an allowlist that can never match — either way
      * the outcome is the actionable 503, never a derived URL.
+     *
+     * Any `:port` the operator configured is KEPT (review r3 finding 3): the port
+     * belongs to the origin this gate exists to pin, so it is part of the compared
+     * value rather than stripped.
      */
     public static function configuredHost(): string
     {
@@ -165,7 +187,7 @@ final class CallbackUrl
             return '';
         }
 
-        return $bare;
+        return $domain;
     }
 
     /**
@@ -177,8 +199,9 @@ final class CallbackUrl
      * @param string|null $forwardedProto The request's `X-Forwarded-Proto` header.
      * @param string      $callbackPath   The flow's fixed callback path, e.g.
      *                                    `/auth/github/callback`.
-     * @param string      $allowedHost    The ONLY hostname a `Host`-derived value may
-     *                                    use ({@see self::configuredHost()}); '' =
+     * @param string      $allowedHost    The ONLY authority (`host[:port]`) a
+     *                                    `Host`-derived value may use
+     *                                    ({@see self::configuredHost()}); '' =
      *                                    nothing may be derived at all (fail
      *                                    closed — review r3). Required, not
      *                                    defaulted, so a new call site cannot
@@ -213,6 +236,10 @@ final class CallbackUrl
      * review r3); an in-flight state row that predates this rule falls back to a
      * fresh resolve, which answers the actionable 503.
      *
+     * The comparison is authority-wise and bracket/default-port normalised
+     * ({@see self::authorityKey()}), so it survives an IPv6 literal and an
+     * explicit `:443`/`:80` on either side (review r3 findings 3 and 4).
+     *
      * @param string $url         The state-carried callback URL.
      * @param string $configured  The `redirect_uri` plugin setting (may be '').
      * @param string $allowedHost {@see self::configuredHost()}; '' = only the
@@ -231,24 +258,63 @@ final class CallbackUrl
         }
 
         $host = parse_url($url, PHP_URL_HOST);
+        if (!is_string($host) || $host === '') {
+            return false;
+        }
+        $scheme = parse_url($url, PHP_URL_SCHEME);
+        $port = parse_url($url, PHP_URL_PORT);
+        // Re-assemble the authority the way a `Host` header carries it. PHP's
+        // parse_url() keeps the brackets on an IPv6 literal, but wrap it defensively
+        // so authorityKey() never has to guess where the port starts.
+        if (str_contains($host, ':') && !str_starts_with($host, '[')) {
+            $host = '[' . $host . ']';
+        }
+        $authority = $host . (is_int($port) ? ':' . $port : '');
 
-        return is_string($host) && strcasecmp($host, $allowedHost) === 0;
+        return strcasecmp(
+            self::authorityKey($authority, is_string($scheme) ? strtolower($scheme) : ''),
+            self::authorityKey($allowedHost, is_string($scheme) ? strtolower($scheme) : ''),
+        ) === 0;
     }
 
     /**
      * A log-safe rendering of a client-supplied `Host` header, for the actionable
-     * 503's log line.
-     *
-     * `Host` is attacker-controlled, so it is stripped of everything outside
-     * printable US-ASCII (a CR/LF would otherwise let a forged Host forge whole log
-     * lines) and length-capped.
+     * 503's log line. Thin alias of {@see self::sanitizeForLog()}.
      */
     public static function sanitizeHostForLog(?string $host): string
     {
-        if (!is_string($host) || trim($host) === '') {
+        return self::sanitizeForLog($host);
+    }
+
+    /**
+     * Bounded, log-safe rendering of an ATTACKER-SUPPLIED string (a `Host` header,
+     * a `sid` read out of the client's `state` envelope, …).
+     *
+     * Everything outside printable US-ASCII is dropped and the result is capped at
+     * 128 bytes, so a log field stays one short readable token whatever the client
+     * sent. Byte-wise on purpose (no `/u`): every byte >= 0x80 goes too, so no
+     * partial multi-byte sequence can survive and the cap can never split a
+     * character.
+     *
+     * ## This is log HYGIENE, not a log-forging fix (review r3, finding 2)
+     *
+     * An earlier version of this docblock claimed a CR/LF "would otherwise let a
+     * forged Host forge whole log lines through the Monolog line formatter". That
+     * is **empirically false for this pipeline** and the claim is not repeated
+     * here: `Phlix\Common\Logger\StructuredLogger` never calls `setFormatter()`, so
+     * Monolog's default `LineFormatter` applies with `allowInlineLineBreaks = false`
+     * and `%context%` rendered through `toJson()` — a `"\r\n"` in a context value
+     * comes out as the two-character escape `\r\n` INSIDE the JSON blob, one record
+     * per line. So this helper is defence in depth (it must not depend on formatter
+     * configuration, which a future change could flip) plus a bounded field size;
+     * it is NOT what stands between the app and log injection today.
+     */
+    public static function sanitizeForLog(?string $value): string
+    {
+        if (!is_string($value) || trim($value) === '') {
             return '(none)';
         }
-        $clean = preg_replace('/[^\x21-\x7E]/', '', $host) ?? '';
+        $clean = preg_replace('/[^\x21-\x7E]/', '', $value) ?? '';
 
         return $clean === '' ? '(unprintable)' : substr($clean, 0, 128);
     }
@@ -282,14 +348,23 @@ final class CallbackUrl
         if (!self::isValidPortSuffix($host)) {
             return null;
         }
+
+        $scheme = self::scheme($forwardedProto);
+        // A default port for this scheme is dropped from BOTH the presented Host and
+        // the derived URL: `https://host:443/cb` is the same origin as
+        // `https://host/cb`, and it is the latter an operator registers with the
+        // provider.
+        $host = self::stripDefaultPort($host, $scheme);
         // NEW-1 — a client-supplied Host may only be turned into a redirect_uri
-        // when it IS the operator's public hostname. Otherwise fall through to
-        // null so the caller answers 503 callback_url_not_configured.
-        if (strcasecmp($bare, $allowedHost) !== 0) {
+        // when it IS the operator's public authority. Otherwise fall through to null
+        // so the caller answers 503 callback_url_not_configured. r3 finding 3: the
+        // PORT is compared too, so `Host: media.example.com:1337` no longer rides in
+        // on `PHLIX_DOMAIN=media.example.com`.
+        if (strcasecmp(self::authorityKey($host, $scheme), self::authorityKey($allowedHost, $scheme)) !== 0) {
             return null;
         }
 
-        $candidate = self::scheme($forwardedProto) . '://' . $host . $callbackPath;
+        $candidate = $scheme . '://' . $host . $callbackPath;
 
         return self::isAbsolute($candidate) ? $candidate : null;
     }
@@ -339,6 +414,47 @@ final class CallbackUrl
         $colon = strrpos($host, ':');
 
         return $colon === false ? $host : substr($host, 0, $colon);
+    }
+
+    /**
+     * Drop a `:port` suffix that is the DEFAULT for the given scheme, so
+     * `example.com:443` under https (and `example.com:80` under http) compares —
+     * and renders — as `example.com`.
+     */
+    private static function stripDefaultPort(string $host, string $scheme): string
+    {
+        $bare = self::stripPort($host);
+        if ($bare === $host) {
+            return $host;
+        }
+        $port = substr($host, strlen($bare) + 1);
+
+        return ($scheme === 'https' && $port === '443') || ($scheme === 'http' && $port === '80')
+            ? $bare
+            : $host;
+    }
+
+    /**
+     * The comparison key for a `host[:port]` authority: default port for the scheme
+     * removed, IPv6 brackets removed.
+     *
+     * The bracket normalisation is review r3 finding 4. That finding's premise —
+     * that `parse_url($url, PHP_URL_HOST)` returns an UNBRACKETED `::1` — does not
+     * reproduce on this PHP (it returns `[::1]`), so the replay check was not dead;
+     * but `Host: [::1]:8096` vs `PHLIX_DOMAIN=[::1]:8096` DOES need the port and the
+     * brackets handled together, and normalising both sides means the check cannot
+     * silently die if any producer ever hands over the bare form.
+     *
+     * @param string $scheme Lower-cased URL scheme, '' when unknown (then no port is
+     *                       treated as default).
+     */
+    private static function authorityKey(string $host, string $scheme): string
+    {
+        $host = self::stripDefaultPort($host, $scheme);
+        $bare = self::stripPort($host);
+        $port = $bare === $host ? '' : substr($host, strlen($bare));
+
+        return trim($bare, '[]') . $port;
     }
 
     /**

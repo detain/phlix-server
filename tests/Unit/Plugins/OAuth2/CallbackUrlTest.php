@@ -92,9 +92,11 @@ final class CallbackUrlTest extends TestCase
 
     public function test_host_with_port_is_preserved(): void
     {
+        // The allowlist carries the port too (review r3 finding 3), so the operator
+        // configured `phlix.example:8443` here.
         $this->assertSame(
             'https://phlix.example:8443/auth/oidc/callback',
-            CallbackUrl::resolve('', 'phlix.example:8443', null, '/auth/oidc/callback', 'phlix.example'),
+            CallbackUrl::resolve('', 'phlix.example:8443', null, '/auth/oidc/callback', 'phlix.example:8443'),
         );
     }
 
@@ -196,8 +198,83 @@ final class CallbackUrlTest extends TestCase
         return [
             'exact' => ['phlix.example', 'https://phlix.example/auth/oidc/callback'],
             'case insensitive' => ['PHLIX.Example', 'https://PHLIX.Example/auth/oidc/callback'],
-            'with port' => ['phlix.example:8443', 'https://phlix.example:8443/auth/oidc/callback'],
+            // The DEFAULT port for the scheme is not a different origin — it is
+            // normalised away rather than leaking into the derived URL (the provider
+            // has the default-port form registered).
+            'default https port' => ['phlix.example:443', 'https://phlix.example/auth/oidc/callback'],
         ];
+    }
+
+    // -----------------------------------------------------------------------
+    // Review r3 finding 3 (LOW) — the allowlist pins the whole ORIGIN, port
+    // included. Before this, `PHLIX_DOMAIN=media.example.com` + `Host:
+    // media.example.com:1337` derived
+    // `redirect_uri=https://media.example.com:1337/auth/github/callback`.
+    // -----------------------------------------------------------------------
+
+    /**
+     * @dataProvider portPinning
+     */
+    public function test_the_port_is_part_of_the_allowlisted_origin(
+        string $host,
+        string $allowed,
+        ?string $expected,
+    ): void {
+        $this->assertSame(
+            $expected,
+            CallbackUrl::resolve('', $host, null, '/auth/github/callback', $allowed),
+        );
+    }
+
+    /**
+     * @return array<string, array{0: string, 1: string, 2: string|null}>
+     */
+    public static function portPinning(): array
+    {
+        return [
+            'unported domain refuses a ported Host' => [
+                'media.example.com:1337',
+                'media.example.com',
+                null,
+            ],
+            'unported domain accepts the bare Host' => [
+                'media.example.com',
+                'media.example.com',
+                'https://media.example.com/auth/github/callback',
+            ],
+            'unported domain tolerates the default https port' => [
+                'media.example.com:443',
+                'media.example.com',
+                'https://media.example.com/auth/github/callback',
+            ],
+            'ported domain accepts that exact port' => [
+                'media.example.com:8443',
+                'media.example.com:8443',
+                'https://media.example.com:8443/auth/github/callback',
+            ],
+            'ported domain refuses another port' => [
+                'media.example.com:1337',
+                'media.example.com:8443',
+                null,
+            ],
+            'ported domain refuses a bare Host' => [
+                'media.example.com',
+                'media.example.com:8443',
+                null,
+            ],
+        ];
+    }
+
+    public function test_the_default_http_port_is_normalised_under_http(): void
+    {
+        $this->assertSame(
+            'http://media.example.com/auth/github/callback',
+            CallbackUrl::resolve('', 'media.example.com:80', 'http', '/auth/github/callback', 'media.example.com'),
+        );
+        // …but :80 is NOT the default under https, so it is a distinct origin.
+        $this->assertNull(
+            CallbackUrl::resolve('', 'media.example.com:80', 'https', '/auth/github/callback', 'media.example.com'),
+        );
     }
 
     /**
@@ -288,8 +365,10 @@ final class CallbackUrlTest extends TestCase
             putenv('PHLIX_DOMAIN=Media.Example.ORG');
             $this->assertSame('media.example.org', CallbackUrl::configuredHost());
 
+            // r3 finding 3 — a configured port is KEPT: it is part of the origin the
+            // allowlist pins.
             putenv('PHLIX_DOMAIN=media.example.org:8443');
-            $this->assertSame('media.example.org', CallbackUrl::configuredHost());
+            $this->assertSame('media.example.org:8443', CallbackUrl::configuredHost());
 
             putenv('PHLIX_DOMAIN=  ');
             $this->assertSame('', CallbackUrl::configuredHost());
@@ -355,8 +434,69 @@ final class CallbackUrlTest extends TestCase
     }
 
     /**
-     * The refusal is LOGGED with the presented Host, which is attacker-controlled —
-     * so a CR/LF (which would otherwise forge whole log lines) must not survive.
+     * Review r3 finding 3, replay leg — the state-carried callback URL is checked
+     * against the whole allowlisted ORIGIN, so a URL on another port of the
+     * operator's hostname is no longer replayable as the token-exchange
+     * `redirect_uri`.
+     */
+    public function test_replay_pins_the_port_too(): void
+    {
+        $this->assertTrue(CallbackUrl::isReplayable(
+            'https://phlix.example:8443/auth/oidc/callback',
+            '',
+            'phlix.example:8443',
+        ));
+        $this->assertFalse(
+            CallbackUrl::isReplayable('https://phlix.example:1337/auth/oidc/callback', '', 'phlix.example'),
+            'another port on the operator hostname is a different origin',
+        );
+        $this->assertFalse(
+            CallbackUrl::isReplayable('https://phlix.example/auth/oidc/callback', '', 'phlix.example:8443'),
+            'a ported allowlist must not accept the default-port origin',
+        );
+        // The default port for the scheme is the same origin.
+        $this->assertTrue(
+            CallbackUrl::isReplayable('https://phlix.example:443/auth/oidc/callback', '', 'phlix.example'),
+        );
+    }
+
+    /**
+     * Review r3 finding 4 — an IPv6-literal `PHLIX_DOMAIN` must not silently disable
+     * the NEW-8 replay re-validation. `Host`/`PHLIX_DOMAIN` carry the brackets and
+     * the port in ONE string while `parse_url()` splits them, so both sides are
+     * normalised (brackets stripped, default port dropped) before comparing.
+     */
+    public function test_an_ipv6_literal_domain_derives_and_replays(): void
+    {
+        $derived = CallbackUrl::resolve('', '[::1]:8096', null, '/auth/oidc/callback', '[::1]:8096');
+        $this->assertSame('https://[::1]:8096/auth/oidc/callback', $derived);
+        $this->assertIsString($derived);
+        $this->assertTrue(
+            CallbackUrl::isReplayable($derived, '', '[::1]:8096'),
+            'the replay check must be live for an IPv6 literal, not dead-and-fail-safe',
+        );
+        // Unported IPv6 literal, both legs.
+        $this->assertSame(
+            'https://[::1]/auth/oidc/callback',
+            CallbackUrl::resolve('', '[::1]', null, '/auth/oidc/callback', '[::1]'),
+        );
+        $this->assertTrue(CallbackUrl::isReplayable('https://[::1]/auth/oidc/callback', '', '[::1]'));
+        // …and the port/host are still pinned for IPv6.
+        $this->assertNull(CallbackUrl::resolve('', '[::1]:9999', null, '/auth/oidc/callback', '[::1]:8096'));
+        $this->assertFalse(
+            CallbackUrl::isReplayable('https://[::1]:9999/auth/oidc/callback', '', '[::1]:8096'),
+        );
+        $this->assertFalse(
+            CallbackUrl::isReplayable('https://[2001:db8::1]/auth/oidc/callback', '', '[::1]'),
+        );
+    }
+
+    /**
+     * The refusal is LOGGED with the presented Host, which is attacker-controlled, so
+     * the field is reduced to printable ASCII and bounded. This is log HYGIENE, not
+     * a log-forging fix: Monolog's default `LineFormatter` already JSON-escapes
+     * context values (review r3, finding 2) — the helper just refuses to depend on
+     * that.
      */
     public function test_host_is_sanitised_before_it_reaches_a_log_line(): void
     {
@@ -370,5 +510,32 @@ final class CallbackUrlTest extends TestCase
             CallbackUrl::sanitizeHostForLog("evil.example\r\nINJECTED: forged"),
         );
         $this->assertSame(128, strlen(CallbackUrl::sanitizeHostForLog(str_repeat('a', 500))));
+    }
+
+    /**
+     * Review r3 finding 2, coverage half — the client-supplied `sid` (read out of the
+     * base64-JSON `state` with no shape validation) is the same class of input as the
+     * `Host` header and now goes through the same helper, so a log field stays one
+     * short readable token whatever the client sent.
+     */
+    public function test_any_attacker_supplied_log_field_is_bounded(): void
+    {
+        $this->assertSame('(none)', CallbackUrl::sanitizeForLog(null));
+        $this->assertSame('(none)', CallbackUrl::sanitizeForLog(" \t "));
+        $this->assertSame('(unprintable)', CallbackUrl::sanitizeForLog("\x00\x1F\x7F"));
+        $this->assertSame('sid-abc123', CallbackUrl::sanitizeForLog('sid-abc123'));
+        $this->assertSame(
+            'sidINJECTED:forged',
+            CallbackUrl::sanitizeForLog("sid\r\nINJECTED: forged"),
+        );
+        $this->assertSame(128, strlen(CallbackUrl::sanitizeForLog(str_repeat('s', 4096))));
+        // Every byte >= 0x80 goes too, so the 128-byte cap can never split a
+        // multi-byte character.
+        $this->assertSame('ac', CallbackUrl::sanitizeForLog("a\u{00E9}c"));
+        // sanitizeHostForLog() is a thin alias of the same helper.
+        $this->assertSame(
+            CallbackUrl::sanitizeForLog("evil.example\r\nX: 1"),
+            CallbackUrl::sanitizeHostForLog("evil.example\r\nX: 1"),
+        );
     }
 }

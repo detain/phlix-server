@@ -546,12 +546,17 @@ final class GithubCallbackControllerTest extends TestCase
         $this->assertSame([], $response->cookies, 'no correlation cookie may be issued');
         $this->assertSame(0, $store->puts, 'no state row may be issued');
 
-        // The 503 must be ACTIONABLE — it is the operator's only clue.
+        // Review r3 finding 6 — the route is UNAUTHENTICATED, so the public body must
+        // stay generic: no PHLIX_DOMAIN, no install.sh, no hint at which condition
+        // fired. The machine-readable `error` code above is the operator/UI contract
+        // and the full remedy goes to the AUTH log.
         /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $message = is_string($body['message'] ?? null) ? $body['message'] : '';
-        $this->assertStringContainsString('PHLIX_DOMAIN', $message);
-        $this->assertStringContainsString('redirect_uri', $message);
+        $this->assertStringNotContainsStringIgnoringCase('phlix_domain', $message);
+        $this->assertStringNotContainsStringIgnoringCase('install.sh', $message);
+        $this->assertStringNotContainsStringIgnoringCase('redirect_uri', $message);
+        $this->assertStringContainsString('administrator', $message);
     }
 
     /**

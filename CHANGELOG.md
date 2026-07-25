@@ -9,6 +9,42 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Added
 
+- **Sign in with GitHub, and DB-backed provider settings** (updates.md #54 / S48).
+  The first concrete non-OIDC OAuth2 provider, proving the S44–S47 foundation:
+  - **`GithubOAuthProvider` + `GET /auth/github/authorize` and
+    `GET /auth/github/callback`** (both unauthenticated — the GitHub redirect carries
+    no Phlix session). Plain authorization-code + **PKCE**, no OIDC discovery and no
+    `id_token` assumption, profile via `GET https://api.github.com/user` (default
+    scopes `read:user user:email`), and account resolution through the S46/S47
+    `user_identities` path so a GitHub identity is scoped to `provider='github'`.
+    Enabled by the `auth.github.enabled` server setting like the other bundled
+    providers and registered per worker by `AuthProviderBootstrapper`; linking an
+    existing account uses `GET /auth/identities/link/github` (unlink stays the
+    provider-generic `DELETE /auth/identities/{id}`). The shared
+    `Phlix\Plugins\OAuth2\AbstractOAuth2Provider` base carries the reusable OAuth2 +
+    PKCE machinery, so the next provider family is a subclass rather than a copy.
+  - **Provider settings now live in the DATABASE, not `settings.json`** — new
+    **`plugin_settings`** table (migration **`093_plugin_settings.sql`**: one row per
+    plugin, `plugin_name` PK + `settings_json`) behind a `PluginSettingsStore`
+    interface, consumed through the `PluginDbSettings` trait. Resident Workerman
+    workers may run on a read-only/ephemeral filesystem and a per-plugin file is
+    invisible to the other workers, so a shared row is the correct home. **No
+    operator action is needed on upgrade:** a plugin with no row yet performs a
+    ONE-TIME lazy import of its legacy `settings.json`, and the file store remains
+    the fallback when no DB store is injected (unit tests / no DB). Deliberately NOT
+    the catalog `plugins` table — a catalog row would double-register the bundled
+    providers.
+  - **OAuth2 state is browser-bound.** `DbOAuth2StateStore` (the `oauth_state_store`
+    table, 600 s TTL, atomic one-shot consume — never `$_SESSION`, which is
+    process-global under Workerman) plus `StateCorrelation`: a 32-byte secret in an
+    HttpOnly + Secure + SameSite=Lax cookie (`phlix_oauth_github` /
+    `phlix_oauth_oidc`) whose SHA-256 is the only copy persisted in the state
+    context, compared with `hash_equals()` **before** any token exchange, account link
+    or session-cookie mint. This closes a login-CSRF / session-fixation path where an
+    attacker ran the authorize leg and then had a victim's browser deliver the
+    callback (`SameSite=Lax` does not restrict `Set-Cookie`). Applied to the OIDC flow
+    too.
+
 - **Unlink an identity, log in *via* a linked identity, and multi-provider
   foundation** (updates.md #55 / S47). Completes the account-linking story started
   in S45 and lays the multi-instance groundwork:
@@ -393,6 +429,33 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   the submitted settings, and gets its verdict back in the `{success, message}`
   envelope. Mutation-verified: deleting the registration turns all ten new tests red
   with 404, and moving the route outside the admin group turns both gate tests red.
+
+### Changed
+
+- **The OAuth2/OIDC `redirect_uri` is now always ABSOLUTE, and is derived only from a
+  `Host` that matches `PHLIX_DOMAIN`** (updates.md #54 / S48). Both browser flows used
+  to send a path-only `redirect_uri` (`/auth/oidc/callback`), which providers reject
+  with `redirect_uri_mismatch` — GitHub and any spec-strict OIDC IdP match the value's
+  scheme, host **and port** against a registered absolute URI. The callback URL is now
+  resolved in two steps: the provider's own `redirect_uri` setting when it is a valid
+  absolute http(s) URL, else `<scheme>://<Host><callback path>` **only** when the
+  request's `Host` — port included — is the configured `PHLIX_DOMAIN`. A `Host` is
+  client-supplied, so deriving from an unvouched-for one could have handed a
+  wildcard-registered IdP an attacker's `redirect_uri`.
+
+  **Upgrade note — this fails CLOSED.** If neither `PHLIX_DOMAIN` nor an absolute
+  per-provider `redirect_uri` is configured, `/auth/github/authorize` and
+  `/auth/oidc/authorize` answer **`503 callback_url_not_configured`** — issuing no
+  state row and no cookie — instead of sending a value the provider would reject. Set
+  **`PHLIX_DOMAIN`** to this server's public `host[:port]` (`scripts/install.sh
+  --domain <domain>` writes it, and the systemd unit reads it from the env file), or
+  set the provider's `redirect_uri` setting to the absolute URL registered with the
+  provider. Reaching authorize over anything else — a LAN IP, `localhost`, the hub
+  relay hostname, or a different port on the same hostname — now `503`s **by design**.
+  The response body is deliberately generic because the route is unauthenticated; the
+  AUTH-channel log line names which condition fired, the presented `Host`, the
+  configured domain and both remedies. `error: callback_url_not_configured` is the
+  stable machine-readable code.
 
 ### Fixed
 

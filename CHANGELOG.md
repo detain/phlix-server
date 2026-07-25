@@ -490,10 +490,14 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   advertise the size was the one that broke. New `Phlix\Server\Workerman\BodylessResponse`
   narrows `__toString()` to leave a caller-supplied `Content-Length` alone on an empty
   body (and delegates to Workerman untouched for everything else);
-  `Response::toWorkermanResponse()` uses it, which fixes `HEAD /dlna/stream/{id}` and
-  the pre-existing twin on `HEAD /media/{id}/stream`. Pinned by assertions on the
-  **encoded bytes** — the previous tests inspected the header *array*, which cannot
-  observe this defect at all.
+  `Response::toWorkermanResponse()` selects it for `HEAD` replies **only** — never for
+  a GET that merely came out empty, whose stale length would be a keep-alive framing
+  desync rather than a fix — which fixes `HEAD /dlna/stream/{id}` and the pre-existing
+  twin on `HEAD /media/{id}/stream`. Every other reply, 204/304/redirect/416 included,
+  is byte-identical to before. Pinned by assertions on the **encoded bytes**, with the
+  expected bytes *derived from* Workerman's own encoder so a future dependency bump
+  cannot make the narrowed copy diverge silently — the previous tests inspected the
+  header *array*, which cannot observe this defect at all.
 
 - **`Router::group()` could leak its middleware onto every later route** if the group
   callback threw. The prefix/middleware restore had no `finally`, and `addRoute()`
@@ -502,6 +506,9 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   allowlist** to the ~15 route loaders that run after it, and those endpoints would
   have begun refusing every non-LAN caller. Low probability, wide blast radius; the
   restore is now unconditional and the log call inside that catch is itself guarded.
+  Pinned by tests that register a throwing group (flat and nested) and assert both
+  that a route registered afterwards carries no leaked middleware and that a nested
+  group restores the *outer* prefix and middleware rather than clearing them.
 
 - **External identities were stored with a hardcoded `provider='external'`**
   (updates.md #37 / S44). `UserRepository::findOrCreateByExternalId()` ignored which

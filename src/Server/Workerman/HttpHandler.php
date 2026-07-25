@@ -1027,6 +1027,12 @@ final class HttpHandler
         // WorkermanResponse with a real Content-Length and an empty body puts TWO
         // conflicting Content-Length fields on the wire (the bogus `0` LAST) —
         // invalid per RFC 9110 §8.6. See {@see BodylessResponse}.
+        //
+        // Named explicitly rather than selected by a `headOnly` flag, because this
+        // method returns WORKERMAN responses (it runs before Application::dispatch()
+        // and never builds a Phlix Response), so `Response::$headOnly` — the flag
+        // that selects this encoder for router-dispatched HEAD replies — does not
+        // exist on this path.
         if ($isHead) {
             $resp = new BodylessResponse(200, ['Content-Type' => $mime]);
             $resp->header('Content-Length', (string) $fileSize);

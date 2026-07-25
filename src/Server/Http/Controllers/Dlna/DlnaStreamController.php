@@ -200,18 +200,27 @@ final class DlnaStreamController
         //
         // The `Content-Length` set here is the size a GET would return, per RFC
         // 9110 §9.3.2. It survives to the wire as the ONLY Content-Length because
-        // {@see \Phlix\Server\Http\Response::toWorkermanResponse()} renders an
-        // empty-bodied reply through {@see \Phlix\Server\Workerman\BodylessResponse};
+        // `headOnly` makes {@see \Phlix\Server\Http\Response::toWorkermanResponse()}
+        // render the reply through {@see \Phlix\Server\Workerman\BodylessResponse};
         // Workerman's own encoder appends a contradictory `Content-Length: 0` after
         // it, which RFC 9110 §8.6 makes invalid and which is exactly the outcome
         // this arm exists to avoid. Asserted on the ENCODED BYTES, not on the
         // header array — a header-array assertion cannot see that defect at all.
+        //
+        // `headOnly` is set EXPLICITLY here because this route registers HEAD in
+        // its own right (`match(['GET','HEAD'], …)`), so `Router::dispatchAsHead()`
+        // — the only other thing that sets the flag — never runs for it. It is also
+        // the flag the CGI/FPM entrypoint reads to suppress the body, so setting it
+        // keeps both entrypoints in agreement.
         if ($request->method === 'HEAD') {
-            return (new Response())
+            $head = (new Response())
                 ->status(200)
                 ->header('Content-Type', $mime)
                 ->header('Accept-Ranges', 'bytes')
                 ->header('Content-Length', (string) $fileSize);
+            $head->headOnly = true;
+
+            return $head;
         }
 
         return $this->serveBytes($request, $real, $fileSize, $mime);

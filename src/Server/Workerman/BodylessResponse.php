@@ -61,13 +61,22 @@ use function strtolower;
  * `Content-Length`, so it would swap one invalid message for another). Narrowing
  * `__toString()` in a subclass is therefore the intended extension point.
  *
- * The narrowing is deliberately as small as it can be:
- * {@see \Phlix\Server\Http\Response::toWorkermanResponse()} selects this class for
- * every empty-bodied response, but {@see self::contentLengthIsAuthoritative()}
- * then delegates straight back to `parent::__toString()` unless the response is
- * the exact shape the parent renders invalidly. So a 204, a 304, a redirect or a
- * 416 is byte-identical to before, and only a caller-sized bodyless reply is
- * rendered here.
+ * The narrowing is deliberately as small as it can be, and it is narrowed twice
+ * over:
+ *
+ *  1. {@see \Phlix\Server\Http\Response::toWorkermanResponse()} selects this class
+ *     **only** for a `HEAD` reply (`Response::$headOnly`) — never for a GET that
+ *     merely happens to have an empty body, because treating a stale non-zero
+ *     `Content-Length` as authoritative on a GET would be a keep-alive framing
+ *     desync rather than a fix (see that method's docblock);
+ *  2. {@see self::contentLengthIsAuthoritative()} then delegates straight back to
+ *     `parent::__toString()` unless the response is the exact shape the parent
+ *     renders invalidly, so a `HEAD` that declares no length at all still gets the
+ *     framework's `Content-Length: 0` exactly as before.
+ *
+ * Between them, a 204, a 304, a redirect, a 416 and every ordinary GET are
+ * byte-identical to the parent encoder, and only a caller-sized bodyless `HEAD`
+ * reply is rendered here.
  *
  * ## Resident-memory / event-loop notes
  *
@@ -82,10 +91,11 @@ class BodylessResponse extends WorkermanResponse
     /**
      * Render the response, suppressing Workerman's generated `Content-Length`.
      *
-     * Mirrors the parent's header emission exactly — same order, same
-     * CR/LF/colon sanitisation, same `Connection: keep-alive` and
-     * `Content-Type` defaults — and then terminates the head. It never appends a
-     * `Content-Length` and never writes a body.
+     * Mirrors the parent's header emission for every value shape
+     * {@see \Phlix\Server\Http\Response::header()} can produce — same order, same
+     * CR/LF/colon sanitisation, same `Connection: keep-alive` and `Content-Type`
+     * defaults — and then terminates the head. It never appends a `Content-Length`
+     * and never writes a body.
      *
      * Anything that is NOT a bodyless, caller-sized reply is delegated to the
      * parent unchanged, so this class is safe to use as a drop-in.
@@ -145,6 +155,13 @@ class BodylessResponse extends WorkermanResponse
      * `Transfer-Encoding` (which the parent already honours by skipping its own
      * `Content-Length`). Server-Sent Events are excluded because the parent
      * deliberately returns a head-only string for them already.
+     *
+     * This is the INNER of two guards. The outer one is the `headOnly` selector in
+     * {@see \Phlix\Server\Http\Response::toWorkermanResponse()}; this one keeps the
+     * class a safe drop-in even when it is constructed directly, as
+     * {@see \Phlix\Server\Workerman\HttpHandler::serveMediaStream()} does — it
+     * returns Workerman responses rather than Phlix ones, so it has no `headOnly`
+     * flag to set and names this class explicitly instead.
      */
     private function contentLengthIsAuthoritative(): bool
     {

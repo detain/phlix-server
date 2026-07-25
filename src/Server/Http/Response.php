@@ -564,22 +564,34 @@ class Response
      * Convert to a Workerman HTTP response — used when this server runs
      * as a long-running Workerman worker (see {@see \Phlix\Server\Core\Application::boot()}).
      *
-     * An empty-bodied response is rendered by {@see BodylessResponse}, which is
-     * Workerman's `Response` in every respect EXCEPT that it will not append its
-     * own `Content-Length: 0` over a `Content-Length` the caller already set. That
-     * is the `HEAD` case — RFC 9110 §9.3.2 requires a `HEAD` reply to carry the
-     * length the equivalent `GET` would have returned while forbidding a body —
-     * and Workerman's unconditional append otherwise puts two contradictory
-     * `Content-Length` fields on the wire, which RFC 9110 §8.6 makes invalid. See
-     * {@see BodylessResponse} for the rendered bytes. An empty-bodied response
-     * that does NOT declare a length (a 204, a 304, a redirect, a 416) is
-     * delegated straight back to the parent encoder, so it is byte-identical to
-     * before.
+     * A `HEAD` reply — and ONLY a `HEAD` reply, i.e. {@see $headOnly} — is rendered
+     * by {@see BodylessResponse}, which is Workerman's `Response` in every respect
+     * EXCEPT that it will not append its own `Content-Length: 0` over a
+     * `Content-Length` the caller already set. RFC 9110 §9.3.2 requires a `HEAD`
+     * reply to carry the length the equivalent `GET` would have returned while
+     * forbidding a body, and Workerman's unconditional append otherwise puts two
+     * contradictory `Content-Length` fields on the wire, which RFC 9110 §8.6 makes
+     * invalid. See {@see BodylessResponse} for the rendered bytes.
+     *
+     * ## Why the selector is `headOnly` and not "the body came out empty"
+     *
+     * Selecting on an empty body would be an order of magnitude wider than the
+     * defect. A **GET** that declares a NON-ZERO `Content-Length` and then produces
+     * an empty body would have that stale length treated as authoritative, and on a
+     * keep-alive connection that is a framing desync: the client blocks waiting for
+     * N bytes that never arrive. It is a reachable shape —
+     * {@see \Phlix\Server\Http\Controllers\ThemeMusicStreamController} sets
+     * `Content-Length` from a `filesize()` taken before its `file_get_contents()`,
+     * so a file truncated inside that window yields exactly it — and for a GET the
+     * parent encoder's invalid-but-immediately-rejected message is the better
+     * failure mode. Only a `HEAD` is legitimately bodyless-with-a-length, so only a
+     * `HEAD` gets the narrowed encoder; every other response, empty-bodied or not,
+     * keeps the framework encoder byte for byte.
      */
     public function toWorkermanResponse(): WorkermanResponse
     {
         $body = $this->headOnly ? '' : $this->body;
-        $wr = $body === ''
+        $wr = $this->headOnly
             ? new BodylessResponse($this->statusCode, $this->headers, $body)
             : new WorkermanResponse($this->statusCode, $this->headers, $body);
 

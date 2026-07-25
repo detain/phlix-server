@@ -357,30 +357,97 @@ final class PlaybackEventMediaTypeEnumTest extends TestCase
     }
 
     /**
+     * S102 review r2 MED-1, SQL half — the QUERY must collapse duplicate rows.
+     *
+     * The reader aggregates twice (`SUM(…) GROUP BY media_type` in SQL, `+=` in
+     * PHP) and the two halves hide each other, so the whole suite stayed green with
+     * either one reverted. This test sees only the SQL half: TWO rows per bucket in
+     * one `recorded_at` second must come back as FIVE `items` rows whose
+     * `total_bytes` are the pair's sum. Drop the `SUM`/`GROUP BY` and it is ten rows
+     * carrying half the bytes each; the PHP half cannot rescue that, because
+     * `items[]` is what the dashboard's per-type table renders. The `+=` half has
+     * its own database-free pin in
+     * {@see \Phlix\Tests\Unit\Admin\DashboardServiceTest::test_get_storage_summary_sums_two_rows_for_one_bucket}.
+     */
+    public function testTheQueryItselfCollapsesDuplicateRowsIntoOneItemPerBucket(): void
+    {
+        $recordedAt = '2031-02-03 04:05:06';
+
+        /** @var array<string, int> $expected */
+        $expected = [];
+        $written = 0;
+        foreach (StorageSnapshotHelper::BUCKETS as $index => $bucket) {
+            $first = 1_000 * ($index + 1);
+            $second = 10_000 * ($index + 1);
+            $this->seedStorageRow($bucket, $first, $recordedAt);
+            $this->seedStorageRow($bucket, $second, $recordedAt);
+            $expected[$bucket] = $first + $second;
+            $written += $first + $second;
+        }
+
+        $summary = $this->dashboard()->getStorageSummary();
+
+        $this->assertCount(
+            5,
+            $summary['items'],
+            'The query must return ONE row per bucket. Ten rows here means the SUM/GROUP BY was '
+            . 'dropped and every per-type figure the dashboard renders is a fragment.',
+        );
+
+        /** @var array<string, int> $actual */
+        $actual = [];
+        foreach ($summary['items'] as $item) {
+            $actual[$item['media_type']] = $item['total_bytes'];
+            $this->assertSame(2, $item['item_count'], 'item_count must be SUMmed too, not sampled');
+        }
+        ksort($actual);
+        ksort($expected);
+        $this->assertSame($expected, $actual);
+
+        $this->assertSame($written, $this->rollUpTotal($summary), $this->rollUpMessage($summary));
+    }
+
+    /**
      * The reviewer's EXACT fixture, through the public single-row API: 13 separate
      * `recordStorageSnapshot()` calls, i.e. the ad-hoc pattern that API still
      * allows. Each call writes its own row, several of them into the same bucket,
      * which is the collision the roll-ups used to lose 60,000 of 91,000 bytes to.
      *
-     * The 13 rows are then stamped with ONE `recorded_at` before reading. That is
-     * NOT cosmetic: `recorded_at` is second-precision and each call is a separate
-     * `NOW()`, so on a loaded box the run spreads over two or three seconds
-     * (measured: 3) and `getStorageSummary()`'s `MAX(recorded_at)` join then only
-     * sees the last second's rows — which would make the assertion flaky rather
-     * than wrong. Stamping reproduces, deterministically, the single-second run the
-     * reviewer measured on an idle scratch DB.
+     * ## The loop deliberately STRADDLES a wall-clock second (S102 review r2, MED-2)
+     *
+     * This test used to force all 13 rows onto one `recorded_at` before reading, and
+     * that stamp was doing the work its name claimed the code did: `recorded_at` is
+     * second-precision, each INSERT took its own `NOW()`, and
+     * `getStorageSummary()`'s join is `MAX(recorded_at)` **per `media_type`** — so
+     * on a loaded box the run spread over three seconds and the dashboard reported
+     * 44,000 of the 91,000 bytes handed in. 47,000 lost, silently, by wall-clock
+     * luck. `StatsCollector::snapshotRunSecond()` now stamps a whole run once, so
+     * the property is real: this test crosses a second boundary ON PURPOSE, asserts
+     * that it really did, stamps NOTHING, and still gets every byte back.
      */
-    public function testThirteenIndividualCallsStillRollUpToEveryByte(): void
+    public function testThirteenIndividualCallsRollUpToEveryByteAcrossASecondBoundary(): void
     {
         $before = $this->storageRowIds();
         $collector = $this->collector();
 
+        $startedAtSecond = time();
         $written = 0;
         foreach (MediaItemType::ALL as $index => $type) {
             $bytes = 1_000 * ($index + 1);
             $written += $bytes;
             $collector->recordStorageSnapshot($type, 1, $bytes);
+
+            if ($index === 5) {
+                $this->waitForTheClockSecondToChange();
+            }
         }
+
+        $this->assertGreaterThan(
+            $startedAtSecond,
+            time(),
+            'PRECONDITION: the loop must really have crossed a wall-clock second, otherwise this '
+            . 'test proves nothing beyond the single-second case.',
+        );
 
         $ids = array_values(array_diff($this->storageRowIds(), $before, $this->storageIds));
         foreach ($ids as $id) {
@@ -389,9 +456,12 @@ final class PlaybackEventMediaTypeEnumTest extends TestCase
 
         $this->assertSame(91_000, $written, 'The review r1 fixture: 13 types, 91,000 bytes');
         $this->assertCount(13, $ids, 'One row per call — the writer must not drop a single type');
-
-        $this->stampRecordedAt($ids, '2031-02-03 04:05:06');
-        $this->assertSame(1, $this->distinctRecordedAt($ids));
+        $this->assertSame(
+            1,
+            $this->distinctRecordedAt($ids),
+            'One snapshot run is ONE recorded_at, however many calls and however many seconds it '
+            . 'spans — nothing in this test touches recorded_at.',
+        );
 
         $summary = $this->dashboard()->getStorageSummary();
 
@@ -555,18 +625,18 @@ final class PlaybackEventMediaTypeEnumTest extends TestCase
     }
 
     /**
-     * Force the given rows onto ONE `recorded_at`, i.e. the single-second snapshot
-     * run that a `NOW()`-per-INSERT writer produces on an idle box.
+     * Block until the wall clock's SECOND changes, so a run can be made to straddle
+     * a `recorded_at` boundary deterministically instead of hoping the box is busy.
      *
-     * @param list<string> $ids
+     * A plain `usleep()` is correct here and only here: this is a test process, not
+     * a Workerman handler — nothing resident is being stalled — and the wait is
+     * bounded by definition at one second.
      */
-    private function stampRecordedAt(array $ids, string $recordedAt): void
+    private function waitForTheClockSecondToChange(): void
     {
-        $db = $this->db;
-        $this->assertNotNull($db);
-
-        foreach ($ids as $id) {
-            $db->query('UPDATE stats_storage SET recorded_at = ? WHERE id = ?', [$recordedAt, $id]);
+        $second = time();
+        while (time() === $second) {
+            usleep(20_000);
         }
     }
 

@@ -265,6 +265,27 @@ class DashboardService
      * exactly the kind of `GROUP BY`/`ORDER BY` ambiguity `ONLY_FULL_GROUP_BY`
      * has bitten this repo with before.
      *
+     * ## The two halves are pinned SEPARATELY, on purpose (S102 review r2, MED-1)
+     *
+     * The halves hide each other: the SQL `GROUP BY` collapses the result set to one
+     * row per `media_type`, so the `+=` never sees a second row — and with `+=` in
+     * place the `SUM` is equally invisible. Every test therefore used to pass with
+     * EITHER half reverted, and only the simultaneous revert was caught. That is a
+     * live trap, because the deferred per-library snapshot writer will start
+     * emitting one row per `library_id` per bucket, and "the SQL already groups" is
+     * a plausible reason to simplify these arms back to `=` — three 1 TB libraries
+     * would then render as 1 TB with a green suite. So each half now has its own
+     * regression:
+     *
+     * - the PHP `+=` arms →
+     *   {@see \Phlix\Tests\Unit\Admin\DashboardServiceTest::test_get_storage_summary_sums_two_rows_for_one_bucket}
+     *   (mocked, no database: two `movie` rows, 1,000 + 2,000, must be 3,000)
+     * - the SQL `SUM`/`GROUP BY` →
+     *   {@see \Phlix\Tests\Integration\Stats\PlaybackEventMediaTypeEnumTest::testTheQueryItselfCollapsesDuplicateRowsIntoOneItemPerBucket}
+     *   (real MySQL: two rows per bucket in one second must be FIVE `items` rows)
+     *
+     * Do not "simplify" either half without watching one of those go red.
+     *
      * @return array{
      *     movie_bytes: int,
      *     series_bytes: int,

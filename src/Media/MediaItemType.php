@@ -64,16 +64,29 @@ namespace Phlix\Media;
  *
  * Do steps 1–2 without 3–4 and the drift test goes red, naming whichever step you
  * skipped. Precisely what it reads, so the guarantee is not larger than the tool:
- * it parses `CREATE TABLE` column definitions and `ALTER TABLE … MODIFY [COLUMN]`
- * / `CHANGE [COLUMN] <old> <new>` clauses, with or without backticks, with or
- * without a schema qualifier, in any position of a multi-clause `ALTER`, in any
- * case, over any whitespace — every style present in this repo's migrations
- * (`030`, `034`, `068`, `081`, `083`, `084`, `091`, `094`), each pinned by a case
- * in `MediaItemTypeDriftTest::definitionStyleProvider()`. What it deliberately does
- * NOT read is DDL built at runtime inside a `PREPARE`/`EXECUTE` string (the style
- * of `migrations/011_music_library.sql:18`): such a statement is SKIPPED rather
- * than half-parsed, so a member introduced ONLY that way would be invisible to the
- * guard — write the widening as a plain statement.
+ * it parses `CREATE TABLE` column definitions and `ALTER TABLE …
+ * MODIFY [COLUMN]` / `CHANGE [COLUMN] <old> <new>` / `ADD [COLUMN]` clauses, with
+ * or without backticks, with or without a schema qualifier, in any position of a
+ * multi-clause `ALTER`, in any case, over any whitespace — every style present in
+ * this repo's migrations (`002`, `030`, `034`, `037`, `068`, `081`, `083`, `084`,
+ * `091`, `094`), each pinned by a case in
+ * `MediaItemTypeDriftTest::definitionStyleProvider()`, and the `ADD COLUMN` style
+ * additionally checked against the real `migrations/037_users_status.sql`. Two
+ * things it deliberately does NOT read:
+ *
+ * - DDL built at runtime inside a `PREPARE`/`EXECUTE` string (the style of
+ *   `migrations/011_music_library.sql:18`): such a statement is SKIPPED rather than
+ *   half-parsed, so a member introduced ONLY that way would be invisible — write
+ *   the widening as a plain statement.
+ * - a bare `DROP COLUMN` with no re-`ADD`: the parser keeps the last definition it
+ *   saw, so it would still report the dropped column's members. That cannot widen
+ *   an ENUM (it deletes the column and every row's value with it), and a
+ *   `DROP` + `ADD` pair IS read, via the `ADD` half.
+ *
+ * A `migrations/*.php` file is not read either — `MigrationRunner` only globs
+ * `*.sql`, so such a file is never applied automatically; `MediaItemTypeDriftTest`
+ * reddens if one ever contains an `ENUM(` definition, so the assumption cannot rot
+ * silently.
  *
  * @package Phlix\Media
  * @since 1.9

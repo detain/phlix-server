@@ -292,6 +292,122 @@ class StatsCollectorTest extends TestCase
     }
 
     /**
+     * S102 review r2 MED-2 — one snapshot RUN carries one `recorded_at`.
+     *
+     * `recorded_at` is a second-precision `DATETIME` and the dashboard joins on
+     * `MAX(recorded_at)` per `media_type`, so a run whose rows land on different
+     * seconds loses every bucket that received rows in more than one of them
+     * (measured on real MySQL: 13 individual calls over three seconds → 44,000 of
+     * 91,000 bytes). With `NOW()` per INSERT that was decided by wall-clock luck;
+     * the run is now stamped once and bound through `FROM_UNIXTIME(?)` — a bound
+     * unix second rather than a PHP-formatted string, so the value is what `NOW()`
+     * would have produced in the MySQL session's own time zone.
+     */
+    public function testEveryRowOfASnapshotRunCarriesTheSameRecordedAtSecond(): void
+    {
+        /** @var list<int> $stamps */
+        $stamps = [];
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(
+            function (string $sql, array $params) use (&$stamps): array {
+                $this->assertStringContainsString('FROM_UNIXTIME(?)', $sql);
+                $this->assertStringNotContainsString('NOW()', $sql);
+                $stamps[] = (int) $params[6];
+
+                return [];
+            }
+        );
+
+        $collector = new StatsCollector($db);
+
+        // A batch (5 rows) plus later individual calls: one run either way.
+        $collector->recordStorageSnapshots([
+            'movie' => ['count' => 1, 'bytes' => 1],
+            'series' => ['count' => 1, 'bytes' => 2],
+            'music' => ['count' => 1, 'bytes' => 3],
+            'photo' => ['count' => 1, 'bytes' => 4],
+            'book' => ['count' => 1, 'bytes' => 5],
+        ]);
+        $collector->recordStorageSnapshot('episode', 1, 6);
+        $collector->recordStorageSnapshot('track', 1, 7);
+
+        $this->assertCount(7, $stamps);
+        $this->assertCount(1, array_unique($stamps), 'One run, one recorded_at: ' . implode(',', $stamps));
+        $this->assertLessThanOrEqual(
+            2,
+            abs(time() - $stamps[0]),
+            'The stamp must be the run\'s own wall-clock second, not an arbitrary value'
+        );
+    }
+
+    /**
+     * A run ends at a STALL, not at an elapsed duration — and it really does end, so
+     * a stopped caller can never freeze the stamp for the life of the worker.
+     *
+     * The gap is rewound by reflection rather than slept through: the point is the
+     * window arithmetic, and a test that sleeps six seconds to prove it would be paid
+     * for on every run of the suite forever.
+     */
+    public function testAStallLongerThanTheGapWindowStartsANewRun(): void
+    {
+        /** @var list<int> $stamps */
+        $stamps = [];
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(
+            static function (string $sql, array $params) use (&$stamps): array {
+                $stamps[] = (int) $params[6];
+
+                return [];
+            }
+        );
+
+        $collector = new StatsCollector($db);
+        $lastWrite = new \ReflectionProperty(StatsCollector::class, 'snapshotRunLastWriteNs');
+        $second = new \ReflectionProperty(StatsCollector::class, 'snapshotRunSecond');
+
+        $collector->recordStorageSnapshot('movie', 1, 1);
+        $firstRun = (int) $second->getValue($collector);
+
+        // Still inside the window: same run.
+        $collector->recordStorageSnapshot('series', 1, 2);
+        $this->assertSame($firstRun, (int) $second->getValue($collector));
+
+        // Rewind the last write past the gap window, then write again.
+        $lastWrite->setValue(
+            $collector,
+            (int) $lastWrite->getValue($collector) - 6_000_000_000
+        );
+        $collector->recordStorageSnapshot('music', 1, 3);
+
+        $this->assertSame($stamps[0], $stamps[1], 'The first two writes are one run');
+        $this->assertNotSame(0, (int) $second->getValue($collector));
+        $this->assertGreaterThanOrEqual(
+            $stamps[1],
+            $stamps[2],
+            'After a stall the stamp is recomputed, so it can only move forward'
+        );
+        $this->assertLessThanOrEqual(2, abs(time() - $stamps[2]));
+    }
+
+    /**
+     * The run stamp is per INSTANCE, so two collectors are two runs and cannot be
+     * merged into one `recorded_at` generation — which is what keeps two concurrent
+     * snapshot writers (two coroutines, two FPM processes) independent.
+     */
+    public function testTheRunStampDoesNotLeakBetweenCollectorInstances(): void
+    {
+        $reflection = new \ReflectionProperty(StatsCollector::class, 'snapshotRunSecond');
+
+        $first = new StatsCollector($this->createMock(Connection::class));
+        $second = new StatsCollector($this->createMock(Connection::class));
+
+        $first->recordStorageSnapshot('movie', 1, 1);
+
+        $this->assertNotSame(0, $reflection->getValue($first), 'The writing collector has a run');
+        $this->assertSame(0, $reflection->getValue($second), 'A second collector must start with none');
+    }
+
+    /**
      * S102 review r1 MED-3 — an unmapped type must NOT be filed under `movie`.
      *
      * `migrations/086_stats_storage_book_bucket.sql:11-14` states the rule: "a
@@ -360,6 +476,69 @@ class StatsCollectorTest extends TestCase
             $counters['library_change']['suppressed'],
             'Exactly ONE of the 1,000 identical failures may reach the log inside the throttle window'
         );
+    }
+
+    /**
+     * S102 review r2 LOW-6 — the throttle may hide a REPEAT, never a NEW FAILURE
+     * CLASS.
+     *
+     * Keyed on the operation alone, the second symptom of a broken subsystem was
+     * counted but never described: once `library_change` had logged its
+     * `RuntimeException`, a `PDOException "MySQL server has gone away"` in the same
+     * 60 s window went into `suppressed` and its message was lost (measured: two
+     * failures, two classes, ONE log line). The window is now keyed on operation AND
+     * exception class, so `suppressed` stays at ZERO for two distinct classes —
+     * which is exactly "both were logged", without this test having to read the log
+     * file.
+     */
+    public function testADifferentFailureClassIsNotSuppressedByTheThrottle(): void
+    {
+        /** @var list<\Throwable> $failures */
+        $failures = [
+            new RuntimeException('stats_library_changes is gone'),
+            new PDOException('SQLSTATE[HY000]: General error: 2006 MySQL server has gone away'),
+        ];
+
+        $call = 0;
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(
+            static function () use (&$call, $failures): array {
+                throw $failures[$call++] ?? $failures[0];
+            }
+        );
+
+        $collector = new StatsCollector($db);
+        $collector->recordLibraryChange('item_added', 'media-1');
+        $collector->recordLibraryChange('item_added', 'media-2');
+
+        $counters = StatsCollector::writeFailureCounters();
+
+        $this->assertSame(2, $counters['library_change']['failures'], 'Both failures must be counted');
+        $this->assertSame(
+            0,
+            $counters['library_change']['suppressed'],
+            'A DIFFERENT exception class for an already-failing operation is different news and must '
+            . 'reach the log; only a repeat of the same class may be suppressed.'
+        );
+    }
+
+    /**
+     * The other side of LOW-6: the ~29,000 → 1 reduction the throttle exists for
+     * must survive the finer key. Same operation, same class, twice ⇒ one line.
+     */
+    public function testARepeatOfTheSameFailureClassIsStillSuppressed(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willThrowException(new RuntimeException('stats_library_changes is gone'));
+
+        $collector = new StatsCollector($db);
+        $collector->recordLibraryChange('item_added', 'media-1');
+        $collector->recordLibraryChange('item_added', 'media-2');
+
+        $counters = StatsCollector::writeFailureCounters();
+
+        $this->assertSame(2, $counters['library_change']['failures']);
+        $this->assertSame(1, $counters['library_change']['suppressed']);
     }
 
     /**

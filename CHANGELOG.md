@@ -513,9 +513,15 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
     configured `error.log` path is date-stamped on disk) and swallows it — telemetry is
     strictly less important than the action that triggered it, and
     `dispatchPlaybackStarted()` has no try/catch of its own. Repeated failures are counted
-    per operation and the log is throttled to one line per operation per minute, with
-    `failures_total` / `suppressed_since_last_log` in the context and the running totals
-    readable via `StatsCollector::writeFailureCounters()`: `ItemRepository::recordChange()`
+    per operation and the log is throttled to one line per operation **per exception class**
+    per minute, with `failures_total` / `suppressed_since_last_log` /
+    `operation_failures_total` in the context and the running totals (still keyed per
+    operation) readable via `StatsCollector::writeFailureCounters()`. The exception class is
+    part of the window key because keying on the operation alone suppressed a *new kind* of
+    failure for an already-failing operation: once `library_change` had logged a
+    `RuntimeException`, a `PDOException "MySQL server has gone away"` in the same 60 s window
+    was counted but its message never reached the log. A repeat is noise; a different class
+    is news. `ItemRepository::recordChange()`
     records one library change per scanned item, so an un-throttled boundary would have
     written ~29,000 identical error lines during one music scan of the production library.
     *Reads* are deliberately left unguarded: they serve the admin dashboard, where a broken
@@ -534,7 +540,35 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
     `StorageSnapshotHelper::bootstrapSnapshot()` also finally honours its documented "if data
     is stale or missing" contract (it was called on *every* PHP-FPM request, re-running
     `du -sb` over both vault roots each time), because summing same-second rows would
-    otherwise double the totals when two snapshot runs land in one second.
+    otherwise double the totals when two snapshot runs land in one second. That staleness
+    check compares the age by ABSOLUTE distance, so a newest row dated in the *future* (a
+    clock that stepped backwards, or one stray row) reads as stale rather than as "fresh
+    forever" — measured pre-fix: one row dated +1 day and the fallback never refreshed again.
+  - **A snapshot run now carries ONE `recorded_at`, so a looping caller cannot lose bytes to
+    a wall-clock second boundary.** `recorded_at` is a second-precision `DATETIME` and the
+    dashboard joins on `MAX(recorded_at)` *per `media_type`*, so a run whose rows straddle two
+    seconds silently loses every bucket that received rows in more than one of them. With a
+    fresh `NOW()` per INSERT that was decided by luck: measured on a loaded box, 13
+    `recordStorageSnapshot()` calls spread over three seconds and the dashboard reported
+    **44,000 of the 91,000 bytes handed in**. The run's second is now computed once and bound
+    through `FROM_UNIXTIME(?)` — a bound unix second rather than a PHP-formatted string, so
+    the value is exactly what `NOW()` would have produced in the MySQL session's own time
+    zone. What ends a run is a *stall* of more than 5 s between two snapshot writes, not an
+    elapsed duration, so a run that measures every library with `du -sb` cannot be split into
+    generations by its own length: 13 calls a full second apart (13 s end to end) round-trip
+    all 91,000 bytes and 13 of 13 item counts, where the same run on the old write path
+    reported 48,000 and 5. The batch form was already immune by accident (one row per bucket
+    makes the per-type `MAX` a no-op); the guarantee is now structural for both forms, and
+    pinned by an integration test that crosses a second boundary on purpose and stamps nothing.
+  - **Each half of the reader's aggregation is pinned on its own.** `SUM(…) GROUP BY
+    media_type` and the PHP `+=` arms hide each other — the `GROUP BY` collapses the result
+    set so `+=` never sees a second row, and with `+=` present the `SUM` is invisible — so the
+    whole suite stayed green with *either* reverted, and only the simultaneous revert failed.
+    That matters because per-library snapshots will legitimately produce several rows per
+    bucket and "the SQL already groups" is a plausible reason to simplify the arms back to
+    `=`, which would render three 1 TB libraries as 1 TB. The `+=` half now has a
+    database-free test (two `movie` rows, 1,000 + 2,000, must be 3,000) and the SQL half a
+    real-MySQL one (two rows per bucket in one second must come back as five `items` rows).
   - **An unrecognised media type is now dropped from the storage snapshot, loudly.** It used
     to fall back to `movie`, i.e. unknown bytes were added to a real bucket with only a
     warning in `app.log`. `migrations/086_stats_storage_book_bucket.sql` already wrote the
@@ -553,13 +587,21 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
     type-carrying columns disagree. The previous cross-checks compared the PHP copies only
     to each other, which is why all of them could agree while the actual column did not.
     The parser reads `CREATE TABLE` column definitions and `ALTER TABLE … MODIFY [COLUMN]` /
-    `CHANGE [COLUMN] <old> <new>` clauses — backticked or bare, schema-qualified or not, in
-    any position of a multi-clause `ALTER`, any case, any whitespace — i.e. every style this
-    repo's migrations actually use, each pinned by its own test case. DDL assembled at
-    runtime inside a `PREPARE`/`EXECUTE` string (as `migrations/011` does) is deliberately
-    **skipped** rather than half-parsed, so a widening must be written as a plain statement
-    to be seen; parsing it naively yielded 24 empty-string "members" that the first version
-    of the guard accepted as success.
+    `CHANGE [COLUMN] <old> <new>` / `ADD [COLUMN]` clauses — backticked or bare,
+    schema-qualified or not, in any position of a multi-clause `ALTER`, any case, any
+    whitespace — i.e. every style this repo's migrations actually use, each pinned by its own
+    test case. `ADD [COLUMN]` is included because it was the one style that could redefine a
+    tracked column while leaving the alarm green (as `DROP COLUMN` + `ADD COLUMN`), and
+    because `users.status` — defined that way by `migrations/037` — was the single ENUM column
+    of the 29 in a fully migrated schema the parser could not read. Three blind spots are
+    deliberate and now documented on `MediaItemType`: DDL assembled at runtime inside a
+    `PREPARE`/`EXECUTE` string (as `migrations/011` does) is **skipped** rather than
+    half-parsed, so a widening must be written as a plain statement to be seen (parsing it
+    naively yielded 24 empty-string "members" that the first version of the guard accepted as
+    success); a bare `DROP COLUMN` with no re-`ADD` cannot widen an ENUM; and
+    `migrations/*.php` files are not read at all — which is safe because `MigrationRunner`
+    likewise globs `*.sql` only, and a test now reddens if any `.php` migration ever contains
+    an `ENUM(` definition.
   - Proven against real MySQL 8.0 under `STRICT_TRANS_TABLES` (a mocked connection accepts
     any string for any column and cannot reproduce an ENUM rejection — the same class of
     miss as the LiveTv `RowQuery` and metrics `ONLY_FULL_GROUP_BY` defects): all 13 members

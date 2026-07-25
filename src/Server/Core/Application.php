@@ -2725,6 +2725,13 @@ class Application
      * share a `recorded_at` second, so several rows for one bucket would inflate it
      * (S102 review r1, MED-2).
      *
+     * The `$collector` is deliberately the SAME instance across the initial run and
+     * every timer tick ({@see startStorageSnapshotTimer()}). That is safe because a
+     * run's shared `recorded_at` stamp
+     * ({@see \Phlix\Stats\StatsCollector::snapshotRunSecond()}) expires after
+     * seconds, while ticks are {@see self::STORAGE_SNAPSHOT_INTERVAL} (6 h) apart —
+     * so every tick is its own generation, as the reader requires.
+     *
      * @param \Phlix\Stats\StatsCollector $collector Collector to write through.
      * @param \Workerman\MySQL\Connection $db        Live MySQL connection.
      * @param \Phlix\Common\Logger\StructuredLogger $logger Application logger.

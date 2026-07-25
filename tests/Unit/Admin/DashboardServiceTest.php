@@ -374,6 +374,60 @@ class DashboardServiceTest extends TestCase
         $this->assertEquals(300, $result['items'][1]['item_count']);
     }
 
+    /**
+     * S102 review r2 MED-1 — the PHP half of the aggregation, pinned ON ITS OWN.
+     *
+     * `getStorageSummary()` aggregates TWICE: `SUM(…) GROUP BY media_type` in SQL
+     * and `+=` in the `match` arms. Each half hides the other — the `GROUP BY`
+     * collapses the result set so the `+=` never sees a second row, and with `+=`
+     * present the `SUM` is invisible — so the entire suite stayed green with EITHER
+     * one reverted, and only the simultaneous revert was caught (measured on real
+     * MySQL: `+=` → `=` alone, `OK (12 tests, 163 assertions)`).
+     *
+     * This test needs no database and no `GROUP BY`: it hands the reader TWO rows
+     * for the SAME bucket, exactly what a per-library snapshot writer will produce,
+     * and asserts the bytes ADD. With `=` instead of `+=` the first row's bytes are
+     * overwritten and the assertion reads 2,000 instead of 3,000 — i.e. three 1 TB
+     * libraries rendering as one.
+     */
+    public function test_get_storage_summary_sums_two_rows_for_one_bucket(): void
+    {
+        $mockConnection = $this->createMockConnection();
+        $mockConnection->method('query')->willReturn([
+            [
+                'media_type' => 'movie',
+                'item_count' => 10,
+                'total_bytes' => 1000,
+                'transcode_cache_bytes' => 100,
+            ],
+            [
+                'media_type' => 'movie',
+                'item_count' => 20,
+                'total_bytes' => 2000,
+                'transcode_cache_bytes' => 200,
+            ],
+        ]);
+
+        $service = new DashboardService(
+            $this->createMockStatsCollector(),
+            $this->createMockSessionManager(),
+            $this->createMockStreamManager(),
+            $this->createMockItemRepository(),
+            $mockConnection
+        );
+
+        $result = $service->getStorageSummary();
+
+        $this->assertSame(
+            3000,
+            $result['movie_bytes'],
+            'Two rows for one bucket must ADD (`+=`), never overwrite (`=`): a second row is what a '
+            . 'per-library snapshot looks like, and the smallest one used to win.'
+        );
+        $this->assertSame(300, $result['transcode_cache_bytes']);
+        $this->assertCount(2, $result['items'], 'The per-row items[] list is not aggregated in PHP');
+    }
+
     public function test_get_storage_summary_surfaces_the_book_bucket(): void
     {
         $mockConnection = $this->createMockConnection();

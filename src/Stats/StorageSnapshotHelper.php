@@ -260,6 +260,16 @@ final class StorageSnapshotHelper
      * possibly-redundant snapshot is much cheaper than a dashboard that is
      * permanently empty because a read went sideways.
      *
+     * That promise includes a newest row dated in the FUTURE (S102 review r2,
+     * LOW-5). `TIMESTAMPDIFF(SECOND, MAX(recorded_at), NOW())` goes NEGATIVE when
+     * the clock has stepped backwards since a write, or when one stray row carries a
+     * future date, and a plain `>=` then reads that row as "fresh" — forever, so
+     * this fallback would never refresh again (measured: one row dated +1 day →
+     * `bootstrapSnapshot()` wrote nothing at all). The age is therefore compared by
+     * ABSOLUTE distance: a row far from now in either direction is stale, which
+     * fails open exactly as documented, while the seconds of jitter a clock
+     * adjustment can leave behind stay inside the window.
+     *
      * @param Connection $db Live MySQL connection
      *
      * @return bool True when a fresh snapshot should be recorded
@@ -287,6 +297,6 @@ final class StorageSnapshotHelper
 
         $age = $row['age_seconds'] ?? null;
 
-        return !is_numeric($age) || (int) $age >= self::SNAPSHOT_MAX_AGE_SECONDS;
+        return !is_numeric($age) || abs((int) $age) >= self::SNAPSHOT_MAX_AGE_SECONDS;
     }
 }

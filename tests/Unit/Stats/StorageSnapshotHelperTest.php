@@ -298,4 +298,56 @@ class StorageSnapshotHelperTest extends TestCase
 
         StorageSnapshotHelper::bootstrapSnapshot($collector, $db);
     }
+
+    /**
+     * S102 review r2 LOW-5 — a FUTURE-dated newest row must not read as "fresh
+     * forever", which contradicted `snapshotIsStale()`'s own "fails OPEN" docblock.
+     *
+     * `TIMESTAMPDIFF(SECOND, MAX(recorded_at), NOW())` is NEGATIVE once the newest
+     * row is ahead of the clock (the clock stepped backwards after a write, or one
+     * stray row carries a future date), and a plain `>=` then never fires again: the
+     * PHP-FPM fallback stops refreshing permanently. Measured pre-fix: one row dated
+     * +1 day → `bootstrapSnapshot()` wrote nothing at all, forever.
+     *
+     * @return array<string, array{0: int}>
+     */
+    public static function futureDatedSnapshotProvider(): array
+    {
+        return [
+            'a day into the future' => [-86_400],
+            'a year into the future' => [-31_536_000],
+            'just past the staleness window, backwards' => [-21_600],
+        ];
+    }
+
+    /**
+     * @dataProvider futureDatedSnapshotProvider
+     */
+    public function testBootstrapSnapshotRecordsWhenTheNewestSnapshotIsDatedInTheFuture(int $age): void
+    {
+        $db = $this->dbReturningTypeCounts([['type' => 'movie', 'item_count' => 10]], $age);
+
+        $collector = $this->createMock(StatsCollector::class);
+        $collector->expects($this->once())
+            ->method('recordStorageSnapshots')
+            ->willReturnCallback(static function (): void {
+            });
+
+        StorageSnapshotHelper::bootstrapSnapshot($collector, $db);
+    }
+
+    /**
+     * The other side of LOW-5: a few seconds of clock jitter is NOT staleness, so
+     * the absolute-distance comparison must not turn every tiny backwards step into
+     * a fresh `du -sb` sweep of both vault roots.
+     */
+    public function testBootstrapSnapshotStillSkipsForAFewSecondsOfBackwardsJitter(): void
+    {
+        $db = $this->dbReturningTypeCounts([['type' => 'movie', 'item_count' => 10]], -5);
+
+        $collector = $this->createMock(StatsCollector::class);
+        $collector->expects($this->never())->method('recordStorageSnapshots');
+
+        StorageSnapshotHelper::bootstrapSnapshot($collector, $db);
+    }
 }

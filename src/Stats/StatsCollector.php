@@ -34,10 +34,12 @@ class StatsCollector
     /**
      * Symbolic names of every WRITE routed through {@see write()}.
      *
-     * The failure counters are keyed by these values (anything else folds into
-     * {@see OTHER_OPERATION}), which is what BOUNDS {@see $writeFailures} to a
-     * compile-time vocabulary. Nothing a request can influence ever becomes a
-     * key, so the map cannot grow in a resident worker.
+     * Every failure-counter key starts with one of these values (anything else
+     * folds into {@see OTHER_OPERATION}), which is what BOUNDS
+     * {@see $writeFailures} to a compile-time vocabulary — six operations crossed
+     * with the exception classes the code can raise. Nothing a request can
+     * influence ever becomes part of a key, so the map cannot grow in a resident
+     * worker.
      *
      * @var list<string>
      */
@@ -53,7 +55,8 @@ class StatsCollector
     private const OTHER_OPERATION = 'other';
 
     /**
-     * Minimum seconds between two logged failures for the SAME operation.
+     * Minimum seconds between two logged failures for the SAME operation AND the
+     * SAME exception class.
      *
      * `ItemRepository::recordChange()` calls {@see recordLibraryChange()} once per
      * scanned item, so an unthrottled boundary emitted one `error` line per item —
@@ -65,22 +68,61 @@ class StatsCollector
     private const FAILURE_LOG_INTERVAL_SECONDS = 60;
 
     /**
-     * Per-operation write-failure counters, shared across every instance in this
-     * worker process.
+     * How long a storage-snapshot run may STALL — i.e. the maximum gap between two
+     * consecutive storage writes — before the next write counts as a new run.
+     *
+     * Deliberately a gap and not a total duration ({@see snapshotRunSecond()}): a run
+     * that measures every library's bytes with `du -sb` can take minutes in total
+     * while never pausing for seconds, and splitting such a run into generations is
+     * exactly the byte loss this stamp exists to prevent. Measured: 13
+     * `recordStorageSnapshot()` calls a full second apart (13 s end to end) stay one
+     * generation and round-trip all 91,000 bytes, where a 5-second TOTAL-duration
+     * window split them into three generations and lost 23,000.
+     *
+     * Tiny next to the six-hourly cadence at which the two live callers record
+     * snapshots, so two runs cannot be merged in practice; enormous next to the
+     * milliseconds a batch or a 13-call loop actually takes.
+     */
+    private const SNAPSHOT_RUN_MAX_GAP_SECONDS = 5;
+
+    /**
+     * Write-failure counters, shared across every instance in this worker process,
+     * keyed by `"<operation>|<exception class>"`.
      *
      * Static because the counter has to survive across the short-lived
      * `StatsCollector` instances the DI container hands out, and because a
-     * process-wide count is the useful one. This is NOT request state: the keys
-     * are the fixed {@see WRITE_OPERATIONS} vocabulary (at most six entries) and
-     * the values are three ints, so it cannot leak memory in a resident worker.
+     * process-wide count is the useful one. This is NOT request state: the keys are
+     * the fixed {@see WRITE_OPERATIONS} vocabulary (at most six values) crossed
+     * with the exception classes the driver and PHP itself can raise — both
+     * compile-time sets, neither influenced by anything a request carries — and the
+     * values are one string plus three ints, so it cannot leak memory in a resident
+     * worker. (S102 review r2 LOW-6: keying the throttle window on the operation
+     * ALONE meant that once `library_change` had logged a `RuntimeException`, a
+     * `PDOException "MySQL server has gone away"` inside the same 60 s window was
+     * counted but never described. A different failure CLASS is different news.)
      *
      * `logged_at_ns` uses `hrtime()`, never `time()`, so a clock adjustment
      * cannot make the throttle window jump. (`hrtime(true)` is `int` on 64-bit
      * builds and `float` on 32-bit ones, hence the union.)
      *
-     * @var array<string, array{failures: int, suppressed: int, logged_at_ns: float|int}>
+     * @var array<string, array{operation: string, failures: int, suppressed: int, logged_at_ns: float|int}>
      */
     private static array $writeFailures = [];
+
+    /**
+     * `recorded_at` (unix seconds) shared by every row of the snapshot run in
+     * progress, or 0 before the first row. See {@see snapshotRunSecond()}.
+     */
+    private int $snapshotRunSecond = 0;
+
+    /**
+     * Monotonic timestamp of the MOST RECENT storage write, which is what the
+     * run-gap window in {@see snapshotRunSecond()} is measured from.
+     *
+     * `hrtime()`, never `time()`, so a clock adjustment cannot stretch or collapse
+     * the run window. (`int` on 64-bit builds, `float` on 32-bit ones.)
+     */
+    private float|int $snapshotRunLastWriteNs = 0;
 
     /** @var Connection Database connection for MySQL queries */
     private Connection $db;
@@ -238,15 +280,27 @@ class StatsCollector
     }
 
     /**
-     * Count a contained write failure and log it, at most once per operation per
-     * {@see FAILURE_LOG_INTERVAL_SECONDS}.
+     * Count a contained write failure and log it, at most once per operation PER
+     * EXCEPTION CLASS per {@see FAILURE_LOG_INTERVAL_SECONDS}.
      *
-     * The first failure for an operation always logs immediately (so a broken
-     * subsystem is loud straight away); subsequent failures inside the window are
-     * counted into `suppressed` and reported on the next line that does get
-     * through. Both `failures_total` and `suppressed_since_last_log` are in the
-     * context, so the log itself answers "how bad is it?" rather than requiring a
-     * `wc -l` over identical lines.
+     * The first failure of an operation always logs immediately (so a broken
+     * subsystem is loud straight away); subsequent failures of the same operation
+     * AND the same exception class inside the window are counted into `suppressed`
+     * and reported on the next line that does get through. Both `failures_total`
+     * and `suppressed_since_last_log` are in the context, so the log itself answers
+     * "how bad is it?" rather than requiring a `wc -l` over identical lines.
+     *
+     * ## Why the exception class is part of the window key (S102 review r2, LOW-6)
+     *
+     * Keyed on the operation alone, the throttle suppressed a NEW KIND of failure
+     * for an already-failing operation: once `library_change` had logged a
+     * `RuntimeException`, a `PDOException "MySQL server has gone away"` in the same
+     * 60 s window was counted but its message never reached the log (measured: two
+     * failures, two classes, ONE line). A different exception class is different
+     * news — the throttle exists to stop 29,000 copies of the SAME line, not to
+     * hide the second symptom. `failures_total` is per operation+class, and
+     * `operation_failures_total` keeps the "how bad is the operation?" answer that
+     * r1's LOW-5 asked for.
      *
      * @param string    $operation Symbolic write name (see {@see WRITE_OPERATIONS}).
      * @param Throwable $e         The contained failure.
@@ -258,8 +312,10 @@ class StatsCollector
      */
     private function noteWriteFailure(string $operation, Throwable $e, string $sql): void
     {
-        $key = in_array($operation, self::WRITE_OPERATIONS, true) ? $operation : self::OTHER_OPERATION;
-        $state = self::$writeFailures[$key] ?? ['failures' => 0, 'suppressed' => 0, 'logged_at_ns' => 0];
+        $bucket = in_array($operation, self::WRITE_OPERATIONS, true) ? $operation : self::OTHER_OPERATION;
+        $key = $bucket . '|' . $e::class;
+        $state = self::$writeFailures[$key]
+            ?? ['operation' => $bucket, 'failures' => 0, 'suppressed' => 0, 'logged_at_ns' => 0];
         $state['failures']++;
 
         $nowNs = hrtime(true);
@@ -280,12 +336,13 @@ class StatsCollector
         LoggerFactory::get(LogChannels::APPLICATION)->error(
             'Stats write failed and was contained; the triggering action is unaffected',
             [
-                'operation' => $key,
+                'operation' => $bucket,
                 'exception' => $e::class,
                 'error' => $e->getMessage(),
                 'sql' => preg_replace('/\s+/', ' ', trim($sql)),
                 'failures_total' => $state['failures'],
                 'suppressed_since_last_log' => $suppressed,
+                'operation_failures_total' => self::writeFailureCounters()[$bucket]['failures'] ?? $state['failures'],
             ]
         );
     }
@@ -298,18 +355,25 @@ class StatsCollector
      * log lines. `suppressed` is the number of failures counted but not logged
      * since the last line that was emitted.
      *
+     * The internal counters are keyed per operation AND exception class (the LOW-6
+     * throttle fix); this reporting surface stays keyed per OPERATION, summing the
+     * classes, so the operator-facing shape did not change when the window did.
+     *
      * @return array<string, array{failures: int, suppressed: int}>
      *
      * @since 1.9
      */
     public static function writeFailureCounters(): array
     {
+        /** @var array<string, array{failures: int, suppressed: int}> $out */
         $out = [];
-        foreach (self::$writeFailures as $operation => $state) {
-            $out[$operation] = [
-                'failures' => $state['failures'],
-                'suppressed' => $state['suppressed'],
-            ];
+        foreach (self::$writeFailures as $state) {
+            $operation = $state['operation'];
+            if (!isset($out[$operation])) {
+                $out[$operation] = ['failures' => 0, 'suppressed' => 0];
+            }
+            $out[$operation]['failures'] += $state['failures'];
+            $out[$operation]['suppressed'] += $state['suppressed'];
         }
 
         return $out;
@@ -505,6 +569,17 @@ class StatsCollector
      * snapshot run: two raw types folding to the same bucket must become ONE
      * summed row, and only the batch form can see that.
      *
+     * Calling this in a LOOP is nonetheless safe now, including across a wall-clock
+     * second boundary: every row of a run shares one `recorded_at`
+     * ({@see snapshotRunSecond()}, whose one bound is a STALL longer than
+     * {@see SNAPSHOT_RUN_MAX_GAP_SECONDS} between two calls), so the reader's
+     * per-`media_type` `MAX(recorded_at)` join sees all of them and sums them.
+     * Before that stamp,
+     * thirteen calls spread over three seconds lost 47,000 of 91,000 bytes with no
+     * error anywhere (S102 review r2, MED-2). The rows are still one-per-call
+     * rather than one-per-bucket, which is why the batch form remains the paved
+     * road.
+     *
      * @param string $mediaType Bucket name, or any `media_items.type` value to fold
      * @param int $itemCount Number of items of this type
      * @param int $totalBytes Total bytes used by this media type
@@ -563,6 +638,21 @@ class StatsCollector
      * design rejects. Summing per bucket BEFORE the INSERT means one snapshot run
      * is one row per bucket, which is what the reader's grouping assumes.
      *
+     * ## What keeping the fold costs, honestly (S102 review r2, item 6)
+     *
+     * The alternative was to NARROW this entry point to {@see
+     * StorageSnapshotHelper::BUCKETS} and refuse raw types loudly. "It fails the
+     * 91,000-byte round-trip" is not an argument against narrowing, because that
+     * metric only exists BECAUSE the fold is part of this writer's contract — the
+     * very thing narrowing questions. The real reasons to keep the fold are that
+     * `TYPE_TO_BUCKET` then lives at exactly ONE writer (no future caller has to
+     * re-derive it, and no caller can fold differently), and that both live callers
+     * already hand over bucket names, so they are untouched either way. The cost is
+     * real and was not free: narrowing would have made the multi-second straddle in
+     * {@see snapshotRunSecond()} structurally IMPOSSIBLE — one row per bucket per
+     * run cannot collide with itself — whereas keeping the fold made a run's
+     * one-timestamp stamp a requirement instead of a nicety.
+     *
      * ## An unmapped type is DROPPED, loudly (S102 review r1, MED-3)
      *
      * A media type with no bucket is logged at **error** and written NOWHERE. It
@@ -600,12 +690,14 @@ class StatsCollector
             return;
         }
 
+        $recordedAt = $this->snapshotRunSecond();
+
         foreach ($this->foldStorageTotals($totals) as $bucket => $summed) {
             $this->write(
                 'storage_snapshot',
                 "INSERT INTO stats_storage
-                 (id, recorded_at, library_id, media_type, item_count, total_bytes, transcode_cache_bytes)
-                 VALUES (?, NOW(), ?, ?, ?, ?, ?)",
+                 (id, library_id, media_type, item_count, total_bytes, transcode_cache_bytes, recorded_at)
+                 VALUES (?, ?, ?, ?, ?, ?, FROM_UNIXTIME(?))",
                 [
                     $this->generateUuid(),
                     $libraryId,
@@ -613,9 +705,88 @@ class StatsCollector
                     $summed['count'],
                     $summed['bytes'],
                     $summed['cache'],
+                    $recordedAt,
                 ]
             );
         }
+    }
+
+    /**
+     * The ONE `recorded_at` second every row of the current snapshot run carries.
+     *
+     * ## Why a run needs one timestamp (S102 review r2, MED-2)
+     *
+     * `stats_storage.recorded_at` is a second-precision `DATETIME` and
+     * `DashboardService::getStorageSummary()` joins on `MAX(recorded_at)` **per
+     * `media_type`**, then SUMS the rows of that second. So every row a run writes
+     * has to land on the SAME second or the reader keeps only the last second's
+     * rows for any bucket that received more than one. With a fresh `NOW()` per
+     * INSERT that was a coin toss decided by wall-clock luck: measured on this box
+     * at load 14, thirteen `recordStorageSnapshot()` calls spread over THREE
+     * seconds and the dashboard reported **44,000 of the 91,000 bytes handed in**
+     * — 47,000 lost, silently. (The batch form survived by accident, because one
+     * row per bucket makes the per-type `MAX` a no-op; that is luck, not a
+     * guarantee, and it stopped being true the moment a caller looped.)
+     *
+     * A run is therefore stamped once: the first storage write computes the second,
+     * and every write that follows within {@see SNAPSHOT_RUN_MAX_GAP_SECONDS} of the
+     * PREVIOUS one reuses that value. So the property holds however many calls the
+     * run is spread over and however long the run takes in total — what ends a run is
+     * a STALL longer than the gap window, not elapsed time. (Measured: 13 calls a
+     * second apart, 13 s end to end, one generation, 91,000 of 91,000 bytes. A
+     * total-duration window instead of a gap window split that same run into three
+     * generations and lost 23,000 — which is why this is a gap.) After such a stall
+     * the next write starts a fresh generation, i.e. it degrades to the old
+     * `NOW()`-per-INSERT behaviour rather than to something worse, and the stamp can
+     * never be frozen indefinitely by a stopped caller.
+     * `FROM_UNIXTIME(?)` — not a PHP-formatted string — is
+     * what keeps the value identical to what `NOW()` would have produced: both are
+     * evaluated in the MySQL session's time zone, so a PHP/MySQL time-zone
+     * disagreement cannot offset a snapshot (which would then also poison
+     * {@see StorageSnapshotHelper::bootstrapSnapshot()}'s staleness check).
+     *
+     * ## Deliberately per-INSTANCE, not static
+     *
+     * A run is what ONE holder of a collector does, so the memo lives on the
+     * instance: two concurrent runs (two coroutines, two FPM processes) keep
+     * separate stamps and cannot be merged into one generation. The state is two
+     * scalars, carries no request data, and is overwritten rather than appended, so
+     * it cannot grow in a resident worker.
+     *
+     * ## Residual, and what it hands to the unique-index step
+     *
+     * Two runs by the SAME collector less than a gap window apart now share a second,
+     * where before they had to collide on the same second — and the reader SUMS rows
+     * that share a second, so such a pair double-counts. Unreachable on the live paths
+     * (`bootstrapSnapshot()` refuses inside 6 h, and the daemon timer is one
+     * `count=1` worker on a 6 h interval), and the structural fix is the unique
+     * index on `(recorded_at, media_type, library_id)` plus a SUMMING upsert, which
+     * needs a migration. That step must ship the upsert WITH the index: this method
+     * makes duplicate `(recorded_at, media_type, library_id)` tuples from a looping
+     * caller deterministic rather than occasional, so a bare unique index would
+     * turn them into rejected INSERTs (contained and logged, but rows lost) instead
+     * of merged ones.
+     *
+     * @return int Unix seconds; bind through `FROM_UNIXTIME(?)`, never as a string.
+     *
+     * @since 1.9
+     */
+    private function snapshotRunSecond(): int
+    {
+        $nowNs = hrtime(true);
+        $maxGapNs = self::SNAPSHOT_RUN_MAX_GAP_SECONDS * 1_000_000_000;
+        $continuingARun = $this->snapshotRunSecond !== 0
+            && ($nowNs - $this->snapshotRunLastWriteNs) < $maxGapNs;
+
+        $this->snapshotRunLastWriteNs = $nowNs;
+
+        if ($continuingARun) {
+            return $this->snapshotRunSecond;
+        }
+
+        $this->snapshotRunSecond = time();
+
+        return $this->snapshotRunSecond;
     }
 
     /**

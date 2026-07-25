@@ -44,9 +44,20 @@ use ReflectionClass;
  * list, so the comparisons below passed against a stale vocabulary and the alarm
  * failed OPEN. {@see testTheParserSeesEveryDefinitionStyleThisRepoUses} now pins
  * every style: optional backticks on table AND column, `MODIFY` with or without
- * `COLUMN`, `CHANGE [COLUMN] <old> <new>`, a schema-qualified table, a
- * multi-clause `ALTER` where the `MODIFY` is not the first clause, and a
+ * `COLUMN`, `CHANGE [COLUMN] <old> <new>`, `ADD [COLUMN]`, a schema-qualified
+ * table, a multi-clause `ALTER` where the `MODIFY` is not the first clause, and a
  * multi-line `ENUM(…)` body.
+ *
+ * `ADD [COLUMN]` was the second fail-open, found by review r2 (LOW-3): the parser
+ * saw only `MODIFY`/`CHANGE`/`CREATE TABLE`, so a `DROP COLUMN` + `ADD COLUMN`
+ * re-definition of a tracked column left the whole alarm green, and the one ENUM
+ * column of 29 in a fully migrated schema it could not read was `users.status`
+ * (`migrations/037_users_status.sql:38`). Both are now covered, the real migration
+ * included ({@see testTheParserSeesTheAddColumnStyleInARealMigration}). The
+ * remaining, deliberate blind spots are named on
+ * {@see \Phlix\Media\MediaItemType}: runtime-assembled `PREPARE` DDL, a bare
+ * `DROP COLUMN` with no re-`ADD`, and `migrations/*.php` — the last of which
+ * {@see testNoPhpMigrationDefinesAnEnumTheGuardCannotRead} keeps honest.
  *
  * ## Why the parser masks string literals first
  *
@@ -117,11 +128,19 @@ final class MediaItemTypeDriftTest extends TestCase
      * - `CREATE TABLE [IF NOT EXISTS] [schema.]<table> ( … <column> ENUM(…) … )`
      * - `ALTER TABLE [schema.]<table> … MODIFY [COLUMN] <column> ENUM(…)`
      * - `ALTER TABLE [schema.]<table> … CHANGE [COLUMN] <old> <column> ENUM(…)`
+     * - `ALTER TABLE [schema.]<table> … ADD [COLUMN] <column> ENUM(…)`
      *
      * Identifiers may be backtick-quoted, the table may be schema-qualified, the
      * `ALTER` may carry other clauses before and after the one that matters, and
      * whitespace/newlines/case are all irrelevant. A `CHANGE` that renames the
      * column AWAY is deliberately not a definition of it.
+     *
+     * `ADD [COLUMN]` is read for two reasons (S102 review r2, LOW-3). It is a real
+     * style in this repo — `migrations/037_users_status.sql:38` defines
+     * `users.status` that way, and it was the ONE column of the 29 in a fully
+     * migrated schema this parser could not see — and, more importantly here, a
+     * `DROP COLUMN` + `ADD COLUMN` pair is a way to redefine a tracked ENUM that
+     * left the whole alarm GREEN. See {@see testTheParserSeesTheAddColumnStyleInARealMigration}.
      *
      * @return list<list<string>>
      */
@@ -322,14 +341,22 @@ final class MediaItemTypeDriftTest extends TestCase
             $clauses = [];
             preg_match_all(
                 '/\bMODIFY(?:\s+COLUMN)?\s+' . $col . '\s+ENUM\s*\(([^)]*)\)'
-                . '|\bCHANGE(?:\s+COLUMN)?\s+' . $identifier . '\s+' . $col . '\s+ENUM\s*\(([^)]*)\)/is',
+                . '|\bCHANGE(?:\s+COLUMN)?\s+' . $identifier . '\s+' . $col . '\s+ENUM\s*\(([^)]*)\)'
+                . '|\bADD(?:\s+COLUMN)?\s+' . $col . '\s+ENUM\s*\(([^)]*)\)/is',
                 $alter['body'],
                 $clauses,
                 PREG_SET_ORDER
             );
             foreach ($clauses as $clause) {
-                // Exactly one of the two alternatives captured.
-                $out[] = ($clause[1] ?? '') !== '' ? $clause[1] : ($clause[2] ?? '');
+                // Exactly one of the three alternatives captured a body.
+                $body = '';
+                foreach ([1, 2, 3] as $group) {
+                    if (($clause[$group] ?? '') !== '') {
+                        $body = $clause[$group];
+                        break;
+                    }
+                }
+                $out[] = $body;
             }
         }
 
@@ -474,6 +501,23 @@ final class MediaItemTypeDriftTest extends TestCase
                 "CREATE TABLE IF NOT EXISTS `media_items` (\n    `id` CHAR(36) NOT NULL,\n"
                 . "    `type` ENUM('movie', 'podcast') NOT NULL,\n    PRIMARY KEY (`id`)\n) ENGINE=InnoDB;",
             ],
+            // migrations 002:59, 037:38 — was INVISIBLE (review r2 LOW-3).
+            'ADD COLUMN, bare identifiers' => [
+                "ALTER TABLE media_items\n    ADD COLUMN type ENUM('movie', 'podcast') NOT NULL DEFAULT 'movie';",
+            ],
+            'ADD without the COLUMN keyword, backticked' => [
+                "ALTER TABLE `media_items` ADD `type` ENUM('movie', 'podcast') NOT NULL AFTER `id`;",
+            ],
+            // The destructive re-definition the ADD blindness let through whole: it
+            // erases every row's type, so it is the LAST thing that should be quiet.
+            'DROP COLUMN then ADD COLUMN in one ALTER' => [
+                "ALTER TABLE media_items\n    DROP COLUMN type,\n"
+                . "    ADD COLUMN `type` ENUM('movie', 'podcast') NOT NULL;",
+            ],
+            'DROP COLUMN then ADD COLUMN in two statements' => [
+                "ALTER TABLE media_items DROP COLUMN type;\n"
+                . "ALTER TABLE media_items ADD COLUMN type ENUM('movie', 'podcast') NOT NULL;",
+            ],
         ];
     }
 
@@ -550,6 +594,69 @@ final class MediaItemTypeDriftTest extends TestCase
             $this->enumDefinitionsIn($sql, 'media_items', 'type'),
             'Migration 011 builds its ALTER inside a PREPARE string with doubled quotes; it must '
             . 'contribute NO definition rather than a list of empty strings.'
+        );
+    }
+
+    /**
+     * S102 review r2 LOW-3 — the `ADD COLUMN … ENUM(…)` style, against a REAL
+     * migration rather than a fixture.
+     *
+     * `users.status` was the one column of the 29 ENUM columns in a fully migrated
+     * schema that the parser could not see, because `migrations/037` defines it with
+     * `ADD COLUMN`. On its own that is harmless (`ADD` cannot add a member to an
+     * existing ENUM), but `DROP COLUMN` + `ADD COLUMN` CAN redefine a tracked
+     * column, and that combination left this entire alarm green — measured
+     * end to end with a scratch migration widening both tracked columns.
+     */
+    public function testTheParserSeesTheAddColumnStyleInARealMigration(): void
+    {
+        $sql = file_get_contents(self::migrationsDir() . '/037_users_status.sql');
+        $this->assertIsString($sql);
+
+        $this->assertSame(
+            ['pending', 'active', 'disabled'],
+            $this->lastEnumDefinitionIn($sql, 'users', 'status'),
+            'migrations/037 defines users.status with ADD COLUMN. A style the parser cannot see is '
+            . 'a style a widening can hide in.'
+        );
+    }
+
+    /**
+     * S102 review r2 LOW-4 — the guard reads `migrations/*.sql` ONLY, so an ENUM
+     * defined in a `.php` migration would be invisible to every assertion here.
+     *
+     * That is currently safe rather than lucky: `MigrationRunner::discoverMigrationFiles()`
+     * also globs `*.sql` only, so a `.php` migration is never applied automatically
+     * — the three that exist (`080_backfill_missing_profiles.php`, `cleanup_072.php`,
+     * `cleanup_090.php`) are hand-run data/index fixups and contain no DDL. This
+     * test makes that assumption self-policing: the day someone writes schema DDL
+     * into a `.php` migration, this reddens and points at the parser, instead of the
+     * drift alarm quietly comparing a stale vocabulary.
+     */
+    public function testNoPhpMigrationDefinesAnEnumTheGuardCannotRead(): void
+    {
+        $files = glob(self::migrationsDir() . '/*.php');
+        self::assertIsArray($files);
+
+        $offenders = [];
+        foreach ($files as $file) {
+            $php = file_get_contents($file);
+            if ($php === false) {
+                continue;
+            }
+            if (preg_match('/\bENUM\s*\(/i', $php) === 1) {
+                $offenders[] = basename($file);
+            }
+        }
+
+        $this->assertSame(
+            [],
+            $offenders,
+            'These .php migrations contain an ENUM definition, but this drift guard only parses '
+            . 'migrations/*.sql — so the members they declare are invisible to every assertion in '
+            . 'this class. Either move the DDL into a .sql migration (which is also the only kind '
+            . 'MigrationRunner applies automatically) or teach enumMembersFromMigrations() to read '
+            . 'PHP files: ' . implode(', ', $offenders)
         );
     }
 

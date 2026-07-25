@@ -258,6 +258,34 @@ final class DbOAuth2StateStoreRealDbIntegrationTest extends TestCase
     }
 
     /**
+     * A row whose `data` JSON is not a usable payload must consume to null rather
+     * than handing the token exchange an empty `code_verifier` (which the provider
+     * would reject with an opaque error) or tripping a TypeError on the request
+     * path. Both shapes are exercised against the real `json` column:
+     * a JSON scalar, and an object with no `code_verifier`.
+     *
+     * Reachable in practice after a schema/format change or a partially-written
+     * row, which is exactly when a 500 in the auth callback is least welcome.
+     */
+    public function testARowWithAnUnusablePayloadConsumesToNull(): void
+    {
+        $store = new DbOAuth2StateStore($this->conn(), $this->provider);
+
+        foreach (['"not-an-object"', '{"context":{"a":1}}', '{"code_verifier":""}'] as $payload) {
+            $state = bin2hex(random_bytes(16));
+            $store->put($state, 'placeholder');
+            $this->conn()->query(
+                'UPDATE oauth_state_store SET data = ? WHERE provider = ? AND state_value = ?',
+                [$payload, $this->provider, $state],
+            );
+
+            $this->assertNull($store->consume($state), "payload {$payload} must not yield an entry");
+            // …and the row is still burned, so a bad payload cannot be retried.
+            $this->assertSame(0, $this->rowCount($state), 'the one-shot delete must still have happened');
+        }
+    }
+
+    /**
      * Re-using a state value within one provider family hits the
      * `uk_provider_state` UNIQUE key. The store must not silently swallow it into a
      * state that cannot be consumed — it either throws or leaves exactly one usable

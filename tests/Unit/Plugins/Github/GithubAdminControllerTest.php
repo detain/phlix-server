@@ -304,4 +304,24 @@ final class GithubAdminControllerTest extends TestCase
         $this->assertSame('kept', $plugin->getSettings()['client_secret'] ?? null);
         $this->assertTrue($this->decode($controller->getSettings(new Request(), []))['configured'] ?? null);
     }
+
+    /**
+     * S48 TestEngineer — review r1 Finding 3's failure branch: the settings are
+     * ALREADY persisted by the time the live-provider refresh runs, so a refresh
+     * that throws must be swallowed and logged, never turned into a 500 that tells
+     * the operator their save failed when it did not.
+     */
+    public function test_a_failing_provider_refresh_does_not_fail_the_already_persisted_save(): void
+    {
+        $plugin = $this->plugin(['client_id' => 'old', 'client_secret' => 'sec']);
+        $bootstrapper = $this->createMock(AuthProviderBootstrapper::class);
+        $bootstrapper->method('refresh')->willThrowException(new \RuntimeException('registry exploded'));
+        $controller = new GithubAdminController($plugin, $bootstrapper);
+
+        $response = $controller->saveSettings($this->post(['client_id' => 'new', 'scopes' => 'read:user']), []);
+
+        $this->assertSame(200, $response->statusCode, (string) $response->body);
+        $this->assertSame('Settings saved successfully', $this->decode($response)['message'] ?? null);
+        $this->assertSame('new', $plugin->getSettings()['client_id'] ?? null, 'the save must have persisted');
+    }
 }

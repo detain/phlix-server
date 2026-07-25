@@ -141,6 +141,9 @@ final class CallbackUrlTest extends TestCase
             'path in host' => ['phlix.example/evil'],
             'bad port' => ['phlix.example:notaport'],
             'out of range port' => ['phlix.example:99999'],
+            // A DNS name cannot exceed 253 characters; refuse rather than build a
+            // URL out of an oversized attacker-supplied Host.
+            'over the 253-character DNS limit' => [str_repeat('a.', 130) . 'example'],
         ];
     }
 

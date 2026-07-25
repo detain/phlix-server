@@ -1438,6 +1438,69 @@ final class MusicLibraryScannerTest extends TestCase
             . '0 here means the flip never reached upsertAlbum() (a by-value hop)',
         );
     }
+
+    /**
+     * The third arm of the fail-open rule, and the reason "referenced" is defined as
+     * *the `music_*` row carries the id we minted* rather than *the INSERT succeeded*:
+     * a mint that reports failure leaves the scanner unable to prove no row exists.
+     *
+     * `createMediaItem()` swallows its own Throwable and returns `''`, so the
+     * `music_artists` INSERT then binds `media_item_id = NULL` and SUCCEEDS. If a
+     * dropped connection (or any error raised after the server committed) is what
+     * produced that `''`, the `media_items` row is really there and really orphaned —
+     * and nothing downstream can tell that case apart from the ordinary one.
+     *
+     * ⚠ What this test pins is therefore the CODE PATH, not a reclaimed row: the fault
+     * is injected before the double inserts anything, so no orphan exists here and
+     * none is adopted. It asserts only that an unconfirmed mint re-enables adoption for
+     * the rest of the scan, which is what covers the committed-but-reported-failed
+     * variant. The orphan in that variant is not reclaimed by THIS scan either way,
+     * because `music_artists` now holds a row for the name and every later lookup
+     * short-circuits on that natural key with `media_item_id = NULL` — that residue is
+     * S96(e)'s backfill, and when S96(e) lands it will reclaim through these very
+     * adoption lookups, so it needs the flag to be open exactly here.
+     */
+    public function testAMintThatIsNotConfirmedReEnablesAdoptionForTheRestOfTheScan(): void
+    {
+        [$dir, $total] = $this->buildAlbumTree(3, 1);
+        $this->assertSame(3, $total);
+
+        $db = new MusicSchemaConnection();
+        // The first media_items INSERT of a flush is always the artist mint.
+        $db->faultOnNth('INSERT INTO media_items', 1);
+
+        $logger = new LogWriteFailureLogger();
+        $scanner = $this->taggedScanner($db, null, $logger);
+
+        $scanner->scanDirectory($dir, null, 'lib-s95');
+
+        // The library was clean, so the gate answered "no" — once.
+        $this->assertSame(1, $db->countStatements('LEFT JOIN music_artists ar'), 'the gate is asked exactly once');
+        $this->assertSame(1, $logger->countMessages('Failed to create media_item'));
+
+        // THE POINT: adoption is back on for the remaining artists/albums even though
+        // the gate said the library was clean and nothing threw past flushAlbum().
+        $this->assertGreaterThan(
+            0,
+            $db->countStatements('LEFT JOIN music_artists ma'),
+            'an unconfirmed mint must re-enable the adoption lookups: with `referenced` defined as merely '
+            . '"the INSERT succeeded", a media_items row that WAS committed but reported as failed stays '
+            . 'orphaned with adoption switched off for the rest of the scan',
+        );
+
+        // And the scan is otherwise intact: 3 artists indexed, one of them with the
+        // pre-existing NULL media_item_id gap that S96(e) owns, no orphan anywhere.
+        $this->assertCount(3, $db->artists);
+        $this->assertCount(2, $db->mediaItemIds('artist'), 'the faulted mint wrote no row at all');
+        $this->assertSame([], $db->orphanedMusicMediaItems());
+        $nullLinked = 0;
+        foreach ($db->artists as $artist) {
+            if ($artist['media_item_id'] === null) {
+                $nullLinked++;
+            }
+        }
+        $this->assertSame(1, $nullLinked, 'exactly one music_artists row keeps the S96(e) NULL media_item_id');
+    }
 }
 
 /**

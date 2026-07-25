@@ -57,9 +57,18 @@ final class MusicTracksQueryIntegrationTest extends TestCase
     private string $libraryId = '';
 
     /**
-     * Fixture-local name prefix. `getAllTracks()` is unscoped (it returns every
-     * track in the library), so assertions filter to this run's rows — the
-     * global ORDER BY preserves their relative order.
+     * Fixture-local name prefix, applied to `music_artists.name` — the FIRST key
+     * of `getAllTracks()`'s `ORDER BY ar.name, al.title, …`.
+     *
+     * `getAllTracks()` is unscoped (every track in every library) *and* clamped
+     * to `LIMIT 100`, so assertions both filter to this run's rows and depend on
+     * those rows being inside page 1. The leading `!` is load-bearing: it sorts
+     * ahead of every digit and letter in `utf8mb4_unicode_ci`
+     * (`!S94 < 0S94 < AAA Filler < S94-abc < zzz`), so the fixture stays on page
+     * 1 no matter how populated the music tables already are. With the old
+     * mid-alphabet `S94-` prefix, ~95 pre-existing tracks by artists sorting
+     * before `S` pushed the fixture off the page and reddened this class for a
+     * reason that had nothing to do with the column under test.
      */
     private string $prefix = '';
 
@@ -93,7 +102,9 @@ final class MusicTracksQueryIntegrationTest extends TestCase
 
         $this->libraryId = Uuid::v4();
         // music_artists.name is UNIQUE, so every run needs its own namespace.
-        $this->prefix = 'S94-' . substr(Uuid::v4(), 0, 8) . '-';
+        // Leading `!` = first-collating, keeping the fixture inside the query's
+        // unscoped `LIMIT 100` on a populated DB (see $prefix).
+        $this->prefix = '!S94-' . substr(Uuid::v4(), 0, 8) . '-';
 
         $this->seedFixtures();
     }

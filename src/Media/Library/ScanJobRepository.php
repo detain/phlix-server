@@ -92,12 +92,21 @@ class ScanJobRepository
      *
      * **THE ONE DEFINITION OF `items_added` (review r2 F5).** It is "`media_items` rows
      * this job created". Mid-scan the live sink writes a LOWER BOUND on that number —
-     * for music, new TRACK rows only, because the artist/album container rows are not in
-     * the scanner's own `added` tally — and at completion a `rescan` replaces it with the
-     * exact all-types row-count delta. Same quantity, coarser then finer, which is why
-     * the final stamp is allowed to raise it and not to lower it (see
+     * for music, new **track `media_items`** rows only, because the artist/album container
+     * rows are not in the scanner's own `added` tally — and at completion a `rescan`
+     * replaces it with the exact all-types row-count delta. Same quantity, coarser then
+     * finer, which is why the final stamp is allowed to raise it and not to lower it (see
      * {@see self::MONOTONIC_FINAL_COLUMNS}). This matters to a reader of
      * {@see self::decodeRow()} because the admin SPA renders the column.
+     *
+     * ⚠ **"track `media_items` rows", not "`music_tracks` rows" (review r3 finding 11).**
+     * The two differ in exactly one shape, and it is a shape that occurs in the field: a
+     * `music_tracks` row inserted against a PRE-EXISTING `media_items` row (a partial
+     * prior scan left the media item but not the track row) is reported `'updated'` by
+     * {@see \Phlix\Media\Music\MusicLibraryScanner}, and is correctly NOT counted here —
+     * because this counter's subject is the `media_items` row, and no `media_items` row
+     * was created. Since this docblock is the single authority for the definition, the
+     * loose wording was the whole ambiguity.
      *
      * @var list<string>
      */
@@ -124,8 +133,9 @@ class ScanJobRepository
      *   `rescanLibrary()` computes `added = after − survivors` with
      *   `survivors = before − removed`, and `after = before + newRows − removed`. Those
      *   reduce to **`added = newRows`** exactly — every `media_items` row the job
-     *   created, containers included. The live sink's music value is `new TRACK rows`,
-     *   and a track is only counted `'added'` after its own `media_items` row is minted,
+     *   created, containers included. The live sink's music value is `new track
+     *   media_items rows`, and a track is only counted `'added'` after its own
+     *   `media_items` row is minted,
      *   so `liveAdded ≤ newRows` ALWAYS. The two are therefore not rival metrics: the
      *   live one is a **lower bound** on the final one (see
      *   {@see self::COUNTER_COLUMNS} for the single definition), and `GREATEST` picks the

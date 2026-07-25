@@ -2076,6 +2076,136 @@ final class MusicLibraryScannerTest extends TestCase
         $this->assertSame(1, $loggerD->countAtLevel('error', 'Skipping album after error during indexing'));
     }
 
+    // -- review r3 MED-1: the insert-result contract, arm by arm ----------------
+
+    /**
+     * **`statementWroteNothing()` must be pinned on EACH of its arms separately, and `'0'`
+     * must be a SUCCESS.**
+     *
+     * Review r3 measured the gap this closes: deleting `|| $result === null` from the
+     * helper left `MusicLibraryScannerTest` + `tests/Unit/Media/Library/` +
+     * `LibraryScanCommandTest` + `tests/Integration/Media/` at
+     * `OK (1113 tests, 10122 assertions)` — **byte-identical to the unmutated baseline**.
+     * The reason was in the doubles, not the production code: the only way any test made
+     * an INSERT report "wrote nothing" was `MusicSchemaConnection::returnFalseFor()`, which
+     * returns literal `false`, while `runInsert()` returned `int 1`. So the suite exercised
+     * only the arm the measured contract says this client NEVER produces, and none of the
+     * arm the whole r2 HIGH finding turns on.
+     *
+     * The measured contract (real MySQL 8.0.46 via `PhlixMySQLConnection`), one row per
+     * assertion below:
+     *
+     * | statement outcome                  | `query()` returns        | wroteNothing |
+     * |---|---|---|
+     * | wrote 0 rows (`INSERT IGNORE`, …)  | `null`                   | **true**     |
+     * | a client that reports failure so   | `false`                  | **true**     |
+     * | wrote 1 row into `media_items`     | `'0'` (UUID PK, no AI)   | **false**    |
+     * | wrote 1 row into an AI table       | `'42'`                   | **false**    |
+     * | any real SQL error                 | THROWS                   | n/a          |
+     *
+     * Reflection, deliberately: the helper is `private static`, and the point is to assert
+     * the two falsy arms INDEPENDENTLY — an end-to-end scenario can only ever drive one
+     * value at a time, which is how the `null` arm went unpinned in the first place. The
+     * production consequence is pinned separately by
+     * {@see self::testAnInsertThatReturnsNullIsChargedAsALossOnEveryPath()}.
+     */
+    public function testTheInsertResultContractIsPinnedOnBothOfItsFalsyArms(): void
+    {
+        $wroteNothing = new \ReflectionMethod(MusicLibraryScanner::class, 'statementWroteNothing');
+
+        $this->assertTrue(
+            $wroteNothing->invoke(null, null),
+            'NULL is the ONLY falsy value this client returns for an INSERT that wrote nothing. '
+            . 'Dropping this arm is invisible to every other test in the repo (measured), and it '
+            . 'restores the r2 HIGH defect: a lost file reported as a clean success',
+        );
+        $this->assertTrue(
+            $wroteNothing->invoke(null, false),
+            'and the `false` arm stays — a bare `createMock(Connection::class)` returns null, but a '
+            . 'different client (or a double, as r2 S3/S4 model) can report failure this way',
+        );
+        $this->assertFalse(
+            $wroteNothing->invoke(null, '0'),
+            "'0' is a SUCCESSFUL media_items insert (CHAR(36) UUID primary key, no AUTO_INCREMENT, "
+            . 'so lastInsertId() is 0) and it is FALSY in PHP. True here means the helper was '
+            . '"simplified" to !$result, which reports every healthy mint as a failure',
+        );
+        $this->assertFalse(
+            $wroteNothing->invoke(null, '42'),
+            'and an AUTO_INCREMENT table returns its id as a STRING, not an int',
+        );
+    }
+
+    /**
+     * The production consequence of the `null` arm, on every one of the four INSERTs whose
+     * result the scanner branches on.
+     *
+     * Each scenario arms the NEW `returnNullFor()` — the value the measured contract says
+     * the client really returns for "wrote nothing" — and asserts that the files are
+     * CHARGED and the rows are genuinely absent. Without the `null` arm every one of these
+     * reports a clean success over an empty table.
+     */
+    public function testAnInsertThatReturnsNullIsChargedAsALossOnEveryPath(): void
+    {
+        // (1) Every track INSERT writes nothing. The media_items row is minted, so this is
+        //     the shape where the DB looks self-consistent and the library is empty.
+        [$dirA, $taggerA] = $this->oneAlbumFixture(5);
+        $dbA = new MusicSchemaConnection();
+        $dbA->returnNullFor('INSERT INTO music_tracks');
+        $logA = new LogWriteFailureLogger();
+        $resultA = $this->taggedScanner($dbA, $taggerA, $logA)->scanDirectory($dirA, null, 'lib-s96');
+
+        $this->assertSame(0, $resultA->added);
+        $this->assertCount(0, $dbA->tracks, 'the fixture must really lose every file');
+        $this->assertSame(
+            5,
+            $resultA->failed,
+            'all five files must be charged. 0 here means the `null` arm is gone and a total loss is '
+            . 'being reported as a clean scan — through ScanResult, library_scan_jobs.items_failed '
+            . 'and `library:scan`\'s exit status alike',
+        );
+        $this->assertSame(5, $logA->countAtLevel('error', 'Track was not indexed'));
+
+        // (2) The artist INSERT writes nothing → upsertArtist() returns null and the whole
+        //     album is charged, at ERROR.
+        [$dirB, $taggerB] = $this->oneAlbumFixture(4);
+        $dbB = new MusicSchemaConnection();
+        $dbB->returnNullFor('INSERT INTO music_artists');
+        $logB = new LogWriteFailureLogger();
+        $resultB = $this->taggedScanner($dbB, $taggerB, $logB)->scanDirectory($dirB, null, 'lib-s96');
+
+        $this->assertSame(4, $resultB->failed, 'losing the artist row loses the album, so all four files');
+        $this->assertCount(0, $dbB->tracks);
+        $this->assertSame(1, $logB->countAtLevel('error', 'Failed to upsert artist'));
+
+        // (3) The album INSERT writes nothing → same, one level down.
+        [$dirC, $taggerC] = $this->oneAlbumFixture(3);
+        $dbC = new MusicSchemaConnection();
+        $dbC->returnNullFor('INSERT INTO music_albums');
+        $logC = new LogWriteFailureLogger();
+        $resultC = $this->taggedScanner($dbC, $taggerC, $logC)->scanDirectory($dirC, null, 'lib-s96');
+
+        $this->assertSame(3, $resultC->failed);
+        $this->assertCount(0, $dbC->tracks);
+        $this->assertSame(1, $logC->countAtLevel('error', 'Failed to upsert album'));
+
+        // (4) The media_items INSERT writes nothing → createMediaItem() must report ''.
+        //     This is the site whose docblock carries the `'0'`-is-falsy warning, so it is
+        //     the one where a "simplification" to !$result and a missing `null` arm are
+        //     each other's exact inverse.
+        [$dirD, $taggerD] = $this->oneAlbumFixture(5);
+        $dbD = new MusicSchemaConnection();
+        $dbD->returnNullFor('INSERT INTO media_items');
+        $logD = new LogWriteFailureLogger();
+        $resultD = $this->taggedScanner($dbD, $taggerD, $logD)->scanDirectory($dirD, null, 'lib-s96');
+
+        $this->assertSame(0, $resultD->added);
+        $this->assertSame(5, $resultD->failed, 'no media_items row can be minted, so no file can be indexed');
+        $this->assertCount(0, $dbD->mediaItems, 'and nothing was written');
+        // 1 artist + 1 album + 5 tracks = 7 mints attempted, every one of them reported.
+        $this->assertSame(7, $logD->countAtLevel('error', 'Failed to create media_item'));
+    }
+
     // -- S96(b): the live counter snapshot on the progress sink ----------------
 
     /**
@@ -2194,6 +2324,44 @@ final class MusicLibraryScannerTest extends TestCase
             1,
             $db->countStatements('UPDATE music_artists SET media_item_id = ? WHERE id = ? AND media_item_id IS NULL'),
             'the backfill UPDATE must be guarded on media_item_id IS NULL',
+        );
+    }
+
+    /**
+     * A backfill UPDATE that wrote nothing must NOT be reported as a heal.
+     *
+     * Review r3 finding 4: `backfillMusicMediaItemId()`'s guard was
+     * `$affected === false || (is_int($affected) && $affected < 1)` — written before the
+     * insert-result contract was measured, and permissive in the wrong direction.
+     * `null === false` is false and `is_int(null)` is false, so a `null` fell through to
+     * `$referenced = true` and logged *"Backfilled a NULL media_item_id on a music row"* at
+     * `info` for a row that is still NULL. That is the inverse of the r2 HIGH finding (a
+     * success reported for work that did not happen) in the same file, and it is reachable
+     * today by any test that hands the scanner a bare `createMock(Connection::class)`, whose
+     * default `query()` return is `null`.
+     */
+    public function testABackfillUpdateThatWroteNothingIsNotReportedAsHealed(): void
+    {
+        [$dir, $tagger] = $this->oneAlbumFixture(1, 'Null Update Artist', 'Some Album');
+
+        $db = new MusicSchemaConnection();
+        $db->plantArtistWithNullMediaItem('Null Update Artist');
+        // The UPDATE reports "wrote nothing" the way the real client does.
+        $db->returnNullFor('UPDATE music_artists SET media_item_id');
+
+        $logger = new LogWriteFailureLogger();
+        $this->taggedScanner($db, $tagger, $logger)->scanDirectory($dir, null, 'lib-s96');
+
+        $this->assertNull(
+            $db->artists['null update artist']['media_item_id'],
+            'the row really is still NULL — the UPDATE wrote nothing',
+        );
+        $this->assertSame(
+            0,
+            $logger->countMessages('Backfilled a NULL media_item_id on a music row'),
+            'so nothing may claim it was healed. 1 here is the permissive-direction defect: an `info` '
+            . 'line asserting a repair that did not happen, which is worse than silence because it '
+            . 'sends the next operator looking somewhere else',
         );
     }
 
@@ -2451,6 +2619,9 @@ final class MusicSchemaConnection extends Connection
     /** @var list<string> Statement substrings whose query() returns false (see returnFalseFor()). */
     private array $falseOn = [];
 
+    /** @var list<string> Statement substrings whose query() returns NULL (see returnNullFor()). */
+    private array $nullOn = [];
+
     private int $autoInc = 0;
 
     private int $uuid = 0;
@@ -2489,6 +2660,29 @@ final class MusicSchemaConnection extends Connection
     public function returnFalseFor(string $needle): void
     {
         $this->falseOn[] = $needle;
+    }
+
+    /**
+     * Make every statement containing `$needle` return **`null`** instead of throwing.
+     *
+     * ⚠ **THIS IS THE ONE THAT MODELS THE REAL CLIENT (review r3 finding 1).**
+     * `MusicLibraryScanner::statementWroteNothing()`'s measured contract (real MySQL
+     * 8.0.46 through `PhlixMySQLConnection`) is three-outcome: a 1-row INSERT returns
+     * `lastInsertId()` **as a string**, a 0-row INSERT returns **`null`**, and any real
+     * SQL error **THROWS**. This double could express only `false` — a value that client
+     * NEVER returns — and `runInsert()` returned `int 1`, so nothing in the suite could
+     * ever produce `null`. Review r3 measured the consequence: deleting
+     * `|| $result === null` from the helper left the whole scanner + library + command +
+     * integration selection at `OK (1113 tests, 10122 assertions)`, byte-identical to
+     * baseline. The mocks were still modelling the OLD, unreachable `=== false` contract
+     * that the fix had replaced.
+     *
+     * `returnFalseFor()` stays — it is what r2's S3/S4 scenarios model and it keeps the
+     * `false` arm (a different client / a bare PHPUnit mock) pinned independently.
+     */
+    public function returnNullFor(string $needle): void
+    {
+        $this->nullOn[] = $needle;
     }
 
     /**
@@ -2606,9 +2800,11 @@ final class MusicSchemaConnection extends Connection
      * @param string $query SQL statement.
      * @param array<int, mixed>|null $params Bound parameters.
      * @param int $fetchmode PDO fetch mode (unused).
-     * @return array<int, mixed>|int|string|false Rows for SELECT, an affected-row
-     *         stand-in otherwise, or `false` when {@see self::returnFalseFor()} armed
-     *         this statement.
+     * @return array<int, mixed>|int|string|false|null Rows for SELECT, the insert id as a
+     *         STRING for an INSERT (`'0'` for `media_items` — UUID PK, no AUTO_INCREMENT),
+     *         an affected-row count for an UPDATE, `false` when
+     *         {@see self::returnFalseFor()} armed this statement, or `null` when
+     *         {@see self::returnNullFor()} did.
      */
     public function query($query = '', $params = null, $fetchmode = \PDO::FETCH_ASSOC)
     {
@@ -2622,6 +2818,15 @@ final class MusicSchemaConnection extends Connection
         foreach ($this->falseOn as $needle) {
             if (str_contains($sql, $needle)) {
                 return false;
+            }
+        }
+
+        // The REAL "wrote nothing" signal — checked before the table handlers so the
+        // in-memory row is not written either, exactly like a statement that affected
+        // zero rows. See returnNullFor() for why this arm has to exist.
+        foreach ($this->nullOn as $needle) {
+            if (str_contains($sql, $needle)) {
+                return null;
             }
         }
 
@@ -2786,10 +2991,22 @@ final class MusicSchemaConnection extends Connection
     }
 
     /**
+     * A successful INSERT, returning what the REAL client returns for one.
+     *
+     * ⚠ **NOT `int 1` (review r3 finding 1 / finding 8).** `PhlixMySQLConnection::query()`
+     * hands back `lastInsertId()` **as a string** for a statement that wrote a row, and
+     * `media_items` has a CHAR(36) UUID primary key with no `AUTO_INCREMENT`, so a
+     * SUCCESSFUL insert there returns the string **`'0'`** — which is FALSY in PHP. That
+     * is the entire reason
+     * {@see \Phlix\Media\Music\MusicLibraryScanner::statementWroteNothing()} must not be
+     * "simplified" to `if (!$result)`, and while this double returned `int 1` the warning
+     * was unfalsifiable off a real MySQL box: r3 planted `return !$result;` and this file
+     * alone stayed `OK (46 tests, 399 assertions)`.
+     *
      * @param array<int, mixed> $p
-     * @return int
+     * @return string The insert id, as the client reports it.
      */
-    private function runInsert(string $sql, array $p): int
+    private function runInsert(string $sql, array $p): string
     {
         if (str_starts_with($sql, 'INSERT INTO media_items')) {
             $this->mediaItems[] = [
@@ -2801,7 +3018,11 @@ final class MusicSchemaConnection extends Connection
                 'parent_id' => null,
             ];
 
-            return 1;
+            // The measured `media_items` success value: no AUTO_INCREMENT column, so
+            // lastInsertId() is '0'. A truthiness test here reports a healthy mint as a
+            // failure — which is what makes this the single most valuable literal in the
+            // whole double.
+            return '0';
         }
 
         if (str_starts_with($sql, 'INSERT INTO music_artists')) {
@@ -2813,7 +3034,7 @@ final class MusicSchemaConnection extends Connection
                 'media_item_id' => is_string($p[2] ?? null) ? $p[2] : null,
             ];
 
-            return 1;
+            return (string) $this->autoInc;
         }
 
         if (str_starts_with($sql, 'INSERT INTO music_albums')) {
@@ -2826,7 +3047,7 @@ final class MusicSchemaConnection extends Connection
                 'total_tracks' => 0,
             ];
 
-            return 1;
+            return (string) $this->autoInc;
         }
 
         if (str_starts_with($sql, 'INSERT INTO music_tracks')) {
@@ -2840,10 +3061,11 @@ final class MusicSchemaConnection extends Connection
                 'duration_secs' => (int) ($p[6] ?? 0),
             ];
 
-            return 1;
+            return (string) $this->autoInc;
         }
 
-        return 1;
+        // The scanner issues no other INSERT; `'0'` is the no-AUTO_INCREMENT shape.
+        return '0';
     }
 
     /**

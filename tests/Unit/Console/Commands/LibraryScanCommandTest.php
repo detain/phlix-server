@@ -83,9 +83,9 @@ class LibraryScanCommandTest extends TestCase
         // print to stdout behind exit 0, so a cron/CI wrapper inspecting the exit status or
         // stderr saw an unqualified success while the library was missing files.
         $this->assertSame(
-            2,
+            3,
             $exitCode,
-            'a scan that lost files must exit non-zero (2 = completed-with-loss, distinct from 1 = '
+            'a scan that lost files must exit non-zero (3 = completed-with-loss, distinct from 1 = '
             . 'did-not-run), so cron/CI notices'
         );
         $this->assertStringContainsString('scanned: 10', $tester->getDisplay());
@@ -106,6 +106,13 @@ class LibraryScanCommandTest extends TestCase
     /**
      * The lossy exit code must not be the same as the did-not-run one, or a wrapper
      * cannot tell "fix your config" from "your library just lost files".
+     *
+     * Review r3 finding 10 added the third comparison: the code must also differ from
+     * `Command::INVALID` (2), Symfony's **"invalid input / usage"**. It WAS 2, so
+     * "the scan ran and lost 5 files" and "you typed the arguments wrong" arrived at a
+     * wrapper as the same integer — the very distinction the constant exists to make.
+     * Asserting against the framework constant (not the literal 2) means this stays
+     * pinned even if Symfony renumbers it.
      */
     public function testTheLossyExitCodeIsDistinctFromTheFailureExitCode(): void
     {
@@ -124,6 +131,13 @@ class LibraryScanCommandTest extends TestCase
         $this->assertSame(Command::FAILURE, $failureCode);
         $this->assertNotSame($failureCode, $lossyCode);
         $this->assertNotSame(Command::SUCCESS, $lossyCode);
+        $this->assertNotSame(
+            Command::INVALID,
+            $lossyCode,
+            'the lossy code must not be Symfony\'s INVALID (2) — that is the framework\'s '
+            . '"invalid input/usage", i.e. a scan that did NOT run, so overloading it destroys '
+            . 'exactly the distinction this exit code was added to provide'
+        );
     }
 
     public function testCleanScanDoesNotWarnAboutFailures(): void

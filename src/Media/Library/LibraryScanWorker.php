@@ -211,10 +211,19 @@ class LibraryScanWorker
                 // a `music_tracks` row added against a pre-existing `media_items` row
                 // (the S96(e) residue shape) makes it smaller, and a counter that goes
                 // 12 → 3 at completion reads as data disappearing. That is why
-                // `markCompleted()` writes these three counters through `GREATEST()`:
-                // the row is a high-water mark, so the two definitions can coexist
-                // without the number ever retracting. Unifying the definitions instead
-                // would mean changing `rescanLibrary()`'s public return semantics.
+                // `markCompleted()` writes `items_added` through `GREATEST()`: the row is
+                // a high-water mark for it, so the two definitions can coexist without the
+                // number ever retracting. Unifying the definitions instead would mean
+                // changing `rescanLibrary()`'s public return semantics.
+                //
+                // ⚠ Of the three keys below, exactly TWO are clamped —
+                // `ScanJobRepository::MONOTONIC_FINAL_COLUMNS` is `items_added` +
+                // `items_failed`. `items_removed` is a PLAIN assignment: review r2 F5
+                // measured its clamp as provably inert (the only writers that set it live
+                // in the `prune`/`delete_all` branches, which reach `markCompleted()` with
+                // an EMPTY `$finalCounts`, so the prior value at clamp time was always the
+                // column default 0). This comment said "these three counters" until review
+                // r3 finding 2 caught that the same round had made it false.
                 $finalCounts = [
                     'items_added' => $rescan->added,
                     'items_removed' => $rescan->removed,

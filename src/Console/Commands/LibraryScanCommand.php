@@ -38,7 +38,19 @@ final class LibraryScanCommand extends Command
      *
      * Distinct from {@see Command::FAILURE} (1), which means the scan did not run at all
      * (unknown library, manager threw). A wrapper needs to tell those apart: 1 says "try
-     * again / fix the config", 2 says "the library is now missing N files".
+     * again / fix the config", 3 says "the library is now missing N files".
+     *
+     * ⚠ **WHY 3 AND NOT 2 (review r3 finding 10).** Symfony reserves the low codes and
+     * defines all three of them on the class this command extends:
+     * `Command::SUCCESS = 0`, `Command::FAILURE = 1`, `Command::INVALID = 2`
+     * (`vendor/symfony/console/Command/Command.php:38-40`), where `INVALID` means
+     * **invalid input / usage** — i.e. precisely the "the scan did not run, fix your
+     * arguments" meaning this constant exists to be DISTINGUISHABLE from. Returning 2
+     * here put both meanings on one number inside a file that imports `Command` and uses
+     * two of its constants, so a wrapper switching on 2 could not tell "you typed the
+     * library id wrong" from "5 tracks were silently lost". 3 is the first value outside
+     * Symfony's reserved set. `LibraryScanCommandTest` pins both the value and the
+     * non-collision, so a future renumber cannot silently walk back onto 2.
      *
      * ⚠ Review r2 F7 asked for callers to be checked before changing this from 0. There
      * are NONE: `grep -rn "library:scan"` across the repo finds no systemd unit (
@@ -46,9 +58,10 @@ final class LibraryScanCommand extends Command
      * no cron entry, nothing in `docker/docker-entrypoint.sh` or `docker/supervisord.conf`,
      * and nothing in `.github/workflows/*` — only `CHANGELOG.md`/docs prose. So no caller
      * depended on exit 0 for a lossy scan, and silently returning success to a cron job
-     * that just lost files is the worse default.
+     * that just lost files is the worse default. That same absence of consumers is why
+     * renumbering to 3 now costs nothing.
      */
-    private const EXIT_FILES_LOST = 2;
+    private const EXIT_FILES_LOST = 3;
 
     /** @var callable(): LibraryManager Lazy factory for the backing manager. */
     private $libraryManagerFactory;
@@ -96,9 +109,10 @@ final class LibraryScanCommand extends Command
      * invisible to every non-human caller.
      *
      * @return int {@see Command::SUCCESS} (0) on a clean scan,
-     *         {@see self::EXIT_FILES_LOST} (2) when the scan completed but could not index
+     *         {@see self::EXIT_FILES_LOST} (3) when the scan completed but could not index
      *         every file it read, or {@see Command::FAILURE} (1) when the scan did not run
-     *         (unknown library id, or the manager threw).
+     *         (unknown library id, or the manager threw). 2 is NOT used — it is Symfony's
+     *         {@see Command::INVALID} (see {@see self::EXIT_FILES_LOST}).
      */
     protected function execute(InputInterface $input, OutputInterface $output): int
     {

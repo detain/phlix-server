@@ -77,8 +77,13 @@ final class MusicLibraryType implements \Phlix\Media\Library\LibraryTypeInterfac
         // `?StructuredLogger $logger` (`MediaScanner.php:290`). Widening it is a video-
         // scanner change with an estate-wide blast radius, well outside an Effort-S music
         // observability step — and `MediaScanner::createDefaultLogger()` mints its own
-        // `/tmp/phlix_media_*` directory, so it is one of ~10 copies of the same pattern
-        // recorded as a follow-up rather than a one-line fix here.
+        // `/tmp/phlix_media_*` directory.
+        //
+        // ⚠ The pattern is **23** classes, and the follow-up is step **S132** (review r3
+        // finding 9). This comment used to say "one of ~10 copies … recorded as a
+        // follow-up": the count was 2.3x low AND no such step existed, so a reader who
+        // trusted it went looking for work nobody had filed. S132 is the one that widens
+        // `MediaScanner`'s constructor, which is the blocker that keeps this narrowing here.
         $structured = $logger instanceof StructuredLogger ? $logger : null;
         return new AudioScanner($db, $itemRepo, $structured);
     }

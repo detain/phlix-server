@@ -74,6 +74,26 @@ class BookLibraryManagerTest extends TestCase
         // Should have scanned items
         $this->assertGreaterThanOrEqual(0, $result->scanned);
 
+        // Review r2 F6 / review r3 MED-2: `durationMs` comes from a MONOTONIC `hrtime()`
+        // pair (`BookLibraryManager.php:98` + `:136`). F6 changed the timing in five
+        // managers and guarded ONE, and r3 measured the consequence: mutating this
+        // manager's END timestamp back to `microtime(true)` — seconds against a nanosecond
+        // origin, the realistic "edited one line and not the other" regression — left the
+        // FULL suite with zero durationMs failures. BOTH bounds are required: a one-sided
+        // `assertLessThan()` passes for the negative number the mutation actually produces.
+        $this->assertGreaterThanOrEqual(
+            0,
+            $result->durationMs,
+            'durationMs must be a sane elapsed millisecond count — a negative value means the start '
+            . 'and end timestamps came from different clocks/units'
+        );
+        $this->assertLessThan(
+            600000,
+            $result->durationMs,
+            'a one-file in-memory rescan cannot take ten minutes; a huge value here is the same '
+            . 'mixed-unit bug with the operands the other way round'
+        );
+
         // Clean up
         unlink($epubPath);
         rmdir($paths[0]);

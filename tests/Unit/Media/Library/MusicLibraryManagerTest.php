@@ -216,7 +216,27 @@ class MusicLibraryManagerTest extends TestCase
         $this->assertIsInt($result->scanned);
         $this->assertIsInt($result->added);
         $this->assertIsInt($result->updated);
-        $this->assertIsInt($result->durationMs);
+        // Review r3 MED-2: `assertIsInt($result->durationMs)` used to stand here and it
+        // COULD NOT FAIL — `ScanResult::$durationMs` is declared `public int`
+        // (`ScanResult.php:64`) and the assignment is an `(int)` cast, so the assertion held
+        // for -88274223122786272 too. Mutating `MusicLibraryManager.php:187`'s end timestamp
+        // back to `microtime(true)` (the realistic regression: edit one of the two timing
+        // lines and not the other, mixing seconds into a nanosecond origin) left the FULL
+        // suite with zero durationMs failures. Both bounds are needed: a one-sided
+        // `assertLessThan()` passes for a negative number, which is precisely the bug.
+        $this->assertGreaterThanOrEqual(
+            0,
+            $result->durationMs,
+            'durationMs must be a sane elapsed millisecond count — a negative value means the start '
+            . 'and end timestamps came from different clocks/units, and `library:scan` prints this '
+            . 'number to an operator'
+        );
+        $this->assertLessThan(
+            600000,
+            $result->durationMs,
+            'a rescan over an EMPTY generator cannot take ten minutes; a huge value here is the same '
+            . 'mixed-unit bug with the operands the other way round'
+        );
     }
 
     /**

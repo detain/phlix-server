@@ -268,6 +268,27 @@ class MusicLibraryScanner
      * comparison for a different client (or a test double) that reports failure that
      * way; it costs nothing and it is what r2's S3 scenario models.
      *
+     * ⚠ **ALL THREE OUTCOMES ARE PINNED, EACH ON ITS OWN (review r3 finding 1).** They
+     * have to be asserted individually, because a suite that only ever produces `false`
+     * leaves the `null` arm — the ONLY falsy value this client actually returns — dead in
+     * test: r3 deleted `|| $result === null` and the whole scanner + library + command +
+     * integration selection stayed byte-identically GREEN. The pins are
+     * `MusicLibraryScannerTest::testTheInsertResultContractIsPinnedOnBothOfItsFalsyArms()`
+     * (the value table, via reflection: `null` ⇒ true, `false` ⇒ true, `'0'` ⇒ FALSE) and
+     * `…::testAnInsertThatReturnsNullIsChargedAsALossOnEveryPath()` (the production
+     * consequence, driven through `MusicSchemaConnection::returnNullFor()`). The double
+     * now returns the measured shapes — `'0'` for a `media_items` insert, a string id for
+     * an `AUTO_INCREMENT` table — so the `'0'` warning above is falsifiable on a DB-less
+     * box too, not only against real MySQL.
+     *
+     * ⚠ **Six OTHER sites in `src/` consume an insert result with the same `=== false`
+     * check this replaced, and they are NOT fixed here** — `StreamSessionService`,
+     * `DbLoginRateLimitStore`, `DbOidcStateStore`, `DbOAuth2StateStore`,
+     * `DbTraktOAuthStateStore`, `DbLastfmOAuthStateStore`. They are tracked as step
+     * **S131**, which is also where this helper is to be promoted somewhere all eleven
+     * sites can share it. None of them is a *falsy* test, so the `'0'` hazard does not
+     * bite them; the defect there is only the `null` blindness.
+     *
      * @param mixed $result Whatever `query()` returned for an INSERT.
      * @return bool True when the statement demonstrably wrote nothing.
      */
@@ -1604,8 +1625,17 @@ class MusicLibraryScanner
 
         try {
             $affected = $this->db->query($sql, [$mediaItemId, $rowId]);
-            if ($affected === false || (is_int($affected) && $affected < 1)) {
-                // Not applied — either the statement failed or another writer got
+            // ⚠ `statementWroteNothing()`, not a bare `=== false` (review r3 finding 4).
+            // This guard was written before the contract was measured and it errs in the
+            // PERMISSIVE direction: `null === false` is false and `is_int(null)` is false,
+            // so a `null` fell straight through to `$referenced = true` and logged
+            // "Backfilled a NULL media_item_id" at `info` for a heal that never happened —
+            // the exact inverse of the r2 HIGH finding, on the same file. The `is_int(...)`
+            // half stays because an UPDATE reports its AFFECTED-ROW count as an int, and 0
+            // there means "the `AND media_item_id IS NULL` guard excluded the row", which is
+            // also "not applied".
+            if (self::statementWroteNothing($affected) || (is_int($affected) && $affected < 1)) {
+                // Not applied — either the statement wrote nothing or another writer got
                 // there first. Report NULL and let the next scan try again.
                 return null;
             }

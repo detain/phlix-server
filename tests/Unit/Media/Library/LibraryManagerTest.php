@@ -91,6 +91,27 @@ class LibraryManagerTest extends TestCase
 
         $this->assertInstanceOf(ScanResult::class, $result);
 
+        // Review r2 F6 / review r3 MED-2: `durationMs` comes from a MONOTONIC `hrtime()`
+        // pair (`LibraryManager.php:878` + `:915`). This is THE manager the `rescan` job
+        // type actually runs and whose duration `php bin/phlix library:scan` prints to an
+        // operator, and it was the least-guarded of the five F6 touched: r3 mutated the end
+        // timestamp back to `microtime(true)` — seconds against a nanosecond origin — and
+        // measured zero durationMs failures in the FULL suite. BOTH bounds are required: a
+        // one-sided `assertLessThan()` passes for the negative number the mutation produces
+        // (r3 saw -88274223122786272 from the same class of edit).
+        $this->assertGreaterThanOrEqual(
+            0,
+            $result->durationMs,
+            'durationMs must be a sane elapsed millisecond count — a negative value means the start '
+            . 'and end timestamps came from different clocks/units'
+        );
+        $this->assertLessThan(
+            600000,
+            $result->durationMs,
+            'a fully mocked rescan cannot take ten minutes; a huge value here is the same mixed-unit '
+            . 'bug with the operands the other way round'
+        );
+
         @unlink($survivingPath);
     }
 

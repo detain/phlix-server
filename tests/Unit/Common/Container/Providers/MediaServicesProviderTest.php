@@ -110,7 +110,7 @@ final class MediaServicesProviderTest extends TestCase
      * `ignorePatterns` are asserted alongside it because they are the same
      * skipped-optional-parameter trap and the class docblock pins all three.
      */
-    public function test_music_scanner_definition_names_the_media_logger(): void
+    public function testMusicScannerDefinitionNamesTheMediaLogger(): void
     {
         $builder = new ContainerBuilder();
         $builder->useAutowiring(true);

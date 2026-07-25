@@ -384,22 +384,3 @@ final class MusicScanMediaItemBackfillIntegrationTest extends TestCase
         return true;
     }
 }
-
-/**
- * Scanner subclass whose tag reader is injected, so a synthetic tree of empty files can
- * stand in for a tagged music library.
- */
-final class BackfillTaggedScanner extends MusicLibraryScanner
-{
-    /** @var \Closure(string): array<string, mixed> Path → canonical metadata. */
-    public \Closure $tagger;
-
-    /**
-     * @param string $path Absolute filesystem path.
-     * @return array<string, mixed>|null
-     */
-    protected function probeViaGetId3(string $path): ?array
-    {
-        return ($this->tagger)($path);
-    }
-}

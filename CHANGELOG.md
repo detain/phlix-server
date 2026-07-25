@@ -9,6 +9,47 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Added
 
+- **Row-sized backdrop on the media LIST shape** (S101, unblocks phlix-ui S69's
+  wide-backdrop library view). `MediaItemShaper::shape()` — the single shaping
+  point behind `GET /api/v1/media` and every other list surface (most-watched,
+  continue-watching, chapter search, user-data, watch history) — now emits two new
+  keys:
+  - **`backdrop_url`** — the item's landscape backdrop, TMDB-width-swapped from
+    the stored `/w500` up to **`/w780`**. Non-TMDB backdrops (fanart.tv, a
+    locally-cached file) have no width ladder and pass through exactly as stored;
+    `null` when the item has no backdrop art.
+  - **`backdrop_srcset`** — exactly **two** candidates, `w780 780w, w1280 1280w`.
+    `w780` covers a full-bleed phone row at 2× DPR (390 CSS px × 2) and a 780 CSS
+    px row at 1×; `w1280` covers a ~1280–1400 CSS px desktop row at 1× and is the
+    largest TMDB step below `/original`. `null` for non-TMDB backdrops → the
+    client uses `backdrop_url`.
+
+  **`/original` is deliberately NOT advertised on list rows, and the detail-only
+  `backdrop_url_large` is NOT emitted there.** `GET /api/v1/media` returns up to
+  `PageLimit::MAX` (100) rows per page; a TMDB `/original` backdrop is a
+  3840×2160-class JPEG (typically 1.5–4 MB), so a single page of hero-sized
+  backdrops would be 150–400 MB of image traffic for a ~300 px-tall strip that can
+  never use 2160 lines of detail. Measured JSON cost of the new keys: **+263
+  bytes per item** with a TMDB backdrop (+25.7 KiB per 100-item page) and **+43
+  bytes** for an item without one — versus +443 bytes/item (+43.3 KiB/page) had
+  `shapeDetail()`'s three fields simply been copied. No image resizer is
+  introduced (that is S71–S73); only existing TMDB size variants are used.
+
+  `shapeDetail()` is unchanged — it still overwrites both keys with the hero
+  budget (stored URL + `/original` + the 3-step srcset) after calling `shape()`,
+  so the detail/player response is byte-identical. Both HTTP entry points
+  (`public/index.php` and the resident `HttpHandler`) resolve the same
+  `WebPortalRouter` and therefore both emit the new keys; no constructor or DI
+  wiring changed. Signed-URL freshness follows the established pattern: both
+  values run through `SignedUrl::refreshArtworkUrl()`/`refreshArtworkSrcset()` at
+  **response** time, so once backdrops are cached locally (S72) a stored scan-time
+  signature can never be served expired. Types with no landscape art
+  (track/music/album/artist/photo/book/audiobook) carry no
+  `metadata_json.backdrop_url` and degrade to `null` on both keys — there is no
+  `type` allowlist, because fanart.tv genuinely supplies artist/album backgrounds.
+  New `BackdropSrcset::rowUrl()` / `::rowSrcset()` hold the row ladder next to the
+  existing hero ladder.
+
 - **Unlink an identity, log in *via* a linked identity, and multi-provider
   foundation** (updates.md #55 / S47). Completes the account-linking story started
   in S45 and lays the multi-instance groundwork:

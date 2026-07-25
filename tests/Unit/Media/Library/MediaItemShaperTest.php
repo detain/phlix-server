@@ -550,8 +550,229 @@ final class MediaItemShaperTest extends TestCase
         $this->assertArrayNotHasKey('crew', $shaped);
         $this->assertArrayNotHasKey('production_companies', $shaped);
         $this->assertArrayNotHasKey('studio', $shaped);
-        $this->assertArrayNotHasKey('backdrop_url', $shaped);
         $this->assertArrayNotHasKey('theme_audio_url', $shaped);
+        // S101: `backdrop_url`/`backdrop_srcset` ARE now on the list shape (a
+        // wide-backdrop row renderer needs them) — but the `/original` hero asset
+        // is still detail-only. A 100-row page must never advertise it.
+        $this->assertArrayHasKey('backdrop_url', $shaped);
+        $this->assertArrayHasKey('backdrop_srcset', $shaped);
+        $this->assertArrayNotHasKey('backdrop_url_large', $shaped);
+    }
+
+    /**
+     * S101 — the LIST shape carries a ROW-sized backdrop so a wide-backdrop row
+     * renderer has something to paint. Backdrops are STORED at TMDB `/w500`
+     * (LibraryMetadataMatcher::imageUrl()), which is narrower than a row strip
+     * needs, so the base steps up to `/w780`.
+     */
+    public function testShapeExposesRowSizedBackdropOnTheListShape(): void
+    {
+        $shaped = MediaItemShaper::shape([
+            'id' => 'm',
+            'name' => 'Backdrop Film',
+            'type' => 'movie',
+            'metadata' => ['backdrop_url' => 'https://image.tmdb.org/t/p/w500/bg.jpg'],
+        ]);
+
+        $this->assertSame('https://image.tmdb.org/t/p/w780/bg.jpg', $shaped['backdrop_url']);
+        // Exactly TWO candidates — TMDB's whole row-range ladder.
+        $this->assertSame(
+            'https://image.tmdb.org/t/p/w780/bg.jpg 780w, '
+            . 'https://image.tmdb.org/t/p/w1280/bg.jpg 1280w',
+            $shaped['backdrop_srcset'],
+        );
+    }
+
+    /**
+     * The payload guard this step exists for: `GET /api/v1/media` returns up to
+     * PageLimit::MAX (100) rows, so the list srcset must NEVER advertise TMDB
+     * `/original` (1.5–4 MB per image → 150–400 MB for one page) and must NEVER
+     * carry the detail-only `backdrop_url_large`. Copying shapeDetail()'s fields
+     * verbatim fails this test.
+     */
+    public function testShapeListBackdropNeverAdvertisesOriginalOrTheHeroKey(): void
+    {
+        $shaped = MediaItemShaper::shape([
+            'id' => 'm',
+            'name' => 'Backdrop Film',
+            'type' => 'movie',
+            'metadata' => ['backdrop_url' => 'https://image.tmdb.org/t/p/w500/bg.jpg'],
+        ]);
+
+        $srcset = $shaped['backdrop_srcset'];
+        $this->assertIsString($srcset);
+        $this->assertStringNotContainsString('/original/', $srcset, 'list rows must not advertise /original');
+        $this->assertStringNotContainsString('1920w', $srcset, 'the /original width step must be absent');
+        $this->assertStringNotContainsString('/original/', (string) $shaped['backdrop_url']);
+        // The `/original` hero asset stays detail-only.
+        $this->assertArrayNotHasKey('backdrop_url_large', $shaped);
+        // Short candidate list — two entries, no more.
+        $this->assertCount(2, explode(',', $srcset));
+    }
+
+    /**
+     * Types with no landscape art (music/photo/book families) carry no
+     * `metadata_json.backdrop_url`, so both keys degrade to null — never a
+     * broken/synthesised URL. The keys stay PRESENT so the response shape is
+     * stable for every row.
+     *
+     * @dataProvider backdroplessTypeProvider
+     */
+    public function testShapeYieldsNullBackdropForTypesWithoutLandscapeArt(string $type): void
+    {
+        $shaped = MediaItemShaper::shape([
+            'id' => 'x',
+            'name' => 'X',
+            'type' => $type,
+            'metadata' => ['poster_url' => 'https://image.tmdb.org/t/p/w500/p.jpg'],
+        ]);
+
+        $this->assertArrayHasKey('backdrop_url', $shaped, "'$type' must still carry the key");
+        $this->assertNull($shaped['backdrop_url'], "'$type' has no backdrop → null");
+        $this->assertNull($shaped['backdrop_srcset'], "'$type' has no backdrop → null srcset");
+    }
+
+    /**
+     * The `media_items.type` members that never carry a landscape backdrop.
+     *
+     * @return iterable<string, array{string}>
+     */
+    public static function backdroplessTypeProvider(): iterable
+    {
+        foreach (['track', 'music', 'album', 'artist', 'photo', 'book', 'audiobook'] as $type) {
+            yield $type => [$type];
+        }
+    }
+
+    /**
+     * There is deliberately NO `type` allowlist on the backdrop keys: fanart.tv
+     * genuinely supplies artist/album backgrounds, so an `album` row that HAS a
+     * backdrop must keep it. Gating on type would throw away real artwork.
+     */
+    public function testShapeKeepsABackdropOnAMusicTypeThatActuallyHasOne(): void
+    {
+        $shaped = MediaItemShaper::shape([
+            'id' => 'al',
+            'name' => 'Kind of Blue',
+            'type' => 'album',
+            'metadata' => ['backdrop_url' => 'https://assets.fanart.tv/fanart/music/abc/bg.jpg'],
+        ]);
+
+        $this->assertSame('https://assets.fanart.tv/fanart/music/abc/bg.jpg', $shaped['backdrop_url']);
+    }
+
+    /**
+     * A non-TMDB backdrop (fanart.tv, a locally-cached file) has no width ladder,
+     * so it passes through EXACTLY as stored and the srcset is null — the client
+     * then uses the single `backdrop_url`.
+     */
+    public function testShapeKeepsNonTmdbListBackdropAsStoredWithNullSrcset(): void
+    {
+        $shaped = MediaItemShaper::shape([
+            'id' => 'm',
+            'name' => 'Local Backdrop',
+            'type' => 'movie',
+            'metadata' => ['backdrop_url' => 'https://example.com/bg.jpg'],
+        ]);
+
+        $this->assertSame('https://example.com/bg.jpg', $shaped['backdrop_url']);
+        $this->assertNull($shaped['backdrop_srcset']);
+        // A spoofed TMDB host must not be width-swapped either.
+        $spoofed = MediaItemShaper::shape([
+            'id' => 'm2',
+            'name' => 'Spoofed',
+            'type' => 'movie',
+            'metadata' => ['backdrop_url' => 'https://evil.com/image.tmdb.org/t/p/w500/bg.jpg'],
+        ]);
+        $this->assertSame('https://evil.com/image.tmdb.org/t/p/w500/bg.jpg', $spoofed['backdrop_url']);
+        $this->assertNull($spoofed['backdrop_srcset']);
+    }
+
+    /**
+     * A blank/non-string stored backdrop must not become an empty-string URL that
+     * a client would render as a broken image.
+     */
+    public function testShapeListBackdropIsNullForBlankOrNonStringMetadata(): void
+    {
+        foreach ([['backdrop_url' => ''], ['backdrop_url' => '   '], ['backdrop_url' => 42], []] as $metadata) {
+            $shaped = MediaItemShaper::shape([
+                'id' => 'm',
+                'name' => 'M',
+                'type' => 'movie',
+                'metadata' => $metadata,
+            ]);
+
+            $this->assertNull($shaped['backdrop_url']);
+            $this->assertNull($shaped['backdrop_srcset']);
+        }
+    }
+
+    /**
+     * Signed-URL freshness on the LIST shape. Once backdrops are cached locally
+     * (S72) `metadata_json.backdrop_url` is a signed `/api/v1/artwork/{id}?size=…`
+     * URL minted at SCAN time — hours later that signature is expired, and an
+     * authless `<img>` 401s on it (the 2026-07-19 production incident). The list
+     * shape must therefore re-mint at RESPONSE time, exactly like poster_url.
+     */
+    public function testShapeReMintsExpiredInternalBackdropUrlOnTheListShape(): void
+    {
+        putenv('PHLIX_SIGNED_URL_SECRET=shaper-list-backdrop-secret');
+        SignedUrl::resetSharedForTesting();
+        $signer = SignedUrl::fromEnv();
+
+        $expiredExp = time() - 3600;
+        $expiredSig = $signer->signature('/api/v1/artwork/m', $expiredExp);
+        $stale = '/api/v1/artwork/m?size=w780&exp=' . $expiredExp . '&sig=' . $expiredSig;
+
+        $shaped = MediaItemShaper::shape([
+            'id' => 'm',
+            'name' => 'Local Backdrop Film',
+            'type' => 'movie',
+            'metadata' => ['backdrop_url' => $stale],
+        ]);
+
+        $this->assertIsString($shaped['backdrop_url']);
+        $this->assertNotSame($stale, $shaped['backdrop_url'], 'the stale signature is re-minted');
+        parse_str((string) parse_url($shaped['backdrop_url'], PHP_URL_QUERY), $q);
+        /** @var array<string, string> $q */
+        $this->assertSame('w780', $q['size'], 'the size descriptor is preserved');
+        $this->assertGreaterThan(time(), (int) $q['exp'], 'the re-minted token is in the future');
+        $this->assertTrue(
+            $signer->verify('/api/v1/artwork/m', $q['exp'], $q['sig']),
+            'the re-minted list backdrop_url verifies with a fresh signature'
+        );
+        // An internal artwork URL has no TMDB width ladder, so no srcset is
+        // synthesised for it (S72 will supply local variants).
+        $this->assertNull($shaped['backdrop_srcset']);
+
+        putenv('PHLIX_SIGNED_URL_SECRET');
+        SignedUrl::resetSharedForTesting();
+    }
+
+    /**
+     * The detail shape keeps its HERO budget: shape() now emits row-sized backdrop
+     * values, and shapeDetail() must OVERWRITE them with the stored URL + the
+     * `/original` variant. Guards the array_merge/override ordering.
+     */
+    public function testShapeDetailOverridesTheRowSizedBackdropWithTheHeroBudget(): void
+    {
+        $row = [
+            'id' => 'm',
+            'name' => 'Backdrop Film',
+            'type' => 'movie',
+            'metadata' => ['backdrop_url' => 'https://image.tmdb.org/t/p/w500/bg.jpg'],
+        ];
+
+        $list = MediaItemShaper::shape($row);
+        $detail = MediaItemShaper::shapeDetail($row, []);
+
+        // List = row budget (w780 base, no /original).
+        $this->assertSame('https://image.tmdb.org/t/p/w780/bg.jpg', $list['backdrop_url']);
+        // Detail = hero budget (stored URL untouched + /original + the 3-step srcset).
+        $this->assertSame('https://image.tmdb.org/t/p/w500/bg.jpg', $detail['backdrop_url']);
+        $this->assertSame('https://image.tmdb.org/t/p/original/bg.jpg', $detail['backdrop_url_large']);
+        $this->assertIsString($detail['backdrop_srcset']);
+        $this->assertStringContainsString('/original/bg.jpg 1920w', $detail['backdrop_srcset']);
     }
 
     public function testShapeDetailExposesBackdropUrlWhenSet(): void
@@ -705,8 +926,11 @@ final class MediaItemShaperTest extends TestCase
         ]);
 
         $this->assertArrayNotHasKey('tags', $shaped);
+        // The `/original` hero asset stays detail-only. S101 DID add a row-sized
+        // `backdrop_srcset` (w780/w1280) to the list shape — see
+        // testShapeExposesRowSizedBackdropOnTheListShape() — so only the large key
+        // is asserted absent here.
         $this->assertArrayNotHasKey('backdrop_url_large', $shaped);
-        $this->assertArrayNotHasKey('backdrop_srcset', $shaped);
     }
 
     public function testShapeDetailExposesThemeAudioUrlWhenSet(): void

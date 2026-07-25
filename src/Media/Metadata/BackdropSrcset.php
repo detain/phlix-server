@@ -29,6 +29,19 @@ namespace Phlix\Media\Metadata;
  * Backdrops are 16:9 landscape, so the advertised widths are larger than the
  * poster set (posters are ~2:3 portrait cards) — sized for hero/background use.
  *
+ * TWO SIZE BUDGETS live here, and they are deliberately different:
+ *
+ *  - **Hero / full-bleed page background** ({@see self::largeUrl()},
+ *    {@see self::forBackdropUrl()}) — the DETAIL response. ONE image fills the
+ *    viewport, so `/original` is worth its 1.5–4 MB.
+ *  - **List row strip** ({@see self::rowUrl()}, {@see self::rowSrcset()}) — the
+ *    LIST response (`GET /api/v1/media`), which returns up to
+ *    {@see \Phlix\Common\Http\PageLimit::MAX} rows per page. `/original` is
+ *    NEVER advertised there: 100 rows of it is 150–400 MB of image traffic for
+ *    a ~300 px-tall strip that can never use 2160 lines of detail. The row
+ *    ladder therefore tops out at `w1280`, the largest TMDB step below
+ *    `/original`.
+ *
  * @see PosterSrcset The poster-side counterpart this mirrors.
  */
 final class BackdropSrcset
@@ -40,6 +53,31 @@ final class BackdropSrcset
      * @var list<int>
      */
     private const WIDTHS = [780, 1280];
+
+    /**
+     * TMDB backdrop widths advertised for a LIST-ROW backdrop strip — TMDB's
+     * whole backdrop ladder is `w300, w780, w1280, original`, so these are the
+     * only two steps that land in row range:
+     *
+     *  - `w780` — a full-bleed phone row at 2× DPR (390 CSS px × 2 = 780) and a
+     *    780 CSS px row at 1×.
+     *  - `w1280` — a wide desktop row (≈1280–1400 CSS px) at 1×, a ~640 CSS px
+     *    row at 2×, and the crispest step available without `/original`.
+     *
+     * `w300` is excluded (too small for even a phone row at 1×) and `original`
+     * is excluded on purpose — see the class docblock. Keep this list SHORT: it
+     * is serialised once per row on the main library listing.
+     *
+     * @var list<int>
+     */
+    private const ROW_WIDTHS = [780, 1280];
+
+    /**
+     * Width used for the single-URL list-row base ({@see self::rowUrl()}) — the
+     * `src` a non-`srcset` client (Roku, the console TUI's `<img>` loader) ends
+     * up fetching. The smallest ROW_WIDTHS step, so the fallback is cheap.
+     */
+    private const ROW_WIDTH = 780;
 
     /**
      * Anchored to the TMDB image host + `/t/p/<size>/` so only genuine TMDB
@@ -88,6 +126,56 @@ final class BackdropSrcset
         [$base, $file] = $parts;
 
         return sprintf('%s/original/%s', $base, $file);
+    }
+
+    /**
+     * Build the SHORT, row-appropriate `srcset` (w780 + w1280 — no `/original`)
+     * for a LIST-row backdrop strip, or null when the URL is absent or not a TMDB
+     * image URL (the client then uses {@see self::rowUrl()}'s single URL).
+     *
+     * Deliberately NOT {@see self::forBackdropUrl()}: that one advertises
+     * `/original` because it serves ONE hero image per page. This serves up to
+     * {@see \Phlix\Common\Http\PageLimit::MAX} rows per response — see the class
+     * docblock for the payload argument.
+     */
+    public static function rowSrcset(?string $backdropUrl): ?string
+    {
+        $parts = self::parse($backdropUrl);
+        if ($parts === null) {
+            return null;
+        }
+        [$base, $file] = $parts;
+
+        $candidates = [];
+        foreach (self::ROW_WIDTHS as $width) {
+            $candidates[] = sprintf('%s/w%d/%s %dw', $base, $width, $file, $width);
+        }
+
+        return implode(', ', $candidates);
+    }
+
+    /**
+     * Width-swap a TMDB backdrop URL to the row-sized {@see self::ROW_WIDTH}
+     * variant for a list-row backdrop strip, or null when the URL is absent or
+     * not a TMDB image URL.
+     *
+     * Backdrops are STORED at `/w500` (see
+     * {@see \Phlix\Media\Metadata\LibraryMetadataMatcher::imageUrl()}), which is
+     * narrower than a row strip needs, so the base is stepped up to `w780`
+     * rather than left as-is. TMDB resizes from the master asset, so stepping a
+     * `/w500` URL UP to `/w780` is a genuine higher-resolution render, not an
+     * upscale. Callers fall back to the stored URL on null so a non-TMDB
+     * (fanart.tv, locally-cached) backdrop still renders.
+     */
+    public static function rowUrl(?string $backdropUrl): ?string
+    {
+        $parts = self::parse($backdropUrl);
+        if ($parts === null) {
+            return null;
+        }
+        [$base, $file] = $parts;
+
+        return sprintf('%s/w%d/%s', $base, self::ROW_WIDTH, $file);
     }
 
     /**

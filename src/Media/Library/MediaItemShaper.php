@@ -143,6 +143,22 @@ final class MediaItemShaper
             $posterSrcset = SignedUrl::refreshArtworkSrcset($posterSrcset);
         }
 
+        // Row-sized backdrop for a wide-backdrop / hero-strip LIST view. Only
+        // items that actually carry `metadata_json.backdrop_url` get one — types
+        // with no landscape art (track/music/album/artist/photo/book) simply have
+        // no such key and degrade to null rather than a broken URL. There is NO
+        // type allowlist on purpose: fanart.tv genuinely supplies artist/album
+        // backgrounds, so gating on `type` would throw away real artwork.
+        //
+        // Deliberately NOT the detail treatment: shapeDetail() prefers TMDB
+        // `/original` (`backdrop_url_large`) because it paints ONE full-bleed hero
+        // per page. This is up to PageLimit::MAX rows per response, so the row
+        // ladder tops out at w1280 and `backdrop_url_large` is NOT emitted here.
+        $storedBackdrop = self::nonemptyString($metadata['backdrop_url'] ?? null);
+        // TMDB URLs step up from the stored /w500 to /w780; non-TMDB (fanart.tv,
+        // locally-cached) URLs have no width ladder and pass through as stored.
+        $backdropUrl = BackdropSrcset::rowUrl($storedBackdrop) ?? $storedBackdrop;
+
         return [
             'id' => $id,
             'name' => $name,
@@ -158,6 +174,21 @@ final class MediaItemShaper
             // When ArtworkStorage has cached the poster (SV-3.4), this carries
             // the local srcset pointing to /api/v1/artwork/{id}?size=...
             'poster_srcset' => $posterSrcset,
+            // Landscape backdrop for a wide-backdrop/hero-strip row renderer,
+            // sized for a row (TMDB /w780) — NOT the detail page's /original.
+            // Null when the item has no backdrop art. Re-minted at RESPONSE time
+            // (see the poster_url note above): once backdrops are cached locally
+            // this is a signed `/api/v1/artwork/{id}?size=…` URL whose stored
+            // scan-time signature is long expired, and an authless <img> would
+            // 401 on it. External TMDB/fanart URLs pass through untouched.
+            'backdrop_url' => SignedUrl::refreshArtworkUrl($backdropUrl),
+            // Exactly TWO responsive candidates (w780, w1280) so a row strip is
+            // crisp from a 2×-DPR phone up to a ~1400 CSS px desktop row without
+            // ever advertising `/original`. Null for non-TMDB backdrops → the
+            // client uses `backdrop_url`.
+            'backdrop_srcset' => SignedUrl::refreshArtworkSrcset(
+                BackdropSrcset::rowSrcset($storedBackdrop)
+            ),
             'genres' => $metadata['genres'] ?? [],
             'year' => isset($metadata['year']) && is_numeric($metadata['year']) ? (int) $metadata['year'] : null,
             'rating' => $rating,
@@ -246,6 +277,14 @@ final class MediaItemShaper
         // URL stored at scan time whose token is expired hours later — authless
         // clients (console `<img>`) then 401. External TMDB backdrops pass through
         // untouched.
+        //
+        // NOTE: shape() already emitted a ROW-sized `backdrop_url`/`backdrop_srcset`
+        // (TMDB /w780 + a w780/w1280 pair) for the list renderers. These three lines
+        // deliberately OVERWRITE them with the hero budget — the stored URL as-is
+        // plus `/original` — because the detail page paints ONE full-bleed
+        // background where `/original` is worth its bytes. Do not "de-duplicate"
+        // this into a single shared value: the whole point is that a 100-row list
+        // page must never advertise `/original`.
         $merged['backdrop_url'] = SignedUrl::refreshArtworkUrl($backdropUrl);
         // Full-bleed background variants (TMDB width swap). `backdrop_url_large`
         // is the `/original` full-resolution asset for the page background;

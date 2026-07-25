@@ -396,6 +396,70 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- **"Original" quality was silently unavailable for every HEVC / non-AAC title**
+  (updates.md #30 / S49). The v7 ABR ladder FOLDED the `original` rendition out of
+  `LadderResult::streamVariants()` whenever a re-encoded (non-copy) Original was the
+  same frame at effectively the same BANDWIDTH as the top ladder rung — which is the
+  normal outcome for a low-bitrate source, since the ladder caps every rung at the
+  source bitrate. `TranscodeManager::writeVodPlaylists()` iterates exactly that list,
+  so a folded Original never got a media playlist written at all: `media_voriginal.m3u8`
+  simply did not exist, and "Original" was either missing from the quality menu or a
+  404 (masked only by a serve-time alias that quietly served the top rung's playlist
+  instead). Every job now always publishes a real Original variant:
+  - `LadderResult::streamVariants()` always returns `[original, ...renditions]`; the
+    fold is gone from the variant list.
+  - `TranscodeManager::getJobVariants()` no longer mirrors that fold (its private
+    `originalDuplicatesTopRung()` helper is removed), so the client `variants[]`
+    payload always advertises `{id: 'original', …}` with its own media-playlist url.
+  - The duplicate-BANDWIDTH problem the fold existed to prevent is now solved where
+    it belongs — in the master playlist. `writeVodPlaylists()`'s SV-4.6 switchable
+    filter (`TranscodeManager::switchableVariants()`, still using
+    `Rendition::duplicatesForAbr()`) withholds a variant from the ABR-switchable
+    `#EXT-X-STREAM-INF` set in exactly two cases: a stream-COPY variant, always (its
+    segment boundaries can drift off the uniform timeline), and a TRANSCODE `original`
+    that duplicates the top rung's frame + BANDWIDTH, which is the low-bitrate
+    collapse a player would merge into one level. Both still get their own media
+    playlist, which is what makes "Original" explicitly selectable.
+    **The master's advertised level set is therefore unchanged from v8**: a transcode
+    `original` that is NOT such a duplicate stays the master's top level, exactly as
+    before — including the large class of sources whose original height matches no
+    canonical rung (2.39:1 crops, DCI-2K). An interim revision of this change excluded
+    every `original` from the switchable set; that dropped the master's top level for
+    those sources (e.g. a 1920×1080 HEVC @8 Mbps master went from `original` at
+    10.0 Mbps down to `1080p` at 5.478 Mbps, halving the auto-ABR ceiling) and is NOT
+    what shipped. Four tests now pin the full level set — ids + BANDWIDTH +
+    RESOLUTION — per source shape (copy / distinct transcode / anamorphic / duplicate).
+  - `TranscodeManager::ensurePlaylistRegenerated()` rebuilt its variant list from the
+    persisted `renditions` **only**, so an LRU cache eviction destroyed
+    `media_voriginal.m3u8` permanently — even for a never-folded stream-COPY Original
+    that had been written correctly. It now reproduces the same `original`-first set
+    `ensureHlsJob()` wrote. The same method also read audio tracks from a
+    `transcode_jobs.audio_tracks` column that has never existed in any migration
+    (`JOB_ROW_COLUMNS` cannot select it), so multi-audio jobs regenerated with no
+    `#EXT-X-MEDIA` audio group and no `media_a{N}.m3u8` playlists; they are read from
+    the persisted ladder JSON now.
+  - `TranscodeManager::ensurePlaylistRegenerated()` also now validates each persisted
+    rendition id against the same `^[a-z0-9]+$` allowlist the segment serve path uses
+    (the id is interpolated into `media_v{id}.m3u8` and into the master's URI), and
+    returns `false` instead of writing a master with zero `#EXT-X-STREAM-INF` levels
+    when nothing in a corrupt ladder survives that check — such a file would otherwise
+    short-circuit every later regeneration attempt and permanently break the job.
+  - `JOB_KEY_VERSION` **v8 → v9** so pre-existing jobs (whose directories lack the
+    Original playlist) are not reused and age out via the cache sweep. `HlsController`'s
+    folded-original serve-time alias is retained for pre-v9 job directories still on
+    disk (bounded by the cache sweep's idle TTL, 3 h by default) so already-issued
+    signed URLs keep playing; its removal is tracked as part of **S59**.
+  - **No client change was required, because the master's advertised level set is
+    unchanged** (see above): `quality.ts`/`QualityMenu.vue` resolve "Original" by
+    matching a master level of the same height and then load `media_voriginal.m3u8`
+    directly, which is precisely the file that now exists. That client gate does have a
+    pre-existing blind spot this change neither introduces nor fixes — a stream-COPY
+    Original is (as before) never a master level, so when its height matches no level
+    and exceeds them all (e.g. a 1920×800 H.264/AAC source against a 720p top rung)
+    the menu still hides "Original" even though the playlist is now guaranteed to
+    exist. Hardening that gate to key off the server's `variants[]` entry rather than
+    level height-matching is tracked as a `phlix-ui` follow-up.
+
 - **External identities were stored with a hardcoded `provider='external'`**
   (updates.md #37 / S44). `UserRepository::findOrCreateByExternalId()` ignored which
   provider actually authenticated, so an OIDC `sub` and an LDAP DN could collide onto

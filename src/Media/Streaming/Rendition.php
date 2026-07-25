@@ -56,10 +56,17 @@ final readonly class Rendition
      * advertised BANDWIDTHs differ enough to be a real quality choice. This is
      * the minimum STEP the ladder enforces between adjacent RETAINED rungs — a
      * rung must be at least (1 − this) below the one above it — and, symmetric,
-     * the tolerance below which a re-encoded "Original" of the SAME frame is a
-     * byte-identical duplicate of the top rung. 0.85 ⇒ a ≥15 % bandwidth drop is
-     * required for a rung to add value; anything closer is a source-bitrate-cap
-     * collapse (see {@see AbrLadder}) that gives ABR nothing to climb to.
+     * the tolerance below which a re-encoded "Original" of the SAME frame is an
+     * indistinguishable duplicate of the top rung ({@see self::duplicatesForAbr()}).
+     * 0.85 ⇒ a ≥15 % bandwidth drop is required for a rung to add value; anything
+     * closer is a source-bitrate-cap collapse (see {@see AbrLadder}'s gradient
+     * pruning) that gives ABR nothing to climb to.
+     *
+     * S49 moved the "Original" use of this tolerance from the VARIANT list to the
+     * MASTER's switchable set: "Original" is now always its own variant with its
+     * own media playlist ({@see LadderResult::streamVariants()}), and only its
+     * appearance as an ABR *level* is suppressed when it duplicates the top rung
+     * (SV-4.6, {@see \Phlix\Media\Transcoding\TranscodeManager}).
      */
     public const ABR_DUPLICATE_TOLERANCE = 0.85;
 
@@ -121,9 +128,15 @@ final readonly class Rendition
      * True when this rendition and `$other` are the SAME frame (identical
      * width×height) at an effectively identical BANDWIDTH — i.e. within
      * {@see self::ABR_DUPLICATE_TOLERANCE} of each other. Such a pair are
-     * byte-identical ABR variants that must not both be advertised (a player
-     * would just merge them and ABR gains no distinct rung). Used to fold a
-     * re-encoded "Original" into the top ladder rung it duplicates.
+     * indistinguishable ABR levels that must not BOTH be advertised in a master
+     * playlist: same RESOLUTION + same CODECS (codecs derive from the frame) +
+     * effectively the same BANDWIDTH is exactly the shape a player collapses into
+     * one level, leaving ABR no gradient to climb (the v7 low-bitrate defect).
+     *
+     * Used by {@see \Phlix\Media\Transcoding\TranscodeManager}'s SV-4.6 filter to
+     * decide whether a TRANSCODE "Original" may be an ABR level alongside the top
+     * rung. It never decides whether a variant EXISTS — every variant of a job
+     * always gets its own `media_v{id}.m3u8` (S49).
      */
     public function duplicatesForAbr(self $other): bool
     {

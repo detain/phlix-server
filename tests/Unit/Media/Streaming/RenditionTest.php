@@ -140,6 +140,61 @@ final class RenditionTest extends TestCase
         self::assertNull($array['url']);
     }
 
+    public function testConstantsIncludeTheAbrDuplicateTolerance(): void
+    {
+        self::assertSame(0.85, Rendition::ABR_DUPLICATE_TOLERANCE);
+    }
+
+    /**
+     * S49 fix round 1 — `duplicatesForAbr()` is what keeps the master's ABR level
+     * set free of two indistinguishable levels while still letting a genuinely
+     * distinct transcode "Original" be advertised. Same frame + BANDWIDTH within
+     * 15 % ⇒ duplicate; a different frame, or a ≥15 % bandwidth gap, ⇒ distinct.
+     *
+     * @param int<0, max> $bitrate
+     */
+    #[DataProvider('duplicateProvider')]
+    public function testDuplicatesForAbrComparesFrameAndBandwidth(
+        int $width,
+        int $height,
+        int $bitrate,
+        bool $expected
+    ): void {
+        $candidate = new Rendition(
+            id: 'original',
+            label: 'Original',
+            width: $width,
+            height: $height,
+            bitrate: $bitrate,
+            videoBitrate: 5_000_000,
+            codecs: 'avc1.640029,mp4a.40.2',
+            isOriginal: true,
+            isCopy: false,
+        );
+
+        // Symmetric in both directions — the tolerance is applied to the higher of
+        // the two bandwidths, so neither argument order can flip the verdict.
+        self::assertSame($expected, $candidate->duplicatesForAbr($this->fullHd()));
+        self::assertSame($expected, $this->fullHd()->duplicatesForAbr($candidate));
+    }
+
+    /**
+     * Reference rung: 1920×1080 @ 5,478,000. Tolerance floor = floor(5_478_000 *
+     * 0.85) = 4,656,300.
+     *
+     * @return iterable<string, array{int, int, int, bool}>
+     */
+    public static function duplicateProvider(): iterable
+    {
+        yield 'identical frame + bandwidth' => [1920, 1080, 5_478_000, true];
+        yield 'same frame, exactly at the tolerance floor' => [1920, 1080, 4_656_300, true];
+        yield 'same frame, one bit below the floor' => [1920, 1080, 4_656_299, false];
+        yield 'same frame, 10 Mbps original (a real distinct level)' => [1920, 1080, 10_000_000, false];
+        yield 'same bandwidth, different height (DCI-2K original)' => [1920, 1012, 5_478_000, false];
+        yield 'same bandwidth, different width' => [1440, 1080, 5_478_000, false];
+        yield 'zero bandwidth is never a duplicate' => [1920, 1080, 0, false];
+    }
+
     private function fullHd(): Rendition
     {
         return new Rendition(

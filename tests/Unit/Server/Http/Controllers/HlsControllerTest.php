@@ -290,12 +290,20 @@ class HlsControllerTest extends TestCase
         $this->assertSame($playlist, $this->bodyOf($res));
     }
 
-    public function testFoldedOriginalPlaylistResolvesToTopRung(): void
+    public function testLegacyPreV9FoldedOriginalPlaylistResolvesToTopRung(): void
     {
-        // v7 robustness: the ladder FOLDED "original" (byte-identical to the top
-        // rung), so the master lists no media_voriginal.m3u8 and it was never
-        // produced. A client that still requests it directly must transparently
-        // receive the TOP (highest-BANDWIDTH) rung's playlist instead of a 404.
+        // LEGACY (pre-v9 job directories only). The v7/v8 ladder FOLDED "original"
+        // (byte-identical to the top rung), so the master listed no
+        // media_voriginal.m3u8 and it was never produced. A client that still
+        // requests it directly must transparently receive the TOP
+        // (highest-BANDWIDTH) rung's playlist instead of a 404.
+        //
+        // S49 removed the fold, so no v9+ job can reach this path — every one of
+        // them writes a real media_voriginal.m3u8 (see
+        // TranscodeManagerTest::testEnsureHlsJobWritesOriginalPlaylistFor…). This
+        // alias is retained for one release so already-issued signed URLs for
+        // pre-v9 job dirs keep playing until the cache sweep ages them out; delete
+        // it, resolveTopVariantPlaylist() and this test together in the follow-up.
         $manager = $this->createMock(TranscodeManager::class);
         $manager->expects($this->never())->method('ensureSegment');
 
@@ -321,10 +329,13 @@ class HlsControllerTest extends TestCase
         $this->assertSame($top, $this->bodyOf($res));
     }
 
-    public function testOriginalPlaylistServedVerbatimWhenNotFolded(): void
+    public function testOriginalPlaylistServedVerbatimWhenPresent(): void
     {
-        // When the job DID produce media_voriginal.m3u8 (copy passthrough / not
-        // folded), it is served verbatim — the fallback never engages.
+        // The normal case for every v9+ job (S49: the Original is always written):
+        // media_voriginal.m3u8 is served verbatim and the legacy top-rung alias
+        // never engages. Note the master here deliberately DOES list the original —
+        // a pre-v9 copy-original job shape — to prove the alias is skipped purely on
+        // the file's presence, not on what the master says.
         $master = "#EXTM3U\n#EXT-X-VERSION:3\n"
             . "#EXT-X-STREAM-INF:BANDWIDTH=8000000,RESOLUTION=1920x1080,CODECS=\"avc1.640029,mp4a.40.2\"\n"
             . "media_voriginal.m3u8\n"
@@ -362,11 +373,12 @@ class HlsControllerTest extends TestCase
         $this->assertSame(404, $res->statusCode);
     }
 
-    public function testFoldedOriginalStill404sWhenNoTopRungOnDisk(): void
+    public function testLegacyPreV9FoldedOriginalStill404sWhenNoTopRungOnDisk(): void
     {
-        // Guard: if the master lists only original (nothing else on disk to alias
-        // to), the folded-original request has no top rung to fall back to and
-        // stays a 404 — the fallback cannot invent a non-existent playlist.
+        // Guard on the same legacy alias: if the master lists only original
+        // (nothing else on disk to alias to), the request has no top rung to fall
+        // back to and stays a 404 — the fallback cannot invent a non-existent
+        // playlist, and must never mask a genuinely missing job.
         $this->writeJobFile('job-empty', 'master.m3u8', "#EXTM3U\n#EXT-X-VERSION:3\n");
 
         $res = $this->controller()->serveFile(

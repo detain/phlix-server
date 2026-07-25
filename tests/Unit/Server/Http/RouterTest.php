@@ -405,6 +405,14 @@ class RouterTest extends TestCase
 
         $routes = $this->router->getRoutes();
 
+        // The PREFIX must be restored too, or the later route is registered at an
+        // entirely different path (asserted first so the failure names that cause).
+        $this->assertArrayHasKey(
+            '/after',
+            $routes['GET'],
+            'a route registered after a throwing group must not inherit its PREFIX either',
+        );
+        $this->assertArrayNotHasKey('/boom/after', $routes['GET']);
         $this->assertSame(
             [],
             $routes['GET']['/after']['middleware'],

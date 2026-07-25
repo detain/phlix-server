@@ -112,9 +112,9 @@ class MusicLibraryService
      * 30,000 and is still no cheaper (measured twice, in opposite directions: median
      * **171 ms vs 150 ms** over 5 alternating samples here, 179–184 ms vs 229 ms in
      * review r2) — plus an internal temp table proportional to the whole fan-out.
-     * Latent today —
-     * production's real 989 rows cost ~9 ms — but if it ever matters the DB-side
-     * bound is a per-album lateral/derived rewrite, not a bigger constant.
+     * Latent today (production's real 989 rows cost ~9 ms), but if it ever matters
+     * the DB-side bound is a per-album lateral/derived rewrite, not a bigger
+     * constant.
      *
      * NB the KB figure is the wire body: `Response::json()` encodes with
      * `JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES` (`Response.php:135`), which is

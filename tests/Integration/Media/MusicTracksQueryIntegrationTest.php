@@ -44,6 +44,15 @@ use Workerman\MySQL\Connection;
  * the later-inserted artist sorts first, the later-inserted album sorts first,
  * and tracks are inserted with their disc/track numbers descending.
  *
+ * `getAllTracks()` is unscoped (every track in every library) and clamped to
+ * `LIMIT 100`, so the fixture's rows are not necessarily on page 1 of a populated
+ * database. Rather than trying to *collate* them onto page 1 — a bet against
+ * whatever else happens to be in `music_artists` — every absolute assertion here
+ * runs against the rows returned by {@see self::collectFixtureRows()}, which pages
+ * with increasing offsets until all six are collected. That makes the class
+ * independent of collation, of row counts, and of `DB_DATABASE` pointing at a
+ * populated dev database, while keeping every assertion absolute.
+ *
  * CI applies all migrations to the `phlix_test` MySQL service before the suite;
  * locally, with no reachable MySQL, it self-skips — the same guard
  * {@see \Phlix\Tests\Integration\Auth\NextUpIntegrationTest} uses.
@@ -52,6 +61,18 @@ use Workerman\MySQL\Connection;
  */
 final class MusicTracksQueryIntegrationTest extends TestCase
 {
+    /** Rows this fixture seeds — the collectors page until they have them all. */
+    private const FIXTURE_TRACKS = 6;
+
+    /** Page size used while collecting; also `getAllTracks()`'s own clamp ceiling. */
+    private const PAGE_SIZE = 100;
+
+    /**
+     * Hard ceiling on pages read, so a genuinely missing fixture row fails as a
+     * clear assertion instead of looping over the whole table forever.
+     */
+    private const MAX_PAGES = 200;
+
     private ?Connection $db = null;
 
     private string $libraryId = '';
@@ -60,15 +81,16 @@ final class MusicTracksQueryIntegrationTest extends TestCase
      * Fixture-local name prefix, applied to `music_artists.name` — the FIRST key
      * of `getAllTracks()`'s `ORDER BY ar.name, al.title, …`.
      *
-     * `getAllTracks()` is unscoped (every track in every library) *and* clamped
-     * to `LIMIT 100`, so assertions both filter to this run's rows and depend on
-     * those rows being inside page 1. The leading `!` is load-bearing: it sorts
-     * ahead of every digit and letter in `utf8mb4_unicode_ci`
-     * (`!S94 < 0S94 < AAA Filler < S94-abc < zzz`), so the fixture stays on page
-     * 1 no matter how populated the music tables already are. With the old
-     * mid-alphabet `S94-` prefix, ~95 pre-existing tracks by artists sorting
-     * before `S` pushed the fixture off the page and reddened this class for a
-     * reason that had nothing to do with the column under test.
+     * Its job is NAMESPACING: `music_artists.name` is UNIQUE, and the assertions
+     * filter the unscoped result set down to this run's rows. The leading `!` is a
+     * cheap optimisation, not a correctness requirement — it sorts ahead of every
+     * digit and letter in `utf8mb4_unicode_ci` (`!S94 < 0S94 < AAA Filler < S94-abc
+     * < zzz`), so on a typical database the fixture is found in the FIRST page and
+     * the collectors stop after one query. Correctness no longer depends on it:
+     * only `' ' _ - , ; :` (plus nbsp and en-dash) collate ahead of `!`, and ~95
+     * tracks by one such artist used to be enough to push the fixture off page 1
+     * and redden three of these four tests for a reason that had nothing to do with
+     * the column under test. {@see self::collectFixtureRows()} pages instead.
      */
     private string $prefix = '';
 
@@ -102,8 +124,9 @@ final class MusicTracksQueryIntegrationTest extends TestCase
 
         $this->libraryId = Uuid::v4();
         // music_artists.name is UNIQUE, so every run needs its own namespace.
-        // Leading `!` = first-collating, keeping the fixture inside the query's
-        // unscoped `LIMIT 100` on a populated DB (see $prefix).
+        // Leading `!` = first-collating, so the fixture is usually found in page 1
+        // and the collectors stop after one query; they page regardless (see
+        // $prefix and collectFixtureRows()).
         $this->prefix = '!S94-' . substr(Uuid::v4(), 0, 8) . '-';
 
         $this->seedFixtures();
@@ -122,13 +145,9 @@ final class MusicTracksQueryIntegrationTest extends TestCase
      */
     public function testGetAllTracksJoinsTheAlbumTitleAndOrdersByArtistAlbumDiscTrack(): void
     {
-        $service = $this->service();
-
-        // Reverting `al.title` to `al.name` makes this call throw
+        // Reverting `al.title` to `al.name` makes the query inside throw
         // "Unknown column 'al.name' in 'field list'" instead of returning rows.
-        $rows = $service->getAllTracks(100, 0);
-
-        $mine = $this->onlyMine($rows);
+        $mine = $this->onlyMine($this->collectFixtureRows());
 
         $this->assertSame(
             [
@@ -153,14 +172,10 @@ final class MusicTracksQueryIntegrationTest extends TestCase
      */
     public function testEveryRowCarriesTheKeysTheApiResponseShapeReads(): void
     {
-        $rows = $this->service()->getAllTracks(100, 0);
+        $rows = $this->collectFixtureRows();
 
         $seen = 0;
         foreach ($rows as $row) {
-            $artist = $row['artist_name'] ?? null;
-            if (!is_string($artist) || !str_starts_with($artist, $this->prefix)) {
-                continue;
-            }
             ++$seen;
             foreach (['id', 'title', 'artist_name', 'album_name', 'track_number', 'duration_secs'] as $key) {
                 $this->assertArrayHasKey($key, $row, sprintf('Row is missing the `%s` key', $key));
@@ -169,7 +184,7 @@ final class MusicTracksQueryIntegrationTest extends TestCase
             $this->assertSame(180, (int) $row['duration_secs']);
         }
 
-        $this->assertSame(6, $seen, 'All six seeded tracks must come back');
+        $this->assertSame(self::FIXTURE_TRACKS, $seen, 'All six seeded tracks must come back');
     }
 
     /**
@@ -203,7 +218,8 @@ final class MusicTracksQueryIntegrationTest extends TestCase
      * The S94 acceptance criterion at the seam that actually 500'd:
      * `WebPortalRouter::getMusicTracks()` has no try/catch, so the SQL error
      * escaped as an unguarded HTTP 500. Assert the handler answers **200** with
-     * the client-shaped, correctly-ordered rows.
+     * the client-shaped, correctly-ordered rows — on every page it is asked for,
+     * until the fixture has been collected.
      */
     public function testTheTracksEndpointHandlerAnswers200WithOrderedRows(): void
     {
@@ -218,34 +234,7 @@ final class MusicTracksQueryIntegrationTest extends TestCase
             musicLibraryService: $this->service(),
         );
 
-        $request = new Request();
-        $request->method = 'GET';
-        $request->path = '/api/v1/music/tracks';
-        $request->query = ['limit' => '100', 'offset' => '0'];
-
-        $response = $router->getMusicTracks($request, []);
-
-        $this->assertSame(200, $response->statusCode, 'GET /api/v1/music/tracks must not 500');
-
-        /** @var array<string, mixed> $payload */
-        $payload = (array) json_decode($response->body, true, 512, JSON_THROW_ON_ERROR);
-        $this->assertArrayHasKey('tracks', $payload);
-        $this->assertIsArray($payload['tracks']);
-        $this->assertGreaterThanOrEqual(6, $payload['total']);
-
-        $mine = [];
-        foreach ($payload['tracks'] as $track) {
-            $this->assertIsArray($track);
-            $artist = $track['artist'] ?? null;
-            if (!is_string($artist) || !str_starts_with($artist, $this->prefix)) {
-                continue;
-            }
-            $mine[] = [
-                substr($artist, strlen($this->prefix)),
-                (string) ($track['album'] ?? ''),
-                (int) ($track['track_number'] ?? 0),
-            ];
-        }
+        $mine = $this->collectFixtureTracksFromEndpoint($router);
 
         // The shaped `album` field is fed by the `album_name` alias — with the
         // pre-fix `al.name` this handler never even produced a response.
@@ -261,6 +250,128 @@ final class MusicTracksQueryIntegrationTest extends TestCase
             $mine,
             'The endpoint must expose the album title and preserve the artist→album→disc→track order',
         );
+    }
+
+    /**
+     * Collect this fixture's six rows by PAGING `getAllTracks()` with increasing
+     * offsets until they have all been seen.
+     *
+     * ## Why paging rather than a first-collating prefix
+     *
+     * `getAllTracks()` is unscoped and clamped to `LIMIT 100`, so "the fixture is
+     * on page 1" is a property of whatever else is in `music_artists`, not of the
+     * code under test. A prefix that collates early only narrows that window:
+     * ~95 tracks by one `-Dash Filler`-style artist is enough to push the fixture
+     * off page 1 and turn three of these tests red for a reason unrelated to the
+     * column they exist to pin. Paging removes the dependency outright.
+     *
+     * Discrimination is untouched, in both directions:
+     *  - the `al.title` → `al.name` regression makes the very first
+     *    `getAllTracks()` call throw `Unknown column 'al.name'`, which propagates
+     *    out of here as a test ERROR;
+     *  - ordering sensitivity is preserved because the fixture's rows are
+     *    contiguous in the global ordering (both fixture artists share a unique
+     *    prefix, so no other artist can sort between them) and pages are appended
+     *    in offset order, so their relative sequence is exactly what page 1 would
+     *    have shown.
+     *
+     * @return list<array<string, mixed>> This run's rows, in query order.
+     */
+    private function collectFixtureRows(): array
+    {
+        $service = $this->service();
+
+        $mine = [];
+        $pagesRead = 0;
+        $offset = 0;
+
+        while ($pagesRead < self::MAX_PAGES) {
+            $page = $service->getAllTracks(self::PAGE_SIZE, $offset);
+            ++$pagesRead;
+            $offset += self::PAGE_SIZE;
+
+            foreach ($page as $row) {
+                $artist = $row['artist_name'] ?? null;
+                if (is_string($artist) && str_starts_with($artist, $this->prefix)) {
+                    $mine[] = $row;
+                }
+            }
+
+            // Stop on a complete fixture, or when the table is exhausted.
+            if (count($mine) >= self::FIXTURE_TRACKS || count($page) < self::PAGE_SIZE) {
+                break;
+            }
+        }
+
+        $this->assertCount(
+            self::FIXTURE_TRACKS,
+            $mine,
+            sprintf(
+                'All %d seeded tracks must be reachable by paging getAllTracks() (read %d page(s) of %d)',
+                self::FIXTURE_TRACKS,
+                $pagesRead,
+                self::PAGE_SIZE,
+            ),
+        );
+
+        return $mine;
+    }
+
+    /**
+     * The same paging walk through the HTTP handler, asserting **200** on every
+     * page it is asked for (the seam that actually 500'd).
+     *
+     * @return list<array{0: string, 1: string, 2: int}> [artist, album, track_number]
+     */
+    private function collectFixtureTracksFromEndpoint(WebPortalRouter $router): array
+    {
+        $mine = [];
+        $pagesRead = 0;
+        $offset = 0;
+
+        while ($pagesRead < self::MAX_PAGES) {
+            $request = new Request();
+            $request->method = 'GET';
+            $request->path = '/api/v1/music/tracks';
+            $request->query = ['limit' => (string) self::PAGE_SIZE, 'offset' => (string) $offset];
+
+            $response = $router->getMusicTracks($request, []);
+            ++$pagesRead;
+            $offset += self::PAGE_SIZE;
+
+            $this->assertSame(200, $response->statusCode, 'GET /api/v1/music/tracks must not 500');
+
+            /** @var array<string, mixed> $payload */
+            $payload = (array) json_decode($response->body, true, 512, JSON_THROW_ON_ERROR);
+            $this->assertArrayHasKey('tracks', $payload);
+            $this->assertIsArray($payload['tracks']);
+            $this->assertGreaterThanOrEqual(self::FIXTURE_TRACKS, $payload['total']);
+
+            foreach ($payload['tracks'] as $track) {
+                $this->assertIsArray($track);
+                $artist = $track['artist'] ?? null;
+                if (!is_string($artist) || !str_starts_with($artist, $this->prefix)) {
+                    continue;
+                }
+                $mine[] = [
+                    substr($artist, strlen($this->prefix)),
+                    (string) ($track['album'] ?? ''),
+                    (int) ($track['track_number'] ?? 0),
+                ];
+            }
+
+            if (count($mine) >= self::FIXTURE_TRACKS || count($payload['tracks']) < self::PAGE_SIZE) {
+                break;
+            }
+        }
+
+        $this->assertCount(
+            self::FIXTURE_TRACKS,
+            $mine,
+            sprintf('The endpoint must expose all %d seeded tracks across its pages', self::FIXTURE_TRACKS),
+        );
+
+        return $mine;
     }
 
     private function service(): MusicLibraryService

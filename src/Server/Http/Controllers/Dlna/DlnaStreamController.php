@@ -207,11 +207,17 @@ final class DlnaStreamController
         // this arm exists to avoid. Asserted on the ENCODED BYTES, not on the
         // header array — a header-array assertion cannot see that defect at all.
         //
-        // `headOnly` is set EXPLICITLY here because this route registers HEAD in
-        // its own right (`match(['GET','HEAD'], …)`), so `Router::dispatchAsHead()`
-        // — the only other thing that sets the flag — never runs for it. It is also
-        // the flag the CGI/FPM entrypoint reads to suppress the body, so setting it
-        // keeps both entrypoints in agreement.
+        // `headOnly` is ALSO set by the router — {@see \Phlix\Server\Http\Router::markHeadOnly()}
+        // flags every response `dispatch()` returns for a `HEAD` request, whether the
+        // route was registered for HEAD in its own right (`match(['GET','HEAD'], …)`,
+        // as this one is) or resolved through the GET→HEAD fallback. So this
+        // assignment is REDUNDANT on the live route and is kept deliberately, as
+        // defence in depth: it keeps the HEAD arm correct on its own when the
+        // controller is invoked by anything that is not `Router::dispatch()` — the
+        // unit test calls `handle()` directly, and `Plugin\PluginRouter` accepts HEAD
+        // registrations without flagging them. Assigning `true` twice is a no-op.
+        // The flag is also what the CGI/FPM entrypoint reads to suppress the body, so
+        // setting it keeps both entrypoints in agreement.
         if ($request->method === 'HEAD') {
             $head = (new Response())
                 ->status(200)

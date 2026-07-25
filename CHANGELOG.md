@@ -489,15 +489,40 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   renderers probe a resource with `HEAD` *before* they open it, so the reply meant to
   advertise the size was the one that broke. New `Phlix\Server\Workerman\BodylessResponse`
   narrows `__toString()` to leave a caller-supplied `Content-Length` alone on an empty
-  body (and delegates to Workerman untouched for everything else);
+  body (and delegates to Workerman untouched for everything else). It is reached two
+  different ways, because the two affected routes are dispatched by different code:
   `Response::toWorkermanResponse()` selects it for `HEAD` replies **only** — never for
   a GET that merely came out empty, whose stale length would be a keep-alive framing
-  desync rather than a fix — which fixes `HEAD /dlna/stream/{id}` and the pre-existing
-  twin on `HEAD /media/{id}/stream`. Every other reply, 204/304/redirect/416 included,
-  is byte-identical to before. Pinned by assertions on the **encoded bytes**, with the
-  expected bytes *derived from* Workerman's own encoder so a future dependency bump
-  cannot make the narrowed copy diverge silently — the previous tests inspected the
-  header *array*, which cannot observe this defect at all.
+  desync rather than a fix — which is what fixes `HEAD /dlna/stream/{id}`; the
+  pre-existing twin on `HEAD /media/{id}/stream` is fixed by **naming the class
+  directly** in `HttpHandler::serveMediaStream()`, which runs *before*
+  `Application::dispatch()` and returns Workerman responses, so it never builds a
+  Phlix `Response` and has no `headOnly` flag to select on. Every other reply,
+  204/304/redirect/416 included, is byte-identical to before. Pinned by assertions on
+  the **encoded bytes**, with the expected bytes *derived from* Workerman's own encoder
+  so a future dependency bump cannot make the narrowed copy diverge silently — the
+  previous tests inspected the header *array*, which cannot observe this defect at all.
+
+- **A route registered for `HEAD` in its own right relied on its handler remembering
+  to flag the reply** (S52 post-merge review, finding 1). `Response::$headOnly` is what
+  selects the narrowed encoder above, and it was set **only** by
+  `Router::dispatchAsHead()` — the GET→HEAD *fallback*. A route registered as
+  `match(['GET', 'HEAD'], …)` (which is how the DLNA stream route is registered, so
+  that a file-backed body is not suppressed to `Content-Length: 0`) never reaches that
+  method, so the router set nothing and correctness depended on each controller setting
+  the flag by hand. The one such route today does, but the next one to declare a
+  `Content-Length` on its HEAD arm and forget the flag would have shipped
+  `Content-Length: 123456789` followed by `Content-Length: 0` again with the whole
+  suite green. `Router::dispatch()` now flags **every** response it returns for a
+  `HEAD` request (`markHeadOnly()`, the single writer of the flag in the class: both
+  route maps, both middleware short-circuits, and the fallback), so the framing is a
+  property of the framework rather than a convention. It cannot flag a GET — the method
+  test is the whole body — and it is idempotent, so the DLNA controller keeps its own
+  explicit set as defence in depth for callers that are not `Router::dispatch()`. No
+  live wire bytes change (the only HEAD-registered route already set the flag); pinned
+  by `RouterTest` tests that register a HEAD route which does **not** set the flag and
+  assert on the **encoded bytes** that exactly one `Content-Length` reaches the wire,
+  with a control showing the framework encoder emits two for the same shape.
 
 - **`Router::group()` could leak its middleware onto every later route** if the group
   callback threw. The prefix/middleware restore had no `finally`, and `addRoute()`

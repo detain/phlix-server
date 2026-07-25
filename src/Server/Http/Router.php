@@ -279,6 +279,26 @@ class Router
     /**
      * Dispatches a request to the appropriate route handler.
      *
+     * ## `HEAD` replies are flagged here, not by the handlers
+     *
+     * Every response this method returns for a `HEAD` request passes through
+     * {@see self::markHeadOnly()}, whichever map matched it and however the route
+     * was registered. That is deliberately a *structural* guarantee rather than a
+     * convention each controller has to remember: the flag is what makes
+     * {@see Response::toWorkermanResponse()} render the reply through
+     * {@see \Phlix\Server\Workerman\BodylessResponse} (so a `Content-Length` the
+     * handler set for a bodyless `HEAD` is not followed by Workerman's own
+     * contradictory `Content-Length: 0`, invalid per RFC 9110 §8.6) and it is also
+     * what the CGI/FPM entrypoint reads to suppress the body
+     * ({@see Response::send()}), so setting it keeps both entrypoints in agreement.
+     *
+     * Before this, only {@see self::dispatchAsHead()} — the GET→HEAD *fallback* —
+     * set it, so a route registered for `HEAD` in its own right
+     * (`match(['GET', 'HEAD'], …)`, as the DLNA stream route is) got nothing and
+     * shipped the two-`Content-Length` defect unless its handler happened to set
+     * the flag by hand. Pinned by
+     * `RouterTest::testAHeadRegisteredRouteThatForgetsTheFlagStillPutsOneContentLengthOnTheWire()`.
+     *
      * @param Request $request The request to dispatch
      * @return Response The response from the matched handler
      *
@@ -300,7 +320,7 @@ class Router
 
             $middlewareResponse = $this->runMiddleware($route['middleware'], $request);
             if ($middlewareResponse instanceof Response) {
-                return $middlewareResponse;
+                return $this->markHeadOnly($request, $middlewareResponse);
             }
 
             error_log('[DEBUG] ' . date('Y-m-d H:i:s.v') . ' Router::dispatch static route [method=' . $method .
@@ -310,7 +330,7 @@ class Router
             $durationMs = (hrtime(true) - $startTime) / 1_000_000.0;
             error_log('[DEBUG] ' . date('Y-m-d H:i:s.v') . ' Router::dispatch completed [method=' . $method .
                 '] [path=' . $path . '] [duration=' . round($durationMs, 2) . 'ms]');
-            return $response;
+            return $this->markHeadOnly($request, $response);
         }
 
         if (!isset($this->routes[$method])) {
@@ -337,7 +357,7 @@ class Router
                 // Apply route middleware
                 $middlewareResponse = $this->runMiddleware($route['middleware'], $request);
                 if ($middlewareResponse instanceof Response) {
-                    return $middlewareResponse;
+                    return $this->markHeadOnly($request, $middlewareResponse);
                 }
 
                 // Call the route handler
@@ -348,7 +368,7 @@ class Router
                 $durationMs = (hrtime(true) - $startTime) / 1_000_000.0;
                 error_log('[DEBUG] ' . date('Y-m-d H:i:s.v') . ' Router::dispatch completed [method=' . $method .
                     '] [path=' . $path . '] [duration=' . round($durationMs, 2) . 'ms]');
-                return $response;
+                return $this->markHeadOnly($request, $response);
             }
         }
 
@@ -366,6 +386,11 @@ class Router
     /**
      * Dispatches a HEAD request by finding a matching GET route and
      * invoking its handler with body suppression (RFC 7231).
+     *
+     * Reached only from the two `$method === 'HEAD'` guards in
+     * {@see self::dispatch()}, so {@see self::markHeadOnly()}'s method test is
+     * always satisfied here — it is used rather than a bare assignment so the flag
+     * has exactly ONE writer in this class.
      */
     private function dispatchAsHead(Request $request, string $path): Response
     {
@@ -376,13 +401,10 @@ class Router
 
             $middlewareResponse = $this->runMiddleware($route['middleware'], $request);
             if ($middlewareResponse instanceof Response) {
-                $middlewareResponse->headOnly = true;
-                return $middlewareResponse;
+                return $this->markHeadOnly($request, $middlewareResponse);
             }
 
-            $response = $this->callHandler($route['handler'], $request, []);
-            $response->headOnly = true;
-            return $response;
+            return $this->markHeadOnly($request, $this->callHandler($route['handler'], $request, []));
         }
 
         // May be reached via the static-only GET fallback, where the parametric
@@ -394,17 +416,54 @@ class Router
 
                 $middlewareResponse = $this->runMiddleware($route['middleware'], $request);
                 if ($middlewareResponse instanceof Response) {
-                    $middlewareResponse->headOnly = true;
-                    return $middlewareResponse;
+                    return $this->markHeadOnly($request, $middlewareResponse);
                 }
 
-                $response = $this->callHandler($route['handler'], $request, $params);
-                $response->headOnly = true;
-                return $response;
+                return $this->markHeadOnly($request, $this->callHandler($route['handler'], $request, $params));
             }
         }
 
         return $this->notFound();
+    }
+
+    /**
+     * Flags a response head-only when — and only when — the request was a `HEAD`.
+     *
+     * The single writer of {@see Response::$headOnly} in this class, applied to
+     * every response {@see self::dispatch()} returns from a matched route: both
+     * route maps, both middleware short-circuits, and (via
+     * {@see self::dispatchAsHead()}) the GET→HEAD fallback. A route registered for
+     * `HEAD` in its own right therefore gets the flag from the router instead of
+     * having to remember it, which is what makes the correct single-`Content-Length`
+     * framing a property of the framework rather than of each handler.
+     *
+     * Two invariants this method exists to hold:
+     *
+     *  - **It can never flag a GET.** The `HEAD` test is the whole body; a response
+     *    to any other method is returned untouched. Treating a stale non-zero
+     *    `Content-Length` as authoritative on a GET that came out empty would be a
+     *    keep-alive framing desync rather than a fix — see
+     *    {@see Response::toWorkermanResponse()}.
+     *  - **It is idempotent.** A handler that also sets the flag itself (the DLNA
+     *    stream route does, so it stays correct when invoked by any other
+     *    dispatcher) is unaffected: this only ever assigns `true`.
+     *
+     * 404s are intentionally NOT flagged: `notFound()` builds a JSON body and no
+     * `Content-Length`, so flagging it would change the bytes on the wire for a
+     * `HEAD` to an unregistered path. That body-on-a-HEAD-404 is pre-existing
+     * behaviour on both entrypoints and belongs to its own change.
+     *
+     * @param Request  $request  The dispatched request (only `method` is read).
+     * @param Response $response The response about to be returned.
+     * @return Response The same instance, for use in a `return` expression.
+     */
+    private function markHeadOnly(Request $request, Response $response): Response
+    {
+        if ($request->method === 'HEAD') {
+            $response->headOnly = true;
+        }
+
+        return $response;
     }
 
     /**

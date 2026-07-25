@@ -13,7 +13,7 @@ namespace Phlix\Plugins\Oidc;
 
 use Phlix\Plugins\Contract\LifecycleInterface;
 use Phlix\Plugins\PluginDbSettings;
-use Phlix\Plugins\Repository\PluginSettingsRepository;
+use Phlix\Plugins\Repository\PluginSettingsStore;
 use Phlix\Auth\AuthProviderRegistry;
 use Psr\Container\ContainerInterface;
 
@@ -50,7 +50,7 @@ final class Plugin implements LifecycleInterface
     /** @var int Cache TTL in seconds (60 seconds) */
     private const CACHE_TTL = 60;
 
-    public function __construct(?PluginSettingsRepository $store = null)
+    public function __construct(?PluginSettingsStore $store = null)
     {
         $this->settingsStore = $store;
     }

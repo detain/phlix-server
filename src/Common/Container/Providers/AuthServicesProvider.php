@@ -245,10 +245,21 @@ final class AuthServicesProvider implements ServiceProviderInterface
             // registry from the persisted `auth.github.enabled` flag, and
             // `identities` backs the account-link branch. All three are optional
             // ctor params PHP-DI would skip during autowiring, so bind explicitly.
+            // `plugin` supplies the operator-configured ABSOLUTE redirect_uri
+            // (review r1 Finding 1); without it the flow falls back to deriving the
+            // callback URL from the request Host.
             \Phlix\Plugins\Github\Controller\GithubCallbackController::class => autowire()
                 ->constructorParameter('db', get(\Workerman\MySQL\Connection::class))
                 ->constructorParameter('bootstrapper', get(AuthProviderBootstrapper::class))
-                ->constructorParameter('identities', get(UserIdentityRepository::class)),
+                ->constructorParameter('identities', get(UserIdentityRepository::class))
+                ->constructorParameter('plugin', get(\Phlix\Plugins\Github\Plugin::class)),
+
+            // S48 review r1 Finding 3: `bootstrapper` lets a settings save rebuild
+            // the live provider in this worker instead of leaving it authenticating
+            // with the previous client_secret until a restart. Optional ctor param,
+            // so PHP-DI needs it named explicitly.
+            \Phlix\Plugins\Github\Controller\GithubAdminController::class => autowire()
+                ->constructorParameter('bootstrapper', get(AuthProviderBootstrapper::class)),
 
             // S44: the (previously dead) OIDC authorize/callback controller.
             // `db` is named explicitly so it constructs the DB-backed
@@ -270,7 +281,12 @@ final class AuthServicesProvider implements ServiceProviderInterface
                 // S45: the account-link store the OIDC callback's link branch
                 // writes to. Optional ctor param (PHP-DI skips it during
                 // autowiring), so bind explicitly — without it a link flow 503s.
-                ->constructorParameter('identities', get(UserIdentityRepository::class)),
+                ->constructorParameter('identities', get(UserIdentityRepository::class))
+                // S48 review r1 Finding 1: the OIDC plugin settings supply the
+                // operator-configured ABSOLUTE redirect_uri. A relative one can
+                // never match a registered IdP redirect URI, so without this the
+                // authorize page answers redirect_uri_mismatch.
+                ->constructorParameter('plugin', get(\Phlix\Plugins\Oidc\Plugin::class)),
 
             // S45/S47: the authenticated account-linking endpoints (list, link
             // LDAP, and the S47 DELETE unlink). `bootstrapper` + `userRepository`

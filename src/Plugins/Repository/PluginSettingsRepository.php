@@ -34,7 +34,7 @@ use Workerman\MySQL\Connection;
  * @package Phlix\Plugins\Repository
  * @since 0.102.0
  */
-class PluginSettingsRepository
+class PluginSettingsRepository implements PluginSettingsStore
 {
     public function __construct(private readonly Connection $db)
     {

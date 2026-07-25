@@ -101,6 +101,7 @@ final class OidcPkceTest extends TestCase
         );
 
         $request = new Request();
+        $request->headers['Host'] = 'phlix.test';
         $request->query = ['redirect_uri' => '/cb'];
 
         $response = $controller->authorize($request, []);
@@ -144,6 +145,7 @@ final class OidcPkceTest extends TestCase
         ]));
 
         $request = new Request();
+        $request->headers['Host'] = 'phlix.test';
         $request->query = [
             'code' => 'attacker-code',
             'state' => $stateValue,
@@ -175,6 +177,7 @@ final class OidcPkceTest extends TestCase
         ]));
 
         $request = new Request();
+        $request->headers['Host'] = 'phlix.test';
         $request->query = [
             'code' => 'attacker-code',
             'state' => $stateValue,
@@ -206,6 +209,7 @@ final class OidcPkceTest extends TestCase
         ]));
 
         $request1 = new Request();
+        $request1->headers['Host'] = 'phlix.test';
         $request1->query = ['code' => 'some-code', 'state' => $stateValue];
         // First call consumes the entry (and will likely fail downstream
         // when it tries to actually hit the token endpoint — we don't
@@ -213,6 +217,7 @@ final class OidcPkceTest extends TestCase
         $controller->callback($request1, []);
 
         $request2 = new Request();
+        $request2->headers['Host'] = 'phlix.test';
         $request2->query = ['code' => 'some-code', 'state' => $stateValue];
         $response2 = $controller->callback($request2, []);
 

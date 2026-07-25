@@ -83,10 +83,18 @@ final class GithubOAuthProvider extends AbstractOAuth2Provider implements Provid
 
     /**
      * {@inheritdoc}
+     *
+     * ONLY an authorization `code` is accepted. A caller-supplied `access_token`
+     * is deliberately NOT a credential (review r1 Finding 8): `GET
+     * api.github.com/user` happily accepts a token minted for ANY other OAuth
+     * app, so honouring one would let whoever holds such a token impersonate that
+     * GitHub user — an OAuth token-substitution hole. The token this provider uses
+     * is only ever the one IT exchanged the code for, inside
+     * {@see authenticateWithCode()}.
      */
     public function supportsAuthentication(array $credentials): bool
     {
-        return isset($credentials['code']) || isset($credentials['access_token']);
+        return isset($credentials['code']);
     }
 
     /**
@@ -96,11 +104,6 @@ final class GithubOAuthProvider extends AbstractOAuth2Provider implements Provid
     {
         if (isset($credentials['code'])) {
             return $this->authenticateWithCode($credentials);
-        }
-
-        if (isset($credentials['access_token'])) {
-            $token = is_string($credentials['access_token']) ? $credentials['access_token'] : '';
-            return $this->fetchProfile($token);
         }
 
         return new AuthResult(success: false, error: 'no_supported_credentials');
@@ -135,6 +138,10 @@ final class GithubOAuthProvider extends AbstractOAuth2Provider implements Provid
 
     /**
      * Fetch the GitHub profile with the access token and map it to an AuthResult.
+     *
+     * Callback-internal ONLY: the token must be one this provider just exchanged
+     * a code for (see {@see supportsAuthentication()} on why a caller-supplied
+     * token is never accepted).
      */
     private function fetchProfile(string $accessToken): AuthResult
     {

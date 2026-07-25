@@ -34,9 +34,33 @@ final class GithubOAuthProviderTest extends TestCase
         $provider = $this->makeProvider(new FakeOAuth2HttpClient());
 
         $this->assertTrue($provider->supportsAuthentication(['code' => 'abc']));
-        $this->assertTrue($provider->supportsAuthentication(['access_token' => 'tok']));
         $this->assertFalse($provider->supportsAuthentication([]));
         $this->assertFalse($provider->supportsAuthentication(['nope' => 'x']));
+    }
+
+    /**
+     * Review r1 Finding 8 — a caller-supplied `access_token` must NOT be a
+     * credential. `GET api.github.com/user` accepts a token minted for ANY other
+     * OAuth app, so honouring one would be a token-substitution impersonation
+     * hole. No profile request may even be attempted.
+     */
+    public function test_raw_access_token_is_not_an_accepted_credential(): void
+    {
+        $http = new FakeOAuth2HttpClient();
+        $http->queue('GET', GithubOAuthProvider::USER_API_URL, 200, (string) json_encode([
+            'id' => 1,
+            'login' => 'victim',
+        ]));
+
+        $provider = $this->makeProvider($http);
+
+        $this->assertFalse($provider->supportsAuthentication(['access_token' => 'gho_stolen']));
+
+        $result = $provider->authenticate(['access_token' => 'gho_stolen']);
+
+        $this->assertTrue($result->isFailure());
+        $this->assertSame('no_supported_credentials', $result->error);
+        $this->assertSame([], $http->requests, 'no GitHub API call may be made for a supplied token');
     }
 
     public function test_build_authorization_url_carries_pkce_and_state(): void

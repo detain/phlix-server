@@ -11,10 +11,12 @@ declare(strict_types=1);
 
 namespace Phlix\Plugins\Oidc\Controller;
 
+use Phlix\Plugins\OAuth2\CallbackUrl;
 use Phlix\Plugins\Oidc\DbOidcStateStore;
 use Phlix\Plugins\Oidc\InMemoryOidcStateStore;
 use Phlix\Plugins\Oidc\OidcProvider;
 use Phlix\Plugins\Oidc\OidcStateStore;
+use Phlix\Plugins\Oidc\Plugin as OidcPlugin;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
 use Phlix\Server\Http\Controllers\AuthController;
@@ -63,6 +65,19 @@ final class OidcCallbackController
     private ?UserIdentityRepository $identities;
 
     /**
+     * S48 review r1 Finding 1 — settings source for the operator-configured
+     * ABSOLUTE `redirect_uri` ({@see resolveCallbackUrl()}). Optional so existing
+     * direct-construction call sites keep working; production DI binds it.
+     */
+    private ?OidcPlugin $plugin;
+
+    /** This server's OIDC callback path (the tail of the absolute redirect_uri). */
+    private const string CALLBACK_PATH = '/auth/oidc/callback';
+
+    /** The state-context key holding the authorize-time absolute redirect_uri. */
+    private const string CALLBACK_URL_KEY = 'callback_url';
+
+    /**
      * S45: the state-context `intent` marker for an account-link authorize flow.
      * When the consumed state carries this intent the callback links the verified
      * external identity to `link_user_id` instead of minting a login session.
@@ -97,12 +112,14 @@ final class OidcCallbackController
         ?Connection $db = null,
         ?AuthProviderBootstrapper $bootstrapper = null,
         ?UserIdentityRepository $identities = null,
+        ?OidcPlugin $plugin = null,
     ) {
         $this->registry = $registry;
         $this->userRepository = $userRepository;
         $this->jwtHandler = $jwtHandler;
         $this->bootstrapper = $bootstrapper;
         $this->identities = $identities;
+        $this->plugin = $plugin;
 
         if ($stateStore !== null) {
             $this->stateStore = $stateStore;
@@ -239,6 +256,19 @@ final class OidcCallbackController
             ]);
         }
 
+        // S48 review r1 Finding 1 (HIGH) — every IdP matches `redirect_uri`
+        // against a REGISTERED ABSOLUTE redirect URI, so a path-only value can
+        // never match and the flow dies at the authorize page. Resolve an
+        // absolute URL and bind it into the state so the token exchange replays
+        // the identical value.
+        $callbackUrl = $this->resolveCallbackUrl($request);
+        if ($callbackUrl === null) {
+            return (new Response())->status(503)->json([
+                'error' => 'callback_url_not_configured',
+                'message' => 'Set an absolute redirect_uri in the OIDC provider settings',
+            ]);
+        }
+
         // RFC 7636 PKCE — generate a per-request code_verifier (S256).
         $codeVerifier = OidcProvider::generateCodeVerifier();
         $codeChallenge = OidcProvider::computeCodeChallenge($codeVerifier);
@@ -257,10 +287,13 @@ final class OidcCallbackController
         ];
         $stateValue = base64_encode((string) json_encode($stateData));
 
-        $this->stateStore->put($stateId, $codeVerifier, $nonce, $linkContext);
+        $context = $linkContext ?? [];
+        $context[self::CALLBACK_URL_KEY] = $callbackUrl;
+
+        $this->stateStore->put($stateId, $codeVerifier, $nonce, $context);
 
         $authorizationUrl = $provider->buildAuthorizationUrl(
-            $this->getCallbackUrl(),
+            $callbackUrl,
             $stateValue,
             $nonce,
             $codeChallenge,
@@ -370,6 +403,21 @@ final class OidcCallbackController
         $context = isset($stored['context']) && is_array($stored['context']) ? $stored['context'] : [];
         $isLinkFlow = ($context['intent'] ?? null) === self::LINK_INTENT;
 
+        // S48 review r1 Finding 1 — replay the EXACT absolute redirect_uri the
+        // authorize step sent (the IdP rejects the exchange when they differ);
+        // re-resolving only matters for a state row issued before this field
+        // existed.
+        $callbackUrl = is_string($context[self::CALLBACK_URL_KEY] ?? null)
+            && $context[self::CALLBACK_URL_KEY] !== ''
+                ? $context[self::CALLBACK_URL_KEY]
+                : $this->resolveCallbackUrl($request);
+        if ($callbackUrl === null) {
+            return (new Response())->status(503)->json([
+                'error' => 'callback_url_not_configured',
+                'message' => 'Set an absolute redirect_uri in the OIDC provider settings',
+            ]);
+        }
+
         // Finding 3 (MEDIUM) — request-path self-heal (see authorize()): register
         // an enabled+configured provider that this worker missed at boot, or drop
         // a stale registration when the flag is now off, before the check below.
@@ -390,7 +438,7 @@ final class OidcCallbackController
 
             $result = $provider->authenticate([
                 'code' => $code,
-                'redirect_uri' => $this->getCallbackUrl(),
+                'redirect_uri' => $callbackUrl,
                 'nonce' => $expectedNonce,
                 'code_verifier' => $codeVerifier,
             ]);
@@ -623,13 +671,29 @@ final class OidcCallbackController
     }
 
     /**
-     * Get the callback URL for this server.
+     * The ABSOLUTE OIDC callback URL to advertise as `redirect_uri`, or null when
+     * neither the operator setting nor the request yields one.
      *
-     * @return string
+     * S48 review r1 Finding 1 (HIGH): this used to return the relative
+     * `/auth/oidc/callback`, which no IdP can match against its registered
+     * redirect URI — the S44 flow could not complete against a real provider.
+     * Precedence: the operator-configured `redirect_uri` OIDC plugin setting,
+     * else the request's own scheme+Host. See {@see CallbackUrl}.
      */
-    private function getCallbackUrl(): string
+    private function resolveCallbackUrl(Request $request): ?string
     {
-        return '/auth/oidc/callback';
+        $configured = '';
+        if ($this->plugin !== null) {
+            $settings = $this->plugin->getSettings();
+            $configured = is_string($settings['redirect_uri'] ?? null) ? $settings['redirect_uri'] : '';
+        }
+
+        return CallbackUrl::resolve(
+            $configured,
+            $request->getHeader('Host'),
+            $request->getHeader('X-Forwarded-Proto'),
+            self::CALLBACK_PATH,
+        );
     }
 
     /**

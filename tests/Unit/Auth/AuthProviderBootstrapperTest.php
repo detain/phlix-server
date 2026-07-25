@@ -506,6 +506,117 @@ final class AuthProviderBootstrapperTest extends TestCase
         $this->assertFalse($registry->hasProvider('github'));
     }
 
+    // -----------------------------------------------------------------------
+    // S48 review r1, Finding 3 — a settings save must reach the LIVE provider.
+    // -----------------------------------------------------------------------
+
+    /**
+     * refresh() drops and rebuilds the registration in THIS worker, so the worker
+     * that handled an admin save stops authenticating with the stale credentials
+     * immediately (registerProvider()'s hasProvider() fast-path would otherwise
+     * keep the old instance until a restart).
+     */
+    public function test_refresh_rebuilds_the_live_provider_from_current_settings(): void
+    {
+        $store = new InMemoryPluginSettingsRepository();
+        $store->save(GithubPlugin::PLUGIN_NAME, ['client_id' => 'cid', 'client_secret' => 'old-secret']);
+        $plugin = new GithubPlugin($store);
+
+        $registry = new AuthProviderRegistry();
+        $boot = new AuthProviderBootstrapper(
+            $this->makeSettingsRepo(['github' => true]),
+            $registry,
+            new OidcPlugin(),
+            new LdapPlugin(),
+            $plugin,
+        );
+
+        $boot->registerEnabledProviders();
+        $first = $registry->getProvider('github');
+        $this->assertInstanceOf(\Phlix\Plugins\Github\GithubOAuthProvider::class, $first);
+
+        // The operator fixes a mistyped secret.
+        $store->save(GithubPlugin::PLUGIN_NAME, ['client_id' => 'cid', 'client_secret' => 'new-secret']);
+
+        $this->assertTrue($boot->refresh('github'));
+        $second = $registry->getProvider('github');
+        $this->assertInstanceOf(\Phlix\Plugins\Github\GithubOAuthProvider::class, $second);
+        $this->assertNotSame($first, $second, 'refresh() must rebuild, not reuse, the provider instance');
+    }
+
+    public function test_refresh_rejects_an_unknown_provider(): void
+    {
+        $boot = new AuthProviderBootstrapper(
+            $this->makeSettingsRepo(['saml' => true]),
+            new AuthProviderRegistry(),
+            new OidcPlugin(),
+            new LdapPlugin(),
+        );
+
+        $this->assertFalse($boot->refresh('saml'));
+    }
+
+    public function test_refresh_drops_the_provider_when_the_flag_is_off(): void
+    {
+        $store = new InMemoryPluginSettingsRepository();
+        $store->save(GithubPlugin::PLUGIN_NAME, ['client_id' => 'cid', 'client_secret' => 'sec']);
+
+        $registry = new AuthProviderRegistry();
+        $registry->registerProvider(
+            new \Phlix\Plugins\Github\GithubOAuthProvider('cid', 'sec', 'read:user'),
+        );
+
+        $boot = new AuthProviderBootstrapper(
+            $this->makeSettingsRepo(['github' => false]),
+            $registry,
+            new OidcPlugin(),
+            new LdapPlugin(),
+            new GithubPlugin($store),
+        );
+
+        $this->assertFalse($boot->refresh('github'));
+        $this->assertFalse($registry->hasProvider('github'));
+    }
+
+    /**
+     * THE cross-worker half of Finding 3: a worker that did NOT handle the save
+     * still picks the change up, because ensureProviderRegistered() compares the
+     * persisted settings fingerprint with the one it built from and rebuilds when
+     * it differs. No restart, no admin call on that worker.
+     */
+    public function test_other_worker_rebuilds_when_persisted_settings_changed(): void
+    {
+        $store = new InMemoryPluginSettingsRepository();
+        $store->save(GithubPlugin::PLUGIN_NAME, ['client_id' => 'cid', 'client_secret' => 'old-secret']);
+
+        $registry = new AuthProviderRegistry();
+        $boot = new AuthProviderBootstrapper(
+            $this->makeSettingsRepo(['github' => true]),
+            $registry,
+            new OidcPlugin(),
+            new LdapPlugin(),
+            new GithubPlugin($store),
+        );
+
+        // This "worker" registered from the OLD row.
+        $this->assertTrue($boot->ensureProviderRegistered('github'));
+        $stale = $registry->getProvider('github');
+
+        // A repeat request with unchanged settings must NOT churn the registry.
+        $this->assertTrue($boot->ensureProviderRegistered('github'));
+        $this->assertSame($stale, $registry->getProvider('github'));
+
+        // Another worker saves a corrected secret straight into the shared store.
+        $store->save(GithubPlugin::PLUGIN_NAME, ['client_id' => 'cid', 'client_secret' => 'new-secret']);
+
+        $this->assertTrue($boot->ensureProviderRegistered('github'));
+        $this->assertNotSame(
+            $stale,
+            $registry->getProvider('github'),
+            'a changed settings fingerprint must rebuild the provider on every worker',
+        );
+    }
+
     /**
      * The S44 race-guard must still hold when the provider settings come from the
      * DB store (the getSettings()-yields path activated by S48): a concurrent

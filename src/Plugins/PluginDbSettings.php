@@ -12,6 +12,7 @@ declare(strict_types=1);
 namespace Phlix\Plugins;
 
 use Phlix\Plugins\Repository\PluginSettingsRepository;
+use Phlix\Plugins\Repository\PluginSettingsStore;
 
 /**
  * DB-backed settings behaviour shared by the bundled auth-provider plugins
@@ -46,7 +47,7 @@ trait PluginDbSettings
     /**
      * DB-backed settings store, or null to fall back to the legacy file store.
      */
-    protected ?PluginSettingsRepository $settingsStore = null;
+    protected ?PluginSettingsStore $settingsStore = null;
 
     /**
      * The `plugin_settings.plugin_name` key this plugin persists under.

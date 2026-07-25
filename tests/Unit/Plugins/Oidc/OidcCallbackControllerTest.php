@@ -65,6 +65,7 @@ final class OidcCallbackControllerTest extends TestCase
         $controller = new OidcCallbackController($registry, $userRepository, $jwtHandler);
 
         $request = new Request();
+        $request->headers['Host'] = 'phlix.test';
         $request->query = [];
 
         $response = $controller->authorize($request, []);
@@ -83,6 +84,7 @@ final class OidcCallbackControllerTest extends TestCase
         $controller = new OidcCallbackController($registry, $userRepository, $jwtHandler);
 
         $request = new Request();
+        $request->headers['Host'] = 'phlix.test';
         // Relative, same-origin target so it passes the redirect allowlist and
         // the request reaches the provider-registration check this test asserts.
         $request->query = ['redirect_uri' => '/callback'];
@@ -118,6 +120,7 @@ final class OidcCallbackControllerTest extends TestCase
         $controller = new OidcCallbackController($registry, $userRepository, $jwtHandler);
 
         $request = new Request();
+        $request->headers['Host'] = 'phlix.test';
         $request->query = ['redirect_uri' => '/callback'];
 
         $response = $controller->authorize($request, []);
@@ -125,6 +128,159 @@ final class OidcCallbackControllerTest extends TestCase
         $this->assertSame(302, $response->statusCode);
         $this->assertArrayHasKey('Location', $response->headers);
         $this->assertStringContainsString('https://example.com/authorize', $response->headers['Location']);
+    }
+
+    /**
+     * S48 review r1 Finding 1 (HIGH) — the outbound `redirect_uri` must be an
+     * ABSOLUTE URL. The S44 flow sent the relative `/auth/oidc/callback`, which no
+     * IdP can match against its registered redirect URI, so the authorize page
+     * answered `redirect_uri_mismatch` and the browser never came back. This test
+     * fails if anyone reverts to a path-only callback.
+     */
+    public function test_authorize_sends_an_absolute_redirect_uri(): void
+    {
+        $registry = $this->makeRegistryWithCachedDiscovery();
+        $controller = new OidcCallbackController(
+            $registry,
+            $this->createMock(UserRepository::class),
+            $this->createMock(JwtHandler::class),
+        );
+
+        $request = new Request();
+        $request->headers['Host'] = 'phlix.test';
+        $request->query = ['redirect_uri' => '/app'];
+
+        $response = $controller->authorize($request, []);
+
+        $this->assertSame(302, $response->statusCode);
+        $params = [];
+        parse_str((string) parse_url($response->headers['Location'] ?? '', PHP_URL_QUERY), $params);
+        $redirectUri = is_string($params['redirect_uri'] ?? null) ? $params['redirect_uri'] : '';
+
+        $this->assertTrue(
+            \Phlix\Plugins\OAuth2\CallbackUrl::isAbsolute($redirectUri),
+            'the authorize redirect_uri must be absolute, not a path',
+        );
+        $this->assertSame('https://phlix.test/auth/oidc/callback', $redirectUri);
+    }
+
+    /**
+     * The authorize-time redirect_uri is captured server-side so the token
+     * exchange replays the IDENTICAL value (the IdP rejects a mismatch).
+     */
+    public function test_authorize_binds_the_callback_url_into_the_server_side_state(): void
+    {
+        $registry = $this->makeRegistryWithCachedDiscovery();
+        $stateStore = new InMemoryOidcStateStore();
+        $controller = new OidcCallbackController(
+            $registry,
+            $this->createMock(UserRepository::class),
+            $this->createMock(JwtHandler::class),
+            $stateStore,
+        );
+
+        $request = new Request();
+        $request->headers['Host'] = 'phlix.test';
+        $request->query = ['redirect_uri' => '/app'];
+
+        $response = $controller->authorize($request, []);
+
+        $params = [];
+        parse_str((string) parse_url($response->headers['Location'] ?? '', PHP_URL_QUERY), $params);
+        $clientState = is_string($params['state'] ?? null) ? $params['state'] : '';
+        /** @var array<string, mixed> $decoded */
+        $decoded = json_decode((string) base64_decode($clientState, true), true);
+        $sid = is_string($decoded['sid'] ?? null) ? $decoded['sid'] : '';
+
+        $stored = $stateStore->consume($sid);
+        $this->assertIsArray($stored);
+        $this->assertSame(
+            is_string($params['redirect_uri'] ?? null) ? $params['redirect_uri'] : '',
+            $stored['context']['callback_url'] ?? null,
+        );
+    }
+
+    /**
+     * An operator-configured absolute redirect_uri (the OIDC plugin setting) wins
+     * over the request-derived one.
+     */
+    public function test_configured_absolute_redirect_uri_is_used(): void
+    {
+        $store = new \Phlix\Tests\Unit\Plugins\Github\InMemoryPluginSettingsRepository();
+        $store->save('oidc', [
+            'provider_url' => 'https://example.com',
+            'client_id' => 'client-id',
+            'redirect_uri' => 'https://sso.example.org/auth/oidc/callback',
+        ]);
+
+        $controller = new OidcCallbackController(
+            $this->makeRegistryWithCachedDiscovery(),
+            $this->createMock(UserRepository::class),
+            $this->createMock(JwtHandler::class),
+            new InMemoryOidcStateStore(),
+            null,
+            null,
+            null,
+            new \Phlix\Plugins\Oidc\Plugin($store),
+        );
+
+        $request = new Request();
+        $request->headers['Host'] = 'phlix.test';
+        $request->query = ['redirect_uri' => '/app'];
+
+        $response = $controller->authorize($request, []);
+
+        $params = [];
+        parse_str((string) parse_url($response->headers['Location'] ?? '', PHP_URL_QUERY), $params);
+        $this->assertSame('https://sso.example.org/auth/oidc/callback', $params['redirect_uri'] ?? null);
+    }
+
+    /**
+     * With neither a configured redirect_uri nor a Host header no absolute
+     * callback can be built — answer 503 instead of sending a value the IdP is
+     * guaranteed to reject.
+     */
+    public function test_authorize_503_when_callback_url_cannot_be_resolved(): void
+    {
+        $controller = new OidcCallbackController(
+            $this->makeRegistryWithCachedDiscovery(),
+            $this->createMock(UserRepository::class),
+            $this->createMock(JwtHandler::class),
+        );
+
+        $request = new Request(); // no Host
+        $request->query = ['redirect_uri' => '/app'];
+
+        $response = $controller->authorize($request, []);
+
+        $this->assertSame(503, $response->statusCode);
+        /** @var array<string, mixed> $body */
+        $body = json_decode($response->body, true);
+        $this->assertSame('callback_url_not_configured', $body['error'] ?? null);
+    }
+
+    /**
+     * A registry holding an OidcProvider whose discovery document is already
+     * cached on disk (so authorize() performs no network I/O).
+     */
+    private function makeRegistryWithCachedDiscovery(): AuthProviderRegistry
+    {
+        $registry = new AuthProviderRegistry();
+        $discovery = new DiscoveryDocument('https://example.com', $this->cacheDir);
+        $cachedData = [
+            'issuer' => 'https://example.com',
+            'authorization_endpoint' => 'https://example.com/authorize',
+            'token_endpoint' => 'https://example.com/token',
+            'jwks_uri' => 'https://example.com/jwks',
+            '_cached_at' => time(),
+        ];
+        file_put_contents(
+            $this->cacheDir . '/discovery_' . md5('https://example.com') . '.json',
+            (string) json_encode($cachedData),
+        );
+        $registry->registerProvider(new OidcProvider($discovery, 'client-id', 'client-secret'));
+
+        return $registry;
     }
 
     public function test_callback_without_code_returns_error(): void
@@ -135,6 +291,7 @@ final class OidcCallbackControllerTest extends TestCase
         $controller = new OidcCallbackController($registry, $userRepository, $jwtHandler);
 
         $request = new Request();
+        $request->headers['Host'] = 'phlix.test';
         $request->query = [];
 
         $response = $controller->callback($request, []);
@@ -153,6 +310,7 @@ final class OidcCallbackControllerTest extends TestCase
         $controller = new OidcCallbackController($registry, $userRepository, $jwtHandler);
 
         $request = new Request();
+        $request->headers['Host'] = 'phlix.test';
         $request->query = ['code' => 'some-code'];
 
         $response = $controller->callback($request, []);
@@ -171,6 +329,7 @@ final class OidcCallbackControllerTest extends TestCase
         $controller = new OidcCallbackController($registry, $userRepository, $jwtHandler);
 
         $request = new Request();
+        $request->headers['Host'] = 'phlix.test';
         $request->query = [
             'code' => 'some-code',
             'state' => 'invalid-state-that-is-not-base64',
@@ -192,6 +351,7 @@ final class OidcCallbackControllerTest extends TestCase
         $controller = new OidcCallbackController($registry, $userRepository, $jwtHandler);
 
         $request = new Request();
+        $request->headers['Host'] = 'phlix.test';
         $request->query = [
             'error' => 'access_denied',
             'error_description' => 'The user denied the request',
@@ -235,6 +395,7 @@ final class OidcCallbackControllerTest extends TestCase
         $state = base64_encode($stateData);
 
         $request = new Request();
+        $request->headers['Host'] = 'phlix.test';
         $request->query = [
             'code' => 'some-code',
             'state' => $state,
@@ -283,6 +444,7 @@ final class OidcCallbackControllerTest extends TestCase
         $controller = new OidcCallbackController($registry, $userRepository, $jwtHandler);
 
         $request = new Request();
+        $request->headers['Host'] = 'phlix.test';
         $request->query = ['redirect_uri' => $redirectUri];
 
         $response = $controller->authorize($request, []);
@@ -321,6 +483,7 @@ final class OidcCallbackControllerTest extends TestCase
         ], JSON_THROW_ON_ERROR));
 
         $request = new Request();
+        $request->headers['Host'] = 'phlix.test';
         $request->query = ['code' => 'auth-code', 'state' => $state];
 
         $response = $controller->callback($request, []);
@@ -386,6 +549,7 @@ final class OidcCallbackControllerTest extends TestCase
         ], JSON_THROW_ON_ERROR));
 
         $request = new Request();
+        $request->headers['Host'] = 'phlix.test';
         $request->query = ['code' => 'auth-code', 'state' => $state];
 
         $response = $controller->callback($request, []);
@@ -456,6 +620,7 @@ final class OidcCallbackControllerTest extends TestCase
         $this->assertFalse($registry->hasProvider('oidc'));
 
         $request = new Request();
+        $request->headers['Host'] = 'phlix.test';
         $request->query = ['redirect_uri' => '/app'];
 
         $response = $controller->authorize($request, []);
@@ -497,6 +662,7 @@ final class OidcCallbackControllerTest extends TestCase
         );
 
         $request = new Request();
+        $request->headers['Host'] = 'phlix.test';
         $request->query = ['redirect_uri' => '/app'];
 
         $response = $controller->authorize($request, []);
@@ -521,6 +687,7 @@ final class OidcCallbackControllerTest extends TestCase
         );
 
         $request = new Request();
+        $request->headers['Host'] = 'phlix.test';
         $request->query = ['redirect_uri' => '/app/settings'];
         // No userId → unauthenticated.
 
@@ -552,6 +719,7 @@ final class OidcCallbackControllerTest extends TestCase
         );
 
         $request = new Request();
+        $request->headers['Host'] = 'phlix.test';
         $request->userId = 'link-user-42';
         $request->query = ['redirect_uri' => '/app/settings/account'];
 
@@ -637,6 +805,7 @@ final class OidcCallbackControllerTest extends TestCase
         ], JSON_THROW_ON_ERROR));
 
         $request = new Request();
+        $request->headers['Host'] = 'phlix.test';
         $request->query = ['code' => 'auth-code', 'state' => $state];
 
         $response = $controller->callback($request, []);
@@ -694,6 +863,7 @@ final class OidcCallbackControllerTest extends TestCase
         ], JSON_THROW_ON_ERROR));
 
         $request = new Request();
+        $request->headers['Host'] = 'phlix.test';
         $request->query = [
             'code' => 'auth-code',
             'state' => $state,
@@ -750,6 +920,7 @@ final class OidcCallbackControllerTest extends TestCase
         ], JSON_THROW_ON_ERROR));
 
         $request = new Request();
+        $request->headers['Host'] = 'phlix.test';
         $request->query = ['code' => 'auth-code', 'state' => $state];
 
         $response = $controller->callback($request, []);
@@ -801,6 +972,7 @@ final class OidcCallbackControllerTest extends TestCase
         ], JSON_THROW_ON_ERROR));
 
         $request = new Request();
+        $request->headers['Host'] = 'phlix.test';
         $request->query = ['code' => 'auth-code', 'state' => $state];
 
         $response = $controller->callback($request, []);
@@ -859,6 +1031,7 @@ final class OidcCallbackControllerTest extends TestCase
         ], JSON_THROW_ON_ERROR));
 
         $request = new Request();
+        $request->headers['Host'] = 'phlix.test';
         $request->query = ['code' => 'auth-code', 'state' => $state];
 
         $response = $controller->callback($request, []);
@@ -935,6 +1108,7 @@ final class OidcCallbackControllerTest extends TestCase
         ], JSON_THROW_ON_ERROR));
 
         $request = new Request();
+        $request->headers['Host'] = 'phlix.test';
         $request->query = [
             'code' => 'auth-code',
             'state' => $state,
@@ -1008,6 +1182,7 @@ final class OidcCallbackControllerTest extends TestCase
         ], JSON_THROW_ON_ERROR));
 
         $request = new Request();
+        $request->headers['Host'] = 'phlix.test';
         $request->query = ['code' => 'auth-code', 'state' => $state];
 
         $response = $controller->callback($request, []);

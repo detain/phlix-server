@@ -96,6 +96,18 @@ class AuthProviderBootstrapper
     }
 
     /**
+     * Per-worker record of the settings fingerprint each registered provider was
+     * BUILT from, so {@see self::registerProvider()} can notice a settings change
+     * made by another worker and rebuild (S48 review r1, Finding 3).
+     *
+     * Bounded by {@see self::TOGGLEABLE} (three entries) — not request state, so
+     * it cannot grow in resident memory.
+     *
+     * @var array<string, string>
+     */
+    private array $builtFrom = [];
+
+    /**
      * Dotted server-settings key holding a provider's boolean enable flag.
      *
      * @param string $provider One of {@see self::TOGGLEABLE}.
@@ -184,6 +196,7 @@ class AuthProviderBootstrapper
         if ($this->registry->hasProvider($provider)) {
             $this->registry->unregisterProvider($provider);
         }
+        unset($this->builtFrom[$provider]);
 
         return false;
     }
@@ -209,17 +222,57 @@ class AuthProviderBootstrapper
     {
         $this->settings->set(self::flagKey($provider), false, 'bool');
         $this->registry->unregisterProvider($provider);
+        unset($this->builtFrom[$provider]);
     }
 
     /**
-     * Register the given provider if configured and not already present.
+     * Drop and rebuild a provider's live registration in THIS worker so a just-saved
+     * settings change takes effect immediately (S48 review r1, Finding 3).
+     *
+     * The admin settings endpoints call this after a successful write. Without it
+     * {@see self::registerProvider()}'s `hasProvider()` fast-path would keep the
+     * provider built from the OLD credentials until a restart — an operator fixing
+     * a mistyped `client_secret` would see logins keep failing on this worker.
+     *
+     * The OTHER workers do not need this call: they pick the change up on their
+     * next request-path {@see self::ensureProviderRegistered()}, which compares the
+     * persisted settings fingerprint with the one they built from.
+     *
+     * @param string $provider One of {@see self::TOGGLEABLE}.
+     * @return bool True when the provider is live in this worker afterwards.
+     */
+    public function refresh(string $provider): bool
+    {
+        if (!$this->isToggleable($provider)) {
+            return false;
+        }
+
+        $this->registry->unregisterProvider($provider);
+        unset($this->builtFrom[$provider]);
+
+        return $this->ensureProviderRegistered($provider);
+    }
+
+    /**
+     * Register the given provider if configured, rebuilding it when the persisted
+     * settings changed since this worker built the live instance.
      *
      * @return bool True when the provider is now (or was already) registered.
      */
     private function registerProvider(string $provider): bool
     {
+        // Finding 3 — a settings save on ANOTHER worker is invisible to this one,
+        // and the hasProvider() fast-path below would keep serving the stale
+        // instance forever. Comparing the persisted settings fingerprint makes the
+        // DB authoritative: identical fingerprint → cheap no-op; changed → rebuild.
+        $fingerprint = $this->settingsFingerprint($provider);
+
         if ($this->registry->hasProvider($provider)) {
-            return true;
+            if (($this->builtFrom[$provider] ?? null) === $fingerprint) {
+                return true;
+            }
+            $this->registry->unregisterProvider($provider);
+            unset($this->builtFrom[$provider]);
         }
 
         $instance = $this->buildProvider($provider);
@@ -248,7 +301,33 @@ class AuthProviderBootstrapper
             // provider is now live, so treat the duplicate throw as benign.
         }
 
+        $this->builtFrom[$provider] = $fingerprint;
+
         return true;
+    }
+
+    /**
+     * A stable fingerprint of a provider's PERSISTED settings, used to detect a
+     * config change made by another worker (Finding 3).
+     *
+     * Content-hashed rather than timestamped, so a no-op save does not churn the
+     * registry (and an OIDC rebuild does not needlessly drop the cached
+     * discovery/JWKS). Returns '' when the provider has no settings source, which
+     * simply disables the check (the pre-review behaviour).
+     */
+    private function settingsFingerprint(string $provider): string
+    {
+        $plugin = match ($provider) {
+            self::OIDC => $this->oidcPlugin,
+            self::LDAP => $this->ldapPlugin,
+            self::GITHUB => $this->githubPlugin,
+            default => null,
+        };
+        if ($plugin === null) {
+            return '';
+        }
+
+        return hash('sha256', (string) json_encode($plugin->getSettings()));
     }
 
     /**

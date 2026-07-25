@@ -105,6 +105,12 @@ final class DbOAuth2StateStore implements OAuth2StateStore
     /**
      * Fetch the entry and delete it atomically within a transaction.
      *
+     * The SELECT takes a `FOR UPDATE` row lock (review r1, Finding 11): without it
+     * two concurrent callbacks carrying the same state could BOTH read the row
+     * before either DELETE landed, and the "one-shot" replay guarantee would be
+     * advisory only. With the lock the second reader blocks until the first
+     * transaction commits and then sees no row.
+     *
      * @return array{code_verifier: string, context?: array<string, mixed>}|null
      */
     private function fetchAndDelete(string $state): ?array
@@ -112,7 +118,9 @@ final class DbOAuth2StateStore implements OAuth2StateStore
         $this->db->beginTrans();
         try {
             $result = $this->db->query(
-                "SELECT data FROM oauth_state_store WHERE provider = ? AND state_value = ? AND expires_at > NOW()",
+                "SELECT data FROM oauth_state_store
+                 WHERE provider = ? AND state_value = ? AND expires_at > NOW()
+                 FOR UPDATE",
                 [$this->provider, $state],
             );
 

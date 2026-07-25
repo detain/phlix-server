@@ -13,7 +13,7 @@ namespace Phlix\Plugins\Ldap;
 
 use Phlix\Plugins\Contract\LifecycleInterface;
 use Phlix\Plugins\PluginDbSettings;
-use Phlix\Plugins\Repository\PluginSettingsRepository;
+use Phlix\Plugins\Repository\PluginSettingsStore;
 use Phlix\Auth\AuthProviderRegistry;
 use Psr\Container\ContainerInterface;
 
@@ -36,7 +36,7 @@ final class Plugin implements LifecycleInterface
 
     private static ?string $pluginDirectory = null;
 
-    public function __construct(?PluginSettingsRepository $store = null)
+    public function __construct(?PluginSettingsStore $store = null)
     {
         $this->settingsStore = $store;
     }

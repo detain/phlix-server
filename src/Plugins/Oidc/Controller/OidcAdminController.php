@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Plugins\Oidc\Controller;
 
+use Phlix\Plugins\OAuth2\CallbackUrl;
 use Phlix\Plugins\Oidc\Plugin;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
@@ -49,6 +50,9 @@ final class OidcAdminController
             'provider_url' => $settings['provider_url'] ?? '',
             'client_id' => $settings['client_id'] ?? '',
             'scopes' => $settings['scopes'] ?? 'openid profile email',
+            // S48 review r1 Finding 1 — the ABSOLUTE callback URL registered with
+            // the IdP. Empty = derive it from the request's scheme + Host.
+            'redirect_uri' => $settings['redirect_uri'] ?? '',
             'configured' => isset($settings['provider_url']) && isset($settings['client_id']),
         ]);
     }
@@ -90,17 +94,41 @@ final class OidcAdminController
             ]);
         }
 
+        $existingSettings = $this->plugin->getSettings();
+
+        // S48 review r1 Finding 1 — optional operator-configured ABSOLUTE
+        // redirect_uri. It must exactly match a redirect URI registered with the
+        // IdP, so a relative path is refused outright rather than silently
+        // producing a `redirect_uri_mismatch` at the authorize page.
+        //
+        // A save is a wholesale replace, so an ABSENT key PRESERVES the stored
+        // value (a client that predates this field must not wipe it); an
+        // explicitly EMPTY value clears it back to host-derivation.
+        $redirectUri = is_string($existingSettings['redirect_uri'] ?? null)
+            ? $existingSettings['redirect_uri']
+            : '';
+        if (array_key_exists('redirect_uri', $body)) {
+            $redirectUri = is_string($body['redirect_uri']) ? trim($body['redirect_uri']) : '';
+        }
+        if ($redirectUri !== '' && !CallbackUrl::isAbsolute($redirectUri)) {
+            return (new Response())->status(400)->json([
+                'error' => 'invalid_redirect_uri',
+                'message' => 'redirect_uri must be an absolute http(s) URL, '
+                    . 'e.g. https://phlix.example/auth/oidc/callback',
+            ]);
+        }
+
         $settings = [
             'provider_url' => rtrim($providerUrl, '/'),
             'client_id' => $clientId,
             'scopes' => $scopes,
+            'redirect_uri' => $redirectUri,
         ];
 
         if ($clientSecret !== '') {
             $settings['client_secret'] = $clientSecret;
         }
 
-        $existingSettings = $this->plugin->getSettings();
         if (isset($existingSettings['client_secret']) && $clientSecret === '') {
             $settings['client_secret'] = $existingSettings['client_secret'];
         }
@@ -146,6 +174,13 @@ final class OidcAdminController
                     'type' => 'string',
                     'description' => 'OAuth scopes to request',
                     'default' => 'openid profile email',
+                ],
+                'redirect_uri' => [
+                    'type' => 'string',
+                    'description' => 'Absolute callback URL registered with the IdP '
+                        . '(e.g. https://phlix.example/auth/oidc/callback). '
+                        . 'Leave empty to derive it from the request host.',
+                    'format' => 'uri',
                 ],
             ],
             'required' => ['provider_url', 'client_id'],

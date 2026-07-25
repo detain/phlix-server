@@ -35,11 +35,50 @@ use function str_starts_with;
  * the hub proxy carries JSON/browse traffic only. Binary media streaming over
  * the tunnel is a later phase.
  *
+ * The DLNA surface is HARD-DENIED before dispatch — see
+ * {@see self::RELAY_DENIED_PREFIXES} for why the IP allowlist cannot be trusted
+ * on this transport.
+ *
  * @package Phlix\Hub
  * @since 0.10.0
  */
 final class RelayRequestDispatcher
 {
+    /**
+     * Path prefixes that must NEVER be reachable over the relay tunnel.
+     *
+     * This is the whole DLNA/UPnP surface `Application::loadCdsRoutes()` registers:
+     * `/dlna/description.xml`, `/dlna/content_directory`, `/dlna/stream/{id}`,
+     * `/cds/control` and `/scpd/{service}.xml`.
+     *
+     * ## Why a hard deny here rather than trust in the allowlist
+     *
+     * Those routes carry NO credentials at all — DLNA has no concept of a user —
+     * so their only gate is {@see \Phlix\Server\Http\Middleware\DlnaAllowlistMiddleware},
+     * whose shipped default is "loopback + RFC1918/ULA/link-local only". But
+     * {@see RelayConsumer} stamps `RELAY_REMOTE_IP = '127.0.0.1'` on every frame it
+     * dispatches (a relayed request has no meaningful TCP peer), and loopback is on
+     * that LAN list. A request arriving from anywhere on the internet through the
+     * tunnel would therefore be handed the LAN policy and admitted with no token:
+     * an unauthenticated whole-library read.
+     *
+     * Nothing exploits that today only because phlix-hub's
+     * `ServerProxyController::BROWSE_SCOPE_ALLOWLIST` happens to list no `/dlna`
+     * prefix — a cross-repo, cross-process invariant that this repository's test
+     * suite cannot see. Widening the hub allowlist, or adding a second tunnel
+     * producer, would silently reopen it. The deny is therefore asserted HERE, on
+     * the server side, where the bytes actually live: a DLNA renderer is by
+     * definition on the local network and never arrives via the relay, so nothing
+     * legitimate is lost.
+     *
+     * @var list<string>
+     */
+    private const RELAY_DENIED_PREFIXES = [
+        '/dlna/',
+        '/cds/',
+        '/scpd/',
+    ];
+
     /**
      * @param Application        $application The route-registered (un-booted) app router.
      * @param ContainerInterface $container   Container used to resolve {@see WebPortalRouter} lazily.
@@ -61,6 +100,12 @@ final class RelayRequestDispatcher
      */
     public function dispatch(Request $request): Response
     {
+        if (self::isRelayDenied($request->path)) {
+            // Indistinguishable from "no such route", so the tunnel cannot even be
+            // used to learn whether DLNA is switched on.
+            return (new Response())->status(404)->text('Not found');
+        }
+
         $response = $this->application->dispatch($request);
 
         if ($response->statusCode === 404 && str_starts_with($request->path, '/api/')) {
@@ -71,5 +116,31 @@ final class RelayRequestDispatcher
         }
 
         return $response;
+    }
+
+    /**
+     * Whether `$path` is part of the authless DLNA surface.
+     *
+     * Matched on {@see Request::$path}, which is never URL-decoded
+     * ({@see Request::fromWorkermanRequest()} takes Workerman's `path()`, i.e.
+     * `parse_url()`'s output), so an encoded variant cannot decode past this test
+     * into a path the router would then match. The bare `/dlna` form is included
+     * because the prefix test alone would miss it.
+     *
+     * @param string $path Request path, query string already removed.
+     */
+    private static function isRelayDenied(string $path): bool
+    {
+        if ($path === '/dlna' || $path === '/description.xml') {
+            return true;
+        }
+
+        foreach (self::RELAY_DENIED_PREFIXES as $prefix) {
+            if (str_starts_with($path, $prefix)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 }

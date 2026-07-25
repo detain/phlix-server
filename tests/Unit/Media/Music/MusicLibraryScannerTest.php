@@ -1078,6 +1078,20 @@ final class MusicLibraryScannerTest extends TestCase
         $this->assertSame(1, $result->added);
         $this->assertSame(1, $logger->countMessages('Skipping album after error during indexing'));
 
+        // S96(f) — THE `$handled` ACCOUNTING, which only this shape can pin. The outer
+        // catch fires with some files already accounted for (file 1 added, file 2
+        // charged by the per-track catch), so it must charge the REMAINDER, 2, and not
+        // `count($files)` = 4. Total: 1 added + 3 failed = 4 files read, no silent
+        // remainder and no double count.
+        $this->assertSame(
+            3,
+            $result->failed,
+            'the outer catch must charge only the files the track loop never reached (2 here) on top of '
+            . 'the one the per-track catch already charged — 4 would be a double count, 1 would mean the '
+            . 'abandoned remainder is not counted at all',
+        );
+        $this->assertSame($result->scanned, $result->added + $result->updated + $result->failed);
+
         // THE POINT: the column was still recomputed, and it matches the rows.
         $this->assertNotSame(
             [],
@@ -1844,6 +1858,16 @@ final class MusicLibraryScannerTest extends TestCase
         $this->assertContains($healed, $db->mediaItemIds('artist'), 'and the media_items row really exists');
         $this->assertSame([], $db->orphanedMusicMediaItems(), 'nothing was left unreferenced');
         $this->assertSame(1, $logger->countMessages('Backfilled a NULL media_item_id on a music row'));
+
+        // The UPDATE must carry `AND media_item_id IS NULL`. Not cosmetic: the column is
+        // UNIQUE (migration 065), so clobbering an id a concurrent writer had already
+        // stored would leave two rows pointing at one media_item and fail some later
+        // INSERT — losing a whole album. The guard also makes the backfill idempotent.
+        $this->assertSame(
+            1,
+            $db->countStatements('UPDATE music_artists SET media_item_id = ? WHERE id = ? AND media_item_id IS NULL'),
+            'the backfill UPDATE must be guarded on media_item_id IS NULL',
+        );
     }
 
     /**

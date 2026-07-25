@@ -612,6 +612,305 @@ final class MusicLibraryScannerTest extends TestCase
         // countAudioFiles applies the exact same skip filter the scan uses.
         $this->assertSame(1, $scanner->countAudioFiles($dir), 'sample.mp3 must be skipped via the setting');
     }
+
+    // -- S95: incremental flush ------------------------------------------------
+
+    /**
+     * Builds `$albums` directories under one root, each holding `$tracks` audio
+     * files, and returns `[rootDir, totalFiles]`.
+     *
+     * One album per directory, and no directory holds a subdirectory, so
+     * `RecursiveIteratorIterator` yields each album's files consecutively — which
+     * makes the flush cadence below exactly predictable.
+     *
+     * @return array{0: string, 1: int}
+     */
+    private function buildAlbumTree(int $albums, int $tracks): array
+    {
+        $root = $this->tempDir();
+
+        for ($a = 0; $a < $albums; $a++) {
+            $albumDir = $root . sprintf('/album-%04d', $a);
+            mkdir($albumDir, 0777, true);
+            $this->cleanup[] = $albumDir;
+            for ($t = 1; $t <= $tracks; $t++) {
+                $this->touchFile($albumDir, sprintf('%03d-track.mp3', $t));
+            }
+        }
+
+        return [$root, $albums * $tracks];
+    }
+
+    /**
+     * A scanner whose tag reader is replaced by a pure function of the path, so a
+     * large synthetic tree costs no getID3 or ffprobe work at all.
+     *
+     * Default tagging: one album per directory, with its own artist.
+     */
+    private function taggedScanner(Connection $db, ?\Closure $tagger = null): TaggedScanner
+    {
+        $scanner = new TaggedScanner($db, $this->createMock(FfmpegRunner::class));
+        $scanner->tagger = $tagger ?? static function (string $path): array {
+            $albumDir = basename(dirname($path));
+            return [
+                'artist' => 'Artist ' . $albumDir,
+                'album' => 'Album ' . $albumDir,
+                'title' => basename($path, '.mp3'),
+                'track_number' => (int) substr(basename($path), 0, 3),
+                'disc_number' => 1,
+                'duration_secs' => 200,
+                'year' => 2001,
+                'genre' => 'Rock',
+            ];
+        };
+
+        return $scanner;
+    }
+
+    /**
+     * THE regression guard. Before S95 the scanner tag-probed the ENTIRE tree into
+     * one in-memory map and only then began writing, so the very first row landed
+     * after the last file had been read — measured on production as 4 h 09 m of
+     * zero durable work on a 61,135-file library, and four consecutive rescans
+     * that were killed mid-walk therefore persisted nothing at all.
+     *
+     * With one album per directory and two tracks each, the 33rd album opens at
+     * file 65, which pushes the open-album window over MAX_OPEN_ALBUMS (32) and
+     * evicts — and writes — the least-recently-touched album. So the first INSERT
+     * must land at file 65 of 200, not at file 200.
+     *
+     * Reverting the fix leaves $firstInsertTick at NULL for all 200 ticks (the old
+     * code issues its first statement only after the walk generator is exhausted),
+     * which fails the first assertion outright.
+     */
+    public function testFirstRowIsWrittenLongBeforeTheWalkEnds(): void
+    {
+        [$dir, $total] = $this->buildAlbumTree(100, 2);
+        $this->assertSame(200, $total);
+
+        $db = new CountingConnection();
+        $scanner = $this->taggedScanner($db);
+
+        $tick = 0;
+        $firstInsertTick = null;
+        $db->onStatement = static function (string $sql) use (&$tick, &$firstInsertTick): void {
+            if ($firstInsertTick === null && str_starts_with($sql, 'INSERT')) {
+                $firstInsertTick = $tick;
+            }
+        };
+
+        $scanner->scanDirectory($dir, static function (int $processed) use (&$tick): void {
+            $tick = $processed;
+        }, 'lib-s95');
+
+        $this->assertNotNull(
+            $firstInsertTick,
+            'Rows must be written DURING the walk. NULL here is exactly the pre-S95 behaviour: '
+            . 'nothing at all is persisted until the whole tree has been tag-probed.',
+        );
+        $this->assertLessThan($total, $firstInsertTick, 'the first write must precede the last file');
+        $this->assertSame(
+            65,
+            $firstInsertTick,
+            'the 33rd album (file 65) is what overflows the 32-album window and triggers the first flush',
+        );
+
+        // And the walk keeps writing: 100 albums minus the 32 still buffered when
+        // the walk ends = 68 albums flushed mid-walk.
+        $this->assertSame(100, $db->inserts['music_artists'] ?? 0);
+        $this->assertSame(100, $db->inserts['music_albums'] ?? 0);
+        $this->assertSame(200, $db->inserts['music_tracks'] ?? 0);
+    }
+
+    /**
+     * Memory must not scale with the size of the tree.
+     *
+     * The pre-S95 map retained one `['file' => SplFileInfo, 'meta' => [...]]` entry
+     * per audio file for the whole walk. Measured on this build that entry costs
+     * ~1,334 bytes, so a 6,000-file tree held ≈ 8 MB (and the user's 60,085-file
+     * path ≈ 80 MB). The bounded window retains at most
+     * MAX_OPEN_ALBUMS (32) × 20 tracks = 640 entries ≈ 0.9 MB here, no matter how
+     * many files follow.
+     */
+    public function testMemoryStaysBoundedAcrossALargeTree(): void
+    {
+        [$dir, $total] = $this->buildAlbumTree(300, 20);
+        $this->assertSame(6000, $total);
+
+        $db = new CountingConnection();
+        $scanner = $this->taggedScanner($db);
+
+        gc_collect_cycles();
+        $baseline = memory_get_usage();
+        $peak = 0;
+
+        $scanner->scanDirectory($dir, static function (int $processed, int $t) use ($baseline, &$peak): void {
+            if ($processed % 250 !== 0 && $processed !== $t) {
+                return;
+            }
+            $peak = max($peak, memory_get_usage() - $baseline);
+        }, 'lib-s95');
+
+        $this->assertLessThan(
+            3 * 1024 * 1024,
+            $peak,
+            sprintf(
+                'Walk-time memory must stay bounded; peaked at %d bytes over %d files. '
+                . 'The pre-S95 whole-tree map would hold ~%d bytes here.',
+                $peak,
+                $total,
+                $total * 1334,
+            ),
+        );
+
+        // Sanity: it really did index the whole tree while staying flat.
+        $this->assertSame(300, $db->inserts['music_albums'] ?? 0);
+        $this->assertSame(6000, $db->inserts['music_tracks'] ?? 0);
+    }
+
+    /**
+     * The album-across-directories case, which is why the flush key is the album's
+     * TAG identity and not its directory.
+     *
+     * `Album/CD1` and `Album/CD2` carry the same artist+album tags. A
+     * directory-triggered flush would have written this as two separate batches;
+     * the tag-keyed window keeps it as ONE album (the two directories are adjacent
+     * in walk order, so the album never leaves the window).
+     */
+    public function testAlbumSplitAcrossTwoDirectoriesIsWrittenAsOneAlbum(): void
+    {
+        $root = $this->tempDir();
+        foreach (['CD1', 'CD2'] as $cd) {
+            $discDir = $root . '/' . $cd;
+            mkdir($discDir, 0777, true);
+            $this->cleanup[] = $discDir;
+            $this->touchFile($discDir, '01-a.mp3');
+            $this->touchFile($discDir, '02-b.mp3');
+        }
+
+        $db = $this->statefulDbMock($mediaItemInserts, $trackInserts);
+        $scanner = $this->taggedScanner($db, static fn(string $path): array => [
+            'artist' => 'One Artist',
+            'album' => 'One Album',
+            'title' => basename($path, '.mp3'),
+            'track_number' => (int) substr(basename($path), 0, 2),
+            'disc_number' => str_contains($path, 'CD2') ? 2 : 1,
+            'duration_secs' => 100,
+            'year' => 1999,
+            'genre' => null,
+        ]);
+
+        $result = $scanner->scanDirectory($root, null, 'lib-1');
+
+        $this->assertSame(4, $result->added);
+        $this->assertCount(
+            1,
+            array_filter($mediaItemInserts, static fn(array $p): bool => ($p[2] ?? null) === 'album'),
+            'an album spread over two directories must still be ONE album row',
+        );
+        $this->assertCount(
+            1,
+            array_filter($mediaItemInserts, static fn(array $p): bool => ($p[2] ?? null) === 'artist'),
+        );
+        $this->assertCount(4, $trackInserts, 'all four tracks belong to that one album');
+    }
+
+    /**
+     * The mirror-image case: one directory holding several albums (a singles or
+     * mixed folder). A window of exactly one album — the naive reading of "flush
+     * when the album changes" — would thrash here; the 32-album window keeps all
+     * three open and writes three distinct albums.
+     */
+    public function testMultipleAlbumsInOneDirectoryBecomeSeparateAlbums(): void
+    {
+        $dir = $this->tempDir();
+        // Interleaved on purpose: A, B, C, A, B, C.
+        foreach ([['A', 1], ['B', 1], ['C', 1], ['A', 2], ['B', 2], ['C', 2]] as [$album, $n]) {
+            $this->touchFile($dir, sprintf('%s-%02d.mp3', $album, $n));
+        }
+
+        $db = $this->statefulDbMock($mediaItemInserts, $trackInserts);
+        $scanner = $this->taggedScanner($db, static function (string $path): array {
+            $letter = substr(basename($path), 0, 1);
+            return [
+                'artist' => 'Artist ' . $letter,
+                'album' => 'Album ' . $letter,
+                'title' => basename($path, '.mp3'),
+                'track_number' => (int) substr(basename($path), 2, 2),
+                'disc_number' => 1,
+                'duration_secs' => 100,
+                'year' => 2000,
+                'genre' => null,
+            ];
+        });
+
+        $result = $scanner->scanDirectory($dir, null, 'lib-1');
+
+        $this->assertSame(6, $result->added);
+        $this->assertCount(
+            3,
+            array_filter($mediaItemInserts, static fn(array $p): bool => ($p[2] ?? null) === 'album'),
+            'three album tags in one directory must produce three album rows',
+        );
+        $this->assertCount(6, $trackInserts);
+    }
+
+    /**
+     * The pathological single album: one directory tagged as ONE album but holding
+     * more files than any album ever would. The tag-keyed window cannot bound that
+     * on its own (the album never leaves the window), so MAX_TRACKS_PER_FLUSH (250)
+     * chunks it — and because the album upsert is find-or-create, the two chunks
+     * still converge on a single album row.
+     */
+    public function testAnOverlongAlbumIsChunkedButStillProducesOneAlbumRow(): void
+    {
+        $dir = $this->tempDir();
+        for ($i = 1; $i <= 260; $i++) {
+            $this->touchFile($dir, sprintf('%03d-t.mp3', $i));
+        }
+
+        $db = $this->statefulDbMock($mediaItemInserts, $trackInserts);
+        $scanner = $this->taggedScanner($db, static fn(string $path): array => [
+            'artist' => 'Bulk Artist',
+            'album' => 'Bulk Album',
+            'title' => basename($path, '.mp3'),
+            'track_number' => (int) substr(basename($path), 0, 3),
+            'disc_number' => 1,
+            'duration_secs' => 100,
+            'year' => 2000,
+            'genre' => null,
+        ]);
+
+        $result = $scanner->scanDirectory($dir, null, 'lib-1');
+
+        $this->assertSame(260, $result->added, 'every track lands even though the album was flushed twice');
+        $this->assertCount(
+            1,
+            array_filter($mediaItemInserts, static fn(array $p): bool => ($p[2] ?? null) === 'album'),
+            'a chunked album must NOT produce a second album row',
+        );
+        $this->assertCount(260, $trackInserts);
+    }
+
+    /**
+     * `ScanResult::scanned` now counts audio FILES, matching the property's own
+     * documented meaning and `countAudioFiles()`. It used to count album groups,
+     * which is no longer well defined (one album can be flushed in several
+     * batches).
+     */
+    public function testScannedCountsAudioFilesNotAlbumGroups(): void
+    {
+        [$dir, $total] = $this->buildAlbumTree(4, 3);
+
+        $db = new CountingConnection();
+        $scanner = $this->taggedScanner($db);
+
+        $result = $scanner->scanDirectory($dir, null, 'lib-1');
+
+        $this->assertSame(12, $total);
+        $this->assertSame($total, $result->scanned);
+        $this->assertSame(12, $result->added);
+    }
 }
 
 /**
@@ -650,6 +949,98 @@ final class TestableMusicScanner extends MusicLibraryScanner
     public function probeViaGetId3Public(string $path): ?array
     {
         return $this->probeViaGetId3($path);
+    }
+}
+
+/**
+ * A scanner whose tag reader is replaced by a pure function of the file path.
+ *
+ * Overriding {@see MusicLibraryScanner::probeViaGetId3()} short-circuits
+ * `probeMetadata()` before getID3 or ffprobe is ever touched, which is what makes
+ * a 6,000-file synthetic tree cheap enough to assert memory behaviour on.
+ */
+final class TaggedScanner extends MusicLibraryScanner
+{
+    /** @var \Closure(string): array<string, mixed> Path → canonical metadata. */
+    public \Closure $tagger;
+
+    /**
+     * @param string $path Absolute filesystem path.
+     * @return array<string, mixed>|null
+     */
+    protected function probeViaGetId3(string $path): ?array
+    {
+        return ($this->tagger)($path);
+    }
+}
+
+/**
+ * A zero-overhead {@see Connection} stand-in that COUNTS statements instead of
+ * recording them.
+ *
+ * Deliberately not a PHPUnit mock: `createMock()` retains every invocation (and
+ * its arguments) for later verification, which on a 6,000-file walk is tens of
+ * thousands of retained arrays — enough to swamp the very memory measurement
+ * {@see MusicLibraryScannerTest::testMemoryStaysBoundedAcrossALargeTree()} makes.
+ * The parent constructor is bypassed so nothing connects to a database.
+ *
+ * @phpstan-ignore-next-line
+ */
+final class CountingConnection extends Connection
+{
+    /** @var array<string, int> INSERT counts, keyed by target table. */
+    public array $inserts = [];
+
+    /** @var int Number of UPDATE statements issued. */
+    public int $updates = 0;
+
+    /** @var \Closure(string): void|null Observer called with each statement's SQL. */
+    public ?\Closure $onStatement = null;
+
+    /** @var int Fake AUTO_INCREMENT counter. */
+    private int $autoInc = 0;
+
+    /** Intentionally does not call the parent constructor (which would connect). */
+    public function __construct()
+    {
+    }
+
+    /**
+     * @param string $query SQL statement.
+     * @param array<int, mixed>|null $params Bound parameters.
+     * @param int $fetchmode PDO fetch mode (unused).
+     * @return array<int, mixed>|int|string Rows for SELECT, else an affected-row stand-in.
+     */
+    public function query($query = '', $params = null, $fetchmode = \PDO::FETCH_ASSOC)
+    {
+        unset($params, $fetchmode);
+
+        $sql = ltrim((string) $query);
+
+        if ($this->onStatement !== null) {
+            ($this->onStatement)($sql);
+        }
+
+        if (str_starts_with($sql, 'SELECT')) {
+            return [];
+        }
+
+        if (str_starts_with($sql, 'INSERT')) {
+            if (preg_match('/^INSERT INTO (\w+)/', $sql, $m) === 1) {
+                $this->inserts[$m[1]] = ($this->inserts[$m[1]] ?? 0) + 1;
+            }
+            $this->autoInc++;
+            return 1;
+        }
+
+        $this->updates++;
+        return 1;
+    }
+
+    /** @return string */
+    public function lastInsertId()
+    {
+        return (string) $this->autoInc;
     }
 }
 

@@ -38,6 +38,17 @@ use Workerman\MySQL\Connection;
  * percentage onto the job row instead of leaving the UI frozen. Use
  * {@see self::countAudioFiles()} to pre-compute the denominator.
  *
+ * **Incremental flush (S95).** The scan used to be two-phase: tag-probe EVERY
+ * audio file under the path into one in-memory map, and only then run the upsert
+ * loop. That meant no row at all was written until the whole walk finished — ~3
+ * hours on a 60k-file library — so every scan that was interrupted by a worker
+ * restart lost 100% of its work and the library stayed permanently empty while
+ * the progress bar looked healthy (the percentage came from the *walk*, not from
+ * any write). {@see self::scanDirectory()} now buffers only a bounded window of
+ * albums and flushes each one as soon as it is complete, so rows land
+ * continuously and an interrupted scan keeps everything already written. See
+ * {@see self::MAX_OPEN_ALBUMS} for the flush trigger and its trade-offs.
+ *
  * @author Phlix Development Team
  * @version 1.1.0
  * @description Scans directories for audio files and builds Artist→Album→Track hierarchy
@@ -50,6 +61,66 @@ class MusicLibraryScanner
 {
     /** Supported audio file extensions */
     private const AUDIO_EXTENSIONS = ['mp3', 'flac', 'm4a', 'ogg', 'wav'];
+
+    /**
+     * How many albums may be accumulating tracks at the same time.
+     *
+     * THE FLUSH TRIGGER. An album is buffered under its *tag* identity
+     * (`artist|album`), never under its directory, and is written out when it
+     * falls out of this least-recently-touched window (or when the walk ends, or
+     * when it exceeds {@see self::MAX_TRACKS_PER_FLUSH}).
+     *
+     * Why not "flush when the directory changes": one album is routinely spread
+     * over several directories (`Album/CD1`, `Album/CD2`; a compilation filed per
+     * artist), and a directory-triggered flush would write it as two separate
+     * batches. Why not "flush when the album tag changes" (window of 1): a single
+     * directory routinely holds several albums (singles/mixed folders, a "Various
+     * Artists" record where every track carries a different `artist` tag), and a
+     * window of 1 would thrash — and if the walk interleaves albums, "wait for the
+     * tag to change" degenerates into buffering the whole tree again.
+     *
+     * A window of 32 keeps every realistic multi-disc / mixed-folder case in one
+     * flush (`RecursiveIteratorIterator` visits sibling directories consecutively,
+     * so `CD1` and `CD2` are adjacent in walk order) while still bounding memory.
+     *
+     * ACCEPTED FAILURE MODE: if one album's files are separated in walk order by
+     * more than 32 *other* albums, it is evicted and later re-opened, so it is
+     * written in two or more batches. That is not a duplicate and not data loss —
+     * {@see self::upsertArtist()} and {@see self::upsertAlbum()} are find-or-create
+     * on their natural keys and {@see self::upsertTrack()} is find-or-create on
+     * `(media_items.path, library_id)`. The cost is a few extra round-trips, and
+     * `music_albums.total_tracks` is recomputed from `music_tracks` on every flush
+     * ({@see self::refreshAlbumTrackTotal()}) so the final count is still exact.
+     */
+    private const MAX_OPEN_ALBUMS = 32;
+
+    /**
+     * How many tracks a single album may buffer before it is flushed early.
+     *
+     * The album-keyed window above cannot bound memory on its own: one album that
+     * legitimately holds every file in the tree (a single flat directory with one
+     * album tag) would stay open for the whole walk. This cap turns that case into
+     * a series of partial flushes of the SAME album — correct, because the album
+     * upsert is find-or-create and `total_tracks` is recomputed from the table.
+     *
+     * 250 is far above any real album, so ordinary albums are never chunked.
+     */
+    private const MAX_TRACKS_PER_FLUSH = 250;
+
+    /**
+     * Ceiling on the per-scan artist find-or-create cache
+     * ({@see self::upsertArtist()}).
+     *
+     * Now that flushes are spread across the whole walk these caches live for the
+     * entire scan, so they need a bound of their own: a library whose files carry
+     * no album tag produces one distinct artist/album key per FILE, which would
+     * otherwise reintroduce the unbounded growth this step removed. Eviction is
+     * always safe — a miss just costs one `SELECT`.
+     */
+    private const MAX_ARTIST_CACHE = 512;
+
+    /** Ceiling on the per-scan album find-or-create cache ({@see self::upsertAlbum()}). */
+    private const MAX_ALBUM_CACHE = 512;
 
     /** @var StructuredLogger Logger instance */
     private StructuredLogger $logger;
@@ -174,15 +245,43 @@ class MusicLibraryScanner
      * and upserts the data into music_artists, music_albums, and music_tracks tables
      * with corresponding media_items entries.
      *
+     * **Writes are incremental (S95).** Files are grouped by their `artist|album`
+     * tag identity into a bounded window of at most {@see self::MAX_OPEN_ALBUMS}
+     * albums; each album is upserted the moment it leaves that window, so rows
+     * start appearing within the first few hundred files instead of only after the
+     * whole tree has been tag-probed. Consequences that matter:
+     *
+     *  - **Interrupting the scan keeps every row already flushed.** Nothing is
+     *    wrapped in an outer transaction (deliberately — see below), so each
+     *    album's inserts are already committed when the worker dies.
+     *  - **A re-scan resumes.** Artists/albums are find-or-create on their natural
+     *    keys and tracks are find-or-create on `(media_items.path, library_id)`, so
+     *    a second pass adds only what is missing and re-adds nothing.
+     *  - **Memory is flat**, not proportional to the tree: at most
+     *    `MAX_OPEN_ALBUMS × MAX_TRACKS_PER_FLUSH` buffered files at any instant.
+     *
+     * **No transactions, on purpose.** Per-album transactions would buy nothing
+     * here (each album is a handful of autocommitted statements and partial
+     * durability is exactly what makes an interrupted scan resumable) while risking
+     * a nested `START TRANSACTION` inside a caller that already opened one — a
+     * failure mode this codebase has already hit in production.
+     *
      * @param string        $path       Root path to scan
      * @param callable|null $onProgress Optional `(int $processed, int $total, string $currentPath): void`
      *                                  sink, ticked once per audio file during the tag-reading pass.
+     *                                  Still exactly one tick per file, so the scan
+     *                                  worker's write throttle is unaffected.
      * @param string|null   $libraryId  Owning library UUID. Stamped onto every
      *                                  `media_items` row this scan creates and
      *                                  carried on the {@see MediaItemAdded} event.
      *                                  NULL only for the legacy manual-path scan
      *                                  endpoint (no library context).
-     * @return ScanResult Summary of the scan operation
+     * @return ScanResult Summary of the scan operation. `scanned` counts audio
+     *                    FILES read (matching {@see ScanResult}'s documented
+     *                    "total number of files scanned" and
+     *                    {@see self::countAudioFiles()}); it previously counted
+     *                    album groups, which is no longer even well defined now
+     *                    that one album can be flushed in several batches.
      *
      * @example
      * ```php
@@ -207,92 +306,99 @@ class MusicLibraryScanner
 
         $this->logger->info('Starting music directory scan', ['path' => $path]);
 
-        // Group files by (artist, album) to count tracks and process efficiently.
-        // Progress is ticked here, during the tag-reading pass (the slow part).
+        // Progress denominator. Only paid for when a sink is wired.
         $total = $onProgress !== null ? $this->countAudioFiles($path) : 0;
-        $albumMap = $this->groupFilesByAlbum($path, $total, $onProgress);
 
-        // Track artist/album IDs to handle the hierarchy
+        // Track artist/album IDs to handle the hierarchy. Bounded (see the
+        // MAX_*_CACHE constants) because they now live for the whole walk.
         /** @var array<string, array{id:int, media_item_id:string|null}> $artistCache */
         $artistCache = [];
         /** @var array<string, array{id:int, media_item_id:string|null}> $albumCache */
         $albumCache = [];
 
-        foreach ($albumMap as $albumKey => $albumData) {
-            unset($albumKey);
+        /**
+         * Albums currently accumulating tracks, keyed by `md5(artist|album)`.
+         *
+         * @var array<string, array{artist:string, album:string, year:?int,
+         *     files:list<array{file:SplFileInfo, meta:array<string, mixed>}>}> $open
+         */
+        $open = [];
 
-            // Defensive: a single malformed album/track must not abort the whole
-            // scan. The DB layer throws on error (it does not return false), so
-            // without this an unexpected row kills the entire library index.
-            try {
-                $result->scanned++;
+        /**
+         * Eviction order for $open: the SAME keys, in least-recently-touched
+         * order. Kept separate from $open on purpose — re-inserting a key to move
+         * it to the end of a PHP array is how the LRU order is maintained, and
+         * doing that on $open itself would leave a second reference alive and turn
+         * every subsequent `files[] =` append into a copy-on-write deep copy of
+         * the buffered album (O(n²) per album).
+         *
+         * @var array<string, true> $recency
+         */
+        $recency = [];
 
-                $artistName = $albumData['artist'];
-                $albumTitle = $albumData['album'];
-                $year = $albumData['year'];
-                $files = $albumData['files'];
+        $processed = 0;
 
-                // Early exit: skip if no valid artist name
-                if ($artistName === '' || $artistName === 'Unknown Artist') {
-                    $this->logger->debug('Skipping album with unknown artist', ['album' => $albumTitle]);
-                    continue;
-                }
+        foreach ($this->audioFileIterator($path) as $file) {
+            $processed++;
+            $result->scanned++;
+            if ($onProgress !== null) {
+                $onProgress($processed, $total, $file->getPathname());
+            }
 
-                // Upsert artist and get media_item_id
-                $artistResult = $this->upsertArtist($artistName, $artistCache, $libraryId);
-                if ($artistResult === null) {
-                    $this->logger->warning('Failed to upsert artist', ['artist' => $artistName]);
-                    continue;
-                }
+            // Read metadata from file (getID3 first, ffprobe fallback). This is
+            // the slow part of the walk, and the only place tags are read: the
+            // flush below reuses what we cache alongside the file here.
+            $metadata = $this->probeMetadata($file->getPathname());
 
-                $artistId = $artistResult['id'];
-                $artistMediaItemId = $artistResult['media_item_id'];
+            $extension = strtolower($file->getExtension());
 
-                // Count total tracks for this album
-                $totalTracks = count($files);
+            // Determine artist and album from tags
+            $artist = is_string($metadata['artist']) ? $metadata['artist'] : 'Unknown Artist';
+            $album = is_string($metadata['album']) ? $metadata['album'] : $file->getBasename('.' . $extension);
+            $year = is_numeric($metadata['year']) ? (int)$metadata['year'] : null;
 
-                // Upsert album
-                $albumResult = $this->upsertAlbum(
-                    $artistId,
-                    $artistMediaItemId,
-                    $albumTitle,
-                    $year,
-                    $totalTracks,
-                    $albumCache,
-                    $libraryId
-                );
-                if ($albumResult === null) {
-                    $this->logger->warning('Failed to upsert album', ['album' => $albumTitle]);
-                    continue;
-                }
+            // Group on the album's TAG identity, not its directory — that is what
+            // keeps a multi-directory album in one flush.
+            $key = md5($artist . '|' . $album);
 
-                $albumId = $albumResult['id'];
-                $albumMediaItemId = $albumResult['media_item_id'];
+            if (!isset($open[$key])) {
+                $open[$key] = [
+                    'artist' => $artist,
+                    'album' => $album,
+                    'year' => $year,
+                    'files' => [],
+                ];
+            }
 
-                // Upsert tracks (metadata already read during grouping — no re-probe).
-                foreach ($files as $fileInfo) {
-                    $trackResult = $this->upsertTrack(
-                        $albumId,
-                        $albumMediaItemId,
-                        $artistId,
-                        $fileInfo['file'],
-                        $fileInfo['meta'],
-                        $libraryId
-                    );
-                    if ($trackResult === 'added') {
-                        $result->added++;
-                    } elseif ($trackResult === 'updated') {
-                        $result->updated++;
-                    }
-                }
-            } catch (\Throwable $e) {
-                $this->logger->error('Skipping album after error during indexing', [
-                    'album' => $albumData['album'] ?? '(unknown)',
-                    'artist' => $albumData['artist'] ?? '(unknown)',
-                    'error' => $e->getMessage(),
-                ]);
+            $open[$key]['files'][] = ['file' => $file, 'meta' => $metadata];
+
+            // Touch: least-recently-used goes to the front of $recency.
+            unset($recency[$key]);
+            $recency[$key] = true;
+
+            // Bound 1 — a single album may not buffer without limit.
+            if (count($open[$key]['files']) >= self::MAX_TRACKS_PER_FLUSH) {
+                $this->flushAlbum($open[$key], $artistCache, $albumCache, $libraryId, $result);
+                unset($open[$key], $recency[$key]);
                 continue;
             }
+
+            // Bound 2 — at most MAX_OPEN_ALBUMS albums stay open; the
+            // least-recently-touched one is written out to make room.
+            while (count($open) > self::MAX_OPEN_ALBUMS) {
+                $oldest = array_key_first($recency);
+                if (!is_string($oldest) || !isset($open[$oldest])) {
+                    break;
+                }
+                $this->flushAlbum($open[$oldest], $artistCache, $albumCache, $libraryId, $result);
+                unset($open[$oldest], $recency[$oldest]);
+            }
+        }
+
+        // Terminal flush: whatever the walk left open.
+        foreach (array_keys($open) as $key) {
+            $this->flushAlbum($open[$key], $artistCache, $albumCache, $libraryId, $result);
+            unset($open[$key], $recency[$key]);
         }
 
         $result->durationMs = (int)((hrtime(true) - $startTime) / 1_000_000.0);
@@ -306,6 +412,174 @@ class MusicLibraryScanner
         ]);
 
         return $result;
+    }
+
+    /**
+     * Writes ONE accumulated album to the database: its artist row, its album row,
+     * every buffered track, then the album's authoritative `total_tracks`.
+     *
+     * This is the body that used to run once per entry of a whole-tree map; it now
+     * runs as soon as an album leaves {@see self::scanDirectory()}'s open window,
+     * which is what makes a music scan resumable.
+     *
+     * Defensive by design: a single malformed album or track must not abort the
+     * walk. The DB layer throws on error (it does not return `false`), so without
+     * the catch one unexpected row would kill the rest of the library index — and
+     * with incremental flushing that would now also discard albums the walk has
+     * not reached yet.
+     *
+     * @param array{artist:string, album:string, year:?int,
+     *     files:list<array{file:SplFileInfo, meta:array<string, mixed>}>} $albumData
+     * @param array<string, array{id:int, media_item_id:string|null}> $artistCache
+     * @param array<string, array{id:int, media_item_id:string|null}> $albumCache
+     * @param string|null $libraryId Owning library UUID.
+     * @param ScanResult  $result    Accumulates added/updated counts.
+     * @return void
+     */
+    private function flushAlbum(
+        array $albumData,
+        array &$artistCache,
+        array &$albumCache,
+        ?string $libraryId,
+        ScanResult $result
+    ): void {
+        $artistName = $albumData['artist'];
+        $albumTitle = $albumData['album'];
+
+        try {
+            $year = $albumData['year'];
+            $files = $albumData['files'];
+
+            // Early exit: skip if no valid artist name
+            if ($artistName === '' || $artistName === 'Unknown Artist') {
+                $this->logger->debug('Skipping album with unknown artist', ['album' => $albumTitle]);
+                return;
+            }
+
+            // Sort this batch by track number using the CACHED metadata, so tracks
+            // are inserted in playing order.
+            usort($files, static function (array $a, array $b): int {
+                $trackA = is_numeric($a['meta']['track_number'] ?? null) ? (int)$a['meta']['track_number'] : 0;
+                $trackB = is_numeric($b['meta']['track_number'] ?? null) ? (int)$b['meta']['track_number'] : 0;
+
+                // If track numbers are equal, compare by filename
+                if ($trackA === $trackB) {
+                    return strcmp($a['file']->getFilename(), $b['file']->getFilename());
+                }
+
+                return $trackA - $trackB;
+            });
+
+            // Upsert artist and get media_item_id
+            $artistResult = $this->upsertArtist($artistName, $artistCache, $libraryId);
+            if ($artistResult === null) {
+                $this->logger->warning('Failed to upsert artist', ['artist' => $artistName]);
+                return;
+            }
+
+            $artistId = $artistResult['id'];
+            $artistMediaItemId = $artistResult['media_item_id'];
+
+            // Upsert album
+            $albumResult = $this->upsertAlbum(
+                $artistId,
+                $artistMediaItemId,
+                $albumTitle,
+                $year,
+                $albumCache,
+                $libraryId
+            );
+            if ($albumResult === null) {
+                $this->logger->warning('Failed to upsert album', ['album' => $albumTitle]);
+                return;
+            }
+
+            $albumId = $albumResult['id'];
+            $albumMediaItemId = $albumResult['media_item_id'];
+
+            // Upsert tracks (metadata already read during the walk — no re-probe).
+            foreach ($files as $fileInfo) {
+                $trackResult = $this->upsertTrack(
+                    $albumId,
+                    $albumMediaItemId,
+                    $artistId,
+                    $fileInfo['file'],
+                    $fileInfo['meta'],
+                    $libraryId
+                );
+                if ($trackResult === 'added') {
+                    $result->added++;
+                } elseif ($trackResult === 'updated') {
+                    $result->updated++;
+                }
+            }
+
+            // Recompute total_tracks from what is actually persisted. This is the
+            // single writer of that column, and it is what makes a chunked or
+            // re-opened album end up with the right count instead of the size of
+            // whichever batch happened to be flushed last.
+            $this->refreshAlbumTrackTotal($albumId);
+        } catch (\Throwable $e) {
+            $this->logger->error('Skipping album after error during indexing', [
+                'album' => $albumTitle,
+                'artist' => $artistName,
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    /**
+     * Sets `music_albums.total_tracks` to the number of `music_tracks` rows the
+     * album actually has.
+     *
+     * Called after every album flush. Deriving the count from the table instead of
+     * from the in-memory batch is what keeps it correct when an album is written in
+     * more than one batch (chunked by {@see self::MAX_TRACKS_PER_FLUSH}, or evicted
+     * and re-opened by {@see self::MAX_OPEN_ALBUMS}) and when a previous scan was
+     * interrupted part-way through the same album.
+     *
+     * @param int $albumId `music_albums.id`.
+     * @return void
+     */
+    private function refreshAlbumTrackTotal(int $albumId): void
+    {
+        $this->db->query(
+            "UPDATE music_albums a
+                SET a.total_tracks = (SELECT COUNT(*) FROM music_tracks t WHERE t.album_id = a.id)
+              WHERE a.id = ?",
+            [$albumId]
+        );
+    }
+
+    /**
+     * Stores a find-or-create result in a bounded, insertion-ordered cache.
+     *
+     * These caches only ever save round-trips — {@see self::upsertArtist()} and
+     * {@see self::upsertAlbum()} both fall back to `SELECT`-then-`INSERT` on a miss
+     * — so evicting the oldest entry can never change what gets written. Bounding
+     * them is what keeps a 60k-file walk's memory flat in the pathological case
+     * where every file yields a distinct album key (an untagged library, where the
+     * album title falls back to the filename).
+     *
+     * @param array<string, array{id:int, media_item_id:string|null}> $cache Cache, by reference.
+     * @param string $key Cache key.
+     * @param array{id:int, media_item_id:string|null} $value Value to remember.
+     * @param int $max Maximum number of retained entries.
+     * @return array{id:int, media_item_id:string|null} The value, for direct return by the caller.
+     */
+    private function cacheRemember(array &$cache, string $key, array $value, int $max): array
+    {
+        $cache[$key] = $value;
+
+        while (count($cache) > $max) {
+            $oldest = array_key_first($cache);
+            if (!is_string($oldest) || $oldest === $key) {
+                break;
+            }
+            unset($cache[$oldest]);
+        }
+
+        return $value;
     }
 
     /**
@@ -338,74 +612,6 @@ class MusicLibraryScanner
 
             yield $file;
         }
-    }
-
-    /**
-     * Groups audio files by artist and album, reading each file's tags exactly
-     * once and caching the result alongside the file (so the sort below and the
-     * later track upsert never re-read tags).
-     *
-     * @param string        $path       Root path to scan
-     * @param int           $total      Progress denominator (audio file count)
-     * @param callable|null $onProgress Optional `(processed, total, currentPath)` sink
-     * @return array<string, array{artist:string, album:string, year:?int,
-     *     files:list<array{file:SplFileInfo, meta:array<string, mixed>}>}>
-     */
-    private function groupFilesByAlbum(string $path, int $total, ?callable $onProgress): array
-    {
-        /** @var array<string, array{artist:string, album:string, year:?int,
-         *     files:list<array{file:SplFileInfo, meta:array<string, mixed>}>}> $albumMap */
-        $albumMap = [];
-        $processed = 0;
-
-        foreach ($this->audioFileIterator($path) as $file) {
-            $processed++;
-            if ($onProgress !== null) {
-                $onProgress($processed, $total, $file->getPathname());
-            }
-
-            // Read metadata from file (getID3 first, ffprobe fallback).
-            $metadata = $this->probeMetadata($file->getPathname());
-
-            $extension = strtolower($file->getExtension());
-
-            // Determine artist and album from tags
-            $artist = is_string($metadata['artist']) ? $metadata['artist'] : 'Unknown Artist';
-            $album = is_string($metadata['album']) ? $metadata['album'] : $file->getBasename('.' . $extension);
-            $year = is_numeric($metadata['year']) ? (int)$metadata['year'] : null;
-
-            // Use artist+album as key to group files
-            $key = md5($artist . '|' . $album);
-
-            if (!isset($albumMap[$key])) {
-                $albumMap[$key] = [
-                    'artist' => $artist,
-                    'album' => $album,
-                    'year' => $year,
-                    'files' => [],
-                ];
-            }
-
-            $albumMap[$key]['files'][] = ['file' => $file, 'meta' => $metadata];
-        }
-
-        // Sort files within each album by track number using the CACHED metadata.
-        foreach ($albumMap as $key => $albumData) {
-            unset($albumData); // Suppress unused warning
-            usort($albumMap[$key]['files'], function (array $a, array $b): int {
-                $trackA = is_numeric($a['meta']['track_number'] ?? null) ? (int)$a['meta']['track_number'] : 0;
-                $trackB = is_numeric($b['meta']['track_number'] ?? null) ? (int)$b['meta']['track_number'] : 0;
-
-                // If track numbers are equal, compare by filename
-                if ($trackA === $trackB) {
-                    return strcmp($a['file']->getFilename(), $b['file']->getFilename());
-                }
-
-                return $trackA - $trackB;
-            });
-        }
-
-        return $albumMap;
     }
 
     /**
@@ -709,8 +915,13 @@ class MusicLibraryScanner
                 $id = isset($firstRow['id']) && is_numeric($firstRow['id']) ? (int)$firstRow['id'] : 0;
                 $mediaItemId = isset($firstRow['media_item_id']) && is_string($firstRow['media_item_id'])
                     && $firstRow['media_item_id'] !== '' ? $firstRow['media_item_id'] : null;
-                $cache[$cacheKey] = ['id' => $id, 'media_item_id' => $mediaItemId];
-                return $cache[$cacheKey];
+
+                return $this->cacheRemember(
+                    $cache,
+                    $cacheKey,
+                    ['id' => $id, 'media_item_id' => $mediaItemId],
+                    self::MAX_ARTIST_CACHE
+                );
             }
         }
 
@@ -731,11 +942,15 @@ class MusicLibraryScanner
         }
 
         $id = (int)$this->db->lastInsertId();
-        $cache[$cacheKey] = ['id' => $id, 'media_item_id' => $mediaItemId !== '' ? $mediaItemId : null];
 
         $this->logger->debug('Upserted artist', ['id' => $id, 'name' => $name, 'media_item_id' => $mediaItemId]);
 
-        return $cache[$cacheKey];
+        return $this->cacheRemember(
+            $cache,
+            $cacheKey,
+            ['id' => $id, 'media_item_id' => $mediaItemId !== '' ? $mediaItemId : null],
+            self::MAX_ARTIST_CACHE
+        );
     }
 
     /**
@@ -745,7 +960,6 @@ class MusicLibraryScanner
      * @param string|null $artistMediaItemId Artist's media_item_id for linking
      * @param string $title Album title
      * @param int|null $year Release year
-     * @param int $totalTracks Total number of tracks
      * @param array<string, array{id:int, media_item_id:string|null}> $cache Album cache key by "artistId|title"
      * @param string|null $libraryId Owning library UUID stamped onto a new media_item.
      * @return array{id: int, media_item_id: string|null}|null Album ID and media_item_id or null on failure
@@ -755,7 +969,6 @@ class MusicLibraryScanner
         ?string $artistMediaItemId,
         string $title,
         ?int $year,
-        int $totalTracks,
         array &$cache,
         ?string $libraryId = null
     ): ?array {
@@ -780,14 +993,22 @@ class MusicLibraryScanner
                 $mediaItemId = isset($firstRow['media_item_id']) && is_string($firstRow['media_item_id'])
                     && $firstRow['media_item_id'] !== '' ? $firstRow['media_item_id'] : null;
 
-                // Update existing album with new track count and year
+                // Refresh the year only. `total_tracks` is owned exclusively by
+                // refreshAlbumTrackTotal(), which derives it from music_tracks
+                // after every flush — the in-memory batch size is no longer a
+                // valid answer now that one album can be flushed in several
+                // batches.
                 $this->db->query(
-                    "UPDATE music_albums SET total_tracks = ?, year = COALESCE(?, year) WHERE id = ?",
-                    [$totalTracks, $year, $id]
+                    "UPDATE music_albums SET year = COALESCE(?, year) WHERE id = ?",
+                    [$year, $id]
                 );
 
-                $cache[$cacheKey] = ['id' => $id, 'media_item_id' => $mediaItemId];
-                return $cache[$cacheKey];
+                return $this->cacheRemember(
+                    $cache,
+                    $cacheKey,
+                    ['id' => $id, 'media_item_id' => $mediaItemId],
+                    self::MAX_ALBUM_CACHE
+                );
             }
         }
 
@@ -797,11 +1018,12 @@ class MusicLibraryScanner
         // Create media_item for artwork/metadata
         $mediaItemId = $this->createMediaItem('album', $title, null, $libraryId);
 
-        // Insert new album
+        // Insert new album. total_tracks defaults to 0 and is set by
+        // refreshAlbumTrackTotal() once this flush's tracks are persisted.
         $result = $this->db->query(
-            "INSERT INTO music_albums (artist_id, media_item_id, title, sort_title, year, total_tracks)
-             VALUES (?, ?, ?, ?, ?, ?)",
-            [$artistId, $mediaItemId !== '' ? $mediaItemId : null, $title, $sortTitle, $year, $totalTracks]
+            "INSERT INTO music_albums (artist_id, media_item_id, title, sort_title, year)
+             VALUES (?, ?, ?, ?, ?)",
+            [$artistId, $mediaItemId !== '' ? $mediaItemId : null, $title, $sortTitle, $year]
         );
 
         if ($result === false) {
@@ -809,11 +1031,15 @@ class MusicLibraryScanner
         }
 
         $id = (int)$this->db->lastInsertId();
-        $cache[$cacheKey] = ['id' => $id, 'media_item_id' => $mediaItemId !== '' ? $mediaItemId : null];
 
         $this->logger->debug('Upserted album', ['id' => $id, 'title' => $title, 'artist_id' => $artistId]);
 
-        return $cache[$cacheKey];
+        return $this->cacheRemember(
+            $cache,
+            $cacheKey,
+            ['id' => $id, 'media_item_id' => $mediaItemId !== '' ? $mediaItemId : null],
+            self::MAX_ALBUM_CACHE
+        );
     }
 
     /**

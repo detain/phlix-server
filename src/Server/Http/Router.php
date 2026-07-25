@@ -558,6 +558,14 @@ class Router
      * GET /api/v1/music/tracks/{id}          — get single track
      * GET /api/v1/music/now-playing          — get current playback state
      *
+     * ⚠ NOT the live registrar. The served music routes are registered by
+     * {@see \Phlix\Server\Core\Application::loadMusicRoutes()} (bound to a real
+     * MusicController instance behind AuthMiddleware). This helper — like its
+     * `books()` / `audiobooks()` / `photo()` / `opds()` siblings — has no caller
+     * in `src/`; its only caller is `RouterMediaRoutesTest`, which uses the whole
+     * family to pin the canonical `/api/v1` URL shapes. S99 left all five in
+     * place rather than deleting one member of a symmetric set.
+     *
      * @param string $controllerClass The MusicController class name
      * @return self
      *

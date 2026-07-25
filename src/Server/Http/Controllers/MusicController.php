@@ -570,6 +570,14 @@ class MusicController
      * before S99 — the scanner never wrote them into `metadata_json` either) and
      * are kept in the payload so the response shape does not change.
      *
+     * There is deliberately NO `path` key. It used to expose the server's absolute
+     * filesystem layout, and this payload is now reachable over the internet-facing
+     * hub relay (S100 widened the allowlist to `/api/v1/music`); `MediaItemShaper`
+     * has always emitted no `path`, so music was the outlier. `stream_url` is the
+     * only locator a client needs. (Checked: no client renders it — `phlix-ui`,
+     * console, roku and tizen/windows never read it, and the mobile normalizer
+     * defaults it to `''`.)
+     *
      * @param array<string, mixed> $track Joined track row from {@see MusicLibraryService}
      * @return array<string, mixed> Formatted track for response
      */
@@ -599,7 +607,6 @@ class MusicController
             'disc_number' => $this->toIntOrNull($track['disc_number'] ?? null),
             'duration_secs' => $this->toIntOrNull($track['duration_secs'] ?? null),
             'composer' => null,
-            'path' => $this->toStringOrNull($track['path'] ?? null),
             'stream_url' => $streamUrl,
         ];
     }

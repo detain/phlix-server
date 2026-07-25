@@ -44,17 +44,17 @@ class MusicLibraryService
      * The SELECT list every track read shares.
      *
      * Aliases are API contract — {@see \Phlix\Server\Http\Controllers\MusicController}
-     * shapes `artist` / `album` / `year` / `path` from `artist_name` /
-     * `album_name` / `album_year` / `path`, so renaming one silently blanks a
-     * field on every track card. `t.*` carries the `media_item_id` UUID that IS
-     * the track's public id.
+     * shapes `artist` / `album` / `year` from `artist_name` / `album_name` /
+     * `album_year`, so renaming one silently blanks a field on every track card.
+     * `t.*` carries the `media_item_id` UUID that IS the track's public id.
      *
-     * The `media_items` join is what supplies `path`; it can never drop a row
-     * because `music_tracks.media_item_id` is `NOT NULL` and FK-constrained
-     * (`ON DELETE CASCADE`) to `media_items.id`.
+     * Deliberately does NOT select `media_items.path`: the track payload must not
+     * leak the server's absolute filesystem layout over the internet-facing relay
+     * (`MediaItemShaper` emits no `path` either, so music is no longer the
+     * outlier). Nothing here needs a `media_items` join as a result.
      */
     private const TRACK_COLUMNS = 't.*, ar.name AS artist_name, al.title AS album_name, '
-        . 'al.year AS album_year, mi.path AS path';
+        . 'al.year AS album_year';
 
     /** @var Connection Database connection */
     private Connection $db;
@@ -664,7 +664,6 @@ class MusicLibraryService
              FROM music_tracks t
              JOIN music_albums al ON al.id = t.album_id
              JOIN music_artists ar ON ar.id = t.artist_id
-             JOIN media_items mi ON mi.id = t.media_item_id
              WHERE t.album_id IN ({$placeholders})
              ORDER BY t.album_id, t.disc_number, t.track_number",
             $ids
@@ -744,7 +743,6 @@ class MusicLibraryService
              FROM music_tracks t
              JOIN music_albums al ON al.id = t.album_id
              JOIN music_artists ar ON ar.id = t.artist_id
-             JOIN media_items mi ON mi.id = t.media_item_id
              ORDER BY ar.name, al.title, t.disc_number, t.track_number
              LIMIT ? OFFSET ?",
             [$limit, $offset]
@@ -786,7 +784,6 @@ class MusicLibraryService
              FROM music_tracks t
              JOIN music_albums al ON al.id = t.album_id
              JOIN music_artists ar ON ar.id = t.artist_id
-             JOIN media_items mi ON mi.id = t.media_item_id
              WHERE t.media_item_id = ?
              LIMIT 1",
             [$mediaItemId]

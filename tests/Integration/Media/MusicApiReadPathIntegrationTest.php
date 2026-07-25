@@ -180,7 +180,9 @@ final class MusicApiReadPathIntegrationTest extends TestCase
             $this->assertSame(180, $track['duration_secs'], 'duration must come from music_tracks');
             $this->assertIsString($track['name']);
             $this->assertNotSame('', $track['name']);
-            $this->assertIsString($track['path'], 'path must come from the joined media_items row');
+            // The absolute filesystem path must never be in the payload — this is
+            // now reachable over the internet-facing hub relay.
+            $this->assertArrayNotHasKey('path', $track);
         }
 
         // Ordering is artist name -> album title -> disc -> track (S94's query).

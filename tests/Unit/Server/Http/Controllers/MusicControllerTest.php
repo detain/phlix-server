@@ -6,6 +6,7 @@ namespace Phlix\Tests\Unit\Server\Http\Controllers;
 
 use PHPUnit\Framework\TestCase;
 use Phlix\Auth\SignedUrl;
+use Phlix\Common\Http\PageLimit;
 use Phlix\Media\Music\MusicArtist;
 use Phlix\Media\Music\MusicArtistWithAlbums;
 use Phlix\Media\Music\MusicLibraryService;
@@ -67,7 +68,6 @@ class MusicControllerTest extends TestCase
             'artist_name' => 'Real Artist',
             'album_name' => 'Real Album',
             'album_year' => 2020,
-            'path' => '/music/real.flac',
         ];
     }
 
@@ -338,7 +338,103 @@ class MusicControllerTest extends TestCase
         $this->assertSame(2020, $track['year']);
         $this->assertSame(245, $track['duration_secs']);
         $this->assertSame(1, $track['track_number']);
-        $this->assertSame('/music/real.flac', $track['path']);
+    }
+
+    /**
+     * The track payload must NOT expose the server's absolute filesystem path.
+     * `MediaItemShaper` never emitted one, and this payload is now reachable over
+     * the internet-facing hub relay.
+     *
+     * @test
+     */
+    public function testTrackPayloadDoesNotLeakTheFilesystemPath(): void
+    {
+        $this->musicLibrary->method('getAllTracks')->willReturn([$this->trackRow()]);
+        $this->musicLibrary->method('findTrackByMediaItemId')->willReturn($this->trackRow());
+        $this->musicLibrary->method('getAllAlbums')->willReturn([$this->albumRow(7)]);
+        $this->musicLibrary->method('getTracksByAlbumIds')->willReturn([7 => [$this->trackRow()]]);
+
+        /** @var array{tracks: list<array<string, mixed>>} $list */
+        $list = json_decode($this->controller->listTracks(new Request(), [])->body, true);
+        $this->assertArrayNotHasKey('path', $list['tracks'][0]);
+
+        /** @var array{track: array<string, mixed>} $detail */
+        $detail = json_decode($this->controller->getTrack(new Request(), ['id' => 'x'])->body, true);
+        $this->assertArrayNotHasKey('path', $detail['track']);
+
+        /** @var array{albums: list<array{tracks: list<array<string, mixed>>}>} $albums */
+        $albums = json_decode($this->controller->listAlbums(new Request(), [])->body, true);
+        $this->assertArrayNotHasKey('path', $albums['albums'][0]['tracks'][0]);
+    }
+
+    /**
+     * SECURITY: an absurd `?limit=` must be clamped to {@see PageLimit::MAX} before
+     * it can reach a `LIMIT ?` binding. The hub relay's browse-scope gate never
+     * inspects the query string, so `…/proxy/api/v1/music/tracks?limit=5000000`
+     * reaches this controller from the internet; unclamped it would hydrate 5M rows
+     * (and mint an HMAC per row) inside a resident worker shared by every tenant.
+     *
+     * @test
+     * @dataProvider absurdLimitProvider
+     */
+    public function testListEndpointsClampAnAbsurdLimit(string $rawLimit): void
+    {
+        $request = new Request();
+        $request->query['limit'] = $rawLimit;
+
+        $this->musicLibrary->expects($this->once())
+            ->method('getAllTracks')
+            ->with(PageLimit::MAX, 0)
+            ->willReturn([]);
+        $this->musicLibrary->expects($this->once())
+            ->method('getAllAlbums')
+            ->with(PageLimit::MAX, 0)
+            ->willReturn([]);
+        $this->musicLibrary->expects($this->once())
+            ->method('getAllArtists')
+            ->with(PageLimit::MAX, 0)
+            ->willReturn([]);
+
+        foreach (['listTracks', 'listAlbums', 'listArtists'] as $method) {
+            /** @var array<string, mixed> $body */
+            $body = json_decode($this->controller->{$method}($request, [])->body, true);
+            $this->assertSame(
+                PageLimit::MAX,
+                $body['limit'],
+                sprintf('%s must clamp ?limit=%s to PageLimit::MAX', $method, $rawLimit),
+            );
+        }
+    }
+
+    /**
+     * @return array<string, array{0: string}>
+     */
+    public static function absurdLimitProvider(): array
+    {
+        return [
+            'five million' => ['5000000'],
+            'int max' => ['9223372036854775807'],
+            'just over the cap' => ['101'],
+        ];
+    }
+
+    /**
+     * A negative or non-numeric `?limit=` must fall back to the default page size,
+     * never to 0 (which would render an empty library) or a negative LIMIT.
+     *
+     * @test
+     */
+    public function testListTracksRejectsNegativeAndGarbageLimits(): void
+    {
+        foreach (['-1', '0', 'DROP TABLE', ''] as $raw) {
+            $request = new Request();
+            $request->query['limit'] = $raw;
+
+            /** @var array<string, mixed> $body */
+            $body = json_decode($this->controller->listTracks($request, [])->body, true);
+            $this->assertGreaterThanOrEqual(PageLimit::MIN, $body['limit']);
+            $this->assertLessThanOrEqual(PageLimit::MAX, $body['limit']);
+        }
     }
 
     /**

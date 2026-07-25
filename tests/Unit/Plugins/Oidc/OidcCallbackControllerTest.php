@@ -1662,6 +1662,125 @@ final class OidcCallbackControllerTest extends TestCase
     }
 
     // -----------------------------------------------------------------------
+    // S48 TestEngineer — the OIDC twin of the GitHub reachability + port-pinning
+    // checks. OIDC is the leg with a real pre-S48 population (an IdP that resolves
+    // a relative redirect_uri against the client root URL, e.g. Keycloak), so its
+    // 503 ordering and its default-port tolerance matter more, not less.
+    // -----------------------------------------------------------------------
+
+    /**
+     * ORDERING: `provider_not_configured` is answered BEFORE the callback-URL
+     * resolve, so a box that never configured OIDC is told exactly that even with
+     * `PHLIX_DOMAIN` unset — the fail-closed 503 is reachable only once the provider
+     * is enabled and configured.
+     */
+    public function test_provider_not_configured_is_answered_before_the_callback_url_503(): void
+    {
+        putenv('PHLIX_DOMAIN'); // the condition that would otherwise fail closed
+
+        $stateStore = new InMemoryOidcStateStore();
+        $controller = new OidcCallbackController(
+            new AuthProviderRegistry(), // provider NOT registered
+            $this->createMock(UserRepository::class),
+            $this->createMock(JwtHandler::class),
+            $stateStore,
+        );
+
+        $request = new Request();
+        $request->headers['Host'] = self::HOST;
+        $request->query = ['redirect_uri' => '/app'];
+
+        $response = $controller->authorize($request, []);
+
+        $this->assertSame(503, $response->statusCode);
+        /** @var array<string, mixed> $body */
+        $body = json_decode($response->body, true);
+        $this->assertSame(
+            'provider_not_configured',
+            $body['error'] ?? null,
+            'a box that never configured OIDC must not be told its callback URL is unconfigured',
+        );
+        $this->assertSame(0, $stateStore->puts);
+        $this->assertSame([], $response->cookies);
+    }
+
+    /**
+     * A garbage `PHLIX_DOMAIN` fails closed exactly like an unset one — never as an
+     * allowlist entry that cannot match, never as "derive from anything".
+     */
+    public function test_a_garbage_phlix_domain_fails_closed_like_an_unset_one(): void
+    {
+        foreach (['https://phlix.test/', 'phlix.test/app', 'phlix.test:', 'phlix.test:99999', '  '] as $domain) {
+            putenv('PHLIX_DOMAIN=' . $domain);
+
+            $stateStore = new InMemoryOidcStateStore();
+            $controller = new OidcCallbackController(
+                $this->makeRegistryWithCachedDiscovery(),
+                $this->createMock(UserRepository::class),
+                $this->createMock(JwtHandler::class),
+                $stateStore,
+            );
+
+            $request = new Request();
+            $request->headers['Host'] = self::HOST;
+            $request->query = ['redirect_uri' => '/app'];
+
+            $response = $controller->authorize($request, []);
+
+            /** @var array<string, mixed> $body */
+            $body = json_decode($response->body, true);
+            $this->assertSame(503, $response->statusCode, "PHLIX_DOMAIN={$domain} must fail closed");
+            $this->assertSame('callback_url_not_configured', $body['error'] ?? null, "PHLIX_DOMAIN={$domain}");
+            $this->assertArrayNotHasKey('Location', $response->headers);
+            $this->assertSame([], $response->cookies);
+            $this->assertSame(0, $stateStore->puts);
+        }
+    }
+
+    /**
+     * A `Host` that carries the scheme's DEFAULT port must still start the flow and
+     * must bind the PORTLESS callback the IdP has registered — the case that would
+     * have made the r4 port pinning 503 every login without `stripDefaultPort()`.
+     * A NON-default port on the same hostname fails closed instead.
+     */
+    public function test_the_default_https_port_is_tolerated_but_another_port_fails_closed(): void
+    {
+        $stateStore = new InMemoryOidcStateStore();
+        $controller = new OidcCallbackController(
+            $this->makeRegistryWithCachedDiscovery(),
+            $this->createMock(UserRepository::class),
+            $this->createMock(JwtHandler::class),
+            $stateStore,
+        );
+
+        $default = new Request();
+        $default->headers['Host'] = self::HOST . ':443';
+        $default->headers['X-Forwarded-Proto'] = 'https';
+        $default->query = ['redirect_uri' => '/app'];
+
+        $ok = $controller->authorize($default, []);
+        $this->assertSame(302, $ok->statusCode);
+        $params = [];
+        parse_str((string) parse_url($ok->headers['Location'] ?? '', PHP_URL_QUERY), $params);
+        $this->assertSame(
+            'https://' . self::HOST . '/auth/oidc/callback',
+            $params['redirect_uri'] ?? null,
+            'the default port must be normalised away, not leaked into the redirect_uri',
+        );
+
+        $other = new Request();
+        $other->headers['Host'] = self::HOST . ':8096';
+        $other->query = ['redirect_uri' => '/app'];
+
+        $refused = $controller->authorize($other, []);
+        /** @var array<string, mixed> $body */
+        $body = json_decode($refused->body, true);
+        $this->assertSame(503, $refused->statusCode);
+        $this->assertSame('callback_url_not_configured', $body['error'] ?? null);
+        $this->assertArrayNotHasKey('Location', $refused->headers);
+    }
+
+    // -----------------------------------------------------------------------
     // Test fixtures.
     // -----------------------------------------------------------------------
 

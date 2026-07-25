@@ -277,6 +277,189 @@ final class CallbackUrlTest extends TestCase
         );
     }
 
+    // -----------------------------------------------------------------------
+    // S48 TestEngineer — ADVERSARIAL default-port matrix.
+    //
+    // `stripDefaultPort()` exists so a client that DOES send the scheme's default
+    // port in `Host` (RFC 9110 permits it, and several HTTP libraries and some
+    // proxies do it) is still accepted. It must strip the default for the RESOLVED
+    // scheme and NOTHING else: :443 is only default under https, :80 only under
+    // http. Getting the cross pairs wrong would either 503 a legitimate client or
+    // silently accept a genuinely different origin.
+    // -----------------------------------------------------------------------
+
+    /**
+     * @dataProvider defaultPortMatrix
+     */
+    public function test_a_default_port_is_default_only_for_its_own_scheme(
+        string $host,
+        string $forwardedProto,
+        string $allowed,
+        ?string $expected,
+    ): void {
+        $this->assertSame(
+            $expected,
+            CallbackUrl::resolve('', $host, $forwardedProto, '/auth/github/callback', $allowed),
+        );
+    }
+
+    /**
+     * All four scheme/port pairs, in BOTH directions (default port on the request
+     * side and on the configured side).
+     *
+     * The ruling behind each row: a URL's origin is (scheme, host, port) with the
+     * scheme's default port elided. So `https://h:443` ≡ `https://h`, and
+     * `http://h:80` ≡ `http://h` — but `https://h:80` and `http://h:443` are
+     * DISTINCT origins that must not match an unported allowlist, because the
+     * `redirect_uri` an operator registered with the provider is the elided form
+     * and a provider compares it literally.
+     *
+     * @return array<string, array{0: string, 1: string, 2: string, 3: string|null}>
+     */
+    public static function defaultPortMatrix(): array
+    {
+        return [
+            // --- default port on the REQUEST side ---
+            ':443 over https is the same origin (ACCEPT)' => [
+                'media.example.com:443',
+                'https',
+                'media.example.com',
+                'https://media.example.com/auth/github/callback',
+            ],
+            ':80 over http is the same origin (ACCEPT)' => [
+                'media.example.com:80',
+                'http',
+                'media.example.com',
+                'http://media.example.com/auth/github/callback',
+            ],
+            ':80 over https is a DIFFERENT origin (REFUSE)' => [
+                'media.example.com:80',
+                'https',
+                'media.example.com',
+                null,
+            ],
+            ':443 over http is a DIFFERENT origin (REFUSE)' => [
+                'media.example.com:443',
+                'http',
+                'media.example.com',
+                null,
+            ],
+            // --- default port on the CONFIGURED (PHLIX_DOMAIN) side ---
+            'PHLIX_DOMAIN with :443 accepts a bare Host over https' => [
+                'media.example.com',
+                'https',
+                'media.example.com:443',
+                'https://media.example.com/auth/github/callback',
+            ],
+            'PHLIX_DOMAIN with :80 accepts a bare Host over http' => [
+                'media.example.com',
+                'http',
+                'media.example.com:80',
+                'http://media.example.com/auth/github/callback',
+            ],
+            'PHLIX_DOMAIN with :443 refuses a bare Host over http' => [
+                'media.example.com',
+                'http',
+                'media.example.com:443',
+                null,
+            ],
+            'PHLIX_DOMAIN with :80 refuses a bare Host over https' => [
+                'media.example.com',
+                'https',
+                'media.example.com:80',
+                null,
+            ],
+            // --- both sides carry the SAME default port ---
+            'both sides :443 over https (ACCEPT)' => [
+                'media.example.com:443',
+                'https',
+                'media.example.com:443',
+                'https://media.example.com/auth/github/callback',
+            ],
+        ];
+    }
+
+    // -----------------------------------------------------------------------
+    // S48 TestEngineer — PRODUCTION REALITY CHECK.
+    //
+    // The one live install is `PHLIX_DOMAIN=intertainer.phlix.interserver.net`
+    // (portless) with phlix-server on 127.0.0.1:8096 behind HAProxy. Verified
+    // read-only against `/etc/haproxy/haproxy.cfg` on that box: `frontend fe_https`
+    // binds :443, sets `X-Forwarded-Proto: https`, routes on
+    // `acl is_phlix_server_host hdr(host) -i intertainer.phlix.interserver.net`
+    // (an EXACT match) to `backend be_phlix_server -> server phlix 127.0.0.1:8096`,
+    // and there is NO Host rewriting anywhere in the config. The backend `server`
+    // line is a TCP target, not a Host override, so the `Host` the app sees is the
+    // one the browser sent — and HAProxy's exact-match ACL means only the portless
+    // authority (or its `:443` equivalent, which HAProxy normalises) is ever routed
+    // to phlix-server at all.
+    //
+    // These assertions pin that: the deployed configuration must keep deriving the
+    // `redirect_uri` an operator registers with GitHub/the IdP.
+    // -----------------------------------------------------------------------
+
+    public function test_the_production_haproxy_authority_still_derives_the_registered_callback(): void
+    {
+        $domain = 'intertainer.phlix.interserver.net';
+        $expected = 'https://' . $domain . '/auth/github/callback';
+
+        // What a browser sends through HAProxy: portless Host + X-Forwarded-Proto.
+        $this->assertSame(
+            $expected,
+            CallbackUrl::resolve('', $domain, 'https', '/auth/github/callback', $domain),
+            'the live deployment must keep deriving its registered callback URL',
+        );
+        // A client that includes the default port (and HAProxy forwards it) must be
+        // accepted too, and must still derive the PORTLESS registered form.
+        $this->assertSame(
+            $expected,
+            CallbackUrl::resolve('', $domain . ':443', 'https', '/auth/github/callback', $domain),
+            'a Host carrying the default https port must not 503 the login',
+        );
+        // Host case is not significant.
+        $this->assertSame(
+            'https://Intertainer.Phlix.Interserver.NET/auth/github/callback',
+            CallbackUrl::resolve('', 'Intertainer.Phlix.Interserver.NET', 'https', '/auth/github/callback', $domain),
+        );
+    }
+
+    /**
+     * The one BEHAVIOUR DELTA of the port pinning on the live box, asserted so it is
+     * a documented decision rather than a surprise: phlix-server also listens
+     * directly on `0.0.0.0:8096`, so a client that BYPASSES HAProxy sends
+     * `Host: intertainer.phlix.interserver.net:8096`. That now 503s instead of
+     * deriving `https://intertainer.phlix.interserver.net:8096/auth/github/callback`.
+     *
+     * Nothing is lost: the derived-with-port value could never have completed the
+     * flow, because the callback registered with GitHub / the IdP is the :443 form,
+     * so the provider answered `redirect_uri_mismatch`. The failure just moves
+     * earlier and says what to fix (and the `redirect_uri` setting remains the
+     * escape hatch for an operator who really does serve auth on :8096).
+     */
+    public function test_reaching_the_app_directly_on_its_listen_port_now_fails_closed(): void
+    {
+        $domain = 'intertainer.phlix.interserver.net';
+
+        $this->assertNull(
+            CallbackUrl::resolve('', $domain . ':8096', null, '/auth/github/callback', $domain),
+            'the app listen port is a different origin from the registered :443 one',
+        );
+        $this->assertNull(
+            CallbackUrl::resolve('', $domain . ':8096', 'http', '/auth/github/callback', $domain),
+        );
+        // The escape hatch still covers that operator.
+        $this->assertSame(
+            'https://' . $domain . ':8096/auth/github/callback',
+            CallbackUrl::resolve(
+                'https://' . $domain . ':8096/auth/github/callback',
+                $domain . ':8096',
+                null,
+                '/auth/github/callback',
+                $domain,
+            ),
+        );
+    }
+
     /**
      * The allowlist must NOT break the explicit configuration path: an operator
      * whose provider setting names another host keeps working (that value is the
@@ -489,6 +672,63 @@ final class CallbackUrlTest extends TestCase
         $this->assertFalse(
             CallbackUrl::isReplayable('https://[2001:db8::1]/auth/oidc/callback', '', '[::1]'),
         );
+    }
+
+    /**
+     * S48 TestEngineer — THE UPGRADE WINDOW, stated explicitly.
+     *
+     * `isReplayable()` got stricter in fix r4 (authority, not bare host). A state
+     * row that was minted under the OLD bare-host rule can therefore carry a
+     * `callback_url` this build no longer accepts — e.g. a login that started on
+     * `https://phlix.example:8096/…` seconds before the restart while
+     * `PHLIX_DOMAIN=phlix.example`.
+     *
+     * What actually happens to that in-flight login is asserted here, because "it
+     * fails safe" is a claim, not an observation:
+     *
+     *  - `isReplayable()` returns FALSE, so `replayCallbackUrl()` yields null;
+     *  - the controller falls back to a FRESH `resolve()`, which for the same
+     *    ported `Host` also returns null → `503 callback_url_not_configured`;
+     *  - the state was already consumed one-shot, so the user simply retries and
+     *    the retry (through HAProxy, portless) succeeds.
+     *
+     * The blast radius is one bounded window: the ≤600 s state TTL, only for a
+     * login started on a non-registered origin, only across the deploy itself.
+     * A row minted on the CANONICAL origin — every login that could actually have
+     * completed — is still replayable, which is the assertion that matters.
+     */
+    public function test_a_state_row_minted_under_the_old_bare_host_rule_is_no_longer_replayable(): void
+    {
+        // Legacy row from the pre-r4 bare-host rule: a port that PHLIX_DOMAIN does
+        // not name. Accepted before, refused now.
+        $this->assertFalse(
+            CallbackUrl::isReplayable('https://phlix.example:8096/auth/github/callback', '', 'phlix.example'),
+            'a legacy ported callback_url must not be replayed as the token-exchange redirect_uri',
+        );
+        // …and the fresh-resolve fallback for that same request also refuses, so
+        // the caller answers the actionable 503 rather than sending a value the
+        // provider would reject.
+        $this->assertNull(
+            CallbackUrl::resolve('', 'phlix.example:8096', null, '/auth/github/callback', 'phlix.example'),
+        );
+
+        // The rows that matter — minted on the canonical origin — are unaffected by
+        // the upgrade, so no completable login is broken.
+        $this->assertTrue(
+            CallbackUrl::isReplayable('https://phlix.example/auth/github/callback', '', 'phlix.example'),
+            'an in-flight login on the configured origin must survive the upgrade',
+        );
+        $this->assertTrue(
+            CallbackUrl::isReplayable('https://phlix.example:443/auth/github/callback', '', 'phlix.example'),
+            'nor may an explicit default port break one',
+        );
+        // A legacy row whose URL is byte-identical to the configured `redirect_uri`
+        // setting also still replays, on the first branch.
+        $this->assertTrue(CallbackUrl::isReplayable(
+            'https://sso.example.org:8443/auth/github/callback',
+            'https://sso.example.org:8443/auth/github/callback',
+            'phlix.example',
+        ));
     }
 
     /**

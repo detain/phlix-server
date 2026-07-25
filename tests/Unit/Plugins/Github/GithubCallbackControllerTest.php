@@ -595,6 +595,206 @@ final class GithubCallbackControllerTest extends TestCase
     }
 
     // -----------------------------------------------------------------------
+    // S48 TestEngineer — the fail-closed 503's REACHABILITY and the port pinning,
+    // end-to-end through the controller (CallbackUrlTest covers the resolver).
+    // -----------------------------------------------------------------------
+
+    /**
+     * ORDERING, asserted rather than assumed: the `provider_not_configured` 503 is
+     * answered BEFORE the callback-URL resolve, so an operator who never enabled
+     * GitHub sees "not enabled" — not a confusing callback-configuration error — and
+     * the fail-closed 503 is only reachable by someone actively setting the provider
+     * up. This also bounds the log-amplification surface of the refusal path
+     * (program follow-up 11) to boxes that enabled the provider.
+     */
+    public function test_provider_not_configured_is_answered_before_the_callback_url_503(): void
+    {
+        putenv('PHLIX_DOMAIN'); // the condition that would otherwise fail closed
+
+        $store = new CountingOAuth2StateStore();
+        $controller = new GithubCallbackController(
+            new AuthProviderRegistry(), // provider NOT registered
+            $this->createMock(UserRepository::class),
+            $this->createMock(JwtHandler::class),
+            $store,
+        );
+
+        $response = $controller->authorize($this->authorizeRequest('/app'), []);
+
+        $this->assertSame(503, $response->statusCode);
+        $this->assertSame(
+            'provider_not_configured',
+            $this->errorCode($response),
+            'a box that never enabled GitHub must not be told its callback URL is unconfigured',
+        );
+        $this->assertSame(0, $store->puts);
+        $this->assertSame([], $response->cookies);
+    }
+
+    /**
+     * A GARBAGE `PHLIX_DOMAIN` must fail closed exactly like an unset one — never as
+     * an allowlist entry that can never match, and never as "no allowlist, derive
+     * anything". A URL, a trailing dot, a trailing colon and an out-of-range port
+     * are all normalised to "unconfigured".
+     *
+     * @dataProvider garbageDomains
+     */
+    public function test_a_garbage_phlix_domain_fails_closed_like_an_unset_one(string $domain): void
+    {
+        putenv('PHLIX_DOMAIN=' . $domain);
+
+        $store = new CountingOAuth2StateStore();
+        $controller = new GithubCallbackController(
+            $this->registryWithProvider(new FakeOAuth2HttpClient()),
+            $this->createMock(UserRepository::class),
+            $this->createMock(JwtHandler::class),
+            $store,
+        );
+
+        $response = $controller->authorize($this->authorizeRequest('/app'), []);
+
+        $this->assertSame(503, $response->statusCode);
+        $this->assertSame('callback_url_not_configured', $this->errorCode($response));
+        $this->assertArrayNotHasKey('Location', $response->headers);
+        $this->assertSame([], $response->cookies, 'no correlation cookie may be issued');
+        $this->assertSame(0, $store->puts, 'no state row may be issued');
+    }
+
+    /**
+     * @return array<string, array{0: string}>
+     */
+    public static function garbageDomains(): array
+    {
+        return [
+            'a URL' => ['https://phlix.test/'],
+            'a path' => ['phlix.test/app'],
+            'trailing colon' => ['phlix.test:'],
+            'trailing dot' => ['phlix.test.'],
+            'out of range port' => ['phlix.test:99999'],
+            'non numeric port' => ['phlix.test:https'],
+            'whitespace only' => ['   '],
+        ];
+    }
+
+    /**
+     * A client (or proxy) that includes the scheme's DEFAULT port in `Host` must
+     * still start the flow, and must still bind the PORTLESS registered callback —
+     * this is the case that would have turned the r4 port pinning into a 503 on
+     * every login had `stripDefaultPort()` not been part of it.
+     */
+    public function test_a_host_carrying_the_default_https_port_still_starts_the_flow(): void
+    {
+        $store = new CountingOAuth2StateStore();
+        $controller = new GithubCallbackController(
+            $this->registryWithProvider(new FakeOAuth2HttpClient()),
+            $this->createMock(UserRepository::class),
+            $this->createMock(JwtHandler::class),
+            $store,
+        );
+
+        $request = new Request();
+        $request->headers['Host'] = self::HOST . ':443';
+        $request->headers['X-Forwarded-Proto'] = 'https';
+        $request->query = ['redirect_uri' => '/app'];
+
+        $response = $controller->authorize($request, []);
+
+        $this->assertSame(302, $response->statusCode);
+        $params = [];
+        parse_str((string) parse_url($response->headers['Location'] ?? '', PHP_URL_QUERY), $params);
+        $this->assertSame(
+            self::DERIVED_CALLBACK,
+            $params['redirect_uri'] ?? null,
+            'the default port must be normalised away, not leaked into the redirect_uri',
+        );
+        $this->assertSame(1, $store->puts);
+    }
+
+    /**
+     * …while a NON-default port on the same hostname fails closed end-to-end: 503,
+     * no `Location`, no correlation cookie, no state row. That is the documented
+     * behaviour change of the r4 port pinning (reaching the app directly on its
+     * listen port instead of through the reverse proxy), and it breaks no flow that
+     * could have completed — the provider has the proxy-fronted origin registered.
+     */
+    public function test_a_host_on_a_non_default_port_fails_closed(): void
+    {
+        $store = new CountingOAuth2StateStore();
+        $controller = new GithubCallbackController(
+            $this->registryWithProvider(new FakeOAuth2HttpClient()),
+            $this->createMock(UserRepository::class),
+            $this->createMock(JwtHandler::class),
+            $store,
+        );
+
+        $request = new Request();
+        $request->headers['Host'] = self::HOST . ':8096';
+        $request->query = ['redirect_uri' => '/app'];
+
+        $response = $controller->authorize($request, []);
+
+        $this->assertSame(503, $response->statusCode);
+        $this->assertSame('callback_url_not_configured', $this->errorCode($response));
+        $this->assertArrayNotHasKey('Location', $response->headers);
+        $this->assertSame([], $response->cookies);
+        $this->assertSame(0, $store->puts);
+
+        // …and an operator who really does serve auth there sets the absolute
+        // redirect_uri setting, which keeps first priority.
+        $withSetting = new GithubCallbackController(
+            $this->registryWithProvider(new FakeOAuth2HttpClient()),
+            $this->createMock(UserRepository::class),
+            $this->createMock(JwtHandler::class),
+            $store,
+            null,
+            null,
+            null,
+            $this->pluginWithSettings([
+                'client_id' => 'cid',
+                'client_secret' => 'sec',
+                'redirect_uri' => 'https://' . self::HOST . ':8096/auth/github/callback',
+            ]),
+        );
+        $ok = $withSetting->authorize($request, []);
+        $this->assertSame(302, $ok->statusCode);
+        $params = [];
+        parse_str((string) parse_url($ok->headers['Location'] ?? '', PHP_URL_QUERY), $params);
+        $this->assertSame('https://' . self::HOST . ':8096/auth/github/callback', $params['redirect_uri'] ?? null);
+    }
+
+    /**
+     * `PHLIX_DOMAIN` WITH a port is the mirror case: only that exact authority
+     * starts the flow, and the port is carried into the derived callback.
+     */
+    public function test_a_configured_port_is_required_and_carried_into_the_callback(): void
+    {
+        putenv('PHLIX_DOMAIN=' . self::HOST . ':8443');
+
+        $store = new CountingOAuth2StateStore();
+        $controller = new GithubCallbackController(
+            $this->registryWithProvider(new FakeOAuth2HttpClient()),
+            $this->createMock(UserRepository::class),
+            $this->createMock(JwtHandler::class),
+            $store,
+        );
+
+        $ported = new Request();
+        $ported->headers['Host'] = self::HOST . ':8443';
+        $ported->query = ['redirect_uri' => '/app'];
+        $response = $controller->authorize($ported, []);
+
+        $this->assertSame(302, $response->statusCode);
+        $params = [];
+        parse_str((string) parse_url($response->headers['Location'] ?? '', PHP_URL_QUERY), $params);
+        $this->assertSame('https://' . self::HOST . ':8443/auth/github/callback', $params['redirect_uri'] ?? null);
+
+        // A bare Host is now a DIFFERENT origin and fails closed.
+        $bare = $controller->authorize($this->authorizeRequest('/app'), []);
+        $this->assertSame(503, $bare->statusCode);
+        $this->assertSame('callback_url_not_configured', $this->errorCode($bare));
+    }
+
+    // -----------------------------------------------------------------------
     // Review r2 NEW-10 — the spent correlation cookie is expired once the
     // one-shot state has been consumed.
     // -----------------------------------------------------------------------

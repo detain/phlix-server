@@ -15,6 +15,8 @@ use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Metadata\Resolution\SourceRegistry;
 use Phlix\Media\Transcoding\FfmpegRunner;
 use Phlix\Plugins\Exception\PluginNotFoundException;
+use Phlix\Plugins\Github\Controller\GithubAdminController;
+use Phlix\Plugins\Github\Plugin as GithubPlugin;
 use Phlix\Plugins\InstalledPlugin;
 use Phlix\Plugins\Ldap\Controller\LdapAdminController;
 use Phlix\Plugins\Ldap\Plugin as LdapPlugin;
@@ -189,6 +191,7 @@ final class AdminRoutesTest extends TestCase
         ) implements ContainerInterface {
             private Plugin $oidcPlugin;
             private LdapPlugin $ldapPlugin;
+            private GithubPlugin $githubPlugin;
 
             public function __construct(
                 private readonly FakePluginLoader $loader,
@@ -222,6 +225,11 @@ final class AdminRoutesTest extends TestCase
                 mkdir($ldapTempDir, 0775, true);
                 LdapPlugin::setPluginDirectory($ldapTempDir);
                 $this->ldapPlugin = new LdapPlugin();
+
+                $githubTempDir = sys_get_temp_dir() . '/phlix_github_test_' . uniqid('', true);
+                mkdir($githubTempDir, 0775, true);
+                GithubPlugin::setPluginDirectory($githubTempDir);
+                $this->githubPlugin = new GithubPlugin();
             }
 
             public function get(string $id): mixed
@@ -246,6 +254,7 @@ final class AdminRoutesTest extends TestCase
                                 $registry,
                                 $this->oidcPlugin,
                                 $this->ldapPlugin,
+                                $this->githubPlugin,
                             ),
                         );
                     })(),
@@ -254,6 +263,9 @@ final class AdminRoutesTest extends TestCase
                     ),
                     LdapAdminController::class => new LdapAdminController(
                         $this->ldapPlugin,
+                    ),
+                    GithubAdminController::class => new GithubAdminController(
+                        $this->githubPlugin,
                     ),
                     StatsController::class     => $this->statsController,
                     DashboardController::class => $this->dashboardController,
@@ -290,6 +302,7 @@ final class AdminRoutesTest extends TestCase
                     AuthProviderController::class,
                     OidcAdminController::class,
                     LdapAdminController::class,
+                    GithubAdminController::class,
                     StatsController::class,
                     DashboardController::class,
                     BackupController::class,

@@ -361,12 +361,29 @@ class WebPortalRouter
             // P4-S3: TMDB box-set collection with members
             $r->get('/api/v1/collections/{id}', [$this, 'getCollection']);
 
-            // P7-S1: Music library API (Artist→Album→Track hierarchy)
-            $r->get('/api/v1/music/artists', [$this, 'getMusicArtists']);
-            $r->get('/api/v1/music/artists/{id}', [$this, 'getMusicArtist']);
-            $r->get('/api/v1/music/albums/{id}', [$this, 'getMusicAlbum']);
-            $r->get('/api/v1/music/tracks', [$this, 'getMusicTracks']);
-            $r->get('/api/v1/music/tracks/{id}', [$this, 'getMusicTrack']);
+            // P7-S1: Music library API (Artist→Album→Track hierarchy).
+            //
+            // S99: the five music GET routes that used to live here were deleted.
+            // They were unreachable — HttpHandler runs Application::dispatch()
+            // first and only falls through to this router on a 404, and
+            // Application::loadMusicRoutes() registers all seven music paths to
+            // MusicController — and every one of them was ALSO
+            // contract-incompatible, though for three different reasons (S99
+            // review r1, LOW-7 — do not collapse these into "they took an int
+            // PK", which was true of only two):
+            //   * getMusicArtist / getMusicAlbum took an int PK where every
+            //     client sends a name/title, so `(int)'Pink Floyd'` = 0 → 404;
+            //   * getMusicArtists DID read the real music_* tables but returned
+            //     MusicArtistWithAlbums::toArray(), i.e. a NESTED
+            //     `{artist:{…},album_count,…}` envelope in which phlix-ui's
+            //     normalizeMusicArtist (which reads top-level `name`) sees
+            //     undefined and renders 'Unknown Artist';
+            //   * getMusicTracks also read the real tables but emitted `id` =
+            //     music_tracks.id (the internal int PK) with `stream_url: null`,
+            //     so playback 404'd;
+            //   * and there was no `/albums` list route here at all.
+            // `POST /api/v1/music/scan` STAYS: Application registers no POST
+            // music route, so this is the only registration of that path.
             $r->post('/api/v1/music/scan', [$this, 'scanMusicDirectory']);
         }, [$auth]);
 
@@ -2863,185 +2880,6 @@ class WebPortalRouter
     // -------------------------------------------------------------------------
 
     /**
-     * Lists all music artists.
-     *
-     * GET /api/v1/music/artists
-     *
-     * @param Request $request The HTTP request with optional query params:
-     *   - limit: Maximum artists to return (default: 50, max: 100)
-     *   - offset: Number of artists to skip for pagination (default: 0)
-     * @param array<string, string> $params Route parameters (unused)
-     *
-     * @return Response JSON response with artists array and pagination info
-     *
-     * @api_endpoint GET /api/v1/music/artists
-     */
-    public function getMusicArtists(Request $request, array $params): Response
-    {
-        if ($this->musicLibraryService === null) {
-            return (new Response())->status(503)->json(['error' => 'Music library service not configured']);
-        }
-
-        // SECURITY: single shared clamp policy (PageLimit).
-        $limit = $request->queryPageSize('limit', 50);
-        $offset = $request->queryOffset();
-
-        $artists = $this->musicLibraryService->getAllArtists($limit, $offset);
-        $total = $this->musicLibraryService->getArtistsCount();
-
-        return (new Response())->json([
-            'artists' => array_map(fn($a) => $a->toArray(), $artists),
-            'total' => $total,
-            'limit' => $limit,
-            'offset' => $offset,
-        ]);
-    }
-
-    /**
-     * Gets a single music artist with their albums.
-     *
-     * GET /api/v1/music/artists/{id}
-     *
-     * @param Request $request The HTTP request (unused)
-     * @param array<string, string> $params Route parameters including 'id'
-     *
-     * @return Response JSON response with artist + albums or 404 error
-     *
-     * @api_endpoint GET /api/v1/music/artists/{id}
-     */
-    public function getMusicArtist(Request $request, array $params): Response
-    {
-        if ($this->musicLibraryService === null) {
-            return (new Response())->status(503)->json(['error' => 'Music library service not configured']);
-        }
-
-        $id = $this->parseIntParam($params['id'] ?? '');
-        if ($id === null) {
-            return (new Response())->status(400)->json(['error' => 'Invalid artist ID']);
-        }
-
-        $artistData = $this->musicLibraryService->getArtistWithAlbums($id);
-        if ($artistData === null) {
-            return (new Response())->status(404)->json(['error' => 'Artist not found']);
-        }
-
-        return (new Response())->json($artistData->toArray());
-    }
-
-    /**
-     * Gets a single album with its tracks.
-     *
-     * GET /api/v1/music/albums/{id}
-     *
-     * @param Request $request The HTTP request (unused)
-     * @param array<string, string> $params Route parameters including 'id'
-     *
-     * @return Response JSON response with album + tracks or 404 error
-     *
-     * @api_endpoint GET /api/v1/music/albums/{id}
-     */
-    public function getMusicAlbum(Request $request, array $params): Response
-    {
-        if ($this->musicLibraryService === null) {
-            return (new Response())->status(503)->json(['error' => 'Music library service not configured']);
-        }
-
-        $id = $this->parseIntParam($params['id'] ?? '');
-        if ($id === null) {
-            return (new Response())->status(400)->json(['error' => 'Invalid album ID']);
-        }
-
-        $albumData = $this->musicLibraryService->getAlbum($id);
-        if ($albumData === null) {
-            return (new Response())->status(404)->json(['error' => 'Album not found']);
-        }
-
-        return (new Response())->json($albumData->toArray());
-    }
-
-    /**
-     * Gets all tracks with pagination.
-     *
-     * GET /api/v1/music/tracks
-     *
-     * @param Request $request The HTTP request with optional limit/offset query params
-     * @param array<string, string> $params Route parameters (unused)
-     *
-     * @return Response JSON response with tracks array and pagination info
-     *
-     * @api_endpoint GET /api/v1/music/tracks
-     */
-    public function getMusicTracks(Request $request, array $params): Response
-    {
-        if ($this->musicLibraryService === null) {
-            return (new Response())->status(503)->json(['error' => 'Music library service not configured']);
-        }
-
-        // SECURITY: single shared clamp policy (PageLimit).
-        $limit = $request->queryPageSize('limit', 100);
-        $offset = $request->queryOffset();
-
-        $tracks = $this->musicLibraryService->getAllTracks($limit, $offset);
-        $total = $this->musicLibraryService->getTracksCount();
-
-        // Shape tracks for the client with the fields normalizeMusicTrack expects
-        $shapedTracks = [];
-        foreach ($tracks as $row) {
-            if (!is_array($row)) {
-                continue;
-            }
-            $rawId = $row['id'] ?? null;
-            $shapedTracks[] = [
-                'id' => is_string($rawId) ? $rawId : (is_scalar($rawId) ? (string) $rawId : ''),
-                'title' => is_string($row['title'] ?? null) ? $row['title'] : 'Unknown Track',
-                'artist' => is_string($row['artist_name'] ?? null) ? $row['artist_name'] : null,
-                'album' => is_string($row['album_name'] ?? null) ? $row['album_name'] : null,
-                'track_number' => is_numeric($row['track_number'] ?? null) ? (int)$row['track_number'] : null,
-                'duration_secs' => is_numeric($row['duration_secs'] ?? null) ? (int)$row['duration_secs'] : 0,
-                'stream_url' => null, // Client resolves via getTrack(id) lazily
-            ];
-        }
-
-        return (new Response())->json([
-            'tracks' => $shapedTracks,
-            'total' => $total,
-            'limit' => $limit,
-            'offset' => $offset,
-        ]);
-    }
-
-    /**
-     * Gets a single track.
-     *
-     * GET /api/v1/music/tracks/{id}
-     *
-     * @param Request $request The HTTP request (unused)
-     * @param array<string, string> $params Route parameters including 'id'
-     *
-     * @return Response JSON response with track or 404 error
-     *
-     * @api_endpoint GET /api/v1/music/tracks/{id}
-     */
-    public function getMusicTrack(Request $request, array $params): Response
-    {
-        if ($this->musicLibraryService === null) {
-            return (new Response())->status(503)->json(['error' => 'Music library service not configured']);
-        }
-
-        $id = $this->parseIntParam($params['id'] ?? '');
-        if ($id === null) {
-            return (new Response())->status(400)->json(['error' => 'Invalid track ID']);
-        }
-
-        $track = $this->musicLibraryService->getTrack($id);
-        if ($track === null) {
-            return (new Response())->status(404)->json(['error' => 'Track not found']);
-        }
-
-        return (new Response())->json(['track' => $track->toArray()]);
-    }
-
-    /**
      * Triggers a music directory scan.
      *
      * POST /api/v1/music/scan
@@ -3078,22 +2916,6 @@ class WebPortalRouter
         $result = $this->musicLibraryService->scanDirectory($path);
 
         return (new Response())->json($result->toArray());
-    }
-
-    /**
-     * Parses an integer route parameter safely.
-     *
-     * @param string $value Raw parameter value
-     *
-     * @return int|null Parsed integer or null if invalid
-     */
-    private function parseIntParam(string $value): ?int
-    {
-        if ($value === '' || !is_numeric($value)) {
-            return null;
-        }
-        $intVal = (int)$value;
-        return $intVal > 0 ? $intVal : null;
     }
 
     /**

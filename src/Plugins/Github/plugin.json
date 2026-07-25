@@ -1,0 +1,31 @@
+{
+    "name": "phlix-plugin-github",
+    "version": "1.0.0",
+    "phlix_min_server_version": "0.102.0",
+    "type": "auth-provider",
+    "entry": "Phlix\\Plugins\\Github\\Plugin",
+    "settings": {
+        "client_id": {
+            "type": "string",
+            "required": true,
+            "secret": false
+        },
+        "client_secret": {
+            "type": "string",
+            "required": true,
+            "secret": true
+        },
+        "scopes": {
+            "type": "string",
+            "required": false,
+            "default": "read:user user:email",
+            "secret": false
+        },
+        "redirect_uri": {
+            "type": "string",
+            "required": false,
+            "secret": false
+        }
+    },
+    "events": []
+}

@@ -2055,6 +2055,25 @@ class Application
      * into a {@see Request} (via {@see Request::fromWorkerman()}) and
      * sending the response back over the connection.
      *
+     * ## `HEAD` replies: this layer is OUTSIDE the router's guarantee
+     *
+     * {@see Router::markHeadOnly()} flags every `HEAD` reply the router returns from
+     * a matched route, which is what keeps a single `Content-Length` on the wire
+     * (RFC 9110 §8.6). The middleware chain built here runs *before* the router, so a
+     * global middleware that SHORT-CIRCUITS (returns a {@see Response} instead of
+     * calling `$next`) never reaches that flag and its reply therefore still ships
+     * its body on a `HEAD`. That is bounded, not unnoticed: the only global
+     * middleware that can short-circuit today is
+     * {@see \Phlix\Server\Http\Middleware\AccessScheduleMiddleware}, whose three
+     * refusals declare no `Content-Length` of their own, so Workerman's generated one
+     * is the only one on the wire — the recoverable "body on a HEAD" shape
+     * (RFC 9110 §9.3.2), not the unrecoverable two-length one, and it moves together
+     * with the other sites of that shape ({@see Router::notFound()},
+     * {@see \Phlix\Server\Workerman\HttpHandler}'s SPA/static/404 replies). A global
+     * middleware that declares its own `Content-Length` on a short-circuit WOULD ship
+     * two; `ApplicationHeadOnlyBoundaryTest` pins both halves of that so neither can
+     * drift silently.
+     *
      * @param Request $request The HTTP request to dispatch.
      *
      * @return Response The response produced by the matching route's
@@ -2115,7 +2134,9 @@ class Application
             return $this->router->dispatch($request);
         };
 
-        // Apply global middleware in reverse order (so first registered runs first)
+        // Apply global middleware in reverse order (so first registered runs first).
+        // Same HEAD boundary as {@see self::dispatch()} — a global middleware that
+        // short-circuits returns before Router::markHeadOnly() can flag the reply.
         $handler = $finalHandler;
         foreach (array_reverse($this->middleware) as $currentHandler) {
             $nextHandler = $handler;
@@ -4039,38 +4060,27 @@ class Application
     /**
      * Returns a MusicController instance.
      *
+     * S99: the controller reads the normalized `music_*` tables through
+     * {@see \Phlix\Media\Music\MusicLibraryService}, so it no longer needs the
+     * `MusicLibraryManager` / `LibraryManager` / `AudioScanner` /
+     * `MetadataManager` graph this factory used to build — those fed the
+     * `media_items.metadata_json` read path, which the music scanner never
+     * populates. This is the ONLY construction site for MusicController
+     * (`public/index.php` dispatches WebPortalRouter, not this router, and no DI
+     * provider registers the class), so the two-argument signature is mirrored
+     * here and nowhere else.
+     *
      * @return \Phlix\Server\Http\Controllers\MusicController The controller instance.
      */
     private function getMusicController(): \Phlix\Server\Http\Controllers\MusicController
     {
         $db = $this->createDatabaseConnection();
-        $itemRepo = new \Phlix\Media\Library\ItemRepository($db);
         $musicScanner = new \Phlix\Media\Music\MusicLibraryScanner($db, new \Phlix\Media\Transcoding\FfmpegRunner());
         $musicLibraryService = new \Phlix\Media\Music\MusicLibraryService($db, $musicScanner);
-        $libraryManager = new \Phlix\Media\Library\LibraryManager(
-            $db,
-            new \Phlix\Media\Library\MediaScanner(
-                $db,
-                $itemRepo
-            ),
-            new \Phlix\Media\Library\FolderWatcher(),
-            $musicLibraryService
-        );
         $sessionManager = new \Phlix\Session\SessionManager($db);
-        $audioScanner = new \Phlix\Media\Library\AudioScanner($db, $itemRepo);
-        $metadataManager = new \Phlix\Media\Metadata\MetadataManager(
-            $itemRepo
-        );
-        $musicManager = new \Phlix\Media\Library\MusicLibraryManager(
-            $audioScanner,
-            $metadataManager,
-            $itemRepo,
-            $db
-        );
 
         return new \Phlix\Server\Http\Controllers\MusicController(
-            $musicManager,
-            $libraryManager,
+            $musicLibraryService,
             $sessionManager
         );
     }

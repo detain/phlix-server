@@ -12,7 +12,8 @@ declare(strict_types=1);
 namespace Phlix\Plugins\Oidc;
 
 use Phlix\Plugins\Contract\LifecycleInterface;
-use Phlix\Shared\Plugin\LifecycleInterface as SharedLifecycleInterface;
+use Phlix\Plugins\PluginDbSettings;
+use Phlix\Plugins\Repository\PluginSettingsStore;
 use Phlix\Auth\AuthProviderRegistry;
 use Psr\Container\ContainerInterface;
 
@@ -22,14 +23,25 @@ use Psr\Container\ContainerInterface;
  * Implements LifecycleInterface to integrate with the Phlix plugin
  * system. On enable, registers the OidcProvider with the AuthProviderRegistry.
  *
+ * S48: provider configuration now persists in the DB-backed `plugin_settings`
+ * store ({@see PluginDbSettings}) instead of a hand-rolled `settings.json`. When
+ * no DB store is injected (unit tests, no-DB contexts) it transparently falls
+ * back to the legacy file store, and the first DB-backed read imports any
+ * existing settings.json so no operator loses their configured OIDC settings.
+ *
  * @package Phlix\Plugins\Oidc
  * @since 0.11.0
  */
 final class Plugin implements LifecycleInterface
 {
+    use PluginDbSettings;
+
+    /** The `plugin_settings.plugin_name` / registry family key. */
+    public const string PLUGIN_NAME = 'oidc';
+
     private static ?string $pluginDirectory = null;
 
-    /** @var array<string, string>|null Cached settings to avoid repeated file reads */
+    /** @var array<string, mixed>|null Cached file settings to avoid repeated file reads */
     private static ?array $cachedSettings = null;
 
     /** @var int|null Timestamp when cached settings were loaded */
@@ -37,6 +49,11 @@ final class Plugin implements LifecycleInterface
 
     /** @var int Cache TTL in seconds (60 seconds) */
     private const CACHE_TTL = 60;
+
+    public function __construct(?PluginSettingsStore $store = null)
+    {
+        $this->settingsStore = $store;
+    }
 
     public static function setPluginDirectory(string $directory): void
     {
@@ -47,7 +64,7 @@ final class Plugin implements LifecycleInterface
         // plugin at a fresh temp dir per case, or an operator relocating the
         // plugin's data dir at runtime) the old cache would otherwise leak
         // into the new directory's context. Invalidate eagerly so the next
-        // loadSettings() call re-reads from the new location.
+        // loadFileSettings() call re-reads from the new location.
         self::$cachedSettings = null;
         self::$cacheTimestamp = null;
     }
@@ -60,8 +77,13 @@ final class Plugin implements LifecycleInterface
         return __DIR__;
     }
 
+    protected function settingsStoreKey(): string
+    {
+        return self::PLUGIN_NAME;
+    }
+
     /**
-     * @param array<string, string> $settings
+     * @param array<string, mixed> $settings
      * @return array<string, string>
      */
     private function filterSettings(array $settings): array
@@ -77,7 +99,7 @@ final class Plugin implements LifecycleInterface
 
     public function onEnable(ContainerInterface $container): void
     {
-        $settings = $this->filterSettings($this->loadSettings());
+        $settings = $this->filterSettings($this->getSettings());
 
         $discovery = new DiscoveryDocument(
             $settings['provider_url'] ?? '',
@@ -108,9 +130,13 @@ final class Plugin implements LifecycleInterface
     }
 
     /**
-     * @return array<string, string>
+     * Legacy on-disk settings.json reader (no-DB fallback + one-time import
+     * source). Retains the 60s memory cache for the file path.
+     * {@see PluginDbSettings::getSettings()}.
+     *
+     * @return array<string, mixed>
      */
-    private function loadSettings(): array
+    protected function loadFileSettings(): array
     {
         $now = time();
 
@@ -135,36 +161,31 @@ final class Plugin implements LifecycleInterface
             self::$cacheTimestamp = $now;
             return [];
         }
+        /** @var mixed $decoded */
         $decoded = json_decode($content, true);
         if (!is_array($decoded)) {
             self::$cachedSettings = [];
             self::$cacheTimestamp = $now;
             return [];
         }
-        /** @var array<string, string> $decoded */
+        /** @var array<string, mixed> $decoded */
         self::$cachedSettings = $decoded;
         self::$cacheTimestamp = $now;
         return $decoded;
     }
 
     /**
-     * @param array<string, string> $settings
+     * Legacy on-disk settings.json writer (no-DB fallback only).
+     *
+     * @param array<string, mixed> $settings
      */
-    public function saveSettings(array $settings): void
+    protected function persistFileSettings(array $settings): void
     {
         $settingsFile = self::getPluginDirectory() . '/settings.json';
         file_put_contents($settingsFile, json_encode($settings, JSON_PRETTY_PRINT));
 
-        // Invalidate cache so next loadSettings() reads fresh data
+        // Invalidate cache so next loadFileSettings() reads fresh data
         self::$cachedSettings = null;
         self::$cacheTimestamp = null;
-    }
-
-    /**
-     * @return array<string, string>
-     */
-    public function getSettings(): array
-    {
-        return $this->loadSettings();
     }
 }

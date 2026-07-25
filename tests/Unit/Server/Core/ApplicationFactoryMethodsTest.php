@@ -180,27 +180,57 @@ class ApplicationFactoryMethodsTest extends TestCase
     }
 
     /**
-     * Test getMusicController creates a MusicController with the new 4-argument LibraryManager.
+     * Pins the dependency graph `Application::getMusicController()` builds.
      *
-     * This test verifies that getMusicController() correctly creates MusicLibraryScanner
-     * and MusicLibraryService before creating LibraryManager with 4 arguments.
+     * S99 collapsed it: the factory used to build
+     * `LibraryManager(db, MediaScanner, FolderWatcher, musicLibraryService)` and
+     * `MusicLibraryManager(audioScanner, metadataManager, itemRepo, db)` on every
+     * boot just to hand `MusicController` a reader that read
+     * `media_items.metadata_json`, which the music scanner never populates. The
+     * controller now takes `(MusicLibraryService, SessionManager)` — the `music_*`
+     * tables — and nothing else.
      *
-     * Note: This test uses the non-container path (container is null) to verify
-     * the direct instantiation path which creates MusicLibraryService.
+     * Until this round the test above this line described the DELETED graph behind
+     * `expectNotToPerformAssertions()`, i.e. it would have passed forever while
+     * documenting the wrong thing (S99 review r1, LOW-6). This repo has already
+     * misdiagnosed the music read path three times off stale documentation, so the
+     * ctor is now asserted rather than described: re-adding `MusicLibraryManager`
+     * or `LibraryManager` here fails this test.
      */
-    public function testGetMusicControllerCreatesCorrectDependencies(): void
+    public function testGetMusicControllerBuildsTheTwoArgumentMusicGraph(): void
     {
-        // This test would verify the structure of MusicController creation
-        // In the non-container path, the factory creates:
-        // - MusicLibraryScanner(db, FfmpegRunner)
-        // - MusicLibraryService(db, musicScanner)
-        // - LibraryManager(db, MediaScanner, FolderWatcher, musicLibraryService)
-        // - MusicLibraryManager(audioScanner, metadataManager, itemRepo, db)
-        // - MusicController(musicManager, libraryManager, sessionManager)
+        $ctor = new \ReflectionMethod(MusicController::class, '__construct');
 
-        // Since we can't easily mock the internal creation without a real DB,
-        // this test documents the expected behavior (no runtime assertion).
-        $this->expectNotToPerformAssertions();
+        $parameterTypes = array_map(
+            static function (\ReflectionParameter $p): ?string {
+                $type = $p->getType();
+
+                return $type instanceof \ReflectionNamedType ? $type->getName() : null;
+            },
+            $ctor->getParameters(),
+        );
+
+        $this->assertSame(
+            [MusicLibraryService::class, \Phlix\Session\SessionManager::class],
+            $parameterTypes,
+            'MusicController must read the music_* tables via MusicLibraryService only',
+        );
+
+        // The factory itself must not reference the graph S99 deleted.
+        $factory = new \ReflectionMethod(Application::class, 'getMusicController');
+        $file = $factory->getFileName();
+        $this->assertIsString($file);
+        $source = (string) file_get_contents($file);
+        $body = implode(
+            "\n",
+            array_slice(
+                explode("\n", $source),
+                (int) $factory->getStartLine() - 1,
+                (int) $factory->getEndLine() - (int) $factory->getStartLine() + 1,
+            ),
+        );
+        $this->assertStringNotContainsString('MusicLibraryManager', $body);
+        $this->assertStringContainsString('MusicLibraryService', $body);
     }
 
     /**

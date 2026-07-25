@@ -371,6 +371,14 @@ class MusicLibraryManager
      *
      * Groups tracks by artist name from metadata and returns artist list.
      *
+     * ⚠ NOT the API read path (S99). The music scanner stamps only
+     * `{"name","sub_type"}` into `media_items.metadata_json`, so
+     * `$metadata['artist']` here is never populated on scanner-indexed tracks and
+     * every row collapses into one `'Unknown Artist'`. `/api/v1/music/artists`
+     * therefore reads {@see \Phlix\Media\Music\MusicLibraryService::getAllArtists()}
+     * (the normalized `music_artists` table). This method is retained only for
+     * callers that hydrate `metadata_json` themselves.
+     *
      * @param string $libraryId The library's unique identifier
      * @return array<int, array<string, mixed>> Array of artist data
      */
@@ -408,6 +416,10 @@ class MusicLibraryManager
      *
      * Groups tracks by album name from metadata and returns album list.
      *
+     * ⚠ NOT the API read path (S99) — same `metadata_json` blind spot as
+     * {@see self::getArtists()}. `/api/v1/music/albums` reads
+     * {@see \Phlix\Media\Music\MusicLibraryService::getAllAlbums()}.
+     *
      * @param string $libraryId The library's unique identifier
      * @return array<int, array<string, mixed>> Array of album data
      */
@@ -442,6 +454,11 @@ class MusicLibraryManager
 
     /**
      * Gets all tracks from a music library.
+     *
+     * ⚠ NOT the API read path (S99): these are raw `media_items` rows whose
+     * `metadata_json` carries no audio tags, so artist/album/year/duration all
+     * read as null. `/api/v1/music/tracks` reads
+     * {@see \Phlix\Media\Music\MusicLibraryService::getAllTracks()}.
      *
      * @param string $libraryId The library's unique identifier
      * @param int $limit Maximum number of tracks to return

@@ -12,6 +12,8 @@ declare(strict_types=1);
 namespace Phlix\Auth;
 
 use Phlix\Admin\SettingsRepository;
+use Phlix\Plugins\Github\GithubOAuthProvider;
+use Phlix\Plugins\Github\Plugin as GithubPlugin;
 use Phlix\Plugins\Ldap\LdapProvider;
 use Phlix\Plugins\Ldap\Plugin as LdapPlugin;
 use Phlix\Plugins\Oidc\DiscoveryDocument;
@@ -20,24 +22,34 @@ use Phlix\Plugins\Oidc\Plugin as OidcPlugin;
 use Phlix\Shared\Auth\ProviderInterface;
 
 /**
- * Persists the enable-state of the built-in OIDC/LDAP auth providers and
+ * Persists the enable-state of the built-in OIDC / LDAP / GitHub auth providers and
  * (re-)registers the enabled + configured ones into the per-worker
  * {@see AuthProviderRegistry}.
  *
  * ## Why a dedicated settings flag, not the plugin pipeline
  *
  * The generic plugin-enable pipeline ({@see \Phlix\Plugins\PluginLoader::bootstrapEnabled()})
- * only iterates rows in the `plugins` DB table, and the bundled `src/Plugins/Oidc`
- * + `src/Plugins/Ldap` are never seeded into that table (there is no built-in
- * plugin seeding — the catalog only installs downloadable plugins into
- * `var/plugins`). They also carry their own `settings.json` config surface
- * ({@see OidcPlugin}/{@see LdapPlugin}), NOT the DB-backed plugin settings store.
- * Turning them into real catalog plugins is a larger migration (S48). Until then
- * the honest, minimal enable-state store is two boolean server settings written
- * through the existing {@see SettingsRepository}:
+ * only iterates rows in the `plugins` DB table, and the bundled `src/Plugins/Oidc`,
+ * `src/Plugins/Ldap` + `src/Plugins/Github` are never seeded into that table (there
+ * is no built-in plugin seeding — the catalog only installs downloadable plugins
+ * into `var/plugins`), and they must not be: a catalog row would double-register the
+ * provider (`bootstrapEnabled()` → `onEnable()` → `registerProvider()` **and**
+ * {@see self::registerEnabledProviders()}) and list a bundled provider in the
+ * catalog UI as an uninstallable download. So the enable-state store is one boolean
+ * server setting per provider, written through the existing
+ * {@see SettingsRepository}:
  *
  *   - `auth.oidc.enabled`
  *   - `auth.ldap.enabled`
+ *   - `auth.github.enabled`   (S48)
+ *
+ * Their CONFIGURATION, by contrast, is DB-backed as of S48: one row per plugin in
+ * the dedicated `plugin_settings` table (migration `093_plugin_settings.sql`) read
+ * through {@see \Phlix\Plugins\Repository\PluginSettingsRepository} and the
+ * {@see \Phlix\Plugins\PluginDbSettings} trait — **not** `settings.json`, which now
+ * survives only as a one-time lazy import source and as the no-DB fallback for unit
+ * tests. Enable-flags stayed in {@see SettingsRepository} deliberately: they are
+ * server settings, and moving them would have re-entangled the two stores.
  *
  * ## Per-worker registration
  *
@@ -47,8 +59,11 @@ use Phlix\Shared\Auth\ProviderInterface;
  * configured provider after a restart/graceful reload. A live admin
  * enable/disable ({@see self::enable()}/{@see self::disable()}) additionally
  * mutates the current worker's registry so the change is effective immediately
- * in at least that worker; the persisted flag governs every other worker on its
- * next boot pass.
+ * in at least that worker; every OTHER worker reconciles on its next request-path
+ * {@see self::ensureProviderRegistered()} — which also notices a CONFIG change made
+ * elsewhere by comparing a content fingerprint of the persisted settings
+ * ({@see self::settingsFingerprint()}) — so neither an enable/disable nor a
+ * settings save needs a restart.
  *
  * Not `final`: it is a collaborator of {@see \Phlix\Server\Http\Controllers\AuthProviderController}
  * and the start.php boot step, so tests substitute a double (mirroring the
@@ -65,21 +80,45 @@ class AuthProviderBootstrapper
     /** Provider name / settings-flag segment for LDAP. */
     public const LDAP = 'ldap';
 
+    /** Provider name / settings-flag segment for GitHub OAuth (S48). */
+    public const GITHUB = 'github';
+
     /**
      * The providers this bootstrapper governs. Anything else is not toggleable
      * through the auth-provider admin endpoints.
      *
      * @var list<string>
      */
-    public const TOGGLEABLE = [self::OIDC, self::LDAP];
+    public const TOGGLEABLE = [self::OIDC, self::LDAP, self::GITHUB];
 
+    /**
+     * @param GithubPlugin|null $githubPlugin S48 GitHub provider settings source.
+     *        Optional (nullable, last) so pre-S48 direct-construction / unit call
+     *        sites — which pass only OIDC + LDAP — keep working. Production DI
+     *        binds it explicitly (PHP-DI skips optional params during autowiring),
+     *        so GitHub is buildable at runtime; when null, GitHub simply cannot be
+     *        built and {@see self::buildGithubProvider()} returns null.
+     */
     public function __construct(
         private readonly SettingsRepository $settings,
         private readonly AuthProviderRegistry $registry,
         private readonly OidcPlugin $oidcPlugin,
         private readonly LdapPlugin $ldapPlugin,
+        private readonly ?GithubPlugin $githubPlugin = null,
     ) {
     }
+
+    /**
+     * Per-worker record of the settings fingerprint each registered provider was
+     * BUILT from, so {@see self::registerProvider()} can notice a settings change
+     * made by another worker and rebuild (S48 review r1, Finding 3).
+     *
+     * Bounded by {@see self::TOGGLEABLE} (three entries) — not request state, so
+     * it cannot grow in resident memory.
+     *
+     * @var array<string, string>
+     */
+    private array $builtFrom = [];
 
     /**
      * Dotted server-settings key holding a provider's boolean enable flag.
@@ -170,6 +209,7 @@ class AuthProviderBootstrapper
         if ($this->registry->hasProvider($provider)) {
             $this->registry->unregisterProvider($provider);
         }
+        unset($this->builtFrom[$provider]);
 
         return false;
     }
@@ -195,36 +235,91 @@ class AuthProviderBootstrapper
     {
         $this->settings->set(self::flagKey($provider), false, 'bool');
         $this->registry->unregisterProvider($provider);
+        unset($this->builtFrom[$provider]);
     }
 
     /**
-     * Register the given provider if configured and not already present.
+     * Drop and rebuild a provider's live registration in THIS worker so a just-saved
+     * settings change takes effect immediately (S48 review r1, Finding 3).
+     *
+     * The admin settings endpoints call this after a successful write. Without it
+     * {@see self::registerProvider()}'s `hasProvider()` fast-path would keep the
+     * provider built from the OLD credentials until a restart — an operator fixing
+     * a mistyped `client_secret` would see logins keep failing on this worker.
+     *
+     * The OTHER workers do not need this call: they pick the change up on their
+     * next request-path {@see self::ensureProviderRegistered()}, which compares the
+     * persisted settings fingerprint with the one they built from.
+     *
+     * @param string $provider One of {@see self::TOGGLEABLE}.
+     * @return bool True when the provider is live in this worker afterwards.
+     */
+    public function refresh(string $provider): bool
+    {
+        if (!$this->isToggleable($provider)) {
+            return false;
+        }
+
+        $this->registry->unregisterProvider($provider);
+        unset($this->builtFrom[$provider]);
+
+        return $this->ensureProviderRegistered($provider);
+    }
+
+    /**
+     * Register the given provider if configured, rebuilding it when the persisted
+     * settings changed since this worker built the live instance.
      *
      * @return bool True when the provider is now (or was already) registered.
      */
     private function registerProvider(string $provider): bool
     {
-        if ($this->registry->hasProvider($provider)) {
+        // Finding 3 — a settings save on ANOTHER worker is invisible to this one,
+        // and the hasProvider() fast-path below would keep serving the stale
+        // instance forever. Comparing the persisted settings fingerprint makes the
+        // DB authoritative: identical fingerprint → cheap no-op; changed → rebuild.
+        $fingerprint = $this->settingsFingerprint($provider);
+
+        if (
+            $this->registry->hasProvider($provider)
+            && ($this->builtFrom[$provider] ?? null) === $fingerprint
+        ) {
             return true;
         }
 
+        // BUILD FIRST, THEN SWAP (S48 review r2, NEW-5). The previous order —
+        // unregister, build, register — left the registry EMPTY across the settings
+        // read inside buildProvider(), which YIELDS the event loop under Swoole.
+        // A concurrent coroutine that had already passed its own
+        // ensureProviderRegistered() and was sitting at resolveProvider() would then
+        // observe hasProvider() === false and answer 503 provider_not_configured on
+        // a perfectly valid login — the same failure class as the S44 cross-worker
+        // 503. Building before touching the registry closes the window: the
+        // unregister+register pair below performs no I/O, so it cannot yield.
         $instance = $this->buildProvider($provider);
         if ($instance === null) {
+            // Not (or no longer) configured: drop any registration built from the
+            // superseded settings so this worker stops serving it.
+            if ($this->registry->hasProvider($provider)) {
+                $this->registry->unregisterProvider($provider);
+            }
+            unset($this->builtFrom[$provider]);
+
             return false;
         }
 
-        // Race-safe register (S44 review r2, Finding A). Under Swoole two
-        // concurrent coroutines in the SAME worker can both pass the
-        // hasProvider() fast-path above and both reach the registry: the
-        // settings read buildProvider() performs yields the event loop once
-        // S48 makes the enable-flag/settings store DB-backed. The registry's
-        // registerProvider() throws \RuntimeException on a duplicate instance
-        // key, so the loser would otherwise get an uncaught throw → 500 on a
-        // valid login. Swallow ONLY a genuine lost race — where the instance is
+        // Race-safe swap (S44 review r2, Finding A). Under Swoole two concurrent
+        // coroutines in the SAME worker can both pass the fast-path above and both
+        // reach the registry: the settings read buildProvider() performs yields the
+        // event loop once S48 makes the enable-flag/settings store DB-backed. The
+        // registry's registerProvider() throws \RuntimeException on a duplicate
+        // instance key, so the loser would otherwise get an uncaught throw → 500 on
+        // a valid login. Swallow ONLY a genuine lost race — where the instance is
         // present afterward — and re-raise any other RuntimeException so a real
         // registration failure (not a duplicate) still surfaces.
         $instanceKey = $instance->name();
         try {
+            $this->registry->unregisterProvider($instanceKey);
             $this->registry->registerProvider($instance);
         } catch (\RuntimeException $e) {
             if (!$this->registry->hasProvider($instanceKey)) {
@@ -234,7 +329,54 @@ class AuthProviderBootstrapper
             // provider is now live, so treat the duplicate throw as benign.
         }
 
+        $this->builtFrom[$provider] = $fingerprint;
+
         return true;
+    }
+
+    /**
+     * A stable fingerprint of a provider's PERSISTED settings, used to detect a
+     * config change made by another worker (Finding 3).
+     *
+     * Content-hashed rather than timestamped, so a no-op save does not churn the
+     * registry — i.e. it avoids the needless rebuild (and the NEW-5 swap) on every
+     * request. It is NOT about the OIDC discovery/JWKS caches, as this comment
+     * previously claimed (review r2, NEW-4): both of those are STATIC
+     * ({@see \Phlix\Plugins\Oidc\DiscoveryDocument}'s memory+disk cache and
+     * {@see \Phlix\Plugins\Oidc\IdTokenValidator}'s JWKS cache), so a rebuilt
+     * OidcProvider refills them with no network I/O regardless.
+     *
+     * Returns '' when the provider has no settings source, which simply disables
+     * the check (the pre-review behaviour).
+     *
+     * ## DO NOT memoise this read (review r2, NEW-6 — deliberately left as is)
+     *
+     * The `$plugin->getSettings()` call below IS the cross-worker freshness
+     * mechanism this whole method exists for. Caching it in worker-global state
+     * (`static`, or a property on this long-lived bootstrapper) would make the
+     * fingerprint answer from the same worker's stale copy and silently re-break
+     * review r1 finding 3: a settings save on ANOTHER worker would again be
+     * invisible forever, and this worker would keep serving the superseded provider
+     * instance. It is one indexed single-row read per authorize; a legitimate
+     * optimisation would be REQUEST-scoped memoisation via `support\Context` (never
+     * a static — that is a resident-memory leak and cross-request state leakage),
+     * threaded down from the controller so the fingerprint and
+     * `resolveCallbackUrl()` share one read. That is real plumbing, tracked
+     * separately — not a drive-by cache.
+     */
+    private function settingsFingerprint(string $provider): string
+    {
+        $plugin = match ($provider) {
+            self::OIDC => $this->oidcPlugin,
+            self::LDAP => $this->ldapPlugin,
+            self::GITHUB => $this->githubPlugin,
+            default => null,
+        };
+        if ($plugin === null) {
+            return '';
+        }
+
+        return hash('sha256', (string) json_encode($plugin->getSettings()));
     }
 
     /**
@@ -249,6 +391,7 @@ class AuthProviderBootstrapper
         return match ($provider) {
             self::OIDC => $this->buildOidcProvider(),
             self::LDAP => $this->buildLdapProvider(),
+            self::GITHUB => $this->buildGithubProvider(),
             default => null,
         };
     }
@@ -320,5 +463,38 @@ class AuthProviderBootstrapper
             userFilter: $userFilter,
             adminGroup: $adminGroup,
         );
+    }
+
+    /**
+     * Build a {@see GithubOAuthProvider} from the GitHub plugin's saved settings
+     * (S48).
+     *
+     * "Configured" mirrors {@see \Phlix\Plugins\Github\Controller\GithubAdminController}:
+     * a client id AND a client secret are required — a GitHub OAuth App is a
+     * confidential client (no PKCE-only public flow), so both are mandatory before
+     * the provider can be brought live.
+     *
+     * Returns null when the GitHub plugin is unavailable (pre-S48 construction
+     * without the optional plugin) or not fully configured.
+     */
+    private function buildGithubProvider(): ?GithubOAuthProvider
+    {
+        if ($this->githubPlugin === null) {
+            return null;
+        }
+
+        $settings = $this->githubPlugin->getSettings();
+
+        $clientId = is_string($settings['client_id'] ?? null) ? $settings['client_id'] : '';
+        $clientSecret = is_string($settings['client_secret'] ?? null) ? $settings['client_secret'] : '';
+        if ($clientId === '' || $clientSecret === '') {
+            return null;
+        }
+
+        $scopes = is_string($settings['scopes'] ?? null) && $settings['scopes'] !== ''
+            ? $settings['scopes']
+            : GithubOAuthProvider::DEFAULT_SCOPES;
+
+        return new GithubOAuthProvider($clientId, $clientSecret, $scopes);
     }
 }

@@ -119,7 +119,9 @@ class PhotoLibraryManager
             'path' => $libraryPath,
         ]);
 
-        $startMs = (int)(microtime(true) * 1000);
+        // hrtime(), not microtime() — monotonic elapsed interval (review r2 F6). Only
+        // the DIFFERENCE is used below, so a monotonic nanosecond origin is fine.
+        $startNs = hrtime(true);
 
         try {
             // Scan and upsert each photo
@@ -157,8 +159,7 @@ class PhotoLibraryManager
             $result->errorMessage = $e->getMessage();
         }
 
-        $endMs = (int)(microtime(true) * 1000);
-        $result->durationMs = $endMs - $startMs;
+        $result->durationMs = (int) ((hrtime(true) - $startNs) / 1_000_000.0);
 
         $this->logger->info('Photo library scan complete', [
             'library_id' => $libraryId,

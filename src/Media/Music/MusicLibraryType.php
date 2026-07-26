@@ -72,6 +72,18 @@ final class MusicLibraryType implements \Phlix\Media\Library\LibraryTypeInterfac
         ItemRepository $itemRepo,
         ?LoggerInterface $logger = null
     ): AudioScanner {
+        // This narrowing is FORCED and stays (unlike getLibraryManager()'s, removed in
+        // review r2 F2): `AudioScanner extends MediaScanner`, whose constructor declares
+        // `?StructuredLogger $logger` (`MediaScanner.php:290`). Widening it is a video-
+        // scanner change with an estate-wide blast radius, well outside an Effort-S music
+        // observability step — and `MediaScanner::createDefaultLogger()` mints its own
+        // `/tmp/phlix_media_*` directory.
+        //
+        // ⚠ The pattern is **23** classes, and the follow-up is step **S132** (review r3
+        // finding 9). This comment used to say "one of ~10 copies … recorded as a
+        // follow-up": the count was 2.3x low AND no such step existed, so a reader who
+        // trusted it went looking for work nobody had filed. S132 is the one that widens
+        // `MediaScanner`'s constructor, which is the blocker that keeps this narrowing here.
         $structured = $logger instanceof StructuredLogger ? $logger : null;
         return new AudioScanner($db, $itemRepo, $structured);
     }
@@ -86,7 +98,8 @@ final class MusicLibraryType implements \Phlix\Media\Library\LibraryTypeInterfac
      * @param AudioScanner $scanner Audio scanner
      * @param MetadataManager $metadataManager Metadata manager
      * @param ItemRepository $itemRepo Item repository
-     * @param LoggerInterface|null $logger Optional logger
+     * @param LoggerInterface|null $logger Optional logger. Forwarded AS-IS since review
+     *        r2 F2 — see below for what the old narrowing did.
      * @return \Phlix\Media\Library\MusicLibraryManager Configured music library manager
      */
     public function getLibraryManager(
@@ -96,13 +109,18 @@ final class MusicLibraryType implements \Phlix\Media\Library\LibraryTypeInterfac
         ItemRepository $itemRepo,
         ?LoggerInterface $logger = null
     ): \Phlix\Media\Library\MusicLibraryManager {
-        $structured = $logger instanceof StructuredLogger ? $logger : null;
+        // ⚠ The `$logger instanceof StructuredLogger ? $logger : null` narrowing that used
+        // to be on this line was the SECOND HALF of the S96(a) defect, in a second class
+        // (review r2 F2). It silently threw away any other PSR-3 logger and passed `null`,
+        // which sent `MusicLibraryManager` down its private temp-directory branch — so no
+        // amount of container wiring could have fixed that class either. The manager's
+        // constructor now accepts `?LoggerInterface`, so the logger is forwarded intact.
         return new \Phlix\Media\Library\MusicLibraryManager(
             $scanner,
             $metadataManager,
             $itemRepo,
             $db,
-            $structured
+            $logger
         );
     }
 }

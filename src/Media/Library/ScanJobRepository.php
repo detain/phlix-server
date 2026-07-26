@@ -81,6 +81,33 @@ class ScanJobRepository
      * `$counts` array keys. Only these keys are honoured; anything else in a
      * caller-supplied array is ignored so the SQL column set stays fixed.
      *
+     * `items_failed` (migration 095, S96(f)) is the count of files a scan could not
+     * index. It exists because a partially-failed scan was previously indistinguishable
+     * from a clean one from the outside: {@see ScanResult} had no failure field, the
+     * job row had no failed-file column, and the scanner's own error log went into the
+     * unit's `PrivateTmp`. ⚠ NOTE THE ASYMMETRY WITH `items_updated`, which is the
+     * PROCESSED-FILE count (the progress numerator the admin UI divides by
+     * `items_found`), NOT {@see ScanResult::$updated} — see
+     * {@see LibraryScanWorker::scanProgressSink()}.
+     *
+     * **THE ONE DEFINITION OF `items_added` (review r2 F5).** It is "`media_items` rows
+     * this job created". Mid-scan the live sink writes a LOWER BOUND on that number —
+     * for music, new **track `media_items`** rows only, because the artist/album container
+     * rows are not in the scanner's own `added` tally — and at completion a `rescan`
+     * replaces it with the exact all-types row-count delta. Same quantity, coarser then
+     * finer, which is why the final stamp is allowed to raise it and not to lower it (see
+     * {@see self::MONOTONIC_FINAL_COLUMNS}). This matters to a reader of
+     * {@see self::decodeRow()} because the admin SPA renders the column.
+     *
+     * ⚠ **"track `media_items` rows", not "`music_tracks` rows" (review r3 finding 11).**
+     * The two differ in exactly one shape, and it is a shape that occurs in the field: a
+     * `music_tracks` row inserted against a PRE-EXISTING `media_items` row (a partial
+     * prior scan left the media item but not the track row) is reported `'updated'` by
+     * {@see \Phlix\Media\Music\MusicLibraryScanner}, and is correctly NOT counted here —
+     * because this counter's subject is the `media_items` row, and no `media_items` row
+     * was created. Since this docblock is the single authority for the definition, the
+     * loose wording was the whole ambiguity.
+     *
      * @var list<string>
      */
     private const COUNTER_COLUMNS = [
@@ -88,6 +115,59 @@ class ScanJobRepository
         'items_added',
         'items_updated',
         'items_removed',
+        'items_failed',
+    ];
+
+    /**
+     * Counter columns {@see self::markCompleted()} may only ever RAISE, never lower.
+     *
+     * Both are cumulative tallies of work a job did, as opposed to `items_found` (the
+     * progress DENOMINATOR) and `items_updated` (the progress NUMERATOR), which are
+     * absolute readings the final stamp must be able to correct in either direction.
+     *
+     * ⚠ **WHY, AND WHY THIS SET SHRANK (review r1 LOW-4 → review r2 F5).** r1 found that
+     * a `rescan`'s `items_added` could move BACKWARDS at completion, and r2 objected that
+     * clamping it takes the maximum of two incommensurable metrics. The arithmetic
+     * settles it, so it is written down rather than argued:
+     *
+     *   `rescanLibrary()` computes `added = after − survivors` with
+     *   `survivors = before − removed`, and `after = before + newRows − removed`. Those
+     *   reduce to **`added = newRows`** exactly — every `media_items` row the job
+     *   created, containers included. The live sink's music value is `new track
+     *   media_items rows`, and a track is only counted `'added'` after its own
+     *   `media_items` row is minted,
+     *   so `liveAdded ≤ newRows` ALWAYS. The two are therefore not rival metrics: the
+     *   live one is a **lower bound** on the final one (see
+     *   {@see self::COUNTER_COLUMNS} for the single definition), and `GREATEST` picks the
+     *   exact value in every normal case.
+     *
+     * So the clamp is not a routine max — it is a guard for the one shape where the
+     * inequality can invert (a concurrent deleter shrinking `after`, or a future change
+     * to either metric), where a visible 12 → 3 retraction is strictly worse than
+     * reporting the lower bound. `items_failed` is monotonic by nature within a job.
+     *
+     * **`items_removed` was REMOVED from this set: its clamp was provably inert.** The
+     * only writers are `updateProgress()` in the `prune` and `delete_all` branches, and
+     * BOTH leave `$finalCounts` empty, so `markCompleted()` never clamps them; the only
+     * branch that puts `items_removed` in `$finalCounts` is `rescan`, whose live sink
+     * never writes that key (`scanProgressSink()`'s payload is
+     * `items_found`/`items_updated`/`items_added`/`items_failed` only). The prior value
+     * at clamp time is therefore always the column default 0, and `GREATEST(0, x) = x`.
+     * Keeping it implied a protection that could not fire.
+     *
+     * **No NULL hazard.** `GREATEST(NULL, 5)` is `NULL` in MySQL, but all five `items_*`
+     * columns are `int unsigned NOT NULL DEFAULT 0` (verified against
+     * `information_schema` on a real 8.0.46 server) and the bound parameter is always
+     * `(int) $finalCounts[$column]`, so neither side can be NULL.
+     *
+     * Costs nothing: one SQL function inside the UPDATE that was already being issued —
+     * no extra statement, no read-modify-write, so no race either.
+     *
+     * @var list<string>
+     */
+    private const MONOTONIC_FINAL_COLUMNS = [
+        'items_added',
+        'items_failed',
     ];
 
     /** @var int Lower bound for {@see self::getHistoryForLibrary()} `$limit`. */
@@ -197,9 +277,9 @@ class ScanJobRepository
      * Update the progress counters (and optional current path) of a job.
      *
      * Only the supplied counter keys (`items_found`, `items_added`,
-     * `items_updated`, `items_removed`) are written; unknown keys are ignored.
-     * When neither a recognised counter nor `$currentPath` is supplied the
-     * call is a no-op (no SQL is issued).
+     * `items_updated`, `items_removed`, `items_failed`) are written; unknown keys
+     * are ignored. When neither a recognised counter nor `$currentPath` is supplied
+     * the call is a no-op (no SQL is issued).
      *
      * @param string                     $jobId       Job UUID.
      * @param array<string, int|string> $counts      Map of counter column →
@@ -244,6 +324,12 @@ class ScanJobRepository
      * Mark a job as `completed`, stamping `completed_at` and optionally
      * writing the final counter values.
      *
+     * The cumulative counters in {@see self::MONOTONIC_FINAL_COLUMNS} are written as
+     * `GREATEST(<column>, ?)` so a completion stamp can only ever RAISE what the live
+     * progress sink already observed — see that constant for why (review r1 LOW-4).
+     * `items_found`/`items_updated` are written verbatim: they are the progress
+     * denominator/numerator, i.e. absolute readings rather than tallies.
+     *
      * @param string                     $jobId       Job UUID.
      * @param array<string, int|string>  $finalCounts Optional final counter
      *                                                values; only recognised
@@ -258,7 +344,9 @@ class ScanJobRepository
 
         foreach (self::COUNTER_COLUMNS as $column) {
             if (array_key_exists($column, $finalCounts)) {
-                $assignments[] = $column . ' = ?';
+                $assignments[] = in_array($column, self::MONOTONIC_FINAL_COLUMNS, true)
+                    ? $column . ' = GREATEST(' . $column . ', ?)'
+                    : $column . ' = ?';
                 $params[]      = (int) $finalCounts[$column];
             }
         }
@@ -274,6 +362,25 @@ class ScanJobRepository
     /**
      * Mark a job as `failed`, recording the error message and stamping
      * `completed_at`.
+     *
+     * ⚠ **NO FINAL COUNTERS, BY NECESSITY — a failed job keeps whatever the live
+     * progress sink last wrote (review r1 LOW-7).** The counters are deliberately left
+     * alone rather than zeroed: there is no {@see ScanResult} to read at this point (the
+     * throw destroyed it), and the reaper path — {@see self::reapStaleJobs()}, which is
+     * how a job killed by a RESTART actually ends up `failed` — never runs in the
+     * process that owned the scan at all. What survives is therefore the truth as of the
+     * last throttled progress write, and how good that is depends on the library type:
+     *
+     *  - MUSIC: accurate to within `LibraryScanWorker::PROGRESS_WRITE_EVERY` files. This
+     *    is the case from the live incident (a 4 h scan killed by a restart reporting
+     *    `items_added: 0`) and S96(b) fixed it.
+     *  - VIDEO / PHOTO / BOOK / AUDIOBOOK: still `items_added: 0`. Those paths go
+     *    through {@see MediaScanner::scan()}, which knows its added count only when a
+     *    whole path is finished, so the 3-argument sink streams no counters and only
+     *    `markCompleted()` can fill them in — which a killed job never reaches. Closing
+     *    that needs a per-file OUTCOME in `MediaScanner`'s `$onFile` contract (it
+     *    currently reports the path only); tracked as a follow-up, deliberately not
+     *    redesigned here.
      *
      * @param string $jobId Job UUID.
      * @param string $error Failure message stored in the `error` column.
@@ -296,6 +403,15 @@ class ScanJobRepository
      * legitimately be `running` — any such row is orphaned by a restart/crash of
      * the process that owned it and would otherwise sit `running` forever (and
      * keep a UI spinner alive). Call this once at worker startup to reap them.
+     *
+     * ⚠ **UNSCOPED BY DESIGN, AND ONLY SAFE FROM THAT ONE CALL SITE (S96(c)).** There
+     * is no `library_id` filter and no age guard: this fails EVERY `running` row in
+     * the table. Calling it from anywhere that is not a single-consumer worker's
+     * startup — an HTTP handler, a second concurrently-draining worker process, a
+     * `count > 1` fork — fails a job that IS still running, while its scan carries on
+     * unaware (nothing re-reads the job row mid-scan). {@see LibraryScanWorker::start()}
+     * documents the exact invariant this rests on and why an age guard was rejected
+     * rather than added.
      *
      * @param string $error Failure message stored on each reaped row.
      *
@@ -460,6 +576,22 @@ class ScanJobRepository
      * columns are preserved as a string or null. Mirrors the null-safety of
      * {@see \Phlix\Admin\SettingsRepository::getOverride()}.
      *
+     * ⚠ **WHAT THE COUNTERS MEAN, since this array IS the admin API payload**
+     * (`GET /api/v1/libraries/{id}/scan-status`, rendered by the SPA — review r2 F5 asked
+     * for this to be stated where a consumer reads it):
+     *
+     *  - `items_found`   files the walk discovered — the progress DENOMINATOR;
+     *  - `items_updated` files PROCESSED so far — the progress NUMERATOR, **not**
+     *    {@see ScanResult::$updated}. The SPA computes
+     *    `items_updated / items_found` as the percentage;
+     *  - `items_added`   `media_items` rows this job created. While the job runs this is a
+     *    LOWER BOUND (music streams new tracks only, not the artist/album containers); at
+     *    completion a `rescan` raises it to the exact all-types delta. It never goes down
+     *    ({@see self::MONOTONIC_FINAL_COLUMNS});
+     *  - `items_removed` rows pruned because their file is gone from disk;
+     *  - `items_failed`  files the scan READ and could not index (errors only — never a
+     *    policy skip, and never an unchanged file).
+     *
      * @param array<array-key, mixed> $row Raw row as returned by the driver.
      *
      * @return array<string, mixed> The decoded job row.
@@ -475,6 +607,7 @@ class ScanJobRepository
             'items_added'   => $this->intColumn($row['items_added'] ?? null),
             'items_updated' => $this->intColumn($row['items_updated'] ?? null),
             'items_removed' => $this->intColumn($row['items_removed'] ?? null),
+            'items_failed'  => $this->intColumn($row['items_failed'] ?? null),
             'current_path'  => $this->nullableString($row['current_path'] ?? null),
             'error'         => $this->nullableString($row['error'] ?? null),
             'queued_at'     => $this->nullableString($row['queued_at'] ?? null),

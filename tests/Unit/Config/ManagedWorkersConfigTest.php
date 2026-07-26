@@ -172,6 +172,96 @@ final class ManagedWorkersConfigTest extends TestCase
         }
     }
 
+    /**
+     * S96(c): `library-scan` MUST stay `count: 1`.
+     *
+     * {@see \Phlix\Media\Library\LibraryScanWorker::start()} calls
+     * {@see \Phlix\Media\Library\ScanJobRepository::reapStaleJobs()}, which fails EVERY
+     * `running` row in `library_scan_jobs` — no `library_id` filter, no age guard. That
+     * is correct for a single consumer (a row left `running` by a crash would otherwise
+     * spin the scan UI forever, which is the music-scan-hang incident) and WRONG the
+     * moment a second consumer exists: `start.php` calls `start()` once per fork, so
+     * `count: 2` has fork #2 fail fork #1's just-claimed job while its scan keeps
+     * running, silently, because nothing re-reads the job row mid-scan.
+     *
+     * The invariant used to live only in a code comment — and `config/process.php`
+     * actively asserted the opposite ("Running both run paths at once is SAFE"),
+     * reasoning from `claimNext()`'s atomicity, which says nothing about the reaper.
+     * This test is what makes raising the count fail out loud instead of quietly
+     * killing live scans.
+     */
+    public function testLibraryScanCountMustStayOneForTheUnscopedReaper(): void
+    {
+        $proc = $this->processConfig();
+
+        $this->assertArrayHasKey('library-scan', $proc);
+        $this->assertSame(
+            1,
+            $proc['library-scan']['count'] ?? null,
+            'library-scan must be count:1. LibraryScanWorker::start() reaps EVERY running scan job at '
+            . 'startup, so a second consumer fails the first one\'s in-flight job. Bounding that safely '
+            . 'needs per-job worker ownership (an owner id / heartbeat column), not a bigger count.',
+        );
+    }
+
+    /**
+     * S96(c) — review r1 HIGH-1: the STANDALONE spawner must not advertise the very
+     * thing the invariant forbids.
+     *
+     * `count: 1` is enforced by the test above, and both spawners read that same
+     * config key — but the OTHER half of the invariant ("only one consumer of this
+     * queue at a time") is enforced by documentation alone, because bounding the
+     * reaper properly needs per-job worker ownership (an owner id / heartbeat column;
+     * `library_scan_jobs` has no `updated_at`, so "no progress in N minutes" is not
+     * even expressible today). Documentation-as-mitigation only works if every
+     * document agrees: `scripts/run-library-scan-worker.php` is the one an operator
+     * reads immediately BEFORE starting a second consumer, and it used to state that
+     * doing so "is safe" — reasoning from `claimNext()`'s atomicity, which says
+     * nothing about the unscoped reaper `start()` runs one line later.
+     *
+     * The needles below are the two RETRACTED claims, quoted here only so this test
+     * can detect their return.
+     */
+    public function testTheStandaloneScanWorkerScriptForbidsASecondConsumer(): void
+    {
+        $root = dirname(__DIR__, 3);
+        $paths = [
+            'scripts/run-library-scan-worker.php',
+            'config/process.php',
+        ];
+
+        // The exact wording each file used to carry, and must never carry again.
+        $retracted = ['at the same time is safe', 'at once is SAFE'];
+
+        foreach ($paths as $relative) {
+            $file = $root . '/' . $relative;
+            $this->assertFileExists($file);
+            $contents = (string) file_get_contents($file);
+
+            foreach ($retracted as $claim) {
+                $this->assertStringNotContainsString(
+                    $claim,
+                    $contents,
+                    sprintf(
+                        '%s must not claim that running both scan-worker spawners concurrently is safe. '
+                        . 'LibraryScanWorker::start() reaps EVERY running job with no age guard and no '
+                        . 'library_id filter, so the second consumer to boot stamps the first one\'s '
+                        . 'in-flight job `failed` while its scan carries on unaware.',
+                        $relative
+                    )
+                );
+            }
+
+            $this->assertStringContainsString(
+                'reapStaleJobs',
+                $contents,
+                $relative . ' must name the reaper as the reason a second consumer is unsafe, not just '
+                . 'say "do not do this" — the previous wording was wrong precisely because it reasoned '
+                . 'from claimNext() instead.'
+            );
+        }
+    }
+
     public function test_managed_worker_classes_exist_and_expose_start_int(): void
     {
         foreach ($this->managedWorkers() as $key => $class) {

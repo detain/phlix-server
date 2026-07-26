@@ -181,8 +181,18 @@ class MusicLibraryService
      * Scans a directory tree for audio files and builds the Artist→Album→Track hierarchy.
      *
      * @param string        $path       Root path to scan
-     * @param callable|null $onProgress Optional `(int $processed, int $total, string $currentPath): void`
-     *                                  sink, forwarded to the scanner so a scan job can stream progress.
+     * @param callable|null $onProgress Optional
+     *        `(int $processed, int $total, string $currentPath, array $counts): void` sink,
+     *        forwarded UNCHANGED to the scanner so a scan job can stream progress.
+     *        ⚠ The 4th argument is load-bearing and this delegate is the seam it crosses
+     *        (S96(b)): `$counts` is the scanner's live
+     *        `array{added:int, updated:int, failed:int}` snapshot, which is what makes
+     *        `library_scan_jobs.items_added` answer "is this scan writing anything?"
+     *        instead of reading 0 for hours. Both ends were updated when it was added
+     *        and this middle docblock was missed, so it documented a 3-argument
+     *        contract the code had already stopped honouring. A 3-parameter sink still
+     *        works (PHP ignores the extra argument), so nothing breaks — which is
+     *        exactly why the drift was invisible.
      * @param string|null   $libraryId  Owning library UUID, forwarded so the scanner can stamp
      *                                  `media_items.library_id` and carry it on the MediaItemAdded event.
      * @return ScanResult Summary of the scan operation

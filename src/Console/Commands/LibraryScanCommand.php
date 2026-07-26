@@ -17,6 +17,7 @@ use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputArgument;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Input\InputOption;
+use Symfony\Component\Console\Output\ConsoleOutputInterface;
 use Symfony\Component\Console\Output\OutputInterface;
 use Throwable;
 
@@ -32,6 +33,36 @@ use Throwable;
 #[AsCommand(name: 'library:scan', description: 'Scan (or rescan) a media library for new content')]
 final class LibraryScanCommand extends Command
 {
+    /**
+     * Exit code for a scan that COMPLETED but could not index every file it read.
+     *
+     * Distinct from {@see Command::FAILURE} (1), which means the scan did not run at all
+     * (unknown library, manager threw). A wrapper needs to tell those apart: 1 says "try
+     * again / fix the config", 3 says "the library is now missing N files".
+     *
+     * ⚠ **WHY 3 AND NOT 2 (review r3 finding 10).** Symfony reserves the low codes and
+     * defines all three of them on the class this command extends:
+     * `Command::SUCCESS = 0`, `Command::FAILURE = 1`, `Command::INVALID = 2`
+     * (`vendor/symfony/console/Command/Command.php:38-40`), where `INVALID` means
+     * **invalid input / usage** — i.e. precisely the "the scan did not run, fix your
+     * arguments" meaning this constant exists to be DISTINGUISHABLE from. Returning 2
+     * here put both meanings on one number inside a file that imports `Command` and uses
+     * two of its constants, so a wrapper switching on 2 could not tell "you typed the
+     * library id wrong" from "5 tracks were silently lost". 3 is the first value outside
+     * Symfony's reserved set. `LibraryScanCommandTest` pins both the value and the
+     * non-collision, so a future renumber cannot silently walk back onto 2.
+     *
+     * ⚠ Review r2 F7 asked for callers to be checked before changing this from 0. There
+     * are NONE: `grep -rn "library:scan"` across the repo finds no systemd unit (
+     * `scripts/install.sh` installs only `phlix-server.service`, which runs `start.php`),
+     * no cron entry, nothing in `docker/docker-entrypoint.sh` or `docker/supervisord.conf`,
+     * and nothing in `.github/workflows/*` — only `CHANGELOG.md`/docs prose. So no caller
+     * depended on exit 0 for a lossy scan, and silently returning success to a cron job
+     * that just lost files is the worse default. That same absence of consumers is why
+     * renumbering to 3 now costs nothing.
+     */
+    private const EXIT_FILES_LOST = 3;
+
     /** @var callable(): LibraryManager Lazy factory for the backing manager. */
     private $libraryManagerFactory;
 
@@ -61,11 +92,27 @@ final class LibraryScanCommand extends Command
     }
 
     /**
-     * Run the scan / rescan and report completion.
+     * Run the scan / rescan and report completion, INCLUDING the counters.
      *
-     * @return int {@see Command::SUCCESS} (0) on a completed scan, or
-     *         {@see Command::FAILURE} (1) when the library is missing or the
-     *         manager throws (e.g. unknown library id).
+     * The counter line exists because of review r1 INFO-10: `items_failed` /
+     * {@see \Phlix\Media\Library\ScanResult::$failed} reaches the scan-status JSON and
+     * the app log, but the admin SPA's `ScanJob` interface does not list it, so nothing
+     * RENDERS it — leaving `curl`/`grep` as the only way to see that a scan lost files.
+     * This command already had the whole `ScanResult` in hand and was throwing it away,
+     * so it is the cheapest honest operator surface, and `failed` is called out
+     * explicitly rather than buried in a tuple.
+     *
+     * **Machine-readable too (review r2 F7).** The counters go to stdout, the lossy-scan
+     * warning goes to **stderr**, and a lossy scan exits {@see self::EXIT_FILES_LOST}, so
+     * a cron/CI wrapper that inspects only the exit status or only stderr still learns
+     * that files were lost. Previously both signals were on stdout behind exit 0, i.e.
+     * invisible to every non-human caller.
+     *
+     * @return int {@see Command::SUCCESS} (0) on a clean scan,
+     *         {@see self::EXIT_FILES_LOST} (3) when the scan completed but could not index
+     *         every file it read, or {@see Command::FAILURE} (1) when the scan did not run
+     *         (unknown library id, or the manager threw). 2 is NOT used — it is Symfony's
+     *         {@see Command::INVALID} (see {@see self::EXIT_FILES_LOST}).
      */
     protected function execute(InputInterface $input, OutputInterface $output): int
     {
@@ -75,11 +122,9 @@ final class LibraryScanCommand extends Command
 
         try {
             $manager = ($this->libraryManagerFactory)();
-            if ($rescan) {
-                $manager->rescanLibrary($libraryId);
-            } else {
-                $manager->scanLibrary($libraryId);
-            }
+            $result = $rescan
+                ? $manager->rescanLibrary($libraryId)
+                : $manager->scanLibrary($libraryId);
         } catch (Throwable $e) {
             $output->writeln('<error>Scan failed: ' . $e->getMessage() . '</error>');
 
@@ -91,6 +136,28 @@ final class LibraryScanCommand extends Command
             $rescan ? 'Rescan' : 'Scan',
             $libraryId
         ));
+        $output->writeln(sprintf(
+            '  scanned: %d   added: %d   updated: %d   removed: %d   failed: %d   (%d ms)',
+            $result->scanned,
+            $result->added,
+            $result->updated,
+            $result->removed,
+            $result->failed,
+            $result->durationMs
+        ));
+
+        if ($result->failed > 0) {
+            // Files the scan READ and could not index. Not a policy skip, and recoverable
+            // (the next clean scan re-adds them), but it is data missing from the library
+            // right now — so it goes to STDERR and the command exits non-zero (r2 F7).
+            $errOutput = $output instanceof ConsoleOutputInterface ? $output->getErrorOutput() : $output;
+            $errOutput->writeln(sprintf(
+                '<comment>%d file(s) could not be indexed — see .logs/error.log for each one.</comment>',
+                $result->failed
+            ));
+
+            return self::EXIT_FILES_LOST;
+        }
 
         return Command::SUCCESS;
     }

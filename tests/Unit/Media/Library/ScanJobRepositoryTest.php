@@ -291,6 +291,71 @@ final class ScanJobRepositoryTest extends TestCase
         $this->assertSame(['job-1'], $captured['params']);
     }
 
+    /**
+     * Review r1 LOW-4 + review r2 F5: the cumulative counters may only be RAISED at
+     * completion — and the set is exactly `items_added` + `items_failed`.
+     *
+     * A `rescan` job row carries the same quantity at two resolutions over its lifetime:
+     * the live sink writes a lower bound (`new TRACK rows` for music), `markCompleted()`
+     * writes `rescanLibrary()`'s exact all-types row-count delta. Plain
+     * `items_added = ?` let a completing job report FEWER items than it had already been
+     * observed to add in the one shape where that inequality inverts, which reads as data
+     * disappearing at the exact moment the job finishes.
+     *
+     * The two exclusions are asserted as deliberately as the inclusions:
+     * `items_found`/`items_updated` are the progress denominator/numerator and must stay
+     * absolute or a corrected total could never come down; `items_removed` was dropped
+     * from the clamp in r2 F5 because no code path ever gives it a prior value to clamp
+     * against (`prune`/`delete_all` write it via `updateProgress()` and then reach
+     * `markCompleted()` with an EMPTY `$finalCounts`; `rescan`'s live sink never writes
+     * the key at all), so the clamp implied a protection that could not fire.
+     */
+    public function testMarkCompletedRaisesCumulativeCountersButNeverLowersThem(): void
+    {
+        $captured = ['sql' => '', 'params' => []];
+        $db = $this->createMock(Connection::class);
+        $db->expects($this->once())
+            ->method('query')
+            ->willReturnCallback(
+                static function (string $sql, ?array $params = null) use (&$captured) {
+                    $captured = ['sql' => $sql, 'params' => $params ?? []];
+                    return 1;
+                },
+            );
+
+        $repo = new ScanJobRepository($db);
+        $repo->markCompleted('job-1', [
+            'items_added'   => 3,
+            'items_removed' => 1,
+            'items_failed'  => 0,
+            'items_found'   => 12,
+            'items_updated' => 12,
+        ]);
+
+        foreach (['items_added', 'items_failed'] as $column) {
+            $this->assertStringContainsString(
+                $column . ' = GREATEST(' . $column . ', ?)',
+                $captured['sql'],
+                $column . ' is a cumulative tally: a completion stamp must never retract what the live '
+                . 'progress sink already observed',
+            );
+        }
+
+        foreach (['items_found', 'items_updated', 'items_removed'] as $column) {
+            $this->assertStringContainsString($column . ' = ?', $captured['sql']);
+            $this->assertStringNotContainsString(
+                'GREATEST(' . $column,
+                $captured['sql'],
+                $column . ' must NOT be clamped: found/updated are the progress denominator/numerator, so '
+                . 'clamping them would make a downward correction impossible, and items_removed has no '
+                . 'prior value to clamp against on any code path (r2 F5)',
+            );
+        }
+
+        // Parameter order still follows COUNTER_COLUMNS, with the job id last.
+        $this->assertSame([12, 3, 12, 1, 0, 'job-1'], $captured['params']);
+    }
+
     public function testMarkFailedRecordsError(): void
     {
         $db = $this->createMock(Connection::class);

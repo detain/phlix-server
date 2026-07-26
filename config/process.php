@@ -17,14 +17,25 @@
  *   - `scripts/run-library-scan-worker.php` — the standalone alternative for
  *     operators who run the scan worker as its own isolated service.
  *
- * Running both run paths at once is SAFE: `ScanJobRepository::claimNext()` is an
- * atomic conditional UPDATE and each worker is `count:1`, so at most one claimer
- * wins each job (by default the two paths are mutually exclusive).
+ * ⚠ **DO NOT RUN BOTH PATHS AT ONCE, AND DO NOT RAISE `library-scan`'s `count`
+ * (corrected 2026-07-25, S96(c)).** This paragraph used to say running both was
+ * "SAFE" because `ScanJobRepository::claimNext()` is an atomic conditional UPDATE.
+ * That is true of CLAIMING and false of the startup reaper:
+ * `LibraryScanWorker::start()` calls `ScanJobRepository::reapStaleJobs()`, which
+ * fails EVERY `running` row in the table with no age guard and no `library_id`
+ * filter — correct only while nothing else is draining this queue, since it is how
+ * a job orphaned by a crash stops spinning the UI forever. A second concurrent
+ * consumer (the standalone script alongside the managed worker, or a `count > 1`
+ * fork whose siblings each call `start()`) therefore fails the OTHER consumer's
+ * in-flight job the moment it boots, while that scan keeps running unaware —
+ * nothing re-reads the job row mid-scan. See `LibraryScanWorker::start()` for the
+ * full invariant and for why an age guard was rejected rather than added.
  *
  * Each entry:
  *   - `enabled`      bool — when false, `start.php` does not spawn the worker.
- *   - `count`        int  — number of worker processes (1 = single claimer;
- *                           `claimNext()` is atomic regardless).
+ *   - `count`        int  — number of worker processes. For `library-scan` this MUST
+ *                           stay 1 (see the reaper warning above); `claimNext()`
+ *                           being atomic is not sufficient on its own.
  *   - `poll_seconds` int  — `Workerman\Timer` poll interval for the loop.
  *
  * @return array<string, array{enabled: bool, count: int, poll_seconds: int}>
@@ -33,6 +44,8 @@
 declare(strict_types=1);
 
 return [
+    // ⚠ `count` MUST remain 1: LibraryScanWorker::start()'s stale-job reaper is
+    // unscoped, so a second consumer fails the first one's live job (S96(c)).
     'library-scan' => [
         'enabled'      => true,
         'count'        => 1,

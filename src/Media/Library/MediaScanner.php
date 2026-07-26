@@ -502,7 +502,11 @@ class MediaScanner
      *               historical unconditional behaviour); pass false to skip the
      *               per-item {@see CollectionService::syncCollectionForMovie()}
      *               block entirely for this scan.
-     * @return void
+     * @return int Number of items this scan ADDED (S96(b)). Already computed for
+     *             {@see self::dispatchScanCompleted()}'s `itemsAdded`; returning it
+     *             is what lets {@see LibraryManager::scanLibrary()} put a truthful
+     *             `items_added` on the scan-job row, which reported 0 for every
+     *             successful scan because nothing propagated the number.
      *
      * @example
      * ```php
@@ -516,10 +520,10 @@ class MediaScanner
         bool $seriesPerDirectory = false,
         ?callable $onFile = null,
         bool $autoCollectionsEnabled = true
-    ): void {
+    ): int {
         if (!is_dir($path)) {
             $this->logger->warning('Scan path does not exist', ['path' => $path]);
-            return;
+            return 0;
         }
 
         $startNs = hrtime(true);
@@ -543,6 +547,8 @@ class MediaScanner
 
         $endNs = hrtime(true);
         $this->dispatchScanCompleted($libraryId, $added, (int)(($endNs - $startNs) / 1_000_000));
+
+        return $added;
     }
 
     /**

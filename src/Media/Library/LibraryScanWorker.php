@@ -49,6 +49,16 @@ use Workerman\Timer;
  * every {@see self::PROGRESS_WRITE_EVERY} files so a large library does not
  * hammer the job row.
  *
+ * **Truthful counters (S96(b)).** The sink also writes `items_added` and
+ * `items_failed` from the live counter snapshot the scanner passes as its 4th
+ * argument, and {@see self::runOnce()} stamps the authoritative final values via
+ * {@see ScanJobRepository::markCompleted()}'s `$finalCounts` (a parameter that
+ * existed but had no caller). Before this, `items_added` was NEVER written for a
+ * `scan`/`rescan` job, so a fully successful scan reported `0 added` for its whole
+ * life — which is why "is this scan actually writing anything?" had to be answered
+ * by reverse-engineering `music_artists.created_at` timestamps during the
+ * empty-music-library investigation.
+ *
  * **Resident-memory (Workerman) safety.** The loop uses {@see Timer::add()} —
  * never a blocking `sleep()` (cf. the legacy
  * {@see \Phlix\Media\Markers\Detection\BackgroundDetectorWorker::runLoop()},
@@ -148,6 +158,16 @@ class LibraryScanWorker
 
         $startTime = hrtime(true);
 
+        /**
+         * Authoritative counter values stamped by `markCompleted()` (S96(b)). Only
+         * the `scan`/`rescan` branches can fill it; every other job type reports
+         * through `updateProgress()` as before and leaves this empty, which
+         * `markCompleted()` treats as "write no counters".
+         *
+         * @var array<string, int> $finalCounts
+         */
+        $finalCounts = [];
+
         try {
             if ($type === 'metadata' || $type === 'metadata_refresh') {
                 // `metadata_refresh` forces a re-match of already-matched items
@@ -174,7 +194,41 @@ class LibraryScanWorker
                 // (and routes each media type to its scanner) internally, so the
                 // worker only forwards the progress sink; the empty $paths arg is
                 // for signature parity with the media-specific subclass managers.
-                $this->libraries->rescanLibrary($libraryId, [], $this->scanProgressSink($jobId));
+                $rescan = $this->libraries->rescanLibrary($libraryId, [], $this->scanProgressSink($jobId));
+                // Final counters. `items_removed` is the prune count, which was
+                // computed and then DISCARDED before S96 — a rescan that pruned rows
+                // reported 0 removed. `items_updated` is deliberately absent: that
+                // column doubles as the progress numerator (processed files), so
+                // writing a semantic "updated" count here would collapse the UI
+                // percentage at the very moment the job completes.
+                //
+                // ⚠ THIS IS THE ONE PLACE A SINGLE JOB ROW CHANGES THE MEANING OF
+                // `items_added` MID-LIFETIME (review r1 LOW-4). Above, the sink
+                // streamed the scanner's own new-LEAF count (for music: new tracks);
+                // here `rescanLibrary()` hands over a row-count DELTA over ALL
+                // `media_items` types, so it also counts the artist/album container
+                // rows. Usually the delta is the larger of the two, but not always —
+                // a `music_tracks` row added against a pre-existing `media_items` row
+                // (the S96(e) residue shape) makes it smaller, and a counter that goes
+                // 12 → 3 at completion reads as data disappearing. That is why
+                // `markCompleted()` writes `items_added` through `GREATEST()`: the row is
+                // a high-water mark for it, so the two definitions can coexist without the
+                // number ever retracting. Unifying the definitions instead would mean
+                // changing `rescanLibrary()`'s public return semantics.
+                //
+                // ⚠ Of the three keys below, exactly TWO are clamped —
+                // `ScanJobRepository::MONOTONIC_FINAL_COLUMNS` is `items_added` +
+                // `items_failed`. `items_removed` is a PLAIN assignment: review r2 F5
+                // measured its clamp as provably inert (the only writers that set it live
+                // in the `prune`/`delete_all` branches, which reach `markCompleted()` with
+                // an EMPTY `$finalCounts`, so the prior value at clamp time was always the
+                // column default 0). This comment said "these three counters" until review
+                // r3 finding 2 caught that the same round had made it false.
+                $finalCounts = [
+                    'items_added' => $rescan->added,
+                    'items_removed' => $rescan->removed,
+                    'items_failed' => $rescan->failed,
+                ];
             } elseif ($type === 'prune') {
                 // Non-destructive: run ONLY the prune pass (per-root presence
                 // guards intact). Record the removed count on the job row so the
@@ -211,10 +265,15 @@ class LibraryScanWorker
                 $removed = $this->libraries->deleteAllItems($libraryId);
                 $this->jobs->updateProgress($jobId, ['items_removed' => $removed]);
             } else {
-                $this->libraries->scanLibrary($libraryId, $this->scanProgressSink($jobId));
+                $scan = $this->libraries->scanLibrary($libraryId, $this->scanProgressSink($jobId));
+                // See the `rescan` branch for why `items_updated` is not written.
+                $finalCounts = [
+                    'items_added' => $scan->added,
+                    'items_failed' => $scan->failed,
+                ];
             }
 
-            $this->jobs->markCompleted($jobId);
+            $this->jobs->markCompleted($jobId, $finalCounts);
 
             $durationMs = (hrtime(true) - $startTime) / 1_000_000.0;
             $this->logger->info('LibraryScanWorker::runOnce Completed job [jobId=' . $jobId . '] [libraryId='
@@ -226,6 +285,11 @@ class LibraryScanWorker
                 'type' => $type,
             ]);
         } catch (Throwable $e) {
+            // No final counters here: the throw destroyed the ScanResult, so the row
+            // keeps whatever the live sink last wrote — accurate to within
+            // PROGRESS_WRITE_EVERY files for music, still 0 for the scanner paths that
+            // report their added count only per completed path. See
+            // ScanJobRepository::markFailed() (review r1 LOW-7).
             $this->jobs->markFailed($jobId, $e->getMessage());
 
             $durationMs = (hrtime(true) - $startTime) / 1_000_000.0;
@@ -253,25 +317,53 @@ class LibraryScanWorker
      * final file) to keep a large library from hammering the job row with one
      * UPDATE per media file. The current path is recorded as the progress hint.
      *
+     * **`items_added` / `items_failed` ride along (S96(b)).** `$counts` is the
+     * scanner's live {@see ScanResult::progressCounts()} snapshot, folded into the
+     * UPDATE this sink was already issuing — deliberately NOT a second statement,
+     * because the throttle exists precisely to bound job-row writes on a 61k-file
+     * library. When a scanner supplies no counts (the video path has no per-file
+     * added/failed counter) the keys are simply absent and those columns are left
+     * untouched, so nothing regresses to a false 0.
+     *
+     * ⚠ `items_updated` stays the PROCESSED-FILE count, not
+     * {@see ScanResult::$updated}. The admin UI computes its percentage as
+     * `items_updated / items_found`, so writing a semantic "updated items" value into
+     * it would show ~0 % on a library whose files are all unchanged. That overload is
+     * pre-existing; this method is the reason it must not be disturbed.
+     *
      * @param string $jobId The scan job to stream progress onto.
      *
-     * @return callable(int, int, string): void `(processed, total, currentPath)`.
+     * @return callable(int, int, string, array<string, int>): void
+     *         `(processed, total, currentPath, counts)`.
      *
      * @since 0.34.0
      */
     private function scanProgressSink(string $jobId): callable
     {
         $lastWrite = 0;
-        return function (int $processed, int $total, string $currentPath) use ($jobId, &$lastWrite): void {
+        return function (
+            int $processed,
+            int $total,
+            string $currentPath,
+            array $counts = []
+        ) use (
+            $jobId,
+            &$lastWrite
+        ): void {
             if ($processed !== $total && $processed - $lastWrite < self::PROGRESS_WRITE_EVERY) {
                 return;
             }
             $lastWrite = $processed;
-            $this->jobs->updateProgress(
-                $jobId,
-                ['items_found' => $total, 'items_updated' => $processed],
-                $currentPath,
-            );
+
+            $payload = ['items_found' => $total, 'items_updated' => $processed];
+            if (isset($counts['added'])) {
+                $payload['items_added'] = (int) $counts['added'];
+            }
+            if (isset($counts['failed'])) {
+                $payload['items_failed'] = (int) $counts['failed'];
+            }
+
+            $this->jobs->updateProgress($jobId, $payload, $currentPath);
         };
     }
 
@@ -283,6 +375,9 @@ class LibraryScanWorker
      * infrequent scans and keeps a single tick from starving the event loop).
      * Must be called from inside a worker's `onWorkerStart` because
      * {@see Timer} requires a running event loop.
+     *
+     * ⚠ **THIS METHOD DEPENDS ON THE `count:1` SINGLE-CONSUMER INVARIANT — see the
+     * reaper block below before changing how the worker is spawned.**
      *
      * @param int $pollSeconds Poll interval in seconds.
      *
@@ -297,6 +392,31 @@ class LibraryScanWorker
         // (`count:1`) consumer, so on a fresh start nothing is legitimately
         // running — any such row would otherwise sit `running` forever and keep
         // a scan UI spinner alive (cf. the music-scan hang incident).
+        //
+        // ⚠ S96(c) — THE BLAST RADIUS IS DELIBERATE, AND IT IS THE WHOLE TABLE.
+        // reapStaleJobs() fails EVERY `running` row, not just this library's and not
+        // just old ones. That is correct if and only if no OTHER process is draining
+        // this queue at the moment we boot. What that invariant rests on, precisely:
+        //
+        //   * `config/process.php` sets `library-scan` to `count: 1`, and `start.php`
+        //     calls this method once per fork — so `count: 2` would have fork #2 fail
+        //     fork #1's just-claimed job while its scan kept running, silently, since
+        //     nothing re-reads the job row mid-scan;
+        //   * `scripts/run-library-scan-worker.php` is an alternative standalone
+        //     spawner for the SAME worker. Running it alongside the managed worker is
+        //     safe for CLAIMING (claimNext() is an atomic conditional UPDATE) but NOT
+        //     for this reaper. `config/process.php` documents that constraint.
+        //
+        // AN AGE GUARD WAS CONSIDERED AND REJECTED, because this is the only call
+        // site and it runs ONCE at boot: `started_at < NOW() - INTERVAL n` would mean
+        // an orphan younger than `n` at the instant of the restart is never reaped at
+        // all (the reaper does not run again), which is exactly the "spinner alive
+        // forever" hang it exists to prevent. Moving it onto a Timer to close that
+        // hole is worse still: a legitimate music scan of the production library ran
+        // for 4 h 09 m before its first durable write, so any age threshold small
+        // enough to be useful would fail live scans. Bounding the radius safely needs
+        // per-job worker ownership (an owner id / heartbeat column), which is a schema
+        // change well outside this step.
         try {
             $reaped = $this->jobs->reapStaleJobs('Interrupted by server restart');
             if ($reaped > 0) {

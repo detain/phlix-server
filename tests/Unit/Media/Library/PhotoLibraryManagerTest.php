@@ -53,6 +53,25 @@ class PhotoLibraryManagerTest extends TestCase
             $this->assertEquals(PhotoLibraryManager::SCAN_COMPLETED, $result->status);
             // Items should be added
             $this->assertGreaterThanOrEqual(0, $result->itemsAdded);
+
+            // Review r2 F6 / review r3 MED-2: `durationMs` comes from a MONOTONIC `hrtime()`
+            // pair (`PhotoLibraryManager.php:124` + `:162`). F6 changed the timing in five
+            // managers and guarded ONE; r3 mutated this manager's END timestamp back to
+            // `microtime(true)` — seconds against a nanosecond origin — and the FULL suite
+            // stayed green. BOTH bounds are required: a one-sided `assertLessThan()` passes
+            // for the negative number that mutation produces.
+            $this->assertGreaterThanOrEqual(
+                0,
+                $result->durationMs,
+                'durationMs must be a sane elapsed millisecond count — a negative value means the '
+                . 'start and end timestamps came from different clocks/units'
+            );
+            $this->assertLessThan(
+                600000,
+                $result->durationMs,
+                'a one-photo in-memory rescan cannot take ten minutes; a huge value here is the same '
+                . 'mixed-unit bug with the operands the other way round'
+            );
         } finally {
             if (file_exists($testFile)) {
                 unlink($testFile);

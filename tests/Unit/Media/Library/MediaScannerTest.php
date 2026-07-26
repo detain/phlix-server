@@ -99,6 +99,29 @@ class MediaScannerTest extends TestCase
         $this->assertSame(0, $scanner->countFiles('/no/such/path', 'movie'));
     }
 
+    /**
+     * S96(b): `scan()` returns the number of items it ADDED, and a path that is not there
+     * added nothing — so it must answer `int 0`, not a stale or truthy value.
+     *
+     * Worth its own pin because this return value is now summed straight into
+     * {@see \Phlix\Media\Library\ScanResult::$added} by every
+     * `LibraryManager::scan*Library()` helper and from there into the scan job row's
+     * `items_added` column. Before S96 the method returned nothing at all, so the
+     * missing-path guard had no value to get wrong; it does now, and the guard's `return 0`
+     * was executed by no test in the suite (measured 0/1 at the coverage pass, i.e. a
+     * `return 1;` there was a GREEN mutation while an operator saw a phantom added file).
+     */
+    public function testScanReturnsZeroAddedForAMissingPath(): void
+    {
+        $scanner = new MediaScanner($this->createMock(Connection::class), $this->makeFakeRepo());
+
+        $this->assertSame(
+            0,
+            $scanner->scan('lib-1', '/no/such/s96/path', 'movie'),
+            'a path that does not exist cannot have added anything — this int reaches items_added',
+        );
+    }
+
     public function testScanInvokesOnFileForEachProcessedMediaFile(): void
     {
         $scanner = new MediaScanner($this->createMock(Connection::class), $this->makeFakeRepo());

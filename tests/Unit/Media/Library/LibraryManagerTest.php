@@ -18,9 +18,40 @@ use RuntimeException;
 
 class LibraryManagerTest extends TestCase
 {
+    /** @var list<string> Directories to remove in tearDown(). */
+    private array $cleanup = [];
+
     protected function setUp(): void
     {
         LoggerFactory::init(__DIR__ . '/../../../../config/logger.php');
+    }
+
+    protected function tearDown(): void
+    {
+        foreach ($this->cleanup as $dir) {
+            if (is_dir($dir)) {
+                @rmdir($dir);
+            }
+        }
+        $this->cleanup = [];
+        parent::tearDown();
+    }
+
+    /**
+     * A scratch directory removed by tearDown().
+     *
+     * Deliberately NOT `try { … } finally { rmdir() }`: a bare try/finally does not
+     * swallow an `ExpectationFailedException`, but every assertion in this repo's
+     * scanner tests is kept OUT of a `try` block on principle, because that exception
+     * is itself a `RuntimeException` and one added `catch` turns a RED test GREEN.
+     */
+    private function scratchDir(string $prefix): string
+    {
+        $dir = sys_get_temp_dir() . '/' . $prefix . uniqid();
+        $this->assertTrue(mkdir($dir, 0777, true));
+        $this->cleanup[] = $dir;
+
+        return $dir;
     }
 
     public function testCanCreateLibraryManager(): void
@@ -869,6 +900,155 @@ class LibraryManagerTest extends TestCase
             ['DELETE FROM media_items WHERE library_id = ?', ['lib-1']],
             $this->deletes($queries),
         );
+    }
+
+    // -- S96(b): items_added must reflect reality on EVERY library type ---------
+
+    /**
+     * `scanLibrary()` must route each non-video library type to its own helper and put
+     * that helper's file count into `ScanResult::$added` — the value that ends up in the
+     * scan job row's `items_added` column.
+     *
+     * ⚠ This is the gap the S96 coverage pass found. S96(b) changed
+     * `scanPhotoLibrary()`, `scanBookLibrary()` and `scanAudiobookLibrary()` from
+     * "returns nothing an operator can see" to `: int`, and wired each into
+     * `$result->added` — and **no test in the suite executed one line of any of them**
+     * (measured: `scanLibrary():527-540` and all three helpers at `count=0`, so
+     * `return 0;` in any of them was a GREEN mutation and a fully successful photo,
+     * book or audiobook scan would have gone on reporting `added = 0`, which is the
+     * exact defect S96(b) exists to fix, in three types nobody looked at).
+     *
+     * The type LABEL handed to the scanner is asserted too: `'image'` is the SCANNER's
+     * library-type label while the `media_items.type` ENUM member is `photo` (the
+     * type-ENUM landmine), so "correcting" it to `'photo'` here would index nothing.
+     * And a second, MISSING path is supplied so the per-path `is_dir()` guard is
+     * exercised in the same call — a missing path must be skipped, not counted.
+     *
+     * @param string $libraryType          `libraries.type` as stored.
+     * @param string $expectedScannerLabel The label `MediaScanner::scan()` must receive.
+     *
+     * @dataProvider nonVideoLibraryTypesProvider
+     */
+    public function testScanLibraryRoutesEachTypeToItsHelperAndReportsWhatItAdded(
+        string $libraryType,
+        string $expectedScannerLabel
+    ): void {
+        $dir = $this->scratchDir('phlix_s96_route_');
+
+        $queries = [];
+        $db = $this->makeDb($queries, [
+            'library_row' => [
+                'id' => 'lib-1',
+                'name' => 'Routed',
+                'type' => $libraryType,
+                'paths' => json_encode([$dir, '/no/such/s96/path']),
+                'options' => json_encode([]),
+            ],
+        ]);
+
+        $seen = [];
+        $scanner = $this->createMock(MediaScanner::class);
+        $scanner->method('scan')->willReturnCallback(
+            function (string $libraryId, string $path, string $type) use (&$seen): int {
+                $seen[] = [$libraryId, $path, $type];
+                return 7;
+            },
+        );
+
+        $manager = new LibraryManager(
+            $db,
+            $scanner,
+            $this->createMock(FolderWatcher::class),
+            $this->createMock(MusicLibraryService::class),
+        );
+
+        $result = $manager->scanLibrary('lib-1');
+
+        // NB: no `assertInstanceOf(ScanResult::class, $result)` — scanLibrary()'s declared
+        // return type makes that assertion unfalsifiable under strict_types.
+        $this->assertSame(
+            7,
+            $result->added,
+            'the helper\'s count must reach ScanResult::$added — 0 here is S96(b) itself, '
+            . 'a successful scan reporting nothing added',
+        );
+        $this->assertSame(
+            [['lib-1', $dir, $expectedScannerLabel]],
+            $seen,
+            'exactly ONE scan of the ONE real path, with the SCANNER label for this type '
+            . '(photo libraries scan as "image" — the type-ENUM landmine)',
+        );
+    }
+
+    /**
+     * @return array<string, array{0: string, 1: string}>
+     */
+    public static function nonVideoLibraryTypesProvider(): array
+    {
+        return [
+            'photo scans as the "image" label, not the "photo" ENUM member' => ['photo', 'image'],
+            'book' => ['book', 'book'],
+            'audiobook' => ['audiobook', 'audiobook'],
+        ];
+    }
+
+    /**
+     * The music arm of that same routing block: `scanLibrary()` must hand a music library
+     * to `MusicLibraryService`, not to `MediaScanner`, and return ITS counters.
+     *
+     * `scanMusicLibrary()`'s body is covered (by `LibraryManagerMusicScanTest`, which
+     * reaches it through reflection to avoid rebuilding `fetchLibraryRow()`'s DB shape) —
+     * but the ROUTING line that selects it was executed by nothing, so a `type === 'music'`
+     * that fell through would have sent every music library down the video scanner with no
+     * test noticing.
+     */
+    public function testScanLibraryRoutesAMusicLibraryThroughTheMusicLibraryService(): void
+    {
+        $dir = $this->scratchDir('phlix_s96_route_music_');
+
+        $queries = [];
+        $db = $this->makeDb($queries, [
+            'library_row' => [
+                'id' => 'lib-music',
+                'name' => 'Tunes',
+                'type' => 'music',
+                'paths' => json_encode([$dir]),
+                'options' => json_encode([]),
+            ],
+        ]);
+
+        $perPath = new ScanResult();
+        $perPath->scanned = 9;
+        $perPath->added = 5;
+        $perPath->updated = 3;
+        $perPath->failed = 1;
+
+        $music = $this->createMock(MusicLibraryService::class);
+        $music->expects($this->once())
+            ->method('scanDirectory')
+            ->with($dir, null, 'lib-music')
+            ->willReturn($perPath);
+
+        $scanner = $this->createMock(MediaScanner::class);
+        $scanner->expects($this->never())->method('scan');
+
+        $manager = new LibraryManager(
+            $db,
+            $scanner,
+            $this->createMock(FolderWatcher::class),
+            $music,
+        );
+
+        $result = $manager->scanLibrary('lib-music');
+
+        // Distinguishable per counter, so a routing that returned a fresh ScanResult
+        // (all zeros) or dropped one field cannot look identical to a correct one.
+        $this->assertSame([9, 5, 3, 1], [
+            $result->scanned,
+            $result->added,
+            $result->updated,
+            $result->failed,
+        ], 'the music manager\'s counters must be what scanLibrary() returns');
     }
 
     /**

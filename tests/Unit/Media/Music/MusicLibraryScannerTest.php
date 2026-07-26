@@ -2736,6 +2736,19 @@ final class MusicLibraryScannerTest extends TestCase
      * OWN double class instead of using this one is outside anything either mechanism can see.
      * The `T_RETURN` count is deliberately token-based, so comments and docblocks mentioning
      * the word cannot affect it.
+     *
+     * ⚠ **SECOND KNOWN LIMIT — and the reason for the second assertion below (review r7 LOW-1).**
+     * {@see MusicSchemaConnection::keywordFaithful()} covers {@see
+     * MusicSchemaConnection::returnAffectedRowsFor()} *completely* only while {@see
+     * MusicSchemaConnection::resolveQueryReturn()} is the **SOLE reader** of `$this->affectedOn`:
+     * the funnel can only see what flows through `query()`. Review r7 MEASURED the loss — add one
+     * public reader that loops `affectedOn` itself and it hands an `int 0` back for a `SELECT`
+     * with nothing to stop it. That precondition was prose only until r7, i.e. a guard that had to
+     * be re-read to work, so it is now **counted**: exactly two `->affectedOn` references, the
+     * write and the one read. Its own residue, stated rather than implied — the count is
+     * syntactic, so a dynamic access (`$this->{'affectedOn'}`), a reflection read or a rename
+     * evades it, and it says nothing about `nullOn`/`falseOn`, whose two sentinels
+     * `keywordFaithful()` exempts for every keyword on purpose.
      */
     public function testEveryQueryReturnFunnelsThroughTheKeywordFidelityCheck(): void
     {
@@ -2760,6 +2773,54 @@ final class MusicLibraryScannerTest extends TestCase
             . 'without its shape being checked against the statement keyword. Add new arms to '
             . 'resolveQueryReturn(), never to query().',
         );
+
+        $this->assertSame(
+            2,
+            self::countPropertyReads(MusicSchemaConnection::class, 'affectedOn'),
+            '$this->affectedOn must be referenced EXACTLY twice — the write in '
+            . 'returnAffectedRowsFor() and the ONE read in resolveQueryReturn() — because '
+            . 'keywordFaithful() only sees values that flow through query(). Review r7 measured '
+            . 'this: a second, non-funnelling reader of this store hands an int 0 back for a '
+            . 'SELECT and every layer stays green. If you need the armed value somewhere else, '
+            . 'route it through resolveQueryReturn() instead of reading the store again.',
+        );
+    }
+
+    /**
+     * Count `->{$property}` reads of a property inside one class's own source range.
+     *
+     * Token-based on purpose, for the same reason the `T_RETURN` count above is: a comment or
+     * docblock naming the property must not be able to move the number. Scoped to the class's
+     * own line range so a same-named property on any of this file's other classes cannot either.
+     */
+    private static function countPropertyReads(string $class, string $property): int
+    {
+        $reflection = new \ReflectionClass($class);
+        $lines = (array) file((string) $reflection->getFileName());
+        $body = implode('', array_slice(
+            $lines,
+            $reflection->getStartLine() - 1,
+            $reflection->getEndLine() - $reflection->getStartLine() + 1,
+        ));
+
+        $skip = [T_WHITESPACE, T_COMMENT, T_DOC_COMMENT];
+        $tokens = array_values(array_filter(
+            token_get_all('<?php ' . $body),
+            static fn (array|string $t): bool => !is_array($t) || !in_array($t[0], $skip, true),
+        ));
+
+        $reads = 0;
+        foreach ($tokens as $i => $token) {
+            $previous = $tokens[$i - 1] ?? null;
+            if (
+                is_array($token) && $token[0] === T_STRING && $token[1] === $property
+                && is_array($previous) && $previous[0] === T_OBJECT_OPERATOR
+            ) {
+                $reads++;
+            }
+        }
+
+        return $reads;
     }
 
     /**
@@ -2819,6 +2880,56 @@ final class MusicLibraryScannerTest extends TestCase
     }
 
     /**
+     * The album twin of {@see self::testTheBackfillAdoptsAnExistingOrphanInsteadOfMintingARival()}:
+     * the ALBUM backfill adopts an existing orphan instead of minting a rival.
+     *
+     * ⚠ The artist twin's adoption closure is exercised (`count=2`); the album one measured
+     * **`count=0`** at the S96 coverage pass, i.e. the whole `$mayAdopt ?
+     * findAdoptableAlbumMediaItemId(...) : null` true branch inside `upsertAlbum()`'s
+     * backfill call was dead in test. That is the arm that reclaims case (c) of the residue
+     * list for albums, and with it unpinned a wrong argument order — the lookup is
+     * ARTIST-SCOPED, unlike the artist one — or a plain `: null` would both stay GREEN.
+     *
+     * The distinguishing fixture detail: an orphaned album `media_items` row is planted, so
+     * the one-per-scan gate answers YES and the closure's `$mayAdopt` branch is really the
+     * one taken. {@see self::testANullAlbumMediaItemIdIsBackfilledOnTheNextScan()} is the
+     * same shape with NO orphan (gate shut, the `: null` arm), so the two arms of that
+     * ternary are pinned by two tests with different observable outcomes — a minted id there
+     * against the ADOPTED id here.
+     */
+    public function testTheAlbumBackfillAdoptsAnExistingOrphanInsteadOfMintingARival(): void
+    {
+        [$dir, $tagger] = $this->oneAlbumFixture(1, 'Album Adopt Artist', 'Committed Orphan Album');
+
+        $db = new MusicSchemaConnection();
+        $artistId = $db->plantArtistWithNullMediaItem('Album Adopt Artist');
+        $albumId = $db->plantAlbumWithNullMediaItem($artistId, 'Committed Orphan Album');
+        // Unreferenced album media_items row => the gate answers YES for this library.
+        $orphanId = $db->plantOrphan('album', 'Committed Orphan Album', 'lib-s96');
+
+        $this->taggedScanner($db, $tagger)->scanDirectory($dir, null, 'lib-s96');
+
+        $this->assertGreaterThan(
+            0,
+            $db->countStatements('LEFT JOIN music_albums ma'),
+            'the album backfill must ISSUE the artist-scoped adoption lookup — 0 here means the '
+            . 'closure took its `: null` arm and no orphan can ever be reclaimed for an album',
+        );
+        $this->assertSame(
+            $orphanId,
+            $db->albums[$albumId]['media_item_id'] ?? null,
+            'the committed-but-unreferenced ALBUM media_items row must be adopted by the '
+            . 'music_albums row that should own it',
+        );
+        $this->assertSame(
+            [$orphanId],
+            $db->mediaItemIds('album'),
+            'and NO second album media_items row may be minted — that is the leak this closes',
+        );
+        $this->assertSame([], $db->orphanedMusicMediaItems());
+    }
+
+    /**
      * A healthy library pays NOTHING for the backfill: it is reached only when a
      * stored `media_item_id` is genuinely NULL.
      *
@@ -2837,6 +2948,151 @@ final class MusicLibraryScannerTest extends TestCase
 
         $this->assertSame(0, $db->countStatements('UPDATE music_artists SET media_item_id'));
         $this->assertSame(0, $db->countStatements('UPDATE music_albums SET media_item_id'));
+    }
+
+    /**
+     * When the backfill's OWN mint reports failure it must (i) report nothing healed and
+     * (ii) re-open the one-per-scan adoption gate for the rest of the scan.
+     *
+     * ⚠ **The S96 coverage pass measured this block at `count=0`** — the two lines
+     * `$mayAdopt = true; return null;` inside `backfillMusicMediaItemId()` were executed by
+     * no test, while the `if ($mediaItemId === '')` above them ran 6 times. So both halves
+     * were GREEN mutations, and each loses something real:
+     *
+     * - drop the `return null` and the method falls through to
+     *   `UPDATE music_artists SET media_item_id = ?` with the EMPTY STRING, i.e. it writes a
+     *   bogus link over a NULL and logs *"Backfilled a NULL media_item_id"* for a row that
+     *   now points at no `media_items` row at all — strictly worse than the NULL S96(e)
+     *   exists to repair;
+     * - drop the `$mayAdopt = true` and the gate stays shut for the rest of the scan, so the
+     *   `media_items` row this mint MAY have committed (`createMediaItem()` swallows its own
+     *   Throwable and cannot tell) is unreclaimable — the exact "orphaned forever" shape.
+     *
+     * Both are asserted against a CONTROL run of the same fixture with no fault, because a
+     * one-sided assertion on "the gate is open" cannot tell an opened gate from one that was
+     * never shut. The control also proves the fixture's gate really starts shut.
+     */
+    public function testAFailedMintInsideTheBackfillHealsNothingAndReOpensAdoption(): void
+    {
+        // CONTROL: same fixture, no fault. The gate is shut (no orphan exists), the
+        // backfill mints successfully, and no album adoption lookup is ever issued.
+        [$cleanDir, $cleanTagger] = $this->oneAlbumFixture(1, 'Control Artist', 'Control Album');
+        $cleanDb = new MusicSchemaConnection();
+        $cleanDb->plantArtistWithNullMediaItem('Control Artist');
+        $this->taggedScanner($cleanDb, $cleanTagger)->scanDirectory($cleanDir, null, 'lib-s96');
+
+        $this->assertSame(
+            1,
+            $cleanDb->countStatements('LEFT JOIN music_artists ar'),
+            'precondition: the one-per-scan gate is asked exactly once',
+        );
+        $this->assertSame(
+            0,
+            $cleanDb->countStatements('LEFT JOIN music_albums ma'),
+            'precondition: with no orphan planted the gate answers NO, so the per-album adoption '
+            . 'lookup must NOT run — this is what makes the faulted run below falsifiable',
+        );
+        $this->assertIsString(
+            $cleanDb->artists['control artist']['media_item_id'] ?? null,
+            'precondition: an unfaulted backfill really does heal the row',
+        );
+
+        // THE SHAPE: the backfill's own createMediaItem() fails. The artist row is found by
+        // its natural key with a NULL link, so the FIRST `INSERT INTO media_items` of the
+        // whole scan is the one the backfill issues.
+        [$dir, $tagger] = $this->oneAlbumFixture(1, 'Unminted Artist', 'Unminted Album');
+        $db = new MusicSchemaConnection();
+        $db->plantArtistWithNullMediaItem('Unminted Artist');
+        $db->faultOnNth('INSERT INTO media_items', 1);
+
+        $logger = new LogWriteFailureLogger();
+        $this->taggedScanner($db, $tagger, $logger)->scanDirectory($dir, null, 'lib-s96');
+
+        // (i) NOTHING healed: no UPDATE issued, the link is still NULL, no heal logged.
+        $this->assertSame(
+            0,
+            $db->countStatements('UPDATE music_artists SET media_item_id'),
+            'a mint that reported failure must not be written over the NULL — falling through '
+            . 'here stores the EMPTY STRING as the link',
+        );
+        $this->assertArrayHasKey('unminted artist', $db->artists);
+        $this->assertNull(
+            $db->artists['unminted artist']['media_item_id'],
+            'the row must be left NULL for the next scan to retry, not linked to nothing',
+        );
+        $this->assertSame(
+            0,
+            $logger->countMessages('Backfilled a NULL media_item_id on a music row'),
+            'and nothing may be REPORTED as healed either',
+        );
+
+        // (ii) The gate is re-opened, so the possibly-committed orphan stays reclaimable.
+        $this->assertGreaterThan(
+            0,
+            $db->countStatements('LEFT JOIN music_albums ma'),
+            'the failed mint must re-open $mayAdopt: 0 lookups here means the gate stayed shut '
+            . 'and a committed-but-unreported media_items row can never be adopted',
+        );
+    }
+
+    /**
+     * A file whose `media_items` row survives but whose `music_tracks` row does NOT —
+     * the partial-prior-scan shape — is `'updated'` when the repair INSERT lands and
+     * **`'failed'`** when it writes nothing.
+     *
+     * ⚠ Review r2's HIGH finding was that this branch returned `'skipped'`: the file has no
+     * `music_tracks` row, so it is NOT indexed, and charging it to the benign bucket is
+     * precisely the "a partially failed scan reports clean success" defect S96(f) exists to
+     * end. The S96 coverage pass then found the whole branch at `count=0` — including the
+     * `? 'failed' : 'updated'` line the r2 fix added — so both arms were unpinned.
+     *
+     * The two arms are asserted with DIFFERENT observable counters (`failed` vs `updated`,
+     * plus the per-file `error` log line), because a fixture that made them look alike
+     * would leave the ternary uncovered while the test still passed.
+     */
+    public function testAMediaItemWhoseTrackRowIsMissingIsRepairedOrChargedAsFailed(): void
+    {
+        // (A) The repair INSERT lands → 'updated', nothing charged to failed.
+        [$dirA, $taggerA] = $this->oneAlbumFixture(1, 'Partial Artist', 'Partial Album');
+        $dbA = new MusicSchemaConnection();
+        $dbA->plantOrphan('track', '01-t', 'lib-s96', null, $dirA . '/01-t.mp3');
+
+        $resultA = $this->taggedScanner($dbA, $taggerA)->scanDirectory($dirA, null, 'lib-s96');
+
+        $this->assertSame(
+            1,
+            $dbA->countStatements('INSERT INTO music_tracks'),
+            'precondition: the existing media_items row is REUSED and only the missing '
+            . 'music_tracks row is inserted',
+        );
+        $this->assertSame(
+            [0, 1, 0],
+            [$resultA->added, $resultA->updated, $resultA->failed],
+            'the media_item already existed, so this is an update — not an add, not a failure',
+        );
+
+        // (B) The same repair INSERT writes nothing → 'failed', NOT 'skipped'.
+        [$dirB, $taggerB] = $this->oneAlbumFixture(1, 'Partial Artist', 'Partial Album');
+        $dbB = new MusicSchemaConnection();
+        $dbB->plantOrphan('track', '01-t', 'lib-s96', null, $dirB . '/01-t.mp3');
+        // `null` is the measured "wrote nothing" shape for an INSERT (Connection.php:1866).
+        $dbB->returnNullFor('INSERT INTO music_tracks');
+
+        $loggerB = new LogWriteFailureLogger();
+        $resultB = $this->taggedScanner($dbB, $taggerB, $loggerB)->scanDirectory($dirB, null, 'lib-s96');
+
+        $this->assertSame(
+            [0, 0, 1],
+            [$resultB->added, $resultB->updated, $resultB->failed],
+            'no music_tracks row means the file is NOT indexed: it must be charged to failed, '
+            . 'and `skipped` (the pre-r2 answer) is what made a lossy scan look clean',
+        );
+        $this->assertSame(
+            1,
+            $loggerB->countMessages('Track was not indexed'),
+            'and the lost path must be logged at error, where an operator can find it — '
+            . 'flushAlbum() logs it there because that is where the PATH is in hand',
+        );
     }
 }
 
@@ -3224,16 +3480,29 @@ final class MusicSchemaConnection extends Connection
         return $this->autoInc;
     }
 
-    /** Plant an orphaned `media_items` row of `$type` that no music_* row references. */
-    public function plantOrphan(string $type, string $name, ?string $libraryId, ?string $parentId = null): string
-    {
+    /**
+     * Plant an orphaned `media_items` row of `$type` that no music_* row references.
+     *
+     * `$path` defaults to `''` because an orphaned artist/album row has no file. Pass a real
+     * file path to build the TRACK variant — a `media_items` row a previous scan committed
+     * whose `music_tracks` row is missing, which is the only way to reach
+     * `upsertTrack()`'s repair branch (it is selected by
+     * `findExistingTrackMediaItemId()`, i.e. by `type = 'track' AND path = ?`).
+     */
+    public function plantOrphan(
+        string $type,
+        string $name,
+        ?string $libraryId,
+        ?string $parentId = null,
+        string $path = ''
+    ): string {
         $id = sprintf('orphan-%s-%02d', $type, ++$this->uuid);
         $this->mediaItems[] = [
             'id' => $id,
             'library_id' => $libraryId,
             'type' => $type,
             'name' => $name,
-            'path' => '',
+            'path' => $path,
             'parent_id' => $parentId,
         ];
 

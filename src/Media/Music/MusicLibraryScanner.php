@@ -1699,7 +1699,14 @@ class MusicLibraryScanner
             // int, anything else (INCLUDING a reformatted `UPDATE`) → `null` — by
             // `…::testTheSchemaDoubleModelsTheClientsPerKeywordReturnDomain()`, which asserts
             // all four rows since r5 (it asserted three while claiming four) and, since r6,
-            // every whitespace layout of the `update` row that its own table names.
+            // every whitespace layout of the `update` row that its own table names AS
+            // REACHABLE. ⚠ Review r7 INFO-1: this signpost used to drop the qualifier its own
+            // target is careful to state. That table has SIX rows, and the sixth — a leading-
+            // whitespace `update`, i.e. the driver's OUTER `trim()` at `Connection.php:1835` —
+            // is asserted by nothing and is labelled `NO — unreachable` there, because the
+            // double's `query()` `ltrim()`s before the keyword is ever derived. Removing that
+            // outer `trim()` leaves the suite GREEN (measured at r7), which is exactly why the
+            // table states the row instead of claiming a pin for it.
             if (self::statementWroteNothing($affected) || (is_int($affected) && $affected < 1)) {
                 // Not applied — either the statement wrote nothing or another writer got
                 // there first. Report NULL and let the next scan try again.

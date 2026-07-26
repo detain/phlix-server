@@ -2441,12 +2441,19 @@ final class MusicLibraryScannerTest extends TestCase
      * the client returns an array. A signpost that claims more than it checks is what let this
      * defect class recur three times, so the claim and the assertions are now the same size.
      *
-     * The last two assertions are the "anything else" row, and the second of them is the one
-     * that matters for production: `Connection.php:1854` splits with **`explode(" ", …)`**, so
-     * an `UPDATE` whose keyword is followed by a newline instead of a single space is NOT
-     * recognised as an update and the client returns **`null`** — measured on real MySQL at r5.
-     * That is precisely why BOTH halves of the backfill guard are required, and why
-     * `statementWroteNothing()` must not be deleted there as dead code.
+     * The last assertions are the WHITESPACE family, and they exist because
+     * `Connection.php:1854` splits with **`explode(" ", …)`** and `:1856` then `trim()`s the
+     * token it took. BOTH halves of that derivation are observable, so both are asserted here:
+     * an `UPDATE` whose keyword is followed by a newline, followed by a bare tab, or preceded
+     * by a block comment is NOT recognised and the client returns **`null`** (measured on real
+     * MySQL at r5) — which is precisely why both halves of the backfill guard are required and
+     * why `statementWroteNothing()` must not be deleted there as dead code — while an `UPDATE`
+     * whose keyword is followed by a **tab THEN a space** IS recognised, because `:1856` strips
+     * the tab off the token it split out. Review r6 measured that last row as the one nothing
+     * pinned: dropping the inner `trim()` from {@see MusicSchemaConnection::keywordOf()} left
+     * this whole file GREEN while the double answered `null` for a statement whose real client
+     * answer is an `int`. See `keywordOf()`'s table for which rows are asserted and which one
+     * is unreachable through `query()` at all.
      */
     public function testTheSchemaDoubleModelsTheClientsPerKeywordReturnDomain(): void
     {
@@ -2502,6 +2509,27 @@ final class MusicLibraryScannerTest extends TestCase
             . 'Reformatting the backfill match arms into a heredoc would move that site from the int '
             . 'arm to the null arm — so statementWroteNothing() is NOT dead code there',
         );
+        $this->assertNull(
+            $db->query("UPDATE\tmusic_artists SET media_item_id = ? WHERE id = ?", ['mi-x', 1]),
+            'a TAB with NO following space loses the keyword the same way: explode(" ") yields the '
+            . 'single token "UPDATE\tmusic_artists", which trim() cannot shorten. Review r6 measured '
+            . 'this row as documented-but-unasserted — a mutation making \t a separator left the file '
+            . 'GREEN',
+        );
+        $this->assertIsInt(
+            $db->query("UPDATE\t music_artists SET media_item_id = ? WHERE id = ?", ['mi-x', 1]),
+            'but a TAB followed by a SPACE is still an UPDATE: explode(" ") yields "UPDATE\t" and '
+            . 'Connection.php:1856 trim()s that token before lowercasing it, so the client returns '
+            . 'rowCount() — an INT. This is the ONLY assertion that pins keywordOf()\'s inner trim(): '
+            . 'review r6 dropped it and the whole file stayed GREEN while the double answered null for '
+            . 'a statement the real client reports an int for',
+        );
+        $this->assertNull(
+            $db->query('/* hint */ UPDATE music_artists SET media_item_id = ? WHERE id = ?', ['mi-x', 1]),
+            'and a leading block comment makes the first space-delimited token "/*", so the client '
+            . 'returns null for that too — the third whitespace row review r6 found documented but '
+            . 'unasserted (stripping a leading comment in keywordOf() left the file GREEN)',
+        );
 
         $armed = new MusicSchemaConnection();
         $armed->returnAffectedRowsFor('UPDATE music_artists SET media_item_id', 0);
@@ -2513,22 +2541,43 @@ final class MusicLibraryScannerTest extends TestCase
     }
 
     /**
-     * The double REFUSES to model a shape the real client cannot produce — twice over.
+     * The double REFUSES to hand back an affected-row count for a statement whose keyword
+     * cannot report one — **at dispatch, where the statement is visible**.
      *
-     * Review r4 armed the INSERT contract on an UPDATE; the fix added an arm-time refusal and
-     * claimed the inverse defect was "no longer expressible". Review r5 measured **four**
-     * bypasses of that refusal (it read only the first `" \t\n"`-delimited token of the needle,
-     * while the needle is matched at dispatch with `str_contains()`), one of which armed an
-     * **INSERT** with `int 0` — the exact class this round exists to prevent. So both layers
-     * are asserted here:
+     * ⚠ **THE ARM-TIME REFUSAL r4 AND r5 BUILT IN `returnAffectedRowsFor()` IS GONE, ON
+     * PURPOSE (review r6 LOW-1).** Its three-round history IS the argument for deleting it
+     * rather than patching it a fourth time:
      *
-     * 1. **arm time** — the needle must not mention `insert`/`select`/`show`, and must mention
-     *    `update`/`delete`/`replace`. All four r5 bypasses are checked, together with the
-     *    needle the scanner really uses, which must still be accepted.
-     * 2. **dispatch time** — the honest residue of (1): `'INTO metadata_updates'` mentions
-     *    `update` inside an identifier, so it IS armable, and `str_contains()` then matches an
-     *    `INSERT`. `keywordFaithful()` sees the statement rather than the needle and throws,
-     *    which is what makes the shape genuinely unproducible.
+     * - **r4** tokenised the needle's first word and declared the inverse defect "no longer
+     *   expressible". **r5 measured FOUR bypasses**, one of which armed an `INSERT` with
+     *   `int 0` — a shape the client cannot produce — with no throw at all.
+     * - **r5** replaced it with two `str_contains()` checks on the needle. **r6 measured the
+     *   OTHER direction:** `'SET a.total_tracks = (SELECT COUNT(*)'` — lifted VERBATIM from
+     *   {@see \Phlix\Media\Music\MusicLibraryScanner::refreshAlbumTrackTotal()}, an `UPDATE`
+     *   whose real client answer is an `int` — was REFUSED because of its `(SELECT COUNT(*)`
+     *   **subquery**, and so were `'UPDATE settings SET selected'` (a column name) and
+     *   `'DELETE FROM tv_shows'` (a table name). All three armed fine before r5.
+     * - Worse than the false refusal: its message said *"Use returnNullFor()… instead"*, i.e.
+     *   it told the next reader to model **`null` for an UPDATE** — precisely the r3/r4 defect
+     *   this whole thread exists to prevent. **A guard whose failure message recommends the
+     *   bug is worse than no guard.**
+     *
+     * The cause is structural, not a bad predicate: **a needle is a substring, and a substring
+     * cannot be keyword-classified.** The driver classifies the *statement*
+     * (`Connection.php:1854-1856`), so that is the only place the question has an answer — and
+     * for this arm the answer there is TOTAL rather than heuristic: `returnAffectedRowsFor()`
+     * can only arm an `int`, and an `int` is faithful for `update`/`delete`/`replace` and for
+     * nothing else, so ANY arm of it that fires on a statement of any other keyword is thrown
+     * out by {@see MusicSchemaConnection::keywordFaithful()}, however the needle was spelled.
+     * An arm that never matches a statement returns nothing and so needs no refusal. One rule,
+     * checked where the truth is known.
+     *
+     * Every needle either round measured is therefore re-checked HERE, at dispatch: r4's
+     * caught set, all four r5 bypasses (incl. the dangerous `'INTO media_items'`), the r5
+     * residue `'INTO metadata_updates'`, and a `TRUNCATE` that drives `keywordFaithful()`'s
+     * `default` arm — which review r6 found was never evaluated in the green suite (LOW-3).
+     * Then the six needles that MUST arm, checked for their **effect** at dispatch and not
+     * merely for the absence of a throw.
      *
      * No assertion sits inside any `try` — every outcome is captured into a variable and
      * asserted afterwards, because `ExpectationFailedException` is itself a `RuntimeException`
@@ -2536,88 +2585,140 @@ final class MusicLibraryScannerTest extends TestCase
      */
     public function testTheDoubleRefusesAnAffectedRowCountForAKeywordThatCannotReportOne(): void
     {
-        $armed = new MusicSchemaConnection();
-
-        $refusals = [];
-        $needles = [
-            // The r4 refusal caught these three (leading keyword, any case, any leading space).
-            'INSERT INTO music_tracks' => 'insert',
-            '  insert into music_tracks' => 'insert',
-            'SELECT id' => 'select',
-            // The four r5 measured BYPASSES. The first is the dangerous one: it armed an
-            // INSERT with int 0, a shape the client cannot produce, with no throw at all.
-            'INTO media_items' => 'no-keyword',
-            '/* hint */ INSERT INTO music_tracks' => 'insert',
-            "INSERT\r\nINTO music_tracks" => 'insert',
-            'WITH c AS (SELECT 1) SELECT * FROM c' => 'select',
+        // needle => [statement it matches, the reason the message must give].
+        // The reasons are deliberately DISTINGUISHABLE per keyword: naming the real return
+        // is the whole point, and identical fixtures are what left this unpinned before.
+        $cannotReport = [
+            // r4's caught set — the leading keyword, in either case.
+            'INSERT INTO music_tracks' => [
+                'INSERT INTO music_tracks (media_item_id) VALUES (?)',
+                'keyword is "insert", and the real client returns string for it',
+            ],
+            'insert into music_tracks' => [
+                'insert into music_tracks (media_item_id) VALUES (?)',
+                'keyword is "insert", and the real client returns string for it',
+            ],
+            'SELECT id' => [
+                'SELECT id FROM music_artists WHERE name = ?',
+                'keyword is "select", and the real client returns array for it',
+            ],
+            'show tables' => [
+                'show tables',
+                'keyword is "show", and the real client returns array for it',
+            ],
+            // The four r5 BYPASSES of the arm-time check. The first is the dangerous one: it
+            // armed an INSERT with int 0 and the suite stayed green.
+            'INTO media_items' => [
+                'INSERT INTO media_items (id, library_id, type, name, path) VALUES (?, ?, ?, ?, ?)',
+                'keyword is "insert", and the real client returns string for it',
+            ],
+            '/* hint */ INSERT INTO music_tracks' => [
+                '/* hint */ INSERT INTO music_tracks (media_item_id) VALUES (?)',
+                'keyword is "/*", and the real client returns null for it',
+            ],
+            "INSERT\r\nINTO music_tracks" => [
+                "INSERT\r\nINTO music_tracks (media_item_id) VALUES (?)",
+                "keyword is \"insert\r\ninto\", and the real client returns null for it",
+            ],
+            'WITH c AS (SELECT 1) SELECT * FROM c' => [
+                'WITH c AS (SELECT 1) SELECT * FROM c',
+                'keyword is "with", and the real client returns null for it',
+            ],
+            // review r6 LOW-3: keywordFaithful()'s `default => 'null'` arm was never
+            // evaluated in the green suite (`default => 'int'` was a GREEN mutation), so the
+            // claim "for any other keyword nothing but the sentinels" was unpinned. These
+            // three `null`-permitted rows are what evaluate it.
+            'TRUNCATE TABLE music_artists' => [
+                'TRUNCATE TABLE music_artists',
+                'keyword is "truncate", and the real client returns null for it',
+            ],
+            // The r5 residue: `update` inside an IDENTIFIER. Unarmable-by-inspection was
+            // never achievable — this row is why, and why the check lives at dispatch.
+            'INTO metadata_updates' => [
+                'INSERT INTO metadata_updates (media_item_id) VALUES (?)',
+                'keyword is "insert", and the real client returns string for it',
+            ],
         ];
 
-        foreach ($needles as $needle => $expected) {
+        $atDispatch = [];
+        foreach ($cannotReport as $needle => [$statement, $reason]) {
+            $db = new MusicSchemaConnection();
+            $db->returnAffectedRowsFor((string) $needle, 4);
             try {
-                $armed->returnAffectedRowsFor((string) $needle, 0);
-                $refusals[$expected][] = 'ACCEPTED';
-            } catch (\InvalidArgumentException $e) {
-                $refusals[$expected][] = $e->getMessage();
+                $value = $db->query($statement, ['mi-x', 'mi-x', 'artist', 'n', '']);
+                $atDispatch[(string) $needle] = 'RETURNED ' . get_debug_type($value) . ', NO THROW';
+            } catch (\LogicException $e) {
+                $atDispatch[(string) $needle] = $e->getMessage();
             }
+            $this->assertStringContainsString(
+                $reason,
+                $atDispatch[(string) $needle],
+                sprintf(
+                    'arming an affected-row count on "%s" must be refused at dispatch, naming the '
+                    . 'statement keyword AND what the real client returns for it. A needle cannot be '
+                    . 'classified (r6 LOW-1: r5\'s arm-time check refused three legitimate needles, '
+                    . 'one of them lifted from production) — the statement can',
+                    addcslashes((string) $needle, "\r\n\t"),
+                ),
+            );
         }
 
-        $accepted = null;
-        try {
-            $armed->returnAffectedRowsFor('UPDATE music_artists SET media_item_id', 0);
-            $accepted = 'accepted';
-        } catch (\InvalidArgumentException $e) {
-            $accepted = 'REFUSED: ' . $e->getMessage();
+        // A needle with leading whitespace can never match anything, because query() ltrim()s
+        // the statement first — so it is INERT rather than dangerous, which is the strongest
+        // possible outcome and the reason r4's '  insert into …' row needs no refusal at all.
+        $inert = new MusicSchemaConnection();
+        $inert->returnAffectedRowsFor('  insert into music_tracks', 4);
+        $this->assertIsString(
+            $inert->query('  insert into music_tracks (media_item_id) VALUES (?)', ['mi-x']),
+            'a needle that cannot match a query() statement arms nothing, so the INSERT contract '
+            . '(a string) is what comes back — an inert arm produces no unfaithful shape',
+        );
+
+        // needle => [statement, params]. Every one of these MUST arm and MUST take effect:
+        // the armed value is 4, which no runUpdate() branch ever returns, so `4` proves the
+        // arm fired rather than merely that nothing threw.
+        $mustArm = [
+            'UPDATE music_artists SET media_item_id' => [
+                'UPDATE music_artists SET media_item_id = ? WHERE id = ? AND media_item_id IS NULL',
+                ['mi-x', 1],
+            ],
+            'DELETE FROM music_tracks' => ['DELETE FROM music_tracks WHERE id = ?', [1]],
+            'REPLACE INTO music_tracks' => [
+                'REPLACE INTO music_tracks (media_item_id) VALUES (?)',
+                ['mi-x'],
+            ],
+            // ⚠ review r6 LOW-1's THREE FALSE REFUSALS. The first is the scanner's own
+            // production UPDATE (refreshAlbumTrackTotal(), MusicLibraryScanner) — the
+            // `(SELECT COUNT(*)` subquery is what r5's str_contains('select') tripped over;
+            // the other two carry `select`/`show` inside a column and a table name.
+            'SET a.total_tracks = (SELECT COUNT(*)' => [
+                "UPDATE music_albums a\n"
+                . "    SET a.total_tracks = (SELECT COUNT(*) FROM music_tracks t WHERE t.album_id = a.id)\n"
+                . '  WHERE a.id = ?',
+                [1],
+            ],
+            'UPDATE settings SET selected' => [
+                'UPDATE settings SET selected = ? WHERE id = ?',
+                ['x', 1],
+            ],
+            'DELETE FROM tv_shows' => ['DELETE FROM tv_shows WHERE id = ?', [1]],
+        ];
+
+        foreach ($mustArm as $needle => [$statement, $params]) {
+            $db = new MusicSchemaConnection();
+            $db->returnAffectedRowsFor((string) $needle, 4);
+            $this->assertSame(
+                4,
+                $db->query($statement, $params),
+                sprintf(
+                    'the needle "%s" must arm AND take effect. Review r6 measured r5\'s arm-time '
+                    . 'refusal rejecting three of these six, including one drawn verbatim from the '
+                    . 'scanner\'s own production UPDATE — and its message recommended returnNullFor(), '
+                    . 'i.e. modelling null for an UPDATE, which is the r3/r4 defect itself',
+                    $needle,
+                ),
+            );
         }
-
-        $this->assertSame(
-            'accepted',
-            $accepted,
-            'the needle the backfill test really uses must still be armable — a refusal that '
-            . 'refuses everything would be worse than none',
-        );
-        $this->assertNotContains(
-            'ACCEPTED',
-            array_merge(...array_values($refusals)),
-            'every one of the seven needles above must be refused, including the four review r5 '
-            . 'measured slipping through the first-token check',
-        );
-        // The two refusal reasons must be DISTINGUISHABLE, not two spellings of one message:
-        // the per-keyword detail (what the client returns instead) is the whole point.
-        $this->assertStringContainsString(
-            'lastInsertId() as a string',
-            $refusals['insert'][0],
-            'the INSERT refusal must say what the client returns for an INSERT instead',
-        );
-        $this->assertStringContainsString(
-            'fetchAll()',
-            $refusals['select'][0],
-            'and the SELECT refusal must name fetchAll() — a message identical for both keywords '
-            . 'would leave the per-keyword table unpinned in exactly the way that keeps failing',
-        );
-        $this->assertStringContainsString(
-            'mentions no UPDATE, DELETE or REPLACE',
-            $refusals['no-keyword'][0],
-            'and a needle naming no affected-row keyword at all must be refused for THAT reason — '
-            . 'this is the r5 bypass that armed an INSERT with int 0',
-        );
-
-        // Layer 2: the residue of a substring check, closed where the statement is visible.
-        $sneaky = new MusicSchemaConnection();
-        $sneaky->returnAffectedRowsFor('INTO metadata_updates', 3);
-        $atDispatch = null;
-        try {
-            $sneaky->query('INSERT INTO metadata_updates (media_item_id) VALUES (?)', ['mi-x']);
-            $atDispatch = 'RETURNED an int for an INSERT';
-        } catch (\LogicException $e) {
-            $atDispatch = $e->getMessage();
-        }
-
-        $this->assertStringContainsString(
-            'the real client returns string for it',
-            $atDispatch,
-            'a needle mentioning `update` only inside an identifier is armable, so the arm-time '
-            . 'refusal alone is not a firewall; keywordFaithful() must refuse the int at dispatch',
-        );
     }
 
     /**
@@ -3055,70 +3156,37 @@ final class MusicSchemaConnection extends Connection
      * Returns BEFORE the table handlers, exactly like {@see self::returnNullFor()}, so the
      * in-memory row is not mutated either — which is what "affected 0 rows" means.
      *
-     * ⚠ **THE REFUSAL BELOW IS A `str_contains()` CHECK ON THE NEEDLE, MATCHING HOW THE NEEDLE
-     * ITSELF IS MATCHED AT DISPATCH (review r5 LOW-2), AND IT IS STILL NOT A FIREWALL ON ITS
-     * OWN.** Review r4 claimed the inverse defect was "no longer expressible"; r5 measured four
-     * bypasses of the then first-token check and disproved it. Both directions are now checked
-     * here — the needle must NOT mention `insert`/`select`/`show`, and it MUST mention
-     * `update`/`delete`/`replace` — which closes all four (`'INTO media_items'`, a needle whose
-     * `INSERT` follows a leading block comment, `"INSERT\r\nINTO …"`, and
-     * `'WITH c AS (SELECT 1) SELECT …'`).
-     * What REMAINS expressible: a needle that mentions an affected-row keyword only inside an
-     * identifier (`'INTO metadata_updates'`) is armed here and can still match an `INSERT`,
-     * because a needle is a substring, not a statement. That residue is closed one layer down
-     * by {@see self::keywordFaithful()}, which sees the real statement and throws. Both layers
+     * ⚠ **THIS METHOD DELIBERATELY HAS NO ARM-TIME REFUSAL — DO NOT ADD ONE BACK (review r6
+     * LOW-1).** Rounds r4 and r5 each built one here and each one was wrong in a new direction:
+     *
+     * - **r4** read the needle's first `" \t\n"`-delimited token. **r5 measured four bypasses**
+     *   (`'INTO media_items'`, a needle whose `INSERT` follows a block comment,
+     *   `"INSERT\r\nINTO …"`, `'WITH c AS (SELECT 1) SELECT …'`), one of which armed an
+     *   **`INSERT` with `int 0`** and left the suite green.
+     * - **r5** made it two `str_contains()` checks on the needle. **r6 measured the opposite
+     *   failure:** `'SET a.total_tracks = (SELECT COUNT(*)'` — taken VERBATIM from
+     *   {@see \Phlix\Media\Music\MusicLibraryScanner::refreshAlbumTrackTotal()}, an `UPDATE`
+     *   whose real return is an `int` — was REFUSED over its `(SELECT COUNT(*)` **subquery**,
+     *   and so were `'UPDATE settings SET selected'` and `'DELETE FROM tv_shows'`.
+     * - And the refusal's message pointed the reader at `returnNullFor()`, i.e. at modelling
+     *   **`null` for an `UPDATE`** — the exact r3/r4 defect this thread exists to prevent.
+     *   **A guard whose failure message recommends the bug is worse than no guard.**
+     *
+     * A needle is a **substring**; the driver classifies the **statement**
+     * (`Connection.php:1854-1856`). Nothing here can do that job, and the layer that can does
+     * it completely for this arm: this method can only arm an `int`, and
+     * {@see self::keywordFaithful()} permits an `int` for `update`/`delete`/`replace` and for
+     * no other keyword — so an arm that fires on any other statement throws, however the needle
+     * was spelled, and an arm that never fires produces no shape at all. Both directions —
+     * every needle either round measured, plus the six that must still arm AND take effect —
      * are pinned by
      * `MusicLibraryScannerTest::testTheDoubleRefusesAnAffectedRowCountForAKeywordThatCannotReportOne()`.
      *
      * @param string $needle   Statement substring to arm.
      * @param int    $affected The `rowCount()` the client should report.
-     *
-     * @throws \InvalidArgumentException When `$needle` mentions a keyword whose real return
-     *         domain is NOT an affected-row count, or mentions no affected-row keyword at all.
      */
     public function returnAffectedRowsFor(string $needle, int $affected): void
     {
-        $lower = strtolower($needle);
-        $cannotReport = [
-            'insert' => 'lastInsertId() as a string, or null when it wrote nothing',
-            'select' => 'fetchAll()',
-            'show' => 'fetchAll()',
-        ];
-
-        foreach ($cannotReport as $foreign => $realReturn) {
-            if (!str_contains($lower, $foreign)) {
-                continue;
-            }
-
-            throw new \InvalidArgumentException(sprintf(
-                'The needle "%s" mentions %s, and a %s does NOT report an affected-row count: '
-                . 'Connection::query() returns %s for it. Use returnNullFor()/the runSelect() '
-                . 'handlers instead — see returnNullFor()\'s per-keyword table.',
-                $needle,
-                strtoupper($foreign),
-                strtoupper($foreign),
-                $realReturn,
-            ));
-        }
-
-        $reportsAffectedRows = false;
-        foreach (['update', 'delete', 'replace'] as $armable) {
-            if (str_contains($lower, $armable)) {
-                $reportsAffectedRows = true;
-                break;
-            }
-        }
-
-        if (!$reportsAffectedRows) {
-            throw new \InvalidArgumentException(sprintf(
-                'The needle "%s" mentions no UPDATE, DELETE or REPLACE, so nothing in it does '
-                . 'report an affected-row count — and because a needle is matched with '
-                . 'str_contains(), it could arm a statement of ANY keyword. Name the keyword you '
-                . 'mean; see returnNullFor()\'s per-keyword table.',
-                $needle,
-            ));
-        }
-
         $this->affectedOn[] = ['needle' => $needle, 'affected' => $affected];
     }
 
@@ -3271,22 +3339,46 @@ final class MusicSchemaConnection extends Connection
      * `Connection::query()` does `trim($query)`, then **`explode(" ", $query)`** — a split on
      * the SPACE character only — then `strtolower(trim($rawStatement[0]))`
      * (`vendor/workerman/mysql/src/Connection.php:1835`, `:1854`, `:1856`). So the keyword is
-     * only recognised when it is followed by a **single space**, and this is mirrored rather
-     * than approximated because the difference is observable and was measured against real
-     * MySQL 8.0.46 at review r5:
+     * only recognised when the token that split out `trim()`s down to it, and this is mirrored
+     * rather than approximated because the difference is observable and was measured against
+     * real MySQL 8.0.46 at review r5.
      *
-     * | statement | `keywordOf()` | client returns |
-     * |---|---|---|
-     * | `UPDATE music_artists SET …` | `update` | `int` (`rowCount()`) |
-     * | `   update music_artists SET …` | `update` | `int` |
-     * | `UPDATE\nmusic_artists SET …` | `update\nmusic_artists` | **`null`** |
-     * | `UPDATE\tmusic_artists SET …` | `update\tmusic_artists` | **`null`** |
-     * | a leading block comment, then `UPDATE …` | the comment opener | **`null`** |
+     * ⚠ **EVERY ROW BELOW THAT IS REACHABLE THROUGH `query()` IS ASSERTED, AND THE ONE THAT IS
+     * NOT SAYS WHY (review r6 LOW-2).** r5 wrote this table and cited the fidelity test as
+     * pinning it while only two rows were asserted — the same "claims more than it pins" defect
+     * r5 itself had just closed one helper over. All assertions live in
+     * `MusicLibraryScannerTest::testTheSchemaDoubleModelsTheClientsPerKeywordReturnDomain()`:
      *
-     * That is why {@see \Phlix\Media\Music\MusicLibraryScanner::statementWroteNothing()} is
-     * NOT dead code at the backfill site: reformatting that `UPDATE` into a heredoc would
-     * move it from the int arm to the `null` arm. Pinned by
-     * `MusicLibraryScannerTest::testTheSchemaDoubleModelsTheClientsPerKeywordReturnDomain()`.
+     * | statement (as `query()` sees it: already `ltrim()`ed) | `keywordOf()` | client | pinned |
+     * |---|---|---|---|
+     * | `UPDATE music_artists SET …` | `update` | `int` | **yes** |
+     * | `UPDATE\nmusic_artists SET …` | `update\nmusic_artists` | **`null`** | **yes** |
+     * | `UPDATE\tmusic_artists SET …` (tab, NO space) | `update\tmusic_artists` | **`null`** | **r6** |
+     * | `UPDATE\t music_artists SET …` (tab THEN space) | `update` | `int` | **r6** |
+     * | a leading block comment, then `UPDATE …` | the comment opener | **`null`** | **r6** |
+     * | `   update music_artists SET …` | `update` | `int` | **NO — unreachable** |
+     *
+     * Which part of the derivation each asserted row is the pin on:
+     * - **row 1** — `strtolower()` and the `[0]` index; drop either and it stops being `update`.
+     * - **row 2** — `explode(' ')` as against any whitespace-aware split. A
+     *   `preg_split('/\s+/')` "tidy-up" fails HERE.
+     * - **row 3** — the split being by SPACE *only*. Making `\t` a separator fails HERE.
+     * - **row 4** — the INNER `trim()`, i.e. `Connection.php:1856`'s, and **nothing else pins
+     *   it**: review r6 dropped that `trim()` and this file stayed GREEN while the double
+     *   answered `null` for a statement whose real client answer is an `int`.
+     * - **row 5** — that a leading comment is NOT stripped before the split.
+     *
+     * The last row is the OUTER `trim()`, mirroring `Connection.php:1835`. It cannot be reached
+     * from this double's public surface: {@see self::query()} `ltrim()`s the statement before
+     * anything else, so no `$sql` arriving here can carry leading whitespace, and trailing
+     * whitespace cannot change `explode(' ')[0]` once the inner `trim()` exists. It is kept for
+     * fidelity with the driver, not for behaviour, and no assertion can falsify it — which is
+     * stated rather than papered over, because "pinned by a test that cannot reach it" is how
+     * this step lost three rounds.
+     *
+     * The `null` rows are why {@see \Phlix\Media\Music\MusicLibraryScanner::statementWroteNothing()}
+     * is NOT dead code at the backfill site: reformatting that `UPDATE` into a heredoc would
+     * move it from the int arm to the `null` arm.
      */
     private function keywordOf(string $sql): string
     {
@@ -3342,10 +3434,17 @@ final class MusicSchemaConnection extends Connection
     /**
      * REFUSES, at dispatch time, to hand back a shape the real client cannot produce.
      *
-     * The arm-time refusal in {@see self::returnAffectedRowsFor()} is a needle check, and a
-     * needle is matched with `str_contains()`, so it can never be complete: a needle that
-     * merely CONTAINS `update` (`'INTO metadata_updates'`) passes it and can then match an
-     * `INSERT`. This is the check that closes that gap, because it sees the statement itself.
+     * ⚠ **THIS IS THE ONLY LAYER, BY DESIGN (review r6 LOW-1).** {@see self::returnAffectedRowsFor()}
+     * used to refuse suspicious NEEDLES too, and a needle is matched with `str_contains()`, so
+     * that check could never be complete in either direction: it let `'INTO metadata_updates'`
+     * arm an `INSERT`, and it refused `'SET a.total_tracks = (SELECT COUNT(*)'` — a fragment of
+     * the scanner's own production `UPDATE`. It is gone. This check sees the **statement**,
+     * which is what the driver classifies, so it is exact rather than heuristic.
+     *
+     * The `default` arm is not defence-only: three statements in
+     * `testTheDoubleRefusesAnAffectedRowCountForAKeywordThatCannotReportOne()` (a `TRUNCATE`, a
+     * `WITH`, and a comment-prefixed `INSERT`) drive it with an armed `int`, so
+     * `default => 'int'` is a RED mutation. Review r6 found it never evaluated at all (LOW-3).
      *
      * `false` and `null` are exempt ON PURPOSE and are the only exemptions: they are the two
      * documented non-client sentinels this double models — `false` for a different client / a

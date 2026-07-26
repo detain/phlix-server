@@ -299,13 +299,16 @@ class MusicLibraryScanner
      * half production trips **for the statement as written today**.
      *
      * ⚠ **AND `null` IS NOT UNREACHABLE FOR AN UPDATE — THAT CLAIM (fix r4's) WAS TOO STRONG
-     * (review r5).** The keyword is only recognised when it is followed by a **single space**:
-     * `Connection::query()` splits with `explode(" ", $query)` (`:1854`) and lowercases only
-     * that first *space*-delimited token (`:1856`). Measured against real MySQL 8.0.46 at r5 —
-     * `"UPDATE\nmusic_artists SET …"` → **`null`**, `"UPDATE\tmusic_artists SET …"` →
-     * **`null`**, a leading block comment then `UPDATE …` → **`null`**, while the verbatim
-     * single-line statement → `int 0`/`int 1`. So reformatting that `UPDATE` into a heredoc
-     * would silently move the site onto the `null` arm. That is exactly why the helper is
+     * (review r5).** The keyword is recognised only when the statement's first
+     * *space*-delimited token `trim()`s down to it: `Connection::query()` splits with
+     * `explode(" ", $query)` (`:1854`), then `strtolower(trim($rawStatement[0]))` (`:1856`).
+     * Measured against real MySQL 8.0.46 at r5 — `"UPDATE\nmusic_artists SET …"` → **`null`**,
+     * `"UPDATE\tmusic_artists SET …"` (tab, NO space) → **`null`**, a leading block comment
+     * then `UPDATE …` → **`null`**, while the verbatim single-line statement → `int 0`/`int 1`.
+     * ⚠ *"followed by a single space"* (r5's phrasing) is not the rule and review r6 measured
+     * the difference: `"UPDATE\t music_artists SET …"` — tab THEN space — splits to `"UPDATE\t"`,
+     * which `:1856` `trim()`s back to `update`, so THAT one is an `int`. So reformatting that
+     * `UPDATE` into a heredoc would silently move the site onto the `null` arm. That is exactly why the helper is
      * needed there and must NOT be deleted as dead code — and equally why it is not
      * sufficient on its own. See the comment at that site; both halves are required, and each
      * is pinned separately. Assume nothing about a keyword — or a whitespace layout — you
@@ -1674,12 +1677,16 @@ class MusicLibraryScanner
             //
             // ⚠ **AND DO NOT DELETE `statementWroteNothing()` AS DEAD CODE EITHER: `null` IS
             // REACHABLE HERE (review r5 corrects fix r4's "never `null`").** The keyword is
-            // recognised only when it is followed by a SINGLE SPACE — `Connection.php:1854`
-            // splits with `explode(" ", $query)` — so the moment the `$sql` above is
+            // recognised only when the statement's first SPACE-delimited token `trim()`s down
+            // to it — `Connection.php:1854` splits with `explode(" ", $query)`, `:1856` does
+            // `strtolower(trim($rawStatement[0]))` — so the moment the `$sql` above is
             // reformatted (a heredoc, a leading comment, a tab) the statement misses the
             // `update` branch and the client returns `null` from `:1866`. Measured on real
-            // MySQL 8.0.46 at r5: `"UPDATE\nmusic_artists SET …"` → `null`, `"UPDATE\t…"` →
-            // `null`, a leading block comment → `null`. A bare `createMock(Connection::class)`
+            // MySQL 8.0.46 at r5: `"UPDATE\nmusic_artists SET …"` → `null`,
+            // `"UPDATE\tmusic_artists …"` (tab, NO space) → `null`, a leading block comment →
+            // `null`. ⚠ Review r6 narrows r5's "a single space": `"UPDATE\t music_artists …"`
+            // (tab THEN space) splits to `"UPDATE\t"`, which `:1856` trims back to `update`, so
+            // that layout still reaches the int arm. A bare `createMock(Connection::class)`
             // hands back `null` too. So **BOTH halves are load-bearing**: drop the int half
             // and every row the predicate excludes gets a false `info` heal today; drop the
             // `null` half and the next reformat of those `match` arms reintroduces the r2 HIGH
@@ -1691,7 +1698,8 @@ class MusicLibraryScanner
             // table — `select`/`show` → list, `insert` → string, `update`/`delete`/`replace` →
             // int, anything else (INCLUDING a reformatted `UPDATE`) → `null` — by
             // `…::testTheSchemaDoubleModelsTheClientsPerKeywordReturnDomain()`, which asserts
-            // all four rows since r5 (it asserted three while claiming four).
+            // all four rows since r5 (it asserted three while claiming four) and, since r6,
+            // every whitespace layout of the `update` row that its own table names.
             if (self::statementWroteNothing($affected) || (is_int($affected) && $affected < 1)) {
                 // Not applied — either the statement wrote nothing or another writer got
                 // there first. Report NULL and let the next scan try again.

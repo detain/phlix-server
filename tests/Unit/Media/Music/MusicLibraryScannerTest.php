@@ -2751,11 +2751,16 @@ final class MusicLibraryScannerTest extends TestCase
      * 1. `query()` contains exactly ONE `T_RETURN`, so every value it hands back goes through
      *    `keywordFaithful()`. Token-based on purpose: a comment or docblock using the word
      *    cannot move the number.
-     * 2. `$affectedOn` stays **private** — an out-of-class read then does not compile, and a
-     *    subclass cannot reach it either, independently of `final`.
+     * 2. `$affectedOn` stays **private** — an out-of-class read then dies at RUN TIME with
+     *    `Error: Cannot access private property`, and a subclass cannot reach it either,
+     *    independently of `final`. Run time, not compile time: PHP performs no compile-time
+     *    visibility check, so `php -l` on such a read exits 0 and the script runs up to it.
      * 3. `MusicSchemaConnection` **uses NO trait**. A trait's body is inside the class
      *    semantically — it can read this private store — and OUTSIDE the class's line range,
-     *    which is the range assertions 4-7 are scoped to.
+     *    which is the range assertions 4, 6 and 7 are scoped to. Assertion 5 deliberately is
+     *    NOT: it sums over the methods the class DECLARES, and a flattened trait method's
+     *    range resolves into the TRAIT's own file and lines — which is exactly the property
+     *    that lets 5 catch trait placement independently of this assertion.
      * 4. the literal name `affectedOn` occurs **exactly 3 times** in the class's line range …
      * 5. … **exactly 2** of those 3 sit inside methods this class declares, so the third is the
      *    class-body declaration: all three occurrences are attributed to a location and there
@@ -2768,8 +2773,11 @@ final class MusicLibraryScannerTest extends TestCase
      * Assertions 2 and 3 are preconditions of the counts and deliberately run first, so a
      * RENAME of the property ERRORS at 2 (*"ReflectionException: Property
      * …MusicSchemaConnection::$affectedOn does not exist"*) and a trait fails at 3, in both
-     * cases before any count is taken. Everything the counts see is SOURCE TOKENS inside one
-     * class's own line range. That is the whole of their power.
+     * cases before any count is taken. Everything the counts see is SOURCE TOKENS, and the range
+     * they see them in SPLITS: assertions 4, 6 and 7 read tokens inside this class's own line
+     * range, while assertion 5 reads the range of each method the class DECLARES — which for a
+     * trait-flattened method resolves into the trait's file and lines. That is the whole of their
+     * power, and the reason 5 still sees a trait-held reader when 4 cannot.
      *
      * ⚠ **2. THE EVASION LIST BELOW IS NOT EXHAUSTIVE, AND CANNOT BE MADE SO.** Nine review
      * rounds each found one more spelling that routes around a token-level pin, and there is no
@@ -2865,12 +2873,16 @@ final class MusicLibraryScannerTest extends TestCase
         $this->assertSame(
             [],
             (new \ReflectionClass(MusicSchemaConnection::class))->getTraitNames(),
-            'MusicSchemaConnection must use NO trait. Every count below is scoped to the class\'s '
-            . 'own line range, and a trait sits OUTSIDE that range while being INSIDE the class '
-            . 'semantically — its body can read this private store. Review r9 measured a '
-            . 'trait-held public reader handing an int 0 back for a SELECT while all SEVEN '
-            . 'assertions of the previous version of this pin stayed green: review r7\'s defeat, '
-            . 're-opened by the ordinary reason to add a trait. Put helpers on this class itself.',
+            'MusicSchemaConnection must use NO trait. The class-range counts below — assertions '
+            . '4, 6 and 7 — are scoped to the class\'s own line range, and a trait sits OUTSIDE '
+            . 'that range while being INSIDE the class semantically: its body can read this '
+            . 'private store. Assertion 5 is the exception and the backstop, so do NOT read a '
+            . 'trait as invisible to everything below — 5 sums over the methods this class '
+            . 'DECLARES, and a flattened trait method\'s range resolves into the trait, so it '
+            . 'catches trait placement on its own. Review r9 measured a trait-held public reader '
+            . 'handing an int 0 back for a SELECT while all SEVEN assertions of the previous '
+            . 'version of this pin stayed green: review r7\'s defeat, re-opened by the ordinary '
+            . 'reason to add a trait. Put helpers on this class itself.',
         );
 
         $this->assertSame(
@@ -2942,6 +2954,14 @@ final class MusicLibraryScannerTest extends TestCase
      * flattened methods as declared by the USING class while `getFileName()`/`getStartLine()`
      * still resolve to the trait, so a trait-held reader is counted here even though the
      * class-range count cannot see it.
+     *
+     * ⚠ **The scan is LINE-granular, so this sum can OVER-count.** Each method contributes the
+     * hits on its own start..end lines, so two methods DECLARED ON ONE PHYSICAL LINE both see
+     * that line's occurrences. Review r10 measured `public function a(): int { return 1; }
+     * public function b(): array { return $this->affectedOn; }` on a single line as a sum of
+     * **2** for ONE real reference. The direction is the safe one: an over-count can only make
+     * this assertion fail spuriously, never hide an extra reader — a reader that is there cannot
+     * subtract from the sum. One declaration per line, as everywhere in this file, avoids it.
      */
     private static function countNameTokensInMethods(string $class, string $name): int
     {
@@ -2958,8 +2978,12 @@ final class MusicLibraryScannerTest extends TestCase
     }
 
     /**
-     * Count every token inside one class's — or one of its methods' — own source range that
-     * NAMES `$name`, in ANY spelling: `->name`, `$name`, or `name` written as a string literal.
+     * Count every token inside one class's — or one of its methods' — own source range whose
+     * SOURCE TEXT names `$name`. FOUR token types are counted and no others: `T_STRING` (which
+     * covers `->name` and a bare `name`), `T_VARIABLE` (`$name`), and both string-fragment
+     * types, `T_CONSTANT_ENCAPSED_STRING` and `T_ENCAPSED_AND_WHITESPACE` — the last two
+     * compared after `trim($text, " \t\n\r\0\x0B'\"")`, i.e. ignoring surrounding quotes AND
+     * surrounding whitespace, so what they match is wider than a bare `'name'` literal.
      *
      * Token-based on purpose, for the same reason the `T_RETURN` count above is: a comment or
      * docblock naming the member must not be able to move the number, and it cannot, because a
@@ -2975,6 +2999,20 @@ final class MusicLibraryScannerTest extends TestCase
      * the same name inside a heredoc/nowdoc — or interpolated — is a
      * `T_ENCAPSED_AND_WHITESPACE`, which review r9 measured as a way past a counter that took
      * only the former.
+     *
+     * ⚠ **The WHITESPACE in the `trim()` charlist is LOAD-BEARING, and it is why this counter
+     * can OVER-count.** A nowdoc token's text is `"affectedOn\n"`, so the quote-only charlist
+     * (`'\'"'`) could not match it at all and the nowdoc spelling walked straight past; admitting
+     * whitespace is what closed that, and narrowing the charlist again would re-open it. The
+     * price paid is that two things which are NOT references to the member also count: a padded
+     * literal such as `'affectedOn '`, and an interpolation fragment such as the `' affectedOn'`
+     * inside `"$x affectedOn"`. Review r10 measured both — one real reference plus
+     * `return "arm 'affectedOn ' vs $x affectedOn";` totals **2** — so the description here is
+     * "text that trims to the name", not "a reference to the name". **The direction is the safe
+     * one:** every mechanism above can only ADD, so the failure mode is a spurious RED on a class
+     * that merely mentions the name in a string; it can never hide an evasion, because an extra
+     * reader cannot subtract from a count. Prefer fixing the mention over widening the expected
+     * number.
      *
      * ⚠ **What is compared is the token's SOURCE TEXT, never a runtime value**, so a name
      * assembled at run time (`'affected' . 'On'`) or spelled with an escape sequence
@@ -3003,6 +3041,11 @@ final class MusicLibraryScannerTest extends TestCase
                 continue;
             }
 
+            // The whitespace in the charlist below is required, not cosmetic: a nowdoc token's
+            // text is "affectedOn\n", which a quote-only charlist cannot match. It also makes
+            // the compare whitespace-insensitive, so a padded literal or an interpolation
+            // fragment counts too — an OVER-count, which can only fail loudly and can never
+            // hide a reader. See this method's docblock; do not narrow the charlist.
             $named = match ($token[0]) {
                 T_STRING => $token[1] === $name,
                 T_VARIABLE => $token[1] === '$' . $name,

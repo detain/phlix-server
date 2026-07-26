@@ -2732,64 +2732,100 @@ final class MusicLibraryScannerTest extends TestCase
      * validated by `keywordFaithful()` automatically; the only remaining escape is an early
      * `return` in `query()` itself, which is what this test forbids.
      *
-     * ⚠ **KNOWN LIMIT, recorded so round 6 does not over-trust this:** a test that defines its
-     * OWN double class instead of using this one is outside anything either mechanism can see.
-     * The `T_RETURN` count is deliberately token-based, so comments and docblocks mentioning
-     * the word cannot affect it.
-     *
-     * ⚠ **SECOND KNOWN LIMIT — r7 LOW-1's and r8 finding 2's TWO structural preconditions, and
-     * the reason for the six structural assertions below (every one but the `T_RETURN` count).**
-     * {@see MusicSchemaConnection::keywordFaithful()} covers {@see
-     * MusicSchemaConnection::returnAffectedRowsFor()} *completely* only while BOTH of these hold:
-     * `$this->affectedOn` has exactly ONE reader, {@see
+     * ⚠ **WHY THE STRUCTURAL ASSERTIONS EXIST — r7 LOW-1's and r8 finding 2's TWO
+     * preconditions.** {@see MusicSchemaConnection::keywordFaithful()} covers {@see
+     * MusicSchemaConnection::returnAffectedRowsFor()} *completely* only while BOTH of these
+     * hold: `$this->affectedOn` has exactly ONE reader, {@see
      * MusicSchemaConnection::resolveQueryReturn()}, and `resolveQueryReturn()` has exactly ONE
      * caller, {@see MusicSchemaConnection::query()}. The funnel can only see what flows through
      * `query()`. Review r7 MEASURED the first loss — add one public reader that loops
      * `affectedOn` itself and it hands an `int 0` back for a `SELECT` with nothing to stop it.
-     * Review r8 MEASURED the second — a public wrapper that calls `resolveQueryReturn()` directly
-     * skips `keywordFaithful()` entirely while adding **zero** new `affectedOn` references, and
-     * `query()`'s single-`return` rule constrains `query()` only. Both preconditions were prose,
-     * i.e. guards that had to be re-read to work; both are now **counted**.
+     * Review r8 MEASURED the second — a public wrapper that calls `resolveQueryReturn()`
+     * directly skips `keywordFaithful()` entirely while adding **zero** new `affectedOn`
+     * references, and `query()`'s single-`return` rule constrains `query()` only. Both
+     * preconditions were prose, i.e. guards that had to be re-read to work; both are now
+     * **counted**.
      *
-     * ⚠ **THREE EVASIONS REVIEW r8 MEASURED GREEN against the first version of this pin — a bare
-     * "exactly two `->affectedOn` references" count — and how each is now CLOSED.** Every one of
-     * them handed an `int 0` back for a `SELECT` with the count still reading exactly 2:
-     * - **widen the declaration from `private` to `public` and read the store from a TEST body.**
-     *   No new method at all: a counter scoped to the class's own line range cannot see a read
-     *   outside the class, and this is the file's own house style — `$mediaItems`, `$artists` and
-     *   `$albums` are already `public` and read directly from tests. **CLOSED** by the
-     *   `isPrivate()` assertion: `private` makes an out-of-class read a fatal error, and it
-     *   closes the obvious fourth evasion — a subclass — for the same reason, independently of
-     *   the `final` keyword.
-     * - **relocate the single read into a NEW method that `resolveQueryReturn()` delegates to.**
-     *   A count sees the NUMBER of references, not their LOCATION, so the total stayed 2.
-     *   **CLOSED** by also counting per-METHOD, which is what makes this test's claim about "the
-     *   ONE read in `resolveQueryReturn()`" a pinned fact rather than an aspiration.
-     * - **`get_object_vars($this)['affectedOn']`** — no `->` operator at all, so a counter keyed
-     *   on `T_OBJECT_OPERATOR` was blind to it. **CLOSED** by counting the NAME in every
-     *   spelling — `->affectedOn`, `$affectedOn` and any `'affectedOn'` string literal — which
-     *   also closes r7's two disclosed residues, the dynamic access `$this->{'affectedOn'}` and
-     *   an in-class reflection read.
+     * ⚠ **1. THE INVARIANT THIS TEST ACTUALLY ENFORCES.** Nine assertions, in this order, and
+     * nothing beyond them:
+     * 1. `query()` contains exactly ONE `T_RETURN`, so every value it hands back goes through
+     *    `keywordFaithful()`. Token-based on purpose: a comment or docblock using the word
+     *    cannot move the number.
+     * 2. `$affectedOn` stays **private** — an out-of-class read then does not compile, and a
+     *    subclass cannot reach it either, independently of `final`.
+     * 3. `MusicSchemaConnection` **uses NO trait**. A trait's body is inside the class
+     *    semantically — it can read this private store — and OUTSIDE the class's line range,
+     *    which is the range assertions 4-7 are scoped to.
+     * 4. the literal name `affectedOn` occurs **exactly 3 times** in the class's line range …
+     * 5. … **exactly 2** of those 3 sit inside methods this class declares, so the third is the
+     *    class-body declaration: all three occurrences are attributed to a location and there
+     *    is no spare slot for a fourth, non-funnelling in-class reader …
+     * 6. … **1** of the 2 is the write in `returnAffectedRowsFor()` …
+     * 7. … and **1** is the read in `resolveQueryReturn()`.
+     * 8. `resolveQueryReturn()` stays **private**, so no test can call it directly.
+     * 9. the literal name `resolveQueryReturn` occurs **exactly twice** — its own declaration
+     *    and the ONE call from `query()`.
+     * Assertions 2 and 3 are preconditions of the counts and deliberately run first, so a
+     * RENAME of the property ERRORS at 2 (*"ReflectionException: Property
+     * …MusicSchemaConnection::$affectedOn does not exist"*) and a trait fails at 3, in both
+     * cases before any count is taken. Everything the counts see is SOURCE TOKENS inside one
+     * class's own line range. That is the whole of their power.
      *
-     * ⚠ **A residue r7 NAMED is measurably NOT one: a RENAME fails LOUD.** Review r8 measured a
-     * rename of all three sites driving the bare count to 0 — *"Failed asserting that 0 is
-     * identical to 2"*. Against THIS version it is louder still: the `isPrivate()` assertion runs
-     * first, so a rename never reaches a count at all and the test ERRORS with *"ReflectionException:
-     * Property …MusicSchemaConnection::$affectedOn does not exist"*. Either way it is RED, so the
-     * rename is named here only to un-name it — listing it as a residue made the block look more
-     * complete than it was.
+     * ⚠ **2. THE EVASION LIST BELOW IS NOT EXHAUSTIVE, AND CANNOT BE MADE SO.** Nine review
+     * rounds each found one more spelling that routes around a token-level pin, and there is no
+     * reason to believe the set is finite: a hand-written double can always be rewritten to hand
+     * the armed value out without naming the store in this class's own source. The purpose of
+     * these assertions is to make **accidental drift** and the **plausible refactor** loud — a
+     * second reader added for convenience, a delegate extracted for tidiness, the store widened
+     * to `public` because every sibling store already is, a helper moved into a trait — NOT to
+     * be tamper-proof against an editor who is deliberately working around them. Do not read
+     * the classes below as a completeness claim. A spelling that is not listed is still an
+     * instance of the sentence above: the counter compares source tokens inside one class's
+     * line range.
      *
-     * ⚠ **The residue that IS left, stated rather than implied:**
-     * - a test that defines its **OWN double class** instead of using this one — as above,
-     *   outside anything either mechanism can see;
-     * - a name that is never written down literally: `$this->{'affected' . 'On'}`, or any
-     *   reflection API handed such a computed value. Only a literal name is countable;
-     * - a `ReflectionProperty` read from **OUTSIDE** the class, which no visibility keyword and
-     *   no in-class token count can stop;
-     * - **duplicating** `resolveQueryReturn()`'s body into a new method instead of calling it —
-     *   the caller count sees calls, not copies;
-     * - `nullOn`/`falseOn`, whose two sentinels `keywordFaithful()` exempts for every keyword on
-     *   purpose. Nothing here constrains them.
+     * ⚠ **3. KNOWN EVASION CLASSES, by class rather than by spelling. Each has a mutation
+     * measured GREEN behind it, in the round named:**
+     * - **a test that defines its OWN double class** instead of using this one — outside
+     *   anything either mechanism can see, by construction;
+     * - **a name whose SOURCE TEXT differs from its runtime value**, because the counter
+     *   compares tokens and not values: `$this->{'affected' . 'On'}` (r8), an escape sequence
+     *   such as `"affected\x4fn"` (r9), or any `sprintf()`/reflection API handed such a value;
+     * - **an out-of-class read that bypasses visibility**, which no keyword and no in-class
+     *   token count can stop: `ReflectionProperty` (r8), `Closure::bind()` bound to this class
+     *   (r9), `((array) $db)["\0" . MusicSchemaConnection::class . "\0affectedOn"]` (r9). The
+     *   last two need **no change to this double at all**;
+     * - **a magic accessor** — add `__get()` returning `$this->{$n}` and read `$db->affectedOn`
+     *   from a test (r9). `isPrivate()` is still TRUE, so assertion 2 does not see it, and the
+     *   same is true of a `__call()`/`__invoke()`/`__debugInfo()` equivalent;
+     * - **`nullOn`/`falseOn`**, the two sentinels `keywordFaithful()` exempts for every keyword
+     *   on purpose. Nothing here constrains them.
+     *
+     * ⚠ **WHAT IS CLOSED, and by WHICH assertion — recorded so no later round re-lists a
+     * residue that is now RED.** Each was measured GREEN against an earlier version of this
+     * pin, handing an `int 0` back for a `SELECT`:
+     * - r8: widen the declaration `private`→`public` and read the store from a TEST body — no
+     *   new method at all, and the file's own house style, since `$mediaItems`, `$artists` and
+     *   `$albums` are already public and read straight from tests → **assertion 2**;
+     * - r8: relocate the ONE read into a new method `resolveQueryReturn()` delegates to; a
+     *   per-class count sees the NUMBER of references, not their LOCATION → **assertion 7**;
+     * - r8: `get_object_vars($this)['affectedOn']`, which contains no `->` at all → **assertion
+     *   4**, by counting the NAME in every spelling instead of `T_OBJECT_OPERATOR` pairs. The
+     *   same change closed r7's two disclosed residues, `$this->{'affectedOn'}` and an in-class
+     *   reflection read;
+     * - r9: a `use`d TRAIT holding a non-funnelling reader → **assertion 3**, and assertion 5
+     *   independently, because a flattened trait method still reports as declared by this class
+     *   while its line range resolves to the trait;
+     * - r9: the DECLARATION moved into a trait so that one of the three counted slots comes free
+     *   for an in-class reader → **assertions 3 and 5**;
+     * - r9: a nowdoc/heredoc-spelled name, which lexes as `T_ENCAPSED_AND_WHITESPACE` and not
+     *   `T_CONSTANT_ENCAPSED_STRING` → **assertion 4**, now that both are counted;
+     * - r7 and r8 each NAMED "rename the property" as a residue, and it never was one: it is
+     *   RED, loudly, at assertion 2. Named here only to keep it un-named.
+     * Two more that are RED and must NOT be listed as residues: **duplicating**
+     * `resolveQueryReturn()`'s body verbatim into an in-class method — r9 measured the literal
+     * copy RED at **assertion 4**, because the copy has to name the store again, and only the
+     * trait-placed variant was ever green — and constructor-promoting the declaration into
+     * `__construct()`, which is RED at **assertion 5**.
      */
     public function testEveryQueryReturnFunnelsThroughTheKeywordFidelityCheck(): void
     {
@@ -2825,6 +2861,17 @@ final class MusicLibraryScannerTest extends TestCase
         );
 
         $this->assertSame(
+            [],
+            (new \ReflectionClass(MusicSchemaConnection::class))->getTraitNames(),
+            'MusicSchemaConnection must use NO trait. Every count below is scoped to the class\'s '
+            . 'own line range, and a trait sits OUTSIDE that range while being INSIDE the class '
+            . 'semantically — its body can read this private store. Review r9 measured a '
+            . 'trait-held public reader handing an int 0 back for a SELECT with all seven other '
+            . 'assertions green, which is review r7\'s defeat re-opened by the ordinary reason to '
+            . 'add a trait. Put helpers on this class itself.',
+        );
+
+        $this->assertSame(
             3,
             self::countNameTokens(MusicSchemaConnection::class, 'affectedOn'),
             'affectedOn must be NAMED exactly three times inside MusicSchemaConnection — the '
@@ -2834,6 +2881,17 @@ final class MusicLibraryScannerTest extends TestCase
             . 'store hands an int 0 back for a SELECT and every layer stays green. If you need '
             . 'the armed value somewhere else, route it through resolveQueryReturn() instead of '
             . 'reading the store again.',
+        );
+
+        $this->assertSame(
+            2,
+            self::countNameTokensInMethods(MusicSchemaConnection::class, 'affectedOn'),
+            'exactly TWO of those three occurrences may live inside a method this class declares '
+            . '— the write and the read pinned below — so the third is the class-body declaration '
+            . 'and every one of the three is attributed to a location. A bare total leaves one '
+            . 'slot unattributed: review r9 moved the DECLARATION into a trait, kept the total at '
+            . '3, and spent the freed slot on a non-funnelling in-class reader. Promoting the '
+            . 'declaration into __construct() fails here for the same reason.',
         );
 
         $this->assertSame(
@@ -2872,21 +2930,54 @@ final class MusicLibraryScannerTest extends TestCase
     }
 
     /**
+     * Sum {@see self::countNameTokens()} over every method `$class` DECLARES, so that all of
+     * `$name`'s occurrences are attributed to a LOCATION instead of only being counted.
+     *
+     * A class-level total says how many references exist, not where they are, so relocating one
+     * legitimate occurrence out of the class's line range frees a slot an illegitimate one can
+     * occupy at the same total — review r9 measured exactly that with a trait. This closes the
+     * spare slot from the other side: `ReflectionClass::getMethods()` reports a trait's
+     * flattened methods as declared by the USING class while `getFileName()`/`getStartLine()`
+     * still resolve to the trait, so a trait-held reader is counted here even though the
+     * class-range count cannot see it.
+     */
+    private static function countNameTokensInMethods(string $class, string $name): int
+    {
+        $sum = 0;
+        foreach ((new \ReflectionClass($class))->getMethods() as $method) {
+            if ($method->getDeclaringClass()->getName() !== $class) {
+                continue;
+            }
+
+            $sum += self::countNameTokens($class, $name, $method->getName());
+        }
+
+        return $sum;
+    }
+
+    /**
      * Count every token inside one class's — or one of its methods' — own source range that
-     * NAMES `$name`, in ANY spelling: `->name`, `$name`, or a `'name'` string literal.
+     * NAMES `$name`, in ANY spelling: `->name`, `$name`, or `name` written as a string literal.
      *
      * Token-based on purpose, for the same reason the `T_RETURN` count above is: a comment or
      * docblock naming the member must not be able to move the number, and it cannot, because a
-     * whole comment is a single `T_COMMENT`/`T_DOC_COMMENT` token that matches none of the three
+     * whole comment is a single `T_COMMENT`/`T_DOC_COMMENT` token that matches none of the
      * spellings. Scoped to the class's own line range so a same-named member on any of this
      * file's other classes cannot move it either — and to a single method's range when `$method`
      * is given, which is what pins WHERE a reference lives rather than only how many exist.
      *
      * **Spelling-agnostic because review r8 defeated a `T_OBJECT_OPERATOR`-keyed counter with
      * `get_object_vars($this)['affectedOn']`, which contains no `->` at all.** Counting the name
-     * itself also covers `$this->{'affectedOn'}` and an in-class reflection read. The residue is
-     * a name never written down literally (`'affected' . 'On'`), which is disclosed at the
-     * caller.
+     * itself also covers `$this->{'affectedOn'}` and an in-class reflection read. Both string
+     * token types are matched because a quoted literal is a `T_CONSTANT_ENCAPSED_STRING` while
+     * the same name inside a heredoc/nowdoc — or interpolated — is a
+     * `T_ENCAPSED_AND_WHITESPACE`, which review r9 measured as a way past a counter that took
+     * only the former.
+     *
+     * ⚠ **What is compared is the token's SOURCE TEXT, never a runtime value**, so a name
+     * assembled at run time (`'affected' . 'On'`) or spelled with an escape sequence
+     * (`"affected\x4fn"`) is invisible here. That residue class is disclosed at the caller,
+     * together with the reason no such list can be complete.
      *
      * @param string      $class  Class whose source range is scanned.
      * @param string      $name   Property or method name, with no leading `$` and no `()`.
@@ -2913,7 +3004,8 @@ final class MusicLibraryScannerTest extends TestCase
             $named = match ($token[0]) {
                 T_STRING => $token[1] === $name,
                 T_VARIABLE => $token[1] === '$' . $name,
-                T_CONSTANT_ENCAPSED_STRING => trim($token[1], '\'"') === $name,
+                T_CONSTANT_ENCAPSED_STRING, T_ENCAPSED_AND_WHITESPACE
+                    => trim($token[1], " \t\n\r\0\x0B'\"") === $name,
                 default => false,
             };
 

@@ -2812,11 +2812,13 @@ final class MusicLibraryScannerTest extends TestCase
      *   4**, by counting the NAME in every spelling instead of `T_OBJECT_OPERATOR` pairs. The
      *   same change closed r7's two disclosed residues, `$this->{'affectedOn'}` and an in-class
      *   reflection read;
-     * - r9: a `use`d TRAIT holding a non-funnelling reader → **assertion 3**, and assertion 5
-     *   independently, because a flattened trait method still reports as declared by this class
-     *   while its line range resolves to the trait;
+     * - r9: a `use`d TRAIT holding a non-funnelling reader → **assertion 3**, which fires first;
+     *   assertion 5 sees it independently (a token probe measures the method sum at 3, because a
+     *   flattened trait method still reports as declared by this class while its line range
+     *   resolves to the trait), and assertion 4 does NOT — the class-range total stays 3;
      * - r9: the DECLARATION moved into a trait so that one of the three counted slots comes free
-     *   for an in-class reader → **assertions 3 and 5**;
+     *   for an in-class reader → **assertion 3** fires first, and again assertion 5 sees it on
+     *   its own (total 3, method sum 3);
      * - r9: a nowdoc/heredoc-spelled name, which lexes as `T_ENCAPSED_AND_WHITESPACE` and not
      *   `T_CONSTANT_ENCAPSED_STRING` → **assertion 4**, now that both are counted;
      * - r7 and r8 each NAMED "rename the property" as a residue, and it never was one: it is
@@ -2866,9 +2868,9 @@ final class MusicLibraryScannerTest extends TestCase
             'MusicSchemaConnection must use NO trait. Every count below is scoped to the class\'s '
             . 'own line range, and a trait sits OUTSIDE that range while being INSIDE the class '
             . 'semantically — its body can read this private store. Review r9 measured a '
-            . 'trait-held public reader handing an int 0 back for a SELECT with all seven other '
-            . 'assertions green, which is review r7\'s defeat re-opened by the ordinary reason to '
-            . 'add a trait. Put helpers on this class itself.',
+            . 'trait-held public reader handing an int 0 back for a SELECT while all SEVEN '
+            . 'assertions of the previous version of this pin stayed green: review r7\'s defeat, '
+            . 're-opened by the ordinary reason to add a trait. Put helpers on this class itself.',
         );
 
         $this->assertSame(

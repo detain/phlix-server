@@ -305,14 +305,14 @@ class MusicLibraryScanner
      * Measured against real MySQL 8.0.46 at r5 — `"UPDATE\nmusic_artists SET …"` → **`null`**,
      * `"UPDATE\tmusic_artists SET …"` (tab, NO space) → **`null`**, a leading block comment
      * then `UPDATE …` → **`null`**, while the verbatim single-line statement → `int 0`/`int 1`.
-     * ⚠ *"followed by a single space"* (r5's phrasing) is not the rule and review r6 measured
+     * ⚠ *"followed by a single space"* (r5's phrasing) is not the rule, and review r6 measured
      * the difference: `"UPDATE\t music_artists SET …"` — tab THEN space — splits to `"UPDATE\t"`,
-     * which `:1856` `trim()`s back to `update`, so THAT one is an `int`. So reformatting that
-     * `UPDATE` into a heredoc would silently move the site onto the `null` arm. That is exactly why the helper is
-     * needed there and must NOT be deleted as dead code — and equally why it is not
-     * sufficient on its own. See the comment at that site; both halves are required, and each
-     * is pinned separately. Assume nothing about a keyword — or a whitespace layout — you
-     * have not measured.
+     * which `:1856` `trim()`s back to `update`, so THAT layout is an `int`. So reformatting
+     * that `UPDATE` into a heredoc would silently move the site onto the `null` arm. That is
+     * exactly why the helper is needed there and must NOT be deleted as dead code — and
+     * equally why it is not sufficient on its own. See the comment at that site; both halves
+     * are required, and each is pinned separately. Assume nothing about a keyword — or a
+     * whitespace layout — you have not measured.
      *
      * ⚠ **Six OTHER sites in `src/` consume an insert result with the same `=== false`
      * check this replaced, and they are NOT fixed here** — `StreamSessionService`,

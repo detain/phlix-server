@@ -2771,10 +2771,13 @@ final class MusicLibraryScannerTest extends TestCase
      *   also closes r7's two disclosed residues, the dynamic access `$this->{'affectedOn'}` and
      *   an in-class reflection read.
      *
-     * ⚠ **A residue r7 NAMED is measurably NOT one: a RENAME fails LOUD.** Renaming the property
-     * drives the count to 0 and this test goes RED (*"Failed asserting that 0 is identical to
-     * 3"*), measured at review r8. It is named here only to un-name it, because listing it made
-     * the block look more complete than it was.
+     * ⚠ **A residue r7 NAMED is measurably NOT one: a RENAME fails LOUD.** Review r8 measured a
+     * rename of all three sites driving the bare count to 0 — *"Failed asserting that 0 is
+     * identical to 2"*. Against THIS version it is louder still: the `isPrivate()` assertion runs
+     * first, so a rename never reaches a count at all and the test ERRORS with *"ReflectionException:
+     * Property …MusicSchemaConnection::$affectedOn does not exist"*. Either way it is RED, so the
+     * rename is named here only to un-name it — listing it as a residue made the block look more
+     * complete than it was.
      *
      * ⚠ **The residue that IS left, stated rather than implied:**
      * - a test that defines its **OWN double class** instead of using this one — as above,

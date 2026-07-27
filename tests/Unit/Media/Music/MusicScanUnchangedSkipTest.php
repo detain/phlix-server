@@ -824,16 +824,26 @@ final class SkipSchemaConnection extends Connection
      */
     private function runSelect(string $sql, array $p): array
     {
-        // S122(a) identity map. The JOIN is honoured EXACTLY — a media_items row with
-        // no music_tracks row must not appear, because that is the property that keeps a
-        // lost file retryable instead of permanently skipped.
-        if (str_contains($sql, 'JOIN music_tracks mt ON mt.media_item_id = mi.id')) {
+        // S122(a) identity map.
+        //
+        // ⚠ THE BRANCH IS RECOGNISED BY THE COLUMNS IT ASKS FOR, AND THE JOIN IS APPLIED
+        // ONLY WHEN THE STATEMENT ACTUALLY CONTAINS IT. Keying the branch on the join
+        // itself made this double UNFAITHFUL to the one mutation that matters: deleting
+        // `JOIN music_tracks` from the production SQL made the statement fall through to
+        // the other handlers and return NOTHING, so two tests stayed green while a real
+        // MySQL would have returned MORE rows and skipped a file that has no track row.
+        // Measured: with that shape,
+        // `testAFileTheScanLostIsNotStampedAndIsRetried` passed against the mutation. Same
+        // rule the sibling double applies to the album adoption's `parent_id` scoping — a
+        // fake that filters unconditionally keeps passing after the predicate is deleted.
+        if (str_contains($sql, 'file_mtime') && str_contains($sql, "mi.type = 'track'")) {
+            $joined = str_contains($sql, 'JOIN music_tracks mt ON mt.media_item_id = mi.id');
             $out = [];
             foreach ($this->mediaItems as $row) {
                 if ($row['type'] !== 'track' || $row['library_id'] !== ($p[0] ?? null)) {
                     continue;
                 }
-                if (!isset($this->tracks[$row['id']])) {
+                if ($joined && !isset($this->tracks[$row['id']])) {
                     continue;
                 }
                 $mtime = $row['metadata_json'][MusicScanSkipIndex::KEY_MTIME] ?? null;

@@ -324,6 +324,16 @@ class LibraryBridge
     /**
      * Resolves `media_items` rows for a list of ids in bounded batches.
      *
+     * Chunking bounds the statement size, but the batches are still ONE logical
+     * page, so the profile tag filter runs ONCE over the concatenated rows
+     * instead of once per batch — `ItemRepository::findByIds()` ends in
+     * `filterItemsByTags()`, which costs two `profile_tags` queries per call
+     * whenever a profile is set, so a 2,000-id page was paying 8 of those
+     * queries where 2 do the same work. The rows are unaffected: the filter is
+     * a per-item predicate that preserves relative order, so applying it to the
+     * whole list drops exactly the rows each per-batch call would have dropped
+     * and leaves the rest in the same order.
+     *
      * @param list<string> $ids Ids in the order the rows should be returned.
      * @return array<int, array<string, mixed>> Rows in `$ids` order.
      *
@@ -341,12 +351,12 @@ class LibraryBridge
 
         $rows = [];
         foreach (array_chunk($ids, self::FIND_BY_IDS_CHUNK) as $chunk) {
-            foreach ($this->itemRepository->findByIds($chunk) as $row) {
+            foreach ($this->itemRepository->findByIds($chunk, false) as $row) {
                 $rows[] = $row;
             }
         }
 
-        return $rows;
+        return $this->itemRepository->filterItemsByTags($rows);
     }
 
     /**

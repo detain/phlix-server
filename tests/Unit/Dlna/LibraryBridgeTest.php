@@ -534,6 +534,13 @@ class LibraryBridgeTest extends TestCase
      * {@see LibraryBridge::getLibraryChildCount()} says so: there is no offset
      * path into the audio root, so a renderer cannot page past the cap. Real
      * DLNA paging is a separate step.
+     *
+     * ⚠ Scope: the ARTIST term only. The stub zeroes `audio`/`audiobook`, so the
+     * asserted `child_count` is that term alone. Every NON-artist term is still
+     * counted with the unbounded `ItemRepository::countAllByType()` while
+     * `getLibraryItems()` lists it with `getAllByType()`, whose default is
+     * `LIMIT 100` — so the Video root still advertises more than it delivers.
+     * That is pre-existing on `master`, untouched by S97, and filed as S147.
      */
     public function testAudioRootClampsTheAdvertisedArtistCountToWhatItCanDeliver(): void
     {
@@ -553,7 +560,9 @@ class LibraryBridgeTest extends TestCase
         $this->assertSame(
             MusicLibraryService::MAX_EMBEDDED_ROWS,
             $byId['library-audio'] ?? null,
-            'the advertised childCount must not exceed what getLibraryItems() can return'
+            'the ARTIST term of the advertised childCount must not exceed the number of artists '
+            . 'getLibraryItems() can hand over (this stub zeroes audio/audiobook, so the whole '
+            . 'count is that term); the non-artist terms are still unbounded — S147'
         );
     }
 
@@ -753,6 +762,12 @@ class LibraryBridgeTest extends TestCase
      * inside a resident worker — the largest the DLNA path issues. Chunking must
      * not change the RESULT: `findByIds()` re-orders its rows to match the ids it
      * was handed, so the concatenated chunks are the un-chunked list.
+     *
+     * The batches are one logical page, so the profile tag filter must run ONCE
+     * over the concatenated rows, not once per batch: `findByIds()`'s own filter
+     * pass costs two `profile_tags` queries per call when a profile is set, and
+     * the filter is an order-preserving per-item predicate, so per-batch calls
+     * would repeat those queries without changing a single returned row.
      */
     public function testTheAudioRootResolvesArtistIdsInBoundedBatches(): void
     {
@@ -764,15 +779,30 @@ class LibraryBridgeTest extends TestCase
         $this->stubCounts(['artist' => 1200, 'audio' => 0, 'audiobook' => 0]);
 
         $batchSizes = [];
+        $tagFilterFlags = [];
         $this->itemRepositoryMock->method('findByIds')
-            ->willReturnCallback(function (array $batch) use (&$batchSizes): array {
-                $batchSizes[] = count($batch);
+            ->willReturnCallback(
+                function (
+                    array $batch,
+                    bool $applyProfileTagFilter = true
+                ) use (
+                    &$batchSizes,
+                    &$tagFilterFlags
+                ): array {
+                    $batchSizes[] = count($batch);
+                    $tagFilterFlags[] = $applyProfileTagFilter;
 
-                return array_map(
-                    static fn (string $id): array => ['id' => $id, 'name' => $id, 'type' => 'artist', 'path' => ''],
-                    $batch
-                );
-            });
+                    return array_map(
+                        static fn (string $id): array => [
+                            'id' => $id, 'name' => $id, 'type' => 'artist', 'path' => '',
+                        ],
+                        $batch
+                    );
+                }
+            );
+        $this->itemRepositoryMock->expects($this->once())
+            ->method('filterItemsByTags')
+            ->willReturnArgument(0);
 
         $music = $this->createMock(MusicLibraryService::class);
         $music->method('getArtistsWithMediaItemCount')->willReturn(1200);
@@ -784,5 +814,10 @@ class LibraryBridgeTest extends TestCase
 
         $this->assertSame([500, 500, 200], $batchSizes, 'no single IN (…) may carry the whole page');
         $this->assertSame($ids, array_column($children, 'id'), 'chunking must not reorder or drop rows');
+        $this->assertSame(
+            [false, false, false],
+            $tagFilterFlags,
+            'each batch must skip findByIds() own tag filter so profile_tags is not queried per chunk'
+        );
     }
 }

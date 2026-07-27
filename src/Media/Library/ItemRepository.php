@@ -177,10 +177,21 @@ class ItemRepository
     /**
      * Finds multiple media items by their unique identifiers.
      *
+     * `$applyProfileTagFilter = false` is for callers that resolve ONE logical
+     * page in several batched calls (see {@see \Phlix\Dlna\LibraryBridge}): the
+     * profile tag filter costs two `profile_tags` queries per call, so running
+     * it per batch repeats those queries for no change in the returned rows.
+     * Such a caller MUST apply {@see self::filterItemsByTags()} itself, once,
+     * to the concatenated result — the filter is a per-item predicate that
+     * preserves relative order, so filtering once over the whole list yields
+     * exactly the rows and order that filtering each batch would have.
+     *
      * @param array<int, string> $ids Array of media item UUIDs
+     * @param bool $applyProfileTagFilter Whether to apply the current profile's
+     *                                    tag restrictions before returning.
      * @return list<array<string, mixed>> Hydrated media items (preserves order of input IDs)
      */
-    public function findByIds(array $ids): array
+    public function findByIds(array $ids, bool $applyProfileTagFilter = true): array
     {
         if ($ids === []) {
             return [];
@@ -214,7 +225,7 @@ class ItemRepository
         // P5-S2: apply profile tag restrictions — filter out any items blocked
         // by the current profile's tags. Items that pass the filter keep their
         // original relative order.
-        return $this->filterItemsByTags($ordered);
+        return $applyProfileTagFilter ? $this->filterItemsByTags($ordered) : $ordered;
     }
 
     /**

@@ -4,6 +4,7 @@ namespace Phlix\Tests\Unit\Media\Library;
 
 use PHPUnit\Framework\TestCase;
 use Phlix\Media\Library\ItemRepository;
+use Phlix\Server\Http\RequestContext;
 use Phlix\Stats\StatsCollector;
 use Workerman\MySQL\Connection;
 
@@ -4008,5 +4009,59 @@ class ItemRepositoryTest extends TestCase
         $repo = new ItemRepository($db);
         $this->assertNull($repo->findByMetadataField('mal_id', null));
         $this->assertNull($repo->findByMetadataField('mal_id', ['array']));
+    }
+
+    /**
+     * `findByIds()` runs the P5-S2 profile tag filter by default, and that
+     * filter costs TWO `profile_tags` queries per call (blocked + allowed).
+     * A caller that resolves one logical page in several batched calls — the
+     * DLNA audio root does, 500 ids at a time — would pay those two queries per
+     * batch for no change in the rows, so it can defer the filter and apply it
+     * once itself via `filterItemsByTags()`.
+     *
+     * Pins both halves: the default STILL filters (a blocked row is dropped),
+     * and the opt-out really skips the queries as well as the filtering.
+     */
+    public function testFindByIdsCanDeferTheProfileTagFilterForABatchedCaller(): void
+    {
+        $tagQueries = 0;
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(
+            function (string $sql, $params = []) use (&$tagQueries): array {
+                if (str_contains($sql, 'FROM profile_tags')) {
+                    $tagQueries++;
+                    return ($params[1] ?? '') === 'blocked' ? [['tag' => 'adult']] : [];
+                }
+
+                return [[
+                    'id'            => 'item-1',
+                    'library_id'    => 'lib-1',
+                    'name'          => 'Blocked Movie',
+                    'type'          => 'movie',
+                    'path'          => '/m/x.mkv',
+                    'metadata_json' => '{"tags":["adult"]}',
+                ]];
+            }
+        );
+
+        RequestContext::setProfileId('profile-1');
+        try {
+            $repo = new ItemRepository($db);
+
+            $deferred = $repo->findByIds(['item-1'], false);
+            $deferredTagQueries = $tagQueries;
+            $filtered = $repo->findByIds(['item-1']);
+        } finally {
+            RequestContext::setProfileId(null);
+        }
+
+        $this->assertSame(
+            ['item-1'],
+            array_column($deferred, 'id'),
+            'the deferred call returns the row unfiltered — its caller filters the combined list'
+        );
+        $this->assertSame(0, $deferredTagQueries, 'deferring must skip the two profile_tags queries');
+        $this->assertSame([], $filtered, 'the default must still drop a row carrying a blocked tag');
+        $this->assertSame(2, $tagQueries, 'the default call pays exactly the two profile_tags queries');
     }
 }

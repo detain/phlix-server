@@ -255,8 +255,9 @@ final class MusicScanReparentTest extends TestCase
         self::assertSame(
             0,
             $scanner->probeCount,
-            'the default must remain the S122(a) fast path: a full read is minutes -> ~3.5 h on the '
-            . 'production library and is an operator decision, never a default'
+            'the default must remain the S122(a) fast path: a full read is minutes -> HOURS on the '
+            . 'production library (the last completed one measured 9 h 55 m; an earlier "~3.5 h" here '
+            . 'was an estimate presented as a measurement) and is an operator decision, never a default'
         );
 
         $summary = $logger->contextOf('Music directory scan complete');

@@ -149,14 +149,25 @@ use Workerman\MySQL\Connection;
  * — the whole point of B3. Overflowing the cap degrades to "probe the file", which
  * is CORRECT and merely slower.
  *
- * The alternative — one indexed `SELECT` per file — was rejected because the
- * lookup key would be `media_items.path`, which has **no b-tree index**
- * (migration 001 gives `media_items` only `FULLTEXT idx_name`; the
- * `(library_id, path_hash)` unique index is added out-of-band by
- * `migrations/cleanup_072.php` and may legitimately be absent). One statement
- * against `idx_media_items_library_type` (migration 011) has a cost that can be
- * reasoned about; 61,135 statements whose plan depends on whether an optional
- * post-migration script was ever run does not.
+ * The alternative — replacing this one bulk load with one `SELECT` per file — was
+ * rejected because the lookup key would be `media_items.path`, which has **no
+ * b-tree index** and cannot get one (`varchar(1000)` utf8mb4 = 4,000 bytes, over
+ * InnoDB's 3,072-byte key limit on its own; migration 001 gives `media_items` only
+ * `FULLTEXT idx_name`). The only usable point key is `(library_id, path_hash)`,
+ * which is added out-of-band by `migrations/cleanup_072.php` and may legitimately
+ * be absent. One statement against `idx_media_items_library_type` (migration 011)
+ * has a cost that can be reasoned about; 61,135 statements whose plan depends on
+ * whether an optional post-migration script was ever run does not.
+ *
+ * ⚠ **S151 changed the ARITHMETIC of that trade-off, not the conclusion.** The
+ * per-file lookup this class exists to avoid ALSO runs, unavoidably, inside
+ * {@see \Phlix\Media\Music\MusicLibraryScanner::findExistingTrackMediaItemId()} for
+ * every file the skip index does not skip — and until S151 it was `ref` over ~48.5k
+ * rows (0.71–0.86 s each, measured on production), which made it the dominant cost
+ * of a music scan. It is now a `const`/`rows=1` lookup through the same
+ * `(library_id, path_hash)` index. That does NOT make this bulk load redundant: the
+ * skip index avoids OPENING the file, which is a different and larger cost, and it
+ * still degrades gracefully to "probe the file" when the optional index is missing.
  *
  * ## Resident-memory note
  *

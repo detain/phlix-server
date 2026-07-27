@@ -481,8 +481,13 @@ class MusicLibraryScanner
      *        container and can outlive one scan inside a Workerman worker, so a mode
      *        held on `$this` would leak from a healing rescan into every later scan.
      *
-     *        The cost is real and deliberate: a full read of the production music
-     *        library is ~3.5 h against minutes for an ordinary rescan. It is reached
+     *        The cost is real and deliberate: the last completed full read of the
+     *        production music library took **9 h 55 m** against minutes for an ordinary
+     *        rescan. (An earlier "~3.5 h" here was an estimate presented as a
+     *        measurement. S151 removed what that run's dominant cost turned out to be —
+     *        the per-file existence lookup in
+     *        {@see self::findExistingTrackMediaItemId()} — so the figure should fall
+     *        sharply, but the post-S151 wall clock is UNMEASURED.) It is reached
      *        from the existing `rescan` job type only
      *        ({@see \Phlix\Media\Library\LibraryManager::rescanLibrary()}).
      * @return ScanResult Summary of the scan operation. `scanned` counts audio
@@ -2779,6 +2784,50 @@ class MusicLibraryScanner
      * The scoping mirrors the `(library_id, path_hash)` unique index (migrations
      * 072/087): a track's identity is its path inside its owning library.
      *
+     * ## S151 — WHY THE HASH PREDICATE IS HERE, AND WHY `path = ?` STAYS
+     *
+     * `media_items.path` has **no b-tree index** and cannot get one: it is
+     * `varchar(1000) utf8mb4` = 4,000 bytes, over InnoDB's 3,072-byte key limit on
+     * its own. Without the hash predicate the planner can only use the FIRST column
+     * of `idx_media_items_library_path_hash` — `library_id`, cardinality **3** — and
+     * then hand-filters the rest. Measured on the production library (warm,
+     * `SQL_NO_CACHE`, 4 identical repeats):
+     *
+     * | form                            | EXPLAIN type | key_len | rows examined | duration            |
+     * |---------------------------------|--------------|---------|---------------|---------------------|
+     * | `path = ?` alone (pre-S151)     | `ref`        | 144     | **48,512**    | 0.714–0.864 s       |
+     * | `path_hash = ? AND path = ?`    | **`const`**  | 305     | **1**         | 0.00022–0.00052 s   |
+     *
+     * This method runs **once per audio file** — 61,122 times on that library — so the
+     * pre-S151 form cost ≈13 h of pure query time and was the DOMINANT cost of a music
+     * scan, ahead of the tag reading everyone assumed was the bottleneck.
+     *
+     * ⚠ **MySQL will NOT substitute the index for you.** Generated-column index
+     * substitution fires only when the WHERE clause contains the column's *exact*
+     * generating expression. `path = '…'` never triggers it, which is how a column that
+     * exists, is indexed and is ~3,500× faster sat unused. Verified by `EXPLAIN`, not
+     * assumed — see `tests/Integration/Media/PathHashIndexUsageTest`.
+     *
+     * ⚠ **`path = ?` is NOT redundant and must not be removed.** The row is already
+     * being fetched by the time it is evaluated, so it is free, and it turns "a SHA-1
+     * collision is unlikely" into "a SHA-1 collision cannot return the wrong row".
+     *
+     * ⚠ **`path_hash` is NULL for 7 of the 13 `type` ENUM members** — its generating
+     * expression (migration 087) covers only `episode, movie, audio, book, track,
+     * audiobook`. This call site is safe **because the statement itself pins
+     * `type = 'track'`**, a covered member (measured on production:
+     * `SUM(path_hash IS NULL) = 0` across all 61,122 track rows). Do NOT copy this
+     * predicate onto a lookup whose type is dynamic or is one of the uncovered members
+     * (`series, season, album, artist, music, video, photo`) — there it would return a
+     * fast WRONG answer (matching nothing) instead of a slow right one. That is why the
+     * sibling artist/album lookups in this class were deliberately left alone.
+     *
+     * ⚠ PHP `sha1()` hashes the raw string bytes; MySQL's `SHA1()` hashes the column's
+     * utf8mb4 bytes. They agree only while PHP hands over UTF-8 — which it does, paths
+     * come from the filesystem verbatim. An ASCII-only fixture cannot tell the two
+     * behaviours apart, so the guarding test uses non-ASCII paths (`Sigur Rós`,
+     * `Björk`, CJK) against real MySQL.
+     *
      * @param string $path Absolute filesystem path of the audio file.
      * @param string|null $libraryId Owning library UUID (null-safe matched).
      * @return string|null Existing media_items UUID, or null when unseen.
@@ -2786,8 +2835,9 @@ class MusicLibraryScanner
     private function findExistingTrackMediaItemId(string $path, ?string $libraryId): ?string
     {
         return $this->firstMediaItemId($this->db->query(
-            "SELECT id FROM media_items WHERE type = 'track' AND path = ? AND library_id <=> ? LIMIT 1",
-            [$path, $libraryId]
+            "SELECT id FROM media_items"
+            . " WHERE type = 'track' AND path_hash = ? AND path = ? AND library_id <=> ? LIMIT 1",
+            [sha1($path), $path, $libraryId]
         ));
     }
 

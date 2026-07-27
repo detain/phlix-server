@@ -74,8 +74,15 @@ class LibraryScanWorker
     /**
      * Persist scan/rescan progress at most once per this many processed files
      * (and always on the final file), to bound job-row writes on big libraries.
+     *
+     * ⚠ **Aliases {@see ScanProgressSink::WRITE_EVERY}, which is the single definition
+     * (S150).** The sink itself moved to {@see ScanProgressSink} when the CLI
+     * `library:scan` command became a second consumer of it; this constant is kept so
+     * the existing references in this file and in
+     * {@see \Phlix\Media\Music\MusicLibraryScanner} keep resolving, and it must never
+     * be given an independent value.
      */
-    private const PROGRESS_WRITE_EVERY = 25;
+    private const PROGRESS_WRITE_EVERY = ScanProgressSink::WRITE_EVERY;
 
     /** @var ScanJobRepository Queue + progress store the worker drains. */
     private ScanJobRepository $jobs;
@@ -331,6 +338,14 @@ class LibraryScanWorker
      * it would show ~0 % on a library whose files are all unchanged. That overload is
      * pre-existing; this method is the reason it must not be disturbed.
      *
+     * ⚠ **THE IMPLEMENTATION MOVED (S150).** It now lives in {@see ScanProgressSink}
+     * so the CLI `library:scan` command — which before S150 wrote NOTHING to
+     * `library_scan_jobs`, leaving the admin Libraries page showing a stale `failed`
+     * badge for the whole of a live CLI run — streams progress in exactly the same
+     * shape as this worker. This method is kept as the worker's seam and must remain a
+     * pure delegation: two implementations is how the two operator surfaces would
+     * start disagreeing.
+     *
      * @param string $jobId The scan job to stream progress onto.
      *
      * @return callable(int, int, string, array<string, int>): void
@@ -340,31 +355,7 @@ class LibraryScanWorker
      */
     private function scanProgressSink(string $jobId): callable
     {
-        $lastWrite = 0;
-        return function (
-            int $processed,
-            int $total,
-            string $currentPath,
-            array $counts = []
-        ) use (
-            $jobId,
-            &$lastWrite
-        ): void {
-            if ($processed !== $total && $processed - $lastWrite < self::PROGRESS_WRITE_EVERY) {
-                return;
-            }
-            $lastWrite = $processed;
-
-            $payload = ['items_found' => $total, 'items_updated' => $processed];
-            if (isset($counts['added'])) {
-                $payload['items_added'] = (int) $counts['added'];
-            }
-            if (isset($counts['failed'])) {
-                $payload['items_failed'] = (int) $counts['failed'];
-            }
-
-            $this->jobs->updateProgress($jobId, $payload, $currentPath);
-        };
+        return ScanProgressSink::for($this->jobs, $jobId, self::PROGRESS_WRITE_EVERY);
     }
 
     /**

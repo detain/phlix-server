@@ -986,11 +986,14 @@ class AudiobookScanner extends BookScanner
                 continue;
             }
 
-            // Check if already exists in repository. Scope to the library: an
-            // audiobook row is a NON-deduped type (NULL path_hash), so findByPath's
-            // fast path_hash pass always misses it — passing libraryId keeps the
-            // raw-path fallback an index range, not a full-table scan, and (without
-            // it) every rescan would re-create every audiobook as a duplicate.
+            // Check if already exists in repository. Scope to the library:
+            // `audiobook` is one of the six types migration 087's `path_hash`
+            // expression covers, so findByPath's fast pass resolves it — as a POINT
+            // lookup only when `library_id` (the composite index's leading column) is
+            // bound. Without a libraryId the same call degrades to an unindexed scan,
+            // and without any match every rescan re-creates every audiobook.
+            // ⚠ This comment used to say `audiobook` was NON-deduped with a NULL
+            // path_hash — true under migration 072, FALSE since 087.
             $existing = $this->itemRepository->findByPath($file->getPathname(), $libraryId);
             if ($existing !== null) {
                 continue;

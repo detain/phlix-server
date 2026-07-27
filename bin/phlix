@@ -43,6 +43,7 @@ use Phlix\Console\Commands\PluginUninstallCommand;
 use Phlix\Console\Commands\UserResetPasswordCommand;
 use Phlix\Media\Library\LibraryManager;
 use Phlix\Media\Library\PathDeduper;
+use Phlix\Media\Library\ScanJobRepository;
 use Phlix\Media\Transcoding\Hwaccel\HwaccelProbe;
 use Phlix\Auth\UserRepository;
 use Phlix\Plugins\Catalog\PluginCatalogService;
@@ -105,7 +106,13 @@ $cli->add(new MigrateCommand($runner));
 // 0.8b — thin wrapper commands. Each resolves its backing service from the
 // lazily-built container only when the command runs.
 $cli->add(new LibraryListCommand(static fn(): LibraryManager => $containerProvider()->get(LibraryManager::class)));
-$cli->add(new LibraryScanCommand(static fn(): LibraryManager => $containerProvider()->get(LibraryManager::class)));
+// S150 — the second factory hands the command the `library_scan_jobs` store, so a
+// CLI scan appears in the admin Libraries page exactly like a web-enqueued one.
+// Both factories stay LAZY: `php bin/phlix list` must not open a database.
+$cli->add(new LibraryScanCommand(
+    static fn(): LibraryManager => $containerProvider()->get(LibraryManager::class),
+    static fn(): ScanJobRepository => $containerProvider()->get(ScanJobRepository::class),
+));
 $cli->add(new PluginListCommand(static fn(): PluginLoader => $containerProvider()->get(PluginLoader::class)));
 $cli->add(new PluginEnableCommand(static fn(): PluginLoader => $containerProvider()->get(PluginLoader::class)));
 $cli->add(new PluginDisableCommand(static fn(): PluginLoader => $containerProvider()->get(PluginLoader::class)));

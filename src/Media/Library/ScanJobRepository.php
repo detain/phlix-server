@@ -225,6 +225,87 @@ class ScanJobRepository
     }
 
     /**
+     * Insert a job that is ALREADY `running`, for a scan this process is about to
+     * execute itself.
+     *
+     * ## Why this is not `enqueue()` + `claimNext()` (S150)
+     *
+     * {@see self::claimNext()} claims the OLDEST `queued` row in the whole table, not
+     * a specific one. A CLI scan that enqueued its own job and then called
+     * `claimNext()` could therefore claim somebody ELSE's queued job — and would in
+     * turn leave its own row `queued` for the worker to pick up and run a SECOND,
+     * concurrent scan of the same library. Inserting directly as `running` is the
+     * only shape that is correct for a self-executing caller: the row is never
+     * `queued`, so {@see self::claimNext()} can never see it.
+     *
+     * ⚠ **This bypasses the queue on purpose, and it is only correct for a caller
+     * that runs the work IN THIS PROCESS.** Do not use it to hand work to the worker
+     * — that is {@see self::enqueue()}.
+     *
+     * ⚠ **A row written here is still subject to {@see self::reapStaleJobs()}**, which
+     * the single-consumer worker calls at boot and which fails EVERY `running` row
+     * without scoping or an age guard. A `phlix-server` restart during a long CLI
+     * scan will therefore mark this row `failed` while the CLI keeps running. That is
+     * pre-existing behaviour of the reaper (see {@see LibraryScanWorker::start()} for
+     * the invariant it rests on and why an age guard was rejected); bounding it needs
+     * per-job worker ownership, i.e. a schema change deliberately out of S150's scope.
+     * The failure mode is a false `failed` badge, never a lost scan or a stuck row.
+     *
+     * @param string $libraryId Target library UUID.
+     * @param string $type      Job type; must be one of {@see self::ALLOWED_TYPES}.
+     *
+     * @return string The newly generated job UUID.
+     *
+     * @throws InvalidArgumentException When `$type` is not one of
+     *                                  {@see self::ALLOWED_TYPES}.
+     *
+     * @since 0.36.0 (S150 — CLI scans visible in the admin UI)
+     */
+    public function startRunning(string $libraryId, string $type): string
+    {
+        if (!in_array($type, self::ALLOWED_TYPES, true)) {
+            throw new InvalidArgumentException(
+                sprintf('Invalid scan-job type "%s"; expected one of: %s', $type, implode(', ', self::ALLOWED_TYPES)),
+            );
+        }
+
+        $id = $this->generateUuid();
+
+        $this->db->query(
+            'INSERT INTO library_scan_jobs (id, library_id, type, status, started_at)'
+            . ' VALUES (?, ?, ?, ?, NOW())',
+            [$id, $libraryId, $type, 'running'],
+        );
+
+        return $id;
+    }
+
+    /**
+     * Whether a job for this library is currently `queued` or `running`.
+     *
+     * Reads only the NEWEST row for the library ({@see self::getLatestForLibrary()}),
+     * which is what the admin Libraries badge shows, so "the UI says a scan is in
+     * progress" and "this returns true" cannot disagree.
+     *
+     * @param string $libraryId Target library UUID.
+     *
+     * @return bool TRUE when the library's newest job is `queued` or `running`.
+     *
+     * @since 0.36.0 (S150)
+     */
+    public function hasActiveJobForLibrary(string $libraryId): bool
+    {
+        $latest = $this->getLatestForLibrary($libraryId);
+        if ($latest === null) {
+            return false;
+        }
+
+        $status = $latest['status'] ?? null;
+
+        return $status === 'queued' || $status === 'running';
+    }
+
+    /**
      * Atomically claim the oldest `queued` job and move it to `running`.
      *
      * Picks the oldest queued job id (by `queued_at`), then issues a

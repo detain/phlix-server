@@ -274,12 +274,20 @@ final class SkipSchemaConnection extends Connection
             return [];
         }
 
+        // S151: the production statement is
+        // `type = 'track' AND path_hash = ? AND path = ? AND library_id <=> ?`,
+        // bound `[sha1($path), $path, $libraryId]`. The hash is matched by RECOMPUTING
+        // it from the stored row rather than trusting the position, so reverting the
+        // production query to the pre-S151 two-parameter form (`[$path, $libraryId]`)
+        // makes `$p[0]` a raw path that can never equal a SHA-1 and every lookup misses
+        // — i.e. this double KILLS that mutation instead of shrugging at it.
         if (str_contains($sql, "FROM media_items WHERE type = 'track'")) {
             foreach ($this->mediaItems as $row) {
                 if (
                     $row['type'] === 'track'
-                    && $row['path'] === ($p[0] ?? null)
-                    && $row['library_id'] === ($p[1] ?? null)
+                    && sha1((string) $row['path']) === ($p[0] ?? null)
+                    && $row['path'] === ($p[1] ?? null)
+                    && $row['library_id'] === ($p[2] ?? null)
                 ) {
                     return [['id' => $row['id']]];
                 }

@@ -879,7 +879,10 @@ class LibraryManager
      * S122(a) unchanged-file skip index unloaded. Without it a rescan cannot repair a
      * track whose ALBUM or ARTIST tag changed: the skip fires before the file is even
      * opened, so the row never reaches the code that would move it. ⚠ This makes a
-     * music rescan take HOURS rather than minutes (~3.5 h for 61,111 files) — today's
+     * music rescan take HOURS rather than minutes — the last completed one took
+     * **9 h 55 m** for 61,111 files (an earlier "~3.5 h" here was an estimate presented
+     * as a measurement; S151 removes the dominant per-file cost but the post-S151 wall
+     * clock is UNMEASURED) — today's
      * fast `rescan` is the thing that is wrong, not this. An incremental refresh is
      * {@see self::scanLibrary()} / the `scan` job type, which is unchanged.
      *
@@ -938,8 +941,11 @@ class LibraryManager
         // `php bin/phlix library:scan <id> --rescan`) get it for free.
         //
         // ⚠ COST, and it is the whole reason this is opt-in: for music this takes a
-        // rescan from minutes to roughly 3.5 hours (61,111 files on the production
-        // library, every one of them opened and tag-read). It is interruptible and
+        // rescan from minutes to HOURS (61,111 files on the production library, every
+        // one of them opened and tag-read). The last completed one took 9 h 55 m; this
+        // comment previously said "roughly 3.5 hours", which was an estimate presented
+        // as a measurement. S151 removed the dominant per-file cost, but no post-S151
+        // rescan has been timed, so no new figure is claimed. It is interruptible and
         // idempotent — {@see \Phlix\Media\Music\MusicLibraryScanner} flushes per album
         // and stamps only what it read — so re-running continues rather than restarts.
         $scan = $this->scanLibrary($libraryId, $onProgress, true);

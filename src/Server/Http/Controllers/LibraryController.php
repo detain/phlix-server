@@ -688,7 +688,10 @@ class LibraryController
      *
      * **S145 — `rescan` reads EVERY file; `scan` does not.** That is the difference
      * between the two actions, and for a music library it is the difference between
-     * minutes and hours (~3.5 h for 61,111 tracks). It is also the only way to repair a
+     * minutes and hours — the last completed music rescan of the production library took
+     * **9 h 55 m** for 61,111 tracks (an earlier "~3.5 h" here was an estimate presented
+     * as a measurement; S151 removes the dominant per-file cost but the post-S151 wall
+     * clock is UNMEASURED). It is also the only way to repair a
      * track filed under the wrong album or artist after its tags were edited: the
      * incremental scan skips an unchanged file before it is ever opened, so the row
      * never reaches the code that would move it. Today's fast `rescan` is the defect,

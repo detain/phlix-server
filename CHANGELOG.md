@@ -705,7 +705,10 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
      and no new command**: the admin *Rescan* action and
      `php bin/phlix library:scan <id> --rescan` both get it for free.
 
-     **Expect a music rescan to take hours, not minutes** (~3.5 h for 61,111 tracks),
+     **Expect a music rescan to take hours, not minutes** (the last completed one took
+     **9 h 55 m** for 61,111 tracks — an earlier note here said "~3.5 h", which was an
+     estimate presented as a measurement; S151 attacks the dominant cost but its effect
+     on that wall clock is not yet measured),
      and to report `updated` in the thousands on its first run — that is the repair, not
      an error. It is interruptible and idempotent; re-running continues. The scan
      summary gains `reparented` (how many tracks moved) and `read_every_file` (whether

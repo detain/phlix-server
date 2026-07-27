@@ -31,7 +31,9 @@ use Workerman\MySQL\Connection;
  *
  *  - `scanLibrary()` (the `scan` job type, the folder watcher, the CLI without
  *    `--rescan`) must keep the fast path. A `true` leaking in here would turn every
- *    routine scan of the production library from minutes into ~3.5 hours.
+ *    routine scan of the production library from minutes into HOURS (the last completed
+ *    full read measured 9 h 55 m — an earlier "~3.5 hours" here was an estimate
+ *    presented as a measurement; S151 attacks the dominant cost, unmeasured as yet).
  *  - `rescanLibrary()` (the `rescan` job type, the admin Rescan action, the CLI with
  *    `--rescan`) must set it. A `false` here makes the whole step cosmetic while
  *    every other test in S145 stays green, because the healing scan would simply

@@ -234,12 +234,14 @@ class ItemRepository
      * Two passes so the lookup is correct for EVERY type while staying indexed
      * for the common case:
      *  1. Fast, indexed `path_hash = SHA1(path)` lookup through the
-     *     `(library_id, path_hash)` unique index (migration 072). This resolves
-     *     the DEDUPED types (episode/movie/audio/book) whose generated path_hash
-     *     is non-NULL, with the raw `path = ?` guarding a SHA1 collision.
-     *  2. If Pass 1 misses, a raw `path = ?` fallback. The NON-deduped types
-     *     (series/season/image/audiobook/track) have a NULL path_hash, and
-     *     `NULL = <hash>` is never true in SQL, so Pass 1 can never see them —
+     *     `(library_id, path_hash)` unique index (migrations 072 + 087). This
+     *     resolves the SIX COVERED types — `episode, movie, audio, book, track,
+     *     audiobook` — whose generated path_hash is non-NULL, with the raw
+     *     `path = ?` guarding a SHA1 collision.
+     *  2. If Pass 1 misses, a raw `path = ?` fallback. The SEVEN UNCOVERED types
+     *     (`series, season, album, artist, music, video, photo`) have a NULL
+     *     path_hash, and `NULL = <hash>` is never true in SQL, so Pass 1 can never
+     *     see them —
      *     without this fallback find-or-create would create an endless stream of
      *     duplicate rows for those types on every rescan. When `$libraryId` is
      *     supplied the fallback is anchored to it (an index range on the composite
@@ -256,13 +258,16 @@ class ItemRepository
     {
         $hash = sha1($path);
 
-        // Pass 1 — the fast, indexed lookup. `path_hash` (migration 072) is the
-        // STORED SHA1 of the path but ONLY for the deduped types
-        // (episode/movie/audio/book); every other type (series/season/image/
-        // audiobook/track) hashes to NULL. So this pass resolves the deduped
-        // types through the `(library_id, path_hash)` unique index as a point
-        // lookup, with the raw `path = ?` guarding an (astronomically rare) SHA1
-        // collision so a foreign path can never win.
+        // Pass 1 — the fast, indexed lookup. `path_hash` (migrations 072 + 087) is
+        // the STORED SHA1 of the path but ONLY for the six covered types
+        // (episode/movie/audio/book/track/audiobook); the other seven
+        // (series/season/album/artist/music/video/photo) hash to NULL. So this pass
+        // resolves the covered types through the `(library_id, path_hash)` unique
+        // index as a point lookup, with the raw `path = ?` guarding an
+        // (astronomically rare) SHA1 collision so a foreign path can never win.
+        // ⚠ The covered set is the ENUM member list in migration 087's generating
+        // expression — READ IT, never guess it. `track` and `audiobook` were added
+        // by 087 and earlier comments in this file called them uncovered.
         if ($libraryId !== null) {
             $result = $this->db->query(
                 "SELECT * FROM media_items WHERE library_id = ? AND path_hash = ? AND path = ?",
@@ -280,19 +285,25 @@ class ItemRepository
             return $this->hydrateItem($row);
         }
 
-        // Pass 2 — raw-path fallback for the NON-deduped types. Their generated
+        // Pass 2 — raw-path fallback for the UNCOVERED types. Their generated
         // `path_hash` is NULL, and in SQL `NULL = <hash>` is never true, so Pass 1
         // silently misses them EVERY time. Without this fallback the scanner's
-        // find-or-create degrades to always-create for those types (season
-        // containers, photos, audiobooks, music tracks), forking a fresh DUPLICATE
-        // row on every rescan — and no unique constraint catches it, because a
-        // NULL `path_hash` never collides with another NULL in a unique index.
-        // `path_hash` is therefore an ACCELERATOR for the deduped types, never the
-        // sole predicate. Anchoring to `library_id` keeps this an index range on
-        // the composite index's leading column, not a full-table scan. (Callers
-        // without a libraryId fall through to an unindexed `path = ?` scan; every
-        // in-tree scanner/manager caller passes its libraryId, so that branch is a
-        // rarely-hit last resort.)
+        // find-or-create degrades to always-create for those types (series/season
+        // containers, photos, and the music `album`/`artist` containers), forking a
+        // fresh DUPLICATE row on every rescan — and no unique constraint catches it,
+        // because a NULL `path_hash` never collides with another NULL in a unique
+        // index. `path_hash` is therefore an ACCELERATOR for the covered types,
+        // never the sole predicate. Anchoring to `library_id` keeps this an index
+        // range on the composite index's leading column, not a full-table scan.
+        // (Callers without a libraryId fall through to an unindexed `path = ?` scan;
+        // every in-tree scanner/manager caller passes its libraryId, so that branch
+        // is a rarely-hit last resort.)
+        //
+        // ⚠ S151 DELIBERATELY DID NOT CONVERT THIS PASS. Its whole purpose is the
+        // types for which `path_hash` is NULL, and `type` is not constrained by the
+        // statement at all, so adding `path_hash = ?` here would make the fallback
+        // match NOTHING — a fast wrong answer replacing a slow right one. That is
+        // the opposite of the fix; leave it raw.
         if ($libraryId !== null) {
             $result = $this->db->query(
                 "SELECT * FROM media_items WHERE library_id = ? AND path = ?",
@@ -489,9 +500,10 @@ class ItemRepository
      * list, so a hypothetical SHA1 collision (a different path hashing to the
      * same value) can never leak a foreign row into the map.
      *
-     * TWO PASSES for correctness: `path_hash` is non-NULL ONLY for the deduped
-     * types (episode/movie/audio/book); the NON-deduped types (series/season/
-     * image/audiobook/track) hash to NULL and `NULL IN (...)` is never true, so
+     * TWO PASSES for correctness: `path_hash` is non-NULL ONLY for the six types
+     * migration 087's generating expression covers (episode/movie/audio/book/
+     * track/audiobook); the other seven (series/season/album/artist/music/video/
+     * photo) hash to NULL and `NULL IN (...)` is never true, so
      * Pass 1 can never see them. A second `WHERE library_id = ? AND path IN (...)`
      * pass — over only the paths NOT resolved by Pass 1, so bounded by the batch
      * size and scoped to the library — resolves the NULL-hash rows by exact path.
@@ -530,8 +542,9 @@ class ItemRepository
         // for the raw-path fallback pass below.
         $pathSet = array_flip($paths);
 
-        // Pass 1 — the fast, indexed batch lookup over path_hash. Resolves the
-        // DEDUPED types (episode/movie/audio/book) whose STORED path_hash is
+        // Pass 1 — the fast, indexed batch lookup over path_hash. Resolves the SIX
+        // COVERED types (episode/movie/audio/book/track/audiobook — migration 087)
+        // whose STORED path_hash is
         // non-NULL, through the `(library_id, path_hash)` index (leading with
         // library_id when supplied so the composite index is used left-prefix
         // first, an index scan rather than a full table scan).
@@ -558,9 +571,9 @@ class ItemRepository
             }
         }
 
-        // Pass 2 — raw-path fallback for the NON-deduped types whose path_hash is
-        // NULL (series/season/image/audiobook/track). `NULL IN (...)` is never
-        // true, so Pass 1 cannot see them and every such row would be reported
+        // Pass 2 — raw-path fallback for the UNCOVERED types whose path_hash is
+        // NULL (series/season/album/artist/music/video/photo). `NULL IN (...)` is
+        // never true, so Pass 1 cannot see them and every such row would be reported
         // "absent" → the scanner would create a FULL DUPLICATE item set on every
         // rescan (no unique constraint catches a NULL-hash path). Only the input
         // paths NOT already resolved by Pass 1 are re-probed, so this is bounded
@@ -569,6 +582,12 @@ class ItemRepository
         // On a deduped-type rescan (the hot path) every path resolves in Pass 1,
         // so `$unresolved` is empty and Pass 2 never runs — the single-query fast
         // path is preserved.
+        //
+        // ⚠ S151 DELIBERATELY DID NOT CONVERT THIS PASS either. It exists precisely
+        // for the rows whose `path_hash` IS NULL, and the statement puts no
+        // constraint on `type`, so adding a hash predicate would make it match
+        // nothing. It is unindexed on `path` by necessity, but it is bounded (only
+        // the batch's Pass-1 misses) and scoped to `library_id`.
         $unresolved = [];
         foreach ($paths as $path) {
             if (!isset($map[$path])) {

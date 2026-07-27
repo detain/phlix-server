@@ -433,12 +433,17 @@ final class MusicLibraryScannerTest extends TestCase
                         $key = ((string) ($p[0] ?? '')) . '|' . strtolower((string) ($p[1] ?? ''));
                         return isset($albums[$key]) ? [$albums[$key]] : [];
                     }
+                    // S151: `type = 'track' AND path_hash = ? AND path = ? AND
+                    // library_id <=> ?`, bound `[sha1($path), $path, $libraryId]`.
+                    // The hash is recomputed from the stored row so a revert to the
+                    // pre-S151 binding is caught rather than tolerated.
                     if (str_contains($t, 'FROM media_items WHERE type')) {
                         foreach ($mediaItems as $mi) {
                             if (
                                 $mi['type'] === 'track'
-                                && $mi['path'] === ($p[0] ?? null)
-                                && $mi['library_id'] === ($p[1] ?? null)
+                                && sha1((string) $mi['path']) === ($p[0] ?? null)
+                                && $mi['path'] === ($p[1] ?? null)
+                                && $mi['library_id'] === ($p[2] ?? null)
                             ) {
                                 return [['id' => $mi['id']]];
                             }
@@ -4220,12 +4225,18 @@ final class MusicSchemaConnection extends Connection
             return [];
         }
 
+        // S151: matches the widened statement
+        // `type = 'track' AND path_hash = ? AND path = ? AND library_id <=> ?`
+        // bound `[sha1($path), $path, $libraryId]`. The hash is RECOMPUTED from the
+        // stored row, so a revert to the pre-S151 two-parameter binding misses every
+        // row rather than passing silently.
         if (str_contains($sql, "FROM media_items WHERE type = 'track'")) {
             foreach ($this->mediaItems as $row) {
                 if (
                     $row['type'] === 'track'
-                    && $row['path'] === ($p[0] ?? null)
-                    && $row['library_id'] === ($p[1] ?? null)
+                    && sha1((string) $row['path']) === ($p[0] ?? null)
+                    && $row['path'] === ($p[1] ?? null)
+                    && $row['library_id'] === ($p[2] ?? null)
                 ) {
                     return [['id' => $row['id']]];
                 }

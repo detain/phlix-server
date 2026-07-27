@@ -393,6 +393,31 @@ final class MusicLibraryScannerTest extends TestCase
      * the rows the first scan wrote. This is what exercises rescan idempotency —
      * the empty-DB mock (every SELECT → []) cannot.
      *
+     * ## ⚠ READ THIS BEFORE TRUSTING AN ASSERTION MADE THROUGH THIS MOCK (S148)
+     *
+     * **Every `SELECT` arm below returns the STORED ROW WHOLESALE and ignores the
+     * statement's column list.** `FROM music_tracks WHERE media_item_id` hands back
+     * `$tracks[$mid]` entire, whatever the production `SELECT` actually named. So this
+     * mock answers with columns production never asked for, and the distinction
+     * "selected" versus "not selected" — which is a real distinction to a real server —
+     * **does not exist here.**
+     *
+     * That permissiveness is not hypothetical: it is why **mutation M10 survived the
+     * ENTIRE unit suite during S145.** M10 reverted only the widened `SELECT` (dropping
+     * `album_id, artist_id`) while leaving the change predicate comparing them. Against
+     * MySQL the absent keys coerce to `0`, `0 !== $albumId` for every row, and every file
+     * in the library turns into an `UPDATE` on every scan — 61,111 of them. Against this
+     * mock the keys are still present, the predicate still matches, and every test stayed
+     * green. It was killed only by
+     * {@see \Phlix\Tests\Integration\Media\MusicRetagReparentIntegrationTest::testAFullReadOfAnUnchangedLibraryRewritesNothing()}
+     * against a real database.
+     *
+     * ⇒ **A claim about WHICH COLUMNS a statement fetches, or about HOW MANY statements
+     * the server received, cannot be proven here.** Take it to
+     * {@see \Phlix\Tests\Integration\Media\RecordingMySqlConnection}, which forwards to a
+     * real server and records what it forwarded. The same warning is on this mock's
+     * sibling, {@see MusicSchemaConnection::runSelect()}.
+     *
      * @param list<array<int,mixed>> $mediaItemInserts Captured media_items INSERT params (by ref).
      * @param list<array<int,mixed>> $trackInserts     Captured music_tracks INSERT params (by ref).
      */
@@ -4218,6 +4243,29 @@ final class MusicSchemaConnection extends Connection
     }
 
     /**
+     * ## ⚠ THIS METHOD RETURNS THE STORED ROW WHOLESALE, IGNORING THE COLUMN LIST (S148)
+     *
+     * Every arm below matches on the statement's `FROM`/`JOIN` shape and then answers
+     * with a row this double composed — most bluntly `FROM music_tracks WHERE
+     * media_item_id`, which returns `$this->tracks[$mid]` entire. **The production
+     * statement's `SELECT` list is never consulted**, so a column the real query does not
+     * fetch is still present in the answer, and the difference between "selected" and
+     * "not selected" cannot be expressed here at all.
+     *
+     * That is the exact permissiveness that let **mutation M10 survive the entire unit
+     * suite during S145**: reverting only the widened `SELECT` (dropping `album_id,
+     * artist_id`) leaves the change predicate comparing keys that MySQL would no longer
+     * return — coerced to `0`, so every unchanged row rewrites itself, 61,111 times on
+     * production — while this double keeps handing them over and every test stays green.
+     * It was killed only by a real-MySQL test.
+     *
+     * ⇒ **Do not conclude anything about a statement's column list, or about how many
+     * statements the server received, from a green test that runs against this double.**
+     * {@see \Phlix\Tests\Integration\Media\RecordingMySqlConnection} exists for those
+     * claims: it subclasses the production connection, forwards every statement to a real
+     * server, and records what it forwarded. The same warning is on this double's sibling,
+     * {@see MusicLibraryScannerTest::statefulDbMock()}.
+     *
      * @param array<int, mixed> $p
      * @return list<array<string, mixed>>
      */

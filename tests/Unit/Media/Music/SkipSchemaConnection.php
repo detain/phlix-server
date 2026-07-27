@@ -307,6 +307,14 @@ final class SkipSchemaConnection extends Connection
         // column list: `id, album_id, artist_id, title, track_number, disc_number,
         // duration_secs` (S145 widened both ends together — the row gained `artist_id`
         // in `runInsert()`, the statement gained `album_id, artist_id`).
+        //
+        // ⚠ "Wholesale" means the statement's column list is NEVER consulted, so this
+        // double cannot tell a fetched column from an unfetched one — the permissiveness
+        // that let mutation M10 survive the whole unit suite in S145 (see the same
+        // warning, at length, on {@see MusicLibraryScannerTest::statefulDbMock()}). Any
+        // claim about a column list or about statement VOLUME belongs in
+        // {@see \Phlix\Tests\Integration\Media\RecordingMySqlConnection}, against a
+        // real server.
         if (str_contains($sql, 'FROM music_tracks WHERE media_item_id')) {
             $mid = (string) ($p[0] ?? '');
 

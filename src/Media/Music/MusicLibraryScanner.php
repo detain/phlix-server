@@ -463,14 +463,23 @@ class MusicLibraryScanner
      *                                  carried on the {@see MediaItemAdded} event.
      *                                  NULL only for the legacy manual-path scan
      *                                  endpoint (no library context).
-     * @param bool $readEveryFile S145 — THE FULL-READ MODE. When TRUE the S122(a) skip
-     *        index is not loaded at all, so every audio file is opened and reaches
-     *        {@see self::upsertTrack()}. That is the whole mechanism, and it exists
-     *        because an `upsertTrack()`-only fix is COSMETIC: the skip at the top of the
-     *        walk `continue`s before `probeMetadata()` and before the file is buffered
-     *        for {@see self::flushAlbum()}, so an already-stamped, unchanged file never
-     *        reaches the repair. Measured on production: 29,134 of 61,111 tracks (47.7 %,
-     *        rising) already carry a stamp and would be skipped by an ordinary rescan.
+     * @param bool $readEveryFile S145 — THE FULL-READ MODE. When TRUE
+     *        {@see self::canSkip()} refuses every skip, so every audio file is opened and
+     *        reaches {@see self::upsertTrack()}. That is the whole mechanism, and it
+     *        exists because an `upsertTrack()`-only fix is COSMETIC: the skip at the top
+     *        of the walk `continue`s before `probeMetadata()` and before the file is
+     *        buffered for {@see self::flushAlbum()}, so an already-stamped, unchanged file
+     *        never reaches the repair. Measured on production: 29,134 of 61,111 tracks
+     *        (47.7 %, rising) already carry a stamp and would be skipped by an ordinary
+     *        rescan.
+     *
+     *        ⚠ **S148: the mode is a `canSkip()` gate, NOT an unloaded index.** S145
+     *        implemented it by skipping {@see MusicScanSkipIndex::load()}, which forced
+     *        the read but also made {@see MusicScanSkipIndex::isStampCurrent()}
+     *        permanently false — so the healing pass ALSO issued one no-op `JSON_SET`
+     *        UPDATE per file it read. The index is now loaded in this mode and consulted
+     *        for stamping only. Reading every file and rewriting every row are two
+     *        different things and only the first one is the point.
      *
      *        ⚠ **This is NOT a filesystem-stat backfill**, which is explicitly rejected
      *        in {@see self::upsertTrack()} and is the S122 review-r1-B1 data-loss shape.
@@ -587,11 +596,30 @@ class MusicLibraryScanner
 
         // ── S145: the third gate, and the only one an OPERATOR controls. ────────
         //
-        // Leaving the index unloaded is the entire full-read mechanism.
-        // {@see MusicScanSkipIndex::isUnchanged()} answers FALSE for an unloaded index,
-        // so every file is probed, every file reaches upsertTrack(), and every file is
-        // still legitimately stamped — the stamp is taken before the read, from the file
-        // this pass actually opened.
+        // The full-read mechanism is {@see self::canSkip()} answering FALSE for the
+        // whole scan, so every file is probed, every file reaches upsertTrack(), and
+        // every file is still legitimately stamped — the stamp is taken before the read,
+        // from the file this pass actually opened.
+        //
+        // ⚠ **S148 MOVED THE GATE OFF `load()` AND ONTO `canSkip()`, AND THAT MOVE IS
+        // THE WHOLE STEP.** S145 implemented the mode by NOT LOADING the index. With the
+        // index unloaded {@see MusicScanSkipIndex::isStampCurrent()} can never suppress
+        // anything, so `stampFileIdentity()` issued a `JSON_SET` UPDATE for EVERY file
+        // read — 61,135 redundant row rewrites per healing pass on the production
+        // library, none of which changed a single byte. Loading the index instead costs
+        // one SELECT and the measured 10.90 MiB it retains, and buys back every one of
+        // those UPDATEs. It cannot weaken the reach guarantee, because the index is now
+        // consulted ONLY for the stamping decision: `canSkip()` is hard-false for the
+        // entire scan, so no loaded entry can suppress a READ. (`isUnchanged()` is still
+        // consulted by the read-ahead below — through the same `canSkip()` — which is
+        // why the two cannot disagree about which files get probed.)
+        //
+        // The load is deliberately UNCONDITIONAL in this mode rather than inheriting the
+        // heal/adopt gate below it. That gate exists because a loaded index plus a
+        // mistaken `canSkip()` is how S96(e)'s heal stops happening; here `canSkip()`
+        // cannot be mistaken, so the objection does not apply — and a healing rescan is
+        // precisely the scan on which an unhealed row is most likely to be present, i.e.
+        // exactly the run that would otherwise pay all 61,135 UPDATEs.
         //
         // ⚠ The bypass is EXPLICIT on purpose. An automatic gate was considered and
         // rejected: the only DB-visible fingerprint of the defect (an album owning zero
@@ -600,7 +628,7 @@ class MusicLibraryScanner
         // re-create the 6.1-hour scan S122 exists to prevent. An operator asking for a
         // full re-read is a decision, not an inference.
         $skipIndex = new MusicScanSkipIndex($this->db, $this->logger);
-        if (!$readEveryFile && !$mayAdopt && !$needsHealing) {
+        if ($readEveryFile || (!$mayAdopt && !$needsHealing)) {
             $skipIndex->load($libraryId);
         }
 
@@ -752,7 +780,7 @@ class MusicLibraryScanner
                     if (!($ahead instanceof SplFileInfo)) {
                         continue;
                     }
-                    if (!$this->canSkip($mayAdopt) || !$skipIndex->isUnchanged($ahead)) {
+                    if (!$this->canSkip($mayAdopt, $readEveryFile) || !$skipIndex->isUnchanged($ahead)) {
                         $prefetcher->submit($ahead->getPathname());
                     }
                 }
@@ -765,7 +793,7 @@ class MusicLibraryScanner
                 // $mayAdopt is re-read here, not captured before the loop, so an orphan
                 // created by a caught mid-walk write failure disables the fast path for
                 // the rest of the scan (see the gate above).
-                if ($this->canSkip($mayAdopt) && $skipIndex->isUnchanged($file)) {
+                if ($this->canSkip($mayAdopt, $readEveryFile) && $skipIndex->isUnchanged($file)) {
                     $skippedUnchanged++;
                     continue;
                 }
@@ -961,11 +989,11 @@ class MusicLibraryScanner
      * be probed. Splitting it would let the pool warm files the walk skips (waste)
      * or, worse, let the skip fire where the lookahead assumed a probe.
      *
-     * The `$needsHealing` half is already folded in: the index is only ever LOADED
-     * when the heal gate said the library is clean ({@see self::scanDirectory()}), so
-     * an unhealed library reaches here with an empty index and
-     * {@see MusicScanSkipIndex::isUnchanged()} answers FALSE for every file. What
-     * remains is the half that can change DURING the walk.
+     * The `$needsHealing` half is folded in for the ORDINARY scan: outside the
+     * full-read mode the index is only ever LOADED when the heal gate said the library
+     * is clean ({@see self::scanDirectory()}), so an unhealed library reaches here with
+     * an empty index and {@see MusicScanSkipIndex::isUnchanged()} answers FALSE for
+     * every file. What remains is the half that can change DURING the walk.
      *
      * @param bool $mayAdopt Live orphan-adoption flag, which
      *        {@see self::upsertArtist()} / {@see self::upsertAlbum()} can flip to
@@ -973,11 +1001,27 @@ class MusicLibraryScanner
      *        scan must go back to flushing albums so it can be adopted — so the fast
      *        path switches OFF for the remainder rather than banking a stale
      *        "healthy" answer taken before the walk.
+     * @param bool $readEveryFile S148 — THE FULL-READ MODE'S ONLY GATE. S145 implemented
+     *        that mode by leaving the index unloaded, which forced the read but ALSO
+     *        made the stamp-suppression in {@see self::stampFileIdentity()} dead, so a
+     *        healing pass rewrote every row it read (61,135 on production, all no-ops).
+     *        The mode is now expressed HERE instead: the index is loaded and consulted
+     *        for STAMPING, while this method refuses every skip.
+     *
+     *        ⚠ **THIS IS THE REACH GUARANTEE AND IT IS NOT NEGOTIABLE.** S145 exists
+     *        because a retagged track filed under the wrong album/artist can only be
+     *        repaired by opening the file: the skip `continue`s BEFORE
+     *        `probeMetadata()`, so a skipped file never reaches `upsertTrack()` at all.
+     *        Anything that lets a `rescan` skip a read re-breaks S145 —
+     *        {@see \Phlix\Tests\Unit\Media\Music\MusicScanReparentTest::testTheFullReadModeHealsAMisParentedTrackWhoseFileNeverChanged()}
+     *        and the probe counts in
+     *        {@see \Phlix\Tests\Integration\Media\MusicRetagReparentIntegrationTest}
+     *        are the executable form of that sentence.
      * @return bool
      */
-    private function canSkip(bool $mayAdopt): bool
+    private function canSkip(bool $mayAdopt, bool $readEveryFile): bool
     {
-        return !$mayAdopt;
+        return !$mayAdopt && !$readEveryFile;
     }
 
     /**
@@ -1140,6 +1184,33 @@ class MusicLibraryScanner
         $files = $albumData['files'];
         $handled = 0;
 
+        /**
+         * **S148 — the vacated albums this flush emptied, DEDUPED. A SET, not a list.**
+         *
+         * {@see self::upsertTrack()} used to call {@see self::refreshAlbumTrackTotal()}
+         * inline, once per moved TRACK. Re-parenting is a per-ALBUM event in practice —
+         * a retagged album moves all N of its tracks off the same row — so an N-track
+         * album issued **N byte-identical recounts of one row**, each of them a
+         * correlated `COUNT(*)` over `music_tracks`. Recording the id here and
+         * recounting once in the `finally` below makes it exactly one per vacated album
+         * per flush, and the LAST one is the only one whose answer was ever kept
+         * anyway.
+         *
+         * Deferring is also strictly more correct than the inline call: by the time the
+         * `finally` runs, every track this flush moves has already moved, so the count
+         * is taken once against the settled table instead of N times against a table
+         * mid-migration.
+         *
+         * Hoisted out of the `try` for the same reason `$handled` is — the `finally`
+         * must see whatever the loop managed to record before it threw.
+         *
+         * ⚠ Keyed by album id with a `true` value so a repeat costs nothing; iterated
+         * with `array_keys()`, never `array_unique()` on a list.
+         *
+         * @var array<int, true> $vacatedAlbums
+         */
+        $vacatedAlbums = [];
+
         try {
             $year = $albumData['year'];
 
@@ -1245,7 +1316,8 @@ class MusicLibraryScanner
                             $libraryId,
                             $skipIndex,
                             $stamp,
-                            $reparented
+                            $reparented,
+                            $vacatedAlbums
                         );
                     } catch (\Throwable $trackError) {
                         // Accounted for either way: this file is done being tried
@@ -1307,6 +1379,26 @@ class MusicLibraryScanner
                 // nothing ever healed it. The column must never be less true than
                 // the rows.
                 $this->refreshAlbumTrackTotal($albumId);
+
+                // S145 + S148 — THE VACATED ALBUMS, once each. Every album this flush
+                // moved a track OFF is recounted here rather than inside
+                // {@see self::upsertTrack()}, so a retagged 12-track album costs ONE
+                // recount of the row it emptied instead of twelve identical ones.
+                //
+                // `$albumId` is excluded because the line above already did it; it can
+                // only appear in the set if a track moved off the album it moved onto,
+                // which is not reachable (the id is compared for INEQUALITY before it is
+                // recorded), so this is belt-and-braces against a future edit.
+                //
+                // In the same `finally` as the line above, and for the same reason: an
+                // album whose tracks were re-parented and whose recount was then skipped
+                // by a throw would advertise a count one too high forever.
+                foreach (array_keys($vacatedAlbums) as $vacatedAlbumId) {
+                    if ($vacatedAlbumId === $albumId) {
+                        continue;
+                    }
+                    $this->refreshAlbumTrackTotal($vacatedAlbumId);
+                }
             }
         } catch (\Throwable $e) {
             // Whatever the track loop never reached is lost with this album. The
@@ -2347,6 +2439,16 @@ class MusicLibraryScanner
      *        line: a healing scan of the production library re-parents thousands of
      *        files and per-track logging is banned for exactly that reason (see the
      *        `'added'` branch below).
+     * @param array<int, true> $vacatedAlbums BY REFERENCE set of `music_albums.id`s this
+     *        flush has emptied — every album a track was moved OFF. **S148.** This method
+     *        used to recount the vacated album inline, once per moved TRACK, which meant
+     *        a retagged N-track album issued N identical recounts of the same row.
+     *        Recording the id instead lets {@see self::flushAlbum()} recount each vacated
+     *        album exactly once, after every move in the flush has landed. The `[]`
+     *        default matches the two arguments before it and keeps the parameter list
+     *        callable without it; {@see self::flushAlbum()} is the only caller and always
+     *        passes one, so a mutation that drops the argument leaves the set undrained
+     *        and the vacated album's count stale — which is what the tests assert on.
      *
      * @return string One of FOUR outcomes. ⚠ `'skipped'` and `'failed'` used to be the
      *         SAME value, and that collision was review r2's HIGH finding: a scan that
@@ -2374,7 +2476,8 @@ class MusicLibraryScanner
         ?string $libraryId = null,
         ?MusicScanSkipIndex $skipIndex = null,
         ?array $stamp = null,
-        int &$reparented = 0
+        int &$reparented = 0,
+        array &$vacatedAlbums = []
     ): string {
         $path = $file->getPathname();
 
@@ -2486,23 +2589,44 @@ class MusicLibraryScanner
                     [$title, $trackNumber, $discNumber, $durationSecs, $albumId, $artistId, $existingId]
                 );
 
-                // S145 — THE VACATED ALBUM. `flushAlbum()`'s `finally` refreshes only the
-                // album being flushed, i.e. the one the track just moved TO. Without this
-                // the album the track just LEFT advertises a `total_tracks` one too high
+                // ── S145 + S148: TWO SEPARATE QUESTIONS, TWO SEPARATE GUARDS. ────────
+                //
+                // "Did this track move?" and "is there a vacated album row to recount?"
+                // are not the same question, and S145 answered both with one `if/elseif`
+                // chain that required `$existingAlbumId > 0`. That under-reported
+                // `reparented`: a row whose `album_id` read as 0 — the "column absent or
+                // unreadable" coercion shape above — genuinely moved and was counted only
+                // if its ARTIST had also changed. (`music_tracks.album_id` is
+                // `INT UNSIGNED NOT NULL` with an enforced FK, so a real 0 is currently
+                // unreachable; the point is that the COUNTER must not depend on a guard
+                // that exists for the RECOUNT, because the day the shape becomes
+                // reachable the operator's only evidence silently goes quiet.)
+                $albumMoved = $existingAlbumId !== $albumId;
+                $artistMoved = $existingArtistId !== $artistId;
+
+                // The counter: any change of parentage, whatever the old ids were.
+                if ($albumMoved || $artistMoved) {
+                    $reparented++;
+                }
+
+                // THE VACATED ALBUM. `flushAlbum()`'s `finally` refreshes only the album
+                // being flushed, i.e. the one the track just moved TO. Without this the
+                // album the track just LEFT advertises a `total_tracks` one too high
                 // forever, and `MusicLibraryService::getArtistWithAlbums()` sums that
                 // column onto the artist page — so healing the parentage would have
                 // traded one wrong number for another.
                 //
-                // Guarded on `> 0` because a 0 is the "column absent / unreadable" shape
-                // from the coercion above, never a real `music_albums.id`.
-                if ($existingAlbumId !== $albumId && $existingAlbumId > 0) {
-                    $reparented++;
-                    $this->refreshAlbumTrackTotal($existingAlbumId);
-                } elseif ($existingArtistId !== $artistId && $existingArtistId > 0) {
-                    // The artist moved but the album id did not — possible only when the
-                    // album row itself was re-pointed. No album was vacated, so there is
-                    // nothing to recount, but it is still a re-parenting.
-                    $reparented++;
+                // ⚠ S148 — RECORDED, NOT RECOUNTED. This used to call
+                // {@see self::refreshAlbumTrackTotal()} right here, once per moved TRACK,
+                // so a retagged 12-track album issued 12 identical correlated `COUNT(*)`
+                // recounts of the one row it emptied. `flushAlbum()` now drains this set
+                // once, in the same `finally` that recounts the album being flushed.
+                //
+                // The `> 0` guard stays HERE, where it belongs: 0 is the "column absent /
+                // unreadable" shape and is not a `music_albums.id`, so recounting it
+                // would `UPDATE … WHERE a.id = 0` and touch nothing.
+                if ($albumMoved && $existingAlbumId > 0) {
+                    $vacatedAlbums[$existingAlbumId] = true;
                 }
 
                 $this->stampFileIdentity($existingMediaItemId, $file, $skipIndex, $stamp);
@@ -2706,25 +2830,36 @@ class MusicLibraryScanner
      * **5 probes and 5 `JSON_SET` UPDATEs**, now pinned by
      * {@see \Phlix\Tests\Unit\Media\Music\MusicScanUnchangedSkipTest::testWithTheFastPathOffEveryUnchangedFileIsStillProbedAndStillReStamped()}.
      *
-     * What the suppression really covers is ONE narrower path, and it is a real one:
-     * the index WAS loaded (healthy library, fast path on) and `$mayAdopt` then flipped
-     * to TRUE mid-walk because a caught write failure left an unreferenced
-     * `media_items` row. From that point {@see self::canSkip()} answers false, so the
-     * remaining unchanged files are probed even though the index still holds their
-     * current identity — and each of those probes would otherwise issue an UPDATE that
-     * changes nothing. Measured on the 40-album flip fixture: **40 files probed, 32
-     * stamp UPDATEs issued** (1 file lost with the album whose write was made to fail,
-     * 7 suppressed by this check), pinned by {@see
-     * \Phlix\Tests\Unit\Media\Music\MusicScanUnchangedSkipTest::testTheStampSuppressionFiresOnTheMidWalkFlipPath()}.
+     * The suppression covers TWO paths, and S148 added the second:
      *
-     * Making the original claim TRUE would mean loading the index unconditionally and
-     * gating only the SKIP on the heal/adopt answer. That is deliberately NOT done
-     * here: it would spend the load's measured **36.74 MiB transient / 10.90 MiB
-     * retained** (see {@see MusicScanSkipIndex}) on every exceptional scan purely to
-     * avoid UPDATEs on the one scan shape that is already accepted as slow, and it
-     * would move a correctness gate — the reason the index is not loaded is that a
-     * loaded index plus a mistaken `canSkip()` is how S96(e)'s heal stops happening.
-     * The claim is corrected instead of the code.
+     *  1. **The mid-walk flip.** The index WAS loaded (healthy library, fast path on)
+     *     and `$mayAdopt` then flipped to TRUE mid-walk because a caught write failure
+     *     left an unreferenced `media_items` row. From that point
+     *     {@see self::canSkip()} answers false, so the remaining unchanged files are
+     *     probed even though the index still holds their current identity — and each of
+     *     those probes would otherwise issue an UPDATE that changes nothing. Measured on
+     *     the 40-album flip fixture: **40 files probed, 32 stamp UPDATEs issued** (1 file
+     *     lost with the album whose write was made to fail, 7 suppressed by this check),
+     *     pinned by {@see
+     *     \Phlix\Tests\Unit\Media\Music\MusicScanUnchangedSkipTest::testTheStampSuppressionFiresOnTheMidWalkFlipPath()}.
+     *  2. 🔑 **The full-read healing rescan — S148, and the big one.**
+     *     {@see self::scanDirectory()}'s `$readEveryFile` mode now LOADS the index and
+     *     gates {@see self::canSkip()} instead, precisely so that this check can fire on
+     *     every unchanged file of a scan that deliberately reads all of them. Before
+     *     S148 the mode was implemented by not loading the index, so a healing pass over
+     *     the production library issued **61,135 `JSON_SET` UPDATEs that changed
+     *     nothing** — one per file, on a multi-hour job. Pinned by
+     *     {@see \Phlix\Tests\Integration\Media\MusicScanWriteAmplificationIntegrationTest}
+     *     against real MySQL, because the number that matters is "how many UPDATEs did
+     *     the server receive" and an in-memory double cannot be asked that question about
+     *     production.
+     *
+     * The heal/adopt gate on {@see MusicScanSkipIndex::load()} still stands for the
+     * ORDINARY scan: there, a loaded index plus a mistaken `canSkip()` is how S96(e)'s
+     * heal stops happening, and the load's measured **36.74 MiB transient / 10.90 MiB
+     * retained** (see {@see MusicScanSkipIndex}) would be spent for nothing. In the
+     * full-read mode `canSkip()` is hard-false for the whole scan, so no loaded entry can
+     * suppress a READ and the objection does not apply.
      *
      * Failure is swallowed at `debug`: an unwritten stamp costs one file's read on the
      * next scan and nothing else, so it must not turn a healthy per-track outcome into

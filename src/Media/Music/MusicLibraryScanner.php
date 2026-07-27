@@ -481,8 +481,13 @@ class MusicLibraryScanner
      *        container and can outlive one scan inside a Workerman worker, so a mode
      *        held on `$this` would leak from a healing rescan into every later scan.
      *
-     *        The cost is real and deliberate: a full read of the production music
-     *        library is ~3.5 h against minutes for an ordinary rescan. It is reached
+     *        The cost is real and deliberate: the last completed full read of the
+     *        production music library took **9 h 55 m** against minutes for an ordinary
+     *        rescan. (An earlier "~3.5 h" here was an estimate presented as a
+     *        measurement. S151 removed what that run's dominant cost turned out to be —
+     *        the per-file existence lookup in
+     *        {@see self::findExistingTrackMediaItemId()} — so the figure should fall
+     *        sharply, but the post-S151 wall clock is UNMEASURED.) It is reached
      *        from the existing `rescan` job type only
      *        ({@see \Phlix\Media\Library\LibraryManager::rescanLibrary()}).
      * @return ScanResult Summary of the scan operation. `scanned` counts audio
@@ -2779,14 +2784,112 @@ class MusicLibraryScanner
      * The scoping mirrors the `(library_id, path_hash)` unique index (migrations
      * 072/087): a track's identity is its path inside its owning library.
      *
+     * ## S151 — WHY THE HASH PREDICATE IS HERE, AND WHY `path = ?` STAYS
+     *
+     * `media_items.path` has **no b-tree index** and cannot get one: it is
+     * `varchar(1000) utf8mb4` = 4,000 bytes, over InnoDB's 3,072-byte key limit on
+     * its own. Without the hash predicate the planner can only use the FIRST column
+     * of `idx_media_items_library_path_hash` — `library_id`, cardinality **3** — and
+     * then hand-filters the rest. Measured on the production library (warm,
+     * `SQL_NO_CACHE`, 4 identical repeats):
+     *
+     * | form                            | EXPLAIN type | key_len | rows examined | duration            |
+     * |---------------------------------|--------------|---------|---------------|---------------------|
+     * | `path = ?` alone (pre-S151)     | `ref`        | 144     | **48,512**    | 0.714–0.864 s       |
+     * | `path_hash = ? AND path = ?`    | **`const`**  | 305     | **1**         | 0.00022–0.00052 s   |
+     *
+     * This method runs **once per audio file** — 61,122 times on that library — so the
+     * pre-S151 form cost ≈13 h of pure query time and was the DOMINANT cost of a music
+     * scan, ahead of the tag reading everyone assumed was the bottleneck.
+     *
+     * ⚠ **MySQL will NOT substitute the index for you.** Generated-column index
+     * substitution fires only when the WHERE clause contains the column's *exact*
+     * generating expression. `path = '…'` never triggers it, which is how a column that
+     * exists, is indexed and is ~3,500× faster sat unused. Verified by `EXPLAIN`, not
+     * assumed — see `tests/Integration/Media/Music/MusicTrackPathHashLookupTest`, which
+     * EXPLAINs the statement this method actually emits. (`PathHashIndexUsageTest` is a
+     * different, pre-existing test covering {@see \Phlix\Media\Library\ItemRepository}.)
+     *
+     * ⚠ **THE `const` PLAN REQUIRES THE `idx_media_items_library_path_hash` UNIQUE
+     * INDEX, AND `migrations/` ALONE DOES NOT CREATE IT.** Migration 087 line 48 does
+     * `DROP INDEX idx_media_items_library_path_hash`, and the only thing that re-adds
+     * it is `migrations/cleanup_072.php` (lines 121-125) — a MANUAL post-deploy
+     * finalizer. So after a clean `scripts/run-migrations.php` the index does not
+     * exist and this statement plans exactly as the pre-S151 form did
+     * (`ref` / `idx_library` / key_len 144 / rows ≈ 404). Production HAS the index
+     * (that is where the `const`/1-row plan was measured); an install that skipped the
+     * finalizer gets correctness but no speed-up. `MusicTrackPathHashLookupTest`
+     * CREATES the index itself when it is absent, so a green test proves the SQL
+     * shape, NOT that your database is in the state this speed-up needs — check with
+     * `SHOW CREATE TABLE media_items`.
+     *
+     * ⚠ **`path = ?` is NOT redundant and must not be removed.** The row is already
+     * being fetched by the time it is evaluated, so it is free, and it turns "a SHA-1
+     * collision is unlikely" into "a SHA-1 collision cannot return the wrong row".
+     *
+     * ⚠ **`path_hash` is NULL for 7 of the 13 `type` ENUM members** — its generating
+     * expression (migration 087) covers only `episode, movie, audio, book, track,
+     * audiobook`. This call site is safe **because the statement itself pins
+     * `type = 'track'`**, a covered member (measured on production:
+     * `SUM(path_hash IS NULL) = 0` across all 61,122 track rows). Do NOT copy this
+     * predicate onto a lookup whose type is dynamic or is one of the uncovered members
+     * (`series, season, album, artist, music, video, photo`) — there it would return a
+     * fast WRONG answer (matching nothing) instead of a slow right one. That is why the
+     * sibling artist/album lookups in this class were deliberately left alone.
+     *
+     * ⚠ PHP `sha1()` hashes the raw string bytes; MySQL's `SHA1()` hashes the column's
+     * utf8mb4 bytes. They agree only while PHP hands over UTF-8 — which it does, paths
+     * come from the filesystem verbatim. An ASCII-only fixture cannot tell the two
+     * behaviours apart, so the guarding test uses non-ASCII paths (`Sigur Rós`,
+     * `Björk`, CJK) against real MySQL.
+     *
+     * ## ⚠ TWO PASSES, LIKE {@see \Phlix\Media\Library\ItemRepository::findByPath()}
+     *
+     * Pass 1 is the hash lookup above. Pass 2 repeats the search on the raw `path`,
+     * and it is NOT optional (review finding 2): `path_hash` is a GENERATED column, so
+     * a hash-only lookup is silently blind on any database where migration 087 has not
+     * run, or ran only in part. 087 is two statements — `DROP INDEX` then
+     * `MODIFY COLUMN` — a migration that fails is not recorded by the runner, and
+     * `docker/docker-entrypoint.sh:9` runs migrations with `|| true`; so "072 applied,
+     * 087 not" is a reachable state, and in it every `track` row has
+     * `path_hash IS NULL`. `NULL = <hash>` is never true, so pass 1 would miss EVERY
+     * file, the caller would fall through to `createMediaItem('track', …)` on each one,
+     * and nothing would catch it — 087's own first statement drops the unique index and
+     * only the manual `migrations/cleanup_072.php` re-adds it. That is a duplicated
+     * track library (61 k rows on the reference install), from a deployment ordering
+     * accident. The pre-S151 raw lookup was immune to the state of `path_hash`; this
+     * keeps that immunity while still taking the fast path whenever the hash is there.
+     *
+     * ⚠ **Pass 2 costs nothing on the workload S151 was measured on, and it CANNOT
+     * regress the pre-S151 baseline.** It runs only when pass 1 MISSES, i.e. only for
+     * a file this library has never indexed. On a rescan — the 9 h 55 m case this step
+     * exists to fix — every lookup hits pass 1 and pass 2 never executes at all. On a
+     * FIRST scan every lookup misses, so each file pays one fast index probe plus the
+     * same unindexed `path = ?` scan it paid before S151: strictly the pre-S151 cost
+     * plus a `const` lookup, never worse than the code being replaced.
+     *
      * @param string $path Absolute filesystem path of the audio file.
      * @param string|null $libraryId Owning library UUID (null-safe matched).
      * @return string|null Existing media_items UUID, or null when unseen.
      */
     private function findExistingTrackMediaItemId(string $path, ?string $libraryId): ?string
     {
+        // Pass 1 — the indexed point lookup this step exists to introduce.
+        $existing = $this->firstMediaItemId($this->db->query(
+            "SELECT id FROM media_items"
+            . " WHERE type = 'track' AND path_hash = ? AND path = ? AND library_id <=> ? LIMIT 1",
+            [sha1($path), $path, $libraryId]
+        ));
+
+        if ($existing !== null) {
+            return $existing;
+        }
+
+        // Pass 2 — raw-path fallback. Correctness must not depend on a migration
+        // having completed; see the docblock. Reached only on a miss.
         return $this->firstMediaItemId($this->db->query(
-            "SELECT id FROM media_items WHERE type = 'track' AND path = ? AND library_id <=> ? LIMIT 1",
+            "SELECT id FROM media_items"
+            . " WHERE type = 'track' AND path = ? AND library_id <=> ? LIMIT 1",
             [$path, $libraryId]
         ));
     }

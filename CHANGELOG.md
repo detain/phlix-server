@@ -9,6 +9,53 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Added
 
+- **A CLI scan is now VISIBLE in the admin UI, and can no longer strand a
+  permanently-`running` job row** (S150/S151). `php bin/phlix library:scan <id>`
+  previously wrote *nothing* to `library_scan_jobs`, so the admin Libraries page kept
+  showing whatever the last web-enqueued job had left behind — measured on production
+  during the S145 healing rescan as a red `failed` badge sitting over a healthy scan
+  that had been repairing rows for 45 minutes. The command now opens its own `running`
+  row up front, streams `items_found` / `items_updated` / `current_path` through the
+  same throttled sink the background worker uses, and stamps `completed`/`failed` on
+  every exit path — including SIGTERM/SIGINT/SIGHUP and a fatal-error shutdown.
+
+  It also **refuses to start while the library already has a `queued`/`running` job**,
+  because two scanners over one library race on every per-file find-or-create and only
+  one of them can own the badge. The refusal is enforced *inside* the INSERT
+  (`INSERT … SELECT … WHERE NOT EXISTS`), not by a read-then-write pair, so two
+  invocations started in the same instant cannot both win. **`--force`** overrides it,
+  for the one case the check cannot distinguish: a row left `running` by a `kill -9` or
+  a power loss, which no in-process handler can ever clean up.
+
+  ⚠ **Two residuals, stated rather than glossed.** `SIGKILL` cannot be trapped by
+  anyone. And `LibraryScanWorker`'s startup reaper is unscoped and ageless, so a
+  `phlix-server` restart during a long CLI scan marks that row `failed` while the CLI
+  keeps running — which also makes the library look idle to the refusal check.
+  Bounding the reaper needs per-job worker ownership, i.e. a schema change.
+
+### Changed
+
+- **The music scanner's per-file existence lookup now uses the `path_hash` index that
+  already existed** (S151). It binds `path_hash = ?` alongside the kept `path = ?`, so
+  the statement resolves as a `const` single-row lookup instead of hand-filtering the
+  whole `library_id` partition — measured on production at `rows 48,512` / 0.71–0.86 s
+  per file before, versus `rows 1` / 0.22–0.52 ms after, on a scan that runs the lookup
+  61,122 times. MySQL will not make that substitution itself: generated-column index
+  substitution fires only on the column's exact generating expression, which `path = ?`
+  never is.
+
+  ⚠ **The speed-up requires `idx_media_items_library_path_hash`, which `migrations/`
+  alone does NOT create** — migration 087 drops it and only the manual
+  `php migrations/cleanup_072.php` re-adds it. On an install that skipped that
+  finalizer the new statement plans exactly as the old one did. Check with
+  `SHOW CREATE TABLE media_items`.
+
+  The lookup keeps a **raw-path second pass** for the same reason
+  `ItemRepository::findByPath()` has one: `path_hash` is a generated column, and on a
+  database where migration 087 has not run it is NULL for every track, which would make
+  a hash-only lookup miss every file and mint a duplicate library. The fallback runs
+  only on a miss, so a rescan never pays for it.
+
 - **Row-sized backdrop on the media LIST shape** (S101, unblocks phlix-ui S69's
   wide-backdrop library view). `MediaItemShaper::shape()` — the single shaping
   point behind `GET /api/v1/media` and every other list surface (most-watched,
@@ -764,7 +811,10 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
      and no new command**: the admin *Rescan* action and
      `php bin/phlix library:scan <id> --rescan` both get it for free.
 
-     **Expect a music rescan to take hours, not minutes** (~3.5 h for 61,111 tracks),
+     **Expect a music rescan to take hours, not minutes** (the last completed one took
+     **9 h 55 m** for 61,111 tracks — an earlier note here said "~3.5 h", which was an
+     estimate presented as a measurement; S151 attacks the dominant cost but its effect
+     on that wall clock is not yet measured),
      and to report `updated` in the thousands on its first run — that is the repair, not
      an error. It is interruptible and idempotent; re-running continues. The scan
      summary gains `reparented` (how many tracks moved) and `read_every_file` (whether

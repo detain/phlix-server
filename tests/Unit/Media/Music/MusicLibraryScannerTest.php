@@ -433,12 +433,19 @@ final class MusicLibraryScannerTest extends TestCase
                         $key = ((string) ($p[0] ?? '')) . '|' . strtolower((string) ($p[1] ?? ''));
                         return isset($albums[$key]) ? [$albums[$key]] : [];
                     }
+                    // S151: `type = 'track' AND path_hash = ? AND path = ? AND
+                    // library_id <=> ?`, bound `[sha1($path), $path, $libraryId]`.
+                    // The hash is recomputed from the stored row so a revert to the
+                    // pre-S151 binding is caught rather than tolerated. The raw-path
+                    // second pass lands here too and is answered `[]`: this models a DB
+                    // where `path_hash` IS populated, so the fallback is inert.
                     if (str_contains($t, 'FROM media_items WHERE type')) {
                         foreach ($mediaItems as $mi) {
                             if (
                                 $mi['type'] === 'track'
-                                && $mi['path'] === ($p[0] ?? null)
-                                && $mi['library_id'] === ($p[1] ?? null)
+                                && sha1((string) $mi['path']) === ($p[0] ?? null)
+                                && $mi['path'] === ($p[1] ?? null)
+                                && $mi['library_id'] === ($p[2] ?? null)
                             ) {
                                 return [['id' => $mi['id']]];
                             }
@@ -2229,6 +2236,77 @@ final class MusicLibraryScannerTest extends TestCase
             $wroteNothing->invoke(null, '42'),
             'and an AUTO_INCREMENT table returns its id as a STRING, not an int',
         );
+    }
+
+    /**
+     * S151 review finding 2 — on a database whose `path_hash` is NULL for tracks, the
+     * per-file lookup must STILL find the existing row.
+     *
+     * `path_hash` is a GENERATED column (migration 087). A hash-only lookup is
+     * therefore silently blind wherever that migration has not run, or ran only in
+     * part: 087 is two statements, the runner does not record a migration that failed,
+     * and `docker/docker-entrypoint.sh:9` runs migrations with `|| true`. In that
+     * state `NULL = <hash>` is never true, every lookup misses, and the caller falls
+     * through to `createMediaItem('track', …)` — a fresh `media_items` + `music_tracks`
+     * pair per track per scan, with nothing to catch it, because 087's first statement
+     * DROPS `idx_media_items_library_path_hash` and only the manual
+     * `migrations/cleanup_072.php` re-adds it. 61 k duplicated rows from a deployment
+     * ordering accident.
+     *
+     * This cannot be staged against real MySQL — the generating expression makes a
+     * `track` row with a NULL hash impossible to write — so the DB is modelled by a
+     * double that answers ONLY the raw-path form, exactly as a NULL-hash column would.
+     * A hash-only implementation returns null here; the two-pass one returns the id.
+     */
+    public function testTheTrackLookupStillResolvesWhenPathHashIsNullForEveryRow(): void
+    {
+        $path = '/music/Björk/Homogénic/02 Jóga.flac';
+        $libraryId = 'lib-null-hash';
+        $existingId = 'mi-existing-track';
+
+        /** @var list<string> $issued */
+        $issued = [];
+
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(
+            /**
+             * @param list<mixed> $params
+             * @return list<array<string, string>>
+             */
+            function (string $sql, array $params = []) use (&$issued, $path, $libraryId, $existingId): array {
+                $issued[] = $sql;
+
+                // A NULL `path_hash` never equals anything, so the hash pass must find
+                // nothing — the whole point of the fixture.
+                if (str_contains($sql, 'path_hash')) {
+                    return [];
+                }
+
+                if (
+                    str_contains($sql, "FROM media_items WHERE type = 'track'")
+                    && ($params[0] ?? null) === $path
+                    && ($params[1] ?? null) === $libraryId
+                ) {
+                    return [['id' => $existingId]];
+                }
+
+                return [];
+            }
+        );
+
+        $scanner = new MusicLibraryScanner($db, $this->createMock(FfmpegRunner::class));
+        $find = new \ReflectionMethod(MusicLibraryScanner::class, 'findExistingTrackMediaItemId');
+
+        $this->assertSame(
+            $existingId,
+            $find->invoke($scanner, $path, $libraryId),
+            'with path_hash NULL for every row the hash pass MUST miss, and the raw-path fallback is the '
+            . 'only thing standing between the scanner and a duplicated track library. A null here means '
+            . 'the fallback was removed.',
+        );
+        $this->assertCount(2, $issued, 'a miss on the hash pass must be followed by exactly one fallback');
+        $this->assertStringContainsString('path_hash', $issued[0]);
+        $this->assertStringNotContainsString('path_hash', $issued[1]);
     }
 
     /**
@@ -4220,12 +4298,21 @@ final class MusicSchemaConnection extends Connection
             return [];
         }
 
+        // S151: matches the widened statement
+        // `type = 'track' AND path_hash = ? AND path = ? AND library_id <=> ?`
+        // bound `[sha1($path), $path, $libraryId]`. The hash is RECOMPUTED from the
+        // stored row, so a revert to the pre-S151 two-parameter binding misses every
+        // row rather than passing silently. The method's SECOND, raw-path pass also
+        // lands here and is answered `[]` — this double models a DB where `path_hash`
+        // is populated, so the fallback is correctly inert; its behaviour is pinned by
+        // self::testTheTrackLookupStillResolvesWhenPathHashIsNullForEveryRow().
         if (str_contains($sql, "FROM media_items WHERE type = 'track'")) {
             foreach ($this->mediaItems as $row) {
                 if (
                     $row['type'] === 'track'
-                    && $row['path'] === ($p[0] ?? null)
-                    && $row['library_id'] === ($p[1] ?? null)
+                    && sha1((string) $row['path']) === ($p[0] ?? null)
+                    && $row['path'] === ($p[1] ?? null)
+                    && $row['library_id'] === ($p[2] ?? null)
                 ) {
                     return [['id' => $row['id']]];
                 }

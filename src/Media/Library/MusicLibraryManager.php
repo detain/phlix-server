@@ -174,11 +174,13 @@ class MusicLibraryManager
                 $result->scanned++;
 
                 $itemPath = is_string($itemData['path'] ?? null) ? $itemData['path'] : '';
-                // Music tracks are type='track' — a NON-deduped type (NULL
-                // path_hash) — so scope to the library: findByPath's fast path_hash
-                // pass always misses a track, and its raw-path fallback needs
-                // library_id to be an index range (and to avoid re-creating every
-                // track as a duplicate on each rescan).
+                // Music tracks are type='track', one of the six types migration 087's
+                // `path_hash` expression covers, so scope to the library: findByPath's
+                // fast path_hash pass resolves a track, but only as a POINT lookup when
+                // `library_id` (the composite index's leading column) is bound — and a
+                // miss re-creates every track as a duplicate on each rescan.
+                // ⚠ This comment used to call `track` a NON-deduped type with a NULL
+                // path_hash — true under migration 072, FALSE since 087.
                 $existing = $this->item_repo->findByPath($itemPath, $libraryId);
                 if ($existing) {
                     $existingId = is_string($existing['id'] ?? null) ? $existing['id'] : '';
@@ -243,9 +245,9 @@ class MusicLibraryManager
         // Build metadata array
         $metadata = $this->buildMetadataFromTags($tags, $path);
 
-        // Check for existing item. Tracks (type='track') are a NON-deduped type
-        // (NULL path_hash) — scope to the library so findByPath's raw-path fallback
-        // finds the existing row instead of always missing and duplicating it.
+        // Check for existing item. `track` is covered by migration 087's `path_hash`
+        // expression — scope to the library so findByPath's fast pass is a point
+        // lookup on `(library_id, path_hash)` instead of an unindexed scan.
         $existing = $this->item_repo->findByPath($path, $libraryId);
 
         if ($existing) {

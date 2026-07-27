@@ -199,8 +199,11 @@ class MusicLibraryService
      *        {@see MusicLibraryScanner::scanDirectory()}. TRUE makes the scanner leave
      *        the S122(a) skip index unloaded so every file is opened and every track row
      *        is re-parented from its current tags. Reached only from the `rescan` job
-     *        type; ~3.5 h on the production library against minutes for an ordinary
-     *        rescan. ⚠ A PARAMETER and not a setter — the scanner is `@autowire`d and can
+     *        type; the last completed full read of the production library took **9 h 55 m**
+     *        against minutes for an ordinary rescan (an earlier "~3.5 h" here was an
+     *        estimate presented as a measurement — S151 removes the dominant per-file cost,
+     *        but no post-S151 rescan has been timed).
+     *        ⚠ A PARAMETER and not a setter — the scanner is `@autowire`d and can
      *        outlive one scan in a Workerman worker.
      * @return ScanResult Summary of the scan operation
      *

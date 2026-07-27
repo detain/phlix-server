@@ -161,10 +161,12 @@ class AudiobookLibraryManager extends LibraryManager
      */
     public function upsertAudiobook(string $libraryId, string $path): ?array
     {
-        // Check if already exists. Audiobooks (type='audiobook') are a NON-deduped
-        // type (NULL path_hash) — scope to the library so findByPath resolves the
-        // existing row via its raw-path fallback rather than always missing and
-        // creating a duplicate on every rescan.
+        // Check if already exists. Scope to the library: `audiobook` is one of the
+        // SIX types migration 087 covers (episode/movie/audio/book/track/audiobook),
+        // so findByPath's fast `path_hash` pass resolves it — but only as a point
+        // lookup when `library_id` (the composite index's leading column) is bound.
+        // ⚠ This comment used to claim audiobooks were a NON-deduped type with a NULL
+        // path_hash. That was true under migration 072 and has been FALSE since 087.
         $existing = $this->itemRepo->findByPath($path, $libraryId);
 
         // Determine file extension and harvest metadata + chapters

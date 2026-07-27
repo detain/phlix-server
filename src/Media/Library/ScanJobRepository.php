@@ -225,6 +225,238 @@ class ScanJobRepository
     }
 
     /**
+     * Insert a job that is ALREADY `running`, for a scan this process is about to
+     * execute itself.
+     *
+     * ## Why this is not `enqueue()` + `claimNext()` (S150)
+     *
+     * {@see self::claimNext()} claims the OLDEST `queued` row in the whole table, not
+     * a specific one. A CLI scan that enqueued its own job and then called
+     * `claimNext()` could therefore claim somebody ELSE's queued job — and would in
+     * turn leave its own row `queued` for the worker to pick up and run a SECOND,
+     * concurrent scan of the same library. Inserting directly as `running` is the
+     * only shape that is correct for a self-executing caller: the row is never
+     * `queued`, so {@see self::claimNext()} can never see it.
+     *
+     * ⚠ **This bypasses the queue on purpose, and it is only correct for a caller
+     * that runs the work IN THIS PROCESS.** Do not use it to hand work to the worker
+     * — that is {@see self::enqueue()}.
+     *
+     * ⚠ **A row written here is still subject to {@see self::reapStaleJobs()}**, which
+     * the single-consumer worker calls at boot and which fails EVERY `running` row
+     * without scoping or an age guard. A `phlix-server` restart during a long CLI
+     * scan will therefore mark this row `failed` while the CLI keeps running. Bounding
+     * that needs per-job worker ownership, i.e. a schema change deliberately out of
+     * S150/S151's scope.
+     *
+     * ⚠ **The consequence is NOT only a false badge.** A reaped row is terminal, so
+     * {@see self::hasActiveJobForLibrary()} then reports the library idle while the CLI
+     * scan is still running — and a second `library:scan`, or an admin-UI "Scan" click
+     * (which has no active-job check at all), will start a genuinely concurrent scan
+     * over the same library. The scan already in flight is not itself lost or stuck:
+     * nothing re-reads the job row mid-scan, and the CLI's own `markCompleted()` will
+     * overwrite the reaped `failed` with `completed` when it finishes.
+     *
+     * ## ⚠ `$jobId` exists so a caller can know the id BEFORE the row exists (S151)
+     *
+     * {@see \Phlix\Console\Commands\LibraryScanCommand} installs its SIGTERM/SIGINT/
+     * SIGHUP and shutdown handlers *before* calling this, and those handlers can only
+     * fail a row whose id they already hold. If this method minted the id, there would
+     * be a window in which the row is committed and externally visible while
+     * `$this->jobId` is still `''` — a signal landing there strands the row `running`
+     * forever, which is the exact state S150 exists to abolish. Passing the id in
+     * removes the window entirely: the id is known before the INSERT is issued, so
+     * every committed row has a handler that can name it.
+     *
+     * @param string      $libraryId Target library UUID.
+     * @param string      $type      Job type; must be one of {@see self::ALLOWED_TYPES}.
+     * @param string|null $jobId     Pre-minted row id (see above). NULL mints one here.
+     *
+     * @return string The job UUID (the one passed in, when one was).
+     *
+     * @throws InvalidArgumentException When `$type` is not one of
+     *                                  {@see self::ALLOWED_TYPES}.
+     *
+     * @since 0.36.0 (S150 — CLI scans visible in the admin UI)
+     */
+    public function startRunning(string $libraryId, string $type, ?string $jobId = null): string
+    {
+        $this->assertAllowedType($type);
+
+        $id = ($jobId === null || $jobId === '') ? $this->generateUuid() : $jobId;
+
+        $this->db->query(
+            'INSERT INTO library_scan_jobs (id, library_id, type, status, started_at)'
+            . ' VALUES (?, ?, ?, ?, NOW())',
+            [$id, $libraryId, $type, 'running'],
+        );
+
+        return $id;
+    }
+
+    /**
+     * Insert a `running` job for this library **only if the library has no
+     * `queued`/`running` job**, in ONE statement.
+     *
+     * ## Why this exists — the check-then-insert race (S151, review finding 5)
+     *
+     * {@see self::hasActiveJobForLibrary()} followed by {@see self::startRunning()} is
+     * a TOCTOU: two `php bin/phlix library:scan <id>` invocations started together both
+     * read "no active job" and both insert a `running` row, which is precisely the
+     * two-scanners-over-one-library race the refusal exists to prevent. This method
+     * folds the check into the INSERT so the decision and the write cannot be
+     * interleaved.
+     *
+     * `INSERT ... SELECT ... WHERE NOT EXISTS` takes locking reads on the
+     * `idx_lsj_library` range it inspects (migration 027), so a concurrent inserter for
+     * the SAME `library_id` either blocks until the winner commits and then sees its
+     * row — inserting nothing — or the pair deadlocks. **The deadlock is retried once**
+     * (see {@see self::isRetryableLockError()}): after the retry the winner's row is
+     * committed, so the loser's `NOT EXISTS` is false and it correctly refuses. Without
+     * that retry a deadlock would surface as a thrown INSERT and the caller would
+     * degrade to "run untracked", i.e. both scans would run — the hole this closes.
+     *
+     * ⚠ **`Connection::query()` returns `lastInsertId()` for an INSERT that affected
+     * rows, and `null` when it affected none.** `library_scan_jobs.id` is a CHAR(36)
+     * UUID with no AUTO_INCREMENT, so a SUCCESSFUL insert here returns the string
+     * `'0'` — which is FALSY. Test `!== null`, never truthiness; `if (!$result)` reads
+     * a successful insert as a refusal.
+     *
+     * @param string      $libraryId Target library UUID.
+     * @param string      $type      Job type; must be one of {@see self::ALLOWED_TYPES}.
+     * @param string|null $jobId     Pre-minted row id ({@see self::startRunning()}).
+     *
+     * @return string|null The job UUID, or NULL when the library already had a
+     *                     `queued`/`running` job and nothing was inserted.
+     *
+     * @throws InvalidArgumentException When `$type` is not one of
+     *                                  {@see self::ALLOWED_TYPES}.
+     *
+     * @since 0.36.0 (S151 — closes the S150 check-then-insert race)
+     */
+    public function startRunningIfIdle(string $libraryId, string $type, ?string $jobId = null): ?string
+    {
+        $this->assertAllowedType($type);
+
+        $id = ($jobId === null || $jobId === '') ? $this->generateUuid() : $jobId;
+
+        $sql = 'INSERT INTO library_scan_jobs (id, library_id, type, status, started_at)'
+            . " SELECT ?, ?, ?, 'running', NOW() FROM DUAL WHERE NOT EXISTS ("
+            . '    SELECT 1 FROM library_scan_jobs active'
+            . "     WHERE active.library_id = ? AND active.status IN ('queued', 'running')"
+            . ' )';
+        $params = [$id, $libraryId, $type, $libraryId];
+
+        try {
+            $result = $this->db->query($sql, $params);
+        } catch (\Throwable $e) {
+            if (!$this->isRetryableLockError($e)) {
+                throw $e;
+            }
+            // The competing inserter has now committed (or rolled back). Re-running the
+            // guarded statement therefore yields the CORRECT answer rather than a
+            // thrown error the caller would have to interpret as "unknown".
+            $result = $this->db->query($sql, $params);
+        }
+
+        return $result === null ? null : $id;
+    }
+
+    /**
+     * Mint a job id without writing anything.
+     *
+     * Exists so a caller can install its termination handlers — which must be able to
+     * name the row they will fail — BEFORE the row is created. See
+     * {@see self::startRunning()} for why that ordering is load-bearing.
+     *
+     * @return string A fresh UUID, not yet present in `library_scan_jobs`.
+     *
+     * @since 0.36.0 (S151)
+     */
+    public function newJobId(): string
+    {
+        return $this->generateUuid();
+    }
+
+    /**
+     * Whether ANY `queued`/`running` job exists for this library.
+     *
+     * ⚠ **This deliberately does NOT ask "is the library's NEWEST job active?"**
+     * (review finding 4). `queued_at` is a `TIMESTAMP` with 1-second granularity
+     * (migration 027), so two rows written in the same second tie and
+     * `ORDER BY queued_at DESC LIMIT 1` picks between them arbitrarily — a `completed`
+     * row can beat a `queued` one and the refusal is then silently bypassed. The same
+     * shape occurs without any tie whenever a NEWER terminal job exists alongside an
+     * older live one (a `metadata` job that completed while a CLI `rescan` from ten
+     * minutes earlier is still `running`): "newest" reports idle for a library that is
+     * actively being scanned. Existence over the whole set has neither hole.
+     *
+     * ⚠ It follows that this can disagree with the admin Libraries badge, which DOES
+     * show the newest row. That is intended: the badge answers "what happened last",
+     * this answers "is it safe to start another scan", and only the second may gate a
+     * write. {@see self::startRunningIfIdle()} re-asserts the same predicate inside the
+     * INSERT, so this is a cheap early message, not the guarantee.
+     *
+     * @param string $libraryId Target library UUID.
+     *
+     * @return bool TRUE when the library has at least one `queued`/`running` job.
+     *
+     * @since 0.36.0 (S150)
+     */
+    public function hasActiveJobForLibrary(string $libraryId): bool
+    {
+        $rows = $this->db->query(
+            "SELECT id FROM library_scan_jobs WHERE library_id = ? AND status IN ('queued', 'running') LIMIT 1",
+            [$libraryId],
+        );
+
+        return is_array($rows) && $rows !== [];
+    }
+
+    /**
+     * Guard a caller-supplied job type against the ENUM allowlist.
+     *
+     * @param string $type Candidate job type.
+     *
+     * @throws InvalidArgumentException When `$type` is not one of
+     *                                  {@see self::ALLOWED_TYPES}.
+     */
+    private function assertAllowedType(string $type): void
+    {
+        if (!in_array($type, self::ALLOWED_TYPES, true)) {
+            throw new InvalidArgumentException(
+                sprintf('Invalid scan-job type "%s"; expected one of: %s', $type, implode(', ', self::ALLOWED_TYPES)),
+            );
+        }
+    }
+
+    /**
+     * Whether a thrown database error is an InnoDB deadlock / lock-wait timeout, i.e.
+     * one where re-running the SAME statement is expected to succeed.
+     *
+     * 1213 `ER_LOCK_DEADLOCK` (SQLSTATE 40001) and 1205 `ER_LOCK_WAIT_TIMEOUT` are the
+     * only two errors InnoDB raises that mean "your transaction was rolled back, try
+     * again"; every other error is a real fault and must propagate. The match is on the
+     * message text as well as the code because the connection wraps PDO and rethrows
+     * with the driver code in either position depending on the failure path.
+     *
+     * @param \Throwable $e The error thrown by the INSERT.
+     *
+     * @return bool TRUE when one retry is warranted.
+     */
+    private function isRetryableLockError(\Throwable $e): bool
+    {
+        $message = $e->getMessage();
+        if (str_contains($message, '1213') || str_contains($message, '1205')) {
+            return true;
+        }
+
+        return stripos($message, 'deadlock') !== false
+            || stripos($message, 'lock wait timeout') !== false
+            || stripos($message, 'try restarting transaction') !== false;
+    }
+
+    /**
      * Atomically claim the oldest `queued` job and move it to `running`.
      *
      * Picks the oldest queued job id (by `queued_at`), then issues a
@@ -399,19 +631,32 @@ class ScanJobRepository
      * Fail every job still marked `running`, stamping the error + `completed_at`.
      *
      * The single `count:1` {@see LibraryScanWorker} is the only consumer of this
-     * queue and drains one job at a time, so on a fresh worker start NO job can
-     * legitimately be `running` — any such row is orphaned by a restart/crash of
-     * the process that owned it and would otherwise sit `running` forever (and
-     * keep a UI spinner alive). Call this once at worker startup to reap them.
+     * QUEUE and drains one job at a time. A row it did not claim would otherwise sit
+     * `running` forever after a restart/crash of the process that owned it, keeping a
+     * UI spinner alive. Call this once at worker startup to reap them.
      *
-     * ⚠ **UNSCOPED BY DESIGN, AND ONLY SAFE FROM THAT ONE CALL SITE (S96(c)).** There
-     * is no `library_id` filter and no age guard: this fails EVERY `running` row in
-     * the table. Calling it from anywhere that is not a single-consumer worker's
+     * ⚠ **UNSCOPED BY DESIGN. IT IS NO LONGER TRUE THAT EVERY `running` ROW AT WORKER
+     * BOOT IS ORPHANED (S150/S151).** This docblock previously said the `count:1`
+     * invariant made a live `running` row impossible on a fresh start. S150 falsified
+     * that: {@see self::startRunning()} lets `php bin/phlix library:scan` insert a
+     * `running` row for a scan it executes IN ITS OWN PROCESS, which the worker never
+     * claims and knows nothing about. A `phlix-server` restart during such a scan
+     * reaps a row whose scan is still running. Consequences, both real:
+     *
+     *   * the badge says `failed` while the scan is healthy — and it is then NOT
+     *     re-corrected until the CLI finishes and `markCompleted()` overwrites it;
+     *   * {@see self::hasActiveJobForLibrary()} reports the library idle, so a second
+     *     CLI scan (or an admin-UI "Scan", which has no active-job check at all) can
+     *     start a genuinely concurrent scan over the same library.
+     *
+     * There is no `library_id` filter and no age guard: this fails EVERY `running` row
+     * in the table. Calling it from anywhere that is not a single-consumer worker's
      * startup — an HTTP handler, a second concurrently-draining worker process, a
      * `count > 1` fork — fails a job that IS still running, while its scan carries on
      * unaware (nothing re-reads the job row mid-scan). {@see LibraryScanWorker::start()}
-     * documents the exact invariant this rests on and why an age guard was rejected
-     * rather than added.
+     * documents why an age guard was rejected rather than added. Bounding the radius
+     * correctly needs per-job worker ownership (an owner id / heartbeat column), which
+     * is a schema change outside S150/S151.
      *
      * @param string $error Failure message stored on each reaped row.
      *

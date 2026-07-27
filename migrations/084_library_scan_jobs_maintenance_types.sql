@@ -51,10 +51,20 @@
 --     ENUM comment always implied. **Today's fast `rescan` is the thing that is
 --     wrong** — the slowdown below is the promise being kept, not a regression.
 --
--- ⚠ COST: a music `rescan` goes from MINUTES to roughly 3.5 HOURS (measured
---    basis: 61,111 tracks on the production library, every one opened and
---    tag-read). It is interruptible and idempotent — the scanner flushes per
---    album and stamps only files it actually read — so re-running continues.
+-- ⚠ COST: a music `rescan` goes from MINUTES to HOURS (61,111 tracks on the
+--    production library, every one opened and tag-read). It is interruptible and
+--    idempotent — the scanner flushes per album and stamps only files it actually
+--    read — so re-running continues.
+--
+--    🔴 CORRECTION (S151, 2026-07-27). This line used to say "roughly 3.5 HOURS
+--    (measured basis: …)". That was an ESTIMATE presented as a MEASUREMENT, and
+--    it was wrong. The last *completed* music rescan of the production library
+--    (job `d8e21a1b`, 2026-07-25) took **9 h 55 m** of wall clock; earlier full
+--    walks of the same library recorded 5:20, 3:29 and 2:22. S151 removes what
+--    was then measured to be the DOMINANT cost — a per-file existence lookup
+--    that examined 48,512 rows instead of 1, 61,122 times per scan — so the
+--    figure is expected to fall sharply. **That reduction is UNMEASURED**: no
+--    post-S151 rescan has been timed, so no new duration is stated here.
 --    It is also the ONLY operation that repairs a track filed under the wrong
 --    album/artist after a retag, because the incremental skip fires before the
 --    file is opened. Use `scan` for an incremental refresh.

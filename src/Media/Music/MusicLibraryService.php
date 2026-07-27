@@ -1179,12 +1179,19 @@ class MusicLibraryService
      * reachable through S96(e)), and a renderer that is promised N children and
      * handed N-1 is a renderer that shows an error.
      *
-     * ⚠ This count is UNBOUNDED and is therefore not, on its own, the number a
-     * renderer may be promised: {@see getArtistMediaItemIds()} stops at
-     * {@see MAX_EMBEDDED_ROWS}. {@see \Phlix\Dlna\LibraryBridge} clamps this value
-     * to that constant before advertising it, and documents the artists beyond it
-     * as unreachable over DLNA. Any other caller that pairs this count with a
-     * bounded listing must clamp it the same way.
+     * ⚠ This count is UNBOUNDED, and since S147 that is exactly what a renderer
+     * is promised: {@see \Phlix\Dlna\LibraryBridge} advertises it verbatim and no
+     * longer clamps it. The clamp was correct only while the Audio root had no
+     * offset path — S97 added it so the advertised number stopped lying about a
+     * listing that stopped dead at {@see MAX_EMBEDDED_ROWS}. S147 removed the
+     * bound instead: {@see getArtistMediaItemIds()} takes an `$offset`,
+     * {@see \Phlix\Dlna\LibraryBridge::getLibraryItems()} threads DLNA's
+     * `StartingIndex` into it, and every artist is reachable by paging.
+     * {@see MAX_EMBEDDED_ROWS} is now a PAGE size, not a ceiling on the set.
+     *
+     * A caller that pairs this count with a listing it cannot page (one that
+     * truncates in PHP, say) still owes the reader an explanation — but there is
+     * no such caller today.
      *
      * @return int Number of artists a `media_items`-backed browse can show.
      */
@@ -1226,12 +1233,16 @@ class MusicLibraryService
      *
      * @param string $artistMediaItemId The artist's `media_items` UUID.
      * @param int $limit Clamped to `[1, self::MAX_EMBEDDED_ROWS]`.
+     * @param int $offset Page offset (negative offsets are clamped to 0). The
+     *        `ORDER BY` ends in `al.id`, the PRIMARY KEY, so it is a TOTAL order
+     *        and paging with this offset can neither drop nor repeat a row.
      * @return list<string> Album `media_items` UUIDs (albums whose own mint failed
      *         are absent — there is no `media_items` row to browse to).
      */
     public function getAlbumMediaItemIdsForArtist(
         string $artistMediaItemId,
-        int $limit = self::MAX_EMBEDDED_ROWS
+        int $limit = self::MAX_EMBEDDED_ROWS,
+        int $offset = 0
     ): array {
         if ($artistMediaItemId === '') {
             return [];
@@ -1243,8 +1254,34 @@ class MusicLibraryService
                JOIN music_artists ar ON ar.id = al.artist_id
               WHERE ar.media_item_id = ? AND al.media_item_id IS NOT NULL
               ORDER BY al.year IS NULL, al.year, COALESCE(al.sort_title, al.title), al.id
-              LIMIT ?",
-            [$artistMediaItemId, $this->clampRowLimit($limit)]
+              LIMIT ? OFFSET ?",
+            [$artistMediaItemId, $this->clampRowLimit($limit), max(0, $offset)]
+        ));
+    }
+
+    /**
+     * Counts one artist's browsable albums — the {@see getAlbumMediaItemIdsForArtist()}
+     * predicate, unbounded.
+     *
+     * The DLNA drill-down advertises this as `TotalMatches`, so it MUST share the
+     * listing's predicate exactly (`al.media_item_id IS NOT NULL`); an album whose
+     * `media_items` mint failed is not browsable and must not be promised.
+     *
+     * @param string $artistMediaItemId The artist's `media_items` UUID.
+     * @return int Number of albums a `media_items`-backed browse can show.
+     */
+    public function countAlbumMediaItemsForArtist(string $artistMediaItemId): int
+    {
+        if ($artistMediaItemId === '') {
+            return 0;
+        }
+
+        return $this->firstCount($this->db->query(
+            "SELECT COUNT(*) AS cnt
+               FROM music_albums al
+               JOIN music_artists ar ON ar.id = al.artist_id
+              WHERE ar.media_item_id = ? AND al.media_item_id IS NOT NULL",
+            [$artistMediaItemId]
         ));
     }
 
@@ -1257,11 +1294,15 @@ class MusicLibraryService
      *
      * @param string $albumMediaItemId The album's `media_items` UUID.
      * @param int $limit Clamped to `[1, self::MAX_EMBEDDED_ROWS]`.
+     * @param int $offset Page offset (negative offsets are clamped to 0). The
+     *        `ORDER BY` ends in `t.id`, the PRIMARY KEY, so it is a TOTAL order
+     *        and paging with this offset can neither drop nor repeat a row.
      * @return list<string> Track `media_items` UUIDs in playback order.
      */
     public function getTrackMediaItemIdsForAlbum(
         string $albumMediaItemId,
-        int $limit = self::MAX_EMBEDDED_ROWS
+        int $limit = self::MAX_EMBEDDED_ROWS,
+        int $offset = 0
     ): array {
         if ($albumMediaItemId === '') {
             return [];
@@ -1273,8 +1314,30 @@ class MusicLibraryService
                JOIN music_albums al ON al.id = t.album_id
               WHERE al.media_item_id = ?
               ORDER BY t.disc_number, t.track_number, t.id
-              LIMIT ?",
-            [$albumMediaItemId, $this->clampRowLimit($limit)]
+              LIMIT ? OFFSET ?",
+            [$albumMediaItemId, $this->clampRowLimit($limit), max(0, $offset)]
+        ));
+    }
+
+    /**
+     * Counts one album's tracks — the {@see getTrackMediaItemIdsForAlbum()}
+     * predicate, unbounded.
+     *
+     * @param string $albumMediaItemId The album's `media_items` UUID.
+     * @return int Number of tracks on the album.
+     */
+    public function countTrackMediaItemsForAlbum(string $albumMediaItemId): int
+    {
+        if ($albumMediaItemId === '') {
+            return 0;
+        }
+
+        return $this->firstCount($this->db->query(
+            "SELECT COUNT(*) AS cnt
+               FROM music_tracks t
+               JOIN music_albums al ON al.id = t.album_id
+              WHERE al.media_item_id = ?",
+            [$albumMediaItemId]
         ));
     }
 

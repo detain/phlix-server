@@ -365,6 +365,21 @@ class ContentDirectory
     /**
      * Browse direct children of a container.
      *
+     * ⚠ **`StartingIndex` is resolved in SQL, not by slicing here (S147).** This
+     * method used to fetch the container's children, count THAT list into
+     * `TotalMatches`, and `array_slice()` it — but the list it was slicing was
+     * already truncated upstream (`getAllByType()`'s `LIMIT 100`, or the music
+     * reader's row cap), so every `StartingIndex` past the truncation point
+     * returned an empty page while `TotalMatches` still advertised the whole
+     * container. `getChildren()` now asks for exactly the requested window and
+     * `TotalMatches` comes from a separate COUNT that shares the listing's
+     * predicate, so the two agree at every index.
+     *
+     * `SortCriteria` re-orders WITHIN the returned page. It did before too (it
+     * ran on the truncated list), and honouring it globally means pushing it into
+     * every listing's `ORDER BY` — a distinct piece of work, deliberately not
+     * folded in here. No renderer this server has been driven by sends one.
+     *
      * @return array<string, mixed>
      */
     private function browseChildren(
@@ -374,18 +389,15 @@ class ContentDirectory
         int $requestedCount,
         string $sortCriteria
     ): array {
-        // Get children based on object ID type
-        $children = $this->getChildren($objectId);
+        // Get the requested WINDOW of children, resolved by the data layer.
+        $resultItems = $this->getChildren($objectId, $startingIndex, $requestedCount);
 
         // Sort if needed
         if (!empty($sortCriteria)) {
-            $children = $this->sortItems($children, $sortCriteria);
+            $resultItems = $this->sortItems($resultItems, $sortCriteria);
         }
 
-        $this->totalMatches = count($children);
-
-        // Apply pagination
-        $resultItems = array_slice($children, $startingIndex, $requestedCount > 0 ? $requestedCount : null);
+        $this->totalMatches = $this->getChildCount($objectId);
 
         $didl = $this->generateDidl($resultItems);
 
@@ -398,11 +410,33 @@ class ContentDirectory
     }
 
     /**
+     * Total number of children of a container — the `TotalMatches` a renderer
+     * needs in order to know a second page exists.
+     *
+     * @return int
+     */
+    private function getChildCount(string $objectId): int
+    {
+        if ($this->libraryBridge !== null) {
+            $resolved = $this->resolveObjectId($objectId);
+            $resolvedType = is_string($resolved['type'] ?? null) ? $resolved['type'] : null;
+
+            return $this->libraryBridge->getContainerChildCount($objectId, $resolvedType);
+        }
+
+        return count($this->bridgelessChildren($objectId));
+    }
+
+    /**
      * Get children of a container.
      *
+     * @param string $objectId The container to list.
+     * @param int $startingIndex DLNA `StartingIndex`.
+     * @param int $requestedCount DLNA `RequestedCount`; 0 means "as many as you
+     *        can", which the bridge answers with {@see LibraryBridge::MAX_PAGE_ROWS}.
      * @return array<int, array<string, mixed>>
      */
-    private function getChildren(string $objectId): array
+    private function getChildren(string $objectId, int $startingIndex = 0, int $requestedCount = 0): array
     {
         // Use LibraryBridge if available for real data.
         //
@@ -416,7 +450,12 @@ class ContentDirectory
             $resolved = $this->resolveObjectId($objectId);
             $resolvedType = is_string($resolved['type'] ?? null) ? $resolved['type'] : null;
 
-            return $this->libraryBridge->getContainerChildren($objectId, $resolvedType);
+            return $this->libraryBridge->getContainerChildren(
+                $objectId,
+                $resolvedType,
+                max(0, $startingIndex),
+                $requestedCount > 0 ? $requestedCount : LibraryBridge::MAX_PAGE_ROWS
+            );
         }
 
         // NOTE: two placeholder branches used to sit here, dispatching to
@@ -431,7 +470,23 @@ class ContentDirectory
         // discard it. Bridge-less callers now fall through to real container
         // resolution below.
 
-        // Handle item-based containers
+        // Handle item-based containers. This is the BRIDGE-LESS path only —
+        // tests and any caller that builds a ContentDirectory directly — and it
+        // keeps the in-PHP window because there is no paging primitive behind it
+        // and nothing here is production-scale. Behaviour is byte-identical to
+        // what browseChildren() used to do for it.
+        $children = $this->bridgelessChildren($objectId);
+
+        return array_slice($children, max(0, $startingIndex), $requestedCount > 0 ? $requestedCount : null);
+    }
+
+    /**
+     * Children of a container when NO {@see LibraryBridge} is wired.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    private function bridgelessChildren(string $objectId): array
+    {
         $item = $this->resolveObjectId($objectId);
         if ($item !== null && ($item['type'] ?? '') === 'container') {
             $parentId = $item['id'] ?? '';

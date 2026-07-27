@@ -221,8 +221,18 @@ class LibraryBridge
      * ONE source for both the advertised `childCount` and the offset arithmetic
      * of the listing. That is the whole mechanism by which "advertised count and
      * deliverable list agree at every StartingIndex" holds: the listing walks
-     * this very map to decide which type a global offset lands in, so the two can
-     * only disagree if a row is written between the two statements.
+     * this very map to decide which type a global offset lands in.
+     *
+     * ⚠ **Resolve it ONCE per `Browse` — {@see browsePage()} is why that method
+     * exists.** While `ContentDirectory` fetched the page and the count through
+     * two separate entry points, this ran twice per request (six `countAllByType()`
+     * for one Video-root browse, instrumented 2026-07-27) and the two evaluations
+     * could disagree whenever a row was written between them — not a theoretical
+     * window on an estate that has a library scan in flight much of the time.
+     * `browsePage()` spends one map on both, so on the browse path they cannot
+     * disagree at all. {@see getLibraryChildCount()} and {@see getLibraryItems()}
+     * remain independent entry points for callers that want only one of the two
+     * (`getRootContainers()` wants only the count).
      *
      * @param string $libraryType One of {@see CATEGORY_TYPES}'s keys.
      * @return array<string, int> `media_items.type` => row count, insertion-ordered.
@@ -380,6 +390,59 @@ class LibraryBridge
     }
 
     /**
+     * ONE page of a container **and** the container's total, resolved together.
+     *
+     * ⚠ **The pairing is the point, not a convenience.** `browseChildren()` used
+     * to call {@see getContainerChildren()} and {@see getContainerChildCount()}
+     * separately, and on a root category BOTH of them end in
+     * {@see categoryTypeCounts()} — so a single `Browse` of the Video root issued
+     * `countAllByType()` **six** times (movie, series, video, twice over,
+     * instrumented 2026-07-27) where three do the work. Worse, the two calls
+     * resolved the counts at two different instants, so a row written between
+     * them made the advertised `TotalMatches` disagree with the offsets the
+     * listing had already spent — and on this estate a scan is in flight much of
+     * the time, which is exactly the window {@see categoryTypeCounts()}'s own
+     * docblock warns about. Resolving both from one map closes it.
+     *
+     * @param string $objectId The container to page.
+     * @param string|null $objectType Its already-resolved `media_items.type`, if
+     *        the caller has one; NULL costs one `findById()`, exactly as in
+     *        {@see getContainerChildren()}.
+     * @param int $offset DLNA `StartingIndex`.
+     * @param int $limit DLNA `RequestedCount`, clamped to `[1, MAX_PAGE_ROWS]`.
+     * @return array{items: array<int, array<string, mixed>>, total: int} The
+     *         requested window and the container's TRUE total.
+     */
+    public function browsePage(
+        string $objectId,
+        ?string $objectType = null,
+        int $offset = 0,
+        int $limit = self::MAX_PAGE_ROWS
+    ): array {
+        if (strpos($objectId, 'library-') === 0) {
+            // Resolved ONCE and spent twice — see the warning above.
+            $counts = $this->categoryTypeCounts(substr($objectId, 8));
+
+            return [
+                'items' => $this->itemsFromTypeCounts(
+                    $counts,
+                    max(0, $offset),
+                    min(max(1, $limit), self::MAX_PAGE_ROWS)
+                ),
+                'total' => array_sum($counts),
+            ];
+        }
+
+        // Resolved once here so neither call below pays for a second findById().
+        $resolvedType = $objectId === '' ? '' : $this->resolveContainerType($objectId, $objectType);
+
+        return [
+            'items' => $this->getContainerChildren($objectId, $resolvedType, $offset, $limit),
+            'total' => $this->getContainerChildCount($objectId, $resolvedType),
+        ];
+    }
+
+    /**
      * The container's `media_items.type`, using the caller's value when it has
      * one and only then paying for a `findById()`.
      *
@@ -525,11 +588,31 @@ class LibraryBridge
      */
     private function getLibraryItems(string $libraryType, int $offset = 0, int $limit = self::MAX_PAGE_ROWS): array
     {
-        $skip = max(0, $offset);
-        $remaining = min(max(1, $limit), self::MAX_PAGE_ROWS);
+        return $this->itemsFromTypeCounts(
+            $this->categoryTypeCounts($libraryType),
+            max(0, $offset),
+            min(max(1, $limit), self::MAX_PAGE_ROWS)
+        );
+    }
 
+    /**
+     * The offset walk of {@see getLibraryItems()}, driven by a counts map the
+     * caller already has.
+     *
+     * Split out so {@see browsePage()} can spend ONE {@see categoryTypeCounts()}
+     * result on both the listing and the advertised total instead of resolving
+     * the counts twice per `Browse`.
+     *
+     * @param array<string, int> $counts `media_items.type` => row count, in the
+     *        order the category concatenates them.
+     * @param int $skip Rows to skip, already clamped to `>= 0`.
+     * @param int $remaining Page size, already clamped to `[1, MAX_PAGE_ROWS]`.
+     * @return array<int, array<string, mixed>>
+     */
+    private function itemsFromTypeCounts(array $counts, int $skip, int $remaining): array
+    {
         $objects = [];
-        foreach ($this->categoryTypeCounts($libraryType) as $type => $available) {
+        foreach ($counts as $type => $available) {
             if ($remaining <= 0) {
                 break;
             }

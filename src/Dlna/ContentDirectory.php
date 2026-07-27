@@ -375,10 +375,41 @@ class ContentDirectory
      * `TotalMatches` comes from a separate COUNT that shares the listing's
      * predicate, so the two agree at every index.
      *
-     * `SortCriteria` re-orders WITHIN the returned page. It did before too (it
-     * ran on the truncated list), and honouring it globally means pushing it into
-     * every listing's `ORDER BY` — a distinct piece of work, deliberately not
-     * folded in here. No renderer this server has been driven by sends one.
+     * ## What `SortCriteria` is and is NOT guaranteed to do
+     *
+     * Measured, not assumed — an earlier revision of this docblock claimed the
+     * sort behaviour was unchanged by S147 and that was **false for containers
+     * smaller than the old truncation bound**. Master's order was sort → slice,
+     * so for a container that fitted inside the pre-S147 fetch the WHOLE
+     * container was sorted before the window was taken; the first revision of
+     * S147 took the window first and sorted only that page, which on a 20-child
+     * Video root with `RequestedCount 5` and `-dc:title` returned the five
+     * alphabetically LOWEST titles reversed instead of the five highest.
+     *
+     * What holds now:
+     *
+     *  - **Container of at most {@see LibraryBridge::MAX_PAGE_ROWS} children:**
+     *    the sort is GLOBAL. Every child is fetched, sorted, and only then
+     *    windowed, so the criteria decides *which* rows the page contains. That
+     *    is master's semantics restored, and it holds for a strictly wider set of
+     *    containers than master ever managed — master sorted a list already cut
+     *    at `getAllByType()`'s `LIMIT 100` **per type**, so a 150-movie root was
+     *    sorted with 50 movies missing.
+     *  - **Container larger than that:** the sort applies WITHIN the returned
+     *    page only, and `StartingIndex` still selects the rows in the listing's
+     *    own order. Making it global there means carrying the sort key into every
+     *    listing's `ORDER BY` **and** merging across a category's
+     *    {@see LibraryBridge::CATEGORY_TYPES} members, because a root is the
+     *    CONCATENATION of its types — sorting each type's SQL and concatenating
+     *    yields movies-desc-then-series-desc, which is not a globally sorted page.
+     *    That is a distinct piece of work; it is not folded in here, and no
+     *    renderer this server has been driven by sends a `SortCriteria` at all.
+     *
+     * ⚠ Cost, stated rather than hidden: a sorted browse of a container LARGER
+     * than one page resolves the data layer twice — once to learn it does not
+     * fit, once for the real window. Only that combination pays it; the unsorted
+     * path (every browse this server has actually served) resolves once, which is
+     * itself a halving of what it cost before this round.
      *
      * @return array<string, mixed>
      */
@@ -389,42 +420,87 @@ class ContentDirectory
         int $requestedCount,
         string $sortCriteria
     ): array {
-        // Get the requested WINDOW of children, resolved by the data layer.
-        $resultItems = $this->getChildren($objectId, $startingIndex, $requestedCount);
+        $startingIndex = max(0, $startingIndex);
 
-        // Sort if needed
-        if (!empty($sortCriteria)) {
-            $resultItems = $this->sortItems($resultItems, $sortCriteria);
+        if ($sortCriteria === '') {
+            // One window, one count, one categoryTypeCounts() — see childPage().
+            $page = $this->childPage($objectId, $startingIndex, $requestedCount);
+
+            return $this->childrenResult($page['items'], $page['total']);
         }
 
-        $this->totalMatches = $this->getChildCount($objectId);
+        // Sorted: take the whole container FIRST when it fits in one page, so the
+        // criteria selects which rows the window contains rather than merely how
+        // the window is arranged.
+        $whole = $this->childPage($objectId, 0, LibraryBridge::MAX_PAGE_ROWS);
+        if ($whole['total'] <= LibraryBridge::MAX_PAGE_ROWS) {
+            $sorted = $this->sortItems($whole['items'], $sortCriteria);
 
-        $didl = $this->generateDidl($resultItems);
+            return $this->childrenResult(
+                array_slice($sorted, $startingIndex, $requestedCount > 0 ? $requestedCount : null),
+                $whole['total']
+            );
+        }
+
+        // Past one page a global sort is not expressible here (see the docblock).
+        // The container stays PAGEABLE, which matters more: sorting the page is a
+        // residual wrong, returning empty pages past row 2,000 is the S97 defect.
+        $page = $this->childPage($objectId, $startingIndex, $requestedCount);
+
+        return $this->childrenResult($this->sortItems($page['items'], $sortCriteria), $page['total']);
+    }
+
+    /**
+     * One page of a container together with the container's TOTAL, resolved in a
+     * single pass over the data layer.
+     *
+     * @param string $objectId The container to page.
+     * @param int $startingIndex DLNA `StartingIndex`.
+     * @param int $requestedCount DLNA `RequestedCount`; 0 means "as many as you
+     *        can", answered with {@see LibraryBridge::MAX_PAGE_ROWS}.
+     * @return array{items: array<int, array<string, mixed>>, total: int}
+     */
+    private function childPage(string $objectId, int $startingIndex, int $requestedCount): array
+    {
+        if ($this->libraryBridge !== null) {
+            // The object's type is handed over rather than re-discovered:
+            // `browse()` has ALREADY resolved and cached this row in order to
+            // choose BrowseMetadata vs BrowseDirectChildren.
+            $resolved = $this->resolveObjectId($objectId);
+            $resolvedType = is_string($resolved['type'] ?? null) ? $resolved['type'] : null;
+
+            return $this->libraryBridge->browsePage(
+                $objectId,
+                $resolvedType,
+                max(0, $startingIndex),
+                $requestedCount > 0 ? $requestedCount : LibraryBridge::MAX_PAGE_ROWS
+            );
+        }
 
         return [
-            'Result' => $didl,
-            'NumberReturned' => count($resultItems),
-            'TotalMatches' => $this->totalMatches,
-            'UpdateID' => $this->systemUpdateId,
+            'items' => $this->getChildren($objectId, $startingIndex, $requestedCount),
+            'total' => $this->bridgelessChildCount($objectId),
         ];
     }
 
     /**
-     * Total number of children of a container — the `TotalMatches` a renderer
-     * needs in order to know a second page exists.
+     * The `Browse` envelope, so the two windowing branches above cannot drift
+     * apart on what they report.
      *
-     * @return int
+     * @param array<int, array<string, mixed>> $items The page being returned.
+     * @param int $total The container's total child count.
+     * @return array<string, mixed>
      */
-    private function getChildCount(string $objectId): int
+    private function childrenResult(array $items, int $total): array
     {
-        if ($this->libraryBridge !== null) {
-            $resolved = $this->resolveObjectId($objectId);
-            $resolvedType = is_string($resolved['type'] ?? null) ? $resolved['type'] : null;
+        $this->totalMatches = $total;
 
-            return $this->libraryBridge->getContainerChildCount($objectId, $resolvedType);
-        }
-
-        return count($this->bridgelessChildren($objectId));
+        return [
+            'Result' => $this->generateDidl($items),
+            'NumberReturned' => count($items),
+            'TotalMatches' => $total,
+            'UpdateID' => $this->systemUpdateId,
+        ];
     }
 
     /**
@@ -487,13 +563,44 @@ class ContentDirectory
      */
     private function bridgelessChildren(string $objectId): array
     {
+        $parentId = $this->bridgelessParentId($objectId);
+
+        return $parentId === null ? [] : $this->itemRepository->findByParent($parentId);
+    }
+
+    /**
+     * `TotalMatches` for the bridge-less path — a COUNT, not the length of a
+     * second copy of the list.
+     *
+     * This used to be `count($this->bridgelessChildren($objectId))`, which
+     * materialised the whole (unbounded) child list a second time purely to
+     * measure it, immediately after `getChildren()` had already built it. It
+     * shares `bridgelessChildren()`'s predicate exactly — same container guard,
+     * same `parent_id` — so the promise and the deliverable still agree.
+     */
+    private function bridgelessChildCount(string $objectId): int
+    {
+        $parentId = $this->bridgelessParentId($objectId);
+
+        return $parentId === null ? 0 : $this->itemRepository->countByParent($parentId);
+    }
+
+    /**
+     * The `parent_id` a bridge-less drill-down reads, or NULL when `$objectId` is
+     * not a container at all.
+     *
+     * One definition so the listing and the count above cannot diverge.
+     */
+    private function bridgelessParentId(string $objectId): ?string
+    {
         $item = $this->resolveObjectId($objectId);
-        if ($item !== null && ($item['type'] ?? '') === 'container') {
-            $parentId = $item['id'] ?? '';
-            return $this->itemRepository->findByParent(is_string($parentId) ? $parentId : '');
+        if ($item === null || ($item['type'] ?? '') !== 'container') {
+            return null;
         }
 
-        return [];
+        $parentId = $item['id'] ?? '';
+
+        return is_string($parentId) ? $parentId : '';
     }
 
     /**

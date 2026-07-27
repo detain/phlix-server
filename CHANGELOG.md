@@ -707,6 +707,27 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   total; a real-MySQL test pages a whole container and asserts the concatenated
   pages equal the unpaged listing row for row.
 
+  `SortCriteria` is honoured **globally** for any container that fits in one page
+  (`LibraryBridge::MAX_PAGE_ROWS`, 2,000): the whole container is fetched and sorted
+  before the window is taken, so the criteria decides *which* rows the page contains.
+  The first revision of this change sorted only the page it had already fetched,
+  which on a 20-child Video root with `RequestedCount 5` and `-dc:title` returned the
+  five alphabetically **lowest** titles reversed instead of the five highest — a
+  regression against the previous sort-then-slice behaviour, now pinned by a test.
+  Past 2,000 children the sort still applies within the returned page only; making it
+  global there needs the sort key in every listing's `ORDER BY` **and** a merge across
+  a category's types, and is deliberately left out rather than trading pageability
+  for it.
+
+  One `Browse` now resolves the category counts **once**. Fetching the page and the
+  advertised total went through two entry points that each recomputed them, so a
+  single Video-root browse issued `countAllByType()` six times (`movie, series,
+  video` twice over) — double the COUNTs on an unauthenticated path, and a window in
+  which a row written between the two evaluations made the advertised total disagree
+  with the offsets the listing had already spent. The bridge-less `TotalMatches` is
+  likewise a `countByParent()` now, instead of re-listing the whole container purely
+  to measure it.
+
   DLNA remains **off by default and unauthenticated**, so this is a functional gap
   closed, not a security change.
 

@@ -1099,4 +1099,151 @@ class LibraryBridgeTest extends TestCase
             'each batch must skip findByIds() own tag filter so profile_tags is not queried per chunk'
         );
     }
+
+    /**
+     * S147 fix round — 🔴 REGRESSION PIN: `SortCriteria` must select WHICH rows
+     * the page contains, not merely how the page is arranged.
+     *
+     * The first revision of S147 replaced master's sort → slice with slice →
+     * sort. Measured on exactly this fixture (20-child Video root,
+     * `StartingIndex 0`, `RequestedCount 5`, `-dc:title`) it returned
+     * `movie-04, 03, 02, 01, 00` — the five alphabetically LOWEST titles,
+     * reversed — where master returned the five highest. The container is far
+     * smaller than {@see LibraryBridge::MAX_PAGE_ROWS}, so the whole of it must be
+     * sorted before the window is taken.
+     */
+    public function testASortedBrowseWindowsTheSortedContainerNotTheSortedWindow(): void
+    {
+        $cd = $this->videoRootBrowser(20);
+
+        $result = $cd->browse('library-video', 'BrowseDirectChildren', '*', 0, 5, '-dc:title');
+
+        $this->assertSame(
+            ['movie-19', 'movie-18', 'movie-17', 'movie-16', 'movie-15'],
+            $this->idsFromDidl($result),
+            'a descending title sort must return the five HIGHEST titles. Sorting only the page '
+            . 'returns the five lowest, reversed — which is what this browse did before the fix.'
+        );
+        $this->assertSame(20, $result['TotalMatches'] ?? null);
+        $this->assertSame(5, $result['NumberReturned'] ?? null);
+    }
+
+    /**
+     * The same guarantee on a LATER page: `StartingIndex` must index into the
+     * SORTED container, so consecutive sorted pages tile it in sorted order.
+     */
+    public function testASortedBrowseIsPagedInSortedOrder(): void
+    {
+        $cd = $this->videoRootBrowser(20);
+
+        $this->assertSame(
+            ['movie-14', 'movie-13', 'movie-12', 'movie-11', 'movie-10'],
+            $this->idsFromDidl($cd->browse('library-video', 'BrowseDirectChildren', '*', 5, 5, '-dc:title')),
+            'page two of a descending sort continues the descending order'
+        );
+        $this->assertSame(
+            ['movie-15', 'movie-16', 'movie-17', 'movie-18', 'movie-19'],
+            $this->idsFromDidl($cd->browse('library-video', 'BrowseDirectChildren', '*', 15, 5, '+dc:title')),
+            'and an ascending sort reaches the end of the container'
+        );
+    }
+
+    /**
+     * ⚠ The residual, pinned so it cannot silently become something else: past
+     * {@see LibraryBridge::MAX_PAGE_ROWS} the sort is page-local — but the
+     * container stays PAGEABLE, which is the property S147 exists to deliver. A
+     * "global sort" implemented by refusing to look past row 2,000 would re-create
+     * the S97 defect for every renderer that sends a `SortCriteria`.
+     */
+    public function testASortedBrowseOfAHugeContainerStaysPageable(): void
+    {
+        $cd = $this->videoRootBrowser(6000);
+
+        $result = $cd->browse('library-video', 'BrowseDirectChildren', '*', 5000, 5, '-dc:title');
+
+        $this->assertSame(6000, $result['TotalMatches'] ?? null);
+        $this->assertSame(5, $result['NumberReturned'] ?? null);
+        $this->assertSame(
+            ['movie-5004', 'movie-5003', 'movie-5002', 'movie-5001', 'movie-5000'],
+            $this->idsFromDidl($result),
+            'StartingIndex 5000 must still reach the 5,001st row; the sort applies within the page'
+        );
+    }
+
+    /**
+     * S147 fix round — one `Browse` resolves the category counts ONCE.
+     *
+     * Instrumented before the fix, a single Browse of the Video root ran
+     * `countAllByType()` six times — `movie, series, video, movie, series, video`
+     * — because `ContentDirectory` fetched the page and the total through two
+     * entry points that each ended in `categoryTypeCounts()`. That is double the
+     * COUNTs on an unauthenticated path, and it opens a TOCTOU window between the
+     * number advertised and the offsets the listing spent.
+     */
+    public function testOneBrowseResolvesTheCategoryCountsOnce(): void
+    {
+        $seen = [];
+        $this->itemRepositoryMock->method('countAllByType')
+            ->willReturnCallback(static function (string $type) use (&$seen): int {
+                $seen[] = $type;
+
+                return $type === 'movie' ? 40 : 0;
+            });
+        $this->itemRepositoryMock->method('getAllByType')->willReturn([]);
+
+        $cd = new \Phlix\Dlna\ContentDirectory($this->itemRepositoryMock);
+        $cd->setLibraryBridge($this->bridge);
+
+        $cd->browse('library-video', 'BrowseDirectChildren', '*', 0, 5, '');
+
+        $this->assertSame(
+            ['movie', 'series', 'video'],
+            $seen,
+            'the page and the advertised total must be spent from ONE counts map — six COUNTs here '
+            . 'means the map was resolved twice, at two different instants'
+        );
+    }
+
+    /**
+     * A ContentDirectory driving a Video root of `$rows` movies, with the listing
+     * resolved in SQL exactly as the real repository does it.
+     */
+    private function videoRootBrowser(int $rows): \Phlix\Dlna\ContentDirectory
+    {
+        $this->stubCounts(['movie' => $rows, 'series' => 0, 'video' => 0]);
+        $this->itemRepositoryMock->method('getAllByType')->willReturnCallback(
+            static function (string $type, int $limit, int $offset) use ($rows): array {
+                $items = [];
+                for ($i = $offset; $i < min($offset + $limit, $rows); $i++) {
+                    $items[] = [
+                        'id' => 'movie-' . $i,
+                        // Zero-padded so the lexical order the DLNA sorter uses
+                        // agrees with the numeric order the ids read as.
+                        'name' => sprintf('Title %05d', $i),
+                        'type' => 'movie',
+                        'path' => '',
+                    ];
+                }
+
+                return $items;
+            }
+        );
+
+        $cd = new \Phlix\Dlna\ContentDirectory($this->itemRepositoryMock);
+        $cd->setLibraryBridge($this->bridge);
+
+        return $cd;
+    }
+
+    /**
+     * @param array<string, mixed> $result A `Browse` response.
+     * @return list<string> Object ids, in the order the DIDL lists them.
+     */
+    private function idsFromDidl(array $result): array
+    {
+        $didl = is_string($result['Result'] ?? null) ? $result['Result'] : '';
+        preg_match_all('/<(?:item|container) id="([^"]+)"/', $didl, $matches);
+
+        return $matches[1];
+    }
 }

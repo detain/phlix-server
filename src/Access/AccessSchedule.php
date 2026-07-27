@@ -132,7 +132,11 @@ final class AccessSchedule
         $minutes = (int) ($parts[1] ?? 0);
         $seconds = (int) ($parts[2] ?? 0);
 
-        return ($hours * 3600 + $minutes * 60 + $seconds) / 60;
+        // intdiv, not `/ 60`: this file declares strict_types=1, so any time whose
+        // seconds component is not a multiple of 60 (e.g. "00:10:30") made `/`
+        // yield a float and the `: int` return type raise a TypeError at runtime.
+        // Truncating to whole minutes is what the declared 0-1440 range means.
+        return intdiv($hours * 3600 + $minutes * 60 + $seconds, 60);
     }
 
     /**

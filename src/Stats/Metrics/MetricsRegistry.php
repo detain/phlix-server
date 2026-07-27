@@ -176,6 +176,11 @@ final class MetricsRegistry
                 'histogram'       => $this->emptyHistogram(),
             ];
         }
+        /**
+         * @psalm-suppress UnsupportedPropertyReferenceUsage Psalm cannot model a
+         *   reference taken into an object property. The reference is deliberate:
+         *   the counters below must accumulate into $this->buckets in place.
+         */
         $overall = &$this->buckets[$bucketTs];
         $overall['request_count']++;
         if ($isError) {
@@ -205,6 +210,11 @@ final class MetricsRegistry
                 'duration_ms_max' => 0,
             ];
         }
+        /**
+         * @psalm-suppress UnsupportedPropertyReferenceUsage Psalm cannot model a
+         *   reference taken into an object property. The reference is deliberate:
+         *   the counters below must accumulate into $this->routeBuckets in place.
+         */
         $r = &$this->routeBuckets[$bucketTs][$key];
         $r['request_count']++;
         if ($isError) {

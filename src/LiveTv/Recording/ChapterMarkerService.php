@@ -50,8 +50,11 @@ class ChapterMarkerService
      * EDL format: [start_seconds, end_seconds, type]
      * HLS chapter format: {start, end, title}
      *
-     * @param array<ChapterMarker|array{start_seconds?: int, end_seconds?: int, title?: string|null}> $edlSegments
-     *        Array of EDL segments (either ChapterMarker DTOs or arrays)
+     * @param array<ChapterMarker|array{start_seconds?: int, end_seconds?: int, start?: int, end?: int, title?: string|null}> $edlSegments
+     *        Array of EDL segments (either ChapterMarker DTOs or arrays). The
+     *        short `start`/`end` keys are the legacy spelling the body still
+     *        accepts as a fallback; they were missing from this shape, so the
+     *        documented type contradicted the implementation.
      *
      * @return array<int, array{start: int, end: int, title: string|null}> HLS chapter markers
      *

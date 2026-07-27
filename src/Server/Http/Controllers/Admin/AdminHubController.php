@@ -1016,8 +1016,12 @@ final class AdminHubController
      *     lastSuccessfulHeartbeat: string|null,
      *     consecutiveFailures: int,
      *     enrollmentExpiresAt: string|null,
-     *     isEnrolled: bool
+     *     isEnrolled: bool,
+     *     lastLatencyMs: int|null
      * }
+     *         `lastLatencyMs` is emitted by both sources this method delegates to
+     *         (HubApplication::getHeartbeatStatus() and HubClient::getStatus());
+     *         it was missing from the declared shape.
      */
     private function getHeartbeatStatus(): array
     {

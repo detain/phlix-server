@@ -707,6 +707,9 @@ class DashboardService
             $unitIndex++;
         }
 
-        return round($size, 2) . ' ' . $units[$unitIndex];
+        // `?? 'TB'` is unreachable — the loop guard stops at count($units) - 1 —
+        // but it makes the bound explicit rather than implied, and 'TB' is the
+        // correct label for the largest bucket if it ever were reached.
+        return round($size, 2) . ' ' . ($units[$unitIndex] ?? 'TB');
     }
 }

@@ -329,7 +329,10 @@ class NewsletterGenerator
      *
      * @param int $watchTimeMinutes Total watch time in minutes
      * @param int $newItemsCount Number of new items added
-     * @param array<int, array{media_item_id: string, name: string, play_count: int}> $topMedia Top media items
+     * @param array<int, array{media_item_id: string, name: string, play_count: int, poster_url?: string|null}> $topMedia
+     *        Top media items. `poster_url` is present on every row the caller
+     *        builds; it was absent from this shape, so the only caller was
+     *        passing a type this signature rejected.
      *
      * @return string Plain text email body
      */

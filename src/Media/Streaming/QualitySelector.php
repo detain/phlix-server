@@ -160,9 +160,13 @@ class QualitySelector
      * direct play is possible or if transcoding is required.
      *
      * @param array{
-     *     streams: array<int, array{codec_type: string, codec?: string, width?: int, height?: int, bitrate?: int}>,
+     *     streams: array<int, array{codec_type: string, codec?: string, channels?: int, width?: int, height?: int,
+     *         bitrate?: int}>,
      *     format?: array{format_name?: string}
-     * } $sourceInfo Source media information from probe
+     * } $sourceInfo Source media information from probe. One stream shape is used
+     *   across selectQuality()/getVideoStream()/getAudioStream(): they all receive
+     *   the same probe array, so declaring narrower per-method subsets made each
+     *   hand-off look like a type error.
      * @param string $profileName Device profile name (e.g., 'generic', 'mobile-high')
      * @param array<string, mixed> $options Additional options including:
      *     - 'vendor' (string): Optional hardware vendor hint (e.g., 'nvenc', 'vaapi')
@@ -266,9 +270,11 @@ class QualitySelector
      * constraints to determine compatibility. When clientCapabilities are
      * provided, also verifies the client can decode the audio codec.
      *
-     * @param array{codec_type?: string, codec?: string, width?: int, height?: int, bitrate?: int}|null $videoStream
+     * @param array{codec_type?: string, codec?: string, channels?: int, width?: int, height?: int,
+     *     bitrate?: int}|null $videoStream
      * Video stream info
-     * @param array{codec_type?: string, codec?: string, channels?: int}|null $audioStream Audio stream info
+     * @param array{codec_type?: string, codec?: string, channels?: int, width?: int, height?: int,
+     *     bitrate?: int}|null $audioStream Audio stream info
      * @param array{max_bitrate: int, max_resolution: array<int, int>, direct_play: array<string>,
      *     transcode: array<string>, container: array<string>} $profile Device profile constraints
      * @param ClientCapabilities|null $clientCapabilities Client decoder capabilities (SV-3.3)
@@ -322,11 +328,11 @@ class QualitySelector
     /**
      * Extracts video stream information from source info.
      *
-     * @param array{streams?: array<int, array{codec_type?: string, codec?: string, width?: int, height?: int,
-     *     bitrate?: int}>, format?: array{format_name?: string}} $sourceInfo Source media information
+     * @param array{streams?: array<int, array{codec_type?: string, codec?: string, channels?: int, width?: int,
+     *     height?: int, bitrate?: int}>, format?: array{format_name?: string}} $sourceInfo Source media information
      *
-     * @return array{codec_type?: string, codec?: string, width?: int, height?: int, bitrate?: int}|null First video
-     * stream found or null
+     * @return array{codec_type?: string, codec?: string, channels?: int, width?: int, height?: int,
+     *     bitrate?: int}|null First video stream found or null
      */
     private function getVideoStream(array $sourceInfo): ?array
     {
@@ -341,10 +347,11 @@ class QualitySelector
     /**
      * Extracts audio stream information from source info.
      *
-     * @param array{streams?: array<int, array{codec_type?: string, codec?: string, channels?: int}>,
-     *     format?: array{format_name?: string}} $sourceInfo Source media information
+     * @param array{streams?: array<int, array{codec_type?: string, codec?: string, channels?: int, width?: int,
+     *     height?: int, bitrate?: int}>, format?: array{format_name?: string}} $sourceInfo Source media information
      *
-     * @return array{codec_type?: string, codec?: string, channels?: int}|null First audio stream found or null
+     * @return array{codec_type?: string, codec?: string, channels?: int, width?: int, height?: int,
+     *     bitrate?: int}|null First audio stream found or null
      */
     private function getAudioStream(array $sourceInfo): ?array
     {

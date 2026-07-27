@@ -516,11 +516,29 @@ class AudioScanner extends MediaScanner
 
         return match ($encoding) {
             0 => $data, // ISO-8859-1
-            1 => mb_convert_encoding($data, 'UTF-8', 'UTF-16'), // UTF-16
-            2 => mb_convert_encoding($data, 'UTF-8', 'UTF-16BE'), // UTF-16BE
+            1 => $this->convertToUtf8($data, 'UTF-16'), // UTF-16
+            2 => $this->convertToUtf8($data, 'UTF-16BE'), // UTF-16BE
             3 => $data, // UTF-8
             default => $data,
         };
+    }
+
+    /**
+     * Converts $data to UTF-8, falling back to the input when conversion fails.
+     *
+     * mb_convert_encoding() is typed `string|false`, and decodeId3String() is
+     * declared `: string`, so the false branch has to be handled here rather
+     * than returned to the caller.
+     *
+     * @param string $data         Raw tag bytes
+     * @param string $fromEncoding Source encoding name
+     * @return string UTF-8 text, or $data unchanged when conversion failed
+     */
+    private function convertToUtf8(string $data, string $fromEncoding): string
+    {
+        $converted = mb_convert_encoding($data, 'UTF-8', $fromEncoding);
+
+        return is_string($converted) ? $converted : $data;
     }
 
     /**

@@ -86,6 +86,7 @@ class ThemeRegistry
      *         css: string,
      *         js?: string,
      *         thumbnail?: string,
+     *         version?: string,
      *         dark?: bool
      *     }
      * } $pluginManifest The parsed plugin manifest array

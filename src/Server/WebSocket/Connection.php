@@ -211,6 +211,12 @@ class Connection implements ConnectionInterface
      * emitted as ping frames.
      *
      * @return void
+     *
+     * @psalm-suppress UndefinedPropertyAssignment `websocketType` is a genuine
+     *   Workerman dynamic property, not a typo: the framework sets and restores
+     *   it exactly this way in vendor/workerman/workerman/src/Protocols/Websocket.php
+     *   (lines 188-200). TcpConnection simply does not declare it, so no static
+     *   analyser can see it.
      */
     public function ping(): void
     {

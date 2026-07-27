@@ -143,6 +143,11 @@ final class PooledMySQLConnection extends Connection
      * @param array<int|string, mixed>|null  $params
      * @param int                            $fetchmode
      * @return mixed
+     *
+     * @psalm-suppress LessSpecificImplementedReturnType The parent docblock claims
+     *   `array`, but Connection::row() returns PDOStatement::fetch(), which yields
+     *   `false` when there is no row. `mixed` is the honest type; narrowing it to
+     *   match the parent would hide that falsy result from every caller.
      */
     public function row($query = '', $params = null, $fetchmode = \PDO::FETCH_ASSOC)
     {
@@ -156,6 +161,10 @@ final class PooledMySQLConnection extends Connection
      * @param string                        $query
      * @param array<int|string, mixed>|null  $params
      * @return mixed
+     *
+     * @psalm-suppress LessSpecificImplementedReturnType The parent docblock claims
+     *   `string`, but Connection::single() returns PDOStatement::fetchColumn(),
+     *   which yields `false` when there is no row. `mixed` is the honest type.
      */
     public function single($query = '', $params = null)
     {
@@ -169,6 +178,10 @@ final class PooledMySQLConnection extends Connection
      * @param string                        $query
      * @param array<int|string, mixed>|null  $params
      * @return mixed
+     *
+     * @psalm-suppress LessSpecificImplementedReturnType The parent docblock claims
+     *   `array`, but the pooled lease can also surface a non-array result. `mixed`
+     *   is the honest type; see row()/single() above for the same reasoning.
      */
     public function column($query = '', $params = null)
     {

@@ -53,6 +53,7 @@ class SubtitleBurner
      *     streams?: array<int, array{
      *         index?: int|string,
      *         codec_type?: string,
+     *         codec_name?: string,
      *         tags?: array<string, string>
      *     }>
      * } $probe_result ffprobe JSON result

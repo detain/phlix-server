@@ -74,7 +74,10 @@ class LocalNfoProvider implements MetadataProviderInterface
      *
      * @param string $query Ignored
      * @param array<string, mixed> $options Ignored
-     * @return array<int, mixed> Always empty - use getDetails() with file path
+     * @return array<int, array{id: string, title: string, overview?: string, poster_path?: string}>
+     *         Always empty - use getDetails() with file path. Typed to match
+     *         MetadataProviderInterface::search() rather than the wider
+     *         `array<int, mixed>` an override is not allowed to return.
      */
     public function search(string $query, array $options = []): array
     {

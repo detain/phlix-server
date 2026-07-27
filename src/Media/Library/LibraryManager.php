@@ -661,7 +661,10 @@ class LibraryManager
             $total,
             $onProgress
         ): void {
-            unset($totalInPath);
+            // $totalInPath is intentionally unused: the callback signature is fixed
+            // by the scanner's contract, and $total (the whole-run total) is what
+            // gets reported. It used to be `unset()` here, which psalm reads as a
+            // reference to an undefined variable.
             // Offset the path-local counters by everything already scanned, exactly
             // as $base offsets $processedInPath.
             $live = [

@@ -108,7 +108,10 @@ final class DbOidcStateStore implements OidcStateStore
      *
      * @param string $state State value to consume
      *
-     * @return array{code_verifier: string, nonce: string}|null
+     * @return array{code_verifier: string, nonce: string, context?: array<string, mixed>}|null
+     *         `context` is passed straight through from fetchAndDelete(); it was
+     *         missing from this shape, so the declared type contradicted what the
+     *         method returns.
      */
     public function consume(string $state): ?array
     {

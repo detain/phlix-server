@@ -139,7 +139,8 @@ class DashStreamer
      *     width?: int,
      *     height?: int,
      *     content_type?: string,
-     *     sample_rate?: int
+     *     sample_rate?: int,
+     *     min_buffer_time?: string
      * } $params Adaptation set parameters
      *
      * @return string MPD manifest content for the adaptation set

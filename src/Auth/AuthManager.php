@@ -446,7 +446,10 @@ class AuthManager
             return;
         }
 
-        $record = &self::$rateLimitStore[$ip];
+        // Read-only copy: nothing below writes through $record (the cleanup
+        // unsets the store entry directly), so the reference this used to take
+        // was not load-bearing.
+        $record = self::$rateLimitStore[$ip];
 
         // Clean up expired records
         if ($record['reset_at'] <= $now) {
@@ -487,6 +490,12 @@ class AuthManager
             ];
         }
 
+        // The reference IS load-bearing here — the window reset and the
+        // ++ below must write back into the static store.
+        /**
+         * @psalm-suppress UnsupportedPropertyReferenceUsage Psalm cannot model a
+         *   reference taken into a static property; the code is correct.
+         */
         $record = &self::$rateLimitStore[$ip];
 
         // Reset if window has expired

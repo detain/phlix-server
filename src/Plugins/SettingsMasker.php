@@ -126,14 +126,26 @@ final class SettingsMasker
      * @param InstalledPlugin $plugin Installed plugin whose manifest to project.
      *
      * @return array<string, array{type:string, required:bool, secret:bool, label:string,
-     *     description:string, tier:string, default?:mixed}>
+     *     description:string, tier:string, default?:mixed, link?:string, link_text?:string}>
      *
      * @since 0.12.0 (S6 — plugin configure endpoint)
      */
     public static function schema(InstalledPlugin $plugin): array
     {
         $out = [];
-        foreach ($plugin->manifest->settings as $key => $schema) {
+        /**
+         * Manifest settings entries genuinely carry `label`, `description`,
+         * `tier`, `link` and `link_text`, but the shared DTO
+         * (Phlix\Shared\Plugin\Manifest::$settings, in the phlix-shared package)
+         * only declares `type`/`required`/`secret`/`default`. Restate the real
+         * shape here; widening the shared declaration belongs in that package.
+         *
+         * @var array<string, array{type?:string, required?:bool, secret?:bool,
+         *     default?:mixed, label?:string, description?:string, tier?:string,
+         *     link?:string, link_text?:string}> $settings
+         */
+        $settings = $plugin->manifest->settings;
+        foreach ($settings as $key => $schema) {
             $required = isset($schema['required']) && $schema['required'] === true;
             $entry = [
                 'type'        => is_string($schema['type'] ?? null) ? (string) $schema['type'] : 'mixed',

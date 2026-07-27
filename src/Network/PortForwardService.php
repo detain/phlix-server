@@ -350,10 +350,14 @@ TEXT;
         if (self::inCoroutine() && class_exists(\Swoole\Coroutine\Socket::class)) {
             try {
                 $sock = new \Swoole\Coroutine\Socket(AF_INET, SOCK_DGRAM, 0);
-                // @phpstan-ignore-next-line setTimeout exists in Swoole extension
-                $sock->setTimeout(2.0);
+                // S146: Swoole\Coroutine\Socket has NO setTimeout() — verified
+                // absent from the class in swoole 6.2.2. The old call raised an
+                // \Error ("Call to undefined method"), which the
+                // catch (RuntimeException) below does NOT catch, so this path
+                // aborted instead of degrading to the blocking fallback.
+                // The timeout is connect()'s third argument.
                 // Connect to 8.8.8.8:53 (DNS) to determine local IP
-                $connected = $sock->connect('8.8.8.8', 53);
+                $connected = $sock->connect('8.8.8.8', 53, 2.0);
                 if ($connected) {
                     $localAddr = $sock->getsockname();
                     $sock->close();
@@ -433,9 +437,11 @@ TEXT;
         if (self::inCoroutine() && class_exists(\Swoole\Coroutine\Socket::class)) {
             try {
                 $sock = new \Swoole\Coroutine\Socket(AF_INET, SOCK_STREAM, 0);
-                // @phpstan-ignore-next-line setTimeout exists in Swoole extension
-                $sock->setTimeout(1.0);
-                $connected = $sock->connect($gateway, 80);
+                // S146: Swoole\Coroutine\Socket has NO setTimeout() — verified
+                // absent from the class in swoole 6.2.2. The old call raised an
+                // \Error, which catch (RuntimeException) does not catch. The
+                // timeout is connect()'s third argument.
+                $connected = $sock->connect($gateway, 80, 1.0);
                 $sock->close();
 
                 if ($connected) {

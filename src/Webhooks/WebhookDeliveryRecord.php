@@ -178,7 +178,12 @@ final class WebhookDeliveryRecord implements JsonSerializable
             return null;
         }
 
-        $baseDelay = self::RETRY_DELAYS[$this->attempt + 1] ?? self::RETRY_DELAYS[self::MAX_ATTEMPTS];
+        // Clamp into the schedule's actual key range (1..MAX_ATTEMPTS) instead of
+        // relying on `??` to absorb an out-of-range offset. Behaviour is
+        // unchanged for every reachable $attempt; the guard above already
+        // returned for $attempt >= MAX_ATTEMPTS.
+        $delayIndex = min(max($this->attempt + 1, 1), self::MAX_ATTEMPTS);
+        $baseDelay = self::RETRY_DELAYS[$delayIndex];
         $jitterWindow = (int) round($baseDelay * self::RETRY_JITTER_FRACTION);
         $jitter = $jitterWindow > 0 ? mt_rand(-$jitterWindow, $jitterWindow) : 0;
 

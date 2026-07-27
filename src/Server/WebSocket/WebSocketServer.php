@@ -208,7 +208,14 @@ class WebSocketServer
         // upgrade Request whose query string (`?token=`) is populated — unlike
         // onConnect's $_GET at TCP-accept.
         $this->worker->onWebSocketConnect = [$this, 'onWebSocketConnect'];
-        // @phpstan-ignore-next-line property.notFound
+        /**
+         * @phpstan-ignore-next-line property.notFound
+         * @psalm-suppress UndefinedPropertyAssignment `onWebSocketPong` is a real
+         *   Workerman callback slot — the protocol resolves it as
+         *   `$connection->worker->onWebSocketPong` in
+         *   vendor/workerman/workerman/src/Protocols/Websocket.php:215 — but Worker
+         *   does not declare the property, so no static analyser can see it.
+         */
         $this->worker->onWebSocketPong = [$this, 'onWebSocketPong'];
     }
 

@@ -160,7 +160,12 @@ class ChromaPrintFfi implements ChromaPrintInterface
                 $libPath
             );
 
-            /** @phpstan-ignore-next-line */
+            /**
+             * @phpstan-ignore-next-line
+             * @psalm-suppress UndefinedMethod FFI binds the C functions declared
+             *   in getFFIDecls() at runtime; no static analyser can see them on
+             *   the \FFI class, so this call cannot be resolved statically.
+             */
             $fingerprint = $ffi->chromaprint_generate_fingerprint($path);
             if ($fingerprint === null || $fingerprint === '') {
                 throw new ChromaPrintFingerprintFailedException(

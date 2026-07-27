@@ -77,7 +77,10 @@ final class IndexBuckets
     /**
      * Compute cumulative offsets from counts (offsets always cumulative from 0).
      *
-     * @param array<int, array{key: string, label: string, offset?: int, count: int}> $buckets
+     * @param array<int, array{key: string, label: string, offset?: int, count: int, min?: int, max?: int}> $buckets
+     *        `min`/`max` ride along on the runtime buckets (see
+     *        {@see self::bucketsForRuntime()}); this method neither reads nor
+     *        strips them, but the shape has to admit them.
      * @return array<int, array{key: string, label: string, offset: int, count: int}>
      */
     public function withOffsets(array $buckets): array
@@ -254,7 +257,11 @@ final class IndexBuckets
      * Runtime field: always 5 fixed ranges (1-30, 31-60, 61-90, 91-120, 120+).
      *
      * @param array<int, array{value: string|int, count: int}> $distincts
-     * @return array<int, array{key: string, label: string, count: int}>
+     * @return array<int, array{key: string, label: string, count: int, min: int, max: int}>
+     *         The `min`/`max` bounds are part of every returned entry — they were
+     *         missing from this shape, so the declared type contradicted what the
+     *         method actually returns. Documented rather than stripped, because
+     *         removing them would change the emitted payload.
      */
     private function bucketsForRuntime(array $distincts): array
     {

@@ -108,7 +108,7 @@ final class Plugin implements LifecycleInterface
     }
 
     /**
-     * @return array<string, mixed>
+     * @return array<class-string, callable|string>
      */
     public function subscribedEvents(): array
     {

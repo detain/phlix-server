@@ -102,12 +102,22 @@ use Workerman\MySQL\Connection;
  * because an entry is a path plus one short scalar string rather than S95's
  * 1,463-byte `['file' => SplFileInfo, 'meta' => [...]]`. Two figures, both
  * measured on PHP 8.3.6 at the real production library size (61,135 rows) with
- * production-shaped 56-character path keys, and both reproducible to the byte:
+ * production-shaped 56-character path keys — but they are NOT equally exact:
+ *
+ *  - **The RETAINED figure reproduces to the byte.** It is a
+ *    `memory_get_usage()` delta over a map this process is the sole owner of,
+ *    and it is the only half the test asserts.
+ *  - **The TRANSIENT peak is APPROXIMATE and BASELINE-DEPENDENT.**
+ *    `memory_get_peak_usage()` is process-wide and monotonic, so what a run
+ *    reports depends on what the process had already allocated before the load:
+ *    review r2 re-measured the same load at 38,609,696 B peak-vs-peak and
+ *    40,303,064 B peak-vs-usage. Read it as "≈37 MiB, ≈3.4x the retained map",
+ *    never as an exact quantity — and note that nothing asserts it (see below).
  *
  * | quantity | measured |
  * |---|---|
- * | RETAINED by the map once `load()` has returned | **11,424,960 B = 10.90 MiB = 186.9 B/entry** |
- * | TRANSIENT peak INSIDE `load()` | **38,527,368 B = 36.74 MiB** |
+ * | RETAINED by the map once `load()` has returned (exact) | **11,424,960 B = 10.90 MiB = 186.9 B/entry** |
+ * | TRANSIENT peak INSIDE `load()` (approximate) | **≈38,527,368 B ≈ 36.74 MiB** |
  *
  * ⚠ **The figure this docblock used to quote — "5,556,000 bytes = 5.30 MB, i.e.
  * 90.9 bytes/entry" — is ≈2x too low, and it was an artefact of HOW it was
@@ -125,9 +135,10 @@ use Workerman\MySQL\Connection;
  *
  * ⚠ **{@see self::MAX_ENTRIES} bounds RETENTION ONLY.** The driver materialises the
  * whole result set before this class can refuse an entry, so the transient `$rows`
- * is 2.4x the retained map (25.84 MiB of row arrays for 61,135 rows) and it scales
+ * is 2.4x the retained map (≈25.84 MiB of row arrays for 61,135 rows) and it scales
  * with the LIBRARY, not with the cap: measured at exactly 250,000 rows, retention
- * stops at 44.33 MiB while the load peaks at **153.54 MiB**. Bounding that too
+ * stops at 44.33 MiB (exact) while the load peaks at **≈153.54 MiB** — a peak, so
+ * it carries the baseline-dependence caveat stated above. Bounding that too
  * would mean chunking the SELECT, which buys nothing at any library size that
  * exists and is therefore not done — but the claim made here is "retention is
  * bounded by a constant", not "memory is".

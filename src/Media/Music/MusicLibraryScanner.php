@@ -2573,8 +2573,8 @@ class MusicLibraryScanner
      * current identity — and each of those probes would otherwise issue an UPDATE that
      * changes nothing. Measured on the 40-album flip fixture: **40 files probed, 32
      * stamp UPDATEs issued** (1 file lost with the album whose write was made to fail,
-     * 7 suppressed by this check), pinned by
-     * {@see \Phlix\Tests\Unit\Media\Music\MusicScanUnchangedSkipTest::testTheStampSuppressionFiresOnTheMidWalkFlipPath()}.
+     * 7 suppressed by this check), pinned by {@see
+     * \Phlix\Tests\Unit\Media\Music\MusicScanUnchangedSkipTest::testTheStampSuppressionFiresOnTheMidWalkFlipPath()}.
      *
      * Making the original claim TRUE would mean loading the index unconditionally and
      * gating only the SKIP on the heal/adopt answer. That is deliberately NOT done

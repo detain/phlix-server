@@ -108,7 +108,9 @@ final class ProbeCountingScanner extends MusicLibraryScanner
 
     protected function probeViaFfprobe(string $path): ?array
     {
-        self::fail('ffprobe must never be reached: probeViaGetId3() already returned usable tags');
+        throw new \LogicException(
+            'ffprobe must never be reached: probeViaGetId3() already returned usable tags'
+        );
     }
 
     /**

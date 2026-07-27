@@ -156,7 +156,7 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
       rules (`Parameters.php:117` → `Constraint.php:106`); and
       `markTestSkipped()`/`markTestIncomplete()`, whose exceptions are also
       `RuntimeException` subclasses. Both of the latter two are currently harmless —
-      mock rules are re-verified at `TestCase.php:687`, after `runTest()` returns and
+      mock rules are re-verified at `TestCase.php:688`, after `runTest()` returns and
       thus outside any swallowing callback, and a token scan finds 0 `markTest*` calls
       inside closures — but they are not covered.
     - **False positives** — a test that *deliberately* catches its own assertion failure

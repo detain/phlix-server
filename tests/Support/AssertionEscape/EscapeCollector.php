@@ -48,7 +48,7 @@ namespace Phlix\Tests\Support\AssertionEscape;
  *     directly and `.../Constraint/Constraint.php:106` throws
  *     `ExpectationFailedException`; sibling rules throw from their own `verify()`
  *     (e.g. `.../Rule/InvokedCount.php:60`). Currently HARMLESS, and the reason is
- *     structural rather than lucky: `TestCase.php:687` calls `verifyMockObjects()`
+ *     structural rather than lucky: `TestCase.php:688` calls `verifyMockObjects()`
  *     AFTER `runTest()` returns, i.e. outside any in-test callback, so a swallowed
  *     `->with()` mismatch is re-raised where nothing is catching it and the test still
  *     goes red. What is lost is only this collector's diagnosis, not the failure.

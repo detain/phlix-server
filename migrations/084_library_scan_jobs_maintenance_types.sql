@@ -63,17 +63,27 @@
 -- databases do not end up out of step with existing ones over a column comment.
 -- The authoritative description is this header.
 --
--- ⚠ NOTE, corrected by S145 review (finding 1): editing THIS HEADER is not free.
--- `MigrationRunner::checksum()` hashes the WHOLE FILE, not just its statements
--- (src/Common/Database/MigrationRunner.php:170-199), so any comment change
--- diverges the recorded checksum and the runner logs
--- "Migration checksum diverged; re-applying" and RE-EXECUTES the ALTER below.
--- It then refreshes the stored checksum, so this happens exactly once per
--- install, not on every deploy. Measured before merging S145: the re-run is a
--- MODIFY COLUMN on `library_scan_jobs`, which holds 153 rows / 48 KB on
--- production — a sub-second rebuild, and the ALTER is idempotent because the
--- ENUM definition is unchanged. Safe here; do NOT assume the same for a comment
--- edit to a migration that touches a large table.
+-- ⚠ NOTE on editing THIS HEADER — and a correction to an earlier note here.
+-- A previous revision of this comment claimed that editing the header diverges
+-- the ledger checksum and re-executes the ALTER. That is WRONG.
+-- `MigrationRunner::checksum()` (src/Common/Database/MigrationRunner.php:361-378)
+-- STRIPS full-line `--` and `#` comments before hashing, precisely so that
+-- documentation edits like this one are free. Header edits do NOT re-run the
+-- migration.
+--
+-- Measured on production immediately after the S145 deploy, which shipped an
+-- edit to this very header:
+--     ledger checksum : c948944dfc1bbb4e82b0675efdb341e2
+--     md5 of the file : 94181b1754ad498bdd64bbef1754ea85   (differs)
+--     runner result   : "98 statement(s) skipped (already applied)"
+--     applied_at      : still 2026-07-18 — no re-apply
+-- The two hashes differ because the ledger stores the COMMENT-STRIPPED hash;
+-- comparing a plain md5 of the file against it proves nothing.
+--
+-- What IS executable, and therefore does diverge the checksum, is the SQL below
+-- — including the `COMMENT` string inside the ALTER. That is why it is left
+-- byte-identical: re-wording it would re-run the migration everywhere for the
+-- sake of a column comment.
 -- ─────────────────────────────────────────────────────────────────────────────
 
 ALTER TABLE `library_scan_jobs`

@@ -20,6 +20,8 @@ vendor
 coverage.xml
 coverage-report/
 .phpunit.result.cache
+# S120 assertion-escape guard report (written only when a run has violations)
+.phpunit-assertion-escapes.json
 
 # PHP-DI compiled container
 var/cache/

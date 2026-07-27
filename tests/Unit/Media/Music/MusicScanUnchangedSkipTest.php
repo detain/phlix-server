@@ -296,6 +296,36 @@ final class MusicScanUnchangedSkipTest extends TestCase
     }
 
     /**
+     * The heal gate FAILS SAFE, and "safe" here is the opposite direction from the
+     * adoption gate next to it.
+     *
+     * A transient error on the adoption probe degrades to "do the per-entity lookups" —
+     * slower but correct. A transient error on the HEAL gate must degrade to **do not
+     * skip anything**, because the alternative is skipping on an answer we could not
+     * establish, i.e. potentially missing a real change. Neither may abort a multi-hour
+     * scan that has nothing else wrong with it.
+     */
+    public function testAFailingHealGateDisablesTheFastPathInsteadOfSkipping(): void
+    {
+        [$dir, $db] = $this->fixture(3);
+        $scanner = $this->scanner($db);
+        $scanner->scanDirectory($dir, null, 'lib-1');
+
+        $db->throwFor('AS unhealed FROM music_artists');
+
+        $scanner->resetProbes();
+        $result = $scanner->scanDirectory($dir, null, 'lib-1');
+
+        self::assertSame(
+            3,
+            $scanner->probeCount,
+            'an unanswerable heal gate must switch the fast path OFF — a skip we cannot justify is a '
+            . 'change we may silently miss, while a probe we did not need is only slow'
+        );
+        self::assertSame(0, $result->failed, 'and it must not fail the scan');
+    }
+
+    /**
      * ⚠ THE PER-FILE RE-READ OF `$mayAdopt`, PINNED — the fast path must switch OFF
      * MID-WALK when a caught write failure leaves a fresh orphan.
      *
@@ -753,6 +783,9 @@ final class SkipSchemaConnection extends Connection
     /** @var list<string> Statement substrings whose query() returns NULL. */
     private array $nullOn = [];
 
+    /** @var list<string> Statement substrings whose query() THROWS. */
+    private array $throwOn = [];
+
     private int $autoInc = 0;
 
     /** Intentionally does not call the parent constructor (which would connect). */
@@ -783,6 +816,18 @@ final class SkipSchemaConnection extends Connection
     }
 
     /**
+     * Make every statement containing `$needle` THROW — the shape a real SQL error takes
+     * (`Connection::execute()` re-throws, it never returns `false`).
+     *
+     * @param string $needle Statement substring.
+     * @return void
+     */
+    public function throwFor(string $needle): void
+    {
+        $this->throwOn[] = $needle;
+    }
+
+    /**
      * Mirrors the driver's own signature (`Connection::query($query, $params,
      * $fetchmode)`), which is why it is untyped here.
      *
@@ -797,6 +842,12 @@ final class SkipSchemaConnection extends Connection
         $sql = ltrim((string) $query);
         $bound = is_array($params) ? array_values($params) : [];
         $this->statements[] = $sql;
+
+        foreach ($this->throwOn as $needle) {
+            if (str_contains($sql, $needle)) {
+                throw new \RuntimeException('injected failure for: ' . $needle);
+            }
+        }
 
         foreach ($this->nullOn as $needle) {
             if (str_contains($sql, $needle)) {

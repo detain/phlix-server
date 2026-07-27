@@ -251,6 +251,94 @@ final class MusicScanPrefetcherTest extends TestCase
     }
 
     /**
+     * A BUSY child is skipped in favour of a free one, rather than the work being
+     * dropped.
+     *
+     * That is the difference between a pool and a queue: with one reader wedged on a
+     * FIFO and one free, every submit must still land. It exercises the round-robin's
+     * "this child's buffer is not empty, try the next" arm, which a single-child pool
+     * cannot reach.
+     */
+    public function testABusyReaderIsSkippedInFavourOfAFreeOne(): void
+    {
+        if (!function_exists('posix_mkfifo')) {
+            self::markTestSkipped('posix_mkfifo() is required to wedge a reader deterministically');
+        }
+
+        $fifo = sys_get_temp_dir() . '/phlix_s122_fifo2_' . bin2hex(random_bytes(6));
+        self::assertTrue(posix_mkfifo($fifo, 0o600));
+        $this->paths[] = $fifo;
+
+        $prefetcher = new MusicScanPrefetcher(new NullLogger(), 3);
+        $prefetcher->open();
+        self::assertSame(2, $prefetcher->poolSize(), 'two children, so one can wedge and one stay free');
+
+        // Wedge one child inside fopen() on the FIFO.
+        $prefetcher->submit($fifo);
+
+        // Now hand out real work. The free child drains it, so nothing may be dropped
+        // even though one child never takes another path again.
+        for ($i = 0; $i < 200; $i++) {
+            $prefetcher->submit(__FILE__);
+            $prefetcher->drain();
+        }
+
+        $stats = $prefetcher->stats();
+        self::assertSame(
+            0,
+            $stats['dropped'],
+            'a wedged child must be SKIPPED, not cause drops, while another child is free'
+        );
+        self::assertSame(201, $stats['submitted']);
+
+        $prefetcher->close();
+    }
+
+    /**
+     * A child that has exited is retired from the pool instead of being written to
+     * forever.
+     *
+     * Driven with a reader program that exits immediately: the first writes succeed into
+     * the pipe buffer, then the kernel tears the pipe down and `fwrite()` reports
+     * failure, at which point the pool must drop that child. Without the retirement the
+     * pool would keep a dead handle and every later submit would fail silently.
+     */
+    public function testAReaderThatExitsImmediatelyIsRetiredFromThePool(): void
+    {
+        $script = sys_get_temp_dir() . '/phlix_s122_exit_' . bin2hex(random_bytes(6)) . '.php';
+        file_put_contents($script, "<?php\nexit(0);\n");
+        $this->paths[] = $script;
+
+        $prefetcher = new MusicScanPrefetcher(new NullLogger(), 2, $script);
+        $prefetcher->open();
+        self::assertSame(1, $prefetcher->poolSize());
+
+        // Keep writing until the pool notices the child is gone. A pipe buffer is 64 KiB,
+        // so this converges quickly; the bound keeps a hang from looking like a pass.
+        $deadline = hrtime(true) + 10_000_000_000;
+        while ($prefetcher->poolSize() > 0 && hrtime(true) < $deadline) {
+            $prefetcher->submit(__FILE__);
+            $prefetcher->drain();
+        }
+
+        self::assertSame(
+            0,
+            $prefetcher->poolSize(),
+            'a dead child must be retired, not written to for the rest of the scan'
+        );
+        self::assertSame(
+            1,
+            $prefetcher->readersInFlight(),
+            'with the pool emptied, the scanner is the only reader left — exactly the pre-S122 shape'
+        );
+
+        // And the pool stays inert rather than throwing.
+        $prefetcher->submit(__FILE__);
+        $prefetcher->drain();
+        $prefetcher->close();
+    }
+
+    /**
      * The reader program really does read the file it is given — verified from the
      * kernel's own counters (`/proc/<pid>/io` `rchar`), not from the program's word.
      *

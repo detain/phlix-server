@@ -257,6 +257,84 @@ final class MusicScanSkipIndexTest extends TestCase
     }
 
     /**
+     * A `query()` that hands back something other than a row list, and rows that are not
+     * arrays, are both ignored rather than crashing the walk.
+     *
+     * Reachable in production: `Connection::query()` returns `null` for any statement
+     * whose leading keyword it does not recognise, so a reformat of the load statement
+     * lands here (the same landmine the backfill site documents at length), and a bare
+     * `createMock(Connection::class)` returns `null` for every call.
+     */
+    public function testANonListResultAndMalformedRowsAreIgnored(): void
+    {
+        $file = $this->file('malformed');
+
+        $notAList = new MusicScanSkipIndex(new NonListConnection(), new NullLogger());
+        $notAList->load('lib-1');
+        self::assertTrue($notAList->isLoaded());
+        self::assertSame(0, $notAList->count());
+        self::assertFalse($notAList->isUnchanged($file));
+
+        $badRows = new MusicScanSkipIndex(
+            new SkipIndexConnection([
+                ['path' => $file->getPathname(), 'file_mtime' => (string) $file->getMTime(),
+                    'file_size' => (string) $file->getSize()],
+            ], ['not-a-row']),
+            new NullLogger()
+        );
+        $badRows->load('lib-1');
+        self::assertSame(1, $badRows->count(), 'the good row survives, the scalar row is dropped');
+        self::assertTrue($badRows->isUnchanged($file));
+    }
+
+    /**
+     * The cap really does stop the load short, really does warn, and really does bound
+     * `remember()` too — driven with `MAX_ENTRIES + 1` rows rather than asserted.
+     *
+     * Worth the ~250k-row fixture (measured under 1 s and well inside the suite's memory
+     * envelope) because the whole memory argument for loading the library in one query
+     * rests on this bound, and an untested bound is a bound that silently is not one.
+     */
+    public function testTheCapTruncatesTheLoadAndWarns(): void
+    {
+        $rows = [];
+        for ($i = 0, $n = MusicScanSkipIndex::MAX_ENTRIES + 1; $i < $n; $i++) {
+            $rows[] = ['path' => '/m/' . $i, 'file_mtime' => '100', 'file_size' => '200'];
+        }
+
+        $logger = new RecordingLogger();
+        $index = new MusicScanSkipIndex(new SkipIndexConnection($rows), $logger);
+        $index->load('lib-1');
+
+        self::assertSame(MusicScanSkipIndex::MAX_ENTRIES, $index->count(), 'the cap is the ceiling, exactly');
+        self::assertTrue($index->wasTruncated());
+        self::assertNotSame(
+            [],
+            $logger->warnings,
+            'a truncated index means the rest of the library is re-read, which an operator must be told'
+        );
+        self::assertStringContainsString('entry cap', $logger->warnings[0]);
+
+        // remember() honours the same bound: a NEW key past the cap is refused, so a
+        // pathological library cannot grow the map through the back door.
+        $file = $this->file('past-the-cap');
+        $index->remember($file);
+        self::assertSame(MusicScanSkipIndex::MAX_ENTRIES, $index->count());
+        self::assertFalse($index->isUnchanged($file));
+    }
+
+    /**
+     * `remember()` on a file that cannot be stat'ed records nothing.
+     */
+    public function testRememberIgnoresAFileItCannotStat(): void
+    {
+        $index = $this->loaded([]);
+        $index->remember(new SplFileInfo('/nonexistent/phlix/s122/never.mp3'));
+
+        self::assertSame(0, $index->count());
+    }
+
+    /**
      * `reset()` drops everything, which is what makes one instance reusable across
      * `scanDirectory()` calls without leaking one library's map into another.
      */
@@ -395,8 +473,13 @@ final class SkipIndexConnection extends Connection
     /** @var list<string> Every statement, in order. */
     public array $statements = [];
 
-    /** @param list<array<string, mixed>> $rows */
-    public function __construct(private readonly array $rows)
+    /**
+     * @param list<array<string, mixed>> $rows Well-formed rows.
+     * @param list<mixed> $extraRows Rows that are NOT arrays, so the loader's own
+     *        `is_array($row)` guard is exercised — the real client can return a mixed
+     *        list shape and a scalar row must be dropped, not crash the walk.
+     */
+    public function __construct(private readonly array $rows, private readonly array $extraRows = [])
     {
     }
 
@@ -411,6 +494,55 @@ final class SkipIndexConnection extends Connection
         unset($params, $fetchmode);
         $this->statements[] = (string) $query;
 
-        return $this->rows;
+        return array_merge($this->rows, $this->extraRows);
+    }
+}
+
+/**
+ * Returns a value the real client hands back for an unrecognised leading keyword: `null`.
+ *
+ * @internal
+ */
+final class NonListConnection extends Connection
+{
+    public function __construct()
+    {
+    }
+
+    /**
+     * @param string $query
+     * @param array<int, mixed>|null $params
+     * @param int $fetchmode
+     * @return null
+     */
+    public function query($query = '', $params = null, $fetchmode = \PDO::FETCH_ASSOC)
+    {
+        unset($query, $params, $fetchmode);
+
+        return null;
+    }
+}
+
+/**
+ * Captures warnings so a truncation can be asserted rather than assumed.
+ *
+ * @internal
+ */
+final class RecordingLogger extends \Psr\Log\AbstractLogger
+{
+    /** @var list<string> */
+    public array $warnings = [];
+
+    /**
+     * @param mixed $level
+     * @param string|\Stringable $message
+     * @param array<string, mixed> $context
+     */
+    public function log($level, string|\Stringable $message, array $context = []): void
+    {
+        unset($context);
+        if ($level === 'warning') {
+            $this->warnings[] = (string) $message;
+        }
     }
 }

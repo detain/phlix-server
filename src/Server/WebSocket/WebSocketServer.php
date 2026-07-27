@@ -209,14 +209,18 @@ class WebSocketServer
         // onConnect's $_GET at TCP-accept.
         $this->worker->onWebSocketConnect = [$this, 'onWebSocketConnect'];
         /**
-         * @phpstan-ignore-next-line property.notFound
          * @psalm-suppress UndefinedPropertyAssignment `onWebSocketPong` is a real
          *   Workerman callback slot — the protocol resolves it as
          *   `$connection->worker->onWebSocketPong` in
          *   vendor/workerman/workerman/src/Protocols/Websocket.php:215 — but Worker
          *   does not declare the property, so no static analyser can see it.
+         *
+         * The PHPStan counterpart is the trailing `@phpstan-ignore` below and NOT
+         * a `@phpstan-ignore-next-line` in this docblock: PHPStan resolves "next
+         * line" relative to the tag's own line, so inside a multi-line docblock it
+         * lands on a comment line and reports `ignore.unmatchedLine` instead.
          */
-        $this->worker->onWebSocketPong = [$this, 'onWebSocketPong'];
+        $this->worker->onWebSocketPong = [$this, 'onWebSocketPong']; // @phpstan-ignore property.notFound
     }
 
     /**

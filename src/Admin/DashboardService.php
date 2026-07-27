@@ -699,17 +699,23 @@ class DashboardService
         }
 
         $units = ['B', 'KB', 'MB', 'GB', 'TB'];
-        $unitIndex = 0;
         $size = (float) $bytes;
 
-        while ($size >= 1024 && $unitIndex < count($units) - 1) {
+        // S146: consume the unit list instead of indexing it. Behaviour is
+        // identical to the previous `while ($size >= 1024 && $unitIndex <
+        // count($units) - 1)` + `$units[$unitIndex]` (including the 1024 TB
+        // saturation at the top of the scale), but the label is now a value that
+        // provably exists rather than an offset the analysers have to bound:
+        // Psalm widened the index to int<0, max> and reported InvalidArrayOffset,
+        // while the `?? 'TB'` fallback that silences Psalm makes PHPStan report
+        // nullCoalesce.offset. The two gates contradict each other on the indexed
+        // form; neither has anything to say about this one.
+        $unit = array_shift($units);
+        while ($size >= 1024 && $units !== []) {
             $size /= 1024;
-            $unitIndex++;
+            $unit = array_shift($units);
         }
 
-        // `?? 'TB'` is unreachable — the loop guard stops at count($units) - 1 —
-        // but it makes the bound explicit rather than implied, and 'TB' is the
-        // correct label for the largest bucket if it ever were reached.
-        return round($size, 2) . ' ' . ($units[$unitIndex] ?? 'TB');
+        return round($size, 2) . ' ' . $unit;
     }
 }

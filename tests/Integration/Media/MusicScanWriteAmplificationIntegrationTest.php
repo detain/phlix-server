@@ -355,8 +355,10 @@ final class MusicScanWriteAmplificationIntegrationTest extends TestCase
         self::assertSame(
             4,
             $summary['skip_index_entries'] ?? null,
-            'S148: the full-read mode LOADS the index now — a 0 here means the mode is back to '
-            . 'discarding the stamp comparison and rewriting every row it reads'
+            'the summary reports a populated index — ⚠ DOCUMENTATION, NOT A KILLER, and measured as '
+            . 'such: MusicScanSkipIndex::remember() adds an entry after every stamp write, so an '
+            . 'UNLOADED index ends a 4-file scan holding 4 entries too. Re-applying S145\'s load gate '
+            . 'leaves THIS assertion green. The discriminator is the UPDATE count above'
         );
     }
 

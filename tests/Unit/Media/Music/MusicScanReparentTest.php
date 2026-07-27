@@ -245,8 +245,10 @@ final class MusicScanReparentTest extends TestCase
         self::assertSame(
             3,
             $summary['skip_index_entries'] ?? null,
-            'the full-read mode must LOAD the index — a 0 here is S145\'s implementation, in which '
-            . 'isStampCurrent() can never fire and every file read costs a JSON_SET UPDATE'
+            'the summary reports a populated index. ⚠ DOCUMENTATION, NOT A KILLER, and measured as '
+            . 'such: MusicScanSkipIndex::remember() adds an entry after every stamp write, so an '
+            . 'UNLOADED index also ends a 3-file scan holding 3 entries — re-applying S145\'s load '
+            . 'gate leaves THIS assertion green. The killer is the UPDATE count below'
         );
         self::assertSame(
             0,

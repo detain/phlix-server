@@ -2438,9 +2438,17 @@ class MusicLibraryScanner
             return 'failed';
         }
 
-        // The CARRIED identity, not a fresh stat — otherwise the in-memory map would
-        // hold a newer identity than the tags just written and a second visit to the
-        // same path inside this scan could skip a file that changed (review r1 B1).
+        // The CARRIED identity, not a fresh stat, so the in-memory map ends up holding
+        // exactly what the row now holds.
+        //
+        // ⚠ SCOPE OF THIS ONE, STATED HONESTLY: unlike the DB stamp above, this is
+        // INVARIANT HYGIENE and not a demonstrated data-loss fix. Measured — mutating it
+        // back to `remember($file)` leaves the whole suite GREEN — because the map is
+        // only re-consulted for a path the walk reaches TWICE in one scan, and the map is
+        // keyed by verbatim path while `RecursiveDirectoryIterator` does not descend
+        // symlinks, so no walk yields the same key twice. It is passed anyway because
+        // "the map agrees with the row" is the property that makes the map safe for the
+        // next reader to consult, and a map that silently disagreed would be a trap.
         $skipIndex?->remember($file, $stamp);
 
         // ⚠ DELIBERATELY NOT LOGGED — DO NOT RE-ADD A PER-TRACK LINE HERE

@@ -194,9 +194,13 @@ final class MusicScanSkipIndexTest extends TestCase
     }
 
     /**
-     * `remember()` keeps the in-memory map in step with what has just been written, so
-     * a path the walk reaches twice (a hard link, a tree entered through a symlink) is
-     * not probed twice.
+     * `remember()` keeps the in-memory map in step with what has just been written.
+     *
+     * ⚠ NOT "so a path the walk reaches twice is not probed twice" — that rationale is
+     * measurably wrong and has been removed from the method's own docblock too: the map
+     * is keyed by verbatim path and the scanner's walk never yields the same path twice
+     * (it does not descend symlinked directories, and a hard link is its own path). What
+     * this really buys is a suppressed redundant `UPDATE` later in the same scan.
      */
     public function testRememberMakesAFreshlyIndexedFileSkippable(): void
     {

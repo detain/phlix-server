@@ -383,7 +383,12 @@ final class MusicScanSkipIndex
      * @param array{0: int, 1: int}|null $values Identity to compare, as captured
      *        by {@see self::stampValues()} BEFORE the file's tags were read. NULL
      *        means "stat the file now", which is only correct for a caller that has
-     *        not read the file yet — see {@see self::remember()}.
+     *        not read the file yet — see {@see self::remember()}. ⚠ Measured: passing
+     *        it changes only whether ONE redundant `UPDATE` is issued for a file edited
+     *        between its probe and its flush — both branches leave the row holding the
+     *        pre-read identity — so a mutation that ignores it leaves the suite green.
+     *        It is passed for consistency with the value being written, not for a
+     *        correctness difference this class can demonstrate.
      *
      * @return bool True when a write would change nothing.
      */
@@ -400,21 +405,35 @@ final class MusicScanSkipIndex
     }
 
     /**
-     * Records the identity the scanner has just persisted for a file.
+     * Records the identity the scanner has just persisted for a file, so the map
+     * agrees with the row for the rest of the scan.
      *
-     * Keeps the in-memory index consistent with the database within one scan, so
-     * a file the walk reaches twice (a hard link, a directory visited through a
-     * symlink) is not probed twice.
+     * ⚠ **The "so a file the walk reaches twice is not probed twice" rationale that
+     * used to be here is WRONG, measured.** The map is keyed by verbatim path, and
+     * `RecursiveDirectoryIterator` (SKIP_DOTS + LEAVES_ONLY, as
+     * {@see MusicLibraryScanner::audioFileIterator()} builds it) does NOT descend a
+     * symlinked directory — verified: a tree with `top/linked -> ../real` yields
+     * `real/a.mp3` exactly once and nothing under `top/linked`, and a hard link
+     * appears as its own distinct path, i.e. its own key. So no walk yields the same
+     * KEY twice and this method saves no probe. What it actually buys is that
+     * {@see self::isStampCurrent()} can suppress a redundant `UPDATE` later in the same
+     * scan, and that anything consulting the map mid-walk sees what the database
+     * holds rather than something staler.
      *
      * @param SplFileInfo $file Audio file just indexed.
      * @param array{0: int, 1: int}|null $values The identity that was actually
      *        WRITTEN — i.e. the one {@see self::stampValues()} captured before the
-     *        tags were read. **Production always passes this.** ⚠ NULL means "stat
-     *        the file now", which re-introduces review r1's B1 defect if the file
-     *        has been read since: the map would then hold a NEWER identity than the
-     *        tags in the database, and the next scan would skip a file that changed.
-     *        It is retained only for callers that have not read the file at all
-     *        (tests that seed the map directly).
+     *        tags were read. **Production always passes this**, so that the map agrees
+     *        with the row. NULL means "stat the file now" and is for callers that have
+     *        not read the file at all (a test seeding the map directly).
+     *        ⚠ **Scope, measured rather than asserted:** unlike the DB stamp, passing
+     *        this is invariant hygiene rather than a demonstrated correctness fix —
+     *        mutating the production call sites back to `remember($file)` leaves the
+     *        suite green, because the map is keyed by verbatim path and no walk yields
+     *        the same path twice (`RecursiveDirectoryIterator` does not descend
+     *        symlinks). It is passed because a map that disagrees with the row it
+     *        mirrors is a trap for whoever consults it next, not because a test can
+     *        currently catch it.
      *
      * @return void
      */

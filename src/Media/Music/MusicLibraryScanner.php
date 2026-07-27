@@ -1111,12 +1111,14 @@ class MusicLibraryScanner
             }
 
             $artistId = $artistResult['id'];
-            $artistMediaItemId = $artistResult['media_item_id'];
 
-            // Upsert album
+            // Upsert album. S97: the artist's `media_items` id is deliberately NOT
+            // passed down any more — nothing below this line writes or reads
+            // `media_items.parent_id` for music, the `music_*` foreign keys are the
+            // hierarchy. `$artistResult['media_item_id']` is still populated (S96(e)
+            // heals it) and remains the artist row's artwork anchor.
             $albumResult = $this->upsertAlbum(
                 $artistId,
-                $artistMediaItemId,
                 $albumTitle,
                 $year,
                 $albumCache,
@@ -1136,9 +1138,11 @@ class MusicLibraryScanner
             }
 
             $albumId = $albumResult['id'];
-            $albumMediaItemId = $albumResult['media_item_id'];
 
             // Upsert tracks (metadata already read during the walk — no re-probe).
+            // S97: `$albumResult['media_item_id']` is NOT forwarded — a track's
+            // parentage is `music_tracks.album_id`/`artist_id` (NOT NULL, enforced
+            // FKs), never `media_items.parent_id`.
             try {
                 foreach ($files as $fileInfo) {
                     // Per-TRACK guard. Without it one unreadable/constraint-
@@ -1158,7 +1162,6 @@ class MusicLibraryScanner
                     try {
                         $trackResult = $this->upsertTrack(
                             $albumId,
-                            $albumMediaItemId,
                             $artistId,
                             $fileInfo['file'],
                             $fileInfo['meta'],
@@ -1929,11 +1932,13 @@ class MusicLibraryScanner
     /**
      * Upserts an album into the database with a corresponding media_item.
      *
+     * ⚠ S97: this used to take the artist's `media_items` id as its second argument,
+     * purely to scope orphan adoption. It is gone because the adoption predicate no
+     * longer scopes by artist — `media_items.parent_id` is never written for music at
+     * all, so there was nothing to scope against. See
+     * {@see self::findAdoptableAlbumMediaItemId()} for the invariant that replaced it.
+     *
      * @param int $artistId Artist ID
-     * @param string|null $artistMediaItemId Artist's `media_items` id. NOT written
-     *        to the album row (S97 owns the `parent_id` hierarchy); used only to
-     *        keep orphan adoption from crossing artists — see
-     *        {@see self::findAdoptableAlbumMediaItemId()}.
      * @param string $title Album title
      * @param int|null $year Release year
      * @param array<string, array{id:int, media_item_id:string|null}> $cache Album cache key by "artistId|title"
@@ -1949,7 +1954,6 @@ class MusicLibraryScanner
      */
     private function upsertAlbum(
         int $artistId,
-        ?string $artistMediaItemId,
         string $title,
         ?int $year,
         array &$cache,
@@ -1996,7 +2000,7 @@ class MusicLibraryScanner
                         $libraryId,
                         $mayAdopt,
                         fn(): ?string => $mayAdopt
-                            ? $this->findAdoptableAlbumMediaItemId($title, $libraryId, $artistMediaItemId)
+                            ? $this->findAdoptableAlbumMediaItemId($title, $libraryId)
                             : null
                     );
                 }
@@ -2020,7 +2024,7 @@ class MusicLibraryScanner
         // The NULL media_item_id gap this used to point at is closed by S96(e) in
         // the natural-key branch above, exactly as in upsertArtist().
         $adopted = $mayAdopt
-            ? $this->findAdoptableAlbumMediaItemId($title, $libraryId, $artistMediaItemId)
+            ? $this->findAdoptableAlbumMediaItemId($title, $libraryId)
             : null;
         $mediaItemId = $adopted ?? $this->createMediaItem('album', $title, null, $libraryId);
 
@@ -2108,8 +2112,9 @@ class MusicLibraryScanner
      *        a freshly minted `media_items` row that nothing references, so the rest
      *        of the scan keeps hunting for orphans instead of leaking them.
      * @param \Closure(): ?string $adopt Orphan lookup for this entity, already gated
-     *        on `$mayAdopt` by the caller (each entity type has its own predicate,
-     *        and the album one needs the artist scoping S97 depends on).
+     *        on `$mayAdopt` by the caller (each entity type has its own predicate;
+     *        the album one additionally asserts the S97 no-parent invariant — see
+     *        {@see self::findAdoptableAlbumMediaItemId()}).
      * @return string|null The id now stored on the row, or NULL when it could not be
      *         healed this pass (the next scan retries — nothing is lost).
      */
@@ -2227,8 +2232,13 @@ class MusicLibraryScanner
      * event is dispatched ONLY when a genuinely-new track is inserted — never on
      * an update or a no-op skip.
      *
+     * ⚠ S97: this used to take the album's `media_items` id as its second argument
+     * ("for linking"), which it then `unset()` without ever reading. It is gone: a
+     * track is linked to its album by `music_tracks.album_id` — `INT UNSIGNED NOT
+     * NULL` with an enforced FK and `ON DELETE CASCADE` — and
+     * `media_items.parent_id` is never written for music. There is nothing to link.
+     *
      * @param int $albumId Album ID
-     * @param string|null $albumMediaItemId Album's media_item_id for linking
      * @param int $artistId Artist ID (denormalized for queries)
      * @param SplFileInfo $file Audio file info
      * @param array<string, mixed> $metadata Tags already read during grouping (no re-probe)
@@ -2270,7 +2280,6 @@ class MusicLibraryScanner
      */
     private function upsertTrack(
         int $albumId,
-        ?string $albumMediaItemId,
         int $artistId,
         SplFileInfo $file,
         array $metadata,
@@ -2278,8 +2287,6 @@ class MusicLibraryScanner
         ?MusicScanSkipIndex $skipIndex = null,
         ?array $stamp = null
     ): string {
-        unset($albumMediaItemId);
-
         $path = $file->getPathname();
 
         $title = is_string($metadata['title'] ?? null) && $metadata['title'] !== ''
@@ -2754,41 +2761,52 @@ class MusicLibraryScanner
      * measurement, the collation rule and the residue this does not reclaim; all of
      * it applies here verbatim.
      *
-     * ⚠ THE ARTIST CONSTRAINT IS LOAD-BEARING FOR S97, NOT DECORATION. Two artists
-     * can legitimately share an album title (`Greatest Hits`). Today an album's
-     * `media_items` row carries nothing artist-specific — `path = ''`,
-     * `metadata_json = {sub_type, name}`, and **this scanner never writes
-     * `parent_id`** (S97 owns that hierarchy) — so `title` alone picks a row that is
-     * indistinguishable from a freshly minted one and the counts stay exact
-     * (measured: two artists × `Greatest Hits` → 2 albums / 2 `media_items[album]`).
-     * The moment S97 starts parenting these rows that stops being true: a
-     * title-only predicate would hand artist B an album row parented to artist A,
-     * and `ma.id IS NULL` cannot catch it because the row genuinely is unreferenced.
-     * Hence `parent_id IS NULL OR parent_id = <this artist>`: it is exactly today's
-     * behaviour while every orphan is unparented, and it fails SAFE (mint a fresh
-     * row, no mis-parenting) as soon as S97 sets the column. **The constraint S97
-     * must honour: an album `media_items` row may only be adopted by the artist it
-     * is parented to — AND `parent_id` must be written by the SAME `INSERT` that
-     * creates the row, never by a second statement afterwards.** The ordering half is
-     * not a style preference: between those two statements the row exists with
-     * `parent_id IS NULL`, the live first branch of
-     * `(mi.parent_id IS NULL OR mi.parent_id = ?)` matches it, and it is handed to
-     * whichever artist reaches it first — exactly the cross-artist mis-parenting this
-     * predicate exists to prevent, and `ma.id IS NULL` cannot flag it because the row
-     * genuinely is unreferenced.
+     * ⚠ `AND mi.parent_id IS NULL` IS AN **ENFORCED INVARIANT**, NOT A NO-OP FILTER
+     * (S97). It used to read `(mi.parent_id IS NULL OR mi.parent_id = ?)`, scoped by
+     * the album's artist, because S97 was still expected to parent these rows. **S97
+     * decided the opposite and the decision is settled: the `music_*` tables are the
+     * one authoritative music hierarchy, and `media_items.parent_id` is NEVER written
+     * for `artist` / `album` / `track`.** (Verified read-only on production: artist
+     * 4,656 / album 10,966 / track 61,105 rows, **0 of 76,727 carrying a
+     * `parent_id`**, matching `music_*` exactly. Reasoning in
+     * `plan_updates_worklog.md`, 2026-07-27.)
+     *
+     * So the predicate no longer scopes anything — it **asserts**. Read it as:
+     * *a music `media_items` row must never carry a parent; a row that does is not
+     * one of ours, so it is not adoptable.* Two artists sharing an album title
+     * (`Greatest Hits`) are still handled correctly without artist scoping, exactly
+     * as they are today: an album's `media_items` row carries nothing
+     * artist-specific (`path = ''`, `metadata_json = {sub_type, name}`), so `title`
+     * alone picks a row that is indistinguishable from a freshly minted one and the
+     * counts stay exact (measured: two artists × `Greatest Hits` → 2 albums /
+     * 2 `media_items[album]`).
+     *
+     * **The new bound, stated deliberately** (the S95 review asked for it to be
+     * re-derived rather than inherited): correctness here needs *"the orphan I adopt
+     * is interchangeable with a row I would mint right now"*. The old artist-scoped
+     * form bought that under a hypothetical future in which `parent_id` distinguished
+     * album rows. Under S97's actual verdict nothing distinguishes them — every
+     * album `media_items` row is `{type:'album', name:<title>, path:'',
+     * library_id:<lib>, parent_id:NULL}` — so title + library + unreferenced is
+     * already the complete identity, and the parent check is pure defence: it fails
+     * **SAFE** (mint a fresh row) against any row some other writer parented, and it
+     * is the tripwire that would catch a regression re-introducing music parenting.
+     * `ma.id IS NULL` cannot do that job: a mis-parented row genuinely is
+     * unreferenced.
+     *
+     * ⚠ If a future step ever revisits this and DOES write `parent_id` for music, it
+     * must re-add artist scoping **and** write the column in the SAME `INSERT` that
+     * creates the row — never a second statement — or the window between them hands
+     * an unparented row to whichever artist reaches it first. That constraint is why
+     * option A was rejected on the adoption path; see the worklog before touching it.
      *
      * @param string $title Album title, as stored in `media_items.name`.
      * @param string|null $libraryId Owning library UUID (null-safe matched).
-     * @param string|null $artistMediaItemId This album's artist's `media_items` id;
-     *        an orphan already parented to a DIFFERENT artist is not adoptable.
-     *        NULL (the artist's own media_item failed — S96(e)) restricts adoption
-     *        to unparented orphans.
      * @return string|null An adoptable media_items UUID, or null when none exists.
      */
     private function findAdoptableAlbumMediaItemId(
         string $title,
-        ?string $libraryId,
-        ?string $artistMediaItemId
+        ?string $libraryId
     ): ?string {
         return $this->firstMediaItemId($this->db->query(
             "SELECT mi.id
@@ -2796,9 +2814,9 @@ class MusicLibraryScanner
                LEFT JOIN music_albums ma ON ma.media_item_id = mi.id
               WHERE mi.type = 'album' AND mi.name = ? AND mi.path = ''
                 AND mi.library_id <=> ? AND ma.id IS NULL
-                AND (mi.parent_id IS NULL OR mi.parent_id = ?)
+                AND mi.parent_id IS NULL
               LIMIT 1",
-            [$title, $libraryId, $artistMediaItemId]
+            [$title, $libraryId]
         ));
     }
 

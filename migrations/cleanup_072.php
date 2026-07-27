@@ -3,29 +3,55 @@
 /**
  * path_hash finalizer: merge duplicate paths, then add the unique index.
  *
- * Run this ONCE after migration 072 (which adds the `path_hash` generated
- * column) has been applied:
+ * ⚠ SINCE MIGRATION 096, THIS SCRIPT IS NO LONGER REQUIRED ON A CLEAN INSTALL.
+ * `migrations/096_path_hash_unique_index.sql` adds the
+ * `UNIQUE INDEX idx_media_items_library_path_hash (library_id, path_hash)` as
+ * part of the ordinary migration chain, idempotently and only when the table is
+ * free of duplicates. Before 096, migration 072 deferred the index to this
+ * script and 087 DROPped it, so a database built by `run-migrations.php` alone
+ * carried NO path-dedupe constraint at all unless an operator remembered to run
+ * this file by hand (S152).
+ *
+ * WHAT THIS SCRIPT STILL OWNS: de-duplication — the one part a `.sql` migration
+ * cannot do. Merging a duplicate group means choosing a keeper by how much user
+ * data it carries ({@see PathDeduper::scoreItem()}) and repointing twenty
+ * referencing tables collision-safely; that logic lives once, in PHP, shared
+ * with the `media:dedupe-paths` CLI command. Re-implementing it in SQL would
+ * create a second source of truth for the keeper rule.
+ *
+ * So run this ONLY when you have duplicates to merge. Migration 096 tells you
+ * so explicitly — on a dirty table it refuses to add the index and fails with
+ *
+ *     Unknown column 'media_items duplicate paths: run php
+ *     migrations/cleanup_072.php' in 'field list'
+ *
+ * Once the duplicates are merged, THIS SCRIPT adds the index itself (step 2
+ * below), so the table is already in the right state when it exits. The next
+ * `run-migrations.php` / `bin/phlix migrate` then finds the index present, takes
+ * 096's no-op branch and only records 096 in the ledger (096 stays unrecorded
+ * until it succeeds, so it retries by itself).
  *
  *     php migrations/cleanup_072.php
  *
- * RE-RUN IT after ANY later migration that widens `path_hash`'s scope — those
- * migrations drop the unique index so the column rewrite cannot fail on a
- * dirty DB, and rely on this script to merge duplicates under the new scope
- * and put the index back. Migration 087 (adding `track` and `audiobook`) is
- * the first such case. The scope itself comes from
- * {@see PathDeduper::DEDUPED_TYPES}, so this script always follows whatever
- * the current code and column agree on.
+ * The scope comes from {@see PathDeduper::DEDUPED_TYPES}, so the script always
+ * follows whatever the current code and the generated column agree on. RE-RUN
+ * IT after any future migration that widens `path_hash`'s scope: such a
+ * migration must drop the unique index before rewriting the column (see 087),
+ * which can hand a hash to rows that previously hashed to NULL and so expose
+ * duplicates that were invisible under the old scope.
  *
- * It performs the one-time work the auto-run `.sql` migration deliberately does
- * NOT do, because it can fail on a DB that still holds duplicates:
+ * The two steps:
  *
  *   1. Merge every duplicate (library_id, path) group using {@see PathDeduper}
  *      — the SAME scoring, repoint and delete logic the `media:dedupe-paths`
  *      CLI command uses, so there is a single source of truth. The keeper is the
  *      row with the most user data (lowest id breaks ties); every referencing
  *      row is repointed onto it collision-safely, then the losers are deleted.
- *   2. Add the `UNIQUE INDEX (library_id, path_hash)` that makes a future
- *      double-insert impossible.
+ *   2. Add the `UNIQUE INDEX (library_id, path_hash)` if it is not already
+ *      there. Retained deliberately: it makes the script complete on its own for
+ *      an operator part-way through an upgrade, or on a DB whose chain has not
+ *      reached 096 yet. On a DB where 096 already ran, this step reports
+ *      "already present" and does nothing.
  *
  * Safe to re-run: step 1 is a no-op once no duplicates remain, and step 2 treats
  * an already-present index as success.

@@ -7,6 +7,47 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased] - 2026-07-24
 
+### Fixed
+
+- **A fresh install now actually HAS the path-dedupe unique index** (S152). Migration
+  072 added the `path_hash` generated column but deferred
+  `UNIQUE KEY idx_media_items_library_path_hash (library_id, path_hash)` to the manual
+  `migrations/cleanup_072.php`, and migration 087 then DROPped the index outright. No
+  auto-run path — not `scripts/run-migrations.php`, not `bin/phlix migrate`, not
+  `scripts/install.sh`, not the Docker entrypoint — ever re-created it, so a database
+  built by the migration chain alone carried **no duplicate-path constraint at all**.
+  New `migrations/096_path_hash_unique_index.sql` adds it as part of the chain, sorted
+  after 087 so it cannot fight the DROP.
+
+  🔴 **The data-integrity half is the serious one.** That unique key is what makes a
+  duplicate media row impossible and what `ItemRepository::upsertByPath()` catches 1062
+  on to win a concurrent-insert race. Production was protected only because somebody
+  ran the finalizer by hand once — which is also why every measurement taken against
+  production looked correct and proved nothing about a fresh install. The perf half:
+  without the index the S151 track lookup degrades from `type=const`/`rows=1` back to
+  `type=ref`/`key_len=144` — identical to pre-S151. (Measured on a clean
+  migrations-only MySQL 8.0 database, 400 track rows: `ref`/`idx_library`/`rows=400`
+  before, `const`/`key_len=305`/`rows=1` after.)
+
+  The migration is safe on a **dirty** database, which is why 072/087 refused to do it:
+  it checks `information_schema` first (already present → a true no-op, no 1061 note, no
+  table rebuild), and if duplicates remain it alters nothing and fails with exactly one
+  error whose text carries the remedy — `Unknown column 'media_items duplicate paths:
+  run php migrations/cleanup_072.php' in 'field list'`. The rest of the chain still
+  runs, and the file is left unrecorded so it retries on the next deploy once the
+  duplicates have been merged.
+
+  `migrations/cleanup_072.php` keeps ownership of **de-duplication only** — the keeper
+  scoring plus twenty-table reference repointing that lives once in `PathDeduper` and is
+  shared with `media:dedupe-paths`. Its `ADD UNIQUE INDEX` stays in place, idempotent,
+  for operators part-way through an upgrade.
+
+  ⚠ **`playback_state` has the same defect and is NOT fixed here.**
+  `uq_playback_state_session_media (session_id, media_item_id)` is created *only* by the
+  manual `migrations/cleanup_090.php`; migration 090 carries no executable statement at
+  all. A fresh install therefore still lacks it, and every ~15 s progress tick inserts a
+  new row instead of updating.
+
 ### Added
 
 - **A CLI scan is now VISIBLE in the admin UI, and can no longer strand a
@@ -45,10 +86,12 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   never is.
 
   ⚠ **The speed-up requires `idx_media_items_library_path_hash`, which `migrations/`
-  alone does NOT create** — migration 087 drops it and only the manual
-  `php migrations/cleanup_072.php` re-adds it. On an install that skipped that
+  alone did NOT create** — migration 087 drops it and only the manual
+  `php migrations/cleanup_072.php` re-added it. On an install that skipped that
   finalizer the new statement plans exactly as the old one did. Check with
-  `SHOW CREATE TABLE media_items`.
+  `SHOW CREATE TABLE media_items`. **Fixed by S152's
+  `migrations/096_path_hash_unique_index.sql`** (see Fixed, above): the chain now adds
+  the index itself, so the `const` plan holds on a fresh install.
 
   The lookup keeps a **raw-path second pass** for the same reason
   `ItemRepository::findByPath()` has one: `path_hash` is a generated column, and on a

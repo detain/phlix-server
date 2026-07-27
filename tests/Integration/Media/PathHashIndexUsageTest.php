@@ -26,16 +26,20 @@ use Workerman\MySQL\Connection;
  * `media_items` (type=ALL) for every scan batch. SV-0.8 leads the predicate
  * with `library_id = ?`, restoring index use.
  *
- * INDEX AVAILABILITY: `run-migrations.php` (what CI applies) adds only the
- * `path_hash` *column* (migration 072's `.sql`); the UNIQUE INDEX itself is
- * created post-migration by `migrations/cleanup_072.php` (kept out of a plain
- * migration because a DB with pre-existing duplicate paths would make an inline
- * `ADD UNIQUE INDEX` fail with 1062 — see 072's header). So this test creates
- * the index itself when absent (idempotently, on its own freshly-seeded rows)
- * and drops it again in tearDown only if it was the creator, leaving the schema
- * as it found it. If pre-existing data prevents the unique index, the test
- * self-skips rather than failing — the index-usage claim is unprovable without
- * the index, but that is an environment gap, not a code defect.
+ * INDEX AVAILABILITY: as of `migrations/096_path_hash_unique_index.sql` (S152)
+ * `run-migrations.php` DOES create the UNIQUE index, so on a current database
+ * the self-heal below is a no-op. It is kept for databases whose chain has not
+ * reached 096 — historically the index was created only by the manual
+ * `migrations/cleanup_072.php` (kept out of a plain migration because a DB with
+ * pre-existing duplicate paths would make an inline `ADD UNIQUE INDEX` fail with
+ * 1062 — see 072's header), and 087 dropped it. So this test creates the index
+ * itself when absent (idempotently, on its own freshly-seeded rows) and drops it
+ * again in tearDown only if it was the creator, leaving the schema as it found
+ * it. If pre-existing data prevents the unique index, the test self-skips rather
+ * than failing — the index-usage claim is unprovable without the index, but that
+ * is an environment gap, not a code defect. That the migration chain leaves the
+ * index in place is asserted separately, by
+ * {@see PathHashUniqueIndexPresentTest}.
  *
  * Like {@see BrowseIndexUsageTest}, with no reachable MySQL the test self-skips.
  *

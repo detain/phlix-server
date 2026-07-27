@@ -444,9 +444,23 @@ the streaming and auth-hardening features and all have safe defaults.
 > tie-break max `id`; batched for large tables) then adds the
 > `uq_playback_state_session_media` unique key, so playback-progress upserts update the
 > existing row instead of inserting a new one every ~15s. **`scripts/install.sh` / the
-> Docker entrypoint do NOT run it automatically** (same as the migration-072
-> `cleanup_072.php` step); until it runs, the unique key does not exist and progress
-> writes keep duplicating. The script is idempotent, so re-running is safe.
+> Docker entrypoint do NOT run it automatically**; until it runs, the unique key does
+> not exist and progress writes keep duplicating. The script is idempotent, so
+> re-running is safe. ⚠ This is the same class of defect S152 fixed for `media_items`
+> — a schema object that exists only because somebody ran a script by hand — and it is
+> still open here.
+
+> **No one-time cleanup needed for `media_items` any more (S152).**
+> `migrations/096_path_hash_unique_index.sql` adds
+> `UNIQUE KEY idx_media_items_library_path_hash (library_id, path_hash)` as part of the
+> ordinary migration chain, so a fresh install gets the path-dedupe constraint from
+> `php bin/phlix migrate` alone. Before it, migration 072 deferred the index to
+> `migrations/cleanup_072.php` and migration 087 dropped it, so an install nobody
+> hand-finalized had **no** duplicate-path protection — and every scanner path lookup
+> lost the `const` plan. The migration is idempotent and refuses to touch a table that
+> still holds duplicates, failing instead with a message that names the remedy: run
+> `php migrations/cleanup_072.php` once to merge them, then re-run migrations. That
+> script now owns **de-duplication only**.
 
 ## API Reference
 

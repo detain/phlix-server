@@ -1,7 +1,5 @@
 <?php
 
-declare(strict_types=1);
-
 /**
  * S120 — enumerate every assertion that runs inside a closure, and (with `--probe`)
  * decide EMPIRICALLY whether that assertion can fail its test.
@@ -43,6 +41,8 @@ declare(strict_types=1);
  *   php scripts/assertion-escape-audit.php --probe --only=42
  */
 
+declare(strict_types=1);
+
 const TRIPWIRE_MESSAGE = 'S120-ASSERTION-ESCAPE-TRIPWIRE';
 
 $root = dirname(__DIR__);
@@ -81,7 +81,14 @@ foreach ($sites as $i => $site) {
     }
 
     $verdict = probeSite($root, $site);
-    printf("%3d  %-11s %s:%d  %s\n", $i, $verdict, substr($site['file'], strlen($root) + 1), $site['assertLine'], $site['method']);
+    printf(
+        "%3d  %-11s %s:%d  %s\n",
+        $i,
+        $verdict,
+        substr($site['file'], strlen($root) + 1),
+        $site['assertLine'],
+        $site['method'],
+    );
 
     if ($verdict === 'VACUOUS' || $verdict === 'DEGRADED') {
         $violations[] = sprintf('%s:%d (%s) — %s', $site['file'], $site['assertLine'], $site['method'], $verdict);

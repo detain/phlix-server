@@ -1,7 +1,5 @@
 <?php
 
-declare(strict_types=1);
-
 /**
  * S120 — turn the assertion-escape guard's report into a CI exit code.
  *
@@ -17,6 +15,8 @@ declare(strict_types=1);
  *
  * Usage: php scripts/assertion-escape-check.php
  */
+
+declare(strict_types=1);
 
 $report = dirname(__DIR__) . '/.phpunit-assertion-escapes.json';
 

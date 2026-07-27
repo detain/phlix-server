@@ -41,6 +41,18 @@
 -- It merges duplicate groups under the NEW (widened) PathDeduper scope and then
 -- re-adds the index. It is documented and built to be re-run safely.
 --
+-- 🔴 CORRECTION (S152) — the paragraph above was the whole defect. Nothing in
+-- `scripts/run-migrations.php` / `bin/phlix migrate` ever ran that finalizer, so
+-- the DROP below was permanent on any install nobody hand-finalized: no unique
+-- index, no path-dedupe constraint, and the S151 track lookup degraded from
+-- `const`/rows=1 back to `ref`/key_len=144. The index is now re-added by the
+-- migration chain itself, in `096_path_hash_unique_index.sql`, which sorts
+-- after this file so it can never fight the DROP; it de-duplicates NOTHING and
+-- refuses to run on a dirty table, pointing at cleanup_072.php instead. Running
+-- the finalizer by hand is therefore only needed when duplicates actually exist.
+-- (Comment-only edit: MigrationRunner::checksum() strips full-line comments
+-- before hashing, so this does NOT re-run migration 087.)
+--
 -- NOTE: rewriting a STORED generated column is a full table rebuild
 -- (ALGORITHM=COPY). Schedule accordingly on a large media_items.
 

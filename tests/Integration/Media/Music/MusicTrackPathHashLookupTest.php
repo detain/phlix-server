@@ -51,21 +51,24 @@ use Workerman\MySQL\Connection;
  * CJK path), and {@see self::assertFixtureIsGenuinelyNonAscii()} fails if a future
  * edit quietly ASCII-fies it.
  *
- * ## ⚠ THE `const` PLAN NEEDS AN INDEX THAT `migrations/` DOES NOT CREATE
+ * ## ⚠ THE `const` PLAN NEEDS AN INDEX `migrations/` DID NOT CREATE UNTIL 096
  *
  * The whole speed-up rests on the `idx_media_items_library_path_hash` UNIQUE index —
- * and migration 087 line 48 **DROPS** it. The only thing that re-adds it is
- * `migrations/cleanup_072.php:121-125`, a MANUAL post-deploy finalizer. After a clean
- * `scripts/run-migrations.php` the index therefore does **not** exist, and the new
- * statement plans as `ref` / `idx_library` / key_len 144 / rows ≈ 404, i.e. exactly as
- * the pre-S151 form did. Production has the index (that is where `const`/1 row was
- * measured); an install that skipped the finalizer gets the correctness of this change
- * and none of the speed.
+ * and migration 087 (`087:59-60`) **DROPS** it. Until S152 the only thing that re-added
+ * it was `migrations/cleanup_072.php:147-151`, a MANUAL post-deploy finalizer, so after
+ * a clean `scripts/run-migrations.php` the index did **not** exist and the new statement
+ * planned as `ref` / `idx_library` / key_len 144 / rows ≈ 404, i.e. exactly as the
+ * pre-S151 form did. Production had the index (that is where `const`/1 row was measured)
+ * only because somebody ran the finalizer by hand. `migrations/096_path_hash_unique_index.sql`
+ * now re-adds it as part of the chain (it sorts after 087), so a current database has it;
+ * that the chain leaves it in place is asserted by
+ * {@see \Phlix\Tests\Integration\Media\PathHashUniqueIndexPresentTest}.
  *
- * ⚠ **So this test CREATES the index itself, and a green run is therefore NOT evidence
- * about your database.** It builds a private, uniquely-named copy of `media_items`
- * ({@see self::createPlanTable()}) via `CREATE TABLE … LIKE`, adds the unique index
- * THERE, and EXPLAINs against that. It deliberately does NOT `ALTER TABLE media_items`:
+ * ⚠ **So this test ENSURES the index on a private copy, and a green run is therefore NOT
+ * evidence about your database.** It builds a private, uniquely-named copy of `media_items`
+ * ({@see self::createPlanTable()}) via `CREATE TABLE … LIKE` — which copies indexes, so
+ * since 096 the clone inherits the unique index and the explicit `ALTER` there is a
+ * tolerated 1061 — and EXPLAINs against that. It deliberately does NOT `ALTER TABLE media_items`:
  * adding a UNIQUE `(library_id, path_hash)` to the SHARED table for the duration of
  * these tests would make any concurrently-running test that inserts two covered-type
  * rows sharing `(library_id, path)` fail with error 1062 for a reason of this test's
@@ -329,8 +332,9 @@ final class MusicTrackPathHashLookupTest extends TestCase
      * recorded by the runner, and `docker/docker-entrypoint.sh:9` runs migrations with
      * `|| true`, so "072 applied, 087 not" is reachable — and in it every `track` row
      * has `path_hash IS NULL`, every lookup misses, and the scanner mints a duplicate
-     * per file with no unique index to catch it (087 drops the index; only the manual
-     * `cleanup_072.php` re-adds it).
+     * per file with nothing to catch it: `track` is outside 072's `CASE`, so every track's
+     * `path_hash` is NULL until 087 has run, and NULLs never collide under a UNIQUE index —
+     * so even the index migration 096 adds cannot constrain those rows.
      *
      * This asserts the SHAPE against real MySQL: two statements on a miss, the second
      * carrying NO `path_hash` while keeping the `type = 'track'` pin and the library
@@ -596,9 +600,25 @@ final class MusicTrackPathHashLookupTest extends TestCase
 
         try {
             $db->query('CREATE TABLE ' . $name . ' LIKE media_items');
-            $db->query(
-                'ALTER TABLE ' . $name . ' ADD UNIQUE INDEX ' . self::PATH_HASH_INDEX . ' (library_id, path_hash)',
-            );
+            // `CREATE TABLE … LIKE` copies indexes, so since migration 096 put
+            // the unique index back into the migration chain (S152) the clone
+            // ALREADY has it and this ALTER raises 1061 "Duplicate key name".
+            // Letting that reach the catch below would markTestSkipped() the
+            // whole class — silently retiring the five S151 plan proofs on a
+            // correctly-migrated database, which is the exact opposite of what
+            // the index being present should mean. Tolerate only 1061; any
+            // other failure still skips, because the plan claim really is
+            // unprovable without the index.
+            try {
+                $db->query(
+                    'ALTER TABLE ' . $name . ' ADD UNIQUE INDEX ' . self::PATH_HASH_INDEX
+                    . ' (library_id, path_hash)',
+                );
+            } catch (Throwable $e) {
+                if (!str_contains($e->getMessage(), 'Duplicate key name')) {
+                    throw $e;
+                }
+            }
             $db->query(
                 'INSERT INTO ' . $name . ' (id, library_id, type, name, path)'
                 . ' SELECT id, library_id, type, name, path FROM media_items WHERE library_id IN (?, ?)',

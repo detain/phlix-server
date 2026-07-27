@@ -14,7 +14,7 @@ use Workerman\MySQL\Connection;
  * SV-0.8 real-DB proof that the scanner's path lookups
  * ({@see ItemRepository::findByPath()} / {@see ItemRepository::findPathsMap()})
  * actually resolve through the `(library_id, path_hash)` unique index (migration
- * 072 + `cleanup_072.php`) instead of full-scanning `media_items` on every scan
+ * 072's column + migration 096's index) instead of full-scanning `media_items` on every scan
  * / rescan. A mocked connection cannot exercise the optimizer, so this runs
  * `EXPLAIN` against the queries those methods emit and asserts the composite
  * index is applicable and — when forced — provides a non-full-scan access path.
@@ -26,16 +26,20 @@ use Workerman\MySQL\Connection;
  * `media_items` (type=ALL) for every scan batch. SV-0.8 leads the predicate
  * with `library_id = ?`, restoring index use.
  *
- * INDEX AVAILABILITY: `run-migrations.php` (what CI applies) adds only the
- * `path_hash` *column* (migration 072's `.sql`); the UNIQUE INDEX itself is
- * created post-migration by `migrations/cleanup_072.php` (kept out of a plain
- * migration because a DB with pre-existing duplicate paths would make an inline
- * `ADD UNIQUE INDEX` fail with 1062 — see 072's header). So this test creates
- * the index itself when absent (idempotently, on its own freshly-seeded rows)
- * and drops it again in tearDown only if it was the creator, leaving the schema
- * as it found it. If pre-existing data prevents the unique index, the test
- * self-skips rather than failing — the index-usage claim is unprovable without
- * the index, but that is an environment gap, not a code defect.
+ * INDEX AVAILABILITY: as of `migrations/096_path_hash_unique_index.sql` (S152)
+ * `run-migrations.php` DOES create the UNIQUE index, so on a current database
+ * the self-heal below is a no-op. It is kept for databases whose chain has not
+ * reached 096 — historically the index was created only by the manual
+ * `migrations/cleanup_072.php` (kept out of a plain migration because a DB with
+ * pre-existing duplicate paths would make an inline `ADD UNIQUE INDEX` fail with
+ * 1062 — see 072's header), and 087 dropped it. So this test creates the index
+ * itself when absent (idempotently, on its own freshly-seeded rows) and drops it
+ * again in tearDown only if it was the creator, leaving the schema as it found
+ * it. If pre-existing data prevents the unique index, the test self-skips rather
+ * than failing — the index-usage claim is unprovable without the index, but that
+ * is an environment gap, not a code defect. That the migration chain leaves the
+ * index in place is asserted separately, by
+ * {@see PathHashUniqueIndexPresentTest}.
  *
  * Like {@see BrowseIndexUsageTest}, with no reachable MySQL the test self-skips.
  *
@@ -113,9 +117,10 @@ final class PathHashIndexUsageTest extends TestCase
             ]);
         }
 
-        // The unique index is normally added by cleanup_072.php (not the base
-        // migration). Ensure it exists so the optimizer actually has it to use;
-        // self-skip if pre-existing data prevents a unique constraint.
+        // The migration chain adds the unique index as of 096, so this is a
+        // no-op on a current database. Ensure it exists anyway (pre-096 chains)
+        // so the optimizer actually has it to use; self-skip if pre-existing
+        // data prevents a unique constraint.
         $this->ensurePathHashIndex();
 
         // Fresh, deterministic index statistics for the cost-based optimizer.
@@ -356,14 +361,14 @@ final class PathHashIndexUsageTest extends TestCase
 
     /**
      * Ensure the `(library_id, path_hash)` unique index exists for the duration
-     * of this test. Mirrors cleanup_072.php's statement. Self-skips when
+     * of this test. Mirrors migration 096's / cleanup_072.php's statement. Self-skips when
      * pre-existing data would violate uniqueness (index-usage is unprovable
      * without the index, but that is an environment gap).
      */
     private function ensurePathHashIndex(): void
     {
         if ($this->hasPathHashIndex()) {
-            return; // Already created (cleanup_072.php was run on this DB).
+            return; // Already there (migration 096, or cleanup_072.php, ran on this DB).
         }
 
         try {

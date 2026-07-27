@@ -201,8 +201,15 @@ final class MusicScanWriteAmplificationIntegrationTest extends TestCase
      * SECOND disjunct already loads the index — so the `$readEveryFile ||` half, which is
      * the entire change, was never the reason the index was loaded anywhere. Mutation M8
      * (delete `$readEveryFile ||`, i.e. let the load inherit the heal/adopt gate)
-     * SURVIVED the whole 7,746-test suite. Reproduced before this test was written:
-     * `Tests: 7746, Skipped: 10, 0 failures`, exit 0.
+     * SURVIVED the whole 7,746-test suite. Reproduced twice, on a pristine `8862fca9`
+     * tree: `Tests: 7746, 0 failures`, exit 0. With this test in place the same mutant
+     * is RED — `Failed asserting that 3 is identical to 0` at the assertion below.
+     *
+     * ⚠ The SKIP COUNT is deliberately not quoted here, because it is not stable: the
+     * three `HlsRelayManagerTest` cases self-skip on "Workerman Timer not available"
+     * only on some runs, so the same tree reports `Skipped: 7` or `Skipped: 10` under
+     * `executionOrder="random"`. Neither number is evidence of anything about this
+     * mutant. `Failures: 0` is, and none of the varying skips is in this file.
      *
      * It is not a harmless mutant. A healing `rescan` is run BECAUSE the library is
      * unhealed — that is the operator's reason for asking — so the production shape is

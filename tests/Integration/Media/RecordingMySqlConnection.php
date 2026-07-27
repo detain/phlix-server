@@ -34,8 +34,15 @@ use Phlix\Common\Database\PhlixMySQLConnection;
  * This class subclasses the production connection and delegates every statement to it,
  * so the SQL is parsed, planned and executed by a real server exactly as in production
  * — the recording is a side effect, not a substitute. It also keeps the bound
- * PARAMETERS, which the unit doubles discard, so "which album was recounted" is a
- * question only this class can answer.
+ * PARAMETERS alongside each statement, which the unit doubles' statement logs do not.
+ *
+ * ⚠ Stated narrowly, because the neighbouring over-claim was review r1's finding 2 and
+ * it must not be re-committed here in a new place. "Which album was recounted" IS
+ * answerable on {@see \Phlix\Tests\Unit\Media\Music\MusicLibraryScannerTest}'s
+ * `MusicSchemaConnection`, whose `$totalTracksWrites` is keyed by album id. What that
+ * array holds is the LAST value written per album, so the question it cannot answer is
+ * **HOW MANY TIMES** a given album was recounted — which is exactly S148's claim, and
+ * why the per-album counting in this file is done here.
  *
  * ⚠ **This is the direct answer to mutation M10, and M10 is the disagreement above made
  * concrete.** During S145 the mutation that reverted only the widened `SELECT` survived
@@ -72,9 +79,19 @@ final class RecordingMySqlConnection extends PhlixMySQLConnection
      * The match is narrowed by the FIRST BOUND PARAMETER, and that is the whole point:
      * `refreshAlbumTrackTotal()` issues byte-identical SQL for every album and differs
      * only in the id it binds, so "fail the recount of THIS album and no other" is not
-     * expressible on SQL text alone. It is also not expressible on the in-memory doubles
-     * at all — {@see \Phlix\Tests\Unit\Media\Music\SkipSchemaConnection::$statements}
-     * keeps the SQL and discards the parameters.
+     * expressible on SQL text alone.
+     *
+     * ⚠ It IS expressible on one of the in-memory doubles, and saying otherwise would
+     * repeat review r1's finding 2 in a new place:
+     * {@see \Phlix\Tests\Unit\Media\Music\MusicLibraryScannerTest}'s
+     * `MusicSchemaConnection::faultOnNth($needle, $occurrence, $param)` narrows on a
+     * bound parameter through the same mechanism (12 call sites, of which 2 — at
+     * `MusicLibraryScannerTest.php:1494` and `:1956` — pass the `$param`). The one
+     * this method is for is
+     * {@see \Phlix\Tests\Unit\Media\Music\SkipSchemaConnection}, which keeps only the
+     * SQL (`$statements`) and has no fault arm at all — and, more to the point, a fault
+     * injected here interrupts a scan a REAL server is answering, so what the rest of
+     * the `finally` then does is production behaviour rather than modelled behaviour.
      *
      * @param string     $needle     Case-sensitive SQL substring, e.g. `'SET a.total_tracks'`.
      * @param int|string $firstParam Value `$params[0]` must equal, compared as a string.

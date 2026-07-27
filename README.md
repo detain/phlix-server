@@ -436,20 +436,6 @@ the streaming and auth-hardening features and all have safe defaults.
 > table). Run `php bin/phlix migrate` (or `php scripts/run-migrations.php`) after
 > pulling — migrations are idempotent, so re-running is safe.
 
-> **Migration + one-time cleanup required on deploy (S29, updates.md #29).** Adds
-> `migrations/090_playback_state_session_media_unique.sql` (documentation-only —
-> reserves the number). After `php bin/phlix migrate` (or `php scripts/run-migrations.php`),
-> run **once**: `php migrations/cleanup_090.php`. It merges any duplicate
-> `(session_id, media_item_id)` rows in `playback_state` (keeping the max `updated_at`,
-> tie-break max `id`; batched for large tables) then adds the
-> `uq_playback_state_session_media` unique key, so playback-progress upserts update the
-> existing row instead of inserting a new one every ~15s. **`scripts/install.sh` / the
-> Docker entrypoint do NOT run it automatically**; until it runs, the unique key does
-> not exist and progress writes keep duplicating. The script is idempotent, so
-> re-running is safe. ⚠ This is the same class of defect S152 fixed for `media_items`
-> — a schema object that exists only because somebody ran a script by hand — and it is
-> still open here.
-
 > **No one-time cleanup needed for `media_items` any more (S152).**
 > `migrations/096_path_hash_unique_index.sql` adds
 > `UNIQUE KEY idx_media_items_library_path_hash (library_id, path_hash)` as part of the
@@ -461,6 +447,25 @@ the streaming and auth-hardening features and all have safe defaults.
 > still holds duplicates, failing instead with a message that names the remedy: run
 > `php migrations/cleanup_072.php` once to merge them, then re-run migrations. That
 > script now owns **de-duplication only**.
+
+> **No one-time cleanup needed for `playback_state` any more (S156).**
+> `migrations/097_playback_state_unique_key.sql` adds
+> `UNIQUE KEY uq_playback_state_session_media (session_id, media_item_id)` as part of the
+> ordinary migration chain, so a fresh install gets the progress-upsert constraint from
+> `php bin/phlix migrate` (or `php scripts/run-migrations.php`) alone. Before it,
+> migration 090 (S29, updates.md #29) reserved the number but carried **no executable
+> statement at all** and deferred the key to the manual `migrations/cleanup_090.php`,
+> which neither `scripts/install.sh` nor the Docker entrypoint nor either migrate command
+> ever calls — so an install nobody hand-finalized had **no**
+> `(session_id, media_item_id)` constraint, the `ON DUPLICATE KEY UPDATE` in
+> `PlaybackController::reportProgress()` / `StreamManager::persistStreamState()` could
+> never fire, and every ~15 s progress tick inserted a new row instead of updating one
+> (finished episodes never left Continue Watching and `playback_state` grew without
+> bound). The migration is idempotent and refuses to touch a table that still holds
+> duplicate rows, failing instead with a message that names the remedy: run
+> `php migrations/cleanup_090.php` once to merge them, then re-run migrations. That
+> script now owns **de-duplication only** — it is needed only on an existing install that
+> accumulated duplicate rows while the key was missing, never on a fresh one.
 
 ## API Reference
 

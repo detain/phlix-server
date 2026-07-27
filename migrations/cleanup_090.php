@@ -3,6 +3,30 @@
 /**
  * playback_state finalizer: merge duplicate rows, then add the unique key.
  *
+ * WHAT THIS SCRIPT OWNS, as of S156: DE-DUPLICATION, and only de-duplication.
+ *
+ * `migrations/097_playback_state_unique_key.sql` now adds
+ * `uq_playback_state_session_media (session_id, media_item_id)` as part of the
+ * migration chain, so a database built by `scripts/run-migrations.php` alone
+ * finally has the constraint. Before 097 the key existed ONLY because somebody
+ * ran this script by hand — migration 090 carries no executable statement at
+ * all, and nothing in `run-migrations.php` / `bin/phlix migrate` /
+ * `scripts/install.sh` / `docker/docker-entrypoint.sh` calls this file.
+ *
+ * You only need to run this on a database that still holds duplicate rows, and
+ * migration 097 will tell you so by name: it fails, deliberately, with
+ *
+ *     Unknown column 'playback_state duplicates: run php
+ *     migrations/cleanup_090.php' in 'field list'
+ *
+ * and alters nothing until you have. Merging is not something 097 can safely do
+ * itself: choosing which duplicate survives decides where the user resumes, and
+ * that rule lives once, in {@see \Phlix\Session\PlaybackStateDeduper}, rather
+ * than being re-implemented as a second source of truth in SQL.
+ *
+ * The `addUniqueKey()` step below stays — idempotent — so this script remains
+ * usable stand-alone by an operator mid-upgrade who has not yet run 097.
+ *
  * Run this ONCE after migration 090 (which documents the
  * `(session_id, media_item_id)` unique key but deliberately does NOT add it —
  * an inline `ADD UNIQUE KEY` fails with error 1062 on any DB that still holds

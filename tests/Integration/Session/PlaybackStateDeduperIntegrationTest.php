@@ -45,11 +45,23 @@ use Workerman\MySQL\Connection;
  * iterate more than once) plus a tie-break group and a block of untouchable
  * singleton groups — thousands of `playback_state` rows in total.
  *
- * Because `addUniqueKey()` mutates the shared `playback_state` schema (and a
- * lingering unique key would break other integration tests that deliberately
- * seed duplicate rows, e.g. ContinueWatchingIntegrationTest), the key is dropped
- * again in tearDown *only when this test created it* — exactly the create-and-
- * restore discipline {@see PathHashIndexUsageTest} uses for its index.
+ * Because `addUniqueKey()` mutates the shared `playback_state` schema, the key is
+ * restored to whatever state it was in when the test started — exactly the
+ * create-and-restore discipline {@see PathHashIndexUsageTest} uses for its index.
+ *
+ * ⚠ S156 — RESTORE, DO NOT JUST DROP. Migration
+ * `097_playback_state_unique_key.sql` now puts
+ * `uq_playback_state_session_media` into the migration chain, so on a correctly
+ * migrated database the key is ALREADY THERE when this test starts. The previous
+ * "drop it in tearDown iff we created it" rule was written when nothing in the
+ * chain created it, and against a 097-built schema it would have STRIPPED a real
+ * constraint off the shared test database and left every later test in the run
+ * (and any subsequent run) unprotected — silently, because nothing asserts the
+ * key outside {@see PlaybackStateUniqueKeyPresentTest}. {@see setUp()} therefore
+ * records whether the key pre-existed, and {@see purgeFixtures()} puts it back.
+ *
+ * The drop in setUp is still required: this fixture seeds hundreds of duplicate
+ * `(session_id, media_item_id)` groups, which the key exists to forbid.
  *
  * @covers \Phlix\Session\PlaybackStateDeduper
  */
@@ -76,6 +88,18 @@ final class PlaybackStateDeduperIntegrationTest extends TestCase
     private ?Connection $db = null;
 
     private bool $createdUniqueKey = false;
+
+    /**
+     * Whether `uq_playback_state_session_media` was ALREADY on the table when
+     * this test started — i.e. whether the database was built by a migration
+     * chain that includes `097_playback_state_unique_key.sql`.
+     *
+     * S156: on such a database {@see setUp()} must drop the key to seed its
+     * duplicate fixtures, so {@see purgeFixtures()} is obliged to put it back.
+     * Dropping it and walking away would strip a real constraint off the shared
+     * test database for every later test in the run.
+     */
+    private bool $uniqueKeyPreExisted = false;
 
     private string $libraryId = '';
     private string $userId = '';
@@ -134,8 +158,15 @@ final class PlaybackStateDeduperIntegrationTest extends TestCase
 
         $this->assertNotNull($this->db);
 
-        // Guard against a leftover key from a previously-aborted run so the
-        // fixture's duplicate rows can be inserted (a live key would 1062).
+        // Record whether the key was already there BEFORE dropping it. On a
+        // database migrated with 097 it always is, and purgeFixtures() has to
+        // restore exactly the state it found (S156). This also still covers the
+        // original case: a leftover key from a previously-aborted run.
+        $deduper = new PlaybackStateDeduper($this->db);
+        $this->uniqueKeyPreExisted = $deduper->hasUniqueKey();
+
+        // The fixture's duplicate rows cannot be inserted while the key is live
+        // (they are exactly what it forbids — a live key would 1062).
         $this->dropUniqueKeyIfPresent();
 
         $this->libraryId = Uuid::v4();
@@ -648,13 +679,6 @@ final class PlaybackStateDeduperIntegrationTest extends TestCase
             return;
         }
 
-        // Restore the schema: drop the unique key iff this test added it, so
-        // sibling integration tests that seed duplicate playback_state rows keep
-        // working against a shared DB.
-        if ($this->createdUniqueKey) {
-            $this->dropUniqueKeyIfPresent();
-        }
-
         if ($this->sessionIds !== []) {
             $placeholders = implode(', ', array_fill(0, count($this->sessionIds), '?'));
             $db->query(
@@ -678,6 +702,22 @@ final class PlaybackStateDeduperIntegrationTest extends TestCase
         }
         if ($this->libraryId !== '') {
             $db->query('DELETE FROM libraries WHERE id = ?', [$this->libraryId]);
+        }
+
+        // Restore the schema to the state setUp() found it in — and do it LAST,
+        // after every fixture row is gone. Order is load-bearing: this fixture
+        // seeds hundreds of duplicate (session_id, media_item_id) groups, so
+        // re-adding the key before deleting them would fail with 1062 and leave
+        // the shared database permanently unconstrained.
+        //
+        // S156: if the key pre-existed (a 097-migrated database, which is now
+        // every correctly-migrated one) it MUST go back, whether this test
+        // created it or merely found it. If it did not pre-exist, the old rule
+        // still holds — drop what this test added so the table is left as found.
+        if ($this->uniqueKeyPreExisted) {
+            (new PlaybackStateDeduper($db))->addUniqueKey();
+        } elseif ($this->createdUniqueKey) {
+            $this->dropUniqueKeyIfPresent();
         }
     }
 

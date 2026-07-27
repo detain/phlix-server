@@ -9,6 +9,65 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- **A fresh install now actually HAS the `playback_state` progress-upsert unique key**
+  (S156). Migration `090_playback_state_session_media_unique.sql` is NAMED for
+  `uq_playback_state_session_media (session_id, media_item_id)` but carries no executable
+  statement at all — it is a pure comment block that reserves the number and defers the
+  key to `migrations/cleanup_090.php`. That script is MANUAL: no auto-run path — not
+  `scripts/run-migrations.php`, not `bin/phlix migrate`, not `scripts/install.sh`, not the
+  Docker entrypoint — has ever called it. A database built by the migration chain alone
+  therefore carried **no `(session_id, media_item_id)` constraint at all**. New
+  `migrations/097_playback_state_unique_key.sql` adds it as part of the chain, sorted
+  after `001_initial_schema.sql`, which creates the table.
+
+  🔴 **This is the recorded root cause of "a finished episode never leaves Continue
+  Watching."** `PlaybackController::reportProgress()` and
+  `StreamManager::persistStreamState()` persist progress with an
+  `INSERT … ON DUPLICATE KEY UPDATE` whose intended conflict target is that pair;
+  `playback_state` otherwise has only the `id` PRIMARY KEY — a fresh random UUID on every
+  call — so `ON DUPLICATE KEY` could never fire and every ~15 s tick INSERTed a brand-new
+  row. The finish signal wrote a new row instead of updating the in-progress one, so the
+  stale `position_ticks < duration * 0.95` row survived and kept surfacing; Next Up and
+  Most Watched could not be built on a "current" row per pair that was not single-valued;
+  and `playback_state` grew without bound. Production had the key only because somebody
+  ran the finalizer by hand once — which is also why every measurement taken against
+  production looked correct and proved nothing about a fresh install.
+
+  The migration is safe on a **dirty** database, which is why 090 refused to emit a bare
+  ALTER (1062 on any table that still holds duplicates, retried and failing on every
+  deploy): it checks `information_schema` first (already present → a true no-op, no 1061
+  note, no table rebuild, and the duplicate scan is skipped because the constraint proves
+  there are none), and if duplicates remain it alters nothing, touches no row, and fails
+  with exactly one error whose text carries the remedy — `Unknown column 'playback_state
+  duplicates: run php migrations/cleanup_090.php' in 'field list'`. The rest of the chain
+  still runs, and the file is left unrecorded so it retries on the next deploy once the
+  duplicates have been merged. 090 and `cleanup_090.php` get comment-only edits, which are
+  checksum-neutral: `MigrationRunner::checksum()` strips full-line comments, so an
+  already-migrated install sees no ledger divergence.
+
+  `migrations/cleanup_090.php` keeps ownership of **de-duplication only**. Choosing which
+  duplicate survives decides where a user resumes playback, so that rule stays in one
+  place — `PlaybackStateDeduper::findKeeperId()`: greatest `updated_at`, ties broken by
+  greatest `id`, which is deliberately the same ordering
+  `PlaybackController::getContinueWatching()` already picks its row with, so merging is
+  behaviour-preserving with respect to the read path. Its `addUniqueKey()` step stays in
+  place, idempotent, for operators part-way through an upgrade.
+
+  The read-path `ROW_NUMBER() OVER (PARTITION BY ps.media_item_id ORDER BY ps.updated_at
+  DESC, ps.id DESC)` dedup in `getContinueWatching()` is still required after this
+  migration — one user can have several *sessions* watching the same item, and this key
+  only constrains a single session — but it is no longer being asked to paper over a
+  per-session write bug.
+
+  ⚠ **A test was green while destroying the constraint.**
+  `PlaybackStateDeduperIntegrationTest` dropped the key in `setUp()` (it has to, to seed
+  hundreds of duplicate groups) and then dropped it *again* in `tearDown()`, so against a
+  097-built schema it stripped a real constraint off the shared test database and still
+  reported `OK`. It now records whether the key pre-existed and restores it — at the very
+  end of `purgeFixtures()`, after the fixture rows are deleted, because re-adding before
+  the deletes would fail 1062 on the fixture's own duplicates and leave the database
+  unconstrained anyway.
+
 - **A fresh install now actually HAS the path-dedupe unique index** (S152). Migration
   072 added the `path_hash` generated column but deferred
   `UNIQUE KEY idx_media_items_library_path_hash (library_id, path_hash)` to the manual

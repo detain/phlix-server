@@ -1,5 +1,29 @@
 -- Migration 090: playback_state (session_id, media_item_id) UNIQUE KEY.
 --
+-- 🔴 CORRECTION (S156) — READ THIS FIRST. The reasoning below is sound but its
+-- CONCLUSION was wrong, and the cost was three years of fresh installs shipping
+-- without the constraint. Deferring the key to a MANUAL script meant that a
+-- database built by `scripts/run-migrations.php` alone never got it: nothing in
+-- the auto-run path calls `migrations/cleanup_090.php`. Production looked fine
+-- only because somebody ran the finalizer by hand once, which is precisely why
+-- every measurement taken against production proved nothing about a new box.
+--
+-- `migrations/097_playback_state_unique_key.sql` now adds the key as part of the
+-- chain. It keeps everything this file got right — it does NOT merge duplicates
+-- inline, and it does NOT blindly `ADD UNIQUE KEY` on a dirty table — by picking
+-- its statement at runtime from `information_schema`: no-op when the key is
+-- present, `ADD UNIQUE KEY` when the table is clean, and a deliberate error
+-- whose text is `run php migrations/cleanup_090.php` when duplicates remain.
+--
+-- `cleanup_090.php` therefore now owns DE-DUPLICATION ONLY. Its `addUniqueKey()`
+-- call stays, idempotent, for operators mid-upgrade and for anyone who runs the
+-- finalizer on its own.
+--
+-- This file itself is left with no executable statement — 097 does the work, and
+-- editing an already-applied migration's SQL would flip its ledger checksum.
+-- (Comment-only edits are checksum-neutral: `MigrationRunner::checksum()` drops
+-- full-line `--`/`#` comments before hashing.)
+--
 -- This is the SCHEMA half of updates.md #29 (plan step S29). The finish-signal
 -- wiring is the SEPARATE step S30 and is NOT part of this migration.
 --
@@ -49,3 +73,6 @@
 -- to reserve the migration number, record the decision in the schema timeline /
 -- `schema_migrations` ledger, and point operators at the finalizer. The runner
 -- applies it cleanly (zero statements) and records it.
+--
+-- ...and that "on purpose" is exactly the defect S156 fixed. See the correction
+-- block at the top of this file: the key is now added by migration 097.

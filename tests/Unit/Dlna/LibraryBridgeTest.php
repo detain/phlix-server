@@ -520,12 +520,22 @@ class LibraryBridgeTest extends TestCase
 
     /**
      * With the `music_*` reader wired, the advertised artist count comes from
-     * `music_artists` — the same source the LISTING is enumerated from — so a
-     * renderer is never promised more children than it is handed. A
-     * `media_items[artist]` row that no `music_artists` row points at is
-     * adoption residue, not a browsable artist.
+     * `music_artists` — the same source the LISTING is enumerated from — and is
+     * then clamped to the ceiling that listing actually stops at,
+     * {@see MusicLibraryService::MAX_EMBEDDED_ROWS}.
+     *
+     * On the production shape (4,656 artists with a `media_items` row) the
+     * unclamped count advertises 4,656 while `getLibraryItems()` can only hand
+     * over 2,000, because it calls `getArtistMediaItemIds()` whose default limit
+     * IS that constant. The renderer is then promised 2.3x what it receives.
+     *
+     * ⚠ This test pins the ADVERTISED number only. It does not claim the other
+     * 2,656 artists are reachable — they are not, and
+     * {@see LibraryBridge::getLibraryChildCount()} says so: there is no offset
+     * path into the audio root, so a renderer cannot page past the cap. Real
+     * DLNA paging is a separate step.
      */
-    public function testAudioRootCountsArtistsFromMusicTablesWhenWired(): void
+    public function testAudioRootClampsTheAdvertisedArtistCountToWhatItCanDeliver(): void
     {
         $this->stubCounts(['artist' => 4658, 'audio' => 0, 'audiobook' => 0]);
         $music = $this->createMock(MusicLibraryService::class);
@@ -540,7 +550,39 @@ class LibraryBridgeTest extends TestCase
 
         $byId = array_column($bridge->getRootContainers(), 'child_count', 'id');
 
-        $this->assertSame(4656, $byId['library-audio'] ?? null, 'the 2 orphaned artist rows must not be advertised');
+        $this->assertSame(
+            MusicLibraryService::MAX_EMBEDDED_ROWS,
+            $byId['library-audio'] ?? null,
+            'the advertised childCount must not exceed what getLibraryItems() can return'
+        );
+    }
+
+    /**
+     * Below the cap, the advertised count is the `music_artists` count exactly —
+     * a `media_items[artist]` row that no `music_artists` row points at is
+     * adoption residue, not a browsable artist, and must not be advertised.
+     *
+     * Deliberately uses numbers under {@see MusicLibraryService::MAX_EMBEDDED_ROWS}
+     * so the clamp cannot mask the orphan exclusion: at production scale both
+     * 4,658 and 4,656 clamp to the same value and this distinction would be
+     * invisible.
+     */
+    public function testAudioRootCountsArtistsFromMusicTablesWhenWired(): void
+    {
+        $this->stubCounts(['artist' => 12, 'audio' => 0, 'audiobook' => 0]);
+        $music = $this->createMock(MusicLibraryService::class);
+        $music->method('getArtistsWithMediaItemCount')->willReturn(10);
+
+        $bridge = new LibraryBridge(
+            $this->itemRepositoryMock,
+            $this->hlsStreamerMock,
+            null,
+            $music
+        );
+
+        $byId = array_column($bridge->getRootContainers(), 'child_count', 'id');
+
+        $this->assertSame(10, $byId['library-audio'] ?? null, 'the 2 orphaned artist rows must not be advertised');
     }
 
     /**
@@ -619,5 +661,128 @@ class LibraryBridgeTest extends TestCase
         $bridge = new LibraryBridge($this->itemRepositoryMock, $this->hlsStreamerMock, null, $music);
 
         $this->assertSame(['season-1'], array_column($bridge->getContainerChildren('series-1'), 'id'));
+    }
+
+    /**
+     * A caller that already knows the container's type must not make the bridge
+     * look it up again.
+     *
+     * `ContentDirectory::browse()` resolves (and caches) the object before it
+     * dispatches to `browseChildren()`, so the `findById()` this class used to
+     * issue was a second read of a row the request already had — one wasted
+     * query on EVERY drill-down, including the `series`/`season` ones that end up
+     * using `parent_id` anyway.
+     */
+    public function testAKnownContainerTypeSpareTheBridgeASecondLookup(): void
+    {
+        $this->itemRepositoryMock->expects($this->never())->method('findById');
+        $this->itemRepositoryMock->expects($this->once())->method('findByParent')->with('series-1')->willReturn([
+            ['id' => 'season-1', 'name' => 'S1', 'type' => 'season', 'path' => ''],
+        ]);
+
+        $music = $this->createMock(MusicLibraryService::class);
+        $bridge = new LibraryBridge($this->itemRepositoryMock, $this->hlsStreamerMock, null, $music);
+
+        $this->assertSame(
+            ['season-1'],
+            array_column($bridge->getContainerChildren('series-1', 'series'), 'id')
+        );
+    }
+
+    /**
+     * The same shortcut on the MUSIC side: a known `artist` type goes straight to
+     * `music_albums` with no `media_items` type probe.
+     */
+    public function testAKnownArtistTypeGoesStraightToTheMusicTables(): void
+    {
+        $this->itemRepositoryMock->expects($this->never())->method('findById');
+        $this->itemRepositoryMock->expects($this->never())->method('findByParent');
+        $this->itemRepositoryMock->method('findByIds')->with(['album-1'])->willReturn([
+            ['id' => 'album-1', 'name' => 'First', 'type' => 'album', 'path' => ''],
+        ]);
+
+        $music = $this->createMock(MusicLibraryService::class);
+        $music->method('getAlbumMediaItemIdsForArtist')->willReturn(['album-1']);
+
+        $bridge = new LibraryBridge($this->itemRepositoryMock, $this->hlsStreamerMock, null, $music);
+
+        $this->assertSame(
+            ['album-1'],
+            array_column($bridge->getContainerChildren('artist-1', 'artist'), 'id')
+        );
+    }
+
+    /**
+     * `ContentDirectory` really does hand the resolved type over — asserted
+     * through the PUBLIC browse path, because a bridge-level test would pass
+     * even if nothing used the new parameter.
+     *
+     * One `findById()` for the whole Browse: the one `browse()` itself makes to
+     * decide BrowseMetadata vs BrowseDirectChildren.
+     */
+    public function testContentDirectoryHandsTheResolvedTypeToTheBridge(): void
+    {
+        $this->itemRepositoryMock->expects($this->once())->method('findById')->with('artist-1')->willReturn([
+            'id' => 'artist-1', 'name' => 'An Artist', 'type' => 'artist', 'path' => '',
+        ]);
+        $this->itemRepositoryMock->expects($this->never())->method('findByParent');
+        $this->itemRepositoryMock->method('findByIds')->with(['album-1'])->willReturn([
+            ['id' => 'album-1', 'name' => 'First', 'type' => 'album', 'path' => ''],
+        ]);
+
+        $music = $this->createMock(MusicLibraryService::class);
+        $music->method('getAlbumMediaItemIdsForArtist')->willReturn(['album-1']);
+
+        $bridge = new LibraryBridge($this->itemRepositoryMock, $this->hlsStreamerMock, null, $music);
+        $cd = new \Phlix\Dlna\ContentDirectory($this->itemRepositoryMock);
+        $cd->setLibraryBridge($bridge);
+
+        $result = $cd->browse('artist-1', 'BrowseDirectChildren', '*', 0, 10, '');
+
+        $this->assertSame(1, $result['TotalMatches'] ?? null);
+        $this->assertStringContainsString('album-1', is_string($result['Result'] ?? null) ? $result['Result'] : '');
+    }
+
+    /**
+     * The audio root resolves its artist ids in BOUNDED batches.
+     *
+     * `getArtistMediaItemIds()` returns up to
+     * {@see MusicLibraryService::MAX_EMBEDDED_ROWS} ids and
+     * `ItemRepository::findByIds()` builds one `IN (…)` placeholder per id, so
+     * un-chunked this was a single 2,000-placeholder statement buffered whole
+     * inside a resident worker — the largest the DLNA path issues. Chunking must
+     * not change the RESULT: `findByIds()` re-orders its rows to match the ids it
+     * was handed, so the concatenated chunks are the un-chunked list.
+     */
+    public function testTheAudioRootResolvesArtistIdsInBoundedBatches(): void
+    {
+        $ids = [];
+        for ($i = 0; $i < 1200; $i++) {
+            $ids[] = sprintf('artist-%04d', $i);
+        }
+
+        $this->stubCounts(['artist' => 1200, 'audio' => 0, 'audiobook' => 0]);
+
+        $batchSizes = [];
+        $this->itemRepositoryMock->method('findByIds')
+            ->willReturnCallback(function (array $batch) use (&$batchSizes): array {
+                $batchSizes[] = count($batch);
+
+                return array_map(
+                    static fn (string $id): array => ['id' => $id, 'name' => $id, 'type' => 'artist', 'path' => ''],
+                    $batch
+                );
+            });
+
+        $music = $this->createMock(MusicLibraryService::class);
+        $music->method('getArtistsWithMediaItemCount')->willReturn(1200);
+        $music->method('getArtistMediaItemIds')->willReturn($ids);
+
+        $bridge = new LibraryBridge($this->itemRepositoryMock, $this->hlsStreamerMock, null, $music);
+
+        $children = $bridge->getContainerChildren('library-audio');
+
+        $this->assertSame([500, 500, 200], $batchSizes, 'no single IN (…) may carry the whole page');
+        $this->assertSame($ids, array_column($children, 'id'), 'chunking must not reorder or drop rows');
     }
 }

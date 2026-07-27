@@ -1984,6 +1984,84 @@ class ItemRepositoryTest extends TestCase
         $this->assertSame(['movie-1'], array_column($result, 'id'));
     }
 
+    /**
+     * S97 r1 — a FULL non-music half must not starve music out of the page.
+     *
+     * The merge used to concatenate (`media_items` half, then the music half) and
+     * cut the combined list at `$limit`. So the moment the non-music half filled
+     * the page — the default page is 50 and a broad query fills it easily — the
+     * search returned ZERO artists and ZERO albums however well they matched.
+     * Master's single `MATCH` over `media_items` could at least surface an artist
+     * row in that case, so the concatenating version was a regression for exactly
+     * the searches music matters most for.
+     *
+     * Anti-tautology: against the pre-fix `mergeSearchResults()` this fails —
+     * the four movies consume the whole page and `artist-1` never appears.
+     */
+    public function testMusicHitsSurviveANonMusicHalfThatFillsThePage(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(function (string $sql): array {
+            if (str_contains($sql, 'IN BOOLEAN MODE')) {
+                $rows = [];
+                for ($i = 1; $i <= 4; $i++) {
+                    $rows[] = [
+                        'id' => 'movie-' . $i, 'name' => 'Eminem Documentary ' . $i, 'type' => 'movie',
+                        'library_id' => 'lib-1', 'path' => '/movies/' . $i . '.mkv', 'metadata_json' => '{}',
+                    ];
+                }
+                return $rows;
+            }
+            if (str_contains($sql, 'JOIN music_artists ar ON ar.media_item_id = mi.id')) {
+                return [[
+                    'id' => 'artist-1', 'name' => 'Eminem', 'type' => 'artist',
+                    'library_id' => 'lib-1', 'path' => '', 'metadata_json' => '{}',
+                ]];
+            }
+            return [];
+        });
+
+        $repo = new ItemRepository($db);
+        $result = $repo->search('Eminem', 4);
+
+        $ids = array_column($result, 'id');
+
+        $this->assertContains('artist-1', $ids, 'the artist must be reachable even with a full non-music half');
+        $this->assertCount(4, $result, 'the caller-supplied limit is still respected');
+        // The reservation is a floor for music, not a re-ranking: the best
+        // non-music hits still lead the page.
+        $this->assertSame(['movie-1', 'movie-2', 'movie-3', 'artist-1'], $ids);
+    }
+
+    /**
+     * The reservation must not cost the non-music half anything when there are no
+     * music hits to put in it — a floor for music, never a tax on everything else.
+     */
+    public function testAFullNonMusicHalfKeepsTheWholePageWhenThereAreNoMusicHits(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(function (string $sql): array {
+            if (str_contains($sql, 'IN BOOLEAN MODE')) {
+                $rows = [];
+                for ($i = 1; $i <= 4; $i++) {
+                    $rows[] = [
+                        'id' => 'movie-' . $i, 'name' => 'Movie ' . $i, 'type' => 'movie',
+                        'library_id' => 'lib-1', 'path' => '/movies/' . $i . '.mkv', 'metadata_json' => '{}',
+                    ];
+                }
+                return $rows;
+            }
+            return [];
+        });
+
+        $repo = new ItemRepository($db);
+
+        $this->assertSame(
+            ['movie-1', 'movie-2', 'movie-3', 'movie-4'],
+            array_column($repo->search('Movie', 4), 'id')
+        );
+    }
+
     public function testCountByTypeReturnsCorrectCount(): void
     {
         $db = $this->createMock(Connection::class);

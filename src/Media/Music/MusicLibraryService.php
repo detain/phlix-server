@@ -1161,12 +1161,19 @@ class MusicLibraryService
     /**
      * Counts the artists that actually have a `media_items` row behind them.
      *
-     * The DLNA Audio root advertises a `childCount` and then lists exactly these
-     * artists, so the count and the listing must be derived from the SAME predicate
-     * — `countRows('music_artists')` would over-count by every artist whose mint
+     * The DLNA Audio root advertises a `childCount` and then lists artists drawn
+     * from this same predicate, so the two must agree on WHICH artists exist —
+     * `countRows('music_artists')` would over-count by every artist whose mint
      * failed (`media_item_id IS NULL`, schema-permitted by migration 065 and
      * reachable through S96(e)), and a renderer that is promised N children and
      * handed N-1 is a renderer that shows an error.
+     *
+     * ⚠ This count is UNBOUNDED and is therefore not, on its own, the number a
+     * renderer may be promised: {@see getArtistMediaItemIds()} stops at
+     * {@see MAX_EMBEDDED_ROWS}. {@see \Phlix\Dlna\LibraryBridge} clamps this value
+     * to that constant before advertising it, and documents the artists beyond it
+     * as unreachable over DLNA. Any other caller that pairs this count with a
+     * bounded listing must clamp it the same way.
      *
      * @return int Number of artists a `media_items`-backed browse can show.
      */

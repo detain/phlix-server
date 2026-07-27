@@ -1099,46 +1099,106 @@ class ItemRepository
     }
 
     /**
-     * Concatenates two result sets, dropping repeats by `id` and applying the
-     * caller's limit to the combined list.
+     * Merges two result sets, dropping repeats by `id` and applying the caller's
+     * limit to the combined list — while RESERVING a share of the page for the
+     * second half.
      *
      * The two halves are issued as separate indexed statements rather than one
      * `OR`-ed query deliberately: an `OR` across a `MATCH … AGAINST` and a
      * `LEFT JOIN`ed `LIKE` cannot use the FULLTEXT index for the first branch, so
      * it would turn every search into a full scan of `media_items` to fix music.
      *
-     * @param array<int, array<string, mixed>> $primary
-     * @param array<int, array<string, mixed>> $secondary
-     * @param int $limit
+     * ⚠ **Why this is not a plain concatenation.** It used to be, and that
+     * starved music: `$secondary` was appended after `$primary` and the combined
+     * list was then cut at `$limit`, so any query whose non-music half already
+     * filled the page (the default is 50, `WebPortalRouter.php`) returned ZERO
+     * artists and ZERO albums no matter how well they matched. A single `MATCH`
+     * over `media_items` — what this replaced — could at least surface an artist
+     * row in that case, so the concatenating version was a regression for exactly
+     * the searches music matters most for. The second half therefore gets a
+     * guaranteed slice of up to half the page, and the first half keeps whatever
+     * the second does not use, so nothing is lost when there are no music hits.
+     *
+     * Order is head-of-primary, then secondary, then the rest of primary: the
+     * best non-music hits still lead, the music hits are reachable, and both
+     * halves keep their own relative ranking.
+     *
+     * @param array<int, array<string, mixed>> $primary Ranked first half.
+     * @param array<int, array<string, mixed>> $secondary Half that must not be
+     *        starved by a full `$primary`.
+     * @param int $limit Maximum size of the combined list.
      * @return array<int, array<string, mixed>>
      */
     private function mergeSearchResults(array $primary, array $secondary, int $limit): array
     {
+        if ($limit <= 0) {
+            return [];
+        }
+
         if ($secondary === []) {
-            return $primary;
+            return array_slice($primary, 0, $limit);
         }
 
         $seen = [];
-        $merged = [];
+        $primaryRows = $this->takeUnseenRows($primary, $seen, $limit);
+        $secondaryRows = $this->takeUnseenRows($secondary, $seen, $limit);
 
-        foreach ([$primary, $secondary] as $rows) {
-            foreach ($rows as $row) {
-                $id = $row['id'] ?? null;
-                if (is_string($id) && $id !== '') {
-                    if (isset($seen[$id])) {
-                        continue;
-                    }
-                    $seen[$id] = true;
-                }
+        if ($secondaryRows === []) {
+            return $primaryRows;
+        }
 
-                $merged[] = $row;
-                if (count($merged) >= $limit) {
-                    return $merged;
-                }
-            }
+        // Half the page, at most, and never more than there are music hits to
+        // put in it — a reservation is a floor for the second half, not a tax on
+        // the first.
+        $reserved = min(count($secondaryRows), intdiv($limit, 2));
+
+        $head = array_slice($primaryRows, 0, max(0, $limit - $reserved));
+        $merged = array_merge($head, array_slice($secondaryRows, 0, $limit - count($head)));
+
+        if (count($merged) < $limit) {
+            $merged = array_merge(
+                $merged,
+                array_slice($primaryRows, count($head), $limit - count($merged))
+            );
         }
 
         return $merged;
+    }
+
+    /**
+     * Copies at most `$limit` rows out of `$rows`, skipping ids already recorded
+     * in `$seen` and recording the ones it keeps.
+     *
+     * Rows without a usable string `id` are passed through untouched: they cannot
+     * participate in de-duplication either way, and silently dropping them would
+     * hide malformed data instead of surfacing it.
+     *
+     * @param array<int, array<string, mixed>> $rows
+     * @param array<string, true> $seen Mutated in place.
+     * @param int $limit
+     * @return array<int, array<string, mixed>>
+     */
+    private function takeUnseenRows(array $rows, array &$seen, int $limit): array
+    {
+        $taken = [];
+
+        foreach ($rows as $row) {
+            if (count($taken) >= $limit) {
+                break;
+            }
+
+            $id = $row['id'] ?? null;
+            if (is_string($id) && $id !== '') {
+                if (isset($seen[$id])) {
+                    continue;
+                }
+                $seen[$id] = true;
+            }
+
+            $taken[] = $row;
+        }
+
+        return $taken;
     }
 
     /**

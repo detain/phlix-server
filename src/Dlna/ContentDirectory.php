@@ -404,9 +404,19 @@ class ContentDirectory
      */
     private function getChildren(string $objectId): array
     {
-        // Use LibraryBridge if available for real data
+        // Use LibraryBridge if available for real data.
+        //
+        // The object's type is handed over rather than re-discovered. `browse()`
+        // has ALREADY called resolveObjectId() for this same id before reaching
+        // here (that is how it decides between BrowseMetadata and
+        // BrowseDirectChildren) and cached the row, so this call is free — while
+        // inside the bridge it saves a `findById()` on every single drill-down,
+        // including the `series`/`season` ones that go on to use `parent_id`.
         if ($this->libraryBridge !== null) {
-            return $this->libraryBridge->getContainerChildren($objectId);
+            $resolved = $this->resolveObjectId($objectId);
+            $resolvedType = is_string($resolved['type'] ?? null) ? $resolved['type'] : null;
+
+            return $this->libraryBridge->getContainerChildren($objectId, $resolvedType);
         }
 
         // NOTE: two placeholder branches used to sit here, dispatching to

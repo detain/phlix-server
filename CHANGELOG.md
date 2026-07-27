@@ -672,6 +672,65 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- **DLNA advertised far more children than it could deliver on EVERY root, and none
+  of them could be paged** (S147). `LibraryBridge::getLibraryChildCount()` counted
+  with the unbounded `ItemRepository::countAllByType()` while
+  `getLibraryItems()` listed with `getAllByType()`'s default `LIMIT 100`, and
+  `ContentDirectory::browseChildren()` then applied the renderer's `StartingIndex`
+  **in PHP to that already-truncated list** — so any index past the truncation
+  point returned an empty page while `TotalMatches` still advertised the whole
+  container. Measured read-only on production 2026-07-27: Video advertised
+  **10,718** movies and **26,389** episodes against pages of 100 (**107x** and
+  **264x**), and the Audio root — whose advertised count S97 had already clamped to
+  2,000 to stop it lying — left **2,656 of 4,656 artists unreachable by any
+  navigation**.
+
+  `StartingIndex` is now resolved in **SQL** on every branch:
+  `getLibraryItems()` takes an offset and spends it against the same per-type
+  counts the container advertises (so a page straddling the movie→series boundary
+  is contiguous); the `music_*` drill-downs and the `parent_id` drill-down
+  (`ItemRepository::findByParentPage()`) take one too; and `browseChildren()` no
+  longer slices — it asks for the requested window and reads `TotalMatches` from a
+  COUNT that shares the listing's predicate.
+
+  **S97's clamp is removed in the same change**, which is the half that makes this
+  a fix rather than a swap: a renderer told "2,000" stops at 2,000 however good the
+  paging underneath is, so the advertised count is the true unbounded total again
+  and `LibraryBridge::MAX_PAGE_ROWS` is a **page size**, not a ceiling.
+
+  Ordering across page boundaries is the other half. `getAllByType()` ordered by
+  `sort_title, name` and `findByParent()` by `name` — neither is unique, and with
+  ties MySQL arranges the tied rows differently per `LIMIT`+`OFFSET`. Measured on
+  MySQL 8.0.46 with 400 rows sharing one name, paged 50 at a time: **400 rows
+  returned, only 372 distinct** — 28 silently repeated, 28 never returned at all.
+  Both queries now end their `ORDER BY` on the `id` PRIMARY KEY, making the order
+  total; a real-MySQL test pages a whole container and asserts the concatenated
+  pages equal the unpaged listing row for row.
+
+  `SortCriteria` is honoured **globally** for any container that fits in one page
+  (`LibraryBridge::MAX_PAGE_ROWS`, 2,000): the whole container is fetched and sorted
+  before the window is taken, so the criteria decides *which* rows the page contains.
+  The first revision of this change sorted only the page it had already fetched,
+  which on a 20-child Video root with `RequestedCount 5` and `-dc:title` returned the
+  five alphabetically **lowest** titles reversed instead of the five highest — a
+  regression against the previous sort-then-slice behaviour, now pinned by a test.
+  Past 2,000 children the sort still applies within the returned page only; making it
+  global there needs the sort key in every listing's `ORDER BY` **and** a merge across
+  a category's types, and is deliberately left out rather than trading pageability
+  for it.
+
+  One `Browse` now resolves the category counts **once**. Fetching the page and the
+  advertised total went through two entry points that each recomputed them, so a
+  single Video-root browse issued `countAllByType()` six times (`movie, series,
+  video` twice over) — double the COUNTs on an unauthenticated path, and a window in
+  which a row written between the two evaluations made the advertised total disagree
+  with the offsets the listing had already spent. The bridge-less `TotalMatches` is
+  likewise a `countByParent()` now, instead of re-listing the whole container purely
+  to measure it.
+
+  DLNA remains **off by default and unauthenticated**, so this is a functional gap
+  closed, not a security change.
+
 - **A retagged music track could NEVER be re-parented, and `rescan` could not reach
   the tracks that needed it** (S145). Editing a file's `ALBUM` or `ARTIST` tag left
   `music_tracks.album_id` / `artist_id` pointing at the *old* album permanently.

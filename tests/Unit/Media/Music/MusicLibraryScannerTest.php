@@ -412,11 +412,20 @@ final class MusicLibraryScannerTest extends TestCase
      * {@see \Phlix\Tests\Integration\Media\MusicRetagReparentIntegrationTest::testAFullReadOfAnUnchangedLibraryRewritesNothing()}
      * against a real database.
      *
-     * ⇒ **A claim about WHICH COLUMNS a statement fetches, or about HOW MANY statements
-     * the server received, cannot be proven here.** Take it to
-     * {@see \Phlix\Tests\Integration\Media\RecordingMySqlConnection}, which forwards to a
-     * real server and records what it forwarded. The same warning is on this mock's
-     * sibling, {@see MusicSchemaConnection::runSelect()}.
+     * ⇒ **A claim about WHICH COLUMNS a statement fetches cannot be proven here.** Take
+     * it to {@see \Phlix\Tests\Integration\Media\RecordingMySqlConnection}, which
+     * forwards to a real server and records what it forwarded. The same warning is on
+     * this mock's sibling, {@see MusicSchemaConnection::runSelect()}.
+     *
+     * Statement VOLUME is a separate limitation with a separate reason, stated so the two
+     * are not confused: this mock keeps **no statement log at all**. `$mediaItemInserts`
+     * and `$trackInserts` capture the bound parameters of `INSERT INTO media_items` and
+     * `INSERT INTO music_tracks` and nothing else, so "how many `UPDATE`s did that scan
+     * issue?" is not a question that can be *asked* here — not one that is answered
+     * unreliably. The doubles that DO keep a log are {@see MusicSchemaConnection}, via
+     * `$statements` and `countStatements()`, and {@see SkipSchemaConnection}, via
+     * `$statements` — there counting is exact. The column list stays invisible on all
+     * three.
      *
      * @param list<array<int,mixed>> $mediaItemInserts Captured media_items INSERT params (by ref).
      * @param list<array<int,mixed>> $trackInserts     Captured music_tracks INSERT params (by ref).
@@ -4259,12 +4268,21 @@ final class MusicSchemaConnection extends Connection
      * production — while this double keeps handing them over and every test stays green.
      * It was killed only by a real-MySQL test.
      *
-     * ⇒ **Do not conclude anything about a statement's column list, or about how many
-     * statements the server received, from a green test that runs against this double.**
-     * {@see \Phlix\Tests\Integration\Media\RecordingMySqlConnection} exists for those
-     * claims: it subclasses the production connection, forwards every statement to a real
-     * server, and records what it forwarded. The same warning is on this double's sibling,
-     * {@see MusicLibraryScannerTest::statefulDbMock()}.
+     * ⇒ **Do not conclude anything about a statement's column list from a green test that
+     * runs against this double.** {@see \Phlix\Tests\Integration\Media\RecordingMySqlConnection}
+     * exists for that claim: it subclasses the production connection, forwards every
+     * statement to a real server, and records what it forwarded. The same warning is on
+     * this double's sibling, {@see MusicLibraryScannerTest::statefulDbMock()}.
+     *
+     * ⚠ **The warning stops there, and deliberately.** It does NOT extend to statement
+     * VOLUME: {@see self::$statements} appends every statement this double is asked to
+     * run and {@see self::countStatements()} counts them, which ~20 assertions in this
+     * file already depend on. Two honest limits on such a count, neither of them the
+     * column-list problem above: only the SQL is kept, never the bound parameters, so a
+     * count says HOW MANY statements of a shape were issued and never WHICH ROW they
+     * targeted; and it counts what the scanner issued GIVEN THE ANSWERS THIS DOUBLE
+     * GAVE, so wherever a branch turns on what a real server would have returned, the
+     * count is only as good as this model of it.
      *
      * @param array<int, mixed> $p
      * @return list<array<string, mixed>>

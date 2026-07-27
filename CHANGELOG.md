@@ -57,6 +57,15 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   `reparented` summary counter no longer sits behind a guard that exists only for that
   recount, so a track that moved off an unreadable album id is still reported as moved.
 
+  **Every recount in that `finally` is attempted independently.** Moving the vacated
+  recount out of the per-track `try`/`catch` and into the flush put it *behind* the
+  flushed album's own recount, so a DB failure on the first one silently skipped the
+  rest — leaving the emptied album advertising a `total_tracks` it no longer owns,
+  permanently (it is never flushed again) and while the scan still reported
+  `failed = 0`. `MusicLibraryService::getArtistWithAlbums()` sums that column. Each id
+  now runs in its own `try`, and the first failure is re-thrown once all of them have
+  been attempted, so what gets logged is unchanged.
+
 - **The music scanner's per-file existence lookup now uses the `path_hash` index that
   already existed** (S151). It binds `path_hash = ?` alongside the kept `path = ?`, so
   the statement resolves as a `const` single-row lookup instead of hand-filtering the

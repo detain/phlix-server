@@ -1378,26 +1378,47 @@ class MusicLibraryScanner
                 // the artist page reported 0 tracks for a populated album and
                 // nothing ever healed it. The column must never be less true than
                 // the rows.
-                $this->refreshAlbumTrackTotal($albumId);
-
-                // S145 + S148 — THE VACATED ALBUMS, once each. Every album this flush
-                // moved a track OFF is recounted here rather than inside
+                //
+                // S145 + S148 — AND THE VACATED ALBUMS, once each. Every album this
+                // flush moved a track OFF is recounted here rather than inside
                 // {@see self::upsertTrack()}, so a retagged 12-track album costs ONE
                 // recount of the row it emptied instead of twelve identical ones.
                 //
-                // `$albumId` is excluded because the line above already did it; it can
-                // only appear in the set if a track moved off the album it moved onto,
-                // which is not reachable (the id is compared for INEQUALITY before it is
-                // recorded), so this is belt-and-braces against a future edit.
+                // The union puts the album being FLUSHED first and de-duplicates:
+                // `$albumId` can only also appear in `$vacatedAlbums` if a track moved
+                // off the album it moved onto, which is not reachable (the id is
+                // compared for INEQUALITY before it is recorded), so the `+` is
+                // belt-and-braces against a future edit rather than live logic.
                 //
-                // In the same `finally` as the line above, and for the same reason: an
-                // album whose tracks were re-parented and whose recount was then skipped
-                // by a throw would advertise a count one too high forever.
-                foreach (array_keys($vacatedAlbums) as $vacatedAlbumId) {
-                    if ($vacatedAlbumId === $albumId) {
-                        continue;
+                // ⚠ **EVERY RECOUNT IS ATTEMPTED, AND ONE THROW MUST NOT STRAND THE
+                // REST (review r1 non-blocking 3).** Straight-line calls here were a
+                // regression against S145, where the vacated recount ran inline inside
+                // the per-TRACK `try`/`catch` and was therefore already independent.
+                // Measured with the flushed album's own recount made to throw and three
+                // tracks re-parented off `Album A`: the drain never ran, `Album A` kept
+                // `total_tracks = 3` while owning 0 rows, and the scan still reported
+                // `failed = 0`. Nothing heals that afterwards — the emptied album is
+                // never flushed again — and getArtistWithAlbums() sums the column, so
+                // the artist page over-counts permanently. Pinned by {@see
+                // \Phlix\Tests\Integration\Media\MusicScanWriteAmplificationIntegrationTest::testAThrowFromTheFlushedAlbumsOwnRecountStillRecountsTheVacatedAlbum()}.
+                //
+                // The FIRST failure is re-thrown once every id has been attempted, so
+                // the outer `catch` still logs it exactly as before — the fix changes
+                // what gets attempted, not what gets reported. (PHP chains an exception
+                // thrown from a `finally` onto whatever the `try` threw, so the original
+                // is preserved as `getPrevious()`.)
+                $recountError = null;
+
+                foreach (array_keys([$albumId => true] + $vacatedAlbums) as $recountId) {
+                    try {
+                        $this->refreshAlbumTrackTotal($recountId);
+                    } catch (\Throwable $recountFailure) {
+                        $recountError ??= $recountFailure;
                     }
-                    $this->refreshAlbumTrackTotal($vacatedAlbumId);
+                }
+
+                if ($recountError !== null) {
+                    throw $recountError;
                 }
             }
         } catch (\Throwable $e) {
@@ -2823,11 +2844,13 @@ class MusicLibraryScanner
      * but the files themselves are unchanged", and that "keeps the exceptional, slow
      * scan from also issuing 61,135 pointless UPDATEs". That was FALSE, and review r1
      * B2 measured it false.** {@see self::scanDirectory()} calls
-     * {@see MusicScanSkipIndex::load()} only when `!$mayAdopt && !$needsHealing`, so on
-     * exactly the two scans that claim named the index is EMPTY, `isStampCurrent()`
-     * returns false for every file, and the slow scan issues one `JSON_SET` per file
-     * after all. Measured on 5 unchanged files with an unhealed `music_artists` row:
-     * **5 probes and 5 `JSON_SET` UPDATEs**, now pinned by
+     * {@see MusicScanSkipIndex::load()} when `$readEveryFile || (!$mayAdopt &&
+     * !$needsHealing)` — the `$readEveryFile` disjunct is S148's and is what makes case
+     * 2 below possible. So on an ORDINARY scan of a library with something to heal, i.e.
+     * exactly the two scans that claim named, the index is still EMPTY,
+     * `isStampCurrent()` returns false for every file, and that slow scan issues one
+     * `JSON_SET` per file after all. Measured on 5 unchanged files with an unhealed
+     * `music_artists` row: **5 probes and 5 `JSON_SET` UPDATEs**, now pinned by
      * {@see \Phlix\Tests\Unit\Media\Music\MusicScanUnchangedSkipTest::testWithTheFastPathOffEveryUnchangedFileIsStillProbedAndStillReStamped()}.
      *
      * The suppression covers TWO paths, and S148 added the second:

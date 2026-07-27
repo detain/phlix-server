@@ -34,16 +34,22 @@ use PHPUnit\Framework\TestCase;
  * ## Why every assertion in this file needs a real server
  *
  * The claims are **counts of statements MySQL received** — "zero stamp UPDATEs",
- * "exactly one recount per vacated album". A statement the scanner never issues is not
- * observable in any return value, so no fake that answers queries from a PHP array can
- * be asked the question. {@see RecordingMySqlConnection} therefore subclasses the
- * production connection and forwards everything to a real server, recording as a side
- * effect.
+ * "exactly one recount per vacated album". The in-memory doubles can count statements
+ * too (see {@see \Phlix\Tests\Unit\Media\Music\MusicScanReparentTest}, which pins the
+ * same two claims cheaply), so the reason this file exists is NOT that a count is
+ * unobservable there. It is that the count is only as true as the double's model: the
+ * scanner's write volume is decided by the rows it reads back, and a fake returns the
+ * rows its author modelled. This file removes the model.
+ *
+ * {@see RecordingMySqlConnection} therefore subclasses the production connection and
+ * forwards everything to a real server, recording as a side effect — and it keeps the
+ * bound PARAMETERS, which the unit doubles discard, so "WHICH album was recounted" is
+ * askable here and nowhere else.
  *
  * ⚠ **This is the same lesson mutation M10 taught during S145** — reverting only the
  * widened `SELECT` survived the entire unit suite, because both in-memory doubles hand
- * back a stored row wholesale and ignore the statement's column list. A green unit
- * suite says nothing about the write volume of this scanner.
+ * back a stored row wholesale and ignore the statement's column list, so the modelled
+ * scan wrote nothing while the real one rewrote all 61,111 rows.
  *
  * ## Reach is asserted in the same file as write volume, deliberately
  *
@@ -119,6 +125,7 @@ final class MusicScanWriteAmplificationIntegrationTest extends TestCase
     protected function tearDown(): void
     {
         $this->db?->stopLog();
+        $this->db?->clearFaults();
         $this->purgeFixtures();
 
         foreach (array_reverse($this->cleanup) as $path) {
@@ -183,6 +190,231 @@ final class MusicScanWriteAmplificationIntegrationTest extends TestCase
         self::assertSame(0, $second->added);
         self::assertSame(0, $second->failed);
         self::assertSame(3, $this->countTracks(), 'nothing duplicated');
+    }
+
+    /**
+     * ⭐ **AC 1, ON THE SHAPE THE STEP EXISTS FOR — an UNHEALED library.**
+     *
+     * ⚠ **Review r1 finding 1.** The gate is
+     * `if ($readEveryFile || (!$mayAdopt && !$needsHealing))`. Every other test in this
+     * file runs with `$needsHealing === false` and `$mayAdopt === false`, where the
+     * SECOND disjunct already loads the index — so the `$readEveryFile ||` half, which is
+     * the entire change, was never the reason the index was loaded anywhere. Mutation M8
+     * (delete `$readEveryFile ||`, i.e. let the load inherit the heal/adopt gate)
+     * SURVIVED the whole 7,746-test suite. Reproduced before this test was written:
+     * `Tests: 7746, Skipped: 10, 0 failures`, exit 0.
+     *
+     * It is not a harmless mutant. A healing `rescan` is run BECAUSE the library is
+     * unhealed — that is the operator's reason for asking — so the production shape is
+     * exactly this one, and under M8 it pays one `JSON_SET` per file again: 61,135 of
+     * them on the production library.
+     *
+     * The ORDINARY scan below is the control, and it is a measurement, not decoration:
+     * with the same unhealed row present it issues **3 probes and 3 stamp UPDATEs**,
+     * because there the heal gate genuinely does keep the index unloaded (review r1 B2's
+     * finding, on a real server). Same fixture, same row, one flag apart — so the only
+     * thing standing between the full read and those 3 UPDATEs is `$readEveryFile ||`.
+     */
+    public function testAFullReadOfAnUnhealedLibraryIssuesNoStampUpdates(): void
+    {
+        $paths = $this->buildTree(['Album A' => 3]);
+        $scanner = $this->scanner();
+        $db = $this->connection();
+
+        self::assertSame(3, $scanner->scanDirectory($this->root, null, $this->libraryId)->added);
+        self::assertFalse($this->healGateAnswersYes(), 'the fixture must start healthy');
+
+        $this->mintUnhealedAlbum();
+        self::assertTrue(
+            $this->healGateAnswersYes(),
+            'THE PRECONDITION, asserted rather than assumed: without a row that makes '
+            . 'hasUnhealedMusicMediaItem() answer TRUE this degrades into the case the other '
+            . 'tests already cover, and M8 would survive it too'
+        );
+
+        // ── The control: an ORDINARY scan, unhealed row present. ────────────────
+        $scanner->resetProbes();
+        $db->startLog();
+        $scanner->scanDirectory($this->root, null, $this->libraryId);
+        $db->stopLog();
+
+        self::assertSame(3, $scanner->probeCount, 'the heal gate switches the fast path off, so nothing is skipped');
+        self::assertSame(
+            3,
+            $db->countMatching(self::STAMP_SQL),
+            'and the index is NOT loaded on this scan, so every one of those probes re-stamps a row '
+            . 'that did not change. That is deliberate and unchanged by S148 — an ordinary scan of an '
+            . 'unhealed library still pays it, which is what makes the number below meaningful'
+        );
+
+        // ── The subject: the same fixture, the same unhealed row, full-read on. ──
+        $scanner->resetProbes();
+        $db->startLog();
+        $result = $scanner->scanDirectory($this->root, null, $this->libraryId, true);
+        $db->stopLog();
+
+        self::assertSame(3, $scanner->probeCount, 'THE REACH HALF: a full read still opens every file');
+        $probed = $scanner->probedPaths;
+        sort($probed);
+        self::assertSame($paths, $probed, 'and it is every file, not three reads of one');
+
+        self::assertSame(
+            0,
+            $db->countMatching(self::STAMP_SQL),
+            'THE POINT, and the assertion that kills M8: 3 immediately above, 0 here, one flag apart. '
+            . 'RED under `if (!$mayAdopt && !$needsHealing)` with 3 — the defect restored on the exact '
+            . 'scan the step exists for'
+        );
+
+        self::assertSame(0, $result->updated, 'nothing changed on disk');
+        self::assertSame(0, $result->added);
+        self::assertSame(0, $result->failed);
+        self::assertSame(3, $this->countTracks(), 'nothing duplicated');
+        self::assertTrue(
+            $this->healGateAnswersYes(),
+            'and the row is STILL unhealed afterwards — so $needsHealing was TRUE for both scans, not '
+            . 'merely at the moment the fixture was built'
+        );
+    }
+
+    /**
+     * ⭐ **AC 1, on the OTHER shape that switches the load gate off — an ADOPTABLE ORPHAN.**
+     *
+     * `$mayAdopt` and `$needsHealing` are two independent one-query-per-scan gates and
+     * `!$mayAdopt && !$needsHealing` fails if EITHER is set, so both have to be pinned or
+     * half the disjunct is still untested. This is the `$mayAdopt` half: an
+     * `artist`-typed `media_items` row with `path = ''` that no `music_artists` row
+     * points at, which is what `hasAdoptableMusicMediaItem()` reads.
+     *
+     * Its name matches nothing the walk flushes, so nothing adopts it and the flag stays
+     * TRUE for the whole scan — asserted at the end rather than assumed.
+     */
+    public function testAFullReadWithAnAdoptableOrphanIssuesNoStampUpdates(): void
+    {
+        $this->buildTree(['Album A' => 3]);
+        $scanner = $this->scanner();
+        $db = $this->connection();
+
+        self::assertSame(3, $scanner->scanDirectory($this->root, null, $this->libraryId)->added);
+        self::assertFalse($this->orphanGateAnswersYes(), 'the fixture must start with nothing to adopt');
+
+        $this->mintAdoptableOrphan();
+        self::assertTrue($this->orphanGateAnswersYes(), 'THE PRECONDITION, asserted rather than assumed');
+        self::assertFalse(
+            $this->healGateAnswersYes(),
+            'and ONLY $mayAdopt may be set here: an unhealed row as well would make this a duplicate '
+            . 'of the test above instead of a test of the other half'
+        );
+
+        // The control, again: `canSkip()` is already false because $mayAdopt is true, so
+        // an ordinary scan reads everything — and re-stamps everything.
+        $scanner->resetProbes();
+        $db->startLog();
+        $scanner->scanDirectory($this->root, null, $this->libraryId);
+        $db->stopLog();
+
+        self::assertSame(3, $scanner->probeCount);
+        self::assertSame(3, $db->countMatching(self::STAMP_SQL), 'the index is unloaded, so every probe re-stamps');
+
+        $scanner->resetProbes();
+        $db->startLog();
+        $result = $scanner->scanDirectory($this->root, null, $this->libraryId, true);
+        $db->stopLog();
+
+        self::assertSame(3, $scanner->probeCount, 'THE REACH HALF');
+        self::assertSame(
+            0,
+            $db->countMatching(self::STAMP_SQL),
+            'THE POINT: RED under `if (!$mayAdopt && !$needsHealing)` with 3'
+        );
+        self::assertSame(0, $result->updated);
+        self::assertSame(0, $result->failed);
+        self::assertTrue(
+            $this->orphanGateAnswersYes(),
+            'the orphan was never adopted, so $mayAdopt was TRUE throughout both scans'
+        );
+    }
+
+    /**
+     * ⚠ **Review r1 finding 3 — a throw from the FLUSHED album\'s own recount must not
+     * strand the vacated album\'s.**
+     *
+     * `flushAlbum()`\'s `finally` recounts the album being flushed and then drains the
+     * vacated-album set. As straight-line calls, a throw from the first skipped the
+     * second entirely: the emptied album kept a `total_tracks` too high **forever** — it
+     * is never flushed again, so no later scan heals it — while
+     * `MusicLibraryService::getArtistWithAlbums()` sums that column. Under S145 the
+     * vacated recount ran inline inside the per-TRACK `try`/`catch`, so this window was a
+     * regression introduced by the S148 deferral, not a pre-existing one.
+     *
+     * The fixture mis-parents by SQL rather than by retagging so that BOTH album ids
+     * exist before the scan — the failure has to be injected on one specific id, and the
+     * album a retag creates has no id until the scan has already run.
+     *
+     * Measured at `8862fca9`: the shell album stayed at `total_tracks = 3` while owning 0
+     * rows, and the scan reported `failed = 0`.
+     */
+    public function testAThrowFromTheFlushedAlbumsOwnRecountStillRecountsTheVacatedAlbum(): void
+    {
+        $paths = $this->buildTree(['Album A' => 3]);
+        $scanner = $this->scanner();
+        $db = $this->connection();
+
+        $scanner->scanDirectory($this->root, null, $this->libraryId);
+
+        $albumA = $this->albumIdByTitle('Album A');
+        $shell = $this->mintShellAlbum();
+
+        // Move all three OFF Album A and onto the shell, by SQL, so the files on disk are
+        // untouched and their stamps stay current — the production mis-parented shape.
+        foreach ($paths as $path) {
+            $db->query(
+                'UPDATE music_tracks SET album_id = ? WHERE media_item_id = ?',
+                [$shell, $this->mediaItemIdFor($path)],
+            );
+        }
+        $db->query('UPDATE music_albums SET total_tracks = 3 WHERE id = ?', [$shell]);
+        $db->query('UPDATE music_albums SET total_tracks = 0 WHERE id = ?', [$albumA]);
+
+        // The healing pass flushes ALBUM A (the tags name it) and vacates the shell. Only
+        // Album A's own recount is made to fail.
+        $db->failOn(self::RECOUNT_SQL, $albumA);
+
+        $db->startLog();
+        $result = $scanner->scanDirectory($this->root, null, $this->libraryId, true);
+        $db->stopLog();
+        $db->clearFaults();
+
+        self::assertSame(
+            1,
+            $this->recountsOf($db, $albumA),
+            'the injected failure must actually have FIRED — without this the test could pass by the '
+            . 'statement never being issued at all'
+        );
+        self::assertSame(3, $result->updated, 'all three tracks were still re-parented back');
+        self::assertSame(3, $this->countTracksOnAlbum($albumA), 'and the rows really moved');
+
+        self::assertSame(
+            0,
+            $this->albumTotal($shell),
+            'THE POINT: the album the three tracks LEFT is recounted even though the recount before it '
+            . 'in the same `finally` threw. RED at 8862fca9 with 3 — a permanent over-count on the '
+            . 'artist page, reported as a clean scan'
+        );
+
+        self::assertSame(
+            0,
+            $this->albumTotal($albumA),
+            'while Album A itself keeps the stale 0 the fixture set: its recount is the statement that '
+            . 'was made to fail, and repairing THAT is not what this test claims'
+        );
+        self::assertSame(
+            0,
+            $result->failed,
+            'and the accounting is unchanged by the fix — every file was written, so none is charged. '
+            . 'Master b8a0bd7e reports the same 0 under the same injected throw; the fix is about the '
+            . 'vacated count, not about the counters'
+        );
     }
 
     /**
@@ -552,6 +784,11 @@ final class MusicScanWriteAmplificationIntegrationTest extends TestCase
      * it never reads" assertion then fails, not because the scanner is wrong but because
      * the fixture disabled the very skip it is asserting on. Measured: without this the
      * ordinary scan healed the row.
+     *
+     * That is a property of THIS fixture only. The `$needsHealing === true` case has its
+     * own test — {@see self::testAFullReadOfAnUnhealedLibraryIssuesNoStampUpdates()},
+     * which mints the NULL-`media_item_id` row on purpose — so nothing is left uncovered
+     * by the choice made here.
      */
     private function mintShellAlbum(): int
     {
@@ -577,6 +814,92 @@ final class MusicScanWriteAmplificationIntegrationTest extends TestCase
             'SELECT id AS v FROM music_albums WHERE artist_id = ? AND title = ?',
             [$artistId, $this->prefix . 'Shell Album'],
         );
+    }
+
+    /**
+     * A `music_albums` row with `media_item_id IS NULL` — the S96(e) unhealed shape, and
+     * the thing that makes `MusicLibraryScanner::hasUnhealedMusicMediaItem()` answer TRUE.
+     *
+     * ⚠ Its title matches nothing the walk flushes, so `upsertAlbum()` never reaches it
+     * and the heal never lands: the flag stays TRUE for the whole scan, which is the
+     * condition under test. (`media_item_id` is `NULL UNIQUE` per migration 065, and
+     * NULLs do not collide, so more than one such row is legal.)
+     *
+     * @return void
+     */
+    private function mintUnhealedAlbum(): void
+    {
+        $artistId = (int) $this->scalar(
+            'SELECT id AS v FROM music_artists WHERE name LIKE ? LIMIT 1',
+            [$this->prefix . '%'],
+        );
+        self::assertNotSame(0, $artistId, 'the first scan must have created the fixture artist');
+
+        $this->connection()->query(
+            'INSERT INTO music_albums (artist_id, title, total_tracks, media_item_id) VALUES (?, ?, 0, NULL)',
+            [$artistId, $this->prefix . 'Unhealed Album'],
+        );
+    }
+
+    /**
+     * An `artist`-typed `media_items` row with `path = ''` that no `music_artists` row
+     * points at — what `MusicLibraryScanner::hasAdoptableMusicMediaItem()` reads, and the
+     * only thing that makes `$mayAdopt` TRUE.
+     *
+     * ⚠ The name is deliberately one the walk can never produce, so
+     * `findAdoptableArtistMediaItemId()` (which matches on `media_items.name`) misses it
+     * and it is never adopted. An orphan that gets adopted mid-scan would flip the very
+     * flag the test is about.
+     *
+     * `path = ''` leaves `path_hash` NULL for every generated-column definition this repo
+     * has shipped (migrations 072/087 hash only non-empty paths of file-backed types), so
+     * this row cannot collide on `(library_id, path_hash)` with the shell album's row.
+     *
+     * @return void
+     */
+    private function mintAdoptableOrphan(): void
+    {
+        $this->connection()->query(
+            'INSERT INTO media_items (id, library_id, type, name, path, metadata_json, created_at, updated_at)'
+            . " VALUES (?, ?, 'artist', ?, '', '{}', NOW(), NOW())",
+            [Uuid::v4(), $this->libraryId, $this->prefix . 'Orphan Artist Matching No Tag'],
+        );
+    }
+
+    /**
+     * Runs `hasUnhealedMusicMediaItem()`'s statement verbatim, so a test can assert the
+     * gate it depends on rather than assume it.
+     */
+    private function healGateAnswersYes(): bool
+    {
+        $rows = $this->connection()->query(
+            'SELECT 1 AS unhealed FROM music_artists WHERE media_item_id IS NULL'
+            . ' UNION ALL SELECT 1 AS unhealed FROM music_albums WHERE media_item_id IS NULL LIMIT 1',
+            [],
+        );
+
+        return is_array($rows) && count($rows) > 0;
+    }
+
+    /** The same, for `hasAdoptableMusicMediaItem()`'s statement, scoped to this library. */
+    private function orphanGateAnswersYes(): bool
+    {
+        $rows = $this->connection()->query(
+            'SELECT mi.id FROM media_items mi'
+            . ' LEFT JOIN music_artists ar ON ar.media_item_id = mi.id'
+            . ' LEFT JOIN music_albums al ON al.media_item_id = mi.id'
+            . " WHERE mi.type IN ('artist', 'album') AND mi.path = ''"
+            . ' AND mi.library_id <=> ? AND ar.id IS NULL AND al.id IS NULL LIMIT 1',
+            [$this->libraryId],
+        );
+
+        return is_array($rows) && count($rows) > 0;
+    }
+
+    /** How many `music_tracks` rows currently sit on an album. */
+    private function countTracksOnAlbum(int $albumId): int
+    {
+        return (int) $this->scalar('SELECT COUNT(*) AS v FROM music_tracks WHERE album_id = ?', [$albumId]);
     }
 
     /** `music_albums.total_tracks` as persisted. */

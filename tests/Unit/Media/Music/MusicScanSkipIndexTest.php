@@ -378,47 +378,89 @@ final class MusicScanSkipIndexTest extends TestCase
     }
 
     /**
-     * Per-entry memory is bounded and small — the figure the class docblock quotes, so
-     * the "≈11.2 MB for 61,135 files" claim is falsifiable rather than asserted.
+     * ⚠ **REVIEW r1 B3 — THIS TEST USED TO MEASURE A CONDITION PRODUCTION NEVER HAS.**
      *
-     * The comparison that matters is against what S95 REMOVED: 1,463 bytes per buffered
-     * file for the whole-tree map, i.e. ≈89 MB for the same library. An entry here has
-     * to stay an order of magnitude below that or the trade stops being worth it.
+     * The earlier version built `$rows` in the test method, handed the array to the
+     * connection double, and then measured the delta across `load()`. Every path string
+     * was therefore already allocated and still owned by the test, so the map's KEYS
+     * were shared by refcount and invisible to the delta — which is how it reproduced
+     * "90.9 bytes/entry" to the byte while the real figure is **186.9**, ≈2x higher. The
+     * `< 200.0` assertion passed at both numbers, so it guarded nothing.
+     *
+     * Production has the opposite shape: `$rows` is the driver's result set, it dies when
+     * `load()` returns, and the map is then the SOLE owner of every key. That is
+     * reproduced here by generating the rows INSIDE
+     * {@see GeneratedIdentityConnection::query()} — nothing outside the map ever holds a
+     * path string — and by measuring at the REAL production library size, so the figure
+     * the class docblock quotes is the figure this test takes.
+     *
+     * Measured on PHP 8.3.6, 61,135 entries, exact-length 56-character keys:
+     * **11,424,960 B retained = 10.90 MiB = 186.9 B/entry**, reproducible to the byte
+     * across runs and confirmed by an independent raw-hashtable measurement that never
+     * calls `load()` at all.
+     *
+     * The comparison that matters is against what S95 REMOVED: 1,463 B per buffered file
+     * for the whole-tree map, i.e. ≈89 MB for this library. 186.9 B is **7.8x** cheaper
+     * (not the 16x the pre-r1 docblock claimed), which is still the whole argument for
+     * loading the library in one query.
      */
     public function testMemoryPerEntryIsBounded(): void
     {
-        $rows = [];
-        $count = 20_000;
-        for ($i = 0; $i < $count; $i++) {
-            // Production-shaped path: /vault1/music/<artist>/<album>/NN - <title>.mp3
-            $rows[] = [
-                'path' => sprintf('/vault1/music/Artist %04d/Album %03d/%02d - Track Title.mp3', $i, $i % 40, $i % 20),
-                'file_mtime' => (string) (1_700_000_000 + $i),
-                'file_size' => (string) (4_000_000 + $i),
-            ];
-        }
-        $db = $this->connection($rows);
+        $count = 61_135;
 
-        $index = new MusicScanSkipIndex($db, new NullLogger());
+        $index = new MusicScanSkipIndex(new GeneratedIdentityConnection($count, 56), new NullLogger());
+
+        gc_collect_cycles();
         $before = memory_get_usage();
         $index->load('lib-1');
+        gc_collect_cycles();
         $after = memory_get_usage();
 
-        self::assertSame($count, $index->count());
-        $perEntry = ($after - $before) / $count;
+        self::assertSame($count, $index->count(), 'the whole library must be loaded, or the figure is not the figure');
+
+        $retained = $after - $before;
+        $perEntry = $retained / $count;
 
         self::assertLessThan(
-            200.0,
+            210.0,
             $perEntry,
             sprintf(
-                'measured %.1f bytes/entry. The class docblock quotes 90.9 B/entry (5.30 MB for the '
-                . 'real 61,135-file production library, measured at that exact size). A regression '
-                . 'past 200 B/entry means the value shape grew — e.g. back into an array per entry — '
-                . 'and the memory argument for loading the whole library in ONE query no longer '
-                . 'holds, because the alternative it beat was 1,463 B/entry.',
+                'measured %.1f B/entry (%d B retained for %d entries). The class docblock quotes '
+                . '186.9 B/entry = 10.90 MiB at exactly this size, measured with the keys owned ONLY '
+                . 'by the map. Past 210 B/entry the value shape has grown — most likely back into an '
+                . 'array per entry — and the memory argument for loading the whole library in ONE '
+                . 'query stops holding, because the alternative it beat was 1,463 B/entry.',
+                $perEntry,
+                $retained,
+                $count
+            )
+        );
+
+        // And the floor: a figure far BELOW the documented one means the measurement has
+        // gone back to sharing its keys with the caller, i.e. the r1 B3 defect has
+        // returned and the test is measuring nothing again.
+        self::assertGreaterThan(
+            120.0,
+            $perEntry,
+            sprintf(
+                'measured only %.1f B/entry, which is below what a 56-byte key plus an 18-byte value '
+                . 'plus a hashtable bucket can possibly cost. That means the path strings are being '
+                . 'shared with something outside the map — exactly the flaw review r1 B3 found in the '
+                . 'previous version of this test.',
                 $perEntry
             )
         );
+
+        // ⚠ THE LOAD'S TRANSIENT PEAK IS DELIBERATELY *NOT* ASSERTED HERE. It is the
+        // other half of the memory story — the driver materialises the whole result set
+        // before MAX_ENTRIES can refuse an entry, so a load peaks well above what it
+        // retains (measured standalone: 38,527,368 B = 36.74 MiB peak against 10.90 MiB
+        // retained at this size, and 153.54 MiB against 44.33 MiB at MAX_ENTRIES) — but
+        // `memory_get_peak_usage()` is PROCESS-wide and monotonic, and this file's own
+        // `testTheCapTruncatesTheLoadAndWarns()` loads 250,001 rows. Under
+        // `executionOrder="random"` the delta measured here is therefore 0 whenever that
+        // test ran first. Asserting on it would be a coin-flip, so the figure lives in
+        // MusicScanSkipIndex's docblock with its method stated instead.
     }
 
     /**
@@ -460,89 +502,5 @@ final class MusicScanSkipIndexTest extends TestCase
         clearstatcache(true, $path);
 
         return new SplFileInfo($path);
-    }
-}
-
-/**
- * Returns a fixed row set for the identity-map SELECT and records every statement.
- *
- * @internal
- */
-final class SkipIndexConnection extends Connection
-{
-    /** @var list<string> Every statement, in order. */
-    public array $statements = [];
-
-    /**
-     * @param list<array<string, mixed>> $rows Well-formed rows.
-     * @param list<mixed> $extraRows Rows that are NOT arrays, so the loader's own
-     *        `is_array($row)` guard is exercised — the real client can return a mixed
-     *        list shape and a scalar row must be dropped, not crash the walk.
-     */
-    public function __construct(private readonly array $rows, private readonly array $extraRows = [])
-    {
-    }
-
-    /**
-     * @param string $query
-     * @param array<int, mixed>|null $params
-     * @param int $fetchmode
-     * @return list<array<string, mixed>>
-     */
-    public function query($query = '', $params = null, $fetchmode = \PDO::FETCH_ASSOC)
-    {
-        unset($params, $fetchmode);
-        $this->statements[] = (string) $query;
-
-        return array_merge($this->rows, $this->extraRows);
-    }
-}
-
-/**
- * Returns a value the real client hands back for an unrecognised leading keyword: `null`.
- *
- * @internal
- */
-final class NonListConnection extends Connection
-{
-    public function __construct()
-    {
-    }
-
-    /**
-     * @param string $query
-     * @param array<int, mixed>|null $params
-     * @param int $fetchmode
-     * @return null
-     */
-    public function query($query = '', $params = null, $fetchmode = \PDO::FETCH_ASSOC)
-    {
-        unset($query, $params, $fetchmode);
-
-        return null;
-    }
-}
-
-/**
- * Captures warnings so a truncation can be asserted rather than assumed.
- *
- * @internal
- */
-final class RecordingLogger extends \Psr\Log\AbstractLogger
-{
-    /** @var list<string> */
-    public array $warnings = [];
-
-    /**
-     * @param mixed $level
-     * @param string|\Stringable $message
-     * @param array<string, mixed> $context
-     */
-    public function log($level, string|\Stringable $message, array $context = []): void
-    {
-        unset($context);
-        if ($level === 'warning') {
-            $this->warnings[] = (string) $message;
-        }
     }
 }

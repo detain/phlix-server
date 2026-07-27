@@ -120,10 +120,22 @@ return [
      * "More parallelism is better" is measurably FALSE here.
      *
      * WHAT THE VALUE MEANS
-     *   1 — no read-ahead pool at all; byte-for-byte the pre-S122 scanner.
-     *       Set this if the media mount uses `direct_io` (which defeats the page
+     *   1 — no read-ahead pool AND no read-ahead walk: this knob's entire effect is
+     *       removed and the scan touches the mount exactly as the pre-S122 scanner
+     *       did. Set this if the media mount uses `direct_io` (which defeats the page
      *       cache the pool warms, so the bytes would be paid twice) or to isolate
      *       the pool while diagnosing something else.
+     *       ⚠ "no read-ahead WALK" is part of the promise as of review r1
+     *       (non-blocking 1). At 1 the pool has no children so every submit() was
+     *       already a no-op, but the scanner still performed a SECOND
+     *       RecursiveIteratorIterator pass over the tree — one readdir/getattr per
+     *       entry, on the very escape valve that exists for a mount where those are
+     *       most expensive. {@see \Phlix\Media\Music\MusicLibraryScanner::scanDirectory()}
+     *       now creates that second walk only when the pool actually has readers.
+     *       ⚠ This value does NOT switch off the S122(a) unchanged-file skip, which
+     *       is an independent mechanism with its own gates
+     *       ({@see \Phlix\Media\Music\MusicScanSkipIndex}). "Pre-S122" here means the
+     *       READ PATTERN of a file the scan does open.
      *   2-4 — the scanner plus (value - 1) reader processes running a few files
      *       ahead of the walk. 4 is the measured optimum and the default.
      *

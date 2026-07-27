@@ -214,6 +214,113 @@ final class MusicScanUnchangedSkipTest extends TestCase
     }
 
     /**
+     * ⚠ **REVIEW r1 B1 — THE STAMP MUST BE THE IDENTITY FROM BEFORE THE READ, NOT FROM
+     * THE FLUSH. THIS IS A DATA-LOSS REGRESSION TEST.**
+     *
+     * The scanner reads a file's tags in the walk and writes them much later, when the
+     * album is flushed — at least {@see MusicLibraryScanner}'s 32-album window later,
+     * and for an album whose tracks are spread across the tree, potentially at the very
+     * END of a multi-hour walk. `SplFileInfo` does not memoise its `stat()`, so a
+     * `getMTime()`/`getSize()` taken at flush time observes the file as it is THEN.
+     *
+     * If the stamp is taken at flush time, an ORDINARY tag write landing in that window
+     * — one that changes size AND mtime, nothing exotic, not the documented
+     * both-preserved case — is recorded as "already indexed at this identity" against
+     * the tags read BEFORE it. Every later scan then matches the stamp and skips the
+     * file, so **the edit is permanently invisible.** Measured against
+     * `a4cd2173`: this test's third scan probed **0** files and the pre-edit title
+     * stayed in the database forever.
+     *
+     * Stamping the PRE-read identity cannot do that: the stamp is then OLDER than the
+     * bytes on disk, so the next scan sees a mismatch and re-reads. A redundant read is
+     * the only error this direction can make.
+     *
+     * The window is reproduced exactly where it lives — the edit happens INSIDE
+     * `probeViaGetId3()`, after the tags for that file have been decided and before the
+     * flush that writes them, which is precisely "a tag editor ran while the scan was
+     * further along the tree".
+     */
+    public function testAFileEditedBetweenItsProbeAndItsFlushIsReReadOnTheNextScan(): void
+    {
+        [$dir, $db] = $this->fixture(2);
+        $scanner = $this->scanner($db);
+        $scanner->scanDirectory($dir, null, 'lib-1');
+
+        $path = $dir . '/track-1.mp3';
+        $indexedTitle = $db->tracks[$this->mediaItemIdFor($db, $path)]['title'];
+        self::assertSame('track-1', $indexedTitle, 'scan 1 must have indexed the pre-edit tags');
+
+        // Make the file eligible for a probe on scan 2 …
+        touch($path, time() + 60);
+        clearstatcache();
+        // … and have an ordinary tag write land DURING that probe: size grows AND mtime
+        // moves forward, which is what any real tag editor does.
+        $scanner->editAfterProbe = [$path => 'appended-by-a-tag-editor'];
+
+        $scanner->resetProbes();
+        $second = $scanner->scanDirectory($dir, null, 'lib-1');
+        self::assertSame([$path], $scanner->probedPaths, 'scan 2 must be the scan that reads it');
+        self::assertSame(0, $second->failed);
+
+        $stamped = $this->stampFor($db, $path);
+        $onDisk = [filemtime($path), filesize($path)];
+        self::assertNotSame(
+            $onDisk,
+            $stamped,
+            sprintf(
+                'THE DEFECT ITSELF: the row was stamped with the identity the file has AFTER the edit '
+                . '(%s), i.e. taken at flush time, while the tags in the row are the ones read BEFORE it. '
+                . 'The stamp must be the pre-read identity, which is now %s on disk.',
+                json_encode($onDisk),
+                json_encode($stamped)
+            )
+        );
+
+        $scanner->resetProbes();
+        $third = $scanner->scanDirectory($dir, null, 'lib-1');
+
+        self::assertSame(
+            [$path],
+            $scanner->probedPaths,
+            'THE CONSEQUENCE: an edit that landed between the probe and the flush must be picked up by '
+            . 'the NEXT scan. A count of 0 here means the file was stamped with its post-edit identity '
+            . 'and the edit is lost for good — reproduced end to end against a4cd2173.'
+        );
+        self::assertSame(0, $third->failed);
+    }
+
+    /**
+     * The same window on the `'added'` path (review r1 B1).
+     *
+     * A brand-new file's stamp goes in on the very INSERT that creates its
+     * `media_items` row ({@see MusicLibraryScanner::createMediaItem()}'s
+     * `$extraMetadata`), which is also inside `flushAlbum()` and therefore also after
+     * the read. A file created and then edited while the walk is still elsewhere in the
+     * tree must not be stamped as though the later bytes were the indexed ones.
+     */
+    public function testANewFileEditedBetweenItsProbeAndItsInsertIsReReadOnTheNextScan(): void
+    {
+        [$dir, $db] = $this->fixture(2);
+        $scanner = $this->scanner($db);
+
+        $path = $dir . '/track-1.mp3';
+        $scanner->editAfterProbe = [$path => 'grown-during-the-first-scan'];
+
+        $first = $scanner->scanDirectory($dir, null, 'lib-1');
+        self::assertSame(2, $first->added, 'both files must be indexed on the first scan');
+
+        $scanner->resetProbes();
+        $scanner->scanDirectory($dir, null, 'lib-1');
+
+        self::assertSame(
+            [$path],
+            $scanner->probedPaths,
+            'a file edited after its tags were read but before its INSERT must be re-read next scan; '
+            . 'the stamp that INSERT carries has to be the pre-read identity'
+        );
+    }
+
+    /**
      * S96(e) MUST NOT REGRESS: while any `music_*` row still has a NULL
      * `media_item_id`, the fast path is off, so the album is flushed and the heal runs.
      *
@@ -624,14 +731,253 @@ final class MusicScanUnchangedSkipTest extends TestCase
     }
 
     /**
+     * ⚠ **REVIEW r1 B2 — THE CORRECTED CLAIM, MADE FALSIFIABLE.**
+     *
+     * {@see MusicLibraryScanner::stampFileIdentity()}'s docblock used to say the stamp
+     * `UPDATE` is "skipped entirely … whenever the fast path is switched off for the scan
+     * (an unhealed row, or an adoptable orphan) but the files themselves are unchanged",
+     * and that this "keeps the exceptional, slow scan from also issuing 61,135 pointless
+     * UPDATEs". It cannot: `scanDirectory()` only LOADS the index when the fast path is
+     * available, so on exactly those scans the index is empty and `isStampCurrent()` is
+     * false for every file.
+     *
+     * This test measures the real behaviour — 5 unchanged files, one unhealed
+     * `music_artists` row, fast path off ⇒ **5 probes and 5 `JSON_SET` UPDATEs** — so the
+     * corrected docblock is pinned to a number and cannot silently drift back.
+     */
+    public function testWithTheFastPathOffEveryUnchangedFileIsStillProbedAndStillReStamped(): void
+    {
+        [$dir, $db] = $this->fixture(5);
+        $scanner = $this->scanner($db);
+        $scanner->scanDirectory($dir, null, 'lib-1');
+
+        // Same shape as the heal-gate test: the artist row loses its media_item_id AND
+        // its media_items row, so the HEAL gate (not the orphan gate) is what turns the
+        // fast path off.
+        $key = array_key_first($db->artists);
+        self::assertIsString($key);
+        $orphanedId = $db->artists[$key]['media_item_id'];
+        $db->artists[$key]['media_item_id'] = null;
+        $db->mediaItems = array_values(array_filter(
+            $db->mediaItems,
+            static fn(array $row): bool => $row['id'] !== $orphanedId
+        ));
+
+        $scanner->resetProbes();
+        $db->statements = [];
+        $scanner->scanDirectory($dir, null, 'lib-1');
+
+        self::assertSame(5, $scanner->probeCount, 'the fast path must be off, so every file is read');
+        self::assertSame(
+            5,
+            $this->countStatements($db, 'UPDATE media_items SET metadata_json = JSON_SET'),
+            'and every one of them is re-stamped: the index was never loaded on this scan, so '
+            . 'isStampCurrent() cannot suppress anything. This is the measured fact the '
+            . 'stampFileIdentity() docblock now states — if this ever becomes 0, the index is being '
+            . 'loaded unconditionally and that docblock needs rewriting again.'
+        );
+    }
+
+    /**
+     * The other half of r1 B2: the ONE path on which the suppression really does fire.
+     *
+     * Index loaded (healthy library, fast path on), then `$mayAdopt` flips mid-walk after
+     * a caught write failure. The unchanged files after the flip are probed — `canSkip()`
+     * is false from then on — but their stamps are already in the loaded index, so no
+     * `JSON_SET` is issued for them.
+     */
+    public function testTheStampSuppressionFiresOnTheMidWalkFlipPath(): void
+    {
+        [$dir, $db] = $this->albumTree(40);
+        $scanner = $this->scanner($db);
+        $scanner->scanDirectory($dir, null, 'lib-1');
+
+        $order = $this->walkOrder($dir);
+        foreach (array_slice($order, 0, 33) as $path) {
+            touch($path, time() + 90);
+        }
+        clearstatcache();
+
+        $scanner->albumOverride = [$order[0] => 'A Brand New Album'];
+        $db->returnNullFor('INSERT INTO music_albums');
+
+        $scanner->resetProbes();
+        $db->statements = [];
+        $scanner->scanDirectory($dir, null, 'lib-1');
+
+        self::assertSame(40, $scanner->probeCount, 'the flip must switch the fast path off for the rest');
+
+        $stamps = $this->countStatements($db, 'UPDATE media_items SET metadata_json = JSON_SET');
+        self::assertLessThan(
+            40,
+            $stamps,
+            sprintf(
+                'issued %d stamp UPDATEs for 40 probed files. The 7 files probed AFTER the flip were '
+                . 'unchanged and their identities were already in the loaded index, so '
+                . 'isStampCurrent() must suppress their writes — this is the only scan shape on which '
+                . 'that suppression can fire at all (review r1 B2).',
+                $stamps
+            )
+        );
+    }
+
+    /**
+     * ⚠ **REVIEW r1 NON-BLOCKING 1 — `music_read_concurrency = 1` MUST NOT WALK THE TREE
+     * TWICE.**
+     *
+     * With the pool disabled every `submit()` is inert, but the scanner still built a
+     * SECOND `RecursiveIteratorIterator` over the whole tree and pulled it in lockstep
+     * with the real walk — one `readdir`/`getattr` per entry, on the very knob that
+     * exists for a `direct_io` mount where those round trips are most expensive, while
+     * `config/scanner.php` promised "byte-for-byte the pre-S122 scanner".
+     *
+     * The extra work is pure filesystem I/O, which a PHP process cannot count on itself
+     * without wrapping every path — so the guard is pinned at the source, the way this
+     * suite already pins the concurrency cap's citation
+     * ({@see MusicScanPrefetcherTest::testTheCapCitesTheMeasurementThatJustifiesIt()}).
+     * ⚠ If you reformat `scanDirectory()`, update these two needles rather than deleting
+     * them.
+     */
+    public function testTheLookaheadWalkIsNotEvenCreatedWhenThePoolIsDisabled(): void
+    {
+        $source = file_get_contents((new \ReflectionClass(MusicLibraryScanner::class))->getFileName() ?: '');
+        self::assertIsString($source);
+
+        self::assertStringContainsString(
+            '$lookahead = $prefetcher->poolSize() > 0 ? $this->audioFileIterator($path) : null;',
+            $source,
+            'the second walk must be created ONLY when the pool actually has readers'
+        );
+        self::assertStringContainsString(
+            '$lookahead !== null',
+            $source,
+            'and the lookahead loop must tolerate its absence'
+        );
+
+        // Behavioural half: a pool-less scan indexes exactly the same library and reports
+        // no prefetching at all, so the guard cannot be "satisfied" by breaking the scan.
+        [$dir, $db] = $this->fixture(3);
+        $logger = new RecordingLogger();
+        $scanner = $this->scanner($db, $logger);
+
+        $result = $scanner->scanDirectory($dir, null, 'lib-1');
+
+        self::assertSame(3, $result->added);
+        $summary = $logger->contextOf('Music directory scan complete');
+        self::assertIsArray($summary);
+        self::assertSame(1, $summary['readers_in_flight'] ?? null, 'the scanner itself is the only reader');
+        self::assertSame(0, $summary['prefetched'] ?? null, 'nothing can be prefetched with no pool');
+    }
+
+    /**
+     * ⚠ **REVIEW r1 NON-BLOCKING 2 — the drop counter reaches the completion summary.**
+     *
+     * `MusicScanPrefetcher::$dropped` was documented as being FOR "the scan's completion
+     * summary" and then emitted nowhere, which made it unfalsifiable. It is the one number
+     * that says the pool was saturated, so it is now a summary key alongside `prefetched`.
+     */
+    public function testTheCompletionSummaryCarriesEveryS122Counter(): void
+    {
+        [$dir, $db] = $this->fixture(2);
+        $logger = new RecordingLogger();
+        $scanner = $this->scanner($db, $logger);
+        $scanner->scanDirectory($dir, null, 'lib-1');
+
+        $scanner->scanDirectory($dir, null, 'lib-1');
+
+        $summary = $logger->contextOf('Music directory scan complete');
+        self::assertIsArray($summary);
+
+        foreach (
+            [
+                'skipped_unchanged',
+                'skip_index_entries',
+                'readers_in_flight',
+                'prefetched',
+                'prefetch_dropped',
+            ] as $key
+        ) {
+            self::assertArrayHasKey(
+                $key,
+                $summary,
+                $key . ' must ALWAYS be in the summary, even at 0 — that is how an operator confirms '
+                . 'from one log line that the fast path engaged and how a 0 on a settled library reads '
+                . 'as the anomaly it is'
+            );
+        }
+
+        self::assertSame(2, $summary['skipped_unchanged'], 'the rescan skipped both files');
+        self::assertSame(0, $summary['prefetch_dropped'], 'and dropped nothing, because there is no pool');
+    }
+
+    /**
+     * How many recorded statements contain `$needle`.
+     *
+     * @param SkipSchemaConnection $db     Fixture database.
+     * @param string               $needle Statement substring.
+     * @return int
+     */
+    private function countStatements(SkipSchemaConnection $db, string $needle): int
+    {
+        $n = 0;
+        foreach ($db->statements as $sql) {
+            if (str_contains($sql, $needle)) {
+                $n++;
+            }
+        }
+
+        return $n;
+    }
+
+    /**
+     * The `media_items.id` the fixture database holds for a track path.
+     *
+     * @param SkipSchemaConnection $db   Fixture database.
+     * @param string               $path Absolute file path.
+     * @return string
+     */
+    private function mediaItemIdFor(SkipSchemaConnection $db, string $path): string
+    {
+        foreach ($db->mediaItems as $row) {
+            if ($row['type'] === 'track' && $row['path'] === $path) {
+                return $row['id'];
+            }
+        }
+
+        self::fail('no media_items row for ' . $path);
+    }
+
+    /**
+     * The `(mtime, size)` currently stamped in `metadata_json` for a track path.
+     *
+     * @param SkipSchemaConnection $db   Fixture database.
+     * @param string               $path Absolute file path.
+     * @return array{0: int|null, 1: int|null}
+     */
+    private function stampFor(SkipSchemaConnection $db, string $path): array
+    {
+        foreach ($db->mediaItems as $row) {
+            if ($row['type'] !== 'track' || $row['path'] !== $path) {
+                continue;
+            }
+            $mtime = $row['metadata_json'][MusicScanSkipIndex::KEY_MTIME] ?? null;
+            $size = $row['metadata_json'][MusicScanSkipIndex::KEY_SIZE] ?? null;
+
+            return [is_int($mtime) ? $mtime : null, is_int($size) ? $size : null];
+        }
+
+        self::fail('no media_items row for ' . $path);
+    }
+
+    /**
      * A scanner whose tag reads are counted and whose read-ahead pool is off.
      */
-    private function scanner(SkipSchemaConnection $db): ProbeCountingScanner
+    private function scanner(SkipSchemaConnection $db, ?RecordingLogger $logger = null): ProbeCountingScanner
     {
         return new ProbeCountingScanner(
             $db,
             $this->createMock(FfmpegRunner::class),
-            $this->createMock(StructuredLogger::class)
+            $logger ?? $this->createMock(StructuredLogger::class)
         );
     }
 
@@ -654,557 +1000,5 @@ final class MusicScanUnchangedSkipTest extends TestCase
         }
 
         @rmdir($dir);
-    }
-}
-
-/**
- * A {@see MusicLibraryScanner} that counts tag reads and never spawns a reader pool.
- *
- * Overriding `probeViaGetId3()` rather than mocking getID3 is what makes the probe
- * COUNT the assertion surface: it is the exact call the S122(a) skip exists to avoid,
- * and it is reached only from `probeMetadata()`, which is reached only from the walk.
- *
- * @internal
- */
-final class ProbeCountingScanner extends MusicLibraryScanner
-{
-    /** Tag reads performed since the counter was last reset. */
-    public int $probeCount = 0;
-
-    /** @var list<string> Paths whose tags were read, in order. */
-    public array $probedPaths = [];
-
-    /** Appended to the title, so a test can make a re-read look like a real change. */
-    public string $titleSuffix = '';
-
-    /**
-     * Per-path album title overrides, so a test can make one file look as though it moved
-     * to a different album (which is what forces a `music_albums` INSERT on a rescan).
-     *
-     * @var array<string, string>
-     */
-    public array $albumOverride = [];
-
-    /**
-     * Clears BOTH counters before a rescan.
-     *
-     * One method rather than two assignments at 11 call sites, because resetting the
-     * count and forgetting the path list is how three of these tests first "failed":
-     * the count assertion passed while the path assertion compared against the union
-     * of both scans.
-     *
-     * @return void
-     */
-    public function resetProbes(): void
-    {
-        $this->probeCount = 0;
-        $this->probedPaths = [];
-    }
-
-    protected function probeViaGetId3(string $path): ?array
-    {
-        $this->probeCount++;
-        $this->probedPaths[] = $path;
-
-        // One album per parent directory, so a fixture can exceed the 32-album open
-        // window and make the scanner flush DURING the walk.
-        $album = $this->albumOverride[$path] ?? 'Skip Album ' . basename(dirname($path));
-
-        return [
-            'artist' => 'Skip Artist',
-            'album' => $album,
-            'title' => basename($path, '.mp3') . $this->titleSuffix,
-            'track_number' => 1,
-            'disc_number' => 1,
-            'duration_secs' => 123,
-            'year' => 2020,
-            'genre' => 'Rock',
-        ];
-    }
-
-    protected function probeViaFfprobe(string $path): ?array
-    {
-        self::fail('ffprobe must never be reached: probeViaGetId3() already returned usable tags');
-    }
-
-    /**
-     * 1 = no reader pool. These tests are about the skip predicate; spawning three
-     * child processes per scan would only add noise and wall time.
-     */
-    protected function readConcurrency(): int
-    {
-        return 1;
-    }
-}
-
-/**
- * In-memory `media_items` + `music_*` schema for the S122(a) tests.
- *
- * Deliberately its OWN double rather than a change to
- * {@see MusicLibraryScannerTest}'s `MusicSchemaConnection`: that one has been hardened
- * across ten review rounds around the INSERT/UPDATE return-value contract and is
- * pinned by tests that count its arms. This one adds what S122 needs — a
- * `metadata_json` document per row, the `JSON_SET` stamp, the identity-map SELECT and
- * the heal gate — without touching those pins.
- *
- * It follows the same measured client contract, because that contract is what the
- * production code branches on: `SELECT` → list, `INSERT` → the insert id AS A STRING
- * (`'0'` for `media_items`, which has a UUID primary key and no `AUTO_INCREMENT` — and
- * `'0'` is FALSY, which is why the scanner must not use `if (!$result)`),
- * `UPDATE`/`DELETE`/`REPLACE` → an affected-row `int`, anything else → `null`.
- *
- * @internal
- */
-final class SkipSchemaConnection extends Connection
-{
-    /**
-     * @var list<array{id:string, library_id:?string, type:string, name:string, path:string,
-     *     parent_id:?string, metadata_json:array<string, mixed>}>
-     */
-    public array $mediaItems = [];
-
-    /** @var array<string, array{id:int, name:string, media_item_id:?string}> By lower-case name. */
-    public array $artists = [];
-
-    /**
-     * @var array<int, array{id:int, artist_id:int, title:string, media_item_id:?string, total_tracks:int}>
-     */
-    public array $albums = [];
-
-    /**
-     * @var array<string, array{id:int, album_id:int, title:string, track_number:int,
-     *     disc_number:int, duration_secs:int}> By media_item_id.
-     */
-    public array $tracks = [];
-
-    /** @var list<string> Every statement, in order. */
-    public array $statements = [];
-
-    /** @var list<string> Statement substrings whose query() returns NULL. */
-    private array $nullOn = [];
-
-    /** @var list<string> Statement substrings whose query() THROWS. */
-    private array $throwOn = [];
-
-    private int $autoInc = 0;
-
-    /** Intentionally does not call the parent constructor (which would connect). */
-    public function __construct()
-    {
-    }
-
-    /**
-     * Make every statement containing `$needle` report that it wrote nothing, the way
-     * the real client does for an INSERT: `null`.
-     *
-     * @param string $needle Statement substring.
-     * @return void
-     */
-    public function returnNullFor(string $needle): void
-    {
-        $this->nullOn[] = $needle;
-    }
-
-    /**
-     * Disarm every {@see self::returnNullFor()}.
-     *
-     * @return void
-     */
-    public function clearNullFor(): void
-    {
-        $this->nullOn = [];
-    }
-
-    /**
-     * Make every statement containing `$needle` THROW — the shape a real SQL error takes
-     * (`Connection::execute()` re-throws, it never returns `false`).
-     *
-     * @param string $needle Statement substring.
-     * @return void
-     */
-    public function throwFor(string $needle): void
-    {
-        $this->throwOn[] = $needle;
-    }
-
-    /**
-     * Mirrors the driver's own signature (`Connection::query($query, $params,
-     * $fetchmode)`), which is why it is untyped here.
-     *
-     * @param string $query
-     * @param array<int, mixed>|null $params
-     * @param int $fetchmode
-     * @return array<int, mixed>|int|string|null
-     */
-    public function query($query = '', $params = null, $fetchmode = \PDO::FETCH_ASSOC)
-    {
-        unset($fetchmode);
-        $sql = ltrim((string) $query);
-        $bound = is_array($params) ? array_values($params) : [];
-        $this->statements[] = $sql;
-
-        foreach ($this->throwOn as $needle) {
-            if (str_contains($sql, $needle)) {
-                throw new \RuntimeException('injected failure for: ' . $needle);
-            }
-        }
-
-        foreach ($this->nullOn as $needle) {
-            if (str_contains($sql, $needle)) {
-                return null;
-            }
-        }
-
-        return match (strtolower(trim(explode(' ', trim($sql))[0]))) {
-            'select', 'show' => $this->runSelect($sql, $bound),
-            'insert' => $this->runInsert($sql, $bound),
-            'update', 'delete', 'replace' => $this->runUpdate($sql, $bound),
-            default => null,
-        };
-    }
-
-    /** @return string */
-    public function lastInsertId()
-    {
-        return (string) $this->autoInc;
-    }
-
-    /**
-     * @param array<int, mixed> $p
-     * @return list<array<string, mixed>>
-     */
-    private function runSelect(string $sql, array $p): array
-    {
-        // S122(a) identity map.
-        //
-        // ⚠ THE BRANCH IS RECOGNISED BY THE COLUMNS IT ASKS FOR, AND THE JOIN IS APPLIED
-        // ONLY WHEN THE STATEMENT ACTUALLY CONTAINS IT. Keying the branch on the join
-        // itself made this double UNFAITHFUL to the one mutation that matters: deleting
-        // `JOIN music_tracks` from the production SQL made the statement fall through to
-        // the other handlers and return NOTHING, so two tests stayed green while a real
-        // MySQL would have returned MORE rows and skipped a file that has no track row.
-        // Measured: with that shape,
-        // `testAFileTheScanLostIsNotStampedAndIsRetried` passed against the mutation. Same
-        // rule the sibling double applies to the album adoption's `parent_id` scoping — a
-        // fake that filters unconditionally keeps passing after the predicate is deleted.
-        if (str_contains($sql, 'file_mtime') && str_contains($sql, "mi.type = 'track'")) {
-            $joined = str_contains($sql, 'JOIN music_tracks mt ON mt.media_item_id = mi.id');
-            $out = [];
-            foreach ($this->mediaItems as $row) {
-                if ($row['type'] !== 'track' || $row['library_id'] !== ($p[0] ?? null)) {
-                    continue;
-                }
-                if ($joined && !isset($this->tracks[$row['id']])) {
-                    continue;
-                }
-                $mtime = $row['metadata_json'][MusicScanSkipIndex::KEY_MTIME] ?? null;
-                $size = $row['metadata_json'][MusicScanSkipIndex::KEY_SIZE] ?? null;
-                $out[] = [
-                    'path' => $row['path'],
-                    // `->>` unquotes to a STRING, or SQL NULL when the path is absent.
-                    'file_mtime' => is_int($mtime) ? (string) $mtime : null,
-                    'file_size' => is_int($size) ? (string) $size : null,
-                ];
-            }
-
-            return $out;
-        }
-
-        // S122(a) heal gate (S96(e) protection).
-        if (str_contains($sql, 'AS unhealed FROM music_artists WHERE media_item_id IS NULL')) {
-            foreach ($this->artists as $artist) {
-                if ($artist['media_item_id'] === null) {
-                    return [['unhealed' => 1]];
-                }
-            }
-            foreach ($this->albums as $album) {
-                if ($album['media_item_id'] === null) {
-                    return [['unhealed' => 1]];
-                }
-            }
-
-            return [];
-        }
-
-        // One-per-scan orphan gate.
-        if (str_contains($sql, 'LEFT JOIN music_artists ar') && str_contains($sql, 'LEFT JOIN music_albums al')) {
-            foreach ($this->mediaItems as $row) {
-                if (
-                    in_array($row['type'], ['artist', 'album'], true)
-                    && $row['path'] === ''
-                    && $row['library_id'] === ($p[0] ?? null)
-                    && !$this->isReferenced($row['id'])
-                ) {
-                    return [['id' => $row['id']]];
-                }
-            }
-
-            return [];
-        }
-
-        if (str_contains($sql, 'LEFT JOIN music_artists ma')) {
-            foreach ($this->mediaItems as $row) {
-                if (
-                    $row['type'] === 'artist'
-                    && $row['name'] === ($p[0] ?? null)
-                    && $row['path'] === ''
-                    && $row['library_id'] === ($p[1] ?? null)
-                    && !$this->isReferenced($row['id'])
-                ) {
-                    return [['id' => $row['id']]];
-                }
-            }
-
-            return [];
-        }
-
-        if (str_contains($sql, 'LEFT JOIN music_albums ma')) {
-            foreach ($this->mediaItems as $row) {
-                if (
-                    $row['type'] === 'album'
-                    && $row['name'] === ($p[0] ?? null)
-                    && $row['path'] === ''
-                    && $row['library_id'] === ($p[1] ?? null)
-                    && !$this->isReferenced($row['id'])
-                ) {
-                    return [['id' => $row['id']]];
-                }
-            }
-
-            return [];
-        }
-
-        if (str_contains($sql, 'FROM music_artists WHERE name')) {
-            $key = strtolower((string) ($p[0] ?? ''));
-
-            return isset($this->artists[$key])
-                ? [['id' => $this->artists[$key]['id'], 'media_item_id' => $this->artists[$key]['media_item_id']]]
-                : [];
-        }
-
-        if (str_contains($sql, 'FROM music_albums WHERE artist_id')) {
-            foreach ($this->albums as $album) {
-                if ($album['artist_id'] === (int) ($p[0] ?? 0) && $album['title'] === ($p[1] ?? null)) {
-                    return [['id' => $album['id'], 'media_item_id' => $album['media_item_id']]];
-                }
-            }
-
-            return [];
-        }
-
-        if (str_contains($sql, "FROM media_items WHERE type = 'track'")) {
-            foreach ($this->mediaItems as $row) {
-                if (
-                    $row['type'] === 'track'
-                    && $row['path'] === ($p[0] ?? null)
-                    && $row['library_id'] === ($p[1] ?? null)
-                ) {
-                    return [['id' => $row['id']]];
-                }
-            }
-
-            return [];
-        }
-
-        if (str_contains($sql, 'FROM music_tracks WHERE media_item_id')) {
-            $mid = (string) ($p[0] ?? '');
-
-            return isset($this->tracks[$mid]) ? [$this->tracks[$mid]] : [];
-        }
-
-        return [];
-    }
-
-    /**
-     * @param array<int, mixed> $p
-     * @return string The insert id, as the real client reports it.
-     */
-    private function runInsert(string $sql, array $p): string
-    {
-        if (str_starts_with($sql, 'INSERT INTO media_items')) {
-            $decoded = is_string($p[5] ?? null) ? json_decode($p[5], true) : null;
-            $this->mediaItems[] = [
-                'id' => (string) ($p[0] ?? ''),
-                'library_id' => is_string($p[1] ?? null) ? $p[1] : null,
-                'type' => (string) ($p[2] ?? ''),
-                'name' => (string) ($p[3] ?? ''),
-                'path' => (string) ($p[4] ?? ''),
-                'parent_id' => null,
-                'metadata_json' => is_array($decoded) ? $decoded : [],
-            ];
-
-            // media_items has a UUID primary key and no AUTO_INCREMENT, so a SUCCESSFUL
-            // insert reports lastInsertId() = '0' — falsy, and measured.
-            return '0';
-        }
-
-        if (str_starts_with($sql, 'INSERT INTO music_artists')) {
-            $this->autoInc++;
-            $name = (string) ($p[0] ?? '');
-            $this->artists[strtolower($name)] = [
-                'id' => $this->autoInc,
-                'name' => $name,
-                'media_item_id' => is_string($p[2] ?? null) ? $p[2] : null,
-            ];
-
-            return (string) $this->autoInc;
-        }
-
-        if (str_starts_with($sql, 'INSERT INTO music_albums')) {
-            $this->autoInc++;
-            $this->albums[$this->autoInc] = [
-                'id' => $this->autoInc,
-                'artist_id' => (int) ($p[0] ?? 0),
-                'title' => (string) ($p[2] ?? ''),
-                'media_item_id' => is_string($p[1] ?? null) ? $p[1] : null,
-                'total_tracks' => 0,
-            ];
-
-            return (string) $this->autoInc;
-        }
-
-        if (str_starts_with($sql, 'INSERT INTO music_tracks')) {
-            $this->autoInc++;
-            $this->tracks[(string) ($p[0] ?? '')] = [
-                'id' => $this->autoInc,
-                'album_id' => (int) ($p[1] ?? 0),
-                'title' => (string) ($p[3] ?? ''),
-                'track_number' => (int) ($p[4] ?? 0),
-                'disc_number' => (int) ($p[5] ?? 1),
-                'duration_secs' => (int) ($p[6] ?? 0),
-            ];
-
-            return (string) $this->autoInc;
-        }
-
-        return '0';
-    }
-
-    /**
-     * @param array<int, mixed> $p
-     * @return int Affected rows, as the real client reports for these keywords.
-     */
-    private function runUpdate(string $sql, array $p): int
-    {
-        // S122(a) stamp. JSON_SET semantics: MERGE the two keys into the existing
-        // document, never replace it — a fake that replaced it would hide the fact that
-        // the production statement has to COALESCE a NULL document.
-        if (str_contains($sql, 'UPDATE media_items SET metadata_json = JSON_SET')) {
-            $id = (string) ($p[2] ?? '');
-            foreach ($this->mediaItems as $i => $row) {
-                if ($row['id'] !== $id) {
-                    continue;
-                }
-                $this->mediaItems[$i]['metadata_json'][MusicScanSkipIndex::KEY_MTIME] = (int) ($p[0] ?? 0);
-                $this->mediaItems[$i]['metadata_json'][MusicScanSkipIndex::KEY_SIZE] = (int) ($p[1] ?? 0);
-
-                return 1;
-            }
-
-            return 0;
-        }
-
-        if (str_contains($sql, 'UPDATE music_artists SET media_item_id')) {
-            foreach ($this->artists as $key => $artist) {
-                if ($artist['id'] !== (int) ($p[1] ?? 0) || $artist['media_item_id'] !== null) {
-                    continue;
-                }
-                $this->artists[$key]['media_item_id'] = is_string($p[0] ?? null) ? $p[0] : null;
-
-                return 1;
-            }
-
-            return 0;
-        }
-
-        if (str_contains($sql, 'UPDATE music_albums SET media_item_id')) {
-            foreach ($this->albums as $id => $album) {
-                if ($album['id'] !== (int) ($p[1] ?? 0) || $album['media_item_id'] !== null) {
-                    continue;
-                }
-                $this->albums[$id]['media_item_id'] = is_string($p[0] ?? null) ? $p[0] : null;
-
-                return 1;
-            }
-
-            return 0;
-        }
-
-        if (str_contains($sql, 'SET a.total_tracks')) {
-            $albumId = (int) ($p[0] ?? 0);
-            if (!isset($this->albums[$albumId])) {
-                return 0;
-            }
-            $count = 0;
-            foreach ($this->tracks as $track) {
-                if ($track['album_id'] === $albumId) {
-                    $count++;
-                }
-            }
-            $this->albums[$albumId]['total_tracks'] = $count;
-
-            return 1;
-        }
-
-        if (str_contains($sql, 'UPDATE music_albums SET year')) {
-            return 1;
-        }
-
-        if (str_contains($sql, 'UPDATE music_tracks SET title')) {
-            foreach ($this->tracks as $mid => $track) {
-                if ($track['id'] !== (int) ($p[4] ?? 0)) {
-                    continue;
-                }
-                $this->tracks[$mid]['title'] = (string) ($p[0] ?? '');
-                $this->tracks[$mid]['track_number'] = (int) ($p[1] ?? 0);
-                $this->tracks[$mid]['disc_number'] = (int) ($p[2] ?? 1);
-                $this->tracks[$mid]['duration_secs'] = (int) ($p[3] ?? 0);
-
-                return 1;
-            }
-
-            return 0;
-        }
-
-        return 0;
-    }
-
-    /**
-     * Every artist/album `media_items` row that no `music_*` row points at.
-     *
-     * @return list<string>
-     */
-    public function orphanedMusicMediaItems(): array
-    {
-        $out = [];
-        foreach ($this->mediaItems as $row) {
-            if (in_array($row['type'], ['artist', 'album'], true) && !$this->isReferenced($row['id'])) {
-                $out[] = $row['id'];
-            }
-        }
-
-        return $out;
-    }
-
-    /**
-     * Is this `media_items.id` referenced by a `music_artists`/`music_albums` row?
-     *
-     * @param string $mediaItemId Candidate id.
-     * @return bool
-     */
-    public function isReferenced(string $mediaItemId): bool
-    {
-        foreach ($this->artists as $artist) {
-            if ($artist['media_item_id'] === $mediaItemId) {
-                return true;
-            }
-        }
-        foreach ($this->albums as $album) {
-            if ($album['media_item_id'] === $mediaItemId) {
-                return true;
-            }
-        }
-
-        return false;
     }
 }

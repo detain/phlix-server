@@ -147,7 +147,15 @@ final class MusicScanPrefetcher
     /** Paths handed to a child (for the completion summary). */
     private int $submitted = 0;
 
-    /** Paths dropped because no child could take them. */
+    /**
+     * Paths dropped because no child could take them.
+     *
+     * Emitted as `prefetch_dropped` in {@see MusicLibraryScanner::scanDirectory()}'s
+     * completion summary. It was documented as being for that summary and then never
+     * surfaced anywhere (review r1 non-blocking 2), which made it unfalsifiable: a
+     * large value means the walk is outrunning the readers, i.e. the read-ahead is not
+     * buying what the measured 1.73x says it should.
+     */
     private int $dropped = 0;
 
     /**
@@ -333,6 +341,29 @@ final class MusicScanPrefetcher
      * Shuts the pool down: stdin EOF (which is how a reader learns to exit),
      * then a terminate for anything that has not noticed.
      *
+     * ⚠ **`proc_close()` WAITS. THE WAIT IS UNBOUNDED, AND THAT IS STATED RATHER THAN
+     * WISHED AWAY (review r1 non-blocking 5).** `proc_close()` is `waitpid()` without
+     * `WNOHANG`, so if a reader is parked inside a `read(2)` on a stalled FUSE mount —
+     * uninterruptible `D` state, where even `SIGKILL` is not delivered until the read
+     * returns — the SCAN WORKER blocks here for exactly as long as the mount takes to
+     * answer. The bound is the mount's, not ours.
+     *
+     * Two reasons this is accepted rather than engineered around:
+     *
+     *  - **it is not a new failure mode.** The scanner's own getID3 read is on the same
+     *    mount in the same process, so a stall of that kind already parks the scan; a
+     *    reader in the same state adds no window that was not already open, and this is
+     *    a resident SCAN WORKER, not an HTTP handler — no request is held.
+     *  - **`proc_get_status()`-polling would not fix it.** Skipping the reap leaves a
+     *    zombie in a long-lived worker (one per reader per scan), and a `D`-state child
+     *    cannot be killed at all, so a bounded wait would have to leak the handle to
+     *    "succeed". Trading a bounded stall for an unbounded FD/zombie leak in a
+     *    resident process is the worse of the two.
+     *
+     * The docblock that used to be here said a reader "exits on EOF almost at once".
+     * That is true of every case except the one that matters, so the sentence has been
+     * replaced by the bound.
+     *
      * @return void
      */
     public function close(): void
@@ -349,10 +380,10 @@ final class MusicScanPrefetcher
             if (!is_resource($proc)) {
                 continue;
             }
-            // A reader's whole job is one bounded read, so it exits on EOF almost
-            // at once. proc_terminate() covers the case where it is mid-read on a
-            // stalled mount; proc_close() then reaps it so no zombie is left in a
-            // resident worker.
+            // A reader's whole job is one bounded read, so on a responsive mount it
+            // exits on EOF immediately. proc_terminate() covers the case where it is
+            // mid-read; proc_close() then reaps it so no zombie is left in a resident
+            // worker — and BLOCKS until it can, see this method's docblock for the bound.
             @proc_terminate($proc);
             @proc_close($proc);
         }

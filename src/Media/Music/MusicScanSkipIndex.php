@@ -37,13 +37,35 @@ use Workerman\MySQL\Connection;
  * ## THE PREDICATE, and its failure mode — READ THIS BEFORE CHANGING IT
  *
  * **Skip iff the file's `mtime` AND its `size` are both byte-identical to the
- * values recorded the last time this scanner actually read its tags.**
+ * values the file had IMMEDIATELY BEFORE this scanner last read its tags.**
+ *
+ * ⚠ **"IMMEDIATELY BEFORE" — not "at the moment the tags were parsed", and
+ * emphatically not "at the moment the row was written". That asymmetry IS the
+ * safety argument, and getting it wrong was a data-loss defect (review r1 B1).**
+ * {@see MusicLibraryScanner::scanDirectory()} stat's the file via
+ * {@see self::stampValues()} one statement ABOVE `probeMetadata()` and then
+ * CARRIES those two integers through the album buffer into the write; nothing
+ * downstream re-stat's the file. The version that stat'ed at write time was
+ * measurably wrong: the probe→flush window is at least
+ * {@see MusicLibraryScanner::MAX_OPEN_ALBUMS} albums (≈400 files at production
+ * ratios) and is unbounded for an album whose tracks are spread across the tree —
+ * S95 groups on TAG identity precisely so a multi-directory album stays in ONE
+ * flush — so an ORDINARY tag write landing inside that window was stamped with
+ * the POST-edit identity against PRE-edit tags, and every later scan then skipped
+ * the file forever.
+ *
+ * Stamping the PRE-read identity cannot do that. An edit that races the read
+ * leaves the stamp OLDER than the content, so the next scan compares a stale
+ * `(mtime, size)` against the new one, sees a mismatch, and re-reads. **The error
+ * direction is a redundant read, never a missed change** — which is the only
+ * direction a cache predicate is allowed to be wrong in.
  *
  * A skip predicate is a CACHE. A wrong one does not make the scan slow, it makes
  * it **silently miss a real change**, which is strictly worse. So the failure
  * mode is stated rather than implied:
  *
- *  - ❌ **An in-place edit that preserves BOTH mtime and size is missed.**
+ *  - ❌ **An in-place edit that preserves BOTH mtime and size is missed** —
+ *    "preserves" meaning "relative to the stat taken just before the last read".
  *    Concretely: a tag editor that rewrites a padded ID3v2 frame region to the
  *    same byte length and then restores the original mtime (`touch -r`), a
  *    restore-from-backup with `--preserve=timestamps` over different content, or
@@ -73,20 +95,48 @@ use Workerman\MySQL\Connection;
  * to prevent — a silent miss — and 2.4 MB across a 61,135-file library is not
  * worth buying it. The key is the verbatim path.
  *
- * ## Memory is bounded, deliberately
+ * ## Memory: the RETAINED map is bounded, the load's TRANSIENT peak is not
  *
  * One `SELECT` per scan loads the library's whole track identity map, which is
  * O(library size) — the shape S95 removed from the scan buffer. It is affordable
- * here only because an entry is a path plus one short scalar string rather than
- * S95's 1,463-byte `['file' => SplFileInfo, 'meta' => [...]]`. **Measured on PHP
- * 8.3.6 with production-shaped paths (`/vault1/music/<artist>/<album>/NN -
- * <title>.mp3`, ~60 chars) at the real library size: 61,135 entries = 5,556,000
- * bytes = 5.30 MB, i.e. 90.9 bytes/entry** — 16x cheaper per entry than the map
- * S95 removed (which would be ≈89 MB for the same library) and half the ≈11.1 MB
- * ceiling S95 already accepts for its open-album window. Pinned by
- * `MusicScanSkipIndexTest::testMemoryPerEntryIsBounded()`. {@see self::MAX_ENTRIES} caps it hard regardless of
- * library size, and overflow degrades to "probe the file", which is CORRECT and
- * merely slower.
+ * because an entry is a path plus one short scalar string rather than S95's
+ * 1,463-byte `['file' => SplFileInfo, 'meta' => [...]]`. Two figures, both
+ * measured on PHP 8.3.6 at the real production library size (61,135 rows) with
+ * production-shaped 56-character path keys, and both reproducible to the byte:
+ *
+ * | quantity | measured |
+ * |---|---|
+ * | RETAINED by the map once `load()` has returned | **11,424,960 B = 10.90 MiB = 186.9 B/entry** |
+ * | TRANSIENT peak INSIDE `load()` | **38,527,368 B = 36.74 MiB** |
+ *
+ * ⚠ **The figure this docblock used to quote — "5,556,000 bytes = 5.30 MB, i.e.
+ * 90.9 bytes/entry" — is ≈2x too low, and it was an artefact of HOW it was
+ * measured (review r1 B3).** It reproduces exactly, but only when the path strings
+ * are allocated by the caller BEFORE the measurement starts, so the map's keys are
+ * shared by refcount with the row set and are invisible to the delta. Production
+ * never has that condition: `$rows` dies with `load()` and the map is then the sole
+ * owner of every key. Three claims that rested on the wrong number are corrected
+ * with it: the retained map is **the same size as** the ≈11.1 MB open-album ceiling
+ * S95 already accepts, not half of it; an entry is **7.8x** cheaper than the
+ * 1,463 B entry S95 removed (≈89 MB for this library), not 16x; and
+ * {@see self::MAX_ENTRIES} is **≈44.3 MiB**, not ≈21.7 MB. The DESIGN survives the
+ * correction — 10.9 MiB in a scan worker is still bounded and still affordable —
+ * only the arithmetic and the measurement method were wrong.
+ *
+ * ⚠ **{@see self::MAX_ENTRIES} bounds RETENTION ONLY.** The driver materialises the
+ * whole result set before this class can refuse an entry, so the transient `$rows`
+ * is 2.4x the retained map (25.84 MiB of row arrays for 61,135 rows) and it scales
+ * with the LIBRARY, not with the cap: measured at exactly 250,000 rows, retention
+ * stops at 44.33 MiB while the load peaks at **153.54 MiB**. Bounding that too
+ * would mean chunking the SELECT, which buys nothing at any library size that
+ * exists and is therefore not done — but the claim made here is "retention is
+ * bounded by a constant", not "memory is".
+ *
+ * Both retained figures are pinned by
+ * `MusicScanSkipIndexTest::testMemoryPerEntryIsBounded()`, which builds its rows
+ * INSIDE the connection double so that nothing outside the map holds a path string
+ * — the whole point of B3. Overflowing the cap degrades to "probe the file", which
+ * is CORRECT and merely slower.
  *
  * The alternative — one indexed `SELECT` per file — was rejected because the
  * lookup key would be `media_items.path`, which has **no b-tree index**
@@ -127,9 +177,16 @@ final class MusicScanSkipIndex
      * Hard ceiling on retained entries.
      *
      * 250,000 is ≈4x the 61,135-file production music library, so the cap is
-     * never reached in practice; it exists so that memory is bounded by a
-     * CONSTANT rather than by however large a library grows. At the measured
-     * 90.9 bytes/entry the ceiling is ≈21.7 MB.
+     * never reached in practice; it exists so that RETAINED memory is bounded by a
+     * CONSTANT rather than by however large a library grows. Measured at exactly
+     * 250,000 entries on PHP 8.3.6: **46,485,840 B = 44.33 MiB retained**
+     * (185.9 B/entry — the same per-entry cost as the 61,135-entry case, see the
+     * class docblock). The pre-r1 docblock said ≈21.7 MB; that came from the
+     * understated 90.9 B/entry figure and was wrong by the same ≈2x.
+     *
+     * ⚠ It does NOT bound the load's transient peak — the result set is
+     * materialised in full before an entry can be refused, measured at **153.54
+     * MiB** for 250,000 rows. See the class docblock.
      *
      * Overflow is safe by construction: a file with no entry is simply probed,
      * which is precisely today's behaviour. The cap can only ever make the scan
@@ -191,9 +248,12 @@ final class MusicScanSkipIndex
      * skip it on the next scan, and never create the missing track row. The join makes
      * such a row invisible here, so the file is probed, takes
      * `upsertTrack()`'s reuse branch, and the loss is retried exactly as it was before
-     * S122. `music_tracks.media_item_id` is `NOT NULL UNIQUE` (migration 011), so the
-     * join is an index lookup, and its `album_id`/`artist_id` are `NOT NULL` FKs — so
-     * a joined row also proves the artist and album rows exist.
+     * S122. `music_tracks.media_item_id` is `NOT NULL UNIQUE`
+     * (`migrations/065_music_library.sql:74` — review r1 non-blocking 3; this used to
+     * cite migration 011, which contains only the `idx_media_items_library_type` index
+     * quoted above and no `music_tracks` table at all), so the join is an index lookup,
+     * and its `album_id`/`artist_id` are `NOT NULL` FKs — so a joined row also proves
+     * the artist and album rows exist.
      *
      * FAILS OPEN, deliberately: a throw here leaves the index empty, which makes
      * every file "unknown" and therefore probed. That is today's behaviour, so a
@@ -270,8 +330,13 @@ final class MusicScanSkipIndex
     }
 
     /**
-     * Is this file byte-for-byte the same size, at the same mtime, as when its
-     * tags were last read?
+     * Is this file byte-for-byte the same size, at the same mtime, as it was
+     * IMMEDIATELY BEFORE its tags were last read?
+     *
+     * The "immediately before" is not pedantry — it is the property that makes a
+     * false TRUE impossible for an ordinary tag write, and getting it wrong was
+     * review r1's B1 data-loss defect. See the predicate section of the class
+     * docblock and {@see self::stampValues()}.
      *
      * Returns FALSE for anything it cannot prove — an unloaded index, an unknown
      * path, a `stat()` that failed. "Unproven" must mean "read it", never "skip
@@ -309,22 +374,27 @@ final class MusicScanSkipIndex
      * Does the index already hold exactly this identity for this path?
      *
      * Used to suppress a pointless `UPDATE` when the scanner probed a file whose
-     * stamp was already current — which happens whenever the fast path is
-     * switched off for the scan (an unhealed `music_*` row, or an adoptable
-     * orphan) but the file itself really is unchanged.
+     * stamp was already current. See
+     * {@see MusicLibraryScanner::stampFileIdentity()} for the ONE scan shape on
+     * which that can actually happen — it is narrower than this docblock used to
+     * claim (review r1 B2).
      *
      * @param SplFileInfo $file Audio file whose stamp is about to be written.
+     * @param array{0: int, 1: int}|null $values Identity to compare, as captured
+     *        by {@see self::stampValues()} BEFORE the file's tags were read. NULL
+     *        means "stat the file now", which is only correct for a caller that has
+     *        not read the file yet — see {@see self::remember()}.
      *
      * @return bool True when a write would change nothing.
      */
-    public function isStampCurrent(SplFileInfo $file): bool
+    public function isStampCurrent(SplFileInfo $file, ?array $values = null): bool
     {
         $recorded = $this->entries[$file->getPathname()] ?? null;
         if ($recorded === null) {
             return false;
         }
 
-        $current = self::currentIdentity($file);
+        $current = $values === null ? self::currentIdentity($file) : self::identity($values[0], $values[1]);
 
         return $current !== null && $current === $recorded;
     }
@@ -337,12 +407,20 @@ final class MusicScanSkipIndex
      * symlink) is not probed twice.
      *
      * @param SplFileInfo $file Audio file just indexed.
+     * @param array{0: int, 1: int}|null $values The identity that was actually
+     *        WRITTEN — i.e. the one {@see self::stampValues()} captured before the
+     *        tags were read. **Production always passes this.** ⚠ NULL means "stat
+     *        the file now", which re-introduces review r1's B1 defect if the file
+     *        has been read since: the map would then hold a NEWER identity than the
+     *        tags in the database, and the next scan would skip a file that changed.
+     *        It is retained only for callers that have not read the file at all
+     *        (tests that seed the map directly).
      *
      * @return void
      */
-    public function remember(SplFileInfo $file): void
+    public function remember(SplFileInfo $file, ?array $values = null): void
     {
-        $current = self::currentIdentity($file);
+        $current = $values === null ? self::currentIdentity($file) : self::identity($values[0], $values[1]);
         if ($current === null) {
             return;
         }
@@ -357,6 +435,15 @@ final class MusicScanSkipIndex
     /**
      * The `(mtime, size)` pair to stamp into `metadata_json` for a file, or NULL
      * when the file could not be stat'ed.
+     *
+     * ⚠ **WHERE THIS IS CALLED FROM IS PART OF THE CORRECTNESS ARGUMENT (review r1
+     * B1).** It must be called in the walk, immediately BEFORE `probeMetadata()`,
+     * and the returned pair carried to the write. `SplFileInfo` does not memoise its
+     * `stat()` — measured: a second `getMTime()` on the SAME instance returns the NEW
+     * value after the file has changed — so calling this again at write time reads a
+     * genuinely later state of the file and stamps post-edit bytes against pre-edit
+     * tags. See {@see self::isUnchanged()} and the predicate section of the class
+     * docblock.
      *
      * @param SplFileInfo $file Audio file being indexed.
      *

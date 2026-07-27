@@ -14,7 +14,7 @@ use Workerman\MySQL\Connection;
  * SV-0.8 real-DB proof that the scanner's path lookups
  * ({@see ItemRepository::findByPath()} / {@see ItemRepository::findPathsMap()})
  * actually resolve through the `(library_id, path_hash)` unique index (migration
- * 072 + `cleanup_072.php`) instead of full-scanning `media_items` on every scan
+ * 072's column + migration 096's index) instead of full-scanning `media_items` on every scan
  * / rescan. A mocked connection cannot exercise the optimizer, so this runs
  * `EXPLAIN` against the queries those methods emit and asserts the composite
  * index is applicable and — when forced — provides a non-full-scan access path.
@@ -117,9 +117,10 @@ final class PathHashIndexUsageTest extends TestCase
             ]);
         }
 
-        // The unique index is normally added by cleanup_072.php (not the base
-        // migration). Ensure it exists so the optimizer actually has it to use;
-        // self-skip if pre-existing data prevents a unique constraint.
+        // The migration chain adds the unique index as of 096, so this is a
+        // no-op on a current database. Ensure it exists anyway (pre-096 chains)
+        // so the optimizer actually has it to use; self-skip if pre-existing
+        // data prevents a unique constraint.
         $this->ensurePathHashIndex();
 
         // Fresh, deterministic index statistics for the cost-based optimizer.
@@ -360,14 +361,14 @@ final class PathHashIndexUsageTest extends TestCase
 
     /**
      * Ensure the `(library_id, path_hash)` unique index exists for the duration
-     * of this test. Mirrors cleanup_072.php's statement. Self-skips when
+     * of this test. Mirrors migration 096's / cleanup_072.php's statement. Self-skips when
      * pre-existing data would violate uniqueness (index-usage is unprovable
      * without the index, but that is an environment gap).
      */
     private function ensurePathHashIndex(): void
     {
         if ($this->hasPathHashIndex()) {
-            return; // Already created (cleanup_072.php was run on this DB).
+            return; // Already there (migration 096, or cleanup_072.php, ran on this DB).
         }
 
         try {

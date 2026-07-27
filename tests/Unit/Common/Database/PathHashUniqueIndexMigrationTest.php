@@ -13,7 +13,7 @@ use PHPUnit\Framework\TestCase;
  * THE DEFECT THIS LOCKS SHUT. Migration 072 added the `path_hash` generated
  * column but deferred the UNIQUE index to `migrations/cleanup_072.php`, a
  * MANUAL post-deploy script. Migration 087 then DROPped the index outright
- * (087:47-48). Nothing in `scripts/run-migrations.php` / `bin/phlix migrate`
+ * (087:59-60). Nothing in `scripts/run-migrations.php` / `bin/phlix migrate`
  * ever re-created it, so a database built by the migration chain ALONE carried
  * NO path-dedupe constraint at all: duplicate media rows were possible, and the
  * S151 `const`/`rows=1` track lookup silently degraded to `ref`/`key_len=144`.

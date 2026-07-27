@@ -3,12 +3,13 @@
 --
 -- THE DEFECT (S152). Migration 072 added the `path_hash` generated column but
 -- deliberately left the UNIQUE index to `migrations/cleanup_072.php`, and
--- migration 087 then DROPs the index (087:47-48) before rewriting the column.
--- The ONLY thing that ever (re-)creates it is `cleanup_072.php:121-125` — a
--- MANUAL post-deploy script that `scripts/run-migrations.php`, `bin/phlix
--- migrate`, `scripts/install.sh` and `docker/docker-entrypoint.sh` never call.
+-- migration 087 then DROPs the index (087:59-60) before rewriting the column.
+-- Until this file, the ONLY thing that ever re-created it was
+-- `cleanup_072.php:147-151` — a MANUAL post-deploy script that
+-- `scripts/run-migrations.php`, `bin/phlix migrate`, `scripts/install.sh` and
+-- `docker/docker-entrypoint.sh` never call.
 --
--- So a database built by the migration chain ALONE ends up with NO
+-- So a database built by the migration chain ALONE ended up with NO
 --
 --     UNIQUE KEY idx_media_items_library_path_hash (library_id, path_hash)
 --
@@ -43,7 +44,7 @@
 --
 -- So the statement to run is chosen at runtime, with the same
 -- `SET @sql = (SELECT CASE ...)` + `PREPARE`/`EXECUTE` idiom migration 011
--- already uses in this repo (011:8-25), over three outcomes:
+-- already uses in this repo (011:8-24), over three outcomes:
 --
 --   a. Index already present (production; any DB where `cleanup_072.php` was
 --      run) → both prepared statements are `SELECT 0`. A true no-op: no 1061

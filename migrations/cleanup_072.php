@@ -25,8 +25,11 @@
  *     Unknown column 'media_items duplicate paths: run php
  *     migrations/cleanup_072.php' in 'field list'
  *
- * After this script has merged them, the next `run-migrations.php` adds the
- * index (096 is left unrecorded until it succeeds, so it retries by itself).
+ * Once the duplicates are merged, THIS SCRIPT adds the index itself (step 2
+ * below), so the table is already in the right state when it exits. The next
+ * `run-migrations.php` / `bin/phlix migrate` then finds the index present, takes
+ * 096's no-op branch and only records 096 in the ledger (096 stays unrecorded
+ * until it succeeds, so it retries by itself).
  *
  *     php migrations/cleanup_072.php
  *

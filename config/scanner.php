@@ -95,4 +95,53 @@ return [
         // which is an unambiguous bug fix: `_UNPACK_` and `movie.TMP` were
         // never matched before and unquestionably should be.)
     ],
+
+    /*
+     * How many file reads the MUSIC scan may have in flight against the media
+     * mount at once, INCLUDING the scanner's own. **S122(b).**
+     *
+     * 🛑 THE CEILING IS 4 AND IT WAS MEASURED. A value above 4 is CLAMPED to 4
+     * by {@see \Phlix\Media\Music\MusicScanPrefetcher::clampReaders()} — this
+     * file cannot raise the cap, only lower it.
+     *
+     * Parallel cold `open()`s on the production vault mount, 16 files per run
+     * (`steps/vault-sshfs-read-perf-diagnostic.worklog.md`):
+     *
+     *   threads |  ms/file | files/s | speedup
+     *   --------+----------+---------+--------
+     *      1    |   117.0  |   8.5   |  1.00x
+     *    **4**  |  **67.7**|**14.8** |**1.73x**
+     *      8    |   197.8  |   5.1   |  0.59x  <- WORSE THAN SERIAL
+     *     16    |   115.9  |   8.6   |  1.01x
+     *
+     * The backing store is a single rotational spindle (`r_await` 10.58 ms,
+     * `%util` 12.45 at queue depth 0.14 — idle but latency-bound), so a few
+     * concurrent requests fill the seek pipeline and more than that thrashes it.
+     * "More parallelism is better" is measurably FALSE here.
+     *
+     * WHAT THE VALUE MEANS
+     *   1 — no read-ahead pool AND no read-ahead walk: this knob's entire effect is
+     *       removed and the scan touches the mount exactly as the pre-S122 scanner
+     *       did. Set this if the media mount uses `direct_io` (which defeats the page
+     *       cache the pool warms, so the bytes would be paid twice) or to isolate
+     *       the pool while diagnosing something else.
+     *       ⚠ "no read-ahead WALK" is part of the promise as of review r1
+     *       (non-blocking 1). At 1 the pool has no children so every submit() was
+     *       already a no-op, but the scanner still performed a SECOND
+     *       RecursiveIteratorIterator pass over the tree — one readdir/getattr per
+     *       entry, on the very escape valve that exists for a mount where those are
+     *       most expensive. {@see \Phlix\Media\Music\MusicLibraryScanner::scanDirectory()}
+     *       now creates that second walk only when the pool actually has readers.
+     *       ⚠ This value does NOT switch off the S122(a) unchanged-file skip, which
+     *       is an independent mechanism with its own gates
+     *       ({@see \Phlix\Media\Music\MusicScanSkipIndex}). "Pre-S122" here means the
+     *       READ PATTERN of a file the scan does open.
+     *   2-4 — the scanner plus (value - 1) reader processes running a few files
+     *       ahead of the walk. 4 is the measured optimum and the default.
+     *
+     * The pool cannot affect WHAT gets indexed — it reads bytes and discards
+     * them — so this knob trades scan speed against mount pressure and nothing
+     * else. See {@see \Phlix\Media\Music\MusicScanPrefetcher}.
+     */
+    'music_read_concurrency' => 4,
 ];

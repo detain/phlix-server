@@ -14,6 +14,7 @@ namespace Phlix\Media\Music;
 use Phlix\Common\Logger\LogChannels;
 use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Common\Uuid;
+use Phlix\Config\EffectiveConfig;
 use Phlix\Media\Library\ScanIgnorePatterns;
 use Phlix\Media\Library\ScanResult;
 use Phlix\Media\Transcoding\FfmpegRunner;
@@ -135,6 +136,17 @@ class MusicLibraryScanner
 
     /** Ceiling on the per-scan album find-or-create cache ({@see self::upsertAlbum()}). */
     private const MAX_ALBUM_CACHE = 512;
+
+    /**
+     * Validated MPEG frames getID3 must see before it trusts an MP3 stream.
+     *
+     * getID3's own default is 50 and its own docblock says "Lower this number to
+     * 5-20 for faster scanning". Measured effect of 50 → 10 on a 16.6 KB MP3:
+     * 455,654 → 139,931 bytes read, 61 → 21 reads, 59 → 19 seeks, with an
+     * IDENTICAL `playtime_seconds`. Full option rationale and the trade-off are in
+     * {@see self::getId3Reader()}.
+     */
+    private const MP3_VALID_CHECK_FRAMES = 10;
 
     /**
      * @var LoggerInterface Logger instance.
@@ -511,6 +523,42 @@ class MusicLibraryScanner
             $mayAdopt = true;
         }
 
+        // ── S122(a): the second one-query-per-scan gate. ────────────────────────
+        //
+        // The unchanged-file fast path skips a file BEFORE probeMetadata(), which
+        // means flushAlbum() never runs for that file — and flushAlbum() is where
+        // S96(e)'s NULL-media_item_id backfill and the orphan adoption live. On a
+        // library with something to heal, skipping everything would therefore make
+        // the heal never happen: exactly S96's acceptance criterion ("a music_* row
+        // whose media_item_id is NULL is backfilled on the NEXT scan rather than
+        // staying NULL forever") silently regressed.
+        //
+        // So the fast path is enabled ONLY on a library with nothing to heal:
+        // no adoptable orphan ($mayAdopt === false) AND no NULL media_item_id. Both
+        // are answered by one query each, before the walk, in the same fail-open
+        // style as the gate above — and $mayAdopt is re-read PER FILE below, so a
+        // mid-walk write failure that leaves a fresh orphan switches the fast path
+        // off for the remainder of the scan rather than banking a stale "healthy".
+        //
+        // That is also why the steady state is fast and the exceptional state is
+        // correct: an unchanged, healthy library is precisely the 6.1-hour case.
+        try {
+            $needsHealing = $this->hasUnhealedMusicMediaItem();
+        } catch (\Throwable $healGateError) {
+            // FAIL SAFE = do NOT skip. A skip we cannot justify is a change we may
+            // silently miss; a probe we did not need is only slow.
+            $this->logger->warning('Music heal gate failed; the unchanged-file fast path is disabled', [
+                'path' => $path,
+                'error' => $healGateError->getMessage(),
+            ]);
+            $needsHealing = true;
+        }
+
+        $skipIndex = new MusicScanSkipIndex($this->db, $this->logger);
+        if (!$mayAdopt && !$needsHealing) {
+            $skipIndex->load($libraryId);
+        }
+
         // Track artist/album IDs to handle the hierarchy. Bounded (see the
         // MAX_*_CACHE constants) because they now live for the whole walk.
         /** @var array<string, array{id:int, media_item_id:string|null}> $artistCache */
@@ -521,8 +569,30 @@ class MusicLibraryScanner
         /**
          * Albums currently accumulating tracks, keyed by `md5(artist|album)`.
          *
+         * `mtime`/`size` are the S122(a) identity STAT'ED BEFORE THE TAG READ and
+         * carried here so the write can stamp it (review r1 B1 — see the skip below).
+         *
+         * They are two FLAT INTS rather than a nested `['stamp' => [m, s]]`, and that
+         * is a measured choice, not a style one. An isolated 7,968-entry buffer (the
+         * worst case `MAX_OPEN_ALBUMS × MAX_TRACKS_PER_FLUSH` allows), PHP 8.3.6:
+         *
+         * | entry shape | B/entry | total |
+         * |---|---|---|
+         * | `['file' =>, 'meta' =>]` (pre-B1) | 1,520.1 | 12,112,536 |
+         * | **+ `'mtime' =>`, `'size' =>` ints (this)** | **1,513.0** | **12,055,192** |
+         * | + `'stamp' => [m, s]` array | 1,729.0 | 13,776,280 |
+         *
+         * Two int-valued keys fit in the 8 buckets PHP has ALREADY allocated for this
+         * array's minimum hash table, so they cost nothing measurable (−7 B/entry, i.e.
+         * allocator noise). A nested 2-element array is a second `zend_array` per entry:
+         * **+208.9 B/entry = +1,721,088 B = +1.64 MiB**, which would push the peak past
+         * the 13,600,000 B ceiling
+         * {@see \Phlix\Tests\Unit\Media\Music\MusicLibraryScannerTest::testMemoryStaysBoundedAcrossALargeTree()}
+         * asserts and break S95's documented 1,463 B/entry bound.
+         *
          * @var array<string, array{artist:string, album:string, year:?int,
-         *     files:list<array{file:SplFileInfo, meta:array<string, mixed>}>}> $open
+         *     files:list<array{file:SplFileInfo, meta:array<string, mixed>,
+         *     mtime:int|null, size:int|null}>}> $open
          */
         $open = [];
 
@@ -554,50 +624,188 @@ class MusicLibraryScanner
          */
         $skippedNoArtist = 0;
 
-        foreach ($this->audioFileIterator($path) as $file) {
-            $processed++;
-            $result->scanned++;
-            if ($onProgress !== null) {
-                // The 4th argument is the LIVE counter snapshot (S96(b)). Surplus
-                // arguments to a user-defined function are ignored by PHP, so a
-                // pre-S96 3-parameter sink is unaffected.
-                $onProgress($processed, $total, $file->getPathname(), $result->progressCounts());
-            }
+        /**
+         * Files the S122(a) fast path recognised as unchanged and did not open.
+         *
+         * The headline number of this step: on the production library 54,585 of
+         * 61,135 files were unchanged and were re-read anyway, at 568 KB and ~60
+         * scattered reads each. Reported in the completion summary so "did the fast
+         * path actually engage?" is answerable from `.logs/app.log` without a
+         * profiler — and so a 0 here on a rescan is visible as the anomaly it is.
+         *
+         * Deliberately NOT folded into {@see ScanResult::$failed} or `$updated`:
+         * nothing failed and nothing changed. It is the same accounting choice
+         * S96(f) made for `$skippedNoArtist`, for the same reason.
+         *
+         * @var int $skippedUnchanged
+         */
+        $skippedUnchanged = 0;
 
-            // Read metadata from file (getID3 first, ffprobe fallback). This is
-            // the slow part of the walk, and the only place tags are read: the
-            // flush below reuses what we cache alongside the file here.
-            $metadata = $this->probeMetadata($file->getPathname());
+        // ── S122(b): raise reads-in-flight against the mount from 1 to <= 4. ────
+        //
+        // A pool of reader processes runs LOOKAHEAD files ahead of this walk and
+        // warms the page cache for files it is about to probe. Capped at 4 because
+        // 4 measured 1.73x and 8 measured 0.59x — see MusicScanPrefetcher, which
+        // carries the table and enforces the cap.
+        //
+        // $lookahead is a SECOND, independent walk of the same tree. That is cheaper
+        // than it sounds and much simpler than buffering: S96(d) measured the walk at
+        // 0.0069 ms/file (~0.4 s for 61,135 files, ~0.003 % of the job), it reads no
+        // tags, and RecursiveIteratorIterator is deterministic over an unchanged
+        // tree, so the two cursors agree. If the tree changes mid-scan they diverge
+        // and some prefetches are wasted — which costs nothing correctness-wise,
+        // because the pool cannot influence what is indexed.
+        //
+        // ⚠ NOT CREATED AT ALL WHEN THE POOL IS OFF (review r1 non-blocking 1). With
+        // `music_read_concurrency = 1` the pool has no children, so every submit() is a
+        // no-op — but the second walk still ran, issuing a readdir/getattr per entry.
+        // That knob exists precisely for a `direct_io` mount, i.e. the case where extra
+        // filesystem round trips are most expensive, and `config/scanner.php` promised
+        // it was "byte-for-byte the pre-S122 scanner". It is now: no pool, no walk.
+        $prefetcher = new MusicScanPrefetcher($this->logger, $this->readConcurrency());
+        $prefetcher->open();
+        $lookahead = $prefetcher->poolSize() > 0 ? $this->audioFileIterator($path) : null;
+        $lookaheadPos = 0;
 
-            $extension = strtolower($file->getExtension());
+        try {
+            foreach ($this->audioFileIterator($path) as $file) {
+                $processed++;
+                $result->scanned++;
+                if ($onProgress !== null) {
+                    // The 4th argument is the LIVE counter snapshot (S96(b)). Surplus
+                    // arguments to a user-defined function are ignored by PHP, so a
+                    // pre-S96 3-parameter sink is unaffected.
+                    $onProgress($processed, $total, $file->getPathname(), $result->progressCounts());
+                }
 
-            // Determine artist and album from tags
-            $artist = is_string($metadata['artist']) ? $metadata['artist'] : 'Unknown Artist';
-            $album = is_string($metadata['album']) ? $metadata['album'] : $file->getBasename('.' . $extension);
-            $year = is_numeric($metadata['year']) ? (int)$metadata['year'] : null;
+                // Keep the reader pool supplied, skipping files it would waste a read on.
+                // `$lookahead === null` is the pool-disabled case: no second walk at all.
+                while (
+                    $lookahead !== null
+                    && $lookaheadPos < $processed + MusicScanPrefetcher::LOOKAHEAD
+                    && $lookahead->valid()
+                ) {
+                    $ahead = $lookahead->current();
+                    $lookahead->next();
+                    $lookaheadPos++;
+                    if (!($ahead instanceof SplFileInfo)) {
+                        continue;
+                    }
+                    if (!$this->canSkip($mayAdopt) || !$skipIndex->isUnchanged($ahead)) {
+                        $prefetcher->submit($ahead->getPathname());
+                    }
+                }
 
-            // Group on the album's TAG identity, not its directory — that is what
-            // keeps a multi-directory album in one flush.
-            $key = md5($artist . '|' . $album);
+                // ── S122(a): THE SKIP. Note where it is — BEFORE probeMetadata(), which
+                // is the 568 KB / ~60-scattered-read / 114.9 ms-of-ffprobe call this whole
+                // step exists to not make. Anything that moves this below the probe
+                // silently deletes the entire benefit while leaving every test green.
+                //
+                // $mayAdopt is re-read here, not captured before the loop, so an orphan
+                // created by a caught mid-walk write failure disables the fast path for
+                // the rest of the scan (see the gate above).
+                if ($this->canSkip($mayAdopt) && $skipIndex->isUnchanged($file)) {
+                    $skippedUnchanged++;
+                    continue;
+                }
 
-            if (!isset($open[$key])) {
-                $open[$key] = [
-                    'artist' => $artist,
-                    'album' => $album,
-                    'year' => $year,
-                    'files' => [],
+                // ── S122(a) / review r1 B1: THE STAMP IS TAKEN HERE, BEFORE THE READ,
+                // AND CARRIED TO THE WRITE. Do not move it, and do not re-stat the file
+                // at write time.
+                //
+                // `SplFileInfo` does not memoise its stat (measured: a second
+                // getMTime() on the SAME instance returns the NEW value once the file
+                // has changed), so a stat taken in flushAlbum() -> upsertTrack() is a
+                // genuinely LATER observation of the file than the tags buffered below.
+                // The window between the two is at least MAX_OPEN_ALBUMS albums (≈400
+                // files) and is UNBOUNDED for an album whose tracks are spread across
+                // the tree. An ordinary tag write inside that window was therefore
+                // stamped with its POST-edit identity against PRE-edit tags, and every
+                // later scan skipped the file forever — reproduced end to end, and the
+                // reason this line exists.
+                //
+                // Stamping the PRE-read identity is safe in the only direction that
+                // matters: an edit racing the read leaves the stamp OLDER than the
+                // content, so the next scan re-reads. A redundant read, never a missed
+                // change.
+                $stamp = MusicScanSkipIndex::stampValues($file);
+
+                // Read metadata from file (getID3 first, ffprobe fallback). This is
+                // the slow part of the walk, and the only place tags are read: the
+                // flush below reuses what we cache alongside the file here.
+                $metadata = $this->probeMetadata($file->getPathname());
+
+                $extension = strtolower($file->getExtension());
+
+                // Determine artist and album from tags
+                $artist = is_string($metadata['artist']) ? $metadata['artist'] : 'Unknown Artist';
+                $album = is_string($metadata['album']) ? $metadata['album'] : $file->getBasename('.' . $extension);
+                $year = is_numeric($metadata['year']) ? (int)$metadata['year'] : null;
+
+                // Group on the album's TAG identity, not its directory — that is what
+                // keeps a multi-directory album in one flush.
+                $key = md5($artist . '|' . $album);
+
+                if (!isset($open[$key])) {
+                    $open[$key] = [
+                        'artist' => $artist,
+                        'album' => $album,
+                        'year' => $year,
+                        'files' => [],
+                    ];
+                }
+
+                $open[$key]['files'][] = [
+                    'file' => $file,
+                    'meta' => $metadata,
+                    'mtime' => $stamp === null ? null : $stamp[0],
+                    'size' => $stamp === null ? null : $stamp[1],
                 ];
+
+                // Touch: re-inserting moves the MOST-recently-used key to the END of
+                // $recency, so array_key_first() below yields the least-recently-used.
+                unset($recency[$key]);
+                $recency[$key] = true;
+
+                // Bound 1 — a single album may not buffer without limit.
+                if (count($open[$key]['files']) >= self::MAX_TRACKS_PER_FLUSH) {
+                    $this->flushAlbum(
+                        $open[$key],
+                        $artistCache,
+                        $albumCache,
+                        $libraryId,
+                        $result,
+                        $mayAdopt,
+                        $skippedNoArtist,
+                        $skipIndex
+                    );
+                    unset($open[$key], $recency[$key]);
+                    continue;
+                }
+
+                // Bound 2 — at most MAX_OPEN_ALBUMS albums stay open; the
+                // least-recently-touched one is written out to make room.
+                while (count($open) > self::MAX_OPEN_ALBUMS) {
+                    $oldest = array_key_first($recency);
+                    if (!is_string($oldest) || !isset($open[$oldest])) {
+                        break;
+                    }
+                    $this->flushAlbum(
+                        $open[$oldest],
+                        $artistCache,
+                        $albumCache,
+                        $libraryId,
+                        $result,
+                        $mayAdopt,
+                        $skippedNoArtist,
+                        $skipIndex
+                    );
+                    unset($open[$oldest], $recency[$oldest]);
+                }
             }
 
-            $open[$key]['files'][] = ['file' => $file, 'meta' => $metadata];
-
-            // Touch: re-inserting moves the MOST-recently-used key to the END of
-            // $recency, so array_key_first() below yields the least-recently-used.
-            unset($recency[$key]);
-            $recency[$key] = true;
-
-            // Bound 1 — a single album may not buffer without limit.
-            if (count($open[$key]['files']) >= self::MAX_TRACKS_PER_FLUSH) {
+            // Terminal flush: whatever the walk left open.
+            foreach (array_keys($open) as $key) {
                 $this->flushAlbum(
                     $open[$key],
                     $artistCache,
@@ -605,44 +813,16 @@ class MusicLibraryScanner
                     $libraryId,
                     $result,
                     $mayAdopt,
-                    $skippedNoArtist
+                    $skippedNoArtist,
+                    $skipIndex
                 );
                 unset($open[$key], $recency[$key]);
-                continue;
             }
-
-            // Bound 2 — at most MAX_OPEN_ALBUMS albums stay open; the
-            // least-recently-touched one is written out to make room.
-            while (count($open) > self::MAX_OPEN_ALBUMS) {
-                $oldest = array_key_first($recency);
-                if (!is_string($oldest) || !isset($open[$oldest])) {
-                    break;
-                }
-                $this->flushAlbum(
-                    $open[$oldest],
-                    $artistCache,
-                    $albumCache,
-                    $libraryId,
-                    $result,
-                    $mayAdopt,
-                    $skippedNoArtist
-                );
-                unset($open[$oldest], $recency[$oldest]);
-            }
-        }
-
-        // Terminal flush: whatever the walk left open.
-        foreach (array_keys($open) as $key) {
-            $this->flushAlbum(
-                $open[$key],
-                $artistCache,
-                $albumCache,
-                $libraryId,
-                $result,
-                $mayAdopt,
-                $skippedNoArtist
-            );
-            unset($open[$key], $recency[$key]);
+        } finally {
+            // The pool must not outlive the scan, whatever ends it. A reader also
+            // exits on stdin EOF, so even a SIGKILLed worker leaves nothing behind.
+            $prefetchStats = $prefetcher->stats();
+            $prefetcher->close();
         }
 
         $result->durationMs = (int)((hrtime(true) - $startTime) / 1_000_000.0);
@@ -651,6 +831,9 @@ class MusicLibraryScanner
         // at 0, so "this scan lost nothing" is a positive statement in the log
         // rather than the absence of one. A partial scan used to be indistinguishable
         // from a clean one from out here.
+        // S122: `skipped_unchanged` is ALWAYS present for the same reason — it is how
+        // an operator confirms from one log line that the fast path engaged, and a 0
+        // on a rescan of a settled library is the anomaly worth noticing.
         $summary = [
             'path' => $path,
             'scanned' => $result->scanned,
@@ -658,6 +841,16 @@ class MusicLibraryScanner
             'updated' => $result->updated,
             'failed' => $result->failed,
             'skipped_no_artist' => $skippedNoArtist,
+            'skipped_unchanged' => $skippedUnchanged,
+            'skip_index_entries' => $skipIndex->count(),
+            'readers_in_flight' => $prefetchStats['readers_in_flight'],
+            'prefetched' => $prefetchStats['submitted'],
+            // Review r1 non-blocking 2: `dropped` was documented as being FOR this
+            // summary and then never emitted anywhere. It is the one number that says
+            // the pool was saturated — a large value means the walk was outrunning the
+            // readers, i.e. the read-ahead is not buying what it is meant to buy — so
+            // leaving it uncollected made the whole counter pointless.
+            'prefetch_dropped' => $prefetchStats['dropped'],
             'duration_ms' => $result->durationMs,
         ];
 
@@ -689,6 +882,101 @@ class MusicLibraryScanner
     }
 
     /**
+     * May this scan take the S122(a) unchanged-file fast path right now?
+     *
+     * ONE expression, in ONE place, consulted by both the skip itself and the
+     * read-ahead lookahead — so the two can never disagree about which files will
+     * be probed. Splitting it would let the pool warm files the walk skips (waste)
+     * or, worse, let the skip fire where the lookahead assumed a probe.
+     *
+     * The `$needsHealing` half is already folded in: the index is only ever LOADED
+     * when the heal gate said the library is clean ({@see self::scanDirectory()}), so
+     * an unhealed library reaches here with an empty index and
+     * {@see MusicScanSkipIndex::isUnchanged()} answers FALSE for every file. What
+     * remains is the half that can change DURING the walk.
+     *
+     * @param bool $mayAdopt Live orphan-adoption flag, which
+     *        {@see self::upsertArtist()} / {@see self::upsertAlbum()} can flip to
+     *        TRUE mid-walk after a caught write failure. Once an orphan exists, the
+     *        scan must go back to flushing albums so it can be adopted — so the fast
+     *        path switches OFF for the remainder rather than banking a stale
+     *        "healthy" answer taken before the walk.
+     * @return bool
+     */
+    private function canSkip(bool $mayAdopt): bool
+    {
+        return !$mayAdopt;
+    }
+
+    /**
+     * Reads-in-flight target for the read-ahead pool, from `config/scanner.php`,
+     * clamped to the measured-safe ceiling.
+     *
+     * `protected` so a test can pin the pool at 1 without touching config — and so
+     * a deployment can never exceed {@see MusicScanPrefetcher::MAX_READERS},
+     * because the clamp lives in that class and not in the config file.
+     *
+     * `config/scanner.php` is deliberately NOT composed into `config/server.php`, so
+     * it must be read through {@see EffectiveConfig::file()} — a plain
+     * `$appConfig['scanner']` lookup resolves to nothing and an override would never
+     * arrive (see that file's own header).
+     *
+     * @return int A value in `[1, MusicScanPrefetcher::MAX_READERS]`.
+     */
+    protected function readConcurrency(): int
+    {
+        try {
+            return MusicScanPrefetcher::configuredReaders(EffectiveConfig::file('scanner'));
+        } catch (\Throwable) {
+            // Config resolution must never be able to fail a scan. The default IS
+            // the measured optimum, so degrading to it is not a penalty.
+            return MusicScanPrefetcher::DEFAULT_READERS;
+        }
+    }
+
+    /**
+     * Does any `music_artists`/`music_albums` row still carry
+     * `media_item_id IS NULL` — i.e. does this database have an S96(e) heal
+     * outstanding?
+     *
+     * ONE query per scan, and it exists purely to keep S122(a) from regressing
+     * S96(e). The heal runs inside {@see self::upsertArtist()} /
+     * {@see self::upsertAlbum()}, which only run when an album is FLUSHED, which only
+     * happens for files the walk actually probes. A library where every file is
+     * skipped therefore never heals — and S96's acceptance criterion is precisely
+     * that such a row "is backfilled on the next scan rather than staying NULL
+     * forever". So: while anything is unhealed, no file is skipped, every album is
+     * flushed, and the heal happens exactly as S96 built it. Once the heal has
+     * landed, this returns FALSE forever after and the fast path is available again.
+     *
+     * ⚠ **DELIBERATELY NOT SCOPED TO ONE LIBRARY.** `music_artists` and
+     * `music_albums` have no `library_id` column at all (migration 065), so there is
+     * nothing to scope BY. The consequence is stated rather than hidden: one unhealed
+     * row anywhere disables the fast path for every music library on the box. That
+     * errs towards "slow but correct", it is self-limiting (the same scan that is
+     * slowed is the one that heals the row), and prod has a single music library.
+     *
+     * Both columns are `NULL UNIQUE` (migration 065), so `media_item_id IS NULL` is
+     * an index lookup rather than a table scan; NULLs sort to the front of a b-tree,
+     * so the affirmative answer is found immediately and the negative answer visits
+     * only the NULL-prefix (empty) region.
+     *
+     * @return bool TRUE when at least one music row still needs its `media_item_id`.
+     */
+    private function hasUnhealedMusicMediaItem(): bool
+    {
+        $rows = $this->db->query(
+            "SELECT 1 AS unhealed FROM music_artists WHERE media_item_id IS NULL"
+            . " UNION ALL"
+            . " SELECT 1 AS unhealed FROM music_albums WHERE media_item_id IS NULL"
+            . " LIMIT 1",
+            []
+        );
+
+        return is_array($rows) && count($rows) > 0;
+    }
+
+    /**
      * Writes ONE accumulated album to the database: its artist row, its album row,
      * every buffered track, then the album's authoritative `total_tracks`.
      *
@@ -717,7 +1005,10 @@ class MusicLibraryScanner
      * clean rescan of an unchanged library.
      *
      * @param array{artist:string, album:string, year:?int,
-     *     files:list<array{file:SplFileInfo, meta:array<string, mixed>}>} $albumData
+     *     files:list<array{file:SplFileInfo, meta:array<string, mixed>, mtime:int|null,
+     *     size:int|null}>} $albumData `mtime`/`size` are the S122(a) identity the WALK
+     *     stat'ed before reading the file's tags, carried here rather than re-stat'ed —
+     *     see {@see self::scanDirectory()} and review r1 B1.
      * @param array<string, array{id:int, media_item_id:string|null}> $artistCache
      * @param array<string, array{id:int, media_item_id:string|null}> $albumCache
      * **Every way out of this method that loses files now counts them (S96(f)).**
@@ -745,6 +1036,11 @@ class MusicLibraryScanner
      *        unknown-artist rule below, reported once in
      *        {@see self::scanDirectory()}'s completion summary. Separate from
      *        `$result->failed` on purpose — see the declaration there.
+     * @param MusicScanSkipIndex|null $skipIndex S122(a) mtime/size index, passed
+     *        through to {@see self::upsertTrack()} so a file that has just been read
+     *        records the identity that lets the NEXT scan skip it. NULL only for the
+     *        legacy construction sites that call this method without one, where the
+     *        stamp is simply not written (correct, merely not accelerated).
      * @return void
      */
     private function flushAlbum(
@@ -754,7 +1050,8 @@ class MusicLibraryScanner
         ?string $libraryId,
         ScanResult $result,
         bool &$mayAdopt,
-        int &$skippedNoArtist
+        int &$skippedNoArtist,
+        ?MusicScanSkipIndex $skipIndex = null
     ): void {
         $artistName = $albumData['artist'];
         $albumTitle = $albumData['album'];
@@ -849,6 +1146,15 @@ class MusicLibraryScanner
                     // every track after it (measured: 2 of 3 written), and the
                     // album's total_tracks was left at whatever the row already
                     // held. A bad file must cost exactly that file.
+                    // Re-pair the two flat ints the walk buffered (see $open's docblock:
+                    // they are flat to keep the buffer's per-entry cost at zero). A pair
+                    // is only allocated here, one track at a time, and dies with the
+                    // call. `null` for either half means the walk could not stat the
+                    // file, which means nothing is stamped — the safe direction.
+                    $stampMtime = $fileInfo['mtime'] ?? null;
+                    $stampSize = $fileInfo['size'] ?? null;
+                    $stamp = is_int($stampMtime) && is_int($stampSize) ? [$stampMtime, $stampSize] : null;
+
                     try {
                         $trackResult = $this->upsertTrack(
                             $albumId,
@@ -856,7 +1162,9 @@ class MusicLibraryScanner
                             $artistId,
                             $fileInfo['file'],
                             $fileInfo['meta'],
-                            $libraryId
+                            $libraryId,
+                            $skipIndex,
+                            $stamp
                         );
                     } catch (\Throwable $trackError) {
                         // Accounted for either way: this file is done being tried
@@ -1046,6 +1354,91 @@ class MusicLibraryScanner
     /**
      * Reads tags natively with getID3.
      *
+     * ⚠ **S122(c) — `analyze()` DOES NOT POPULATE `$info['comments']`, AND THAT MADE
+     * THIS WHOLE METHOD DEAD CODE ON PRODUCTION. MEASURED.** getID3 puts a format's
+     * tags in `$info['tags'][<tagtype>]` (`getid3.php:1675`, inside `HandleAllTags()`);
+     * the merged, format-agnostic `$info['comments']` view is built by
+     * `getid3_lib::CopyTagsToComments()`, which **no getID3 module and no part of
+     * `analyze()` ever calls** — it is a helper the CALLER is expected to invoke
+     * (`getid3.php:1762`, and `grep -rn CopyTagsToComments vendor/james-heinrich/getid3`
+     * returns only its own declaration and that forwarder). So `$info['comments']` came
+     * back holding, at most, the key `picture`:
+     *
+     *  - measured on an ffmpeg-written MP3 (artist/album/title/track/date/genre, ID3v2.3):
+     *    `array_keys($info['comments'])` = **`[]`**, while
+     *    `array_keys($info['tags']['id3v2'])` = `[artist, album, title, track_number,
+     *    year, genre, encoder_settings, totaltracks]`;
+     *  - measured on a file WITH cover art: `array_keys($info['comments'])` =
+     *    **`['picture']`** — because `HandleAllTags()` writes pictures straight into
+     *    `$info['comments']['picture']` (`getid3.php:1716`) and nothing else.
+     *
+     * {@see self::mapId3Comments()} therefore found `artist`, `band`, `album` and `title`
+     * all NULL for **every file**, returned NULL, and {@see self::probeMetadata()} fell
+     * through to ffprobe for **100 % of the library** — after paying getID3's full read.
+     * The class docblock's "getID3 first (a pure-PHP tag reader, ~1-3 ms/file), falling
+     * back to FFmpeg/ffprobe only when getID3 yields nothing usable" described the
+     * INTENT; the code never delivered it. Measured cost of that, warm, on a LOCAL
+     * 4.17 MB MP3 (20 iterations each):
+     *
+     * | probe | ms/file | read syscalls |
+     * |---|---|---|
+     * | `ffprobe` subprocess (what actually ran) | **114.9** | **232** (`strace -c`) |
+     * | tuned getID3 (what was meant to run) | **2.2** | — |
+     *
+     * i.e. **52x**, ≈1.95 h of pure ffprobe over the 61,135-file production library on
+     * warm LOCAL disk, before any sshfs latency is added. `CopyTagsToComments()` is
+     * additive and duplicate-suppressing (`getid3.lib.php:1570-1640`), so calling it
+     * cannot clobber a `comments` block that is already populated, and
+     * {@see self::mapId3Comments()}'s contract is unchanged — which is why the fix is
+     * here and not in the mapper.
+     *
+     * ## ⚠ THIS CHANGES THE METADATA SOURCE FOR 100 % OF THE LIBRARY — SAY SO
+     *
+     * Review r1 non-blocking 7. Because getID3 previously produced nothing, EVERY tag
+     * in the database today came from ffprobe. From this change on, every tag comes from
+     * getID3 and ffprobe is reached only for a file getID3 cannot read at all. Two
+     * consequences an operator will see and must not mistake for a fault:
+     *
+     *  1. **The first rescan after deploy reports ~every file as `updated`**, not
+     *     `skipped`. {@see self::upsertTrack()} compares title/track/disc/duration, and
+     *     `duration_secs` is now derived differently (below), so the comparison fails
+     *     for most rows even though nothing on disk changed. `items_added` stays 0 —
+     *     nothing is duplicated, the same `(path, library_id)` rows are reused — and the
+     *     rescan after THAT one is the fast, all-skipped scan.
+     *  2. **`duration_secs` comes from getID3 `playtime_seconds`, not from ffprobe's
+     *     container duration.** Both are floored to whole seconds, and the two differ by
+     *     **exactly one MPEG frame — 1152/44100 = 0.0261 s** — on every Xing-header MP3
+     *     measured (getID3 excludes the VBR-header frame from the audio region; ffprobe
+     *     counts it). Measured on the committed fixture: getID3 **2.0115** vs ffprobe
+     *     **2.0376**. So for the ≈2.6 % of files whose true length lands inside that
+     *     26 ms window, the displayed duration moves by 1 second. Cosmetic, and
+     *     one-directional (getID3 is never the longer of the two).
+     *
+     * **Is getID3 LESS accurate than ffprobe? Measured: no — it is equal or better.**
+     * 11 fixtures (`libmp3lame` CBR 128k/320k, VBR `-q:a 4`/`-q:a 9`, VBR with the
+     * Xing/LAME header stripped, a 5-minute VBR file whose first 60 s are near-silence,
+     * plus flac / aac-m4a / vorbis-ogg / pcm wav, and the committed fixture):
+     *
+     * | shape | true | getID3 | ffprobe |
+     * |---|---|---|---|
+     * | flac / m4a / ogg / wav | 37.000 | **37.0000** | 37.0000 |
+     * | mp3 CBR + VBR with Xing | 37.000 | 37.0155 | 37.0416 |
+     * | **mp3 VBR, Xing header STRIPPED** | 37.000 | **37.0047** | **35.6591 ✗** |
+     * | **mp3 VBR, no Xing, silence-then-loud, 5 min** | 300.000 | **299.6459** | **627.467 ✗ (2.09x)** |
+     *
+     * On a headerless VBR stream ffprobe extrapolates the whole file from the leading
+     * frames' bitrate and can be wrong by minutes; getID3 is within 0.35 s. So the
+     * revival IMPROVES duration accuracy on the one shape where the two disagree
+     * materially. There is no measured case where getID3 is the less accurate of the two.
+     *
+     * The `options_audio_mp3_mp3_valid_check_frames = 10` trade-off documented in
+     * {@see self::getId3Reader()} does not bear on this: `playtime_seconds` was
+     * **byte-identical at 10, 20, 50 and 200 frames on all 11 fixtures, with zero
+     * getID3 warnings and zero errors at either setting**, because that option gates a
+     * frame-chain VALIDITY scan (`module.audio.mp3.php:1172`, inside
+     * `RecursiveFrameScanning()`) and not the duration derivation
+     * (`module.audio.mp3.php:175-180`).
+     *
      * @param string $path Absolute filesystem path
      * @return array<string, mixed>|null Mapped metadata, or null when getID3 read
      *                                   nothing usable (so a fallback should run).
@@ -1053,10 +1446,15 @@ class MusicLibraryScanner
     protected function probeViaGetId3(string $path): ?array
     {
         try {
-            $info = $this->getId3Reader()->analyze($path);
+            $reader = $this->getId3Reader();
+            $info = $reader->analyze($path);
             if (!is_array($info)) {
                 return null;
             }
+
+            // Build the merged tag view this class has always read. Without this the
+            // block is empty and every file falls through to ffprobe — see above.
+            $reader->CopyTagsToComments($info);
 
             $comments = isset($info['comments']) && is_array($info['comments']) ? $info['comments'] : [];
 
@@ -1244,8 +1642,88 @@ class MusicLibraryScanner
     }
 
     /**
-     * Lazily constructs the native getID3 reader (disabling the expensive
-     * md5/sha1 hashing we do not need for tag harvesting).
+     * Lazily constructs the native getID3 reader, configured to read as little as
+     * a tag harvest needs.
+     *
+     * **S122(c) — EVERY OPTION HERE IS SET FROM A MEASUREMENT, AND THE MEASUREMENTS
+     * ARE BELOW SO THEY CAN BE CHECKED.** Byte/read/seek counts were taken through a
+     * counting stream wrapper — the same technique `MusicScanTagReadCostTest` uses, so
+     * every row is falsifiable in CI on a DB-less box — on two fixtures:
+     *
+     *  - **SYNTH**: a hand-built 4.17 MB MP3 with textbook-perfect CBR frames and a
+     *    404 KB `APIC` frame. Isolates the cover-art cost.
+     *  - **REAL**: `tests/Fixtures/Media/Music/tagged-short.mp3`, 16.6 KB, written by
+     *    ffmpeg with a Xing header and no art. ⚠ This one is the representative shape: a
+     *    real encoder's output sends getID3 down its recursive frame-scanning path, which
+     *    is where the diagnostic's "~60 `fread`/`fseek` per MP3" figure comes from. The
+     *    synthetic file validates in one pass at 21 reads / 11 seeks and would have made
+     *    the frame-count option look worthless.
+     *
+     * | fixture | options | bytes read | reads | seeks | bytes retained |
+     * |---|---|---|---|---|---|
+     * | SYNTH 4.17 MB + 404 KB art | pre-S122 | 598,585 | 76 | 11 | **1,891,240** |
+     * | SYNTH 4.17 MB + 404 KB art | **these** | 582,201 | 74 | 9 | **33,256** |
+     * | REAL 16.6 KB, no art | pre-S122 | 455,654 | 61 | 59 | 41,488 |
+     * | REAL 16.6 KB, no art | **these** | **139,931** | **21** | **19** | 31,384 |
+     *
+     * So on a real file this is **−69 % bytes, −66 % reads and −68 % seeks**; on a long
+     * art-carrying file it is only −2.7 % bytes, because ≈404 KB of that is the
+     * unconditional ID3v2 read described next.
+     *
+     * ⚠ **CORRECTION TO THE DIAGNOSTIC (`steps/vault-sshfs-read-perf-diagnostic.worklog.md`
+     * §1), MEASURED: `option_save_attachments = false` does NOT reduce bytes read.** The
+     * diagnostic correctly identified ≈404 KB of discarded cover art per file, but the
+     * read is **unconditional and contiguous** — `module.tag.id3v2.php:139` does
+     * `$framedata = $this->fread($sizeofframes)` for the WHOLE frame region before any
+     * frame is inspected, and `option_save_attachments` is only consulted afterwards, at
+     * `:1448`, to decide whether to KEEP the picture. Measured: 598,585 bytes read with
+     * the option either way, to the byte. What it does buy is real but is memory, not
+     * I/O: **1,891,240 → 33,256 bytes retained per analyse, a 98.2 % cut** (the APIC
+     * payload plus its base64/`getimagesizefromstring` derivatives), which in a resident
+     * scan worker is the difference between 1.9 MB of churn per file and none.
+     * **Removing the 404 KB read itself would require patching `vendor/`, which is
+     * forbidden** (a hand-edited vendor file is invisible to CI forever). The bytes
+     * lever for that file is S122(a): an unchanged file is not opened at all.
+     *
+     * Per option:
+     *
+     *  - `option_md5_data` / `option_md5_data_source` / `option_sha1_data` — pre-existing.
+     *    Hashing the audio payload would read the ENTIRE file.
+     *  - `option_save_attachments = false` — see the correction above. Also
+     *    `getID3::ATTACHMENTS_NONE`, spelled as the literal `false` the vendor
+     *    `=== false` comparison at `:1448` requires.
+     *  - `option_tags_html = false` — suppresses `$info['tags_html']`, an
+     *    HTML-entity-encoded SECOND copy of every tag built by
+     *    `getid3_lib::recursiveMultiByteCharString2HTML()`. Nothing in this codebase
+     *    reads `tags_html` (`grep -rn tags_html src/` is empty), so it was pure cost.
+     *  - `options_audio_mp3_mp3_valid_check_frames = 10` — vendor default 50, and the
+     *    vendor's own docblock says "Lower this number to 5-20 for faster scanning".
+     *    This is the 51 x `fread(226)` frame scan the diagnostic counted. It is where
+     *    the REAL-fixture numbers above come from: 455,654 → 139,931 bytes and 59 → 19
+     *    seeks, because a real encoder's stream sends getID3 into recursive frame
+     *    scanning and the 50-frame requirement then forces repeated re-reads.
+     *    ⚠ TRADE-OFF, stated, and NARROWER than it first looked. The option gates a
+     *    frame-chain VALIDITY scan (`module.audio.mp3.php:1172`, inside
+     *    `RecursiveFrameScanning()`), not the duration derivation
+     *    (`module.audio.mp3.php:175-180`), so it can only reach `playtime_seconds`
+     *    indirectly — via `:1561-1563`, where failing to find N consecutive valid frames
+     *    after a VBR header decides whether that header is trusted. Measured across 11
+     *    fixtures (CBR 128k/320k, VBR q4/q9, VBR with the Xing header STRIPPED, a
+     *    5-minute silence-then-loud headerless VBR, flac/m4a/ogg/wav, and the committed
+     *    fixture): `playtime_seconds` is **byte-identical at 10, 20, 50 and 200 frames,
+     *    with zero warnings and zero errors at every setting.** 10 is inside the vendor's
+     *    own recommended range, and duration is display metadata — playback seeks on the
+     *    container, never on this figure. See {@see self::probeViaGetId3()} for the full
+     *    accuracy table, including the two shapes where getID3 beats ffprobe outright.
+     *
+     * NOT changed, and why: `option_tags_process` must stay TRUE — it is what runs
+     * `HandleAllTags()` (`getid3.php:790`), without which `$info['tags']` is never built
+     * and {@see self::probeViaGetId3()} has nothing to merge. `option_tag_id3v1` stays
+     * TRUE because it is the legacy fallback for files with no ID3v2 at all.
+     * `option_tag_apetag` / `option_tag_lyrics3` stay TRUE: switching them off removes
+     * two of the four end-of-file seek regions but measured only −313 bytes, and an
+     * APE-or-Lyrics3-only file would silently lose its artist/album — a tag-loss risk
+     * bought for nothing.
      *
      * `protected` so tests can inject a fake reader.
      */
@@ -1256,6 +1734,12 @@ class MusicLibraryScanner
             $reader->option_md5_data = false;
             $reader->option_md5_data_source = false;
             $reader->option_sha1_data = false;
+            // Read the cover art (unavoidable, see above) but do not RETAIN it.
+            $reader->option_save_attachments = false;
+            // No second, HTML-escaped copy of every tag; nothing reads it.
+            $reader->option_tags_html = false;
+            // 50 -> 10 validated MPEG frames. The vendor recommends 5-20 for speed.
+            $reader->options_audio_mp3_mp3_valid_check_frames = self::MP3_VALID_CHECK_FRAMES;
             $reader->encoding = 'UTF-8';
             $this->id3Reader = $reader;
         }
@@ -1749,6 +2233,23 @@ class MusicLibraryScanner
      * @param SplFileInfo $file Audio file info
      * @param array<string, mixed> $metadata Tags already read during grouping (no re-probe)
      * @param string|null $libraryId Owning library UUID (stamped on a new media_item + event).
+     * @param MusicScanSkipIndex|null $skipIndex S122(a). When supplied, `$stamp` is
+     *        recorded into `media_items.metadata_json` on every outcome that leaves the
+     *        row CONSISTENT WITH THE FILE JUST READ — `'added'`, `'updated'` and
+     *        `'skipped'` — and on none that does not (`'failed'`). That is the whole
+     *        cache-validity argument: the stamp means "the tags now indexed are the
+     *        tags this file had at this mtime and size", so it may only be written by
+     *        a pass that actually read those tags.
+     * @param array{0: int, 1: int}|null $stamp The `(mtime, size)`
+     *        {@see self::scanDirectory()} stat'ed IMMEDIATELY BEFORE reading this
+     *        file's tags, or NULL when it could not be stat'ed (nothing is stamped
+     *        then). ⚠ **This is an argument and not a fresh stat for a measured reason
+     *        (review r1 B1).** Re-stat'ing here reads the file as it is at FLUSH time,
+     *        which can be hundreds of files — or a whole multi-hour walk, for an album
+     *        spread across the tree — after the tags were read. An ordinary tag write
+     *        in that window was then stamped post-edit against pre-edit tags and
+     *        skipped forever. Pinned by
+     *        {@see \Phlix\Tests\Unit\Media\Music\MusicScanUnchangedSkipTest::testAFileEditedBetweenItsProbeAndItsFlushIsReReadOnTheNextScan()}.
      *
      * @return string One of FOUR outcomes. ⚠ `'skipped'` and `'failed'` used to be the
      *         SAME value, and that collision was review r2's HIGH finding: a scan that
@@ -1773,7 +2274,9 @@ class MusicLibraryScanner
         int $artistId,
         SplFileInfo $file,
         array $metadata,
-        ?string $libraryId = null
+        ?string $libraryId = null,
+        ?MusicScanSkipIndex $skipIndex = null,
+        ?array $stamp = null
     ): string {
         unset($albumMediaItemId);
 
@@ -1820,6 +2323,37 @@ class MusicLibraryScanner
                     && $existingDiscNum === $discNumber
                     && $existingDuration === $durationSecs
                 ) {
+                    // S122(a): THE BACKFILL PATH, and the reason the first rescan after
+                    // this step ships is still slow while every later one is fast. Every
+                    // pre-S122 row carries no `(mtime, size)`, so nothing can be skipped
+                    // until something records it — and this branch is where an unchanged
+                    // library records it, one statement per file, once.
+                    //
+                    // What makes stamping sound here is NOT that this is the "unchanged"
+                    // branch — that reasoning was wrong (review r1 B1) and is what let a
+                    // flush-time stat write a post-edit identity against the pre-edit
+                    // tags this branch just compared. It is sound because `$stamp` is the
+                    // identity the walk observed BEFORE the read: it can only be older
+                    // than the bytes those tags came from, never newer.
+                    //
+                    // ⚠ Also unchanged by S122, stated so the comment stays accurate
+                    // (review r1 non-blocking 6): this branch compares only
+                    // title/track/disc/duration, so a file whose ARTIST or ALBUM tag
+                    // changed while those four stay identical still returns 'skipped' and
+                    // `music_tracks.album_id`/`artist_id` are left pointing at the OLD
+                    // album. That is a pre-existing defect with its own step. Pre-S122
+                    // every scan re-read such a file and took this same no-op branch, so
+                    // it never healed then either — S122 removes a retry that never fixed
+                    // anything, and does not make the mis-parenting worse in kind.
+                    //
+                    // ⚠ There is deliberately NO filesystem backfill migration. Stat'ing
+                    // 61,135 files and recording today's mtime for a row whose indexed
+                    // tags might predate a change would make the next scan skip a file
+                    // that really did change — manufacturing the exact silent miss this
+                    // predicate is designed to avoid. Paying one slow rescan is the
+                    // honest price.
+                    $this->stampFileIdentity($existingMediaItemId, $file, $skipIndex, $stamp);
+
                     return 'skipped';
                 }
 
@@ -1829,6 +2363,8 @@ class MusicLibraryScanner
                      WHERE id = ?",
                     [$title, $trackNumber, $discNumber, $durationSecs, $existingId]
                 );
+
+                $this->stampFileIdentity($existingMediaItemId, $file, $skipIndex, $stamp);
 
                 return 'updated';
             }
@@ -1845,11 +2381,33 @@ class MusicLibraryScanner
 
             // `'failed'`, NOT `'skipped'` (r2 HIGH): the media_item exists but the
             // track row does not, so this file is still not indexed.
-            return self::statementWroteNothing($result) ? 'failed' : 'updated';
+            if (self::statementWroteNothing($result)) {
+                // NO stamp: the file is NOT indexed, so recording "already indexed at
+                // this mtime" would make the next scan skip a file it has never
+                // successfully read. Every `'failed'` return in this method is stampless
+                // for that reason.
+                return 'failed';
+            }
+
+            $this->stampFileIdentity($existingMediaItemId, $file, $skipIndex, $stamp);
+
+            return 'updated';
         }
 
         // Genuinely new track: mint the media_item, insert, and announce it.
-        $mediaItemId = $this->createMediaItem('track', $title, $path, $libraryId);
+        //
+        // S122(a): the identity goes in on the SAME INSERT that creates the row rather
+        // than in a follow-up UPDATE. That halves the statements on the first-scan path
+        // (61,135 of them) and, more importantly, means there is no window in which a
+        // track row exists without its stamp — a crash in such a window would leave a
+        // row that no later scan can ever skip.
+        $mediaItemId = $this->createMediaItem(
+            'track',
+            $title,
+            $path,
+            $libraryId,
+            $skipIndex !== null ? self::stampMetadata($stamp) : []
+        );
         if ($mediaItemId === '') {
             // THE production-reachable loss shape (r2's S2). createMediaItem() catches
             // its own \Throwable, so a DB error there never reaches flushAlbum()'s
@@ -1868,8 +2426,30 @@ class MusicLibraryScanner
         if (self::statementWroteNothing($result)) {
             // The media_item was minted but the track row was not written, so the file
             // is not in the library. Charged, not silently dropped (r2 HIGH / S3).
+            //
+            // ⚠ THE `media_items` ROW DOES NOW CARRY A STAMP — it went in on the INSERT
+            // above — AND THAT IS WHY {@see MusicScanSkipIndex::load()} JOINS
+            // `music_tracks`. Without that join this exact shape would be a permanent
+            // data loss instead of a retry: the next scan would find a matching stamp,
+            // skip the file, and never create the missing `music_tracks` row. With it,
+            // a `media_items` row that has no track row is not in the index at all, so
+            // the file is probed, falls into the reuse branch above, and the loss is
+            // retried exactly as it was before this step.
             return 'failed';
         }
+
+        // The CARRIED identity, not a fresh stat, so the in-memory map ends up holding
+        // exactly what the row now holds.
+        //
+        // ⚠ SCOPE OF THIS ONE, STATED HONESTLY: unlike the DB stamp above, this is
+        // INVARIANT HYGIENE and not a demonstrated data-loss fix. Measured — mutating it
+        // back to `remember($file)` leaves the whole suite GREEN — because the map is
+        // only re-consulted for a path the walk reaches TWICE in one scan, and the map is
+        // keyed by verbatim path while `RecursiveDirectoryIterator` does not descend
+        // symlinks, so no walk yields the same key twice. It is passed anyway because
+        // "the map agrees with the row" is the property that makes the map safe for the
+        // next reader to consult, and a map that silently disagreed would be a trap.
+        $skipIndex?->remember($file, $stamp);
 
         // ⚠ DELIBERATELY NOT LOGGED — DO NOT RE-ADD A PER-TRACK LINE HERE
         // (review r1 MED-3). There was a `logger->debug('Upserted track', …)` on this
@@ -1920,6 +2500,140 @@ class MusicLibraryScanner
         $this->dispatchMediaItemAdded($mediaItemId, $libraryId, $path, 'track');
 
         return 'added';
+    }
+
+    /**
+     * The `metadata_json` fragment recording a file's `(mtime, size)` identity.
+     *
+     * Empty when the walk could not stat the file — in which case nothing is stamped
+     * and the file is simply probed again next time, which is the safe direction.
+     *
+     * ⚠ Takes the ALREADY-CAPTURED pair rather than an `SplFileInfo` to stat, so that
+     * no write site can accidentally re-stat the file at flush time. That was review
+     * r1's B1 defect; see {@see self::upsertTrack()}'s `$stamp` parameter.
+     *
+     * @param array{0: int, 1: int}|null $values `[mtime, size]` as stat'ed by the walk
+     *        immediately before the file's tags were read.
+     * @return array<string, int> `{file_mtime, file_size}`, or `[]`.
+     */
+    private static function stampMetadata(?array $values): array
+    {
+        if ($values === null) {
+            return [];
+        }
+
+        return [
+            MusicScanSkipIndex::KEY_MTIME => $values[0],
+            MusicScanSkipIndex::KEY_SIZE => $values[1],
+        ];
+    }
+
+    /**
+     * Records, on an EXISTING `media_items` row, the `(mtime, size)` the file had
+     * IMMEDIATELY BEFORE its tags were read — the datum
+     * {@see MusicScanSkipIndex::isUnchanged()} decides on. **S122(a).**
+     *
+     * Only ever called from an outcome that leaves the database consistent with the
+     * file just read (`'added'`, `'updated'`, `'skipped'`), never from `'failed'`.
+     * That asymmetry IS the cache-validity rule: the stamp asserts "the tags now
+     * indexed are this file's tags at this mtime and size", which only a pass that
+     * actually read those tags can assert.
+     *
+     * The pair is an ARGUMENT, stat'ed by the walk one statement above
+     * `probeMetadata()`. It is not re-stat'ed here, and re-stat'ing here is the review
+     * r1 B1 data-loss defect — see {@see self::upsertTrack()}'s `$stamp` parameter for
+     * the window and the reproduction.
+     *
+     * `JSON_SET` rather than a read-modify-write: one statement, no round trip to
+     * fetch the existing document, and no way for two concurrent writers to clobber
+     * each other's unrelated keys. `COALESCE(metadata_json, JSON_OBJECT())` is
+     * required because `JSON_SET(NULL, …)` returns NULL — the column is nullable and a
+     * row written by another code path may legitimately have no document, and without
+     * the COALESCE this statement would ERASE `sub_type`/`name` for such a row.
+     *
+     * ## When the `isStampCurrent()` suppression below can actually fire — MEASURED
+     *
+     * ⚠ **This docblock used to claim the write is "skipped entirely … whenever the
+     * fast path is switched off for the scan (an unhealed row, or an adoptable orphan)
+     * but the files themselves are unchanged", and that "keeps the exceptional, slow
+     * scan from also issuing 61,135 pointless UPDATEs". That was FALSE, and review r1
+     * B2 measured it false.** {@see self::scanDirectory()} calls
+     * {@see MusicScanSkipIndex::load()} only when `!$mayAdopt && !$needsHealing`, so on
+     * exactly the two scans that claim named the index is EMPTY, `isStampCurrent()`
+     * returns false for every file, and the slow scan issues one `JSON_SET` per file
+     * after all. Measured on 5 unchanged files with an unhealed `music_artists` row:
+     * **5 probes and 5 `JSON_SET` UPDATEs**, now pinned by
+     * {@see \Phlix\Tests\Unit\Media\Music\MusicScanUnchangedSkipTest::testWithTheFastPathOffEveryUnchangedFileIsStillProbedAndStillReStamped()}.
+     *
+     * What the suppression really covers is ONE narrower path, and it is a real one:
+     * the index WAS loaded (healthy library, fast path on) and `$mayAdopt` then flipped
+     * to TRUE mid-walk because a caught write failure left an unreferenced
+     * `media_items` row. From that point {@see self::canSkip()} answers false, so the
+     * remaining unchanged files are probed even though the index still holds their
+     * current identity — and each of those probes would otherwise issue an UPDATE that
+     * changes nothing. Measured on the 40-album flip fixture: **40 files probed, 32
+     * stamp UPDATEs issued** (1 file lost with the album whose write was made to fail,
+     * 7 suppressed by this check), pinned by {@see
+     * \Phlix\Tests\Unit\Media\Music\MusicScanUnchangedSkipTest::testTheStampSuppressionFiresOnTheMidWalkFlipPath()}.
+     *
+     * Making the original claim TRUE would mean loading the index unconditionally and
+     * gating only the SKIP on the heal/adopt answer. That is deliberately NOT done
+     * here: it would spend the load's measured **36.74 MiB transient / 10.90 MiB
+     * retained** (see {@see MusicScanSkipIndex}) on every exceptional scan purely to
+     * avoid UPDATEs on the one scan shape that is already accepted as slow, and it
+     * would move a correctness gate — the reason the index is not loaded is that a
+     * loaded index plus a mistaken `canSkip()` is how S96(e)'s heal stops happening.
+     * The claim is corrected instead of the code.
+     *
+     * Failure is swallowed at `debug`: an unwritten stamp costs one file's read on the
+     * next scan and nothing else, so it must not turn a healthy per-track outcome into
+     * a `'failed'` — the counter S96(f) built means "this file is not in the library",
+     * and a file with a stale stamp certainly is.
+     *
+     * @param string $mediaItemId Existing `media_items.id` for the file.
+     * @param SplFileInfo $file Audio file just read (for the map key and the log line).
+     * @param MusicScanSkipIndex|null $skipIndex Index to keep in step, or NULL to do
+     *        nothing at all (the legacy construction sites).
+     * @param array{0: int, 1: int}|null $values `[mtime, size]` captured by the walk
+     *        before the read. NULL means "not stat'able", so nothing is written.
+     * @return void
+     */
+    private function stampFileIdentity(
+        string $mediaItemId,
+        SplFileInfo $file,
+        ?MusicScanSkipIndex $skipIndex,
+        ?array $values
+    ): void {
+        if ($skipIndex === null || $mediaItemId === '') {
+            return;
+        }
+
+        if ($skipIndex->isStampCurrent($file, $values)) {
+            return;
+        }
+
+        $stamp = self::stampMetadata($values);
+        if ($stamp === []) {
+            return;
+        }
+
+        try {
+            $this->db->query(
+                "UPDATE media_items SET metadata_json = JSON_SET(COALESCE(metadata_json, JSON_OBJECT()),"
+                . " '$." . MusicScanSkipIndex::KEY_MTIME . "', ?,"
+                . " '$." . MusicScanSkipIndex::KEY_SIZE . "', ?) WHERE id = ?",
+                [$stamp[MusicScanSkipIndex::KEY_MTIME], $stamp[MusicScanSkipIndex::KEY_SIZE], $mediaItemId]
+            );
+        } catch (\Throwable $e) {
+            $this->logger->debug('Could not record the file identity for a track', [
+                'media_item_id' => $mediaItemId,
+                'path' => $file->getPathname(),
+                'error' => $e->getMessage(),
+            ]);
+            return;
+        }
+
+        $skipIndex->remember($file, $values);
     }
 
     /**
@@ -2257,19 +2971,28 @@ class MusicLibraryScanner
      * @param string $name Display name
      * @param string|null $path File path (for tracks)
      * @param string|null $libraryId Owning library UUID (stamped into the NOT NULL library_id column)
+     * @param array<string, int> $extraMetadata Additional `metadata_json` keys merged
+     *        in — S122(a) uses it for `file_mtime`/`file_size`, so a new track's
+     *        identity is recorded by the SAME statement that creates the row rather
+     *        than a follow-up UPDATE. `sub_type` and `name` are written LAST and
+     *        therefore cannot be overwritten by a caller.
      * @return string The media_item UUID ('' on failure)
      */
     private function createMediaItem(
         string $subType,
         string $name,
         ?string $path = null,
-        ?string $libraryId = null
+        ?string $libraryId = null,
+        array $extraMetadata = []
     ): string {
         $type = $subType;
-        $metadata = [
-            'sub_type' => $subType,
-            'name' => $name,
-        ];
+        // The two authoritative keys are assigned unconditionally, so a caller can
+        // never override them. (Review r1 non-blocking 4: this used to be a `+` union
+        // with the same two keys followed by these two assignments, which made the
+        // union dead code and implied it was doing something.)
+        $metadata = $extraMetadata;
+        $metadata['sub_type'] = $subType;
+        $metadata['name'] = $name;
         $id = Uuid::v4();
 
         try {

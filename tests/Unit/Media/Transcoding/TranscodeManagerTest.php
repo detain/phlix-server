@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Phlix\Tests\Unit\Media\Transcoding;
 
+use PHPUnit\Framework\AssertionFailedError;
 use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
 use Phlix\Media\Streaming\AbrLadder;
@@ -3698,10 +3699,15 @@ class TranscodeManagerTest extends TestCase
         $ff = $this->createMock(FfmpegRunner::class);
         $manager = $this->segManager($db, $ff, null, null, null, 100);
 
+        // S120 — the callback RECORDS, the assertions run OUTSIDE it. It used to call
+        // $this->assertSame() directly, which the `catch (\RuntimeException)` below
+        // swallowed (ExpectationFailedException IS a RuntimeException), so this test
+        // stayed GREEN with `assertTrue(false)` planted in the callback.
         $final = "{$dir}/seg-00008.ts";
+        $waitersAtLaunch = null;
         $ff->expects($this->once())->method('startSegmentEncode')->willReturnCallback(
-            function () use ($manager, $final): int {
-                $this->assertSame(1, $manager->waiterCount($final), 'the launcher is counted before the throw');
+            function () use ($manager, $final, &$waitersAtLaunch): int {
+                $waitersAtLaunch = $manager->waiterCount($final);
                 throw new \RuntimeException('ffmpeg arg builder blew up');
             }
         );
@@ -3709,11 +3715,28 @@ class TranscodeManagerTest extends TestCase
         $thrown = null;
         try {
             $manager->ensureSegment('seg-job', null, 8);
+        } catch (AssertionFailedError $e) {
+            // S120 — PHPUnit's ExpectationFailedException extends AssertionFailedError
+            // extends PHPUnit\Framework\Exception extends RuntimeException, so without
+            // this arm the `catch (\RuntimeException)` below eats any assertion that
+            // future maintenance puts inside the callback above and the test goes
+            // green regardless. Re-throw: a failed assertion is never "the exception
+            // under test".
+            throw $e;
         } catch (\RuntimeException $e) {
             $thrown = $e;
         }
 
-        $this->assertNotNull($thrown, 'the exception propagates, it is not swallowed');
+        // Identify the exception by MESSAGE, not merely by "something was caught":
+        // the old assertNotNull() was satisfied by a swallowed assertion failure, so
+        // the guard meant to prove propagation was what the swallowing made pass.
+        $this->assertInstanceOf(\RuntimeException::class, $thrown, 'the exception propagates, it is not swallowed');
+        $this->assertSame(
+            'ffmpeg arg builder blew up',
+            $thrown->getMessage(),
+            'the launcher\'s own exception propagated — not some other RuntimeException'
+        );
+        $this->assertSame(1, $waitersAtLaunch, 'the launcher is counted before the throw');
         $this->assertSame(0, $manager->waiterCount($final), 'F7: waiter ref-count decremented on a mid-poll throw — no leak');
         $this->assertFalse($manager->hasOtherWaiter($final), 'no phantom waiter left to defer future kills');
     }
@@ -4850,10 +4873,14 @@ class TranscodeManagerTest extends TestCase
         $ff = $this->createMock(FfmpegRunner::class);
         $manager = $this->segManager($db, $ff, null, null, null, 100);
 
+        // S120 — the callback RECORDS, the assertions run OUTSIDE it. It used to call
+        // $this->assertArrayHasKey() directly, which the `catch (\RuntimeException)`
+        // below swallowed, so this test stayed GREEN with `assertTrue(false)` planted.
         $final = "{$dir}/seg-00003.ts";
+        $inFlightAtLaunch = null;
         $ff->expects($this->once())->method('startSegmentEncode')->willReturnCallback(
-            function () use ($manager, $final): int {
-                $this->assertArrayHasKey($final, $this->inFlightSet($manager)); // incremented first
+            function () use ($manager, &$inFlightAtLaunch): int {
+                $inFlightAtLaunch = $this->inFlightSet($manager);
                 throw new \RuntimeException('ffmpeg arg builder blew up');
             }
         );
@@ -4861,11 +4888,31 @@ class TranscodeManagerTest extends TestCase
         $thrown = null;
         try {
             $manager->ensureSegment('seg-job', null, 3);
+        } catch (AssertionFailedError $e) {
+            // S120 — see the twin arm in
+            // testSegmentWaiterCountReturnsToZeroWhenPollBodyThrows(): an
+            // ExpectationFailedException IS a RuntimeException, so this arm is what
+            // stops the catch below from silently eating a future in-callback
+            // assertion.
+            throw $e;
         } catch (\RuntimeException $e) {
             $thrown = $e;
         }
 
-        $this->assertNotNull($thrown, 'the RuntimeException must propagate, not be swallowed');
+        // Identify by MESSAGE: the old assertNotNull() was satisfied by a swallowed
+        // assertion failure, i.e. by the very thing it was written to rule out.
+        $this->assertInstanceOf(
+            \RuntimeException::class,
+            $thrown,
+            'the RuntimeException must propagate, not be swallowed'
+        );
+        $this->assertSame(
+            'ffmpeg arg builder blew up',
+            $thrown->getMessage(),
+            'the launcher\'s own exception propagated — not some other RuntimeException'
+        );
+        $this->assertIsArray($inFlightAtLaunch, 'the launch callback ran');
+        $this->assertArrayHasKey($final, $inFlightAtLaunch, 'the in-flight slot is taken before the launch call');
         $this->assertSame([], $this->inFlightSet($manager), 'finally releases the slot even on a launch-time throw');
     }
 

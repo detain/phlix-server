@@ -264,12 +264,21 @@ class LibraryScanCommandTest extends TestCase
             },
         );
 
+        // S120 — the callback RECORDS the sink it was handed, the assertion runs
+        // OUTSIDE it. It used to call self::assertIsCallable() inline, which
+        // LibraryScanCommand.php:246's `catch (Throwable $e)` swallowed (it wraps the
+        // scanLibrary() call at :245), leaving this test red on the $writes diff below
+        // with no trace of the real cause.
         $manager = $this->createMock(LibraryManager::class);
+        $sink = null;
         $manager->method('scanLibrary')->willReturnCallback(
-            static function (string $lib, ?callable $onProgress = null): ScanResult {
-                self::assertIsCallable($onProgress, 'the CLI must pass a progress sink to the scanner');
-                for ($i = 1; $i <= 30; $i++) {
-                    $onProgress($i, 30, "/music/file-$i.flac", ['added' => $i, 'failed' => 0]);
+            static function (string $lib, ?callable $onProgress = null) use (&$sink): ScanResult {
+                $sink = $onProgress;
+
+                if ($onProgress !== null) {
+                    for ($i = 1; $i <= 30; $i++) {
+                        $onProgress($i, 30, "/music/file-$i.flac", ['added' => $i, 'failed' => 0]);
+                    }
                 }
 
                 return new ScanResult();
@@ -277,6 +286,8 @@ class LibraryScanCommandTest extends TestCase
         );
 
         $this->testerWithJobs($manager, $jobs)->execute(['libraryId' => 'lib-j3']);
+
+        $this->assertIsCallable($sink, 'the CLI must pass a progress sink to the scanner');
 
         // Same throttle as the worker: one write at 25, one on the final file.
         // ⚠ `items_updated` is the PROCESSED-FILE numerator, not rows written.

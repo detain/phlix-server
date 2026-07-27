@@ -231,12 +231,24 @@ class StatsCollectorTest extends TestCase
      */
     public function testRecordStorageSnapshotsSumsEveryTypeThatSharesABucket(): void
     {
+        // S120 — the callback RECORDS every statement, the assertion about their shape
+        // runs OUTSIDE it. It used to call $this->assertStringContainsString() inline,
+        // which StatsCollector::write() swallows via its own `catch (\Throwable)`; the
+        // test still went red, but on the array diff below, which says nothing about
+        // the statement that was actually wrong.
         /** @var array<string, array{count: int, bytes: int, cache: int}> $written */
         $written = [];
+        /** @var list<string> $statements */
+        $statements = [];
         $db = $this->createMock(Connection::class);
         $db->method('query')->willReturnCallback(
-            function (string $sql, array $params) use (&$written): array {
-                $this->assertStringContainsString('INSERT INTO stats_storage', $sql);
+            function (string $sql, array $params) use (&$written, &$statements): array {
+                $statements[] = $sql;
+
+                if (!str_contains($sql, 'INSERT INTO stats_storage')) {
+                    return [];
+                }
+
                 $written[(string) $params[2]] = [
                     'count' => (int) $params[3],
                     'bytes' => (int) $params[4],
@@ -253,6 +265,16 @@ class StatsCollectorTest extends TestCase
             'episode' => ['count' => 3, 'bytes' => 4_000, 'cache' => 4],
             'photo' => ['count' => 4, 'bytes' => 12_000],
         ]);
+
+        $this->assertNotSame([], $statements, 'the collector must issue at least one query');
+
+        foreach ($statements as $index => $sql) {
+            $this->assertStringContainsString(
+                'INSERT INTO stats_storage',
+                $sql,
+                "query #{$index} must be a stats_storage INSERT"
+            );
+        }
 
         $this->assertSame(['series', 'photo'], array_keys($written), 'One row per BUCKET, not per type');
         $this->assertSame(['count' => 6, 'bytes' => 9_000, 'cache' => 7], $written['series']);

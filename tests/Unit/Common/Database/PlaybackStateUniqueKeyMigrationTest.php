@@ -132,10 +132,15 @@ final class PlaybackStateUniqueKeyMigrationTest extends TestCase
      * The column order is load-bearing beyond the constraint itself: the upsert
      * conflict target is the whole pair, and `session_id` first also gives the
      * per-session lookups a usable left prefix.
+     *
+     * Asserted against {@see self::executable()}, NOT the raw file. 097 is a
+     * 175-line file whose header quotes the statement it emits, so a raw-text
+     * match stays green even if the ALTER is commented out and the migration
+     * does nothing at all — exactly the mutation this test exists to kill.
      */
     public function testTheAdderAddsTheUniqueKeyOnSessionIdThenMediaItemId(): void
     {
-        $sql = self::read(self::ADDER);
+        $sql = self::executable(self::read(self::ADDER));
 
         $this->assertMatchesRegularExpression(
             '/ALTER TABLE playback_state ADD UNIQUE KEY ' . self::KEY_NAME
@@ -166,10 +171,13 @@ final class PlaybackStateUniqueKeyMigrationTest extends TestCase
      * identifier limit. An identifier longer than 64 characters raises error
      * 1059 ("Identifier name '...' is too long") instead of 1054, and the
      * operator loses the one thing that made the failure actionable.
+     *
+     * Against {@see self::executable()}: the header quotes the same message, so
+     * a raw-text match would still pass with the guard branch deleted.
      */
     public function testTheDirtyTableRemedyFitsInAMysqlIdentifierAndNamesTheFinalizer(): void
     {
-        $sql = self::read(self::ADDER);
+        $sql = self::executable(self::read(self::ADDER));
 
         $matched = preg_match('/\'SELECT `([^`]+)`\'/', $sql, $m);
         $this->assertSame(1, $matched, self::ADDER . ' must carry the remediation as a quoted identifier');
@@ -218,10 +226,14 @@ final class PlaybackStateUniqueKeyMigrationTest extends TestCase
      * from `information_schema`, so a re-apply (checksum divergence, an empty
      * ledger, a manual re-run) is a no-op rather than a 1061 note or a table
      * rebuild.
+     *
+     * Against {@see self::executable()} for the same reason as the two tests
+     * above: the header explains the `information_schema` lookup in prose, so a
+     * raw-text match proves nothing about what the file actually runs.
      */
     public function testTheAdderChecksInformationSchemaBeforeAltering(): void
     {
-        $sql = self::read(self::ADDER);
+        $sql = self::executable(self::read(self::ADDER));
 
         $this->assertStringContainsString('information_schema.STATISTICS', $sql);
         $this->assertStringContainsString("INDEX_NAME = '" . self::KEY_NAME . "'", $sql);

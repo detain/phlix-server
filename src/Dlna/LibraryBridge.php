@@ -93,12 +93,14 @@ class LibraryBridge
      * 2026-07-27):
      *
      *  - {@see getLibraryChildCount()} sums {@see ItemRepository::countAllByType()}
-     *    over all six types and advertises **76,727+** children, while
-     *    {@see getLibraryItems()} returns {@see ItemRepository::getAllByType()}'s
+     *    over all six types and advertised **76,727+** children, while
+     *    {@see getLibraryItems()} returned {@see ItemRepository::getAllByType()}'s
      *    default page — **at most 100 per type**. The `<upnp:childCount>` a
-     *    renderer is promised and the list it receives disagree by three orders of
-     *    magnitude.
-     *  - The 100 albums and 100 tracks it does return are an arbitrary
+     *    renderer was promised and the list it received disagreed by three orders
+     *    of magnitude. (S147 closed the disagreement itself — the listing is now
+     *    paged, see {@see getLibraryItems()} — but the flattening below is a
+     *    separate wrong, and this narrowing is still what fixes it.)
+     *  - The 100 albums and 100 tracks it did return were an arbitrary
      *    title-ordered slice with no relation to the 100 artists beside them.
      *
      * That could not be fixed by nesting them: {@see getLibraryItems()} calls
@@ -142,6 +144,29 @@ class LibraryBridge
      * same reason ({@see \Phlix\Media\Library\DuplicateFinder::DEFAULT_BATCH_SIZE}).
      */
     private const FIND_BY_IDS_CHUNK = 500;
+
+    /**
+     * The most CDS objects one `Browse` response may carry.
+     *
+     * This is a PAGE size, not a ceiling on the container. Every browsable
+     * container in this bridge now answers `StartingIndex` from SQL
+     * ({@see getLibraryItems()}, {@see getMusicChildren()},
+     * {@see ItemRepository::findByParentPage()}), and the count it advertises is
+     * the true unbounded total, so a renderer reaches row 26,388 of the Video
+     * root by asking for it — which is precisely what it could NOT do while the
+     * bound lived in the listing.
+     *
+     * UPnP says `RequestedCount = 0` means "as many as you can". This is that
+     * answer: `NumberReturned` comes back smaller than `TotalMatches` and a
+     * renderer continues from where it left off, which is the ordinary paging
+     * contract every CDS client already implements.
+     *
+     * 2,000 is deliberately {@see MusicLibraryService::MAX_EMBEDDED_ROWS}'s
+     * value: `getArtistMediaItemIds()` clamps its own `$limit` to that constant,
+     * so a larger page here would be silently truncated by it and the arithmetic
+     * in {@see getLibraryItems()} would start skipping rows.
+     */
+    public const MAX_PAGE_ROWS = MusicLibraryService::MAX_EMBEDDED_ROWS;
 
     /**
      * Root containers representing the media library categories, with accurate
@@ -190,7 +215,71 @@ class LibraryBridge
     }
 
     /**
+     * How many rows each `media_items.type` in a category contributes, in the
+     * order {@see getLibraryItems()} concatenates them.
+     *
+     * ONE source for both the advertised `childCount` and the offset arithmetic
+     * of the listing. That is the whole mechanism by which "advertised count and
+     * deliverable list agree at every StartingIndex" holds: the listing walks
+     * this very map to decide which type a global offset lands in.
+     *
+     * ⚠ **Resolve it ONCE per `Browse` — {@see browsePage()} is why that method
+     * exists.** While `ContentDirectory` fetched the page and the count through
+     * two separate entry points, this ran twice per request (six `countAllByType()`
+     * for one Video-root browse, instrumented 2026-07-27) and the two evaluations
+     * could disagree whenever a row was written between them — not a theoretical
+     * window on an estate that has a library scan in flight much of the time.
+     * `browsePage()` spends one map on both, so on the browse path they cannot
+     * disagree at all. {@see getLibraryChildCount()} and {@see getLibraryItems()}
+     * remain independent entry points for callers that want only one of the two
+     * (`getRootContainers()` wants only the count).
+     *
+     * @param string $libraryType One of {@see CATEGORY_TYPES}'s keys.
+     * @return array<string, int> `media_items.type` => row count, insertion-ordered.
+     */
+    private function categoryTypeCounts(string $libraryType): array
+    {
+        $types = self::CATEGORY_TYPES[$libraryType] ?? null;
+        if ($types === null) {
+            return [];
+        }
+
+        $counts = [];
+        foreach ($types as $type) {
+            // The artist count must come from the SAME source as the artist
+            // listing (S97), or the advertised childCount over-counts by every
+            // `media_items[artist]` row that no `music_artists` row points at —
+            // the orphan shape MusicLibraryScanner's adoption path exists to
+            // reclaim.
+            $counts[$type] = $type === 'artist' && $this->musicLibrary !== null
+                ? $this->musicLibrary->getArtistsWithMediaItemCount()
+                : $this->itemRepository->countAllByType($type);
+        }
+
+        return $counts;
+    }
+
+    /**
      * Get child count for a library type.
+     *
+     * ⚠ **This number is UNBOUNDED, and that is now correct** — read this before
+     * re-introducing a clamp. S97 clamped the artist term to
+     * {@see MusicLibraryService::MAX_EMBEDDED_ROWS} because the listing stopped
+     * dead there: `getLibraryItems()` took no offset and
+     * `ContentDirectory::browseChildren()` applied `StartingIndex` in PHP to a
+     * list this bridge had already truncated, so on production's 4,656 artists a
+     * renderer was promised 4,656, handed 2,000, and could not page to the rest
+     * by any navigation. The clamp made the promise honest; it did not make the
+     * artists reachable, and it left the far larger lie on the OTHER roots
+     * untouched (movies advertised 10,718 against a `LIMIT 100` listing — 107x;
+     * episodes 26,389 — 264x; all measured read-only 2026-07-27).
+     *
+     * S147 removed the bound instead of the honesty: {@see getLibraryItems()}
+     * takes an offset and resolves it in SQL, {@see MAX_PAGE_ROWS} is a page
+     * size, and the true total is what a renderer needs in order to know there
+     * is a second page to ask for. 🛑 Clamping this to the page size again would
+     * re-create the S97 defect from the other side — the renderer would stop
+     * after one page believing it had seen everything.
      *
      * @param string $libraryType The library type (video, audio, images)
      * @return int Number of items in the library
@@ -199,45 +288,7 @@ class LibraryBridge
      */
     private function getLibraryChildCount(string $libraryType): int
     {
-        $types = self::CATEGORY_TYPES[$libraryType] ?? null;
-        if ($types === null) {
-            return 0;
-        }
-
-        $total = 0;
-        foreach ($types as $type) {
-            // The artist count must come from the SAME source as the artist
-            // listing (S97), or the advertised childCount over-counts by every
-            // `media_items[artist]` row that no `music_artists` row points at —
-            // the orphan shape MusicLibraryScanner's adoption path exists to
-            // reclaim.
-            //
-            // It is then clamped to MusicLibraryService::MAX_EMBEDDED_ROWS
-            // because that constant, not the row count, is the hard ceiling on
-            // what {@see getLibraryItems()} can actually hand over: it calls
-            // getArtistMediaItemIds(), whose default `$limit` IS that constant.
-            // Unclamped, a production-shaped library (4,656 artists with a
-            // `media_items` row, measured read-only 2026-07-27) advertises 4,656
-            // and delivers 2,000.
-            //
-            // ⚠ RESIDUAL BOUND — the clamp makes the advertised number honest,
-            // it does NOT make the missing artists reachable. Artists ranked
-            // past MAX_EMBEDDED_ROWS in `ORDER BY COALESCE(sort_name, name)` are
-            // not browsable over DLNA at all: getLibraryItems() takes no offset,
-            // and ContentDirectory::browseChildren() applies `StartingIndex` in
-            // PHP to the list this bridge already truncated, so a renderer
-            // cannot page past the cap either. Giving the Audio root a real
-            // paging path is a separate, filed step — do not paper over it by
-            // raising the ceiling on one side only.
-            $total += $type === 'artist' && $this->musicLibrary !== null
-                ? min(
-                    $this->musicLibrary->getArtistsWithMediaItemCount(),
-                    MusicLibraryService::MAX_EMBEDDED_ROWS
-                )
-                : $this->itemRepository->countAllByType($type);
-        }
-
-        return $total;
+        return array_sum($this->categoryTypeCounts($libraryType));
     }
 
     /**
@@ -248,6 +299,11 @@ class LibraryBridge
      * `album` `media_items` row never carries children under `parent_id`, so
      * `findByParent()` on one returns an empty container and the browse dead-ends.
      *
+     * ⚠ **Every branch resolves `$offset`/`$limit` in SQL.** Nothing above this
+     * method may re-slice the result — {@see ContentDirectory::browseChildren()}
+     * used to, against a list that was already truncated, which is what made
+     * `StartingIndex` useless past the first page (S147).
+     *
      * @param string $objectId The object ID of the container
      * @param string|null $objectType The container's `media_items.type`, when the
      *        caller has already resolved the row. {@see ContentDirectory::browse()}
@@ -255,30 +311,154 @@ class LibraryBridge
      *        `browseChildren()` — so passing it here saves this class a second
      *        `findById()` on EVERY drill-down, music or not. NULL means "not
      *        known", and the type is looked up as before.
+     * @param int $offset DLNA `StartingIndex` — rows to skip within the container.
+     * @param int $limit DLNA `RequestedCount`, clamped to
+     *        `[1, self::MAX_PAGE_ROWS]`. Callers map `RequestedCount = 0`
+     *        ("as many as you can") onto {@see MAX_PAGE_ROWS}.
      * @return array<int, array<string, mixed>> Array of child items
      *
      * @since 0.12.0
      */
-    public function getContainerChildren(string $objectId, ?string $objectType = null): array
-    {
-        $this->logger?->debug('LibraryBridge: Getting container children', ['object_id' => $objectId]);
+    public function getContainerChildren(
+        string $objectId,
+        ?string $objectType = null,
+        int $offset = 0,
+        int $limit = self::MAX_PAGE_ROWS
+    ): array {
+        $this->logger?->debug('LibraryBridge: Getting container children', [
+            'object_id' => $objectId,
+            'offset' => $offset,
+            'limit' => $limit,
+        ]);
+
+        $offset = max(0, $offset);
+        $limit = min(max(1, $limit), self::MAX_PAGE_ROWS);
 
         // Handle library containers
         if (strpos($objectId, 'library-') === 0) {
             $libraryType = substr($objectId, 8);
-            return $this->getLibraryItems($libraryType);
+            return $this->getLibraryItems($libraryType, $offset, $limit);
         }
 
         // Music drill-down: artist → albums → tracks, read from `music_*`.
-        $musicChildren = $this->getMusicChildren($objectId, $objectType);
+        $musicChildren = $this->getMusicChildren($objectId, $objectType, $offset, $limit);
         if ($musicChildren !== null) {
             return $musicChildren;
         }
 
         // Handle regular parent-based children
-        $items = $this->itemRepository->findByParent($objectId);
+        $items = $this->itemRepository->findByParentPage($objectId, $limit, $offset);
 
         return array_map(fn($item) => $this->itemToCdsObject($item), $items);
+    }
+
+    /**
+     * How many children a container has IN TOTAL — the `TotalMatches` a `Browse`
+     * response must carry.
+     *
+     * Deliberately NOT `count(getContainerChildren(...))`: that is the size of
+     * one page, and a renderer that is told the page size is the total stops
+     * after one page. Each branch here shares its listing counterpart's
+     * predicate exactly, so the promise and the deliverable agree at every
+     * `StartingIndex`.
+     *
+     * @param string $objectId The object ID of the container.
+     * @param string|null $objectType The container's already-resolved
+     *        `media_items.type`; NULL triggers a lookup, exactly as in
+     *        {@see getContainerChildren()}.
+     * @return int Total number of children.
+     */
+    public function getContainerChildCount(string $objectId, ?string $objectType = null): int
+    {
+        if (strpos($objectId, 'library-') === 0) {
+            return $this->getLibraryChildCount(substr($objectId, 8));
+        }
+
+        if ($this->musicLibrary !== null && $objectId !== '') {
+            $resolvedType = $this->resolveContainerType($objectId, $objectType);
+
+            if ($resolvedType === 'artist') {
+                return $this->musicLibrary->countAlbumMediaItemsForArtist($objectId);
+            }
+
+            if ($resolvedType === 'album') {
+                return $this->musicLibrary->countTrackMediaItemsForAlbum($objectId);
+            }
+        }
+
+        return $this->itemRepository->countByParent($objectId);
+    }
+
+    /**
+     * ONE page of a container **and** the container's total, resolved together.
+     *
+     * ⚠ **The pairing is the point, not a convenience.** `browseChildren()` used
+     * to call {@see getContainerChildren()} and {@see getContainerChildCount()}
+     * separately, and on a root category BOTH of them end in
+     * {@see categoryTypeCounts()} — so a single `Browse` of the Video root issued
+     * `countAllByType()` **six** times (movie, series, video, twice over,
+     * instrumented 2026-07-27) where three do the work. Worse, the two calls
+     * resolved the counts at two different instants, so a row written between
+     * them made the advertised `TotalMatches` disagree with the offsets the
+     * listing had already spent — and on this estate a scan is in flight much of
+     * the time, which is exactly the window {@see categoryTypeCounts()}'s own
+     * docblock warns about. Resolving both from one map closes it.
+     *
+     * @param string $objectId The container to page.
+     * @param string|null $objectType Its already-resolved `media_items.type`, if
+     *        the caller has one; NULL costs one `findById()`, exactly as in
+     *        {@see getContainerChildren()}.
+     * @param int $offset DLNA `StartingIndex`.
+     * @param int $limit DLNA `RequestedCount`, clamped to `[1, MAX_PAGE_ROWS]`.
+     * @return array{items: array<int, array<string, mixed>>, total: int} The
+     *         requested window and the container's TRUE total.
+     */
+    public function browsePage(
+        string $objectId,
+        ?string $objectType = null,
+        int $offset = 0,
+        int $limit = self::MAX_PAGE_ROWS
+    ): array {
+        if (strpos($objectId, 'library-') === 0) {
+            // Resolved ONCE and spent twice — see the warning above.
+            $counts = $this->categoryTypeCounts(substr($objectId, 8));
+
+            return [
+                'items' => $this->itemsFromTypeCounts(
+                    $counts,
+                    max(0, $offset),
+                    min(max(1, $limit), self::MAX_PAGE_ROWS)
+                ),
+                'total' => array_sum($counts),
+            ];
+        }
+
+        // Resolved once here so neither call below pays for a second findById().
+        $resolvedType = $objectId === '' ? '' : $this->resolveContainerType($objectId, $objectType);
+
+        return [
+            'items' => $this->getContainerChildren($objectId, $resolvedType, $offset, $limit),
+            'total' => $this->getContainerChildCount($objectId, $resolvedType),
+        ];
+    }
+
+    /**
+     * The container's `media_items.type`, using the caller's value when it has
+     * one and only then paying for a `findById()`.
+     *
+     * @param string $objectId A `media_items` UUID.
+     * @param string|null $objectType The caller's already-resolved type, if any.
+     */
+    private function resolveContainerType(string $objectId, ?string $objectType): string
+    {
+        if ($objectType !== null) {
+            return $objectType;
+        }
+
+        $item = $this->itemRepository->findById($objectId);
+        $type = $item['type'] ?? null;
+
+        return is_string($type) ? $type : '';
     }
 
     /**
@@ -295,25 +475,30 @@ class LibraryBridge
      *         `$objectId` is not a music container — the caller then falls through
      *         to the ordinary `parent_id` drill-down. NULL and `[]` are deliberately
      *         distinct: `[]` means "this artist really has no browsable albums".
+     * @param int $offset Rows to skip, resolved by SQL `OFFSET` — both listings
+     *        end their `ORDER BY` on a PRIMARY KEY, so the order is TOTAL and a
+     *        paged walk can neither drop nor repeat an album/track.
+     * @param int $limit Page size, already clamped by the caller.
      */
-    private function getMusicChildren(string $objectId, ?string $objectType = null): ?array
-    {
+    private function getMusicChildren(
+        string $objectId,
+        ?string $objectType = null,
+        int $offset = 0,
+        int $limit = self::MAX_PAGE_ROWS
+    ): ?array {
         if ($this->musicLibrary === null || $objectId === '') {
             return null;
         }
 
-        if ($objectType === null) {
-            $item = $this->itemRepository->findById($objectId);
-            $objectType = is_string($item['type'] ?? null) ? $item['type'] : '';
-        }
+        $objectType = $this->resolveContainerType($objectId, $objectType);
 
         if (!in_array($objectType, self::MUSIC_CONTAINER_TYPES, true)) {
             return null;
         }
 
         $childIds = $objectType === 'artist'
-            ? $this->musicLibrary->getAlbumMediaItemIdsForArtist($objectId)
-            : $this->musicLibrary->getTrackMediaItemIdsForAlbum($objectId);
+            ? $this->musicLibrary->getAlbumMediaItemIdsForArtist($objectId, $limit, $offset)
+            : $this->musicLibrary->getTrackMediaItemIdsForAlbum($objectId, $limit, $offset);
 
         return array_map(
             fn(array $child): array => $this->itemToCdsObject($child),
@@ -360,38 +545,101 @@ class LibraryBridge
     }
 
     /**
-     * Get media items from a specific library type.
+     * One page of a root category's children.
+     *
+     * A category is the CONCATENATION of its {@see CATEGORY_TYPES} members in a
+     * fixed order (`video` = movies, then series, then loose videos), so
+     * `StartingIndex` is a global index into that concatenation, not into any one
+     * type. The walk below spends the offset against
+     * {@see categoryTypeCounts()} — the same counts the container advertises —
+     * skipping whole types until it lands inside one, then hands the remainder to
+     * that type's own SQL `OFFSET`. Once a type is entered, `$skip` is zeroed and
+     * later types start from their first row, which is what makes a page that
+     * straddles a type boundary contiguous.
+     *
+     * ⚠ **Why this had to be SQL and not `array_slice()`.** Before S147 this
+     * method took no offset at all: it returned `getAllByType()`'s default
+     * `LIMIT 100` per type, and `ContentDirectory::browseChildren()` then applied
+     * `StartingIndex` in PHP to that already-truncated list. On production's
+     * 26,389 episodes a renderer was promised 26,389 and could reach 100 of them
+     * — asking for `StartingIndex = 5000` returned nothing at all rather than the
+     * 5,001st episode.
+     *
+     * **Order is preserved across page boundaries** because every per-type
+     * listing sorts on a TOTAL order: `getAllByType()` ends its `ORDER BY` on the
+     * `id` PRIMARY KEY, and `getArtistMediaItemIds()` on `music_artists.id`.
+     * Without that, two rows sharing a sort key have no defined relative order
+     * and MySQL may return them one way for one `OFFSET` and the other way for
+     * the next — the classic paged-walk row loss.
+     *
+     * `$remaining` is decremented by what was REQUESTED, not by what came back,
+     * so the offset arithmetic stays aligned with the counts even if the profile
+     * tag filter drops rows from a music page. A short page is then honest
+     * (`NumberReturned` < requested) instead of silently shifting every
+     * subsequent page.
      *
      * @param string $libraryType The library type (video, audio, images)
+     * @param int $offset DLNA `StartingIndex` into the whole category.
+     * @param int $limit Page size, clamped by the caller to
+     *        `[1, self::MAX_PAGE_ROWS]`.
      * @return array<int, array<string, mixed>> Array of media items converted to CDS objects
      *
      * @since 0.12.0
      */
-    private function getLibraryItems(string $libraryType): array
+    private function getLibraryItems(string $libraryType, int $offset = 0, int $limit = self::MAX_PAGE_ROWS): array
     {
-        $types = self::CATEGORY_TYPES[$libraryType] ?? null;
-        if ($types === null) {
-            return [];
-        }
+        return $this->itemsFromTypeCounts(
+            $this->categoryTypeCounts($libraryType),
+            max(0, $offset),
+            min(max(1, $limit), self::MAX_PAGE_ROWS)
+        );
+    }
 
+    /**
+     * The offset walk of {@see getLibraryItems()}, driven by a counts map the
+     * caller already has.
+     *
+     * Split out so {@see browsePage()} can spend ONE {@see categoryTypeCounts()}
+     * result on both the listing and the advertised total instead of resolving
+     * the counts twice per `Browse`.
+     *
+     * @param array<string, int> $counts `media_items.type` => row count, in the
+     *        order the category concatenates them.
+     * @param int $skip Rows to skip, already clamped to `>= 0`.
+     * @param int $remaining Page size, already clamped to `[1, MAX_PAGE_ROWS]`.
+     * @return array<int, array<string, mixed>>
+     */
+    private function itemsFromTypeCounts(array $counts, int $skip, int $remaining): array
+    {
         $objects = [];
-        foreach ($types as $type) {
+        foreach ($counts as $type => $available) {
+            if ($remaining <= 0) {
+                break;
+            }
+
+            if ($skip >= $available) {
+                $skip -= $available;
+                continue;
+            }
+
+            $take = min($remaining, $available - $skip);
+
             $items = $type === 'artist' && $this->musicLibrary !== null
                 // Enumerated from `music_artists` (S97), so the root shows exactly
                 // the artists that can actually be drilled into — an orphaned
                 // `media_items[artist]` row is not one of them.
                 //
-                // Bounded twice over: getArtistMediaItemIds() stops at
-                // MusicLibraryService::MAX_EMBEDDED_ROWS (the same ceiling
-                // getLibraryChildCount() clamps the advertised count to), and the
-                // id resolution is chunked so no single `IN (…)` carries 2,000
-                // placeholders. See self::FIND_BY_IDS_CHUNK.
-                ? $this->findByIdsChunked($this->musicLibrary->getArtistMediaItemIds())
-                : $this->itemRepository->getAllByType($type);
+                // The id resolution is chunked so no single `IN (…)` carries
+                // MAX_PAGE_ROWS placeholders. See self::FIND_BY_IDS_CHUNK.
+                ? $this->findByIdsChunked($this->musicLibrary->getArtistMediaItemIds($take, $skip))
+                : $this->itemRepository->getAllByType($type, $take, $skip);
 
             foreach ($items as $item) {
                 $objects[] = $this->itemToCdsObject($item);
             }
+
+            $remaining -= $take;
+            $skip = 0;
         }
 
         return $objects;

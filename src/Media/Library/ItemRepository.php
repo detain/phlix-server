@@ -752,6 +752,62 @@ class ItemRepository
     }
 
     /**
+     * One page of a parent's children, in a TOTAL order so paging is stable.
+     *
+     * {@see findByParent()} is deliberately left unbounded — a dozen callers
+     * (metadata matching, marker detection, series merging) want every child and
+     * two test doubles override its signature. This is the paging twin used by
+     * the DLNA `BrowseDirectChildren` path, which must answer a `StartingIndex`
+     * from SQL rather than by truncating in PHP.
+     *
+     * ⚠ The `id` tiebreak is load-bearing, not cosmetic. `findByParent()` orders
+     * by `name` alone; two children sharing a name (two "Episode 1" rows under
+     * different seasons of a merged series, say) have NO defined relative order,
+     * and MySQL is free to return them differently on two executions of the same
+     * statement with different `OFFSET`s. That is exactly how an offset-paged
+     * walk drops one row and repeats another. `id` is the PRIMARY KEY, so
+     * `(name, id)` is unique and the order is total.
+     *
+     * @param string $parentId The parent media item's unique identifier.
+     * @param int $limit Page size, clamped to `[1, self::ABSOLUTE_ROW_CEILING]`.
+     * @param int $offset Rows to skip (negative offsets normalize to 0).
+     * @return array<int, array<string, mixed>> Hydrated children, `name` then `id`.
+     */
+    public function findByParentPage(string $parentId, int $limit, int $offset = 0): array
+    {
+        $results = $this->db->query(
+            "SELECT * FROM media_items WHERE parent_id = ? ORDER BY name, id LIMIT ? OFFSET ?",
+            [
+                $parentId,
+                min(max(1, $limit), self::ABSOLUTE_ROW_CEILING),
+                $this->normalizeOffset($offset),
+            ]
+        );
+
+        return $this->hydrateRows($results);
+    }
+
+    /**
+     * Counts a parent's direct children.
+     *
+     * Pairs with {@see findByParentPage()}: the DLNA `TotalMatches` a renderer is
+     * promised must be the TRUE total, not the size of the page it was handed,
+     * or it cannot know to ask for a second page.
+     *
+     * @param string $parentId The parent media item's unique identifier.
+     * @return int Number of direct children.
+     */
+    public function countByParent(string $parentId): int
+    {
+        $result = $this->db->query(
+            "SELECT COUNT(*) as count FROM media_items WHERE parent_id = ?",
+            [$parentId]
+        );
+
+        return $this->extractCount($result);
+    }
+
+    /**
      * Finds all child items for multiple parent media items in a single query.
      *
      * @param array<int, string> $parentIds Array of parent media item UUIDs
@@ -867,9 +923,22 @@ class ItemRepository
      */
     public function getAllByType(string $type, int $limit = 100, int $offset = 0): array
     {
+        // ⚠ The trailing `id` is what makes OFFSET paging safe here, and it is
+        // NOT redundant with titleOrder()'s `sort_title, name`. Two rows can
+        // share BOTH (a remake and its original are both "Dune" with the same
+        // sort key), and their relative order is then undefined — MySQL may
+        // legitimately return them in one order for `LIMIT 100 OFFSET 0` and the
+        // other for `LIMIT 100 OFFSET 100`, which drops one row from the paged
+        // walk and repeats the other. `id` is the PRIMARY KEY, so appending it
+        // makes the order TOTAL and every page boundary reproducible.
+        //
+        // This costs nothing in plan terms: `WHERE type = ?` resolves through
+        // the single-column `idx_type` and the ORDER BY already filesorts (there
+        // is no `(type, sort_title, …)` index — the composite from migration 050
+        // leads with `library_id`), so the sort was happening either way.
         $results = $this->db->query(
-            "SELECT * FROM media_items WHERE type = ? ORDER BY " . self::titleOrder() . " LIMIT ? OFFSET ?",
-            [$type, $limit, $offset]
+            "SELECT * FROM media_items WHERE type = ? ORDER BY " . self::titleOrder() . ", id ASC LIMIT ? OFFSET ?",
+            [$type, min(max(1, $limit), self::ABSOLUTE_ROW_CEILING), $this->normalizeOffset($offset)]
         );
 
         return $this->hydrateRows($results);

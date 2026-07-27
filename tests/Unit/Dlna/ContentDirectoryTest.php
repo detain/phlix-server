@@ -274,4 +274,40 @@ class ContentDirectoryTest extends TestCase
 
         $this->assertArrayHasKey('Result', $result);
     }
+
+    /**
+     * S147 fix round — the bridge-less `TotalMatches` is a COUNT, not a second
+     * copy of the child list.
+     *
+     * It used to be `count($this->bridgelessChildren($objectId))`, evaluated a few
+     * statements after `getChildren()` had already materialised the very same
+     * (unbounded) list — so this path fetched every child TWICE, once to show and
+     * once to measure. `findByParent()` is therefore expected exactly ONCE, and
+     * the advertised total comes from `countByParent()`.
+     */
+    public function testTheBridgelessChildCountIsACountNotASecondFetch(): void
+    {
+        $children = [];
+        for ($i = 0; $i < 3; $i++) {
+            $children[] = ['id' => 'child-' . $i, 'name' => 'Child ' . $i, 'type' => 'episode'];
+        }
+
+        $this->itemRepositoryMock->expects($this->once())
+            ->method('findByParent')
+            ->with('library-video')
+            ->willReturn($children);
+        $this->itemRepositoryMock->expects($this->once())
+            ->method('countByParent')
+            ->with('library-video')
+            ->willReturn(9999);
+
+        $result = $this->contentDirectory->browse('library-video', 'BrowseDirectChildren', '*', 0, 3, '');
+
+        $this->assertSame(3, $result['NumberReturned']);
+        $this->assertSame(
+            9999,
+            $result['TotalMatches'],
+            'TotalMatches must come from countByParent(), not from re-listing the container'
+        );
+    }
 }

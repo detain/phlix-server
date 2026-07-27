@@ -368,7 +368,11 @@ final class MusicLibraryServiceTest extends TestCase
         );
         $this->assertStringContainsString('WHERE al.media_item_id = ?', $captured['sql']);
         $this->assertStringContainsString('ORDER BY t.disc_number, t.track_number', $captured['sql']);
-        $this->assertSame(['album-uuid', MusicLibraryService::MAX_EMBEDDED_ROWS], $captured['params']);
+        $this->assertSame(
+            ['album-uuid', MusicLibraryService::MAX_EMBEDDED_ROWS, 0],
+            $captured['params'],
+            'S147 — the third bind is the OFFSET that makes a long album pageable over DLNA'
+        );
     }
 
     /**
@@ -401,7 +405,7 @@ final class MusicLibraryServiceTest extends TestCase
 
         $this->assertStringContainsString('ar.media_item_id = ?', $captured['sql']);
         $this->assertStringContainsString('al.media_item_id IS NOT NULL', $captured['sql']);
-        $this->assertSame(['artist-uuid', 10], $captured['params']);
+        $this->assertSame(['artist-uuid', 10, 0], $captured['params']);
     }
 
     /**
@@ -432,7 +436,7 @@ final class MusicLibraryServiceTest extends TestCase
         $captured = $this->captureQuery(
             fn(MusicLibraryService $s): mixed => $s->getTrackMediaItemIdsForAlbum('album-uuid', 10_000)
         );
-        $this->assertSame(['album-uuid', MusicLibraryService::MAX_EMBEDDED_ROWS], $captured['params']);
+        $this->assertSame(['album-uuid', MusicLibraryService::MAX_EMBEDDED_ROWS, 0], $captured['params']);
 
         $db = $this->createMock(Connection::class);
         $db->expects($this->never())->method('query');

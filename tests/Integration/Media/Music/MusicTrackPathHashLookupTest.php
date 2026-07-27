@@ -596,9 +596,25 @@ final class MusicTrackPathHashLookupTest extends TestCase
 
         try {
             $db->query('CREATE TABLE ' . $name . ' LIKE media_items');
-            $db->query(
-                'ALTER TABLE ' . $name . ' ADD UNIQUE INDEX ' . self::PATH_HASH_INDEX . ' (library_id, path_hash)',
-            );
+            // `CREATE TABLE … LIKE` copies indexes, so since migration 096 put
+            // the unique index back into the migration chain (S152) the clone
+            // ALREADY has it and this ALTER raises 1061 "Duplicate key name".
+            // Letting that reach the catch below would markTestSkipped() the
+            // whole class — silently retiring the five S151 plan proofs on a
+            // correctly-migrated database, which is the exact opposite of what
+            // the index being present should mean. Tolerate only 1061; any
+            // other failure still skips, because the plan claim really is
+            // unprovable without the index.
+            try {
+                $db->query(
+                    'ALTER TABLE ' . $name . ' ADD UNIQUE INDEX ' . self::PATH_HASH_INDEX
+                    . ' (library_id, path_hash)',
+                );
+            } catch (Throwable $e) {
+                if (!str_contains($e->getMessage(), 'Duplicate key name')) {
+                    throw $e;
+                }
+            }
             $db->query(
                 'INSERT INTO ' . $name . ' (id, library_id, type, name, path)'
                 . ' SELECT id, library_id, type, name, path FROM media_items WHERE library_id IN (?, ?)',

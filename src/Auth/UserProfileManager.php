@@ -153,8 +153,6 @@ class UserProfileManager
      *        autowiring, so the binding in `AuthServicesProvider` names this
      *        explicitly. Without that the manager silently keeps the shipped
      *        cap and `auth.max_profiles` becomes inert (read-path class (g)).
-     *
-     * @throws void
      */
     public function __construct(Connection $db, ?SettingsRepository $settings = null)
     {
@@ -217,8 +215,6 @@ class UserProfileManager
      *                   is_active, is_admin, created_at, updated_at. Returns null
      *                   if profile not found.
      *
-     * @throws void
-     *
      * @example
      * $profile = $manager->findById('prof_abc123');
      * if ($profile !== null) {
@@ -251,8 +247,6 @@ class UserProfileManager
      *                    - allowed_genres: array|null
      *                    - blocked_genres: array|null
      *                    Returns null if profile not found.
-     *
-     * @throws void
      *
      * @see findById() For simple profile lookup without settings
      */
@@ -295,8 +289,6 @@ class UserProfileManager
      *                           - content_rating: string (if settings exist)
      *                           - settings: array (if content_rating exists)
      *
-     * @throws void
-     *
      * @see getActiveProfile() To get only the currently active profile
      */
     public function findByUserId(string $userId): array
@@ -324,8 +316,6 @@ class UserProfileManager
      *
      * @return array<string, mixed>|null Profile array with settings, or null if no active
      *                   profile exists. See findByIdWithSettings() return format.
-     *
-     * @throws void
      *
      * @see findByUserId() To get all profiles for a user
      */
@@ -538,8 +528,6 @@ class UserProfileManager
      * @return bool True if switch successful, false if profile doesn't
      *              exist or doesn't belong to user
      *
-     * @throws void
-     *
      * @see getActiveProfile() To retrieve the currently active profile
      */
     public function switchProfile(string $userId, string $profileId): bool
@@ -598,8 +586,6 @@ class UserProfileManager
      * @param string $pin The PIN to verify (4 or 6 digits)
      *
      * @return bool True if PIN matches or no PIN is set, false if incorrect
-     *
-     * @throws void
      *
      * @see setPin() To set or change a profile PIN
      * @see removePin() To remove the PIN requirement
@@ -664,8 +650,6 @@ class UserProfileManager
      *
      * @return void
      *
-     * @throws void
-     *
      * @see setPin() To set a new PIN
      * @see verifyPin() For PIN verification logic
      */
@@ -693,8 +677,6 @@ class UserProfileManager
      *
      * @return bool True if content is allowed, false if restricted.
      *              Returns true if no settings exist (no restrictions).
-     *
-     * @throws void
      *
      * @see getAllowedRatings() To get list of all allowed ratings for a profile
      */
@@ -733,8 +715,6 @@ class UserProfileManager
      *
      * @return array<string> Array of allowed rating codes (e.g., ['G', 'PG', 'PG-13']).
      *                      Returns all 7 ratings if no settings exist.
-     *
-     * @throws void
      *
      * @see isContentRatingAllowed() To check a single rating
      */
@@ -911,8 +891,14 @@ class UserProfileManager
      *     max_daily_watch_time?: int,
      *     allowed_genres?: array<string>|null,
      *     blocked_genres?: array<string>|null,
-     *     allow_unrated?: bool
-     * } $data Settings fields to update (see create() for field descriptions)
+     *     allow_unrated?: bool,
+     *     name?: string,
+     *     avatar_url?: string|null,
+     *     is_active?: bool
+     * } $data Settings fields to update (see create() for field descriptions).
+     *   `name`/`avatar_url`/`is_active` are ignored here — they are applied by the
+     *   caller against user_profiles — but the caller forwards the whole $data
+     *   array, so the shape has to admit them.
      *
      * @return void
      *

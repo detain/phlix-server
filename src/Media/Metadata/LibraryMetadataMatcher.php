@@ -659,10 +659,10 @@ class LibraryMetadataMatcher
                 $params['match'] = 'unmatched';
             }
             $result = $this->items->query($params, $libraryId);
+            // The is_int() early return that used to sit here made the tail
+            // unreachable (psalm narrowed the remaining type to `never`), and it
+            // was redundant anyway: is_numeric() is true for every int.
             $total = $result['total'] ?? 0;
-            if (is_int($total)) {
-                return $total;
-            }
             return is_numeric($total) ? (int) $total : 0;
         } catch (Throwable) {
             return 0;

@@ -1,0 +1,51 @@
+<?xml version="1.0"?>
+<!--
+    Psalm configuration for phlix-server (S146).
+
+    HISTORY — why this file exists. The "Psalm Static Analysis" job in
+    .github/workflows/coding-standards.yml has existed since the very first CI
+    commit (b7c728ca, 2026-05-15) but `vimeo/psalm` was NEVER added to
+    composer.json, so `vendor/bin/psalm` never existed, the job's
+    `if [ -f vendor/bin/psalm ]` guard was always false, and the job went GREEN
+    having analysed zero files. It was counted as real coverage in PR reviews.
+    S146 finishes the abandoned rollout: the dependency, this config, the guard
+    removal and the code fixes all land together, because adding the dependency
+    on its own makes psalm abort with "Could not locate a config XML file" and
+    turns master red instantly.
+
+    errorLevel="5" is a deliberate, measured choice — NOT a baseline. Measured
+    finding counts for src/ on 2026-07-27 with the analysis extensions loaded:
+
+        level 1: 4343   level 2: 1484   level 3: 620   level 4: 484
+        level 5:   89   level 6:   78   level 7:  30   level 8:   6
+
+    Level 4 is the cliff: 348 of the 395 findings it adds over level 5 are
+    RedundantCondition / TypeDoesNotContainType / RedundantCast, and in this
+    codebase those are overwhelmingly deliberate is_array()/is_string() guards
+    on database rows and decoded JSON. Deleting them to satisfy psalm would
+    strip real runtime protection, so level 5 is where the tool stops arguing
+    with defensive code and starts reporting defects. Raise the level if and
+    when those guards are replaced by typed row objects; do NOT add a
+    psalm-baseline.xml, which would reproduce the exact "gate that proves
+    nothing" defect S146 exists to remove.
+
+    phpVersion is pinned to the version CI and production analyse against, so
+    the result does not drift with whatever PHP the runner happens to ship.
+-->
+<psalm
+    errorLevel="5"
+    phpVersion="8.3"
+    resolveFromConfigFile="true"
+    findUnusedCode="false"
+    findUnusedBaselineEntry="false"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xmlns="https://getpsalm.org/schema/config"
+    xsi:schemaLocation="https://getpsalm.org/schema/config vendor/vimeo/psalm/config.xsd"
+>
+    <projectFiles>
+        <directory name="src" />
+        <ignoreFiles>
+            <directory name="vendor" />
+        </ignoreFiles>
+    </projectFiles>
+</psalm>

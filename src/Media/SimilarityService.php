@@ -136,7 +136,10 @@ final class SimilarityService
      *
      * @param string $mediaItemId The source item.
      * @param int $limit Maximum number of results (default 10).
-     * @return list<array{id: string, title: string, posterUrl: string|null, score: float, reason: string}>
+     * @return list<array{id: string, title: string, posterUrl: string|null, year: int|null, score: float, reason: string}>
+     *         `year` is emitted for every row (from extractYear()) but was absent
+     *         from this shape, so consumers that read it were reported as
+     *         accessing an undeclared offset.
      */
     public function getSimilar(string $mediaItemId, int $limit = 10): array
     {

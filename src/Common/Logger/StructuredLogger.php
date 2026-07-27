@@ -332,7 +332,10 @@ class StructuredLogger implements LoggerInterface
      *
      * @param mixed              $level
      * @param string|Stringable  $message
-     * @param array<string,mixed> $context
+     * @param array<array-key, mixed> $context Widened from array<string,mixed> to
+     *        match Psr\Log\LoggerInterface::log() exactly — an override may not
+     *        narrow a parameter type (LSP), and a caller holding the interface is
+     *        free to pass an integer-keyed array.
      */
     public function log($level, string|Stringable $message, array $context = []): void
     {

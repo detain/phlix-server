@@ -2920,10 +2920,19 @@ class WebPortalRouter
 
     /**
      * Returns the configured TMDB API key, or an empty string when not set.
+     *
+     * S146: the path was `dirname(__DIR__, 2) . '/../../config/tmdb.php'`, which
+     * from src/Server/WebPortal resolves to `<repo>/../config/tmdb.php` — one
+     * level ABOVE the repository root. config/tmdb.php could therefore never be
+     * found, `@` swallowed the warning, and the method silently always fell
+     * through to the TMDB_API_KEY environment variable. Corrected to the same
+     * form the sibling config loader in this class uses — see
+     * getPlaybackPreferences(), which reads config/playback.php via
+     * dirname(__DIR__, 3).
      */
     private function tmdbApiKey(): string
     {
-        $tmdbConfigRaw = @include dirname(__DIR__, 2) . '/../../config/tmdb.php';
+        $tmdbConfigRaw = @include dirname(__DIR__, 3) . '/config/tmdb.php';
         return is_array($tmdbConfigRaw)
             && isset($tmdbConfigRaw['api_key'])
             && is_string($tmdbConfigRaw['api_key'])

@@ -351,7 +351,10 @@ class TrickplayGenerator
      *
      * @param string $jobId Transcode job identifier
      * @param TrickplayConfig $config Trickplay configuration
-     * @param array<string, array{offset: int, size: int}> $imageFiles Image file metadata
+     * @param array<string, array{offset: int, size: int, start_index?: int, count?: int}> $imageFiles
+     *        Image file metadata. `start_index`/`count` are written for every grid
+     *        by generate() and read back by generateIndex(); they were missing
+     *        from this shape.
      * @param string|null $indexXml Path to index XML (optional)
      *
      * @return TrickplayResult

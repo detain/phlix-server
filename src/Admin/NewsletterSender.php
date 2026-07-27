@@ -212,7 +212,11 @@ class NewsletterSender
             $status = is_string($row['status']) ? $row['status'] : '';
             $count = is_numeric($row['count']) ? (int) $row['count'] : 0;
 
-            if (isset($stats[$status])) {
+            // Explicit key match rather than isset($stats[$status]) with a dynamic
+            // key: the dynamic write made the inferred shape open-ended, and it
+            // also meant a row whose status happened to be the literal 'total'
+            // would clobber the running total.
+            if ($status === 'pending' || $status === 'sent' || $status === 'failed') {
                 $stats[$status] = $count;
             }
             $stats['total'] += $count;

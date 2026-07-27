@@ -181,8 +181,6 @@ class WatchHistory
      * @param Connection $db Database connection for watch history persistence
      * @param RecommendationService|null $recommendationService Optional recommendation
      *        engine for P4-S2 background recomputation on watch completion.
-     *
-     * @throws void
      */
     public function __construct(Connection $db, ?RecommendationService $recommendationService = null)
     {
@@ -205,8 +203,6 @@ class WatchHistory
      *         duration_ticks, playback_status, progress_percent, last_watched_at,
      *         created_at, completed_at, and optionally media_name, media_type,
      *         metadata, poster_url, thumbnail_url when JOINed.
-     *
-     * @throws void
      *
      * @see getContinueWatching() For in-progress items only
      * @see getRecentlyCompleted() For finished items only
@@ -238,8 +234,6 @@ class WatchHistory
      *
      * @return list<array<string, mixed>> Array of in-progress watch entries with media info.
      *                          See getHistory() return format for structure.
-     *
-     * @throws void
      *
      * @see getRecentlyCompleted() For finished items
      * @see getHistory() For all history entries
@@ -274,8 +268,6 @@ class WatchHistory
      *
      * @return list<array<string, mixed>> Array of completed watch entries with media info.
      *                          See getHistory() return format for structure.
-     *
-     * @throws void
      *
      * @see getContinueWatching() For in-progress items
      * @see hasWatched() To check completion status only
@@ -332,8 +324,6 @@ class WatchHistory
      *         Ordered by each series' most-recent playback recency (most recently
      *         touched series first). Series whose finale is already watched
      *         contribute nothing.
-     *
-     * @throws void
      *
      * @see \Phlix\Session\PlaybackController::getContinueWatching() Sibling rail.
      * @see NextUpSelector Pure ordering + next-episode selection logic.
@@ -622,8 +612,6 @@ class WatchHistory
      * @return array<string, mixed>|null Watch history entry array (see getHistory() format)
      *                    or null if no entry exists
      *
-     * @throws void
-     *
      * @see updateProgress() To create or update an entry
      */
     public function getForMediaItem(string $profileId, string $mediaItemId): ?array
@@ -801,8 +789,6 @@ class WatchHistory
      *
      * @return void
      *
-     * @throws void
-     *
      * @see clearHistory() To remove all history for a profile
      */
     public function removeFromHistory(string $profileId, string $mediaItemId): void
@@ -823,8 +809,6 @@ class WatchHistory
      *
      * @return void
      *
-     * @throws void
-     *
      * @see removeFromHistory() To remove a single entry
      */
     public function clearHistory(string $profileId): void
@@ -844,8 +828,6 @@ class WatchHistory
      * @param string $profileId The unique profile identifier (UUID format)
      *
      * @return int Total watch time in seconds (0 if no history)
-     *
-     * @throws void
      *
      * @see getTodayWatchTime() For today's watch time only
      * @see getWatchTimeByDay() For historical breakdown
@@ -874,8 +856,6 @@ class WatchHistory
      * @param string $profileId The unique profile identifier (UUID format)
      *
      * @return int Today's watch time in seconds (0 if none)
-     *
-     * @throws void
      *
      * @see getTotalWatchTime() For all-time total
      * @see getWatchTimeByDay() For multi-day breakdown
@@ -908,8 +888,6 @@ class WatchHistory
      * @return array<string, int> Associative array with date strings (Y-m-d) as keys
      *                          and watch time in seconds as values. Dates with no
      *                          watch activity are omitted from the array.
-     *
-     * @throws void
      *
      * @see getTotalWatchTime() For all-time total
      * @see getTodayWatchTime() For today's total only
@@ -952,8 +930,6 @@ class WatchHistory
      *
      * @return bool True if the media has been completed, false otherwise
      *
-     * @throws void
-     *
      * @see getForMediaItem() For full watch history entry
      * @see getRecentlyCompleted() For all completed items
      */
@@ -980,8 +956,6 @@ class WatchHistory
      * @param string $mediaItemId The unique media item identifier (UUID format)
      *
      * @return int|null Resume position in ticks, or null if not resumable
-     *
-     * @throws void
      *
      * @example
      * $position = $watchHistory->getResumePosition('profile_123', 'media_456');
@@ -1012,8 +986,6 @@ class WatchHistory
      * @param string $profileId The unique profile identifier (UUID format)
      *
      * @return int Total number of history entries (0 if none)
-     *
-     * @throws void
      *
      * @see getHistory() To retrieve the actual entries
      */

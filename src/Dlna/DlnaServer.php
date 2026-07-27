@@ -445,9 +445,12 @@ class DlnaServer
             }
         }
 
+        // array_slice rather than an index loop: $index was only ever used to
+        // read $pattern[$index] back, and slicing makes the bound provably safe
+        // instead of relying on $lastPresent staying in range. $lastPresent === -1
+        // yields a zero-length slice, exactly as the old loop body never ran.
         $params = [];
-        for ($index = 0; $index <= $lastPresent; $index++) {
-            $name = $pattern[$index];
+        foreach (array_slice($pattern, 0, $lastPresent + 1) as $name) {
             $value = $present[$name] ?? null;
 
             if (in_array($name, self::INT_ARGUMENTS, true)) {

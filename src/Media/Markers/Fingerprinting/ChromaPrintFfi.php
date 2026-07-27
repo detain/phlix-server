@@ -160,8 +160,18 @@ class ChromaPrintFfi implements ChromaPrintInterface
                 $libPath
             );
 
-            /** @phpstan-ignore-next-line */
-            $fingerprint = $ffi->chromaprint_generate_fingerprint($path);
+            /**
+             * @psalm-suppress UndefinedMethod FFI binds the C functions declared
+             *   in getFFIDecls() at runtime; no static analyser can see them on
+             *   the \FFI class, so this call cannot be resolved statically.
+             *
+             * The PHPStan counterpart is the trailing `@phpstan-ignore` below and
+             * NOT a `@phpstan-ignore-next-line` in this docblock: PHPStan resolves
+             * "next line" relative to the tag's own line, so inside a multi-line
+             * docblock it lands on a comment line and reports
+             * `ignore.unmatchedLine` instead of suppressing the call.
+             */
+            $fingerprint = $ffi->chromaprint_generate_fingerprint($path); // @phpstan-ignore method.notFound
             if ($fingerprint === null || $fingerprint === '') {
                 throw new ChromaPrintFingerprintFailedException(
                     sprintf('FFI returned empty fingerprint for %s', $path)

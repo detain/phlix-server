@@ -500,7 +500,11 @@ class PhotoController
             /** @var array<string, mixed> */
             $exif = $photo['metadata'] ?? [];
             /** @var string */
-            $caption = ($exif['camera_model'] ?? $photo['name']) ?? '';
+            // Parentheses removed: `??` chains right-associatively, so this is the
+            // same expression, but `(expr) ?? ''` made the left operand a
+            // parenthesised expression rather than an array element, which isset()
+            // semantics do not allow.
+            $caption = $exif['camera_model'] ?? $photo['name'] ?? '';
 
             if (isset($exif['date_taken_unix']) && is_numeric($exif['date_taken_unix'])) {
                 /** @var int */

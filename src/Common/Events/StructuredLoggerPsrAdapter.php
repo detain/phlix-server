@@ -52,7 +52,10 @@ final class StructuredLoggerPsrAdapter extends AbstractLogger
      *                                    integer / Monolog equivalent).
      * @param string|Stringable  $message Log message, possibly with
      *                                    placeholders.
-     * @param array<string, mixed> $context Structured context for the record.
+     * @param array<array-key, mixed> $context Structured context for the record.
+     *        Typed as array-key rather than string to match
+     *        Psr\Log\LoggerInterface::log() exactly — an override may not narrow
+     *        a parameter type (LSP).
      *
      * @return void
      */

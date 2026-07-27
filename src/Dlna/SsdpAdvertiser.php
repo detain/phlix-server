@@ -136,10 +136,13 @@ class SsdpAdvertiser extends Worker
                 $this->timerId = 0;
             }
 
-            // Close socket
+            // Close socket. Detach first, then fclose the local handle: closing
+            // through the property leaves it holding a closed resource, which
+            // contradicts its declared `resource|null` type.
             if ($this->socket !== null) {
-                fclose($this->socket);
+                $socket = $this->socket;
                 $this->socket = null;
+                fclose($socket);
             }
         };
     }

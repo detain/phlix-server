@@ -86,12 +86,13 @@ final class RecordingMySqlConnection extends PhlixMySQLConnection
      * {@see \Phlix\Tests\Unit\Media\Music\MusicLibraryScannerTest}'s
      * `MusicSchemaConnection::faultOnNth($needle, $occurrence, $param)` narrows on a
      * bound parameter through the same mechanism (12 call sites, of which 2 — at
-     * `MusicLibraryScannerTest.php:1494` and `:1956` — pass the `$param`). The one
-     * this method is for is
-     * {@see \Phlix\Tests\Unit\Media\Music\SkipSchemaConnection}, which keeps only the
-     * SQL (`$statements`) and has no fault arm at all — and, more to the point, a fault
-     * injected here interrupts a scan a REAL server is answering, so what the rest of
-     * the `finally` then does is production behaviour rather than modelled behaviour.
+     * `MusicLibraryScannerTest.php:1494` and `:1956` — pass the `$param`). The one this
+     * method is for is {@see \Phlix\Tests\Unit\Media\Music\SkipSchemaConnection}, which
+     * keeps only the SQL (`$statements`), so its fault arms (`throwFor()`,
+     * `returnNullFor()`) match on statement text and never on a bound parameter — and,
+     * more to the point, a fault injected here interrupts a scan a REAL server is
+     * answering, so what the rest of the `finally` then does is production behaviour
+     * rather than modelled behaviour.
      *
      * @param string     $needle     Case-sensitive SQL substring, e.g. `'SET a.total_tracks'`.
      * @param int|string $firstParam Value `$params[0]` must equal, compared as a string.

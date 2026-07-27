@@ -227,10 +227,26 @@ final class MusicScanUnchangedSkipTest extends TestCase
         $scanner = $this->scanner($db);
         $scanner->scanDirectory($dir, null, 'lib-1');
 
-        // Reproduce the S96(e) shape: an artist row whose media_item mint failed.
+        // Reproduce the S96(e) shape EXACTLY: `createMediaItem()` failed outright, so the
+        // `music_artists` row was written with `media_item_id = NULL` and there is NO
+        // `media_items` artist row at all.
+        //
+        // ⚠ THE ARTIST ROW MUST GO TOO, AND THAT IS THE WHOLE POINT OF THIS FIXTURE.
+        // Nulling `media_item_id` while LEAVING the `media_items` row behind produces an
+        // ORPHAN, which `hasAdoptableMusicMediaItem()` already catches — so the test would
+        // pass with the heal gate deleted (measured: mutating
+        // `hasUnhealedMusicMediaItem()` to `return false` left the earlier version of this
+        // test GREEN, i.e. it proved nothing). Removing the row leaves the heal gate as
+        // the ONLY thing that can disable the fast path here.
         $key = array_key_first($db->artists);
         self::assertIsString($key);
+        $orphanedId = $db->artists[$key]['media_item_id'];
         $db->artists[$key]['media_item_id'] = null;
+        $db->mediaItems = array_values(array_filter(
+            $db->mediaItems,
+            static fn(array $row): bool => $row['id'] !== $orphanedId
+        ));
+        self::assertSame([], $db->orphanedMusicMediaItems(), 'this fixture must NOT contain an orphan');
 
         $scanner->resetProbes();
         $scanner->scanDirectory($dir, null, 'lib-1');
@@ -277,6 +293,69 @@ final class MusicScanUnchangedSkipTest extends TestCase
             $scanner->probeCount,
             'an adoptable orphan must switch the fast path OFF, or the orphan can never be adopted'
         );
+    }
+
+    /**
+     * ⚠ THE PER-FILE RE-READ OF `$mayAdopt`, PINNED — the fast path must switch OFF
+     * MID-WALK when a caught write failure leaves a fresh orphan.
+     *
+     * This is what {@see MusicLibraryScanner::canSkip()} exists for, and it needs a
+     * fixture with more than `MAX_OPEN_ALBUMS` (32) albums to reach: `flushAlbum()` —
+     * the only place that can flip the flag — runs DURING the walk only when the open-album
+     * window overflows. With a handful of albums everything is flushed after the walk, so
+     * the flip cannot be observed and a `canSkip()` mutated to `return true` stays GREEN
+     * (measured on the earlier, small-fixture version of this test).
+     *
+     * ⚠ AND A SKIPPED FILE NEVER OPENS AN ALBUM, which tightens the fixture further: the
+     * open-album window only ever holds albums belonging to PROBED files, so the window
+     * cannot overflow unless at least 33 files are probed. A fixture where one file is
+     * touched and 39 are unchanged produces exactly one open album, no eviction, and no
+     * flip — measured, and it is why the first version of this test proved nothing.
+     *
+     * Shape: 40 single-track albums, indexed and stamped. Then the first 33 files in WALK
+     * order are touched (so they are probed and their albums open, overflowing the
+     * window), the first-walked file is additionally given a NEW album title so a
+     * `music_albums` INSERT is issued for it, and that INSERT is armed to write nothing.
+     * `upsertAlbum()` therefore mints a `media_items` row it cannot reference and sets
+     * `$mayAdopt = true` through the reference chain — so the 7 files still to come, all
+     * unchanged, must go back to being PROBED.
+     *
+     * The discriminating number: **40 probes with the per-file read, 33 without it.**
+     */
+    public function testAMidWalkWriteFailureSwitchesTheFastPathOffForTheRest(): void
+    {
+        [$dir, $db] = $this->albumTree(40);
+        $scanner = $this->scanner($db);
+        $scanner->scanDirectory($dir, null, 'lib-1');
+        self::assertSame(40, $scanner->probeCount, 'the first scan must index all 40');
+
+        $order = $this->walkOrder($dir);
+        self::assertCount(40, $order);
+
+        // 33 touched files => 33 open albums => the window (32) overflows and the
+        // least-recently-touched album — the first one — is flushed DURING the walk.
+        foreach (array_slice($order, 0, 33) as $path) {
+            touch($path, time() + 90);
+        }
+        clearstatcache();
+
+        // The flushed album must be the one whose write fails, so make the first-walked
+        // file look as though it moved to a brand-new album and refuse that INSERT.
+        $scanner->albumOverride = [$order[0] => 'A Brand New Album'];
+        $db->returnNullFor('INSERT INTO music_albums');
+
+        $scanner->resetProbes();
+        $scanner->scanDirectory($dir, null, 'lib-1');
+
+        self::assertSame(
+            40,
+            $scanner->probeCount,
+            'after a mid-walk failure left an unreferenced media_items row, the 7 REMAINING '
+            . 'unchanged files must be probed again — otherwise that orphan can never be adopted. '
+            . 'A count of 33 means only the touched files were read, i.e. $mayAdopt is being '
+            . 'captured once before the walk instead of re-read per file.'
+        );
+        self::assertContains($order[39], $scanner->probedPaths, 'including the very last file');
     }
 
     /**
@@ -466,6 +545,55 @@ final class MusicScanUnchangedSkipTest extends TestCase
     }
 
     /**
+     * Builds a tree of `$albums` single-track albums, one per subdirectory, so that a scan
+     * exceeds {@see MusicLibraryScanner}'s 32-album open window and therefore flushes
+     * albums DURING the walk rather than only at the end.
+     *
+     * @param int $albums Number of albums (and files).
+     * @return array{0: string, 1: SkipSchemaConnection}
+     */
+    private function albumTree(int $albums): array
+    {
+        $dir = sys_get_temp_dir() . '/phlix_s122_tree_' . bin2hex(random_bytes(6));
+        mkdir($dir, 0o777, true);
+        $this->tempDirs[] = $dir;
+
+        for ($i = 1; $i <= $albums; $i++) {
+            $sub = $dir . '/album-' . str_pad((string) $i, 2, '0', STR_PAD_LEFT);
+            mkdir($sub, 0o777, true);
+            file_put_contents($sub . '/track.mp3', str_repeat('a', 100 + $i));
+        }
+
+        return [$dir, new SkipSchemaConnection()];
+    }
+
+    /**
+     * The order the scanner's own walk will visit files in.
+     *
+     * Read from the filesystem rather than assumed: `RecursiveDirectoryIterator` yields in
+     * `readdir()` order, which is not sorted and not portable, so a test that needs "the
+     * first file the scan reaches" has to ask.
+     *
+     * @param string $dir Root directory.
+     * @return list<string>
+     */
+    private function walkOrder(string $dir): array
+    {
+        $out = [];
+        $iterator = new \RecursiveIteratorIterator(
+            new \RecursiveDirectoryIterator($dir, \RecursiveDirectoryIterator::SKIP_DOTS),
+            \RecursiveIteratorIterator::LEAVES_ONLY
+        );
+        foreach ($iterator as $file) {
+            if ($file instanceof \SplFileInfo && !$file->isDir() && $file->getExtension() === 'mp3') {
+                $out[] = $file->getPathname();
+            }
+        }
+
+        return $out;
+    }
+
+    /**
      * A scanner whose tag reads are counted and whose read-ahead pool is off.
      */
     private function scanner(SkipSchemaConnection $db): ProbeCountingScanner
@@ -520,6 +648,14 @@ final class ProbeCountingScanner extends MusicLibraryScanner
     public string $titleSuffix = '';
 
     /**
+     * Per-path album title overrides, so a test can make one file look as though it moved
+     * to a different album (which is what forces a `music_albums` INSERT on a rescan).
+     *
+     * @var array<string, string>
+     */
+    public array $albumOverride = [];
+
+    /**
      * Clears BOTH counters before a rescan.
      *
      * One method rather than two assignments at 11 call sites, because resetting the
@@ -540,9 +676,13 @@ final class ProbeCountingScanner extends MusicLibraryScanner
         $this->probeCount++;
         $this->probedPaths[] = $path;
 
+        // One album per parent directory, so a fixture can exceed the 32-album open
+        // window and make the scanner flush DURING the walk.
+        $album = $this->albumOverride[$path] ?? 'Skip Album ' . basename(dirname($path));
+
         return [
             'artist' => 'Skip Artist',
-            'album' => 'Skip Album',
+            'album' => $album,
             'title' => basename($path, '.mp3') . $this->titleSuffix,
             'track_number' => 1,
             'disc_number' => 1,
@@ -969,12 +1109,29 @@ final class SkipSchemaConnection extends Connection
     }
 
     /**
+     * Every artist/album `media_items` row that no `music_*` row points at.
+     *
+     * @return list<string>
+     */
+    public function orphanedMusicMediaItems(): array
+    {
+        $out = [];
+        foreach ($this->mediaItems as $row) {
+            if (in_array($row['type'], ['artist', 'album'], true) && !$this->isReferenced($row['id'])) {
+                $out[] = $row['id'];
+            }
+        }
+
+        return $out;
+    }
+
+    /**
      * Is this `media_items.id` referenced by a `music_artists`/`music_albums` row?
      *
      * @param string $mediaItemId Candidate id.
      * @return bool
      */
-    private function isReferenced(string $mediaItemId): bool
+    public function isReferenced(string $mediaItemId): bool
     {
         foreach ($this->artists as $artist) {
             if ($artist['media_item_id'] === $mediaItemId) {

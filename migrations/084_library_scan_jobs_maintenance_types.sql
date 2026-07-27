@@ -59,11 +59,21 @@
 --    album/artist after a retag, because the incremental skip fires before the
 --    file is opened. Use `scan` for an incremental refresh.
 --
--- The executable SQL below is deliberately left BYTE-IDENTICAL: this migration
--- is already applied everywhere, so re-wording the COMMENT string here would
--- only take effect on brand-new installs and would put fresh databases out of
--- step with existing ones over a column comment. The authoritative description
--- is this header.
+-- The executable SQL below is deliberately left BYTE-IDENTICAL, so that fresh
+-- databases do not end up out of step with existing ones over a column comment.
+-- The authoritative description is this header.
+--
+-- ⚠ NOTE, corrected by S145 review (finding 1): editing THIS HEADER is not free.
+-- `MigrationRunner::checksum()` hashes the WHOLE FILE, not just its statements
+-- (src/Common/Database/MigrationRunner.php:170-199), so any comment change
+-- diverges the recorded checksum and the runner logs
+-- "Migration checksum diverged; re-applying" and RE-EXECUTES the ALTER below.
+-- It then refreshes the stored checksum, so this happens exactly once per
+-- install, not on every deploy. Measured before merging S145: the re-run is a
+-- MODIFY COLUMN on `library_scan_jobs`, which holds 153 rows / 48 KB on
+-- production — a sub-second rebuild, and the ALTER is idempotent because the
+-- ENUM definition is unchanged. Safe here; do NOT assume the same for a comment
+-- edit to a migration that touches a large table.
 -- ─────────────────────────────────────────────────────────────────────────────
 
 ALTER TABLE `library_scan_jobs`

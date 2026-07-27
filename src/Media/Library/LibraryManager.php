@@ -498,6 +498,13 @@ class LibraryManager
      *        `(int $processed, int $total, string $currentPath, array $counts): void`
      *        sink. The 4th argument is the live counter snapshot for scanners that
      *        report one (music); a 3-parameter sink is unaffected.
+     * @param bool $readEveryFile S145 — read EVERY file rather than skipping the ones
+     *        whose `(mtime, size)` is unchanged. Music libraries only; every other
+     *        scanner ignores it (none of them has a skip index). Set by
+     *        {@see self::rescanLibrary()} and by nothing else, so an ordinary `scan`
+     *        keeps the S122(a) fast path. See
+     *        {@see \Phlix\Media\Music\MusicLibraryScanner::scanDirectory()} for why a
+     *        fix confined to `upsertTrack()` cannot reach an already-stamped row.
      * @return ScanResult Counters this scan can honestly report (see above).
      * @throws \InvalidArgumentException If the library does not exist
      *
@@ -506,8 +513,11 @@ class LibraryManager
      * $manager->scanLibrary('abc-123');
      * ```
      */
-    public function scanLibrary(string $libraryId, ?callable $onProgress = null): ScanResult
-    {
+    public function scanLibrary(
+        string $libraryId,
+        ?callable $onProgress = null,
+        bool $readEveryFile = false
+    ): ScanResult {
         $library = $this->fetchLibraryRow($libraryId);
         if ($library === null) {
             throw new \InvalidArgumentException("Library not found: $libraryId");
@@ -519,8 +529,12 @@ class LibraryManager
 
         // Route music libraries through MusicLibraryManager for tag harvesting
         if ($library->type === 'music') {
-            return $this->scanMusicLibrary($libraryId, $library, $onProgress);
+            return $this->scanMusicLibrary($libraryId, $library, $onProgress, $readEveryFile);
         }
+
+        // $readEveryFile is deliberately unused from here down: every other scanner
+        // has no skip index, so there is nothing for the flag to switch off. It is
+        // consumed by the music path above and by nothing else.
 
         // Route photo libraries through PhotoLibraryManager for EXIF extraction
         if ($library->type === 'photo') {
@@ -617,12 +631,17 @@ class LibraryManager
      * @param LibraryRow    $library    The library data
      * @param callable|null $onProgress Optional
      *        `(int $processed, int $total, string $currentPath, array $counts): void` sink.
+     * @param bool $readEveryFile S145 full-read mode, forwarded UNCHANGED to every
+     *        per-path {@see \Phlix\Media\Music\MusicLibraryService::scanDirectory()}
+     *        call. Both call sites below take it, because a multi-path library must not
+     *        heal one path and skip the next.
      * @return ScanResult Summed counters across every scanned path.
      */
     private function scanMusicLibrary(
         string $libraryId,
         LibraryRow $library,
-        ?callable $onProgress = null
+        ?callable $onProgress = null,
+        bool $readEveryFile = false
     ): ScanResult {
         $paths = $library->paths;
         $result = new ScanResult();
@@ -633,7 +652,10 @@ class LibraryManager
                     $this->logger->warning('Music library path does not exist', ['path' => $path]);
                     continue;
                 }
-                $this->accumulate($result, $this->musicLibraryService->scanDirectory($path, null, $libraryId));
+                $this->accumulate(
+                    $result,
+                    $this->musicLibraryService->scanDirectory($path, null, $libraryId, $readEveryFile)
+                );
             }
             $this->logMusicScanComplete($libraryId, $result);
             return $result;
@@ -682,7 +704,7 @@ class LibraryManager
             }
             $this->accumulate(
                 $result,
-                $this->musicLibraryService->scanDirectory($path, $onScanProgress, $libraryId)
+                $this->musicLibraryService->scanDirectory($path, $onScanProgress, $libraryId, $readEveryFile)
             );
             $base += $counts[$i];
         }
@@ -851,6 +873,16 @@ class LibraryManager
      *     genuinely-removed media is cleaned up), plus any series/season container
      *     left empty by that pruning — see {@see self::pruneRemovedItems()}.
      *
+     * **S145 — for a MUSIC library this now reads every file, and that is the point.**
+     * `rescan` passes `readEveryFile: true` down to
+     * {@see \Phlix\Media\Music\MusicLibraryScanner::scanDirectory()}, which leaves the
+     * S122(a) unchanged-file skip index unloaded. Without it a rescan cannot repair a
+     * track whose ALBUM or ARTIST tag changed: the skip fires before the file is even
+     * opened, so the row never reaches the code that would move it. ⚠ This makes a
+     * music rescan take HOURS rather than minutes (~3.5 h for 61,111 files) — today's
+     * fast `rescan` is the thing that is wrong, not this. An incremental refresh is
+     * {@see self::scanLibrary()} / the `scan` job type, which is unchanged.
+     *
      * `scanLibrary()` derives the configured paths from the library row and routes
      * music / photo / book / audiobook libraries to their specialised scanners, so
      * a single base rescan correctly refreshes every library type (including a
@@ -893,7 +925,24 @@ class LibraryManager
         // NON-DESTRUCTIVE rescan: re-scan from the filesystem WITHOUT deleting
         // first. Surviving files keep their existing rows (and UUIDs) via the
         // scanner's upsert-by-path, so all cascading user data is preserved.
-        $scan = $this->scanLibrary($libraryId, $onProgress);
+        //
+        // ── S145: `readEveryFile: true` is what makes `rescan` mean rescan. ─────
+        //
+        // `library_scan_jobs.type` has documented `rescan` as the heavy option since
+        // migration 084 ("scan=incremental, rescan=purge+rescan"), but for a music
+        // library this method ran the SAME skip-index-enabled scan `scan` runs — so
+        // `rescan` was not a full re-read and the ENUM comment was a promise the code
+        // did not keep. Passing the flag here restores the documented semantics; it
+        // does not invent a new one. No migration, no new job type, no new command,
+        // and both operator surfaces (the admin Rescan action and
+        // `php bin/phlix library:scan <id> --rescan`) get it for free.
+        //
+        // ⚠ COST, and it is the whole reason this is opt-in: for music this takes a
+        // rescan from minutes to roughly 3.5 hours (61,111 files on the production
+        // library, every one of them opened and tag-read). It is interruptible and
+        // idempotent — {@see \Phlix\Media\Music\MusicLibraryScanner} flushes per album
+        // and stamps only what it read — so re-running continues rather than restarts.
+        $scan = $this->scanLibrary($libraryId, $onProgress, true);
 
         // Prune only items whose source file is gone from disk, plus any now-empty
         // series/season containers — but ONLY when the library storage is actually

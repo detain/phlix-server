@@ -83,11 +83,19 @@ final class LibraryScanCommand extends Command
     protected function configure(): void
     {
         $this->addArgument('libraryId', InputArgument::REQUIRED, 'The library identifier to scan');
+        // ⚠ The old text — "Clear existing items and rescan from the filesystem" — was
+        // wrong in both halves: the rescan has been NON-DESTRUCTIVE since the
+        // DELETE-then-rescan data-loss fix, and for music it used to run the same
+        // incremental scan `scan` runs. S145 makes the second half true instead of
+        // deleting the promise: the flag now reads every file.
         $this->addOption(
             'rescan',
             null,
             InputOption::VALUE_NONE,
-            'Clear existing items and rescan from the filesystem'
+            'Full rescan: re-read EVERY file rather than skipping unchanged ones, then prune items whose '
+            . 'file is gone. Non-destructive (user data is preserved). For a music library this reads every '
+            . 'track\'s tags and can take hours — it is what repairs tracks filed under the wrong '
+            . 'album/artist. Use a plain scan for an incremental refresh.'
         );
     }
 

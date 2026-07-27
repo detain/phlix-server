@@ -672,6 +672,58 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- **A retagged music track could NEVER be re-parented, and `rescan` could not reach
+  the tracks that needed it** (S145). Editing a file's `ALBUM` or `ARTIST` tag left
+  `music_tracks.album_id` / `artist_id` pointing at the *old* album permanently.
+
+  Two independent halves, both required:
+
+  1. **`MusicLibraryScanner::upsertTrack()` could not see, or write, parentage.** Its
+     change predicate compared exactly four fields — `title`, `track_number`,
+     `disc_number`, `duration_secs` — and its `UPDATE` named exactly those four
+     columns. Change only the album or artist tag and all four stay identical, so the
+     call returned `'skipped'` having written nothing. A repo-wide grep finds just
+     three statements that write `music_tracks`, all in this one file, and the other
+     two are INSERTs — so nothing in the codebase could move a track. The columns are
+     `INT UNSIGNED NOT NULL` with enforced foreign keys (migration 065), so the row was
+     never NULL and never violated a constraint: it was **wrong but valid**, which is
+     why nothing ever surfaced it. The `SELECT`, the predicate and the `UPDATE` now all
+     carry `album_id` and `artist_id`, and the album a track *leaves* has its
+     `total_tracks` recomputed (`flushAlbum()`'s `finally` only ever refreshes the
+     album being flushed, and `MusicLibraryService` sums that column onto the artist
+     page).
+
+  2. **⚠ `rescan` now RE-READS EVERY FILE for a music library, and that is the fix —
+     today's fast `rescan` is the thing that was wrong.** Fixing `upsertTrack()` alone
+     is cosmetic: the unchanged-file fast path skips a file *before* it is opened, so
+     an already-stamped row never reaches the repair at all. Measured on the production
+     library, **29,134 of 61,111 tracks (47.7 %, rising)** would be skipped by an
+     ordinary scan. `LibraryManager::rescanLibrary()` therefore asks the music scanner
+     to leave its skip index unloaded. Migration 084 has documented `rescan` as the
+     heavy option since it was written — this restores a promise the schema already
+     made rather than inventing a new one, so there is **no migration, no new job type
+     and no new command**: the admin *Rescan* action and
+     `php bin/phlix library:scan <id> --rescan` both get it for free.
+
+     **Expect a music rescan to take hours, not minutes** (~3.5 h for 61,111 tracks),
+     and to report `updated` in the thousands on its first run — that is the repair, not
+     an error. It is interruptible and idempotent; re-running continues. The scan
+     summary gains `reparented` (how many tracks moved) and `read_every_file` (whether
+     the scan really was a full read). **Use `scan`, not `rescan`, for an incremental
+     refresh** — the incremental path is unchanged and still skips unchanged files.
+
+  Measured impact on production 2026-07-27: **310 albums owning zero tracks** plus 7
+  empty artists; **292 tracks provably mis-parented** (a floor — the rest cannot be
+  identified by SQL, because the truth is in the file's tags and the tags are not in
+  the database). It was accumulating, not dormant: of the albums created once the
+  initial import settled, **100 % (07-26) and 97.8 % (07-27) were empty shells**, i.e.
+  essentially every new album the scanner created was one whose tracks it then refused
+  to move.
+
+  Not done here, deliberately: the now-vacated shell albums are **not** deleted.
+  `fk_tracks_album` is `ON DELETE CASCADE`, so reaping them is a destructive decision
+  with artwork behind it and is a follow-up step of its own.
+
 - **`media_item_id` was silently ALWAYS dropped on all three music DTOs** (S121).
   `MusicArtist::fromRow()`, `MusicAlbum::fromRow()` and `MusicTrack::fromRow()` each
   coerced `media_item_id` through

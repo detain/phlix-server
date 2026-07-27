@@ -683,8 +683,17 @@ class LibraryController
     /**
      * Enqueue a full rescan for a library (async; Step 1.1b).
      *
-     * Like {@see self::scan()} but enqueues a `rescan` job (purge + rescan). The
-     * work is performed off the HTTP path by the scan worker; returns `202`.
+     * Like {@see self::scan()} but enqueues a `rescan` job. The work is performed off
+     * the HTTP path by the scan worker; returns `202`.
+     *
+     * **S145 — `rescan` reads EVERY file; `scan` does not.** That is the difference
+     * between the two actions, and for a music library it is the difference between
+     * minutes and hours (~3.5 h for 61,111 tracks). It is also the only way to repair a
+     * track filed under the wrong album or artist after its tags were edited: the
+     * incremental scan skips an unchanged file before it is ever opened, so the row
+     * never reaches the code that would move it. Today's fast `rescan` is the defect,
+     * not this cost. A rescan remains NON-DESTRUCTIVE — no user data, watch history or
+     * fetched metadata is deleted.
      *
      * @param array<string, string> $params Route params; `id` is the library UUID.
      *
@@ -708,7 +717,12 @@ class LibraryController
         return (new Response())->status(202)->json([
             'job_id' => $jobId,
             'status' => 'queued',
-            'message' => 'Library rescan queued',
+            // The operator-facing help for this action (S145). The admin console renders
+            // this string, and "queued" alone did not say that a rescan re-reads every
+            // file — which for a music library is hours, not minutes.
+            'message' => 'Library rescan queued: every file will be re-read. This repairs tracks filed under '
+                . 'the wrong album or artist and can take hours on a large music library. '
+                . 'Use Scan for an incremental refresh.',
         ]);
     }
 

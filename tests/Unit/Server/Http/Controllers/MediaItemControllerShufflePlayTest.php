@@ -10,6 +10,7 @@ use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Markers\Detection\MarkerCandidateRepository;
 use Phlix\Media\Markers\MarkerService;
 use Phlix\Media\MarkerService as ChapterMarkerService;
+use Phlix\Media\Music\MusicLibraryService;
 use Phlix\Media\Playback\GaplessPlaybackManager;
 use Phlix\Media\Playback\PlaybackPreferences;
 use Phlix\Media\Streaming\Trickplay\TrickplayController;
@@ -46,6 +47,12 @@ class MediaItemControllerShufflePlayTest extends TestCase
 
     /**
      * Pure grouping types. A childless container has genuinely nothing to play.
+     *
+     * ⚠ `album` / `artist` reach the 404 by a DIFFERENT route since S97: they
+     * never consult `findByParent()` at all (music carries no `parent_id`), they
+     * ask `music_*` — and with no {@see MusicLibraryService} wired, as here, that
+     * is unanswerable, so the pre-S97 404 is preserved rather than an unplayable
+     * container id being returned. The wired behaviour is pinned below.
      *
      * @return array<string, array{string}>
      */
@@ -215,6 +222,122 @@ class MediaItemControllerShufflePlayTest extends TestCase
     public function testBlankTypeReturns404(): void
     {
         $response = $this->controllerFor('')->shufflePlay($this->requestFor('item-1'), []);
+
+        $this->assertSame(404, $response->statusCode);
+    }
+
+    // -----------------------------------------------------------------------
+    // S97 — music containers resolve to playable TRACK ids via `music_*`.
+    // -----------------------------------------------------------------------
+
+    /**
+     * Build a controller for a music container of `$type` whose `music_*` reader
+     * answers `$trackIds`, and whose `findByIds()` returns a row per id.
+     *
+     * @param list<string> $trackIds
+     */
+    private function musicControllerFor(string $type, array $trackIds): MediaItemController
+    {
+        /** @var Connection&MockObject $db */
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(
+            function (string $sql) use ($type, $trackIds): array {
+                if (str_contains($sql, 'WHERE id IN (')) {
+                    return array_map(static fn (string $id): array => [
+                        'id' => $id,
+                        'name' => 'Track ' . $id,
+                        'type' => 'track',
+                        'library_id' => 'lib-1',
+                        'parent_id' => null,
+                        'path' => '/music/' . $id . '.mp3',
+                        'metadata_json' => json_encode([]),
+                    ], $trackIds);
+                }
+                if (str_contains($sql, 'parent_id = ?')) {
+                    return [];
+                }
+
+                return [[
+                    'id' => 'item-1',
+                    'name' => 'Test Container',
+                    'type' => $type,
+                    'library_id' => 'lib-1',
+                    'parent_id' => null,
+                    'path' => '',
+                    'metadata_json' => json_encode([]),
+                ]];
+            }
+        );
+
+        $itemRepo = new ItemRepository($db);
+        $gapless = $this->createMock(GaplessPlaybackManager::class);
+        $gapless->method('getPreferences')->willReturn(PlaybackPreferences::fromRaw(0, 0.3, 0.3));
+
+        $music = $this->createMock(MusicLibraryService::class);
+        $music->method('getTrackMediaItemIdsForAlbum')->willReturn($trackIds);
+        $music->method('getTrackMediaItemIdsForArtist')->willReturn($trackIds);
+
+        return new MediaItemController(
+            $itemRepo,
+            new MarkerService($itemRepo, new MarkerCandidateRepository($itemRepo)),
+            $gapless,
+            new TrickplayController('/tmp/trickplay', ''),
+            new ChapterMarkerService($db),
+            null,
+            null,
+            $music
+        );
+    }
+
+    /**
+     * Shuffling an ALBUM must return its TRACK ids — the ids `/media/{id}/stream`
+     * can actually serve. Before S97 this 404'd, and the `parent_id`-hierarchy
+     * alternative would have returned the album's own (unplayable) id.
+     */
+    public function testShufflingAnAlbumReturnsItsTrackIds(): void
+    {
+        $response = $this->musicControllerFor('album', ['tr-1', 'tr-2', 'tr-3'])
+            ->shufflePlay($this->requestFor('item-1'), []);
+
+        $this->assertSame(200, $response->statusCode);
+
+        /** @var array<string, mixed> $body */
+        $body = json_decode($response->body, true);
+        $this->assertSame('shuffle', $body['mode']);
+        $ids = $body['shuffled_ids'];
+        $this->assertIsArray($ids);
+        sort($ids);
+        $this->assertSame(['tr-1', 'tr-2', 'tr-3'], $ids);
+    }
+
+    /**
+     * Shuffling an ARTIST spans every album — one indexed read of the
+     * denormalized `music_tracks.artist_id`, not a walk of the album list.
+     */
+    public function testShufflingAnArtistReturnsEveryTrackId(): void
+    {
+        $response = $this->musicControllerFor('artist', ['tr-1', 'tr-2'])
+            ->shufflePlay($this->requestFor('item-1'), []);
+
+        $this->assertSame(200, $response->statusCode);
+
+        /** @var array<string, mixed> $body */
+        $body = json_decode($response->body, true);
+        $ids = $body['shuffled_ids'];
+        $this->assertIsArray($ids);
+        sort($ids);
+        $this->assertSame(['tr-1', 'tr-2'], $ids);
+    }
+
+    /**
+     * An album the music tables know nothing about (every track lost, or an
+     * orphaned `media_items` mirror row) still 404s rather than returning its own
+     * unplayable id.
+     */
+    public function testShufflingAnAlbumWithNoTracksReturns404(): void
+    {
+        $response = $this->musicControllerFor('album', [])
+            ->shufflePlay($this->requestFor('item-1'), []);
 
         $this->assertSame(404, $response->statusCode);
     }

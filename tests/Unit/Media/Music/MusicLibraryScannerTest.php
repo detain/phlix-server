@@ -1200,16 +1200,25 @@ final class MusicLibraryScannerTest extends TestCase
     }
 
     /**
-     * Album adoption, plus the constraint S97 will depend on: an orphaned album
-     * `media_items` row is adoptable only by the artist it is parented to.
+     * Album adoption, plus **the S97 invariant**: a music `media_items` row must
+     * never carry a `parent_id`, so an album row that does is not one of ours and
+     * is NOT adoptable.
+     *
+     * S97 settled that the `music_*` tables are the one authoritative music
+     * hierarchy and `media_items.parent_id` is never written for `artist` /
+     * `album` / `track` (verified read-only on production: 0 of 76,727 music rows
+     * carry one). The adoption predicate was therefore narrowed from the
+     * artist-scoped `(mi.parent_id IS NULL OR mi.parent_id = ?)` to a plain
+     * `AND mi.parent_id IS NULL`, which no longer SCOPES anything — it ASSERTS.
      *
      * Two artists here share the title `Greatest Hits`. One planted orphan is
-     * unparented (today's shape — adoptable by whichever artist reaches it first)
-     * and one is parented to a THIRD artist, modelling what S97 will write. The
-     * second must never be adopted, or artist B silently inherits artist A's album
-     * row and the hierarchy is wrong in a way `ma.id IS NULL` cannot detect.
+     * unparented (the only shape the scanner can produce) and one carries a
+     * parent. The second must never be adopted: it fails safe to a freshly minted
+     * row, and `ma.id IS NULL` cannot flag it because the row genuinely is
+     * unreferenced. Deleting the predicate from the SQL makes this test fail —
+     * the double applies the parent filter only when the statement asks for it.
      */
-    public function testAnOrphanedAlbumIsAdoptedOnlyWhenItIsNotParentedToAnotherArtist(): void
+    public function testAnOrphanedAlbumIsAdoptedOnlyWhenItCarriesNoParentId(): void
     {
         $root = $this->tempDir();
         foreach (['artist-a', 'artist-b'] as $sub) {
@@ -1249,13 +1258,93 @@ final class MusicLibraryScannerTest extends TestCase
         $this->assertNotContains(
             $foreignOrphan,
             $albumMediaItemIds,
-            'an album row parented to a DIFFERENT artist must never be adopted — that is S97 mis-parenting',
+            'an album media_items row carrying a parent_id must never be adopted: S97 makes '
+            . '"music rows are never parented" an invariant, so a parented row is not one of ours',
         );
         $this->assertFalse($db->isReferenced($foreignOrphan));
         $this->assertCount(
             3,
             $db->mediaItemIds('album'),
             'two planted orphans + exactly one freshly minted album row',
+        );
+    }
+
+    /**
+     * ⚠ **THE S97 INVARIANT, PINNED AT THE STATEMENT LEVEL: a music scan must never
+     * WRITE `media_items.parent_id`.**
+     *
+     * S97's verdict is that the `music_*` tables are the one authoritative music
+     * hierarchy — `music_tracks.album_id` / `.artist_id` are `INT UNSIGNED NOT
+     * NULL` with enforced FKs and `ON DELETE CASCADE` (migration 065), against a
+     * nullable `CHAR(36)` `parent_id` with no FK at all (migration 001) — so the
+     * `parent_id` chain is lossier by construction and is deliberately left unused
+     * for music. Production agrees: **0 of 76,727** `artist`/`album`/`track` rows
+     * carry one (measured read-only 2026-07-27).
+     *
+     * Asserting on the double's in-memory rows would prove nothing (it stores
+     * `parent_id => null` itself), so this asserts on the STATEMENTS the scanner
+     * issued: no `INSERT`/`UPDATE`/`REPLACE` may so much as mention the column.
+     * That is what fails the moment someone adds `parent_id` to
+     * `createMediaItem()`'s column list or bolts on a second parenting statement —
+     * the latter being the exact same-INSERT hazard S95 review r3 documented and
+     * the reason option A was rejected on the adoption path.
+     *
+     * The `SELECT` side is exempt and deliberately checked in the other direction:
+     * the adoption lookup MUST still carry `AND mi.parent_id IS NULL`, which is the
+     * invariant's tripwire.
+     */
+    public function testAScanNeverWritesParentIdOnAnyMusicMediaItemRow(): void
+    {
+        $root = $this->tempDir();
+        foreach (['artist-a', 'artist-b'] as $sub) {
+            mkdir($root . '/' . $sub, 0777, true);
+            $this->cleanup[] = $root . '/' . $sub;
+            $this->touchFile($root . '/' . $sub, '01-t.mp3');
+        }
+
+        $db = new MusicSchemaConnection();
+        // An orphan so the one-per-scan gate opens and the adoption lookup runs.
+        $db->plantOrphan('album', 'Greatest Hits', 'lib-s97');
+
+        $scanner = $this->taggedScanner($db, static fn(string $path): array => [
+            'artist' => basename(dirname($path)),
+            'album' => 'Greatest Hits',
+            'title' => basename($path, '.mp3'),
+            'track_number' => 1,
+            'disc_number' => 1,
+            'duration_secs' => 100,
+            'year' => 2000,
+            'genre' => null,
+        ]);
+
+        $scanner->scanDirectory($root, null, 'lib-s97');
+
+        // Precondition: the scan really did mint all three music types, so the
+        // assertion below is about rows that exist rather than a vacuous pass.
+        $this->assertNotEmpty($db->mediaItemIds('artist'), 'the scan must mint artist rows');
+        $this->assertNotEmpty($db->mediaItemIds('album'), 'the scan must mint album rows');
+        $this->assertNotEmpty($db->mediaItemIds('track'), 'the scan must mint track rows');
+
+        foreach ($db->statements as $sql) {
+            $keyword = strtolower(strtok(ltrim($sql), " \t\n\r"));
+            if (!in_array($keyword, ['insert', 'update', 'replace'], true)) {
+                continue;
+            }
+
+            $this->assertStringNotContainsString(
+                'parent_id',
+                $sql,
+                'S97: no music write may touch media_items.parent_id — the music_* FKs ARE the '
+                . 'hierarchy. Statement: ' . $sql,
+            );
+        }
+
+        // …and the read side must still assert the invariant.
+        $this->assertGreaterThan(
+            0,
+            $db->countStatements('AND mi.parent_id IS NULL'),
+            'the album adoption lookup must keep `AND mi.parent_id IS NULL` — it is the tripwire '
+            . 'that refuses to adopt a row some other writer parented',
         );
     }
 
@@ -4077,12 +4166,14 @@ final class MusicSchemaConnection extends Connection
             return [];
         }
 
-        // Album adoption lookup. The artist scoping is applied ONLY when the
-        // statement actually asks for it — a fake that filtered on parent_id
+        // Album adoption lookup. S97: the predicate is `AND mi.parent_id IS NULL`
+        // — an ENFORCED INVARIANT (music rows never carry a parent), no longer the
+        // artist-scoped `(IS NULL OR = ?)`. The filter is applied ONLY when the
+        // statement actually asks for it, because a fake that filtered on parent_id
         // unconditionally would keep passing after the predicate was deleted from
-        // the SQL, which is exactly the blind spot this test exists to close.
+        // the SQL, which is exactly the blind spot the tests here exist to close.
         if (str_contains($sql, 'LEFT JOIN music_albums ma')) {
-            $artistScoped = str_contains($sql, 'mi.parent_id');
+            $parentInvariant = str_contains($sql, 'mi.parent_id IS NULL');
             foreach ($this->mediaItems as $row) {
                 if (
                     $row['type'] === 'album'
@@ -4090,11 +4181,7 @@ final class MusicSchemaConnection extends Connection
                     && $row['path'] === ''
                     && $row['library_id'] === ($p[1] ?? null)
                     && !$this->isReferenced($row['id'])
-                    && (
-                        !$artistScoped
-                        || $row['parent_id'] === null
-                        || $row['parent_id'] === ($p[2] ?? null)
-                    )
+                    && (!$parentInvariant || $row['parent_id'] === null)
                 ) {
                     return [['id' => $row['id']]];
                 }

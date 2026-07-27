@@ -11,6 +11,7 @@ use Phlix\Media\Library\RatingGate;
 use Phlix\Media\Markers\Detection\MarkerCandidateRepository;
 use Phlix\Media\Markers\MarkerService;
 use Phlix\Media\Playback\GaplessPlaybackManager;
+use Phlix\Media\Music\MusicLibraryService;
 use Phlix\Media\Playback\PlaybackPreferences;
 use Phlix\Media\MarkerService as ChapterMarkerService;
 use Phlix\Media\Streaming\Trickplay\TrickplayController;
@@ -22,7 +23,8 @@ use Workerman\MySQL\Connection;
 /**
  * Parental-control ACCESS gate coverage for MediaItemController: show(),
  * getDownload(), getPlaybackInfo() deny over-cap items (404, no signed URL);
- * children() honours effective (inherited) ratings; the owner is never gated.
+ * the S97 music shuffle path honours the cap on the tracks it resolves from
+ * `music_*`; the owner is never gated.
  */
 class MediaItemControllerParentalTest extends TestCase
 {
@@ -51,6 +53,11 @@ class MediaItemControllerParentalTest extends TestCase
         $db->method('query')->willReturnCallback(
             static function (string $sql) use ($byId, $children): array {
                 if (str_contains($sql, 'WHERE parent_id = ?')) {
+                    return $children;
+                }
+                // S97: the music shuffle path resolves track ids through
+                // `music_*` and then batch-loads the rows by id.
+                if (str_contains($sql, 'WHERE id IN (')) {
                     return $children;
                 }
                 if (str_contains($sql, 'FROM media_items WHERE id = ?')) {
@@ -88,8 +95,11 @@ class MediaItemControllerParentalTest extends TestCase
         return new RatingGate($items, $pm, $users);
     }
 
-    private function controller(ItemRepository $repo, RatingGate $gate): MediaItemController
-    {
+    private function controller(
+        ItemRepository $repo,
+        RatingGate $gate,
+        ?MusicLibraryService $music = null
+    ): MediaItemController {
         $candidateRepo = new MarkerCandidateRepository($repo);
         $markerService = new MarkerService($repo, $candidateRepo);
         $gapless = $this->createMock(GaplessPlaybackManager::class);
@@ -102,8 +112,47 @@ class MediaItemControllerParentalTest extends TestCase
             new TrickplayController('/tmp/trickplay', ''),
             new ChapterMarkerService($this->createMock(Connection::class)),
             null,
-            $gate
+            $gate,
+            $music
         );
+    }
+
+    /**
+     * A {@see MusicLibraryService} double whose album lookup answers `$trackIds`.
+     *
+     * @param list<string> $trackIds
+     */
+    private function musicWithAlbumTracks(array $trackIds): MusicLibraryService
+    {
+        $music = $this->createMock(MusicLibraryService::class);
+        $music->method('getTrackMediaItemIdsForAlbum')->willReturn($trackIds);
+        $music->method('getTrackMediaItemIdsForArtist')->willReturn($trackIds);
+
+        return $music;
+    }
+
+    /**
+     * Decode a shuffle response body's `shuffled_ids` array.
+     *
+     * @return list<mixed>
+     */
+    private function shuffledIdsOf(\Phlix\Server\Http\Response $resp): array
+    {
+        $body = json_decode($resp->body, true);
+        $this->assertIsArray($body);
+        $ids = $body['shuffled_ids'] ?? null;
+        $this->assertIsArray($ids);
+        return array_values($ids);
+    }
+
+    /**
+     * A shuffle request body for `$mediaId`.
+     */
+    private function shuffleRequest(string $mediaId): Request
+    {
+        $req = $this->cappedRequest();
+        $req->body = ['media_id' => $mediaId];
+        return $req;
     }
 
     private function cappedRequest(): Request
@@ -111,20 +160,6 @@ class MediaItemControllerParentalTest extends TestCase
         $req = new Request();
         $req->userId = 'u1';
         return $req;
-    }
-
-    /**
-     * Decode a JSON response body's `items` array.
-     *
-     * @return array<int, mixed>
-     */
-    private function itemsOf(\Phlix\Server\Http\Response $resp): array
-    {
-        $body = json_decode($resp->body, true);
-        $this->assertIsArray($body);
-        $items = $body['items'] ?? null;
-        $this->assertIsArray($items);
-        return array_values($items);
     }
 
     public function testShowBlocksOverCapItem(): void
@@ -205,47 +240,79 @@ class MediaItemControllerParentalTest extends TestCase
         $this->assertSame(404, $resp->statusCode);
     }
 
-    public function testChildrenKeepsEpisodesOfAllowedSeries(): void
+    /**
+     * S97 — the music shuffle path resolves tracks through `music_*` instead of
+     * `findByParent()`, so the parental cap has to be re-applied there. Without it
+     * the new path is a hole in the cap: a capped profile could reach an over-cap
+     * track simply by shuffling its album.
+     *
+     * (This replaces three tests of `MediaItemController::children()`, which S97
+     * deleted — it was never registered on any route.)
+     */
+    public function testMusicShuffleDropsOverCapTracks(): void
     {
-        // Episodes have NULL own rating + parent series → effective from series.
-        $children = [
-            ['id' => 'ep-1', 'name' => 'E1', 'type' => 'episode', 'content_rating' => null,
-                'parent_id' => 'show-1', 'metadata_json' => '{}'],
-            ['id' => 'ep-2', 'name' => 'E2', 'type' => 'episode', 'content_rating' => null,
-                'parent_id' => 'show-1', 'metadata_json' => '{}'],
+        $tracks = [
+            ['id' => 'tr-1', 'name' => 'Clean', 'type' => 'track', 'content_rating' => 'PG',
+                'parent_id' => null, 'metadata_json' => '{}'],
+            ['id' => 'tr-2', 'name' => 'Explicit', 'type' => 'track', 'content_rating' => 'R',
+                'parent_id' => null, 'metadata_json' => '{}'],
         ];
-        $repo = new ItemRepository($this->connection([], $children));
-        $controller = $this->controller($repo, $this->gate($this->pg13Filter(), false, ['show-1' => 'PG']));
+        $repo = new ItemRepository($this->connection(
+            [['id' => 'al-1', 'name' => 'An Album', 'type' => 'album', 'metadata_json' => '{}', 'path' => '']],
+            $tracks
+        ));
+        $controller = $this->controller(
+            $repo,
+            $this->gate($this->pg13Filter()),
+            $this->musicWithAlbumTracks(['tr-1', 'tr-2'])
+        );
 
-        $resp = $controller->children($this->cappedRequest(), ['id' => 'show-1']);
+        $resp = $controller->shufflePlay($this->shuffleRequest('al-1'), []);
+
         $this->assertSame(200, $resp->statusCode);
-        $this->assertCount(2, $this->itemsOf($resp));
+        $this->assertSame(['tr-1'], $this->shuffledIdsOf($resp));
     }
 
-    public function testChildrenHidesEpisodesOfBlockedSeries(): void
+    public function testMusicShuffleIsUnfilteredForOwner(): void
     {
-        $children = [
-            ['id' => 'ep-1', 'name' => 'E1', 'type' => 'episode', 'content_rating' => null,
-                'parent_id' => 'show-1', 'metadata_json' => '{}'],
+        $tracks = [
+            ['id' => 'tr-1', 'name' => 'Explicit', 'type' => 'track', 'content_rating' => 'R',
+                'parent_id' => null, 'metadata_json' => '{}'],
         ];
-        $repo = new ItemRepository($this->connection([], $children));
-        $controller = $this->controller($repo, $this->gate($this->pg13Filter(), false, ['show-1' => 'R']));
+        $repo = new ItemRepository($this->connection(
+            [['id' => 'ar-1', 'name' => 'An Artist', 'type' => 'artist', 'metadata_json' => '{}', 'path' => '']],
+            $tracks
+        ));
+        $controller = $this->controller(
+            $repo,
+            $this->gate($this->pg13Filter(), true),
+            $this->musicWithAlbumTracks(['tr-1'])
+        );
 
-        $resp = $controller->children($this->cappedRequest(), ['id' => 'show-1']);
+        $resp = $controller->shufflePlay($this->shuffleRequest('ar-1'), []);
+
         $this->assertSame(200, $resp->statusCode);
-        $this->assertCount(0, $this->itemsOf($resp));
+        $this->assertSame(['tr-1'], $this->shuffledIdsOf($resp));
     }
 
-    public function testChildrenUnfilteredForOwner(): void
+    public function testMusicShuffle404sWhenEveryTrackIsOverCap(): void
     {
-        $children = [
-            ['id' => 'ep-1', 'name' => 'E1', 'type' => 'episode', 'content_rating' => 'R',
-                'parent_id' => 'show-1', 'metadata_json' => '{}'],
+        $tracks = [
+            ['id' => 'tr-1', 'name' => 'Explicit', 'type' => 'track', 'content_rating' => 'R',
+                'parent_id' => null, 'metadata_json' => '{}'],
         ];
-        $repo = new ItemRepository($this->connection([], $children));
-        $controller = $this->controller($repo, $this->gate($this->pg13Filter(), true));
+        $repo = new ItemRepository($this->connection(
+            [['id' => 'al-1', 'name' => 'An Album', 'type' => 'album', 'metadata_json' => '{}', 'path' => '']],
+            $tracks
+        ));
+        $controller = $this->controller(
+            $repo,
+            $this->gate($this->pg13Filter()),
+            $this->musicWithAlbumTracks(['tr-1'])
+        );
 
-        $resp = $controller->children($this->cappedRequest(), ['id' => 'show-1']);
-        $this->assertCount(1, $this->itemsOf($resp));
+        $resp = $controller->shufflePlay($this->shuffleRequest('al-1'), []);
+
+        $this->assertSame(404, $resp->statusCode);
     }
 }

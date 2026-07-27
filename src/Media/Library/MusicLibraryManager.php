@@ -27,6 +27,17 @@ use Workerman\MySQL\Connection;
  * coordinating between the AudioScanner for tag harvesting, MetadataManager
  * for metadata enrichment, and ItemRepository for persistence.
  *
+ * ⚠ **This class does NOT read the music hierarchy — `music_*` does (S97).** It
+ * used to carry `getArtists()`, `getAlbums()` and `getTracks()`, which grouped raw
+ * `media_items` rows by `metadata_json.$.artist` / `.album`. The music scanner
+ * stamps only `{"name","sub_type"}` there, so those keys were never populated and
+ * every row collapsed into one `'Unknown Artist'` / `'Unknown Album'`. S99 already
+ * repointed `/api/v1/music/*` at {@see \Phlix\Media\Music\MusicLibraryService}
+ * (the normalized `music_artists` / `music_albums` / `music_tracks` tables, whose
+ * FKs are `NOT NULL` and enforced), leaving the three methods with zero production
+ * callers; S97 deleted them so exactly one music read path exists. Add music reads
+ * to `MusicLibraryService`, never here.
+ *
  * @author Phlix Development Team
  * @version 1.0.0
  * @description Manages music library operations including scanning, tag parsing, and metadata enrichment
@@ -381,109 +392,5 @@ class MusicLibraryManager
             }
         }
         return LibraryRow::fromRow($row);
-    }
-
-    /**
-     * Gets all artists from a music library.
-     *
-     * Groups tracks by artist name from metadata and returns artist list.
-     *
-     * ⚠ NOT the API read path (S99). The music scanner stamps only
-     * `{"name","sub_type"}` into `media_items.metadata_json`, so
-     * `$metadata['artist']` here is never populated on scanner-indexed tracks and
-     * every row collapses into one `'Unknown Artist'`. `/api/v1/music/artists`
-     * therefore reads {@see \Phlix\Media\Music\MusicLibraryService::getAllArtists()}
-     * (the normalized `music_artists` table). This method is retained only for
-     * callers that hydrate `metadata_json` themselves.
-     *
-     * @param string $libraryId The library's unique identifier
-     * @return array<int, array<string, mixed>> Array of artist data
-     */
-    public function getArtists(string $libraryId): array
-    {
-        $items = $this->item_repo->getByType($libraryId, 'track');
-
-        $artists = [];
-        foreach ($items as $item) {
-            $metadata = is_array($item['metadata'] ?? null) ? $item['metadata'] : [];
-            $rawArtist = $metadata['artist'] ?? 'Unknown Artist';
-            $artist = is_string($rawArtist) ? $rawArtist : 'Unknown Artist';
-            if (!isset($artists[$artist])) {
-                $artists[$artist] = [
-                    'name' => $artist,
-                    'album_count' => 0,
-                    'track_count' => 0,
-                    'albums' => [],
-                ];
-            }
-            $artists[$artist]['track_count']++;
-            $rawAlbum = $metadata['album'] ?? 'Unknown Album';
-            $album = is_string($rawAlbum) ? $rawAlbum : 'Unknown Album';
-            if (!in_array($album, $artists[$artist]['albums'], true)) {
-                $artists[$artist]['albums'][] = $album;
-                $artists[$artist]['album_count']++;
-            }
-        }
-
-        return array_values($artists);
-    }
-
-    /**
-     * Gets all albums from a music library.
-     *
-     * Groups tracks by album name from metadata and returns album list.
-     *
-     * ⚠ NOT the API read path (S99) — same `metadata_json` blind spot as
-     * {@see self::getArtists()}. `/api/v1/music/albums` reads
-     * {@see \Phlix\Media\Music\MusicLibraryService::getAllAlbums()}.
-     *
-     * @param string $libraryId The library's unique identifier
-     * @return array<int, array<string, mixed>> Array of album data
-     */
-    public function getAlbums(string $libraryId): array
-    {
-        $items = $this->item_repo->getByType($libraryId, 'track');
-
-        $albums = [];
-        foreach ($items as $item) {
-            $metadata = is_array($item['metadata'] ?? null) ? $item['metadata'] : [];
-            $rawAlbum = $metadata['album'] ?? 'Unknown Album';
-            $album = is_string($rawAlbum) ? $rawAlbum : 'Unknown Album';
-            $rawArtist = $metadata['artist'] ?? 'Unknown Artist';
-            $artist = is_string($rawArtist) ? $rawArtist : 'Unknown Artist';
-
-            $key = $album . ' - ' . $artist;
-            if (!isset($albums[$key])) {
-                $albums[$key] = [
-                    'name' => $album,
-                    'artist' => $artist,
-                    'year' => $metadata['year'] ?? null,
-                    'track_count' => 0,
-                    'tracks' => [],
-                ];
-            }
-            $albums[$key]['track_count']++;
-            $albums[$key]['tracks'][] = $item;
-        }
-
-        return array_values($albums);
-    }
-
-    /**
-     * Gets all tracks from a music library.
-     *
-     * ⚠ NOT the API read path (S99): these are raw `media_items` rows whose
-     * `metadata_json` carries no audio tags, so artist/album/year/duration all
-     * read as null. `/api/v1/music/tracks` reads
-     * {@see \Phlix\Media\Music\MusicLibraryService::getAllTracks()}.
-     *
-     * @param string $libraryId The library's unique identifier
-     * @param int $limit Maximum number of tracks to return
-     * @param int $offset Pagination offset
-     * @return array<int, array<string, mixed>> Array of track data
-     */
-    public function getTracks(string $libraryId, int $limit = 100, int $offset = 0): array
-    {
-        return $this->item_repo->getByType($libraryId, 'track', $limit, $offset);
     }
 }

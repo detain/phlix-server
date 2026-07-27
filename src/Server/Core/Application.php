@@ -3355,6 +3355,17 @@ class Application
         } catch (\Throwable) {
             $ratingGate = null;
         }
+        // S97: shuffle needs the `music_*` read path to turn an album/artist id
+        // into playable TRACK ids — `media_items.parent_id` is never written for
+        // music, so findByParent() cannot. Optional: a null instance keeps the
+        // pre-S97 404 rather than returning unplayable container ids.
+        $musicLibrary = null;
+        try {
+            /** @var \Phlix\Media\Music\MusicLibraryService $musicLibrary */
+            $musicLibrary = $this->container->get(\Phlix\Media\Music\MusicLibraryService::class);
+        } catch (\Throwable) {
+            $musicLibrary = null;
+        }
         return new \Phlix\Server\Http\Controllers\MediaItemController(
             $itemRepository,
             $markerService,
@@ -3362,7 +3373,8 @@ class Application
             $trickplayController,
             $chapterMarkerService,
             null,
-            $ratingGate
+            $ratingGate,
+            $musicLibrary
         );
     }
 

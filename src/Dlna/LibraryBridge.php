@@ -13,6 +13,7 @@ namespace Phlix\Dlna;
 
 use Phlix\Common\Logger\StructuredLogger;
 use Phlix\Media\Library\ItemRepository;
+use Phlix\Media\Music\MusicLibraryService;
 use Phlix\Media\Streaming\HlsStreamer;
 
 /**
@@ -35,20 +36,34 @@ class LibraryBridge
     private ?StructuredLogger $logger;
 
     /**
+     * The `music_*` read path (S97) — the ONE authoritative music hierarchy.
+     *
+     * Null degrades the Audio category to artists-only with no drill-down, which
+     * is still correct (an empty container), never wrong (a flood of unbrowsable
+     * album/track rows).
+     *
+     * @var MusicLibraryService|null
+     */
+    private ?MusicLibraryService $musicLibrary;
+
+    /**
      * @param ItemRepository $itemRepository Repository for accessing media items
      * @param HlsStreamer $hlsStreamer Service for generating HLS stream URLs
      * @param StructuredLogger|null $logger Optional logger for diagnostics
+     * @param MusicLibraryService|null $musicLibrary Music hierarchy reader (S97)
      *
      * @since 0.12.0
      */
     public function __construct(
         ItemRepository $itemRepository,
         HlsStreamer $hlsStreamer,
-        ?StructuredLogger $logger = null
+        ?StructuredLogger $logger = null,
+        ?MusicLibraryService $musicLibrary = null
     ) {
         $this->itemRepository = $itemRepository;
         $this->hlsStreamer = $hlsStreamer;
         $this->logger = $logger;
+        $this->musicLibrary = $musicLibrary;
     }
 
     /**
@@ -68,14 +83,65 @@ class LibraryBridge
      * hang off their series and would otherwise flood the root (production has
      * 26 389 episodes against 434 series).
      *
+     * ⚠ **`album` / `track` / `music` are excluded for the SAME reason, and S97
+     * is why the exclusion had to be a type narrowing rather than a parent
+     * filter.** Audio used to list `['music','audio','album','artist','track',
+     * 'audiobook']`, which put artists, their albums AND their individual tracks
+     * side by side as SIBLINGS of the Audio root, with no way to descend from one
+     * to the next. Two concrete consequences on production's music library
+     * (4,656 artists / 10,966 albums / 61,105 tracks, measured read-only
+     * 2026-07-27):
+     *
+     *  - {@see getLibraryChildCount()} sums {@see ItemRepository::countAllByType()}
+     *    over all six types and advertises **76,727+** children, while
+     *    {@see getLibraryItems()} returns {@see ItemRepository::getAllByType()}'s
+     *    default page — **at most 100 per type**. The `<upnp:childCount>` a
+     *    renderer is promised and the list it receives disagree by three orders of
+     *    magnitude.
+     *  - The 100 albums and 100 tracks it does return are an arbitrary
+     *    title-ordered slice with no relation to the 100 artists beside them.
+     *
+     * That could not be fixed by nesting them: {@see getLibraryItems()} calls
+     * {@see ItemRepository::getAllByType()}, which has **no parent filter at all**,
+     * and S97 settled that `media_items.parent_id` is never written for music —
+     * the hierarchy lives only in the `music_*` tables. So the root lists only the
+     * true top level (artists, plus the standalone audio types) and the levels
+     * below it are produced by {@see getMusicChildren()} from `music_*`.
+     * `music` is dropped outright: it is a container type with zero rows.
+     *
      * @var array<string, list<string>>
      */
     private const CATEGORY_TYPES = [
         'video'  => ['movie', 'series', 'video'],
-        'audio'  => ['music', 'audio', 'album', 'artist', 'track', 'audiobook'],
+        'audio'  => ['artist', 'audio', 'audiobook'],
         'photos' => ['photo'],
         'books'  => ['book'],
     ];
+
+    /**
+     * `media_items.type` members whose children come from `music_*`, not from
+     * `media_items.parent_id` (S97).
+     *
+     * @var list<string>
+     */
+    private const MUSIC_CONTAINER_TYPES = ['artist', 'album'];
+
+    /**
+     * How many `media_items` ids are resolved per `findByIds()` statement.
+     *
+     * {@see getLibraryItems()} can hand {@see ItemRepository::findByIds()} up to
+     * {@see MusicLibraryService::MAX_EMBEDDED_ROWS} artist ids, and that method
+     * builds one `IN (…)` with a placeholder per id — a 2,000-placeholder
+     * statement whose whole result set is buffered inside a resident Workerman
+     * worker. Chunking bounds the single largest statement the DLNA path issues
+     * without changing what is returned: `findByIds()` re-orders its rows to
+     * match the ids it was given, so concatenating the chunks in id order
+     * reproduces the un-chunked list exactly.
+     *
+     * 500 is the batch ceiling already used elsewhere in this codebase for the
+     * same reason ({@see \Phlix\Media\Library\DuplicateFinder::DEFAULT_BATCH_SIZE}).
+     */
+    private const FIND_BY_IDS_CHUNK = 500;
 
     /**
      * Root containers representing the media library categories, with accurate
@@ -140,7 +206,35 @@ class LibraryBridge
 
         $total = 0;
         foreach ($types as $type) {
-            $total += $this->itemRepository->countAllByType($type);
+            // The artist count must come from the SAME source as the artist
+            // listing (S97), or the advertised childCount over-counts by every
+            // `media_items[artist]` row that no `music_artists` row points at —
+            // the orphan shape MusicLibraryScanner's adoption path exists to
+            // reclaim.
+            //
+            // It is then clamped to MusicLibraryService::MAX_EMBEDDED_ROWS
+            // because that constant, not the row count, is the hard ceiling on
+            // what {@see getLibraryItems()} can actually hand over: it calls
+            // getArtistMediaItemIds(), whose default `$limit` IS that constant.
+            // Unclamped, a production-shaped library (4,656 artists with a
+            // `media_items` row, measured read-only 2026-07-27) advertises 4,656
+            // and delivers 2,000.
+            //
+            // ⚠ RESIDUAL BOUND — the clamp makes the advertised number honest,
+            // it does NOT make the missing artists reachable. Artists ranked
+            // past MAX_EMBEDDED_ROWS in `ORDER BY COALESCE(sort_name, name)` are
+            // not browsable over DLNA at all: getLibraryItems() takes no offset,
+            // and ContentDirectory::browseChildren() applies `StartingIndex` in
+            // PHP to the list this bridge already truncated, so a renderer
+            // cannot page past the cap either. Giving the Audio root a real
+            // paging path is a separate, filed step — do not paper over it by
+            // raising the ceiling on one side only.
+            $total += $type === 'artist' && $this->musicLibrary !== null
+                ? min(
+                    $this->musicLibrary->getArtistsWithMediaItemCount(),
+                    MusicLibraryService::MAX_EMBEDDED_ROWS
+                )
+                : $this->itemRepository->countAllByType($type);
         }
 
         return $total;
@@ -149,14 +243,23 @@ class LibraryBridge
     /**
      * Get children of a container (library, folder, playlist).
      *
-     * Uses ItemRepository::findByParent() to get actual media items.
+     * Uses ItemRepository::findByParent() to get actual media items — EXCEPT for
+     * music containers, whose children come from `music_*` (S97): an `artist` or
+     * `album` `media_items` row never carries children under `parent_id`, so
+     * `findByParent()` on one returns an empty container and the browse dead-ends.
      *
      * @param string $objectId The object ID of the container
+     * @param string|null $objectType The container's `media_items.type`, when the
+     *        caller has already resolved the row. {@see ContentDirectory::browse()}
+     *        always has — it resolves and caches the object before dispatching to
+     *        `browseChildren()` — so passing it here saves this class a second
+     *        `findById()` on EVERY drill-down, music or not. NULL means "not
+     *        known", and the type is looked up as before.
      * @return array<int, array<string, mixed>> Array of child items
      *
      * @since 0.12.0
      */
-    public function getContainerChildren(string $objectId): array
+    public function getContainerChildren(string $objectId, ?string $objectType = null): array
     {
         $this->logger?->debug('LibraryBridge: Getting container children', ['object_id' => $objectId]);
 
@@ -166,10 +269,94 @@ class LibraryBridge
             return $this->getLibraryItems($libraryType);
         }
 
+        // Music drill-down: artist → albums → tracks, read from `music_*`.
+        $musicChildren = $this->getMusicChildren($objectId, $objectType);
+        if ($musicChildren !== null) {
+            return $musicChildren;
+        }
+
         // Handle regular parent-based children
         $items = $this->itemRepository->findByParent($objectId);
 
         return array_map(fn($item) => $this->itemToCdsObject($item), $items);
+    }
+
+    /**
+     * Resolves the children of a music container (`artist` → albums, `album` →
+     * tracks) through the authoritative `music_*` tables.
+     *
+     * @param string $objectId A `media_items` UUID.
+     * @param string|null $objectType The caller's already-resolved
+     *        `media_items.type` for `$objectId`. When supplied, NO lookup is
+     *        issued here at all — which is the point: the previous version ran a
+     *        `findById()` on every drill-down, including `series`/`season` ones
+     *        that then fell straight through to `findByParent()`.
+     * @return array<int, array<string, mixed>>|null CDS objects, or NULL when
+     *         `$objectId` is not a music container — the caller then falls through
+     *         to the ordinary `parent_id` drill-down. NULL and `[]` are deliberately
+     *         distinct: `[]` means "this artist really has no browsable albums".
+     */
+    private function getMusicChildren(string $objectId, ?string $objectType = null): ?array
+    {
+        if ($this->musicLibrary === null || $objectId === '') {
+            return null;
+        }
+
+        if ($objectType === null) {
+            $item = $this->itemRepository->findById($objectId);
+            $objectType = is_string($item['type'] ?? null) ? $item['type'] : '';
+        }
+
+        if (!in_array($objectType, self::MUSIC_CONTAINER_TYPES, true)) {
+            return null;
+        }
+
+        $childIds = $objectType === 'artist'
+            ? $this->musicLibrary->getAlbumMediaItemIdsForArtist($objectId)
+            : $this->musicLibrary->getTrackMediaItemIdsForAlbum($objectId);
+
+        return array_map(
+            fn(array $child): array => $this->itemToCdsObject($child),
+            $this->findByIdsChunked($childIds)
+        );
+    }
+
+    /**
+     * Resolves `media_items` rows for a list of ids in bounded batches.
+     *
+     * Chunking bounds the statement size, but the batches are still ONE logical
+     * page, so the profile tag filter runs ONCE over the concatenated rows
+     * instead of once per batch — `ItemRepository::findByIds()` ends in
+     * `filterItemsByTags()`, which costs two `profile_tags` queries per call
+     * whenever a profile is set, so a 2,000-id page was paying 8 of those
+     * queries where 2 do the same work. The rows are unaffected: the filter is
+     * a per-item predicate that preserves relative order, so applying it to the
+     * whole list drops exactly the rows each per-batch call would have dropped
+     * and leaves the rest in the same order.
+     *
+     * @param list<string> $ids Ids in the order the rows should be returned.
+     * @return array<int, array<string, mixed>> Rows in `$ids` order.
+     *
+     * @see self::FIND_BY_IDS_CHUNK for why this is not one statement.
+     */
+    private function findByIdsChunked(array $ids): array
+    {
+        if ($ids === []) {
+            return [];
+        }
+
+        if (count($ids) <= self::FIND_BY_IDS_CHUNK) {
+            return $this->itemRepository->findByIds($ids);
+        }
+
+        $rows = [];
+        foreach (array_chunk($ids, self::FIND_BY_IDS_CHUNK) as $chunk) {
+            foreach ($this->itemRepository->findByIds($chunk, false) as $row) {
+                $rows[] = $row;
+            }
+        }
+
+        return $this->itemRepository->filterItemsByTags($rows);
     }
 
     /**
@@ -189,7 +376,20 @@ class LibraryBridge
 
         $objects = [];
         foreach ($types as $type) {
-            foreach ($this->itemRepository->getAllByType($type) as $item) {
+            $items = $type === 'artist' && $this->musicLibrary !== null
+                // Enumerated from `music_artists` (S97), so the root shows exactly
+                // the artists that can actually be drilled into — an orphaned
+                // `media_items[artist]` row is not one of them.
+                //
+                // Bounded twice over: getArtistMediaItemIds() stops at
+                // MusicLibraryService::MAX_EMBEDDED_ROWS (the same ceiling
+                // getLibraryChildCount() clamps the advertised count to), and the
+                // id resolution is chunked so no single `IN (…)` carries 2,000
+                // placeholders. See self::FIND_BY_IDS_CHUNK.
+                ? $this->findByIdsChunked($this->musicLibrary->getArtistMediaItemIds())
+                : $this->itemRepository->getAllByType($type);
+
+            foreach ($items as $item) {
                 $objects[] = $this->itemToCdsObject($item);
             }
         }

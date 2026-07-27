@@ -347,6 +347,127 @@ final class MusicLibraryServiceTest extends TestCase
         $this->assertSame([3, 4], $captured['params']);
     }
 
+    // -----------------------------------------------------------------------
+    // S97 — the `music_*` hierarchy readers the rewired consumers depend on.
+    // -----------------------------------------------------------------------
+
+    /**
+     * S97 — an album's tracks are resolved by joining `music_albums` on its
+     * `media_item_id`, in disc/track order, and the ids returned are the TRACK
+     * `media_items` UUIDs (which are the playable ones).
+     */
+    public function testGetTrackMediaItemIdsForAlbumJoinsTheAlbumOnItsMediaItemId(): void
+    {
+        $captured = $this->captureQuery(
+            fn(MusicLibraryService $s): mixed => $s->getTrackMediaItemIdsForAlbum('album-uuid')
+        );
+
+        $this->assertMatchesRegularExpression(
+            '/FROM\s+music_tracks\s+t\s+JOIN\s+music_albums\s+al\s+ON\s+al\.id\s*=\s*t\.album_id/i',
+            preg_replace('/\s+/', ' ', $captured['sql']) ?? '',
+        );
+        $this->assertStringContainsString('WHERE al.media_item_id = ?', $captured['sql']);
+        $this->assertStringContainsString('ORDER BY t.disc_number, t.track_number', $captured['sql']);
+        $this->assertSame(['album-uuid', MusicLibraryService::MAX_EMBEDDED_ROWS], $captured['params']);
+    }
+
+    /**
+     * S97 — an artist's tracks come from the denormalized `music_tracks.artist_id`
+     * FK (migration 065 added it "for efficient queries"), so an artist shuffle is
+     * ONE indexed statement rather than 1 + N walks through the albums.
+     */
+    public function testGetTrackMediaItemIdsForArtistUsesTheDenormalizedArtistFk(): void
+    {
+        $captured = $this->captureQuery(
+            fn(MusicLibraryService $s): mixed => $s->getTrackMediaItemIdsForArtist('artist-uuid')
+        );
+
+        $this->assertMatchesRegularExpression(
+            '/FROM\s+music_tracks\s+t\s+JOIN\s+music_artists\s+ar\s+ON\s+ar\.id\s*=\s*t\.artist_id/i',
+            preg_replace('/\s+/', ' ', $captured['sql']) ?? '',
+        );
+        $this->assertSame(['artist-uuid', MusicLibraryService::MAX_EMBEDDED_ROWS], $captured['params']);
+    }
+
+    /**
+     * S97 — an artist's albums, and only the ones that have a `media_items` row:
+     * an album whose mint failed (S96(e)) has nothing to browse to.
+     */
+    public function testGetAlbumMediaItemIdsForArtistSkipsAlbumsWithoutAMediaItem(): void
+    {
+        $captured = $this->captureQuery(
+            fn(MusicLibraryService $s): mixed => $s->getAlbumMediaItemIdsForArtist('artist-uuid', 10)
+        );
+
+        $this->assertStringContainsString('ar.media_item_id = ?', $captured['sql']);
+        $this->assertStringContainsString('al.media_item_id IS NOT NULL', $captured['sql']);
+        $this->assertSame(['artist-uuid', 10], $captured['params']);
+    }
+
+    /**
+     * S97 — the artist enumeration and its COUNT must share one predicate, or the
+     * DLNA root advertises more children than it can list.
+     */
+    public function testArtistEnumerationAndCountShareTheSameMediaItemPredicate(): void
+    {
+        $list = $this->captureQuery(
+            fn(MusicLibraryService $s): mixed => $s->getArtistMediaItemIds(50, 100)
+        );
+        $count = $this->captureQuery(
+            fn(MusicLibraryService $s): mixed => $s->getArtistsWithMediaItemCount()
+        );
+
+        $this->assertStringContainsString('WHERE media_item_id IS NOT NULL', $list['sql']);
+        $this->assertStringContainsString('WHERE media_item_id IS NOT NULL', $count['sql']);
+        $this->assertSame([50, 100], $list['params']);
+    }
+
+    /**
+     * Every one of these lists is buffered whole by a resident Workerman worker,
+     * so the caller's limit is clamped rather than trusted — and an empty id is
+     * answered without touching the database at all.
+     */
+    public function testTheHierarchyReadersClampTheirLimitAndShortCircuitOnAnEmptyId(): void
+    {
+        $captured = $this->captureQuery(
+            fn(MusicLibraryService $s): mixed => $s->getTrackMediaItemIdsForAlbum('album-uuid', 10_000)
+        );
+        $this->assertSame(['album-uuid', MusicLibraryService::MAX_EMBEDDED_ROWS], $captured['params']);
+
+        $db = $this->createMock(Connection::class);
+        $db->expects($this->never())->method('query');
+        $service = new MusicLibraryService($db, $this->createMock(MusicLibraryScanner::class));
+
+        $this->assertSame([], $service->getTrackMediaItemIdsForAlbum(''));
+        $this->assertSame([], $service->getTrackMediaItemIdsForArtist(''));
+        $this->assertSame([], $service->getAlbumMediaItemIdsForArtist(''));
+    }
+
+    /**
+     * The id column reader drops anything that is not a usable UUID: a `null` or
+     * `''` handed on would either widen an `IN (…)` for nothing or reach a client
+     * as an unplayable id.
+     */
+    public function testTheHierarchyReadersDropNonStringAndEmptyIds(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturn([
+            ['media_item_id' => 'track-1'],
+            ['media_item_id' => null],
+            ['media_item_id' => ''],
+            ['media_item_id' => 42],
+            'not-a-row',
+            ['media_item_id' => 'track-2'],
+        ]);
+
+        $service = new MusicLibraryService($db, $this->createMock(MusicLibraryScanner::class));
+
+        $this->assertSame(
+            ['track-1', 'track-2'],
+            $service->getTrackMediaItemIdsForAlbum('album-uuid')
+        );
+    }
+
     /**
      * Runs one service call against a mocked connection and returns the SQL and
      * bound parameters it emitted.

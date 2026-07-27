@@ -596,8 +596,36 @@ This project follows PSR-12 coding standards and uses static analysis tools:
 
 # Run static analysis
 ./vendor/bin/phpstan analyze src/ --level=9
-./vendor/bin/psalm
+./vendor/bin/psalm --show-info=false
 ```
+
+Both are CI gates (`.github/workflows/coding-standards.yml`). Psalm is configured
+by `psalm.xml` at `errorLevel="5"`; there is **no** `psalm-baseline.xml` and the
+workflow fails if one appears. `--show-info=false` matches what CI runs — without
+it Psalm additionally prints ~1400 informational suggestions that are not gated.
+
+**Psalm needs PHP >= 8.3.16.** Psalm 6.x aborts at startup on anything older
+(`Psalm requires a PHP version ">= 8.3.16"`), which includes the 8.3.6 that some
+dev boxes ship. CI is unaffected — `shivammathur/setup-php` with `php-version:
+'8.3'` installs the newest 8.3 patch. If your local PHP is too old, run it in a
+container instead of upgrading the box:
+
+```bash
+docker build -t phlix-psalm - <<'EOF'
+FROM php:8.3-cli
+ADD --chmod=0755 https://github.com/mlocati/docker-php-extension-installer/releases/latest/download/install-php-extensions /usr/local/bin/
+RUN install-php-extensions mysqli pdo_mysql gd zip fileinfo sockets pcntl posix ldap ffi curl swoole
+EOF
+
+docker run --rm --network host -v "$PWD:/app" -w /app -u "$(id -u):$(id -g)" -e HOME=/tmp \
+  phlix-psalm ./vendor/bin/psalm --show-info=false --no-progress
+```
+
+The extension list is not optional and mirrors the `extensions:` list in the
+Psalm CI job: Psalm resolves classes and constants from the extensions that are
+actually loaded, so a bare `php:8.3-cli` reports 140 phantom errors
+(`Swoole\Coroutine\Channel`, `Socket`, `AF_INET`, `ZipArchive`, `GdImage`, `FFI`, …)
+that do not exist on a properly configured runner.
 
 ### CLI
 

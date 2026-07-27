@@ -116,17 +116,56 @@ jobs:
         uses: shivammathur/setup-php@v2
         with:
           php-version: '8.3'
-          extensions: json
+          # S146. This job used to declare `extensions: json` only. Psalm resolves
+          # classes and constants from the extensions that are actually LOADED, so
+          # without these it reports 140 phantom errors that are missing-extension
+          # artifacts rather than code defects — measured on this tree:
+          #   Swoole\Coroutine\Channel x34, Swoole\Coroutine x23, Socket x15,
+          #   Swoole\Coroutine\Socket x6, ZipArchive x3, GdImage x3,
+          #   Swoole\Coroutine\Http\Client x1, FFI x1, plus AF_INET/SOL_SOCKET/
+          #   SOCK_DGRAM/SO_RCVTIMEO/SO_SNDTIMEO/SOL_UDP constants.
+          # A gate that is red for reasons unrelated to the code gets switched off,
+          # which is exactly how the old no-op guard below came to exist.
+          #
+          # Base list copied from the canonical project list in phpunit.yml (the
+          # `test:` job, `mysql, pdo, pdo_mysql, json, gd, zip, fileinfo, swoole`)
+          # minus pcov, which is coverage-only. Added for static analysis:
+          # sockets + pcntl + posix (Discovery/Mdns, ProcessManager), ldap (the
+          # LDAP auth plugin), ffi (ChromaPrintFfi) and curl.
+          extensions: mysql, pdo, pdo_mysql, json, gd, zip, fileinfo, swoole, sockets, pcntl, posix, ldap, ffi, curl
 
       - name: Install Composer dependencies
         run: composer install --no-interaction --prefer-dist
 
+      - name: Assert Psalm is actually installed
+        run: |
+          # S146. The "Run Psalm" step below used to be wrapped in
+          # `if [ -f vendor/bin/psalm ]`, and `vimeo/psalm` was never in
+          # composer.json — so the binary never existed, the condition was always
+          # false, and this job reported GREEN having analysed zero files. It was
+          # counted as real coverage in PR reviews. The guard is gone; this
+          # assertion replaces it so that a *missing tool* fails loudly instead of
+          # silently degrading back into a no-op.
+          if [ ! -f vendor/bin/psalm ]; then
+            echo "::error::vendor/bin/psalm is missing. vimeo/psalm must stay in composer.json require-dev — do not re-add an 'if [ -f ... ]' guard around the analysis step (S146)."
+            exit 1
+          fi
+          ./vendor/bin/psalm --version
+
+      - name: Assert no psalm baseline file
+        run: |
+          # Mirrors the PHPStan job's baseline assertion. A baseline would make
+          # this gate green while proving nothing, reproducing the exact defect
+          # S146 exists to remove. Fix findings at their source or lower the
+          # errorLevel in psalm.xml with a written rationale.
+          if [ -f psalm-baseline.xml ]; then
+            echo "::error::psalm-baseline.xml has been introduced. S146 forbids it — a baseline reproduces the permanently-green gate this job was fixed to stop being."
+            exit 1
+          fi
+
       - name: Run Psalm
         if: always()
-        run: |
-          if [ -f vendor/bin/psalm ]; then
-            ./vendor/bin/psalm --show-info=false
-          fi
+        run: ./vendor/bin/psalm --show-info=false --no-progress
 
   composer-validate:
     name: Composer Validation

@@ -5,10 +5,21 @@
  *
  * `tests/Support/AssertionEscape/AssertionEscapeGuardExtension` writes
  * `.phpunit-assertion-escapes.json` when a test run contained an assertion failure
- * that did not decide its test's outcome. It cannot fail the run itself: PHPUnit's
- * `DirectDispatcher::dispatch()` catches every `Throwable` a subscriber raises
- * (`vendor/phpunit/phpunit/src/Event/Dispatcher/DirectDispatcher.php`, read at
- * 10.5.64), so a subscriber has no way to influence the exit code.
+ * that did not decide its test's outcome. It cannot reliably fail the run itself:
+ * PHPUnit's `DirectDispatcher::dispatch()` catches every `Throwable` a subscriber
+ * raises (`vendor/phpunit/phpunit/src/Event/Dispatcher/DirectDispatcher.php`, read at
+ * 10.5.64) and `handleThrowable()` demotes it to a PHPUnit *warning*.
+ *
+ * That warning is not nothing — it reaches `TestResult::numberOfPhpunitWarnings()`
+ * (`vendor/phpunit/phpunit/src/Runner/TestResult/TestResult.php:523-527`, which counts
+ * `testRunnerTriggeredWarningEvents`) and
+ * `ShellExitCodeCalculator::calculate()` (`.../TextUI/ShellExitCodeCalculator.php:140-142`)
+ * turns it into a failing exit code — but ONLY when `failOnPhpunitWarning` is set.
+ * This repo's `phpunit.xml` (line 2) sets `failOnWarning="true"`, which is a DIFFERENT
+ * counter, and does not set `failOnPhpunitWarning` (verified: 0 occurrences in
+ * `phpunit.xml`). So under this repo's configuration a subscriber cannot influence the
+ * exit code, and this separate script is required. It is a config fact, not a
+ * property of PHPUnit: if `--fail-on-phpunit-warning` is ever adopted, revisit.
  *
  * Run this immediately after PHPUnit. Exits 0 when the report is absent (the normal
  * case) and 1 when it is present.

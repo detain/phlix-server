@@ -32,12 +32,76 @@ namespace Phlix\Tests\Support\AssertionEscape;
  * assertion failure decide the outcome" is exact, needs no whole-program analysis,
  * and costs one integer increment per failing assertion.
  *
- * ## Known blind spot — stated as a limitation, not a claim of completeness
+ * ## Known blind spots — stated as limitations, not a claim of completeness
  *
- * `Assert::fail()` (same file) throws `AssertionFailedError` directly and does not go
- * through `assertThat()`, so it emits no `AssertionFailed` event and this collector
- * cannot see a swallowed `$this->fail(...)`. `scripts/assertion-escape-audit.php`
- * covers that shape by planting a tripwire and observing the run instead.
+ * The collector sees exactly what `Assert::assertThat()` emits. Three failure paths
+ * throw an `AssertionFailedError`/`ExpectationFailedException` WITHOUT going through
+ * `assertThat()`, and therefore emit no `AssertionFailed` event at all (all read at
+ * PHPUnit 10.5.64):
+ *
+ *  1. `Assert::fail()` — `vendor/phpunit/phpunit/src/Framework/Assert.php:2282` throws
+ *     `AssertionFailedError` directly, so a swallowed `$this->fail(...)` is invisible
+ *     here. `scripts/assertion-escape-audit.php` covers that shape by planting a
+ *     tripwire and observing the run instead.
+ *  2. Mock parameter and invocation rules —
+ *     `.../MockObject/Runtime/Rule/Parameters.php:117` calls `$parameter->evaluate(...)`
+ *     directly and `.../Constraint/Constraint.php:106` throws
+ *     `ExpectationFailedException`; sibling rules throw from their own `verify()`
+ *     (e.g. `.../Rule/InvokedCount.php:60`). Currently HARMLESS, and the reason is
+ *     structural rather than lucky: `TestCase.php:687` calls `verifyMockObjects()`
+ *     AFTER `runTest()` returns, i.e. outside any in-test callback, so a swallowed
+ *     `->with()` mismatch is re-raised where nothing is catching it and the test still
+ *     goes red. What is lost is only this collector's diagnosis, not the failure.
+ *  3. `markTestSkipped()` / `markTestIncomplete()` —
+ *     `class_parents(SkippedWithMessageException::class)` and
+ *     `class_parents(IncompleteTestError::class)` are BOTH
+ *     `AssertionFailedError → PHPUnit\Framework\Exception → RuntimeException` (verified
+ *     by execution), so either one raised inside a callback that production wraps in
+ *     `catch (\Throwable)`/`catch (\RuntimeException)` is eaten silently and emits
+ *     nothing. Currently HARMLESS because there are none to eat: a token scan over all
+ *     701 files under `tests/` finds 0 `markTestSkipped`/`markTestIncomplete` calls
+ *     lexically inside an anonymous `function` body.
+ *
+ * ## Known false-positive class — and why there is deliberately no opt-out
+ *
+ * The MEASUREMENT above is exact. The VERDICT derived from it is not: the collector
+ * reads "an assertion failed and the test did not" as a defect, and one legitimate
+ * shape produces exactly that reading — a test that DELIBERATELY catches its own
+ * assertion failure, which is the normal way to test a custom assertion helper or
+ * `Constraint`:
+ *
+ *     try { $this->assertSame(1, 2, '…'); }
+ *     catch (\PHPUnit\Framework\AssertionFailedError $e) { $caught = $e; }
+ *     $this->assertNotNull($caught, 'the helper must report a failure');
+ *
+ * That test is correct and is reported `VACUOUS (an assertion failed, the test did
+ * not)`, which fails CI via `scripts/assertion-escape-check.php`. A milder variant: a
+ * test that fails in its body while `tearDown()` also asserts and fails is reported
+ * `SWALLOWED-BUT-RED` even though PHPUnit already printed both failures and nothing was
+ * hidden. Note that `expectException(ExpectationFailedException::class)` is NOT an
+ * escape from this — the event still fires and the outcome is still `passed`.
+ *
+ * No suppression attribute and no allow-list is provided, and that is a decision rather
+ * than an omission. This guard's entire value is that it cannot be waved away; an
+ * opt-out is reached for at exactly the moment a maintainer is looking at a real
+ * escape and wants the red to stop, so it would be used to silence the defect class
+ * far more often than the false positive. There are 0 tests of this shape in the suite
+ * today, so an opt-out would ship with no caller — speculative machinery guarding a
+ * hypothetical.
+ *
+ * If you hit this, the remedies in order of preference, none of which trips the guard:
+ *
+ *  1. Exercise the `Constraint` through its non-throwing path —
+ *     `Constraint::evaluate(mixed $other, string $description = '', bool $returnResult
+ *     = false): ?bool` (`.../Constraint/Constraint.php:38`) returns a bool instead of
+ *     throwing when `$returnResult` is true, and emits no event.
+ *  2. For a helper that is not a `Constraint`, assert on what it RECORDS rather than on
+ *     the exception it throws — the same callback-records/assert-outside shape this
+ *     whole guard exists to enforce.
+ *  3. Only if neither fits: add a suppression keyed on the test id here, greppable and
+ *     with the justification inline. Do NOT delete the extension — a real escape is
+ *     silent by construction, so removing the guard removes the only thing that can
+ *     see it.
  *
  * @phpstan-type Violation array{test: string, kind: string, failures: list<string>, outcome: string}
  */

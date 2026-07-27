@@ -1,18 +1,33 @@
 <?php
 
 /**
- * S120 — enumerate every assertion that runs inside a closure, and (with `--probe`)
- * decide EMPIRICALLY whether that assertion can fail its test.
+ * S120 — enumerate every assertion-bearing closure under `tests/`, probing its FIRST
+ * assertion, and (with `--probe`) decide EMPIRICALLY whether that assertion can fail
+ * its test.
+ *
+ * Scope, stated precisely because the point of S120 is not to overstate what a check
+ * covers: the unit of enumeration is the CLOSURE, not the assertion. `collectSites()`
+ * keeps only the first assert-like call per innermost closure (see the `$firstAssert`
+ * guard below), because one tripwire decides whether that closure sits in a swallowing
+ * context — which is a property of the closure's CALL SITE, not of the individual
+ * assertion. Measured on this tree by re-running the same token logic without that
+ * filter: 51 assert-like calls live inside anonymous `function` bodies, in 20 closures,
+ * so 20 of 51 calls are probed. Consequence, latent rather than live: if a closure's
+ * FIRST assertion sits in a branch that is not taken, the site is filed `NOT-REACHED`
+ * and that closure's later, reachable assertions are never decided.
  *
  * ## Why this exists alongside the runtime guard
  *
  * `tests/Support/AssertionEscape/AssertionEscapeGuardExtension` is exact and free, but
- * it only sees an escape when the assertion actually fails, and it is blind to
- * `Assert::fail()` (which throws `AssertionFailedError` directly instead of going
- * through `Assert::assertThat()`, so it emits no `AssertionFailed` event — read at
- * PHPUnit 10.5.64). This script closes both gaps by mutation: it plants a named
- * tripwire immediately before the first assertion in each closure, runs the owning
- * test, and reads the verdict off the run.
+ * it only sees an escape when the assertion actually fails, and it is blind to every
+ * failure that does not go through `Assert::assertThat()` — `Assert::fail()`
+ * (`vendor/phpunit/phpunit/src/Framework/Assert.php:2282`, which throws
+ * `AssertionFailedError` directly), mock parameter/invocation rules
+ * (`.../MockObject/Runtime/Rule/Parameters.php:117` → `.../Constraint/Constraint.php:106`),
+ * and `markTestSkipped()`/`markTestIncomplete()`. None of those emit an
+ * `AssertionFailed` event (PHPUnit 10.5.64). This script closes those gaps by mutation:
+ * it plants a named tripwire immediately before the first assertion in each closure,
+ * runs the owning test, and reads the verdict off the run.
  *
  * ## Verdicts
  *
@@ -26,6 +41,14 @@
  *  - `NOT-REACHED`— the tripwire line never executed, so the probe decided nothing.
  *                   Typical of a `$this->fail('must not happen')` guard inside a
  *                   branch that is not supposed to be taken. Listed, never a violation.
+ *
+ * `NOT-REACHED` is ENVIRONMENT-DEPENDENT and a census that quotes it must say so. A
+ * test that self-skips without a live database — e.g. the Integration site in
+ * `tests/Integration/Media/Transcoding/PooledConnectionConcurrencyTest.php`, which is
+ * also a known pre-existing flake under coroutine churn — probes `NOT-REACHED` on a box
+ * with no DB and can probe `GATES` on a box with one. The same site has been observed
+ * both ways on this branch. Never quote a bare count: re-run the probe and quote the
+ * run, and say which box it ran on.
  *
  * ## Safety
  *
@@ -74,6 +97,8 @@ if (!$probe) {
 }
 
 $violations = [];
+$tally = ['GATES' => 0, 'VACUOUS' => 0, 'DEGRADED' => 0, 'NOT-REACHED' => 0, 'ERROR' => 0];
+$probed = 0;
 
 foreach ($sites as $i => $site) {
     if ($only !== null && $only !== $i) {
@@ -81,6 +106,8 @@ foreach ($sites as $i => $site) {
     }
 
     $verdict = probeSite($root, $site);
+    $probed++;
+    $tally[$verdict] = ($tally[$verdict] ?? 0) + 1;
     printf(
         "%3d  %-11s %s:%d  %s\n",
         $i,
@@ -95,7 +122,22 @@ foreach ($sites as $i => $site) {
     }
 }
 
+// Report the CENSUS, never a bare "all good". The previous wording here claimed
+// "every probed assertion gates its test", which is false the moment any site comes
+// back NOT-REACHED: such a site was probed and DECIDED NOTHING. Print the tally so a
+// reader can only quote a number that came with its undecided remainder attached.
+$summary = sprintf(
+    "\nS120: %d site(s) probed — %d GATES, %d NOT-REACHED, %d VACUOUS, %d DEGRADED%s.\n",
+    $probed,
+    $tally['GATES'],
+    $tally['NOT-REACHED'],
+    $tally['VACUOUS'],
+    $tally['DEGRADED'],
+    $tally['ERROR'] > 0 ? sprintf(', %d ERROR', $tally['ERROR']) : '',
+);
+
 if ($violations !== []) {
+    fwrite(STDERR, $summary);
     fwrite(STDERR, "\nS120: " . count($violations) . " assertion(s) cannot fail their test as written:\n");
 
     foreach ($violations as $violation) {
@@ -107,7 +149,15 @@ if ($violations !== []) {
     exit(1);
 }
 
-fwrite(STDOUT, "\nS120: every probed assertion gates its test.\n");
+fwrite(STDOUT, $summary);
+fwrite(
+    STDOUT,
+    $tally['NOT-REACHED'] === 0
+        ? "Every site executed its tripwire and gates its test.\n"
+        : "Every site that EXECUTED its tripwire gates its test. The NOT-REACHED sites are\n"
+        . "UNDECIDED, not verified, and the verdict can differ per box (see the NOT-REACHED\n"
+        . "note in this file's header). Quote this run, not a remembered count.\n",
+);
 
 exit(0);
 

@@ -28,16 +28,20 @@ use PHPUnit\TextUI\Configuration\Configuration;
  *
  * Registered from `phpunit.xml`. It subscribes to PHPUnit's own assertion and outcome
  * events and reports any test where an assertion failure did not become the outcome —
- * see {@see EscapeCollector} for the mechanism, the exactness argument and the one
- * known blind spot (`Assert::fail()`).
+ * see {@see EscapeCollector} for the mechanism, the exactness argument, the failure
+ * paths that emit no event, and the one known false-positive class.
  *
  * On a run with violations it writes `.phpunit-assertion-escapes.json` at the repo root
  * and prints a block to STDERR. It deliberately does NOT try to fail the run from
  * inside the event system: `DirectDispatcher::dispatch()`
  * (`vendor/phpunit/phpunit/src/Event/Dispatcher/DirectDispatcher.php`, read at 10.5.64)
- * catches every `Throwable` a subscriber raises, so a subscriber cannot change an exit
- * code. `scripts/assertion-escape-check.php` reads the report file and is what turns a
- * violation into a non-zero exit for CI.
+ * catches every `Throwable` a subscriber raises and demotes it to a PHPUnit warning,
+ * which changes the exit code only under `failOnPhpunitWarning`
+ * (`vendor/phpunit/phpunit/src/TextUI/ShellExitCodeCalculator.php:140-142`). This
+ * repo's `phpunit.xml` (line 2) sets `failOnWarning="true"` — a different counter — and
+ * does NOT set `failOnPhpunitWarning`, so under this repo's configuration a subscriber
+ * cannot change the exit code. `scripts/assertion-escape-check.php` reads the report
+ * file and is what turns a violation into a non-zero exit for CI.
  */
 final class AssertionEscapeGuardExtension implements Extension
 {

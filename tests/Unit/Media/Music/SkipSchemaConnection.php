@@ -49,8 +49,13 @@ final class SkipSchemaConnection extends Connection
     public array $albums = [];
 
     /**
-     * @var array<string, array{id:int, album_id:int, title:string, track_number:int,
-     *     disc_number:int, duration_secs:int}> By media_item_id.
+     * ⚠ `artist_id` was MISSING from this row until S145 — `runInsert()` dropped
+     * `$p[2]` entirely, so the double could not express a track whose `artist_id`
+     * disagrees with its album, which is exactly the mis-parenting S145 repairs.
+     * A double that cannot represent the defect cannot pin the fix.
+     *
+     * @var array<string, array{id:int, album_id:int, artist_id:int, title:string,
+     *     track_number:int, disc_number:int, duration_secs:int}> By media_item_id.
      */
     public array $tracks = [];
 
@@ -283,6 +288,10 @@ final class SkipSchemaConnection extends Connection
             return [];
         }
 
+        // Returns the stored row wholesale, so its key set IS the production SELECT's
+        // column list: `id, album_id, artist_id, title, track_number, disc_number,
+        // duration_secs` (S145 widened both ends together — the row gained `artist_id`
+        // in `runInsert()`, the statement gained `album_id, artist_id`).
         if (str_contains($sql, 'FROM music_tracks WHERE media_item_id')) {
             $mid = (string) ($p[0] ?? '');
 
@@ -345,6 +354,11 @@ final class SkipSchemaConnection extends Connection
             $this->tracks[(string) ($p[0] ?? '')] = [
                 'id' => $this->autoInc,
                 'album_id' => (int) ($p[1] ?? 0),
+                // S145: `$p[2]` used to be dropped on the floor. The production INSERT
+                // has always named `artist_id` third, so the stored row silently lacked
+                // the column, `runSelect()` could never return it, and no test could
+                // assert on a track's artist parentage.
+                'artist_id' => (int) ($p[2] ?? 0),
                 'title' => (string) ($p[3] ?? ''),
                 'track_number' => (int) ($p[4] ?? 0),
                 'disc_number' => (int) ($p[5] ?? 1),
@@ -427,15 +441,28 @@ final class SkipSchemaConnection extends Connection
             return 1;
         }
 
+        // ⚠ S145 — THE POSITIONAL LANDMINE. This handler read the row id from `$p[4]`,
+        // which was the last parameter while the production UPDATE named four columns.
+        // The moment that statement gained `album_id` and `artist_id`, `$p[4]` stopped
+        // being the id, this `foreach` matched nothing, and
+        // {@see MusicScanUnchangedSkipTest::testAChangedFileIsStampedSoItIsSkippedOnTheFollowingScan()}
+        // went RED **with production correct**. That is why the double and the
+        // `upsertTrack()` change ship in ONE commit.
+        //
+        // The production column order is pinned deliberately: the two new columns are
+        // APPENDED after `duration_secs` and `id` stays LAST, so this stays a
+        // three-index edit rather than a re-shuffle.
         if (str_contains($sql, 'UPDATE music_tracks SET title')) {
             foreach ($this->tracks as $mid => $track) {
-                if ($track['id'] !== (int) ($p[4] ?? 0)) {
+                if ($track['id'] !== (int) ($p[6] ?? 0)) {
                     continue;
                 }
                 $this->tracks[$mid]['title'] = (string) ($p[0] ?? '');
                 $this->tracks[$mid]['track_number'] = (int) ($p[1] ?? 0);
                 $this->tracks[$mid]['disc_number'] = (int) ($p[2] ?? 1);
                 $this->tracks[$mid]['duration_secs'] = (int) ($p[3] ?? 0);
+                $this->tracks[$mid]['album_id'] = (int) ($p[4] ?? 0);
+                $this->tracks[$mid]['artist_id'] = (int) ($p[5] ?? 0);
 
                 return 1;
             }

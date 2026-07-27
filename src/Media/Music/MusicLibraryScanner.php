@@ -463,6 +463,28 @@ class MusicLibraryScanner
      *                                  carried on the {@see MediaItemAdded} event.
      *                                  NULL only for the legacy manual-path scan
      *                                  endpoint (no library context).
+     * @param bool $readEveryFile S145 — THE FULL-READ MODE. When TRUE the S122(a) skip
+     *        index is not loaded at all, so every audio file is opened and reaches
+     *        {@see self::upsertTrack()}. That is the whole mechanism, and it exists
+     *        because an `upsertTrack()`-only fix is COSMETIC: the skip at the top of the
+     *        walk `continue`s before `probeMetadata()` and before the file is buffered
+     *        for {@see self::flushAlbum()}, so an already-stamped, unchanged file never
+     *        reaches the repair. Measured on production: 29,134 of 61,111 tracks (47.7 %,
+     *        rising) already carry a stamp and would be skipped by an ordinary rescan.
+     *
+     *        ⚠ **This is NOT a filesystem-stat backfill**, which is explicitly rejected
+     *        in {@see self::upsertTrack()} and is the S122 review-r1-B1 data-loss shape.
+     *        Every file this mode stamps is a file it just READ, and the stamp is still
+     *        the identity taken BEFORE the read.
+     *
+     *        ⚠ A PARAMETER, never a setter. This scanner is `@autowire`d from the
+     *        container and can outlive one scan inside a Workerman worker, so a mode
+     *        held on `$this` would leak from a healing rescan into every later scan.
+     *
+     *        The cost is real and deliberate: a full read of the production music
+     *        library is ~3.5 h against minutes for an ordinary rescan. It is reached
+     *        from the existing `rescan` job type only
+     *        ({@see \Phlix\Media\Library\LibraryManager::rescanLibrary()}).
      * @return ScanResult Summary of the scan operation. `scanned` counts audio
      *                    FILES read (matching {@see ScanResult}'s documented
      *                    "total number of files scanned" and
@@ -477,8 +499,12 @@ class MusicLibraryScanner
      * echo "Scanned {$result->scanned}, added {$result->added}, updated {$result->updated}";
      * ```
      */
-    public function scanDirectory(string $path, ?callable $onProgress = null, ?string $libraryId = null): ScanResult
-    {
+    public function scanDirectory(
+        string $path,
+        ?callable $onProgress = null,
+        ?string $libraryId = null,
+        bool $readEveryFile = false
+    ): ScanResult {
         $result = new ScanResult();
         $startTime = hrtime(true);
 
@@ -554,8 +580,22 @@ class MusicLibraryScanner
             $needsHealing = true;
         }
 
+        // ── S145: the third gate, and the only one an OPERATOR controls. ────────
+        //
+        // Leaving the index unloaded is the entire full-read mechanism.
+        // {@see MusicScanSkipIndex::isUnchanged()} answers FALSE for an unloaded index,
+        // so every file is probed, every file reaches upsertTrack(), and every file is
+        // still legitimately stamped — the stamp is taken before the read, from the file
+        // this pass actually opened.
+        //
+        // ⚠ The bypass is EXPLICIT on purpose. An automatic gate was considered and
+        // rejected: the only DB-visible fingerprint of the defect (an album owning zero
+        // tracks) is NOT self-clearing, because a healed track leaves its old album as a
+        // fresh shell. A gate keyed on it would latch the fast path off permanently and
+        // re-create the 6.1-hour scan S122 exists to prevent. An operator asking for a
+        // full re-read is a decision, not an inference.
         $skipIndex = new MusicScanSkipIndex($this->db, $this->logger);
-        if (!$mayAdopt && !$needsHealing) {
+        if (!$readEveryFile && !$mayAdopt && !$needsHealing) {
             $skipIndex->load($libraryId);
         }
 
@@ -640,6 +680,22 @@ class MusicLibraryScanner
          * @var int $skippedUnchanged
          */
         $skippedUnchanged = 0;
+
+        /**
+         * Tracks this scan moved to a different album or artist (S145).
+         *
+         * The operator's evidence that a healing rescan did something. Every one of
+         * these is ALSO counted in {@see ScanResult::$updated} — this number says how
+         * much of that total was parentage repair rather than tag edits, which matters
+         * because the first `readEveryFile` scan of the production library is expected
+         * to report `updated` in the thousands and that must not read as an alarm.
+         *
+         * Deliberately ONE summary number and NOT a per-track log line: per-track
+         * logging in this walk is 61k lines per scan and is banned for that reason.
+         *
+         * @var int $reparented
+         */
+        $reparented = 0;
 
         // ── S122(b): raise reads-in-flight against the mount from 1 to <= 4. ────
         //
@@ -777,7 +833,8 @@ class MusicLibraryScanner
                         $result,
                         $mayAdopt,
                         $skippedNoArtist,
-                        $skipIndex
+                        $skipIndex,
+                        $reparented
                     );
                     unset($open[$key], $recency[$key]);
                     continue;
@@ -798,7 +855,8 @@ class MusicLibraryScanner
                         $result,
                         $mayAdopt,
                         $skippedNoArtist,
-                        $skipIndex
+                        $skipIndex,
+                        $reparented
                     );
                     unset($open[$oldest], $recency[$oldest]);
                 }
@@ -814,7 +872,8 @@ class MusicLibraryScanner
                     $result,
                     $mayAdopt,
                     $skippedNoArtist,
-                    $skipIndex
+                    $skipIndex,
+                    $reparented
                 );
                 unset($open[$key], $recency[$key]);
             }
@@ -842,6 +901,14 @@ class MusicLibraryScanner
             'failed' => $result->failed,
             'skipped_no_artist' => $skippedNoArtist,
             'skipped_unchanged' => $skippedUnchanged,
+            // S145: ALWAYS present, for the same reason the two above are. `reparented`
+            // is how an operator sees that a healing rescan repaired mis-filed tracks
+            // (and why `updated` spiked), and `read_every_file` is how they confirm the
+            // scan they asked for was actually the full-read one — a `false` here beside
+            // a `reparented` of 0 says the healing scan never ran, which is precisely
+            // the failure the skip index would otherwise hide.
+            'reparented' => $reparented,
+            'read_every_file' => $readEveryFile,
             'skip_index_entries' => $skipIndex->count(),
             'readers_in_flight' => $prefetchStats['readers_in_flight'],
             'prefetched' => $prefetchStats['submitted'],
@@ -1041,6 +1108,10 @@ class MusicLibraryScanner
      *        records the identity that lets the NEXT scan skip it. NULL only for the
      *        legacy construction sites that call this method without one, where the
      *        stamp is simply not written (correct, merely not accelerated).
+     * @param int $reparented BY REFERENCE tally of tracks moved to a different album or
+     *        artist (S145), forwarded to {@see self::upsertTrack()} and reported once in
+     *        {@see self::scanDirectory()}'s completion summary. Same accounting shape as
+     *        `$skippedNoArtist`: one summary number rather than 61k log lines.
      * @return void
      */
     private function flushAlbum(
@@ -1051,7 +1122,8 @@ class MusicLibraryScanner
         ScanResult $result,
         bool &$mayAdopt,
         int &$skippedNoArtist,
-        ?MusicScanSkipIndex $skipIndex = null
+        ?MusicScanSkipIndex $skipIndex = null,
+        int &$reparented = 0
     ): void {
         $artistName = $albumData['artist'];
         $albumTitle = $albumData['album'];
@@ -1167,7 +1239,8 @@ class MusicLibraryScanner
                             $fileInfo['meta'],
                             $libraryId,
                             $skipIndex,
-                            $stamp
+                            $stamp,
+                            $reparented
                         );
                     } catch (\Throwable $trackError) {
                         // Accounted for either way: this file is done being tried
@@ -1403,7 +1476,8 @@ class MusicLibraryScanner
      * consequences an operator will see and must not mistake for a fault:
      *
      *  1. **The first rescan after deploy reports ~every file as `updated`**, not
-     *     `skipped`. {@see self::upsertTrack()} compares title/track/disc/duration, and
+     *     `skipped`. {@see self::upsertTrack()} compares title/track/disc/duration
+     *     (plus album/artist parentage since S145), and
      *     `duration_secs` is now derived differently (below), so the comparison fails
      *     for most rows even though nothing on disk changed. `items_added` stays 0 —
      *     nothing is duplicated, the same `(path, library_id)` rows are reused — and the
@@ -2260,6 +2334,14 @@ class MusicLibraryScanner
      *        in that window was then stamped post-edit against pre-edit tags and
      *        skipped forever. Pinned by
      *        {@see \Phlix\Tests\Unit\Media\Music\MusicScanUnchangedSkipTest::testAFileEditedBetweenItsProbeAndItsFlushIsReReadOnTheNextScan()}.
+     * @param int $reparented BY REFERENCE tally of tracks this call moved to a different
+     *        album or artist (S145), surfaced once in {@see self::scanDirectory()}'s
+     *        completion summary as `reparented`. A re-parented track is ALSO charged to
+     *        {@see ScanResult::$updated} — this counter says how much of that number is
+     *        parentage repair rather than tag edits. Deliberately NOT a per-track log
+     *        line: a healing scan of the production library re-parents thousands of
+     *        files and per-track logging is banned for exactly that reason (see the
+     *        `'added'` branch below).
      *
      * @return string One of FOUR outcomes. ⚠ `'skipped'` and `'failed'` used to be the
      *         SAME value, and that collision was review r2's HIGH finding: a scan that
@@ -2270,7 +2352,8 @@ class MusicLibraryScanner
      *
      *          - `'added'`   a new `media_items` + `music_tracks` pair was written;
      *          - `'updated'` an existing row was refreshed in place;
-     *          - `'skipped'` BENIGN no-op — the row exists and nothing changed. This is
+     *          - `'skipped'` BENIGN no-op — the row exists and nothing changed, WHERE
+     *                        "nothing" now includes its album and artist (S145). This is
      *                        the common case on every rescan, so it must never be
      *                        charged to {@see ScanResult::$failed} (an unchanged
      *                        library would otherwise report every file as an error);
@@ -2285,7 +2368,8 @@ class MusicLibraryScanner
         array $metadata,
         ?string $libraryId = null,
         ?MusicScanSkipIndex $skipIndex = null,
-        ?array $stamp = null
+        ?array $stamp = null,
+        int &$reparented = 0
     ): string {
         $path = $file->getPathname();
 
@@ -2304,8 +2388,14 @@ class MusicLibraryScanner
         $existingMediaItemId = $this->findExistingTrackMediaItemId($path, $libraryId);
 
         if ($existingMediaItemId !== null) {
+            // S145: `album_id`/`artist_id` are SELECTed because the change predicate
+            // below compares them. Without them in hand, a file whose ALBUM or ARTIST
+            // tag changed is indistinguishable from an unchanged one and the row stays
+            // filed under its old album forever (measured on production: 310 albums
+            // owning zero tracks, and essentially every album minted after the initial
+            // import was such a shell).
             $existing = $this->db->query(
-                "SELECT id, title, track_number, disc_number, duration_secs
+                "SELECT id, album_id, artist_id, title, track_number, disc_number, duration_secs
                  FROM music_tracks WHERE media_item_id = ?",
                 [$existingMediaItemId]
             );
@@ -2323,12 +2413,23 @@ class MusicLibraryScanner
                     (int)$existingTrack['disc_number'] : 1;
                 $existingDuration = isset($existingTrack['duration_secs']) &&
                     is_numeric($existingTrack['duration_secs']) ? (int)$existingTrack['duration_secs'] : 0;
+                // S145: parentage joins the predicate. Same is_numeric -> (int) shape as
+                // the four above; `music_tracks.album_id`/`artist_id` are INT UNSIGNED
+                // NOT NULL with enforced FKs (migration 065), so there is no NULL case —
+                // the only reachable failure is WRONG BUT VALID, which is precisely why
+                // nothing ever surfaced it.
+                $existingAlbumId = isset($existingTrack['album_id']) &&
+                    is_numeric($existingTrack['album_id']) ? (int)$existingTrack['album_id'] : 0;
+                $existingArtistId = isset($existingTrack['artist_id']) &&
+                    is_numeric($existingTrack['artist_id']) ? (int)$existingTrack['artist_id'] : 0;
 
                 if (
                     $existingTitle === $title
                     && $existingTrackNum === $trackNumber
                     && $existingDiscNum === $discNumber
                     && $existingDuration === $durationSecs
+                    && $existingAlbumId === $albumId
+                    && $existingArtistId === $artistId
                 ) {
                     // S122(a): THE BACKFILL PATH, and the reason the first rescan after
                     // this step ships is still slow while every later one is fast. Every
@@ -2343,15 +2444,18 @@ class MusicLibraryScanner
                     // identity the walk observed BEFORE the read: it can only be older
                     // than the bytes those tags came from, never newer.
                     //
-                    // ⚠ Also unchanged by S122, stated so the comment stays accurate
-                    // (review r1 non-blocking 6): this branch compares only
-                    // title/track/disc/duration, so a file whose ARTIST or ALBUM tag
-                    // changed while those four stay identical still returns 'skipped' and
-                    // `music_tracks.album_id`/`artist_id` are left pointing at the OLD
-                    // album. That is a pre-existing defect with its own step. Pre-S122
-                    // every scan re-read such a file and took this same no-op branch, so
-                    // it never healed then either — S122 removes a retry that never fixed
-                    // anything, and does not make the mis-parenting worse in kind.
+                    // ✅ S145 CLOSED THE HOLE THIS PARAGRAPH USED TO DESCRIBE. Until then
+                    // the predicate above compared only title/track/disc/duration, so a
+                    // file whose ARTIST or ALBUM tag changed while those four stayed
+                    // identical returned 'skipped' here and `music_tracks.album_id` /
+                    // `artist_id` kept pointing at the OLD album — permanently, because
+                    // nothing else in the codebase writes those two columns outside the
+                    // two INSERTs below. Parentage is now part of the predicate, so such
+                    // a file falls through to the UPDATE instead of reaching this line.
+                    //
+                    // Reaching this branch therefore now means MORE than "the four fields
+                    // match": it means the row is correct in every column the scan can
+                    // observe, which is what makes stamping-and-returning honest.
                     //
                     // ⚠ There is deliberately NO filesystem backfill migration. Stat'ing
                     // 61,135 files and recording today's mtime for a row whose indexed
@@ -2365,11 +2469,36 @@ class MusicLibraryScanner
                 }
 
                 // Update existing track (no new media_item, no event).
+                //
+                // ⚠ S145 — COLUMN ORDER IS PART OF THE CONTRACT. `album_id`/`artist_id`
+                // are APPENDED after `duration_secs` and `id` stays LAST. Any other
+                // arrangement is equally correct SQL and gratuitously breaks the two
+                // in-memory doubles, which index the row id positionally.
                 $this->db->query(
-                    "UPDATE music_tracks SET title = ?, track_number = ?, disc_number = ?, duration_secs = ?
+                    "UPDATE music_tracks SET title = ?, track_number = ?, disc_number = ?, duration_secs = ?,
+                            album_id = ?, artist_id = ?
                      WHERE id = ?",
-                    [$title, $trackNumber, $discNumber, $durationSecs, $existingId]
+                    [$title, $trackNumber, $discNumber, $durationSecs, $albumId, $artistId, $existingId]
                 );
+
+                // S145 — THE VACATED ALBUM. `flushAlbum()`'s `finally` refreshes only the
+                // album being flushed, i.e. the one the track just moved TO. Without this
+                // the album the track just LEFT advertises a `total_tracks` one too high
+                // forever, and `MusicLibraryService::getArtistWithAlbums()` sums that
+                // column onto the artist page — so healing the parentage would have
+                // traded one wrong number for another.
+                //
+                // Guarded on `> 0` because a 0 is the "column absent / unreadable" shape
+                // from the coercion above, never a real `music_albums.id`.
+                if ($existingAlbumId !== $albumId && $existingAlbumId > 0) {
+                    $reparented++;
+                    $this->refreshAlbumTrackTotal($existingAlbumId);
+                } elseif ($existingArtistId !== $artistId && $existingArtistId > 0) {
+                    // The artist moved but the album id did not — possible only when the
+                    // album row itself was re-pointed. No album was vacated, so there is
+                    // nothing to recount, but it is still a re-parenting.
+                    $reparented++;
+                }
 
                 $this->stampFileIdentity($existingMediaItemId, $file, $skipIndex, $stamp);
 

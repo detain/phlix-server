@@ -1070,7 +1070,14 @@ class LibraryControllerTest extends TestCase
         $this->assertIsArray($body);
         $this->assertSame('job-2', $body['job_id']);
         $this->assertSame('queued', $body['status']);
-        $this->assertSame('Library rescan queued', $body['message']);
+        $this->assertIsString($body['message']);
+        $this->assertStringStartsWith('Library rescan queued', $body['message']);
+        // S145: the message is the admin console's help text for this action, so it has
+        // to say what makes a rescan different from a scan — it re-reads every file, and
+        // on a music library that is hours. A bare "queued" left an operator to discover
+        // the runtime by watching it.
+        $this->assertStringContainsString('every file will be re-read', $body['message']);
+        $this->assertStringContainsString('can take hours', $body['message']);
     }
 
     /**

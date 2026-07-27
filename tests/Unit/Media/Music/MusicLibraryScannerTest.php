@@ -481,6 +481,12 @@ final class MusicLibraryScannerTest extends TestCase
                     $mid = (string) ($p[0] ?? '');
                     $tracks[$mid] = [
                         'id' => $autoInt,
+                        // S145: parentage is now part of upsertTrack()'s change
+                        // predicate, so a double that drops these two columns reports
+                        // every unchanged rescan as `updated` — which is exactly how
+                        // this test caught the omission.
+                        'album_id' => $p[1] ?? 0,
+                        'artist_id' => $p[2] ?? 0,
                         'title' => $p[3] ?? '',
                         'track_number' => $p[4] ?? null,
                         'disc_number' => $p[5] ?? 1,
@@ -3583,8 +3589,14 @@ final class MusicSchemaConnection extends Connection
     public array $albums = [];
 
     /**
-     * @var array<string, array{id:int, album_id:int, title:string, track_number:int,
-     *     disc_number:int, duration_secs:int}> `music_tracks` by media_item_id.
+     * ⚠ `artist_id` was MISSING here until S145 (the same defect this double's sibling
+     * {@see \Phlix\Tests\Unit\Media\Music\SkipSchemaConnection} carried): `runInsert()`
+     * dropped `$p[2]`, so `runSelect()` handed `upsertTrack()` a row with no
+     * `artist_id` key at all. Once the change predicate started comparing parentage
+     * that absent key read as `0` and turned every unchanged rescan into an UPDATE.
+     *
+     * @var array<string, array{id:int, album_id:int, artist_id:int, title:string,
+     *     track_number:int, disc_number:int, duration_secs:int}> `music_tracks` by media_item_id.
      */
     public array $tracks = [];
 
@@ -4296,6 +4308,8 @@ final class MusicSchemaConnection extends Connection
             $this->tracks[(string) ($p[0] ?? '')] = [
                 'id' => $this->autoInc,
                 'album_id' => (int) ($p[1] ?? 0),
+                // S145: `$p[2]` used to be discarded — see the $tracks docblock.
+                'artist_id' => (int) ($p[2] ?? 0),
                 'title' => (string) ($p[3] ?? ''),
                 'track_number' => (int) ($p[4] ?? 0),
                 'disc_number' => (int) ($p[5] ?? 1),
@@ -4349,6 +4363,30 @@ final class MusicSchemaConnection extends Connection
             $this->albums[$albumId]['media_item_id'] = is_string($p[0] ?? null) ? $p[0] : null;
 
             return 1;
+        }
+
+        // S145 — `upsertTrack()`'s `'updated'` branch. This double never modelled it at
+        // all: the statement fell through to the blanket `return 1` below, so the stored
+        // row kept its pre-update values and, in particular, a re-parented track never
+        // moved. Mutating here (and still falling through to `return 1`, which is the
+        // affected-row count this double has always reported for an UPDATE) keeps the
+        // in-memory rows honest for the `total_tracks` recount immediately above.
+        //
+        // Parameter order is production's: title, track, disc, duration, album, artist,
+        // id — the two S145 columns APPENDED and `id` LAST.
+        if (str_contains($sql, 'UPDATE music_tracks SET title')) {
+            foreach ($this->tracks as $mid => $track) {
+                if ($track['id'] !== (int) ($p[6] ?? 0)) {
+                    continue;
+                }
+                $this->tracks[$mid]['title'] = (string) ($p[0] ?? '');
+                $this->tracks[$mid]['track_number'] = (int) ($p[1] ?? 0);
+                $this->tracks[$mid]['disc_number'] = (int) ($p[2] ?? 1);
+                $this->tracks[$mid]['duration_secs'] = (int) ($p[3] ?? 0);
+                $this->tracks[$mid]['album_id'] = (int) ($p[4] ?? 0);
+                $this->tracks[$mid]['artist_id'] = (int) ($p[5] ?? 0);
+                break;
+            }
         }
 
         // refreshAlbumTrackTotal(): derive the count from the rows that really

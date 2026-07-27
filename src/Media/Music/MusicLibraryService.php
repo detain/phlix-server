@@ -195,6 +195,13 @@ class MusicLibraryService
      *        exactly why the drift was invisible.
      * @param string|null   $libraryId  Owning library UUID, forwarded so the scanner can stamp
      *                                  `media_items.library_id` and carry it on the MediaItemAdded event.
+     * @param bool $readEveryFile S145 full-read mode, a pure pass-through to
+     *        {@see MusicLibraryScanner::scanDirectory()}. TRUE makes the scanner leave
+     *        the S122(a) skip index unloaded so every file is opened and every track row
+     *        is re-parented from its current tags. Reached only from the `rescan` job
+     *        type; ~3.5 h on the production library against minutes for an ordinary
+     *        rescan. ⚠ A PARAMETER and not a setter — the scanner is `@autowire`d and can
+     *        outlive one scan in a Workerman worker.
      * @return ScanResult Summary of the scan operation
      *
      * @example
@@ -202,9 +209,13 @@ class MusicLibraryService
      * $result = $service->scanDirectory('/music/rock', null, $libraryId);
      * ```
      */
-    public function scanDirectory(string $path, ?callable $onProgress = null, ?string $libraryId = null): ScanResult
-    {
-        return $this->scanner->scanDirectory($path, $onProgress, $libraryId);
+    public function scanDirectory(
+        string $path,
+        ?callable $onProgress = null,
+        ?string $libraryId = null,
+        bool $readEveryFile = false
+    ): ScanResult {
+        return $this->scanner->scanDirectory($path, $onProgress, $libraryId, $readEveryFile);
     }
 
     /**

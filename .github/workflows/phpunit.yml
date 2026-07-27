@@ -92,6 +92,16 @@ jobs:
         # alarm so the suite always runs to completion.
         run: php -d max_execution_time=0 ./vendor/bin/phpunit --coverage-clover coverage.xml --coverage-html coverage-report
 
+      - name: S120 assertion-escape guard
+        # ADDITIVE step — it reads the report the PHPUnit extension registered in
+        # phpunit.xml leaves behind when a test contained an assertion failure that did
+        # not decide the test's outcome (an ExpectationFailedException swallowed by a
+        # catch (\Throwable) / catch (\RuntimeException) between the assertion and
+        # PHPUnit). No report file => exit 0. `if: always()` so it still reports when
+        # the suite itself failed, which is exactly when a degraded message hurts most.
+        if: always()
+        run: php scripts/assertion-escape-check.php
+
       - name: Check minimum coverage threshold
         run: |
           # PHPUnit's --coverage-clover writes Clover XML, which uses

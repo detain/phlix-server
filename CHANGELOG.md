@@ -9,6 +9,40 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- **Assertions inside a callback can no longer pass a test while asserting `false`**
+  (S120). PHPUnit's `ExpectationFailedException` extends `AssertionFailedError` extends
+  `PHPUnit\Framework\Exception` extends `RuntimeException`, so any assertion that runs
+  inside a callback which is invoked under `try { … } catch (\Throwable)` or
+  `catch (\RuntimeException)` is caught by the code doing the catching and never reaches
+  PHPUnit.
+
+  A 24-site census over the 699 `.php` files then under `tests/` — each site decided by
+  planting a tripwire and reading the run, not by grep — found **2 fully vacuous** tests
+  (`TranscodeManagerTest::testSegmentWaiterCountReturnsToZeroWhenPollBodyThrows`,
+  `::testInFlightCounterReleasedWhenLaunchThrowsBeforePolling`: green with
+  `assertTrue(false)` planted, and their own `assertNotNull($thrown, …)` was **satisfied
+  by the swallowed failure** — verbatim, the two messages were
+  `'the exception propagates, it is not swallowed'` and `'the RuntimeException must
+  propagate, not be swallowed'`, at `tests/Unit/Media/Transcoding/TranscodeManagerTest.php:3716`
+  and `:4868` before this change) and **2 swallowed-but-red** ones whose diagnostics were
+  degraded (`LibraryScanCommandTest::testProgressTicksStreamOntoTheJobRow`, swallowed by
+  `LibraryScanCommand.php:246`; `StatsCollectorTest::testRecordStorageSnapshotsSumsEveryTypeThatSharesABucket`).
+  All four now follow the established remedy — **the callback RECORDS, the assertions run
+  OUTSIDE it** — and the two `TranscodeManagerTest` tests gained a
+  `catch (AssertionFailedError) { throw $e; }` arm ahead of their `catch (\RuntimeException)`
+  so a future in-callback assertion cannot be swallowed either.
+
+  The other **20** sites were left untouched: 18 whose tripwire executed and took the
+  test red with its own message, and 2 whose tripwire never executed — **undecided by
+  the probe, not verified**. Every one of these numbers is MEASURED by running
+  `php scripts/assertion-escape-audit.php --probe`, and one row is
+  environment-dependent: the Integration site
+  (`PooledConnectionConcurrencyTest.php:392`, also a known pre-existing flake under
+  coroutine churn) self-skips without a live database, so it reports `NOT-REACHED` on a
+  box with no DB and has been observed as `GATES` on one with. A run on a DB-less box
+  therefore prints `20 site(s) probed — 17 GATES, 3 NOT-REACHED, 0 VACUOUS, 0 DEGRADED`.
+  Re-run the probe rather than quoting a remembered count.
+
 - **A fresh install now actually HAS the `playback_state` progress-upsert unique key**
   (S156). Migration `090_playback_state_session_media_unique.sql` is NAMED for
   `uq_playback_state_session_media (session_id, media_item_id)` but carries no executable
@@ -108,6 +142,45 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   new row instead of updating.
 
 ### Added
+
+- **A mechanical guard for the swallowed-assertion class** (S120), in two independent
+  parts:
+  - `tests/Support/AssertionEscape/` — a PHPUnit extension (registered in `phpunit.xml`)
+    that reports any test where an assertion failure did not decide the outcome. The
+    **measurement** is exact rather than heuristic: `Assert::assertThat()` emits
+    `Test\AssertionFailed` from a `finally` **before** the exception propagates, so the
+    event fires even when the exception is subsequently swallowed. Its limits are stated
+    rather than papered over, in `EscapeCollector`'s docblock:
+    - **Blind spots** — three paths throw an assertion failure without going through
+      `assertThat()` and so emit no event: `Assert::fail()`; mock parameter/invocation
+      rules (`Parameters.php:117` → `Constraint.php:106`); and
+      `markTestSkipped()`/`markTestIncomplete()`, whose exceptions are also
+      `RuntimeException` subclasses. Both of the latter two are currently harmless —
+      mock rules are re-verified at `TestCase.php:688`, after `runTest()` returns and
+      thus outside any swallowing callback, and a token scan finds 0 `markTest*` calls
+      inside closures — but they are not covered.
+    - **False positives** — a test that *deliberately* catches its own assertion failure
+      (the usual way to test an assertion helper) is reported as a violation and fails
+      CI. There is no opt-out, deliberately: an escape hatch would be reached for at
+      precisely the moment a real escape is being looked at. The docblock records the
+      non-tripping remedies instead.
+  - `scripts/assertion-escape-audit.php` — enumerates every assertion-bearing **closure**
+    under `tests/`, probing its **first** assertion (the unit is the closure, because
+    being swallowed is a property of the call site; on this tree that is 20 of the 51
+    assert-like calls inside closures), and with `--probe` plants a tripwire and
+    classifies each site `GATES` / `VACUOUS` / `DEGRADED` / `NOT-REACHED`. Covers
+    `Assert::fail()` and sites that are green today. Runs PHPUnit with `--no-extensions`
+    so it stays independent of the runtime guard.
+
+  `scripts/assertion-escape-check.php` turns the extension's report into a non-zero exit
+  and is wired into `.github/workflows/phpunit.yml` as an additive `if: always()` step.
+  A static rule was considered and rejected on evidence: deciding whether an assertion in
+  a callback can fail requires knowing which production frame invokes that callback — a
+  binding PHPUnit's mock builder makes at runtime — and the one purely-lexical
+  approximation available ("assertion-bearing closure in a test method that also has its
+  own `try`/`catch (\Throwable)`") produces a false positive on
+  `PooledConnectionConcurrencyTest`, where the caught message is deliberately re-surfaced
+  by `assertSame([], $errors, …)`.
 
 - **A CLI scan is now VISIBLE in the admin UI, and can no longer strand a
   permanently-`running` job row** (S150/S151). `php bin/phlix library:scan <id>`

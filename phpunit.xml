@@ -23,6 +23,20 @@
       <text outputFile="php://stdout" showUncoveredFiles="true" showOnlySummary="true"/>
     </report>
   </coverage>
+  <extensions>
+    <!--
+      S120 — reports any test where a failed assertion did not decide the test's
+      outcome (an assertion swallowed by a `catch (\Throwable)` / `catch (\RuntimeException)`
+      between the assertion and PHPUnit). See
+      tests/Support/AssertionEscape/EscapeCollector.php for the mechanism, for the
+      failure paths that emit no event and are therefore invisible to it
+      (Assert::fail(), mock parameter/invocation rules, markTestSkipped/Incomplete),
+      and for the one known false-positive class (a test that deliberately catches its
+      own assertion failure) together with the reasoning for providing no opt-out.
+      scripts/assertion-escape-check.php turns a report into a non-zero exit for CI.
+    -->
+    <bootstrap class="Phlix\Tests\Support\AssertionEscape\AssertionEscapeGuardExtension"/>
+  </extensions>
   <php>
     <env name="APP_ENV" value="testing"/>
     <env name="DB_HOST" value="127.0.0.1"/>

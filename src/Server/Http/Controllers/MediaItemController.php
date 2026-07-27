@@ -27,6 +27,7 @@ use Phlix\Media\Streaming\SourceProfile;
 use Phlix\Media\Streaming\Trickplay\TrickplayController;
 use Phlix\Media\MarkerService as ChapterMarkerService;
 use Phlix\Media\MarkerType;
+use Phlix\Media\Music\MusicLibraryService;
 
 class MediaItemController
 {
@@ -42,13 +43,32 @@ class MediaItemController
      * this check previously came to 404 on a childless `track`/`book`/`photo`/
      * `audiobook` — it named only `movie` and `audio`.
      *
-     * `music`/`album`/`artist` carry no scanner-created rows today (the music
-     * scanner writes `track`), but they are grouping types by definition and
-     * are listed so they stay non-playable if that ever changes.
+     * ⚠ **CORRECTED (S97): `album` and `artist` ARE scanner-created.** This comment
+     * used to claim the music scanner writes only `track`. It does not —
+     * {@see \Phlix\Media\Music\MusicLibraryScanner} mints an `artist` row and an
+     * `album` row for every artist/album it indexes, and production carries
+     * **4,656 `artist` + 10,966 `album` + 61,105 `track`** rows in `media_items`,
+     * matching `music_*` exactly (measured read-only 2026-07-27). Only `music`
+     * itself has no rows. They are still listed here because they are containers:
+     * a `media_items` album/artist id is NOT streamable, so returning one from
+     * shuffle hands the client an id it cannot play.
+     *
+     * Their children do NOT live in `media_items.parent_id` — S97 settled that the
+     * `music_*` tables are the one authoritative music hierarchy and this column is
+     * never written for music — so {@see shufflePlay()} resolves them through
+     * {@see \Phlix\Media\Music\MusicLibraryService} instead of `findByParent()`.
      *
      * @var list<string>
      */
     private const CONTAINER_TYPES = ['series', 'season', 'music', 'album', 'artist'];
+
+    /**
+     * The `media_items.type` members whose hierarchy lives in the `music_*` tables
+     * rather than in `media_items.parent_id` (S97).
+     *
+     * @var list<string>
+     */
+    private const MUSIC_CONTAINER_TYPES = ['album', 'artist'];
 
     private ItemRepository $itemRepository;
     private MarkerService $markerService;
@@ -68,6 +88,17 @@ class MediaItemController
      */
     private ?RatingGate $ratingGate;
 
+    /**
+     * The `music_*` read path (S97), used by {@see shufflePlay()} to turn an album
+     * or artist id into playable TRACK ids.
+     *
+     * Optional, and a null instance degrades music shuffle to the pre-S97 404
+     * rather than to a wrong answer: without it there is no way to reach a music
+     * container's children at all, because `media_items.parent_id` is never written
+     * for music.
+     */
+    private ?MusicLibraryService $musicLibrary;
+
     public function __construct(
         ItemRepository $itemRepository,
         MarkerService $markerService,
@@ -75,7 +106,8 @@ class MediaItemController
         TrickplayController $trickplayController,
         ChapterMarkerService $chapterMarkerService,
         ?StreamProbeBackfill $streamBackfill = null,
-        ?RatingGate $ratingGate = null
+        ?RatingGate $ratingGate = null,
+        ?MusicLibraryService $musicLibrary = null
     ) {
         $this->itemRepository = $itemRepository;
         $this->markerService = $markerService;
@@ -84,6 +116,7 @@ class MediaItemController
         $this->chapterMarkerService = $chapterMarkerService;
         $this->streamBackfill = $streamBackfill;
         $this->ratingGate = $ratingGate;
+        $this->musicLibrary = $musicLibrary;
     }
 
     /**
@@ -176,24 +209,6 @@ class MediaItemController
         }
 
         return (new Response())->json(['item' => $shaped]);
-    }
-
-    /**
-     * @param array<string, string> $params
-     */
-    public function children(Request $request, array $params): Response
-    {
-        $children = $this->itemRepository->findByParent($params['id']);
-
-        // Parental cap: drop over-cap children (by EFFECTIVE rating, so episodes
-        // inherit the series rating — a drill-down of an allowed series keeps its
-        // episodes, an over-cap series' episodes are hidden). No-op for the owner.
-        $filter = $this->resolveRatingFilter($request);
-        if ($filter !== null && $this->ratingGate !== null) {
-            $children = $this->ratingGate->filterItems($children, $filter, 'id');
-        }
-
-        return (new Response())->json(['items' => $children]);
     }
 
     /**
@@ -710,6 +725,16 @@ class MediaItemController
     /**
      * Initiate shuffle-play for a media item.
      *
+     * ⚠ **Music does not go through `findByParent()` (S97).** An `album` / `artist`
+     * `media_items` row has no children there — S97 settled that
+     * `media_items.parent_id` is never written for music and the `music_*` tables
+     * are the one authoritative hierarchy — so `findByParent()` returned `[]`, the
+     * container check fired, and shuffling an album 404'd. Music containers are
+     * resolved through {@see MusicLibraryService} into TRACK `media_items` ids,
+     * which are the ids `/media/{id}/stream` can actually play. Returning the
+     * album/artist ids themselves (which is what a `parent_id`-based hierarchy
+     * would have produced) would hand the client ids it cannot stream.
+     *
      * @param Request $request Current request with JSON body containing 'media_id'
      * @param array<string, string> $params Path parameters
      * @return Response JSON response with shuffled episode list
@@ -729,13 +754,18 @@ class MediaItemController
             return (new Response())->status(404)->json(['error' => 'Item not found']);
         }
 
+        $itemType = is_string($item['type'] ?? null) ? $item['type'] : '';
+
+        if (in_array($itemType, self::MUSIC_CONTAINER_TYPES, true)) {
+            return $this->shuffleMusicContainer($request, $mediaId, $itemType);
+        }
+
         $children = $this->itemRepository->findByParent($mediaId);
 
         if (empty($children)) {
             // A childless item is playable on its own unless it is a pure
             // grouping type, in which case there is genuinely nothing to play.
-            $type = is_string($item['type'] ?? null) ? $item['type'] : '';
-            if ($type !== '' && !in_array($type, self::CONTAINER_TYPES, true)) {
+            if ($itemType !== '' && !in_array($itemType, self::CONTAINER_TYPES, true)) {
                 return (new Response())->json([
                     'shuffled_ids' => [$mediaId],
                     'mode' => 'single',
@@ -749,6 +779,59 @@ class MediaItemController
 
         return (new Response())->json([
             'shuffled_ids' => $ids,
+            'mode' => 'shuffle',
+        ]);
+    }
+
+    /**
+     * Shuffle-play an `album` / `artist` by resolving it to TRACK ids via `music_*`.
+     *
+     * The parental cap is applied to the resolved tracks with the SAME gate the
+     * `findByParent()` branch uses, so a capped profile cannot reach a track by
+     * shuffling its album — the music path must not be a hole in the cap just
+     * because it reads a different table.
+     *
+     * @param string $mediaId The album/artist `media_items` UUID.
+     * @param 'album'|'artist'|string $type Its `media_items.type`.
+     */
+    private function shuffleMusicContainer(Request $request, string $mediaId, string $type): Response
+    {
+        if ($this->musicLibrary === null) {
+            return (new Response())->status(404)->json(['error' => 'No playable items found']);
+        }
+
+        $trackIds = $type === 'album'
+            ? $this->musicLibrary->getTrackMediaItemIdsForAlbum($mediaId)
+            : $this->musicLibrary->getTrackMediaItemIdsForArtist($mediaId);
+
+        if ($trackIds === []) {
+            return (new Response())->status(404)->json(['error' => 'No playable items found']);
+        }
+
+        $filter = $this->resolveRatingFilter($request);
+        if ($filter !== null && $this->ratingGate !== null) {
+            $tracks = $this->ratingGate->filterItems(
+                $this->itemRepository->findByIds($trackIds),
+                $filter,
+                'id'
+            );
+            $trackIds = [];
+            foreach ($tracks as $track) {
+                $trackId = $track['id'] ?? null;
+                if (is_string($trackId) && $trackId !== '') {
+                    $trackIds[] = $trackId;
+                }
+            }
+
+            if ($trackIds === []) {
+                return (new Response())->status(404)->json(['error' => 'No playable items found']);
+            }
+        }
+
+        shuffle($trackIds);
+
+        return (new Response())->json([
+            'shuffled_ids' => $trackIds,
             'mode' => 'shuffle',
         ]);
     }

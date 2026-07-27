@@ -23,6 +23,7 @@ use Phlix\Media\Library\MediaScanner;
 use Phlix\Media\Library\RatingGate;
 use Phlix\Media\Library\ScanJobRepository;
 use Phlix\Media\Music\MusicLibraryScanner;
+use Phlix\Media\Music\MusicLibraryService;
 use Phlix\Media\ChapterSearchService;
 use Phlix\Media\CollectionService;
 use Phlix\Media\Markers\Detection\BackgroundDetectorWorker;
@@ -370,6 +371,16 @@ final class MediaServicesProvider implements ServiceProviderInterface
                 ->constructorParameter('logger', get('logger.media'))
                 ->constructorParameter('eventDispatcher', get(EventDispatcherInterface::class))
                 ->constructorParameter('ignorePatterns', get(ScanIgnorePatterns::class)),
+
+            // The ONE music read path (S99), and — since S97 — the only place the
+            // Artist→Album→Track hierarchy exists at all: `media_items.parent_id`
+            // is never written for music, so `findByParent()` cannot reach it.
+            // Registered here (it used to be `new`-ed inline in
+            // WebPortalServicesProvider) because the DLNA LibraryBridge and
+            // MediaItemController's shuffle both need it now. Both ctor
+            // dependencies — the Workerman MySQL Connection and the scanner
+            // configured just above — are already resolvable in this container.
+            MusicLibraryService::class => autowire(),
 
             LibraryManager::class => autowire()
                 ->constructorParameter('logger', get('logger.media'))

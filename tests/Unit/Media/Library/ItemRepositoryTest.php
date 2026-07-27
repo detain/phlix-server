@@ -1835,19 +1835,25 @@ class ItemRepositoryTest extends TestCase
     public function testSearchReturnsFullTextMatches(): void
     {
         $db = $this->createMock(Connection::class);
-        $db->expects($this->once())
-            ->method('query')
-            ->with($this->stringContains('MATCH(name) AGAINST(? IN BOOLEAN MODE)'))
-            ->willReturn([
-                [
-                    'id' => 'movie-1',
-                    'name' => 'Test Movie',
-                    'type' => 'movie',
-                    'library_id' => 'lib-1',
-                    'path' => '/movies/test.mkv',
-                    'metadata_json' => '{}',
-                ],
-            ]);
+        // S97: search() now issues THREE statements — the FULLTEXT match over
+        // non-music `media_items` rows, plus one music-container lookup per
+        // `music_*` table. Only the first returns anything here.
+        $db->method('query')->willReturnCallback(function (string $sql): array {
+            if (str_contains($sql, 'MATCH(name) AGAINST(? IN BOOLEAN MODE)')) {
+                return [
+                    [
+                        'id' => 'movie-1',
+                        'name' => 'Test Movie',
+                        'type' => 'movie',
+                        'library_id' => 'lib-1',
+                        'path' => '/movies/test.mkv',
+                        'metadata_json' => '{}',
+                    ],
+                ];
+            }
+
+            return [];
+        });
 
         $repo = new ItemRepository($db);
         $result = $repo->search('Test');
@@ -1883,6 +1889,99 @@ class ItemRepositoryTest extends TestCase
 
         $this->assertCount(1, $result);
         $this->assertEquals('Fallback Movie', $result[0]['name']);
+    }
+
+    /**
+     * S97 — artists and albums are matched on the AUTHORITATIVE music columns
+     * (`music_artists.name` / `music_albums.title`), not on the
+     * `media_items.name` mirror.
+     *
+     * ⚠ The premise this change was briefed on ("only track filenames are
+     * searchable") is FALSE and was measured to be false on production: the
+     * scanner stamps artist names and album titles straight into
+     * `media_items.name`, and `MATCH(name) AGAINST('Eminem')` returned 135
+     * `artist` + 74 `album` + 37 `track` rows. What was wrong is that the match
+     * ran against a mirror column that nothing keeps in step with `music_*`, and
+     * that orphaned mirror rows were served as results (see the test below).
+     */
+    public function testSearchMatchesArtistsAndAlbumsOnTheirMusicTableNames(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $seen = [];
+        $db->method('query')->willReturnCallback(function (string $sql) use (&$seen): array {
+            if (str_contains($sql, 'IN BOOLEAN MODE')) {
+                $seen[] = 'media_items';
+                // The non-music half finds nothing: this artist/album is only
+                // reachable through the music tables.
+                return [];
+            }
+            if (str_contains($sql, 'JOIN music_artists ar ON ar.media_item_id = mi.id')) {
+                $seen[] = 'music_artists';
+                return [[
+                    'id' => 'artist-1', 'name' => 'Eminem', 'type' => 'artist',
+                    'library_id' => 'lib-1', 'path' => '', 'metadata_json' => '{}',
+                ]];
+            }
+            if (str_contains($sql, 'JOIN music_albums al ON al.media_item_id = mi.id')) {
+                $seen[] = 'music_albums';
+                return [[
+                    'id' => 'album-1', 'name' => 'The Slim Shady LP', 'type' => 'album',
+                    'library_id' => 'lib-1', 'path' => '', 'metadata_json' => '{}',
+                ]];
+            }
+            return [];
+        });
+
+        $repo = new ItemRepository($db);
+        $result = $repo->search('Eminem');
+
+        $this->assertSame(['media_items', 'music_artists', 'music_albums'], $seen);
+        $this->assertSame(['artist-1', 'album-1'], array_column($result, 'id'));
+    }
+
+    /**
+     * S97 — the `media_items` half of a search must NOT return `artist`/`album`
+     * rows on its own, or an orphaned mirror row (one that no `music_*` row
+     * points at, i.e. adoption residue) comes back as a search hit that leads
+     * nowhere. The type exclusion is what makes the music tables authoritative
+     * for these two types.
+     */
+    public function testSearchExcludesArtistAndAlbumFromTheMediaItemsHalf(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $statements = [];
+        $db->method('query')->willReturnCallback(function (string $sql) use (&$statements): array {
+            $statements[] = $sql;
+            return [];
+        });
+
+        $repo = new ItemRepository($db);
+        $repo->searchFuzzy('Greatest Hits');
+
+        $this->assertStringContainsString("type NOT IN ('artist', 'album')", $statements[0]);
+    }
+
+    /**
+     * A database without the `music_*` tables (or any other failure in the music
+     * half) must degrade to "no music hits", never to a 500 on the whole search.
+     */
+    public function testSearchStillReturnsNonMusicHitsWhenTheMusicTablesAreUnavailable(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(function (string $sql): array {
+            if (str_contains($sql, 'music_artists') || str_contains($sql, 'music_albums')) {
+                throw new \RuntimeException("Table 'phlix.music_artists' doesn't exist");
+            }
+            return [[
+                'id' => 'movie-1', 'name' => 'Greatest Hits', 'type' => 'movie',
+                'library_id' => 'lib-1', 'path' => '/movies/gh.mkv', 'metadata_json' => '{}',
+            ]];
+        });
+
+        $repo = new ItemRepository($db);
+        $result = $repo->searchFuzzy('Greatest Hits');
+
+        $this->assertSame(['movie-1'], array_column($result, 'id'));
     }
 
     public function testCountByTypeReturnsCorrectCount(): void

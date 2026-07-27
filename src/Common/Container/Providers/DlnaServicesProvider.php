@@ -23,6 +23,7 @@ use Phlix\Dlna\DlnaServer;
 use Phlix\Dlna\LibraryBridge;
 use Phlix\Dlna\SsdpAdvertiser;
 use Phlix\Media\Library\ItemRepository;
+use Phlix\Media\Music\MusicLibraryService;
 use Phlix\Media\Streaming\HlsStreamer;
 use Psr\Container\ContainerInterface;
 
@@ -124,7 +125,22 @@ final class DlnaServicesProvider implements ServiceProviderInterface
                     // optional decoration.
                     /** @var HlsStreamer $hls */
                     $hls = $c->get(HlsStreamer::class);
-                    $server->setLibraryBridge(new LibraryBridge($items, $hls, $logger));
+
+                    // S97: without this the Audio category can only list artists —
+                    // their albums and tracks are unreachable, because the music
+                    // hierarchy lives in `music_*` and never in
+                    // `media_items.parent_id`. Optional so a container that cannot
+                    // build it degrades to an empty artist container rather than
+                    // failing DLNA startup outright.
+                    $musicLibrary = null;
+                    try {
+                        /** @var MusicLibraryService $musicLibrary */
+                        $musicLibrary = $c->get(MusicLibraryService::class);
+                    } catch (\Throwable) {
+                        $musicLibrary = null;
+                    }
+
+                    $server->setLibraryBridge(new LibraryBridge($items, $hls, $logger, $musicLibrary));
 
                     return $server;
                 }

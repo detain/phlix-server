@@ -964,6 +964,11 @@ class ItemRepository
      * these operators before the query, falling back to LIKE only when
      * the sanitized query is empty.
      *
+     * ⚠ **Artists and albums are matched on `music_*`, not on `media_items.name`
+     * (S97).** See {@see searchMusicContainers()} for why the mirror column is not
+     * the right thing to match, and for the measurement that corrects the claim
+     * that music names were not searchable at all.
+     *
      * @param string $query The search query for full-text matching
      * @param int $limit Maximum number of results to return
      * @return array<int, array<string, mixed>> Array of hydrated media items matching the query
@@ -980,11 +985,18 @@ class ItemRepository
 
         try {
             $results = $this->db->query(
-                "SELECT * FROM media_items WHERE MATCH(name) AGAINST(? IN BOOLEAN MODE) LIMIT ?",
+                "SELECT * FROM media_items
+                  WHERE type NOT IN ('artist', 'album')
+                    AND MATCH(name) AGAINST(? IN BOOLEAN MODE)
+                  LIMIT ?",
                 [$sanitizedQuery, $limit]
             );
 
-            return $this->hydrateRows($results);
+            return $this->mergeSearchResults(
+                $this->hydrateRows($results),
+                $this->searchMusicContainers($query, $limit),
+                $limit
+            );
         } catch (\Throwable) {
             return $this->searchFuzzy($query, $limit);
         }
@@ -992,6 +1004,9 @@ class ItemRepository
 
     /**
      * Performs fuzzy/partial string matching on media item names.
+     *
+     * ⚠ Artists and albums are matched on `music_*` — see {@see search()} and
+     * {@see searchMusicContainers()}.
      *
      * @param string $query The partial string to search for
      * @param int $limit Maximum number of results to return
@@ -1001,11 +1016,129 @@ class ItemRepository
     {
         $escapedQuery = '%' . addcslashes($query, '%_') . '%';
         $results = $this->db->query(
-            "SELECT * FROM media_items WHERE name LIKE ? LIMIT ?",
+            "SELECT * FROM media_items
+              WHERE type NOT IN ('artist', 'album') AND name LIKE ?
+              LIMIT ?",
             [$escapedQuery, $limit]
         );
 
-        return $this->hydrateRows($results);
+        return $this->mergeSearchResults(
+            $this->hydrateRows($results),
+            $this->searchMusicContainers($query, $limit),
+            $limit
+        );
+    }
+
+    /**
+     * Finds `artist` / `album` media items by matching the AUTHORITATIVE music
+     * names — `music_artists.name` and `music_albums.title` — instead of the
+     * `media_items.name` mirror (S97).
+     *
+     * ⚠ **CORRECTION TO A CLAIM THIS CHANGE WAS BRIEFED ON, measured read-only on
+     * production 2026-07-27.** The brief said artist and album names were not
+     * searchable at all and only track filenames were. That is false in both
+     * halves: {@see \Phlix\Media\Music\MusicLibraryScanner::createMediaItem()}
+     * stamps the artist name / album title straight into `media_items.name`, and a
+     * track's name is its tag title (the filename is only a fallback). Measured
+     * against the live library, `… WHERE MATCH(name) AGAINST('Eminem')` returned
+     * **135 `artist` + 74 `album` + 37 `track`** rows and the `LIKE` form returned
+     * the same three counts. Music WAS findable.
+     *
+     * What was actually wrong is subtler, and is what this method fixes:
+     *
+     *  1. **The match ran against a mirror.** `media_items.name` is a copy written
+     *     once at mint time; `music_artists.name` (UNIQUE, indexed) and
+     *     `music_albums.title` (indexed) are the columns the music read path, every
+     *     `/api/v1/music/*` endpoint and every client actually use. Two columns
+     *     holding "the same" value is exactly the second source of truth S97 exists
+     *     to remove — and the mirror is the one nothing keeps in step.
+     *  2. **Orphaned mirror rows were served as results.** An `artist`/`album`
+     *     `media_items` row that no `music_*` row points at is unreachable by every
+     *     music surface, yet it matched by name and came back as a search hit that
+     *     leads nowhere. Those rows are the adoption residue
+     *     {@see \Phlix\Media\Music\MusicLibraryScanner::findAdoptableAlbumMediaItemId()}
+     *     reclaims; an inner join drops them from search until it does.
+     *
+     * The join is on `media_item_id`, which is `UNIQUE` on both music tables
+     * (migration 065), so a `media_items` row can be produced at most once and no
+     * de-duplication is needed inside this query.
+     *
+     * Failure is swallowed to `[]` on purpose: search must degrade to "no music
+     * hits" on a database without the `music_*` tables, never to a 500.
+     *
+     * @param string $query Raw user query (LIKE-escaped here).
+     * @param int $limit Maximum number of music container rows to return.
+     * @return array<int, array<string, mixed>> Hydrated `artist`/`album` rows.
+     */
+    private function searchMusicContainers(string $query, int $limit): array
+    {
+        $escapedQuery = '%' . addcslashes($query, '%_') . '%';
+
+        try {
+            $results = $this->db->query(
+                "SELECT mi.* FROM media_items mi
+                   JOIN music_artists ar ON ar.media_item_id = mi.id
+                  WHERE ar.name LIKE ?
+                  LIMIT ?",
+                [$escapedQuery, $limit]
+            );
+            $artists = $this->hydrateRows($results);
+
+            $results = $this->db->query(
+                "SELECT mi.* FROM media_items mi
+                   JOIN music_albums al ON al.media_item_id = mi.id
+                  WHERE al.title LIKE ?
+                  LIMIT ?",
+                [$escapedQuery, $limit]
+            );
+
+            return $this->mergeSearchResults($artists, $this->hydrateRows($results), $limit);
+        } catch (\Throwable) {
+            return [];
+        }
+    }
+
+    /**
+     * Concatenates two result sets, dropping repeats by `id` and applying the
+     * caller's limit to the combined list.
+     *
+     * The two halves are issued as separate indexed statements rather than one
+     * `OR`-ed query deliberately: an `OR` across a `MATCH … AGAINST` and a
+     * `LEFT JOIN`ed `LIKE` cannot use the FULLTEXT index for the first branch, so
+     * it would turn every search into a full scan of `media_items` to fix music.
+     *
+     * @param array<int, array<string, mixed>> $primary
+     * @param array<int, array<string, mixed>> $secondary
+     * @param int $limit
+     * @return array<int, array<string, mixed>>
+     */
+    private function mergeSearchResults(array $primary, array $secondary, int $limit): array
+    {
+        if ($secondary === []) {
+            return $primary;
+        }
+
+        $seen = [];
+        $merged = [];
+
+        foreach ([$primary, $secondary] as $rows) {
+            foreach ($rows as $row) {
+                $id = $row['id'] ?? null;
+                if (is_string($id) && $id !== '') {
+                    if (isset($seen[$id])) {
+                        continue;
+                    }
+                    $seen[$id] = true;
+                }
+
+                $merged[] = $row;
+                if (count($merged) >= $limit) {
+                    return $merged;
+                }
+            }
+        }
+
+        return $merged;
     }
 
     /**

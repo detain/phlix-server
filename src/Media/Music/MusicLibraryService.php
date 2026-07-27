@@ -1159,6 +1159,181 @@ class MusicLibraryService
     }
 
     /**
+     * Counts the artists that actually have a `media_items` row behind them.
+     *
+     * The DLNA Audio root advertises a `childCount` and then lists exactly these
+     * artists, so the count and the listing must be derived from the SAME predicate
+     * — `countRows('music_artists')` would over-count by every artist whose mint
+     * failed (`media_item_id IS NULL`, schema-permitted by migration 065 and
+     * reachable through S96(e)), and a renderer that is promised N children and
+     * handed N-1 is a renderer that shows an error.
+     *
+     * @return int Number of artists a `media_items`-backed browse can show.
+     */
+    public function getArtistsWithMediaItemCount(): int
+    {
+        return $this->firstCount($this->db->query(
+            "SELECT COUNT(*) AS cnt FROM music_artists WHERE media_item_id IS NOT NULL"
+        ));
+    }
+
+    /**
+     * Lists the `media_items` ids of the artists, alphabetically — the top level of
+     * the music hierarchy (S97).
+     *
+     * ⚠ **This is the ONLY correct way to enumerate music containers.** The generic
+     * `media_items` route (`getAllByType('artist')` / `findByParent()`) cannot do it:
+     * S97 settled that `media_items.parent_id` is never written for music, so
+     * `findByParent()` on an artist returns nothing and `getAllByType()` has no
+     * parent filter at all. The `music_*` tables are the hierarchy.
+     *
+     * @param int $limit  Page size, clamped to `[1, self::MAX_EMBEDDED_ROWS]`.
+     * @param int $offset Page offset (negative offsets are clamped to 0).
+     * @return list<string> Artist `media_items` UUIDs, alphabetical by sort name.
+     */
+    public function getArtistMediaItemIds(int $limit = self::MAX_EMBEDDED_ROWS, int $offset = 0): array
+    {
+        return $this->mediaItemIdColumn($this->db->query(
+            "SELECT media_item_id
+               FROM music_artists
+              WHERE media_item_id IS NOT NULL
+              ORDER BY COALESCE(sort_name, name), id
+              LIMIT ? OFFSET ?",
+            [$this->clampRowLimit($limit), max(0, $offset)]
+        ));
+    }
+
+    /**
+     * Lists the `media_items` ids of one artist's albums, oldest release first.
+     *
+     * @param string $artistMediaItemId The artist's `media_items` UUID.
+     * @param int $limit Clamped to `[1, self::MAX_EMBEDDED_ROWS]`.
+     * @return list<string> Album `media_items` UUIDs (albums whose own mint failed
+     *         are absent — there is no `media_items` row to browse to).
+     */
+    public function getAlbumMediaItemIdsForArtist(
+        string $artistMediaItemId,
+        int $limit = self::MAX_EMBEDDED_ROWS
+    ): array {
+        if ($artistMediaItemId === '') {
+            return [];
+        }
+
+        return $this->mediaItemIdColumn($this->db->query(
+            "SELECT al.media_item_id
+               FROM music_albums al
+               JOIN music_artists ar ON ar.id = al.artist_id
+              WHERE ar.media_item_id = ? AND al.media_item_id IS NOT NULL
+              ORDER BY al.year IS NULL, al.year, COALESCE(al.sort_title, al.title), al.id
+              LIMIT ?",
+            [$artistMediaItemId, $this->clampRowLimit($limit)]
+        ));
+    }
+
+    /**
+     * Lists the `media_items` ids of one album's tracks, in disc/track order.
+     *
+     * These ARE playable ids: `music_tracks.media_item_id` is `CHAR(36) NOT NULL
+     * UNIQUE` (migration 065) and points at the `track` row carrying the file path,
+     * which is what `/media/{id}/stream` and the HLS pipeline resolve.
+     *
+     * @param string $albumMediaItemId The album's `media_items` UUID.
+     * @param int $limit Clamped to `[1, self::MAX_EMBEDDED_ROWS]`.
+     * @return list<string> Track `media_items` UUIDs in playback order.
+     */
+    public function getTrackMediaItemIdsForAlbum(
+        string $albumMediaItemId,
+        int $limit = self::MAX_EMBEDDED_ROWS
+    ): array {
+        if ($albumMediaItemId === '') {
+            return [];
+        }
+
+        return $this->mediaItemIdColumn($this->db->query(
+            "SELECT t.media_item_id
+               FROM music_tracks t
+               JOIN music_albums al ON al.id = t.album_id
+              WHERE al.media_item_id = ?
+              ORDER BY t.disc_number, t.track_number, t.id
+              LIMIT ?",
+            [$albumMediaItemId, $this->clampRowLimit($limit)]
+        ));
+    }
+
+    /**
+     * Lists the `media_items` ids of every track by one artist, across all albums.
+     *
+     * Reads `music_tracks.artist_id` — the denormalized `NOT NULL` FK migration 065
+     * added "for efficient queries" — rather than walking artist → albums → tracks,
+     * so an artist shuffle is one indexed statement instead of 1 + N.
+     *
+     * @param string $artistMediaItemId The artist's `media_items` UUID.
+     * @param int $limit Clamped to `[1, self::MAX_EMBEDDED_ROWS]`.
+     * @return list<string> Track `media_items` UUIDs.
+     */
+    public function getTrackMediaItemIdsForArtist(
+        string $artistMediaItemId,
+        int $limit = self::MAX_EMBEDDED_ROWS
+    ): array {
+        if ($artistMediaItemId === '') {
+            return [];
+        }
+
+        return $this->mediaItemIdColumn($this->db->query(
+            "SELECT t.media_item_id
+               FROM music_tracks t
+               JOIN music_artists ar ON ar.id = t.artist_id
+              WHERE ar.media_item_id = ?
+              ORDER BY t.album_id, t.disc_number, t.track_number, t.id
+              LIMIT ?",
+            [$artistMediaItemId, $this->clampRowLimit($limit)]
+        ));
+    }
+
+    /**
+     * Clamps a caller-supplied row limit into `[1, self::MAX_EMBEDDED_ROWS]`.
+     *
+     * Same ceiling, and the same reason, as every other batched read here: these
+     * lists are buffered whole by a resident Workerman worker, so an unbounded
+     * `LIMIT` is a memory hazard rather than a convenience.
+     */
+    private function clampRowLimit(int $limit): int
+    {
+        return max(1, min($limit, self::MAX_EMBEDDED_ROWS));
+    }
+
+    /**
+     * Reads a single-column `media_item_id` result set into a clean list of UUIDs.
+     *
+     * Non-string / empty ids are dropped rather than passed on: every caller feeds
+     * these straight into `ItemRepository::findByIds()` or a playback response, and
+     * a `null` or `''` there would either widen an `IN (…)` for nothing or hand a
+     * client an unplayable id.
+     *
+     * @param mixed $result Whatever the driver returned.
+     * @return list<string>
+     */
+    private function mediaItemIdColumn(mixed $result): array
+    {
+        if (!is_array($result)) {
+            return [];
+        }
+
+        $ids = [];
+        foreach ($result as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            $id = $row['media_item_id'] ?? null;
+            if (is_string($id) && $id !== '') {
+                $ids[] = $id;
+            }
+        }
+
+        return $ids;
+    }
+
+    /**
      * Counts every row of one of this service's own tables.
      *
      * `$table` is never caller-supplied — the three call sites pass a literal

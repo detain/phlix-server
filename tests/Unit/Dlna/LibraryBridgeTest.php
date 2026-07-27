@@ -8,6 +8,7 @@ use PHPUnit\Framework\TestCase;
 use PHPUnit\Framework\MockObject\MockObject;
 use Phlix\Dlna\LibraryBridge;
 use Phlix\Media\Library\ItemRepository;
+use Phlix\Media\Music\MusicLibraryService;
 use Phlix\Media\Streaming\HlsStreamer;
 use Phlix\Media\Streaming\QualitySelector;
 
@@ -482,5 +483,141 @@ class LibraryBridgeTest extends TestCase
     {
         $streamer = $this->bridge->getHlsStreamer();
         $this->assertSame($this->hlsStreamerMock, $streamer);
+    }
+
+    // -----------------------------------------------------------------------
+    // S97 — the music hierarchy comes from `music_*`, never from `parent_id`.
+    // -----------------------------------------------------------------------
+
+    /**
+     * The Audio category must advertise ARTISTS (the top of the music
+     * hierarchy) and the standalone audio types — not artists AND albums AND
+     * tracks flattened into one sibling list.
+     *
+     * Before S97 `CATEGORY_TYPES['audio']` was
+     * `['music','audio','album','artist','track','audiobook']`, so on a
+     * production-shaped library this container advertised 76,727+ children
+     * while `getLibraryItems()` could only ever return
+     * `ItemRepository::getAllByType()`'s default page of 100 PER TYPE. Nesting
+     * could not fix it: `getAllByType()` has no parent filter, and music rows
+     * carry no `parent_id` to filter on.
+     */
+    public function testAudioRootCountsArtistsButNotAlbumsOrTracks(): void
+    {
+        $this->stubCounts([
+            'artist' => 4656,
+            'album' => 10966,
+            'track' => 61105,
+            'music' => 0,
+            'audio' => 12,
+            'audiobook' => 3,
+        ]);
+
+        $byId = array_column($this->bridge->getRootContainers(), 'child_count', 'id');
+
+        $this->assertSame(4656 + 12 + 3, $byId['library-audio'] ?? null);
+    }
+
+    /**
+     * With the `music_*` reader wired, the advertised artist count comes from
+     * `music_artists` — the same source the LISTING is enumerated from — so a
+     * renderer is never promised more children than it is handed. A
+     * `media_items[artist]` row that no `music_artists` row points at is
+     * adoption residue, not a browsable artist.
+     */
+    public function testAudioRootCountsArtistsFromMusicTablesWhenWired(): void
+    {
+        $this->stubCounts(['artist' => 4658, 'audio' => 0, 'audiobook' => 0]);
+        $music = $this->createMock(MusicLibraryService::class);
+        $music->method('getArtistsWithMediaItemCount')->willReturn(4656);
+
+        $bridge = new LibraryBridge(
+            $this->itemRepositoryMock,
+            $this->hlsStreamerMock,
+            null,
+            $music
+        );
+
+        $byId = array_column($bridge->getRootContainers(), 'child_count', 'id');
+
+        $this->assertSame(4656, $byId['library-audio'] ?? null, 'the 2 orphaned artist rows must not be advertised');
+    }
+
+    /**
+     * Drilling into an ARTIST returns its albums, read from `music_albums`.
+     *
+     * `findByParent()` cannot answer this: S97 settled that
+     * `media_items.parent_id` is never written for music, so the generic
+     * drill-down returns an empty container and the browse dead-ends at the
+     * artist.
+     */
+    public function testDrillingIntoAnArtistReturnsItsAlbumsFromTheMusicTables(): void
+    {
+        $this->itemRepositoryMock->method('findById')->willReturn([
+            'id' => 'artist-1', 'name' => 'An Artist', 'type' => 'artist', 'path' => '',
+        ]);
+        $this->itemRepositoryMock->expects($this->never())->method('findByParent');
+        $this->itemRepositoryMock->method('findByIds')->with(['album-1', 'album-2'])->willReturn([
+            ['id' => 'album-1', 'name' => 'First', 'type' => 'album', 'path' => ''],
+            ['id' => 'album-2', 'name' => 'Second', 'type' => 'album', 'path' => ''],
+        ]);
+
+        $music = $this->createMock(MusicLibraryService::class);
+        $music->method('getAlbumMediaItemIdsForArtist')->willReturn(['album-1', 'album-2']);
+
+        $bridge = new LibraryBridge($this->itemRepositoryMock, $this->hlsStreamerMock, null, $music);
+
+        $children = $bridge->getContainerChildren('artist-1');
+
+        $this->assertSame(['album-1', 'album-2'], array_column($children, 'id'));
+        $this->assertSame(
+            ['object.container.album.musicAlbum', 'object.container.album.musicAlbum'],
+            array_column($children, 'class')
+        );
+    }
+
+    /**
+     * Drilling into an ALBUM returns its tracks, read from `music_tracks`.
+     */
+    public function testDrillingIntoAnAlbumReturnsItsTracksFromTheMusicTables(): void
+    {
+        $this->itemRepositoryMock->method('findById')->willReturn([
+            'id' => 'album-1', 'name' => 'First', 'type' => 'album', 'path' => '',
+        ]);
+        $this->itemRepositoryMock->expects($this->never())->method('findByParent');
+        $this->itemRepositoryMock->method('findByIds')->with(['track-1'])->willReturn([
+            ['id' => 'track-1', 'name' => 'A Song', 'type' => 'track', 'path' => '/music/a.mp3'],
+        ]);
+
+        $music = $this->createMock(MusicLibraryService::class);
+        $music->method('getTrackMediaItemIdsForAlbum')->willReturn(['track-1']);
+
+        $bridge = new LibraryBridge($this->itemRepositoryMock, $this->hlsStreamerMock, null, $music);
+
+        $children = $bridge->getContainerChildren('album-1');
+
+        $this->assertSame(['track-1'], array_column($children, 'id'));
+        $this->assertSame('object.item.audioItem.musicTrack', $children[0]['class']);
+    }
+
+    /**
+     * NON-music containers are untouched: a series still drills down through
+     * `media_items.parent_id`, which is where ITS hierarchy really lives.
+     */
+    public function testDrillingIntoASeriesStillUsesTheParentIdHierarchy(): void
+    {
+        $this->itemRepositoryMock->method('findById')->willReturn([
+            'id' => 'series-1', 'name' => 'A Show', 'type' => 'series', 'path' => '',
+        ]);
+        $this->itemRepositoryMock->expects($this->once())->method('findByParent')->with('series-1')->willReturn([
+            ['id' => 'season-1', 'name' => 'S1', 'type' => 'season', 'path' => ''],
+        ]);
+
+        $music = $this->createMock(MusicLibraryService::class);
+        $music->expects($this->never())->method('getAlbumMediaItemIdsForArtist');
+
+        $bridge = new LibraryBridge($this->itemRepositoryMock, $this->hlsStreamerMock, null, $music);
+
+        $this->assertSame(['season-1'], array_column($bridge->getContainerChildren('series-1'), 'id'));
     }
 }

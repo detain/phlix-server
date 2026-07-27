@@ -13,6 +13,7 @@ namespace Phlix\Dlna;
 
 use Phlix\Common\Logger\StructuredLogger;
 use Phlix\Media\Library\ItemRepository;
+use Phlix\Media\Music\MusicLibraryService;
 use Phlix\Media\Streaming\HlsStreamer;
 
 /**
@@ -35,20 +36,34 @@ class LibraryBridge
     private ?StructuredLogger $logger;
 
     /**
+     * The `music_*` read path (S97) — the ONE authoritative music hierarchy.
+     *
+     * Null degrades the Audio category to artists-only with no drill-down, which
+     * is still correct (an empty container), never wrong (a flood of unbrowsable
+     * album/track rows).
+     *
+     * @var MusicLibraryService|null
+     */
+    private ?MusicLibraryService $musicLibrary;
+
+    /**
      * @param ItemRepository $itemRepository Repository for accessing media items
      * @param HlsStreamer $hlsStreamer Service for generating HLS stream URLs
      * @param StructuredLogger|null $logger Optional logger for diagnostics
+     * @param MusicLibraryService|null $musicLibrary Music hierarchy reader (S97)
      *
      * @since 0.12.0
      */
     public function __construct(
         ItemRepository $itemRepository,
         HlsStreamer $hlsStreamer,
-        ?StructuredLogger $logger = null
+        ?StructuredLogger $logger = null,
+        ?MusicLibraryService $musicLibrary = null
     ) {
         $this->itemRepository = $itemRepository;
         $this->hlsStreamer = $hlsStreamer;
         $this->logger = $logger;
+        $this->musicLibrary = $musicLibrary;
     }
 
     /**
@@ -68,14 +83,48 @@ class LibraryBridge
      * hang off their series and would otherwise flood the root (production has
      * 26 389 episodes against 434 series).
      *
+     * ⚠ **`album` / `track` / `music` are excluded for the SAME reason, and S97
+     * is why the exclusion had to be a type narrowing rather than a parent
+     * filter.** Audio used to list `['music','audio','album','artist','track',
+     * 'audiobook']`, which put artists, their albums AND their individual tracks
+     * side by side as SIBLINGS of the Audio root, with no way to descend from one
+     * to the next. Two concrete consequences on production's music library
+     * (4,656 artists / 10,966 albums / 61,105 tracks, measured read-only
+     * 2026-07-27):
+     *
+     *  - {@see getLibraryChildCount()} sums {@see ItemRepository::countAllByType()}
+     *    over all six types and advertises **76,727+** children, while
+     *    {@see getLibraryItems()} returns {@see ItemRepository::getAllByType()}'s
+     *    default page — **at most 100 per type**. The `<upnp:childCount>` a
+     *    renderer is promised and the list it receives disagree by three orders of
+     *    magnitude.
+     *  - The 100 albums and 100 tracks it does return are an arbitrary
+     *    title-ordered slice with no relation to the 100 artists beside them.
+     *
+     * That could not be fixed by nesting them: {@see getLibraryItems()} calls
+     * {@see ItemRepository::getAllByType()}, which has **no parent filter at all**,
+     * and S97 settled that `media_items.parent_id` is never written for music —
+     * the hierarchy lives only in the `music_*` tables. So the root lists only the
+     * true top level (artists, plus the standalone audio types) and the levels
+     * below it are produced by {@see getMusicChildren()} from `music_*`.
+     * `music` is dropped outright: it is a container type with zero rows.
+     *
      * @var array<string, list<string>>
      */
     private const CATEGORY_TYPES = [
         'video'  => ['movie', 'series', 'video'],
-        'audio'  => ['music', 'audio', 'album', 'artist', 'track', 'audiobook'],
+        'audio'  => ['artist', 'audio', 'audiobook'],
         'photos' => ['photo'],
         'books'  => ['book'],
     ];
+
+    /**
+     * `media_items.type` members whose children come from `music_*`, not from
+     * `media_items.parent_id` (S97).
+     *
+     * @var list<string>
+     */
+    private const MUSIC_CONTAINER_TYPES = ['artist', 'album'];
 
     /**
      * Root containers representing the media library categories, with accurate
@@ -140,7 +189,14 @@ class LibraryBridge
 
         $total = 0;
         foreach ($types as $type) {
-            $total += $this->itemRepository->countAllByType($type);
+            // The artist count must come from the SAME source as the artist
+            // listing (S97), or the advertised childCount over-counts by every
+            // `media_items[artist]` row that no `music_artists` row points at —
+            // the orphan shape MusicLibraryScanner's adoption path exists to
+            // reclaim. Whichever source is used, count and list agree.
+            $total += $type === 'artist' && $this->musicLibrary !== null
+                ? $this->musicLibrary->getArtistsWithMediaItemCount()
+                : $this->itemRepository->countAllByType($type);
         }
 
         return $total;
@@ -149,7 +205,10 @@ class LibraryBridge
     /**
      * Get children of a container (library, folder, playlist).
      *
-     * Uses ItemRepository::findByParent() to get actual media items.
+     * Uses ItemRepository::findByParent() to get actual media items — EXCEPT for
+     * music containers, whose children come from `music_*` (S97): an `artist` or
+     * `album` `media_items` row never carries children under `parent_id`, so
+     * `findByParent()` on one returns an empty container and the browse dead-ends.
      *
      * @param string $objectId The object ID of the container
      * @return array<int, array<string, mixed>> Array of child items
@@ -166,10 +225,49 @@ class LibraryBridge
             return $this->getLibraryItems($libraryType);
         }
 
+        // Music drill-down: artist → albums → tracks, read from `music_*`.
+        $musicChildren = $this->getMusicChildren($objectId);
+        if ($musicChildren !== null) {
+            return $musicChildren;
+        }
+
         // Handle regular parent-based children
         $items = $this->itemRepository->findByParent($objectId);
 
         return array_map(fn($item) => $this->itemToCdsObject($item), $items);
+    }
+
+    /**
+     * Resolves the children of a music container (`artist` → albums, `album` →
+     * tracks) through the authoritative `music_*` tables.
+     *
+     * @param string $objectId A `media_items` UUID.
+     * @return array<int, array<string, mixed>>|null CDS objects, or NULL when
+     *         `$objectId` is not a music container — the caller then falls through
+     *         to the ordinary `parent_id` drill-down. NULL and `[]` are deliberately
+     *         distinct: `[]` means "this artist really has no browsable albums".
+     */
+    private function getMusicChildren(string $objectId): ?array
+    {
+        if ($this->musicLibrary === null || $objectId === '') {
+            return null;
+        }
+
+        $item = $this->itemRepository->findById($objectId);
+        $type = is_string($item['type'] ?? null) ? $item['type'] : '';
+
+        if (!in_array($type, self::MUSIC_CONTAINER_TYPES, true)) {
+            return null;
+        }
+
+        $childIds = $type === 'artist'
+            ? $this->musicLibrary->getAlbumMediaItemIdsForArtist($objectId)
+            : $this->musicLibrary->getTrackMediaItemIdsForAlbum($objectId);
+
+        return array_map(
+            fn(array $child): array => $this->itemToCdsObject($child),
+            $this->itemRepository->findByIds($childIds)
+        );
     }
 
     /**
@@ -189,7 +287,14 @@ class LibraryBridge
 
         $objects = [];
         foreach ($types as $type) {
-            foreach ($this->itemRepository->getAllByType($type) as $item) {
+            $items = $type === 'artist' && $this->musicLibrary !== null
+                // Enumerated from `music_artists` (S97), so the root shows exactly
+                // the artists that can actually be drilled into — an orphaned
+                // `media_items[artist]` row is not one of them.
+                ? $this->itemRepository->findByIds($this->musicLibrary->getArtistMediaItemIds())
+                : $this->itemRepository->getAllByType($type);
+
+            foreach ($items as $item) {
                 $objects[] = $this->itemToCdsObject($item);
             }
         }

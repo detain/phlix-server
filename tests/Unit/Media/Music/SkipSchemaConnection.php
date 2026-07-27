@@ -307,6 +307,25 @@ final class SkipSchemaConnection extends Connection
         // column list: `id, album_id, artist_id, title, track_number, disc_number,
         // duration_secs` (S145 widened both ends together — the row gained `artist_id`
         // in `runInsert()`, the statement gained `album_id, artist_id`).
+        //
+        // ⚠ "Wholesale" means the statement's column list is NEVER consulted, so this
+        // double cannot tell a fetched column from an unfetched one — the permissiveness
+        // that let mutation M10 survive the whole unit suite in S145 (see the same
+        // warning, at length, on {@see MusicLibraryScannerTest::statefulDbMock()}). A
+        // claim about WHICH COLUMNS a statement fetches therefore belongs in
+        // {@see \Phlix\Tests\Integration\Media\RecordingMySqlConnection}, against a
+        // real server.
+        //
+        // Statement VOLUME is a different matter and is deliberately NOT covered by that
+        // warning: {@see self::$statements} appends every statement this double is asked
+        // to run, so counting them is exact — that is what
+        // {@see MusicScanReparentTest::testAllTracksMovingOffOneAlbumCostASingleRecount()}
+        // and the stamp-UPDATE guards in the same file do. Two honest limits on such a
+        // count: only the SQL is kept, never the bound parameters, so it can say HOW MANY
+        // statements of a shape were issued and never WHICH ROW they targeted; and it
+        // counts what the scanner issued GIVEN THE ANSWERS ABOVE, so wherever a branch
+        // turns on what a real server would have returned, the count is only as good as
+        // this model of it.
         if (str_contains($sql, 'FROM music_tracks WHERE media_item_id')) {
             $mid = (string) ($p[0] ?? '');
 

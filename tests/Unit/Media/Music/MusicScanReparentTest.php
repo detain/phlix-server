@@ -138,7 +138,10 @@ final class MusicScanReparentTest extends TestCase
         self::assertSame(
             2,
             $scanner->probeCount,
-            'the full-read mode must leave the skip index unloaded, so EVERY file is opened'
+            'the full-read mode must make canSkip() refuse every skip, so EVERY file is opened. '
+            . '(S148 changed HOW: S145 achieved it by leaving the index unloaded, which also killed the '
+            . 'stamp suppression and rewrote every row read. The index is loaded now; the probe count is '
+            . 'unchanged, and that invariance IS the point.)'
         );
         self::assertSame(
             [$rightAlbumId, $rightArtistId],
@@ -216,7 +219,9 @@ final class MusicScanReparentTest extends TestCase
         $scanner->scanDirectory($dir, null, 'lib-1');
 
         $scanner->resetProbes();
+        $db->statements = [];
         $result = $scanner->scanDirectory($dir, null, 'lib-1', true);
+        $stampUpdates = $this->countStatements($db, 'UPDATE media_items SET metadata_json = JSON_SET');
 
         self::assertSame(3, $scanner->probeCount, 'a full read reads everything, by definition');
         self::assertSame(
@@ -231,6 +236,120 @@ final class MusicScanReparentTest extends TestCase
         $summary = $logger->contextOf('Music directory scan complete');
         self::assertIsArray($summary);
         self::assertSame(0, $summary['reparented'] ?? null, 'nothing was mis-parented, so nothing moved');
+
+        // S148 — and it must not rewrite the row's STAMP either. The full-read mode now
+        // loads the skip index and gates canSkip() instead of leaving the index unloaded,
+        // so isStampCurrent() can suppress every one of these no-op writes. The real-DB
+        // proof is MusicScanWriteAmplificationIntegrationTest; this is the cheap guard
+        // that runs on every push.
+        self::assertSame(
+            3,
+            $summary['skip_index_entries'] ?? null,
+            'the summary reports a populated index. ⚠ DOCUMENTATION, NOT A KILLER, and measured as '
+            . 'such: MusicScanSkipIndex::remember() adds an entry after every stamp write, so an '
+            . 'UNLOADED index also ends a 3-file scan holding 3 entries — re-applying S145\'s load '
+            . 'gate leaves THIS assertion green. The killer is the UPDATE count below'
+        );
+        self::assertSame(
+            0,
+            $stampUpdates,
+            'so a clean full read rewrites nothing at all: not the track row, and not its stamp. '
+            . 'At 8b953e82 this was 3 — 61,135 no-op UPDATEs on the production library'
+        );
+    }
+
+    /**
+     * S148 — the `reparented` counter answers "did this track move?", and nothing else.
+     *
+     * S145 shared ONE guard between the counter and the vacated-album recount:
+     * `if ($existingAlbumId !== $albumId && $existingAlbumId > 0)`. The `> 0` half exists
+     * for the RECOUNT — 0 is the "column absent or unreadable" shape from the coercion,
+     * not a `music_albums.id`, so recounting it would target no row. The COUNTER has no
+     * business inheriting it: such a track has genuinely moved.
+     *
+     * ⚠ **This shape cannot be produced against a real database** — `music_tracks.album_id`
+     * is `INT UNSIGNED NOT NULL` with an enforced FK (migration 065) — which is exactly
+     * why it belongs on the double, and exactly why it went unnoticed. A test that can
+     * only be written where the constraint does not exist is still worth writing: the
+     * defect is that the counter's correctness DEPENDS on a constraint it never mentions.
+     */
+    public function testATrackWhoseStoredAlbumIdReadsAsZeroIsStillCountedAsReparented(): void
+    {
+        [$dir, $db] = $this->fixture(2);
+        $logger = new RecordingLogger();
+        $scanner = $this->scanner($db, $logger);
+        $scanner->scanDirectory($dir, null, 'lib-1');
+
+        $trackPath = $dir . '/track-1.mp3';
+        [$rightAlbumId, $rightArtistId] = $this->parentageOf($db, $trackPath);
+        $mid = $this->mediaItemIdFor($db, $trackPath);
+        // The absent-column shape, verbatim: `(int) ($row['album_id'] ?? 0)` reading 0
+        // while the artist is untouched, so the artist half of S145's `elseif` cannot
+        // rescue the count.
+        $db->tracks[$mid]['album_id'] = 0;
+
+        $db->statements = [];
+        $scanner->scanDirectory($dir, null, 'lib-1', true);
+
+        self::assertSame(
+            [$rightAlbumId, $rightArtistId],
+            $this->parentageOf($db, $trackPath),
+            'the row is repaired either way — that half was never broken'
+        );
+
+        $summary = $logger->contextOf('Music directory scan complete');
+        self::assertIsArray($summary);
+        self::assertSame(
+            1,
+            $summary['reparented'] ?? null,
+            'RED at 8b953e82 with 0: the counter sat behind the recount\'s `> 0` guard, so a track '
+            . 'that moved off an unreadable album id was repaired SILENTLY and the operator\'s only '
+            . 'evidence of the repair said nothing had happened'
+        );
+
+        self::assertSame(
+            1,
+            $this->countStatements($db, 'SET a.total_tracks'),
+            'and still exactly one recount — the album being flushed. 0 is not a music_albums.id, so '
+            . 'nothing may be recounted for the album the track "left"'
+        );
+    }
+
+    /**
+     * S148 — a retagged N-track album recounts the album it vacated ONCE, not N times.
+     *
+     * All three tracks are re-pointed at one shell album and then healed back in a single
+     * flush. `refreshAlbumTrackTotal()` used to run inside `upsertTrack()`, once per moved
+     * track, so the vacated row was recounted three times with three identical correlated
+     * `COUNT(*)`s. The real-MySQL proof is
+     * {@see \Phlix\Tests\Integration\Media\MusicScanWriteAmplificationIntegrationTest::testARetaggedFourTrackAlbumRecountsTheVacatedAlbumExactlyOnce()};
+     * this pins the same claim where the statement stream is cheap to read.
+     */
+    public function testAllTracksMovingOffOneAlbumCostASingleRecount(): void
+    {
+        [$dir, $db] = $this->fixture(3);
+        $scanner = $this->scanner($db);
+        $scanner->scanDirectory($dir, null, 'lib-1');
+
+        $this->misParent($db, $dir . '/track-1.mp3');
+        foreach ([2, 3] as $n) {
+            $mid = $this->mediaItemIdFor($db, $dir . '/track-' . $n . '.mp3');
+            $db->tracks[$mid]['album_id'] = self::WRONG_ALBUM_ID;
+            $db->tracks[$mid]['artist_id'] = self::WRONG_ARTIST_ID;
+        }
+        $db->albums[self::WRONG_ALBUM_ID]['total_tracks'] = 3;
+
+        $db->statements = [];
+        $result = $scanner->scanDirectory($dir, null, 'lib-1', true);
+
+        self::assertSame(3, $result->updated, 'all three moved back');
+        self::assertSame(
+            2,
+            $this->countStatements($db, 'SET a.total_tracks'),
+            'ONE recount of the album they arrived at (flushAlbum()\'s finally) and ONE of the album '
+            . 'they left. RED at 8b953e82 with 4: the vacated album was recounted once per track'
+        );
+        self::assertSame(0, $db->albums[self::WRONG_ALBUM_ID]['total_tracks'], 'and the answer is still right');
     }
 
     /**
@@ -323,6 +442,30 @@ final class MusicScanReparentTest extends TestCase
         self::assertIsArray($track, 'no music_tracks row for ' . $path);
 
         return [$track['album_id'], $track['artist_id']];
+    }
+
+    /**
+     * How many recorded statements contain `$needle`.
+     *
+     * ⚠ {@see SkipSchemaConnection::$statements} keeps the SQL only, not the bound
+     * parameters, so a count here says HOW MANY statements of a shape were issued and
+     * never WHICH ROW they targeted. Where the target matters, the real-MySQL
+     * {@see \Phlix\Tests\Integration\Media\RecordingMySqlConnection} records both.
+     *
+     * @param SkipSchemaConnection $db     Fixture database.
+     * @param string               $needle Statement substring.
+     * @return int
+     */
+    private function countStatements(SkipSchemaConnection $db, string $needle): int
+    {
+        $n = 0;
+        foreach ($db->statements as $sql) {
+            if (str_contains($sql, $needle)) {
+                $n++;
+            }
+        }
+
+        return $n;
     }
 
     /**

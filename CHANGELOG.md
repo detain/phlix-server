@@ -135,6 +135,37 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Changed
 
+- **A healing `rescan` no longer rewrites every row it reads** (S148). S145 implemented
+  the full-read mode by *not loading* the S122(a) skip index. That forced every file to
+  be opened, which was the point — but it also left `isStampCurrent()` unable to
+  suppress anything, so the scan issued one `JSON_SET` stamp `UPDATE` **per file read,
+  writing back the values already stored**: 61,135 no-op row rewrites per healing pass
+  on the production music library. The mode is now expressed as a `canSkip()` gate
+  instead: the index is loaded and consulted for the *stamping* decision, while the
+  *read* is forced. Reading every file and rewriting every row were never the same
+  thing.
+
+  **The reach guarantee is unchanged and is asserted alongside every write count** — a
+  retagged track filed under the wrong album can only be repaired by opening the file,
+  because the skip `continue`s before `probeMetadata()`. A full read of an unchanged
+  library now opens and tag-reads every file and issues **zero** stamp UPDATEs, proven
+  against real MySQL by counting the statements the server received.
+
+  Two smaller repairs in the same area: a retagged N-track album issues **one** recount
+  of the album it vacated instead of N identical ones (`refreshAlbumTrackTotal()` moved
+  out of the per-track path into the flush's `finally`, deduped by album id), and the
+  `reparented` summary counter no longer sits behind a guard that exists only for that
+  recount, so a track that moved off an unreadable album id is still reported as moved.
+
+  **Every recount in that `finally` is attempted independently.** Moving the vacated
+  recount out of the per-track `try`/`catch` and into the flush put it *behind* the
+  flushed album's own recount, so a DB failure on the first one silently skipped the
+  rest — leaving the emptied album advertising a `total_tracks` it no longer owns,
+  permanently (it is never flushed again) and while the scan still reported
+  `failed = 0`. `MusicLibraryService::getArtistWithAlbums()` sums that column. Each id
+  now runs in its own `try`, and the first failure is re-thrown once all of them have
+  been attempted, so what gets logged is unchanged.
+
 - **The music scanner's per-file existence lookup now uses the `path_hash` index that
   already existed** (S151). It binds `path_hash = ?` alongside the kept `path = ?`, so
   the statement resolves as a `const` single-row lookup instead of hand-filtering the

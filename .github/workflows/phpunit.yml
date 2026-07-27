@@ -131,6 +131,20 @@ jobs:
           fail_ci_if_error: false
           token: ${{ secrets.CODECOV_TOKEN }}
 
+      - name: Upload coverage to Codacy
+        uses: codacy/codacy-coverage-reporter-action@v1
+        # Non-blocking for the same reason as the Codecov step above: a missing
+        # or expired token, or a repo not yet activated in the Codacy UI, must
+        # not fail the test workflow. This action has no fail_ci_if_error input,
+        # so continue-on-error is how that guarantee is expressed.
+        # NOTE: continue-on-error makes a FAILED step report "success" — to check
+        # whether an upload actually happened, read the step log for
+        # "Coverage data uploaded successfully", not the step conclusion.
+        continue-on-error: true
+        with:
+          api-token: ${{ secrets.CODACY_API_TOKEN }}
+          coverage-reports: ./coverage.xml
+
   test-server:
     name: Server Component Tests
     runs-on: ubuntu-latest

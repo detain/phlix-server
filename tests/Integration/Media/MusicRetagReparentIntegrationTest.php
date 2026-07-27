@@ -247,6 +247,45 @@ final class MusicRetagReparentIntegrationTest extends TestCase
     }
 
     /**
+     * The steady-state guard, against a REAL database — and it has to be here rather
+     * than beside its unit siblings.
+     *
+     * A full read of a clean library must rewrite NOTHING. The way to break that is to
+     * compare a column the `SELECT` does not fetch: the coercion reads the absent key
+     * as `0`, `0 !== $albumId` for every row, and every file in the library turns into
+     * an `UPDATE` on every scan. The in-memory double **cannot** catch it — its
+     * `runSelect()` hands back the stored row wholesale and ignores the statement's
+     * column list entirely, so it answers with columns production never asked for.
+     * Only a server distinguishes "selected" from "not selected".
+     *
+     * (Measured: reverting the widened `SELECT` alone leaves the unit steady-state test
+     * green and turns this file red.)
+     */
+    public function testAFullReadOfAnUnchangedLibraryRewritesNothing(): void
+    {
+        $this->buildTree(3);
+        $scanner = $this->scanner();
+
+        $first = $scanner->scanDirectory($this->root, null, $this->libraryId);
+        self::assertSame(3, $first->added);
+
+        $scanner->resetProbes();
+        $second = $scanner->scanDirectory($this->root, null, $this->libraryId, true);
+
+        self::assertSame(3, $scanner->probeCount, 'the full-read mode must open every file');
+        self::assertSame(
+            0,
+            $second->updated,
+            'but a correct row must not be rewritten. A non-zero count here means the widened change '
+            . 'predicate is comparing something the SELECT does not fetch, which would rewrite all '
+            . '61,111 production rows on every healing scan'
+        );
+        self::assertSame(0, $second->added);
+        self::assertSame(0, $second->failed);
+        self::assertSame(3, $this->countTracks());
+    }
+
+    /**
      * Rewrites the ID3v2 tag of `$path` in place, changing only what is asked for.
      *
      * ⚠ Every other frame is written back verbatim, so `title`, `track_number` and

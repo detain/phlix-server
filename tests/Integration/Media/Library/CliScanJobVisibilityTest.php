@@ -180,6 +180,18 @@ final class CliScanJobVisibilityTest extends TestCase
      * A mock cannot be killed, so this spawns a real `php` subprocess running the real
      * command against the real database, waits until it has written its `running` row,
      * then sends a real SIGTERM.
+     *
+     * ## ⚠ THIS TEST WAS FLAKY, AND THE FLAKE WAS THE PRODUCT, NOT THE TEST
+     *
+     * It failed 3 runs in 10 (and a standalone harness stranded 12 of 15 rows with the
+     * MySQL general log on) because `LibraryScanCommand` used to INSERT the `running`
+     * row BEFORE installing its signal handlers. Using the row's appearance as the
+     * "child is killable" probe is only sound if a visible row implies a handler
+     * exists — which it did not. The command now mints the job id, installs the
+     * handlers, and only then inserts, so the row's appearance IS a valid readiness
+     * probe and this test's original shape became correct rather than lucky. Do not
+     * "fix" a recurrence by adding a sleep before the kill; that hides the defect the
+     * test exists to catch.
      */
     public function testAKilledCliScanLandsAsFailedAndNeverStaysRunning(): void
     {
@@ -285,6 +297,210 @@ final class CliScanJobVisibilityTest extends TestCase
         } while (microtime(true) < $deadline);
 
         return null;
+    }
+
+    /**
+     * S151 review finding 7 — the SIGTERM handler writes to the database, and the
+     * original proof delivered its signal at a QUIESCENT point (the child was inside
+     * `sleep(60)` with no query in flight). In a real `library:scan` the scanner issues
+     * a query per file, so the arrival point that matters is MID-QUERY.
+     *
+     * This child therefore spends its whole life inside back-to-back `SELECT SLEEP(2)`
+     * statements on the SAME connection the repository writes through, and is signalled
+     * while one is in flight. If re-entering that connection from the handler could
+     * desync the client, `markFailed()` would throw, `failJob()`'s `catch (Throwable)`
+     * would swallow it, and the row would stay `running` — a green here is the whole
+     * guarantee.
+     *
+     * ⚠ Note what this also demonstrates: the stamp is not instantaneous. PHP dispatches
+     * an async signal handler at an opcode boundary, so a signal arriving 100 ms into a
+     * 2-second query is acted on ~1.9 s later, when the query returns. That is why the
+     * child's queries are 2 s and not 60 s.
+     */
+    public function testASigtermDeliveredMidQueryStillLandsTheRowFailed(): void
+    {
+        foreach (['proc_open', 'posix_kill'] as $needed) {
+            if (!function_exists($needed)) {
+                $this->markTestSkipped($needed . '() unavailable — cannot kill a real process here.');
+            }
+        }
+
+        $script = $this->writeSlowQueryRunnerScript();
+        $suffix = bin2hex(random_bytes(6));
+        $pidFile = sys_get_temp_dir() . '/phlix-s151-pid-' . $suffix;
+        $busyFile = sys_get_temp_dir() . '/phlix-s151-busy-' . $suffix;
+        $childPid = 0;
+
+        try {
+            $pipes = [];
+            $proc = proc_open(
+                [PHP_BINARY, $script, $this->libraryId, $pidFile, $busyFile],
+                [1 => ['file', '/dev/null', 'w'], 2 => ['file', '/dev/null', 'w']],
+                $pipes,
+                dirname(__DIR__, 4),
+                array_merge($_ENV, [
+                    'DB_HOST' => getenv('DB_HOST') ?: '127.0.0.1',
+                    'DB_PORT' => (string) (getenv('DB_PORT') ?: 3306),
+                    'DB_DATABASE' => getenv('DB_DATABASE') ?: 'phlix_test',
+                    'DB_USER' => getenv('DB_USER') ?: 'root',
+                    'DB_PASSWORD' => getenv('DB_PASSWORD') ?: 'root',
+                ]),
+            );
+            $this->assertIsResource($proc, 'could not spawn the CLI scan subprocess');
+
+            // Gate on the child's OWN "I am inside a query now" marker, not on the row.
+            $ready = $this->waitFor(function () use ($pidFile, $busyFile, &$childPid): ?array {
+                if ($childPid === 0 && is_file($pidFile)) {
+                    $childPid = (int) trim((string) @file_get_contents($pidFile));
+                }
+                $row = $this->latestJobRow();
+
+                return $childPid > 0 && is_file($busyFile) && is_array($row) && $row['status'] === 'running'
+                    ? $row
+                    : null;
+            });
+
+            $this->assertIsArray($ready, 'the subprocess must reach the mid-query state within the timeout');
+            $this->assertTrue(posix_kill($childPid, SIGTERM), 'SIGTERM must reach the live child');
+
+            $final = $this->waitFor(function (): ?array {
+                $row = $this->latestJobRow();
+
+                return is_array($row) && $row['status'] !== 'running' ? $row : null;
+            });
+
+            $this->assertIsArray(
+                $final,
+                'a SIGTERM delivered while a query was in flight must still land the row terminal — if the '
+                . 'handler could corrupt the shared connection, markFailed() would throw and the row would '
+                . 'stay `running`',
+            );
+            $this->assertSame('failed', $final['status']);
+            $this->assertStringContainsString('signal', (string) $final['error']);
+        } finally {
+            if ($childPid > 0) {
+                @posix_kill($childPid, SIGKILL);
+            }
+            if (isset($proc) && is_resource($proc)) {
+                @proc_close($proc);
+            }
+            @unlink($script);
+            @unlink($pidFile);
+            @unlink($busyFile);
+        }
+    }
+
+    /**
+     * S151 review finding 5 — the refusal must survive an interleaving in which BOTH
+     * callers read "no active job" before either inserts.
+     *
+     * `hasActiveJobForLibrary()` + `startRunning()` is a check-then-act pair with
+     * nothing between them, so the guarantee has to live in the INSERT. This drives
+     * exactly that order against real MySQL: read idle twice, then insert twice.
+     */
+    public function testTheGuardedInsertRefusesTheSecondStarterEvenWhenBothSawAnIdleLibrary(): void
+    {
+        $jobs = new ScanJobRepository($this->db());
+
+        $this->assertFalse($jobs->hasActiveJobForLibrary($this->libraryId), 'fixture must start idle');
+        $this->assertFalse($jobs->hasActiveJobForLibrary($this->libraryId), 'and the competitor reads idle too');
+
+        $winner = $jobs->startRunningIfIdle($this->libraryId, 'scan');
+        $loser = $jobs->startRunningIfIdle($this->libraryId, 'rescan');
+
+        $this->assertIsString($winner, 'the first starter must get a row');
+        $this->assertNull(
+            $loser,
+            'the second must be refused BY THE INSERT — its pre-check already said idle, so nothing else can '
+            . 'stop it starting a concurrent scan over the same library',
+        );
+
+        $rows = $this->db()->query(
+            'SELECT id FROM library_scan_jobs WHERE library_id = ?',
+            [$this->libraryId],
+        );
+        $this->assertIsArray($rows);
+        $this->assertCount(1, $rows, 'exactly one row may exist — the loser must not have written anything');
+
+        // ⚠ Regression guard for the `'0'`-is-falsy landmine: Connection::query()
+        // returns lastInsertId() ('0' for this UUID-keyed table) on a successful
+        // INSERT and null on one that wrote nothing. A `if (!$result)` test would read
+        // the WINNER as a refusal too, and no scan would ever start.
+        $this->assertNotSame('', (string) $winner, 'a successful guarded insert must return the job id');
+    }
+
+    /**
+     * S151 review finding 4 — "is the library's NEWEST job active?" is not the same
+     * question as "does the library have an active job", and only the second is safe to
+     * gate a write on.
+     *
+     * `queued_at` is a TIMESTAMP with 1-second granularity, and a terminal job can
+     * legitimately be newer than a live one (a `metadata` job that completed while a
+     * long CLI `rescan` is still running). Both shapes are staged here; a
+     * newest-row-only implementation reports `false` for both and lets a second scanner
+     * loose on a library that is actively being scanned.
+     */
+    public function testAnActiveJobIsSeenEvenWhenANewerTerminalJobExists(): void
+    {
+        $jobs = new ScanJobRepository($this->db());
+        $db = $this->db();
+
+        $liveId = $this->uuid();
+        $doneId = $this->uuid();
+
+        // A live `running` job, stamped ten minutes ago.
+        $db->query(
+            'INSERT INTO library_scan_jobs (id, library_id, type, status, queued_at, started_at)'
+            . ' VALUES (?, ?, ?, ?, NOW() - INTERVAL 10 MINUTE, NOW() - INTERVAL 10 MINUTE)',
+            [$liveId, $this->libraryId, 'rescan', 'running'],
+        );
+        // A NEWER terminal job, exactly as a metadata match that finished meanwhile.
+        $db->query(
+            'INSERT INTO library_scan_jobs (id, library_id, type, status, queued_at, completed_at)'
+            . ' VALUES (?, ?, ?, ?, NOW(), NOW())',
+            [$doneId, $this->libraryId, 'metadata', 'completed'],
+        );
+
+        $latest = $jobs->getLatestForLibrary($this->libraryId);
+        $this->assertIsArray($latest);
+        $this->assertSame(
+            'completed',
+            $latest['status'],
+            'fixture check: the NEWEST row is the terminal one, which is what makes this case interesting',
+        );
+
+        $this->assertTrue(
+            $jobs->hasActiveJobForLibrary($this->libraryId),
+            'a `running` job must be seen even though a newer job has completed — reading only the newest '
+            . 'row reports "idle" for a library that is actively being scanned',
+        );
+        $this->assertNull(
+            $jobs->startRunningIfIdle($this->libraryId, 'scan'),
+            'and the guarded insert must agree, or the refusal is decorative',
+        );
+    }
+
+    /**
+     * The same hole without any newer row: two jobs written in the SAME second tie on
+     * `queued_at`, and `ORDER BY queued_at DESC LIMIT 1` then picks arbitrarily.
+     */
+    public function testAQueuedJobTyingOnQueuedAtWithATerminalOneIsStillSeen(): void
+    {
+        $jobs = new ScanJobRepository($this->db());
+        $db = $this->db();
+
+        $stamp = '2026-07-27 13:15:03';
+        foreach ([[$this->uuid(), 'queued'], [$this->uuid(), 'completed']] as [$id, $status]) {
+            $db->query(
+                'INSERT INTO library_scan_jobs (id, library_id, type, status, queued_at) VALUES (?, ?, ?, ?, ?)',
+                [$id, $this->libraryId, 'scan', $status, $stamp],
+            );
+        }
+
+        $this->assertTrue(
+            $jobs->hasActiveJobForLibrary($this->libraryId),
+            'a `queued` job tying on queued_at with a `completed` one must still count as active',
+        );
     }
 
     /**
@@ -440,6 +656,95 @@ $manager = new class extends LibraryManager {
             $onProgress(1, 1000, '/tmp/phlix-s150/blocking.flac', ['added' => 0, 'failed' => 0]);
         }
         sleep(60);
+
+        return new ScanResult();
+    }
+};
+
+$application = new Application();
+$application->setAutoExit(false);
+$application->add(new LibraryScanCommand(
+    static fn(): LibraryManager => $manager,
+    static fn(): ScanJobRepository => $jobs,
+));
+
+$application->find('library:scan')->run(
+    new ArrayInput(['libraryId' => $libraryId]),
+    new ConsoleOutput(),
+);
+PHP;
+
+        $written = file_put_contents($path, str_replace('__DIR__PLACEHOLDER', var_export($root, true), $code));
+        $this->assertNotFalse($written, 'could not write the subprocess runner script');
+
+        return $path;
+    }
+
+    /**
+     * Write the program the MID-QUERY case spawns. Identical to
+     * {@see self::writeRunnerScript()} except that the stub manager, instead of
+     * sleeping in PHP, keeps a query in flight on the SAME connection the
+     * {@see ScanJobRepository} writes through — which is the state a real scan is in
+     * for essentially its whole life, and the state the original SIGTERM proof never
+     * covered.
+     */
+    private function writeSlowQueryRunnerScript(): string
+    {
+        $root = dirname(__DIR__, 4);
+        $path = sys_get_temp_dir() . '/phlix-s151-runner-' . bin2hex(random_bytes(6)) . '.php';
+
+        $code = <<<'PHP'
+<?php
+
+declare(strict_types=1);
+
+require __DIR__PLACEHOLDER . '/vendor/autoload.php';
+
+use Phlix\Common\Database\ConnectionPool;
+use Phlix\Console\Commands\LibraryScanCommand;
+use Phlix\Media\Library\LibraryManager;
+use Phlix\Media\Library\ScanJobRepository;
+use Phlix\Media\Library\ScanResult;
+use Symfony\Component\Console\Application;
+use Symfony\Component\Console\Input\ArrayInput;
+use Symfony\Component\Console\Output\ConsoleOutput;
+
+$libraryId = $argv[1] ?? '';
+$pidFile = $argv[2] ?? '';
+$busyFile = $argv[3] ?? '';
+
+if ($pidFile !== '') {
+    file_put_contents($pidFile, (string) getmypid());
+}
+
+ConnectionPool::init(__DIR__PLACEHOLDER . '/config/database.php');
+$conn = ConnectionPool::getConnection('mysql');
+$jobs = new ScanJobRepository($conn);
+
+/**
+ * A manager that keeps a query IN FLIGHT on the repository's own connection, so a
+ * signal arriving here is a signal arriving mid-query. Two seconds per statement,
+ * not sixty: PHP dispatches an async signal handler at an opcode boundary, so the
+ * handler cannot run until the statement in progress returns.
+ */
+$manager = new class ($conn, $busyFile) extends LibraryManager {
+    public function __construct(private $conn, private string $busyFile)
+    {
+    }
+
+    public function scanLibrary(
+        string $libraryId,
+        ?callable $onProgress = null,
+        bool $readEveryFile = false
+    ): ScanResult {
+        for ($i = 0; $i < 60; $i++) {
+            $this->conn->query('SELECT SLEEP(2)');
+            if ($this->busyFile !== '') {
+                // Written only AFTER a query has already completed, so by the time the
+                // parent sees it the next one is in flight.
+                file_put_contents($this->busyFile, (string) $i);
+            }
+        }
 
         return new ScanResult();
     }

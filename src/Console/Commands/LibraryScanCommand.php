@@ -110,6 +110,16 @@ final class LibraryScanCommand extends Command
     /** Signals that must land the job row as `failed` rather than strand it. */
     private const TRAPPED_SIGNALS = [SIGTERM, SIGINT, SIGHUP];
 
+    /**
+     * The one refusal message, emitted from both the pre-check and the lost-race path
+     * so an operator cannot tell them apart (there is nothing useful to tell apart —
+     * in both cases a scan of this library is already in flight).
+     */
+    private const REFUSAL_MESSAGE = '<error>A scan job for this library is already queued or running. '
+        . 'Refusing to start a second one — two scanners over one library race on every per-file lookup, '
+        . 'and the admin badge can only report one of them. Re-run with --force if you know the existing '
+        . 'row is stranded (a kill -9 leaves one behind; a phlix-server restart clears it).</error>';
+
     /** @var callable(): LibraryManager Lazy factory for the backing manager. */
     private $libraryManagerFactory;
 
@@ -293,6 +303,10 @@ final class LibraryScanCommand extends Command
      * INSERT, the scan still runs — just invisibly, exactly as it did before S150. An
      * observability feature must never be able to refuse an operator's scan.
      *
+     * ⚠ **The handlers are installed BEFORE the row is created, and the id is minted
+     * before either.** That ordering is the fix for review finding 1 and is explained
+     * in full at the call site below — read it before reordering anything here.
+     *
      * @param string          $libraryId Library being scanned.
      * @param string          $type      `scan` or `rescan`.
      * @param bool            $force     Skip the already-active refusal.
@@ -317,21 +331,50 @@ final class LibraryScanCommand extends Command
             return null;
         }
 
-        if (!$force && $jobs->hasActiveJobForLibrary($libraryId)) {
-            $errOutput->writeln(
-                '<error>A scan job for this library is already queued or running. Refusing to start a '
-                . 'second one — two scanners over one library race on every per-file lookup, and the admin '
-                . 'badge can only report one of them. Re-run with --force if you know the existing row is '
-                . 'stranded (a kill -9 leaves one behind; a phlix-server restart clears it).</error>'
-            );
-
-            return Command::FAILURE;
-        }
-
         try {
-            $this->jobId = $jobs->startRunning($libraryId, $type);
+            if (!$force && $jobs->hasActiveJobForLibrary($libraryId)) {
+                $errOutput->writeln(self::REFUSAL_MESSAGE);
+
+                return Command::FAILURE;
+            }
+
+            // ⚠ **ORDERING IS LOAD-BEARING — DO NOT MOVE THE INSERT ABOVE THIS LINE.**
+            // (S151, review finding 1.) The handlers below are what guarantee the row
+            // reaches a terminal state, and they can only fail a row whose id they
+            // already hold. Creating the row first left a window in which the row was
+            // COMMITTED and externally visible while `$this->jobId` was still `''` and
+            // no handler existed at all: a SIGTERM landing there killed the process
+            // with the default disposition and stranded the row `running` forever —
+            // the exact state S150 exists to abolish. It was not theoretical; the
+            // integration test reproduced it in 3 runs out of 10, and a standalone
+            // harness in 12 out of 15 with the server under extra latency.
+            //
+            // Minting the id up front closes the window COMPLETELY, not merely
+            // narrowly, and the reason is PHP's signal dispatch, not luck:
+            // `pcntl_async_signals(true)` sets `EG(vm_interrupt)` from the C handler
+            // and the userland callback runs at the next VM interrupt check, i.e. at
+            // an opcode boundary. It therefore CANNOT run in the middle of the
+            // `PDOStatement::execute()` that performs the INSERT. So a signal arriving
+            // in the INSERT's round-trip is dispatched only after the INSERT has
+            // returned — by which point `markFailed($this->jobId)` names the row that
+            // was just committed. A signal arriving BEFORE the INSERT stamps a row id
+            // that does not exist yet (an UPDATE affecting 0 rows, harmless) and then
+            // re-raises, so the INSERT never runs and there is no row to strand.
             $this->jobs = $jobs;
+            $this->jobId = $jobs->newJobId();
+            $this->installTerminationHandlers();
+
+            // `startRunningIfIdle()` re-asserts the refusal INSIDE the INSERT, closing
+            // the check-then-insert race the pre-check above cannot (review finding 5):
+            // two invocations started together both read "idle", and only the guarded
+            // statement can stop both of them inserting. The pre-check is kept because
+            // it is the cheap, unambiguous operator message; the guarded insert is the
+            // guarantee.
+            $started = $force
+                ? $jobs->startRunning($libraryId, $type, $this->jobId)
+                : $jobs->startRunningIfIdle($libraryId, $type, $this->jobId);
         } catch (Throwable $e) {
+            $this->abandonJobRow();
             $errOutput->writeln(
                 '<comment>Could not create the scan-job row (' . $e->getMessage() . '); the scan will run '
                 . 'but will not appear in the admin UI.</comment>'
@@ -340,9 +383,35 @@ final class LibraryScanCommand extends Command
             return null;
         }
 
-        $this->installTerminationHandlers();
+        if ($started === null) {
+            // Lost the race against a concurrent starter, between the pre-check and
+            // the INSERT. No row was written, so nothing needs unwinding.
+            $this->abandonJobRow();
+            $errOutput->writeln(self::REFUSAL_MESSAGE);
+
+            return Command::FAILURE;
+        }
+
+        // The repository is the authority on the id of the row it wrote. It echoes the
+        // id we minted, but re-reading it here means a future implementation that mints
+        // its own cannot leave the handlers pointing at a row that does not exist.
+        $this->jobId = $started;
 
         return null;
+    }
+
+    /**
+     * Forget the row this run was going to own, so the already-installed termination
+     * handlers become no-ops.
+     *
+     * Called when the INSERT was refused or failed. The handlers are installed BEFORE
+     * the INSERT on purpose (see {@see self::openJobRow()}), so "no row exists" has to
+     * be expressed by clearing the state they read rather than by not installing them.
+     */
+    private function abandonJobRow(): void
+    {
+        $this->jobs = null;
+        $this->jobId = '';
     }
 
     /**
@@ -377,6 +446,35 @@ final class LibraryScanCommand extends Command
      * ⚠ The handler does NOT call `exit()`. It stamps the row, restores the default
      * disposition and re-raises, so the process dies with the correct
      * `128 + signo` status and the shell reports the signal it actually got.
+     *
+     * ## Is it safe for this handler to WRITE TO THE DATABASE? (review finding 7)
+     *
+     * Yes, and the reason is a property of PHP's signal machinery, not luck. It was
+     * MEASURED rather than assumed:
+     *
+     *   * `pcntl_async_signals(true)` does not run PHP code from the C signal handler.
+     *     The C handler sets `EG(vm_interrupt)`; the userland callback is invoked from
+     *     the executor's interrupt check, i.e. at an OPCODE BOUNDARY. It therefore
+     *     cannot be entered part-way through the C call that is executing a query.
+     *     Probe: a `SELECT SLEEP(3)` on a PDO connection, SIGTERMed 500 ms in — the
+     *     handler was entered at **3,003 ms**, not at 500 ms, in every run.
+     *   * The connection this repository uses ({@see \Phlix\Common\Database\PhlixMySQLConnection})
+     *     sets `PDO::MYSQL_ATTR_USE_BUFFERED_QUERY = true`, so a statement's whole
+     *     result set is client-side before `execute()` returns. A query issued from the
+     *     handler therefore starts on an idle connection; there is no half-read result
+     *     stream to desync. The same probe issued `SELECT 42` from inside the handler
+     *     while the outer statement was still on the PHP stack: the nested query
+     *     returned normally, the outer statement then returned its rows correctly, and
+     *     the connection was still healthy afterwards.
+     *   * The stamp is a single autocommitted `UPDATE … WHERE id = ?` and
+     *     {@see self::failJob()} is guarded by `$this->jobFinished`, so it can neither
+     *     nest a transaction nor run twice.
+     *
+     * `CliScanJobVisibilityTest::testASigtermDeliveredMidQueryStillLandsTheRowFailed()`
+     * pins this end to end against real MySQL, by signalling the child while it is
+     * inside a genuinely slow query rather than at a quiescent point.
+     *
+     * ⚠ The residual is `SIGKILL`, as above — nothing else.
      */
     private function installTerminationHandlers(): void
     {

@@ -281,6 +281,13 @@ final class SkipSchemaConnection extends Connection
         // production query to the pre-S151 two-parameter form (`[$path, $libraryId]`)
         // makes `$p[0]` a raw path that can never equal a SHA-1 and every lookup misses
         // — i.e. this double KILLS that mutation instead of shrugging at it.
+        //
+        // ⚠ The production method has a SECOND, raw-path pass (`[$path, $libraryId]`)
+        // for databases where migration 087 left `path_hash` NULL. This branch matches
+        // it too and, because the sha1 test then fails, answers it with `[]` — i.e.
+        // this double models a DB where the hash IS present, so the fallback is
+        // correctly inert here. Its behaviour is pinned separately by
+        // MusicLibraryScannerTest::testTheTrackLookupStillResolvesWhenPathHashIsNullForEveryRow().
         if (str_contains($sql, "FROM media_items WHERE type = 'track'")) {
             foreach ($this->mediaItems as $row) {
                 if (

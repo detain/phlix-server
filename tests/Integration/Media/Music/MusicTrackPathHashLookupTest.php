@@ -51,6 +51,27 @@ use Workerman\MySQL\Connection;
  * CJK path), and {@see self::assertFixtureIsGenuinelyNonAscii()} fails if a future
  * edit quietly ASCII-fies it.
  *
+ * ## ⚠ THE `const` PLAN NEEDS AN INDEX THAT `migrations/` DOES NOT CREATE
+ *
+ * The whole speed-up rests on the `idx_media_items_library_path_hash` UNIQUE index —
+ * and migration 087 line 48 **DROPS** it. The only thing that re-adds it is
+ * `migrations/cleanup_072.php:121-125`, a MANUAL post-deploy finalizer. After a clean
+ * `scripts/run-migrations.php` the index therefore does **not** exist, and the new
+ * statement plans as `ref` / `idx_library` / key_len 144 / rows ≈ 404, i.e. exactly as
+ * the pre-S151 form did. Production has the index (that is where `const`/1 row was
+ * measured); an install that skipped the finalizer gets the correctness of this change
+ * and none of the speed.
+ *
+ * ⚠ **So this test CREATES the index itself, and a green run is therefore NOT evidence
+ * about your database.** It builds a private, uniquely-named copy of `media_items`
+ * ({@see self::createPlanTable()}) via `CREATE TABLE … LIKE`, adds the unique index
+ * THERE, and EXPLAINs against that. It deliberately does NOT `ALTER TABLE media_items`:
+ * adding a UNIQUE `(library_id, path_hash)` to the SHARED table for the duration of
+ * these tests would make any concurrently-running test that inserts two covered-type
+ * rows sharing `(library_id, path)` fail with error 1062 for a reason of this test's
+ * making. To learn whether YOUR database has the index, run
+ * `SHOW CREATE TABLE media_items` — nothing here can tell you.
+ *
  * ## ⚠ `path_hash` is NULL for 7 of the 13 `type` ENUM members
  *
  * Migration 087's generating expression covers only
@@ -92,8 +113,11 @@ final class MusicTrackPathHashLookupTest extends TestCase
 
     private string $otherLibraryId = '';
 
-    /** True only when THIS test created the unique index (so tearDown drops it). */
-    private bool $createdIndex = false;
+    /**
+     * Name of this test's PRIVATE copy of `media_items`, the only table that carries
+     * the unique index. Empty when it could not be created.
+     */
+    private string $planTable = '';
 
     /** @var array<string, string> label => seeded media_items UUID */
     private array $nonAsciiIds = [];
@@ -137,20 +161,17 @@ final class MusicTrackPathHashLookupTest extends TestCase
         }
 
         $this->seedTracks();
-        $this->ensurePathHashIndex();
-
-        // Deterministic index statistics for the cost-based optimizer.
-        $db->query('ANALYZE TABLE media_items');
+        $this->createPlanTable();
     }
 
     protected function tearDown(): void
     {
         if ($this->db !== null) {
-            if ($this->createdIndex) {
+            if ($this->planTable !== '') {
                 try {
-                    $this->db->query('ALTER TABLE media_items DROP INDEX ' . self::PATH_HASH_INDEX);
+                    $this->db->query('DROP TABLE IF EXISTS ' . $this->planTable);
                 } catch (Throwable) {
-                    // Best-effort: a leftover index is exactly what production carries.
+                    // Best-effort; the name is unique per run so a leftover is inert.
                 }
             }
             foreach ([$this->libraryId, $this->otherLibraryId] as $id) {
@@ -210,7 +231,15 @@ final class MusicTrackPathHashLookupTest extends TestCase
      */
     public function testTheScannerLookupExplainsAsAConstSingleRowIndexLookup(): void
     {
-        $captured = $this->captureScannerLookup(self::NON_ASCII_PATHS['bjork'], $this->libraryId);
+        $statements = $this->captureScannerLookup(self::NON_ASCII_PATHS['bjork'], $this->libraryId);
+
+        $this->assertCount(
+            1,
+            $statements,
+            'a HIT must cost exactly ONE statement — the raw-path fallback exists for the miss case only, '
+            . 'and paying for it on every hit would give back the whole S151 saving.',
+        );
+        $captured = $statements[0];
 
         $this->assertStringContainsString(
             'path_hash',
@@ -288,6 +317,66 @@ final class MusicTrackPathHashLookupTest extends TestCase
             (int) $this->planStr($plan, 'rows'),
             'the raw-path form hand-filters the whole library_id partition; on production that was 48,512 '
             . 'rows per file. Plan: ' . $this->planJson($plan),
+        );
+    }
+
+    /**
+     * A MISS must fall back to the raw `path` — the second pass that keeps the lookup
+     * correct on a database where migration 087 never ran (review finding 2).
+     *
+     * `path_hash` is a GENERATED column, so a hash-only lookup is silently blind
+     * wherever the column is NULL. 087 is two statements, a failed migration is not
+     * recorded by the runner, and `docker/docker-entrypoint.sh:9` runs migrations with
+     * `|| true`, so "072 applied, 087 not" is reachable — and in it every `track` row
+     * has `path_hash IS NULL`, every lookup misses, and the scanner mints a duplicate
+     * per file with no unique index to catch it (087 drops the index; only the manual
+     * `cleanup_072.php` re-adds it).
+     *
+     * This asserts the SHAPE against real MySQL: two statements on a miss, the second
+     * carrying NO `path_hash` while keeping the `type = 'track'` pin and the library
+     * scoping. The BEHAVIOUR under a NULL `path_hash` cannot be staged here — the
+     * generating expression makes it impossible to write a `track` row with a NULL
+     * hash — so it is pinned by a double in
+     * {@see \Phlix\Tests\Unit\Media\Music\MusicLibraryScannerTest}.
+     */
+    public function testAMissFallsBackToTheRawPathSoAnUnappliedMigration087CannotDuplicateTheLibrary(): void
+    {
+        $statements = $this->captureScannerLookup(
+            self::PATH_PREFIX . 'never/seeded/Björk — nope.flac',
+            $this->libraryId,
+        );
+
+        $this->assertCount(
+            2,
+            $statements,
+            'a MISS must try the raw `path` as well. Without it, a database whose `path_hash` is NULL for '
+            . 'tracks resolves NOTHING and the scanner duplicates the entire library.',
+        );
+
+        $this->assertStringContainsString('path_hash', $statements[0]['sql'], 'pass 1 must be the hash lookup');
+
+        $fallback = $statements[1]['sql'];
+        $this->assertStringNotContainsString(
+            'path_hash',
+            $fallback,
+            'the fallback must NOT bind path_hash — that is the very column it exists to survive. SQL: '
+            . $fallback,
+        );
+        $this->assertStringContainsString(
+            "type = 'track'",
+            $fallback,
+            'the fallback must keep the type pin, or it can return a non-track row. SQL: ' . $fallback,
+        );
+        $this->assertStringContainsString(
+            'library_id <=> ?',
+            $fallback,
+            'the fallback must stay scoped to the library, or it can adopt another library\'s row. SQL: '
+            . $fallback,
+        );
+        $this->assertSame(
+            [self::PATH_PREFIX . 'never/seeded/Björk — nope.flac', $this->libraryId],
+            $statements[1]['params'],
+            'the fallback binds exactly the raw path and the library id',
         );
     }
 
@@ -391,7 +480,9 @@ final class MusicTrackPathHashLookupTest extends TestCase
      * passing after the production method changed, which is precisely the class of
      * false green that let mutation M10 survive S145's unit suite.
      *
-     * @return array{sql: string, params: list<mixed>}
+     * @return list<array{sql: string, params: list<mixed>}> Every statement issued, in
+     *         order: one on a HIT, two on a MISS (hash pass, then the raw-path
+     *         fallback that keeps the lookup correct when `path_hash` is NULL).
      */
     private function captureScannerLookup(string $path, string $libraryId): array
     {
@@ -415,14 +506,15 @@ final class MusicTrackPathHashLookupTest extends TestCase
         $method = new ReflectionMethod(MusicLibraryScanner::class, 'findExistingTrackMediaItemId');
         $method->invoke($scanner, $path, $libraryId);
 
-        $this->assertCount(
-            1,
-            $seen,
-            'findExistingTrackMediaItemId() must issue exactly ONE statement — it runs once per audio file, '
-            . '61,122 times on the production library.',
+        $this->assertNotEmpty($seen, 'findExistingTrackMediaItemId() issued no statement at all');
+        $this->assertLessThanOrEqual(
+            2,
+            count($seen),
+            'findExistingTrackMediaItemId() runs once per audio file (61,122 times on the production '
+            . 'library), so it may issue at most the indexed pass plus the raw-path fallback.',
         );
 
-        return $seen[0];
+        return $seen;
     }
 
     /**
@@ -481,40 +573,52 @@ final class MusicTrackPathHashLookupTest extends TestCase
     }
 
     /**
-     * Ensure the `(library_id, path_hash)` unique index exists for this test.
-     * Mirrors `cleanup_072.php`; the base migration deliberately does not add it.
+     * Build this test's PRIVATE copy of `media_items`, carrying the unique index that
+     * `migrations/` alone does not create.
+     *
+     * ⚠ **This is deliberately NOT `ALTER TABLE media_items ADD UNIQUE INDEX …`.**
+     * The earlier shape mutated the SHARED schema for the duration of these five
+     * tests, during which any concurrently-running test inserting two covered-type
+     * rows with the same `(library_id, path)` would have failed with error 1062 for a
+     * reason of this test's making. A uniquely-named table that nothing else
+     * references cannot do that, and `CREATE TABLE … LIKE` copies the column
+     * definitions verbatim — including the STORED `path_hash` generating expression —
+     * so `key_len` and the plan shape are the production ones.
+     *
+     * `CREATE TABLE … LIKE` copies indexes but NOT foreign keys, which is why the rows
+     * can be copied straight across without seeding `libraries` again. `path_hash` is
+     * generated, so it is excluded from the INSERT column list and recomputed here.
      */
-    private function ensurePathHashIndex(): void
+    private function createPlanTable(): void
     {
-        if ($this->hasPathHashIndex()) {
-            return;
-        }
+        $db = $this->db();
+        $name = 'media_items_s151_plan_' . bin2hex(random_bytes(6));
 
         try {
-            $this->db()->query(
-                'ALTER TABLE media_items ADD UNIQUE INDEX ' . self::PATH_HASH_INDEX . ' (library_id, path_hash)',
+            $db->query('CREATE TABLE ' . $name . ' LIKE media_items');
+            $db->query(
+                'ALTER TABLE ' . $name . ' ADD UNIQUE INDEX ' . self::PATH_HASH_INDEX . ' (library_id, path_hash)',
             );
-            $this->createdIndex = true;
+            $db->query(
+                'INSERT INTO ' . $name . ' (id, library_id, type, name, path)'
+                . ' SELECT id, library_id, type, name, path FROM media_items WHERE library_id IN (?, ?)',
+                [$this->libraryId, $this->otherLibraryId],
+            );
+            // Deterministic index statistics for the cost-based optimizer.
+            $db->query('ANALYZE TABLE ' . $name);
         } catch (Throwable $e) {
-            if (str_contains($e->getMessage(), 'Duplicate key name')) {
-                return;
+            try {
+                $db->query('DROP TABLE IF EXISTS ' . $name);
+            } catch (Throwable) {
+                // ignore
             }
             $this->markTestSkipped(
-                'Could not create the (library_id, path_hash) unique index (pre-existing duplicate paths?) — '
-                . 'the S151 plan claim is unprovable without it: ' . $e->getMessage(),
+                'Could not build the private plan table — the S151 plan claim is unprovable without the '
+                . '(library_id, path_hash) unique index: ' . $e->getMessage(),
             );
         }
-    }
 
-    private function hasPathHashIndex(): bool
-    {
-        try {
-            $rows = $this->db()->query('SHOW INDEX FROM media_items WHERE Key_name = ?', [self::PATH_HASH_INDEX]);
-
-            return is_array($rows) && $rows !== [];
-        } catch (Throwable) {
-            return false;
-        }
+        $this->planTable = $name;
     }
 
     private function hasPathHashColumn(): bool
@@ -529,7 +633,12 @@ final class MusicTrackPathHashLookupTest extends TestCase
     }
 
     /**
-     * Run EXPLAIN and return the driving-table plan row.
+     * Run EXPLAIN against the private plan table and return the driving-table row.
+     *
+     * The ONLY edit made to the statement is the table name, substituted mechanically
+     * and asserted to occur exactly once — the predicate list, the parameter order and
+     * the `LIMIT` are whatever the production method emitted. Re-typing the SQL here
+     * is what let mutation M10 survive S145's unit suite.
      *
      * `Connection::query()` only returns rows when the statement's leading keyword
      * is `select`/`show`, so `EXPLAIN` must go through `Connection::row()`.
@@ -539,8 +648,17 @@ final class MusicTrackPathHashLookupTest extends TestCase
      */
     private function explain(string $sql, array $params): array
     {
-        $row = $this->db()->row('EXPLAIN ' . $sql, $params);
-        $this->assertIsArray($row, 'EXPLAIN returned no plan row for: ' . $sql);
+        $this->assertNotSame('', $this->planTable, 'the private plan table was never created');
+        $this->assertSame(
+            1,
+            substr_count($sql, 'media_items'),
+            'the captured statement must name `media_items` exactly once for the substitution to be safe: '
+            . $sql,
+        );
+
+        $onPlanTable = str_replace('media_items', $this->planTable, $sql);
+        $row = $this->db()->row('EXPLAIN ' . $onPlanTable, $params);
+        $this->assertIsArray($row, 'EXPLAIN returned no plan row for: ' . $onPlanTable);
 
         /** @var array<string, mixed> $row */
         return $row;

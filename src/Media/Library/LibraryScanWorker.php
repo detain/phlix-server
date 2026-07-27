@@ -379,15 +379,31 @@ class LibraryScanWorker
     public function start(int $pollSeconds): void
     {
         // Reap orphaned `running` jobs left behind by a previous worker's
-        // restart/crash before we begin draining. This worker is the single
-        // (`count:1`) consumer, so on a fresh start nothing is legitimately
-        // running — any such row would otherwise sit `running` forever and keep
-        // a scan UI spinner alive (cf. the music-scan hang incident).
+        // restart/crash before we begin draining. Such a row would otherwise sit
+        // `running` forever and keep a scan UI spinner alive (cf. the music-scan
+        // hang incident).
         //
         // ⚠ S96(c) — THE BLAST RADIUS IS DELIBERATE, AND IT IS THE WHOLE TABLE.
         // reapStaleJobs() fails EVERY `running` row, not just this library's and not
-        // just old ones. That is correct if and only if no OTHER process is draining
-        // this queue at the moment we boot. What that invariant rests on, precisely:
+        // just old ones.
+        //
+        // ⚠ S150 FALSIFIED THE INVARIANT THIS USED TO CLAIM, AND THE CLAIM HAS BEEN
+        // REMOVED RATHER THAN SOFTENED. The old text here said that because this
+        // worker is the single (`count:1`) consumer, "on a fresh start nothing is
+        // legitimately running", so every reaped row was by definition an orphan.
+        // That is no longer true: `php bin/phlix library:scan` inserts its OWN
+        // `running` row (ScanJobRepository::startRunning()) for a scan it executes in
+        // its own process. That row is never queued and never claimed, so this worker
+        // has no knowledge of it — and a `phlix-server` restart mid-CLI-scan reaps a
+        // row whose scan is alive. The observable damage is a `failed` badge on a
+        // healthy scan (until the CLI's markCompleted() overwrites it) PLUS
+        // hasActiveJobForLibrary() reporting the library idle, which re-opens the door
+        // to a second, genuinely concurrent scan. Bounding the reaper needs per-job
+        // worker ownership (an owner id / heartbeat column) — a schema change outside
+        // S150/S151, filed rather than half-done.
+        //
+        // The `count:1` constraint is still REAL and still load-bearing for the rest
+        // of the queue, so it stays documented here:
         //
         //   * `config/process.php` sets `library-scan` to `count: 1`, and `start.php`
         //     calls this method once per fork — so `count: 2` would have fork #2 fail

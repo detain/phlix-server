@@ -203,8 +203,9 @@ class LibraryScanCommandTest extends TestCase
 
         $jobs = $this->createMock(ScanJobRepository::class);
         $jobs->method('hasActiveJobForLibrary')->willReturn(false);
+        $jobs->expects($this->never())->method('startRunning');
         $jobs->expects($this->once())
-            ->method('startRunning')
+            ->method('startRunningIfIdle')
             ->with('lib-j1', 'scan')
             ->willReturn('job-j1');
         $jobs->expects($this->once())
@@ -229,7 +230,11 @@ class LibraryScanCommandTest extends TestCase
     {
         $jobs = $this->createMock(ScanJobRepository::class);
         $jobs->method('hasActiveJobForLibrary')->willReturn(false);
-        $jobs->expects($this->once())->method('startRunning')->with('lib-j2', 'rescan')->willReturn('job-j2');
+        $jobs->expects($this->never())->method('startRunning');
+        $jobs->expects($this->once())
+            ->method('startRunningIfIdle')
+            ->with('lib-j2', 'rescan')
+            ->willReturn('job-j2');
         $jobs->expects($this->once())->method('markCompleted');
 
         $manager = $this->createMock(LibraryManager::class);
@@ -252,7 +257,7 @@ class LibraryScanCommandTest extends TestCase
 
         $jobs = $this->createMock(ScanJobRepository::class);
         $jobs->method('hasActiveJobForLibrary')->willReturn(false);
-        $jobs->method('startRunning')->willReturn('job-j3');
+        $jobs->method('startRunningIfIdle')->willReturn('job-j3');
         $jobs->method('updateProgress')->willReturnCallback(
             function (string $jobId, array $counts, ?string $cur = null) use (&$writes): void {
                 $writes[] = [$jobId, $counts, $cur];
@@ -287,7 +292,7 @@ class LibraryScanCommandTest extends TestCase
     {
         $jobs = $this->createMock(ScanJobRepository::class);
         $jobs->method('hasActiveJobForLibrary')->willReturn(false);
-        $jobs->method('startRunning')->willReturn('job-j4');
+        $jobs->method('startRunningIfIdle')->willReturn('job-j4');
         $jobs->expects($this->never())->method('markCompleted');
         $jobs->expects($this->once())->method('markFailed')->with('job-j4', 'Library not found: gone');
 
@@ -312,7 +317,7 @@ class LibraryScanCommandTest extends TestCase
 
         $jobs = $this->createMock(ScanJobRepository::class);
         $jobs->method('hasActiveJobForLibrary')->willReturn(false);
-        $jobs->method('startRunning')->willReturn('job-j5');
+        $jobs->method('startRunningIfIdle')->willReturn('job-j5');
         $jobs->expects($this->once())
             ->method('markCompleted')
             ->with('job-j5', ['items_added' => 0, 'items_removed' => 0, 'items_failed' => 2]);
@@ -334,6 +339,7 @@ class LibraryScanCommandTest extends TestCase
         $jobs = $this->createMock(ScanJobRepository::class);
         $jobs->method('hasActiveJobForLibrary')->with('lib-busy')->willReturn(true);
         $jobs->expects($this->never())->method('startRunning');
+        $jobs->expects($this->never())->method('startRunningIfIdle');
 
         $manager = $this->createMock(LibraryManager::class);
         $manager->expects($this->never())->method('scanLibrary');
@@ -350,6 +356,7 @@ class LibraryScanCommandTest extends TestCase
         $jobs = $this->createMock(ScanJobRepository::class);
         $jobs->method('hasActiveJobForLibrary')->willReturn(true);
         $jobs->expects($this->once())->method('startRunning')->willReturn('job-forced');
+        $jobs->expects($this->never())->method('startRunningIfIdle');
 
         $manager = $this->createMock(LibraryManager::class);
         $manager->expects($this->once())->method('scanLibrary')->willReturn(new ScanResult());
@@ -358,6 +365,78 @@ class LibraryScanCommandTest extends TestCase
             'libraryId' => 'lib-busy',
             '--force' => true,
         ]));
+    }
+
+    /**
+     * S151 review finding 5 — the pre-check is not the guarantee, the guarded INSERT
+     * is. Two invocations started together BOTH read "no active job"; only
+     * `startRunningIfIdle()` returning NULL can stop the second one running.
+     *
+     * The mock reproduces exactly that interleaving: `hasActiveJobForLibrary()` says
+     * idle (the competitor had not inserted yet), and the INSERT then finds it has.
+     * The scan must not run, and no terminal stamp may be written — the row belongs to
+     * the winner and stamping it would report the LOSER's outcome on it.
+     */
+    public function testLosingTheInsertRaceRefusesTheScanEvenThoughThePreCheckSaidIdle(): void
+    {
+        $jobs = $this->createMock(ScanJobRepository::class);
+        $jobs->method('newJobId')->willReturn('job-race');
+        $jobs->method('hasActiveJobForLibrary')->willReturn(false);
+        $jobs->expects($this->once())->method('startRunningIfIdle')->willReturn(null);
+        $jobs->expects($this->never())->method('markCompleted');
+        $jobs->expects($this->never())->method('markFailed');
+        $jobs->expects($this->never())->method('updateProgress');
+
+        $manager = $this->createMock(LibraryManager::class);
+        $manager->expects($this->never())->method('scanLibrary');
+        $manager->expects($this->never())->method('rescanLibrary');
+
+        $tester = $this->testerWithJobs($manager, $jobs);
+        $this->assertSame(Command::FAILURE, $tester->execute(['libraryId' => 'lib-race']));
+        $this->assertStringContainsString('already queued or running', $tester->getDisplay());
+    }
+
+    /**
+     * S151 review finding 1 — the id must be minted BEFORE the row is created, so the
+     * termination handlers can name a row that does not exist yet.
+     *
+     * Ordering is asserted directly: `newJobId()` must be called, and it must be
+     * called before the INSERT. If a future edit goes back to letting the INSERT mint
+     * the id, there is again a window in which a committed, externally visible row has
+     * no handler that can fail it — which is what stranded rows `running` forever in
+     * 3 runs out of 10 of the integration test.
+     */
+    public function testTheJobIdIsMintedBeforeTheRowIsCreated(): void
+    {
+        $order = [];
+
+        $jobs = $this->createMock(ScanJobRepository::class);
+        $jobs->method('hasActiveJobForLibrary')->willReturn(false);
+        $jobs->method('newJobId')->willReturnCallback(static function () use (&$order): string {
+            $order[] = 'newJobId';
+
+            return 'job-order';
+        });
+        $jobs->method('startRunningIfIdle')->willReturnCallback(
+            static function (string $libraryId, string $type, ?string $jobId = null) use (&$order): ?string {
+                $order[] = 'insert:' . (string) $jobId;
+
+                return $jobId;
+            },
+        );
+        $jobs->expects($this->once())->method('markCompleted')->with('job-order', $this->anything());
+
+        $manager = $this->createMock(LibraryManager::class);
+        $manager->method('scanLibrary')->willReturn(new ScanResult());
+
+        $this->assertSame(Command::SUCCESS, $this->testerWithJobs($manager, $jobs)->execute([
+            'libraryId' => 'lib-order',
+        ]));
+        $this->assertSame(
+            ['newJobId', 'insert:job-order'],
+            $order,
+            'the id must exist before the row does, and it must be the id the INSERT is handed',
+        );
     }
 
     /**

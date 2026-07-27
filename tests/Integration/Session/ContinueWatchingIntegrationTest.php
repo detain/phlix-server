@@ -27,11 +27,25 @@ use Workerman\MySQL\Connection;
  *
  * It seeds a full series → season → episode hierarchy (episode poster = its TMDB
  * still) plus a standalone movie, records playback progress for the episode (via
- * TWO playback_state rows — a newer and an older one — so the `ROW_NUMBER()`
+ * TWO playback_state rows — a newer and an older one, under TWO DIFFERENT
+ * SESSIONS of the same user — so the `ROW_NUMBER()`
  * dedup has real duplicates to collapse) and the movie, then asserts the shaped
  * output: exactly ONE row survives for the episode and it is the NEWER playback
  * (proving the `PARTITION BY ps.media_item_id ORDER BY ps.updated_at DESC, ps.id
  * DESC` dedup), the episode row surfaces the SERIES
+ *
+ * ⚠ S156 — WHY THE TWO DUPLICATE ROWS LIVE IN DIFFERENT SESSIONS. Migration
+ * `097_playback_state_unique_key.sql` puts
+ * `UNIQUE KEY uq_playback_state_session_media (session_id, media_item_id)` into
+ * the migration chain, so two rows sharing ONE session and one media item are
+ * now a 1062 — the fixture could no longer be seeded, and the whole file would
+ * have died in `setUp()`. Splitting the pair across two sessions of the same
+ * user keeps the duplicate REAL rather than synthetic: `getContinueWatching()`
+ * partitions by `ps.media_item_id` alone and scopes by `s_session.user_id`, so
+ * one user watching the same episode on two devices is exactly the duplicate the
+ * `ROW_NUMBER()` dedup still has to collapse after 097. The unique key cannot
+ * subsume it — it constrains a single session only.
+ *
  * poster at the TOP LEVEL (the /app MediaCard bug), a positive top-level runtime,
  * id == media item id, a real parent_id, and the retained playback fields; the
  * movie keeps its own poster. CI applies all migrations to the `phlix_test` MySQL
@@ -47,6 +61,13 @@ final class ContinueWatchingIntegrationTest extends TestCase
     private string $libraryId = '';
     private string $userId = '';
     private string $sessionId = '';
+    /**
+     * A SECOND session for the same user. The older/stale episode playback row
+     * lives here so the (session_id, media_item_id) unique key added by migration
+     * 097 is not violated while the ROW_NUMBER dedup still has two rows to
+     * collapse. See the class docblock.
+     */
+    private string $staleSessionId = '';
     private string $seriesId = '';
     private string $seasonId = '';
     private string $episodeId = '';
@@ -78,6 +99,7 @@ final class ContinueWatchingIntegrationTest extends TestCase
         $this->libraryId = Uuid::v4();
         $this->userId = Uuid::v4();
         $this->sessionId = Uuid::v4();
+        $this->staleSessionId = Uuid::v4();
         $this->seriesId = Uuid::v4();
         $this->seasonId = Uuid::v4();
         $this->episodeId = Uuid::v4();
@@ -204,6 +226,12 @@ final class ContinueWatchingIntegrationTest extends TestCase
             "INSERT INTO sessions (id, user_id, device_id) VALUES (?, ?, ?)",
             [$this->sessionId, $this->userId, 'cw-it-device'],
         );
+        // A SECOND device/session for the SAME user — the shape the unique key
+        // added by migration 097 deliberately does not (and must not) prevent.
+        $db->query(
+            "INSERT INTO sessions (id, user_id, device_id) VALUES (?, ?, ?)",
+            [$this->staleSessionId, $this->userId, 'cw-it-device-2'],
+        );
 
         // In-progress playback (< 95%) for both the episode and the movie.
         // The episode gets TWO playback_state rows so the read query's
@@ -211,7 +239,7 @@ final class ContinueWatchingIntegrationTest extends TestCase
         // ps.updated_at DESC, ps.id DESC) dedup is genuinely exercised — the
         // NEWER row (position_ticks = 1000, default updated_at = NOW()) must
         // win and the OLDER row (position_ticks = 500, an explicitly stale
-        // updated_at) must be collapsed away.
+        // updated_at, on the OTHER session) must be collapsed away.
         $this->insertPlayback($this->episodeId, 1000, 100000);
         $this->insertPlayback(
             $this->episodeId,
@@ -219,6 +247,7 @@ final class ContinueWatchingIntegrationTest extends TestCase
             100000,
             $this->olderEpisodePlaybackId,
             '2020-01-01 00:00:00',
+            $this->staleSessionId,
         );
         $this->insertPlayback($this->movieId, 5000, 100000);
     }
@@ -251,16 +280,22 @@ final class ContinueWatchingIntegrationTest extends TestCase
         int $duration,
         ?string $id = null,
         ?string $updatedAt = null,
+        ?string $sessionId = null,
     ): void {
         $db = $this->db;
         $this->assertNotNull($db);
         $id ??= Uuid::v4();
+        // `$sessionId` exists so a second row for the SAME media item can be
+        // seeded under a different session of the same user — the only duplicate
+        // shape that survives migration 097's
+        // `uq_playback_state_session_media (session_id, media_item_id)`.
+        $sessionId ??= $this->sessionId;
         if ($updatedAt === null) {
             $db->query(
                 "INSERT INTO playback_state
                     (id, session_id, media_item_id, position_ticks, duration_ticks, playback_status)
                  VALUES (?, ?, ?, ?, ?, 'playing')",
-                [$id, $this->sessionId, $mediaItemId, $position, $duration],
+                [$id, $sessionId, $mediaItemId, $position, $duration],
             );
 
             return;
@@ -272,7 +307,7 @@ final class ContinueWatchingIntegrationTest extends TestCase
             "INSERT INTO playback_state
                 (id, session_id, media_item_id, position_ticks, duration_ticks, playback_status, updated_at)
              VALUES (?, ?, ?, ?, ?, 'playing', ?)",
-            [$id, $this->sessionId, $mediaItemId, $position, $duration, $updatedAt],
+            [$id, $sessionId, $mediaItemId, $position, $duration, $updatedAt],
         );
     }
 
@@ -299,11 +334,17 @@ final class ContinueWatchingIntegrationTest extends TestCase
         // Child-first (FKs cascade, but be explicit and id-scoped so a shared test
         // DB is left untouched apart from these rows).
         $db->query('DELETE FROM playback_state WHERE session_id = ?', [$this->sessionId]);
+        if ($this->staleSessionId !== '') {
+            $db->query('DELETE FROM playback_state WHERE session_id = ?', [$this->staleSessionId]);
+        }
         // Belt-and-braces id-scoped removal of the second (older) episode row.
         if ($this->olderEpisodePlaybackId !== '') {
             $db->query('DELETE FROM playback_state WHERE id = ?', [$this->olderEpisodePlaybackId]);
         }
         $db->query('DELETE FROM sessions WHERE id = ?', [$this->sessionId]);
+        if ($this->staleSessionId !== '') {
+            $db->query('DELETE FROM sessions WHERE id = ?', [$this->staleSessionId]);
+        }
         foreach ([$this->episodeId, $this->seasonId, $this->seriesId, $this->movieId] as $id) {
             if ($id !== '') {
                 $db->query('DELETE FROM media_items WHERE id = ?', [$id]);

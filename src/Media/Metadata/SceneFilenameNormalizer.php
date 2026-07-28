@@ -553,11 +553,21 @@ final class SceneFilenameNormalizer
     /**
      * Strip bracketed and parenthetical tags like [YTS.MX], (YTS), etc.
      *
+     * Only a BALANCED group is removed (each pattern requires its closer), and
+     * the text around a group is kept — so `Show [480p] Title` collapses to
+     * `Show Title` rather than being truncated at the opener.
+     *
+     * Public because {@see \Phlix\Media\Library\EpisodeFilenameParser} needs the
+     * exact same tag-stripping for the EPISODE-title segment; duplicating these
+     * three patterns there would let the two drift (the fullwidth `【…】` pair in
+     * particular is easy to forget). Behaviour is unchanged from when it was
+     * private — this is a visibility widening only.
+     *
      * @param string $title Title to clean.
      *
      * @return string Title with tags stripped.
      */
-    private static function stripBracketedTags(string $title): string
+    public static function stripBracketedTags(string $title): string
     {
         $title = preg_replace('/\s*\[\s*[^\]]*\]\s*/', ' ', $title) ?? $title;
         $title = preg_replace('/\s*\(\s*[^\)]*\)\s*/', ' ', $title) ?? $title;

@@ -155,6 +155,259 @@ class EpisodeFilenameParserTest extends TestCase
     }
 
     /**
+     * SM-0.2 — the title that follows a quality tag must survive.
+     *
+     * `Show SxxEyy [480p] Title` is the dominant convention in the reference
+     * library: 501 of the 1,328 episodes that have NO title at all carry one in
+     * exactly this shape, and the old first-bracket cut deleted every one of
+     * them. Every filename below is a real prod basename.
+     *
+     * @dataProvider titleAfterQualityTagCases
+     */
+    public function testTitleSurvivesAQualityTagThatPrecedesIt(
+        string $filename,
+        string $expected
+    ): void {
+        $result = EpisodeFilenameParser::parse($filename, true);
+        $this->assertNotNull($result, "should parse: {$filename}");
+        $this->assertSame($expected, $result['episode_title']);
+    }
+
+    /** @return array<string, array{0:string,1:string}> */
+    public static function titleAfterQualityTagCases(): array
+    {
+        return [
+            'tv 480p'            => ['Knight Rider S02E23 [480p] Let It Be Me.mkv', 'Let It Be Me'],
+            'anime 480p'         => ["InuYasha S06E23 [480p] Miroku's Past Mistake.mkv", "Miroku's Past Mistake"],
+            'apostrophe'         => [
+                "Battlestar Galactica (2003) S02E17 [720p] The Captain's Hand.mkv",
+                "The Captain's Hand",
+            ],
+            'punctuation'        => ['Turn A Gundam S01E31 [720p] Pursuit! Crybaby Poe.mkv', 'Pursuit! Crybaby Poe'],
+            'digits inside'      => [
+                'InuYasha S03E06 [480p] The 50 Year-Old Curse of the Dark Priestess.mkv',
+                'The 50 Year-Old Curse of the Dark Priestess',
+            ],
+            // Two tags around the title — both groups go, the text between stays.
+            'tag on both sides'  => ['Show S01E02 [720p] Real Title [x265].mkv', 'Real Title'],
+            // Fullwidth brackets are a group too (the ASCII-only patterns miss them).
+            'fullwidth bracket'  => ["Show S01E03 \u{3010}720p\u{3011} Real Title.mkv", 'Real Title'],
+            // The series segment keeps its own first-bracket cut (see cleanSeries).
+            'paren year series'  => [
+                'The Outer Limits (1995) S01E22 [240p] The Voice of Reason.avi',
+                'The Voice of Reason',
+            ],
+        ];
+    }
+
+    /**
+     * A dot-separated scene name keeps its title and loses only the trailing
+     * release run — and the kept prefix keeps its ORIGINAL separators, so an
+     * abbreviation ("Mr.Monk") is never rewritten into spaces.
+     *
+     * @dataProvider sceneRunCases
+     */
+    public function testTrailingReleaseRunIsCutWithoutRewritingSeparators(
+        string $filename,
+        ?string $expected
+    ): void {
+        $result = EpisodeFilenameParser::parse($filename, true);
+        $this->assertNotNull($result, "should parse: {$filename}");
+        $this->assertSame($expected, $result['episode_title']);
+    }
+
+    /** @return array<string, array{0:string,1:?string}> */
+    public static function sceneRunCases(): array
+    {
+        return [
+            'dotted title'      => ['The.Office.US.S03E14.Ben.Franklin.720p.WEBRip.2CH.x265.HEVC-PSA', 'Ben.Franklin'],
+            'abbreviation kept' => ['Monk.S07E01.Mr.Monk.Buys.a.House.720p.WEB-DL.DD5.1.h.264-TjHD', 'Mr.Monk.Buys.a.House'],
+            'group suffix'      => ['MacGyver.S04E18.Renegade.DVDRip', 'Renegade'],
+            // Release run AFTER a bracket group — reachable only because the tag
+            // strip runs before the truncation.
+            'run after a group' => [
+                'Elementary (2012) - S01E07 - One Way to Get Off (1080p AMZN WEB-DL x265 RZeroX) REPACK',
+                'One Way to Get Off',
+            ],
+            // Nothing but release junk → no title at all (today this stores
+            // "720p.AMZN.WEBRip.x264-GalaxyTV" as the episode title on 472 rows).
+            'pure junk'         => ['House.S08E07.720p.AMZN.WEBRip.x264-GalaxyTV', null],
+            'bare resolution'   => ['Family Ties S1EP17 1080p (moviesbyrizzo upl).mp4', null],
+            // 70 prod rows are literally NAMED "v2" because of this shape.
+            'revision tag'      => ['Fullmetal Alchemist Brotherhood - E19 v2 [1080p][x265].mkv', null],
+        ];
+    }
+
+    /**
+     * A multi-episode range leaves the second marker glued to the front of the
+     * remainder ("S04E01-E02 …" → "-E02 …"). That is not a title.
+     */
+    public function testMultiEpisodeRangeContinuationIsNotPartOfTheTitle(): void
+    {
+        $r = EpisodeFilenameParser::parse('Star Trek Deep Space Nine S04E01-E02 [576p] The Way of the Warrior.mkv', true);
+        $this->assertNotNull($r);
+        $this->assertSame('The Way of the Warrior', $r['episode_title']);
+
+        $r2 = EpisodeFilenameParser::parse('Burn Notice S06E17-E18 You Can Run & Game Change.mkv', true);
+        $this->assertNotNull($r2);
+        $this->assertSame('You Can Run & Game Change', $r2['episode_title']);
+    }
+
+    /**
+     * The range strip requires the TIGHT form (dash glued to the marker), so a
+     * real title that merely begins with a number survives untouched.
+     */
+    public function testSpacedSeparatorBeforeANumericTitleIsNotARangeMarker(): void
+    {
+        $r = EpisodeFilenameParser::parse("Family Guy - S20E04 - 80's Guy.mkv", true);
+        $this->assertNotNull($r);
+        $this->assertSame("80's Guy", $r['episode_title']);
+
+        $r2 = EpisodeFilenameParser::parse('Family Guy - S04E08 - 8 Simple Rules for Buying my Teenage Daughter.mkv', true);
+        $this->assertNotNull($r2);
+        $this->assertSame('8 Simple Rules for Buying my Teenage Daughter', $r2['episode_title']);
+    }
+
+    /**
+     * A trailing part marker is TMDB's own spelling ("Kobol's Last Gleaming (2)")
+     * and is what keeps two halves of a two-parter from collapsing into one
+     * title. Measured: dropping it collided 20 rows into 10 duplicate pairs.
+     *
+     * @dataProvider partMarkerCases
+     */
+    public function testTrailingPartMarkerIsPreserved(string $filename, string $expected): void
+    {
+        $result = EpisodeFilenameParser::parse($filename, true);
+        $this->assertNotNull($result, "should parse: {$filename}");
+        $this->assertSame($expected, $result['episode_title']);
+    }
+
+    /** @return array<string, array{0:string,1:string}> */
+    public static function partMarkerCases(): array
+    {
+        return [
+            'bare (n)'          => [
+                "Battlestar Galactica (2003) S01E13 [720p] Kobol's Last Gleaming (2).mkv",
+                "Kobol's Last Gleaming (2)",
+            ],
+            'sibling half one'  => [
+                'Battlestar Galactica (2003) S03E19 [720p] Crossroads (1).mkv',
+                'Crossroads (1)',
+            ],
+            'then a tag group'  => [
+                'Married... with Children (1987) - S09E18 - Ship Happens (1) (480p DVD x265 Silence).mkv',
+                'Ship Happens (1)',
+            ],
+            'Part n spelling'   => [
+                'King of the Hill - S04E14 - High Anxiety (Part 2) [576p] [x265] [pseudo].mkv',
+                'High Anxiety (Part 2)',
+            ],
+        ];
+    }
+
+    /**
+     * A part marker must never be promoted on its own: with no title text left,
+     * the result is null, not " (2)".
+     */
+    public function testPartMarkerAloneIsNotATitle(): void
+    {
+        $r = EpisodeFilenameParser::parse('Show S01E05 [720p] (2).mkv', true);
+        $this->assertNotNull($r);
+        $this->assertNull($r['episode_title']);
+    }
+
+    /**
+     * 🔴 The narrow release list exists BECAUSE the broad one is wrong.
+     * `SceneFilenameNormalizer::QUALITY_TOKENS` contains FINAL / MA / DVD / FIX /
+     * LIMITED / EXTENDED / THEATRICAL — ordinary English words. Applying it to an
+     * episode title (which is a sentence, not a movie name) corrupts 86 genuine
+     * titles in the reference library to clean up 81 junk ones. These are all
+     * real prod titles.
+     *
+     * @dataProvider englishWordsThatLookLikeTagsCases
+     */
+    public function testEnglishWordsSharedWithQualityTokensAreNotStripped(
+        string $filename,
+        string $expected
+    ): void {
+        $result = EpisodeFilenameParser::parse($filename, true);
+        $this->assertNotNull($result, "should parse: {$filename}");
+        $this->assertSame($expected, $result['episode_title']);
+    }
+
+    /** @return array<string, array{0:string,1:string}> */
+    public static function englishWordsThatLookLikeTagsCases(): array
+    {
+        return [
+            'final'     => ['Show S01E01 [480p] And the Final Curtain.mkv', 'And the Final Curtain'],
+            'dvd'       => ['Show S01E02 [480p] In a DVD Factory.mkv', 'In a DVD Factory'],
+            'fix'       => ['Show S01E03 [480p] The Fix-Up.mkv', 'The Fix-Up'],
+            'ma'        => ['Show S01E04 [480p] Dear Ma.mkv', 'Dear Ma'],
+            'limited'   => ['Show S01E05 [480p] The Limited.mkv', 'The Limited'],
+            'extended'  => ['Show S01E06 [480p] Original Extended Broadcast Pilot.mkv', 'Original Extended Broadcast Pilot'],
+            'web'       => ['Star Trek S03E09 [360p] The Tholian Web.mkv', 'The Tholian Web'],
+            'web again' => ['Overlord S03E07 [1080p] Butterfly Entangled in a Spider\'s Web.mkv', 'Butterfly Entangled in a Spider\'s Web'],
+        ];
+    }
+
+    /**
+     * A CRC32 stamp is dropped, but the rule requires a DIGIT so an eight-letter
+     * word that happens to be spelled from a-f is never mistaken for one.
+     */
+    public function testCrcStampIsDroppedButAnAllLetterHexWordSurvives(): void
+    {
+        $r = EpisodeFilenameParser::parse('Log Horizon - S02E13 a Sweet Trap [8BF54CFC].mkv', true);
+        $this->assertNotNull($r);
+        $this->assertSame('a Sweet Trap', $r['episode_title']);
+
+        $r2 = EpisodeFilenameParser::parse('Show S01E01 [480p] Deadface.mkv', true);
+        $this->assertNotNull($r2);
+        $this->assertSame('Deadface', $r2['episode_title']);
+    }
+
+    /**
+     * An episode named after its own show is a real convention (17 prod rows —
+     * "Dexter" S01E01, "Goblin Slayer" S01E02, "The Sopranos" S01E01). A
+     * "reject a title that echoes the series name" guard was measured and
+     * REJECTED: it would have discarded 16 genuine titles to catch 1 junk one.
+     */
+    public function testTitleEqualToTheSeriesNameIsStillATitle(): void
+    {
+        $r = EpisodeFilenameParser::parse('Goblin Slayer S01E02 [720p] Goblin Slayer.mkv', true);
+        $this->assertNotNull($r);
+        $this->assertSame('Goblin Slayer', $r['series']);
+        $this->assertSame('Goblin Slayer', $r['episode_title']);
+    }
+
+    /**
+     * The "must contain a word" guard uses \p{L}, so a non-Latin title passes
+     * while a bare marker fragment ("E02") does not.
+     */
+    public function testNonLatinTitleIsKeptAndMarkerFragmentIsNot(): void
+    {
+        $r = EpisodeFilenameParser::parse("Show S01E07 [720p] \u{541B}\u{306E}\u{540D}\u{306F}.mkv", true);
+        $this->assertNotNull($r);
+        $this->assertSame("\u{541B}\u{306E}\u{540D}\u{306F}", $r['episode_title']);
+
+        $r2 = EpisodeFilenameParser::parse('Seinfeld S07E14-E15 [720p].mkv', true);
+        $this->assertNotNull($r2);
+        $this->assertNull($r2['episode_title']);
+    }
+
+    /**
+     * A title may never be emitted as invalid UTF-8 — `media_items` is utf8mb4
+     * and a stray byte fails the insert with MySQL error 1366.
+     */
+    public function testInvalidUtf8NameNeverYieldsAnInvalidTitle(): void
+    {
+        $r = EpisodeFilenameParser::parse("Show S01E01 [480p] Caf\xE9 Noir", true);
+        $this->assertNotNull($r);
+        if ($r['episode_title'] !== null) {
+            $this->assertTrue(mb_check_encoding($r['episode_title'], 'UTF-8'));
+        }
+    }
+
+    /**
      * @dataProvider nonEpisodeCases
      */
     public function testNonEpisodesReturnNull(string $filename): void

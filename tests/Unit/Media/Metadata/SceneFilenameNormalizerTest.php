@@ -1380,4 +1380,39 @@ final class SceneFilenameNormalizerTest extends TestCase
             }
         }
     }
+
+    /**
+     * SM-0.2 widened {@see SceneFilenameNormalizer::stripBracketedTags()} from
+     * private to public so
+     * {@see \Phlix\Media\Library\EpisodeFilenameParser::extractEpisodeTitle()}
+     * can reuse the exact same three patterns instead of growing a second copy
+     * that would drift (the fullwidth `【…】` pair is the easy one to forget).
+     * Narrowing it again breaks that caller, so the visibility is pinned here.
+     *
+     * @dataProvider bracketedTagCases
+     */
+    public function testStripBracketedTagsIsPublicAndKeepsTheSurroundingText(
+        string $input,
+        string $expected
+    ): void {
+        $this->assertTrue(
+            (new \ReflectionMethod(SceneFilenameNormalizer::class, 'stripBracketedTags'))->isPublic(),
+            'stripBracketedTags() is part of the API EpisodeFilenameParser depends on'
+        );
+        $this->assertSame($expected, SceneFilenameNormalizer::stripBracketedTags($input));
+    }
+
+    /** @return array<string, array{0:string,1:string}> */
+    public static function bracketedTagCases(): array
+    {
+        return [
+            'leading tag'   => ['[480p] Let It Be Me', 'Let It Be Me'],
+            'trailing tag'  => ['Let It Be Me [480p]', 'Let It Be Me'],
+            'both sides'    => ['[480p] Let It Be Me [x265]', 'Let It Be Me'],
+            'parens'        => ['Q and A (720p - AMZN Web-DL)', 'Q and A'],
+            'fullwidth'     => ["\u{3010}720p\u{3011} Real Title", 'Real Title'],
+            'only tags'     => ['[720p] [x265]', ''],
+            'no tag at all' => ['Plain Title', 'Plain Title'],
+        ];
+    }
 }

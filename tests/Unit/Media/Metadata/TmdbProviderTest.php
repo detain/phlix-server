@@ -2,8 +2,11 @@
 
 namespace Phlix\Tests\Unit\Media\Metadata;
 
+use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
+use Phlix\Media\Metadata\MetadataFailureKind;
 use Phlix\Media\Metadata\MetadataHttpClient;
+use Phlix\Media\Metadata\MetadataHttpResult;
 use Phlix\Media\Metadata\TmdbProvider;
 use Phlix\Common\Logger\LoggerFactory;
 
@@ -12,6 +15,36 @@ class TmdbProviderTest extends TestCase
     protected function setUp(): void
     {
         LoggerFactory::init(__DIR__ . '/../../../../config/logger.php');
+    }
+
+    /**
+     * A MetadataHttpClient mock whose `getResult()` mirrors its `get()` stub.
+     *
+     * TmdbProvider calls {@see MetadataHttpClient::getResult()} so it can tell
+     * an auth failure from an empty result set. The tests below predate that
+     * and stub `get()`, so this bridges the two: `getResult()` delegates to
+     * `get()` and wraps the outcome. Delegating rather than duplicating keeps
+     * every existing `expects()`/`with()` constraint on `get()` meaningful —
+     * the provider's single logical call still produces exactly one `get()`
+     * invocation with the same arguments.
+     *
+     * @return MetadataHttpClient&MockObject
+     */
+    private function httpMock(): MetadataHttpClient
+    {
+        $http = $this->createMock(MetadataHttpClient::class);
+
+        $http->method('getResult')->willReturnCallback(
+            static function (string $endpoint, array $params = [], ?array $headers = null) use ($http) {
+                $body = $http->get($endpoint, $params, $headers);
+
+                return $body === null
+                    ? MetadataHttpResult::failure(MetadataFailureKind::Transport)
+                    : MetadataHttpResult::success(200, $body);
+            }
+        );
+
+        return $http;
     }
 
     public function testCanCreateTmdbProvider(): void
@@ -41,7 +74,7 @@ class TmdbProviderTest extends TestCase
 
     public function testSearchTvMapsResultsAndForwardsYear(): void
     {
-        $http = $this->createMock(MetadataHttpClient::class);
+        $http = $this->httpMock();
         $http->expects($this->once())
             ->method('get')
             ->with('/search/tv', $this->callback(static fn(array $p): bool => ($p['first_air_date_year'] ?? null) === '2001'))
@@ -59,7 +92,7 @@ class TmdbProviderTest extends TestCase
 
     public function testGetTvDetailsFormatsSeriesWithGenresYearAndRating(): void
     {
-        $http = $this->createMock(MetadataHttpClient::class);
+        $http = $this->httpMock();
         $http->method('get')->willReturn([
             'id' => 1668,
             'name' => '24',
@@ -89,7 +122,7 @@ class TmdbProviderTest extends TestCase
 
     public function testGetDetailsParsesUsMovieCertificationFromReleaseDates(): void
     {
-        $http = $this->createMock(MetadataHttpClient::class);
+        $http = $this->httpMock();
         $http->method('get')->willReturn([
             'id' => 27205,
             'title' => 'Inception',
@@ -111,7 +144,7 @@ class TmdbProviderTest extends TestCase
 
     public function testGetDetailsPrefersTheatricalCertificationOverOtherReleaseTypes(): void
     {
-        $http = $this->createMock(MetadataHttpClient::class);
+        $http = $this->httpMock();
         $http->method('get')->willReturn([
             'id' => 1,
             'title' => 'Film',
@@ -130,7 +163,7 @@ class TmdbProviderTest extends TestCase
 
     public function testGetDetailsFallsBackToFirstNonEmptyCertificationWhenNoTheatrical(): void
     {
-        $http = $this->createMock(MetadataHttpClient::class);
+        $http = $this->httpMock();
         $http->method('get')->willReturn([
             'id' => 1,
             'title' => 'Film',
@@ -149,7 +182,7 @@ class TmdbProviderTest extends TestCase
 
     public function testGetDetailsOfficialRatingNullWhenNoUsCertification(): void
     {
-        $http = $this->createMock(MetadataHttpClient::class);
+        $http = $this->httpMock();
         $http->method('get')->willReturn([
             'id' => 1,
             'title' => 'Film',
@@ -168,7 +201,7 @@ class TmdbProviderTest extends TestCase
     {
         // FINDING 4: a first US results[] entry whose certs are all empty must
         // NOT short-circuit the scan — a later US entry's non-empty cert wins.
-        $http = $this->createMock(MetadataHttpClient::class);
+        $http = $this->httpMock();
         $http->method('get')->willReturn([
             'id' => 1,
             'title' => 'Film',
@@ -191,7 +224,7 @@ class TmdbProviderTest extends TestCase
     {
         // A non-theatrical cert in an earlier US entry is only a fallback; a
         // theatrical (type 3) cert in a later US entry still wins.
-        $http = $this->createMock(MetadataHttpClient::class);
+        $http = $this->httpMock();
         $http->method('get')->willReturn([
             'id' => 1,
             'title' => 'Film',
@@ -212,7 +245,7 @@ class TmdbProviderTest extends TestCase
 
     public function testGetDetailsOfficialRatingNullWhenReleaseDatesAbsent(): void
     {
-        $http = $this->createMock(MetadataHttpClient::class);
+        $http = $this->httpMock();
         $http->method('get')->willReturn(['id' => 1, 'title' => 'Film']);
 
         $details = (new TmdbProvider('k', $http))->getDetails('1');
@@ -225,7 +258,7 @@ class TmdbProviderTest extends TestCase
         // M3: the TheTVDB id (integer in TMDB's external_ids) must surface as a
         // string `tvdb_id` on the formatted record so the theme-music resolver
         // can build the Plex-archive fallback URL.
-        $http = $this->createMock(MetadataHttpClient::class);
+        $http = $this->httpMock();
         $http->method('get')->willReturn([
             'id' => 1668,
             'name' => '24',
@@ -239,7 +272,7 @@ class TmdbProviderTest extends TestCase
 
     public function testGetTvDetailsTvdbIdNullWhenAbsent(): void
     {
-        $http = $this->createMock(MetadataHttpClient::class);
+        $http = $this->httpMock();
         $http->method('get')->willReturn([
             'id' => 1668,
             'name' => '24',
@@ -253,7 +286,7 @@ class TmdbProviderTest extends TestCase
 
     public function testGetTvSeasonMapsEpisodesAndPoster(): void
     {
-        $http = $this->createMock(MetadataHttpClient::class);
+        $http = $this->httpMock();
         $http->method('get')->willReturn([
             'poster_path' => '/s1.jpg',
             'overview' => 'Season one.',
@@ -273,7 +306,7 @@ class TmdbProviderTest extends TestCase
 
     public function testGetTvSeasonRequestsCreditsAndCapturesGuestStarsCrewAndVote(): void
     {
-        $http = $this->createMock(MetadataHttpClient::class);
+        $http = $this->httpMock();
         $http->expects($this->once())
             ->method('get')
             ->with(
@@ -334,7 +367,7 @@ class TmdbProviderTest extends TestCase
 
     public function testGetTvDetailsExposesTagsFromKeywords(): void
     {
-        $http = $this->createMock(MetadataHttpClient::class);
+        $http = $this->httpMock();
         $http->method('get')->willReturn([
             'id' => 1668,
             'name' => '24',
@@ -354,7 +387,7 @@ class TmdbProviderTest extends TestCase
 
     public function testGetTvDetailsRequestsKeywords(): void
     {
-        $http = $this->createMock(MetadataHttpClient::class);
+        $http = $this->httpMock();
         $http->expects($this->once())
             ->method('get')
             ->with('/tv/1668', $this->callback(static function (array $p): bool {
@@ -368,7 +401,7 @@ class TmdbProviderTest extends TestCase
 
     public function testGetTvDetailsReturnsEmptyOnNullResponse(): void
     {
-        $http = $this->createMock(MetadataHttpClient::class);
+        $http = $this->httpMock();
         $http->method('get')->willReturn(null);
 
         $this->assertSame([], (new TmdbProvider('k', $http))->getTvDetails('1668'));
@@ -376,7 +409,7 @@ class TmdbProviderTest extends TestCase
 
     public function testGetDetailsEmitsRichCastCrewAndCompaniesForMovie(): void
     {
-        $http = $this->createMock(MetadataHttpClient::class);
+        $http = $this->httpMock();
         $http->method('get')->willReturn([
             'id' => 603,
             'title' => 'The Matrix',
@@ -451,7 +484,7 @@ class TmdbProviderTest extends TestCase
 
     public function testGetDetailsExposesTagsFromKeywordsForMovie(): void
     {
-        $http = $this->createMock(MetadataHttpClient::class);
+        $http = $this->httpMock();
         $http->method('get')->willReturn([
             'id' => 603,
             'title' => 'The Matrix',
@@ -472,7 +505,7 @@ class TmdbProviderTest extends TestCase
 
     public function testGetDetailsRequestsKeywordsForMovie(): void
     {
-        $http = $this->createMock(MetadataHttpClient::class);
+        $http = $this->httpMock();
         $http->expects($this->once())
             ->method('get')
             ->with('/movie/603', $this->callback(static function (array $p): bool {
@@ -486,7 +519,7 @@ class TmdbProviderTest extends TestCase
 
     public function testGetTvDetailsAppendsProductionCompanies(): void
     {
-        $http = $this->createMock(MetadataHttpClient::class);
+        $http = $this->httpMock();
         $http->expects($this->once())
             ->method('get')
             ->with('/tv/1668', $this->callback(static function (array $p): bool {
@@ -501,7 +534,7 @@ class TmdbProviderTest extends TestCase
 
     public function testGetTvDetailsEmitsRichCastCrewFromAggregateCreditsAndNetworks(): void
     {
-        $http = $this->createMock(MetadataHttpClient::class);
+        $http = $this->httpMock();
         $http->method('get')->willReturn([
             'id' => 1668,
             'name' => '24',
@@ -596,7 +629,7 @@ class TmdbProviderTest extends TestCase
 
     public function testGetDetailsRequestsVideosForMovie(): void
     {
-        $http = $this->createMock(MetadataHttpClient::class);
+        $http = $this->httpMock();
         $http->expects($this->once())
             ->method('get')
             ->with('/movie/603', $this->callback(static function (array $p): bool {
@@ -610,7 +643,7 @@ class TmdbProviderTest extends TestCase
 
     public function testGetDetailsPrefersOfficialYouTubeTrailerForMovie(): void
     {
-        $http = $this->createMock(MetadataHttpClient::class);
+        $http = $this->httpMock();
         $http->method('get')->willReturn([
             'id' => 603,
             'title' => 'The Matrix',
@@ -634,7 +667,7 @@ class TmdbProviderTest extends TestCase
 
     public function testGetDetailsFallsBackToTeaserWhenNoTrailerForMovie(): void
     {
-        $http = $this->createMock(MetadataHttpClient::class);
+        $http = $this->httpMock();
         $http->method('get')->willReturn([
             'id' => 603,
             'title' => 'The Matrix',
@@ -650,7 +683,7 @@ class TmdbProviderTest extends TestCase
 
     public function testGetDetailsOmitsTrailerWhenNoUsableVideoForMovie(): void
     {
-        $http = $this->createMock(MetadataHttpClient::class);
+        $http = $this->httpMock();
         $http->method('get')->willReturn([
             'id' => 603,
             'title' => 'The Matrix',
@@ -670,7 +703,7 @@ class TmdbProviderTest extends TestCase
 
     public function testGetTvDetailsRequestsVideos(): void
     {
-        $http = $this->createMock(MetadataHttpClient::class);
+        $http = $this->httpMock();
         $http->expects($this->once())
             ->method('get')
             ->with('/tv/1668', $this->callback(static function (array $p): bool {
@@ -684,7 +717,7 @@ class TmdbProviderTest extends TestCase
 
     public function testGetTvDetailsPrefersOfficialYouTubeTrailer(): void
     {
-        $http = $this->createMock(MetadataHttpClient::class);
+        $http = $this->httpMock();
         $http->method('get')->willReturn([
             'id' => 1668,
             'name' => '24',
@@ -704,7 +737,7 @@ class TmdbProviderTest extends TestCase
 
     public function testGetTvDetailsOmitsTrailerWhenNoVideos(): void
     {
-        $http = $this->createMock(MetadataHttpClient::class);
+        $http = $this->httpMock();
         $http->method('get')->willReturn([
             'id' => 1668,
             'name' => '24',
@@ -718,7 +751,7 @@ class TmdbProviderTest extends TestCase
 
     public function testGetTrailersStillParsesYouTubeTrailersAndTeasers(): void
     {
-        $http = $this->createMock(MetadataHttpClient::class);
+        $http = $this->httpMock();
         $http->method('get')->willReturn(['results' => [
             ['site' => 'YouTube', 'type' => 'Trailer', 'key' => 'ABC', 'name' => 'Main Trailer'],
             ['site' => 'YouTube', 'type' => 'Teaser', 'key' => 'DEF', 'name' => 'Teaser'],
@@ -737,7 +770,7 @@ class TmdbProviderTest extends TestCase
 
     public function testGetDetailsRejectsTrailerWithMalformedKey(): void
     {
-        $http = $this->createMock(MetadataHttpClient::class);
+        $http = $this->httpMock();
         $http->method('get')->willReturn([
             'id' => 603,
             'title' => 'The Matrix',
@@ -756,7 +789,7 @@ class TmdbProviderTest extends TestCase
 
     public function testGetTrailersDropsEntriesWithMalformedKey(): void
     {
-        $http = $this->createMock(MetadataHttpClient::class);
+        $http = $this->httpMock();
         $http->method('get')->willReturn(['results' => [
             // A key smuggling a query param is out of the safe charset → dropped.
             ['site' => 'YouTube', 'type' => 'Trailer', 'key' => 'x&list=PLmalicious', 'name' => 'Evil'],
@@ -771,7 +804,7 @@ class TmdbProviderTest extends TestCase
 
     public function testGetDetailsPrefersPngLogoOverSvg(): void
     {
-        $http = $this->createMock(MetadataHttpClient::class);
+        $http = $this->httpMock();
         $http->method('get')->willReturn([
             'id' => 603,
             'title' => 'The Matrix',
@@ -790,7 +823,7 @@ class TmdbProviderTest extends TestCase
 
     public function testGetDetailsPrefersEnglishLogoThenNullLanguage(): void
     {
-        $http = $this->createMock(MetadataHttpClient::class);
+        $http = $this->httpMock();
         $http->method('get')->willReturn([
             'id' => 603,
             'title' => 'The Matrix',
@@ -809,7 +842,7 @@ class TmdbProviderTest extends TestCase
 
     public function testGetDetailsBreaksLogoTieByVoteAverage(): void
     {
-        $http = $this->createMock(MetadataHttpClient::class);
+        $http = $this->httpMock();
         $http->method('get')->willReturn([
             'id' => 603,
             'title' => 'The Matrix',
@@ -826,7 +859,7 @@ class TmdbProviderTest extends TestCase
 
     public function testGetDetailsSvgOnlyLogoExposesUrlWithoutPngPreference(): void
     {
-        $http = $this->createMock(MetadataHttpClient::class);
+        $http = $this->httpMock();
         $http->method('get')->willReturn([
             'id' => 603,
             'title' => 'The Matrix',
@@ -845,7 +878,7 @@ class TmdbProviderTest extends TestCase
 
     public function testGetDetailsWithoutLogosLeavesLogoFieldsAbsent(): void
     {
-        $http = $this->createMock(MetadataHttpClient::class);
+        $http = $this->httpMock();
         $http->method('get')->willReturn([
             'id' => 603,
             'title' => 'The Matrix',
@@ -860,7 +893,7 @@ class TmdbProviderTest extends TestCase
 
     public function testGetTvDetailsSelectsPngLogo(): void
     {
-        $http = $this->createMock(MetadataHttpClient::class);
+        $http = $this->httpMock();
         $http->method('get')->willReturn([
             'id' => 1399,
             'name' => 'Game of Thrones',

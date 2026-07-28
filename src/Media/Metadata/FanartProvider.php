@@ -71,13 +71,18 @@ class FanartProvider implements MetadataProviderInterface
     /**
      * Constructor for FanartProvider.
      *
-     * @param string                $apiKey Fanart.tv API client key
-     *                                      Get your key at https://fanart.tv/api/
-     * @param StructuredLogger|null $logger Optional logger; defaults to MEDIA channel.
+     * @param string                  $apiKey Fanart.tv API client key
+     *                                        Get your key at https://fanart.tv/api/
+     * @param StructuredLogger|null   $logger Optional logger; defaults to MEDIA channel.
+     * @param MetadataHttpClient|null $http   Optional HTTP client (injected in
+     *                                        tests); defaults to a real Fanart.tv client.
      */
-    public function __construct(string $apiKey, ?StructuredLogger $logger = null)
-    {
-        $this->http = new MetadataHttpClient(
+    public function __construct(
+        string $apiKey,
+        ?StructuredLogger $logger = null,
+        ?MetadataHttpClient $http = null
+    ) {
+        $this->http = $http ?? new MetadataHttpClient(
             'https://webservice.fanart.tv/v3',
             $apiKey
         );
@@ -118,10 +123,11 @@ class FanartProvider implements MetadataProviderInterface
         // Fanart.tv uses external IDs - try to fetch by type
         $idType = MetadataValue::asString($options['id_type'] ?? null, 'tvdb');
 
-        $response = $this->fetchArtwork($idType, $externalId);
+        $result = $this->fetchArtwork($idType, $externalId);
+        $response = $result->body();
 
         if ($response === null) {
-            $this->logger->debug('FanartProvider: getDetails miss', [
+            ProviderOutcomeLog::record($this->logger, 'FanartProvider', 'getDetails', $result, [
                 'id_type' => $idType,
                 'external_id' => $externalId,
             ]);
@@ -161,10 +167,11 @@ class FanartProvider implements MetadataProviderInterface
     public function getImages(string $externalId): array
     {
         $idType = 'tvdb'; // Default to TVDB
-        $response = $this->fetchArtwork($idType, $externalId);
+        $result = $this->fetchArtwork($idType, $externalId);
+        $response = $result->body();
 
         if ($response === null) {
-            $this->logger->debug('FanartProvider: getImages miss', [
+            ProviderOutcomeLog::record($this->logger, 'FanartProvider', 'getImages', $result, [
                 'id_type' => $idType,
                 'external_id' => $externalId,
             ]);
@@ -217,10 +224,11 @@ class FanartProvider implements MetadataProviderInterface
      */
     public function getMovieImages(string $imdbId): array
     {
-        $response = $this->fetchArtwork('imdb', $imdbId);
+        $result = $this->fetchArtwork('imdb', $imdbId);
+        $response = $result->body();
 
         if ($response === null) {
-            $this->logger->debug('FanartProvider: getMovieImages miss', [
+            ProviderOutcomeLog::record($this->logger, 'FanartProvider', 'getMovieImages', $result, [
                 'imdb_id' => $imdbId,
             ]);
             return [];
@@ -253,10 +261,11 @@ class FanartProvider implements MetadataProviderInterface
      */
     public function getTvShowImages(string $tvdbId): array
     {
-        $response = $this->fetchArtwork('tvdb', $tvdbId);
+        $result = $this->fetchArtwork('tvdb', $tvdbId);
+        $response = $result->body();
 
         if ($response === null) {
-            $this->logger->debug('FanartProvider: getTvShowImages miss', [
+            ProviderOutcomeLog::record($this->logger, 'FanartProvider', 'getTvShowImages', $result, [
                 'tvdb_id' => $tvdbId,
             ]);
             return [];
@@ -290,10 +299,11 @@ class FanartProvider implements MetadataProviderInterface
      */
     public function getMusicImages(string $musicbrainzId): array
     {
-        $response = $this->fetchArtwork('musicbrainz', $musicbrainzId);
+        $result = $this->fetchArtwork('musicbrainz', $musicbrainzId);
+        $response = $result->body();
 
         if ($response === null) {
-            $this->logger->debug('FanartProvider: getMusicImages miss', [
+            ProviderOutcomeLog::record($this->logger, 'FanartProvider', 'getMusicImages', $result, [
                 'musicbrainz_id' => $musicbrainzId,
             ]);
             return [];
@@ -313,16 +323,21 @@ class FanartProvider implements MetadataProviderInterface
     /**
      * Fetch artwork data from Fanart.tv API with caching.
      *
+     * Returns the classified outcome rather than a bare `?array` so callers can
+     * tell an empty artwork set apart from Fanart.tv refusing our API key —
+     * every one of the five public entry points used to log both as the same
+     * DEBUG "miss" line.
+     *
      * @param string $idType ID type ('tvdb', 'imdb', 'tmdb', 'musicbrainz')
      * @param string $id External provider ID
-     * @return array<string, mixed>|null Decoded API response or null on failure
+     * @return MetadataHttpResult Classified outcome; never null.
      */
-    private function fetchArtwork(string $idType, string $id): ?array
+    private function fetchArtwork(string $idType, string $id): MetadataHttpResult
     {
         $cacheKey = "fanart_{$idType}_{$id}";
 
         if (isset($this->cache[$cacheKey])) {
-            return $this->cache[$cacheKey];
+            return MetadataHttpResult::success(200, $this->cache[$cacheKey]);
         }
 
         $endpoint = match ($idType) {
@@ -334,18 +349,18 @@ class FanartProvider implements MetadataProviderInterface
         };
 
         if ($endpoint === null) {
-            return null;
+            return MetadataHttpResult::unsupported("unknown id_type '{$idType}'");
         }
 
         // Fanart.tv requires X-Client-Key header
-        $response = $this->http->get($endpoint);
+        $result = $this->http->getResult($endpoint);
+        $response = $result->body();
 
-        if ($response === null) {
-            return null;
+        if ($response !== null) {
+            $this->cache[$cacheKey] = $response;
         }
 
-        $this->cache[$cacheKey] = $response;
-        return $response;
+        return $result;
     }
 
     /**

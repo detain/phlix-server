@@ -127,10 +127,11 @@ class TmdbProvider implements MetadataProviderInterface
             'include_adult' => $includeAdult,
         ];
 
-        $response = $this->http->get('/search/movie', $params);
+        $result = $this->http->getResult('/search/movie', $params);
+        $response = $result->body();
 
         if ($response === null || !isset($response['results'])) {
-            $this->logger->debug('TmdbProvider: search miss', [
+            ProviderOutcomeLog::record($this->logger, 'TmdbProvider', 'search', $result, [
                 'query' => $query,
                 'year' => $year,
                 'endpoint' => '/search/movie',
@@ -184,12 +185,13 @@ class TmdbProvider implements MetadataProviderInterface
             return null;
         }
 
-        $response = $this->http->get("/find/{$imdbId}", [
+        $result = $this->http->getResult("/find/{$imdbId}", [
             'external_source' => 'imdb_id',
         ]);
+        $response = $result->body();
 
         if ($response === null) {
-            $this->logger->debug('TmdbProvider: findByImdbId miss', [
+            ProviderOutcomeLog::record($this->logger, 'TmdbProvider', 'findByImdbId', $result, [
                 'imdb_id' => $imdbId,
                 'endpoint' => "/find/{$imdbId}",
             ]);
@@ -246,7 +248,7 @@ class TmdbProvider implements MetadataProviderInterface
         $language = MetadataValue::asString($options['language'] ?? null, 'en-US');
 
         $append = 'credits,genres,production_companies,external_ids,keywords,release_dates,videos,images';
-        $response = $this->http->get("/movie/{$externalId}", [
+        $result = $this->http->getResult("/movie/{$externalId}", [
             'language' => $language,
             'append_to_response' => $append,
             // Title logos are language-tagged; ask for English plus the
@@ -254,9 +256,10 @@ class TmdbProvider implements MetadataProviderInterface
             // usable PNG candidates for the hero overlay (Phase C).
             'include_image_language' => 'en,null',
         ]);
+        $response = $result->body();
 
         if ($response === null) {
-            $this->logger->debug('TmdbProvider: getDetails miss', [
+            ProviderOutcomeLog::record($this->logger, 'TmdbProvider', 'getDetails', $result, [
                 'tmdb_id' => $externalId,
                 'endpoint' => "/movie/{$externalId}",
             ]);
@@ -414,9 +417,10 @@ class TmdbProvider implements MetadataProviderInterface
             $params['first_air_date_year'] = (string) $year;
         }
 
-        $response = $this->http->get('/search/tv', $params);
+        $result = $this->http->getResult('/search/tv', $params);
+        $response = $result->body();
         if ($response === null || !isset($response['results'])) {
-            $this->logger->debug('TmdbProvider: searchTv miss', [
+            ProviderOutcomeLog::record($this->logger, 'TmdbProvider', 'searchTv', $result, [
                 'query' => $query,
                 'year' => $year,
                 'endpoint' => '/search/tv',
@@ -458,15 +462,16 @@ class TmdbProvider implements MetadataProviderInterface
     public function getTvDetails(string $externalId, array $options = []): array
     {
         $append = 'genres,external_ids,content_ratings,aggregate_credits,production_companies,keywords,videos,images';
-        $response = $this->http->get("/tv/{$externalId}", [
+        $result = $this->http->getResult("/tv/{$externalId}", [
             'language' => MetadataValue::asString($options['language'] ?? null, 'en-US'),
             'append_to_response' => $append,
             // See getDetails(): pull English + language-neutral logos so the
             // series carries a title logo for the hero overlay (Phase C).
             'include_image_language' => 'en,null',
         ]);
+        $response = $result->body();
         if ($response === null) {
-            $this->logger->debug('TmdbProvider: getTvDetails miss', [
+            ProviderOutcomeLog::record($this->logger, 'TmdbProvider', 'getTvDetails', $result, [
                 'tmdb_id' => $externalId,
                 'endpoint' => "/tv/{$externalId}",
             ]);
@@ -515,12 +520,13 @@ class TmdbProvider implements MetadataProviderInterface
      */
     public function getTvSeason(string $externalId, int $seasonNumber, array $options = []): array
     {
-        $response = $this->http->get("/tv/{$externalId}/season/{$seasonNumber}", [
+        $result = $this->http->getResult("/tv/{$externalId}/season/{$seasonNumber}", [
             'language' => MetadataValue::asString($options['language'] ?? null, 'en-US'),
             'append_to_response' => 'credits',
         ]);
+        $response = $result->body();
         if ($response === null) {
-            $this->logger->debug('TmdbProvider: getTvSeason miss', [
+            ProviderOutcomeLog::record($this->logger, 'TmdbProvider', 'getTvSeason', $result, [
                 'tmdb_id' => $externalId,
                 'season' => $seasonNumber,
                 'endpoint' => "/tv/{$externalId}/season/{$seasonNumber}",

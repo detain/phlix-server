@@ -4,8 +4,8 @@ declare(strict_types=1);
 
 namespace Phlix\Tests\Integration\Media;
 
-use Phlix\Common\Database\ConnectionPool;
 use Phlix\Media\Library\ItemRepository;
+use Phlix\Tests\Support\Database\RequiresRealDatabase;
 use PHPUnit\Framework\TestCase;
 use Throwable;
 use Workerman\MySQL\Connection;
@@ -63,6 +63,8 @@ use Workerman\MySQL\Connection;
  */
 final class BrowseIndexUsageTest extends TestCase
 {
+    use RequiresRealDatabase;
+
     private const BROWSE_INDEX = 'idx_media_items_library_type_sort_title';
     private const RATING_INDEX = 'idx_media_items_content_rating';
 
@@ -98,21 +100,9 @@ final class BrowseIndexUsageTest extends TestCase
     {
         parent::setUp();
 
-        $host = getenv('DB_HOST') ?: '127.0.0.1';
-        $port = (int) (getenv('DB_PORT') ?: 3306);
-
-        if (!$this->isMysqlReachable($host, $port)) {
-            $this->markTestSkipped(
-                sprintf('No MySQL on %s:%d — skipping browse index-usage EXPLAIN test. Runs in CI / docker-compose.', $host, $port),
-            );
-        }
-
-        try {
-            ConnectionPool::init(dirname(__DIR__, 3) . '/config/database.php');
-            $this->db = ConnectionPool::getConnection('mysql');
-        } catch (Throwable $e) {
-            $this->markTestSkipped('Could not connect to MySQL: ' . $e->getMessage());
-        }
+        $this->db = $this->requireRealDatabase(
+            'skipping browse index-usage EXPLAIN test. Runs in CI / docker-compose.',
+        );
 
         // If migration 050 has not been applied to this schema, the columns /
         // indexes under test do not exist — self-skip rather than error, so the
@@ -394,17 +384,6 @@ final class BrowseIndexUsageTest extends TestCase
         } catch (Throwable) {
             return false;
         }
-    }
-
-    private function isMysqlReachable(string $host, int $port): bool
-    {
-        $sock = @fsockopen($host, $port, $errno, $errstr, 1.0);
-        if ($sock === false) {
-            return false;
-        }
-        fclose($sock);
-
-        return true;
     }
 
     private function uuid(): string

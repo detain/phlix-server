@@ -4,10 +4,10 @@ declare(strict_types=1);
 
 namespace Phlix\Tests\Integration\Plugins;
 
-use Phlix\Common\Database\ConnectionPool;
 use Phlix\Common\Uuid;
 use Phlix\Plugins\OAuth2\DbOAuth2StateStore;
 use Phlix\Plugins\OAuth2\Pkce;
+use Phlix\Tests\Support\Database\RequiresRealDatabase;
 use PHPUnit\Framework\TestCase;
 use Throwable;
 use Workerman\MySQL\Connection;
@@ -43,6 +43,8 @@ use Workerman\MySQL\Connection;
  */
 final class DbOAuth2StateStoreRealDbIntegrationTest extends TestCase
 {
+    use RequiresRealDatabase;
+
     private ?Connection $db = null;
 
     /** Per-run `oauth_state_store.provider` tag, so rows can never collide. */
@@ -52,21 +54,7 @@ final class DbOAuth2StateStoreRealDbIntegrationTest extends TestCase
     {
         parent::setUp();
 
-        $host = getenv('DB_HOST') ?: '127.0.0.1';
-        $port = (int) (getenv('DB_PORT') ?: 3306);
-
-        if (!$this->isMysqlReachable($host, $port)) {
-            $this->markTestSkipped(
-                sprintf('No MySQL on %s:%d — skipping S48 OAuth2 state-store real-DB test. Runs in CI.', $host, $port),
-            );
-        }
-
-        try {
-            ConnectionPool::init(dirname(__DIR__, 3) . '/config/database.php');
-            $this->db = ConnectionPool::getConnection('mysql');
-        } catch (Throwable $e) {
-            $this->markTestSkipped('Could not connect to MySQL: ' . $e->getMessage());
-        }
+        $this->db = $this->requireRealDatabase('skipping S48 OAuth2 state-store real-DB test. Runs in CI.');
 
         $this->assertNotNull($this->db);
         // `provider` is VARCHAR(50); keep the tag comfortably inside it.
@@ -334,16 +322,5 @@ final class DbOAuth2StateStoreRealDbIntegrationTest extends TestCase
         );
 
         return is_array($rows) && isset($rows[0]) && is_array($rows[0]) ? (int) ($rows[0]['c'] ?? 0) : 0;
-    }
-
-    private function isMysqlReachable(string $host, int $port): bool
-    {
-        $socket = @fsockopen($host, $port, $errno, $errstr, 1.0);
-        if ($socket === false) {
-            return false;
-        }
-        fclose($socket);
-
-        return true;
     }
 }

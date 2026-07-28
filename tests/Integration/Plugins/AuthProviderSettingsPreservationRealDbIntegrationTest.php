@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace Phlix\Tests\Integration\Plugins;
 
-use Phlix\Common\Database\ConnectionPool;
 use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Common\Uuid;
 use Phlix\Plugins\Github\Controller\GithubAdminController;
@@ -15,8 +14,8 @@ use Phlix\Plugins\Oidc\Plugin as OidcPlugin;
 use Phlix\Plugins\Repository\PluginSettingsRepository;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
+use Phlix\Tests\Support\Database\RequiresRealDatabase;
 use PHPUnit\Framework\TestCase;
-use Throwable;
 use Workerman\MySQL\Connection;
 
 /**
@@ -59,6 +58,8 @@ use Workerman\MySQL\Connection;
  */
 final class AuthProviderSettingsPreservationRealDbIntegrationTest extends TestCase
 {
+    use RequiresRealDatabase;
+
     private ?Connection $db = null;
 
     private string $githubKey = '';
@@ -71,23 +72,7 @@ final class AuthProviderSettingsPreservationRealDbIntegrationTest extends TestCa
     {
         parent::setUp();
 
-        $host = getenv('DB_HOST') ?: '127.0.0.1';
-        $port = (int) (getenv('DB_PORT') ?: 3306);
-
-        if (!$this->isMysqlReachable($host, $port)) {
-            $this->markTestSkipped(sprintf(
-                'No MySQL on %s:%d — skipping S48 settings-preservation real-DB test. Runs in CI.',
-                $host,
-                $port,
-            ));
-        }
-
-        try {
-            ConnectionPool::init(dirname(__DIR__, 3) . '/config/database.php');
-            $this->db = ConnectionPool::getConnection('mysql');
-        } catch (Throwable $e) {
-            $this->markTestSkipped('Could not connect to MySQL: ' . $e->getMessage());
-        }
+        $this->db = $this->requireRealDatabase('skipping S48 settings-preservation real-DB test. Runs in CI.');
 
         $this->assertNotNull($this->db);
         LoggerFactory::reset();
@@ -452,16 +437,5 @@ final class AuthProviderSettingsPreservationRealDbIntegrationTest extends TestCa
         }
 
         return $db;
-    }
-
-    private function isMysqlReachable(string $host, int $port): bool
-    {
-        $socket = @fsockopen($host, $port, $errno, $errstr, 1.0);
-        if ($socket === false) {
-            return false;
-        }
-        fclose($socket);
-
-        return true;
     }
 }

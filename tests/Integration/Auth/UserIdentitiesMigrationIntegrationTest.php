@@ -6,8 +6,8 @@ namespace Phlix\Tests\Integration\Auth;
 
 use Phlix\Auth\UserIdentityRepository;
 use Phlix\Auth\UserRepository;
-use Phlix\Common\Database\ConnectionPool;
 use Phlix\Common\Uuid;
+use Phlix\Tests\Support\Database\RequiresRealDatabase;
 use PHPUnit\Framework\TestCase;
 use Throwable;
 use Workerman\MySQL\Connection;
@@ -50,9 +50,10 @@ use Workerman\MySQL\Connection;
  *     owned via a `user_identities` row RESOLVES that owner instead of creating a
  *     duplicate (the former deterministic dual-write conflict is now superseded).
  *
- * The suite self-skips when no MySQL is reachable (same fsockopen guard as
- * {@see NextUpIntegrationTest} / {@see UserRepositoryExternalIdIntegrationTest})
- * and env gates (`DB_HOST`/`DB_PORT`/...). Unlike those two it BUILDS the schema
+ * The suite self-skips when no MySQL is reachable, and FAILS when one is reachable
+ * but unusable — the shared S126 gate in {@see RequiresRealDatabase}, the same one
+ * {@see NextUpIntegrationTest} / {@see UserRepositoryExternalIdIntegrationTest} use,
+ * reading the `DB_HOST`/`DB_PORT` env. Unlike those two it BUILDS the schema
  * it needs (`CREATE TABLE IF NOT EXISTS`), so it runs against a bare scratch DB;
  * on a fully-migrated shared schema the IF-NOT-EXISTS creates are no-ops. It only
  * ever mutates rows it creates (namespaced by a per-run token, cleaned up in
@@ -63,6 +64,8 @@ use Workerman\MySQL\Connection;
  */
 final class UserIdentitiesMigrationIntegrationTest extends TestCase
 {
+    use RequiresRealDatabase;
+
     private ?Connection $db = null;
 
     private string $token = '';
@@ -83,25 +86,7 @@ final class UserIdentitiesMigrationIntegrationTest extends TestCase
     {
         parent::setUp();
 
-        $host = getenv('DB_HOST') ?: '127.0.0.1';
-        $port = (int) (getenv('DB_PORT') ?: 3306);
-
-        if (!$this->isMysqlReachable($host, $port)) {
-            $this->markTestSkipped(
-                sprintf(
-                    'No MySQL on %s:%d — skipping user_identities migration integration test. Runs in CI.',
-                    $host,
-                    $port,
-                ),
-            );
-        }
-
-        try {
-            ConnectionPool::init(dirname(__DIR__, 3) . '/config/database.php');
-            $this->db = ConnectionPool::getConnection('mysql');
-        } catch (Throwable $e) {
-            $this->markTestSkipped('Could not connect to MySQL: ' . $e->getMessage());
-        }
+        $this->db = $this->requireRealDatabase('skipping user_identities migration integration test. Runs in CI.');
 
         $this->assertNotNull($this->db);
 
@@ -648,16 +633,5 @@ final class UserIdentitiesMigrationIntegrationTest extends TestCase
         );
 
         return array_values($parts);
-    }
-
-    private function isMysqlReachable(string $host, int $port): bool
-    {
-        $sock = @fsockopen($host, $port, $errno, $errstr, 1.0);
-        if ($sock === false) {
-            return false;
-        }
-        fclose($sock);
-
-        return true;
     }
 }

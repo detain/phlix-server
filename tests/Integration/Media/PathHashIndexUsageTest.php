@@ -4,8 +4,8 @@ declare(strict_types=1);
 
 namespace Phlix\Tests\Integration\Media;
 
-use Phlix\Common\Database\ConnectionPool;
 use Phlix\Media\Library\ItemRepository;
+use Phlix\Tests\Support\Database\RequiresRealDatabase;
 use PHPUnit\Framework\TestCase;
 use Throwable;
 use Workerman\MySQL\Connection;
@@ -47,6 +47,8 @@ use Workerman\MySQL\Connection;
  */
 final class PathHashIndexUsageTest extends TestCase
 {
+    use RequiresRealDatabase;
+
     private const PATH_HASH_INDEX = 'idx_media_items_library_path_hash';
 
     /** Rows to seed — enough to give a full scan a real cost to beat. */
@@ -68,23 +70,9 @@ final class PathHashIndexUsageTest extends TestCase
     {
         parent::setUp();
 
-        $host = getenv('DB_HOST') ?: '127.0.0.1';
-        $port = (int) (getenv('DB_PORT') ?: 3306);
-
-        if (!$this->isMysqlReachable($host, $port)) {
-            $this->markTestSkipped(sprintf(
-                'No MySQL on %s:%d — skipping path_hash index-usage EXPLAIN test. Runs in CI / docker-compose.',
-                $host,
-                $port,
-            ));
-        }
-
-        try {
-            ConnectionPool::init(dirname(__DIR__, 3) . '/config/database.php');
-            $this->db = ConnectionPool::getConnection('mysql');
-        } catch (Throwable $e) {
-            $this->markTestSkipped('Could not connect to MySQL: ' . $e->getMessage());
-        }
+        $this->db = $this->requireRealDatabase(
+            'skipping path_hash index-usage EXPLAIN test. Runs in CI / docker-compose.',
+        );
 
         // Migration 072 adds the path_hash generated column; without it there is
         // nothing to index. Self-skip rather than error on a stale schema.
@@ -461,17 +449,6 @@ final class PathHashIndexUsageTest extends TestCase
         } catch (Throwable) {
             return false;
         }
-    }
-
-    private function isMysqlReachable(string $host, int $port): bool
-    {
-        $sock = @fsockopen($host, $port, $errno, $errstr, 1.0);
-        if ($sock === false) {
-            return false;
-        }
-        fclose($sock);
-
-        return true;
     }
 
     private function uuid(): string

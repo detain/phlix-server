@@ -7,6 +7,7 @@ namespace Phlix\Tests\Integration\Media\Transcoding;
 use Phlix\Common\Database\PooledMySQLConnection;
 use Phlix\Media\Transcoding\FfmpegRunner;
 use Phlix\Media\Transcoding\TranscodeManager;
+use Phlix\Tests\Support\Database\RequiresRealDatabase;
 use PHPUnit\Framework\TestCase;
 use ReflectionMethod;
 use Throwable;
@@ -48,6 +49,8 @@ use Throwable;
  */
 final class PooledConnectionConcurrencyTest extends TestCase
 {
+    use RequiresRealDatabase;
+
     private string $host = '127.0.0.1';
     private int $port = 3306;
     private string $user = 'root';
@@ -70,15 +73,46 @@ final class PooledConnectionConcurrencyTest extends TestCase
         $this->password = getenv('DB_PASSWORD') !== false ? (string) getenv('DB_PASSWORD') : 'root';
         $this->database = getenv('DB_DATABASE') ?: (getenv('DB_NAME') ?: 'phlix_test');
 
-        if (!$this->isMysqlReachable($this->host, $this->port)) {
-            $this->markTestSkipped(
-                sprintf('No MySQL on %s:%d — skipping pool concurrency test. Runs in CI / docker.', $this->host, $this->port)
-            );
-        }
-
         // Silence swoole's per-syscall TRACE spam (it would swamp the test log
         // and trip failOnOutput). Mirrors MediaScannerTest's concurrency tests.
+        //
+        // ⚠ MUST come BEFORE the database guard below, not after. The test methods
+        // in this class call \Swoole\Runtime::enableCoroutine(SWOOLE_HOOK_ALL) and
+        // never disable it, so under phpunit.xml's executionOrder="random" the 2nd
+        // and 3rd setUp() run the guard's real PDO round-trip with the hooks still
+        // on — i.e. exactly the traffic this trace_flags reset silences, emitted
+        // into a run configured with beStrictAboutOutputDuringTests="true" and
+        // failOnRisky="true". This is the known S137 flake file; do not move the
+        // guard back above this line.
         \Swoole\Coroutine::set(['log_level' => SWOOLE_LOG_ERROR, 'trace_flags' => 0]);
+
+        // ⚠ KNOWN AND UNADDRESSED — this reorder fixes the OUTPUT half only.
+        // The hooks are still on when the guard runs, and the guard's PDO
+        // round-trip still happens OUTSIDE any coroutine (S126 review round 1 #4,
+        // round 2 #7). The connection it opens is cached process-wide in
+        // ConnectionPool::$connections['mysql'] and never closed, so a
+        // coroutine-hooked socket is still open at PHPUnit's RSHUTDOWN — the
+        // hazard src/Common/Database/ConnectionPool.php:142-146 documents as
+        // "API must be called in the coroutine". Pre-S126 this setUp() did no PDO
+        // I/O at all, so S126 added that exposure here; swoole 6.2.1 is loaded on
+        // the dev box and in both .github/workflows/phpunit.yml jobs (:37, :170),
+        // so it is a live path in the job that has MySQL. It is NOT fixed below.
+        // Closing it means running the guard inside Coroutine::run() (which
+        // changes how markTestSkipped's exception propagates, so it needs the
+        // MySQL-backed CI job to verify and cannot be validated on a box with no
+        // MySQL) or dropping the hooks around it. Tracked as a follow-up; do not
+        // read the comment above as having covered it.
+
+        // The guard is given this test's own resolved host/port rather than reading
+        // DB_HOST/DB_PORT itself, so it probes exactly the server the hand-built
+        // PooledMySQLConnection below will connect to. It also runs a real `SELECT 1`
+        // through ConnectionPool's SHARED connection, which is a different instance
+        // from the pool this test builds — see IntegrationDbGuard.
+        $this->requireHealthyDatabase(
+            'skipping pool concurrency test. Runs in CI / docker.',
+            $this->host,
+            $this->port,
+        );
 
         $this->segmentDir = sys_get_temp_dir() . '/phlix_s9_conc_' . uniqid();
         mkdir($this->segmentDir, 0755, true);
@@ -484,17 +518,6 @@ final class PooledConnectionConcurrencyTest extends TestCase
             $cachedValue,
             'the epoch-guarded cache must converge on the final written value (no stale row stuck without a TTL)'
         );
-    }
-
-    private function isMysqlReachable(string $host, int $port): bool
-    {
-        $sock = @fsockopen($host, $port, $errno, $errstr, 1.0);
-        if ($sock === false) {
-            return false;
-        }
-        fclose($sock);
-
-        return true;
     }
 
     private function uuid(): string

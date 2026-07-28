@@ -6,12 +6,12 @@ namespace Phlix\Tests\Integration\Auth;
 
 use Phlix\Auth\AuthProviderRegistry;
 use Phlix\Auth\UserIdentityRepository;
-use Phlix\Common\Database\ConnectionPool;
 use Phlix\Common\Uuid;
 use Phlix\Plugins\Ldap\LdapConnection;
 use Phlix\Plugins\Ldap\LdapProvider;
 use Phlix\Server\Http\Controllers\AccountLinkController;
 use Phlix\Server\Http\Request;
+use Phlix\Tests\Support\Database\RequiresRealDatabase;
 use PHPUnit\Framework\TestCase;
 use Throwable;
 use Workerman\MySQL\Connection;
@@ -70,9 +70,10 @@ use Workerman\MySQL\Connection;
  *  5. Listing: `GET /auth/identities` shaping returns A's identity with the
  *     expected fields and NEVER leaks `provider_data` secrets.
  *
- * The suite self-skips when no MySQL is reachable (same fsockopen guard + env
- * gates as {@see UserIdentitiesMigrationIntegrationTest} /
- * {@see UserRepositoryExternalIdIntegrationTest}). Like the S46 test it BUILDS
+ * The suite self-skips when no MySQL is reachable, and FAILS when one is reachable
+ * but unusable — the shared S126 gate in {@see RequiresRealDatabase}, the same one
+ * {@see UserIdentitiesMigrationIntegrationTest} /
+ * {@see UserRepositoryExternalIdIntegrationTest} use. Like the S46 test it BUILDS
  * the schema it needs (`users` = migrations 001+004+009+032+037+040+041+091,
  * `user_identities` = the verbatim migration-092 CREATE) with `IF NOT EXISTS`,
  * so it runs against a bare scratch DB and is a no-op create on a migrated one.
@@ -84,6 +85,8 @@ use Workerman\MySQL\Connection;
  */
 final class AccountLinkIntegrationTest extends TestCase
 {
+    use RequiresRealDatabase;
+
     private ?Connection $db = null;
 
     private string $token = '';
@@ -101,25 +104,7 @@ final class AccountLinkIntegrationTest extends TestCase
     {
         parent::setUp();
 
-        $host = getenv('DB_HOST') ?: '127.0.0.1';
-        $port = (int) (getenv('DB_PORT') ?: 3306);
-
-        if (!$this->isMysqlReachable($host, $port)) {
-            $this->markTestSkipped(
-                sprintf(
-                    'No MySQL on %s:%d — skipping account-link integration test. Runs in CI.',
-                    $host,
-                    $port,
-                ),
-            );
-        }
-
-        try {
-            ConnectionPool::init(dirname(__DIR__, 3) . '/config/database.php');
-            $this->db = ConnectionPool::getConnection('mysql');
-        } catch (Throwable $e) {
-            $this->markTestSkipped('Could not connect to MySQL: ' . $e->getMessage());
-        }
+        $this->db = $this->requireRealDatabase('skipping account-link integration test. Runs in CI.');
 
         $this->assertNotNull($this->db);
 
@@ -718,16 +703,5 @@ final class AccountLinkIntegrationTest extends TestCase
         );
 
         return array_values($parts);
-    }
-
-    private function isMysqlReachable(string $host, int $port): bool
-    {
-        $sock = @fsockopen($host, $port, $errno, $errstr, 1.0);
-        if ($sock === false) {
-            return false;
-        }
-        fclose($sock);
-
-        return true;
     }
 }

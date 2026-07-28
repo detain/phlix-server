@@ -4,15 +4,14 @@ declare(strict_types=1);
 
 namespace Phlix\Tests\Integration\Dlna;
 
-use Phlix\Common\Database\ConnectionPool;
 use Phlix\Common\Uuid;
 use Phlix\Dlna\LibraryBridge;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Music\MusicLibraryScanner;
 use Phlix\Media\Music\MusicLibraryService;
 use Phlix\Media\Streaming\HlsStreamer;
+use Phlix\Tests\Support\Database\RequiresRealDatabase;
 use PHPUnit\Framework\TestCase;
-use Throwable;
 use Workerman\MySQL\Connection;
 
 /**
@@ -60,6 +59,8 @@ use Workerman\MySQL\Connection;
  */
 final class DlnaMusicDrillDownCountIntegrationTest extends TestCase
 {
+    use RequiresRealDatabase;
+
     /** Albums seeded under the fixture artist that DO have a `media_items` row. */
     private const MINTED_ALBUMS = 4;
 
@@ -100,26 +101,7 @@ final class DlnaMusicDrillDownCountIntegrationTest extends TestCase
     {
         parent::setUp();
 
-        $host = getenv('DB_HOST') ?: '127.0.0.1';
-        $port = (int) (getenv('DB_PORT') ?: 3306);
-
-        if (!$this->isMysqlReachable($host, $port)) {
-            $this->markTestSkipped(sprintf(
-                'No MySQL on %s:%d — skipping the S147 music drill-down COUNT proof. Runs in CI.',
-                $host,
-                $port,
-            ));
-        }
-
-        try {
-            ConnectionPool::init(dirname(__DIR__, 3) . '/config/database.php');
-            $db = ConnectionPool::getConnection('mysql');
-            // Forces the lazily-leased pooled connection to open for real.
-            $db->query('SELECT 1');
-            $this->db = $db;
-        } catch (Throwable $e) {
-            $this->markTestSkipped('Could not connect to MySQL: ' . $e->getMessage());
-        }
+        $this->db = $this->requireRealDatabase('skipping the S147 music drill-down COUNT proof. Runs in CI.');
 
         $this->libraryId = Uuid::v4();
         $this->prefix = '!S147-' . substr(Uuid::v4(), 0, 8) . '-';
@@ -481,16 +463,5 @@ final class DlnaMusicDrillDownCountIntegrationTest extends TestCase
         }
 
         return $this->db;
-    }
-
-    private function isMysqlReachable(string $host, int $port): bool
-    {
-        $socket = @fsockopen($host, $port, $errno, $errstr, 1.0);
-        if ($socket === false) {
-            return false;
-        }
-        fclose($socket);
-
-        return true;
     }
 }

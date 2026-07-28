@@ -398,13 +398,18 @@ class StreamProbeBackfill
      * 3. A SQLSTATE class that is transient by the standard: `08xxx`
      *    (connection exception) and `40001` (serialization failure / deadlock).
      *
-     * The errno/SQLSTATE are read from `PDOException::$errorInfo` when it
-     * survives, and otherwise parsed back out of the message — which is the
-     * COMMON case, not a fallback: {@see \Phlix\Common\Database\PhlixMySQLConnection::execute()}
-     * re-throws `new \PDOException('SQL:…' . $e->getMessage(), …)` for every code
-     * except 2006/2013, and a freshly constructed `PDOException` carries no
-     * `errorInfo`. The exception chain is walked so a future wrapper cannot hide
-     * the cause.
+     * The errno/SQLSTATE come from {@see sqlErrorOf()}, which needs BOTH of its
+     * readers because the two failure families arrive in mutually exclusive
+     * shapes (measured on MySQL 8.0.46, not inferred):
+     * - STATEMENT failures are re-wrapped by
+     *   {@see \Phlix\Common\Database\PhlixMySQLConnection::execute()} into
+     *   `new \PDOException('SQL:…' . $e->getMessage(), …)` for every code except
+     *   2006/2013, and a freshly constructed `PDOException` carries no
+     *   `errorInfo` — so only the message survives.
+     * - CONNECT failures are re-thrown VERBATIM, keeping `errorInfo`, but PDO
+     *   words them `SQLSTATE[08004] [1040] Too many connections` — no colon
+     *   after the bracket — so only `errorInfo` survives.
+     * The exception chain is walked so a future wrapper cannot hide the cause.
      */
     private static function isTransientWriteFailure(\Throwable $e): bool
     {
@@ -432,17 +437,37 @@ class StreamProbeBackfill
      * Extracts `[SQLSTATE, MySQL errno]` from a throwable, `['', 0]` when it
      * carries neither.
      *
-     * Prefers `PDOException::$errorInfo`; falls back to parsing PDO's message
-     * format `SQLSTATE[40001]: Serialization failure: 1213 Deadlock found …`,
-     * which survives `PhlixMySQLConnection::execute()`'s re-wrap. The LAST match
-     * wins: that re-wrap prefixes the failing SQL — parameter values included —
-     * so an earlier "match" could only come from row data, never from PDO.
+     * BOTH readers are load-bearing; neither is a fallback for the other,
+     * because PDO words its two failure families differently and the transport
+     * preserves a different half of each (all four shapes reproduced against
+     * MySQL 8.0.46):
+     *
+     * 1. `PDOException::$errorInfo`, read first. It is the ONLY signal for a
+     *    CONNECT failure, whose message reads
+     *    `SQLSTATE[08004] [1040] Too many connections` /
+     *    `SQLSTATE[HY000] [2002] Connection refused` — a bracketed errno with no
+     *    colon after `]`, which the pattern below deliberately does not match.
+     *    Those arrive here VERBATIM (so `errorInfo` is intact) because
+     *    `PooledMySQLConnection::acquire()` re-throws its `rawFactory()`
+     *    failure and workerman/mysql's `beginTrans()` re-throws anything that is
+     *    not 2006/2013 — and `replaceStreams()`'s `beginTrans()` is the first
+     *    statement of the write, so a connect failure is exactly what a caller
+     *    sees when the server is briefly unreachable. Dropping this reader
+     *    silently classifies 1040/2002/2003 as DETERMINISTIC and stamps the
+     *    item, permanently masking it for a condition that clears by itself.
+     * 2. The message, parsed as `SQLSTATE[40001]: Serialization failure: 1213
+     *    Deadlock found …`. It is the ONLY signal for a STATEMENT failure,
+     *    because `PhlixMySQLConnection::execute()` re-wraps those in a fresh
+     *    `PDOException`, which carries no `errorInfo` at all. The LAST match
+     *    wins: that re-wrap prefixes the failing SQL — parameter values
+     *    included — so an earlier "match" could only come from row data, never
+     *    from PDO.
      *
      * @return array{0: string, 1: int}
      */
     private static function sqlErrorOf(\Throwable $e): array
     {
-        if (false) {
+        if ($e instanceof \PDOException) {
             $info = $e->errorInfo;
             if (is_array($info) && isset($info[0], $info[1]) && is_scalar($info[0]) && is_numeric($info[1])) {
                 return [(string) $info[0], (int) $info[1]];

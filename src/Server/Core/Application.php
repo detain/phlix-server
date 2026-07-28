@@ -3534,13 +3534,14 @@ class Application
         /** @var \Phlix\Media\Library\ItemRepository */
         $itemRepository = $container->get(\Phlix\Media\Library\ItemRepository::class);
 
-        $tmdbConfigRaw = @include __DIR__ . '/../../../config/tmdb.php';
-        $tmdbApiKey = is_array($tmdbConfigRaw)
-            && isset($tmdbConfigRaw['api_key'])
-            && is_string($tmdbConfigRaw['api_key'])
-            ? $tmdbConfigRaw['api_key']
-            : (getenv('TMDB_API_KEY') ?: '');
-        $tmdb = new \Phlix\Media\Metadata\TmdbProvider($tmdbApiKey);
+        // Resolve TmdbProvider through the container. Hand-building it here
+        // read only config/tmdb.php / TMDB_API_KEY and so ignored the
+        // admin-managed `server_settings` row `tmdb.api_key` entirely — with
+        // TMDB_API_KEY unexported that meant a permanently empty key on the
+        // poster endpoints registered from this controller. The container's
+        // factory (MediaServicesProvider) applies the settings override.
+        /** @var \Phlix\Media\Metadata\TmdbProvider */
+        $tmdb = $container->get(\Phlix\Media\Metadata\TmdbProvider::class);
 
         $controller = new \Phlix\Server\Http\Controllers\MediaPosterController($itemRepository, $tmdb);
 
@@ -3618,8 +3619,9 @@ class Application
      * Falls back to a hand-wired instance only when no PSR-11 container is
      * present (legacy test helpers); production always resolves through DI
      * so PHP-DI can autowire the controller, TrailerResolver, and the
-     * TmdbProvider factory (which reads the API key from $appConfig['tmdb']
-     * or the TMDB_API_KEY environment variable — see MediaServicesProvider).
+     * TmdbProvider factory (which prefers the admin-managed `server_settings`
+     * row `tmdb.api_key` and falls back to $appConfig['tmdb'] / the
+     * TMDB_API_KEY environment variable — see MediaServicesProvider).
      *
      * @return \Phlix\Server\Http\Controllers\ExtrasController The controller instance.
      */
@@ -3634,12 +3636,12 @@ class Application
                 'password'
             );
             $itemRepository = new \Phlix\Media\Library\ItemRepository($db);
-            $tmdbConfigRaw = @include __DIR__ . '/../../../config/tmdb.php';
-            $tmdbApiKey = is_array($tmdbConfigRaw)
-                && isset($tmdbConfigRaw['api_key'])
-                && is_string($tmdbConfigRaw['api_key'])
-                ? $tmdbConfigRaw['api_key']
-                : (getenv('TMDB_API_KEY') ?: '');
+            // No container on this legacy branch, so build the settings store
+            // from the local connection rather than reading config/env only —
+            // the admin-managed `server_settings` override must still win.
+            $tmdbApiKey = \Phlix\Media\Metadata\TmdbApiKeyResolver::resolve(
+                new \Phlix\Admin\SettingsRepository($db)
+            );
             $tmdb = new \Phlix\Media\Metadata\TmdbProvider($tmdbApiKey);
             $extrasRepo = new \Phlix\Media\Extras\ExtrasRepository($db);
             $trailerFinder = new \Phlix\Media\Extras\TrailerFinder();

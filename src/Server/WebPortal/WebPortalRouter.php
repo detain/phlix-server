@@ -39,6 +39,7 @@ use Phlix\Auth\UserRepository;
 use Phlix\Auth\WatchHistory;
 use Phlix\Common\Logger\AuditLogger;
 use Phlix\Media\UserItemDataRepository;
+use Phlix\Media\Metadata\TmdbApiKeyResolver;
 use Phlix\Media\Metadata\TmdbProvider;
 use Phlix\Media\Playback\PlaybackPreferences;
 use Phlix\Media\Streaming\ClientCapabilities;
@@ -2919,24 +2920,24 @@ class WebPortalRouter
     }
 
     /**
-     * Returns the configured TMDB API key, or an empty string when not set.
+     * Returns the effective TMDB API key, or an empty string when not set.
      *
-     * S146: the path was `dirname(__DIR__, 2) . '/../../config/tmdb.php'`, which
-     * from src/Server/WebPortal resolves to `<repo>/../config/tmdb.php` — one
-     * level ABOVE the repository root. config/tmdb.php could therefore never be
-     * found, `@` swallowed the warning, and the method silently always fell
-     * through to the TMDB_API_KEY environment variable. Corrected to the same
-     * form the sibling config loader in this class uses — see
-     * getPlaybackPreferences(), which reads config/playback.php via
-     * dirname(__DIR__, 3).
+     * S146 fixed the config path this used to read, but the method still only
+     * ever consulted `config/tmdb.php` / `TMDB_API_KEY` — never the
+     * admin-managed `server_settings` row that the SPA's Settings → Metadata
+     * page actually writes. With `TMDB_API_KEY` unexported (the normal case
+     * once the key is managed from the UI) this returned an empty string
+     * permanently, so the admin poster endpoints registered below behaved as
+     * if no key were configured. Resolution now goes through
+     * {@see TmdbApiKeyResolver}, which prefers the `server_settings` override
+     * and keeps config/env as the fallback.
+     *
+     * The key is captured when routes are registered (constructor time), so a
+     * newly saved key applies on the next worker cycle — see the caching note
+     * on {@see TmdbApiKeyResolver}.
      */
     private function tmdbApiKey(): string
     {
-        $tmdbConfigRaw = @include dirname(__DIR__, 3) . '/config/tmdb.php';
-        return is_array($tmdbConfigRaw)
-            && isset($tmdbConfigRaw['api_key'])
-            && is_string($tmdbConfigRaw['api_key'])
-            ? $tmdbConfigRaw['api_key']
-            : (getenv('TMDB_API_KEY') ?: '');
+        return TmdbApiKeyResolver::resolve($this->settings);
     }
 }

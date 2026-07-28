@@ -102,30 +102,61 @@ jobs:
         if: always()
         run: php scripts/assertion-escape-check.php
 
-      - name: Check minimum coverage threshold
+      - name: Assert the coverage report and its parser exist
+        # ADDITIVE guard, and the direct analogue of "Assert Psalm is actually
+        # installed" in coding-standards.yml (S146). It exists because the
+        # threshold step below spent the life of this repo reporting success
+        # while measuring nothing: it shelled out to `xmllint`, which is NOT
+        # installed on ubuntu-latest, hid the resulting "command not found"
+        # behind `2>/dev/null`, substituted `0` via `|| echo "0"`, and then read
+        # that `0` as "empty report — skip" and exited 0.
+        #
+        # Evidence (do not re-litigate): Ubuntu 24.04.4 LTS, image provisioner
+        # 20260707.563 — `libxml2-utils` is absent from that image's
+        # installed-apt-packages manifest. And in run 30354212368 the step body
+        # started at 11:21:28.1580647 and printed its WARNING at
+        # 11:21:28.1685980: 10.5 ms for two supposed parses of a ~4 MB Clover
+        # report. Two real xmllint parses of that file measure 461 ms; two
+        # command-not-found failures measure 5 ms.
+        #
+        # A missing tool must fail loudly rather than degrade into a no-op.
         run: |
-          # PHPUnit's --coverage-clover writes Clover XML, which uses
-          # `statements`/`coveredstatements` on /coverage/project/metrics.
-          # The Cobertura-style `line-rate` attribute does not exist here,
-          # so compute the percentage from the raw counts.
-          STMTS=$(xmllint --xpath "string(/coverage/project/metrics/@statements)" coverage.xml 2>/dev/null || echo "0")
-          COVERED=$(xmllint --xpath "string(/coverage/project/metrics/@coveredstatements)" coverage.xml 2>/dev/null || echo "0")
-          if [ -z "$STMTS" ] || [ "$STMTS" = "0" ]; then
-            echo "WARNING: no statements found in coverage.xml — skipping threshold check"
-            exit 0
-          fi
-          PCT=$(echo "scale=2; $COVERED * 100 / $STMTS" | bc)
-          MIN_COVERAGE=40
-
-          echo "Statement coverage: ${PCT}% ($COVERED / $STMTS)"
-          echo "Minimum required:   ${MIN_COVERAGE}%"
-
-          if [ "$(echo "$PCT < $MIN_COVERAGE" | bc)" -eq 1 ]; then
-            echo "ERROR: Coverage ${PCT}% is below minimum ${MIN_COVERAGE}%"
+          if [ ! -f coverage.xml ]; then
+            echo "::error::coverage.xml was not produced by the 'Run PHPUnit tests' step. The coverage gate cannot run — fix the test run, do not skip the gate."
             exit 1
           fi
+          if [ ! -s coverage.xml ]; then
+            echo "::error::coverage.xml exists but is empty (0 bytes)."
+            exit 1
+          fi
+          if ! php -r 'exit(class_exists("DOMDocument") && class_exists("DOMXPath") ? 0 : 1);'; then
+            echo "::error::PHP is missing ext-dom (DOMDocument/DOMXPath). Add 'dom' to the setup-php extensions list — do not re-add a conditional that skips the coverage gate when its parser is missing (S146)."
+            exit 1
+          fi
+          echo "coverage.xml present ($(wc -c < coverage.xml) bytes); PHP XML parser available."
 
-          echo "Coverage check passed."
+      - name: Check minimum coverage threshold
+        # The threshold logic is unchanged in intent — a MIN_COVERAGE floor over
+        # statement coverage computed from Clover's
+        # `statements`/`coveredstatements` on /coverage/project/metrics. The
+        # XPath was never the problem and is preserved verbatim inside the
+        # script; the Cobertura-style `line-rate` attribute still does not exist
+        # in PHPUnit's output, so do not reach for it.
+        #
+        # What changed is WHO parses. scripts/coverage-threshold-check.php reads
+        # the report with ext-dom and does the arithmetic in PHP, which removes
+        # both external-tool dependencies this step used to carry: `xmllint`
+        # (proven absent above) and `bc` (also absent from the Ubuntu 24.04
+        # manifest — never observed failing only because the xmllint line
+        # short-circuited three lines above it).
+        #
+        # Every failure mode in that script is exit 1: missing report, missing
+        # parser, unparseable XML, missing/non-numeric metric, zero statements.
+        # There is no `exit 0` fallback and no `|| echo "0"`. Do not add one —
+        # a gate that cannot measure must not report success.
+        env:
+          MIN_COVERAGE: '40'
+        run: php scripts/coverage-threshold-check.php coverage.xml
 
       - name: Upload coverage to Codecov
         if: env.CODECOV_TOKEN != ''

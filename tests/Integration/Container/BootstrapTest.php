@@ -10,6 +10,7 @@ use Phlix\Common\Container\ServiceProviderInterface;
 use Phlix\Common\Database\ConnectionPool;
 use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Server\Core\Application;
+use Phlix\Tests\Support\Database\RequiresRealDatabase;
 use PHPUnit\Framework\TestCase;
 use Psr\Container\ContainerInterface;
 use Workerman\MySQL\Connection;
@@ -27,6 +28,8 @@ use function DI\factory;
  */
 final class BootstrapTest extends TestCase
 {
+    use RequiresRealDatabase;
+
     private string $tempDir = '';
     private string $loggerConfigPath = '';
     private string $serverConfigPath = '';
@@ -113,9 +116,21 @@ final class BootstrapTest extends TestCase
         // bypassing the container-bound mock below. So this smoke test still
         // needs a reachable MySQL. CI provides one as a service container;
         // skip locally when the host doesn't.
-        if (!$this->isMysqlReachable('127.0.0.1', 3306)) {
-            $this->markTestSkipped('No MySQL on 127.0.0.1:3306 — skipping Application bootstrap test. Run in docker-compose for integration testing.');
-        }
+        //
+        // ⚠ The probe target is pinned to the literal `127.0.0.1:3306` this test has
+        // always used rather than to DB_HOST/DB_PORT. That is deliberately UNCHANGED by
+        // S126: under `phpunit.xml`'s own `<env>` block (`DB_HOST=127.0.0.1`,
+        // `DB_PORT=3306`) and under `.github/workflows/phpunit.yml`'s MySQL service the
+        // two resolve to the same address, so pinning it keeps this site's behaviour
+        // byte-identical everywhere the suite is actually configured to run. It does
+        // mean the probe and the connection `ConnectionPool` opens can disagree if
+        // DB_PORT is overridden from the environment — a pre-existing inconsistency in
+        // this file, out of S126's scope, not introduced here.
+        $this->requireHealthyDatabase(
+            'skipping Application bootstrap test. Run in docker-compose for integration testing.',
+            '127.0.0.1',
+            3306,
+        );
 
         $mockConnection = $this->createMock(Connection::class);
 
@@ -154,23 +169,17 @@ final class BootstrapTest extends TestCase
         // fromConfigPath wires the real DB stack; the Application constructor
         // eagerly resolves controller factories that open a live connection.
         // Needs a reachable MySQL (CI service container); skip otherwise.
-        if (!$this->isMysqlReachable('127.0.0.1', 3306)) {
-            $this->markTestSkipped('No MySQL on 127.0.0.1:3306 — skipping Application bootstrap test. Run in docker-compose for integration testing.');
-        }
+        // Probe target pinned to the historical literal for the same reason as in
+        // {@see test_container_resolves_application_with_mocked_connection()}.
+        $this->requireHealthyDatabase(
+            'skipping Application bootstrap test. Run in docker-compose for integration testing.',
+            '127.0.0.1',
+            3306,
+        );
 
         // We can't supply a mock connection through fromConfigPath, but we
         // can verify it doesn't blow up before lazy-resolving the DB.
         $app = Application::fromConfigPath($this->serverConfigPath);
         $this->assertNotNull($app->getContainer());
-    }
-
-    private function isMysqlReachable(string $host, int $port): bool
-    {
-        $sock = @fsockopen($host, $port, $errno, $errstr, 1.0);
-        if ($sock === false) {
-            return false;
-        }
-        fclose($sock);
-        return true;
     }
 }

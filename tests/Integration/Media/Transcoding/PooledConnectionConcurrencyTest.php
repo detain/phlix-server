@@ -7,6 +7,7 @@ namespace Phlix\Tests\Integration\Media\Transcoding;
 use Phlix\Common\Database\PooledMySQLConnection;
 use Phlix\Media\Transcoding\FfmpegRunner;
 use Phlix\Media\Transcoding\TranscodeManager;
+use Phlix\Tests\Support\Database\RequiresRealDatabase;
 use PHPUnit\Framework\TestCase;
 use ReflectionMethod;
 use Throwable;
@@ -48,6 +49,8 @@ use Throwable;
  */
 final class PooledConnectionConcurrencyTest extends TestCase
 {
+    use RequiresRealDatabase;
+
     private string $host = '127.0.0.1';
     private int $port = 3306;
     private string $user = 'root';
@@ -70,11 +73,16 @@ final class PooledConnectionConcurrencyTest extends TestCase
         $this->password = getenv('DB_PASSWORD') !== false ? (string) getenv('DB_PASSWORD') : 'root';
         $this->database = getenv('DB_DATABASE') ?: (getenv('DB_NAME') ?: 'phlix_test');
 
-        if (!$this->isMysqlReachable($this->host, $this->port)) {
-            $this->markTestSkipped(
-                sprintf('No MySQL on %s:%d — skipping pool concurrency test. Runs in CI / docker.', $this->host, $this->port)
-            );
-        }
+        // The guard is given this test's own resolved host/port rather than reading
+        // DB_HOST/DB_PORT itself, so it probes exactly the server the hand-built
+        // PooledMySQLConnection below will connect to. It also runs a real `SELECT 1`
+        // through ConnectionPool's SHARED connection, which is a different instance
+        // from the pool this test builds — see IntegrationDbGuard.
+        $this->requireHealthyDatabase(
+            'skipping pool concurrency test. Runs in CI / docker.',
+            $this->host,
+            $this->port,
+        );
 
         // Silence swoole's per-syscall TRACE spam (it would swamp the test log
         // and trip failOnOutput). Mirrors MediaScannerTest's concurrency tests.
@@ -484,17 +492,6 @@ final class PooledConnectionConcurrencyTest extends TestCase
             $cachedValue,
             'the epoch-guarded cache must converge on the final written value (no stale row stuck without a TTL)'
         );
-    }
-
-    private function isMysqlReachable(string $host, int $port): bool
-    {
-        $sock = @fsockopen($host, $port, $errno, $errstr, 1.0);
-        if ($sock === false) {
-            return false;
-        }
-        fclose($sock);
-
-        return true;
     }
 
     private function uuid(): string

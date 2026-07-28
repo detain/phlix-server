@@ -4,10 +4,9 @@ declare(strict_types=1);
 
 namespace Phlix\Tests\Integration\Media;
 
-use Phlix\Common\Database\ConnectionPool;
 use Phlix\Media\Library\ScanJobRepository;
+use Phlix\Tests\Support\Database\RequiresRealDatabase;
 use PHPUnit\Framework\TestCase;
-use Throwable;
 use Workerman\MySQL\Connection;
 
 /**
@@ -31,6 +30,8 @@ use Workerman\MySQL\Connection;
  */
 final class ScanJobRoundTripTest extends TestCase
 {
+    use RequiresRealDatabase;
+
     private ?Connection $db = null;
 
     /** @var string UUID of the parent library row created for the FK. */
@@ -40,26 +41,7 @@ final class ScanJobRoundTripTest extends TestCase
     {
         parent::setUp();
 
-        $host = getenv('DB_HOST') ?: '127.0.0.1';
-        $port = (int) (getenv('DB_PORT') ?: 3306);
-
-        if (!$this->isMysqlReachable($host, $port)) {
-            $this->markTestSkipped(
-                sprintf('No MySQL on %s:%d — skipping scan-job round-trip. Runs in CI / docker-compose.', $host, $port),
-            );
-        }
-
-        try {
-            // Resolve the SAME patched connection production uses
-            // (PhlixMySQLConnection re-keys positional params 1-indexed for
-            // PDO::bindParam — the raw workerman/mysql Connection trips
-            // "bindParam(): Argument #1 must be >= 1" on PHP 8.x). Creds come
-            // from config/database.php, which reads the DB_* env phpunit.xml sets.
-            ConnectionPool::init(dirname(__DIR__, 3) . '/config/database.php');
-            $this->db = ConnectionPool::getConnection('mysql');
-        } catch (Throwable $e) {
-            $this->markTestSkipped('Could not connect to MySQL: ' . $e->getMessage());
-        }
+        $this->db = $this->requireRealDatabase('skipping scan-job round-trip. Runs in CI / docker-compose.');
 
         // A scan job FK-references libraries(id); create a disposable parent
         // row in the migration-created (empty) `libraries` table.
@@ -251,17 +233,6 @@ final class ScanJobRoundTripTest extends TestCase
         $raised = $repo->findById($jobId);
         $this->assertIsArray($raised);
         $this->assertSame(99, $raised['items_added']);
-    }
-
-    private function isMysqlReachable(string $host, int $port): bool
-    {
-        $sock = @fsockopen($host, $port, $errno, $errstr, 1.0);
-        if ($sock === false) {
-            return false;
-        }
-        fclose($sock);
-
-        return true;
     }
 
     private function uuid(): string

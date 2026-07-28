@@ -5,9 +5,12 @@ namespace Phlix\Tests\Unit\Server\Core;
 use PHPUnit\Framework\TestCase;
 use Phlix\Common\Database\ConnectionPool;
 use Phlix\Server\Core\Application;
+use Phlix\Tests\Support\Database\RequiresRealDatabase;
 
 class ApplicationTest extends TestCase
 {
+    use RequiresRealDatabase;
+
     /**
      * @group integration
      */
@@ -124,12 +127,19 @@ class ApplicationTest extends TestCase
      */
     private function bootApplication(): Application
     {
-        if (!$this->isMysqlReachable('127.0.0.1', 3306)) {
-            $this->markTestSkipped(
-                'No MySQL on 127.0.0.1:3306 — skipping Application boot. '
-                . 'Run in docker-compose for integration testing.',
-            );
-        }
+        // ⚠ Probe target pinned to the literal `127.0.0.1:3306` this test has always
+        // used rather than to DB_HOST/DB_PORT — deliberately UNCHANGED by S126, which
+        // replaced the private fsockopen probe here. Under `phpunit.xml`'s own `<env>`
+        // block (`DB_HOST=127.0.0.1`, `DB_PORT=3306`) the two resolve identically, so
+        // pinning keeps this site byte-identical. Note this file is in the
+        // `tests/Unit/Server/` set that `.github/workflows/phpunit.yml`'s `test-server`
+        // job runs with NO MySQL service, so the skip below is a live path in CI and
+        // must stay a skip.
+        $this->requireHealthyDatabase(
+            'skipping Application boot. Run in docker-compose for integration testing.',
+            '127.0.0.1',
+            3306,
+        );
 
         // ConnectionPool keeps process-wide static state. If another test in
         // the suite already initialised it (e.g. via the prod
@@ -170,16 +180,6 @@ class ApplicationTest extends TestCase
             $p->setAccessible(true);
             $p->setValue(null, $value);
         }
-    }
-
-    private function isMysqlReachable(string $host, int $port): bool
-    {
-        $sock = @fsockopen($host, $port, $errno, $errstr, 1.0);
-        if ($sock === false) {
-            return false;
-        }
-        fclose($sock);
-        return true;
     }
 
     private function writeTempDbConfig(): string

@@ -4,10 +4,9 @@ declare(strict_types=1);
 
 namespace Phlix\Tests\Integration\Media;
 
-use Phlix\Common\Database\ConnectionPool;
 use Phlix\Media\Library\ItemRepository;
+use Phlix\Tests\Support\Database\RequiresRealDatabase;
 use PHPUnit\Framework\TestCase;
-use Throwable;
 use Workerman\MySQL\Connection;
 
 /**
@@ -29,6 +28,8 @@ use Workerman\MySQL\Connection;
  */
 final class SortTitleOrderingTest extends TestCase
 {
+    use RequiresRealDatabase;
+
     private ?Connection $db = null;
 
     /** @var string UUID of the disposable parent library. */
@@ -38,21 +39,7 @@ final class SortTitleOrderingTest extends TestCase
     {
         parent::setUp();
 
-        $host = getenv('DB_HOST') ?: '127.0.0.1';
-        $port = (int) (getenv('DB_PORT') ?: 3306);
-
-        if (!$this->isMysqlReachable($host, $port)) {
-            $this->markTestSkipped(
-                sprintf('No MySQL on %s:%d — skipping sort-title ordering test. Runs in CI / docker-compose.', $host, $port),
-            );
-        }
-
-        try {
-            ConnectionPool::init(dirname(__DIR__, 3) . '/config/database.php');
-            $this->db = ConnectionPool::getConnection('mysql');
-        } catch (Throwable $e) {
-            $this->markTestSkipped('Could not connect to MySQL: ' . $e->getMessage());
-        }
+        $this->db = $this->requireRealDatabase('skipping sort-title ordering test. Runs in CI / docker-compose.');
 
         $this->libraryId = $this->uuid();
         $this->db->query(
@@ -140,17 +127,6 @@ final class SortTitleOrderingTest extends TestCase
     private function fixtureNames(): array
     {
         return ['The Plot', 'Plot Device', 'An Apple', 'Apple Core', 'Zebra', 'the matrix', 'El Camino', 'Box', 'The '];
-    }
-
-    private function isMysqlReachable(string $host, int $port): bool
-    {
-        $sock = @fsockopen($host, $port, $errno, $errstr, 1.0);
-        if ($sock === false) {
-            return false;
-        }
-        fclose($sock);
-
-        return true;
     }
 
     private function uuid(): string

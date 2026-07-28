@@ -13,6 +13,7 @@ namespace Phlix\Tests\Integration\Media;
 
 use Phlix\Common\Uuid;
 use Phlix\Media\Transcoding\FfmpegRunner;
+use Phlix\Tests\Support\Database\RequiresRealDatabase;
 use Phlix\Tests\Unit\Media\Music\RecordingLogger;
 use PHPUnit\Framework\TestCase;
 
@@ -66,6 +67,8 @@ use PHPUnit\Framework\TestCase;
  */
 final class MusicScanWriteAmplificationIntegrationTest extends TestCase
 {
+    use RequiresRealDatabase;
+
     /** The scanner's stamp statement, verbatim enough to match nothing else. */
     private const STAMP_SQL = 'UPDATE media_items SET metadata_json = JSON_SET';
 
@@ -95,11 +98,14 @@ final class MusicScanWriteAmplificationIntegrationTest extends TestCase
         $host = is_scalar($conn['host'] ?? null) ? (string) $conn['host'] : '127.0.0.1';
         $port = is_numeric($conn['port'] ?? null) ? (int) $conn['port'] : 3306;
 
-        if (!$this->isMysqlReachable($host, $port)) {
-            $this->markTestSkipped(
-                sprintf('No MySQL on %s:%d — skipping the S148 real-DB write-volume test. Runs in CI.', $host, $port),
-            );
-        }
+        // $host/$port come from config/database.php:14-15, which resolve DB_HOST/DB_PORT
+        // exactly as IntegrationDbGuard does; passed explicitly so this site keeps
+        // probing the same address it always has.
+        $this->requireHealthyDatabase(
+            'skipping the S148 real-DB write-volume test. Runs in CI.',
+            $host,
+            $port,
+        );
 
         // A DEDICATED connection, not ConnectionPool's shared one: the pool caches its
         // instance for the whole process, so swapping in a recording subclass there
@@ -1009,16 +1015,5 @@ final class MusicScanWriteAmplificationIntegrationTest extends TestCase
             $db->query('DELETE FROM media_items WHERE library_id = ?', [$this->libraryId]);
             $db->query('DELETE FROM libraries WHERE id = ?', [$this->libraryId]);
         }
-    }
-
-    private function isMysqlReachable(string $host, int $port): bool
-    {
-        $sock = @fsockopen($host, $port, $errno, $errstr, 1.0);
-        if ($sock === false) {
-            return false;
-        }
-        fclose($sock);
-
-        return true;
     }
 }

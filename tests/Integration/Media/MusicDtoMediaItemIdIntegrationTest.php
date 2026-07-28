@@ -4,13 +4,11 @@ declare(strict_types=1);
 
 namespace Phlix\Tests\Integration\Media;
 
-use Phlix\Common\Database\ConnectionPool;
 use Phlix\Common\Uuid;
 use Phlix\Media\Music\MusicLibraryScanner;
 use Phlix\Media\Music\MusicLibraryService;
+use Phlix\Tests\Support\Database\RequiresRealDatabase;
 use PHPUnit\Framework\TestCase;
-use RuntimeException;
-use Throwable;
 use Workerman\MySQL\Connection;
 
 /**
@@ -36,22 +34,24 @@ use Workerman\MySQL\Connection;
  * null must stay null, not become `''`.
  *
  * CI applies all migrations to the `phlix_test` MySQL service before the suite;
- * locally, with no reachable MySQL, it self-skips — the same `isMysqlReachable()`
- * guard {@see MusicTracksQueryIntegrationTest} uses. It does **not** copy that
- * sibling's second guard: see the comment in {@see setUp()} for why a
- * reachable-but-unusable database is raised rather than skipped.
+ * locally, with no reachable MySQL, it self-skips. **S126** moved that gate out of
+ * this file into {@see \Phlix\Tests\Support\Database\IntegrationDbGuard}, reached
+ * through {@see RequiresRealDatabase}. The behaviour S121 built here — a real
+ * `SELECT 1` round-trip inside the guarded block, so a reachable-but-unusable
+ * database is RAISED rather than skipped — is preserved unchanged; it is now the
+ * behaviour of all 35 migrated sites rather than of this one.
  *
- * **On S120 (assertions swallowed by a `catch`).** This class DOES contain one
- * `try`/`catch` — around `ConnectionPool::init()` + `getConnection()` in
- * {@see setUp()} — so the "no try/catch anywhere" claim first made for this file was
- * wrong. The S120 conclusion is unaffected and was re-audited: **zero assertions
- * execute inside that block**, no assertion in this class runs inside a callback that
- * production invokes under `catch (\Throwable)`/`catch (\RuntimeException)`, and the
- * only closures in the read path under test are `array_map` shapers whose results are
- * asserted outside them. So no `ExpectationFailedException` can be swallowed and no
- * test here is vacuous — proven by mutation, not by inspection: planting the original
- * `is_numeric()` predicate reddens 2 of these 4 tests and planting a `''` fallback
- * reddens a 3rd, each with its named message.
+ * **On S120 (assertions swallowed by a `catch`).** The `try`/`catch` this note was
+ * written about lived in {@see setUp()} and is now inside `IntegrationDbGuard`;
+ * this class no longer contains a `try`/`catch` of its own. The S120 conclusion is
+ * unaffected and was re-audited when the note was written: **zero assertions execute
+ * inside that block**, no assertion in this class runs inside a callback that
+ * production invokes under a `catch`, and the only closures in the read path under
+ * test are `array_map` shapers whose results are asserted outside them. So no
+ * `ExpectationFailedException` can be swallowed and no test here is vacuous —
+ * proven by mutation, not by inspection: planting the original `is_numeric()`
+ * predicate reddens 2 of these 4 tests and planting a `''` fallback reddens a 3rd,
+ * each with its named message.
  *
  * @covers \Phlix\Media\Music\MusicArtist
  * @covers \Phlix\Media\Music\MusicAlbum
@@ -59,6 +59,8 @@ use Workerman\MySQL\Connection;
  */
 final class MusicDtoMediaItemIdIntegrationTest extends TestCase
 {
+    use RequiresRealDatabase;
+
     /** Page size used while paging {@see MusicLibraryService::getAllArtists()}. */
     private const PAGE_SIZE = 100;
 
@@ -104,86 +106,7 @@ final class MusicDtoMediaItemIdIntegrationTest extends TestCase
     {
         parent::setUp();
 
-        $host = getenv('DB_HOST') ?: '127.0.0.1';
-        $port = (int) (getenv('DB_PORT') ?: 3306);
-
-        if (!$this->isMysqlReachable($host, $port)) {
-            $this->markTestSkipped(
-                sprintf('No MySQL on %s:%d — skipping music DTO media_item_id test. Runs in CI.', $host, $port),
-            );
-        }
-
-        // ⚠ Deliberately NOT `markTestSkipped()` here, which is what the other 22
-        // `markTestSkipped`-inside-`catch` integration sites do (S121 review r1
-        // finding 3, r2 findings 1/2/6/7, r3 finding 7 — 22 sites across 21 files,
-        // brace-matched with token_get_all, not grepped; `PathHashIndexUsageTest` has
-        // two. An earlier "23" here was one high, and S126's scope depends on the
-        // number). `isMysqlReachable()` above has already proven a listener ACCEPTED a
-        // TCP connection on $host:$port, so reaching the catch below does not mean "no
-        // MySQL on this box" — it means whatever is on that port would not serve us.
-        // Skipping that reports success without ever touching a database, in the one
-        // environment (CI) where this test is the only thing proving the column type.
-        // Genuine absence is still a skip, handled one block up. The other 22 sites
-        // are deliberately untouched; unifying them is step S126.
-        //
-        // ⚠⚠ The `SELECT 1` is LOAD-BEARING, not a sanity check (r2 finding 1).
-        // `config/database.php` resolves `pool_enabled = true` BY DEFAULT, and
-        // `PooledMySQLConnection::__construct()` deliberately does NOT call
-        // `parent::__construct()` — it opens no socket, leasing one lazily on the
-        // first `query()`. So without a real round-trip inside this `try`, nothing
-        // here could fail and the named exception below was dead code in exactly the
-        // configuration CI and local dev use; only `DB_POOL_ENABLED=0` (which builds
-        // a `PhlixMySQLConnection`, whose parent ctor connects eagerly) ever reached
-        // it. Measured with a deliberately wrong password on a scratch MySQL:
-        //
-        //   without the round-trip: pool default → `PDOException … [1045] Access
-        //     denied` escaping from seedFixtures(); pool 0 → named RuntimeException.
-        //   with the round-trip:    BOTH modes → named RuntimeException.
-        //
-        // A healthy database is unaffected in either mode — `OK (4 tests, 141
-        // assertions)` (117 before the identifier allow-list in `idOf()` added 24; r3
-        // finding 2 caught this figure going stale inside the very comment that was
-        // rewritten to stop stale claims) — so this cannot redden a healthy CI.
-        try {
-            ConnectionPool::init(dirname(__DIR__, 3) . '/config/database.php');
-            $db = ConnectionPool::getConnection('mysql');
-            // Forces the lazy pooled connection to open for real, and binds nothing.
-            //
-            // `SELECT` is chosen because it RETURNS ROWS, not because `query()`
-            // requires it (r3 finding 3 — the older "query() must start with SELECT"
-            // note here was wrong, and this same file pushes INSERT/DELETE through
-            // `query()` below). What workerman/mysql actually does
-            // (`vendor/workerman/mysql/src/Connection.php:1852-1869`): it ALWAYS
-            // executes the statement, then switches on the first keyword only to pick
-            // a return value — `select`/`show` → `fetchAll()`, `update`/`delete`/
-            // `replace` → `rowCount()`, `insert` → `lastInsertId()` **only when
-            // `rowCount() > 0`** (`:1861-1864`; a 0-row insert falls through to the
-            // `return null` at `:1869`, so an `INSERT IGNORE` that hits a duplicate is
-            // indistinguishable from a no-op — r4 finding 3), and **anything else →
-            // `null`**. So the real, narrower constraint worth remembering is
-            // that a statement outside that keyword set (`SET`, `CREATE`, `TRUNCATE`,
-            // `BEGIN`, …) runs but is indistinguishable from a no-op by its return
-            // value. A round-trip here would work with any statement; `SELECT 1` also
-            // proves a result set came back, and is side-effect-free.
-            $db->query('SELECT 1');
-            $this->db = $db;
-        } catch (Throwable $e) {
-            throw new RuntimeException(
-                sprintf(
-                    'Something on %s:%d accepted a TCP connection but no query could be run over it (%s). '
-                    . 'That is NOT "no MySQL on this box", so it is reported instead of skipped. Most often '
-                    . 'it is a DB_* / config problem — wrong credentials, or a database that does not exist '
-                    . 'yet: check DB_USER/DB_PASSWORD/DB_DATABASE and run scripts/run-migrations.php. This '
-                    . 'guard cannot tell that apart from a transient condition (a non-MySQL listener on the '
-                    . 'port, or a connect timeout on a loaded box), so read the driver message above first.',
-                    $host,
-                    $port,
-                    $e->getMessage(),
-                ),
-                0,
-                $e,
-            );
-        }
+        $this->db = $this->requireRealDatabase('skipping music DTO media_item_id test. Runs in CI.');
 
         $this->assertNotNull($this->db);
 
@@ -503,16 +426,5 @@ final class MusicDtoMediaItemIdIntegrationTest extends TestCase
         if ($this->libraryId !== '') {
             $db->query('DELETE FROM libraries WHERE id = ?', [$this->libraryId]);
         }
-    }
-
-    private function isMysqlReachable(string $host, int $port): bool
-    {
-        $sock = @fsockopen($host, $port, $errno, $errstr, 1.0);
-        if ($sock === false) {
-            return false;
-        }
-        fclose($sock);
-
-        return true;
     }
 }

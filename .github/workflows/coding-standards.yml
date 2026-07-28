@@ -24,12 +24,28 @@ jobs:
       - name: Install Composer dependencies
         run: composer install --no-interaction --prefer-dist
 
-      - name: Run PHPCS
-        if: always()
+      - name: Assert PHPCS is actually installed
         run: |
-          if [ -f vendor/bin/phpcs ]; then
-            ./vendor/bin/phpcs --standard=PSR12 -n --colors src/
+          # The "Run PHPCS" step below used to be wrapped in
+          # `if [ -f vendor/bin/phpcs ]`. That binary DOES currently exist
+          # (squizlabs/php_codesniffer is in composer.json require-dev), so unlike
+          # the Psalm and Security Audit jobs this gate is genuinely running today.
+          #
+          # It is still the same fragile shape: the moment the dependency were
+          # dropped, or `composer install` produced a partial vendor/, the guard
+          # would go false and this job would report GREEN having sniffed zero
+          # files — silently, with nothing in the log to say so. That is exactly
+          # how S146's Psalm job and this file's Security Audit job spent their
+          # whole lives green while checking nothing. Converted to an assertion so
+          # a missing tool FAILS instead of skipping.
+          if [ ! -f vendor/bin/phpcs ]; then
+            echo "::error::vendor/bin/phpcs is missing. squizlabs/php_codesniffer must stay in composer.json require-dev — do not re-add an 'if [ -f ... ]' guard around the analysis step (S146)."
+            exit 1
           fi
+          ./vendor/bin/phpcs --version
+
+      - name: Run PHPCS
+        run: ./vendor/bin/phpcs --standard=PSR12 -n --colors src/
 
   phpstan:
     name: PHPStan Static Analysis
@@ -55,12 +71,22 @@ jobs:
             exit 1
           fi
 
-      - name: Run PHPStan
-        if: always()
+      - name: Assert PHPStan is actually installed
         run: |
-          if [ -f vendor/bin/phpstan ]; then
-            ./vendor/bin/phpstan analyze src/ --level=9 --no-progress --error-format=github
+          # Same conversion as the PHPCS job. `phpstan/phpstan` is in composer.json
+          # require-dev so `vendor/bin/phpstan` exists today and this gate really
+          # runs — but `if [ -f vendor/bin/phpstan ]` would turn a dropped
+          # dependency into a silent pass rather than a failure, which is the
+          # defect S146 was raised for and the one the Security Audit job in this
+          # same file had been living with since the first CI commit.
+          if [ ! -f vendor/bin/phpstan ]; then
+            echo "::error::vendor/bin/phpstan is missing. phpstan/phpstan must stay in composer.json require-dev — do not re-add an 'if [ -f ... ]' guard around the analysis step (S146)."
+            exit 1
           fi
+          ./vendor/bin/phpstan --version
+
+      - name: Run PHPStan
+        run: ./vendor/bin/phpstan analyze src/ --level=9 --no-progress --error-format=github
 
   smarty-escape-guard:
     name: Smarty Page-Rendering Guard (S1)
@@ -196,14 +222,54 @@ jobs:
         with:
           php-version: '8.3'
 
-      - name: Install Composer dependencies
-        run: composer install --no-interaction --prefer-dist
+      # NOTE: there is deliberately no `composer install` in this job any more.
+      # The audit runs against composer.lock (`--locked`) and needs no vendor/ at
+      # all, and Composer 2.10 refuses to INSTALL packages carrying known
+      # advisories (policy.advisories.block) — so auditing after an install would
+      # mean a vulnerable lock died in the dependency solver with an opaque
+      # resolution error before this job's audit ever ran. Auditing the lock
+      # first produces the precise, actionable report instead.
+
+      - name: Assert the security audit tool is actually available
+        run: |
+          # THE DEFECT THIS REPLACES. The "Run Security Audit" step used to be:
+          #
+          #   if [ -f vendor/bin/security-checker ]; then
+          #     ./vendor/bin/security-checker security:check
+          #   elif [ -f vendor/bin/composer-audit ]; then
+          #     ./vendor/bin/composer-audit audit --format=github
+          #   fi
+          #
+          # NEITHER binary has ever existed. sensiolabs/security-checker (which is
+          # also abandoned upstream) and any package shipping a `composer-audit`
+          # binary are both absent from composer.json — vendor/bin/ holds phpcs,
+          # phpstan and psalm and neither of these. Both branches were always
+          # false, the `if` fell through, the step exited 0, and this job reported
+          # GREEN having audited nothing, for the entire life of the repo.
+          #
+          # Same defect class as S146 (the Psalm job that spent its life green
+          # having analysed zero files), so this mirrors its assertion: a missing
+          # tool must FAIL LOUDLY, never silently skip.
+          #
+          # The tool is now `composer audit`, built into Composer 2.4+. There is
+          # no vendor/bin/ binary to probe for and nothing to add to composer.json.
+          if ! command -v composer >/dev/null 2>&1; then
+            echo "::error::composer is not on PATH, so the security audit cannot run. Do NOT re-add an 'if [ -f ... ]' guard that turns a missing tool into a silent pass (S146)."
+            exit 1
+          fi
+          composer --version
+          if ! composer audit --help >/dev/null 2>&1; then
+            echo "::error::This composer has no 'audit' command (it was added in Composer 2.4). Pin a v2 composer in the setup-php step: tools: composer:v2."
+            exit 1
+          fi
 
       - name: Run Security Audit
-        if: always()
-        run: |
-          if [ -f vendor/bin/security-checker ]; then
-            ./vendor/bin/security-checker security:check
-          elif [ -f vendor/bin/composer-audit ]; then
-            ./vendor/bin/composer-audit audit --format=github
-          fi
+        # Blocking on advisories, loudly advisory on abandoned packages. The split
+        # is enforced in the script because `composer audit`'s exit code conflates
+        # the two: measured on this tree it exits 1 with ZERO advisories, purely
+        # because fgrosse/phpasn1 and web-auth/metadata-service are abandoned
+        # transitive dependencies that cannot be fixed from this repo. Trusting
+        # that exit code would make every PR red on day one, and a gate that is
+        # red for reasons unrelated to the code gets switched off — which is how
+        # the no-op above came to exist. See the script header for the full table.
+        run: php scripts/security-audit-check.php

@@ -6,6 +6,7 @@ namespace Phlix\Tests\Unit\Media\Metadata;
 
 use PHPUnit\Framework\TestCase;
 use Phlix\Media\Metadata\SceneFilenameNormalizer;
+use Phlix\Media\Metadata\TitleSuffixStripper;
 
 /**
  * Unit tests for {@see SceneFilenameNormalizer}: parsing dirty release filenames
@@ -803,5 +804,580 @@ final class SceneFilenameNormalizerTest extends TestCase
     {
         $this->assertSame('Blade Runner', SceneFilenameNormalizer::normalize('Blade Runner Directors Cut', null)['title']);
         $this->assertSame('Blade Runner', SceneFilenameNormalizer::normalize('Blade Runner Directors Cut', [])['title']);
+    }
+
+    // --- SM-0.1: dangling bracket repair (plan_scanner_matching.md T3) -------
+
+    /**
+     * The pinned repro from the plan: the single-year branch slices `$cleaned` at
+     * the year's byte offset, cutting INSIDE `(2010 - 720p BluRay)` and leaving an
+     * orphan `(` that `stripBracketedTags()` (which needs a closing paren) cannot
+     * remove. Before SM-0.1 this returned `1a Gantz (`.
+     */
+    public function testNormalizeDropsOrphanParenLeftByYearSlice(): void
+    {
+        $result = SceneFilenameNormalizer::normalize('1a. Gantz (2010 - 720p BluRay)');
+
+        $this->assertSame('1a Gantz', $result['title']);
+        $this->assertSame(2010, $result['year']);
+    }
+
+    /** recon_live fixture: `Gantz O (2016 DUAL Audio - 720p BluRay)` → `Gantz O`. */
+    public function testNormalizeGantzOReconFixture(): void
+    {
+        $result = SceneFilenameNormalizer::normalize('Gantz O (2016 DUAL Audio - 720p BluRay)');
+
+        $this->assertSame('Gantz O', $result['title']);
+        $this->assertSame(2016, $result['year']);
+    }
+
+    /**
+     * recon_live fixture: `Repo Men (2010) Unrated 1080p BrRip x264 YIFY` → `Repo Men`.
+     * The year sits inside a BALANCED `(2010)` group, but the slice still cuts
+     * between the `(` and the `)`, orphaning the opener.
+     */
+    public function testNormalizeRepoMenReconFixture(): void
+    {
+        $result = SceneFilenameNormalizer::normalize('Repo Men (2010) Unrated 1080p BrRip x264 YIFY');
+
+        $this->assertSame('Repo Men', $result['title']);
+        $this->assertSame(2010, $result['year']);
+    }
+
+    /**
+     * recon_live music fixture. The two paren groups are BALANCED, so the repair
+     * must be a no-op here and the pre-existing `stripBracketedTags()` decision
+     * (strip both groups) must survive unchanged — while the title still never
+     * ends in an orphan opener.
+     */
+    public function testNormalizeKeepsBalancedParenDecisionForMusicTrack(): void
+    {
+        $result = SceneFilenameNormalizer::normalize("01 Nas - Life's a Bitch (Arsenal mix) (feat. AZ)");
+
+        $this->assertSame("01 Nas - Life's a Bitch", $result['title']);
+        $this->assertNull($result['year']);
+    }
+
+    /** The same orphan-after-slice bug for `[` … `]`. */
+    public function testNormalizeDropsOrphanSquareBracketLeftByYearSlice(): void
+    {
+        $result = SceneFilenameNormalizer::normalize('Movie [2010 - 720p BluRay]');
+
+        $this->assertSame('Movie', $result['title']);
+        $this->assertSame(2010, $result['year']);
+    }
+
+    /** The same orphan-after-slice bug for the fullwidth `【` … `】` pair. */
+    public function testNormalizeDropsOrphanFullwidthBracketLeftByYearSlice(): void
+    {
+        $result = SceneFilenameNormalizer::normalize('Movie 【2010 - 720p BluRay】');
+
+        $this->assertSame('Movie', $result['title']);
+        $this->assertSame(2010, $result['year']);
+    }
+
+    /** The symmetric leading-orphan case: an unmatched CLOSER is dropped too. */
+    public function testNormalizeDropsOrphanClosingParen(): void
+    {
+        $result = SceneFilenameNormalizer::normalize('Foo) Bar 2010 1080p BluRay');
+
+        $this->assertSame('Foo Bar', $result['title']);
+        $this->assertSame(2010, $result['year']);
+    }
+
+    /** An orphan opener with no year at all is still repaired. */
+    public function testNormalizeDropsOrphanParenWithoutYear(): void
+    {
+        $result = SceneFilenameNormalizer::normalize('Some Movie (');
+
+        $this->assertSame('Some Movie', $result['title']);
+        $this->assertNull($result['year']);
+    }
+
+    /**
+     * A balanced group that precedes the orphan is still handed to
+     * `stripBracketedTags()` intact — only the orphan is removed.
+     */
+    public function testNormalizeStripsBalancedGroupAndDropsOrphan(): void
+    {
+        $result = SceneFilenameNormalizer::normalize('Movie (Special Edition) (2010 - 1080p)');
+
+        $this->assertSame('Movie', $result['title']);
+        $this->assertSame(2010, $result['year']);
+    }
+
+    /**
+     * Cross-nested brackets: `stripBracketedTags()` removes `[y) z]` first, which
+     * takes the `)` that balanced the `(` with it. The repair must therefore also
+     * run AFTER the tag strip, or the output ends in `(`.
+     */
+    public function testNormalizeRepairsImbalanceCreatedByTagStripping(): void
+    {
+        $result = SceneFilenameNormalizer::normalize('Alpha (beta [gamma) delta] omega 2010 1080p');
+
+        $this->assertSame('Alpha beta omega', $result['title']);
+        $this->assertSame(2010, $result['year']);
+    }
+
+    /**
+     * The bracketed-(YYYY) branch has its OWN empty-title fallback, and it must
+     * repair that fallback exactly like the tail fallback does.
+     *
+     * `( [2010]` parses as title-part `(`, which the repair empties, so the branch
+     * falls back to `$cleaned` — and returning `$cleaned` untouched would store a
+     * title containing the very dangling `(` this step exists to remove. This is
+     * the only path in `normalize()` that could still emit unbalanced brackets.
+     *
+     * @dataProvider provideBracketedYearFallbackFilenames
+     */
+    public function testNormalizeRepairsBracketedYearBranchFallback(
+        string $filename,
+        string $expected,
+        int $year
+    ): void {
+        $result = SceneFilenameNormalizer::normalize($filename);
+
+        $this->assertSame($expected, $result['title'], "for input: {$filename}");
+        $this->assertSame($year, $result['year'], "for input: {$filename}");
+        $this->assertBracketsBalanced($result['title'], $filename);
+    }
+
+    /**
+     * Every case here reaches the bracketed-(YYYY) branch AND empties its title,
+     * which is the only way to hit that branch's fallback.
+     *
+     * @return array<string, array{string, string, int}>
+     */
+    public static function provideBracketedYearFallbackFilenames(): array
+    {
+        return [
+            // title-part is a bare "(" -> repaired to "" -> falls back to $cleaned.
+            'orphan opener before bracketed year' => ['( [2010]', '[2010]', 2010],
+            // title-part "[1080p] ]" -> strip leaves "]" -> repaired to "".
+            'orphan closer before bracketed year' => ['[1080p] ] (2010)', '[1080p] (2010)', 2010],
+            // title-part "[" -> repaired to "" -> falls back to "[[2010)".
+            'double opener before bracketed year' => ['[[2010)', '2010', 2010],
+            // title-part "【" -> the fullwidth pair takes the same route.
+            'fullwidth opener before year'        => ['【 (2010)', '(2010)', 2010],
+        ];
+    }
+
+    /**
+     * Repairing brackets must happen strictly AFTER `stripBracketedTags()`, never
+     * before it.
+     *
+     * Both inputs are real production basenames. Dropping the orphan `[` FIRST
+     * shortens the reach of the square-bracket strip pattern (which spans from a
+     * `[` to the next `]`): it can then only start at a LATER opener, so the
+     * release-tag fragment that sat between the orphan and that closer survives as
+     * bare title text. Repairing only on the way out leaves the junk inside a
+     * group the strip swallows whole.
+     *
+     * @dataProvider provideOrphanHeadedReleaseTagRuns
+     */
+    public function testNormalizeDoesNotPromoteReleaseTagJunkIntoTitle(string $filename, string $expected): void
+    {
+        $result = SceneFilenameNormalizer::normalize($filename);
+
+        $this->assertSame($expected, $result['title'], "for input: {$filename}");
+        $this->assertBracketsBalanced($result['title'], $filename);
+    }
+
+    /**
+     * @return array<string, array{string, string}>
+     */
+    public static function provideOrphanHeadedReleaseTagRuns(): array
+    {
+        return [
+            // Real prod basename (no-year branch).
+            'prod pokemon 0942' => [
+                'Pokémon - 0942 - Alola to New Adventure! [DisneyXD Webri [1080p] [x265] [pseudo]',
+                'Pokémon - - Alola to New Adventure!',
+            ],
+            // Real prod basename (no-year branch), shorter orphan run.
+            'prod pokemon 0001' => [
+                'Pokémon - 0001 - Pokémon, I Choose You [Di [480p] [x265] [pseudo]',
+                'Pokémon - - Pokémon, I Choose You',
+            ],
+            // Same shape on the single-year branch, so the tail path is pinned.
+            'orphan run before year' => [
+                'Show Name [Group Webrip [1080p] [x265] 2010',
+                'Show Name',
+            ],
+            // ...and on the bracketed-(YYYY) branch, which has its own strip call.
+            'orphan run before bracketed year' => [
+                'Show Name [Group Webrip [1080p] [x265] (2010)',
+                'Show Name',
+            ],
+        ];
+    }
+
+    /**
+     * The global invariant: `normalize()` never returns a title that ends in an
+     * unbalanced opener, and never returns a title whose brackets are unbalanced.
+     *
+     * @dataProvider provideBracketSoupFilenames
+     */
+    public function testNormalizeNeverEmitsUnbalancedBrackets(string $filename): void
+    {
+        $title = SceneFilenameNormalizer::normalize($filename)['title'];
+
+        foreach (['(', '[', '【'] as $opener) {
+            $this->assertFalse(
+                str_ends_with($title, $opener),
+                "title '{$title}' ends in unbalanced opener '{$opener}' for input: {$filename}"
+            );
+        }
+
+        $this->assertBracketsBalanced($title, $filename);
+    }
+
+    /**
+     * Real recon fixtures plus deliberately pathological bracket soup. Every one
+     * must come out of `normalize()` with balanced brackets.
+     *
+     * @return array<string, array{string}>
+     */
+    public static function provideBracketSoupFilenames(): array
+    {
+        return [
+            'recon gantz numbered'   => ['1a. Gantz (2010 - 720p BluRay)'],
+            'recon gantz o'          => ['Gantz O (2016 DUAL Audio - 720p BluRay)'],
+            'recon repo men'         => ['Repo Men (2010) Unrated 1080p BrRip x264 YIFY'],
+            'recon nas track'        => ["01 Nas - Life's a Bitch (Arsenal mix) (feat. AZ)"],
+            'square orphan'          => ['Movie [2010 - 720p BluRay]'],
+            'fullwidth orphan'       => ['Movie 【2010 - 720p BluRay】'],
+            'leading closer'         => ['Foo) Bar 2010 1080p BluRay'],
+            'leading closer no year' => ['Foo] Bar'],
+            'orphan only'            => ['('],
+            'orphan only closer'     => [')'],
+            'year first in parens'   => ['(2010) Movie'],
+            'unterminated open'      => ['Some Movie (2011'],
+            'unopened close'         => ['Movie 2010) tail'],
+            'cross nested'           => ['Alpha (beta [gamma) delta] omega 2010 1080p'],
+            'nested balanced'        => ['Alpha (beta (gamma) delta) 2010 1080p'],
+            'inner orphan'           => ['Alpha (beta (gamma delta) 2010 1080p'],
+            // Unbalanced outer + BALANCED inner: outermost-wins re-cuts the
+            // groups (the inner "(gamma)" does not survive as such), which must
+            // still leave the emitted title balanced. See the exact-string pins
+            // in provideBracketBalanceRepairs().
+            'balanced inner orphan'  => ['Alpha (beta (gamma) delta 2010 1080p'],
+            'bracket storm'          => ['[[[Movie]] (2010 (('],
+            'fullwidth mixed'        => ['Movie 【2010 (720p】 BluRay'],
+            'balanced no year'       => ['(Instrumental)'],
+            'empty'                  => [''],
+            'all quality plus paren' => ['1080p ('],
+            // These four reach the bracketed-(YYYY) branch's own fallback, which
+            // used to return $cleaned unrepaired — the only path that could still
+            // emit an unbalanced title, and previously uncovered by this provider.
+            'fallback orphan opener' => ['( [2010]'],
+            'fallback orphan closer' => ['[1080p] ] (2010)'],
+            'fallback double opener' => ['[[2010)'],
+            'fallback fullwidth'     => ['【 (2010)'],
+            // Real prod basenames whose orphan "[" heads a release-tag run.
+            'prod orphan tag run'    => ['Pokémon - 0942 - Alola to New Adventure! [DisneyXD Webri [1080p] [x265] [pseudo]'],
+            'prod orphan tag short'  => ['Pokémon - 0001 - Pokémon, I Choose You [Di [480p] [x265] [pseudo]'],
+        ];
+    }
+
+    /**
+     * The invariant as a CLASS guarantee rather than a sample: exhaustively
+     * enumerate every bracket sequence up to length 3 over all three pairs and
+     * push each through a set of realistic filename templates. ~2k inputs, and
+     * every one must come back with balanced brackets.
+     *
+     * A per-case assertion would add thousands of assertions for no signal, so
+     * violations are collected and asserted once — a non-empty result names every
+     * offending input.
+     */
+    public function testNormalizeKeepsBracketsBalancedAcrossExhaustiveBracketSoup(): void
+    {
+        $alphabet = ['(', ')', '[', ']', '【', '】'];
+
+        $sequences = [''];
+        $frontier = [''];
+        for ($length = 0; $length < 3; $length++) {
+            $next = [];
+            foreach ($frontier as $prefix) {
+                foreach ($alphabet as $char) {
+                    $next[] = $prefix . $char;
+                }
+            }
+            $sequences = array_merge($sequences, $next);
+            $frontier = $next;
+        }
+
+        $templates = [
+            '%s',
+            'Movie %s',
+            '%s Movie',
+            'Movie %s 2010',
+            'Movie 2010 %s',
+            'Movie %s 2010 1080p BluRay',
+            'Movie %s (2010)',
+            'Movie %s [2010]',
+            '%s (2010)',
+            '%s [2010]',
+            'Movie %s 2010 %s 1999',
+        ];
+
+        $violations = [];
+        foreach ($sequences as $sequence) {
+            foreach ($templates as $template) {
+                $filename = str_replace('%s', $sequence, $template);
+                $title = SceneFilenameNormalizer::normalize($filename)['title'];
+                if (!$this->bracketsAreBalanced($title)) {
+                    $violations[$filename] = $title;
+                }
+            }
+        }
+
+        $this->assertSame([], $violations, 'normalize() emitted unbalanced titles');
+    }
+
+    /**
+     * Asserts that every bracket in `$title` is matched: no closer appears before
+     * its opener and no opener is left unclosed.
+     */
+    private function assertBracketsBalanced(string $title, string $input): void
+    {
+        $pairs = ['(' => ')', '[' => ']', '【' => '】'];
+        $closers = [')' => '(', ']' => '[', '】' => '【'];
+
+        $chars = preg_split('//u', $title, -1, PREG_SPLIT_NO_EMPTY);
+        $this->assertIsArray($chars, "title '{$title}' is not valid UTF-8 for input: {$input}");
+
+        $depth = ['(' => 0, '[' => 0, '【' => 0];
+        foreach ($chars as $char) {
+            if (isset($pairs[$char])) {
+                $depth[$char]++;
+                continue;
+            }
+            if (!isset($closers[$char])) {
+                continue;
+            }
+            $opener = $closers[$char];
+            $this->assertGreaterThan(
+                0,
+                $depth[$opener],
+                "title '{$title}' has a '{$char}' with no opener for input: {$input}"
+            );
+            $depth[$opener]--;
+        }
+
+        foreach ($depth as $opener => $remaining) {
+            $this->assertSame(
+                0,
+                $remaining,
+                "title '{$title}' has {$remaining} unclosed '{$opener}' for input: {$input}"
+            );
+        }
+    }
+
+    /**
+     * Boolean twin of {@see assertBracketsBalanced()} for loop-driven checks that
+     * must not emit one assertion per case. Deliberately an independent second
+     * implementation of the same invariant: if the two ever disagree, the
+     * exhaustive test and the data-driven test fail against each other.
+     */
+    private function bracketsAreBalanced(string $title): bool
+    {
+        $pairs = ['(' => ')', '[' => ']', '【' => '】'];
+        $closers = [')' => '(', ']' => '[', '】' => '【'];
+
+        $chars = preg_split('//u', $title, -1, PREG_SPLIT_NO_EMPTY);
+        if ($chars === false) {
+            return false;
+        }
+
+        $depth = ['(' => 0, '[' => 0, '【' => 0];
+        foreach ($chars as $char) {
+            if (isset($pairs[$char])) {
+                $depth[$char]++;
+                continue;
+            }
+            if (!isset($closers[$char])) {
+                continue;
+            }
+            $opener = $closers[$char];
+            if ($depth[$opener] === 0) {
+                return false;
+            }
+            $depth[$opener]--;
+        }
+
+        return $depth['('] === 0 && $depth['['] === 0 && $depth['【'] === 0;
+    }
+
+    // --- SM-0.1: the private repairBracketBalance() helper itself ------------
+
+    /**
+     * Direct unit coverage of the private helper: it removes ONLY unmatched
+     * bracket characters and leaves every matched pair (including nested pairs)
+     * in place for `stripBracketedTags()` to handle.
+     *
+     * @dataProvider provideBracketBalanceRepairs
+     */
+    public function testRepairBracketBalanceDropsOnlyUnmatchedBrackets(string $input, string $expected): void
+    {
+        $method = new \ReflectionMethod(SceneFilenameNormalizer::class, 'repairBracketBalance');
+
+        $this->assertSame($expected, $method->invoke(null, $input), "for input: {$input}");
+    }
+
+    /**
+     * @return array<string, array{string, string}>
+     */
+    public static function provideBracketBalanceRepairs(): array
+    {
+        return [
+            'trailing orphan paren'        => ['Gantz O (', 'Gantz O'],
+            'trailing orphan bracket'      => ['Movie [', 'Movie'],
+            'trailing orphan fullwidth'    => ['Movie 【', 'Movie'],
+            'leading orphan closer'        => ['Foo) Bar', 'Foo Bar'],
+            'leading orphan bracket close' => ['Foo] Bar', 'Foo Bar'],
+            'leading orphan fullwidth'     => ['Foo】 Bar', 'Foo Bar'],
+            'balanced parens preserved'    => ["Life's a Bitch (Arsenal mix)", "Life's a Bitch (Arsenal mix)"],
+            'balanced brackets preserved'  => ['Movie [YTS MX]', 'Movie [YTS MX]'],
+            'balanced fullwidth preserved' => ['Movie 【YTS MX】', 'Movie 【YTS MX】'],
+            'nested balanced preserved'    => ['A (b (c) d)', 'A (b (c) d)'],
+            // Outermost-wins: the closer settles the EARLIEST open "(", so the
+            // surplus INNER opener is the one dropped. This keeps the run of text
+            // after the orphan inside a group that stripBracketedTags() can then
+            // swallow, instead of promoting release-tag junk into the title.
+            'outer pair wins'              => ['A (b (c d)', 'A (b c d)'],
+            'outer pair wins three deep'   => ['A (b (c (d e)', 'A (b c d e)'],
+            // The flip side of outermost-wins, pinned so a change to it is a
+            // visible test edit: once the title as a whole is unbalanced, an
+            // individual balanced group is NOT preserved. The closer settles the
+            // EARLIEST open opener, so the balanced inner "(c)" is destroyed and
+            // a wider "(b c)" is synthesised. Intended (see the helper docblock)
+            // — it keeps the run after the orphan opener inside a group that
+            // stripBracketedTags() can swallow. LIFO would have given 'A b (c) d'.
+            'unbalanced outer breaks balanced inner'        => ['A (b (c) d', 'A (b c) d'],
+            'unbalanced outer breaks balanced inner square' => ['A [b [c] d', 'A [b c] d'],
+            'unbalanced outer breaks balanced inner wide'   => ['A (b (c) d (e) f', 'A (b (c) d e) f'],
+            'no brackets untouched'        => ['Plain Title', 'Plain Title'],
+            'whitespace kept when no drop' => ['  Plain  Title  ', '  Plain  Title  '],
+            'whitespace collapsed on drop' => ['Foo ( Bar', 'Foo Bar'],
+            'orphan only'                  => ['(', ''],
+            'empty string'                 => ['', ''],
+            'types are independent'        => ['A (b] c', 'A b c'],
+            'balanced across types'        => ['A (b) [c] 【d】', 'A (b) [c] 【d】'],
+            // --- NOT valid UTF-8: preg_split('//u') returns false and the scan
+            // falls back to bytes. 0x9C is a lone Windows-1252 byte, the exact
+            // shape MediaScanner.php:1367-1371 documents as reaching the parser.
+            // The fullwidth pair (E3 80 90 / E3 80 91) must still be recognised.
+            'non-utf8 fullwidth orphan'    => ["Bad\x9C 【 tail", "Bad\x9C tail"],
+            'non-utf8 fullwidth closer'    => ["Bad\x9C 】 tail", "Bad\x9C tail"],
+            'non-utf8 fullwidth balanced'  => ["Bad\x9C 【x】", "Bad\x9C 【x】"],
+            'non-utf8 ascii orphan'        => ["Bad\x9C (", "Bad\x9C"],
+            'non-utf8 mixed orphans'       => ["Bad\x9C 【 (a) [", "Bad\x9C (a)"],
+        ];
+    }
+
+    /**
+     * A filename carrying a stray non-UTF-8 byte still gets its fullwidth orphan
+     * repaired end-to-end.
+     *
+     * This path is live, not theoretical: `MediaScanner.php:1367-1371` documents
+     * scene filenames carrying stray bytes (e.g. a Windows-1252 0x9C), and its
+     * `toValidUtf8()` coercion runs only AFTER `parseNaming()` — i.e. after
+     * `normalize()` has already seen the raw bytes. `preg_split('//u')` fails on
+     * them, so the repair scans bytes, where `【` is the three-byte sequence
+     * E3 80 90 and would be invisible to a naive per-byte split.
+     */
+    public function testNormalizeDropsFullwidthOrphanOnNonUtf8Filename(): void
+    {
+        $result = SceneFilenameNormalizer::normalize("Movie \x9C 【2010 - 720p BluRay】");
+
+        $this->assertStringNotContainsString('【', $result['title']);
+        $this->assertSame("Movie \x9C", $result['title']);
+        $this->assertSame(2010, $result['year']);
+    }
+
+    /** The ASCII pairs keep working on the same non-UTF-8 path. */
+    public function testNormalizeDropsAsciiOrphanOnNonUtf8Filename(): void
+    {
+        $paren = SceneFilenameNormalizer::normalize("Movie \x9C (2010 - 720p BluRay)");
+        $this->assertSame("Movie \x9C", $paren['title']);
+        $this->assertSame(2010, $paren['year']);
+
+        $square = SceneFilenameNormalizer::normalize("Movie \x9C [2010 - 720p BluRay]");
+        $this->assertSame("Movie \x9C", $square['title']);
+        $this->assertSame(2010, $square['year']);
+    }
+
+    // --- SM-0.1: the ONE documented limit of the balance guarantee -----------
+
+    /**
+     * KNOWN LIMIT, pinned so it stays *known* rather than lurking:
+     * `TitleSuffixStripper::strip()` runs AFTER the last `repairBracketBalance()`
+     * pass, so an admin-authored `matching.noise_suffixes` entry whose TEXT
+     * contains a bracket can peel the closing half of a group back off and
+     * re-unbalance the title.
+     *
+     * Pre-existing shape — the strip/repair ordering is not changed by SM-0.1 —
+     * and deliberately NOT closed with a further repair pass; see the KNOWN LIMIT
+     * note on `SceneFilenameNormalizer::normalize()`. Reaching it requires a
+     * bracket-bearing admin override; the shipped default list is bracket-free
+     * (`testShippedNoiseSuffixListIsBracketFree()`).
+     *
+     * This test DOCUMENTS the behaviour, it does not endorse it: if a later
+     * change adds a repair after the strip, this test should fail and be updated
+     * — that visible edit is the point.
+     */
+    public function testBracketBearingNoiseSuffixCanReUnbalanceTitle(): void
+    {
+        // Control — with the shipped (bracket-free) list the title comes out
+        // balanced. `Movie 【a]b】` survives stripBracketedTags() at all because
+        // that method's fullwidth pattern negates the ASCII `]`, not `】`; the
+        // repair pass then drops the stray `]`.
+        $shipped = SceneFilenameNormalizer::normalize('Movie 【a]b】');
+        $this->assertSame('Movie 【ab】', $shipped['title']);
+        $this->assertNull($shipped['year']);
+
+        // The limit itself: a bracket-BEARING override peels `ab】` off after the
+        // last repair, leaving a dangling `【`.
+        $override = array_merge(['ab】'], TitleSuffixStripper::NOISE_SUFFIXES);
+        $overridden = SceneFilenameNormalizer::normalize('Movie 【a]b】', $override);
+        $this->assertSame('Movie 【', $overridden['title']);
+
+        // Same limit on the bracketed-(YYYY) branch's own strip call site.
+        $withYear = SceneFilenameNormalizer::normalize('Movie 【a]b】 (2010)', $override);
+        $this->assertSame('Movie 【', $withYear['title']);
+        $this->assertSame(2010, $withYear['year']);
+    }
+
+    /**
+     * The precondition that keeps the limit above unreachable in practice: no
+     * shipped noise suffix carries a bracket character. `config/matching.php` is
+     * the admin-facing default and must mirror the const exactly, so both are
+     * checked — a bracket added to either would silently void the balance
+     * guarantee.
+     */
+    public function testShippedNoiseSuffixListIsBracketFree(): void
+    {
+        $brackets = ['(', ')', '[', ']', '【', '】'];
+
+        /** @var array{noise_suffixes: list<string>} $config */
+        $config = require \dirname(__DIR__, 4) . '/config/matching.php';
+
+        $this->assertSame(
+            TitleSuffixStripper::NOISE_SUFFIXES,
+            $config['noise_suffixes'],
+            'config/matching.php must mirror TitleSuffixStripper::NOISE_SUFFIXES'
+        );
+
+        foreach ($config['noise_suffixes'] as $suffix) {
+            foreach ($brackets as $bracket) {
+                $this->assertStringNotContainsString(
+                    $bracket,
+                    $suffix,
+                    "shipped noise suffix '{$suffix}' must not contain '{$bracket}': a bracket-bearing "
+                    . 'suffix peels after the last repairBracketBalance() pass and can re-unbalance the title'
+                );
+            }
+        }
     }
 }

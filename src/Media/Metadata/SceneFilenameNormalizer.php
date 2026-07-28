@@ -91,7 +91,50 @@ final class SceneFilenameNormalizer
     private const YEAR_PATTERN = '/\b(19\d{2}|20\d{2})\b/';
 
     /**
+     * @var array<string, string> Bracket openers mapped to their closers, used by
+     *      {@see repairBracketBalance()}. Each pair is matched independently.
+     */
+    private const BRACKET_PAIRS = [
+        '(' => ')',
+        '[' => ']',
+        '【' => '】',
+    ];
+
+    /**
+     * @var array<string, string> The inverse of {@see BRACKET_PAIRS} (closer =>
+     *      opener), kept as its own const so the scan needs no array_search().
+     */
+    private const BRACKET_CLOSERS = [
+        ')' => '(',
+        ']' => '[',
+        '】' => '【',
+    ];
+
+    /**
      * Normalize a dirty release filename.
+     *
+     * KNOWN LIMIT — the "the returned title always has balanced brackets"
+     * guarantee holds only for a BRACKET-FREE noise-suffix list.
+     * {@see TitleSuffixStripper::strip()} runs AFTER the last
+     * {@see repairBracketBalance()} pass at both call sites below, so an
+     * admin-authored `matching.noise_suffixes` entry whose TEXT contains a
+     * bracket can peel the closing half of a group back off and re-unbalance the
+     * title:
+     *
+     * ```
+     * normalize('Movie 【a]b】')                  // 'Movie 【ab】' — balanced
+     * normalize('Movie 【a]b】', ['ab】', ...])    // 'Movie 【'    — unbalanced
+     * ```
+     *
+     * (`'Movie 【a]b】'` survives {@see stripBracketedTags()} in the first place
+     * because that method's fullwidth pattern negates the ASCII `]`, not `】`.)
+     *
+     * This is pre-existing, not introduced by the bracket-repair pass, and is
+     * deliberately left as a documented limit rather than closed with a further
+     * repair pass: the shipped default list (`config/matching.php`, mirrored by
+     * {@see TitleSuffixStripper::NOISE_SUFFIXES}) is bracket-free, so a
+     * speculative extra pass would cost more than the escape. Pinned by
+     * `SceneFilenameNormalizerTest::testBracketBearingNoiseSuffixCanReUnbalanceTitle()`.
      *
      * @param string            $filename      Raw filename (with or without extension).
      * @param list<string>|null $noiseSuffixes Effective trailing-edition noise list
@@ -133,12 +176,21 @@ final class SceneFilenameNormalizer
                 $titlePart = trim($bracketMatch[1]);
                 $titlePart = self::stripGroupSuffix($titlePart);
                 $title = self::stripBracketedTags($titlePart);
+                // Repair only AFTER the strip — see the note on the tail call below.
+                $title = self::repairBracketBalance($title);
+                // Peels AFTER the repair, so the balance guarantee assumes a
+                // bracket-free noise list — see the KNOWN LIMIT note on this
+                // method's docblock.
                 $title = TitleSuffixStripper::strip($title, false, $noiseSuffixes);
                 $title = preg_replace('/\s+/', ' ', $title) ?? $title;
                 $title = trim($title);
 
                 return [
-                    'title' => $title !== '' ? $title : $cleaned,
+                    // Falling back to the untouched $cleaned would hand the caller a
+                    // title with the very orphan bracket this pass exists to remove
+                    // (e.g. "( [2010]"), so repair the fallback too — exactly as the
+                    // sibling fallback at the tail of this method does.
+                    'title' => $title !== '' ? $title : self::repairBracketBalance($cleaned),
                     'year' => $bracketYear,
                     'raw' => $raw,
                 ];
@@ -222,12 +274,30 @@ final class SceneFilenameNormalizer
 
         $title = self::stripGroupSuffix($title);
         $title = self::stripBracketedTags($title);
+        // The year branches above slice $cleaned at the year's byte offset, which
+        // can cut INSIDE a bracket group and orphan its opener (e.g.
+        // "Gantz O (2016 DUAL Audio - 720p BluRay)" -> "Gantz O ("), and
+        // stripBracketedTags() can itself unbalance cross-nested input — removing
+        // "[y) z]" from "A (x [y) z]" takes the ")" that closed the "(" with it.
+        // Since stripBracketedTags() can only remove a BALANCED group, an orphan
+        // would otherwise survive into the stored title.
+        //
+        // Repair strictly AFTER the strip, never before: dropping an orphan opener
+        // first SHORTENS the reach of /\s*\[\s*[^\]]*\]\s*/, so the release-tag junk
+        // between that opener and the next closer survives as bare title text
+        // ("… Adventure! [DisneyXD Webri [1080p] [x265]" would keep "DisneyXD
+        // Webri"). One post-pass is enough to satisfy the balance invariant.
+        $title = self::repairBracketBalance($title);
+        // Peels AFTER the repair, so the balance guarantee assumes a bracket-free
+        // noise list — see the KNOWN LIMIT note on this method's docblock.
         $title = TitleSuffixStripper::strip($title, false, $noiseSuffixes);
         $title = preg_replace('/\s+/', ' ', $title) ?? $title;
         $title = trim($title);
 
         if ($title === '' && $year === null) {
-            $title = $cleaned;
+            // Falling back to the untouched $cleaned would re-introduce the very
+            // orphan we just removed, so repair the fallback too.
+            $title = self::repairBracketBalance($cleaned);
         }
 
         return [
@@ -317,6 +387,167 @@ final class SceneFilenameNormalizer
         $title = preg_replace('/\s*-\s*[A-Z0-9]{2,}$/', '', $title) ?? $title;
         $title = preg_replace('/\s+/', ' ', $title) ?? $title;
         return trim($title);
+    }
+
+    /**
+     * Remove every UNMATCHED bracket character, leaving matched pairs intact.
+     *
+     * The year branches in {@see normalize()} truncate the cleaned filename at the
+     * year's byte offset, which routinely cuts through a bracket group and leaves a
+     * dangling opener ("Gantz O (") — or, for a leading cut, a dangling closer
+     * ("Foo) Bar"). {@see stripBracketedTags()} cannot help: its patterns all
+     * require a closing delimiter, so an orphan opener survives into the stored
+     * title and poisons the metadata lookup.
+     *
+     * Each pair in {@see BRACKET_PAIRS} is matched independently, so a mismatched
+     * type never cancels another type, and a closer is matched to the OUTERMOST
+     * still-open opener of its type. That choice matters only when openers
+     * outnumber closers, and outermost-wins is the better fit for real filenames:
+     * an orphan opener is almost always the head of a release-tag run
+     * ("… [DisneyXD Webri [1080p] [x265]"), so the text between it and the next
+     * closer is junk that should stay inside a group for
+     * {@see stripBracketedTags()} to swallow rather than being promoted to title
+     * text. It also reproduces what the same name yields when its brackets are
+     * balanced.
+     *
+     * What outermost-wins does and does not guarantee:
+     *
+     * - An ALREADY-balanced title (per type, with no prefix that over-closes) is
+     *   returned byte-for-byte unchanged, so {@see stripBracketedTags()} still
+     *   gets to make its own decision about every group in it.
+     * - Only bracket characters are ever removed — never added, moved or
+     *   re-ordered — so the surviving text is always a subsequence of the input
+     *   and the result is always balanced.
+     * - An INDIVIDUAL balanced group is NOT preserved once the title as a whole
+     *   is unbalanced. With openers outnumbering closers a closer settles the
+     *   EARLIEST open opener, which re-cuts the groups rather than merely
+     *   deleting the orphan: `A (b (c) d` becomes `A (b c) d`, destroying the
+     *   balanced inner `(c)` and synthesising a wider `(b c)`. That is the
+     *   intent, not a defect — it keeps the run that followed the orphan opener
+     *   inside a group for {@see stripBracketedTags()} to swallow. Pinned by the
+     *   `unbalanced outer breaks balanced inner` data sets.
+     *
+     * Whitespace is collapsed and trimmed only when something was actually
+     * removed; a title with no orphan is returned byte-for-byte unchanged.
+     *
+     * Note: input that is not valid UTF-8 reaches this method (scene filenames
+     * carrying stray Windows-1252 bytes are normalized before
+     * {@see \Phlix\Media\Library\MediaScanner} coerces them), so the scan falls
+     * back to {@see splitBytesKeepingFullwidthBrackets()}, which still recognises
+     * the fullwidth pair by its byte sequence.
+     *
+     * @param string $title Title that may contain orphan brackets.
+     *
+     * @return string Title with all unmatched bracket characters removed.
+     */
+    private static function repairBracketBalance(string $title): string
+    {
+        if ($title === '') {
+            return $title;
+        }
+
+        if (
+            strpbrk($title, '()[]') === false
+            && !str_contains($title, '【')
+            && !str_contains($title, '】')
+        ) {
+            return $title;
+        }
+
+        $chars = preg_split('//u', $title, -1, PREG_SPLIT_NO_EMPTY);
+        if ($chars === false) {
+            $chars = self::splitBytesKeepingFullwidthBrackets($title);
+        }
+
+        /** @var array<string, list<int>> $openStacks Opener => indexes still unclosed. */
+        $openStacks = [];
+        /** @var array<int, true> $drop Indexes of unmatched bracket characters. */
+        $drop = [];
+
+        foreach ($chars as $index => $char) {
+            if (isset(self::BRACKET_PAIRS[$char])) {
+                $openStacks[$char][] = $index;
+                continue;
+            }
+
+            if (!isset(self::BRACKET_CLOSERS[$char])) {
+                continue;
+            }
+
+            $opener = self::BRACKET_CLOSERS[$char];
+            if (isset($openStacks[$opener]) && $openStacks[$opener] !== []) {
+                // Outermost-wins: close the EARLIEST still-open opener, so a
+                // surplus opener is dropped from the inside out.
+                array_shift($openStacks[$opener]);
+                continue;
+            }
+
+            $drop[$index] = true;
+        }
+
+        foreach ($openStacks as $stack) {
+            foreach ($stack as $index) {
+                $drop[$index] = true;
+            }
+        }
+
+        if ($drop === []) {
+            return $title;
+        }
+
+        $repaired = '';
+        foreach ($chars as $index => $char) {
+            if (!isset($drop[$index])) {
+                $repaired .= $char;
+            }
+        }
+
+        $repaired = preg_replace('/\s+/', ' ', $repaired) ?? $repaired;
+
+        return trim($repaired);
+    }
+
+    /**
+     * Split a NOT-valid-UTF-8 title into scan tokens for {@see repairBracketBalance()}.
+     *
+     * `preg_split('//u')` returns false on malformed UTF-8, and such filenames do
+     * reach the normalizer: {@see \Phlix\Media\Library\MediaScanner} only coerces
+     * stray bytes (e.g. a Windows-1252 0x9C) AFTER parsing the name. Splitting on
+     * raw bytes would then hide the fullwidth pair, whose UTF-8 encodings are the
+     * three-byte sequences E3 80 90 (`【`) and E3 80 91 (`】`), leaving a dangling
+     * `【` in the stored title.
+     *
+     * So: single bytes everywhere, except that those two sequences are emitted as
+     * one token each. They can never appear inside another well-formed UTF-8
+     * character (a continuation byte is always >= 0x80, and E3 only ever starts a
+     * three-byte sequence), so matching them bytewise cannot split a valid
+     * character in half.
+     *
+     * @param string $title Title that is not valid UTF-8.
+     *
+     * @return list<string> One token per byte, fullwidth brackets kept whole.
+     */
+    private static function splitBytesKeepingFullwidthBrackets(string $title): array
+    {
+        $tokens = [];
+        $length = strlen($title);
+
+        for ($i = 0; $i < $length; $i++) {
+            if (
+                $title[$i] === "\xE3"
+                && $i + 2 < $length
+                && $title[$i + 1] === "\x80"
+                && ($title[$i + 2] === "\x90" || $title[$i + 2] === "\x91")
+            ) {
+                $tokens[] = substr($title, $i, 3);
+                $i += 2;
+                continue;
+            }
+
+            $tokens[] = $title[$i];
+        }
+
+        return $tokens;
     }
 
     /**

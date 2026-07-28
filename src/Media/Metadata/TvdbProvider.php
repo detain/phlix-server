@@ -67,10 +67,16 @@ class TvdbProvider implements MetadataProviderInterface
      * @param string                  $language Default language code (ISO 639-1, default: 'eng')
      *                                          Supported: 'eng', ' spa', 'ger', 'fre', 'ita', 'jpn', etc.
      * @param StructuredLogger|null   $logger   Optional logger; defaults to MEDIA channel.
+     * @param MetadataHttpClient|null $http     Optional HTTP client (injected in
+     *                                          tests); defaults to a real TVDB client.
      */
-    public function __construct(string $apiKey, string $language = 'eng', ?StructuredLogger $logger = null)
-    {
-        $this->http = new MetadataHttpClient(
+    public function __construct(
+        string $apiKey,
+        string $language = 'eng',
+        ?StructuredLogger $logger = null,
+        ?MetadataHttpClient $http = null
+    ) {
+        $this->http = $http ?? new MetadataHttpClient(
             'https://api.thetvdb.com',
             $apiKey
         );
@@ -108,10 +114,11 @@ class TvdbProvider implements MetadataProviderInterface
             'language' => $language,
         ];
 
-        $response = $this->http->get('/search/series', $params);
+        $outcome = $this->http->getResult('/search/series', $params);
+        $response = $outcome->body();
 
         if ($response === null || !isset($response['data'])) {
-            $this->logger->debug('TvdbProvider: search miss', [
+            ProviderOutcomeLog::record($this->logger, 'TvdbProvider', 'search', $outcome, [
                 'query' => $query,
                 'endpoint' => '/search/series',
             ]);
@@ -168,10 +175,11 @@ class TvdbProvider implements MetadataProviderInterface
         ];
 
         // Fetch series details
-        $seriesResponse = $this->http->get("/series/{$externalId}", $params);
+        $seriesResult = $this->http->getResult("/series/{$externalId}", $params);
+        $seriesResponse = $seriesResult->body();
 
         if ($seriesResponse === null || !isset($seriesResponse['data'])) {
-            $this->logger->debug('TvdbProvider: getDetails miss', [
+            ProviderOutcomeLog::record($this->logger, 'TvdbProvider', 'getDetails', $seriesResult, [
                 'tvdb_id' => $externalId,
                 'endpoint' => "/series/{$externalId}",
             ]);
@@ -336,12 +344,19 @@ class TvdbProvider implements MetadataProviderInterface
         $params = ['language' => $language];
 
         // First get all episodes to find the right one
-        $response = $this->http->get("/series/{$seriesId}/episodes/query", array_merge($params, [
+        $outcome = $this->http->getResult("/series/{$seriesId}/episodes/query", array_merge($params, [
             'airedSeason' => $season,
             'airedEpisode' => $episode,
         ]));
+        $response = $outcome->body();
 
         if ($response === null || !isset($response['data'])) {
+            ProviderOutcomeLog::record($this->logger, 'TvdbProvider', 'getEpisode', $outcome, [
+                'tvdb_id' => $seriesId,
+                'season' => $season,
+                'episode' => $episode,
+                'endpoint' => "/series/{$seriesId}/episodes/query",
+            ]);
             return [];
         }
 
@@ -389,12 +404,18 @@ class TvdbProvider implements MetadataProviderInterface
     {
         $language = MetadataValue::asString($options['language'] ?? null, $this->language);
 
-        $response = $this->http->get("/series/{$seriesId}/episodes/query", [
+        $outcome = $this->http->getResult("/series/{$seriesId}/episodes/query", [
             'language' => $language,
             'airedSeason' => $season,
         ]);
+        $response = $outcome->body();
 
         if ($response === null || !isset($response['data'])) {
+            ProviderOutcomeLog::record($this->logger, 'TvdbProvider', 'getSeasonEpisodes', $outcome, [
+                'tvdb_id' => $seriesId,
+                'season' => $season,
+                'endpoint' => "/series/{$seriesId}/episodes/query",
+            ]);
             return [];
         }
 

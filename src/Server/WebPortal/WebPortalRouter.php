@@ -139,7 +139,8 @@ class WebPortalRouter
 
     /**
      * @var StreamProbeBackfill|null Lazy one-shot stream backfill for pre-071
-     *      items (see getPlaybackInfo()); built on first use when not injected
+     *      items (see getPlaybackInfo()) and for items whose video codec is
+     *      unknown (see getMediaItem()); built on first use when not injected
      *      (the optional ctor arg is a test seam)
      */
     private ?StreamProbeBackfill $streamBackfill;
@@ -636,10 +637,32 @@ class WebPortalRouter
         // Enrich the row into the same shape the list endpoint returns (poster
         // URLs, genres, overview, season/episode numbers, …) PLUS streams, so the
         // detail/player pages render a cover and metadata instead of a blank hero.
+        //
+        // The streams are read ONCE and the ensured set is what gets shaped — a
+        // second getItemStreams() call would hand the player the pre-backfill rows
+        // and silently undo the repair below.
+        //
+        // Backfill deliberately runs AFTER the parental gate above: an
+        // unauthorised caller must never be able to make this endpoint fork an
+        // ffprobe (an over-cap deep-link is a 404 with zero disk I/O). It is also
+        // the NARROW ensureVideoCodecFor() — NOT the ensureFor() the playback-info
+        // handler uses. Detail is hit on every item view and 79,218 of the
+        // library's 116,325 items match ensureFor()'s pre-071 audio/subtitle
+        // trigger (mostly music tracks on sshfs shares), so arming that trigger
+        // here would turn the first browse after a deploy into an ffprobe storm
+        // inside the single-threaded worker. The narrow trigger fires only when
+        // the item's VIDEO codec is genuinely unknown — the one thing this
+        // response is authoritative for, since the player reads direct-play vs
+        // transcode out of `streams[]` and treats an unknown codec as
+        // direct-playable.
         $itemId = is_string($item['id'] ?? null) ? $item['id'] : '';
+        $streams = $this->streamBackfill()->ensureVideoCodecFor(
+            $item,
+            $this->itemRepository->getItemStreams($itemId)
+        );
         $shaped = MediaItemShaper::shapeDetail(
             $item,
-            $this->itemRepository->getItemStreams($itemId),
+            $streams,
             $isAdmin
         );
 
@@ -1378,7 +1401,15 @@ class WebPortalRouter
     /**
      * Returns the lazy stream backfill, building it on first use when none was
      * injected (mirrors MediaItemController::streamBackfill() so both dispatch
-     * paths behave identically).
+     * paths behave identically). Used by {@see getPlaybackInfo()} (broad pre-071
+     * trigger) and {@see getMediaItem()} (narrow video-codec trigger).
+     *
+     * Deliberately NOT resolved from the DI container: `WebPortalServicesProvider`
+     * passes `null` here, and this accessor is what production has run on since
+     * the backfill shipped, so the detail path inherits the EXACT construction the
+     * playback-info path is already proven on. Constructing it is also free — the
+     * FfmpegRunner (and its config/ffmpeg.php include) is built only when a probe
+     * actually happens, which for the narrow trigger is ~never.
      */
     private function streamBackfill(): StreamProbeBackfill
     {

@@ -136,13 +136,21 @@ final class WebPortalRouterTmdbKeyTest extends TestCase
     }
 
     /**
-     * A stored key must outrank the config file, not merely fill in for it.
+     * A stored key must OUTRANK a configured env key, not merely fill in when
+     * one is absent.
+     *
+     * Asserted against a populated TMDB_API_KEY on purpose: an assertion that
+     * the result merely differs from the config value would also hold for the
+     * pre-fix code (which returned ''), so it would not discriminate. This
+     * comparison does — the old readers return 'env-key' here.
      */
-    public function testStoredKeyOutranksConfigFile(): void
+    public function testStoredKeyOutranksConfiguredEnvKey(): void
     {
+        putenv('TMDB_API_KEY=env-key');
+
         $router = $this->makeRouter($this->settingsWithStoredKey('admin-saved-key'));
 
-        $this->assertNotSame('config-file-key', $this->resolvedKey($router));
+        $this->assertSame('admin-saved-key', $this->resolvedKey($router));
     }
 
     /**

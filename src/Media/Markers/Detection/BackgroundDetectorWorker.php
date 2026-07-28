@@ -41,6 +41,20 @@ class BackgroundDetectorWorker
     private bool $running = true;
 
     /**
+     * Whether the "queue empty" line has already been emitted for the CURRENT idle
+     * streak.
+     *
+     * This worker is spawned as a managed worker (`config/managed_workers.php`)
+     * polling every 30s (`config/process.php` → `marker-detection.poll_seconds`),
+     * and app.log is at `debug` (`config/logger.php`). Logging "nothing to process"
+     * on every idle tick is ~2,880 identical lines per day per box — pure noise
+     * that buries the genuine work/error lines. So the line is emitted on the STATE
+     * CHANGE only: the first idle tick after startup, and the first idle tick after
+     * a backlog drains. It re-arms as soon as a show is processed.
+     */
+    private bool $idleLogged = false;
+
+    /**
      * @param IntroDetectionJob           $job           Detection job
      * @param MarkerCandidateStore        $store         Job store
      * @param MarkerCandidateRepository   $candidateRepo Candidate repository
@@ -72,9 +86,16 @@ class BackgroundDetectorWorker
         $showId = $this->store->dequeueShow();
 
         if ($showId === null) {
-            $this->logger->debug('BackgroundDetectorWorker: queue empty, nothing to process');
+            // Idle is the steady state on a 30s poll — log the transition INTO idle,
+            // not every tick. See {@see self::$idleLogged}.
+            if (!$this->idleLogged) {
+                $this->logger->debug('BackgroundDetectorWorker: queue empty, nothing to process');
+                $this->idleLogged = true;
+            }
             return false;
         }
+
+        $this->idleLogged = false;
 
         $this->logger->info('BackgroundDetectorWorker::runOnce Starting [showId=' . $showId . ']');
         $startTime = hrtime(true);

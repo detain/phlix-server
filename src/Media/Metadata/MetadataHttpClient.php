@@ -177,6 +177,28 @@ class MetadataHttpClient
     }
 
     /**
+     * Replace the API key stamped onto every outgoing request.
+     *
+     * Exists so a provider whose key resolved EMPTY at construction can adopt a
+     * key that became resolvable later without being rebuilt — see
+     * {@see TmdbProvider::refreshApiKeyIfEmpty()}. The provider is a per-worker
+     * PHP-DI singleton, so without this the client would keep stamping
+     * `api_key=` for the worker's entire lifetime.
+     *
+     * Safe with respect to the response cache: only 2xx responses are cached,
+     * and an unauthenticated TMDB request answers 401, so no empty-key result
+     * is ever cached under a key a later authenticated request would hit.
+     *
+     * @param string $apiKey API key for authentication.
+     *
+     * @return void
+     */
+    public function setApiKey(string $apiKey): void
+    {
+        $this->apiKey = $apiKey;
+    }
+
+    /**
      * The short provider label this client reports under, e.g. `tmdb`.
      *
      * @return string Provider label.

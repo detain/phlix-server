@@ -17,6 +17,9 @@ use Phlix\Auth\UserRepository;
 use Phlix\Collections\CollectionManager;
 use Phlix\Collections\CollectionRepository;
 use Phlix\Common\Container\ServiceProviderInterface;
+use Phlix\Common\Logger\LogChannels;
+use Phlix\Common\Logger\LoggerFactory;
+use Phlix\Common\Logger\StructuredLogger;
 use Phlix\Media\Library\BookProgressStore;
 use Phlix\Media\Library\FolderWatcher;
 use Phlix\Media\Library\ItemRepository;
@@ -318,21 +321,52 @@ final class MediaServicesProvider implements ServiceProviderInterface
                 // and fall back to config/tmdb.php / the TMDB_API_KEY env var.
                 // getEffective() already returns the override when present,
                 // else the config/env default, so an admin-saved key wins.
-                // Resolved when the provider is first built, so a saved key
-                // applies on the next worker cycle without a redeploy.
+                //
+                // This factory result is a PER-WORKER SINGLETON (PHP-DI caches
+                // it in $resolvedEntries), so whatever is decided here used to
+                // be final for the worker's whole lifetime. On a deployment
+                // where server_settings is the ONLY source of the key — the
+                // normal case once it is managed from the admin UI, since
+                // config/tmdb.php resolves `api_key` to `getenv('TMDB_API_KEY')
+                // ?: ''` — ANY transient failure to reach the database at fork
+                // time (connection refused, auth blip, pool exhaustion) baked an
+                // EMPTY key in permanently. Every TMDB lookup on that worker
+                // then returned [] with nothing logged, which is
+                // indistinguishable from "no match": exactly the failure mode
+                // that makes unmatched-episode counts mysteriously stall.
+                //
+                // Two things prevent that now: the catch below LOGS instead of
+                // swallowing, and $resolve is handed to the provider so it can
+                // re-resolve later if what we captured here is empty.
+                $resolve = static function () use ($c): mixed {
+                    $settings = $c->get(SettingsRepository::class);
+
+                    return $settings instanceof SettingsRepository
+                        ? $settings->getEffective('tmdb.api_key')
+                        : null;
+                };
+
                 $key = $tmdbApiKey;
                 try {
-                    $settings = $c->get(SettingsRepository::class);
-                    if ($settings instanceof SettingsRepository) {
-                        $stored = $settings->getEffective('tmdb.api_key');
-                        if (is_string($stored) && $stored !== '') {
-                            $key = $stored;
-                        }
+                    $stored = $resolve();
+                    if (is_string($stored) && $stored !== '') {
+                        $key = $stored;
                     }
-                } catch (\Throwable) {
-                    // Settings store not available — keep the config/env key.
+                } catch (\Throwable $e) {
+                    self::mediaLogger($c)->warning(
+                        'TMDB API key: the settings store was unreachable while building '
+                        . 'TmdbProvider; falling back to the config/env key.',
+                        [
+                            'exception' => $e::class,
+                            'message' => $e->getMessage(),
+                            // Whether the fallback is usable at all. False here means
+                            // this worker has NO key until the store answers again.
+                            'fallback_key_present' => $key !== '',
+                        ]
+                    );
                 }
-                return new TmdbProvider($key);
+
+                return new TmdbProvider($key, null, null, $resolve);
             }),
 
             FolderWatcher::class => autowire()
@@ -1099,6 +1133,29 @@ final class MediaServicesProvider implements ServiceProviderInterface
         }
 
         return $out;
+    }
+
+    /**
+     * The MEDIA-channel logger, preferring the container's wired instance.
+     *
+     * Used from inside factories to report a degraded build — most importantly a
+     * TMDB key that could not be resolved. Falls back to
+     * {@see LoggerFactory::get()} because the whole point of the call site is
+     * that the container is *already* misbehaving; a logger lookup must not be
+     * the second thing that fails.
+     */
+    private static function mediaLogger(ContainerInterface $c): StructuredLogger
+    {
+        try {
+            $logger = $c->get('logger.media');
+            if ($logger instanceof StructuredLogger) {
+                return $logger;
+            }
+        } catch (\Throwable) {
+            // Fall through to the factory-built channel logger.
+        }
+
+        return LoggerFactory::get(LogChannels::MEDIA);
     }
 
     /**

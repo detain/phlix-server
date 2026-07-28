@@ -78,7 +78,7 @@ use Workerman\MySQL\Connection;
  *  - it is about the *address*, and it holds for the address only.
  *    `ConnectionPool` caches by connection **name**, not by config path
  *    (`src/Common/Database/ConnectionPool.php:23-27` — `init()` re-news the
- *    instance but does **not** clear `self::$connections`; `:35-36` reads the
+ *    instance but does **not** clear `self::$connections`; `:36` reads the
  *    config only `if (!isset(self::$connections[$name]))`). So the
  *    `ConnectionPool::init(self::configPath())` in {@see connection()} is a
  *    no-op for the connection it then validates whenever anything earlier in the

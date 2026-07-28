@@ -92,7 +92,7 @@ final class PooledConnectionConcurrencyTest extends TestCase
         // round 2 #7). The connection it opens is cached process-wide in
         // ConnectionPool::$connections['mysql'] and never closed, so a
         // coroutine-hooked socket is still open at PHPUnit's RSHUTDOWN — the
-        // hazard src/Common/Database/ConnectionPool.php:135-141 documents as
+        // hazard src/Common/Database/ConnectionPool.php:142-146 documents as
         // "API must be called in the coroutine". Pre-S126 this setUp() did no PDO
         // I/O at all, so S126 added that exposure here; swoole 6.2.1 is loaded on
         // the dev box and in both .github/workflows/phpunit.yml jobs (:37, :170),

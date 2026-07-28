@@ -110,7 +110,8 @@ use RecursiveIteratorIterator;
  * next reader will believe:
  *
  *  - `stream_socket_client()` / `socket_create()` / `socket_connect()`, and
- *    `fopen()` on a `tcp://`-style URL, are only flagged in a file that also
+ *    `fopen()` on a `tcp://`-style URL (which cannot actually open a socket —
+ *    {@see NETWORK_URL_CALLS}), are only flagged in a file that also
  *    references the database configuration ({@see mentionsDatabaseConfig()}).
  *    Without it the rule fires on `tests/Unit/Discovery/Mdns/MdnsSocketTest.php:107,133`,
  *    which opens a UDP socket for mDNS and has nothing to do with MySQL.
@@ -149,7 +150,15 @@ use RecursiveIteratorIterator;
  *    `if ($why !== null) { $this->markTestSkipped($why); }`);
  *  - the acquisition moved one hop into a helper the `try` calls;
  *  - a probe spelled through `call_user_func('fsockopen', …)`, `eval()`, or any
- *    other indirection that hides the name from the token stream.
+ *    other indirection that hides the name from the token stream;
+ *  - `@fopen("tcp://$host:$port", 'r')` — the *interpolated* spelling of the
+ *    `fopen` rule. `@fopen('tcp://' . $host . ':' . $port, 'r')` is flagged, the
+ *    interpolated one is not ({@see firstArgumentOpensANetworkUrl()}). Left open
+ *    deliberately: `fopen()` cannot open a socket transport in either spelling
+ *    ({@see NETWORK_URL_CALLS}), so no *working* probe hides here — and the
+ *    working interpolated shape, `stream_socket_client("tcp://{$host}:{$port}", …)`,
+ *    is flagged, because {@see DB_TARGETED_SOCKET_CALLS} applies no
+ *    first-argument test at all.
  *
  * What *is* covered one hop out is the **skip**: a `catch` that calls a private
  * helper which itself calls `markTestSkipped()`/`markTestIncomplete()` is
@@ -224,15 +233,46 @@ final class IntegrationDbGuardAdoptionTest extends TestCase
     private const DB_TARGETED_SOCKET_CALLS = ['stream_socket_client', 'socket_create', 'socket_connect'];
 
     /**
-     * Calls that open a socket only when their first argument is a network URL.
-     * `@fopen('tcp://' . $host . ':' . $port, 'r')` is a reachability probe;
-     * `fopen($tmpFile, 'w')` is not, and hundreds of tests do the latter — so
-     * these need the URL scheme *and* the database-config narrowing before they
-     * are flagged. {@see NETWORK_URL_SCHEMES}.
+     * Calls flagged only when their first argument is a `tcp://`-style URL —
+     * i.e. an *attempted* reachability probe. `fopen($tmpFile, 'w')` is not one,
+     * and hundreds of tests do that, so these need the transport prefix *and*
+     * the database-config narrowing before they are flagged.
+     * {@see NETWORK_URL_SCHEMES}.
+     *
+     * ⚠ Neither of these functions can actually open such a URL, and this
+     * docblock used to claim otherwise. `tcp://`, `udp://`, `ssl://`, `tls://`,
+     * `unix://` and `udg://` are socket **transports** (`stream_get_transports()`),
+     * not stream **wrappers** (`stream_get_wrappers()`), and only a wrapper is
+     * reachable from `fopen()` / `file_get_contents()`. Measured on this box,
+     * PHP 8.3.6:
+     *
+     * ```
+     * in_array('tcp', stream_get_wrappers(), true)  -> false
+     * stream_get_wrappers()   -> https,ftps,compress.zlib,php,file,glob,data,http,…
+     * stream_get_transports() -> tcp,udp,unix,udg,ssl,tls,tlsv1.*,async.*
+     * @fopen('tcp://127.0.0.1:3306', 'r')  -> false, and error_get_last() is
+     *   "fopen(tcp://127.0.0.1:3306): Failed to open stream: No such file or
+     *    directory" — the FILE wrapper's ENOENT, i.e. the argument was treated
+     *    as a filename. The same address via @stream_socket_client() returns
+     *    "Connection refused", i.e. it really dialled.
+     * ```
+     *
+     * So this rule can only ever fire on a probe that never worked. It is kept,
+     * not deleted, because that is still worth naming at the moment it is
+     * written: a reachability check that is a constant `false` makes its test
+     * skip on every box forever, which is the S126 outcome — a green run that
+     * never touched a database — reached by a different route. The spellings
+     * that DO open a socket are covered by {@see UNCONDITIONAL_SOCKET_CALLS} and
+     * {@see DB_TARGETED_SOCKET_CALLS}, neither of which applies any
+     * first-argument test.
      */
     private const NETWORK_URL_CALLS = ['fopen', 'file_get_contents'];
 
-    /** Stream wrappers that mean "this is a socket", not "this is a file". */
+    /**
+     * Socket transport prefixes — "this argument is an address, not a path".
+     * Written like stream wrappers, but they are not wrappers; see
+     * {@see NETWORK_URL_CALLS} for what that costs this rule.
+     */
     private const NETWORK_URL_SCHEMES = ['tcp://', 'udp://', 'ssl://', 'tls://', 'unix://', 'udg://'];
 
     /**
@@ -542,11 +582,28 @@ final class IntegrationDbGuardAdoptionTest extends TestCase
 
     /**
      * Whether the first argument of the call whose `(` sits at `$paren` begins
-     * with a string literal carrying a network stream wrapper.
+     * with a **single-token** string literal carrying a socket transport prefix
+     * ({@see NETWORK_URL_SCHEMES} — a transport, not a stream wrapper, and
+     * {@see NETWORK_URL_CALLS} for why that matters).
      *
-     * `@fopen('tcp://' . $host . ':' . $port, 'r')` — a probe — matches;
-     * `fopen($this->tempDir . '/x.mp4', 'w')` does not, and neither does any
-     * call whose target is built without a leading literal.
+     * ```
+     * @fopen('tcp://' . $host . ':' . $port, 'r')   matches
+     * @fopen("tcp://$host:$port", 'r')              does NOT match — see below
+     * fopen($this->tempDir . '/x.mp4', 'w')         does not match
+     * ```
+     *
+     * ⚠ The interpolated spelling is a measured gap, not an oversight. This test
+     * requires `T_CONSTANT_ENCAPSED_STRING`; a double-quoted interpolated string
+     * produces no such token — `token_get_all()` emits the bare `"` character,
+     * then `T_ENCAPSED_AND_WHITESPACE 'tcp://'`, `T_VARIABLE '$host'`, … — so it
+     * is rejected below even though it does lead with a literal. It is left open
+     * because widening it would buy coverage of no working probe: neither
+     * spelling can open a socket through `fopen()` at all, and the *functional*
+     * interpolated shape is already flagged elsewhere with no first-argument
+     * test — measured, `@stream_socket_client("tcp://{$host}:{$port}", $errno,
+     * $errstr, 0.5)` in a file whose only DB markers are
+     * `getenv('DB_HOST')`/`getenv('DB_PORT')` fires via
+     * {@see DB_TARGETED_SOCKET_CALLS}.
      *
      * @param list<array{0: int, 1: string, 2: int}|string> $tokens
      */

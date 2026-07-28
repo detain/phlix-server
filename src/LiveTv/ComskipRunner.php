@@ -127,7 +127,10 @@ class ComskipRunner
         );
 
         $output = [];
-        $returnCode = 0;
+        // Exit status of the comskip process. Stays null until it has actually
+        // been observed — see the resolution step after the poll loop. Seeding
+        // this with 0 made an unobserved status read as a successful run.
+        $returnCode = null;
 
         $descriptorSpec = [
             1 => ['pipe', 'w'], // stdout
@@ -226,7 +229,7 @@ class ComskipRunner
             }
 
             // Check if process exited
-            $status = proc_get_status($process);
+            $status = $this->processStatus($process);
             if (!$status['running']) {
                 // Process finished — drain any remaining buffered data
                 $this->drainRemainingPipes($pipesByIdx, $stdout, $stderr);
@@ -240,6 +243,20 @@ class ComskipRunner
             if (is_resource($pipe)) {
                 fclose($pipe);
             }
+        }
+
+        // The poll loop has a second way out: every pipe drained, so the `while`
+        // condition went false without the status check ever seeing the process
+        // exit. That ordering is routine, not exotic — the kernel closes a dying
+        // child's descriptors before it makes the child reapable, so EOF can
+        // reach us a scheduler slice ahead of proc_get_status() reporting it, and
+        // the chunk-cap above force-closes pipes on its own. Falling through with
+        // an assumed 0 reported a *failed* comskip as a success, which then
+        // surfaced as a misleading "EDL file not found". Resolve the real status
+        // instead. (proc_close() also returns it, but it blocks with no deadline,
+        // which would give up the bounded-timeout guarantee below.)
+        if ($returnCode === null) {
+            $returnCode = $this->awaitExitCode($process, $startTime, $timeoutNanos);
         }
 
         proc_close($process);
@@ -281,6 +298,71 @@ class ComskipRunner
         ]);
 
         return $edlPath;
+    }
+
+    /**
+     * Read the current status of the comskip process.
+     *
+     * Wraps {@see proc_get_status()} as an overridable seam so tests can
+     * reproduce the pipes-drained-before-the-process-is-reapable ordering
+     * deterministically rather than racing the kernel for it.
+     *
+     * Narrowed to the two fields this class actually reads, and built explicitly
+     * rather than returned through: Psalm treats array shapes as sealed, so
+     * handing back the full proc_get_status() shape under this signature is an
+     * InvalidReturnType there even though PHPStan accepts the wider array.
+     *
+     * @param resource $process Process handle from {@see proc_open()}
+     *
+     * @return array{running: bool, exitcode: int} Subset of proc_get_status() this class reads
+     *
+     * @since 0.12.0
+     */
+    protected function processStatus($process): array
+    {
+        $status = proc_get_status($process);
+
+        return [
+            'running' => $status['running'],
+            'exitcode' => $status['exitcode'],
+        ];
+    }
+
+    /**
+     * Wait for a process whose pipes have closed to report its exit status.
+     *
+     * Polls until the process is no longer running, honouring the same monotonic
+     * deadline as the read loop so a process that closes its output but never
+     * exits still cannot wedge the caller.
+     *
+     * @param resource $process Process handle from {@see proc_open()}
+     * @param float $startTime Monotonic start timestamp in nanoseconds
+     * @param float $timeoutNanos Timeout budget in nanoseconds
+     *
+     * @return int Exit code reported by the process
+     *
+     * @throws \RuntimeException If the process outlives the timeout budget
+     *
+     * @since 0.12.0
+     */
+    private function awaitExitCode($process, float $startTime, float $timeoutNanos): int
+    {
+        while (true) {
+            $status = $this->processStatus($process);
+            if (!$status['running']) {
+                return $status['exitcode'];
+            }
+
+            if ((hrtime(true) - $startTime) >= $timeoutNanos) {
+                proc_terminate($process, SIGKILL);
+                proc_close($process);
+                throw new \RuntimeException(
+                    "Comskip timed out after " . $this->timeoutSeconds . " seconds"
+                );
+            }
+
+            $this->nonBlockingSleep(0.01);
+        }
     }
 
     /**

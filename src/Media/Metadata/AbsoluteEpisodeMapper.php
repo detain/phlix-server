@@ -35,7 +35,10 @@ namespace Phlix\Media\Metadata;
  *    as **414–500**; `Hunter x Hunter` (46298) is 1–62 / 63–136 / 137–148. Here
  *    the translation is a LOOKUP, not arithmetic: episode 368 is the provider's
  *    own episode 368 and it says which season holds it. Nothing is inferred, so
- *    nothing can be mis-inferred. See {@see providerChain()} + {@see locate()}.
+ *    nothing can be mis-inferred — PROVIDED the library's own run has first been
+ *    related to the chain's extent, which is what {@see chainCoversStoredRun()}
+ *    does. A chain proves a fact about the provider and nothing about the library.
+ *    See {@see providerChain()} + {@see chainCoversStoredRun()} + {@see locate()}.
  * 2. **The provider numbers per season.** `Turn A Gundam` (37546) is 1–25 / 1–25
  *    for one continuous 50-episode show. Only here is a prefix sum needed, and
  *    only here do the strict guards below carry the whole safety burden.
@@ -65,6 +68,13 @@ namespace Phlix\Media\Metadata;
  * | Provider simply lacks the tail of a season               | `Firefly S01E12..E14` (TMDB season 1 has 11) |
  * | Numbers re-used by several rips of one show              | `Nurarihyon no Mago` — 74 files, 25 numbers  |
  * | Absolute numbers behind a per-season label               | `My Hero Academia S02E33` (S2 is 1–25)     |
+ * | One per-season-numbered season vs a longer provider chain | stored season 2 `1..30`, chain runs to 48   |
+ *
+ * Every one of those refusals now rests on ONE relation between the library and
+ * the provider — `storedMax` must equal the provider's total episode count, via
+ * {@see chainCoversStoredRun()} for shape 1 and {@see isAbsoluteNumbering()} for
+ * shape 2. None of them depends on the matched entity happening to have a single
+ * season, so none of them is a coincidence of today's data.
  *
  * ## Purity
  *
@@ -188,6 +198,60 @@ final class AbsoluteEpisodeMapper
             $expectedFirst = $max + 1;
         }
         return count($chain) >= 2 ? $chain : [];
+    }
+
+    /**
+     * Relate the LIBRARY's stored run to the PROVIDER's chain: does the provider's
+     * absolute run end exactly where the library's does?
+     *
+     * {@see providerChain()} proves a fact about the PROVIDER and nothing about the
+     * library. Without this relation the chain branch would stamp `locate()`'s
+     * answer onto every out-of-range number with no evidence that the library's
+     * `1..storedMax` is that same ordering — the exact failure this class exists to
+     * prevent. It is the chain-side twin of {@see isAbsoluteNumbering()}'s
+     * `storedMax === array_sum($run)`, and it is exact, not a tolerance.
+     *
+     * Because a chain is contiguous from 1, its last season's `max` IS the number of
+     * episodes the provider knows, so this reads as "the library's last episode is
+     * the show's last episode".
+     *
+     * ## What that relation refuses, BY CONSTRUCTION
+     *
+     * - **A per-season-numbered single season.** If the library holds one complete
+     *   season `k` (`1..N`, `N` = the provider's own season-`k` size) and the chain
+     *   has two or more seasons each holding at least one episode, then the chain's
+     *   extent is at least `N + 1 > N = storedMax`. The relation therefore CANNOT
+     *   accept it — no data coincidence required. Measured shape: a library holding
+     *   only season 2 (`1..30`) of a show the provider numbers `1–12 / 13–24 /
+     *   25–36 / 37–48`; without this guard stored `S02E25` was written with the
+     *   provider's SEASON 3 title.
+     * - **A wrong-entity match.** `Hajime no Ippo` (75 stored) and `Vampire Princess
+     *   Miyu` (26 stored) are refused because 75 ≠ 25 and 26 ≠ 4 — the same totals
+     *   test the arithmetic branch applies, so the refusal no longer depends on the
+     *   wrong entity happening to have a single season. A 220-file library bound to
+     *   a 500-episode chain-numbered entity is refused at 220 ≠ 500.
+     * - **A partially-downloaded library**, deliberately: an incomplete run cannot
+     *   be told apart from ordinary per-season numbering.
+     *
+     * Verified against the cached production fixtures: `Naruto Shippuuden`
+     * storedMax 500 === chain extent 500, `Hunter x Hunter` 148 === 148, so every
+     * series the pass acts on satisfies it.
+     *
+     * @param array<int, array{min: int, max: int}> $chain     From {@see providerChain()}.
+     * @param int                                   $storedMax The library's highest stored number.
+     */
+    public function chainCoversStoredRun(array $chain, int $storedMax): bool
+    {
+        if ($chain === []) {
+            return false;
+        }
+        $extent = 0;
+        foreach ($chain as $range) {
+            if ($range['max'] > $extent) {
+                $extent = $range['max'];
+            }
+        }
+        return $storedMax === $extent;
     }
 
     /**

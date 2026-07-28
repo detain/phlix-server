@@ -199,6 +199,88 @@ class AbsoluteEpisodeMapperTest extends TestCase
         $this->assertCount(AbsoluteEpisodeMapper::MAX_SEASONS, $this->mapper->providerChain($seasons));
     }
 
+    // --------------------------------------------------- chainCoversStoredRun
+
+    /**
+     * `Naruto Shippuuden` (500 stored, chain 1–500) and `Hunter x Hunter`
+     * (148 stored, chain 1–148) — the two series the chain branch acts on, both
+     * read off the cached production fixtures. Every one of the 579 rescues
+     * depends on this returning true.
+     */
+    public function testChainCoversStoredRunAcceptsAnExactExtent(): void
+    {
+        $naruto = [
+            1 => ['min' => 1, 'max' => 32],
+            17 => ['min' => 362, 'max' => 372],
+            20 => ['min' => 414, 'max' => 500],
+        ];
+        $this->assertTrue($this->mapper->chainCoversStoredRun($naruto, 500));
+
+        $hxh = [1 => ['min' => 1, 'max' => 62], 2 => ['min' => 63, 'max' => 136], 3 => ['min' => 137, 'max' => 148]];
+        $this->assertTrue($this->mapper->chainCoversStoredRun($hxh, 148));
+    }
+
+    /**
+     * The chain-side twin of the total-equality guard, and the fix for the finding
+     * that the chain branch related the library to the provider in no way at all:
+     * a library holding one per-season-numbered season 2 (`1..30`) against a chain
+     * that runs to 48 used to be stamped with the provider's SEASON 3 titles.
+     */
+    public function testChainCoversStoredRunRefusesAChainThatRunsLonger(): void
+    {
+        $chain = [
+            1 => ['min' => 1, 'max' => 12],
+            2 => ['min' => 13, 'max' => 24],
+            3 => ['min' => 25, 'max' => 36],
+            4 => ['min' => 37, 'max' => 48],
+        ];
+        $this->assertFalse($this->mapper->chainCoversStoredRun($chain, 30));
+    }
+
+    /**
+     * Wrong-entity amplification: 220 files against the real 500-episode
+     * `Naruto Shippuuden` chain. The arithmetic branch refuses the same shape at
+     * 220 !== 500, and now so does the lookup branch.
+     */
+    public function testChainCoversStoredRunRefusesAWrongEntityTotal(): void
+    {
+        $chain = [1 => ['min' => 1, 'max' => 32], 20 => ['min' => 414, 'max' => 500]];
+        $this->assertFalse($this->mapper->chainCoversStoredRun($chain, 220));
+        // …and a library that runs PAST the provider is refused too.
+        $this->assertFalse($this->mapper->chainCoversStoredRun($chain, 501));
+    }
+
+    public function testChainCoversStoredRunRefusesAnEmptyChain(): void
+    {
+        $this->assertFalse($this->mapper->chainCoversStoredRun([], 500));
+        $this->assertFalse($this->mapper->chainCoversStoredRun([], 0));
+    }
+
+    /**
+     * The refusal of a complete per-season-numbered single season is STRUCTURAL,
+     * not a property of today's data: whenever a chain holds two or more seasons
+     * each with at least one episode, its extent is strictly greater than any one
+     * season's size, so a library holding exactly one complete provider season can
+     * never satisfy the relation — whatever the sizes are.
+     */
+    public function testAPerSeasonNumberedSingleSeasonCanNeverSatisfyTheRelation(): void
+    {
+        foreach ([[12, 12, 12], [1, 99], [30, 1, 1, 1], [7, 7, 7, 7, 7, 7]] as $sizes) {
+            $chain = [];
+            $next = 1;
+            foreach ($sizes as $i => $size) {
+                $chain[$i + 1] = ['min' => $next, 'max' => $next + $size - 1];
+                $next += $size;
+            }
+            foreach ($sizes as $size) {
+                $this->assertFalse(
+                    $this->mapper->chainCoversStoredRun($chain, $size),
+                    'a library holding exactly one complete provider season must never be admitted'
+                );
+            }
+        }
+    }
+
     // -------------------------------------------------------------------- locate
 
     public function testLocateFindsTheSeasonHoldingAnAbsoluteNumber(): void

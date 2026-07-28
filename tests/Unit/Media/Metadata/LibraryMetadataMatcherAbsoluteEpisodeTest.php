@@ -39,16 +39,19 @@ class LibraryMetadataMatcherAbsoluteEpisodeTest extends TestCase
      * @param list<int> $numbers
      * @param list<int> $untitled Numbers the provider LISTS but has no title for —
      *     the bucket-D shape (a genuine hole inside a covered range).
+     * @param bool      $rich     Also supply the per-episode `overview`/`poster_url`
+     *     and the season poster, so the idempotence test can observe whether a
+     *     second refresh reverts them to the series/season fallbacks.
      * @return array<string, mixed>
      */
-    private function season(array $numbers, string $prefix, array $untitled = []): array
+    private function season(array $numbers, string $prefix, array $untitled = [], bool $rich = false): array
     {
         $episodes = [];
         foreach ($numbers as $n) {
             $episodes[$n] = [
                 'episode_title' => in_array($n, $untitled, true) ? null : $prefix . ' ' . $n,
-                'overview' => null,
-                'poster_url' => null,
+                'overview' => $rich ? 'EPISODE OVERVIEW ' . $n : null,
+                'poster_url' => $rich ? 'https://img/still-' . $n . '.jpg' : null,
                 'still_url' => 'https://img/still-' . $n . '.jpg',
                 'air_date' => null,
                 'runtime' => null,
@@ -57,7 +60,11 @@ class LibraryMetadataMatcherAbsoluteEpisodeTest extends TestCase
                 'crew' => [],
             ];
         }
-        return ['poster_url' => null, 'overview' => '', 'episodes' => $episodes];
+        return [
+            'poster_url' => $rich ? 'https://img/season.jpg' : null,
+            'overview' => '',
+            'episodes' => $episodes,
+        ];
     }
 
     /**
@@ -386,5 +393,373 @@ class LibraryMetadataMatcherAbsoluteEpisodeTest extends TestCase
             $this->makeLogger()
         );
         $matcher->matchLibrary('lib-1');
+    }
+
+    // =====================================================================
+    // Reviewer findings 1–3, 2026-07-28. Everything below reproduces a shape
+    // the first implementation got wrong, or pins a guard that survived the
+    // first mutation round.
+    // =====================================================================
+
+    /**
+     * Wire a one-series library across ARBITRARY stored seasons, with a STATEFUL
+     * repository: what one `matchLibrary()` run writes is what the next one reads,
+     * which is what makes the idempotence test possible at all.
+     *
+     * Episode ids are `ep-{storedSeason}-{number}`; season container ids are
+     * `season-{storedSeason}`. Provider seasons the fixture does not name resolve
+     * to an EMPTY episode list — exactly what `SeriesMetadataResolver::
+     * resolveSeasonEpisodes()` returns when TMDB fails or the season is unknown.
+     *
+     * Kept separate from {@see makeMatcher()} on purpose: that helper's one-season,
+     * `ep-{n}` id scheme is baked into the tests above it, and rewriting them to
+     * prove a different point would be churn.
+     *
+     * @param array<int, list<int>>              $storedSeasons    Stored season => episode numbers held.
+     * @param array<int, list<int>>              $providerSeasons  Provider season => episode numbers.
+     * @param array<int, list<int>>              $providerUntitled Provider season => numbers it lists untitled.
+     * @param bool                               $rich             Give the provider per-episode overview/poster.
+     * @param array<string, array<string, mixed>> $seedMeta        `"season:number"` => metadata already on the row.
+     *
+     * @return array{0: LibraryMetadataMatcher, 1: \ArrayObject<string, array<string, mixed>>}
+     */
+    private function makeSeriesMatcher(
+        array $storedSeasons,
+        array $providerSeasons,
+        array $providerUntitled = [],
+        bool $rich = false,
+        array $seedMeta = []
+    ): array {
+        /** @var array<string, array<string, mixed>> $rows */
+        $rows = ['series-1' => ['id' => 'series-1', 'type' => 'series', 'name' => 'Show', 'metadata' => []]];
+        /** @var array<string, list<string>> $children */
+        $children = ['series-1' => []];
+
+        foreach ($storedSeasons as $season => $numbers) {
+            $seasonId = 'season-' . $season;
+            $rows[$seasonId] = [
+                'id' => $seasonId,
+                'type' => 'season',
+                'name' => 'Season ' . $season,
+                'metadata' => ['season' => $season],
+            ];
+            $children['series-1'][] = $seasonId;
+            $children[$seasonId] = [];
+            foreach ($numbers as $n) {
+                $id = 'ep-' . $season . '-' . $n;
+                $rows[$id] = [
+                    'id' => $id,
+                    'type' => 'episode',
+                    'name' => 'Show ' . $season . 'x' . $n,
+                    'metadata' => array_merge(
+                        ['season' => $season, 'episode' => $n],
+                        $seedMeta[$season . ':' . $n] ?? []
+                    ),
+                ];
+                $children[$seasonId][] = $id;
+            }
+        }
+
+        /** @var \ArrayObject<string, array<string, mixed>> $updates */
+        $updates = new \ArrayObject();
+
+        $items = $this->createMock(ItemRepository::class);
+        $items->method('getByLibrary')->willReturnCallback(
+            static function () use (&$rows): array {
+                return [$rows['series-1']];
+            }
+        );
+        $items->method('findByParent')->willReturnCallback(
+            static function (string $parentId) use (&$rows, &$children): array {
+                $out = [];
+                foreach ($children[$parentId] ?? [] as $id) {
+                    $out[] = $rows[$id];
+                }
+                return $out;
+            }
+        );
+        $items->method('update')->willReturnCallback(
+            static function (string $id, array $data) use (&$rows, $updates): void {
+                $meta = is_array($data['metadata_json'] ?? null) ? $data['metadata_json'] : [];
+                $updates[$id] = $meta;
+                if (isset($rows[$id])) {
+                    $rows[$id]['metadata'] = $meta;
+                    $rows[$id]['metadata_refreshed_at'] = $data['metadata_refreshed_at'] ?? null;
+                }
+            }
+        );
+
+        $seriesResolver = $this->createMock(SeriesMetadataResolver::class);
+        $seriesResolver->method('resolve')->willReturn([
+            'external_ids' => ['tmdb' => '31910'],
+            'tmdb_id' => '31910',
+            'poster_url' => 'https://img/series.jpg',
+            'overview' => 'SERIES OVERVIEW',
+            'sources' => ['tmdb'],
+        ]);
+        $seasonFixtures = [];
+        foreach ($providerSeasons as $number => $numbers) {
+            $seasonFixtures[$number] = $this->season($numbers, 'Title', $providerUntitled[$number] ?? [], $rich);
+        }
+        $seriesResolver->method('resolveSeasonEpisodes')->willReturnCallback(
+            static function (string $tmdbId, int $season) use ($seasonFixtures): array {
+                return $seasonFixtures[$season] ?? ['poster_url' => null, 'overview' => '', 'episodes' => []];
+            }
+        );
+
+        $matcher = new LibraryMetadataMatcher(
+            $items,
+            $this->createMock(MovieMetadataResolver::class),
+            $seriesResolver,
+            $this->makeLogger()
+        );
+
+        return [$matcher, $updates];
+    }
+
+    /**
+     * The REAL `Naruto Shippuuden` (TMDB 31910) season shape, read off the cached
+     * fixtures on 2026-07-28: 20 seasons, numbered continuously 1–500.
+     *
+     * @return array<int, list<int>> Provider season => episode numbers.
+     */
+    private function narutoChain(): array
+    {
+        $sizes = [32, 21, 18, 17, 24, 31, 8, 24, 21, 25, 21, 33, 20, 25, 28, 13, 11, 21, 20, 87];
+        $seasons = [];
+        $next = 1;
+        foreach ($sizes as $i => $size) {
+            $seasons[$i + 1] = range($next, $next + $size - 1);
+            $next += $size;
+        }
+        return $seasons;
+    }
+
+    /**
+     * How many rows the absolute pass stamped.
+     *
+     * @param \ArrayObject<string, array<string, mixed>> $updates
+     */
+    private function rescuedCount(\ArrayObject $updates): int
+    {
+        $n = 0;
+        foreach ($updates as $meta) {
+            if (isset($meta['absolute_number'])) {
+                $n++;
+            }
+        }
+        return $n;
+    }
+
+    /**
+     * FINDING 1(a). A library holding ONE per-season-numbered season that is not
+     * the first one.
+     *
+     * Stored season 2 holds the complete run 1..30; the provider numbers the show
+     * continuously (1–12 / 13–24 / 25–36 / 37–48). A chain exists, so before the
+     * chain-extent relation was added every out-of-range stored number was stamped
+     * with `locate()`'s answer: stored `S02E25` was written with the provider's
+     * SEASON 3 title and `matched_season => 3`. Under the provider's own ordering
+     * the library's "season 2 episode 25" is absolute 37, not 25.
+     *
+     * The relation refuses it by construction: 30 !== 48.
+     */
+    public function testRefusesAPerSeasonNumberedSeasonWhoseChainRunsLonger(): void
+    {
+        [$matcher, $updates] = $this->makeSeriesMatcher(
+            [2 => range(1, 30)],
+            [1 => range(1, 12), 2 => range(13, 24), 3 => range(25, 36), 4 => range(37, 48)]
+        );
+        $matcher->matchLibrary('lib-1');
+
+        // In range for the stored season — the ordinary numeric index, untouched.
+        $this->assertSame('Title 24', $updates['ep-2-24']['episode_title']);
+
+        // Out of range — must stay unmatched, NOT acquire season 3's title.
+        $this->assertArrayNotHasKey('episode_title', $updates['ep-2-25']);
+        $this->assertArrayNotHasKey('matched_season', $updates['ep-2-25']);
+        $this->assertArrayNotHasKey('episode_title', $updates['ep-2-30']);
+        $this->assertSame(0, $this->rescuedCount($updates));
+    }
+
+    /**
+     * FINDING 1(b). Wrong-entity amplification.
+     *
+     * 220 absolutely-numbered files bound to the real 500-episode, 20-season
+     * `Naruto Shippuuden` chain. Without the relation, 188 rows (33..220) that are
+     * unmatched today were newly stamped with that entity's titles — e.g. absolute
+     * 220 became `matched_season => 10`. The arithmetic branch would have refused
+     * the identical series outright (220 !== 500); the chain branch has to as well.
+     */
+    public function testRefusesAChainNumberedEntityWhoseTotalDisagreesWithTheLibrary(): void
+    {
+        [$matcher, $updates] = $this->makeSeriesMatcher([1 => range(1, 220)], $this->narutoChain());
+        $matcher->matchLibrary('lib-1');
+
+        $this->assertSame('Title 32', $updates['ep-1-32']['episode_title']); // in range
+        $this->assertArrayNotHasKey('episode_title', $updates['ep-1-33']);
+        $this->assertArrayNotHasKey('episode_title', $updates['ep-1-220']);
+        $this->assertArrayNotHasKey('matched_season', $updates['ep-1-220']);
+        $this->assertSame(0, $this->rescuedCount($updates));
+    }
+
+    /**
+     * The relation is a RELATION, not a rubber stamp: the same 20-season chain with
+     * a library that really does hold all 500 episodes is still accepted. Together
+     * with the two refusals above this pins the boundary exactly at
+     * `storedMax === chain extent`.
+     */
+    public function testStillRescuesWhenTheLibraryRunAndTheChainEndTogether(): void
+    {
+        [$matcher, $updates] = $this->makeSeriesMatcher([1 => range(1, 500)], $this->narutoChain());
+        $matcher->matchLibrary('lib-1');
+
+        $this->assertSame('Title 368', $updates['ep-1-368']['episode_title']);
+        $this->assertSame(17, $updates['ep-1-368']['matched_season']);
+        $this->assertSame('Title 500', $updates['ep-1-500']['episode_title']);
+        $this->assertSame(20, $updates['ep-1-500']['matched_season']);
+        $this->assertSame(468, $this->rescuedCount($updates)); // 500 stored - 32 in range
+    }
+
+    /**
+     * FINDING 2. The rescue must be IDEMPOTENT.
+     *
+     * A rescued row keeps its title, so it is never re-queued; but the ordinary
+     * pass still runs for it with an empty `$info`, and the series-level fallbacks
+     * used to overwrite what the rescue wrote. Measured before the fix, over two
+     * real passes: `overview` "EPISODE OVERVIEW 60" -> "SERIES OVERVIEW" and
+     * `poster_url` ".../still-60.jpg" -> ".../season.jpg", i.e. the episode
+     * overview and image lasted exactly one refresh cycle.
+     *
+     * The second pass sets force-refresh because that is literally what the next
+     * `metadata_refresh` does — without it the batch pre-skip drops every item that
+     * already carries a `metadata_refreshed_at` stamp and the row is never revisited.
+     */
+    public function testARescuedEpisodeSurvivesTheNextRefreshUnchanged(): void
+    {
+        [$matcher, $updates] = $this->makeSeriesMatcher(
+            [1 => range(1, 71)],
+            [1 => range(1, 32), 2 => range(33, 53), 3 => range(54, 71)],
+            [],
+            true
+        );
+
+        $matcher->matchLibrary('lib-1');
+        $this->assertSame('Title 60', $updates['ep-1-60']['episode_title']);
+        $this->assertSame('EPISODE OVERVIEW 60', $updates['ep-1-60']['overview']);
+        $this->assertSame('https://img/still-60.jpg', $updates['ep-1-60']['poster_url']);
+
+        $matcher->setForceRefresh(true); // the next metadata_refresh
+        $matcher->matchLibrary('lib-1');
+
+        $this->assertSame('Title 60', $updates['ep-1-60']['episode_title']);
+        $this->assertSame('EPISODE OVERVIEW 60', $updates['ep-1-60']['overview']);
+        $this->assertSame('https://img/still-60.jpg', $updates['ep-1-60']['poster_url']);
+        $this->assertSame('https://img/still-60.jpg', $updates['ep-1-60']['still_url']);
+        $this->assertSame(3, $updates['ep-1-60']['matched_season']);
+        $this->assertSame(60, $updates['ep-1-60']['matched_episode']);
+    }
+
+    /**
+     * The idempotence guard is scoped by PROVENANCE, not by "the index missed".
+     *
+     * Stored season 2 holds 1..30 while the provider's season 2 starts at 13, so
+     * episodes 1..12 miss the index exactly like a rescued row does — but they were
+     * never rescued (the relation refused this series, see the finding-1 test above)
+     * and so they must still inherit the series overview and the season poster. A
+     * guard that keyed off the empty `$info` alone would render them blank.
+     */
+    public function testAnUnrescuedEpisodeStillInheritsTheSeriesFallbacks(): void
+    {
+        [$matcher, $updates] = $this->makeSeriesMatcher(
+            [2 => range(1, 30)],
+            [1 => range(1, 12), 2 => range(13, 24), 3 => range(25, 36), 4 => range(37, 48)],
+            [],
+            true
+        );
+
+        $matcher->matchLibrary('lib-1');
+        $matcher->setForceRefresh(true);
+        $matcher->matchLibrary('lib-1');
+
+        $this->assertArrayNotHasKey('absolute_number', $updates['ep-2-5']);
+        $this->assertArrayNotHasKey('episode_title', $updates['ep-2-5']);
+        $this->assertSame('SERIES OVERVIEW', $updates['ep-2-5']['overview']);
+        $this->assertSame('https://img/season.jpg', $updates['ep-2-5']['poster_url']);
+    }
+
+    /**
+     * …and the guard is scoped to provenance that is still CURRENT. A row whose
+     * `absolute_number` names a different ordinal than the one it now stores has
+     * been renumbered since it was rescued — which is exactly what the reindex step
+     * (SM-0.6) will do to these rows — so the provenance is stale and must not
+     * freeze the row's overview/image against the series fallbacks.
+     */
+    public function testStaleProvenanceFromAnotherOrdinalDoesNotFreezeTheRow(): void
+    {
+        [$matcher, $updates] = $this->makeSeriesMatcher(
+            [2 => range(1, 30)],
+            [1 => range(1, 12), 2 => range(13, 24), 3 => range(25, 36), 4 => range(37, 48)],
+            [],
+            true,
+            ['2:5' => ['absolute_number' => 60, 'matched_season' => 3, 'matched_episode' => 60]]
+        );
+
+        $matcher->matchLibrary('lib-1');
+
+        $this->assertSame('SERIES OVERVIEW', $updates['ep-2-5']['overview'] ?? null);
+        $this->assertSame('https://img/season.jpg', $updates['ep-2-5']['poster_url'] ?? null);
+    }
+
+    /**
+     * FINDING 3(a) — pins the stored-season filter in `enrichAbsoluteNumbered()`.
+     *
+     * A season-0 special numbered 27 sits beside a complete aired run 1..71 whose
+     * chain the pass DOES act on. The special's ordinal is not part of the aired
+     * run, so it must be left alone. Dropping the `$r['season'] === $season` filter
+     * makes the mutant stamp it with the aired `Title 27` and `matched_season => 1`.
+     *
+     * Live shape: `Fairy Tail S00E10/E11`, `Sword Art Online S00E27` (worklog §6.2).
+     */
+    public function testNeverRescuesASeasonZeroSpecial(): void
+    {
+        [$matcher, $updates] = $this->makeSeriesMatcher(
+            [0 => [27], 1 => range(1, 71)],
+            [0 => [1, 2, 3], 1 => range(1, 32), 2 => range(33, 53), 3 => range(54, 71)]
+        );
+        $matcher->matchLibrary('lib-1');
+
+        // The aired run IS rescued — so the pass definitely ran on this series.
+        $this->assertSame('Title 71', $updates['ep-1-71']['episode_title']);
+
+        // The special is not part of that run and must not be touched by it.
+        $this->assertArrayNotHasKey('episode_title', $updates['ep-0-27']);
+        $this->assertArrayNotHasKey('absolute_number', $updates['ep-0-27']);
+        $this->assertArrayNotHasKey('matched_season', $updates['ep-0-27']);
+    }
+
+    /**
+     * FINDING 3(b) — pins the `$highest > 0` precondition in `recordEpisodeSlot()`.
+     *
+     * An EMPTY provider episode list is what a TMDB failure returns
+     * (`SeriesMetadataResolver::resolveSeasonEpisodes()` answers `['episodes' => []]`
+     * on any Throwable, and `TmdbProvider::getTvSeason()` does the same on a null
+     * body). An empty list says nothing about whether a number overflows, so
+     * nothing may be queued from it. Dropping the precondition turns every episode
+     * of the stored season into an "overflow" and re-reads the WHOLE season into
+     * the earlier seasons the chain does cover.
+     */
+    public function testAnEmptyProviderSeasonNeverQueuesTheStoredSeason(): void
+    {
+        [$matcher, $updates] = $this->makeSeriesMatcher(
+            [3 => range(1, 24)],                              // one aired season, complete 1..24
+            [1 => range(1, 12), 2 => range(13, 24)]           // season 3 resolves to NO episodes
+        );
+        $matcher->matchLibrary('lib-1');
+
+        $this->assertSame(0, $this->rescuedCount($updates));
+        $this->assertArrayNotHasKey('episode_title', $updates['ep-3-1']);
+        $this->assertArrayNotHasKey('episode_title', $updates['ep-3-24']);
+        $this->assertArrayNotHasKey('matched_season', $updates['ep-3-24']);
     }
 }

@@ -1736,11 +1736,20 @@ class LibraryMetadataMatcher
      * Two strategies, in order — see {@see AbsoluteEpisodeMapper} for why both are
      * needed and which real series proved each one:
      *
-     * 1. `providerChain()` + `locate()` — the provider numbers the show
-     *    continuously as well, so the stored number IS the provider's number and
-     *    only the season it was looked up in was wrong. Pure lookup.
-     * 2. `contiguousRun()` + `map()` — the provider numbers per season, so the
-     *    stored number has to be translated arithmetically.
+     * 1. `providerChain()` + `chainCoversStoredRun()` + `locate()` — the provider
+     *    numbers the show continuously as well, so the stored number IS the
+     *    provider's number and only the season it was looked up in was wrong.
+     *    Pure lookup.
+     * 2. `contiguousRun()` + `isAbsoluteNumbering()` + `map()` — the provider
+     *    numbers per season, so the stored number has to be translated
+     *    arithmetically.
+     *
+     * **Both strategies carry the SAME relation between library and provider:**
+     * `storedMax` must equal the provider's total episode count (the chain's extent
+     * for strategy 1, the run's sum for strategy 2). A chain on its own is a fact
+     * about the provider and no evidence at all about the library — without the
+     * relation, a library holding one per-season-numbered season, or bound to the
+     * wrong entity, is stamped with confident wrong titles.
      *
      * **Fail closed.** A wrong translation attaches a confident, wrong title that
      * nobody notices until playback, so every guard in {@see AbsoluteEpisodeMapper}
@@ -1796,17 +1805,23 @@ class LibraryMetadataMatcher
 
         // One walk of the provider's seasons feeds both strategies. Strategy 1 (the
         // provider numbers the show continuously too) is a lookup and is preferred;
-        // strategy 2 (per-season provider numbering) is arithmetic and carries the
-        // strict total-equality guard.
+        // strategy 2 (per-season provider numbering) is arithmetic. BOTH carry the
+        // same, exact relation between the library and the provider: the library's
+        // last episode must be the show's last episode. A chain on its own proves
+        // only that the PROVIDER numbers continuously and says nothing at all about
+        // the library, so `$chain !== []` is never sufficient on its own.
         $providerSeasons = $this->providerSeasonNumbers($tmdbId, $seasonCache);
         $chain = $this->absoluteMapper->providerChain($providerSeasons);
         $run = $this->absoluteMapper->contiguousRun($providerSeasons);
+        $lookup = $this->absoluteMapper->chainCoversStoredRun($chain, $storedMax);
         $arithmetic = $this->absoluteMapper->isAbsoluteNumbering($run, $season, $storedMax);
-        if ($chain === [] && !$arithmetic) {
+        if (!$lookup && !$arithmetic) {
             $this->logger->info('LibraryMetadataMatcher: absolute numbering refused', [
                 'tmdb_id' => $tmdbId,
                 'stored_season' => $season,
                 'stored_max' => $storedMax,
+                'chain_seasons' => count($chain),
+                'chain_extent' => $chain === [] ? 0 : max(array_column($chain, 'max')),
                 'provider_seasons' => count($run),
                 'provider_total' => array_sum($run),
                 'candidates' => count($retry),
@@ -1816,7 +1831,7 @@ class LibraryMetadataMatcher
 
         $applied = 0;
         foreach ($retry as $entry) {
-            $chainSeason = $chain === [] ? null : $this->absoluteMapper->locate($chain, $entry['number']);
+            $chainSeason = $lookup ? $this->absoluteMapper->locate($chain, $entry['number']) : null;
             if ($chainSeason !== null) {
                 // The provider's own ordinal — the episode number is already right,
                 // only the season it was looked up in was wrong.
@@ -1859,8 +1874,8 @@ class LibraryMetadataMatcher
             'tmdb_id' => $tmdbId,
             'stored_season' => $season,
             'stored_max' => $storedMax,
-            'strategy' => $chain !== [] ? 'provider_chain' : 'prefix_sum',
-            'provider_seasons' => $chain !== [] ? count($chain) : count($run),
+            'strategy' => $lookup ? 'provider_chain' : 'prefix_sum',
+            'provider_seasons' => $lookup ? count($chain) : count($run),
             'candidates' => count($retry),
             'applied' => $applied,
         ]);
@@ -1913,6 +1928,14 @@ class LibraryMetadataMatcher
      * inherited from the parent series record (episodes carry no TMDB genres/tags
      * of their own).
      *
+     * **Idempotent for rows the absolute pass rescued.** Such a row still misses the
+     * numeric index on every later refresh, so the series-level `overview`/
+     * `poster_url` fallbacks would silently revert its episode overview and image
+     * one cycle after the rescue. The row's own persisted `absolute_number`/
+     * `matched_season`/`matched_episode` provenance identifies that state and the
+     * two fallbacks are skipped, leaving the rescued values in place. Every other
+     * call site is unaffected — the provenance keys exist nowhere else.
+     *
      * @param array<string, mixed>      $episode        Hydrated episode row.
      * @param array<string, mixed>|null $seasonData     Resolved season data (or null).
      * @param string|null               $seriesPoster   Series poster fallback.
@@ -1956,6 +1979,27 @@ class LibraryMetadataMatcher
             }
         }
 
+        // IDEMPOTENCE. A row a previous refresh rescued through the absolute pass
+        // carries `absolute_number`/`matched_season`/`matched_episode`, and the
+        // ordinary numeric index still misses it — that is WHY it was rescued. It is
+        // also not re-queued, because {@see recordEpisodeSlot()} never re-reads a row
+        // that already has a title. So `$info` is empty here and the series-level
+        // fallbacks below would replace the episode's own overview and image with
+        // series/season ones: measured over two real passes, `overview` reverted
+        // "EPISODE OVERVIEW 60" -> "SERIES OVERVIEW" and `poster_url`
+        // ".../still-60.jpg" -> ".../season.jpg", i.e. the rescued enrichment lasted
+        // exactly one refresh cycle. Recognising the state from its own persisted
+        // provenance lets the stored values stand instead. Cost: zero extra provider
+        // calls. Trade-off: a rescued episode's overview/image no longer track later
+        // series-level edits — until the provider lists the episode in the stored
+        // season, at which point `$info` is non-empty and the normal path resumes.
+        $rescued = $absoluteMatch === null
+            && $info === []
+            && $episodeNumber !== null
+            && $this->intMeta($meta, 'absolute_number') === $episodeNumber
+            && $this->intMeta($meta, 'matched_season') !== null
+            && $this->intMeta($meta, 'matched_episode') !== null;
+
         $patch = [];
         if ($absoluteMatch !== null) {
             // Provenance only. `season`/`episode` and `parent_id` are left exactly
@@ -1969,7 +2013,10 @@ class LibraryMetadataMatcher
         if ($title !== null) {
             $patch['episode_title'] = $title;
         }
-        $overview = $this->stringOrNull($info['overview'] ?? null) ?? $seriesOverview;
+        $overview = $this->stringOrNull($info['overview'] ?? null);
+        if ($overview === null && !$rescued) {
+            $overview = $seriesOverview;
+        }
         if ($overview !== null) {
             $patch['overview'] = $overview;
         }
@@ -1981,9 +2028,11 @@ class LibraryMetadataMatcher
             $patch['runtime'] = $info['runtime'];
         }
         // Poster: episode still → season poster → series poster.
-        $poster = $this->stringOrNull($info['poster_url'] ?? null)
-            ?? ($seasonData !== null ? $this->stringOrNull($seasonData['poster_url'] ?? null) : null)
-            ?? $seriesPoster;
+        $poster = $this->stringOrNull($info['poster_url'] ?? null);
+        if ($poster === null && !$rescued) {
+            $poster = ($seasonData !== null ? $this->stringOrNull($seasonData['poster_url'] ?? null) : null)
+                ?? $seriesPoster;
+        }
         if ($poster !== null) {
             $patch['poster_url'] = $poster;
         }

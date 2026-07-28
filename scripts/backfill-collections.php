@@ -17,9 +17,11 @@ declare(strict_types=1);
 require_once __DIR__ . '/../vendor/autoload.php';
 require_once __DIR__ . '/bootstrap_env.php';
 
+use Phlix\Admin\SettingsRepository;
 use Phlix\Common\Database\ConnectionPool;
 use Phlix\Media\CollectionService;
 use Phlix\Media\Library\ItemRepository;
+use Phlix\Media\Metadata\TmdbApiKeyResolver;
 use Phlix\Media\Metadata\TmdbProvider;
 
 $dryRun = true;
@@ -44,24 +46,16 @@ $db = ConnectionPool::getConnection('mysql');
 
 $itemRepository = new ItemRepository($db, null);
 
-// Get TMDB API key from config/environment
-$tmdbApiKey = '';
-$tmdbConfigFile = __DIR__ . '/../config/tmdb.php';
-if (file_exists($tmdbConfigFile)) {
-    $tmdbConfig = require $tmdbConfigFile;
-    if (is_array($tmdbConfig) && isset($tmdbConfig['api_key']) && is_string($tmdbConfig['api_key'])) {
-        $tmdbApiKey = $tmdbConfig['api_key'];
-    }
-}
-if ($tmdbApiKey === '') {
-    $envKey = getenv('TMDB_API_KEY');
-    if ($envKey !== false && $envKey !== '') {
-        $tmdbApiKey = (string) $envKey;
-    }
-}
+// Effective TMDB API key: the admin-managed `server_settings` override wins,
+// then config/tmdb.php, then TMDB_API_KEY. Reading config/env only (as this
+// did) reports "key not found" on a server whose key is set from the admin UI.
+$tmdbApiKey = TmdbApiKeyResolver::resolve(
+    new SettingsRepository($db, __DIR__ . '/../config'),
+    __DIR__ . '/../config/tmdb.php'
+);
 
 if ($tmdbApiKey === '') {
-    echo "ERROR: TMDB API key not found. Set it in config/tmdb.php or TMDB_API_KEY env var.\n";
+    echo "ERROR: TMDB API key not found. Set it in the admin settings, config/tmdb.php or TMDB_API_KEY env var.\n";
     exit(1);
 }
 

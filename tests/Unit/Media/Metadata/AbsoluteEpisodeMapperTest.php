@@ -289,9 +289,20 @@ class AbsoluteEpisodeMapperTest extends TestCase
         $this->assertFalse($this->mapper->isAbsoluteNumbering([1 => 25, 2 => 25], 1, 40));
     }
 
-    public function testIsAbsoluteNumberingRefusesWithoutAnOverflow(): void
+    /**
+     * Pins the implication that let a separate overflow test be removed as dead
+     * code: an accepted verdict ALWAYS means the stored maximum overflows the
+     * stored season, for every season in the run.
+     */
+    public function testAnAcceptedVerdictAlwaysImpliesAnOverflow(): void
     {
-        $this->assertFalse($this->mapper->isAbsoluteNumbering([1 => 25, 2 => 25], 1, 25));
+        $run = [1 => 25, 2 => 13, 3 => 12];
+        foreach (array_keys($run) as $season) {
+            $this->assertTrue($this->mapper->isAbsoluteNumbering($run, $season, 50));
+            $this->assertGreaterThan($run[$season], 50);
+        }
+        // Without the overflow there is no equality either.
+        $this->assertFalse($this->mapper->isAbsoluteNumbering($run, 1, 25));
     }
 
     public function testIsAbsoluteNumberingRefusesAnUnknownStoredSeason(): void

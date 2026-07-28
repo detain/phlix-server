@@ -253,8 +253,7 @@ final class AbsoluteEpisodeMapper
      *
      * 1. The run spans at least two seasons — with one season there is nothing to
      *    translate into, and the mismatch has some other cause.
-     * 2. The stored season exists in the run and the stored maximum genuinely
-     *    OVERFLOWS it. Without an overflow the numbering is already season-scoped.
+     * 2. The stored season exists in the run.
      * 3. `storedMax === ` the run's total. This is the load-bearing guard and it
      *    is exact, not a tolerance: the library's last episode must be the show's
      *    last episode under absolute numbering. It is what rejects `Hajime no Ippo`
@@ -263,6 +262,12 @@ final class AbsoluteEpisodeMapper
      *    A partially-downloaded show is refused too — deliberately, because an
      *    incomplete run cannot distinguish "absolute" from "per-season".
      *
+     * There is deliberately NO separate "the stored maximum must overflow the
+     * stored season" test: with a run of two or more seasons each holding at least
+     * one episode, `storedMax === array_sum($run)` already implies
+     * `storedMax > $run[$season]`. Mutation testing surfaced such a test as dead
+     * code, so it was removed rather than left to imply a protection it never gave.
+     *
      * @param array<int, int> $run       Season => episode count, from {@see contiguousRun()}.
      * @param int             $season    The stored season being re-read.
      * @param int             $storedMax The highest episode number stored in it.
@@ -270,9 +275,6 @@ final class AbsoluteEpisodeMapper
     public function isAbsoluteNumbering(array $run, int $season, int $storedMax): bool
     {
         if (count($run) < 2 || !isset($run[$season])) {
-            return false;
-        }
-        if ($storedMax <= $run[$season]) {
             return false;
         }
         return $storedMax === array_sum($run);

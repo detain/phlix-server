@@ -69,14 +69,19 @@ class LibraryMetadataMatcherAbsoluteEpisodeTest extends TestCase
      * them from a callback long after this method returns, and a by-value array
      * would snapshot an empty one.
      *
-     * @param list<int>             $stored
-     * @param array<int, list<int>> $providerSeasons
-     * @param array<int, string>    $existingTitles Stored episode number => an already-persisted title.
+     * @param list<int>              $stored
+     * @param array<int, list<int>>  $providerSeasons
+     * @param array<int, string>     $existingTitles  Stored episode number => an already-persisted title.
+     * @param array<int, list<int>>  $providerUntitled Provider season => numbers it lists but has no title for.
      *
      * @return array{0: LibraryMetadataMatcher, 1: \ArrayObject<string, array<string, mixed>>}
      */
-    private function makeMatcher(array $stored, array $providerSeasons, array $existingTitles = []): array
-    {
+    private function makeMatcher(
+        array $stored,
+        array $providerSeasons,
+        array $existingTitles = [],
+        array $providerUntitled = []
+    ): array {
         $items = $this->createMock(ItemRepository::class);
         $items->method('getByLibrary')->willReturnOnConsecutiveCalls(
             [['id' => 'series-1', 'type' => 'series', 'name' => 'Show', 'metadata' => []]],
@@ -128,7 +133,7 @@ class LibraryMetadataMatcherAbsoluteEpisodeTest extends TestCase
         ]);
         $seasonFixtures = [];
         foreach ($providerSeasons as $number => $numbers) {
-            $seasonFixtures[$number] = $this->season($numbers, 'Title');
+            $seasonFixtures[$number] = $this->season($numbers, 'Title', $providerUntitled[$number] ?? []);
         }
         $seriesResolver->method('resolveSeasonEpisodes')->willReturnCallback(
             static function (string $tmdbId, int $season) use ($seasonFixtures): array {
@@ -260,23 +265,44 @@ class LibraryMetadataMatcherAbsoluteEpisodeTest extends TestCase
 
     /**
      * A gap INSIDE the provider's range for the stored season is a genuine
-     * provider hole (bucket D, 5 rows estate-wide). Re-reading it as an absolute
-     * ordinal would move a correctly-placed episode, so it is left alone.
+     * provider hole (bucket D, 5 rows estate-wide). Only numbers past the END of
+     * the season's list are ever re-read, so episode 17 — which the provider lists
+     * but has no title for — is left exactly where it is while the genuine
+     * overflow above it is still rescued.
      */
     public function testNeverRemapsAGapInsideTheProviderRange(): void
     {
-        $providerSeasonOne = array_values(array_diff(range(1, 32), [17]));
         [$matcher, $updates] = $this->makeMatcher(
             range(1, 71),
-            [1 => $providerSeasonOne, 2 => range(33, 53), 3 => range(54, 71)]
+            [1 => range(1, 32), 2 => range(33, 53), 3 => range(54, 71)],
+            [],
+            [1 => [17]]
         );
         $matcher->matchLibrary('lib-1');
 
-        // 17 is missing from the provider's season 1 and must stay missing …
         $this->assertArrayNotHasKey('episode_title', $updates['ep-17']);
         $this->assertArrayNotHasKey('absolute_number', $updates['ep-17']);
-        // … while the genuine overflow is still rescued.
         $this->assertSame('Title 40', $updates['ep-40']['episode_title']);
+    }
+
+    /**
+     * A hole in the provider's own season NUMBERING (not just a missing title)
+     * breaks the proof that the provider numbers the show continuously, so the
+     * rescue is disabled for the WHOLE series. Strict on purpose: the alternative
+     * is trusting a season range the provider only partly filled in.
+     */
+    public function testAHoleInTheProviderNumberingDisablesTheWholeSeries(): void
+    {
+        $holed = array_values(array_diff(range(1, 32), [17]));
+        [$matcher, $updates] = $this->makeMatcher(
+            range(1, 71),
+            [1 => $holed, 2 => range(33, 53), 3 => range(54, 71)]
+        );
+        $matcher->matchLibrary('lib-1');
+
+        $this->assertArrayNotHasKey('episode_title', $updates['ep-40']);
+        $this->assertArrayNotHasKey('absolute_number', $updates['ep-40']);
+        $this->assertArrayNotHasKey('episode_title', $updates['ep-71']);
     }
 
     /**
@@ -299,20 +325,21 @@ class LibraryMetadataMatcherAbsoluteEpisodeTest extends TestCase
 
     /**
      * A translated slot the provider has no title for leaves the row unmatched
-     * rather than stamping a blank.
+     * rather than stamping a blank — and its neighbours are still rescued.
      */
     public function testRefusesWhenTheTranslatedSlotHasNoProviderTitle(): void
     {
-        [$matcher, $updates] = $this->makeMatcher(range(1, 50), [1 => range(1, 25), 2 => range(1, 25)]);
-        // Blank out the target of ep-44 (season 2, episode 19).
+        [$matcher, $updates] = $this->makeMatcher(
+            range(1, 50),
+            [1 => range(1, 25), 2 => range(1, 25)],
+            [],
+            [2 => [19]] // the target of stored episode 44
+        );
         $matcher->matchLibrary('lib-1');
-        $this->assertSame('Title 19', $updates['ep-44']['episode_title']);
 
-        [$matcher2, $updates2] = $this->makeMatcher(range(1, 50), [1 => range(1, 25), 2 => range(1, 18)]);
-        $matcher2->matchLibrary('lib-1');
-        // The provider's season 2 is short, so the totals no longer match and the
-        // whole series is refused — the strictest possible answer.
-        $this->assertArrayNotHasKey('episode_title', $updates2['ep-44']);
+        $this->assertArrayNotHasKey('episode_title', $updates['ep-44']);
+        $this->assertArrayNotHasKey('absolute_number', $updates['ep-44']);
+        $this->assertSame('Title 20', $updates['ep-45']['episode_title']);
     }
 
     /**

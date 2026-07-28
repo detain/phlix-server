@@ -489,7 +489,15 @@ final class AdminSettingsControllerTest extends TestCase
         $lastfm = $meta['lastfm.shared_secret'];
 
         $this->assertTrue($lastfm['secret']);
-        $this->assertFalse($lastfm['restart']);
+        // restart:true since phlix-shared v0.47.0. This assertion previously
+        // read assertFalse() and so contradicted the very code it describes:
+        // Application::applyLastfmOverrides()'s docblock already stated the
+        // overlay "runs at route-build time (once per worker) … That is why the
+        // `lastfm.*` schema keys carry \"restart\": true" — the credentials are
+        // frozen into LastfmApi's constructor-promoted readonly properties, so
+        // a saved key cannot apply until the workers are recycled.
+        // See docs/dev/settings-restart-gap.md.
+        $this->assertTrue($lastfm['restart']);
     }
 
     // ---------------------------------------------------------------------

@@ -90,7 +90,16 @@ final class NetworkServicesProvider implements ServiceProviderInterface
                 ->constructorParameter('natpmp', get(NatPmpClient::class))
                 ->constructorParameter('logger', get('logger.network'))
                 ->constructorParameter('port', $port)
-                ->constructorParameter('autoEnabled', $autoEnabled),
+                ->constructorParameter('autoEnabled', $autoEnabled)
+                // Until now $upnpEnabled was computed above and then dropped on
+                // the floor — it reached no definition, and PortForwardService
+                // had no UPnP switch at all. `upnp_enabled` was therefore inert
+                // in effect even though EffectiveConfig resolved it correctly:
+                // an admin could save `false` and UPnP discovery still ran, on
+                // every restart, forever. Wiring it is what makes the key's
+                // `"restart": true` (phlix-shared v0.47.0) an honest promise
+                // rather than a relabelled no-op.
+                ->constructorParameter('upnpEnabled', $upnpEnabled),
         ]);
     }
 }

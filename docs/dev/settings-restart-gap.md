@@ -16,8 +16,8 @@ asymmetry, which is now disclosed in the keys' own admin-facing `helpText`, not 
 > `tmdb.api_key`. The schema has since grown other `restart: true` keys (the
 > `server.rate_limit.*` family, `metrics.enabled`, `theme_music.*`, `dlna.*`) that were added
 > already-wired and are not re-verified here. See
-> [Audit: `restart: false` keys that should be `restart: true`](#audit-restart-false-keys-that-should-be-restart-true)
-> for the inverse problem — keys whose schema flag is wrong in the other direction.
+> [Audit of the other restart false keys](#audit-of-the-other-restart-false-keys)
+> for the inverse problem — keys whose schema flag was wrong in the other direction.
 
 ---
 
@@ -132,22 +132,56 @@ Two separate defects were fixed together:
    `Phlix\Media\Metadata\TmdbApiKeyResolver`. `scripts/backfill-{ratings,collections}.php`
    had the same read and reported "key not found" on a correctly configured server.
 
-## Audit: `restart: false` keys that should be `restart: true`
+## Audit of the other restart false keys
+
+**Status: ✅ all seven wrong flags FIXED in `phlix-shared` v0.47.0.**
 
 Auditing the other 38 `restart: false` keys against the same criterion — *is the value
 captured into a DI singleton's constructor, or otherwise read once at container/route build
-time?* — found **7 more in the same Class (b) shape**. Several contradict their own consuming
-code's docblocks. **None of these are fixed yet**; they are recorded so the finding is not lost.
+time?* — found **7 more in the same Class (b) shape**. Several contradicted their own
+consuming code's docblocks. All seven are now `restart: true`, with the requirement
+disclosed in each key's admin-facing `helpText`.
 
-| Key | Evidence | Verdict |
+| Key | Evidence | Status |
 | --- | --- | --- |
-| `matching.noise_suffixes` | `factory()` at `MediaServicesProvider:171`, injected via `constructorParameter('noiseSuffixes', …)` into `MediaScanner` (`:320`) and a second service (`:461`). Its own comment: *"the value is computed once at construction."* | ❌ should be `restart: true` |
-| `metadata.provider_priority` | Captured into the `PriorityConfig` factory (`MediaServicesProvider:207-248`), injected as `constructorParameter('globalPriority', …)` (`:258`). Comment: *"resolved ONCE when first built (per worker cycle, not per request)."* | ❌ should be `restart: true` |
-| `metadata.genres_mode` | Same `PriorityConfig` factory (`:237`). | ❌ should be `restart: true` |
-| `lastfm.api_key` | Overlaid at **route-build time** by `Application::applyLastfmOverrides()`. Its docblock states: *"this runs at route-build time (once per worker) … That is why the `lastfm.*` schema keys carry `"restart": true`"* — **which the schema contradicts.** | ❌ should be `restart: true` |
-| `lastfm.shared_secret` | Same overlay. | ❌ should be `restart: true` |
-| `lastfm.enabled` | Same overlay. | ❌ should be `restart: true` |
-| `port-forward.port_forwarding.upnp_enabled` | Read via `EffectiveConfig::file('port-forward')` in `NetworkServicesProvider::register()` — container-build time. Its comment says the values are *"genuinely admin-controlled (on reload)"*. | ❌ should be `restart: true` |
+| `matching.noise_suffixes` | `factory()` in `MediaServicesProvider`, injected via `constructorParameter('noiseSuffixes', …)` into `MediaScanner` at **two** wiring sites. Its own comment: *"the value is computed once at construction."* | ✅ `restart: true` |
+| `metadata.provider_priority` | Captured into the `PriorityConfig` factory, injected as `constructorParameter('globalPriority', …)`. Comment: *"resolved ONCE when first built (per worker cycle, not per request)."* | ✅ `restart: true` |
+| `metadata.genres_mode` | Same `PriorityConfig` factory. | ✅ `restart: true` |
+| `lastfm.api_key` | Overlaid at **route-build time** by `Application::applyLastfmOverrides()`, then frozen into `LastfmApi`'s constructor-promoted readonly properties. Its docblock stated: *"this runs at route-build time (once per worker) … That is why the `lastfm.*` schema keys carry `"restart": true`"* — **the schema had been contradicting the code.** | ✅ `restart: true` |
+| `lastfm.shared_secret` | Same overlay. | ✅ `restart: true` |
+| `lastfm.enabled` | Same overlay. | ✅ `restart: true` |
+| `port-forward.port_forwarding.upnp_enabled` | Read at container-build time in `NetworkServicesProvider::register()` — **and was additionally INERT**, see below. | ✅ `restart: true` **+ wired** |
+
+### ⚠️ `port-forward.port_forwarding.upnp_enabled` — the flag was not the whole defect
+
+The first pass of this audit classified this key as plain Class (b). Re-verifying it before
+changing it showed that was **wrong**, and the correction matters more than the flag:
+
+- `NetworkServicesProvider::register()` computed `$upnpEnabled` and then passed it to **no
+  definition** — the variable appeared exactly once in the file, at its own assignment.
+- `PortForwardService` had **no UPnP switch at all**; `autoConfigure()` called
+  `$this->upnp->discoverGateway()` unconditionally.
+- A repo-wide sweep found no other consumer.
+
+So an admin who set it to `false` got nothing — **even across a restart**. Flipping the flag
+alone would have replaced one false promise with another, which is exactly the trap
+`hwaccel.probe_timeout` fell into before it was deleted (see above: it was *not* relabelled
+`restart: false`, because that would have claimed it was live — "even less true").
+
+The key is now genuinely wired: `PortForwardService::$upnpEnabled` gates the UPnP leg only,
+so `autoConfigure()` falls through to NAT-PMP. That is deliberately different from
+`$autoEnabled`, which short-circuits forwarding entirely — an operator who distrusts UPnP
+(unauthenticated on most consumer routers) still wants NAT-PMP. `disable()` is deliberately
+**not** gated: it is teardown, and a mapping created while UPnP was on must stay removable
+afterwards or it leaks on the router.
+
+Note `InertSettingRepairsTest` was never wrong here — it states its own scope honestly
+(*"This proves the value resolves and overlays; it does NOT by itself prove
+`NetworkServicesProvider` consumes that path"*). It never claimed the effect; the effect was
+simply missing. The new consequence tests in `PortForwardServiceTest` assert the effect —
+whether the UPnP client is consulted — and were mutation-verified by removing the gate
+(2 of the 4 go red; the other 2 are deliberate guards against over-correcting into "UPnP is
+always skipped" and against gating teardown).
 
 ### Verified correct as `restart: false` (23 keys)
 

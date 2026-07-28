@@ -541,9 +541,32 @@ class Application
             );
         }
 
-        // Media item playback-info endpoint
+        // Media item playback-info endpoint — REQUIRES a signed-in user.
+        //
+        // It was registered ungated. {@see \Phlix\Server\Workerman\HttpHandler} —
+        // the Workerman daemon, and the ONLY entry point that dispatches THIS
+        // router — runs it first and falls through to WebPortalRouter only when it
+        // answers 404 (HttpHandler.php:241-269), so an anonymous caller got a 200
+        // with the full playback plan (container/codec details, direct-play URL,
+        // audio/subtitle track list). (`public/index.php`, the CGI entry point,
+        // never dispatches this router at all: it builds its own Router, registers
+        // only the admin group, and sends every other `/api/` path straight to
+        // WebPortalRouter — public/index.php:212-243.) Registered inside an
+        // AuthMiddleware group using the same nested `''`-prefix + full-path
+        // pattern as the marker/extras group below.
+        //
+        // NOT the same thing as the parental RatingGate the handler applies: that
+        // one narrows what an AUTHENTICATED user may see (and deliberately answers
+        // 404, never 403, so a refusal cannot confirm the item exists). This group
+        // only establishes that there IS a user.
         $mediaItemController = $this->getMediaItemController();
-        $this->router->get('/api/v1/media/{id}/playback-info', [$mediaItemController, 'getPlaybackInfo']);
+        $this->router->group(
+            '',
+            function (Router $r) use ($mediaItemController): void {
+                $r->get('/api/v1/media/{id}/playback-info', [$mediaItemController, 'getPlaybackInfo']);
+            },
+            [new \Phlix\Server\Http\Middleware\AuthMiddleware()]
+        );
 
         // Trickplay sprite and timeline URLs (public, no auth required).
         // These point to the existing /trickplay/{itemId}/ routes.
@@ -572,9 +595,39 @@ class Application
         // On-demand transcode: start (or reuse) an HLS job for a media item, and
         // poll its readiness. The web player calls these when a file can't be
         // direct-played; the master playlist URL is served by HlsController.
+        //
+        // BOTH routes REQUIRE a signed-in user.
+        //
+        // `start` ungated let an anonymous caller SPAWN a detached FFmpeg encode
+        // (a resource-exhaustion vector) and receive the signed HLS
+        // master/variant/subtitle URLs for the result.
+        //
+        // `status` ungated *appeared* safe because an anonymous probe with a
+        // made-up job id gets a 401 — but that 401 is the HttpHandler fall-through
+        // (this router 404s the unknown job, WebPortalRouter's copy of the path is
+        // inside an AuthMiddleware group and answers the 401). A REAL job id never
+        // 404s here, so it was answered 200 to an anonymous caller, handing back
+        // the signed `master_url`, `variants[].url` and subtitle URLs
+        // ({@see \Phlix\Server\Http\Controllers\TranscodeController::status()}).
+        // The parental branch there is no defence either: `resolveRatingFilter()`
+        // returns null for an anonymous caller, so the cap check is skipped
+        // entirely.
+        //
+        // Same nested `''`-prefix group pattern as playback-info above; gating all
+        // three is safe because the web SPA and the native clients send
+        // `Authorization: Bearer`, and the only callers that ever hold a job id are
+        // the ones that just called `start()` (now gated). hls.js/<video> never
+        // touch these routes — they fetch the SIGNED `/hls/...` URLs the response
+        // hands back, which stay unauthenticated.
         $transcodeController = $this->getTranscodeController();
-        $this->router->post('/api/v1/media/{id}/transcode', [$transcodeController, 'start']);
-        $this->router->get('/api/v1/transcode/{jobId}/status', [$transcodeController, 'status']);
+        $this->router->group(
+            '',
+            function (Router $r) use ($transcodeController): void {
+                $r->post('/api/v1/media/{id}/transcode', [$transcodeController, 'start']);
+                $r->get('/api/v1/transcode/{jobId}/status', [$transcodeController, 'status']);
+            },
+            [new \Phlix\Server\Http\Middleware\AuthMiddleware()]
+        );
 
         // Marker + extras endpoints — per-item metadata from the DB (intro/outro
         // markers for the "skip intro" UI, bulk per-show export, trailers and

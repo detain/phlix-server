@@ -91,6 +91,39 @@ final class SeriesCandidateSelectorTest extends TestCase
         $this->assertFalse($this->selector->isExactTitleMatch('XIII', ['id' => '45348', 'name' => 'Appleseed XIII']));
     }
 
+    /**
+     * …and the OTHER direction, which the pair above cannot see: a candidate
+     * whose title EXTENDS the query is not exact either. Equality, not prefix.
+     *
+     * Both folds are pinned because both are load-bearing in opposite senses —
+     * relaxing the permissive one to a prefix test silently disarms guard 1
+     * (`Naruto` would trust a `Naruto Shippūden` winner) and makes
+     * {@see SeriesCandidateSelector::knowsTitle()} corroborate anything.
+     *
+     * @return array<string, array{0: string, 1: string}>
+     */
+    public static function extendedTitleCases(): array
+    {
+        return [
+            'franchise sequel' => ['Naruto', 'Naruto Shippūden'],
+            'series suffix' => ['XIII', 'XIII: The Series'],
+            'subtitle suffix' => ['Magi', 'Magi: The Labyrinth of Magic'],
+            'the big o' => ['The Big O', 'The Big O Show'],
+        ];
+    }
+
+    /**
+     * @dataProvider extendedTitleCases
+     */
+    public function testNeitherFoldAcceptsACandidateThatExtendsTheQuery(string $query, string $name): void
+    {
+        $candidate = ['id' => '1', 'name' => $name];
+
+        $this->assertFalse($this->selector->isExactTitleMatch($query, $candidate));
+        $this->assertFalse($this->selector->isStrictTitleMatch($query, $candidate));
+        $this->assertFalse($this->selector->knowsTitle($query, ['name' => $name]));
+    }
+
     public function testExactMatchIsFalseForAnEmptyQueryOrMissingName(): void
     {
         $this->assertFalse($this->selector->isExactTitleMatch('', ['id' => '1', 'name' => '']));
@@ -276,5 +309,235 @@ final class SeriesCandidateSelectorTest extends TestCase
             ['1972'],
             array_column($this->selector->exactTitleAlternatives('Battlestar Galactica', $results, '71365'), 'id'),
         );
+    }
+
+    // --------------------------------------------------------- normalizeStrict
+
+    /**
+     * @return array<string, array{0: string, 1: string}>
+     */
+    public static function strictNormalizeCases(): array
+    {
+        return [
+            'plus survives as its own token' => ['Blood+', 'blood +'],
+            'bang survives' => ['Eureka!', 'eureka'  . ' !'],
+            'ellipsis survives' => ['Once Upon a Time...', 'once upon a time . . .'],
+            'separators still collapse' => ['Avatar - The Last Airbender', 'avatar the last airbender'],
+            'colon still collapses' => ['Avatar: The Last Airbender', 'avatar the last airbender'],
+            'apostrophe still collapses' => ["Crow's Blood", 'crow s blood'],
+            'case still folds' => ['The Big O', 'the big o'],
+            'ampersand still spells out' => ['Blood & Chrome', 'blood and chrome'],
+            'empty stays empty' => ['', ''],
+            'separators only stay empty' => ['---', ''],
+        ];
+    }
+
+    /**
+     * @dataProvider strictNormalizeCases
+     */
+    public function testStrictNormalizeKeepsDistinguishingMarks(string $input, string $expected): void
+    {
+        $this->assertSame($expected, $this->selector->normalizeStrict($input));
+    }
+
+    /**
+     * THE finding this fold exists for. `Blood+` and `Blood` collapse to the same
+     * permissive key, and TMDB 84768 `Blood` (an unrelated 2018 Irish drama) is
+     * really offered as a same-title alternative for the live `Blood+` folder.
+     * The permissive fold must keep saying yes (it is only a trust test); the
+     * strict fold — the one every swap gates on — must say no.
+     */
+    public function testStrictMatchSeparatesBloodPlusFromBlood(): void
+    {
+        $candidate = ['id' => '84768', 'name' => 'Blood'];
+
+        $this->assertTrue(
+            $this->selector->isExactTitleMatch('Blood+', $candidate),
+            'the permissive fold is deliberately unchanged',
+        );
+        $this->assertFalse($this->selector->isStrictTitleMatch('Blood+', $candidate));
+        $this->assertTrue($this->selector->isStrictTitleMatch('Blood+', ['id' => '19849', 'name' => 'Blood+']));
+    }
+
+    /**
+     * The other live fold collisions the same defect covers. None of them trips
+     * the guards today; each must stay separated even if one ever does.
+     *
+     * @return array<string, array{0: string, 1: string}>
+     */
+    public static function foldCollisionCases(): array
+    {
+        return [
+            'Food Wars' => ['Food Wars!', 'Food Wars'],
+            'Eureka' => ['Eureka', 'Eureka!'],
+            'Once Upon a Time' => ['Once Upon a Time', 'Once Upon a Time...'],
+            'Full Metal Panic' => ['Full Metal Panic', 'Full Metal Panic!'],
+            'Gangsta' => ['Gangsta', 'Gangsta.'],
+            'Soul Eater Not' => ['Soul Eater Not', 'Soul Eater Not!'],
+        ];
+    }
+
+    /**
+     * @dataProvider foldCollisionCases
+     */
+    public function testStrictMatchSeparatesTheLiveFoldCollisions(string $query, string $other): void
+    {
+        $candidate = ['id' => '1', 'name' => $other];
+
+        $this->assertTrue($this->selector->isExactTitleMatch($query, $candidate));
+        $this->assertFalse($this->selector->isStrictTitleMatch($query, $candidate));
+    }
+
+    /** The two live corrections must still pass the strict test. */
+    public function testStrictMatchStillAcceptsTheLiveCorrections(): void
+    {
+        $this->assertTrue($this->selector->isStrictTitleMatch(
+            'Avatar - The Last Airbender',
+            ['id' => '246', 'name' => 'Avatar: The Last Airbender'],
+        ));
+        $this->assertTrue($this->selector->isStrictTitleMatch(
+            'Battlestar Galactica',
+            ['id' => '1972', 'name' => 'Battlestar Galactica'],
+        ));
+        $this->assertTrue($this->selector->isStrictTitleMatch('The Big O', ['id' => '18241', 'name' => 'The Big O']));
+    }
+
+    public function testStrictMatchIsFalseForAnEmptyQuery(): void
+    {
+        $this->assertFalse($this->selector->isStrictTitleMatch('', ['id' => '1', 'name' => '']));
+        $this->assertFalse($this->selector->isStrictTitleMatch('---', ['id' => '1', 'name' => '---']));
+    }
+
+    /**
+     * The guard must not act on a permissive-only match: `Blood+`'s year-less top
+     * hit being `Blood` is NOT grounds to re-point 50 files.
+     */
+    public function testReplacementRejectsAPermissiveOnlyTopHit(): void
+    {
+        $winner = ['id' => '40895', 'name' => 'Sincerely Yours in Cold Blood'];
+        $yearLess = [['id' => '84768', 'name' => 'Blood']];
+
+        $this->assertNull($this->selector->spuriousYearMatchReplacement('Blood+', $winner, $yearLess));
+    }
+
+    // ---------------------------------------------------------------- knowsTitle
+
+    /**
+     * `Kaze no Stigma` is TMDB 61333 `Stigma of the Wind`, whose
+     * `alternative_titles` really do carry `Kaze no Stigma`. That is a POSITIVE
+     * fact about the entity — the bounded replacement for the unverifiable claim
+     * that a winner "appears nowhere" in a truncated search ranking.
+     */
+    public function testKnowsTitleFindsAnAlternativeTitle(): void
+    {
+        $details = [
+            'name' => 'Stigma of the Wind',
+            'original_name' => '風のスティグマ',
+            'alternative_titles' => ['Kaze no Sutiguma', 'Kaze no Stigma'],
+        ];
+
+        $this->assertTrue($this->selector->knowsTitle('Kaze no Stigma', $details));
+    }
+
+    public function testKnowsTitleFindsThePrimaryAndOriginalName(): void
+    {
+        $this->assertTrue($this->selector->knowsTitle('The Big O', ['name' => 'The Big O']));
+        $this->assertTrue($this->selector->knowsTitle('Blood+', ['name' => 'x', 'original_name' => 'Blood+']));
+    }
+
+    /**
+     * The two live corrections: TMDB carries no title resembling the query for
+     * either winner, in any language, so neither is corroborated.
+     */
+    public function testKnowsTitleIsFalseForTheYearFabricatedWinners(): void
+    {
+        $this->assertFalse($this->selector->knowsTitle('Blood+', [
+            'name' => 'Sincerely Yours in Cold Blood',
+            'original_name' => 'Kylmäverisesti sinun',
+            'alternative_titles' => [],
+        ]));
+        $this->assertFalse($this->selector->knowsTitle('The Big O', [
+            'name' => 'The Big Battles Of World War II',
+            'original_name' => 'The Big Battles Of World War II',
+            'alternative_titles' => [],
+        ]));
+    }
+
+    public function testKnowsTitleIsFalseForAnEmptyQueryOrEmptyDetails(): void
+    {
+        $this->assertFalse($this->selector->knowsTitle('', ['name' => 'anything']));
+        $this->assertFalse($this->selector->knowsTitle('The Big O', []));
+    }
+
+    /**
+     * The corroboration deliberately uses the PERMISSIVE fold: a loose "yes" must
+     * win, because a "yes" makes the caller stand down (fail closed).
+     */
+    public function testKnowsTitleUsesThePermissiveFold(): void
+    {
+        $this->assertTrue($this->selector->knowsTitle('Blood+', ['name' => 'Blood']));
+    }
+
+    // ------------------------------------------------- sharesProductionOrigin
+
+    public function testProductionOriginMatchesTheLiveSwaps(): void
+    {
+        // Avatar: 2024 remake vs 2005 original — same language, same country.
+        $this->assertTrue($this->selector->sharesProductionOrigin(
+            ['original_language' => 'en', 'origin_country' => ['US']],
+            ['original_language' => 'en', 'origin_country' => ['US']],
+        ));
+        // Battlestar: the miniseries is CA-only, the series is CA+US+GB.
+        $this->assertTrue($this->selector->sharesProductionOrigin(
+            ['original_language' => 'en', 'origin_country' => ['CA']],
+            ['original_language' => 'en', 'origin_country' => ['CA', 'US', 'GB']],
+        ));
+    }
+
+    /**
+     * The live `Blood+` collision on its second, independent axis: 19849 is
+     * `ja`/`JP`, 84768 is `en`/`IE`. Either the strict fold or this check rejects
+     * it on its own — deliberately, so a sibling step cannot remove the only
+     * protection.
+     */
+    public function testProductionOriginRejectsADifferentLanguage(): void
+    {
+        $this->assertFalse($this->selector->sharesProductionOrigin(
+            ['original_language' => 'ja', 'origin_country' => ['JP']],
+            ['original_language' => 'en', 'origin_country' => ['IE']],
+        ));
+    }
+
+    public function testProductionOriginRejectsDisjointCountries(): void
+    {
+        $this->assertFalse($this->selector->sharesProductionOrigin(
+            ['original_language' => 'en', 'origin_country' => ['US']],
+            ['original_language' => 'en', 'origin_country' => ['IE']],
+        ));
+    }
+
+    /** Fail closed: an unknown language or an unknown country is not a match. */
+    public function testProductionOriginIsFalseWhenEitherSideIsUnknown(): void
+    {
+        $known = ['original_language' => 'en', 'origin_country' => ['US']];
+
+        $this->assertFalse($this->selector->sharesProductionOrigin($known, []));
+        $this->assertFalse($this->selector->sharesProductionOrigin([], $known));
+        $this->assertFalse($this->selector->sharesProductionOrigin(
+            $known,
+            ['original_language' => 'en', 'origin_country' => []],
+        ));
+        $this->assertFalse($this->selector->sharesProductionOrigin(
+            ['original_language' => '', 'origin_country' => ['US']],
+            $known,
+        ));
+    }
+
+    public function testProductionOriginIgnoresCaseAndPadding(): void
+    {
+        $this->assertTrue($this->selector->sharesProductionOrigin(
+            ['original_language' => 'EN', 'origin_country' => [' us ']],
+            ['original_language' => 'en', 'origin_country' => ['US']],
+        ));
     }
 }

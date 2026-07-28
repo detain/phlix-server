@@ -532,6 +532,56 @@ class TmdbProviderTest extends TestCase
         (new TmdbProvider('k', $http))->getTvDetails('1668');
     }
 
+    /**
+     * The series-identification guards corroborate a candidate against TMDB's own
+     * `alternative_titles` and production origin, so `getTvDetails()` has to
+     * surface them. `alternative_titles` rides on `append_to_response`, i.e. it
+     * costs no extra round-trip.
+     */
+    public function testGetTvDetailsSurfacesIdentityCorroborationFields(): void
+    {
+        $http = $this->httpMock();
+        $http->expects($this->once())
+            ->method('get')
+            ->with('/tv/61333', $this->callback(static function (array $p): bool {
+                $append = is_string($p['append_to_response'] ?? null) ? $p['append_to_response'] : '';
+                return str_contains($append, 'alternative_titles');
+            }))
+            ->willReturn([
+                'id' => 61333,
+                'name' => 'Stigma of the Wind',
+                'original_name' => '風のスティグマ',
+                'original_language' => 'ja',
+                'origin_country' => ['JP', '', 'JP'],
+                'alternative_titles' => [
+                    'results' => [
+                        ['iso_3166_1' => 'JP', 'title' => 'Kaze no Stigma'],
+                        ['iso_3166_1' => 'US', 'title' => ' Kaze no Stigma '],
+                        ['iso_3166_1' => 'XX', 'title' => ''],
+                    ],
+                ],
+            ]);
+
+        $details = (new TmdbProvider('k', $http))->getTvDetails('61333');
+
+        $this->assertSame('ja', $details['original_language']);
+        $this->assertSame(['JP'], $details['origin_country']);
+        $this->assertSame(['Kaze no Stigma'], $details['alternative_titles']);
+    }
+
+    /** Absent identity fields degrade to empty rather than to a wrong value. */
+    public function testGetTvDetailsIdentityFieldsDefaultToEmpty(): void
+    {
+        $http = $this->httpMock();
+        $http->method('get')->willReturn(['id' => 1668, 'name' => '24']);
+
+        $details = (new TmdbProvider('k', $http))->getTvDetails('1668');
+
+        $this->assertSame('', $details['original_language']);
+        $this->assertSame([], $details['origin_country']);
+        $this->assertSame([], $details['alternative_titles']);
+    }
+
     public function testGetTvDetailsEmitsRichCastCrewFromAggregateCreditsAndNetworks(): void
     {
         $http = $this->httpMock();

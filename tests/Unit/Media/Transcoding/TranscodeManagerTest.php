@@ -5179,4 +5179,104 @@ class TranscodeManagerTest extends TestCase
 
         return $manager;
     }
+
+    /**
+     * readFailureReason() must return valid UTF-8: its result is written into
+     * `transcode_jobs.error` (TEXT on a utf8mb4 table), and MySQL rejects invalid
+     * UTF-8 with error 1366 — so a byte-wise tail cut would make a merely-failed
+     * job into one whose failure cannot be recorded at all.
+     *
+     * The log here ends with a non-ASCII filename followed by ASCII padding, so
+     * the last 500 BYTES begin inside a multibyte character. The test asserts the
+     * precondition (the byte-wise cut really is invalid) before asserting the
+     * method's output is clean, so the fixture cannot decay into a non-case.
+     */
+    public function testReadFailureReasonReturnsValidUtf8WhenTheTailCutsMidCharacter(): void
+    {
+        // 467 bytes of padding puts the 500-byte boundary inside "ü" (C3 BC),
+        // so the byte-wise tail would start on the dangling 0xBC.
+        $log = "Error opening /media/Grüße aus Österreich/Grüße.mkv\n" . str_repeat('x', 467);
+        $reason = $this->invokeReadFailureReason($log);
+
+        $this->assertFalse(
+            mb_check_encoding(substr(trim($log), -500), 'UTF-8'),
+            'fixture must cut mid-character at 500 bytes for this test to mean anything',
+        );
+        $this->assertTrue(mb_check_encoding($reason, 'UTF-8'), 'reason must be valid UTF-8 or MySQL 1366s');
+        $this->assertLessThanOrEqual(500, mb_strlen($reason, 'UTF-8'), 'reason stays within the 500-character bound');
+        $this->assertStringContainsString('Grüße', $reason, 'the readable tail is preserved, not mangled');
+    }
+
+    /**
+     * Sliding the 500-wide window across the log proves the guard is load-bearing
+     * rather than incidentally passing on one lucky offset: the byte-wise cut is
+     * invalid at several offsets, the shipped implementation at none.
+     */
+    public function testReadFailureReasonIsValidAtEveryTailOffset(): void
+    {
+        $byteWiseFailures = 0;
+        $shippedFailures = 0;
+
+        for ($pad = 0; $pad < 60; $pad++) {
+            $log = "Error opening /media/Grüße aus Österreich/Grüße.mkv\n" . str_repeat('x', 440 + $pad);
+            if (!mb_check_encoding(substr(trim($log), -500), 'UTF-8')) {
+                $byteWiseFailures++;
+            }
+            if (!mb_check_encoding($this->invokeReadFailureReason($log), 'UTF-8')) {
+                $shippedFailures++;
+            }
+        }
+
+        $this->assertGreaterThan(
+            0,
+            $byteWiseFailures,
+            'the byte-wise tail this replaced must break on at least one offset, else nothing is being guarded',
+        );
+        $this->assertSame(0, $shippedFailures, 'the shipped tail must be valid UTF-8 at every offset');
+    }
+
+    /**
+     * The log is a file on disk with no encoding guarantee, so a genuinely
+     * non-UTF-8 byte (here Windows-1252 0x9C) must also be scrubbed rather than
+     * passed through to the utf8mb4 column.
+     */
+    public function testReadFailureReasonScrubsNonUtf8LogBytes(): void
+    {
+        $reason = $this->invokeReadFailureReason("Error: bad file \x9C name.mkv");
+
+        $this->assertTrue(mb_check_encoding($reason, 'UTF-8'), 'stray Windows-1252 byte must not survive');
+        $this->assertStringContainsString('bad file', $reason);
+    }
+
+    /** A log-less job directory still yields the generic reason. */
+    public function testReadFailureReasonFallsBackWhenNoLogExists(): void
+    {
+        $ref = new \ReflectionClass(TranscodeManager::class);
+        $method = $ref->getMethod('readFailureReason');
+        $method->setAccessible(true);
+
+        $this->assertSame(
+            'Transcode failed',
+            $method->invoke($ref->newInstanceWithoutConstructor(), $this->segmentDir . '/no-such-job'),
+        );
+    }
+
+    /**
+     * Write $content as a job's ffmpeg.log and return readFailureReason()'s value.
+     * The method only reads the file, so a ctor-less instance suffices.
+     */
+    private function invokeReadFailureReason(string $content): string
+    {
+        $dir = $this->segmentDir . '/job-' . uniqid();
+        mkdir($dir, 0755, true);
+        file_put_contents($dir . '/ffmpeg.log', $content);
+
+        $ref = new \ReflectionClass(TranscodeManager::class);
+        $method = $ref->getMethod('readFailureReason');
+        $method->setAccessible(true);
+
+        $result = $method->invoke($ref->newInstanceWithoutConstructor(), $dir);
+
+        return is_string($result) ? $result : '';
+    }
 }

@@ -1853,6 +1853,30 @@ class MediaScanner
      * empty, or the "und" (undetermined) placeholder. Accepts a mixed value so
      * callers never need to pre-narrow the raw stream array.
      *
+     * Truncation is character-wise (mb_substr), never byte-wise: the column is
+     * VARCHAR(10) under utf8mb4, so 10 is a CHARACTER budget, and a byte-wise
+     * cut of a mistagged non-ASCII value (e.g. "Deutsch (Österreich)") lands
+     * mid-sequence and yields invalid UTF-8. MySQL rejects that row outright
+     * with error 1366 ("Incorrect string value: '\xC3'").
+     *
+     * That single bad row costs the item most of its stream set, because both
+     * write paths delete before they re-insert and neither is transactional:
+     *
+     *  - {@see StreamProbeBackfill::ensureFor()} calls `deleteStreamsByItem()`
+     *    and then `addStream()` per row; its `catch (\Throwable)` stamps
+     *    `markStreamsProbed()` unconditionally — it does not inspect the error.
+     *    The probed-marker guard at the top of that method then means the item
+     *    is never re-probed, so it keeps whatever partial set survived the throw,
+     *    permanently.
+     *  - {@see persistStreams()} deletes first too. It does NOT stamp on failure,
+     *    so the item stays repairable, but it is left with a partial set until
+     *    something rescans it.
+     *
+     * Note the asymmetry that let this through: `media_items` writes are cleaned
+     * by `ItemRepository::toValidUtf8()`, but `ItemRepository::addStream()` binds
+     * `language`/`title` straight into the INSERT with no such guard, so
+     * media_streams values must already be valid UTF-8 when they arrive here.
+     *
      * @param mixed $stream Raw ffprobe stream entry.
      */
     private static function streamLanguage(mixed $stream): ?string
@@ -1868,7 +1892,7 @@ class MediaScanner
         if (!is_string($lang) || $lang === '' || strtolower($lang) === 'und') {
             return null;
         }
-        return substr($lang, 0, 10);
+        return mb_substr($lang, 0, 10, 'UTF-8');
     }
 
     /**
@@ -1893,7 +1917,7 @@ class MediaScanner
         if (!is_string($title) || $title === '') {
             return null;
         }
-        return mb_substr($title, 0, 255);
+        return mb_substr($title, 0, 255, 'UTF-8');
     }
 
     /**

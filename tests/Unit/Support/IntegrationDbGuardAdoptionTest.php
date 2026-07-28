@@ -216,8 +216,13 @@ final class IntegrationDbGuardAdoptionTest extends TestCase
      * unit of slack, so one migrated test could silently drop the trait and the
      * check stayed green. If a real-DB test is legitimately deleted or added,
      * change this number in the same commit — that is the point.
+     *
+     * 36 since `tests/Integration/Media/StreamLanguageUtf8RoundTripTest.php`
+     * was added: it proves a multi-byte `media_streams.language` value survives
+     * the write that byte-wise truncation used to fail with MySQL 1366, which
+     * only a real utf8mb4 server can decide.
      */
-    private const EXPECTED_ADOPTERS = 35;
+    private const EXPECTED_ADOPTERS = 36;
 
     /**
      * Bare function calls that are a MySQL reachability probe under any

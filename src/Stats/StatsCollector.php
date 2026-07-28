@@ -179,6 +179,18 @@ class StatsCollector
      * bootstrap generation), so an admin override applies on reload without a
      * full restart.
      *
+     * "On reload" is NOT "live", and the schema reflects that: the key is
+     * `"restart": true` as of phlix-shared v0.48.0. The call site is per
+     * request, but the DATA is not — `EffectiveConfig::$overrides` is a static
+     * array populated once by `bootstrap()`, which runs in `onWorkerStart`. An
+     * override saved while this worker is running is invisible to it until the
+     * workers cycle, which is exactly what the admin Restart control (a
+     * graceful SIGUSR2 reload) does. Contrast
+     * {@see \Phlix\Admin\SettingsRepository::getEffective()}, which does an
+     * uncached SELECT per call and IS live — that is the line between the
+     * `restart: false` keys and this one.
+     * {@see docs/dev/settings-restart-gap.md}
+     *
      * Guarding HERE rather than at the ~52 call sites is deliberate: a switch
      * that each caller had to remember to consult would be honoured
      * inconsistently, which is the "half-effective setting" failure this

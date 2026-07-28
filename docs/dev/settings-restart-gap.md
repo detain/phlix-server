@@ -202,18 +202,54 @@ explicitly requires `restart: false`) · `scanner.ignore_patterns` (`ScanIgnoreP
 re-read per request) · `casting.chromecast.enabled`, `casting.roku.enabled`,
 `casting.airplay.enabled` (`CastingEnabledMiddleware:90`, per request).
 
-### Unresolved — no use-time consumer found (8 keys)
+### The last 8 keys — traced, and all `restart: true` (`phlix-shared` v0.48.0)
 
-A literal-key search found **no** `getEffective()`/`getOverride()` consumer for these. Their
-`config/*.php` defaults all exist, so they are not obviously fake, but whether an override
-reaches anything at all is **unverified** — the flag may be wrong, or the key may be inert
-like `port-forward.*` was before it was rewired. Each needs its consumer traced before its
-flag can be trusted in either direction:
+A literal-key search found **no** `getEffective()`/`getOverride()` consumer for these, so
+v0.47.0 deliberately left them alone rather than guess — `port-forward.*` had just proved
+that "no obvious consumer" can mean *inert*, not *mis-flagged*.
 
-`transcoding.tone_mapping_mode`, `transcoding.prefer_hdr_output` (surfaced only by
-`AdminTranscodingController` from injected boot `$this->config`) · `newsletter.enabled`,
-`newsletter.send_hour` · `relay.reconnect_delay`, `relay.ping_interval` · `webhooks.enabled` ·
-`stats.enabled`.
+Tracing them explains the empty search: **none of them is read through `SettingsRepository`
+at all.** Every one reaches its consumer by a route that snapshots per worker. None is inert.
+
+| Key(s) | Consumer | Why it cannot apply live |
+| --- | --- | --- |
+| `webhooks.enabled` | `WebhookDispatcher::getConfig()` → `EffectiveConfig::file('webhooks')` | See the `EffectiveConfig` note below — the call is at use time but the *data* is a boot snapshot. |
+| `stats.enabled` | `StatsCollector::isEnabled()` → `EffectiveConfig::file('stats')` | Same. Its own docblock already said the override "applies on reload". |
+| `transcoding.tone_mapping_mode`, `transcoding.prefer_hdr_output` | `HwAccelConfig::get()` → `FfmpegRunner::setConfig()`, read as `$this->config[…]` | The **identical path** as `transcoding.preferred_accelerator` and the `hwaccel.*` keys — which were already `restart: true` and ✅ in the table above. Sibling keys in the same config file, same consumer, contradictory flags. |
+| `newsletter.enabled`, `newsletter.send_hour` | `Application` reads boot `$config['newsletter']` when registering the newsletter timer | Timer registration happens once per worker start. |
+| `relay.reconnect_delay`, `relay.ping_interval` | `RelayConfig::class => factory(…)` over `$appConfig['relay']` in `HubServicesProvider` | PHP-DI caches the factory result per container — Class (b). |
+
+#### ⚠️ `EffectiveConfig::file()` at use time is **not** live
+
+This is the trap that made two of these look fine. The call site is per-request, so the read
+*looks* live — but the data is not:
+
+- `EffectiveConfig::$overrides` is a **static** array, populated once by `bootstrap()`.
+- `bootstrap()` runs inside `onWorkerStart` (six call sites in `start.php`), i.e. **once per
+  worker**, not per request.
+- `file()` is then **memoised per bootstrap generation**.
+
+So an override saved while a worker is running is invisible to that worker no matter how often
+`file()` is called. Contrast `SettingsRepository::getEffective()`, which performs an **uncached
+`SELECT` on every call** and *is* genuinely live — that difference is the whole line between
+the 23 `restart: false` keys and the rest.
+
+(`public/index.php` also bootstraps, per request — but production runs Workerman via
+`start.php`, so the per-worker semantics are the ones that matter.)
+
+#### On "restart" vs "reload"
+
+`restart: true` here means the admin **Restart server** control, which sends a graceful reload
+(SIGUSR2) — workers cycle, re-run `onWorkerStart`, re-bootstrap the overlay, rebuild their DI
+containers. A key that needs that cycle is `restart: true` **even when a full `systemctl
+restart` is not required**. `StatsCollector::isEnabled()`'s phrase "applies on reload without a
+full restart" is accurate and is not in conflict with the flag.
+
+### Audit complete
+
+All **72** schema keys are now traced to a consumer: **49 `restart: true`, 23 `restart: false`,
+none unverified.** The 23 listed above as verified-correct are exactly what remains at
+`restart: false` — a clean cross-check that nothing was left unclassified.
 
 ### 🗑️ `hwaccel.probe_timeout` — DELETED in `phlix-shared` v0.26.0
 

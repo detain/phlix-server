@@ -547,6 +547,13 @@ class WebhookDispatcher
         // config/webhooks.php, which is read-path class (d) NOT REACHABLE: the
         // file's values were honoured but no override on top of them ever was.
         // {@see \Phlix\Config\EffectiveConfig}
+        //
+        // Reaching them is not the same as reaching them LIVE: EffectiveConfig's
+        // $overrides is a static array populated once by bootstrap(), which runs
+        // in onWorkerStart, and file() memoises per bootstrap generation. So an
+        // override applies on the next worker cycle, not mid-request — which is
+        // why `webhooks.enabled` is `"restart": true` as of phlix-shared
+        // v0.48.0. {@see docs/dev/settings-restart-gap.md}
         $config = \Phlix\Config\EffectiveConfig::file('webhooks');
 
         if ($config !== []) {

@@ -6,11 +6,18 @@
 Read this before telling a user — in docs, in a CHANGELOG entry, in a docblock, or in the admin UI —
 that restarting the server makes a specific setting take effect.
 
-**All fifteen `restart: true` keys now genuinely apply on restart.** The sixteenth,
-`hwaccel.probe_timeout`, was **deleted** from `server-settings.schema.json` in `phlix-shared`
+**All sixteen `restart: true` keys tracked here now genuinely apply on restart.** One further
+key, `hwaccel.probe_timeout`, was **deleted** from `server-settings.schema.json` in `phlix-shared`
 **v0.26.0** rather than wired — it had no consumer and could not be given one cheaply or safely
 (reasoning below). The one remaining caveat is the `process.<worker>.enabled` enable/disable
 asymmetry, which is now disclosed in the keys' own admin-facing `helpText`, not merely here.
+
+> **Scope note.** This table tracks the keys covered by the `EffectiveConfig` work plus
+> `tmdb.api_key`. The schema has since grown other `restart: true` keys (the
+> `server.rate_limit.*` family, `metrics.enabled`, `theme_music.*`, `dlna.*`) that were added
+> already-wired and are not re-verified here. See
+> [Audit: `restart: false` keys that should be `restart: true`](#audit-restart-false-keys-that-should-be-restart-true)
+> for the inverse problem — keys whose schema flag is wrong in the other direction.
 
 ---
 
@@ -92,6 +99,87 @@ or hand-edited row cannot inject a config key the code does not already read.
 | `process.marker-detection.enabled` | ⚠️ asymmetric | same |
 | `process.media-asset.enabled` | ⚠️ asymmetric | same |
 | `process.similarity.enabled` | ⚠️ asymmetric | same |
+| `tmdb.api_key` | ✅ | `TmdbProvider` factory in `MediaServicesProvider` reads `getEffective()` when the per-worker container builds it. **Was `restart: false` until `phlix-shared` v0.46.0** — see below |
+
+### `tmdb.api_key` — was mislabelled `restart: false` until `phlix-shared` v0.46.0
+
+The key is admin-managed (Settings → Metadata → `server_settings` row `tmdb.api_key`), and
+the schema advertised it as taking effect immediately. It does not.
+
+`TmdbProvider` is registered as a PHP-DI `factory()`, and PHP-DI caches **every** resolved
+entry — factories included — in `Container::$resolvedEntries`. The provider is therefore a
+per-container singleton that captures the key **by value at construction**. One container is
+built per worker in `onWorkerStart`, and `phlix-library-scan` resolves it **eagerly at fork
+time** (`LibraryScanWorker` → `LibraryMetadataMatcher` → `TmdbProvider`). With no TTL, no
+invalidation hook and no cross-worker propagation, a saved key stays inert until the workers
+are recycled.
+
+That `SettingsRepository::getEffective()` performs an uncached `SELECT` on every call is
+irrelevant here: the value is read **once**, at container-build time, and frozen into the
+singleton. This is the same **Class (b) RESTART** shape already documented for the
+`server.rate_limit.*` keys in `phlix-shared`'s `tests/Schema/ServerSettingsSchemaTest.php`.
+
+Two separate defects were fixed together:
+
+1. **The flag** (`phlix-shared` v0.46.0) — `restart: true`, with the requirement disclosed in
+   the key's admin-facing `helpText`.
+2. **Three consumers that never read the DB at all** — `WebPortalRouter::tmdbApiKey()`,
+   `Application::getMediaPosterController()` and `Application::getExtrasController()`'s
+   container-less branch read `config/tmdb.php` / `TMDB_API_KEY` only. Since
+   `config/tmdb.php` resolves `api_key` to `getenv('TMDB_API_KEY') ?: ''`, and that variable
+   is not exported once the key is managed from the admin UI, all three resolved to an empty
+   string **permanently — no restart could fix them**. They now go through
+   `Phlix\Media\Metadata\TmdbApiKeyResolver`. `scripts/backfill-{ratings,collections}.php`
+   had the same read and reported "key not found" on a correctly configured server.
+
+## Audit: `restart: false` keys that should be `restart: true`
+
+Auditing the other 38 `restart: false` keys against the same criterion — *is the value
+captured into a DI singleton's constructor, or otherwise read once at container/route build
+time?* — found **7 more in the same Class (b) shape**. Several contradict their own consuming
+code's docblocks. **None of these are fixed yet**; they are recorded so the finding is not lost.
+
+| Key | Evidence | Verdict |
+| --- | --- | --- |
+| `matching.noise_suffixes` | `factory()` at `MediaServicesProvider:171`, injected via `constructorParameter('noiseSuffixes', …)` into `MediaScanner` (`:320`) and a second service (`:461`). Its own comment: *"the value is computed once at construction."* | ❌ should be `restart: true` |
+| `metadata.provider_priority` | Captured into the `PriorityConfig` factory (`MediaServicesProvider:207-248`), injected as `constructorParameter('globalPriority', …)` (`:258`). Comment: *"resolved ONCE when first built (per worker cycle, not per request)."* | ❌ should be `restart: true` |
+| `metadata.genres_mode` | Same `PriorityConfig` factory (`:237`). | ❌ should be `restart: true` |
+| `lastfm.api_key` | Overlaid at **route-build time** by `Application::applyLastfmOverrides()`. Its docblock states: *"this runs at route-build time (once per worker) … That is why the `lastfm.*` schema keys carry `"restart": true`"* — **which the schema contradicts.** | ❌ should be `restart: true` |
+| `lastfm.shared_secret` | Same overlay. | ❌ should be `restart: true` |
+| `lastfm.enabled` | Same overlay. | ❌ should be `restart: true` |
+| `port-forward.port_forwarding.upnp_enabled` | Read via `EffectiveConfig::file('port-forward')` in `NetworkServicesProvider::register()` — container-build time. Its comment says the values are *"genuinely admin-controlled (on reload)"*. | ❌ should be `restart: true` |
+
+### Verified correct as `restart: false` (23 keys)
+
+Each resolves through `SettingsRepository` at **use** time (per request / per call), so no
+restart is needed:
+
+`auth.signup_mode` (`AuthManager:344`) · `auth.password.min_length` (`PasswordPolicy`) ·
+`auth.access_ttl`, `auth.refresh_ttl` (`TokenTtlPolicy`, per mint) · `auth.max_profiles`
+(`UserProfileManager`) · `access.default_concurrent_streams` (`StreamSessionService`, per
+playback) · `transcoding.preset`, `transcoding.crf_h264`, `transcoding.audio_bitrate`
+(`EncodeSettings`) · `artwork.download_enabled` (`ArtworkDownloadPolicy` — its docblock
+explicitly requires `restart: false`) · `scanner.ignore_patterns` (`ScanIgnorePatterns`) ·
+`subtitles.default_language` (`WebPortalRouter:2712`) · `subtitles.provider_priority`
+(`SubtitleFetchService:291`) · `trickplay.enabled` (`MediaAssetGenerationJob:77`) ·
+`metadata.overwrite_existing` (`MetadataOverwritePolicy`) · `dlna.allowed_cidrs`,
+`dlna.restrict_to_lan` (`DlnaAllowlistMiddleware`) · `trakt.client_id`, `trakt.client_secret`,
+`trakt.redirect_uri` (`TraktOperatorConfig::load()` via `TraktOAuthController::loadConfig()`,
+re-read per request) · `casting.chromecast.enabled`, `casting.roku.enabled`,
+`casting.airplay.enabled` (`CastingEnabledMiddleware:90`, per request).
+
+### Unresolved — no use-time consumer found (8 keys)
+
+A literal-key search found **no** `getEffective()`/`getOverride()` consumer for these. Their
+`config/*.php` defaults all exist, so they are not obviously fake, but whether an override
+reaches anything at all is **unverified** — the flag may be wrong, or the key may be inert
+like `port-forward.*` was before it was rewired. Each needs its consumer traced before its
+flag can be trusted in either direction:
+
+`transcoding.tone_mapping_mode`, `transcoding.prefer_hdr_output` (surfaced only by
+`AdminTranscodingController` from injected boot `$this->config`) · `newsletter.enabled`,
+`newsletter.send_hour` · `relay.reconnect_delay`, `relay.ping_interval` · `webhooks.enabled` ·
+`stats.enabled`.
 
 ### 🗑️ `hwaccel.probe_timeout` — DELETED in `phlix-shared` v0.26.0
 

@@ -24,12 +24,32 @@ use Workerman\MySQL\Connection;
  * `tests/Unit/Support/IntegrationDbGuardAdoptionTest.php` for the check that
  * enforces this.
  *
- * ⚠ Do NOT wrap these calls in a `try`/`catch` that ends in `markTestSkipped()`.
- * `requireRealDatabase()` already skips on genuine absence all by itself; the
- * only thing it *throws* is {@see IntegrationDbUnusableException}, raised
- * precisely so that a reachable-but-unusable database reddens the run.
- * Converting that back into a skip restores the S126 defect exactly, which is
- * why the adoption test flags the shape.
+ * ⚠ Do NOT wrap these calls in a `try`/`catch` at all. `requireRealDatabase()`
+ * already skips on genuine absence all by itself; the only thing it *throws* is
+ * {@see IntegrationDbUnusableException}, raised precisely so that a
+ * reachable-but-unusable database reddens the run. Turning that back into a
+ * skip — by any route: `markTestSkipped()` inline in the catch,
+ * `markTestIncomplete()`, a private helper called from the catch, or a flag set
+ * in the catch and read afterwards — restores the S126 defect exactly. The
+ * first three are flagged by `tests/Unit/Support/IntegrationDbGuardAdoptionTest.php`;
+ * the fourth is a documented limit of that static check, not permission. Do not
+ * read the flagged/unflagged split as a list of approved spellings: the rule is
+ * "no try/catch around the guard", and the check is a net under it, not the
+ * specification of it.
+ *
+ * Skipping because a *specific schema object* is missing is a different thing
+ * and is fine — keep the acquisition outside the `try` and put only the schema
+ * probe inside it:
+ *
+ * ```php
+ * $db = $this->requireRealDatabase('skipping X. Runs in CI.');
+ *
+ * try {
+ *     $db->query('CREATE INDEX idx_x ON media_items (path_hash)');
+ * } catch (Throwable $e) {
+ *     $this->markTestSkipped('migration 072 not applied on this box');
+ * }
+ * ```
  */
 trait RequiresRealDatabase
 {

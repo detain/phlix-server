@@ -73,6 +73,24 @@ use Workerman\MySQL\Connection;
  * also closes the converse hazard — a healthy MySQL on a non-3306 port used to
  * make a probe pinned to 3306 skip forever.
  *
+ * ⚠ Two bounds on that guarantee, both measured rather than assumed:
+ *
+ *  - it is about the *address*, and it holds for the address only.
+ *    `ConnectionPool` caches by connection **name**, not by config path
+ *    (`src/Common/Database/ConnectionPool.php:23-27` — `init()` re-news the
+ *    instance but does **not** clear `self::$connections`; `:35-36` reads the
+ *    config only `if (!isset(self::$connections[$name]))`). So the
+ *    `ConnectionPool::init(self::configPath())` in {@see connection()} is a
+ *    no-op for the connection it then validates whenever anything earlier in the
+ *    process already cached one under `'mysql'`. `tests/Unit/Server/Core/ApplicationTest.php`
+ *    does exactly that, booting `Application` against a temp config; under
+ *    `executionOrder="random"` a later guard call can therefore probe
+ *    `config/database.php`'s address and then `SELECT 1` over a connection built
+ *    from the temp one. Latent, not live: `phpunit.xml`'s `<env>` block supplies
+ *    every `DB_*`, so both configs resolve to the same server. A developer
+ *    running one file with a partial environment can see them differ.
+ *  - an explicit `$host`/`$port` override re-opens it for that call site.
+ *
  * The `$host`/`$port` override parameters remain, for the two call sites
  * (`tests/Integration/Container/BootstrapTest.php`,
  * `tests/Unit/Server/Core/ApplicationTest.php`) that pin the historical literal
@@ -91,10 +109,13 @@ use Workerman\MySQL\Connection;
  * Every pre-S126 call site built its skip message as
  * `No MySQL on {host}:{port} — {reason}`; `$skipReason` is that trailing part, so
  * migrated sites emit byte-identical skip text. The host/port interpolated into
- * it are resolved by the same `?:` semantics the 35 private copies used
- * (`getenv('DB_HOST') ?: '127.0.0.1'`, `(int) (getenv('DB_PORT') ?: 3306)`),
- * inherited from `config/database.php:14-15` — including the edge cases
- * `DB_HOST="0"` → `127.0.0.1` and `DB_PORT="0"` → `3306`.
+ * it are whatever `config/database.php:14-15` resolved, passed through
+ * unchanged — so they inherit that file's `getenv('DB_HOST') ?: '127.0.0.1'` /
+ * `(int) (getenv('DB_PORT') ?: 3306)`, which is the expression the 35 private
+ * copies used verbatim. Checked input by input (`'0'`, `''`, unset, `'abc'`,
+ * `'0x0d3d'`, `'3307'`, `'-1'`, `'65536'`, `'3306abc'`): guard, config and the
+ * old private copies agree on every one, including `DB_HOST="0"` → `127.0.0.1`
+ * and `DB_PORT="0"` → `3306`.
  *
  * @see RequiresRealDatabase for the trait most tests should use.
  */
@@ -141,23 +162,37 @@ final class IntegrationDbGuard
      * the environment so the probe target cannot diverge from the connection
      * target — see the class docblock.
      *
+     * ⚠ The value is passed through **unchanged**. `?:` is applied by the config
+     * (which is what makes `DB_HOST="0"` resolve to `127.0.0.1`), so re-applying
+     * it here can only make the probe target differ from the connection target —
+     * the one thing this accessor exists to prevent. The `'127.0.0.1'` below is
+     * reached only when the config has no `host` key at all, i.e. when the file
+     * is not the config this repo ships.
+     *
      * `phpunit.xml` exports `DB_HOST=127.0.0.1` for the suite, so this is
-     * `127.0.0.1` under the repo's own configuration. The `?:` (not `!== ''`)
-     * fallback is what makes `DB_HOST="0"` resolve to `127.0.0.1`, matching the
-     * 35 private copies byte for byte.
+     * `127.0.0.1` under the repo's own configuration.
      */
     public static function host(): string
     {
         /** @var mixed $host */
         $host = self::mysqlConfig()['host'] ?? null;
 
-        return is_string($host) ? ($host ?: '127.0.0.1') : '127.0.0.1';
+        return is_string($host) ? $host : '127.0.0.1';
     }
 
     /**
      * Port the guard probes: whatever `config/database.php:15` resolved, which is
-     * `(int) (getenv('DB_PORT') ?: 3306)` — so `DB_PORT="0"` resolves to 3306,
-     * matching the 35 private copies.
+     * `(int) (getenv('DB_PORT') ?: 3306)` — so `DB_PORT="0"` resolves to 3306.
+     *
+     * ⚠ No second `?:`, for the reason given on {@see host()} and because that
+     * second application was measurably wrong: `DB_PORT='abc'` makes the config
+     * resolve `(int) 'abc'` = `0`, so `ConnectionPool` connects to port 0 while
+     * `((int) $port ?: 3306)` aimed the probe at 3306. Probe and connection then
+     * targeted different ports — exactly the divergence the class docblock says
+     * an un-pinned call site can no longer have. Measured across
+     * `'abc'`, `'0x0d3d'`, `'0'`, `''`, unset, `'3307'`, `'-1'`, `'65536'` and
+     * `'3306abc'`, this now agrees with `config/database.php` on every input, and
+     * with the 35 private copies' `(int) (getenv('DB_PORT') ?: 3306)` too.
      *
      * `phpunit.xml` exports `DB_PORT=3306` for the suite.
      */
@@ -166,7 +201,7 @@ final class IntegrationDbGuard
         /** @var mixed $port */
         $port = self::mysqlConfig()['port'] ?? null;
 
-        return is_int($port) || is_string($port) ? ((int) $port ?: 3306) : 3306;
+        return is_int($port) || is_string($port) ? (int) $port : 3306;
     }
 
     /**

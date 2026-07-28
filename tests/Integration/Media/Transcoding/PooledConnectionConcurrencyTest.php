@@ -86,6 +86,23 @@ final class PooledConnectionConcurrencyTest extends TestCase
         // guard back above this line.
         \Swoole\Coroutine::set(['log_level' => SWOOLE_LOG_ERROR, 'trace_flags' => 0]);
 
+        // ⚠ KNOWN AND UNADDRESSED — this reorder fixes the OUTPUT half only.
+        // The hooks are still on when the guard runs, and the guard's PDO
+        // round-trip still happens OUTSIDE any coroutine (S126 review round 1 #4,
+        // round 2 #7). The connection it opens is cached process-wide in
+        // ConnectionPool::$connections['mysql'] and never closed, so a
+        // coroutine-hooked socket is still open at PHPUnit's RSHUTDOWN — the
+        // hazard src/Common/Database/ConnectionPool.php:135-141 documents as
+        // "API must be called in the coroutine". Pre-S126 this setUp() did no PDO
+        // I/O at all, so S126 added that exposure here; swoole 6.2.1 is loaded on
+        // the dev box and in both .github/workflows/phpunit.yml jobs (:37, :170),
+        // so it is a live path in the job that has MySQL. It is NOT fixed below.
+        // Closing it means running the guard inside Coroutine::run() (which
+        // changes how markTestSkipped's exception propagates, so it needs the
+        // MySQL-backed CI job to verify and cannot be validated on a box with no
+        // MySQL) or dropping the hooks around it. Tracked as a follow-up; do not
+        // read the comment above as having covered it.
+
         // The guard is given this test's own resolved host/port rather than reading
         // DB_HOST/DB_PORT itself, so it probes exactly the server the hand-built
         // PooledMySQLConnection below will connect to. It also runs a real `SELECT 1`

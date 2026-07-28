@@ -114,11 +114,11 @@ class TvdbProvider implements MetadataProviderInterface
             'language' => $language,
         ];
 
-        $result = $this->http->getResult('/search/series', $params);
-        $response = $result->body();
+        $outcome = $this->http->getResult('/search/series', $params);
+        $response = $outcome->body();
 
         if ($response === null || !isset($response['data'])) {
-            ProviderOutcomeLog::record($this->logger, 'TvdbProvider', 'search', $result, [
+            ProviderOutcomeLog::record($this->logger, 'TvdbProvider', 'search', $outcome, [
                 'query' => $query,
                 'endpoint' => '/search/series',
             ]);
@@ -344,14 +344,14 @@ class TvdbProvider implements MetadataProviderInterface
         $params = ['language' => $language];
 
         // First get all episodes to find the right one
-        $result = $this->http->getResult("/series/{$seriesId}/episodes/query", array_merge($params, [
+        $outcome = $this->http->getResult("/series/{$seriesId}/episodes/query", array_merge($params, [
             'airedSeason' => $season,
             'airedEpisode' => $episode,
         ]));
-        $response = $result->body();
+        $response = $outcome->body();
 
         if ($response === null || !isset($response['data'])) {
-            ProviderOutcomeLog::record($this->logger, 'TvdbProvider', 'getEpisode', $result, [
+            ProviderOutcomeLog::record($this->logger, 'TvdbProvider', 'getEpisode', $outcome, [
                 'tvdb_id' => $seriesId,
                 'season' => $season,
                 'episode' => $episode,
@@ -404,14 +404,14 @@ class TvdbProvider implements MetadataProviderInterface
     {
         $language = MetadataValue::asString($options['language'] ?? null, $this->language);
 
-        $result = $this->http->getResult("/series/{$seriesId}/episodes/query", [
+        $outcome = $this->http->getResult("/series/{$seriesId}/episodes/query", [
             'language' => $language,
             'airedSeason' => $season,
         ]);
-        $response = $result->body();
+        $response = $outcome->body();
 
         if ($response === null || !isset($response['data'])) {
-            ProviderOutcomeLog::record($this->logger, 'TvdbProvider', 'getSeasonEpisodes', $result, [
+            ProviderOutcomeLog::record($this->logger, 'TvdbProvider', 'getSeasonEpisodes', $outcome, [
                 'tvdb_id' => $seriesId,
                 'season' => $season,
                 'endpoint' => "/series/{$seriesId}/episodes/query",

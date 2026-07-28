@@ -123,11 +123,11 @@ class FanartProvider implements MetadataProviderInterface
         // Fanart.tv uses external IDs - try to fetch by type
         $idType = MetadataValue::asString($options['id_type'] ?? null, 'tvdb');
 
-        $result = $this->fetchArtwork($idType, $externalId);
-        $response = $result->body();
+        $outcome = $this->fetchArtwork($idType, $externalId);
+        $response = $outcome->body();
 
         if ($response === null) {
-            ProviderOutcomeLog::record($this->logger, 'FanartProvider', 'getDetails', $result, [
+            ProviderOutcomeLog::record($this->logger, 'FanartProvider', 'getDetails', $outcome, [
                 'id_type' => $idType,
                 'external_id' => $externalId,
             ]);
@@ -167,11 +167,11 @@ class FanartProvider implements MetadataProviderInterface
     public function getImages(string $externalId): array
     {
         $idType = 'tvdb'; // Default to TVDB
-        $result = $this->fetchArtwork($idType, $externalId);
-        $response = $result->body();
+        $outcome = $this->fetchArtwork($idType, $externalId);
+        $response = $outcome->body();
 
         if ($response === null) {
-            ProviderOutcomeLog::record($this->logger, 'FanartProvider', 'getImages', $result, [
+            ProviderOutcomeLog::record($this->logger, 'FanartProvider', 'getImages', $outcome, [
                 'id_type' => $idType,
                 'external_id' => $externalId,
             ]);
@@ -224,11 +224,11 @@ class FanartProvider implements MetadataProviderInterface
      */
     public function getMovieImages(string $imdbId): array
     {
-        $result = $this->fetchArtwork('imdb', $imdbId);
-        $response = $result->body();
+        $outcome = $this->fetchArtwork('imdb', $imdbId);
+        $response = $outcome->body();
 
         if ($response === null) {
-            ProviderOutcomeLog::record($this->logger, 'FanartProvider', 'getMovieImages', $result, [
+            ProviderOutcomeLog::record($this->logger, 'FanartProvider', 'getMovieImages', $outcome, [
                 'imdb_id' => $imdbId,
             ]);
             return [];
@@ -261,11 +261,11 @@ class FanartProvider implements MetadataProviderInterface
      */
     public function getTvShowImages(string $tvdbId): array
     {
-        $result = $this->fetchArtwork('tvdb', $tvdbId);
-        $response = $result->body();
+        $outcome = $this->fetchArtwork('tvdb', $tvdbId);
+        $response = $outcome->body();
 
         if ($response === null) {
-            ProviderOutcomeLog::record($this->logger, 'FanartProvider', 'getTvShowImages', $result, [
+            ProviderOutcomeLog::record($this->logger, 'FanartProvider', 'getTvShowImages', $outcome, [
                 'tvdb_id' => $tvdbId,
             ]);
             return [];
@@ -299,11 +299,11 @@ class FanartProvider implements MetadataProviderInterface
      */
     public function getMusicImages(string $musicbrainzId): array
     {
-        $result = $this->fetchArtwork('musicbrainz', $musicbrainzId);
-        $response = $result->body();
+        $outcome = $this->fetchArtwork('musicbrainz', $musicbrainzId);
+        $response = $outcome->body();
 
         if ($response === null) {
-            ProviderOutcomeLog::record($this->logger, 'FanartProvider', 'getMusicImages', $result, [
+            ProviderOutcomeLog::record($this->logger, 'FanartProvider', 'getMusicImages', $outcome, [
                 'musicbrainz_id' => $musicbrainzId,
             ]);
             return [];
@@ -353,14 +353,14 @@ class FanartProvider implements MetadataProviderInterface
         }
 
         // Fanart.tv requires X-Client-Key header
-        $result = $this->http->getResult($endpoint);
-        $response = $result->body();
+        $outcome = $this->http->getResult($endpoint);
+        $response = $outcome->body();
 
         if ($response !== null) {
             $this->cache[$cacheKey] = $response;
         }
 
-        return $result;
+        return $outcome;
     }
 
     /**

@@ -16,10 +16,9 @@ use Phlix\Admin\SettingsRepository;
 use Phlix\Auth\UserRepository;
 use Phlix\Collections\CollectionManager;
 use Phlix\Collections\CollectionRepository;
+use Phlix\Common\Container\DegradedBuild;
 use Phlix\Common\Container\ServiceProviderInterface;
 use Phlix\Common\Logger\LogChannels;
-use Phlix\Common\Logger\LoggerFactory;
-use Phlix\Common\Logger\StructuredLogger;
 use Phlix\Media\Library\BookProgressStore;
 use Phlix\Media\Library\FolderWatcher;
 use Phlix\Media\Library\ItemRepository;
@@ -184,8 +183,20 @@ final class MediaServicesProvider implements ServiceProviderInterface
                                 return $effective;
                             }
                         }
-                    } catch (\Throwable) {
+                    } catch (\Throwable $e) {
                         // Settings store unavailable — use the in-code default.
+                        // Logged because this decision is frozen per worker: an
+                        // admin's saved list stays ignored until the workers are
+                        // recycled, and the default list is indistinguishable from
+                        // "the admin never set one".
+                        DegradedBuild::warnUnlessAbsent(
+                            $c,
+                            LogChannels::MEDIA,
+                            'matching.noise_suffixes: the settings store was unreachable; using the '
+                            . 'in-code default noise-suffix list. An admin-saved list stays ignored '
+                            . 'by this worker until it is recycled.',
+                            $e
+                        );
                     }
 
                     // Defensive fallback: config/matching.php unreadable AND no
@@ -245,10 +256,18 @@ final class MediaServicesProvider implements ServiceProviderInterface
                                 $genresMode = $modeOverride;
                             }
                         }
-                    } catch (\Throwable) {
+                    } catch (\Throwable $e) {
                         // Settings store unavailable — use the in-code defaults
                         // (PriorityConfig::orderFor() still falls back to the
                         // canonical [tmdb, imdb] baseline for any type).
+                        DegradedBuild::warnUnlessAbsent(
+                            $c,
+                            LogChannels::MEDIA,
+                            'metadata.provider_priority / metadata.genres_mode: the settings store '
+                            . 'was unreachable; using the in-code provider order and genres mode. '
+                            . 'Admin-saved values stay ignored by this worker until it is recycled.',
+                            $e
+                        );
                     }
 
                     return new PriorityConfig($merged, $genresMode);
@@ -353,12 +372,13 @@ final class MediaServicesProvider implements ServiceProviderInterface
                         $key = $stored;
                     }
                 } catch (\Throwable $e) {
-                    self::mediaLogger($c)->warning(
+                    DegradedBuild::warnUnlessAbsent(
+                        $c,
+                        LogChannels::MEDIA,
                         'TMDB API key: the settings store was unreachable while building '
                         . 'TmdbProvider; falling back to the config/env key.',
+                        $e,
                         [
-                            'exception' => $e::class,
-                            'message' => $e->getMessage(),
                             // Whether the fallback is usable at all. False here means
                             // this worker has NO key until the store answers again.
                             'fallback_key_present' => $key !== '',
@@ -1136,29 +1156,6 @@ final class MediaServicesProvider implements ServiceProviderInterface
     }
 
     /**
-     * The MEDIA-channel logger, preferring the container's wired instance.
-     *
-     * Used from inside factories to report a degraded build — most importantly a
-     * TMDB key that could not be resolved. Falls back to
-     * {@see LoggerFactory::get()} because the whole point of the call site is
-     * that the container is *already* misbehaving; a logger lookup must not be
-     * the second thing that fails.
-     */
-    private static function mediaLogger(ContainerInterface $c): StructuredLogger
-    {
-        try {
-            $logger = $c->get('logger.media');
-            if ($logger instanceof StructuredLogger) {
-                return $logger;
-            }
-        } catch (\Throwable) {
-            // Fall through to the factory-built channel logger.
-        }
-
-        return LoggerFactory::get(LogChannels::MEDIA);
-    }
-
-    /**
      * Resolve {@see SettingsRepository} from the container, or NULL when it is
      * unavailable.
      *
@@ -1167,6 +1164,20 @@ final class MediaServicesProvider implements ServiceProviderInterface
      * fails: a container without a settings binding (or one whose database is
      * down) must degrade to the shipped defaults rather than throw out of the
      * factory. Mirrors `TranscodeServicesProvider::optionalSettings()`.
+     *
+     * The two failures are NOT the same and are treated differently:
+     *
+     *   - **Not defined at all** (`NotFoundExceptionInterface`) — a normal,
+     *     expected shape; several unit containers register no settings store.
+     *     Stays quiet.
+     *   - **Defined but unbuildable** — a genuine degradation: the policies then
+     *     silently run on shipped defaults for the worker's whole lifetime.
+     *     Logged.
+     *
+     * `$c->has()` cannot make this distinction: with autowiring enabled it
+     * returns TRUE for any instantiable class, so a container with no settings
+     * store at all still answers `has() === true`. The exception type is the
+     * only reliable signal.
      */
     private static function optionalSettings(ContainerInterface $c): ?SettingsRepository
     {
@@ -1174,7 +1185,16 @@ final class MediaServicesProvider implements ServiceProviderInterface
             $settings = $c->get(SettingsRepository::class);
 
             return $settings instanceof SettingsRepository ? $settings : null;
-        } catch (\Throwable) {
+        } catch (\Throwable $e) {
+            DegradedBuild::warnUnlessAbsent(
+                $c,
+                LogChannels::MEDIA,
+                'The settings store is bound but could not be built; artwork-download and '
+                . 'scan-ignore policies fall back to their shipped defaults. Admin-saved '
+                . 'values stay ignored by this worker until it is recycled.',
+                $e
+            );
+
             return null;
         }
     }

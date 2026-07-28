@@ -12,7 +12,9 @@ declare(strict_types=1);
 namespace Phlix\Common\Container\Providers;
 
 use DI\ContainerBuilder;
+use Phlix\Common\Container\DegradedBuild;
 use Phlix\Common\Container\ServiceProviderInterface;
+use Phlix\Common\Logger\LogChannels;
 use Phlix\Auth\AuthManager;
 use Phlix\Auth\UserProfileManager;
 use Phlix\Auth\UserRepository;
@@ -152,8 +154,23 @@ final class WebPortalServicesProvider implements ServiceProviderInterface
                     try {
                         /** @var \Phlix\Media\Library\RatingGate $transcodeRatingGate */
                         $transcodeRatingGate = $c->get(\Phlix\Media\Library\RatingGate::class);
-                    } catch (\Throwable) {
+                    } catch (\Throwable $e) {
+                        // A null gate is a strict no-op, i.e. parental ACCESS
+                        // control is OFF for the transcode endpoints — and this
+                        // decision is frozen for the worker's lifetime. That must
+                        // never be silent, even though it should be unreachable:
+                        // RatingGate's three dependencies (ItemRepository,
+                        // UserRepository, UserProfileManager) are all resolved
+                        // UNGUARDED earlier in this same factory, so a dependency
+                        // failure would already have thrown above.
                         $transcodeRatingGate = null;
+                        DegradedBuild::warnUnlessAbsent(
+                            $c,
+                            LogChannels::MEDIA,
+                            'RatingGate could not be built: parental access control is NOT enforced '
+                            . 'on the transcode start/status endpoints for this worker.',
+                            $e
+                        );
                     }
                     $transcodeController = $transcodeManager !== null
                         ? new TranscodeController($transcodeManager, $transcodeRatingGate)
@@ -216,8 +233,26 @@ final class WebPortalServicesProvider implements ServiceProviderInterface
                     try {
                         /** @var \Phlix\Media\Library\RatingGate $bookRatingGate */
                         $bookRatingGate = $c->get(\Phlix\Media\Library\RatingGate::class);
-                    } catch (\Throwable) {
+                    } catch (\Throwable $e) {
+                        // Unlike the WebPortalRouter factory above, this factory
+                        // resolves only ItemRepository beforehand — RatingGate's
+                        // other two dependencies (UserProfileManager, UserRepository)
+                        // are NOT resolved here, so this catch is genuinely
+                        // reachable when either fails to build. A null gate makes
+                        // BookController::bookOverCap() return false, i.e. every
+                        // book is served regardless of its rating, for the worker's
+                        // whole lifetime. Whether it fires at all depends on PHP-DI
+                        // resolution order, which is exactly why it would never
+                        // reproduce reliably — so it must be logged.
                         $bookRatingGate = null;
+                        DegradedBuild::warnUnlessAbsent(
+                            $c,
+                            LogChannels::MEDIA,
+                            'RatingGate could not be built: parental access control is NOT enforced '
+                            . 'on book read/download for this worker — every book is served '
+                            . 'regardless of its content rating.',
+                            $e
+                        );
                     }
                     $controller = new BookController(
                         $itemRepository,

@@ -18,6 +18,8 @@ use Phlix\Admin\SettingsRepository;
 use Phlix\Admin\WatchHistoryService;
 use Phlix\Auth\AuthManager;
 use Phlix\Common\Container\ServiceProviderInterface;
+use Phlix\Common\Logger\AuditLogger;
+use Phlix\Common\Logger\StructuredLogger;
 use Phlix\Media\Library\DuplicateFinder;
 use Phlix\Media\Transcoding\FfmpegRunner;
 use Phlix\Media\Library\ItemRepository;
@@ -101,7 +103,21 @@ final class AdminServicesProvider implements ServiceProviderInterface
             WatchHistoryService::class    => autowire(),
             WatchHistoryController::class => autowire(),
 
-            BackupManager::class    => autowire(),
+            // `logger` + `auditLogger` are named explicitly: PHP-DI skips
+            // optional ctor params that carry a default, so both stayed null.
+            // `auditLogger` is the one that mattered — every
+            // `$this->auditLogger?->logDataExport(...)` call site (backup create,
+            // restore, and S3 upload) was skipped, so those privileged
+            // data-export events were NEVER written to the audit log. `logger`
+            // is bound for the one call site that reads the property directly
+            // instead of via getLogger() (the "skipped config file outside the
+            // config directory during restore" warning, a path-traversal
+            // signal that was being dropped); the APPLICATION channel bound
+            // here is the same one getLogger() falls back to, so no channel
+            // changes.
+            BackupManager::class    => autowire()
+                ->constructorParameter('logger', get(StructuredLogger::class))
+                ->constructorParameter('auditLogger', get(AuditLogger::class)),
             BackupController::class => autowire(),
 
             // Server-wide settings store + admin API (Step 0.5).
@@ -188,7 +204,18 @@ final class AdminServicesProvider implements ServiceProviderInterface
 
             // Webhook event system (P9-S1) — async delivery with retry queue.
             WebhookHttpClient::class => autowire(),
-            WebhookService::class => autowire(),
+
+            // `logger` is named explicitly for the same PHP-DI reason as
+            // BackupManager above (optional defaulted params are skipped). This
+            // one is behaviour-NEUTRAL: the ctor already self-heals with
+            // `?? LoggerFactory::get(LogChannels::APPLICATION)`, and the
+            // StructuredLogger binding resolves to that very channel. It is bound
+            // so the service shares this container's initialised logger instance
+            // (the factory guarantees LoggerFactory::init() has run) rather than
+            // building its own, and so the wiring no longer *looks* like the
+            // silently-dropped dependencies fixed alongside it.
+            WebhookService::class => autowire()
+                ->constructorParameter('logger', get(StructuredLogger::class)),
             AdminWebhooksController::class => autowire(),
 
             // Phase 8: graceful server restart via SIGUSR1.

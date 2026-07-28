@@ -13,6 +13,9 @@ namespace Phlix\Common\Container\Providers;
 
 use DI\ContainerBuilder;
 use Phlix\Admin\SettingsRepository;
+use Phlix\Auth\UserRepository;
+use Phlix\Collections\CollectionManager;
+use Phlix\Collections\CollectionRepository;
 use Phlix\Common\Container\ServiceProviderInterface;
 use Phlix\Media\Library\BookProgressStore;
 use Phlix\Media\Library\FolderWatcher;
@@ -265,16 +268,45 @@ final class MediaServicesProvider implements ServiceProviderInterface
                 ->constructorParameter('statsCollector', get(StatsCollector::class)),
 
             // Shared parental-control ACCESS gate (effective-rating + cap check),
-            // used by every user-facing read/stream path. Autowires from
-            // ItemRepository + UserProfileManager + UserRepository.
-            RatingGate::class => autowire(),
+            // used by every user-facing read/stream path.
+            //
+            // `users` is named EXPLICITLY. PHP-DI skips optional ctor params that
+            // carry a default during autowiring, so the previous bare
+            // `autowire()` left {@see RatingGate::$users} NULL — which silently
+            // disabled the account-owner/admin bypass in
+            // {@see RatingGate::resolveFilterForUser()} (that shortcut is guarded
+            // by `if ($this->users !== null)`). The container-built gate then
+            // applied the active profile's cap to the OWNER too, and because
+            // `profile_settings.content_rating` defaults to 'R', every NC-17 item
+            // 404'd out of `GET /api/v1/media/{id}/playback-info` and
+            // `POST /api/v1/media/{id}/transcode` for the owner — with a valid
+            // Bearer token, while an ANONYMOUS request (empty user id → early
+            // null return) still got a 200. Browse/detail kept working only
+            // because {@see \Phlix\Server\WebPortal\WebPortalRouter::gate()}
+            // builds its OWN RatingGate WITH the repository. Same PHP-DI pitfall
+            // (and same fix shape) as `statsCollector` on ItemRepository above.
+            RatingGate::class => autowire()
+                ->constructorParameter('users', get(UserRepository::class)),
 
             // Per-user favorites + ratings (E10). The repository takes only a
             // Workerman MySQL Connection; the controller takes ItemRepository +
-            // the repository — both autowirable. Referenced by WebPortalRouter
-            // (the single dispatch point for /api/v1/media/* on both entry points).
+            // the repository — both autowirable. Consumed by MediaUserDataController,
+            // which is dispatched from TWO routers, not one: WebPortalRouter's auth
+            // group (favorite/rating/like/watched) and {@see
+            // \Phlix\Server\Core\Application::loadApiRoutes()}:723-730, which
+            // registers `POST /api/v1/media/{id}/watched` + `/unwatched` on the
+            // Application router as well.
             \Phlix\Media\UserItemDataRepository::class => autowire(),
-            \Phlix\Server\Http\Controllers\MediaUserDataController::class => autowire(),
+
+            // `ratingGate` is named explicitly for the SAME PHP-DI reason as
+            // RatingGate::$users above: it is an optional ctor param with a
+            // default, so a bare `autowire()` left it null and the controller's
+            // parental checks (`$this->ratingGate?->resolveFilterForUser(...)`
+            // plus the `$this->ratingGate !== null && !isAllowed(...)` guard)
+            // were skipped ENTIRELY — a rating-capped profile could favorite,
+            // rate, like and mark-watched items above its cap.
+            \Phlix\Server\Http\Controllers\MediaUserDataController::class => autowire()
+                ->constructorParameter('ratingGate', get(RatingGate::class)),
 
             // Book reading progress tracking (SV-3.2). Autowires with
             // Workerman MySQL Connection (globally registered in CoreServicesProvider).
@@ -564,9 +596,17 @@ final class MediaServicesProvider implements ServiceProviderInterface
 
             // Fuzzy matching (P1-S5): Levenshtein-distance similarity search across
             // TMDB/IMDb results, plus manual match-override persistence. Autowires:
-            // Workerman MySQL Connection (global binding from CoreServicesProvider),
-            // TmdbProvider (admin-keyed factory above), and an optional logger.
-            FuzzyMatcher::class => autowire(),
+            // Workerman MySQL Connection (global binding from CoreServicesProvider)
+            // and TmdbProvider (admin-keyed factory above).
+            //
+            // `logger` is named explicitly for the same PHP-DI reason as every
+            // other optional param in this provider (skipped when defaulted):
+            // without it the matcher built its OWN MEDIA logger via
+            // LoggerFactory instead of sharing this container's initialised
+            // instance. The `logger.media` alias is used so the channel matches
+            // the class's own fallback exactly (no channel change).
+            FuzzyMatcher::class => autowire()
+                ->constructorParameter('logger', get('logger.media')),
 
             // Process-scoped registry of PLUGIN metadata sources
             // (MetadataSourceInterface). Single container-scoped instance —
@@ -649,7 +689,32 @@ final class MediaServicesProvider implements ServiceProviderInterface
             SmartPlaylistEngine::class => autowire()
                 ->constructorParameter('itemRepository', get(ItemRepository::class)),
 
-            SmartPlaylistRefreshHandler::class => autowire(),
+            // `collectionManager` + `collectionRepo` are named explicitly: both are
+            // optional ctor params with defaults, so PHP-DI skipped them and the
+            // handler's own guard —
+            // `if ($this->collectionManager === null || $this->collectionRepo === null) { return; }`
+            // ({@see \Phlix\Playlists\SmartPlaylistRefreshHandler}:78) — would have
+            // made smart-COLLECTION refresh a silent no-op. Both deps are plainly
+            // autowirable (CollectionRepository/CollectionItemRepository take only
+            // the Workerman MySQL Connection; CollectionManager's other deps —
+            // SmartPlaylistEngine, SmartPlaylistRepository, ItemRepository — are
+            // all bound in this provider), and neither depends back on the handler,
+            // so there is no cycle.
+            //
+            // ⚠ The binding is right but it changes NOTHING at runtime yet, and the
+            // reason is upstream of the container: NEITHER half of this handler
+            // executes in production. Nothing resolves
+            // SmartPlaylistRefreshHandler::class from the container, and
+            // {@see \Phlix\Playlists\SmartPlaylistRefreshHandler::register()}
+            // (:95 — the only place the handler subscribes to LibraryUpdated) has
+            // no caller: EventServicesProvider auto-registers WebhookEventSubscriber
+            // ONLY (EventServicesProvider.php:131-141). So the handler is never
+            // SUBSCRIBED, and smart-playlist refresh AND smart-collection refresh
+            // both stay dead until a subscriber hookup is added. That hookup is a
+            // separate outstanding gap, not something this binding closes.
+            SmartPlaylistRefreshHandler::class => autowire()
+                ->constructorParameter('collectionManager', get(CollectionManager::class))
+                ->constructorParameter('collectionRepo', get(CollectionRepository::class)),
 
             SmartPlaylistController::class => factory(static function ($container): SmartPlaylistController {
                 return new SmartPlaylistController(
@@ -721,9 +786,26 @@ final class MediaServicesProvider implements ServiceProviderInterface
                 return new IntroDetectionJob($fpRepo, $itemRepo, $chromaPrint, null, $minEpisodes);
             }),
 
-            // Background detector worker: autowires with IntroDetectionJob, MarkerCandidateStore,
-            // MarkerCandidateRepository + optional LoggerInterface (defaults to NullLogger).
-            BackgroundDetectorWorker::class => autowire(),
+            // Background detector worker: autowires with IntroDetectionJob,
+            // MarkerCandidateStore and MarkerCandidateRepository.
+            //
+            // `logger` is named explicitly because PHP-DI skips optional ctor
+            // params with defaults — without it the worker fell back to its own
+            // `new NullLogger()` and every intro/outro detection run was
+            // completely SILENT (no progress, no failures). Bound to the MEDIA
+            // channel like the other media workers in this provider; the alias
+            // resolves to a StructuredLogger, which implements the ctor's
+            // Psr\Log\LoggerInterface.
+            //
+            // This is the one binding in this batch that changes behaviour in a
+            // LIVE process: the worker is spawned by config/managed_workers.php and
+            // polls every 30s. A real logger therefore also turned its per-tick
+            // "queue empty" debug line into ~2,880 lines/day/box, so that line was
+            // demoted to a state-change log at the same time — see
+            // {@see \Phlix\Media\Markers\Detection\BackgroundDetectorWorker::$idleLogged}.
+            // Genuine work/error logging is untouched.
+            BackgroundDetectorWorker::class => autowire()
+                ->constructorParameter('logger', get('logger.media')),
 
             // SV-1.3: media-asset (chapter-thumbnail + trickplay) job store and worker.
             // Reads job_queue_dir and max_concurrent from media_asset_jobs config.

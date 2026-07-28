@@ -66,15 +66,60 @@ class TmdbProvider implements MetadataProviderInterface
     private StructuredLogger $logger;
 
     /**
+     * Re-resolver consulted when {@see self::$apiKey} is EMPTY, or null when the
+     * caller supplied no way to look the key up again.
+     *
+     * @var (\Closure(): mixed)|null
+     */
+    private ?\Closure $apiKeyResolver;
+
+    /**
+     * Has the "lookup attempted with no API key" warning already been emitted?
+     *
+     * Latched so a library scan over tens of thousands of items produces one
+     * line, not one per item. Cleared again if a key is later recovered.
+     *
+     * @var bool
+     */
+    private bool $warnedMissingApiKey = false;
+
+    /**
+     * `hrtime(true)` of the last lazy re-resolution attempt; null = never tried.
+     *
+     * @var int|null
+     */
+    private ?int $lastKeyResolveNs = null;
+
+    /**
+     * Minimum gap between lazy re-resolution attempts, in nanoseconds (30s).
+     *
+     * Re-resolution reads the settings store, which issues a DB SELECT. Without
+     * a floor, a store that is DOWN would be re-queried once per item for every
+     * item in the library.
+     */
+    private const KEY_RETRY_INTERVAL_NS = 30_000_000_000;
+
+    /**
      * Constructor for TmdbProvider.
      *
-     * @param string                  $apiKey TMDB API v3 authentication key.
-     * @param MetadataHttpClient|null $http   Optional HTTP client (injected in
-     *                                        tests); defaults to a real TMDB client.
-     * @param StructuredLogger|null   $logger Optional logger; defaults to MEDIA channel.
+     * @param string                  $apiKey         TMDB API v3 authentication key.
+     * @param MetadataHttpClient|null $http           Optional HTTP client (injected in
+     *                                                tests); defaults to a real TMDB client.
+     * @param StructuredLogger|null   $logger         Optional logger; defaults to MEDIA channel.
+     * @param \Closure|null           $apiKeyResolver Optional re-resolver returning the
+     *                                                effective key. Consulted ONLY while
+     *                                                `$apiKey` is empty; see
+     *                                                {@see self::refreshApiKeyIfEmpty()}.
+     *                                                Its return value is treated as `mixed`
+     *                                                (settings stores are untyped) — anything
+     *                                                that is not a non-empty string is ignored.
      */
-    public function __construct(string $apiKey, ?MetadataHttpClient $http = null, ?StructuredLogger $logger = null)
-    {
+    public function __construct(
+        string $apiKey,
+        ?MetadataHttpClient $http = null,
+        ?StructuredLogger $logger = null,
+        ?\Closure $apiKeyResolver = null
+    ) {
         $this->apiKey = $apiKey;
         $this->http = $http ?? new MetadataHttpClient(
             'https://api.themoviedb.org/3',
@@ -82,6 +127,7 @@ class TmdbProvider implements MetadataProviderInterface
         );
         $this->imageBaseUrl = 'https://image.tmdb.org/t/p';
         $this->logger = $logger ?? LoggerFactory::get(LogChannels::MEDIA);
+        $this->apiKeyResolver = $apiKeyResolver;
     }
 
     /**
@@ -91,11 +137,143 @@ class TmdbProvider implements MetadataProviderInterface
      * error instead of letting an unauthenticated request silently return no
      * results / no match.
      *
+     * Attempts a lazy re-resolution first, so a provider built during a
+     * transient settings-store outage can still report a key once the store
+     * recovers.
+     *
      * @return bool True when an API key is present.
      */
     public function hasApiKey(): bool
     {
+        $this->refreshApiKeyIfEmpty();
+
         return $this->apiKey !== '';
+    }
+
+    /**
+     * Re-resolve the API key when the one captured at construction is EMPTY.
+     *
+     * This provider is built by a PHP-DI `factory()`, whose result PHP-DI caches
+     * as a per-worker singleton. If the settings store was unreachable at the
+     * moment the worker built it — a connection blip, an auth hiccup, pool
+     * exhaustion — the key captured is `''` and, without this, STAYS `''` for
+     * that worker's entire lifetime. Every lookup then returns `[]`, which is
+     * indistinguishable from "no match", so unmatched counts stall with nothing
+     * in the logs to explain it.
+     *
+     * This is the reason `tmdb.api_key` is declared `restart: true` in the
+     * settings schema: the key is captured BY VALUE at construction. Recovering
+     * it here narrows that to "a key saved while the store was reachable still
+     * needs a recycle" — an EMPTY key no longer survives the store coming back.
+     *
+     * Re-resolution is attempted at most once per {@see self::KEY_RETRY_INTERVAL_NS}
+     * and stops entirely once a key is found (the guard below short-circuits on
+     * a non-empty key), so the happy path costs one comparison.
+     *
+     * @return void
+     */
+    private function refreshApiKeyIfEmpty(): void
+    {
+        if ($this->apiKey !== '' || $this->apiKeyResolver === null) {
+            return;
+        }
+
+        $now = hrtime(true);
+        if (
+            $this->lastKeyResolveNs !== null
+            && ($now - $this->lastKeyResolveNs) < self::KEY_RETRY_INTERVAL_NS
+        ) {
+            return;
+        }
+        $this->lastKeyResolveNs = $now;
+
+        try {
+            $resolved = ($this->apiKeyResolver)();
+        } catch (\Throwable $e) {
+            // Never let a settings/DB failure escape into a metadata lookup:
+            // the caller asked for metadata, not for the settings store. Log it
+            // so the empty key is attributable instead of silent.
+            $this->logger->warning('TMDB API key re-resolution failed; provider stays unconfigured', [
+                'exception' => $e::class,
+                'message' => $e->getMessage(),
+            ]);
+            return;
+        }
+
+        if (!is_string($resolved) || $resolved === '') {
+            return;
+        }
+
+        $this->apiKey = $resolved;
+        $this->http->setApiKey($resolved);
+        $this->warnedMissingApiKey = false;
+
+        $this->logger->info('TMDB API key recovered after resolving EMPTY at construction', [
+            // Length only — never the key itself.
+            'key_length' => strlen($resolved),
+        ]);
+    }
+
+    /**
+     * Make an unconfigured provider OBSERVABLE before a lookup goes out.
+     *
+     * Complements {@see ProviderOutcomeLog}, which reports what the UPSTREAM
+     * said — a 401 means TMDB rejected a key we actually sent. This reports the
+     * case where there is no key to send at all, which produces no upstream
+     * status to classify and so would otherwise stay silent.
+     *
+     * The request still proceeds; this changes what gets logged, not what gets
+     * returned.
+     *
+     * @param string $endpoint API endpoint path, for the log context.
+     *
+     * @return void
+     */
+    private function guardApiKey(string $endpoint): void
+    {
+        $this->refreshApiKeyIfEmpty();
+
+        if ($this->apiKey !== '' || $this->warnedMissingApiKey) {
+            return;
+        }
+
+        $this->warnedMissingApiKey = true;
+        $this->logger->warning(
+            'TMDB lookup attempted with NO API key — results will be empty and '
+            . 'indistinguishable from "no match". Set tmdb.api_key in the admin '
+            . 'settings (Settings → Metadata), or export TMDB_API_KEY.',
+            ['endpoint' => $endpoint]
+        );
+    }
+
+    /**
+     * Guarded {@see MetadataHttpClient::get()}.
+     *
+     * @param string               $endpoint API endpoint path (e.g. '/movie/1/images').
+     * @param array<string, mixed> $params   Query parameters.
+     *
+     * @return array<string, mixed>|null Decoded JSON response, or null on failure.
+     */
+    private function request(string $endpoint, array $params = []): ?array
+    {
+        $this->guardApiKey($endpoint);
+
+        return $this->http->get($endpoint, $params);
+    }
+
+    /**
+     * Guarded {@see MetadataHttpClient::getResult()}.
+     *
+     * @param string               $endpoint API endpoint path (e.g. '/search/movie').
+     * @param array<string, mixed> $params   Query parameters.
+     *
+     * @return MetadataHttpResult Outcome carrying the body and the upstream status.
+     */
+    private function requestResult(string $endpoint, array $params = []): MetadataHttpResult
+    {
+        $this->guardApiKey($endpoint);
+
+        return $this->http->getResult($endpoint, $params);
     }
 
     /**
@@ -127,7 +305,7 @@ class TmdbProvider implements MetadataProviderInterface
             'include_adult' => $includeAdult,
         ];
 
-        $outcome = $this->http->getResult('/search/movie', $params);
+        $outcome = $this->requestResult('/search/movie', $params);
         $response = $outcome->body();
 
         if ($response === null || !isset($response['results'])) {
@@ -185,7 +363,7 @@ class TmdbProvider implements MetadataProviderInterface
             return null;
         }
 
-        $outcome = $this->http->getResult("/find/{$imdbId}", [
+        $outcome = $this->requestResult("/find/{$imdbId}", [
             'external_source' => 'imdb_id',
         ]);
         $response = $outcome->body();
@@ -248,7 +426,7 @@ class TmdbProvider implements MetadataProviderInterface
         $language = MetadataValue::asString($options['language'] ?? null, 'en-US');
 
         $append = 'credits,genres,production_companies,external_ids,keywords,release_dates,videos,images';
-        $outcome = $this->http->getResult("/movie/{$externalId}", [
+        $outcome = $this->requestResult("/movie/{$externalId}", [
             'language' => $language,
             'append_to_response' => $append,
             // Title logos are language-tagged; ask for English plus the
@@ -334,7 +512,7 @@ class TmdbProvider implements MetadataProviderInterface
                 // Skip redundant or pointless locales in the chain
                 continue;
             }
-            $fallbackResponse = $this->http->get("/movie/{$externalId}", ['language' => $locale]);
+            $fallbackResponse = $this->request("/movie/{$externalId}", ['language' => $locale]);
             foreach (array_keys($needsFallback) as $field) {
                 if (!empty($fallbackResponse[$field])) {
                     $response[$field] = $fallbackResponse[$field];
@@ -377,7 +555,7 @@ class TmdbProvider implements MetadataProviderInterface
             if ($locale === null || $locale === '') {
                 continue;
             }
-            $fallbackResponse = $this->http->get("/movie/{$externalId}", ['language' => $locale]);
+            $fallbackResponse = $this->request("/movie/{$externalId}", ['language' => $locale]);
             foreach (array_keys($needsFallback) as $field) {
                 if (!empty($fallbackResponse[$field])) {
                     $response[$field] = $fallbackResponse[$field];
@@ -417,7 +595,7 @@ class TmdbProvider implements MetadataProviderInterface
             $params['first_air_date_year'] = (string) $year;
         }
 
-        $outcome = $this->http->getResult('/search/tv', $params);
+        $outcome = $this->requestResult('/search/tv', $params);
         $response = $outcome->body();
         if ($response === null || !isset($response['results'])) {
             ProviderOutcomeLog::record($this->logger, 'TmdbProvider', 'searchTv', $outcome, [
@@ -462,7 +640,7 @@ class TmdbProvider implements MetadataProviderInterface
     public function getTvDetails(string $externalId, array $options = []): array
     {
         $append = 'genres,external_ids,content_ratings,aggregate_credits,production_companies,keywords,videos,images';
-        $outcome = $this->http->getResult("/tv/{$externalId}", [
+        $outcome = $this->requestResult("/tv/{$externalId}", [
             'language' => MetadataValue::asString($options['language'] ?? null, 'en-US'),
             'append_to_response' => $append,
             // See getDetails(): pull English + language-neutral logos so the
@@ -520,7 +698,7 @@ class TmdbProvider implements MetadataProviderInterface
      */
     public function getTvSeason(string $externalId, int $seasonNumber, array $options = []): array
     {
-        $outcome = $this->http->getResult("/tv/{$externalId}/season/{$seasonNumber}", [
+        $outcome = $this->requestResult("/tv/{$externalId}/season/{$seasonNumber}", [
             'language' => MetadataValue::asString($options['language'] ?? null, 'en-US'),
             'append_to_response' => 'credits',
         ]);
@@ -1001,7 +1179,7 @@ class TmdbProvider implements MetadataProviderInterface
      */
     public function getImages(string $externalId): array
     {
-        $response = $this->http->get("/movie/{$externalId}/images");
+        $response = $this->request("/movie/{$externalId}/images");
 
         if ($response === null) {
             return [];
@@ -1223,7 +1401,7 @@ class TmdbProvider implements MetadataProviderInterface
      */
     public function getCollection(int $collectionId): ?array
     {
-        $response = $this->http->get("/collection/{$collectionId}");
+        $response = $this->request("/collection/{$collectionId}");
 
         if ($response === null || !isset($response['id'])) {
             return null;
@@ -1264,7 +1442,7 @@ class TmdbProvider implements MetadataProviderInterface
      */
     public function getCollectionIdForMovie(int $tmdbId): ?int
     {
-        $response = $this->http->get("/movie/{$tmdbId}");
+        $response = $this->request("/movie/{$tmdbId}");
 
         if ($response === null) {
             return null;
@@ -1296,7 +1474,7 @@ class TmdbProvider implements MetadataProviderInterface
      */
     public function getTrailers(string $externalId): array
     {
-        $response = $this->http->get("/movie/{$externalId}/videos");
+        $response = $this->request("/movie/{$externalId}/videos");
 
         if ($response === null || !isset($response['results']) || !is_array($response['results'])) {
             return [];

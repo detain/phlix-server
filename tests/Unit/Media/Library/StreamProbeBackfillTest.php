@@ -218,7 +218,7 @@ class StreamProbeBackfillTest extends TestCase
      * `scripts/backfill-streams.php` reselects only items with zero rows or a
      * NULL stream_index). So the item must stay eligible for a later retry.
      *
-     * Four differently-SHAPED transient failures, because one planted case only
+     * Six differently-SHAPED transient failures, because one planted case only
      * proves that case:
      *  - a deadlock as it actually arrives, i.e. RE-WRAPPED by
      *    `PhlixMySQLConnection::execute()` into a fresh `PDOException` with the
@@ -229,7 +229,13 @@ class StreamProbeBackfillTest extends TestCase
      *    with an errno that is not in the allow-list;
      *  - `PooledMySQLConnection`'s plain `RuntimeException('pool exhausted…')`,
      *    which is not a `PDOException` at all and reaches this handler because
-     *    the pool leases on `replaceStreams()`'s own `beginTrans()`.
+     *    the pool leases on `replaceStreams()`'s own `beginTrans()`;
+     *  - the two CONNECT-time shapes, which are the reason `sqlErrorOf()` reads
+     *    `errorInfo` at all: PDO words a failed connect
+     *    `SQLSTATE[08004] [1040] Too many connections`, with the errno in
+     *    BRACKETS and no colon after `]`, so the message parser cannot see it
+     *    and only `errorInfo` can. One is recognised by its errno (2002) and one
+     *    by its SQLSTATE class (08004), so neither signal alone carries both.
      *
      * @dataProvider transientWriteFailures
      */
@@ -282,6 +288,19 @@ class StreamProbeBackfillTest extends TestCase
             'pool exhausted (not a PDOException at all)' => [
                 new \RuntimeException('pool exhausted: could not acquire a connection within 10 s'),
             ],
+            // The two shapes only `errorInfo` can classify. Both messages are
+            // verbatim PDO output from MySQL 8.0.46 and are UNPARSEABLE by the
+            // SQLSTATE pattern, so dropping the errorInfo reader stamps them.
+            'connect refused, errno only in errorInfo (2002)' => [self::connectFailure(
+                'SQLSTATE[HY000] [2002] Connection refused',
+                'HY000',
+                2002
+            )],
+            'too many connections, SQLSTATE class only in errorInfo (1040)' => [self::connectFailure(
+                'SQLSTATE[08004] [1040] Too many connections',
+                '08004',
+                1040
+            )],
         ];
     }
 
@@ -296,11 +315,13 @@ class StreamProbeBackfillTest extends TestCase
      * `ensureFor()` has 79,218 unstamped candidates on the measured library, so
      * that is a production stall rather than a slow endpoint.
      *
-     * Four shapes again, including the two that pin the chosen default: an
+     * Six shapes again, including the three that pin the chosen default: an
      * UNRECOGNISED failure is treated as deterministic (master's behaviour —
-     * never worse), and the SQLSTATE parser takes the LAST match so a decoy
+     * never worse), the SQLSTATE parser takes the LAST match so a decoy
      * inside the re-wrapped SQL text — which contains the row's own parameter
-     * values — cannot flip a permanent failure to "transient".
+     * values — cannot flip a permanent failure to "transient", and a CONNECT
+     * failure that will never clear by itself (1045) stays deterministic even
+     * though `errorInfo` makes its errno readable.
      *
      * @dataProvider deterministicWriteFailures
      */
@@ -359,6 +380,15 @@ class StreamProbeBackfillTest extends TestCase
                 . "long for column 'title' at row 1",
                 22001
             )],
+            // The other direction for the errorInfo reader: reading errorInfo
+            // must not make every CONNECT failure look transient. A wrong
+            // password fails identically for ever, so it is stamped.
+            'connect denied (1045) is NOT transient' => [self::connectFailure(
+                "SQLSTATE[HY000] [1045] Access denied for user 'phlix'@'127.0.0.1' "
+                . '(using password: YES)',
+                'HY000',
+                1045
+            )],
         ];
     }
 
@@ -387,6 +417,59 @@ class StreamProbeBackfillTest extends TestCase
         $e = new \PDOException($message);
         $e->errorInfo = [$sqlState, $errno, $message];
         return $e;
+    }
+
+    /**
+     * A failure raised while OPENING the connection rather than while running a
+     * statement — `new PDO(...)` inside `PooledMySQLConnection::acquire()`'s
+     * `rawFactory()`, or inside workerman/mysql's `beginTrans()` reconnect.
+     *
+     * Two things make it its own shape, both reproduced against MySQL 8.0.46:
+     * it reaches the classifier VERBATIM (nothing re-wraps it, so `errorInfo`
+     * survives), and PDO words it `SQLSTATE[08004] [1040] Too many connections`
+     * — errno in brackets, no colon after `]` — which the message pattern in
+     * `sqlErrorOf()` cannot read. `errorInfo` is therefore the only signal, and
+     * `getMessage()` deliberately carries nothing the parser can pick up.
+     */
+    private static function connectFailure(string $message, string $sqlState, int $errno): \PDOException
+    {
+        $e = new \PDOException($message);
+        $e->errorInfo = [$sqlState, $errno, $message];
+        return $e;
+    }
+
+    /**
+     * The half of the errorInfo proof that the classification tests cannot show
+     * on their own: every CONNECT-shaped message above is UNPARSEABLE by
+     * `sqlErrorOf()`'s message reader (the pattern is asserted here verbatim, so
+     * it fails if either side drifts). Together with
+     * `testTransientStreamWriteFailureIsNotStampedSoTheItemStaysRepairable`
+     * classifying those same failures as transient, that pins `errorInfo` as the
+     * signal actually consulted — a message reader alone would see `['', 0]` and
+     * stamp them.
+     */
+    public function testConnectFailureMessagesCarryNothingTheMessageReaderCanParse(): void
+    {
+        $pattern = '/SQLSTATE\[([0-9A-Za-z]{5})\]:[^:]*:\s*(\d+)\b/';
+
+        // A statement failure IS parseable — the control, so a pattern that
+        // matched nothing at all could not pass this test.
+        $this->assertSame(
+            1,
+            preg_match($pattern, 'SQLSTATE[HY000]: General error: 1366 Incorrect string value'),
+            'statement failures must stay parseable from the message'
+        );
+
+        $connectShapes = [
+            'connect refused, errno only in errorInfo (2002)',
+            'too many connections, SQLSTATE class only in errorInfo (1040)',
+        ];
+        foreach ($connectShapes as $case) {
+            $failure = self::transientWriteFailures()[$case][0];
+            $this->assertSame(0, preg_match($pattern, $failure->getMessage()), $case);
+        }
+        $denied = self::deterministicWriteFailures()['connect denied (1045) is NOT transient'][0];
+        $this->assertSame(0, preg_match($pattern, $denied->getMessage()), 'access denied');
     }
 
     /**

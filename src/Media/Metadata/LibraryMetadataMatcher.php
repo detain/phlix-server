@@ -194,6 +194,19 @@ class LibraryMetadataMatcher
     private MetadataOverwritePolicy $overwritePolicy;
 
     /**
+     * Absolute→(season, episode) translator for continuously-numbered shows.
+     *
+     * Pure and stateless, so it is constructed here rather than injected — it has
+     * no dependencies and nothing to configure, and adding a 16th constructor
+     * parameter would touch every call site for no benefit.
+     *
+     * Consulted ONLY by {@see enrichAbsoluteNumbered()}, i.e. only after an
+     * episode's provider lookup has already missed, so it can never alter a row
+     * that matched normally.
+     */
+    private AbsoluteEpisodeMapper $absoluteMapper;
+
+    /**
      * Rating persistence (F2). When a resolve() result carries `plugin_ratings`
      * (produced only on the opt-in `includePluginSources=true` path — e.g. an
      * on-demand single-item refresh), the matcher owns the media_item_id and so
@@ -379,6 +392,7 @@ class LibraryMetadataMatcher
         // behaviour before the gate existed.
         $this->overwritePolicy = $overwritePolicy ?? new MetadataOverwritePolicy();
         $this->ratingService = $ratingService;
+        $this->absoluteMapper = new AbsoluteEpisodeMapper();
     }
 
     /**
@@ -1602,6 +1616,19 @@ class LibraryMetadataMatcher
         /** @var array<int, array<string, mixed>> $seasonCache */
         $seasonCache = [];
         $enriched = 0;
+        /**
+         * The library's OWN numbering for this series, and the episodes whose
+         * number ran past the end of their season's provider episode list.
+         *
+         * Both are locals, deliberately: this worker is resident, so a per-series
+         * index must never live in a `static` (see {@see MediaScanner::$containerCache}
+         * for the same rule on the scan side).
+         *
+         * @var array<int, list<int>> $storedSeasons
+         */
+        $storedSeasons = [];
+        /** @var list<array{row: array<string, mixed>, season: int, number: int}> $outOfRange */
+        $outOfRange = [];
 
         foreach ($this->items->findByParent($seriesId) as $child) {
             $childType = $child['type'] ?? null;
@@ -1622,17 +1649,256 @@ class LibraryMetadataMatcher
                 );
                 $enriched++;
                 foreach ($this->items->findByParent($childId) as $episode) {
+                    $this->recordEpisodeSlot($episode, $seasonData, $storedSeasons, $outOfRange);
                     $this->enrichEpisode($episode, $seasonData, $seriesPoster, $seriesOverview, $seriesInheritance);
                     $enriched++;
                 }
             } elseif ($childType === 'episode') {
                 $seasonData = $this->cachedSeason($tmdbId, $this->intMeta($childMeta, 'season'), $seasonCache);
+                $this->recordEpisodeSlot($child, $seasonData, $storedSeasons, $outOfRange);
                 $this->enrichEpisode($child, $seasonData, $seriesPoster, $seriesOverview, $seriesInheritance);
                 $enriched++;
             }
         }
 
+        // Second pass: the episodes the numeric index missed BECAUSE the library
+        // numbers this show continuously. No-op (and zero extra provider calls)
+        // unless something actually overflowed AND the series clears every guard.
+        $this->enrichAbsoluteNumbered(
+            $tmdbId,
+            $storedSeasons,
+            $outOfRange,
+            $seasonCache,
+            $seriesPoster,
+            $seriesOverview,
+            $seriesInheritance
+        );
+
         return $enriched;
+    }
+
+    /**
+     * Record one episode's stored slot, and queue it for the absolute-numbering
+     * pass when its number ran past the END of the provider's episode list for
+     * that season.
+     *
+     * Deliberately narrow: a number that falls in a HOLE inside the provider's
+     * range is a genuine provider gap (measured at 5 rows estate-wide) and must
+     * never be re-read as an absolute ordinal. Likewise an episode that already
+     * carries a title is left alone — re-reading a correct row is a regression,
+     * not a fix.
+     *
+     * @param array<string, mixed>                                     $episode       Hydrated episode row.
+     * @param array<string, mixed>|null                                $seasonData    Resolved season data.
+     * @param array<int, list<int>>                                    $storedSeasons Census, mutated.
+     * @param list<array{row: array<string, mixed>, season: int, number: int}> $outOfRange Queue, mutated.
+     */
+    private function recordEpisodeSlot(
+        array $episode,
+        ?array $seasonData,
+        array &$storedSeasons,
+        array &$outOfRange
+    ): void {
+        $meta = $this->extractMetadata($episode);
+        $season = $this->intMeta($meta, 'season');
+        $number = $this->intMeta($meta, 'episode');
+        if ($season === null || $number === null || $number < 1) {
+            return;
+        }
+        $storedSeasons[$season][] = $number;
+
+        if ($this->stringOrNull($meta['episode_title'] ?? null) !== null) {
+            return; // already matched — never re-read
+        }
+        $highest = 0;
+        $episodes = ($seasonData !== null && is_array($seasonData['episodes'] ?? null))
+            ? $seasonData['episodes']
+            : [];
+        foreach (array_keys($episodes) as $known) {
+            if (is_int($known) && $known > $highest) {
+                $highest = $known;
+            }
+        }
+        if ($highest > 0 && $number > $highest) {
+            $outOfRange[] = ['row' => $episode, 'season' => $season, 'number' => $number];
+        }
+    }
+
+    /**
+     * Re-read overflowing episode numbers as ABSOLUTE ordinals and enrich from the
+     * season they really belong to.
+     *
+     * This is the fix for the largest measured unmatched bucket: 742 of 1,328
+     * unmatched episodes (55.9%) on the production estate are an episode number
+     * past the end of the provider's season, because the library numbers the show
+     * continuously (`Naruto Shippuden - 368`, `Hunter x Hunter (2011) - S01E131`).
+     *
+     * Two strategies, in order — see {@see AbsoluteEpisodeMapper} for why both are
+     * needed and which real series proved each one:
+     *
+     * 1. `providerChain()` + `locate()` — the provider numbers the show
+     *    continuously as well, so the stored number IS the provider's number and
+     *    only the season it was looked up in was wrong. Pure lookup.
+     * 2. `contiguousRun()` + `map()` — the provider numbers per season, so the
+     *    stored number has to be translated arithmetically.
+     *
+     * **Fail closed.** A wrong translation attaches a confident, wrong title that
+     * nobody notices until playback, so every guard in {@see AbsoluteEpisodeMapper}
+     * must pass, the translated slot must actually carry a provider title, and
+     * anything else leaves the row exactly as unmatched as it was.
+     *
+     * **What it does NOT do.** It does not rewrite `metadata.season`/`.episode` and
+     * does not re-parent the row. Those are scanner-owned identity fields belonging
+     * to the reindex step; a wrong value there would be structural rather than
+     * cosmetic. The original ordinal and the slot the title came from are recorded
+     * as `absolute_number` / `matched_season` / `matched_episode` so a later
+     * re-parenting step has an audit trail.
+     *
+     * **Cost.** Zero extra provider calls unless an overflow exists AND the series
+     * passes {@see AbsoluteEpisodeMapper::candidateSeason()} — measured at 9 of 434
+     * series on the production estate. For those, the season walk reuses the
+     * caller's per-series season cache, so a 20-season show costs ~20 fetches once.
+     *
+     * @param array<int, list<int>>                                    $storedSeasons The library's own numbering.
+     * @param list<array{row: array<string, mixed>, season: int, number: int}> $outOfRange Overflowing episodes.
+     * @param array<int, array<string, mixed>>                         $seasonCache   Season cache (mutated).
+     * @param array{
+     *     genres?: list<string>,
+     *     tags?: list<string>,
+     *     backdrop_url?: string,
+     *     theme_audio_url?: string
+     * } $seriesInheritance
+     *
+     * @return int Episodes rescued by the absolute reading.
+     */
+    private function enrichAbsoluteNumbered(
+        string $tmdbId,
+        array $storedSeasons,
+        array $outOfRange,
+        array &$seasonCache,
+        ?string $seriesPoster,
+        ?string $seriesOverview,
+        array $seriesInheritance
+    ): int {
+        if ($outOfRange === [] || $this->seriesResolver === null || $tmdbId === '') {
+            return 0;
+        }
+        $candidate = $this->absoluteMapper->candidateSeason($storedSeasons);
+        if ($candidate === null) {
+            return 0;
+        }
+        $season = $candidate['season'];
+        $storedMax = $candidate['max'];
+        $retry = array_values(array_filter($outOfRange, static fn(array $r): bool => $r['season'] === $season));
+        if ($retry === []) {
+            return 0;
+        }
+
+        // One walk of the provider's seasons feeds both strategies. Strategy 1 (the
+        // provider numbers the show continuously too) is a lookup and is preferred;
+        // strategy 2 (per-season provider numbering) is arithmetic and carries the
+        // strict total-equality guard.
+        $providerSeasons = $this->providerSeasonNumbers($tmdbId, $seasonCache);
+        $chain = $this->absoluteMapper->providerChain($providerSeasons);
+        $run = $this->absoluteMapper->contiguousRun($providerSeasons);
+        $arithmetic = $this->absoluteMapper->isAbsoluteNumbering($run, $season, $storedMax);
+        if ($chain === [] && !$arithmetic) {
+            $this->logger->info('LibraryMetadataMatcher: absolute numbering refused', [
+                'tmdb_id' => $tmdbId,
+                'stored_season' => $season,
+                'stored_max' => $storedMax,
+                'provider_seasons' => count($run),
+                'provider_total' => array_sum($run),
+                'candidates' => count($retry),
+            ]);
+            return 0;
+        }
+
+        $applied = 0;
+        foreach ($retry as $entry) {
+            $chainSeason = $chain === [] ? null : $this->absoluteMapper->locate($chain, $entry['number']);
+            if ($chainSeason !== null) {
+                // The provider's own ordinal — the episode number is already right,
+                // only the season it was looked up in was wrong.
+                $target = [$chainSeason, $entry['number']];
+            } elseif ($arithmetic) {
+                $target = $this->absoluteMapper->map($run, $entry['number']);
+            } else {
+                $target = null;
+            }
+            if ($target === null) {
+                continue;
+            }
+            [$targetSeason, $targetNumber] = $target;
+            $seasonData = $this->cachedSeason($tmdbId, $targetSeason, $seasonCache);
+            $episodes = ($seasonData !== null && is_array($seasonData['episodes'] ?? null))
+                ? $seasonData['episodes']
+                : [];
+            $info = $episodes[$targetNumber] ?? null;
+            if (!is_array($info) || $this->stringOrNull($info['episode_title'] ?? null) === null) {
+                continue; // translated slot carries no provider title — stay unmatched
+            }
+            /** @var array<string, mixed> $info */
+            $this->enrichEpisode(
+                $entry['row'],
+                $seasonData,
+                $seriesPoster,
+                $seriesOverview,
+                $seriesInheritance,
+                [
+                    'info' => $info,
+                    'absolute' => $entry['number'],
+                    'season' => $targetSeason,
+                    'episode' => $targetNumber,
+                ]
+            );
+            $applied++;
+        }
+
+        $this->logger->info('LibraryMetadataMatcher: absolute numbering applied', [
+            'tmdb_id' => $tmdbId,
+            'stored_season' => $season,
+            'stored_max' => $storedMax,
+            'strategy' => $chain !== [] ? 'provider_chain' : 'prefix_sum',
+            'provider_seasons' => $chain !== [] ? count($chain) : count($run),
+            'candidates' => count($retry),
+            'applied' => $applied,
+        ]);
+
+        return $applied;
+    }
+
+    /**
+     * Walk the provider's seasons from 1 and collect each one's episode numbers,
+     * stopping at the first season it does not know.
+     *
+     * Bounded by {@see AbsoluteEpisodeMapper::MAX_SEASONS} so a malformed provider
+     * response can never spin a resident worker. Every fetch goes through
+     * {@see cachedSeason()}, so seasons the caller already resolved cost nothing
+     * and each remaining season is fetched at most once per series.
+     *
+     * @param array<int, array<string, mixed>> $cache Season cache (mutated).
+     *
+     * @return array<int, list<int>> Season number => that season's episode numbers.
+     */
+    private function providerSeasonNumbers(string $tmdbId, array &$cache): array
+    {
+        $out = [];
+        for ($season = 1; $season <= AbsoluteEpisodeMapper::MAX_SEASONS; $season++) {
+            $data = $this->cachedSeason($tmdbId, $season, $cache);
+            $episodes = ($data !== null && is_array($data['episodes'] ?? null)) ? $data['episodes'] : [];
+            $numbers = [];
+            foreach (array_keys($episodes) as $number) {
+                if (is_int($number) && $number >= 1) {
+                    $numbers[] = $number;
+                }
+            }
+            if ($numbers === []) {
+                break;
+            }
+            $out[$season] = $numbers;
+        }
+        return $out;
     }
 
     /**
@@ -1658,13 +1924,19 @@ class LibraryMetadataMatcher
      *     theme_audio_url?: string
      * } $seriesInheritance
      *     Series-level fields inherited by the episode.
+     * @param array{info: array<string, mixed>, absolute: int, season: int, episode: int}|null $absoluteMatch
+     *     Set ONLY by {@see enrichAbsoluteNumbered()} for an episode whose stored number is an
+     *     absolute ordinal. Supplies the provider info for the slot it really belongs to,
+     *     bypassing the numeric index that missed, and records the provenance. Null on every
+     *     other call site, which therefore behaves exactly as before.
      */
     private function enrichEpisode(
         array $episode,
         ?array $seasonData,
         ?string $seriesPoster,
         ?string $seriesOverview,
-        array $seriesInheritance = []
+        array $seriesInheritance = [],
+        ?array $absoluteMatch = null
     ): void {
         $id = is_string($episode['id'] ?? null) ? $episode['id'] : '';
         if ($id === '') {
@@ -1675,7 +1947,9 @@ class LibraryMetadataMatcher
 
         /** @var array<string, mixed> $info */
         $info = [];
-        if ($seasonData !== null && $episodeNumber !== null) {
+        if ($absoluteMatch !== null) {
+            $info = $absoluteMatch['info'];
+        } elseif ($seasonData !== null && $episodeNumber !== null) {
             $episodes = $seasonData['episodes'] ?? [];
             if (is_array($episodes) && isset($episodes[$episodeNumber]) && is_array($episodes[$episodeNumber])) {
                 $info = $episodes[$episodeNumber];
@@ -1683,6 +1957,14 @@ class LibraryMetadataMatcher
         }
 
         $patch = [];
+        if ($absoluteMatch !== null) {
+            // Provenance only. `season`/`episode` and `parent_id` are left exactly
+            // as the scanner wrote them — re-numbering and re-parenting belong to
+            // the reindex step, and a wrong one there would be structural.
+            $patch['absolute_number'] = $absoluteMatch['absolute'];
+            $patch['matched_season'] = $absoluteMatch['season'];
+            $patch['matched_episode'] = $absoluteMatch['episode'];
+        }
         $title = $this->stringOrNull($info['episode_title'] ?? null);
         if ($title !== null) {
             $patch['episode_title'] = $title;

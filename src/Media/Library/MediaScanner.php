@@ -1953,6 +1953,17 @@ class MediaScanner
      * {@see backfillItemSourceMetadata()}). An empty stream set, or an empty
      * item id, is a no-op success.
      *
+     * ATOMIC: the clear + re-insert is one transaction
+     * ({@see ItemRepository::replaceStreams()}). Two consequences that used to
+     * be defects. A rescan can no longer expose a half-replaced set to a
+     * concurrent browse/detail read (`streams: []` or a partial set), and a
+     * write that fails part-way now leaves the item's PREVIOUS rows in place
+     * instead of stranding it permanently partial — the `false` return then
+     * means "nothing changed", not "half-written".
+     *
+     * The ffprobe that produced `$streams` happens in the caller, so no blocking
+     * probe is ever held inside the transaction.
+     *
      * On full success the item is also stamped `streams_probed_at` (see
      * {@see ItemRepository::markStreamsProbed()}) so the lazy playback-info
      * backfill ({@see StreamProbeBackfill}) never re-probes an item whose full
@@ -1971,10 +1982,7 @@ class MediaScanner
         }
 
         try {
-            $this->itemRepository->deleteStreamsByItem($itemId);
-            foreach ($streams as $stream) {
-                $this->itemRepository->addStream($itemId, $stream);
-            }
+            $this->itemRepository->replaceStreams($itemId, $streams);
             $this->itemRepository->markStreamsProbed($itemId);
             return true;
         } catch (\Throwable $e) {

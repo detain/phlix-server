@@ -2074,6 +2074,90 @@ class ItemRepository
     }
 
     /**
+     * ATOMICALLY replace a media item's `media_streams` rows with `$streams`.
+     *
+     * The delete-then-reinsert replacement is the only way to make stream
+     * persistence idempotent (the table has no unique key on
+     * `media_item_id + stream_index`), but issued as bare autocommit statements
+     * — {@see deleteStreamsByItem()} followed by N {@see addStream()} calls — it
+     * has two failure modes this method closes by wrapping the whole sequence in
+     * ONE explicit transaction:
+     *
+     * 1. **Torn reads.** Concurrency here is real, not theoretical: `start.php`
+     *    runs 14 HTTP worker processes with independent connections, and with
+     *    `connections.mysql.pool_enabled` (the DEFAULT)
+     *    {@see \Phlix\Common\Database\PooledMySQLConnection} leases a SEPARATE
+     *    connection per coroutine, so writes are not even serialised inside one
+     *    worker. Between the DELETE and the last INSERT a concurrent
+     *    {@see getItemStreams()} could therefore observe an EMPTY or PARTIAL set
+     *    — surfacing as `streams: []` on the media detail endpoint, or as empty
+     *    audio/subtitle track menus in playback info. Inside a transaction the
+     *    uncommitted rows are invisible to other connections, so a reader sees
+     *    either the pre-delete set or the post-commit set (InnoDB snapshot).
+     * 2. **Permanent partial state.** A write failure part-way through the
+     *    INSERT loop used to leave the item with the deleted rows GONE and only
+     *    some of the new ones present, with nothing to repair it (the scanner
+     *    logs and moves on). The rollback restores the item's previous rows, so
+     *    a failed replacement is a no-op rather than data loss.
+     *
+     * Uses the `beginTrans()`/`commitTrans()`/`rollBackTrans()` API declared on
+     * the base {@see Connection} — NOT a raw `query('START TRANSACTION')`, which
+     * would bypass {@see \Phlix\Common\Database\PhlixMySQLConnection}'s
+     * whole-transaction coroutine mutex and the pool front's `txPending`
+     * tracking. BOTH connection implementations Phlix wires honour it: the
+     * single-socket {@see \Phlix\Common\Database\PhlixMySQLConnection} holds its
+     * transaction mutex for the whole transaction so no other coroutine's query
+     * interleaves, and {@see \Phlix\Common\Database\PooledMySQLConnection} leases
+     * one connection per coroutine for that coroutine's lifetime, so the
+     * statements stay affine to a single connection (and a leaked transaction is
+     * rolled back when the lease is released).
+     *
+     * NO-OP (nothing queried, no transaction opened) for an empty `$itemId` or
+     * an empty `$streams`: an empty probe result must never wipe an item's good
+     * rows — that is exactly why both callers guarded the replacement before
+     * this method existed. Use {@see deleteStreamsByItem()} to genuinely clear
+     * an item.
+     *
+     * MUST NOT be called from inside another transaction. Despite
+     * {@see \Phlix\Common\Database\PhlixMySQLConnection::beginTrans()}'s docblock,
+     * transactions do NOT nest: `workerman/mysql` implements `beginTrans()` as a
+     * bare `PDO::beginTransaction()` and issues no SAVEPOINT anywhere, so a
+     * nested call throws `PDOException: There is already an active transaction`
+     * (verified against MySQL 8.0 on BOTH connection classes). Neither caller
+     * nests today — no code path reaching here opens a transaction — and the
+     * failure mode is safe if one ever did (the throw happens BEFORE the DELETE,
+     * so nothing is lost; the caller's catch degrades as usual) — but it would
+     * silently stop persisting streams, so keep this call outside transactions.
+     *
+     * @param string                     $itemId  The media item's unique identifier.
+     * @param list<array<string, mixed>> $streams Replacement rows, in insert order,
+     *                                            each shaped for {@see addStream()}.
+     * @return void
+     *
+     * @throws Throwable Re-thrown after the rollback, so the caller keeps its own
+     *         error contract ({@see MediaScanner::persistStreams()} returns false,
+     *         {@see StreamProbeBackfill} degrades to the stored rows).
+     */
+    public function replaceStreams(string $itemId, array $streams): void
+    {
+        if ($itemId === '' || $streams === []) {
+            return;
+        }
+
+        $this->db->beginTrans();
+        try {
+            $this->deleteStreamsByItem($itemId);
+            foreach ($streams as $stream) {
+                $this->addStream($itemId, $stream);
+            }
+            $this->db->commitTrans();
+        } catch (Throwable $e) {
+            $this->db->rollBackTrans();
+            throw $e;
+        }
+    }
+
+    /**
      * Stamps a media item's streams_probed_at marker (migration 071), recording
      * that its FULL media_streams set was persisted from a real ffprobe.
      *

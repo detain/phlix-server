@@ -446,7 +446,14 @@ final class AdminSettingsControllerTest extends TestCase
         $tmdb = $meta['tmdb.api_key'];
 
         $this->assertTrue($tmdb['secret']);
-        $this->assertFalse($tmdb['restart']);
+        // restart:true since phlix-shared v0.46.0. This assertion previously
+        // read assertFalse() and so encoded the defect: TmdbProvider is a
+        // PHP-DI factory() whose result is cached per container, one container
+        // is built per worker in onWorkerStart, and phlix-library-scan resolves
+        // it eagerly at fork time — so the key is captured BY VALUE at
+        // construction and a saved key stays inert until the workers are
+        // recycled. See docs/dev/settings-restart-gap.md.
+        $this->assertTrue($tmdb['restart']);
         $this->assertSame('metadata', $tmdb['group']);
     }
 

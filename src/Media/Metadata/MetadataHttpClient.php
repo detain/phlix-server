@@ -594,10 +594,15 @@ class MetadataHttpClient
      * Fallback synchronous cURL request for CLI/testing contexts where no
      * Workerman event loop is running.
      *
+     * Protected rather than private to provide a seam: a test can override just
+     * the transport and exercise the real status-handling logic in
+     * {@see getResult()}, which is where the 401-body-returned-as-data defect
+     * lived.
+     *
      * @param array<string, string> $headers Request headers
      * @return ResponseInterface|null Response or null on error
      */
-    private function requestCurl(string $url, array $headers): ?ResponseInterface
+    protected function requestCurl(string $url, array $headers): ?ResponseInterface
     {
         if ($url === '') {
             return null;

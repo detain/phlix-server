@@ -379,19 +379,107 @@ class EpisodeFilenameParserTest extends TestCase
         $this->assertSame('Goblin Slayer', $r['episode_title']);
     }
 
-    /**
-     * The "must contain a word" guard uses \p{L}, so a non-Latin title passes
-     * while a bare marker fragment ("E02") does not.
-     */
-    public function testNonLatinTitleIsKeptAndMarkerFragmentIsNot(): void
+    /** A non-Latin title is kept verbatim. */
+    public function testNonLatinTitleIsKept(): void
     {
         $r = EpisodeFilenameParser::parse("Show S01E07 [720p] \u{541B}\u{306E}\u{540D}\u{306F}.mkv", true);
         $this->assertNotNull($r);
         $this->assertSame("\u{541B}\u{306E}\u{540D}\u{306F}", $r['episode_title']);
+    }
 
-        $r2 = EpisodeFilenameParser::parse('Seinfeld S07E14-E15 [720p].mkv', true);
+    /** A marker with no free text after it yields no title. */
+    public function testRangeMarkerWithNoTitleYieldsNull(): void
+    {
+        $r = EpisodeFilenameParser::parse('Seinfeld S07E14-E15 [720p].mkv', true);
+        $this->assertNotNull($r);
+        $this->assertNull($r['episode_title']);
+    }
+
+    /**
+     * 🔴 REGRESSION PIN — do not "clean up" short or punctuation-only titles.
+     *
+     * A `/\p{L}\p{L}/u` "must contain a word" guard was written for this method
+     * and DELETED after measurement: it rejects 88 real files and all 88 are
+     * genuine episode titles, 21 of which the previous parser already returned.
+     * Every filename below is a real prod basename; the expected value is the
+     * real episode title.
+     *
+     * @dataProvider shortTitleCases
+     */
+    public function testShortAndPunctuationOnlyTitlesAreKept(string $filename, string $expected): void
+    {
+        $result = EpisodeFilenameParser::parse($filename, true);
+        $this->assertNotNull($result, "should parse: {$filename}");
+        $this->assertSame($expected, $result['episode_title']);
+    }
+
+    /** @return array<string, array{0:string,1:string}> */
+    public static function shortTitleCases(): array
+    {
+        return [
+            'dotted initialism'  => ['Gargoyles - S02 E29 - M.I.A. (480p - DVDRip).mp4', 'M.I.A'],
+            'long initialism'    => ['Beyond S02E09 [720p] F.G.B..mkv', 'F.G.B'],
+            'ampersand'          => ['Homeland (2011) - S02E05 - Q&A (1080p BluRay x265 Silence).mkv', 'Q&A'],
+            'roman numeral'      => ['Black Sails S02E02 X.mkv', 'X'],
+            'digits and dots'    => ['Warehouse 13 S02E05 [1080p] 13.1.mkv', '13.1'],
+            'digits and comma'   => ['Person of Interest S05E04 [720p] 6,741.mkv', '6,741'],
+            'digits and dashes'  => ["Marvel's Agents of S.H.I.E.L.D. S01E02 [1080p] 0-8-4.mkv", '0-8-4'],
+            'version-like title' => ['Nikita S01E02 [720p] 2.0.mkv', '2.0'],
+            'letter plus digit'  => ['Star Trek Voyager S07E19 [576p] Q2.mkv', 'Q2'],
+            'clock range'        => ['24 S01E15 [1080p] 200 P.M. - 300 P.M..mkv', '200 P.M. - 300 P.M'],
+        ];
+    }
+
+    /**
+     * The pre-existing bare-ordinal guard still fires: a two-digit multi-episode
+     * range continuation that is not in the tight "-Enn" form ("S06E04-05")
+     * leaves a bare "05", which is not a title.
+     */
+    public function testBareOrdinalResidueIsNotATitle(): void
+    {
+        $r = EpisodeFilenameParser::parse('The.Office.US.S06E04-05.1080p.NF.WEB.x264-MRSK.mkv', true);
+        $this->assertNotNull($r);
+        $this->assertNull($r['episode_title']);
+    }
+
+    /**
+     * ⚠ KNOWN, MEASURED LIMIT — carried over unchanged from before SM-0.2, NOT
+     * introduced by it.
+     *
+     * The bare-ordinal guard also refuses episodes whose real title IS a number:
+     * Stargate SG-1 "200"/"1969"/"2010", Battlestar Galactica "33", Loki "1893",
+     * Heroes "1961", Family Guy "420", X-Files "3", Daredevil ".380". Measured
+     * over the reference library the guard changes 25 files, of which 22 are
+     * genuine titles like these and only 3 are range fragments.
+     *
+     * SM-0.2 deliberately does NOT flip it: all 25 rows already carry a provider
+     * title, so nothing is recovered by relaxing it today, and the interaction
+     * with the absolute-numbering rules ("Show - 394 - 395") is unmeasured. It
+     * needs its own step. This test exists so the limit is visible rather than
+     * folklore.
+     */
+    public function testNumericEpisodeTitlesAreRefusedByTheBareOrdinalGuard(): void
+    {
+        $r = EpisodeFilenameParser::parse('Stargate SG-1 S10E06 [1080p] 200.mkv', true);
+        $this->assertNotNull($r);
+        $this->assertNull($r['episode_title'], 'documented limit: a numeric episode title is refused');
+
+        $r2 = EpisodeFilenameParser::parse('Battlestar Galactica (2003) S01E01 [720p] 33.mkv', true);
         $this->assertNotNull($r2);
         $this->assertNull($r2['episode_title']);
+    }
+
+    /**
+     * A release token fused to its group with a dash ("DVDRip-TV-Series") is
+     * still a release token: the head before the first "-" is tested too. Real
+     * prod basename — the only file in the reference library where this is the
+     * difference between a title and a junk run.
+     */
+    public function testReleaseTokenFusedToItsGroupSuffixStillTruncates(): void
+    {
+        $r = EpisodeFilenameParser::parse('MacGyver.S01E01.Pilot.DVDRip-TV-Series No.001 S1E01 Pilot.avi', true);
+        $this->assertNotNull($r);
+        $this->assertSame('Pilot', $r['episode_title']);
     }
 
     /**

@@ -253,9 +253,20 @@ final class EpisodeFilenameParser
      * bracket group ("… (1080p AMZN WEB-DL x265) REPACK") is still reachable by
      * {@see truncateAtReleaseTag()}.
      *
-     * Returns null when nothing meaningful remains — empty, a bare number, or
-     * text with no word in it ("E02", "v2", a CRC32 stamp), e.g.
-     * "Naruto - 394 [720p]" or "Bleach - 160 -".
+     * Returns null when nothing meaningful remains — an empty residue or a bare
+     * ordinal, e.g. "Naruto - 394 [720p]" or "Bleach - 160 -". The junk shapes
+     * this used to need a separate guard for ("v2", a CRC32 stamp, a trailing
+     * "-E17" range marker) are all removed upstream instead, by
+     * {@see truncateAtReleaseTag()} and the range strip below.
+     *
+     * ⚠ DO NOT ADD A "must contain a word" GUARD. It was written, measured and
+     * deleted: `/\p{L}\p{L}/u` (two adjacent letters) rejects 88 real files, and
+     * ALL 88 are genuine titles — every dotted initialism ("M.I.A.", "P.O.V",
+     * "A.W.O.L", "T.A.H.I.T.I", "F.Z.Z.T"), every numeric title ("6,741", "2.0",
+     * "13.1", "0-8-4", ".07%", "1:00 A.M. - 2:00 A.M."), and Black Sails' Roman
+     * numerals ("I", "V", "X"). 21 of the 88 are titles the PREVIOUS parser
+     * already returned, so the guard was a live regression. Pinned by
+     * {@see EpisodeFilenameParserTest::testShortAndPunctuationOnlyTitlesAreKept()}.
      *
      * KNOWN LIMITS (deliberate, measured): a part marker with free text after it
      * ("Look at the Princess (3) The Maltese Crichton") still loses the marker;
@@ -280,12 +291,6 @@ final class EpisodeFilenameParser
         $title = self::trimSeparators($title);
 
         if ($title === '' || preg_match('/^\d+$/', $title) === 1) {
-            return null;
-        }
-        // Require a word: two adjacent letters (any script, so CJK titles pass).
-        // Rejects "E02", "v2", "5.1" and bare release stamps without needing to
-        // enumerate them.
-        if (preg_match('/\p{L}\p{L}/u', $title) !== 1) {
             return null;
         }
 

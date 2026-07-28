@@ -31,6 +31,7 @@ use Phlix\Common\Container\ServiceProviderInterface;
 use Phlix\Common\RateLimit\DbRateLimiter;
 use Phlix\Common\RateLimit\RateLimiter;
 use Phlix\Common\RateLimit\RateLimitProfiles;
+use Phlix\Media\RecommendationService;
 use Phlix\Server\Http\Controllers\AuthController;
 use Phlix\Server\Http\Controllers\AuthProviderController;
 use Phlix\Server\Http\Controllers\WebAuthnController;
@@ -203,7 +204,42 @@ final class AuthServicesProvider implements ServiceProviderInterface
             // MAX_PROFILES_PER_USER and make `auth.max_profiles` inert.
             UserProfileManager::class => autowire()
                 ->constructorParameter('settings', get(SettingsRepository::class)),
-            WatchHistory::class => autowire(),
+            // `recommendationService` is named explicitly: PHP-DI skips optional
+            // ctor params with defaults, so it stayed null and the P4-S2 background
+            // step in WatchHistory::updateProgress() —
+            // `if ($newlyCompleted && $this->recommendationService !== null)`
+            // ({@see \Phlix\Auth\WatchHistory}:744) — could never run. The binding
+            // is CORRECT but CURRENTLY INERT, and the distinction matters:
+            //
+            //  - {@see \Phlix\Auth\WatchHistory::updateProgress()} and
+            //    {@see \Phlix\Auth\WatchHistory::markCompleted()} have ZERO callers
+            //    repo-wide. Live playback progress is written by
+            //    {@see \Phlix\Session\PlaybackController} against `playback_state`,
+            //    not through this class (WebPortalRouter only ever calls
+            //    getNextUp()/removeFromHistory()/clearHistory() on it). So nothing
+            //    reaches the guarded branch today.
+            //  - It therefore does NOT by itself make
+            //    `GET /api/v1/me/recommendations` non-empty: nothing writes
+            //    `user_recommendations` after this change either. Reviving that
+            //    endpoint needs a caller, which is a separate piece of work.
+            //
+            // Bound anyway because it is the right wiring the moment a caller
+            // exists, and because leaving it null keeps the same silent-null trap
+            // fixed elsewhere in this provider. No cycle: RecommendationService
+            // takes the Connection + SimilarityService (which takes
+            // ItemRepository), none of which reach back to WatchHistory.
+            //
+            // ⚠ FOLLOW-UP (not this step): before ANY caller is wired, move the
+            // recompute behind the existing job queue (cf.
+            // {@see \Phlix\Media\SimilarityJobStore} +
+            // {@see \Phlix\Media\SimilarityWorker}).
+            // {@see \Phlix\Media\RecommendationService::computeBecauseYouWatched()}
+            // issues one getSimilar() query PER watched item, inline on the
+            // single-threaded event loop; the per-call fan-out is now capped by
+            // RecommendationService::MAX_WATCHED_SEEDS, but a bounded synchronous
+            // fan-out in an HTTP handler is still the wrong place for it.
+            WatchHistory::class => autowire()
+                ->constructorParameter('recommendationService', get(RecommendationService::class)),
 
             AuthProviderRegistry::class => autowire(),
             ProviderManager::class => autowire(),
@@ -353,8 +389,20 @@ final class AuthServicesProvider implements ServiceProviderInterface
                     return WebAuthnSettings::fromConfig($cfg);
                 }
             ),
-            WebAuthnCredentialRepository::class => autowire(),
-            WebAuthnManager::class => autowire(),
+            // Both `logger` params are named explicitly: PHP-DI skips optional
+            // ctor params with defaults, so both stayed null and every
+            // `$this->logger?->…` / `if ($this->logger)` site was skipped —
+            // passkey registration/authentication produced NO log line at all
+            // (WebAuthnCredentialRepository has no fallback; the manager's
+            // log() helper is a no-op without one). Bound to the same AUTH
+            // channel AuthManager uses below; the alias resolves to a
+            // StructuredLogger, which satisfies both the repository's
+            // Psr\Log\LoggerInterface param and the manager's StructuredLogger
+            // param.
+            WebAuthnCredentialRepository::class => autowire()
+                ->constructorParameter('logger', get('logger.auth')),
+            WebAuthnManager::class => autowire()
+                ->constructorParameter('logger', get('logger.auth')),
             // SV-4.15(f): the start/finish WebAuthn authentication ceremonies get
             // their own per-surface DB-backed limiters, bound explicitly to their
             // RateLimitProfiles container ids for the same optional-param reason

@@ -5,17 +5,28 @@ declare(strict_types=1);
 namespace Phlix\Tests\Unit\Common\Container;
 
 use DI\ContainerBuilder;
+use Phlix\Admin\BackupManager;
 use Phlix\Auth\AuthManager;
 use Phlix\Auth\DbLoginRateLimitStore;
 use Phlix\Auth\JwtHandler;
+use Phlix\Auth\UserRepository;
+use Phlix\Auth\WatchHistory;
+use Phlix\Auth\WebAuthn\WebAuthnCredentialRepository;
+use Phlix\Auth\WebAuthn\WebAuthnManager;
 use Phlix\Media\Library\MediaScanner;
+use Phlix\Media\Library\RatingGate;
+use Phlix\Media\Markers\Detection\BackgroundDetectorWorker;
 use Phlix\Media\MediaAsset\MediaAssetJobStore;
+use Phlix\Media\Metadata\FuzzyMatcher;
 use Phlix\Media\Metadata\LibraryMetadataMatcher;
 use Phlix\Media\Metadata\MetadataManager;
 use Phlix\Media\SimilarityJobStore;
 use Phlix\Media\SimilarityWorker;
 use Phlix\Media\Storage\ArtworkStorage;
+use Phlix\Playlists\SmartPlaylistRefreshHandler;
 use Phlix\Server\Http\Controllers\Admin\AdminUserController;
+use Phlix\Server\Http\Controllers\MediaUserDataController;
+use Phlix\Webhooks\WebhookService;
 use Phlix\Common\Container\ContainerFactory;
 use Phlix\Common\Container\Providers\AdminServicesProvider;
 use Phlix\Common\Container\Providers\AuthServicesProvider;
@@ -604,6 +615,227 @@ final class ContainerFactoryTest extends TestCase
             'MetadataManager must resolve with the config/metadata.php-derived '
             . 'provider-priority map via the named DI binding, not a divergent default.'
         );
+    }
+
+    /**
+     * The production defect: `RatingGate::class => autowire()` (bare) left
+     * {@see RatingGate::$users} NULL, because PHP-DI skips optional ctor params
+     * that carry a default. `$users` is what guards the account-owner/admin
+     * bypass in {@see RatingGate::resolveFilterForUser()}, so the CONTAINER-BUILT
+     * gate capped the owner at the active profile's `profile_settings.content_rating`
+     * (default 'R') and every NC-17 item 404'd out of `/playback-info` and
+     * `/transcode` for the owner — while an anonymous request still got a 200.
+     *
+     * A hand-constructed `new RatingGate($items, $profiles, $users)` would NOT
+     * have caught this, so the assertion is deliberately against the container.
+     */
+    public function test_rating_gate_wires_user_repository_in_prod(): void
+    {
+        $container = $this->containerWithMockedDb();
+
+        /** @var RatingGate $gate */
+        $gate = $container->get(RatingGate::class);
+
+        $this->assertInstanceOf(
+            UserRepository::class,
+            $this->readPrivate($gate, 'users'),
+            'RatingGate must resolve with a UserRepository or the account-owner/admin '
+            . 'parental bypass is silently dead and the owner gets 404s on over-cap items.'
+        );
+    }
+
+    /**
+     * The behavioural half of the same regression, end-to-end through the real
+     * container: an `is_admin` ACCOUNT must not be capped even when its active
+     * profile carries a restrictive `profile_settings.content_rating`.
+     *
+     * The mocked connection answers all three queries the path makes, and the
+     * profile row is deliberately NOT an admin profile with a real 'R' cap — so
+     * with a null `$users` (the pre-fix wiring) `resolveFilterForUser()` falls
+     * through to `UserProfileManager::getActiveRatingFilter()` and returns the
+     * G/PG/PG-13/R cap instead of null. That is what made NC-17 unplayable.
+     */
+    public function test_container_built_rating_gate_does_not_cap_an_admin_account(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(
+            static function (string $sql): array {
+                if (str_contains($sql, 'FROM users')) {
+                    return [['id' => 'owner-1', 'is_admin' => 1]];
+                }
+                if (str_contains($sql, 'user_profiles')) {
+                    return [[
+                        'id' => 'profile-1',
+                        'user_id' => 'owner-1',
+                        'name' => 'Kids',
+                        'is_active' => 1,
+                        'is_admin' => 0,
+                        'content_rating' => 'R',
+                    ]];
+                }
+                if (str_contains($sql, 'profile_settings')) {
+                    return [['content_rating' => 'R', 'allow_unrated' => 1]];
+                }
+                return [];
+            }
+        );
+
+        /** @var RatingGate $gate */
+        $gate = $this->containerWithConnection($db)->get(RatingGate::class);
+
+        $this->assertNull(
+            $gate->resolveFilterForUser('owner-1'),
+            'The container-built gate must return the permissive null filter for an '
+            . 'is_admin account; a non-null cap is the NC-17 playback 404 defect.'
+        );
+    }
+
+    /**
+     * `MediaUserDataController::$ratingGate` is the same PHP-DI landmine: optional,
+     * defaulted, therefore skipped by a bare `autowire()`. Every parental check in
+     * the controller is written `$this->ratingGate?->…` / guarded by
+     * `$this->ratingGate !== null`, so a null gate skipped the cap ENTIRELY and a
+     * rating-capped profile could favorite / rate / like / mark-watched items above
+     * its cap.
+     */
+    public function test_media_user_data_controller_wires_rating_gate_in_prod(): void
+    {
+        $container = $this->containerWithMockedDb();
+
+        /** @var MediaUserDataController $controller */
+        $controller = $container->get(MediaUserDataController::class);
+
+        $this->assertInstanceOf(
+            RatingGate::class,
+            $this->readPrivate($controller, 'ratingGate'),
+            'MediaUserDataController must resolve with a RatingGate or its parental '
+            . 'checks are all skipped (fail-open).'
+        );
+    }
+
+    /**
+     * Every class-typed OPTIONAL constructor parameter that must be bound
+     * explicitly, as `[container id, ctor param name]`.
+     *
+     * PHP-DI's own definition dump is the oracle here — it renders a skipped
+     * optional param as `$name = (default value)` and a bound one as
+     * `$name = get(...)`. That is exactly the evidence that identified the
+     * RatingGate defect on production, and it is the only check that catches the
+     * cases where the class ALSO has an internal `?? fallback` (FuzzyMatcher,
+     * WebhookService, BackgroundDetectorWorker), where a resolved-object
+     * assertion cannot tell a bound dependency from a self-built one.
+     *
+     * @return array<string, array{0: string, 1: string}>
+     */
+    public static function explicitlyBoundOptionalParams(): array
+    {
+        return [
+            'RatingGate::$users' => [RatingGate::class, 'users'],
+            'MediaUserDataController::$ratingGate' => [MediaUserDataController::class, 'ratingGate'],
+            'FuzzyMatcher::$logger' => [FuzzyMatcher::class, 'logger'],
+            'SmartPlaylistRefreshHandler::$collectionManager' => [
+                SmartPlaylistRefreshHandler::class,
+                'collectionManager',
+            ],
+            'SmartPlaylistRefreshHandler::$collectionRepo' => [
+                SmartPlaylistRefreshHandler::class,
+                'collectionRepo',
+            ],
+            'BackgroundDetectorWorker::$logger' => [BackgroundDetectorWorker::class, 'logger'],
+            'BackupManager::$logger' => [BackupManager::class, 'logger'],
+            'BackupManager::$auditLogger' => [BackupManager::class, 'auditLogger'],
+            'WebhookService::$logger' => [WebhookService::class, 'logger'],
+            'WatchHistory::$recommendationService' => [WatchHistory::class, 'recommendationService'],
+            'WebAuthnCredentialRepository::$logger' => [WebAuthnCredentialRepository::class, 'logger'],
+            'WebAuthnManager::$logger' => [WebAuthnManager::class, 'logger'],
+        ];
+    }
+
+    /**
+     * @dataProvider explicitlyBoundOptionalParams
+     */
+    public function test_optional_ctor_param_is_explicitly_bound_not_skipped(
+        string $id,
+        string $param
+    ): void {
+        $container = ContainerFactory::create($this->baseConfig());
+        if (!$container instanceof \DI\Container) {
+            self::fail('ContainerFactory must build a PHP-DI container for definition introspection.');
+        }
+
+        $definition = $container->debugEntry($id);
+
+        $this->assertStringNotContainsString(
+            '$' . $param . ' = (default value)',
+            $definition,
+            "{$id}::\${$param} is an optional ctor param, so PHP-DI SKIPS it unless the "
+            . "definition names it via ->constructorParameter('{$param}', get(…)). It is "
+            . "currently skipped, which silently disables the feature it feeds:\n" . $definition
+        );
+        $this->assertMatchesRegularExpression(
+            '/\$' . preg_quote($param, '/') . ' = get\(/',
+            $definition,
+            "{$id}::\${$param} must be bound with get(…):\n" . $definition
+        );
+    }
+
+    /**
+     * BOOT SAFETY: `get(X::class)` on an unresolvable id throws when the entry is
+     * built, so every dependency named above must actually resolve. This walks the
+     * real provider stack (only the MySQL connection is a double) and builds each
+     * touched class, so a missing binding, an un-autowirable interface or a
+     * dependency CYCLE fails here in CI instead of taking the server down at boot.
+     *
+     * @return array<string, array{0: string}>
+     */
+    public static function classesWithNewlyBoundDependencies(): array
+    {
+        $out = [];
+        foreach (self::explicitlyBoundOptionalParams() as [$id, $_param]) {
+            $out[$id] = [$id];
+        }
+
+        return $out;
+    }
+
+    /**
+     * @dataProvider classesWithNewlyBoundDependencies
+     */
+    public function test_container_resolves_class_with_its_newly_bound_dependencies(string $id): void
+    {
+        $container = $this->containerWithMockedDb();
+
+        $this->assertIsObject(
+            $container->get($id),
+            "{$id} must be resolvable from the production provider stack — an unresolvable "
+            . 'explicit get(…) throws at container-build/boot time, which is worse than the '
+            . 'silently-null dependency it replaces.'
+        );
+    }
+
+    /**
+     * Build the canonical provider stack with the MySQL {@see Connection} rebound
+     * to the supplied double, so a test can script the SQL the resolved services
+     * run without touching a database.
+     */
+    private function containerWithConnection(Connection $connection): ContainerInterface
+    {
+        $providers = ContainerFactory::defaultProviders();
+        $providers[] = new class ($connection) implements ServiceProviderInterface {
+            public function __construct(private Connection $connection)
+            {
+            }
+
+            public function register(ContainerBuilder $builder, array $appConfig): void
+            {
+                $connection = $this->connection;
+                $builder->addDefinitions([
+                    Connection::class => factory(static fn (): Connection => $connection),
+                ]);
+            }
+        };
+
+        return ContainerFactory::create($this->baseConfig(), $providers);
     }
 
     /**

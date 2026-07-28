@@ -13,7 +13,9 @@ namespace Phlix\Common\Container\Providers;
 
 use DI\ContainerBuilder;
 use Phlix\Admin\SettingsRepository;
+use Phlix\Common\Container\DegradedBuild;
 use Phlix\Common\Container\ServiceProviderInterface;
+use Phlix\Common\Logger\LogChannels;
 use Phlix\Config\HwAccelConfig;
 use Phlix\Media\Transcoding\FfmpegRunner;
 use Phlix\Media\Transcoding\EncodeSettings;
@@ -215,8 +217,21 @@ final class TranscodeServicesProvider implements ServiceProviderInterface
                                 $effectiveMaxTranscodes = (int) $override;
                             }
                         }
-                    } catch (\Throwable) {
-                        // Keep the config-file default.
+                    } catch (\Throwable $e) {
+                        // Keep the config-file default — but say so. This factory
+                        // result is reused for the worker's whole lifetime, so an
+                        // admin-saved concurrency cap stays ignored until a recycle,
+                        // and the config value is indistinguishable from an override
+                        // that happens to equal it.
+                        DegradedBuild::warnUnlessAbsent(
+                            $c,
+                            LogChannels::MEDIA,
+                            'ffmpeg.max_concurrent_transcodes: the settings store was unreachable; '
+                            . 'keeping the config-file transcode concurrency cap. An admin-saved cap '
+                            . 'stays ignored by this worker until it is recycled.',
+                            $e,
+                            ['config_max_concurrent_transcodes' => $maxConcurrentTranscodes]
+                        );
                     }
                     // The constructor args are POSITIONAL, so threading the SV-1.9
                     // ENOSPC threshold (position 13) requires passing position 12
@@ -295,6 +310,19 @@ final class TranscodeServicesProvider implements ServiceProviderInterface
      * transcode fails: a container without a settings binding (or one whose
      * database is down) degrades to the shipped encode defaults rather than
      * throwing out of the TranscodeManager factory.
+     *
+     * The two failures are NOT the same and are treated differently:
+     *
+     *   - **Not defined at all** (`NotFoundExceptionInterface`) — a normal,
+     *     expected shape; several unit containers register no settings store.
+     *     Stays quiet.
+     *   - **Defined but unbuildable** — a genuine degradation: encoding then
+     *     silently runs on shipped defaults for the worker's whole lifetime.
+     *     Logged.
+     *
+     * `$c->has()` cannot make this distinction: with autowiring enabled it
+     * returns TRUE for any instantiable class. The exception type is the only
+     * reliable signal.
      */
     private static function optionalSettings(ContainerInterface $c): ?SettingsRepository
     {
@@ -302,7 +330,16 @@ final class TranscodeServicesProvider implements ServiceProviderInterface
             $settings = $c->get(SettingsRepository::class);
 
             return $settings instanceof SettingsRepository ? $settings : null;
-        } catch (\Throwable) {
+        } catch (\Throwable $e) {
+            DegradedBuild::warnUnlessAbsent(
+                $c,
+                LogChannels::MEDIA,
+                'The settings store is bound but could not be built; encode settings fall back '
+                . 'to their shipped defaults. Admin-saved encode values stay ignored by this '
+                . 'worker until it is recycled.',
+                $e
+            );
+
             return null;
         }
     }

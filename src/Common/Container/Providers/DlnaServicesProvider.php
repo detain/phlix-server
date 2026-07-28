@@ -12,6 +12,7 @@ declare(strict_types=1);
 namespace Phlix\Common\Container\Providers;
 
 use DI\ContainerBuilder;
+use Phlix\Common\Container\DegradedBuild;
 use Phlix\Common\Container\ServiceProviderInterface;
 use Phlix\Common\Logger\LogChannels;
 use Phlix\Common\Logger\LoggerFactory;
@@ -136,8 +137,21 @@ final class DlnaServicesProvider implements ServiceProviderInterface
                     try {
                         /** @var MusicLibraryService $musicLibrary */
                         $musicLibrary = $c->get(MusicLibraryService::class);
-                    } catch (\Throwable) {
+                    } catch (\Throwable $e) {
+                        // Degrading to an empty artist container is the right call —
+                        // it beats failing DLNA startup outright — but it is a real,
+                        // user-visible loss: the Audio category lists artists whose
+                        // albums and tracks are then unreachable. Nothing else in
+                        // this factory resolves MusicLibraryService, so this catch
+                        // is genuinely reachable.
                         $musicLibrary = null;
+                        DegradedBuild::warnUnlessAbsent(
+                            $c,
+                            LogChannels::DLNA,
+                            'MusicLibraryService could not be built: the DLNA Audio category will '
+                            . 'list artists but their albums and tracks will be unreachable.',
+                            $e
+                        );
                     }
 
                     $server->setLibraryBridge(new LibraryBridge($items, $hls, $logger, $musicLibrary));

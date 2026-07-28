@@ -1553,6 +1553,104 @@ class MediaScannerTest extends TestCase
     }
 
     /**
+     * streamLanguage(): truncation is CHARACTER-wise, never byte-wise.
+     *
+     * media_streams.language is VARCHAR(10) under utf8mb4, so 10 is a character
+     * budget. A byte-wise substr($lang, 0, 10) on a mistagged non-ASCII value
+     * lands mid-sequence and emits invalid UTF-8, which MySQL rejects outright:
+     *
+     *   SQLSTATE[HY000]: General error: 1366 Incorrect string value: '\xC3'
+     *                    for column 'language' at row 1
+     *
+     * ItemRepository::addStream() binds `language` straight into the INSERT with
+     * no toValidUtf8() guard (unlike the media_items writes), so that rejection
+     * reaches MySQL. Both write paths delete the item's existing rows before
+     * re-inserting and neither is transactional, so one bad tag costs the item
+     * most of its stream set — and StreamProbeBackfill::ensureFor()'s catch
+     * stamps markStreamsProbed() unconditionally, which makes its probed-marker
+     * guard skip that item forever.
+     *
+     * Each case asserts the guard is real (the byte-wise cut genuinely IS
+     * invalid UTF-8) before asserting the value survives, so the fixture cannot
+     * silently decay into a case that no longer exercises the boundary.
+     *
+     * @dataProvider multiByteLanguageCases
+     */
+    public function testStreamLanguageTruncatesOnCharacterBoundariesNotBytes(
+        string $tag,
+        string $expected,
+        string $badLeadByte,
+        string $desc
+    ): void {
+        // Precondition: this fixture really does cut mid-character at 10 bytes.
+        $byteCut = substr($tag, 0, 10);
+        $this->assertFalse(
+            mb_check_encoding($byteCut, 'UTF-8'),
+            $desc . ': fixture must cut mid-character at 10 bytes to be a valid guard'
+        );
+        $this->assertSame(
+            $badLeadByte,
+            strtoupper(bin2hex(substr($byteCut, -1))),
+            $desc . ': byte-wise cut ends on the documented dangling lead byte'
+        );
+
+        $summary = $this->summarize([
+            'streams' => [
+                ['index' => 0, 'codec_type' => 'audio', 'codec_name' => 'aac',
+                 'tags' => ['language' => $tag]],
+            ],
+            'format' => [],
+        ]);
+
+        $language = $summary['streams'][0]['language'];
+        $this->assertIsString($language);
+        $this->assertTrue(
+            mb_check_encoding($language, 'UTF-8'),
+            $desc . ': stored value must be valid UTF-8 or MySQL rejects it with 1366'
+        );
+        $this->assertLessThanOrEqual(
+            10,
+            mb_strlen($language, 'UTF-8'),
+            $desc . ': must fit media_streams.language VARCHAR(10) (a CHARACTER budget)'
+        );
+        $this->assertSame($expected, $language, $desc);
+    }
+
+    /**
+     * Language tags whose 10-BYTE cut lands mid-character, one per UTF-8
+     * sequence width, including the exact '\xC3' lead byte from the reported
+     * production failure.
+     *
+     * @return array<string, array{0: string, 1: string, 2: string, 3: string}>
+     */
+    public static function multiByteLanguageCases(): array
+    {
+        return [
+            // "Deutsch (" = 9 bytes, then Ö (C3 96) straddles bytes 10-11.
+            'latin-1 supplement (2-byte)' => [
+                'Deutsch (Österreich)',
+                'Deutsch (Ö',
+                'C3',
+                'Austrian German tag, the reported \xC3 failure',
+            ],
+            // "Audio: " = 7 bytes, Р = bytes 8-9, у (D1 83) straddles 10-11.
+            'cyrillic after ascii (2-byte)' => [
+                'Audio: Русский',
+                'Audio: Рус',
+                'D1',
+                'ASCII prefix pushing Cyrillic onto an odd byte offset',
+            ],
+            // 3 CJK chars = 9 bytes, then オ (E3 82 AA) straddles bytes 10-12.
+            'cjk (3-byte)' => [
+                '日本語オーディオトラック',
+                '日本語オーディオトラ',
+                'E3',
+                'Japanese audio-track tag, 3-byte sequences',
+            ],
+        ];
+    }
+
+    /**
      * isAttachedPic() truth table — `1` and `"1"` are true; `0`, `"0"`, other
      * numerics, a missing key, a non-array disposition, and a non-array stream
      * are all false.

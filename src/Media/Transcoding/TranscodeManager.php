@@ -3303,6 +3303,28 @@ class TranscodeManager
     /**
      * Reads a short failure reason from the job's ffmpeg log.
      *
+     * The return value is written straight into `transcode_jobs.error` (TEXT on
+     * a utf8mb4 table), so it MUST be valid UTF-8 — MySQL rejects anything else
+     * with error 1366 ("Incorrect string value"), which would turn a job that
+     * merely failed into a job whose failure cannot even be recorded.
+     *
+     * Two things are therefore deliberate:
+     *
+     *  - the tail is taken with `mb_substr`, NOT `substr`. A byte-wise `-500`
+     *    lands mid-sequence whenever the last 500 bytes begin inside a multibyte
+     *    character, leaving a dangling *leading* continuation byte. ffmpeg logs
+     *    the input path and the container's stream/metadata tags, so non-ASCII
+     *    in that window is ordinary, not exotic: sliding the window across a log
+     *    containing a non-ASCII filename put 5 of 60 offsets on a broken
+     *    boundary.
+     *  - the content is scrubbed FIRST, because the log is a file on disk with
+     *    no encoding guarantee of its own; scrubbing before the cut means the
+     *    character count is taken over already-valid text.
+     *
+     * 500 is now a CHARACTER bound rather than a byte bound. That is well within
+     * TEXT's 65,535 bytes even for 4-byte characters, and the column exists to
+     * hold a short human-readable reason rather than a fixed-width field.
+     *
      * @param string $dir Job HLS directory.
      *
      * @return string Trimmed tail of the ffmpeg log, or a generic message.
@@ -3313,7 +3335,8 @@ class TranscodeManager
         if (is_file($log)) {
             $content = file_get_contents($log);
             if (is_string($content) && $content !== '') {
-                return substr(trim($content), -500);
+                $clean = (string) mb_convert_encoding(trim($content), 'UTF-8', 'UTF-8');
+                return mb_substr($clean, -500, null, 'UTF-8');
             }
         }
         return 'Transcode failed';

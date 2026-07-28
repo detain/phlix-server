@@ -35,6 +35,16 @@ class PortForwardService
     private LoggerInterface $logger;
     private int $port;
     private bool $autoEnabled;
+    /**
+     * Whether UPnP IGD discovery may be attempted.
+     *
+     * Backs the `port-forward.port_forwarding.upnp_enabled` admin setting.
+     * Distinct from {@see self::$autoEnabled}: `auto` off disables automatic
+     * forwarding entirely, whereas this only skips the UPnP leg so
+     * autoConfigure() falls through to NAT-PMP. An operator who distrusts UPnP
+     * (it is unauthenticated on most consumer routers) still wants NAT-PMP.
+     */
+    private bool $upnpEnabled;
     private string $configPath;
 
     public function __construct(
@@ -44,7 +54,8 @@ class PortForwardService
         ?LoggerInterface $logger = null,
         int $port = self::PORT,
         bool $autoEnabled = true,
-        string $configPath = ''
+        string $configPath = '',
+        bool $upnpEnabled = true
     ) {
         $this->upnp = $upnp ?? new UpnpIgdClient();
         $this->stun = $stun ?? new StunClient();
@@ -52,6 +63,7 @@ class PortForwardService
         $this->logger = $logger ?? new NullLogger();
         $this->port = $port;
         $this->autoEnabled = $autoEnabled;
+        $this->upnpEnabled = $upnpEnabled;
         $this->configPath = $configPath !== '' ? $configPath : dirname(__DIR__, 2) . '/' . self::CONFIG_FILE;
     }
 
@@ -85,7 +97,13 @@ class PortForwardService
             return $this->result(false, null, 'no-local-ip', null);
         }
 
-        $gateway = $this->upnp->discoverGateway();
+        // `port-forward.port_forwarding.upnp_enabled` off skips the UPnP leg and
+        // falls through to NAT-PMP below — it does not disable forwarding, which
+        // is what `auto` already does.
+        $gateway = $this->upnpEnabled ? $this->upnp->discoverGateway() : null;
+        if ($gateway === null && !$this->upnpEnabled) {
+            $this->logger->info('UPnP disabled by setting; trying NAT-PMP');
+        }
         if ($gateway !== null) {
             $this->logger->info('UPnP IGD discovered', ['gateway' => $gateway]);
 
@@ -297,6 +315,9 @@ TEXT;
      */
     public function disable(): bool
     {
+        // Deliberately NOT gated on $upnpEnabled: this is teardown. An operator
+        // who turns UPnP off after a mapping was already created still needs
+        // that mapping removed, so gating here would leak it on the router.
         $gateway = $this->upnp->discoverGateway();
         if ($gateway !== null) {
             $this->upnp->removePortMapping($gateway, (string) $this->port);

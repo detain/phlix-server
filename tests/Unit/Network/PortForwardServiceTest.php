@@ -187,4 +187,110 @@ class PortForwardServiceTest extends TestCase
         $status = $service->getStatus();
         $this->assertFalse($status['enabled']);
     }
+
+    // ---------------------------------------------------------------------
+    // `port-forward.port_forwarding.upnp_enabled` — CONSEQUENCE tests.
+    //
+    // The setting was shipped, resolvable and overlaid correctly, and still
+    // inert: NetworkServicesProvider computed the value into a local it never
+    // passed to any definition, and this class had no UPnP switch at all, so
+    // UPnP discovery ran unconditionally. These assert the OBSERVABLE EFFECT
+    // (was the UPnP client actually consulted?), not that a flag is stored.
+    // ---------------------------------------------------------------------
+
+    public function testUpnpDisabledSkipsUpnpDiscoveryEntirely(): void
+    {
+        $upnp = $this->createMock(UpnpIgdClient::class);
+        $stun = $this->createMock(StunClient::class);
+        $natpmp = $this->createMock(NatPmpClient::class);
+
+        // THE assertion: with the setting off, the UPnP client must never be
+        // consulted. Before the wiring this ran regardless of the setting.
+        $upnp->expects($this->never())->method('discoverGateway');
+        $stun->method('getPublicIp')->willReturn(null);
+
+        $service = new PortForwardService(
+            $upnp,
+            $stun,
+            $natpmp,
+            new NullLogger(),
+            32400,
+            true,
+            $this->tmpDir,
+            false // upnpEnabled
+        );
+
+        $service->autoConfigure();
+    }
+
+    public function testUpnpDisabledStillFallsThroughToNatPmp(): void
+    {
+        $upnp = $this->createMock(UpnpIgdClient::class);
+        $stun = $this->createMock(StunClient::class);
+        $natpmp = $this->createMock(NatPmpClient::class);
+
+        $upnp->expects($this->never())->method('discoverGateway');
+        // Turning UPnP off must not disable forwarding wholesale — that is what
+        // `auto` does. NAT-PMP is still attempted.
+        $natpmp->expects($this->atLeastOnce())->method('discoverGateway');
+        $stun->method('getPublicIp')->willReturn(null);
+
+        $service = new PortForwardService(
+            $upnp,
+            $stun,
+            $natpmp,
+            new NullLogger(),
+            32400,
+            true,
+            $this->tmpDir,
+            false // upnpEnabled
+        );
+
+        $result = $service->autoConfigure();
+
+        // Distinct from the `auto` off path, which short-circuits to 'disabled'.
+        $this->assertNotSame('disabled', $result['method']);
+    }
+
+    public function testUpnpEnabledByDefaultStillDiscovers(): void
+    {
+        $upnp = $this->createMock(UpnpIgdClient::class);
+        $stun = $this->createMock(StunClient::class);
+        $natpmp = $this->createMock(NatPmpClient::class);
+
+        // Guard against over-correcting the fix into "UPnP is always skipped":
+        // the default must remain enabled.
+        $upnp->expects($this->atLeastOnce())->method('discoverGateway')->willReturn(null);
+        $stun->method('getPublicIp')->willReturn(null);
+
+        $service = new PortForwardService($upnp, $stun, $natpmp, new NullLogger(), 32400, true, $this->tmpDir);
+
+        $service->autoConfigure();
+    }
+
+    public function testDisableStillTearsDownUpnpMappingWhenSettingIsOff(): void
+    {
+        $upnp = $this->createMock(UpnpIgdClient::class);
+        $stun = $this->createMock(StunClient::class);
+        $natpmp = $this->createMock(NatPmpClient::class);
+
+        // Teardown is deliberately NOT gated: a mapping created while UPnP was
+        // enabled must still be removable after the setting is turned off,
+        // otherwise it leaks on the router.
+        $upnp->expects($this->atLeastOnce())->method('discoverGateway')->willReturn('192.168.1.1');
+        $upnp->expects($this->once())->method('removePortMapping');
+
+        $service = new PortForwardService(
+            $upnp,
+            $stun,
+            $natpmp,
+            new NullLogger(),
+            32400,
+            true,
+            $this->tmpDir,
+            false // upnpEnabled
+        );
+
+        $this->assertTrue($service->disable());
+    }
 }

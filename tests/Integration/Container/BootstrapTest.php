@@ -118,14 +118,18 @@ final class BootstrapTest extends TestCase
         // skip locally when the host doesn't.
         //
         // ⚠ The probe target is pinned to the literal `127.0.0.1:3306` this test has
-        // always used rather than to DB_HOST/DB_PORT. That is deliberately UNCHANGED by
-        // S126: under `phpunit.xml`'s own `<env>` block (`DB_HOST=127.0.0.1`,
-        // `DB_PORT=3306`) and under `.github/workflows/phpunit.yml`'s MySQL service the
-        // two resolve to the same address, so pinning it keeps this site's behaviour
-        // byte-identical everywhere the suite is actually configured to run. It does
-        // mean the probe and the connection `ConnectionPool` opens can disagree if
-        // DB_PORT is overridden from the environment — a pre-existing inconsistency in
-        // this file, out of S126's scope, not introduced here.
+        // always used rather than to DB_HOST/DB_PORT — deliberately UNCHANGED by S126.
+        //
+        // ⚠ That pin is a KNOWN, MEASURED gap, not a claim of equivalence. Since S126's
+        // review, IntegrationDbGuard defaults its probe to `config/database.php`'s own
+        // resolved host/port, so an un-pinned call site can no longer probe a different
+        // address than it connects to. This one still can: measured with `DB_PORT=33306`
+        // aimed at a listener that accepts-and-closes, this file reports `Skipped: 2` —
+        // a green skip against a provably unusable configured database — while the
+        // non-pinned files correctly error. Under `phpunit.xml`'s `<env>` block
+        // (`DB_HOST=127.0.0.1`, `DB_PORT=3306`) and `.github/workflows/phpunit.yml`'s
+        // MySQL service the two addresses are identical, so the pin costs nothing there;
+        // dropping the two literals is a deliberate follow-up, not an oversight.
         $this->requireHealthyDatabase(
             'skipping Application bootstrap test. Run in docker-compose for integration testing.',
             '127.0.0.1',

@@ -73,6 +73,19 @@ final class PooledConnectionConcurrencyTest extends TestCase
         $this->password = getenv('DB_PASSWORD') !== false ? (string) getenv('DB_PASSWORD') : 'root';
         $this->database = getenv('DB_DATABASE') ?: (getenv('DB_NAME') ?: 'phlix_test');
 
+        // Silence swoole's per-syscall TRACE spam (it would swamp the test log
+        // and trip failOnOutput). Mirrors MediaScannerTest's concurrency tests.
+        //
+        // ⚠ MUST come BEFORE the database guard below, not after. The test methods
+        // in this class call \Swoole\Runtime::enableCoroutine(SWOOLE_HOOK_ALL) and
+        // never disable it, so under phpunit.xml's executionOrder="random" the 2nd
+        // and 3rd setUp() run the guard's real PDO round-trip with the hooks still
+        // on — i.e. exactly the traffic this trace_flags reset silences, emitted
+        // into a run configured with beStrictAboutOutputDuringTests="true" and
+        // failOnRisky="true". This is the known S137 flake file; do not move the
+        // guard back above this line.
+        \Swoole\Coroutine::set(['log_level' => SWOOLE_LOG_ERROR, 'trace_flags' => 0]);
+
         // The guard is given this test's own resolved host/port rather than reading
         // DB_HOST/DB_PORT itself, so it probes exactly the server the hand-built
         // PooledMySQLConnection below will connect to. It also runs a real `SELECT 1`
@@ -83,10 +96,6 @@ final class PooledConnectionConcurrencyTest extends TestCase
             $this->host,
             $this->port,
         );
-
-        // Silence swoole's per-syscall TRACE spam (it would swamp the test log
-        // and trip failOnOutput). Mirrors MediaScannerTest's concurrency tests.
-        \Swoole\Coroutine::set(['log_level' => SWOOLE_LOG_ERROR, 'trace_flags' => 0]);
 
         $this->segmentDir = sys_get_temp_dir() . '/phlix_s9_conc_' . uniqid();
         mkdir($this->segmentDir, 0755, true);

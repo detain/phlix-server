@@ -129,12 +129,21 @@ class ApplicationTest extends TestCase
     {
         // ⚠ Probe target pinned to the literal `127.0.0.1:3306` this test has always
         // used rather than to DB_HOST/DB_PORT — deliberately UNCHANGED by S126, which
-        // replaced the private fsockopen probe here. Under `phpunit.xml`'s own `<env>`
-        // block (`DB_HOST=127.0.0.1`, `DB_PORT=3306`) the two resolve identically, so
-        // pinning keeps this site byte-identical. Note this file is in the
+        // replaced the private fsockopen probe here. Note this file is in the
         // `tests/Unit/Server/` set that `.github/workflows/phpunit.yml`'s `test-server`
         // job runs with NO MySQL service, so the skip below is a live path in CI and
         // must stay a skip.
+        //
+        // ⚠ The pin is a KNOWN, MEASURED gap, not a claim of equivalence. Since S126's
+        // review, IntegrationDbGuard defaults its probe to `config/database.php`'s own
+        // resolved host/port, so an un-pinned call site can no longer probe a different
+        // address than it connects to. This one still can: measured with `DB_PORT=33306`
+        // aimed at a listener that accepts-and-closes, this file reports `Skipped: 3` —
+        // a green skip against a provably unusable configured database — while the
+        // non-pinned files correctly error. Under `phpunit.xml`'s `<env>` block
+        // (`DB_HOST=127.0.0.1`, `DB_PORT=3306`) and CI's MySQL service the two addresses
+        // are identical, so the pin costs nothing there; dropping the two literals is a
+        // deliberate follow-up, not an oversight.
         $this->requireHealthyDatabase(
             'skipping Application boot. Run in docker-compose for integration testing.',
             '127.0.0.1',
@@ -187,6 +196,13 @@ class ApplicationTest extends TestCase
         $path = tempnam(sys_get_temp_dir(), 'phlix-db-test-');
         // Honour the env credentials phpunit.xml exports so the CI workflow
         // (which uses a non-root DB user) can connect.
+        //
+        // ⚠ LATENT, not live: the guard in bootApplication() validates
+        // `config/database.php`, while Application then boots against THIS temp
+        // config. They cannot disagree today because both resolve from the same
+        // `DB_*` env with the same `?:` semantics — but if either side's
+        // resolution changes, the guard would be vouching for a database the
+        // test never touches. Keep the two resolutions identical.
         file_put_contents($path, "<?php\nreturn " . var_export([
             'connections' => [
                 'mysql' => [

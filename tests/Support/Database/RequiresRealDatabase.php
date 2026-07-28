@@ -23,6 +23,13 @@ use Workerman\MySQL\Connection;
  * after it can fail either — see {@see IntegrationDbGuard} for the mechanism and
  * `tests/Unit/Support/IntegrationDbGuardAdoptionTest.php` for the check that
  * enforces this.
+ *
+ * ⚠ Do NOT wrap these calls in a `try`/`catch` that ends in `markTestSkipped()`.
+ * `requireRealDatabase()` already skips on genuine absence all by itself; the
+ * only thing it *throws* is {@see IntegrationDbUnusableException}, raised
+ * precisely so that a reachable-but-unusable database reddens the run.
+ * Converting that back into a skip restores the S126 defect exactly, which is
+ * why the adoption test flags the shape.
  */
 trait RequiresRealDatabase
 {
@@ -32,8 +39,12 @@ trait RequiresRealDatabase
      *
      * @param string      $skipReason Trailing part of the skip message, appended to
      *                                `No MySQL on {host}:{port} — `.
-     * @param string|null $host       Override the probe host (defaults to `DB_HOST`).
-     * @param int|null    $port       Override the probe port (defaults to `DB_PORT`).
+     * @param string|null $host       Override the probe host. Defaults to the host
+     *                                `config/database.php` resolved, i.e. the same
+     *                                address the connection is opened to. ⚠ Overriding
+     *                                lets the probe and the connection disagree — see
+     *                                {@see IntegrationDbGuard}'s class docblock.
+     * @param int|null    $port       Override the probe port (same caveat).
      */
     protected function requireRealDatabase(
         string $skipReason,

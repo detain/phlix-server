@@ -62,11 +62,39 @@ use Workerman\MySQL\Connection;
  * that job goes red for a reason that is not a defect. The same applies to a
  * developer box with no MySQL installed.
  *
+ * ## Probe target == connection target
+ *
+ * {@see host()} / {@see port()} read the *resolved* `mysql` block of
+ * `config/database.php` — the very file {@see connection()} hands to
+ * `ConnectionPool::init()` — rather than reading `DB_HOST`/`DB_PORT` themselves.
+ * That is deliberate: if the probe resolved its target independently it could
+ * disagree with the connection, and a probe against a *different* address than
+ * the one the test then connects to is the S126 defect wearing a new hat. It
+ * also closes the converse hazard — a healthy MySQL on a non-3306 port used to
+ * make a probe pinned to 3306 skip forever.
+ *
+ * The `$host`/`$port` override parameters remain, for the two call sites
+ * (`tests/Integration/Container/BootstrapTest.php`,
+ * `tests/Unit/Server/Core/ApplicationTest.php`) that pin the historical literal
+ * `127.0.0.1:3306`, and for a test like
+ * `tests/Integration/Media/Transcoding/PooledConnectionConcurrencyTest.php`
+ * that builds its own connection and wants the probe aimed at exactly that.
+ * ⚠ An override re-opens the divergence *for that call site only*: measured with
+ * `DB_PORT=33306` pointed at a listener that accepts-and-closes, the two pinned
+ * files report `Skipped: 2` and `Skipped: 3` — a green skip against a provably
+ * unusable configured database — while the four non-pinned files correctly
+ * report errors. Overriding is therefore a decision to be made per call site,
+ * never a default.
+ *
  * ## Message compatibility
  *
  * Every pre-S126 call site built its skip message as
  * `No MySQL on {host}:{port} — {reason}`; `$skipReason` is that trailing part, so
- * migrated sites emit byte-identical skip text.
+ * migrated sites emit byte-identical skip text. The host/port interpolated into
+ * it are resolved by the same `?:` semantics the 35 private copies used
+ * (`getenv('DB_HOST') ?: '127.0.0.1'`, `(int) (getenv('DB_PORT') ?: 3306)`),
+ * inherited from `config/database.php:14-15` — including the edge cases
+ * `DB_HOST="0"` → `127.0.0.1` and `DB_PORT="0"` → `3306`.
  *
  * @see RequiresRealDatabase for the trait most tests should use.
  */
@@ -84,28 +112,61 @@ final class IntegrationDbGuard
     }
 
     /**
-     * Host the guard probes, resolved the same way as `config/database.php:14`.
+     * The resolved `mysql` connection block of {@see configPath()}.
      *
-     * `phpunit.xml` exports `DB_HOST=127.0.0.1` for the suite, so this is
-     * `127.0.0.1` under the repo's own configuration.
+     * `require`, NOT `require_once`: `require_once` returns `true` rather than
+     * the file's array on every call after the first, which would silently turn
+     * every host/port lookup after the first into the fallback.
+     *
+     * @return array<string, mixed>
      */
-    public static function host(): string
+    private static function mysqlConfig(): array
     {
-        $host = getenv('DB_HOST');
+        /** @var mixed $config */
+        $config = require self::configPath();
 
-        return is_string($host) && $host !== '' ? $host : '127.0.0.1';
+        if (!is_array($config) || !is_array($config['connections'] ?? null)) {
+            return [];
+        }
+
+        /** @var array<string, mixed> $connections */
+        $connections = $config['connections'];
+
+        return is_array($connections['mysql'] ?? null) ? $connections['mysql'] : [];
     }
 
     /**
-     * Port the guard probes, resolved the same way as `config/database.php:15`.
+     * Host the guard probes: whatever `config/database.php:14` resolved, which is
+     * `getenv('DB_HOST') ?: '127.0.0.1'`. Read from the config rather than from
+     * the environment so the probe target cannot diverge from the connection
+     * target — see the class docblock.
+     *
+     * `phpunit.xml` exports `DB_HOST=127.0.0.1` for the suite, so this is
+     * `127.0.0.1` under the repo's own configuration. The `?:` (not `!== ''`)
+     * fallback is what makes `DB_HOST="0"` resolve to `127.0.0.1`, matching the
+     * 35 private copies byte for byte.
+     */
+    public static function host(): string
+    {
+        /** @var mixed $host */
+        $host = self::mysqlConfig()['host'] ?? null;
+
+        return is_string($host) ? ($host ?: '127.0.0.1') : '127.0.0.1';
+    }
+
+    /**
+     * Port the guard probes: whatever `config/database.php:15` resolved, which is
+     * `(int) (getenv('DB_PORT') ?: 3306)` — so `DB_PORT="0"` resolves to 3306,
+     * matching the 35 private copies.
      *
      * `phpunit.xml` exports `DB_PORT=3306` for the suite.
      */
     public static function port(): int
     {
-        $port = getenv('DB_PORT');
+        /** @var mixed $port */
+        $port = self::mysqlConfig()['port'] ?? null;
 
-        return is_string($port) && $port !== '' ? (int) $port : 3306;
+        return is_int($port) || is_string($port) ? ((int) $port ?: 3306) : 3306;
     }
 
     /**
@@ -122,6 +183,15 @@ final class IntegrationDbGuard
         $host ??= self::host();
         $port ??= self::port();
 
+        // ⚠ skipUnlessListening() MUST stay ABOVE the try, never inside it.
+        // `Assert::markTestSkipped()` throws `SkippedWithMessageException`, which
+        // `extends AssertionFailedError extends Exception` — so the
+        // `catch (Throwable)` below WOULD catch it, and every legitimate "no
+        // MySQL on this box" skip would be converted into a false
+        // `IntegrationDbUnusableException`, reddening the `test-server` CI job
+        // that deliberately runs with no MySQL service. Nothing inside the try
+        // can reach `Assert`, a mock or an assertion, which is what makes the
+        // catch safe as written.
         self::skipUnlessListening($host, $port, $skipReason);
 
         try {

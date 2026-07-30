@@ -2118,10 +2118,11 @@ class ItemRepository
      * this method existed. Use {@see deleteStreamsByItem()} to genuinely clear
      * an item.
      *
-     * MUST NOT be called from inside another transaction. Despite
-     * {@see \Phlix\Common\Database\PhlixMySQLConnection::beginTrans()}'s docblock,
-     * transactions do NOT nest: `workerman/mysql` implements `beginTrans()` as a
-     * bare `PDO::beginTransaction()` and issues no SAVEPOINT anywhere, so a
+     * MUST NOT be called from inside another transaction. As
+     * {@see \Phlix\Common\Database\PhlixMySQLConnection::beginTrans()}'s docblock
+     * states, transactions do NOT nest: `workerman/mysql` implements
+     * `beginTrans()` as a bare `PDO::beginTransaction()` and issues no SAVEPOINT
+     * anywhere (that docblock claimed the opposite until 2026-07-28), so a
      * nested call throws `PDOException: There is already an active transaction`
      * (verified against MySQL 8.0 on BOTH connection classes). Neither caller
      * nests today — no code path reaching here opens a transaction — and the

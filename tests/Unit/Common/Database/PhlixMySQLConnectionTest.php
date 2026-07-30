@@ -112,6 +112,221 @@ final class PhlixMySQLConnectionTest extends TestCase
     }
 
     /**
+     * A second `beginTrans()` on a connection that already has one open THROWS.
+     * It does not open an inner scope, and no SAVEPOINT is issued anywhere.
+     *
+     * This pins the contract the class docblocks claimed the opposite of until
+     * 2026-07-28 ("nested transactions issue MySQL SAVEPOINTs and the mutex is
+     * held until the outermost commit"). Nothing in `workerman/mysql` issues a
+     * savepoint — `beginTrans()` is a bare `PDO::beginTransaction()` — so the
+     * false claim was readable as proof that the class is nesting-safe, and it
+     * was read that way once already.
+     *
+     * Uses a REAL in-memory PDO rather than a mock precisely because the refusal
+     * comes from PDO itself (`pdo_dbh.c`, driver-independent), so this is the
+     * same mechanism MySQL 8.0.46 exhibits — measured on both connection classes
+     * and both `DB_POOL_ENABLED` modes, see
+     * `steps/fix-savepoint-docblocks.worklog.md`.
+     *
+     * This is the NON-coroutine path (`Coroutine::getCid() < 0`), which
+     * delegates straight to the parent.
+     */
+    public function testANestedBeginTransThrowsInsteadOfOpeningAnInnerScope(): void
+    {
+        $pdo = new \PDO('sqlite::memory:');
+        $conn = $this->connectionWithHandle($pdo);
+
+        $this->assertTrue($conn->beginTrans(), 'the OUTER transaction must open');
+
+        $thrown = self::captureVendorNullOffsetWarning(static function () use ($conn): ?\Throwable {
+            try {
+                $conn->beginTrans();
+                return null;
+            } catch (\Throwable $e) {
+                return $e;
+            }
+        });
+
+        $this->assertInstanceOf(
+            \PDOException::class,
+            $thrown,
+            'a nested beginTrans() must throw — it does NOT create a savepoint'
+        );
+        $this->assertStringContainsString('There is already an active transaction', $thrown->getMessage());
+        $this->assertTrue(
+            $pdo->inTransaction(),
+            'the refused nested call must leave the OUTER transaction untouched'
+        );
+    }
+
+    /**
+     * Same contract inside a coroutine, where the class takes its own
+     * `transLockHolder === $cid` branch instead of delegating straight to the
+     * parent — and where getting it wrong is worse than a throw.
+     *
+     * That branch exists to FAIL FAST: a nested call that fell through to the
+     * mutex would `pop()` a channel the calling coroutine has already emptied
+     * and hang the worker forever. So the test also fails on a DEADLOCK rather
+     * than hanging the suite: a watchdog coroutine cancels the worker coroutine
+     * if the nested call has not returned within 3 s.
+     *
+     * Finally it pins that nothing leaks: the outer transaction still commits
+     * and the connection accepts a fresh transaction afterwards (i.e. the
+     * whole-transaction mutex was neither double-released nor stranded).
+     */
+    public function testANestedBeginTransInsideACoroutineThrowsWithoutDeadlocking(): void
+    {
+        if (!extension_loaded('swoole')) {
+            $this->markTestSkipped('Swoole extension required');
+        }
+
+        $pdo = new \PDO('sqlite::memory:');
+        $conn = $this->connectionWithHandle($pdo);
+
+        $thrown = null;
+        $reusable = false;
+        $deadlocked = false;
+        $finished = false;
+
+        \Swoole\Coroutine\run(static function () use (
+            $conn,
+            &$thrown,
+            &$reusable,
+            &$deadlocked,
+            &$finished
+        ): void {
+            $worker = \Swoole\Coroutine::getCid();
+            \Swoole\Coroutine\go(static function () use ($worker, &$deadlocked, &$finished): void {
+                // Poll in slices so the watchdog costs ~100 ms on the happy path
+                // instead of holding the scheduler open for the full timeout.
+                for ($i = 0; $i < 30 && !$finished; $i++) {
+                    \Swoole\Coroutine::sleep(0.1);
+                }
+                if (!$finished) {
+                    $deadlocked = true;
+                    \Swoole\Coroutine::cancel($worker);
+                }
+            });
+
+            $conn->beginTrans();
+            $thrown = self::captureVendorNullOffsetWarning(static function () use ($conn): ?\Throwable {
+                try {
+                    $conn->beginTrans();
+                    return null;
+                } catch (\Throwable $e) {
+                    return $e;
+                }
+            });
+            $conn->commitTrans();
+            $reusable = $conn->beginTrans();
+            $conn->rollBackTrans();
+            $finished = true;
+        });
+
+        $this->assertFalse(
+            $deadlocked,
+            'a nested beginTrans() blocked instead of throwing — the same coroutine waited on the '
+            . 'transaction mutex it already holds, which wedges the worker permanently'
+        );
+        $this->assertInstanceOf(\PDOException::class, $thrown, 'a nested beginTrans() must throw');
+        $this->assertStringContainsString('There is already an active transaction', $thrown->getMessage());
+        $this->assertTrue($reusable, 'the connection must still be usable after the refused nested call');
+    }
+
+    /**
+     * The rollback that {@see PhlixMySQLConnection::execute()} performs on the
+     * caller's behalf must not fatal when the PDO handle is already gone.
+     *
+     * `parent::rollBackTrans()` dereferences `$this->pdo` unconditionally, and
+     * `execute()`'s "server has gone away" branch calls `closeConnection()`
+     * (which nulls it) before retrying — so when the RECONNECT also fails, the
+     * catch used to raise `Error: Call to a member function inTransaction() on
+     * null`, an error type that is not a `PDOException` and therefore replaces
+     * the real connect failure on its way out of every `catch (\PDOException)`.
+     * Observed in unpooled mode as `ItemRepository::markStreamsProbed()` dying
+     * with exactly that message.
+     */
+    public function testRollBackTransDoesNotFatalWhenThePdoHandleIsGone(): void
+    {
+        $conn = $this->connectionWithHandle(null);
+
+        $this->assertTrue(
+            $conn->rollBackTrans(),
+            'rollBackTrans() on a handle-less connection must be a no-op, not a null dereference'
+        );
+    }
+
+    /**
+     * …and the handle-less guard must not have turned rollback into a no-op for
+     * the normal case: with a live handle the transaction is really rolled back.
+     */
+    public function testRollBackTransStillRollsBackWithALiveHandle(): void
+    {
+        $pdo = new \PDO('sqlite::memory:');
+        $pdo->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
+        $pdo->exec('CREATE TABLE t (v TEXT)');
+        $conn = $this->connectionWithHandle($pdo);
+
+        $conn->beginTrans();
+        $pdo->exec("INSERT INTO t (v) VALUES ('doomed')");
+        $this->assertTrue($conn->rollBackTrans());
+
+        $this->assertSame(
+            0,
+            (int) $pdo->query('SELECT COUNT(*) FROM t')->fetchColumn(),
+            'the rolled-back INSERT must be gone'
+        );
+        $this->assertFalse($pdo->inTransaction());
+    }
+
+    /**
+     * Build a connection over a supplied PDO handle (or none) WITHOUT opening a
+     * socket: the constructor deliberately skips `parent::__construct()`, the
+     * same technique {@see \Phlix\Common\Database\PooledMySQLConnection} uses.
+     */
+    private function connectionWithHandle(?\PDO $pdo): PhlixMySQLConnection
+    {
+        return new class ($pdo) extends PhlixMySQLConnection {
+            /**
+             * @psalm-suppress MissingParentConstructorCall Intentional: no socket.
+             */
+            public function __construct(?\PDO $pdo)
+            {
+                if ($pdo === null) {
+                    return;
+                }
+                $prop = new ReflectionProperty(parent::class, 'pdo');
+                $prop->setAccessible(true);
+                $prop->setValue($this, $pdo);
+            }
+        };
+    }
+
+    /**
+     * Run $body with the one PHP warning this vendor path emits silenced.
+     *
+     * `workerman/mysql`'s `beginTrans()` catch block reads `$e->errorInfo[1]` to
+     * recognise a "server has gone away" code, but PDO's "There is already an
+     * active transaction" exception carries NO `errorInfo`, so the read warns
+     * ("Trying to access array offset on null",
+     * `vendor/workerman/mysql/src/Connection.php` ~:2000). It is vendor
+     * behaviour on the exact path these tests exist to pin, and `phpunit.xml`
+     * sets `failOnWarning="true"` — so it is suppressed HERE, narrowly, for one
+     * call, and the handler is restored immediately.
+     *
+     * @param callable(): ?\Throwable $body
+     */
+    private static function captureVendorNullOffsetWarning(callable $body): ?\Throwable
+    {
+        set_error_handler(static fn (): bool => true, E_WARNING);
+        try {
+            return $body();
+        } finally {
+            restore_error_handler();
+        }
+    }
+
+    /**
      * Verify that concurrent coroutines cannot interleave queries inside a
      * transaction. Coroutine A acquires the transaction lock first; coroutine
      * B's beginTrans() must block on the mutex until A releases it. The

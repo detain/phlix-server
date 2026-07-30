@@ -70,26 +70,62 @@ class PathDeduper
 
     /**
      * Begin a database transaction.
+     *
+     * Uses the transaction API declared on the base {@see Connection}, NOT a raw
+     * `query('START TRANSACTION')`. The raw form opens the same server-side
+     * transaction, but it is invisible to the two connection classes Phlix
+     * wires, and both of them track transactions for a reason:
+     *
+     *  - {@see \Phlix\Common\Database\PhlixMySQLConnection} holds its
+     *    whole-transaction mutex from `beginTrans()` to `commitTrans()`. Opened
+     *    raw, `$transNesting` stays 0, so every following statement takes and
+     *    RELEASES the per-query lock instead — and another coroutine's queries
+     *    can land in the middle of the merge.
+     *  - {@see \Phlix\Common\Database\PooledMySQLConnection} marks the lease
+     *    `txPending` so that a coroutine which dies mid-transaction cannot hand
+     *    a DIRTY connection to the next lessee. Opened raw, that flag is never
+     *    set and the rollback-on-release never runs.
+     *
+     * MUST NOT be called with a transaction already open: transactions do not
+     * nest (see {@see \Phlix\Common\Database\PhlixMySQLConnection::beginTrans()});
+     * this now throws `PDOException: There is already an active transaction`
+     * where the raw form would have silently COMMITTED the enclosing
+     * transaction, because MySQL commits implicitly on `START TRANSACTION`.
+     * Neither caller nests ({@see \Phlix\Console\Commands\MediaDedupePathsCommand}
+     * and `migrations/cleanup_072.php`).
+     *
+     * @throws \PDOException When a transaction is already open.
      */
     public function beginTrans(): void
     {
-        $this->db->query('START TRANSACTION');
+        $this->db->beginTrans();
     }
 
     /**
-     * Commit the current transaction.
+     * Commit the current transaction. See {@see beginTrans()} for why this is
+     * the connection's own API rather than `query('COMMIT')`.
      */
     public function commit(): void
     {
-        $this->db->query('COMMIT');
+        $this->db->commitTrans();
     }
 
     /**
-     * Rollback the current transaction.
+     * Roll back the current transaction. See {@see beginTrans()} for why this is
+     * the connection's own API rather than `query('ROLLBACK')`.
+     *
+     * Safe to call when nothing is open — both connection classes check
+     * `PDO::inTransaction()` first — which matters because a statement that
+     * fails inside the transaction has already been rolled back by
+     * {@see \Phlix\Common\Database\PhlixMySQLConnection::execute()} before the
+     * caller's `catch` runs. That second rollback really is inert HERE because
+     * both callers are plain CLI (`cid < 0`), so no whole-transaction mutex is
+     * in play; inside a coroutine on the shared-socket connection it is not
+     * unconditionally inert — see that method's CAUTION paragraph.
      */
     public function rollback(): void
     {
-        $this->db->query('ROLLBACK');
+        $this->db->rollBackTrans();
     }
 
     /**

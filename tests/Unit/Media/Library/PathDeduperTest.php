@@ -201,4 +201,39 @@ class PathDeduperTest extends TestCase
 
         $this->assertFalse((new PathDeduper($db))->deleteItem('id-1'));
     }
+
+    /**
+     * The transaction helpers must go through the connection's OWN transaction
+     * API, never a raw `query('START TRANSACTION')`.
+     *
+     * The raw form opens the same server-side transaction, so nothing looks
+     * broken — but it is invisible to both connection classes Phlix wires:
+     * {@see \Phlix\Common\Database\PhlixMySQLConnection} then leaves
+     * `$transNesting` at 0 and keeps releasing its per-query mutex between the
+     * merge's statements (another coroutine can interleave), and
+     * {@see \Phlix\Common\Database\PooledMySQLConnection} never sets the lease's
+     * `txPending` flag, so a coroutine that dies mid-merge returns a DIRTY
+     * connection to the pool instead of having it rolled back on release.
+     */
+    public function testTransactionHelpersUseTheConnectionsTransactionApiNotRawSql(): void
+    {
+        $seen = [];
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(
+            function (string $sql) use (&$seen): array {
+                $seen[] = $sql;
+                return [];
+            }
+        );
+        $db->expects($this->once())->method('beginTrans')->willReturn(true);
+        $db->expects($this->once())->method('commitTrans')->willReturn(true);
+        $db->expects($this->once())->method('rollBackTrans')->willReturn(true);
+
+        $deduper = new PathDeduper($db);
+        $deduper->beginTrans();
+        $deduper->commit();
+        $deduper->rollback();
+
+        $this->assertSame([], $seen, 'no transaction control statement may be issued as raw SQL');
+    }
 }

@@ -98,9 +98,15 @@ class PhlixMySQLConnection extends Connection
     private int $transLockHolder = -1;
 
     /**
-     * Tracks nested transaction depth so that a single coroutine can issue
-     * multiple `beginTrans()` calls (MySQL savepoints) without deadlocking.
-     * Zero means no active transaction.
+     * Whether the coroutine holding {@see $transLock} currently has a
+     * transaction open: 0 = none, 1 = open.
+     *
+     * Despite the name it is a FLAG, not a depth counter — it can never exceed
+     * 1, because transactions do not nest on this stack: a second
+     * `beginTrans()` throws instead of opening an inner scope
+     * (see {@see beginTrans()}). It is kept as an `int` so the
+     * `commitTrans()`/`rollBackTrans()` guards can be written as depth checks
+     * and stay correct if savepoint reentrancy is ever actually implemented.
      *
      * @var int
      */
@@ -167,6 +173,39 @@ class PhlixMySQLConnection extends Connection
      * natural PDO type via {@see pdoParamType()} so integers stay unquoted. The
      * parent's `clearSQuery()` is private, so its single line is inlined as
      * `$this->sQuery = null`.
+     *
+     * CAUTION — this rolls back ON THE CALLER'S BEHALF. Both failure paths call
+     * `$this->rollBackTrans()` before rethrowing, so a statement that fails
+     * inside a caller's transaction ENDS that transaction (and, in a coroutine,
+     * releases the whole-transaction mutex) whether or not the caller knows. A
+     * caller that catches the exception and carries on is then writing in
+     * AUTOCOMMIT with nothing to warn it. The rule that keeps this safe — and the
+     * one every transactional caller in this codebase already follows — is to
+     * treat ANY throw from a statement between `beginTrans()` and
+     * `commitTrans()` as fatal to the whole unit of work: roll back and abandon
+     * it.
+     *
+     * The defensive `rollBackTrans()` such a caller runs in its `catch` is inert
+     * on the two paths where this connection object is that caller's alone:
+     * outside a coroutine, and in the DEFAULT pooled mode, where each coroutine
+     * leases a {@see PhlixMySQLConnection} of its own behind
+     * {@see PooledMySQLConnection} so `$transLock` is never contended. It is NOT
+     * unconditionally inert on the single shared socket (`DB_POOL_ENABLED=0` —
+     * the opt-out fallback `config/database.php` documents). Nothing is pushed
+     * twice there either (this one already nulled `$transLock`) and the vendor's
+     * `rollBackTrans()` checks `PDO::inTransaction()` first — but by then the
+     * mutex has been HANDED ON, not merely dropped: the internal rollback
+     * releases it with `$lock->push(true)`, and swoole resumes a coroutine
+     * parked in {@see beginTrans()}'s `$this->transLock->pop()` SYNCHRONOUSLY
+     * inside that push (measured on 6.2.1), so that coroutine has already
+     * written itself into `$transLockHolder` before the internal rollback even
+     * finishes. Nothing in the unwind that follows yields, so the caller's
+     * `catch` is entered with the new owner installed, and its second
+     * `rollBackTrans()` takes the outermost branch and overwrites
+     * `$transNesting`/`$transLockHolder` — clearing THAT coroutine's
+     * bookkeeping, and rolling its transaction back for real if its `BEGIN` has
+     * landed by then (one shared PDO handle). That window is PRE-EXISTING; this
+     * docblock records it, nothing here changes it.
      *
      * @param string $query
      * @param mixed  $parameters
@@ -262,10 +301,14 @@ class PhlixMySQLConnection extends Connection
      * we run directly. The lock is reentrant per coroutine, so a query issued
      * while this coroutine already holds it (nested call) cannot deadlock.
      *
-     * When inside a transaction (one or more `beginTrans()` calls without the
-     * matching `commitTrans()`/`rollBackTrans()`), the mutex is held for the
-     * entire transaction rather than per-query, preventing concurrent
-     * coroutines from interleaving queries inside our transaction.
+     * When inside a transaction (a `beginTrans()` without its matching
+     * `commitTrans()`/`rollBackTrans()`), the mutex is held for the entire
+     * transaction rather than per-query, preventing concurrent coroutines from
+     * interleaving queries inside our transaction. NB this is why a raw
+     * `query('START TRANSACTION')` is not an equivalent way to open one: it
+     * leaves `$transNesting` at 0, so every following statement takes and
+     * RELEASES the per-query lock and another coroutine's queries can land
+     * inside the transaction.
      *
      * @param string                          $query
      * @param array<int|string, mixed>|null    $params
@@ -300,14 +343,39 @@ class PhlixMySQLConnection extends Connection
      * Begin a transaction, acquiring the whole-transaction mutex so that no
      * other coroutine can interleave queries inside this transaction.
      *
-     * Supports reentrancy: a coroutine that calls `beginTrans()` multiple
-     * times (nested transactions) issues MySQL SAVEPOINTs and the mutex is
-     * held until the outermost `commitTrans()`/`rollBackTrans()`.
+     * TRANSACTIONS DO NOT NEST — callers MUST NOT open one inside another.
+     * `workerman/mysql` implements `beginTrans()` as a bare
+     * `PDO::beginTransaction()` (`vendor/workerman/mysql/src/Connection.php`
+     * ~:1991) and no `SAVEPOINT` statement is issued anywhere in that package
+     * or by this class, so a second `beginTrans()` before the matching
+     * `commitTrans()`/`rollBackTrans()` throws
+     * `PDOException: There is already an active transaction`. Verified against
+     * MySQL 8.0.46 in BOTH `DB_POOL_ENABLED` modes and on both the coroutine and
+     * the CLI path, with the server's own general log confirming zero SAVEPOINT
+     * statements are ever sent. (Until 2026-07-28 this docblock claimed nested
+     * calls issued savepoints and held the mutex to the outermost commit. They
+     * never did — the claim was read as proof that this class is nesting-safe,
+     * which is how it earned this correction. {@see
+     * \Phlix\Media\Library\ItemRepository::replaceStreams()} shows how a
+     * transactional unit of work states the MUST-NOT-nest precondition.)
      *
-     * Outside a coroutine the mutex is not applicable; delegation to the
-     * parent is sufficient (no concurrency).
+     * The same-coroutine branch below therefore exists to FAIL FAST, not to
+     * support nesting: without it a nested call would `pop()` a channel this very
+     * coroutine has already emptied and hang the worker forever. The throw is
+     * strictly better — it is catchable, it lands BEFORE any statement of the
+     * nested unit of work, and it leaves the outer transaction, its mutex and
+     * `$transNesting` exactly as they were (so the outer scope still commits
+     * durably and the connection is reusable afterwards — both measured).
+     *
+     * Outside a coroutine the mutex is not applicable; delegation to the parent
+     * is sufficient (no concurrency). The non-nesting rule is identical there —
+     * PDO itself enforces it.
      *
      * @return bool
+     *
+     * @throws \PDOException When this coroutine already has a transaction open
+     *         ("There is already an active transaction"), or on a connect
+     *         failure from the parent.
      */
     public function beginTrans(): bool
     {
@@ -316,7 +384,10 @@ class PhlixMySQLConnection extends Connection
             return parent::beginTrans();
         }
 
-        // Reentrant: same coroutine can nest beginTrans() (savepoint).
+        // Same coroutine, transaction already open: NOT reentrant. The parent
+        // throws "There is already an active transaction" here — deliberately,
+        // so a nesting caller fails fast instead of deadlocking on the mutex it
+        // is itself holding. $transNesting therefore never gets past 1.
         if ($this->transLockHolder === $cid) {
             $result = parent::beginTrans();
             if ($result) {
@@ -350,9 +421,13 @@ class PhlixMySQLConnection extends Connection
     }
 
     /**
-     * Commit the current transaction, releasing the whole-transaction mutex
-     * only when exiting the outermost transaction (nested commits release only
-     * the savepoint).
+     * Commit the current transaction and release the whole-transaction mutex.
+     *
+     * There is only ever ONE scope to exit: transactions do not nest here (see
+     * {@see beginTrans()}), so `$transNesting` is 0 or 1 and the `> 1` branch
+     * below is UNREACHABLE today. It is kept as a guard rather than deleted so
+     * that an inner commit could never release another scope's mutex if
+     * savepoint reentrancy were ever implemented in `beginTrans()`.
      *
      * @return bool
      */
@@ -363,7 +438,8 @@ class PhlixMySQLConnection extends Connection
             return parent::commitTrans();
         }
 
-        // Nested transaction: release savepoint but keep the mutex.
+        // Unreachable while beginTrans() refuses to nest (see its docblock):
+        // an inner commit must never release the outer scope's mutex.
         if ($this->transNesting > 1) {
             $result = parent::commitTrans();
             if ($result) {
@@ -386,9 +462,28 @@ class PhlixMySQLConnection extends Connection
     }
 
     /**
-     * Roll back the current transaction, releasing the whole-transaction mutex
-     * only when exiting the outermost transaction (nested rollbacks roll back
-     * only the innermost savepoint).
+     * Roll back the current transaction and release the whole-transaction mutex.
+     *
+     * As with {@see commitTrans()} there is only ever ONE scope to exit —
+     * transactions do not nest here (see {@see beginTrans()}), so the `> 1`
+     * branch below is UNREACHABLE today and kept only as a guard.
+     *
+     * Safe to call when no transaction is open (the vendor checks
+     * `PDO::inTransaction()` first) and when the PDO handle is already gone
+     * (see {@see rollBackParent()}). That makes the defensive `rollBackTrans()`
+     * in a caller's `catch` inert whenever this object serves one coroutine at a
+     * time — outside a coroutine, and in the default pooled mode, where each
+     * coroutine has its own lease. On the shared-socket fallback
+     * (`DB_POOL_ENABLED=0`) it is NOT free after {@see execute()} has already
+     * rolled back on the caller's behalf: the outermost branch below writes
+     * `$transNesting = 0` / `$transLockHolder = -1` unconditionally, before
+     * consulting anything, so it clears the bookkeeping of whichever coroutine
+     * took the mutex when that EARLIER rollback released it — and "in the
+     * meantime" can be zero yields, because the `$lock->push(true)` below hands
+     * the mutex straight on rather than merely dropping it: swoole resumes a
+     * coroutine waiting in {@see beginTrans()}'s `pop()` synchronously, inside
+     * the push. See the CAUTION paragraph on {@see execute()}; pre-existing,
+     * documented here rather than fixed.
      *
      * @return bool
      */
@@ -396,12 +491,13 @@ class PhlixMySQLConnection extends Connection
     {
         $cid = $this->currentCoroutineId();
         if ($cid < 0) {
-            return parent::rollBackTrans();
+            return $this->rollBackParent();
         }
 
-        // Nested rollback: roll back savepoint but keep the mutex.
+        // Unreachable while beginTrans() refuses to nest (see its docblock):
+        // an inner rollback must never release the outer scope's mutex.
         if ($this->transNesting > 1) {
-            $result = parent::rollBackTrans();
+            $result = $this->rollBackParent();
             if ($result) {
                 $this->transNesting--;
             }
@@ -411,7 +507,7 @@ class PhlixMySQLConnection extends Connection
         // Outermost: release the transaction mutex.
         $this->transNesting = 0;
         $this->transLockHolder = -1;
-        $result = parent::rollBackTrans();
+        $result = $this->rollBackParent();
         $lock = $this->transLock;
         if ($lock !== null) {
             $lock->push(true);
@@ -419,6 +515,35 @@ class PhlixMySQLConnection extends Connection
         }
 
         return $result;
+    }
+
+    /**
+     * Delegate to the vendor's `rollBackTrans()`, but only while there is still
+     * a PDO handle to roll back on.
+     *
+     * `parent::rollBackTrans()` dereferences `$this->pdo` unconditionally
+     * (`Connection.php` ~:2023 → `$this->pdo->inTransaction()`), so it fatals
+     * with `Error: Call to a member function inTransaction() on null` whenever
+     * the handle is gone. That is reachable from {@see execute()}: its
+     * 2006/2013 ("server has gone away") branch calls `closeConnection()`, which
+     * sets `$this->pdo = null`, and then — if the RECONNECT also fails, i.e.
+     * the server is still down — the catch calls `rollBackTrans()` on a
+     * handle-less connection. Because `Error` is not a `PDOException`, it
+     * REPLACES the real "connection refused" cause with a null dereference and
+     * escapes every `catch (\PDOException)` on the way out; observed in
+     * unpooled mode as `ItemRepository::markStreamsProbed()` dying with
+     * "Call to a member function inTransaction() on null".
+     *
+     * With no handle there is also nothing to roll back — the server discards
+     * the transaction when the socket dies — so report success and let the real
+     * cause propagate.
+     */
+    private function rollBackParent(): bool
+    {
+        if (!$this->pdo instanceof \PDO) {
+            return true;
+        }
+        return parent::rollBackTrans();
     }
 
     /**

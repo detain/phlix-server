@@ -34,6 +34,16 @@ class ComskipRunner
     /** @var int Default timeout for comskip execution in seconds */
     private const TIMEOUT_SECONDS = 300;
 
+    /**
+     * @var int Chunk reads allowed *per pipe* before the rest of that pipe's
+     *          output is dropped. At 8 KB a read, that caps a pipe at ~1.6 MB —
+     *          but only as an upper bound, since a short read costs a whole chunk
+     *          of the budget. Charged per pipe rather than pooled, so a flood on
+     *          stdout cannot spend the budget stderr needs: stderr is the text
+     *          quoted back in the failure a non-zero exit throws.
+     */
+    protected const MAX_CHUNKS_PER_PIPE = 200;
+
     /** @var int Effective timeout for comskip execution in seconds (per-instance) */
     private int $timeoutSeconds;
 
@@ -159,8 +169,10 @@ class ComskipRunner
         // Using non-blocking reads with bounded chunk size so timeout is reachable.
         $stdout = '';
         $stderr = '';
-        $readChunks = 0;
-        $maxChunksPerPipe = 200; // ~200 * 8KB = 1.6MB per pipe max
+        // Chunk reads charged to each pipe, keyed by descriptor index. One shared
+        // counter made the cap a combined budget instead of the per-pipe one its
+        // name promised, so a chatty stdout could close stderr with nothing read.
+        $readChunks = [];
         $chunkSize = 8192;
 
         $pipesByIdx = [];
@@ -183,6 +195,13 @@ class ComskipRunner
                     }
                 }
                 proc_terminate($process, SIGKILL);
+                // Reap it. Without this the SIGKILLed child stays a zombie for the
+                // life of the process, and this class runs in long-lived Workerman
+                // workers — one leaked per comskip timeout. Safe to block on: the
+                // pipes are closed just above and the child has been SIGKILLed, so
+                // waitpid() returns at once, and it waits only on the direct child,
+                // never on a grandchild the kill orphaned.
+                proc_close($process);
                 throw new \RuntimeException(
                     "Comskip timed out after " . $this->timeoutSeconds . " seconds"
                 );
@@ -200,9 +219,16 @@ class ComskipRunner
             }
 
             foreach ($readable as $idx => $pipe) {
-                $readChunks++;
-                if ($readChunks > $maxChunksPerPipe) {
-                    // Safety limit: something is flooding us
+                $readChunks[$idx] = ($readChunks[$idx] ?? 0) + 1;
+                if ($readChunks[$idx] > static::MAX_CHUNKS_PER_PIPE) {
+                    // Safety limit: something is flooding us. Say so — everything
+                    // this pipe still had to give is dropped here, and for stderr
+                    // that is the text quoted back in the failure this run throws.
+                    $this->logger->warning('Comskip output truncated at the read cap', [
+                        'pipe' => $idx === 1 ? 'stdout' : 'stderr',
+                        'max_chunks_per_pipe' => static::MAX_CHUNKS_PER_PIPE,
+                        'chunk_bytes' => $chunkSize,
+                    ]);
                     if (is_resource($pipe)) {
                         fclose($pipe);
                     }

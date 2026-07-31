@@ -81,6 +81,7 @@ use Phlix\Media\Transcoding\FfmpegRunner;
 use Phlix\Playlists\SmartPlaylistController;
 use Phlix\Playlists\SmartPlaylistEngine;
 use Phlix\Playlists\SmartPlaylistRefreshHandler;
+use Phlix\Playlists\SmartPlaylistRefreshSubscriber;
 use Phlix\Playlists\SmartPlaylistRepository;
 use Phlix\Stats\StatsCollector;
 use Psr\Container\ContainerInterface;
@@ -747,28 +748,37 @@ final class MediaServicesProvider implements ServiceProviderInterface
             // optional ctor params with defaults, so PHP-DI skipped them and the
             // handler's own guard —
             // `if ($this->collectionManager === null || $this->collectionRepo === null) { return; }`
-            // ({@see \Phlix\Playlists\SmartPlaylistRefreshHandler}:78) — would have
-            // made smart-COLLECTION refresh a silent no-op. Both deps are plainly
+            // ({@see \Phlix\Playlists\SmartPlaylistRefreshHandler::refreshCollectionsForPlaylist()})
+            // — would have made smart-COLLECTION refresh a silent no-op. Since the
+            // collection refresh is the ONLY thing this handler does, skipping
+            // them would leave it with no effect at all. Both deps are plainly
             // autowirable (CollectionRepository/CollectionItemRepository take only
             // the Workerman MySQL Connection; CollectionManager's other deps —
             // SmartPlaylistEngine, SmartPlaylistRepository, ItemRepository — are
             // all bound in this provider), and neither depends back on the handler,
             // so there is no cycle.
             //
-            // ⚠ The binding is right but it changes NOTHING at runtime yet, and the
-            // reason is upstream of the container: NEITHER half of this handler
-            // executes in production. Nothing resolves
-            // SmartPlaylistRefreshHandler::class from the container, and
-            // {@see \Phlix\Playlists\SmartPlaylistRefreshHandler::register()}
-            // (:95 — the only place the handler subscribes to LibraryUpdated) has
-            // no caller: EventServicesProvider auto-registers WebhookEventSubscriber
-            // ONLY (EventServicesProvider.php:131-141). So the handler is never
-            // SUBSCRIBED, and smart-playlist refresh AND smart-collection refresh
-            // both stay dead until a subscriber hookup is added. That hookup is a
-            // separate outstanding gap, not something this binding closes.
+            // The handler is now actually REACHED: SmartPlaylistRefreshSubscriber
+            // (below) is resolved and registered by the `library-scan` managed
+            // worker in start.php. Before that hookup existed, nothing resolved
+            // this handler and `SmartPlaylistRefreshHandler::register()` had no
+            // caller, so smart-COLLECTION membership never refreshed after a scan.
             SmartPlaylistRefreshHandler::class => autowire()
                 ->constructorParameter('collectionManager', get(CollectionManager::class))
                 ->constructorParameter('collectionRepo', get(CollectionRepository::class)),
+
+            // The subscriber that makes the handler live. Registered ONLY in the
+            // library-scan managed worker (start.php) — the process that
+            // dispatches LibraryScanCompleted. It must never be registered in an
+            // HTTP worker: a refresh is O(library size × linked collections) +
+            // O(playlists) blocking DB round-trips — ONE linked collection
+            // already walks the whole library in 500-row batches and then writes
+            // the membership diff, and even with NO link there is one cheap
+            // `collections` lookup per playlist (floor `1 + N`, not 1) — which
+            // would stall every concurrent connection on that worker. It enqueues
+            // on the event and drains one library per timer tick.
+            SmartPlaylistRefreshSubscriber::class => autowire()
+                ->constructorParameter('handler', get(SmartPlaylistRefreshHandler::class)),
 
             SmartPlaylistController::class => factory(static function ($container): SmartPlaylistController {
                 return new SmartPlaylistController(

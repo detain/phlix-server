@@ -1055,6 +1055,46 @@ try {
                                 ['process' => $procKey, 'error' => $enrichBootError->getMessage()],
                             );
                         }
+
+                        // Smart-COLLECTION membership refresh.
+                        // SmartPlaylistRefreshHandler was written for this and then
+                        // never wired: its `register()` had NO caller anywhere in
+                        // the repo, so a collection linked to a smart playlist
+                        // never re-evaluated its stored membership
+                        // (`collection_items`) after a scan. This is that missing
+                        // hookup, and that is the ONLY behaviour it changes — a
+                        // smart PLAYLIST has no stored membership; its rules are
+                        // evaluated on request by SmartPlaylistController::preview().
+                        //
+                        // Gated to `library-scan` for the same reason as the block
+                        // above, and for one more: THIS is the process that
+                        // dispatches LibraryScanCompleted (MediaScanner runs under
+                        // this worker; the HTTP LibraryController only ENQUEUES a
+                        // job and returns 202). It must NOT be registered in an
+                        // HTTP worker — a refresh is O(library size × linked
+                        // collections) + O(playlists) blocking DB round-trips
+                        // (ONE linked collection already walks the whole library
+                        // in 500-row batches, then writes the membership diff;
+                        // with no link at all it is still one cheap `collections`
+                        // lookup per playlist, so the floor is `1 + N`, not 1)
+                        // and would stall every concurrent connection on that
+                        // worker.
+                        //
+                        // On the event the subscriber only ENQUEUES a library id
+                        // (no I/O — the scan path stays fast); a re-arming
+                        // Workerman timer drains ONE library per tick, which also
+                        // coalesces the one-event-per-library-PATH that
+                        // LibraryManager::scanLibrary() produces. Non-blocking;
+                        // never blocks the fork.
+                        try {
+                            $container->get(\Phlix\Playlists\SmartPlaylistRefreshSubscriber::class)
+                                ->register($container->get(\Phlix\Common\Events\ListenerRegistry::class));
+                        } catch (\Throwable $smartPlaylistBootError) {
+                            LoggerFactory::get(LogChannels::MEDIA)->error(
+                                'smart playlist refresh subscriber wiring failed (managed worker)',
+                                ['process' => $procKey, 'error' => $smartPlaylistBootError->getMessage()],
+                            );
+                        }
                     }
 
                     // Arms a Workerman\Timer that polls runOnce() every $pollSeconds.

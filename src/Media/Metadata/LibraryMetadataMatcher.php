@@ -1711,6 +1711,16 @@ class LibraryMetadataMatcher
             return; // already matched — never re-read
         }
         $highest = 0;
+        // ⚠ The `@var` is REQUIRED for psalm and must not be "tidied away". These are
+        // decoded provider JSON keys, so `is_int()` below is a real guard, not a
+        // formality. Psalm resolves `array_keys()`'s `key-of<T>` to `never` when `T`
+        // was produced by narrowing a `mixed` ARRAY OFFSET (`is_array($x['k'] ?? null)`)
+        // rather than a plain variable — it then reports this live loop as dead code
+        // (NoValue, psalm.dev/179) even though it displays `$episodes` as
+        // `array<array-key, mixed>`. The annotation states that same type explicitly,
+        // which restores the correct `list<array-key>`. It widens nothing: `array-key`
+        // is `int|string`, so `is_int()` still narrows.
+        /** @var array<array-key, mixed> $episodes */
         $episodes = ($seasonData !== null && is_array($seasonData['episodes'] ?? null))
             ? $seasonData['episodes']
             : [];
@@ -1935,6 +1945,9 @@ class LibraryMetadataMatcher
         $out = [];
         for ($season = 1; $season <= AbsoluteEpisodeMapper::MAX_SEASONS; $season++) {
             $data = $this->cachedSeason($tmdbId, $season, $cache);
+            // Same psalm `key-of<T>` quirk as {@see recordEpisodeSlot()} — see the note
+            // there. The annotation is load-bearing for the gate and widens nothing.
+            /** @var array<array-key, mixed> $episodes */
             $episodes = ($data !== null && is_array($data['episodes'] ?? null)) ? $data['episodes'] : [];
             $numbers = [];
             foreach (array_keys($episodes) as $number) {

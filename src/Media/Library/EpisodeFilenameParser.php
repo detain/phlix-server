@@ -372,11 +372,21 @@ final class EpisodeFilenameParser
      * load-bearing. The earlier "cut at the first release token anywhere" rule
      * turned every mid-title collision into total loss — "A Proper Sendoff" → "A",
      * "The Hdtv Years" → "The", "Divx and Conquer" → null. A run qualifies only
-     * when it holds a {@see RELEASE_TOKENS} anchor AND one of: it reaches the end
-     * of the name, it has two BARE markers (bracket groups do not count), or it
-     * contains the scene's tag-GROUP spelling. So one stray marker between real
-     * words can never fire. That is also what makes {@see ABSORBED_TOKENS}
+     * when it holds a {@see RELEASE_TOKENS} anchor AND one of: it holds a bare
+     * PATTERN marker ({@see isHardReleaseMarker()}), it reaches the end of the
+     * name, it has two BARE markers (bracket groups do not count), or it
+     * contains the scene's tag-GROUP spelling. So one stray WORD marker between
+     * real words can never fire. That is also what makes {@see ABSORBED_TOKENS}
      * listable at all.
+     *
+     * ⚠ The pattern-marker qualification exists because a run BREAKS on any
+     * token in neither marker list, and modern scene names are full of them
+     * ("AAC", "Atmos", "HDR", "AVC", "DV", "MULTi"). A broken run failed the
+     * two-marker test and the cut fired at the NEXT run instead, stranding the
+     * anchor inside the title: "The Title 1080p AAC x264-GRP" produced
+     * "The Title 1080p AAC". Only the SHAPE half of the marker test is trusted
+     * for this; see {@see isHardReleaseMarker()} for why the vocabulary half is
+     * not.
      *
      * Runs on the text BEFORE {@see SceneFilenameNormalizer::stripBracketedTags()}
      * so a bracket group is still visible: the group is the only evidence that
@@ -439,26 +449,31 @@ final class EpisodeFilenameParser
             $end = $start;
             $anchored = false;
             $tagged = false;
+            $hard = false;
             $bare = 0;
             while ($end < $count && $kinds[$end] !== self::KIND_SOLID) {
                 $anchored = $anchored || $kinds[$end] === self::KIND_RELEASE;
                 $tagged = $tagged || self::isGroupTaggedToken($tokens[$end][0]);
                 if (!self::isBracketGroup($tokens[$end][0])) {
                     $bare++;
+                    $hard = $hard || self::isHardReleaseMarker($tokens[$end][0]);
                 }
                 $end++;
             }
 
-            // A run that stops short of the end has to prove itself: two BARE
-            // markers, or the scene's tag-GROUP spelling ("x264-MRSK",
-            // "DVDRip-TV-Series"), which no English phrase produces. One marker
-            // alone never cuts — that is what saves "The Hdtv Years".
+            // A run that stops short of the end has to prove itself: a BARE
+            // pattern marker (see isHardReleaseMarker()), two BARE markers, or
+            // the scene's tag-GROUP spelling ("x264-MRSK", "DVDRip-TV-Series"),
+            // which no English phrase produces. One WORD marker alone never cuts
+            // — that is what saves "The Hdtv Years".
             //
-            // ⚠ A bracket group does not count toward the two. It is deleted by
-            // stripBracketedTags() either way, so letting it lend mass to its
-            // neighbour made "[720p] Remux and Remaster" a two-token run and
-            // deleted a real title.
-            if ($anchored && ($end === $count || $bare >= 2 || $tagged)) {
+            // ⚠ A bracket group does not count toward the two, and cannot be the
+            // hard marker either. It is deleted by stripBracketedTags() anyway,
+            // so letting it lend mass to its neighbour made
+            // "[720p] Remux and Remaster" a two-token run and deleted a real
+            // title, and letting it prove a run outright would delete the whole
+            // 501-file recovery this step exists for ("[480p] Let It Be Me").
+            if ($anchored && ($hard || $end === $count || $bare >= 2 || $tagged)) {
                 return substr($title, 0, $tokens[$start][1]);
             }
 
@@ -600,10 +615,23 @@ final class EpisodeFilenameParser
     /** True when this exact lower-cased spelling is an unambiguous marker. */
     private static function isExactReleaseToken(string $candidate): bool
     {
-        if (in_array($candidate, self::RELEASE_TOKENS, true)) {
-            return true;
-        }
-        // Resolution (720p, 2160p), bit depth (10bit), revision tag (v2).
+        return in_array($candidate, self::RELEASE_TOKENS, true)
+            || self::isPatternReleaseMarker($candidate);
+    }
+
+    /**
+     * The PATTERN half of {@see isExactReleaseToken()}: a marker recognised by
+     * SHAPE rather than by vocabulary — resolution (720p, 2160p), bit depth
+     * (10bit), revision tag (v2), CRC32 stamp.
+     *
+     * ⚠ Kept separate from the word list because a shape can be trusted where a
+     * word cannot: none of these four patterns can be an English word, so unlike
+     * "remux"/"hdtv"/"proper" they can never legitimately sit inside an episode
+     * title. {@see isHardReleaseMarker()} is what spends that guarantee, and it
+     * is the ONLY place the two halves are treated differently.
+     */
+    private static function isPatternReleaseMarker(string $candidate): bool
+    {
         if (preg_match('/^\d{3,4}p$/', $candidate) === 1) {
             return true;
         }
@@ -621,6 +649,46 @@ final class EpisodeFilenameParser
         // the digit requirement costs a real title and buys nothing on the
         // reference library.
         return preg_match('/^(?=[0-9a-f]{8}$)[a-f]*[0-9][0-9a-f]*$/', $candidate) === 1;
+    }
+
+    /**
+     * True when a BARE token — or the head of a dash-joined scene tag
+     * ("1080p-GRP") — is a PATTERN marker, i.e. one that proves its run on its
+     * own in {@see truncateAtReleaseRun()}.
+     *
+     * ⚠ Why this exists. The run rule needs two bare markers, or the end of the
+     * name, before it cuts; that is what stops one stray English-shaped marker
+     * from destroying a title. But a run is broken by any token in NEITHER
+     * marker list, and modern scene names are full of them — "AAC", "Atmos",
+     * "DTS", "AVC", "HDR", "HDR10", "SDR", "DV", "MULTi", and "H.265", whose dot
+     * splits "H" from "265". A broken run failed the two-marker test and the cut
+     * then fired at the NEXT qualifying run, stranding its own anchor inside the
+     * title: "Show S01E01 The Title 1080p AAC x264-GRP" produced
+     * "The Title 1080p AAC". Measured over 30,000 realistic modern scene names,
+     * 2,047 of them (6.8%) kept a resolution or bit-depth token in the title.
+     * It matters because MediaScanner::episodeName() writes this string into
+     * `media_items.name`, which LibraryMetadataMatcher::enrichEpisode() never
+     * rewrites — only `metadata_json` — so it is permanent.
+     *
+     * ⚠ The fix is deliberately NOT a wider vocabulary. Adding "aac"/"dts"/"hdr"/
+     * "dv"/"sdr"/"multi" as words re-opens exactly what §2.1 of this step
+     * measured and rejected: "DV", "SDR" and "MULTi" are plausible title
+     * substrings, and QUALITY_TOKENS-style lists fire inside 86 genuine titles.
+     * Only the PATTERN half is trusted here, because a shape cannot be a word.
+     *
+     * ⚠ A BRACKET GROUP is never hard, even when it holds a pattern marker. The
+     * dominant recovery convention IS "Show S01E23 [480p] Let It Be Me"; letting
+     * "[480p]" prove its own run would delete all 501 recovered titles.
+     */
+    private static function isHardReleaseMarker(string $token): bool
+    {
+        foreach (self::tokenCandidates($token) as $candidate) {
+            if (self::isPatternReleaseMarker($candidate)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**

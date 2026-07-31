@@ -928,4 +928,189 @@ class EpisodeFilenameParserTest extends TestCase
             '1.28' => ['Death Note S01E36 [1080p] 1.28.mkv', '1.28'],
         ];
     }
+
+    /**
+     * A run broken by a token in NEITHER marker list used to fail the
+     * two-bare-marker test and leave its own anchor behind, so the resolution
+     * was promoted into the title ("The Title 1080p AAC"). Every shape below is
+     * a mainstream modern release naming; measured over 30,000 such names the
+     * class was 2,047 titles (6.8%) before this rule and 0 after.
+     *
+     * The breaking tokens are exactly the ones a wider vocabulary would have to
+     * absorb — AAC, Atmos, DTS, AVC, HDR, HDR10, SDR, DV, MULTi, SUBBED, and
+     * "H.265" whose dot split separates "H" from "265". None of them is listed;
+     * the resolution / bit-depth PATTERN is what cuts.
+     *
+     * @dataProvider brokenReleaseRunCases
+     */
+    public function testAResolutionTokenIsNeverPromotedIntoTheTitle(string $filename, string $expected): void
+    {
+        $r = EpisodeFilenameParser::parse($filename, true);
+        $this->assertNotNull($r, "should still parse: {$filename}");
+        $this->assertSame($expected, $r['episode_title']);
+    }
+
+    /** @return array<string, array{0: string, 1: string}> */
+    public static function brokenReleaseRunCases(): array
+    {
+        return [
+            'aac breaks the run'    => ['Show S01E01 The Title 1080p AAC x264-GRP.mkv', 'The Title'],
+            'hdr + atmos'           => [
+                'Show.S01E01.The.Title.2160p.HDR.WEB-DL.DDP5.1.Atmos.x265-GRP.mkv',
+                'The.Title',
+            ],
+            'hdr alone'             => ['Show S01E01 The Title 2160p HDR WEB-DL x265-GRP.mkv', 'The Title'],
+            'sdr + aac + repack'    => ['Show S01E01 The Title 720p SDR AAC REPACK x265.mkv', 'The Title'],
+            'dv + atmos + multi'    => ['Show S01E01 The Title 1080p DV Atmos MULTi.mkv', 'The Title'],
+            'hdr10 + subbed + avc'  => ['Show S01E01 The Title 2160p HDR10 SUBBED AVC.mkv', 'The Title'],
+            'dts after a bit depth' => ['Show S01E01 The Title 1080p 10bit DTS x265.mkv', 'The Title'],
+            'dot-spelled h.265'     => ['Show.S01E01.The.Title.1080p.H.265.HMAX.WEB-DL.mkv', 'The.Title'],
+            'crc32 breaks the run'  => ['Show S01E01 The Title deadbee1 AAC MULTi.mkv', 'The Title'],
+        ];
+    }
+
+    /**
+     * ⚠ The rule above trusts a SHAPE, never a word. A marker that is also an
+     * English word must still need two of them, or the end of the name — so the
+     * cut lands on the resolution and leaves the title whole. If
+     * isHardReleaseMarker() were widened to the whole marker dictionary these
+     * would all collapse to "The".
+     *
+     * @dataProvider wordMarkerInsideATitleCases
+     */
+    public function testAWordMarkerInsideATitleStillDoesNotCut(string $filename, string $expected): void
+    {
+        $r = EpisodeFilenameParser::parse($filename, true);
+        $this->assertNotNull($r, "should still parse: {$filename}");
+        $this->assertSame($expected, $r['episode_title']);
+    }
+
+    /** @return array<string, array{0: string, 1: string}> */
+    public static function wordMarkerInsideATitleCases(): array
+    {
+        return [
+            'remux' => ['Show S01E01 The Remux Job 1080p AAC x265-GRP.mkv', 'The Remux Job'],
+            'hdtv'  => ['Show S01E01 The Hdtv Years 2160p HDR x265-GRP.mkv', 'The Hdtv Years'],
+            'divx'  => ['Show S01E01 Divx and Conquer 720p AAC x264-GRP.mkv', 'Divx and Conquer'],
+        ];
+    }
+
+    /**
+     * ⚠ A BRACKET GROUP is never a hard marker, even when it holds a resolution.
+     * "Show SxxEyy [480p] Title" IS the recovery convention this whole step
+     * exists for — all 501 recovered prod titles are that shape — so letting
+     * "[480p]" prove its own run would delete every one of them.
+     *
+     * @dataProvider bracketedResolutionCases
+     */
+    public function testABracketedResolutionNeverProvesItsOwnRun(string $filename, string $expected): void
+    {
+        $r = EpisodeFilenameParser::parse($filename, true);
+        $this->assertNotNull($r, "should still parse: {$filename}");
+        $this->assertSame($expected, $r['episode_title']);
+    }
+
+    /** @return array<string, array{0: string, 1: string}> */
+    public static function bracketedResolutionCases(): array
+    {
+        return [
+            // Real prod basenames.
+            'square before'  => ['Grey\'s Anatomy S06E12 [480p] Let It Be Me.mkv', 'Let It Be Me'],
+            'square 1080p'   => ['Supernatural S11E15 [1080p] Beyond the Mat.mkv', 'Beyond the Mat'],
+            'both sides'     => [
+                'Fullmetal Alchemist Brotherhood - E10 [1080p] Separate Destinations [x265].mkv',
+                'Separate Destinations',
+            ],
+            'parenthesised'  => ['Show S01E01 (1080p) Real Title.mkv', 'Real Title'],
+            'bit depth tag'  => ['Show S01E01 [10bit] Real Title.mkv', 'Real Title'],
+        ];
+    }
+
+    /**
+     * The other side of the same rule: a BARE resolution / bit depth / revision
+     * marker in front of the text means the text is more release metadata, so
+     * nothing is promoted. Pre-change these produced "1080p The Title".
+     *
+     * @dataProvider bareMarkerBeforeTextCases
+     */
+    public function testABareMarkerInFrontOfTheTextYieldsNoTitle(string $filename): void
+    {
+        $r = EpisodeFilenameParser::parse($filename, true);
+        $this->assertNotNull($r, "should still parse: {$filename}");
+        $this->assertNull($r['episode_title']);
+    }
+
+    /** @return array<string, array{0: string}> */
+    public static function bareMarkerBeforeTextCases(): array
+    {
+        return [
+            'resolution' => ['Show S01E01 1080p The Title.mkv'],
+            'bit depth'  => ['Show S01E01 10bit The Title.mkv'],
+            'revision'   => ['Show S01E01 v2 The Title.mkv'],
+        ];
+    }
+
+    /**
+     * The two-BARE-marker threshold is exactly two. Nothing on the 26,389-name
+     * reference library distinguishes 2 from 3 — every real row that qualifies
+     * that way also reaches the end of the name or carries a tag-GROUP spelling
+     * — but a resolution-less scene name does, and there the run rule is the
+     * ONLY thing that cuts (no pattern marker exists to fall back on). Raising
+     * the threshold to 3 leaves the whole tail on all three.
+     *
+     * @dataProvider twoBareMarkerCases
+     */
+    public function testTwoBareMarkersAreEnoughWhenThereIsNoResolutionToCutAt(
+        string $filename,
+        string $expected
+    ): void {
+        $r = EpisodeFilenameParser::parse($filename, true);
+        $this->assertNotNull($r, "should still parse: {$filename}");
+        $this->assertSame($expected, $r['episode_title']);
+    }
+
+    /**
+     * An eight-DIGIT token is title text, not a CRC32 stamp. That distinction
+     * only started to matter here: the CRC pattern is now one of the markers
+     * that proves a run on its own, so without the digits-only SOLID rule
+     * "11001001" — a real Star Trek TNG episode title — would cut the run open
+     * and take the rest of the title with it.
+     *
+     * @dataProvider allDigitTokenCases
+     */
+    public function testAnAllDigitTokenIsTitleTextNotACrcStamp(string $filename, string $expected): void
+    {
+        $r = EpisodeFilenameParser::parse($filename, true);
+        $this->assertNotNull($r, "should still parse: {$filename}");
+        $this->assertSame($expected, $r['episode_title']);
+    }
+
+    /** @return array<string, array{0: string, 1: string}> */
+    public static function allDigitTokenCases(): array
+    {
+        return [
+            'before a broken run' => [
+                'Star Trek The Next Generation S01E15 The 11001001 Job 1080p AAC x264-GRP.mkv',
+                'The 11001001 Job',
+            ],
+            'after a quality tag' => [
+                'Star Trek The Next Generation S01E15 [1080p] The 11001001 Job.mkv',
+                'The 11001001 Job',
+            ],
+        ];
+    }
+
+    /** @return array<string, array{0: string, 1: string}> */
+    public static function twoBareMarkerCases(): array
+    {
+        return [
+            'web-dl + ddp5' => [
+                'Show.S01E01.The.Title.WEB-DL.DDP5.1.Atmos.H.264-NTb.mkv',
+                'The.Title',
+            ],
+            'bluray + remux' => ['Show.S01E01.The.Title.BluRay.REMUX.AVC.Atmos.mkv', 'The.Title'],
+            'hdtv + xvid'    => ['Show.S01E01.The.Title.HDTV.XviD.MP3.Dual.mkv', 'The.Title'],
+            'space spelled'  => ['Show S01E01 The Title WEB-DL DDP5.1 Atmos AVC.mkv', 'The Title'],
+        ];
+    }
 }

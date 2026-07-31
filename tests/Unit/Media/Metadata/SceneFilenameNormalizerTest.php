@@ -1415,4 +1415,40 @@ final class SceneFilenameNormalizerTest extends TestCase
             'no tag at all' => ['Plain Title', 'Plain Title'],
         ];
     }
+
+    /**
+     * SM-0.2 (reviewer finding F2) widened
+     * {@see SceneFilenameNormalizer::repairBracketBalance()} from private to
+     * public for the same reason as stripBracketedTags(): it must run
+     * IMMEDIATELY AFTER that method at every call site, and
+     * {@see \Phlix\Media\Library\EpisodeFilenameParser::extractEpisodeTitle()}
+     * is one of them. While it was private the episode path was the only
+     * consumer of stripBracketedTags() without the balance guarantee, and an
+     * orphan opener went straight into `media_items.name` ("Title [720p").
+     *
+     * @dataProvider orphanBracketRepairCases
+     */
+    public function testRepairBracketBalanceIsPublicAndDropsOrphans(
+        string $input,
+        string $expected
+    ): void {
+        $this->assertTrue(
+            (new \ReflectionMethod(SceneFilenameNormalizer::class, 'repairBracketBalance'))->isPublic(),
+            'repairBracketBalance() is part of the API EpisodeFilenameParser depends on'
+        );
+        $this->assertSame($expected, SceneFilenameNormalizer::repairBracketBalance($input));
+    }
+
+    /** @return array<string, array{0:string,1:string}> */
+    public static function orphanBracketRepairCases(): array
+    {
+        return [
+            'orphan opener'    => ['Title [720p', 'Title 720p'],
+            'orphan paren'     => ['Title (1080p', 'Title 1080p'],
+            'orphan closer'    => ['Foo) Bar', 'Foo Bar'],
+            'fullwidth orphan' => ["Title \u{3010}720p", 'Title 720p'],
+            'balanced is kept' => ['Title [720p] Rest', 'Title [720p] Rest'],
+            'no bracket'       => ['Plain Title', 'Plain Title'],
+        ];
+    }
 }

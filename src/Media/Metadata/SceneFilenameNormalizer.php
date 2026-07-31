@@ -436,11 +436,22 @@ final class SceneFilenameNormalizer
      * back to {@see splitBytesKeepingFullwidthBrackets()}, which still recognises
      * the fullwidth pair by its byte sequence.
      *
+     * Public for the same reason {@see stripBracketedTags()} is: it must run
+     * IMMEDIATELY AFTER that method at EVERY call site, and
+     * {@see \Phlix\Media\Library\EpisodeFilenameParser} is one of them. Leaving it
+     * private made the episode path the only consumer of stripBracketedTags()
+     * without the balance guarantee, which put an orphan opener straight into
+     * `media_items.name` ("Title [720p"). Behaviour is unchanged from when it was
+     * private — this is a visibility widening only.
+     *
+     * ⚠ AFTER, never before. A pre-pass over the raw filename regressed 2 of
+     * 39,024 real names when SM-0.1 measured it.
+     *
      * @param string $title Title that may contain orphan brackets.
      *
      * @return string Title with all unmatched bracket characters removed.
      */
-    private static function repairBracketBalance(string $title): string
+    public static function repairBracketBalance(string $title): string
     {
         if ($title === '') {
             return $title;

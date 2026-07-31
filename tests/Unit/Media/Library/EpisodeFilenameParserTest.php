@@ -630,4 +630,302 @@ class EpisodeFilenameParserTest extends TestCase
         $this->assertNotNull($stripped);
         $this->assertSame('Highlander', $stripped['series']);
     }
+
+    // ------------------------------------------------------------------
+    // SM-0.2 reviewer findings F1-F4. Every filename below is either a real
+    // prod basename or the exact shape a finding named.
+    // ------------------------------------------------------------------
+
+    /**
+     * F1. A release-group suffix that a removed tag group leaves behind is no
+     * longer promoted to a title. These three were STRICTLY WORSE than the
+     * pre-change parser, which returned null for all of them.
+     *
+     * @dataProvider groupSuffixCases
+     */
+    public function testAReleaseGroupSuffixIsNeverPromotedToATitle(string $filename): void
+    {
+        $r = EpisodeFilenameParser::parse($filename, true);
+        $this->assertNotNull($r, "should still parse: {$filename}");
+        $this->assertNull($r['episode_title'], "junk promoted from: {$filename}");
+    }
+
+    /** @return array<string, array{0: string}> */
+    public static function groupSuffixCases(): array
+    {
+        return [
+            'dash-glued to the closer'   => ['Show S01E01 [1080p]-RARBG.mkv'],
+            'dash-led after a space'     => ['Show S01E01 [1080p] -GalaxyTV.mkv'],
+            'named group after a paren'  => ['Show S01E01 (1080p) YIFY.mkv'],
+            'named group, no list entry' => ['Show S01E01 [720p] x264-MRSK.mkv'],
+            'tilde residue'              => ['Show S01E01 [720p] ~.mkv'],
+            'ampersand residue'          => ['Show S01E01 [720p] &.mkv'],
+            'comma residue'              => ['Show S01E01 [720p] , .mkv'],
+            'quote residue'              => ["Show S01E01 [720p] ''.mkv"],
+        ];
+    }
+
+    /**
+     * F1. The live evidence: 8 prod rows produced the title "INTERNAL" because
+     * the cut started at "1080p" and left the scene's own prefix marker behind.
+     * "INTERNAL"/"WEB"/"NF"/"AMZN" are absorbed into the run instead.
+     *
+     * @dataProvider wholeSceneRunCases
+     */
+    public function testAWholeSceneRunLeavesNoResidue(string $filename): void
+    {
+        $r = EpisodeFilenameParser::parse($filename, true);
+        $this->assertNotNull($r, "should still parse: {$filename}");
+        $this->assertNull($r['episode_title'], "residue from: {$filename}");
+    }
+
+    /** @return array<string, array{0: string}> */
+    public static function wholeSceneRunCases(): array
+    {
+        return [
+            // Real prod basename (The Witcher US, 8 rows).
+            'INTERNAL prefix' => ['The.Witcher.US.S01E01.INTERNAL.1080p.WEB.x264-STRiFE.mkv'],
+            'WEB prefix'      => ['Show.S01E01.WEB.H264-EDITH.mkv'],
+            'NF + WEB'        => ['Show.S01E01.NF.WEB.x264-MRSK.mkv'],
+            'AMZN + WEB + DL' => ['Show.S01E01.AMZN.WEB.DL.x264-FLUX.mkv'],
+            'PROPER prefix'   => ['Show.S01E01.PROPER.1080p.WEB.x264-GRP.mkv'],
+            'REPACK prefix'   => ['Show.S01E01.REPACK.1080p.WEB.x264-GRP.mkv'],
+            'HD after a res'  => ['Show.S01E01.720p.HD.mkv'],
+            // Real prod basename (Shameless US).
+            'bare tag run'    => ['Shameless.US.S05E03.1080p.Bluray.x265.HEVC.5.1[fs87].mkv'],
+        ];
+    }
+
+    /**
+     * F1. The one genuine per-row regression the reviewer found: a duplicate-file
+     * digit welded to the closing paren ended up welded to the title.
+     * Real prod basename.
+     */
+    public function testADigitGluedToAClosingParenIsNotWeldedToTheTitle(): void
+    {
+        $r = EpisodeFilenameParser::parse(
+            'The Boondocks (2005) - S03E06 - Smokin With Cigarettes (1080p HMAX WEB-DL x265 YOGI)1.mkv',
+            true
+        );
+        $this->assertNotNull($r);
+        $this->assertSame('Smokin With Cigarettes', $r['episode_title']);
+
+        // Same duplicate-file artefact spelled with square brackets. The glued
+        // chunk has to stay part of the group's token: split off on its own it is
+        // a digits-only token, which is title text and breaks the run.
+        $square = EpisodeFilenameParser::parse('Show S01E01 Smokin With Cigarettes [1080p]1.mkv', true);
+        $this->assertNotNull($square);
+        $this->assertSame('Smokin With Cigarettes', $square['episode_title']);
+    }
+
+    /**
+     * F2. SM-0.1's balanced-bracket guarantee reaches the episode path too:
+     * `repairBracketBalance()` runs immediately AFTER `stripBracketedTags()`,
+     * never before, exactly as `normalize()` does at every other call site.
+     *
+     * @dataProvider orphanBracketCases
+     */
+    public function testAnOrphanBracketNeverReachesTheEpisodeTitle(
+        string $filename,
+        ?string $expected
+    ): void {
+        $r = EpisodeFilenameParser::parse($filename, true);
+        $this->assertNotNull($r, "should still parse: {$filename}");
+        $this->assertSame($expected, $r['episode_title']);
+    }
+
+    /** @return array<string, array{0: string, 1: ?string}> */
+    public static function orphanBracketCases(): array
+    {
+        return [
+            'trailing orphan opener'   => ['Show S01E01 Title [720p.mkv', 'Title'],
+            'trailing orphan paren'    => ['Show S01E01 Title (1080p.mkv', 'Title'],
+            'leading orphan opener'    => ['Show S01E01 [720p Title.mkv', null],
+            'fullwidth orphan opener'  => ["Show S01E01 \u{3010}720p Title.mkv", null],
+            // No release marker inside, so the group is not cut — the orphan is
+            // repaired and the words are kept. Without repairBracketBalance()
+            // this returns "The (Best Episode".
+            'orphan with no marker'    => ['Show S01E01 The (Best Episode.mkv', 'The Best Episode'],
+            // Nested parens: stripBracketedTags() is deliberately non-nesting, so
+            // it eats "(Special (Extended)" and leaves an orphan ")" that ONLY the
+            // AFTER-order repair removes. Running the repair FIRST yields
+            // "The Trial ) Ending" — this pins the ordering SM-0.1 established.
+            'nested parens'            => [
+                'Show S01E01 The Trial (Special (Extended)) Ending.mkv',
+                'The Trial Ending',
+            ],
+            'nested tag group'         => ['Show S01E01 Title (Bonus (Disc 2)).mkv', 'Title'],
+        ];
+    }
+
+    /**
+     * F4. The revision rule is deliberately ONE digit, so a two-digit "v" token
+     * is ordinary title text, not a fansub revision. Measured over all 26,389
+     * reference basenames the only revision markers that exist are v1 and v2;
+     * "v10"-"v99" are unreachable, which is exactly why the second digit the
+     * pattern used to allow was dead code.
+     */
+    public function testATwoDigitVTokenIsTitleTextNotARevisionMarker(): void
+    {
+        $r = EpisodeFilenameParser::parse('Show S01E01 [720p] V10.mkv', true);
+        $this->assertNotNull($r);
+        $this->assertSame('V10', $r['episode_title']);
+    }
+
+    /**
+     * F3. Ordinary English words that collide with a scene marker no longer
+     * destroy the title. Before the run rule these returned "A", "The", "The"
+     * and null respectively, because the cut was a PREFIX cut.
+     *
+     * @dataProvider englishWordCollisionCases
+     */
+    public function testAMarkerThatIsAlsoAnEnglishWordDoesNotCutTheTitle(
+        string $filename,
+        string $expected
+    ): void {
+        $r = EpisodeFilenameParser::parse($filename, true);
+        $this->assertNotNull($r, "should still parse: {$filename}");
+        $this->assertSame($expected, $r['episode_title']);
+    }
+
+    /** @return array<string, array{0: string, 1: string}> */
+    public static function englishWordCollisionCases(): array
+    {
+        return [
+            'proper mid-title'  => ['Show S01E01 [720p] A Proper Sendoff.mkv', 'A Proper Sendoff'],
+            'proper leading'    => ['Show S01E01 [720p] Proper Channels.mkv', 'Proper Channels'],
+            'repack trailing'   => ['Show S01E01 [720p] The Repack.mkv', 'The Repack'],
+            'hdtv mid-title'    => ['Show S01E01 [720p] The Hdtv Years.mkv', 'The Hdtv Years'],
+            'remux mid-title'   => ['Show S01E01 [720p] The Remux Job.mkv', 'The Remux Job'],
+            'remux leading'     => ['Show S01E01 [720p] Remux and Remaster.mkv', 'Remux and Remaster'],
+            'divx leading'      => ['Show S01E01 [720p] Divx and Conquer.mkv', 'Divx and Conquer'],
+            // Real prod basenames.
+            'web after a tag'   => ['NCIS S03E06 [576p] The Voyeur\'s Web.m4v', 'The Voyeur\'s Web'],
+            'web before a tag'  => [
+                'The MAGIC School Bus - S03 E03 - Spins a Web (480p - DVDRip).mp4',
+                'Spins a Web',
+            ],
+            'internal after tag' => ['NCIS S05E14 [576p] Internal Affairs.m4v', 'Internal Affairs'],
+            'dl at the end'      => ['Dark Angel S01E05 [360p] 411 on the DL.mkv', '411 on the DL'],
+        ];
+    }
+
+    /**
+     * F4. The bit-depth branch was dead under the old prefix cut (the cut already
+     * happened at "1080p", so "10bit" never mattered). Under the run rule it is
+     * load-bearing: without it the run breaks at "10bit" and the resolution
+     * survives into the title.
+     *
+     * @dataProvider bitDepthCases
+     */
+    public function testABitDepthTokenKeepsTheReleaseRunTogether(string $filename): void
+    {
+        $r = EpisodeFilenameParser::parse($filename, true);
+        $this->assertNotNull($r, "should still parse: {$filename}");
+        $this->assertSame('The.Title', $r['episode_title']);
+    }
+
+    /** @return array<string, array{0: string}> */
+    public static function bitDepthCases(): array
+    {
+        return [
+            '10bit' => ['Show.S01E01.The.Title.1080p.10bit.x265-GRP.mkv'],
+            '8bit'  => ['Show.S01E01.The.Title.1080p.8bit.BluRay.x265-GRP.mkv'],
+            '12bit' => ['Show.S01E01.The.Title.2160p.12bit.WEBRip.x265-GRP.mkv'],
+        ];
+    }
+
+    /**
+     * F4. The revision rule is ONE digit. Measured over all 26,389 reference
+     * basenames the only revision markers that exist are v1 and v2, so the
+     * second digit the pattern used to allow was unreachable. D6 (70 prod rows
+     * literally named "v2") stays closed — the real basename is below.
+     */
+    public function testTheRevisionMarkerIsStillRemoved(): void
+    {
+        $r = EpisodeFilenameParser::parse(
+            'Fullmetal Alchemist Brotherhood - E63 v2 [1080p][x265][10-bit][Dual-Audio].mkv',
+            true
+        );
+        $this->assertNotNull($r);
+        $this->assertNull($r['episode_title']);
+    }
+
+    /**
+     * A lone marker in the middle of a name is left alone, but the scene's
+     * tag-GROUP spelling may cut on its own — no English phrase produces it.
+     * Real prod basename; without this the title keeps the whole tail.
+     */
+    public function testADashJoinedSceneTagCutsOnItsOwn(): void
+    {
+        $r = EpisodeFilenameParser::parse(
+            'MacGyver.S01E01.Pilot.DVDRip-TV-Series No.001 S1E01 Pilot.avi',
+            true
+        );
+        $this->assertNotNull($r);
+        $this->assertSame('Pilot', $r['episode_title']);
+    }
+
+    /**
+     * Scrap is DASH-led only. A broader "does not start with a letter or a digit"
+     * test looked identical and cost 26 real titles on the reference library.
+     * All five below are real prod basenames.
+     *
+     * @dataProvider punctuationLedTitleCases
+     */
+    public function testAPunctuationLedTitleIsNotScrap(string $filename, string $expected): void
+    {
+        $r = EpisodeFilenameParser::parse($filename, true);
+        $this->assertNotNull($r, "should still parse: {$filename}");
+        $this->assertSame($expected, $r['episode_title']);
+    }
+
+    /** @return array<string, array{0: string, 1: string}> */
+    public static function punctuationLedTitleCases(): array
+    {
+        return [
+            'hash'        => ['Supernatural S09E15 [1080p] #THINMAN.mkv', '#THINMAN'],
+            'ellipsis'    => [
+                'Marvel\'s Agents of S.H.I.E.L.D. S02E09 [720p] …Ye Who Enter Here.mkv',
+                '…Ye Who Enter Here',
+            ],
+            'apostrophe'  => [
+                'Star Trek Deep Space Nine S07E18 [576p] \'Til Death Do Us Part.mkv',
+                '\'Til Death Do Us Part',
+            ],
+            'clipped word' => [
+                'Batman T.A.S - S01 E35 - Almost Got \'Im (720p - BluRay).mp4',
+                'Almost Got \'Im',
+            ],
+            'trailing bang' => [
+                'Pokemon - 0518 - Tag! We\'re It...! [480p] [x265] [pseudo].mkv',
+                'Tag! We\'re It...!',
+            ],
+        ];
+    }
+
+    /**
+     * A digits-only token is title text, not junk — it breaks a run rather than
+     * joining one. All four are real prod basenames whose provider title is
+     * exactly the number, and all four sit immediately after a quality tag.
+     *
+     * @dataProvider numericTitleCases
+     */
+    public function testANumericTitleAfterATagSurvives(string $filename, string $expected): void
+    {
+        $r = EpisodeFilenameParser::parse($filename, true);
+        $this->assertNotNull($r, "should still parse: {$filename}");
+        $this->assertSame($expected, $r['episode_title']);
+    }
+
+    /** @return array<string, array{0: string, 1: string}> */
+    public static function numericTitleCases(): array
+    {
+        return [
+            '2.0'  => ['Nikita S01E02 [720p] 2.0.mkv', '2.0'],
+            '3.0'  => ['Nikita S03E01 [720p] 3.0.mkv', '3.0'],
+            '13.1' => ['Warehouse 13 S02E05 [1080p] 13.1.mkv', '13.1'],
+            '1.28' => ['Death Note S01E36 [1080p] 1.28.mkv', '1.28'],
+        ];
+    }
 }

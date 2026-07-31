@@ -965,7 +965,12 @@ class EpisodeFilenameParserTest extends TestCase
             'hdr10 + subbed + avc'  => ['Show S01E01 The Title 2160p HDR10 SUBBED AVC.mkv', 'The Title'],
             'dts after a bit depth' => ['Show S01E01 The Title 1080p 10bit DTS x265.mkv', 'The Title'],
             'dot-spelled h.265'     => ['Show.S01E01.The.Title.1080p.H.265.HMAX.WEB-DL.mkv', 'The.Title'],
-            'crc32 breaks the run'  => ['Show S01E01 The Title deadbee1 AAC MULTi.mkv', 'The Title'],
+            // ⚠ Bit depth with NO resolution anywhere. These are the shapes that
+            // fail if isHardPatternMarker() is narrowed to the resolution alone —
+            // measured, that narrowing leaves 574 (seed 4242) / 533 (seed 90210)
+            // resolution-or-bit-depth titles per 30,000 modern scene names.
+            'bit depth alone'       => ['Show S01E01 The Title 10bit AAC x265-GRP.mkv', 'The Title'],
+            '8bit alone'            => ['Show S01E01 The Title 8bit DTS Atmos.mkv', 'The Title'],
         ];
     }
 
@@ -1027,9 +1032,14 @@ class EpisodeFilenameParserTest extends TestCase
     }
 
     /**
-     * The other side of the same rule: a BARE resolution / bit depth / revision
-     * marker in front of the text means the text is more release metadata, so
-     * nothing is promoted. Pre-change these produced "1080p The Title".
+     * The other side of the same rule: a BARE resolution or bit-depth marker in
+     * front of the text means the text is more release metadata, so nothing is
+     * promoted. Pre-change these produced "1080p The Title".
+     *
+     * ⚠ The revision tag is deliberately absent — see
+     * {@see revisionOrCrcShapedTitleCases()}. "Show S01E01 v2 The Title" keeps
+     * master's "v2 The Title" precisely so "V2 Rocket Base" survives; the two
+     * are the same rule firing.
      *
      * @dataProvider bareMarkerBeforeTextCases
      */
@@ -1046,7 +1056,131 @@ class EpisodeFilenameParserTest extends TestCase
         return [
             'resolution' => ['Show S01E01 1080p The Title.mkv'],
             'bit depth'  => ['Show S01E01 10bit The Title.mkv'],
-            'revision'   => ['Show S01E01 v2 The Title.mkv'],
+        ];
+    }
+
+    /**
+     * ⚠ A revision tag ("V2") and a CRC32-shaped word are NOT hard markers, and
+     * this test is the guarantee.
+     *
+     * A hard marker cuts a run with no corroboration at all — no second marker,
+     * no end of name. That is safe for a resolution and a bit depth, which no
+     * one writes inside a sentence, but it is NOT safe for the other two
+     * patterns: a census of all 85,763 basenames in this estate finds
+     * "07 deadmau5 - Tau V2", "04 deadmau5 - Tau V1", "16 Superspy - Sumo V2",
+     * "08 8bit" and "28 Just Before 8bit" as human-authored titles, and
+     * "V1"/"V2"/"V8" are ordinary title vocabulary (rocket designations, engine
+     * layouts). While they were hard, a single such token between two real words
+     * truncated the title outright: "V2 Rocket Base" → null, "The V8
+     * Interceptor" → "The".
+     *
+     * Both patterns remain ordinary markers in
+     * EpisodeFilenameParser::isPatternReleaseMarker(), which is what keeps
+     * defect D6 closed — see {@see revisionOrCrcMarkerStillCutsCases()}.
+     *
+     * @dataProvider revisionOrCrcShapedTitleCases
+     */
+    public function testARevisionOrCrcShapedTokenIsNotAHardMarker(
+        string $filename,
+        string $expected
+    ): void {
+        $r = EpisodeFilenameParser::parse($filename, true);
+        $this->assertNotNull($r, "should still parse: {$filename}");
+        $this->assertSame($expected, $r['episode_title']);
+    }
+
+    /** @return array<string, array{0: string, 1: string}> */
+    public static function revisionOrCrcShapedTitleCases(): array
+    {
+        return [
+            // Leading, medial and trailing revision tags, in every separator
+            // style the tokenizer distinguishes.
+            'v2 leads the title'      => ['Show S01E01 V2 Rocket Base.mkv', 'V2 Rocket Base'],
+            'v8 mid title'            => ['Show S01E01 The V8 Interceptor.mkv', 'The V8 Interceptor'],
+            'v1 mid title'            => ['Show S01E01 The V1 Flying Bomb.mkv', 'The V1 Flying Bomb'],
+            'v2 mid title'            => ['Show S01E01 Mission V2 Complete.mkv', 'Mission V2 Complete'],
+            'v2 dot-separated'        => ['Show S01E01.V2.Rocket.Base.mkv', 'V2.Rocket.Base'],
+            'v2 after a quality tag'  => ['Show S01E23 [480p] V2 Rocket.mkv', 'V2 Rocket'],
+            'v2 in front of the text' => ['Show S01E01 v2 The Title.mkv', 'v2 The Title'],
+            'v2 before a word run'    => [
+                'Show S01E01 The Title v2 AAC MULTi.mkv',
+                'The Title v2 AAC MULTi',
+            ],
+            // CRC32-shaped words: eight hex characters with at least one digit.
+            'crc-shaped word leads'   => ['Show S01E01 Cafe1234 Blues.mkv', 'Cafe1234 Blues'],
+            'crc-shaped word leads 2' => ['Show S01E01 Deadbe3f Story.mkv', 'Deadbe3f Story'],
+            'crc-shaped word mid'     => [
+                'Show S01E01 The Deadbe3f Affair.mkv',
+                'The Deadbe3f Affair',
+            ],
+            'crc-shaped before a run' => [
+                'Show S01E01 The Title deadbee1 AAC.mkv',
+                'The Title deadbee1 AAC',
+            ],
+            // ⚠ …and the round-2 fix still fires on the very same titles: the
+            // release run is cut, the title is not. If isHardReleaseMarker() were
+            // widened back these would be null or a one-word stump.
+            'v2 title + broken run'   => [
+                'Show S01E01 V2 Rocket Base 1080p AAC x264-GRP.mkv',
+                'V2 Rocket Base',
+            ],
+            'v2 title + hdr dot run'  => [
+                'Show S01E01.V2.Rocket.Base.2160p.HDR.WEB-DL.DDP5.1.Atmos.x265-GRP.mkv',
+                'V2.Rocket.Base',
+            ],
+            'crc title + broken run'  => [
+                'Show S01E01 Cafe1234 Blues 1080p AAC x264-GRP.mkv',
+                'Cafe1234 Blues',
+            ],
+            'crc title mid + run'     => [
+                'Show S01E01 The Deadbe3f Affair 1080p AAC x264-GRP.mkv',
+                'The Deadbe3f Affair',
+            ],
+        ];
+    }
+
+    /**
+     * Defect D6 stays closed, and so does the CRC32 stamp. Both are still
+     * release MARKERS in isPatternReleaseMarker() — they simply need
+     * corroboration again: the end of the name, a second bare marker, or a
+     * tag-GROUP spelling. All 70 prod rows literally named "v2" are this shape.
+     *
+     * ⚠ These are the cases that fail if either pattern is deleted from
+     * isPatternReleaseMarker() rather than merely demoted out of the HARD set.
+     *
+     * @dataProvider revisionOrCrcMarkerStillCutsCases
+     */
+    public function testARevisionOrCrcMarkerStillCutsWhenCorroborated(
+        string $filename,
+        ?string $expected
+    ): void {
+        $r = EpisodeFilenameParser::parse($filename, true);
+        $this->assertNotNull($r, "should still parse: {$filename}");
+        $this->assertSame($expected, $r['episode_title']);
+    }
+
+    /** @return array<string, array{0: string, 1: string|null}> */
+    public static function revisionOrCrcMarkerStillCutsCases(): array
+    {
+        return [
+            // Real D6 prod shapes — base emitted "v2" on 70 rows.
+            'absolute numbering'   => ['Show - 259 v2 [720p].mkv', null],
+            'bare v2 is the name'  => ['Show S01E01 v2.mkv', null],
+            'v2 then resolution'   => ['Show S01E01 v2 1080p x264-GRP.mkv', null],
+            // Reaches the end of the name, so no hard marker is needed.
+            'v2 ends the name'     => ['Show S01E01 The Title v2.mkv', 'The Title'],
+            // A CRC32 stamp in its usual bracketed place is still removed.
+            'bracketed crc stamp'  => ['Show S01E01 The Title [6D3D5CCA].mkv', 'The Title'],
+            // …and unbracketed, where only its being a MARKER can start the run.
+            'bare crc stamp'       => ['Show S01E01 The Title deadbee1.mkv', 'The Title'],
+            'crc stamp then a run' => [
+                'Show S01E01 The Title deadbee1 1080p x264-GRP.mkv',
+                'The Title',
+            ],
+            'crc stamp dot scene'  => [
+                'Show.S01E01.The.Title.deadbee1.WEB.x264-MRSK.mkv',
+                'The.Title',
+            ],
         ];
     }
 

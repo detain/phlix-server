@@ -462,7 +462,8 @@ final class EpisodeFilenameParser
             }
 
             // A run that stops short of the end has to prove itself: a BARE
-            // pattern marker (see isHardReleaseMarker()), two BARE markers, or
+            // resolution or bit-depth marker (see isHardReleaseMarker() — the
+            // revision tag and the CRC32 stamp are NOT hard), two BARE markers, or
             // the scene's tag-GROUP spelling ("x264-MRSK", "DVDRip-TV-Series"),
             // which no English phrase produces. One WORD marker alone never cuts
             // — that is what saves "The Hdtv Years".
@@ -624,18 +625,27 @@ final class EpisodeFilenameParser
      * SHAPE rather than by vocabulary — resolution (720p, 2160p), bit depth
      * (10bit), revision tag (v2), CRC32 stamp.
      *
-     * ⚠ Kept separate from the word list because a shape can be trusted where a
-     * word cannot: none of these four patterns can be an English word, so unlike
-     * "remux"/"hdtv"/"proper" they can never legitimately sit inside an episode
-     * title. {@see isHardReleaseMarker()} is what spends that guarantee, and it
-     * is the ONLY place the two halves are treated differently.
+     * ⚠ A shape is NOT automatically safer than a word. An earlier revision of
+     * this docblock claimed "none of these four patterns can be an English word,
+     * so they can never legitimately sit inside an episode title" and spent that
+     * guarantee in {@see isHardReleaseMarker()}. It is FALSE for two of the four,
+     * and the counter-evidence is in this estate: scanning all 85,763 real
+     * basenames for bare pattern-marker tokens turns up "07 deadmau5 - Tau V2",
+     * "04 deadmau5 - Tau V1", "16 Superspy - Sumo V2", "08 8bit",
+     * "28 Just Before 8bit" and "07 Ghettochip Malfunction (Hell Yes) (8bit
+     * remix)" — human-authored titles, not release junk. "V1"/"V2"/"V8" are
+     * ordinary title vocabulary (rocket designations, engine layouts) and an
+     * eight-hex-with-a-digit word is reachable by ordinary spelling
+     * ("Cafe1234", "Deadbe3f"). Only the resolution and bit-depth members are
+     * trusted as HARD; see {@see isHardPatternMarker()}.
+     *
+     * All four still count as ordinary markers here, which is what closes defect
+     * D6 (70 episode rows literally named "v2") — a marker only needs a run to
+     * cut, and a run needs corroboration.
      */
     private static function isPatternReleaseMarker(string $candidate): bool
     {
-        if (preg_match('/^\d{3,4}p$/', $candidate) === 1) {
-            return true;
-        }
-        if (preg_match('/^(?:8|10|12)bit$/', $candidate) === 1) {
+        if (self::isHardPatternMarker($candidate)) {
             return true;
         }
         // ⚠ ONE digit. "v10"-"v99" do not exist: the highest revision marker on
@@ -652,9 +662,38 @@ final class EpisodeFilenameParser
     }
 
     /**
+     * The two pattern markers a BARE token may prove a run with on its own —
+     * resolution ("720p", "2160p") and bit depth ("8bit", "10bit", "12bit").
+     *
+     * ⚠ Deliberately NOT the whole of {@see isPatternReleaseMarker()}. The
+     * revision tag ("v2") and the CRC32 stamp are ordinary title vocabulary in
+     * the wild (see that method's census), and because the hard rule cuts a run
+     * that neither reaches the end of the name nor has any second marker, one
+     * such token between two real words truncates the title outright:
+     * "Show S01E01 V2 Rocket Base" → null, "Show S01E01 The V8 Interceptor" →
+     * "The". Measured, the narrowing is FREE: identical output to the wide
+     * version across 465,019 names — 26,389 real episode basenames, all 85,763
+     * whole-estate basenames, 60,000 modern-scene fuzz names (two seeds) and
+     * 319,256 planted-title probes — with the resolution/bit-depth-in-title
+     * count still 0 and D6 still closed.
+     *
+     * ⚠ Do NOT narrow this to the resolution alone. Measured over 30,000 modern
+     * scene names, dropping bit depth leaves 109 (seed 4242) / 110 (seed 90210)
+     * titles carrying a resolution or bit-depth token — the very class the hard
+     * rule exists to close. "8bit" as genuine title text is a real but far
+     * smaller exposure (3 music files in this estate, none of which reach this
+     * parser) than the one it buys down.
+     */
+    private static function isHardPatternMarker(string $candidate): bool
+    {
+        return preg_match('/^\d{3,4}p$/', $candidate) === 1
+            || preg_match('/^(?:8|10|12)bit$/', $candidate) === 1;
+    }
+
+    /**
      * True when a BARE token — or the head of a dash-joined scene tag
-     * ("1080p-GRP") — is a PATTERN marker, i.e. one that proves its run on its
-     * own in {@see truncateAtReleaseRun()}.
+     * ("1080p-GRP") — is a HARD pattern marker, i.e. one that proves its run on
+     * its own in {@see truncateAtReleaseRun()}.
      *
      * ⚠ Why this exists. The run rule needs two bare markers, or the end of the
      * name, before it cuts; that is what stops one stray English-shaped marker
@@ -674,7 +713,13 @@ final class EpisodeFilenameParser
      * "dv"/"sdr"/"multi" as words re-opens exactly what §2.1 of this step
      * measured and rejected: "DV", "SDR" and "MULTi" are plausible title
      * substrings, and QUALITY_TOKENS-style lists fire inside 86 genuine titles.
-     * Only the PATTERN half is trusted here, because a shape cannot be a word.
+     *
+     * ⚠ Nor is it the whole PATTERN half. {@see isHardPatternMarker()} carries
+     * the census: "V2"/"V8" and eight-hex-with-a-digit words ARE ordinary title
+     * text, and a hard marker cuts with no corroboration at all, so trusting
+     * them deleted real titles ("V2 Rocket Base" → null). Only resolution and
+     * bit depth are hard, and that narrowing was measured free over 465,019
+     * names.
      *
      * ⚠ A BRACKET GROUP is never hard, even when it holds a pattern marker. The
      * dominant recovery convention IS "Show S01E23 [480p] Let It Be Me"; letting
@@ -683,7 +728,7 @@ final class EpisodeFilenameParser
     private static function isHardReleaseMarker(string $token): bool
     {
         foreach (self::tokenCandidates($token) as $candidate) {
-            if (self::isPatternReleaseMarker($candidate)) {
+            if (self::isHardPatternMarker($candidate)) {
                 return true;
             }
         }

@@ -1357,6 +1357,14 @@ class MediaScannerTest extends TestCase
     /**
      * Every source field the probe does not expose becomes null (never 0/'')
      * so the ABR-ladder clamp downstream can tell "unknown" from "zero".
+     *
+     * The bare video stream below is DEGENERATE by
+     * {@see \Phlix\Media\Library\MediaScanner::videoStreamDefects()} (no codec, no
+     * dimensions) and is emitted anyway, because no video stream ever loses its
+     * row for being degenerate — only a flagged `attached_pic` cover art does.
+     * That is deliberate, not an oversight: see
+     * {@see \Phlix\Tests\Unit\Media\Library\MediaScannerDegenerateVideoStreamTest}
+     * for the real content tracks that a row-level rejection destroyed.
      */
     public function testSummarizeProbeMissingFieldsBecomeNull(): void
     {

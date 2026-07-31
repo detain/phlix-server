@@ -15,6 +15,7 @@ use Phlix\Shared\Events\Library\LibraryScanCompleted;
 use Phlix\Shared\Events\Library\LibraryScanStarted;
 use Phlix\Shared\Events\Library\MediaItemAdded;
 use Phlix\Common\Logger\LogChannels;
+use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Common\Logger\StructuredLogger;
 use Phlix\Media\CollectionService;
 use Phlix\Media\Extras\TrailerFinder;
@@ -199,6 +200,62 @@ class MediaScanner
      * @var array<int, string>
      */
     private const VIDEO_CONTENT_LIBRARY_TYPES = ['video', 'series', 'movie'];
+
+    /**
+     * Largest width:height (or height:width) ratio a `video` stream may claim
+     * before {@see videoStreamDefects()} calls its geometry implausible and
+     * {@see summarizeProbe()} declines to describe the file with it.
+     *
+     * ⚠ THIS IS A HEURISTIC, NOT A DECODER LIMIT. An earlier revision asserted
+     * "an aspect beyond 100:1 is not a picture ffmpeg could have produced", and
+     * a companion `MAX_VIDEO_DIMENSION = 65536` claimed 65,536 was "ffmpeg's OWN
+     * hard ceiling (`MAX_WIDTH`/`MAX_HEIGHT` in libavcodec)". BOTH claims are
+     * FALSE, and both were disproved on this box's ffmpeg 6.1.1: `-f lavfi -i
+     * color=s=4096x2 -c:v ffv1` (2048:1) and `-i color=s=70000x1000 -c:v ffv1`
+     * each encode, probe AND decode with exit 0. Do not reason about the bound
+     * below as if ffmpeg enforced it.
+     *
+     * The dimension bound was DELETED for that reason: of the 18 measured broken
+     * rows it fired on 0 (the not-positive rule catches the ten `1920x0` rows and
+     * this ratio catches the eight `4x3841` / `4x5634` ones), while its one
+     * demonstrable effect was to take `source` away from a real, decodable
+     * 70000x1000 ffv1 file. This bound stays because it is the rule that earns
+     * its place on the measurement.
+     *
+     * What it actually is: an implausibility bound sized against the MEASURED
+     * library. The 37,925 codec-carrying `video` rows on production 2026-07-28
+     * span aspect 1.02 – 3.00, and the broken headers are 1:960 and 1:1408.
+     * 100:1 sits ~33x outside the widest real frame and outside the most extreme
+     * content anyone here could name (a 3840x64 signage ribbon, 60:1), so it
+     * separates the two measured populations with margin on both sides. Widening
+     * or narrowing it is a judgement about content, and the warrant is that
+     * measurement — re-measure before changing it.
+     *
+     * Nothing is DISCARDED on the strength of this bound: a stream that trips it
+     * still gets its `media_streams` row (see {@see summarizeProbe()}). It only
+     * loses the right to define `metadata_json['source']` — but that loss is
+     * PERMANENT, so a false positive does not heal itself. Nothing re-derives an
+     * existing `source`: {@see backfillItemSourceMetadata()} returns `'skipped'`
+     * without probing once `duration_seconds` and `source` are both populated,
+     * and even on the branch that does probe it writes `source` only when it is
+     * absent; `StreamProbeBackfill::probeAndReplace()` writes `media_streams` and
+     * `streams_probed_at` and never touches `metadata_json`; and
+     * `scripts/backfill-source-metadata.php` reselects only items whose
+     * `$.source` IS NULL. Only re-creating the item (path change, dedupe,
+     * library re-add) re-derives it.
+     */
+    private const MAX_VIDEO_ASPECT_RATIO = 100.0;
+
+    /**
+     * `video` stream defect ids reported by {@see videoStreamDefects()} and
+     * logged verbatim so an operator can tell WHICH rule fired on a given
+     * stream. Only the two geometry ids disqualify a stream from becoming the
+     * primary `$video`; {@see DEFECT_CODEC_ABSENT} is recorded for diagnosis and
+     * changes nothing.
+     */
+    private const DEFECT_CODEC_ABSENT = 'codec_name_absent';
+    private const DEFECT_DIMENSION_NOT_POSITIVE = 'dimension_missing_or_not_positive';
+    private const DEFECT_ASPECT_BEYOND_BOUND = 'aspect_beyond_bound';
 
     /**
      * Per-scan cache of series/season container IDs keyed by their synthetic path,
@@ -1574,7 +1631,9 @@ class MediaScanner
     /**
      * Derive the total duration, a compact source technical summary, and the
      * media_streams rows from a SINGLE {@see FfmpegRunner::probe()} result.
-     * Pure and side-effect free so one probe feeds every downstream write.
+     * Deterministic in its return value, so one probe feeds every downstream
+     * write; its ONLY side effect is a diagnostic log line per degenerate `video`
+     * stream (see {@see logDegenerateVideoStreams()}), which nothing reads back.
      * Public so the lazy playback-info backfill ({@see StreamProbeBackfill})
      * derives rows from the EXACT same logic and the two paths never drift.
      *
@@ -1599,8 +1658,60 @@ class MediaScanner
      * `title` tag, and `is_default` (ffprobe `disposition.default`) — so the
      * playback-info track menus (see {@see StreamTrackShaper}) can offer every
      * audio and subtitle track. Embedded cover-art "video" streams
-     * (`disposition.attached_pic`) are excluded unless they are the promoted
-     * fallback (a file whose ONLY video stream is the poster).
+     * (`disposition.attached_pic`) are excluded unless the file has NO
+     * non-poster video stream at all, in which case the FIRST of them keeps its
+     * row (see {@see coverArtLosesItsRow()}). A poster promoted to `source`
+     * because every non-poster stream had implausible geometry does NOT gain a
+     * row — that is the same rule master applies, and the reason is in
+     * {@see coverArtLosesItsRow()}.
+     *
+     * DEGENERATE "video" streams — no `codec_name`, or geometry that cannot
+     * describe a frame / is implausible for the measured library (see
+     * {@see videoStreamDefects()}) — are STILL PERSISTED, and
+     * only lose the right to define the `source` summary. A stream whose geometry
+     * is implausible is skipped when choosing the primary `$video`, so a `1920x0`
+     * broken header cannot become `source` and clamp every rung of the ABR ladder
+     * to zero height; a stream that merely names no codec is NOT skipped, because
+     * its dimensions are still the file's real dimensions.
+     *
+     * THAT SPLIT IS THE WHOLE POINT, and an earlier revision got it wrong by
+     * ALSO dropping the row. Rejecting a video row on these predicates destroys
+     * real content: a `codec_type=video` stream with an ABSENT `codec_name` and
+     * valid dimensions is exactly what ffmpeg 6.1.1 reports for a sample-entry
+     * fourcc the installed build cannot map — `vvc1` (H.266), `apv1`, and every
+     * Common-Encryption `encv` (Widevine / PlayReady) or FairPlay `drmi` MP4 —
+     * while `codec_name='h264'` at `0x0` is what an MPEG-TS joined mid-GOP (an
+     * in-progress DVR recording, a partial download) reports. Verified on real
+     * files with real ffprobe. Those are content tracks, and the row is the only
+     * record that the track exists, plus its dimensions, bitrate, language and
+     * color metadata. A junk row, by contrast, is INERT: every reader that asks
+     * "what is this item's video codec?" already skips a blank `codec`
+     * (`StreamProbeBackfill::videoCodecMissing()`, the SPA's
+     * `videoCodecFromStreams()`), `getVideoStreamColorMetadata()` reads the
+     * LOWEST `stream_index`, and `StreamTrackShaper` never counts a video row
+     * into an `0:a:N` / `0:s:N` ordinal. A dropped row, meanwhile, cannot be
+     * recovered — nothing re-probes an item that already has a duration, a
+     * `source` and a `streams_probed_at` stamp ({@see
+     * backfillItemSourceMetadata()} returns `'skipped'`, and both
+     * `StreamProbeBackfill` triggers short-circuit) — and its absence is
+     * indistinguishable from "ffprobe never reported that stream". Preserving
+     * the row therefore outranks not storing a junk one.
+     *
+     * The same asymmetry is why no cleanup migration ships with this: DELETING
+     * the measured junk rows is exactly as irreversible as never writing them,
+     * and the only predicate that identifies them ("a `video` row with a blank
+     * codec, on an item that has another `video` row WITH a codec") also matches
+     * the `encv`/`drmi`/`vvc1` content track of any file that carries an
+     * unflagged poster or a second video stream. Verified on MySQL 8.0.46
+     * against rows this method actually produced for such a file. An operator
+     * who wants the junk gone runs a one-off DELETE against the library they
+     * measured; the ledgered migration chain is the wrong place for it.
+     *
+     * The pre-existing `attached_pic` skip is NOT affected by that reasoning and
+     * stays UNWIDENED: a poster stream is not a content track, it is a picture
+     * the muxer flagged as such, and the file's first poster still keeps its row
+     * when the file has no non-poster video stream at all — the one case where
+     * dropping it would leave the item with zero video rows.
      *
      * @param array<string, mixed> $probe Raw ffprobe result (streams + format).
      * @return array{
@@ -1620,23 +1731,56 @@ class MediaScanner
         $videoFallbackIndex = null;
         $audio = null;
         $audioIndex = null;
+        // Whether the file carries any video-type stream that is NOT flagged
+        // cover art. It decides which poster rows may be persisted (see
+        // {@see coverArtLosesItsRow()}), and must therefore be known for the
+        // WHOLE file before the persist loop starts — a poster at index 0 is
+        // reached before the content track at index 1.
+        $hasNonPosterVideo = false;
+        /** @var list<array{stream: array<string, mixed>, defects: list<string>}> $degenerate */
+        $degenerate = [];
         foreach ($rawStreams as $stream) {
             if (!is_array($stream)) {
                 continue;
             }
             $codecType = $stream['codec_type'] ?? null;
             if ($codecType === 'video') {
-                // Remember the first video-type stream as a fallback for the
-                // rare file whose ONLY video stream is an embedded cover art.
+                // Remember the first video-type stream as a fallback for a file
+                // that offers nothing fit to describe it: every video stream is
+                // an embedded cover art, or every non-poster one has implausible
+                // geometry. Which of those two it was decides whether the
+                // fallback also gets a row — see the persist loop below.
                 if ($videoFallback === null) {
                     $videoFallback = $stream;
                     $videoFallbackIndex = self::intOrNull($stream['index'] ?? null);
                 }
+                if (!self::isAttachedPic($stream)) {
+                    $hasNonPosterVideo = true;
+                }
+                // Computed ONCE per video stream and reused for both the
+                // selection guard and the log line, so the predicate can never
+                // disagree with what gets reported.
+                $defects = self::videoStreamDefects($stream);
+                if ($defects !== []) {
+                    $degenerate[] = ['stream' => $stream, 'defects' => $defects];
+                }
                 // Prefer the first REAL video stream: skip an embedded poster
                 // (disposition.attached_pic = 1), whose tiny 600x900 dims would
                 // otherwise masquerade as the source resolution and wrongly cap
-                // the ABR ladder at the thumbnail size.
-                if ($video === null && !self::isAttachedPic($stream)) {
+                // the ABR ladder at the thumbnail size, and skip a stream whose
+                // GEOMETRY is implausible for the same reason — a `1920x0`
+                // header would clamp the ladder to zero height.
+                //
+                // A missing `codec_name` deliberately does NOT disqualify a
+                // stream here: its width/height are still the file's real
+                // dimensions (a `vvc1`/`encv`/`drmi` content track probes with no
+                // codec name and correct 320x240), and handing `source` to a
+                // poster instead would ladder a 4K DRM film as a 600x900 mjpeg.
+                if (
+                    $video === null
+                    && !self::isAttachedPic($stream)
+                    && !self::defectsIncludeGeometry($defects)
+                ) {
                     $video = $stream;
                     $videoIndex = self::intOrNull($stream['index'] ?? null);
                 }
@@ -1646,12 +1790,32 @@ class MediaScanner
             }
         }
 
-        // Only when every video-type stream is an attached picture do we fall
-        // back to it — preserving prior behavior for that edge (an item that
-        // truly has no playable video stream).
+        // Only when every video-type stream is an attached picture (or has
+        // implausible geometry) do we fall back to it — preserving prior
+        // behavior for that edge (an item that truly has no playable video
+        // stream), and guaranteeing `source` is never null for a file that has
+        // any video-type stream at all.
+        //
+        // This promotion decides `source` ONLY. It does not hand a poster a
+        // media_streams row it would not otherwise get: that is
+        // {@see coverArtLosesItsRow()}'s call, and it says no whenever the file
+        // has any non-poster video stream. The two were coupled once, and the
+        // added row flipped `StreamProbeBackfill::videoCodecMissing()` from true
+        // to false on a `1920x0`-plus-cover-art file, masking the item from
+        // `ensureVideoCodecFor()` permanently.
         if ($video === null && $videoFallback !== null) {
             $video = $videoFallback;
             $videoIndex = $videoFallbackIndex;
+        }
+
+        // LOUD about every degenerate stream, because the alternative is that
+        // the only evidence of a false positive is a `source` descriptor taken
+        // from a different stream than ffprobe's first — invisible after the
+        // fact. Costs nothing on a clean file: the list is empty and this is
+        // skipped, so a full-library scan logs 18 lines for the 18 measured
+        // broken headers and nothing for the other 37,907 video rows.
+        if ($degenerate !== []) {
+            self::logDegenerateVideoStreams($degenerate, $format, $video, $hasNonPosterVideo);
         }
 
         // Total duration (seconds) from the container format. Rounded and
@@ -1690,7 +1854,9 @@ class MediaScanner
         // so the playback-info track menus can list all audio tracks and
         // subtitles. The primary video row reuses $videoBitrate (with its
         // format-level fallback) so the ABR ladder's source ceiling and the
-        // stored row agree; every other row carries its own bit_rate.
+        // stored row agree; every other row carries its own bit_rate. When the
+        // primary is a cover-art stream that keeps no row, no stored row carries
+        // that fallback — the ladder reads `source`, not the rows.
         $streams = [];
         $nextIndex = 0;
         foreach ($rawStreams as $stream) {
@@ -1701,9 +1867,18 @@ class MediaScanner
             if (!in_array($codecType, ['video', 'audio', 'subtitle'], true)) {
                 continue; // data/attachment streams have no playable track
             }
-            // Skip embedded cover art unless it was promoted as the only
-            // "video" the file has (the $video fallback above).
-            if ($codecType === 'video' && self::isAttachedPic($stream) && $stream !== $video) {
+
+            // Skip embedded cover art unless it is the only "video" the file
+            // has. This is the ONLY reason a video stream loses its row, and the
+            // rule is EXACTLY the one master applies, so this method cannot
+            // write a row master would not have written.
+            //
+            // A degenerate stream (no codec_name, or implausible geometry) keeps
+            // its row on purpose — see the DEGENERATE paragraph in this method's
+            // docblock: the shapes that trip those predicates include real
+            // content tracks (`encv`/`drmi` DRM, `vvc1`, a mid-GOP `.ts`), and a
+            // dropped row is unrecoverable while a junk row is inert.
+            if ($codecType === 'video' && self::coverArtLosesItsRow($stream, $video, $hasNonPosterVideo)) {
                 continue;
             }
 
@@ -1845,6 +2020,231 @@ class MediaScanner
         }
         $attached = $disposition['attached_pic'] ?? null;
         return is_numeric($attached) && (int) $attached === 1;
+    }
+
+    /**
+     * Whether this `video` stream loses its `media_streams` row to the cover-art
+     * skip. TRUE only for a flagged {@see isAttachedPic()} stream, and then only
+     * when the file has some OTHER record of its video content: any non-poster
+     * video-type stream at all, or (for a poster-only file) another poster that
+     * was promoted ahead of this one.
+     *
+     * WHY IT IS NOT "`$stream !== $video`". A poster can now win the primary
+     * `$video` role in a second way — every non-poster video stream having
+     * implausible geometry promotes the fallback — and letting that promotion
+     * also grant a row was a REGRESSION AGAINST MASTER, not a widening of it.
+     * A/B'd against pristine `b07b5de3` on a file with a flagged 600x900 mjpeg
+     * cover at index 0 and a codec-less `1920x0` content track at index 1:
+     *
+     *     master  rows [video#1 NULL, audio#2]                 videoCodecMissing = TRUE
+     *     coupled rows [video#0 mjpeg, video#1 NULL, audio#2]  videoCodecMissing = FALSE
+     *
+     * `StreamProbeBackfill::videoCodecMissing()` takes the FIRST codec-bearing
+     * video row, so the added poster row answers "this item's codec is known"
+     * and `ensureVideoCodecFor()` short-circuits — the item can never be
+     * re-probed, which is precisely the permanently-unrepairable outcome the
+     * DEGENERATE paragraph of {@see summarizeProbe()} exists to prevent. The same
+     * row also becomes the lowest `stream_index`, so
+     * `ItemRepository::getVideoStreamColorMetadata()` would read the cover art's
+     * color metadata instead of the content track's.
+     *
+     * So `source` selection and row persistence are decoupled for posters
+     * exactly as they already are for degenerate streams: a poster may describe
+     * the file without being recorded as one of its tracks.
+     *
+     * @param array<string, mixed>      $stream            The video stream being persisted.
+     * @param array<string, mixed>|null $video             The promoted primary video stream.
+     * @param bool                      $hasNonPosterVideo Whether the file carries any
+     *                                                     video-type stream that is not
+     *                                                     flagged cover art.
+     */
+    private static function coverArtLosesItsRow(array $stream, ?array $video, bool $hasNonPosterVideo): bool
+    {
+        if (!self::isAttachedPic($stream)) {
+            return false;
+        }
+
+        return $hasNonPosterVideo || $stream !== $video;
+    }
+
+    /**
+     * Every way in which an ffprobe `video` stream is DEGENERATE — a stream
+     * ffprobe labelled `codec_type: video` whose own description is not
+     * self-consistent. Returns the list of defect ids, EMPTY for a sound stream,
+     * so the caller can both act on the geometry ones and report exactly which
+     * rule fired.
+     *
+     * The defects:
+     *
+     *  - {@see DEFECT_CODEC_ABSENT} — `codec_name` absent, empty, or not a
+     *    string, so `stringOrNull()` would store `NULL`. Purely informational:
+     *    it does NOT disqualify the stream from anything. ffmpeg reports exactly
+     *    this for a sample-entry fourcc the installed build cannot map, so the
+     *    stream is very often real content (see {@see summarizeProbe()}).
+     *  - {@see DEFECT_DIMENSION_NOT_POSITIVE} — width or height absent or ≤ 0
+     *    (the real `1920x0` header on production; also `0x0` from an MPEG-TS
+     *    joined mid-GOP).
+     *  - {@see DEFECT_ASPECT_BEYOND_BOUND} — aspect beyond
+     *    {@see MAX_VIDEO_ASPECT_RATIO}:1 either way (the real `4x3841` /
+     *    `4x5634` headers, 1:960 and 1:1408).
+     *
+     * There is deliberately NO upper bound on a single dimension: a 70000x1000
+     * ffv1 file encodes, probes and decodes with exit 0 on ffmpeg 6.1.1, and a
+     * `MAX_VIDEO_DIMENSION = 65536` rule fired on 0 of the 18 measured broken
+     * rows while taking `source` away from that real file. See
+     * {@see MAX_VIDEO_ASPECT_RATIO}.
+     *
+     * Both geometry defects are the ones {@see defectsIncludeGeometry()} reports
+     * and that cost a stream the primary-`$video` role, because geometry is what
+     * `metadata_json['source']` and the ABR ladder are built from. NEITHER of
+     * them costs a stream its `media_streams` row.
+     *
+     * Judges the VALUES only, so it holds whatever ffprobe's reason was. NOT a
+     * misclassified `data`/`attachment` stream — those are already filtered in
+     * {@see summarizeProbe()} — and not a synonym for cover art either.
+     *
+     * ⚠ The not-positive check must stay ABOVE the ratio, and must stay `<= 0`
+     * rather than `< 0`: the production shape is `1920x0`, so relaxing it lets a
+     * zero height reach `$width / $height` and the scan dies with a
+     * `DivisionByZeroError`. Proved by mutation.
+     *
+     * Accepts a mixed value so callers never need to pre-narrow the raw stream
+     * array (mirrors {@see isAttachedPic()}).
+     *
+     * @param mixed $stream Raw ffprobe stream entry.
+     *
+     * @return list<string> Defect ids, empty when the stream describes itself
+     *                      consistently.
+     */
+    private static function videoStreamDefects(mixed $stream): array
+    {
+        if (!is_array($stream)) {
+            return [];
+        }
+
+        $defects = [];
+        if (self::stringOrNull($stream['codec_name'] ?? null) === null) {
+            $defects[] = self::DEFECT_CODEC_ABSENT;
+        }
+
+        $width = self::intOrNull($stream['width'] ?? null);
+        $height = self::intOrNull($stream['height'] ?? null);
+        if ($width === null || $height === null || $width <= 0 || $height <= 0) {
+            $defects[] = self::DEFECT_DIMENSION_NOT_POSITIVE;
+
+            return $defects; // no usable ratio, and 0 would divide by zero
+        }
+
+        $ratio = $width / $height;
+        if ($ratio > self::MAX_VIDEO_ASPECT_RATIO || $ratio < (1.0 / self::MAX_VIDEO_ASPECT_RATIO)) {
+            $defects[] = self::DEFECT_ASPECT_BEYOND_BOUND;
+        }
+
+        return $defects;
+    }
+
+    /**
+     * Whether a {@see videoStreamDefects()} result contains a GEOMETRY defect —
+     * i.e. one that makes the stream unfit to define `metadata_json['source']`
+     * and the ABR ladder built from it.
+     *
+     * Spelled as "anything that is not {@see DEFECT_CODEC_ABSENT}" on purpose:
+     * a new geometry rule added to {@see videoStreamDefects()} is then
+     * automatically honoured here, whereas an allowlist would silently ignore it.
+     * Only a defect that is deliberately consequence-free belongs on the
+     * exemption list.
+     *
+     * @param list<string> $defects
+     */
+    private static function defectsIncludeGeometry(array $defects): bool
+    {
+        foreach ($defects as $defect) {
+            if ($defect !== self::DEFECT_CODEC_ABSENT) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Report every degenerate `video` stream ffprobe returned for one file.
+     *
+     * WHY THIS EXISTS. The geometry predicate in {@see videoStreamDefects()} is
+     * a heuristic sized against one library's measured contents
+     * ({@see MAX_VIDEO_ASPECT_RATIO}), and a false positive changes which stream
+     * describes the file — permanently. Without a log the only
+     * evidence would be a `source` descriptor quietly taken from a stream other
+     * than ffprobe's first — indistinguishable after the fact from a file that
+     * really is shaped that way. This class already makes the same call in the
+     * other direction: `StreamProbeBackfill::degradeAfterWriteFailure()` masks a
+     * write failure and documents that "the masking is made recoverable by being
+     * LOUD".
+     *
+     * LEVELS, chosen for volume on a resident event loop. A full scan calls this
+     * at most once per file and only for files that HAVE a degenerate stream (18
+     * of 37,925 measured video rows), so:
+     *
+     *  - `warning` when a geometry defect actually cost the stream the primary
+     *    `$video` role — the consequential case, and the one an operator must be
+     *    able to audit;
+     *  - `debug` otherwise: a codec-less stream (which changes nothing at all,
+     *    and is the normal shape of a DRM `encv`/`drmi` title — a library full of
+     *    those must not fill error.log), or a geometry defect on the stream that
+     *    was promoted anyway — the file's first video-type stream, taken because
+     *    the selection loop rejected every candidate and nothing better existed.
+     *
+     * Static because {@see summarizeProbe()} is; {@see LoggerFactory::get()} is a
+     * static accessor over a per-channel singleton, so this adds no state and no
+     * unbounded growth.
+     *
+     * `row_persisted` is not hard-coded: a degenerate stream that is ALSO
+     * flagged cover art can lose its row to the pre-existing skip, so the field
+     * is computed with {@see coverArtLosesItsRow()} — the same call the persist
+     * loop makes, so the log and the write can never disagree about it.
+     *
+     * @param list<array{stream: array<string, mixed>, defects: list<string>}> $degenerate
+     * @param array<string, mixed>      $format ffprobe `format` block (for `filename`).
+     * @param array<string, mixed>|null $video  The stream chosen as primary, after
+     *                                          the fallback promotion.
+     * @param bool $hasNonPosterVideo Whether the file carries any video-type
+     *                                stream that is not flagged cover art.
+     */
+    private static function logDegenerateVideoStreams(
+        array $degenerate,
+        array $format,
+        ?array $video,
+        bool $hasNonPosterVideo
+    ): void {
+        $logger = LoggerFactory::get(LogChannels::MEDIA);
+        $path = self::stringOrNull($format['filename'] ?? null);
+
+        foreach ($degenerate as $seen) {
+            $stream = $seen['stream'];
+            $context = [
+                'path' => $path,
+                'stream_index' => self::intOrNull($stream['index'] ?? null),
+                'codec' => self::stringOrNull($stream['codec_name'] ?? null),
+                'width' => self::intOrNull($stream['width'] ?? null),
+                'height' => self::intOrNull($stream['height'] ?? null),
+                'defects' => $seen['defects'],
+                'source_stream_index' => $video !== null ? self::intOrNull($video['index'] ?? null) : null,
+                // Stated explicitly so a reader of the log never has to guess
+                // whether the row was dropped. No defect can drop it; only the
+                // cover-art skip can, and only for a flagged poster.
+                'row_persisted' => !self::coverArtLosesItsRow($stream, $video, $hasNonPosterVideo),
+            ];
+
+            if (self::defectsIncludeGeometry($seen['defects']) && $stream !== $video) {
+                $logger->warning(
+                    'ffprobe video stream has implausible geometry; not used as the source descriptor',
+                    $context
+                );
+                continue;
+            }
+
+            $logger->debug('ffprobe reported a degenerate video stream; row persisted as-is', $context);
+        }
     }
 
     /**

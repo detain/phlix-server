@@ -366,6 +366,176 @@ SCRIPT);
             $this->assertLessThan(10.0, $elapsedSeconds);
         }
     }
+
+    /**
+     * The process SIGKILLed on the read loop's timeout must also be reaped.
+     *
+     * proc_terminate() alone leaves the killed child a zombie until the PHP
+     * process exits, and ComskipRunner runs inside long-lived Workerman workers
+     * — so an unreaped child is one zombie per comskip timeout, forever.
+     *
+     * Asserted by asking the kernel: with the child reaped, this process has no
+     * children left to wait on, so waitpid(-1) reports ECHILD (-1). An unreaped
+     * zombie is returned by that same call instead. The wedged fixture's `sleep`
+     * grandchild is orphaned by the kill, not inherited, so it is never a
+     * candidate here — which is also why proc_close() does not block on it.
+     */
+    public function testRunReapsTheProcessItKillsOnTimeout(): void
+    {
+        $this->requireExecutableFixtures();
+
+        if (!function_exists('pcntl_waitpid')) {
+            $this->markTestSkipped('Needs ext-pcntl to observe unreaped child processes.');
+        }
+
+        $tempScript = $this->writeScript('comskip_wedged_reap', "#!/bin/bash\nsleep 30\n");
+
+        $runner = new ComskipRunner($tempScript, null, 1);
+        $recordingPath = $this->makeRecording();
+
+        try {
+            $runner->run($recordingPath);
+            $this->fail('Expected a RuntimeException: the fake comskip never exits.');
+        } catch (\RuntimeException $e) {
+            $this->assertStringContainsString('Comskip timed out after 1 seconds', $e->getMessage());
+        }
+
+        // A zombie appears as soon as the kernel delivers the SIGKILL, but give
+        // it a bounded grace period rather than racing the scheduler for it.
+        $deadline = hrtime(true) + 500_000_000;
+        $leaked = -1;
+        do {
+            $status = 0;
+            $leaked = pcntl_waitpid(-1, $status, WNOHANG);
+            if ($leaked > 0) {
+                break;
+            }
+            usleep(10_000);
+        } while (hrtime(true) < $deadline);
+
+        $this->assertLessThanOrEqual(
+            0,
+            $leaked,
+            'The timed-out comskip was killed but never reaped — it is left a zombie.'
+        );
+    }
+
+    /**
+     * The chunk cap is charged per pipe, so a flood on one stream cannot spend
+     * the budget the other needs.
+     *
+     * A single shared counter made the "per pipe" cap a combined one: reads on
+     * stdout were billed to stderr as well, and once the total tripped, whichever
+     * pipe came up next was force-closed and the rest of its output dropped.
+     * stderr is the text quoted back in the exception this run throws, so losing
+     * it is what turns a real comskip failure into an unexplained one.
+     *
+     * Driven with a cap of one chunk per pipe and a stdout that keeps flooding,
+     * which pins the two semantics apart however stream_select happens to order
+     * the pipes: under a shared counter, stdout's read either force-closes stderr
+     * (a second truncation warning) or is itself force-closed before reading a
+     * byte (an empty stdout). Per pipe, neither can happen.
+     */
+    public function testChunkCapIsChargedPerPipeNotSharedBetweenThem(): void
+    {
+        $this->requireExecutableFixtures();
+
+        $tempScript = $this->writeScript('comskip_flood', <<<'SCRIPT'
+#!/bin/bash
+# ~320 KB on stdout: far past a one-chunk cap, and still flowing when it trips.
+for _ in {1..40}; do
+    printf '%08192d' 0
+done
+exit 1
+SCRIPT);
+
+        $logger = new RecordingComskipLogger();
+        // 10s rather than the production 300s: if the run ever fails to converge,
+        // this should fail as a test, not hang as one.
+        $runner = new OneChunkPerPipeComskipRunner($tempScript, $logger, 10);
+        $recordingPath = $this->makeRecording();
+
+        try {
+            $runner->run($recordingPath);
+            $this->fail('Expected a RuntimeException: the fake comskip exits non-zero.');
+        } catch (\RuntimeException $e) {
+            // Exit code is left unasserted: the flood is force-closed mid-write,
+            // so comskip may exit 1 or die of the resulting SIGPIPE.
+            $this->assertStringContainsString('Comskip failed with exit code', $e->getMessage());
+        }
+
+        // stdout spent its own chunk, and nothing else's...
+        $failures = $logger->matching('Comskip execution failed');
+        $this->assertCount(1, $failures);
+        $this->assertNotSame(
+            '',
+            $failures[0]['context']['stdout'],
+            'stdout was force-closed before a single read — its budget went to the other pipe.'
+        );
+
+        // ...and stderr was never closed on stdout's account.
+        $truncations = $logger->matching('Comskip output truncated');
+        $this->assertCount(
+            1,
+            $truncations,
+            'Only the flooded pipe should hit the cap; stderr closed at EOF with a budget of its own.'
+        );
+        $this->assertSame('stdout', $truncations[0]['context']['pipe']);
+    }
+}
+
+/**
+ * ComskipRunner with a one-chunk-per-pipe read cap.
+ *
+ * Lets the cap be reached in a couple of reads instead of the 1.6 MB per pipe
+ * the production value asks for.
+ *
+ * @since 0.12.0
+ */
+class OneChunkPerPipeComskipRunner extends ComskipRunner
+{
+    /** @var int One chunk per pipe, so the cap trips on a flooded pipe's second read */
+    protected const MAX_CHUNKS_PER_PIPE = 1;
+}
+
+/**
+ * Captures log records so what the runner reported can be asserted.
+ *
+ * @since 0.12.0
+ */
+class RecordingComskipLogger extends \Psr\Log\AbstractLogger
+{
+    /** @var list<array{level: string, message: string, context: array<string, mixed>}> Every record logged */
+    public array $records = [];
+
+    /**
+     * @param mixed $level Log level
+     * @param string|\Stringable $message Log message
+     * @param array<string, mixed> $context Log context
+     */
+    public function log($level, string|\Stringable $message, array $context = []): void
+    {
+        $this->records[] = [
+            'level' => is_scalar($level) ? (string) $level : '?',
+            'message' => (string) $message,
+            'context' => $context,
+        ];
+    }
+
+    /**
+     * Records whose message contains the given substring.
+     *
+     * @param string $needle Message substring to match
+     *
+     * @return list<array{level: string, message: string, context: array<string, mixed>}> Matching records
+     */
+    public function matching(string $needle): array
+    {
+        return array_values(array_filter(
+            $this->records,
+            static fn (array $record): bool => str_contains($record['message'], $needle)
+        ));
+    }
 }
 
 /**

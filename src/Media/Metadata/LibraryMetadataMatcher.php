@@ -1719,6 +1719,22 @@ class LibraryMetadataMatcher
                 $highest = $known;
             }
         }
+        // ⚠ `$highest > 0` is a KNOWN EQUIVALENT MUTANT for correctness — do NOT
+        // "discover" that dropping it leaves the suite green and delete it as dead
+        // code. An empty `$episodes` is what a transient provider failure returns
+        // ({@see SeriesMetadataResolver::resolveSeasonEpisodes()} answers
+        // `['episodes' => []]` on any Throwable), and an empty list is no evidence
+        // that a number overflowed, so without this test EVERY episode of the stored
+        // season is queued. Since {@see enrichAbsoluteNumbered()} gained the
+        // `isset($chain[$season])` containment test those queued rows can no longer
+        // be mis-stamped: `providerSeasonNumbers()` reads this same cached empty
+        // result, so its walk breaks at or before the stored season and neither
+        // `isset($chain[$season])` nor `isset($run[$season])` can hold — the series
+        // is refused whole. What the test still buys is COST: without it a single
+        // failed season fetch drags a resident worker through a provider-season walk
+        // for a series that is certain to be refused, breaking this method's
+        // documented "zero extra provider calls" contract. That cost is what
+        // `testAFailedSeasonFetchTriggersNoProviderWalk` pins.
         if ($highest > 0 && $number > $highest) {
             $outOfRange[] = ['row' => $episode, 'season' => $season, 'number' => $number];
         }
@@ -1744,12 +1760,17 @@ class LibraryMetadataMatcher
      *    numbers per season, so the stored number has to be translated
      *    arithmetically.
      *
-     * **Both strategies carry the SAME relation between library and provider:**
+     * **Both strategies carry the SAME two tests relating library to provider:**
      * `storedMax` must equal the provider's total episode count (the chain's extent
-     * for strategy 1, the run's sum for strategy 2). A chain on its own is a fact
-     * about the provider and no evidence at all about the library — without the
-     * relation, a library holding one per-season-numbered season, or bound to the
-     * wrong entity, is stamped with confident wrong titles.
+     * for strategy 1, the run's sum for strategy 2), AND the walk must have reached
+     * the stored season (`isset($chain[$season])` / `isset($run[$season])`). A chain
+     * on its own is a fact about the provider and no evidence at all about the
+     * library — without the extent relation, a library holding one
+     * per-season-numbered season, or bound to the wrong entity, is stamped with
+     * confident wrong titles. And without the containment test a chain truncated by
+     * a transient season-fetch failure has a shorter extent that can coincide with
+     * `storedMax`, which stamps the stored season's episodes with a different
+     * show-position's titles.
      *
      * **Fail closed.** A wrong translation attaches a confident, wrong title that
      * nobody notices until playback, so every guard in {@see AbsoluteEpisodeMapper}
@@ -1813,7 +1834,19 @@ class LibraryMetadataMatcher
         $providerSeasons = $this->providerSeasonNumbers($tmdbId, $seasonCache);
         $chain = $this->absoluteMapper->providerChain($providerSeasons);
         $run = $this->absoluteMapper->contiguousRun($providerSeasons);
-        $lookup = $this->absoluteMapper->chainCoversStoredRun($chain, $storedMax);
+        // The chain must ALSO contain the stored season, exactly as the arithmetic
+        // branch requires `isset($run[$season])`. The extent equality alone is not
+        // enough: `providerSeasonNumbers()` stops at the first season the provider
+        // returns no episodes for, and a transient TMDB failure is indistinguishable
+        // from a genuinely absent season, so the walk can truncate BELOW the stored
+        // season while that season's own list is already cached from the children
+        // loop. A truncated chain has a SMALLER extent — and a smaller extent can
+        // coincide with `storedMax`. Measured: a stored season 5 holding 1..24 whose
+        // provider is 1–12 / 13–24 / (season 3 fetch fails) / season 5 = 1–10 yields
+        // `chain = {1, 2}` with extent 24 === storedMax 24, and stamped all 14
+        // out-of-range rows with the chain's absolute 11–24 titles.
+        $lookup = $this->absoluteMapper->chainCoversStoredRun($chain, $storedMax)
+            && isset($chain[$season]);
         $arithmetic = $this->absoluteMapper->isAbsoluteNumbering($run, $season, $storedMax);
         if (!$lookup && !$arithmetic) {
             $this->logger->info('LibraryMetadataMatcher: absolute numbering refused', [
@@ -1822,6 +1855,7 @@ class LibraryMetadataMatcher
                 'stored_max' => $storedMax,
                 'chain_seasons' => count($chain),
                 'chain_extent' => $chain === [] ? 0 : max(array_column($chain, 'max')),
+                'chain_has_stored' => isset($chain[$season]),
                 'provider_seasons' => count($run),
                 'provider_total' => array_sum($run),
                 'candidates' => count($retry),

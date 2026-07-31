@@ -421,7 +421,15 @@ class LibraryMetadataMatcherAbsoluteEpisodeTest extends TestCase
      * @param bool                               $rich             Give the provider per-episode overview/poster.
      * @param array<string, array<string, mixed>> $seedMeta        `"season:number"` => metadata already on the row.
      *
-     * @return array{0: LibraryMetadataMatcher, 1: \ArrayObject<string, array<string, mixed>>}
+     * The third element is the log of provider season fetches, in call order, so a
+     * test can pin the class's documented "zero extra provider calls" cost contract.
+     * Callers that do not need it simply destructure two elements.
+     *
+     * @return array{
+     *     0: LibraryMetadataMatcher,
+     *     1: \ArrayObject<string, array<string, mixed>>,
+     *     2: \ArrayObject<int, int>
+     * }
      */
     private function makeSeriesMatcher(
         array $storedSeasons,
@@ -501,8 +509,11 @@ class LibraryMetadataMatcherAbsoluteEpisodeTest extends TestCase
         foreach ($providerSeasons as $number => $numbers) {
             $seasonFixtures[$number] = $this->season($numbers, 'Title', $providerUntitled[$number] ?? [], $rich);
         }
+        /** @var \ArrayObject<int, int> $seasonCalls */
+        $seasonCalls = new \ArrayObject();
         $seriesResolver->method('resolveSeasonEpisodes')->willReturnCallback(
-            static function (string $tmdbId, int $season) use ($seasonFixtures): array {
+            static function (string $tmdbId, int $season) use ($seasonFixtures, $seasonCalls): array {
+                $seasonCalls[] = $season;
                 return $seasonFixtures[$season] ?? ['poster_url' => null, 'overview' => '', 'episodes' => []];
             }
         );
@@ -514,7 +525,7 @@ class LibraryMetadataMatcherAbsoluteEpisodeTest extends TestCase
             $this->makeLogger()
         );
 
-        return [$matcher, $updates];
+        return [$matcher, $updates, $seasonCalls];
     }
 
     /**
@@ -549,6 +560,32 @@ class LibraryMetadataMatcherAbsoluteEpisodeTest extends TestCase
             }
         }
         return $n;
+    }
+
+    /**
+     * Every row the absolute pass stamped, and WHAT it stamped:
+     * `row id => [matched_season, matched_episode, episode_title]`.
+     *
+     * Asserted against `[]` rather than counted, so a regression prints the exact
+     * mis-assignments instead of just a number.
+     *
+     * @param \ArrayObject<string, array<string, mixed>> $updates
+     *
+     * @return array<string, array{0: mixed, 1: mixed, 2: mixed}>
+     */
+    private function rescuedStamps(\ArrayObject $updates): array
+    {
+        $out = [];
+        foreach ($updates as $id => $meta) {
+            if (isset($meta['absolute_number'])) {
+                $out[$id] = [
+                    $meta['matched_season'] ?? null,
+                    $meta['matched_episode'] ?? null,
+                    $meta['episode_title'] ?? null,
+                ];
+            }
+        }
+        return $out;
     }
 
     /**
@@ -739,6 +776,55 @@ class LibraryMetadataMatcherAbsoluteEpisodeTest extends TestCase
     }
 
     /**
+     * ROUND-2 FINDING 1. A chain TRUNCATED BELOW the stored season by a transient
+     * provider failure can still match `storedMax` by coincidence.
+     *
+     * `providerSeasonNumbers()` walks the provider's seasons from 1 and `break`s at
+     * the first one that returns no episodes — and an empty list is exactly what a
+     * transient TMDB failure produces, indistinguishable from a genuinely absent
+     * season (the same premise the `$highest > 0` test below rests on). So the walk
+     * can stop *below* the stored season while that season's own list is already
+     * cached from the children loop, and the resulting SHORTER chain extent can land
+     * on `storedMax` by accident.
+     *
+     * The shape, measured: stored season 5 holds the complete run 1..24; the
+     * provider's season 1 is 1–12, season 2 is 13–24, **season 3's fetch fails**,
+     * and season 5 is 1–10. The walk yields `chain = {1, 2}` whose extent is 24,
+     * `24 === storedMax 24` passes, and all 14 out-of-range rows (11..24) were
+     * stamped with the chain's ABSOLUTE 11–24 titles — the library's season-5
+     * episodes given a different show-position's titles.
+     *
+     * The sibling arithmetic branch was already immune via
+     * `isAbsoluteNumbering()`'s `isset($run[$season])`; the chain branch now carries
+     * the same containment test. Pre-fix this test reported 14 rescues; post-fix, 0.
+     */
+    public function testRefusesAChainTruncatedBelowTheStoredSeasonByAFailedFetch(): void
+    {
+        [$matcher, $updates] = $this->makeSeriesMatcher(
+            [5 => range(1, 24)],                    // one aired season, complete 1..24
+            [
+                1 => range(1, 12),
+                2 => range(13, 24),
+                // season 3 resolves to NO episodes — the transient failure
+                5 => range(1, 10),
+            ]
+        );
+        $matcher->matchLibrary('lib-1');
+
+        // In range for the stored season — the ordinary numeric index, untouched.
+        $this->assertSame('Title 10', $updates['ep-5-10']['episode_title']);
+
+        // Nothing may be rescued off a chain that never reached the stored season.
+        // Asserted as the full stamp map so a regression names the mis-assignments.
+        $this->assertSame([], $this->rescuedStamps($updates));
+        $this->assertArrayNotHasKey('episode_title', $updates['ep-5-11']);
+        $this->assertArrayNotHasKey('matched_season', $updates['ep-5-11']);
+        $this->assertArrayNotHasKey('episode_title', $updates['ep-5-13']);
+        $this->assertArrayNotHasKey('episode_title', $updates['ep-5-24']);
+        $this->assertArrayNotHasKey('matched_season', $updates['ep-5-24']);
+    }
+
+    /**
      * FINDING 3(b) — pins the `$highest > 0` precondition in `recordEpisodeSlot()`.
      *
      * An EMPTY provider episode list is what a TMDB failure returns
@@ -761,5 +847,42 @@ class LibraryMetadataMatcherAbsoluteEpisodeTest extends TestCase
         $this->assertArrayNotHasKey('episode_title', $updates['ep-3-1']);
         $this->assertArrayNotHasKey('episode_title', $updates['ep-3-24']);
         $this->assertArrayNotHasKey('matched_season', $updates['ep-3-24']);
+    }
+
+    /**
+     * …and pins what `$highest > 0` still buys once the chain branch carries the
+     * `isset($chain[$season])` containment test: COST.
+     *
+     * On correctness that precondition is now a KNOWN EQUIVALENT MUTANT. Dropping
+     * it queues every episode of the stored season, but `providerSeasonNumbers()`
+     * shares the same cached empty result, so its walk breaks at or before the
+     * stored season and neither `isset($chain[$season])` nor `isset($run[$season])`
+     * can hold — the series is refused whole and no row is stamped either way.
+     *
+     * What is NOT equivalent is the provider traffic. `enrichAbsoluteNumbered()`
+     * documents "zero extra provider calls unless an overflow exists AND the series
+     * passes `candidateSeason()`", and a transient failure fabricates an overflow
+     * that is certain to be refused. Here the stored season 5 fetch comes back
+     * empty while seasons 1–4 are real, so the mutant drags a resident worker
+     * through four pointless season fetches. Pinning the call log keeps the guard
+     * killable instead of leaving it to be "discovered" as dead code and deleted.
+     */
+    public function testAFailedSeasonFetchTriggersNoProviderWalk(): void
+    {
+        [$matcher, $updates, $seasonCalls] = $this->makeSeriesMatcher(
+            [5 => range(1, 24)],                    // one aired season, complete 1..24
+            [
+                1 => range(1, 12),
+                2 => range(13, 24),
+                3 => range(25, 36),
+                4 => range(37, 48),
+                // season 5 resolves to NO episodes — the transient failure
+            ]
+        );
+        $matcher->matchLibrary('lib-1');
+
+        // The stored season is fetched once by the ordinary pass, and that is ALL.
+        $this->assertSame([5], iterator_to_array($seasonCalls));
+        $this->assertSame([], $this->rescuedStamps($updates));
     }
 }

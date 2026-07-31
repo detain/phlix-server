@@ -1550,7 +1550,15 @@ class LibraryMetadataMatcher
             $year = $this->extractYear($existing) ?? $normalized['year'];
         }
 
-        $resolved = $resolver->resolve($name, $year, $priorityOverride);
+        // Season-coverage guard input (bucket B). The highest NON-SPECIAL season
+        // already on disk under this series is what lets the resolver reject a
+        // same-titled entity that cannot hold the tree — the 2003 Battlestar
+        // Galactica miniseries (1 season) under a 4-season folder, or the 2024
+        // live-action Avatar remake (2 seasons) under the 3-season animated show.
+        // Null (a freshly-created series with no children yet) leaves the guard
+        // off, so an initial scan behaves exactly as it does today and the guard
+        // takes effect on the metadata/metadata_refresh pass that follows.
+        $resolved = $resolver->resolve($name, $year, $priorityOverride, false, $this->localHighestSeason($id));
         if ($resolved === null) {
             return false;
         }
@@ -1584,6 +1592,42 @@ class LibraryMetadataMatcher
         }
 
         return true;
+    }
+
+    /**
+     * Highest NON-SPECIAL season number present under a series container.
+     *
+     * Reads the season containers (and any episode parented straight to the
+     * series) and returns the largest `metadata.season` that is >= 1. Season 0 is
+     * excluded: a `Specials/` folder says nothing about how many real seasons the
+     * show has, and TMDB's `number_of_seasons` — the value this is compared
+     * against — excludes it too.
+     *
+     * Returns null when the series has no numbered season yet, which switches the
+     * resolver's coverage guard OFF rather than guessing.
+     *
+     * @param string $seriesId Series container id.
+     *
+     * @return int|null Highest local season number >= 1, or null when there is none.
+     */
+    private function localHighestSeason(string $seriesId): ?int
+    {
+        $highest = null;
+        foreach ($this->items->findByParent($seriesId) as $child) {
+            $childType = $child['type'] ?? null;
+            if ($childType !== 'season' && $childType !== 'episode') {
+                continue;
+            }
+            $season = $this->intMeta($this->extractMetadata($child), 'season');
+            if ($season === null || $season < 1) {
+                continue;
+            }
+            if ($highest === null || $season > $highest) {
+                $highest = $season;
+            }
+        }
+
+        return $highest;
     }
 
     /**

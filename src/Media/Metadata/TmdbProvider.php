@@ -639,7 +639,17 @@ class TmdbProvider implements MetadataProviderInterface
      */
     public function getTvDetails(string $externalId, array $options = []): array
     {
-        $append = 'genres,external_ids,content_ratings,aggregate_credits,production_companies,keywords,videos,images';
+        // `alternative_titles` costs no extra round-trip (append_to_response) and
+        // is what lets SeriesCandidateSelector::knowsTitle() ask TMDB directly
+        // whether an entity is known by a queried title, instead of inferring it
+        // from a truncated search ranking.
+        $append = 'genres,external_ids,content_ratings,aggregate_credits,production_companies,keywords,videos,images'
+            . ',alternative_titles';
+        // Goes through requestResult() — NOT the raw HTTP client — so
+        // guardApiKey() -> refreshApiKeyIfEmpty() runs first (#587). This path is
+        // the one the series guards lean on (the guard-1 winner probe and every
+        // alternative fetch), so it must recover an EMPTY key like the other five
+        // provider entry points.
         $outcome = $this->requestResult("/tv/{$externalId}", [
             'language' => MetadataValue::asString($options['language'] ?? null, 'en-US'),
             'append_to_response' => $append,
@@ -917,7 +927,54 @@ class TmdbProvider implements MetadataProviderInterface
             'poster_path' => MetadataValue::asNullableString($data['poster_path'] ?? null),
             'backdrop_path' => MetadataValue::asNullableString($data['backdrop_path'] ?? null),
             'number_of_seasons' => MetadataValue::asInt($data['number_of_seasons'] ?? null),
+            // Identity corroboration for the series guards (see
+            // SeriesCandidateSelector). Additive: no built-in canonical field
+            // maps from them, so no persisted metadata changes.
+            'original_language' => MetadataValue::asString($data['original_language'] ?? null),
+            'origin_country' => $this->originCountries($data['origin_country'] ?? null),
+            'alternative_titles' => $this->alternativeTitles($data['alternative_titles'] ?? null),
         ]);
+    }
+
+    /**
+     * Narrow a raw TMDB `origin_country` value to a list of country codes.
+     *
+     * @param mixed $value Raw `origin_country` (TMDB sends `["US"]`).
+     * @return list<string>
+     */
+    private function originCountries(mixed $value): array
+    {
+        $out = [];
+        foreach (MetadataValue::asList($value) as $entry) {
+            $code = trim(MetadataValue::asString($entry));
+            if ($code !== '' && !in_array($code, $out, true)) {
+                $out[] = $code;
+            }
+        }
+
+        return $out;
+    }
+
+    /**
+     * Every title TMDB knows an entity by, from `append_to_response=alternative_titles`.
+     *
+     * TMDB nests them as `alternative_titles.results[] = {iso_3166_1, title, type}`.
+     *
+     * @param mixed $value Raw appended `alternative_titles` object.
+     * @return list<string> De-duplicated non-empty titles.
+     */
+    private function alternativeTitles(mixed $value): array
+    {
+        $block = MetadataValue::asAssoc($value);
+        $out = [];
+        foreach (MetadataValue::asAssocList($block['results'] ?? null) as $entry) {
+            $title = trim(MetadataValue::asString($entry['title'] ?? null));
+            if ($title !== '' && !in_array($title, $out, true)) {
+                $out[] = $title;
+            }
+        }
+
+        return $out;
     }
 
     /**

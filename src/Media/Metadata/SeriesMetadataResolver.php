@@ -37,6 +37,23 @@ use Throwable;
  * Performs NO persistence — it is a pure matching/format unit. TMDB being
  * unavailable (no API key, network error) degrades gracefully to `null`/empty.
  *
+ * ## Provider call budget — HARD bound per {@see resolve()} call
+ *
+ * | | searches (`/search/tv`) | details (`/tv/{id}`) |
+ * |---|---:|---:|
+ * | common path (exact-title year winner, coverage satisfied) | 1 | 1 |
+ * | **worst case** | **3** | **5** |
+ *
+ * The three searches are the year-scoped one, the year-less one, and the
+ * year-less one the coverage guard falls back to when it was never fetched. The
+ * five details are the chosen entity, the one winner probe guard 1 pays for
+ * corroboration ({@see SeriesCandidateSelector::knowsTitle()}), and at most
+ * {@see SeriesCandidateSelector::MAX_ALTERNATIVES} same-title alternatives. No
+ * loop here is driven by provider data, so the bound cannot be widened by a
+ * response; `/search/tv` is deliberately NOT paginated (see
+ * {@see SeriesCandidateSelector::spuriousYearMatchReplacement()} — the live
+ * corpus contains 500-page result sets).
+ *
  * @package Phlix\Media\Metadata
  * @since   0.24.0
  */
@@ -50,6 +67,9 @@ class SeriesMetadataResolver
 
     /** @var PriorityFieldResolver Configurable per-field first-non-empty merge engine. */
     private PriorityFieldResolver $fieldResolver;
+
+    /** @var SeriesCandidateSelector Pure series-identification guards for the TMDB TV search. */
+    private SeriesCandidateSelector $selector;
 
     /**
      * @param TmdbProvider               $tmdb           Online TMDB provider (TV endpoints).
@@ -76,6 +96,7 @@ class SeriesMetadataResolver
         // TMDB record, so no other source can contribute a field.
         $this->priorityConfig = $priorityConfig ?? new PriorityConfig(['series' => ['tmdb']]);
         $this->fieldResolver = $fieldResolver ?? new PriorityFieldResolver();
+        $this->selector = new SeriesCandidateSelector();
     }
 
     private function logger(): StructuredLogger
@@ -100,6 +121,12 @@ class SeriesMetadataResolver
      *     a `plugin_ratings` key for the caller to persist. **DEFAULT false** — the bulk library-scan
      *     path leaves this off so a scan makes ZERO plugin-source network calls. When false, output is
      *     byte-for-byte identical to today (TMDB only).
+     * @param int|null            $localHighestSeason Highest NON-SPECIAL season number present in the
+     *     caller's local tree for this series (season 0 excluded; null when unknown or when the tree
+     *     has no numbered season yet). Used ONLY by the season-coverage guard
+     *     {@see seasonCoverageSwap()} to detect a same-titled entity that cannot possibly hold the
+     *     local tree (miniseries vs series, remake vs original). **DEFAULT null = the guard is off**,
+     *     so every caller that does not supply it keeps today's behaviour byte-for-byte.
      *
      * @return array<string, mixed>|null Metadata to merge (with `external_ids.tmdb`
      *     + `tmdb_id` so the caller can fetch seasons), or null on no match.
@@ -108,7 +135,8 @@ class SeriesMetadataResolver
         string $title,
         ?int $year,
         ?PriorityConfig $priorityOverride = null,
-        bool $includePluginSources = false
+        bool $includePluginSources = false,
+        ?int $localHighestSeason = null
     ): ?array {
         if (trim($title) === '') {
             return null;
@@ -120,7 +148,8 @@ class SeriesMetadataResolver
                 'year' => $year,
             ]);
 
-            $tmdbId = $this->searchSeriesId($title, $year);
+            $search = $this->searchSeries($title, $year);
+            $tmdbId = $search['id'];
             if ($tmdbId === null) {
                 $this->logger()->info('SeriesMetadataResolver: search returned no id', [
                     'title' => $title,
@@ -135,13 +164,37 @@ class SeriesMetadataResolver
                 'tmdb_id' => $tmdbId,
             ]);
 
-            $details = $this->tmdb->getTvDetails($tmdbId);
+            // Guard 1 may already have paid for these details while corroborating
+            // the winner it decided to KEEP; reusing them makes the decline path
+            // cost nothing extra.
+            $details = $search['details'] ?? $this->tmdb->getTvDetails($tmdbId);
             if ($details === []) {
                 $this->logger()->info('SeriesMetadataResolver: details returned empty', [
                     'title' => $title,
                     'tmdb_id' => $tmdbId,
                 ]);
                 return null;
+            }
+
+            $swap = $this->seasonCoverageSwap(
+                $title,
+                $tmdbId,
+                $details,
+                $localHighestSeason,
+                $search['yearLess'],
+            );
+            if ($swap !== null) {
+                $this->logger()->info('SeriesMetadataResolver: season-coverage guard swapped entity', [
+                    'title' => $title,
+                    'year' => $year,
+                    'local_highest_season' => $localHighestSeason,
+                    'rejected_tmdb_id' => $tmdbId,
+                    'rejected_seasons' => MetadataValue::asInt($details['number_of_seasons'] ?? null),
+                    'tmdb_id' => $swap['id'],
+                    'seasons' => MetadataValue::asInt($swap['details']['number_of_seasons'] ?? null),
+                ]);
+                $tmdbId = $swap['id'];
+                $details = $swap['details'];
             }
 
             $result = $this->format($tmdbId, $details, $priorityOverride, $includePluginSources, $title, $year);
@@ -235,20 +288,105 @@ class SeriesMetadataResolver
     }
 
     /**
-     * Find the TMDB series id by title (+ optional year), falling back to a
-     * year-less search when a year-scoped search finds nothing.
+     * Find the TMDB series id by title (+ optional year).
+     *
+     * Falls back to a year-less search when a year-scoped search finds nothing,
+     * and applies the spurious-year-match guard
+     * ({@see SeriesCandidateSelector::spuriousYearMatchReplacement()}) when the
+     * year-scoped winner's title is not an exact match for the query. The extra
+     * year-less request is issued ONLY in that inexact case — measured against
+     * the live library that is 52 of 434 series, so the common path costs exactly
+     * the one search it costs today.
+     *
+     * A proposed replacement is never acted on unsupported: the winner is probed
+     * once with `getTvDetails()` and kept whenever TMDB itself knows it under the
+     * queried title ({@see SeriesCandidateSelector::knowsTitle()}). Those details
+     * are handed back so the keep path costs no extra request, and a failed probe
+     * keeps the winner too — no corroboration, no swap.
+     *
+     * @param string   $title Series title.
+     * @param int|null $year  Optional first-air-year hint.
+     *
+     * @return array{
+     *     id: string|null,
+     *     yearLess: array<int, array<string, mixed>>|null,
+     *     details: array<string, mixed>|null
+     * } The chosen TMDB id, the year-less candidate list when one was fetched
+     *   (null when it was not, so the caller can fetch it lazily), and the chosen
+     *   entity's already-fetched details when the guard paid for them.
      */
-    private function searchSeriesId(string $title, ?int $year): ?string
+    private function searchSeries(string $title, ?int $year): array
     {
-        $options = $year !== null ? ['first_air_date_year' => $year] : [];
-        $results = $this->tmdb->searchTv($title, $options);
-        if ($results === [] && $year !== null) {
+        if ($year === null) {
+            $results = $this->tmdb->searchTv($title);
+            return ['id' => $this->firstId($title, $year, $results), 'yearLess' => $results, 'details' => null];
+        }
+
+        $scoped = $this->tmdb->searchTv($title, ['first_air_date_year' => $year]);
+        if ($scoped === []) {
             $this->logger()->debug('SeriesMetadataResolver: year-scoped search empty, retrying without year', [
                 'title' => $title,
                 'year' => $year,
             ]);
             $results = $this->tmdb->searchTv($title); // retry without the year filter
+            return ['id' => $this->firstId($title, $year, $results), 'yearLess' => $results, 'details' => null];
         }
+
+        $winner = $scoped[0];
+        if ($this->selector->isExactTitleMatch($title, $winner)) {
+            // Fast path: the year filter produced a title-identical hit. No extra
+            // request, and the year-less list is left unfetched for the caller.
+            return ['id' => $this->firstId($title, $year, $scoped), 'yearLess' => null, 'details' => null];
+        }
+
+        $yearLess = $this->tmdb->searchTv($title);
+        $replacement = $this->selector->spuriousYearMatchReplacement($title, $winner, $yearLess);
+        if ($replacement === null) {
+            return ['id' => $this->firstId($title, $year, $scoped), 'yearLess' => $yearLess, 'details' => null];
+        }
+
+        $winnerId = MetadataValue::asString($winner['id'] ?? null);
+        $winnerDetails = $winnerId !== '' ? $this->tmdb->getTvDetails($winnerId) : [];
+        if ($winnerDetails === [] || $this->selector->knowsTitle($title, $winnerDetails)) {
+            // Either the corroborating fact could not be established (a failed
+            // probe) or it came back POSITIVE — TMDB does know this entity under
+            // the queried title, so the year filter did not fabricate it. Keep it.
+            $this->logger()->info('SeriesMetadataResolver: kept an inexact year-scoped match', [
+                'title' => $title,
+                'year' => $year,
+                'tmdb_id' => $winnerId,
+                'name' => MetadataValue::asNullableString($winner['name'] ?? null),
+                'reason' => $winnerDetails === [] ? 'details_unavailable' : 'provider_knows_this_title',
+            ]);
+            return [
+                'id' => $this->firstId($title, $year, $scoped),
+                'yearLess' => $yearLess,
+                'details' => $winnerDetails === [] ? null : $winnerDetails,
+            ];
+        }
+
+        $this->logger()->info('SeriesMetadataResolver: discarded a spurious year-scoped match', [
+            'title' => $title,
+            'year' => $year,
+            'rejected_tmdb_id' => $winnerId,
+            'rejected_name' => MetadataValue::asNullableString($winner['name'] ?? null),
+            'tmdb_id' => MetadataValue::asNullableString($replacement['id'] ?? null),
+            'name' => MetadataValue::asNullableString($replacement['name'] ?? null),
+        ]);
+
+        return ['id' => $this->firstId($title, $year, [$replacement]), 'yearLess' => $yearLess, 'details' => null];
+    }
+
+    /**
+     * Narrow a candidate list's first entry to a non-empty TMDB id, logging the
+     * outcome exactly as the pre-guard code path did.
+     *
+     * @param array<int, array<string, mixed>> $results Candidate rows.
+     *
+     * @return string|null Non-empty TMDB id, or null when there is none.
+     */
+    private function firstId(string $title, ?int $year, array $results): ?string
+    {
         if ($results === []) {
             $this->logger()->info('SeriesMetadataResolver: searchTv returned no results', [
                 'title' => $title,
@@ -265,6 +403,88 @@ class SeriesMetadataResolver
             'total_results' => count($results),
         ]);
         return ($id !== null && $id !== '') ? $id : null;
+    }
+
+    /**
+     * Season-coverage guard — reject an entity that cannot hold the local tree.
+     *
+     * A same-titled TMDB entity with FEWER seasons than the caller's tree has is
+     * the measured signature of a wrong incarnation: the 2-episode
+     * `Battlestar Galactica` 2003 miniseries standing in for the 4-season 2004
+     * series, or the 2024 live-action `Avatar: The Last Airbender` standing in for
+     * the 3-season 2005 animated series (TMDB's own relevance ranking prefers the
+     * remake, so no title/year heuristic can catch that one).
+     *
+     * Fail-closed by construction:
+     *  - off entirely unless the caller supplied `$localHighestSeason >= 2`;
+     *  - only STRICT-EXACT title alternatives are eligible;
+     *  - the alternative must share a production origin with the entity it would
+     *    replace ({@see SeriesCandidateSelector::sharesProductionOrigin()}) —
+     *    corroboration that does NOT depend on the local season count, so a
+     *    sibling step that re-parses the local tree cannot silently remove the
+     *    only thing keeping an unrelated show out;
+     *  - the alternative must itself cover `$localHighestSeason`, otherwise the
+     *    original stands.
+     * ⚠ **Known limit:** a local tree whose seasons are really absolute episode
+     * ordinals is out of scope here — the alternative has to cover the local
+     * season span exactly, so those simply find no alternative and are left alone
+     * (measured: 16 of the 18 live series that trip the coverage check).
+     *
+     * @param string                          $title              Series title searched for.
+     * @param string                          $tmdbId             Currently chosen TMDB id.
+     * @param array<string, mixed>            $details            Its `getTvDetails()` payload.
+     * @param int|null                        $localHighestSeason Highest local non-special season.
+     * @param array<int, array<string, mixed>>|null $yearLess     Year-less candidates when already
+     *     fetched; null makes this method fetch them (only in the rare coverage-miss case).
+     *
+     * @return array{id: string, details: array<string, mixed>}|null The better entity, or null to keep
+     *     the current one.
+     */
+    private function seasonCoverageSwap(
+        string $title,
+        string $tmdbId,
+        array $details,
+        ?int $localHighestSeason,
+        ?array $yearLess
+    ): ?array {
+        if ($localHighestSeason === null) {
+            return null;
+        }
+        // A single-season tree needs no explicit guard: any entity TMDB reports
+        // at all has >= 1 season, so the coverage test below is already false.
+        $providerSeasons = MetadataValue::asInt($details['number_of_seasons'] ?? null);
+        if ($providerSeasons <= 0 || $providerSeasons >= $localHighestSeason) {
+            return null;
+        }
+
+        $candidates = $yearLess ?? $this->tmdb->searchTv($title);
+        foreach ($this->selector->exactTitleAlternatives($title, $candidates, $tmdbId) as $alternative) {
+            $altId = MetadataValue::asString($alternative['id'] ?? null);
+            if ($altId === '') {
+                continue;
+            }
+            $altDetails = $this->tmdb->getTvDetails($altId);
+            if ($altDetails === []) {
+                continue;
+            }
+            if (!$this->selector->sharesProductionOrigin($details, $altDetails)) {
+                // A same-titled show from another country/language is another
+                // show, not another incarnation of this one. Live case: the
+                // `Blood+` folder is offered TMDB 84768 `Blood` (en/IE) against
+                // 19849 `Blood+` (ja/JP).
+                $this->logger()->info('SeriesMetadataResolver: alternative rejected, production origin differs', [
+                    'title' => $title,
+                    'tmdb_id' => $tmdbId,
+                    'rejected_alternative' => $altId,
+                ]);
+                continue;
+            }
+            if (MetadataValue::asInt($altDetails['number_of_seasons'] ?? null) >= $localHighestSeason) {
+                return ['id' => $altId, 'details' => $altDetails];
+            }
+        }
+
+        return null;
     }
 
     /**

@@ -656,6 +656,13 @@ final class MovedTopLevelFileKeepsIdentityTest extends TestCase
      * row whose `duration`/`source`/`media_streams` describe a different file and
      * which never self-repairs, because `backfillItemSourceMetadata()` returns
      * `'skipped'` the moment duration and source are populated.
+     *
+     * ⚠ TWO films go over budget in one rescan, and that is the whole point of
+     * the shape. An earlier version of this case moved ONE film, so the run
+     * produced a single overflow event and `assertCount(1, …)` passed whether the
+     * once-per-run latch existed or not — a mutation that removed the latch
+     * entirely stayed green. Two over-budget adoptions is the smallest library
+     * that can tell "logged once" from "logged per row" apart.
      */
     public function testTheProbeBudgetIsAnnouncedOnceAndTheRowIsAdoptedButNotRedescribed(): void
     {
@@ -664,9 +671,20 @@ final class MovedTopLevelFileKeepsIdentityTest extends TestCase
             self::markTestSkipped('ffmpeg/ffprobe not available; this case is about probe-derived state');
         }
 
-        $small = $this->root . '/A/Blade Runner (1982).mp4';
-        $large = $this->root . '/B/Blade.Runner.1982.1080p.mp4';
-        $this->makeClip($small, 320, 240, 2);
+        /** @var array<string, array{small: string, large: string}> $films */
+        $films = [
+            'Blade Runner' => [
+                'small' => $this->root . '/A/Blade Runner (1982).mp4',
+                'large' => $this->root . '/B/Blade.Runner.1982.1080p.mp4',
+            ],
+            'Solaris' => [
+                'small' => $this->root . '/A/Solaris (1972).mp4',
+                'large' => $this->root . '/B/Solaris.1972.1080p.mp4',
+            ],
+        ];
+        foreach ($films as $film) {
+            $this->makeClip($film['small'], 320, 240, 2);
+        }
         $this->makeClip($this->root . '/A/Metropolis (1927).mp4', 160, 120, 1);
 
         $libraryId = $this->createLibrary('movie');
@@ -675,28 +693,40 @@ final class MovedTopLevelFileKeepsIdentityTest extends TestCase
         $manager = $this->manager($ffmpeg, $logger, null, 0);
 
         $manager->rescanLibrary($libraryId);
-        $originalId = $this->itemIdAtPath($libraryId, $small);
-        $this->assertNotSame('', $originalId);
-        $this->recordUserData($originalId);
+        $ids = [];
+        foreach ($films as $title => $film) {
+            $ids[$title] = $this->itemIdAtPath($libraryId, $film['small']);
+            $this->assertNotSame('', $ids[$title], "$title must be indexed at its small copy first");
+            $this->recordUserData($ids[$title]);
+        }
 
-        $this->makeClip($large, 1280, 720, 6);
-        self::assertTrue(unlink($small));
+        foreach ($films as $film) {
+            $this->makeClip($film['large'], 1280, 720, 6);
+            self::assertTrue(unlink($film['small']));
+        }
         clearstatcache(true);
 
         $result = $manager->rescanLibrary($libraryId);
 
-        $this->assertSame(0, $result->removed, 'identity is never traded for memory: the row is still adopted');
-        $this->assertSame([$originalId], $this->idsAtPath($libraryId, $large));
-        $this->assertSame(1, $this->countUserData($originalId));
-        $this->assertSame(
-            [320, 240, 2],
-            $this->fileDerivedState($originalId),
-            'and this is the degradation the warning exists for: the row now points at the 1280x720 '
-            . 'copy while still describing the 320x240 one',
-        );
+        $this->assertSame(0, $result->removed, 'identity is never traded for memory: both rows are still adopted');
+        foreach ($films as $title => $film) {
+            $this->assertSame([$ids[$title]], $this->idsAtPath($libraryId, $film['large']), "$title followed its file");
+            $this->assertSame(1, $this->countUserData($ids[$title]), "$title kept its user data");
+            $this->assertSame(
+                [320, 240, 2],
+                $this->fileDerivedState($ids[$title]),
+                "$title is the degradation the warning exists for: the row now points at the 1280x720 "
+                . 'copy while still describing the 320x240 one',
+            );
+        }
 
         $warnings = $this->logLines('Moved-file adoption probe budget reached');
-        $this->assertCount(1, $warnings, 'announced, and announced once');
+        $this->assertCount(
+            1,
+            $warnings,
+            'announced, and announced ONCE — two rows went over budget in this rescan, so a missing '
+            . 'latch would show up here as two lines',
+        );
         $this->assertStringContainsString('"cap":0', $warnings[0]);
         $this->assertSame(
             [],

@@ -230,17 +230,19 @@ class ItemRepositoryReplaceStreamsTest extends TestCase
      *
      * `commitTrans()` therefore has to stay INSIDE the `try`. Moving it out (a
      * plausible "tidy-up" refactor) left the whole 7,614-test suite green before
-     * this test existed, and it is not a cosmetic difference:
-     * {@see \Phlix\Common\Database\PhlixMySQLConnection::commitTrans()} sets
-     * `transNesting = 0` and `transLockHolder = -1` and only THEN calls the
-     * vendor's `commitTrans()`; if that throws and nothing rolls back, the mutex
-     * push never runs and every other coroutine on that connection blocks forever
-     * in `beginTrans()`'s `$this->transLock->pop()` — a resident-worker deadlock,
-     * not a slowdown. `rollBackTrans()`'s outermost branch is what pushes the lock
-     * back, so "the catch rolls back" is the property that keeps the worker alive.
+     * this test existed, and it is not a cosmetic difference: on
+     * {@see \Phlix\Common\Database\PhlixMySQLConnection} a COMMIT that throws
+     * leaves the transaction OPEN, holding the half-written stream set, so
+     * without the rollback in the `catch` the item keeps neither its old rows
+     * nor its new ones — which is exactly what the assertions below check.
      *
-     * (The clearing order in `PhlixMySQLConnection` is filed separately and is not
-     * touched here; this test pins the CALLER's side of it.)
+     * Until 2026-07-31 that same `catch` was also the only thing keeping the
+     * WORKER alive: `commitTrans()` cleared `transNesting`/`transLockHolder` and
+     * pushed the whole-transaction mutex back only on the success path, so a
+     * throwing COMMIT left the mutex un-pushed and every other coroutine on that
+     * connection blocked forever in `beginTrans()`'s `$this->transLock->pop()`.
+     * That release now happens in a `finally`, so the liveness argument no
+     * longer rests on the caller — the data argument above still does.
      */
     public function testAFailingCommitRollsBackInsteadOfLeavingTheTransactionOpen(): void
     {

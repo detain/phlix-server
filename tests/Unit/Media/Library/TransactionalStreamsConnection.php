@@ -110,11 +110,16 @@ final class TransactionalStreamsConnection extends Connection
      * it, so a subsequent `rollBackTrans()` restores the snapshot.
      *
      * Models a COMMIT that fails, which is not a hypothetical shape on this
-     * stack: {@see \Phlix\Common\Database\PhlixMySQLConnection::commitTrans()}
-     * clears `transNesting`/`transLockHolder` BEFORE calling the vendor's
-     * `commitTrans()`, so a commit that throws without being rolled back leaves
-     * the whole-transaction mutex un-pushed and every other coroutine on that
-     * connection blocked forever in `beginTrans()`.
+     * stack — `PhlixMySQLConnection::commitTrans()` delegates to the vendor's,
+     * i.e. to `PDO::commit()`, which raises on a connection lost mid-commit
+     * (2013). What it costs is the DATA: the transaction is still open with the
+     * half-written stream set in it, so only the caller's rollback restores the
+     * previous rows. (It no longer costs the worker: since 2026-07-31
+     * `commitTrans()` hands the whole-transaction mutex on from a `finally`, so
+     * a throwing COMMIT frees the mutex whether or not anyone rolls back. Before
+     * that it cleared `transNesting`/`transLockHolder` and pushed only on the
+     * success path, and a throwing COMMIT left every other coroutine on that
+     * connection blocked forever in `beginTrans()`.)
      */
     public ?Throwable $commitFailure = null;
 

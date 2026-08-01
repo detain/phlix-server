@@ -74,7 +74,11 @@ class PhlixMySQLConnection extends Connection
      * widget fetches triggered (→ worker crash → 502).
      *
      * Created lazily on first use because a Swoole\Coroutine\Channel can only
-     * exist inside the coroutine runtime (not at construction / CLI time).
+     * be USED inside the coroutine runtime: `push()`/`pop()` raise
+     * `Swoole\Error: API must be called in the coroutine` outside one, and the
+     * creation here pushes the initial token. (Constructing one outside a
+     * coroutine does in fact succeed on swoole 6.2.1 — measured — so it is the
+     * push, not the `new`, that forces the laziness.)
      *
      * @var \Swoole\Coroutine\Channel|null
      */
@@ -84,9 +88,30 @@ class PhlixMySQLConnection extends Connection
     private int $queryLockHolder = -1;
 
     /**
-     * Reentrant mutex that wraps each whole transaction so that concurrent
-     * coroutines can NEVER interleave queries inside a transaction on the
-     * shared socket.
+     * Binary semaphore that wraps each whole transaction, so that no two
+     * coroutines can have a transaction OPEN at the same time on the shared
+     * socket, and (with {@see $transLockHolder}) so that only the coroutine
+     * that opened one may end it.
+     *
+     * NOT reentrant. A second `beginTrans()` in the same coroutine throws
+     * instead of opening an inner scope, and no `SAVEPOINT` is ever issued —
+     * see {@see beginTrans()}, whose docblock carries the measurement. (Until
+     * 2026-07-31 this said "Reentrant mutex", three lines from a docblock
+     * stating the opposite in capitals; PR #594 exists to remove exactly that
+     * class of claim from this file.)
+     *
+     * It does NOT, on its own, stop other coroutines from interleaving
+     * individual QUERIES inside a transaction: {@see query()} skips the
+     * per-query lock whenever `$transNesting > 0` — a shared field — whoever
+     * the caller is, so an unrelated coroutine's statement can still land on
+     * the socket inside somebody else's transaction. What this mutex
+     * guarantees is mutual exclusion between whole TRANSACTIONS plus
+     * single-owner commit/rollback; the missing `$transLockHolder === $cid`
+     * term in `query()`'s short-circuit is tracked separately (it changes the
+     * locking of every query on the connection, so it needs its own
+     * measurement). The destructive half — a non-holder's failed statement
+     * ending the holder's transaction — is already blocked by the holder
+     * guards in {@see commitTrans()}/{@see rollBackTrans()}.
      *
      * Created lazily on first use (same reasoning as {@see $queryLock}).
      *
@@ -185,27 +210,23 @@ class PhlixMySQLConnection extends Connection
      * `commitTrans()` as fatal to the whole unit of work: roll back and abandon
      * it.
      *
-     * The defensive `rollBackTrans()` such a caller runs in its `catch` is inert
-     * on the two paths where this connection object is that caller's alone:
-     * outside a coroutine, and in the DEFAULT pooled mode, where each coroutine
-     * leases a {@see PhlixMySQLConnection} of its own behind
-     * {@see PooledMySQLConnection} so `$transLock` is never contended. It is NOT
-     * unconditionally inert on the single shared socket (`DB_POOL_ENABLED=0` —
-     * the opt-out fallback `config/database.php` documents). Nothing is pushed
-     * twice there either (this one already nulled `$transLock`) and the vendor's
-     * `rollBackTrans()` checks `PDO::inTransaction()` first — but by then the
-     * mutex has been HANDED ON, not merely dropped: the internal rollback
-     * releases it with `$lock->push(true)`, and swoole resumes a coroutine
-     * parked in {@see beginTrans()}'s `$this->transLock->pop()` SYNCHRONOUSLY
-     * inside that push (measured on 6.2.1), so that coroutine has already
-     * written itself into `$transLockHolder` before the internal rollback even
-     * finishes. Nothing in the unwind that follows yields, so the caller's
-     * `catch` is entered with the new owner installed, and its second
-     * `rollBackTrans()` takes the outermost branch and overwrites
-     * `$transNesting`/`$transLockHolder` — clearing THAT coroutine's
-     * bookkeeping, and rolling its transaction back for real if its `BEGIN` has
-     * landed by then (one shared PDO handle). That window is PRE-EXISTING; this
-     * docblock records it, nothing here changes it.
+     * The defensive `rollBackTrans()` such a caller runs in its `catch` is
+     * inert. On the two paths where this connection object is that caller's
+     * alone — outside a coroutine, and in the DEFAULT pooled mode, where each
+     * coroutine leases a {@see PhlixMySQLConnection} of its own behind
+     * {@see PooledMySQLConnection} so `$transLock` is never contended — it is
+     * inert because there is nothing left open. On the single shared socket
+     * (`DB_POOL_ENABLED=0`, the opt-out fallback `config/database.php`
+     * documents) it is inert because by then the mutex has been HANDED ON, not
+     * merely dropped: the internal rollback releases it with `push(true)`, and
+     * swoole resumes a coroutine parked in {@see beginTrans()}'s `pop()`
+     * SYNCHRONOUSLY inside that push (measured on 6.2.1), so that coroutine has
+     * already written itself into `$transLockHolder` before the internal
+     * rollback even finishes — and {@see rollBackTrans()}'s holder guard then
+     * turns the caller's second call into a no-op instead of letting it clobber
+     * the new owner. Until 2026-07-31 there was no such guard and that second
+     * call really did overwrite `$transNesting`/`$transLockHolder` and roll the
+     * new owner's transaction back; see that method's docblock.
      *
      * @param string $query
      * @param mixed  $parameters
@@ -301,14 +322,46 @@ class PhlixMySQLConnection extends Connection
      * we run directly. The lock is reentrant per coroutine, so a query issued
      * while this coroutine already holds it (nested call) cannot deadlock.
      *
-     * When inside a transaction (a `beginTrans()` without its matching
-     * `commitTrans()`/`rollBackTrans()`), the mutex is held for the entire
-     * transaction rather than per-query, preventing concurrent coroutines from
-     * interleaving queries inside our transaction. NB this is why a raw
-     * `query('START TRANSACTION')` is not an equivalent way to open one: it
-     * leaves `$transNesting` at 0, so every following statement takes and
-     * RELEASES the per-query lock and another coroutine's queries can land
-     * inside the transaction.
+     * While a transaction is open on this connection (a `beginTrans()` without
+     * its matching `commitTrans()`/`rollBackTrans()`) this method SKIPS the
+     * per-query lock entirely — `$transNesting > 0` short-circuits straight to
+     * the parent. What that is worth depends on the mode, and the two modes are
+     * OPPOSITE:
+     *
+     * - DEFAULT pooled mode (`DB_POOL_ENABLED=1`, what production runs): every
+     *   coroutine leases a {@see PhlixMySQLConnection} of its own behind
+     *   {@see PooledMySQLConnection}, so `$transNesting` and `$transLock` are
+     *   per-lease and nothing is shared. No other coroutine's query CAN
+     *   interleave inside our transaction, and skipping the lock is simply free.
+     * - Shared socket (`DB_POOL_ENABLED=0`, the opt-out fallback in
+     *   `config/database.php`): one instance serves every coroutine, so
+     *   `$transNesting` is a SHARED field and the short-circuit fires for EVERY
+     *   caller while ANY coroutine has a transaction open — whoever opened it.
+     *   An unrelated coroutine's statement therefore lands on the socket inside
+     *   somebody else's transaction, with no per-query lock taken at all. The
+     *   missing term is `&& $this->transLockHolder === $cid`; it is tracked as
+     *   its own step rather than fixed here because adding it re-serialises
+     *   every read on the connection behind whole transactions and so needs its
+     *   own throughput measurement. The DESTRUCTIVE half — such a statement
+     *   failing and {@see execute()}'s rollback ending the holder's transaction
+     *   — is already blocked by the holder guards in
+     *   {@see commitTrans()}/{@see rollBackTrans()}.
+     *
+     * (Until 2026-08-01 this paragraph claimed the opposite: that holding the
+     * mutex for the whole transaction "prevents concurrent coroutines from
+     * interleaving queries inside our transaction". On the shared socket it does
+     * not. That is the very claim removed from {@see $transLock}'s docblock on
+     * 2026-07-31 — it was corrected there first and left standing here, in the
+     * method the corrected text points AT, which is the class of contradiction
+     * PR #594 exists to delete from this file.)
+     *
+     * NB a raw `query('START TRANSACTION')` is not an equivalent way to open a
+     * transaction either, for a DIFFERENT reason: it leaves `$transNesting` at
+     * 0, so the transaction is invisible to this class. Every following
+     * statement then takes and RELEASES the per-query lock — serialised, but
+     * still landing inside the open transaction — and neither the
+     * whole-transaction mutex nor the holder guards ever apply to it. Use
+     * `beginTrans()`.
      *
      * @param string                          $query
      * @param array<int|string, mixed>|null    $params
@@ -322,9 +375,16 @@ class PhlixMySQLConnection extends Connection
             return parent::query($query, $params, $fetchmode);
         }
 
-        // Inside a transaction: the transaction lock (acquired in beginTrans)
-        // is already held, so just run the query.  The per-query lock is NOT
-        // released between queries — it stays pinned until commit/rollback.
+        // A transaction is open on this connection, so skip the per-query lock.
+        // NOT "we already hold the transaction lock": `$transNesting` is shared
+        // state, so on the single shared socket (`DB_POOL_ENABLED=0`) this fires
+        // for every coroutine while ANY of them holds the whole-transaction
+        // mutex, and the caller may well not be that holder — the missing
+        // `$transLockHolder === $cid` term is the separately-tracked defect the
+        // docblock above describes. In the DEFAULT pooled mode, where this
+        // instance is one coroutine's exclusive lease, the caller IS always the
+        // holder. And the per-query lock is not "pinned" across a transaction: it is
+        // never acquired on this path at all, so there is nothing to release.
         if ($this->transNesting > 0) {
             return parent::query($query, $params, $fetchmode);
         }
@@ -371,11 +431,18 @@ class PhlixMySQLConnection extends Connection
      * is sufficient (no concurrency). The non-nesting rule is identical there —
      * PDO itself enforces it.
      *
+     * A throw from the parent NEVER strands the mutex: the acquisition below is
+     * checked and the parent call is wrapped, so this method either returns
+     * holding the mutex with `$transNesting = 1`, or leaves the mutex exactly
+     * as it found it. See the comments on those two hunks for the measurements.
+     *
      * @return bool
      *
      * @throws \PDOException When this coroutine already has a transaction open
-     *         ("There is already an active transaction"), or on a connect
-     *         failure from the parent.
+     *         ("There is already an active transaction"), on a connect failure
+     *         from the parent, or when the whole-transaction mutex could not be
+     *         acquired because this coroutine was cancelled while waiting for
+     *         it (a worker stop cancels every live coroutine).
      */
     public function beginTrans(): bool
     {
@@ -396,28 +463,126 @@ class PhlixMySQLConnection extends Connection
             return $result;
         }
 
-        if ($this->transLock === null) {
-            $this->transLock = new \Swoole\Coroutine\Channel(1);
-            $this->transLock->push(true);
+        // Acquisition must be CHECKED before this coroutine records itself as
+        // the holder. `pop()` returns false instead of the token when the
+        // waiting coroutine is CANCELLED while parked — and that is not
+        // hypothetical: Workerman's Swoole event driver cancels EVERY live
+        // coroutine on worker stop (`Workerman\Events\Swoole::stop()`,
+        // `vendor/workerman/workerman/src/Events/Swoole.php:231-233`, and
+        // `start.php:127` selects that driver), so a `systemctl stop` (SIGTERM)
+        // or `reload` (SIGUSR1 — Workerman's NON-graceful path, which does not
+        // wait for in-flight work) can hit a coroutine parked here. Parking here
+        // at all needs the CONTENDED shared socket, i.e. `DB_POOL_ENABLED=0`; in
+        // the default pooled mode each coroutine leases its own connection, so
+        // `$transLock` is never contended. Walking on would install a NON-owner in
+        // `$transLockHolder` and steal ownership from the live holder, whose
+        // `commitTrans()` would then take the guard below and return true
+        // WITHOUT committing — a silent lost commit, with the transaction left
+        // open and the token never returned. Measured on this class before the
+        // check: `tokens=0`, holder = the cancelled cid forever. Throwing here
+        // instead writes nothing and holds nothing, and it costs no working
+        // behaviour: the cancelled coroutine went on to raise "There is already
+        // an active transaction" from the parent one line further on anyway
+        // (measured) — or worse, if the holder's own BEGIN had not landed yet,
+        // to open a SECOND transaction on the shared socket. Either way this
+        // replaces a late, destructive failure with an early, inert one.
+        if ($this->transLock()->pop() === false) {
+            throw new \PDOException(
+                'Could not acquire the transaction mutex: the coroutine was cancelled while waiting'
+            );
         }
-        $this->transLock->pop();
         $this->transLockHolder = $cid;
 
-        $result = parent::beginTrans();
+        // A parent that THROWS must still hand the mutex back. This is the same
+        // rule {@see commitTrans()} states for a COMMIT that throws, and it is
+        // load-bearing for the same reason: nothing else would ever release it.
+        // All nine coroutine-reachable call sites in `src/` write
+        // `$db->beginTrans();` OUTSIDE their `try` (the one site inside a `try`
+        // is `MediaDedupePathsCommand`, which is CLI and never takes the mutex),
+        // so the throwing coroutine runs no `rollBackTrans()` of its own, and the
+        // holder guards in {@see commitTrans()}/{@see rollBackTrans()} correctly
+        // refuse a rescue from any OTHER coroutine — so on the shared socket
+        // (`DB_POOL_ENABLED=0`) one connect failure would otherwise leave a
+        // worker that can never open another transaction until it is restarted
+        // (measured: the next coroutine stayed parked indefinitely). Releasing
+        // is safe on both throw shapes: after a failed reconnect no transaction
+        // exists, and on "There is already an active transaction" the open
+        // transaction is not ours ($transNesting is still 0). The holder check
+        // keeps the release single and self-owned — the acquisition above
+        // guarantees it is us, and parent::beginTrans() can yield.
+        try {
+            $result = parent::beginTrans();
+        } catch (\Throwable $e) {
+            if ($this->transLockHolder === $cid) {
+                $this->releaseTransLock();
+            }
+            throw $e;
+        }
+
         if ($result) {
             $this->transNesting = 1;
         } else {
-            $this->transLockHolder = -1;
-            // phpstan-ignore-line notIdentical.alwaysTrue -- PHPStan loses
-            // track of the null-assignment below when beginTrans() (an impure
-            // method) controls the failure path.  The logic is sound.
-            if ($this->transLock !== null) { // @phpstan-ignore-line
-                $this->transLock->push(true);
-                $this->transLock = null;
-            }
+            $this->releaseTransLock();
         }
 
         return $result;
+    }
+
+    /**
+     * The whole-transaction mutex, created on first use and NEVER replaced.
+     *
+     * The channel IS the mutex: a coroutine owns the transaction exactly while
+     * it holds the single token, and every other coroutine is parked in
+     * {@see beginTrans()}'s `pop()` ON THAT CHANNEL OBJECT. Replacing the field
+     * therefore does not reset the mutex, it FORKS it — the parked coroutines
+     * keep waiting on the old channel while new arrivals mint a second one and
+     * run concurrently, and the token in the old channel can never be returned
+     * because the release path only ever pushes to the field.
+     *
+     * Until 2026-07-31 `commitTrans()`/`rollBackTrans()` (and this method's
+     * failure path) did exactly that: they set `$transLock = null` right AFTER
+     * pushing the token back. Swoole resumes a parked consumer synchronously
+     * inside `Channel::push()` (measured on 6.2.1), so the null-out always
+     * landed on a channel a NEW owner had already taken, and that owner's own
+     * release then found `null` and pushed nothing. Measured on the unfixed
+     * class with 8 concurrent transactions on one shared connection: 6 of the 8
+     * coroutines waited forever. Creating it lazily is still required — a
+     * `Swoole\Coroutine\Channel` can only be USED inside the coroutine runtime
+     * and this method pushes the initial token (`push()` outside a coroutine
+     * raises `Swoole\Error: API must be called in the coroutine`; the `new`
+     * itself succeeds on swoole 6.2.1, measured, so it is the push that forces
+     * the laziness) — but from the first `beginTrans()` on it is a fixed object.
+     */
+    private function transLock(): \Swoole\Coroutine\Channel
+    {
+        if ($this->transLock === null) {
+            $lock = new \Swoole\Coroutine\Channel(1);
+            $lock->push(true);
+            $this->transLock = $lock;
+        }
+
+        return $this->transLock;
+    }
+
+    /**
+     * Hand the whole-transaction mutex on: give up ownership, then release the
+     * token. MUST be the last thing a releasing coroutine does to this object's
+     * shared state.
+     *
+     * `push()` resumes a coroutine parked in {@see beginTrans()}'s `pop()`
+     * SYNCHRONOUSLY, inside the push — so the next owner has already written
+     * itself into `$transLockHolder` by the time `push()` returns. Any write
+     * after that point lands on somebody else's transaction.
+     *
+     * Callers only reach this once {@see commitTrans()}/{@see rollBackTrans()}
+     * have established that this coroutine is the recorded holder, so the token
+     * is pushed exactly once per acquisition and the channel's capacity of 1 is
+     * never exceeded.
+     */
+    private function releaseTransLock(): void
+    {
+        $this->transLockHolder = -1;
+        $this->transLock()->push(true);
     }
 
     /**
@@ -429,6 +594,30 @@ class PhlixMySQLConnection extends Connection
      * that an inner commit could never release another scope's mutex if
      * savepoint reentrancy were ever implemented in `beginTrans()`.
      *
+     * Only the coroutine recorded in `$transLockHolder` may commit — see
+     * {@see rollBackTrans()}, which carries the reasoning for both.
+     *
+     * NOT a reversal of PR #594, which is easy to misread it as. The guard #594
+     * deliberately WITHHELD from this method is the null-PDO-handle guard
+     * ({@see rollBackParent()}'s `if (!$this->pdo instanceof \PDO)`), on the
+     * grounds that a silent "commit succeeded" on a dead socket would be a lie
+     * where a silent "rollback succeeded" is the truth. That decision still
+     * stands and is still visible below: `parent::commitTrans()` is called
+     * UNCONDITIONALLY, so a commit with no handle still fails loudly. The
+     * `$transLockHolder !== $cid` guard in the body is orthogonal to all of
+     * that — it is about WHICH coroutine's transaction this is, not about
+     * whether the socket is alive.
+     *
+     * The non-holder return is `true` rather than `false` deliberately. A throw
+     * is wrong here because the stale call arrives from inside a caller's
+     * `catch` and would replace the original exception; `false` would be
+     * marginally more honest than `true`. As of 2026-07-31 the choice is inert
+     * either way: no caller anywhere outside `src/Common/Database/` inspects the
+     * return value of `commitTrans()`/`rollBackTrans()` at all (verified by
+     * grep), so it is an API-honesty question, not a control-flow one. THAT IS
+     * THE FACT THIS RESTS ON — if a caller ever starts checking the boolean,
+     * revisit this and return `false` for a non-holder.
+     *
      * @return bool
      */
     public function commitTrans(): bool
@@ -436,6 +625,11 @@ class PhlixMySQLConnection extends Connection
         $cid = $this->currentCoroutineId();
         if ($cid < 0) {
             return parent::commitTrans();
+        }
+
+        // Not the holder: this coroutine has no transaction of its own here.
+        if ($this->transLockHolder !== $cid) {
+            return true;
         }
 
         // Unreachable while beginTrans() refuses to nest (see its docblock):
@@ -448,14 +642,15 @@ class PhlixMySQLConnection extends Connection
             return $result;
         }
 
-        // Outermost: release the transaction mutex.
+        // Outermost: end the transaction, then hand the mutex on. The release
+        // is in a `finally` because a COMMIT that throws (a lost connection,
+        // say) must still free the mutex — otherwise every later transaction on
+        // this connection blocks forever.
         $this->transNesting = 0;
-        $this->transLockHolder = -1;
-        $result = parent::commitTrans();
-        $lock = $this->transLock;
-        if ($lock !== null) {
-            $lock->push(true);
-            $this->transLock = null;
+        try {
+            $result = parent::commitTrans();
+        } finally {
+            $this->releaseTransLock();
         }
 
         return $result;
@@ -470,20 +665,34 @@ class PhlixMySQLConnection extends Connection
      *
      * Safe to call when no transaction is open (the vendor checks
      * `PDO::inTransaction()` first) and when the PDO handle is already gone
-     * (see {@see rollBackParent()}). That makes the defensive `rollBackTrans()`
-     * in a caller's `catch` inert whenever this object serves one coroutine at a
-     * time — outside a coroutine, and in the default pooled mode, where each
-     * coroutine has its own lease. On the shared-socket fallback
-     * (`DB_POOL_ENABLED=0`) it is NOT free after {@see execute()} has already
-     * rolled back on the caller's behalf: the outermost branch below writes
-     * `$transNesting = 0` / `$transLockHolder = -1` unconditionally, before
-     * consulting anything, so it clears the bookkeeping of whichever coroutine
-     * took the mutex when that EARLIER rollback released it — and "in the
-     * meantime" can be zero yields, because the `$lock->push(true)` below hands
-     * the mutex straight on rather than merely dropping it: swoole resumes a
-     * coroutine waiting in {@see beginTrans()}'s `pop()` synchronously, inside
-     * the push. See the CAUTION paragraph on {@see execute()}; pre-existing,
-     * documented here rather than fixed.
+     * (see {@see rollBackParent()}).
+     *
+     * ONLY THE RECORDED HOLDER MAY END THE TRANSACTION. That is what the
+     * `$transLockHolder !== $cid` guard below is for, and on the shared-socket
+     * fallback (`DB_POOL_ENABLED=0`) it is load-bearing rather than defensive:
+     * the defensive `rollBackTrans()` a caller runs in its `catch` reaches this
+     * method AFTER {@see execute()} has already rolled back on the caller's
+     * behalf and released the mutex — and released does not mean dropped, it
+     * means HANDED ON, because swoole resumes a coroutine parked in
+     * {@see beginTrans()}'s `pop()` synchronously inside `push()` (measured on
+     * 6.2.1) and nothing in the unwind that follows yields. So by the time the
+     * `catch` runs, another coroutine owns the mutex. Without the guard the
+     * outermost branch would write `$transNesting = 0` / `$transLockHolder = -1`
+     * over that coroutine's bookkeeping and then issue a real `ROLLBACK` on its
+     * transaction once its `BEGIN` had landed (one shared PDO handle). Measured
+     * on the unguarded class, forcing each schedule deterministically: the new
+     * owner's `commitTrans()` died with "There is no active transaction", and a
+     * third coroutine walked past the cleared holder into a concurrent
+     * transaction. With the guard a non-holder issues no statement and writes
+     * nothing, so that `catch` really is inert — in every mode, not just the two
+     * where this object serves one coroutine at a time (outside a coroutine, and
+     * in the default pooled mode where each coroutine has its own lease).
+     *
+     * Corollary, relied on by nothing but worth stating: a coroutine that opened
+     * a transaction with a raw `query('START TRANSACTION')` instead of
+     * {@see beginTrans()} is not the recorded holder, so this method will not
+     * roll it back. No caller does that (`PathDeduper` was the last one and was
+     * converted on 2026-07-28); the tracked API is the only supported way in.
      *
      * @return bool
      */
@@ -492,6 +701,12 @@ class PhlixMySQLConnection extends Connection
         $cid = $this->currentCoroutineId();
         if ($cid < 0) {
             return $this->rollBackParent();
+        }
+
+        // Not the holder: a STALE releaser. Return without touching anything —
+        // see the docblock for why both halves of that matter.
+        if ($this->transLockHolder !== $cid) {
+            return true;
         }
 
         // Unreachable while beginTrans() refuses to nest (see its docblock):
@@ -504,14 +719,13 @@ class PhlixMySQLConnection extends Connection
             return $result;
         }
 
-        // Outermost: release the transaction mutex.
+        // Outermost: end the transaction, then hand the mutex on. The release
+        // is in a `finally` so a throwing ROLLBACK cannot strand the mutex.
         $this->transNesting = 0;
-        $this->transLockHolder = -1;
-        $result = $this->rollBackParent();
-        $lock = $this->transLock;
-        if ($lock !== null) {
-            $lock->push(true);
-            $this->transLock = null;
+        try {
+            $result = $this->rollBackParent();
+        } finally {
+            $this->releaseTransLock();
         }
 
         return $result;
@@ -574,6 +788,27 @@ class PhlixMySQLConnection extends Connection
             $this->queryLock->push(true);
         }
         // Blocks (yields the coroutine) until the single token is available.
+        //
+        // This `pop()` is UNCHECKED on purpose, and the asymmetry with
+        // {@see beginTrans()}'s checked one is a deferral, not an oversight. The
+        // hazard is identical (see that comment for the trigger, and for the fact
+        // that it needs the shared socket, `DB_POOL_ENABLED=0`): a cancelled
+        // waiter walks on and returns `true` to {@see query()} (measured
+        // `got=true`), stealing `$queryLockHolder` from the live holder, so
+        // `query()`'s `finally` then pushes a SPURIOUS token — measured
+        // `holder=-1 tokens=1` while the true holder is still mid-statement —
+        // and mutual exclusion is broken for every later coroutine too, not just
+        // the cancelled one. It is NOT fixed here because the fix is not
+        // symmetric with `beginTrans()`'s: throwing out of `query()` changes the
+        // failure surface of every DB read on this connection, and the
+        // release-side half lives inside `query()`'s own `finally`. Nor can it be
+        // made correct on its own — while `query()`'s `if ($transNesting > 0)`
+        // short-circuit lacks the `$transLockHolder === $cid` term, a non-holder
+        // querying DURING somebody's transaction never reaches this method at
+        // all, so a check here would be half a fix. Both halves belong
+        // to the step that owns `query()`'s locking (finding F1 in
+        // `steps/fix-unpooled-txn-mutex-race.worklog.md`), which must measure
+        // them together.
         $this->queryLock->pop();
         $this->queryLockHolder = $cid;
         return true;

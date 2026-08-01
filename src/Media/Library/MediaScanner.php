@@ -302,16 +302,45 @@ class MediaScanner
     private bool $adoptionCapWarned = false;
 
     /**
+     * Number of candidates in the current window that are carrying a probe
+     * summary, so {@see MAX_ADOPTION_PROBES} can be enforced without walking the
+     * map. Reset by {@see beginAdoptionTracking()}.
+     */
+    private int $adoptionProbesHeld = 0;
+
+    /**
      * Hard ceiling on {@see $adoptionCandidates} for ONE rescan pass.
      *
-     * Each entry holds the new path plus the probe summary already taken for that
-     * file (a handful of scalars and its stream rows) — order a couple of KB. The
-     * cap therefore bounds the worst case at tens of MB in a resident worker even
-     * if an entire library is reorganised in one go, instead of scaling without
-     * limit with library size. Past the cap the extra rows simply behave as they
-     * did before S158 (the prune deletes them); one warning says so.
+     * Bounds the worst case in a resident worker instead of letting it scale with
+     * library size. MEASURED on this box (PHP 8.3.6, 110-character paths): a full
+     * 20,000-entry map of path-only candidates is 20.6 MB of live PHP memory,
+     * released in full when the window closes.
+     *
+     * Past the cap the extra rows behave exactly as they did before S158 — the
+     * prune deletes them — and one warning says so. The number is deliberately
+     * generous because what is being protected here is row IDENTITY and the user
+     * data cascading off it; a library-wide reorganisation is precisely the case
+     * where losing rows to a stingy cap would be most damaging.
      */
     private const MAX_ADOPTION_CANDIDATES = 20000;
+
+    /**
+     * How many of those candidates may additionally retain the probe summary that
+     * lets {@see adoptRecordedPath()} re-derive `duration_seconds`,
+     * `metadata_json.source` and `media_streams` for a DIFFERENT physical copy.
+     *
+     * Separate from {@see MAX_ADOPTION_CANDIDATES} because the two properties are
+     * not worth the same: the probe payload dominates the entry (MEASURED: 934
+     * bytes serialized per candidate with a video + audio probe attached, and a
+     * full 20,000-entry map with probes costs 65.6 MB live versus 20.6 MB
+     * without). So identity is never traded for memory, and only the best-effort
+     * technical re-description is. Past this budget a candidate is still recorded
+     * and still adopted — it simply keeps the file-derived metadata it already
+     * had, which is what the pre-review revision did for every adoption.
+     *
+     * Worst case with both limits: ~25 MB, transient, fully released.
+     */
+    private const MAX_ADOPTION_PROBES = 2000;
 
     /**
      * Effective `scanner.ignore_patterns` list used by {@see shouldSkipFile()}.
@@ -1661,6 +1690,7 @@ class MediaScanner
     {
         $this->adoptionCandidates = [];
         $this->adoptionCapWarned = false;
+        $this->adoptionProbesHeld = 0;
     }
 
     /**
@@ -1675,6 +1705,7 @@ class MediaScanner
     {
         $this->adoptionCandidates = null;
         $this->adoptionCapWarned = false;
+        $this->adoptionProbesHeld = 0;
     }
 
     /**
@@ -1933,6 +1964,18 @@ class MediaScanner
                 );
             }
             return;
+        }
+
+        // Identity first: the candidate is always recorded. The probe payload —
+        // which is what the entry's weight is made of — is retained only within
+        // its own smaller budget, so a pathological mass move degrades to "moved
+        // rows keep their old technical metadata" rather than "moved rows are
+        // deleted".
+        if ($probe !== null && $this->adoptionProbesHeld >= self::MAX_ADOPTION_PROBES) {
+            $probe = null;
+        }
+        if ($probe !== null) {
+            $this->adoptionProbesHeld++;
         }
 
         $this->adoptionCandidates[$id] = ['path' => $path, 'probe' => $probe];

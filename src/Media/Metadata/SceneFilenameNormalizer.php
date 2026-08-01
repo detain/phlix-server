@@ -436,11 +436,22 @@ final class SceneFilenameNormalizer
      * back to {@see splitBytesKeepingFullwidthBrackets()}, which still recognises
      * the fullwidth pair by its byte sequence.
      *
+     * Public for the same reason {@see stripBracketedTags()} is: it must run
+     * IMMEDIATELY AFTER that method at EVERY call site, and
+     * {@see \Phlix\Media\Library\EpisodeFilenameParser} is one of them. Leaving it
+     * private made the episode path the only consumer of stripBracketedTags()
+     * without the balance guarantee, which put an orphan opener straight into
+     * `media_items.name` ("Title [720p"). Behaviour is unchanged from when it was
+     * private — this is a visibility widening only.
+     *
+     * ⚠ AFTER, never before. A pre-pass over the raw filename regressed 2 of
+     * 39,024 real names when SM-0.1 measured it.
+     *
      * @param string $title Title that may contain orphan brackets.
      *
      * @return string Title with all unmatched bracket characters removed.
      */
-    private static function repairBracketBalance(string $title): string
+    public static function repairBracketBalance(string $title): string
     {
         if ($title === '') {
             return $title;
@@ -553,11 +564,21 @@ final class SceneFilenameNormalizer
     /**
      * Strip bracketed and parenthetical tags like [YTS.MX], (YTS), etc.
      *
+     * Only a BALANCED group is removed (each pattern requires its closer), and
+     * the text around a group is kept — so `Show [480p] Title` collapses to
+     * `Show Title` rather than being truncated at the opener.
+     *
+     * Public because {@see \Phlix\Media\Library\EpisodeFilenameParser} needs the
+     * exact same tag-stripping for the EPISODE-title segment; duplicating these
+     * three patterns there would let the two drift (the fullwidth `【…】` pair in
+     * particular is easy to forget). Behaviour is unchanged from when it was
+     * private — this is a visibility widening only.
+     *
      * @param string $title Title to clean.
      *
      * @return string Title with tags stripped.
      */
-    private static function stripBracketedTags(string $title): string
+    public static function stripBracketedTags(string $title): string
     {
         $title = preg_replace('/\s*\[\s*[^\]]*\]\s*/', ' ', $title) ?? $title;
         $title = preg_replace('/\s*\(\s*[^\)]*\)\s*/', ' ', $title) ?? $title;

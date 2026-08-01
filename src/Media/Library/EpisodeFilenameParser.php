@@ -672,17 +672,20 @@ final class EpisodeFilenameParser
      * such token between two real words truncates the title outright:
      * "Show S01E01 V2 Rocket Base" → null, "Show S01E01 The V8 Interceptor" →
      * "The". Measured, the narrowing is FREE: identical output to the wide
-     * version across 465,019 names — 26,389 real episode basenames, all 85,763
-     * whole-estate basenames, 60,000 modern-scene fuzz names (two seeds) and
-     * 319,256 planted-title probes — with the resolution/bit-depth-in-title
-     * count still 0 and D6 still closed.
+     * version across every name measured — 26,389 real episode basenames +
+     * 85,763 whole-estate basenames + 60,000 modern-scene fuzz names (two seeds
+     * x 30,000) + 319,256 planted-title probes = 491,408 — with the
+     * resolution/bit-depth-in-title count still 0 and D6 still closed.
      *
      * ⚠ Do NOT narrow this to the resolution alone. Measured over 30,000 modern
-     * scene names, dropping bit depth leaves 109 (seed 4242) / 110 (seed 90210)
-     * titles carrying a resolution or bit-depth token — the very class the hard
-     * rule exists to close. "8bit" as genuine title text is a real but far
-     * smaller exposure (3 music files in this estate, none of which reach this
-     * parser) than the one it buys down.
+     * scene names, dropping bit depth leaves 574 (seed 4242) / 533 (seed 90210)
+     * titles carrying a resolution or bit-depth token — i.e. 1.9% / 1.8% of the
+     * corpus, the very class the hard rule exists to close. That figure was
+     * derived independently twice, and the same two numbers pin the two
+     * "bit depth alone" / "8bit alone" rows in
+     * EpisodeFilenameParserTest::brokenReleaseRunCases(). "8bit" as genuine
+     * title text is a real but far smaller exposure (3 music files in this
+     * estate, none of which reach this parser) than the one it buys down.
      */
     private static function isHardPatternMarker(string $candidate): bool
     {
@@ -718,8 +721,9 @@ final class EpisodeFilenameParser
      * the census: "V2"/"V8" and eight-hex-with-a-digit words ARE ordinary title
      * text, and a hard marker cuts with no corroboration at all, so trusting
      * them deleted real titles ("V2 Rocket Base" → null). Only resolution and
-     * bit depth are hard, and that narrowing was measured free over 465,019
-     * names.
+     * bit depth are hard, and that narrowing was measured free over all
+     * 26,389 + 85,763 + 60,000 + 319,256 = 491,408 names enumerated by
+     * {@see isHardPatternMarker()}.
      *
      * ⚠ A BRACKET GROUP is never hard, even when it holds a pattern marker. The
      * dominant recovery convention IS "Show S01E23 [480p] Let It Be Me"; letting

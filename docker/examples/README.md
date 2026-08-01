@@ -91,7 +91,8 @@ All scenarios use a bridge network named `phlix_network` for container communica
 
 ## Health Checks
 
-- phlix-server: `curl http://localhost/health`
+- phlix-server: `curl http://localhost:8096/health` (the Workerman daemon serves
+  this itself; nothing listens on port 80 in these images)
 - MySQL: `mysqladmin ping`
 
 ## Troubleshooting
@@ -103,6 +104,25 @@ Check logs:
 docker-compose logs phlix
 docker-compose logs mysql
 ```
+
+### The container exited — what the exit code means
+
+```bash
+docker inspect -f '{{.State.ExitCode}}' phlix-server
+```
+
+| exit code | meaning |
+|---|---|
+| `0` | clean shutdown (`docker compose stop`, SIGTERM) |
+| **`70`** | **a supervised program entered FATAL** — the application is not running and supervisord gave up retrying it. Look for the `PHLIX-SUPERVISOR-FATAL` banner in `docker compose logs phlix`, then `/var/phlix/logs/phlix-error.log`. Common causes: a placeholder `PHLIX_SECRET_KEY` (the entrypoint refuses it), or the database never becoming reachable. |
+| other | supervisord's own exit status |
+
+Before this existed, a FATAL left the container reporting `Up` with nothing
+serving. It now stops instead — and because every compose file here uses
+`restart: unless-stopped`, Docker restarts it, so a persistent fault shows up
+as a **restart loop that re-runs the migration chain each cycle** rather than a
+silent `Up`. If you would rather it stay down where monitoring can see it,
+change the `phlix` service to `restart: on-failure:5`.
 
 ### Can't connect to database
 

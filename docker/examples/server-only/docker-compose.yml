@@ -25,6 +25,12 @@ services:
     depends_on:
       mysql:
         condition: service_healthy
+    # The Phlix container's PID 1 exits 70 when a supervised program enters
+    # FATAL (a total application outage), and 0 on a clean stop — see
+    # docker/README.md "What the container's exit code means".
+    # `unless-stopped` restarts on ANY exit, so a persistent fault becomes a
+    # restart loop that re-runs the migration chain each cycle. Swap to
+    # `on-failure:5` if you would rather it stay `Exited (70)` for monitoring.
     restart: unless-stopped
     networks:
       - phlix_network

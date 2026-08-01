@@ -59,8 +59,10 @@ That script builds the image (rebuilding the shared base first, because the
 pipeline is two-stage), runs it against a throwaway MySQL on a private network,
 and makes 11 assertions: `/health` 200s; the migration step reported success;
 the schema really is there when reached with the application's own credentials;
-every supervisord program is `RUNNING`; the application AND its Workerman
-workers hold their pids across a 90 s window; `start.php` is the running
+every supervisord program is `RUNNING`; the application, its Workerman workers
+AND the `exit-on-fatal` event listener hold their pids across a 90 s window
+(the listener is the only thing that turns a FATAL into a dead container, so a
+listener that crash-loops is its own failure); `start.php` is the running
 process and no CGI/FPM/nginx process is; `:8097` answers both inside the
 container and through the published port mapping; the SPA shell and its
 immutable assets are served; the container reaches `healthy` and its
@@ -90,6 +92,41 @@ nor `PHLIX_SECRET_KEY` is set, the entrypoint generates one and persists it to
 `/var/phlix/config/jwt_secret` so it survives restarts — **mount
 `/var/phlix/config`**, or every restart invalidates all sessions and signed
 media URLs (the entrypoint says so loudly if it cannot write the file).
+
+### What the container's exit code means, and which `restart:` policy to use
+
+The container's PID 1 is `docker/docker-entrypoint.sh`, not supervisord.
+supervisord runs as its child so the entrypoint can translate a supervised
+program's collapse into an exit code an orchestrator can act on:
+
+| exit code | meaning |
+|---|---|
+| `0` | clean shutdown — `docker stop`, SIGTERM/SIGINT/SIGQUIT, or supervisord exiting normally |
+| **`70`** | **a supervised program entered FATAL.** The application is not running and supervisord has stopped retrying it. `docker logs` carries the `PHLIX-SUPERVISOR-FATAL` and `PHLIX-SUPERVISOR-FATAL-EXIT` banners; the cause is in `/var/phlix/logs/phlix-error.log`. |
+| anything else | supervisord's own exit status, passed through unchanged |
+
+70 is `EX_SOFTWARE` from `sysexits.h`. It exists because a FATAL used to leave
+the container sitting `Up` with nothing serving — the exact shape of the outage
+these images were fixed for — and because signalling supervisord makes it exit
+**0**, which `restart: on-failure`, k8s `restartPolicy: OnFailure`,
+`docker wait` and every exit-code alert read as success.
+
+**This changes what a FATAL does to a running deployment.** Every compose file
+here uses `restart: unless-stopped`, which restarts the container on *any*
+exit, so a persistent FATAL becomes a container-level restart loop that re-runs
+the whole migration chain on every cycle. That is still better than a silent
+`Up`, but pick deliberately:
+
+| policy | behaviour on exit 70 |
+|---|---|
+| `unless-stopped` (shipped) | restarts forever; survives a daemon restart. Fine when the cause is transient (a database that comes up late). |
+| `on-failure:5` | restarts at most five times, then leaves the container `Exited (70)` where monitoring and `docker ps -a` can see it. Use this if you alert on exit codes. |
+| `no` | leaves it dead on the first FATAL. |
+
+The HEALTHCHECK is the other half: the container goes `unhealthy` within
+`90 s + 3 × 30 s` if `/health` stops answering, which is what a k8s
+`livenessProbe` consumes. Neither signal is consumed by compose on its own —
+`unless-stopped` does not react to `unhealthy`.
 
 ## Base image (shared)
 

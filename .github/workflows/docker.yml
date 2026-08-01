@@ -30,6 +30,13 @@ jobs:
       contents: read
       packages: write
 
+    outputs:
+      # The EXACT base reference the dependent jobs must build FROM, and the
+      # digest it must resolve to. Empty when the base for this commit could
+      # not be published (fork PR) — see the `base_ref` step.
+      base_ref: ${{ steps.baseref.outputs.base_ref }}
+      base_digest: ${{ steps.base.outputs.digest }}
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -47,16 +54,53 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # ----------------------------------------------------------------------
+      # A PR MUST publish the immutable per-commit tag. (S163 round 4.)
+      #
+      # This job used to be `push: github.event_name != 'pull_request'`, i.e. a
+      # PR built the new base and threw it away — while the `docker` and
+      # `docker-hub` jobs below went on building FROM
+      # `ghcr.io/detain/phlix-base:latest`, the base published by some earlier
+      # commit. So every PR compiled this branch's code against last week's
+      # base, and the failure mode was exactly the one this whole step exists
+      # to fix: a green check that measured the wrong artefact.
+      #
+      # It stopped being silent on `fe876c5c`: this branch adds `ext-ldap` to
+      # the base and drops `--ignore-platform-reqs` from `docker/Dockerfile`,
+      # so `composer install` failed with `Root composer.json requires PHP
+      # extension ext-ldap` — with `/usr/local/etc/php/conf.d/docker-fpm.ini`
+      # in the error, i.e. the OLD `-fpm-alpine` base. (Only the alpine leg
+      # actually failed; the other two were CANCELLED by the matrix's default
+      # fail-fast, which is also fixed below.)
+      #
+      # `:latest` is still published only on master/tags — a PR must not move
+      # the tag every deployment pulls. What a PR now publishes is
+      # `:<full-sha>`, which is immutable and names the commit it came from,
+      # and the dependent jobs consume THAT and verify its digest.
+      # ----------------------------------------------------------------------
+      # Built as an explicit list (same shape as the hub job's `hubmeta`) rather
+      # than a conditional line inside `tags: |`, so there is never an empty
+      # entry whose handling depends on the action's input parsing.
+      - name: Compute base image tags
+        id: basetags
+        run: |
+          set -euo pipefail
+          TAGS="${BASE_IMAGE}:${GITHUB_SHA}"
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            TAGS="${BASE_IMAGE}:latest,${TAGS}"
+          fi
+          echo "tags=${TAGS}" >> "$GITHUB_OUTPUT"
+          echo "publishing: ${TAGS}"
+
       - name: Build and push base image
+        id: base
         uses: docker/build-push-action@v7
         with:
           context: .
           file: docker/Dockerfile.base
           platforms: linux/amd64,linux/arm64
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: |
-            ${{ env.BASE_IMAGE }}:latest
-            ${{ env.BASE_IMAGE }}:${{ github.sha }}
+          push: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+          tags: ${{ steps.basetags.outputs.tags }}
           # Registry cache MUST use a dedicated tag, not the image tag — pushing
           # `mode=max` cache to `:latest` pollutes the image manifest with a
           # buildkit cacheconfig blob, which later breaks `FROM …:latest`
@@ -70,16 +114,43 @@ jobs:
           build-args: |
             PHP_VERSION=8.3
 
+      # A PR from a FORK gets a read-only GITHUB_TOKEN no matter what the
+      # `permissions:` block says, so the push above cannot succeed and there
+      # is no same-commit base for the dependent jobs to use. They are SKIPPED
+      # rather than quietly built against a stale registry base: a build that
+      # measures the wrong artefact is worse than no build, and the boot gate
+      # (which builds base + image locally and BOOTS them) still runs and is
+      # the check that actually proves anything. Every PR to this repository so
+      # far has come from a branch in this repository, so this is a documented
+      # corner, not the normal path.
+      - name: Decide the base reference the dependent jobs must build FROM
+        id: baseref
+        env:
+          IS_FORK_PR: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
+        run: |
+          if [ "$IS_FORK_PR" = "true" ]; then
+            echo "::warning::Fork PR: GITHUB_TOKEN cannot write packages, so the base built from this commit could not be published. Skipping the runtime image builds rather than building them against a stale base. The boot gate still runs."
+            echo "base_ref=" >> "$GITHUB_OUTPUT"
+          else
+            echo "base_ref=${BASE_IMAGE}:${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+          fi
+
   docker:
     name: Build and Push phlix-server
     runs-on: ubuntu-latest
     needs: docker-base
+    # See the base job: no same-commit base ⇒ no runtime image build.
+    if: needs.docker-base.outputs.base_ref != ''
 
     permissions:
       contents: read
       packages: write
 
     strategy:
+      # One leg failing must not CANCEL the other two. On `fe876c5c` only the
+      # alpine leg actually failed and the intel/nvidia legs were cancelled,
+      # which read as "all three are broken" and cost a round of diagnosis.
+      fail-fast: false
       matrix:
         include:
           - dockerfile: docker/Dockerfile
@@ -120,6 +191,32 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=sha,prefix=
 
+      # Prove the base we are about to build FROM is the one THIS run produced,
+      # before spending twenty minutes compiling against it. A tag is mutable;
+      # the digest is not. Anything other than an exact match is a hard error —
+      # never a fallback to `:latest`, which is what made the stale-base defect
+      # invisible for the life of these images.
+      - name: Verify the base image is the one built from this commit
+        env:
+          BASE_REF: ${{ needs.docker-base.outputs.base_ref }}
+          BASE_DIGEST: ${{ needs.docker-base.outputs.base_digest }}
+        run: |
+          set -euo pipefail
+          if [ -z "$BASE_DIGEST" ]; then
+            echo "::error::docker-base published no digest; refusing to build against an unverified base."
+            exit 1
+          fi
+          echo "expected: ${BASE_REF} @ ${BASE_DIGEST}"
+          INSPECT="$(docker buildx imagetools inspect "$BASE_REF")"
+          printf '%s\n' "$INSPECT" | head -20
+          case "$INSPECT" in
+            *"$BASE_DIGEST"*)
+              echo "OK: ${BASE_REF} resolves to the base built in this run." ;;
+            *)
+              echo "::error::${BASE_REF} does NOT resolve to ${BASE_DIGEST} — the runtime image would be built against a different base than this commit produced."
+              exit 1 ;;
+          esac
+
       - name: Build and push
         uses: docker/build-push-action@v7
         with:
@@ -135,7 +232,7 @@ jobs:
           build-args: |
             PHP_VERSION=8.3
             PHLIX_VERSION=${{ github.ref_name }}
-            PHLIX_BASE_IMAGE=${{ env.BASE_IMAGE }}:latest
+            PHLIX_BASE_IMAGE=${{ needs.docker-base.outputs.base_ref }}
 
   # --------------------------------------------------------------------------
   # S163 — the BOOT gate.
@@ -247,6 +344,9 @@ jobs:
     name: Build and Push phlix-hub
     runs-on: ubuntu-latest
     needs: docker-base
+    # Same exposure as the server job: this built FROM `…phlix-base:latest`,
+    # i.e. a base from some other commit, on every PR.
+    if: needs.docker-base.outputs.base_ref != ''
 
     permissions:
       contents: read
@@ -287,6 +387,27 @@ jobs:
           SHA="${GITHUB_SHA::12}"
           echo "tags=${{ env.REGISTRY }}/detain/phlix-hub:latest,${{ env.REGISTRY }}/detain/phlix-hub:${SHA}" >> "$GITHUB_OUTPUT"
 
+      - name: Verify the base image is the one built from this commit
+        env:
+          BASE_REF: ${{ needs.docker-base.outputs.base_ref }}
+          BASE_DIGEST: ${{ needs.docker-base.outputs.base_digest }}
+        run: |
+          set -euo pipefail
+          if [ -z "$BASE_DIGEST" ]; then
+            echo "::error::docker-base published no digest; refusing to build against an unverified base."
+            exit 1
+          fi
+          echo "expected: ${BASE_REF} @ ${BASE_DIGEST}"
+          INSPECT="$(docker buildx imagetools inspect "$BASE_REF")"
+          printf '%s\n' "$INSPECT" | head -20
+          case "$INSPECT" in
+            *"$BASE_DIGEST"*)
+              echo "OK: ${BASE_REF} resolves to the base built in this run." ;;
+            *)
+              echo "::error::${BASE_REF} does NOT resolve to ${BASE_DIGEST} — the hub image would be built against a different base than this commit produced."
+              exit 1 ;;
+          esac
+
       - name: Build and push phlix-hub
         uses: docker/build-push-action@v7
         with:
@@ -299,4 +420,4 @@ jobs:
           cache-from: type=gha,type=registry,ref=${{ env.REGISTRY }}/detain/phlix-hub:buildcache
           cache-to: type=gha,type=registry,ref=${{ env.REGISTRY }}/detain/phlix-hub:buildcache,mode=max,image-manifest=true,oci-mediatypes=true
           build-args: |
-            PHLIX_BASE_IMAGE=${{ env.BASE_IMAGE }}:latest
+            PHLIX_BASE_IMAGE=${{ needs.docker-base.outputs.base_ref }}

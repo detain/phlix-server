@@ -103,6 +103,12 @@ MAX_START_PERIOD="${MAX_START_PERIOD:-120}"
 # The supervisord program name that IS the application (docker/supervisord.conf).
 APP_PROGRAM="${APP_PROGRAM:-phlix}"
 
+# The event listener that turns a PROCESS_STATE_FATAL into a dead container
+# (`[eventlistener:exit-on-fatal]`). It is NOT an unrelated program: it is the
+# only mechanism by which a total outage stops reading as `Up`, so it gets its
+# own stability verdict. (S163 review round 3, finding 5.)
+FATAL_LISTENER_PROGRAM="${FATAL_LISTENER_PROGRAM:-exit-on-fatal}"
+
 # Where supervisord's config lives INSIDE the image (all three Dockerfiles).
 # ASSERT 11 appends a deliberately-unstartable program to it.
 SUPERVISORD_CONF_IN_IMAGE="${SUPERVISORD_CONF_IN_IMAGE:-/etc/supervisor/conf.d/supervisord.conf}"
@@ -139,6 +145,7 @@ schema
 supervisor-states
 stability-program
 stability-workers
+stability-listener
 daemon-process
 no-cgi
 ws-in-container
@@ -682,10 +689,9 @@ done
 # Independent second signal: supervisord's own log must not have recorded a
 # respawn OF THE APPLICATION while we were watching.
 #
-# ⚠ Scope this to `$APP_PROGRAM`. Round 2 counted `spawned:`/`exited:` for ANY
-# program, so a respawn of the `exit-on-fatal` event listener — which is
-# `autorestart=true` and entirely harmless — reddened a perfectly healthy
-# application. (S163 review round 2, finding 8)
+# ⚠ Scope THIS pattern to `$APP_PROGRAM` — but only because the listener now
+# has a verdict of its own (5c below). Round 2 scoped it and then counted
+# nothing else, which hid a crash-looping `exit-on-fatal`; round 3 finding 5.
 #
 # supervisord's wording, which is what these patterns match:
 #   INFO spawned: 'phlix' with pid 141
@@ -711,17 +717,54 @@ if [ "$STAB_NEW_EVENTS" -gt 0 ]; then
     $DOCKER exec "$APP_NAME" sh -c \
         "tail -n +$(( STABILITY_MARK + 1 )) /var/phlix/logs/supervisord.log 2>/dev/null | head -20" 2>&1 || true
 fi
-# Events for OTHER programs are informational only — see the scope note above.
-STAB_OTHER_EVENTS="$($DOCKER exec "$APP_NAME" sh -c \
-    "tail -n +$(( STABILITY_MARK + 1 )) /var/phlix/logs/supervisord.log 2>/dev/null \
-     | grep -E 'spawned:|exited:' | grep -vE \"${STAB_EVENT_RE}\" | head -5 || true" 2>/dev/null || true)"
-[ -n "$STAB_OTHER_EVENTS" ] && info "supervisord events for OTHER programs (informational): $(printf '%s' "$STAB_OTHER_EVENTS" | tr '\n' '|')"
-
 if [ "$STAB_OK" = "1" ]; then
     pass stability-program "stayed up for ${STABILITY_WINDOW}s: same pid ${STAB_FIRST_PID}, monotonic uptime, no respawn of '${APP_PROGRAM}'"
 else
     fail stability-program "NOT STABLE — ${STAB_REASON}"
 fi
+
+# --- 5c. the FATAL LISTENER must be stable too ------------------------------
+#
+# S163 review round 3, finding 5 — and this is a partial WALK-BACK of round 2's
+# finding 8, made after measuring rather than reasoning.
+#
+# Round 2 scoped the event count to `$APP_PROGRAM` to kill a false-RED from a
+# respawning `exit-on-fatal` listener. Round 3 measured that false-RED and it
+# does not exist: four green runs each show exactly ONE
+# `spawned: 'exit-on-fatal'`, at boot, before the window opens. What the
+# scoping DID do is make a listener that crash-loops and then dies completely
+# invisible — fed a log where it respawns three times and enters FATAL, the
+# scoped pattern counted 0 where the unscoped one counted 6.
+#
+# That matters because the listener is not an unrelated program: it is the ONLY
+# thing that turns a PROCESS_STATE_FATAL into a dead container, i.e. the whole
+# F6 / round-2-finding-3 mechanism. A listener that is down when a FATAL
+# arrives silently restores the original outage shape (`Up`, serving nothing).
+#
+# So the events are counted for BOTH programs again, but they are reported as
+# TWO verdicts instead of one. A flapping listener no longer hides behind the
+# application's green, and it also cannot redden the application's verdict —
+# which is the legitimate half of round 2's complaint.
+STAB_LISTENER_RE="spawned: '${FATAL_LISTENER_PROGRAM}'|exited: ${FATAL_LISTENER_PROGRAM}[[:space:](]|${FATAL_LISTENER_PROGRAM} entered (FATAL|BACKOFF)"
+STAB_LISTENER_EVENTS_RAW="$($DOCKER exec "$APP_NAME" sh -c \
+    "tail -n +$(( STABILITY_MARK + 1 )) /var/phlix/logs/supervisord.log 2>/dev/null \
+     | grep -cE \"${STAB_LISTENER_RE}\" || true" 2>/dev/null | tr -d " \r\n" || true)"
+if ! is_uint "$STAB_LISTENER_EVENTS_RAW"; then
+    fail stability-listener "could not count supervisord events for '${FATAL_LISTENER_PROGRAM}' (got '${STAB_LISTENER_EVENTS_RAW}') — an unreadable count is a failure, never a silent zero"
+elif [ "$STAB_LISTENER_EVENTS_RAW" -gt 0 ]; then
+    fail stability-listener "the FATAL event listener '${FATAL_LISTENER_PROGRAM}' recorded ${STAB_LISTENER_EVENTS_RAW} spawn/exit/FATAL event(s) during the ${STABILITY_WINDOW}s window — it is the only thing that turns a FATAL into a dead container, so while it is down a total outage reads as 'Up' again"
+    $DOCKER exec "$APP_NAME" sh -c \
+        "tail -n +$(( STABILITY_MARK + 1 )) /var/phlix/logs/supervisord.log 2>/dev/null \
+         | grep -E \"${STAB_LISTENER_RE}\" | head -10" 2>&1 | sed 's/^/   | /' || true
+else
+    pass stability-listener "the FATAL event listener '${FATAL_LISTENER_PROGRAM}' did not respawn during the ${STABILITY_WINDOW}s window"
+fi
+
+# Anything that is neither the application nor the listener is informational.
+STAB_OTHER_EVENTS="$($DOCKER exec "$APP_NAME" sh -c \
+    "tail -n +$(( STABILITY_MARK + 1 )) /var/phlix/logs/supervisord.log 2>/dev/null \
+     | grep -E 'spawned:|exited:' | grep -vE \"${STAB_EVENT_RE}\" | grep -vE \"${STAB_LISTENER_RE}\" | head -5 || true" 2>/dev/null || true)"
+[ -n "$STAB_OTHER_EVENTS" ] && info "supervisord events for OTHER programs (informational): $(printf '%s' "$STAB_OTHER_EVENTS" | tr '\n' '|')"
 
 # --- 5b. the WORKERS, not just the master (finding 10) ---------------------
 # A refork loop under a stable master is what blocker 6 looked like. Two
@@ -1073,13 +1116,28 @@ else
         info "after FATAL: Running=${FATAL_RUNNING} ExitCode=${FATAL_EXIT_RAW:-<unreadable>} canary-reached-FATAL=${CANARY_WENT_FATAL}"
         printf '%s\n' "$FATAL_LOG" | tail -12 | sed 's/^/   | /' || true
 
-        if [ "$FATAL_RUNNING" != "false" ] && [ "$CANARY_WENT_FATAL" -eq 0 ]; then
+        # ⚠ The induced FATAL is what LICENSES both verdicts, so it is the first
+        # thing tested and it is tested on its own.
+        #
+        # S163 review round 3, finding 2. This guard used to read
+        # `[ "$FATAL_RUNNING" != "false" ] && [ "$CANARY_WENT_FATAL" -eq 0 ]`,
+        # so it could not fire once the container was already dead; the `else`
+        # branch then treated `Running=false` as proof that the canary had
+        # killed it. Driven verbatim with `Running=false, canary-never-FATAL,
+        # exit 137` the shipped block printed:
+        #     PASS [fatal-kills-container] a FATAL program stopped the container…
+        #     PASS [fatal-exit-code-nonzero] container exit code is 137…
+        # — two verdicts asserting something that never happened. That is a
+        # WRONG verdict rather than a missing one, and the completeness
+        # registry is structurally unable to see it: it only checks that each
+        # check reported, not that what it reported was true.
+        if [ "$CANARY_WENT_FATAL" -ne 1 ]; then
             # Distinguish "the container survived a FATAL" (a real defect) from
             # "no FATAL happened, so nothing was tested" (a gate-setup bug).
             # Conflating those is how the first version of this assertion would
             # have reported a defect that did not exist — the same class as
             # finding 8.
-            fail fatal-kills-container "could not induce a FATAL at all (canary never entered FATAL) — this is a GATE SETUP failure, not a verdict on the image"
+            fail fatal-kills-container "could not induce a FATAL at all (canary never entered FATAL; container Running=${FATAL_RUNNING}, ExitCode=${FATAL_EXIT_RAW:-<unreadable>}) — this is a GATE SETUP failure, not a verdict on the image"
             fail fatal-exit-code-nonzero "no FATAL was induced, so the container exit code proves nothing"
         else
             if [ "$FATAL_RUNNING" = "false" ]; then

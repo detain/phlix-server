@@ -33,6 +33,93 @@ use PHPUnit\Framework\TestCase;
  */
 class DockerEntrypointTest extends TestCase
 {
+    /**
+     * THE CANARY LIST — the exact set of verdicts `scripts/docker-boot-smoke.sh`
+     * is required to reach, pinned BY NAME, in a second file.
+     *
+     * S163 review round 3, finding 1. The gate's own `EXPECTED_CHECKS`
+     * registry catches a check that stops REPORTING; it is structurally unable
+     * to catch a check that is DELETED, because the registry is
+     * self-referential — it enforces exactly the list it currently carries and
+     * that list is editable in the same commit as the deletion.
+     *
+     * Reproduced on this tree before this list existed: deleting ASSERT 5
+     * (196 lines — round 1's F1 fix for the crash-loop false-pass) and
+     * ASSERT 11 (83 lines — round 2's findings 3+9 fix for the
+     * FATAL-leaves-the-container-`Up` false-pass) together with their four
+     * registry entries left the gate printing `ALL 15 ASSERTIONS PASSED` /
+     * `all 15 registered checks reported exactly once`, exit 0, and the whole
+     * 84-test suite green — because the only size constraint was
+     * `assertGreaterThan(10, 15)`. Fourteen of the nineteen ids had zero
+     * references anywhere in the unit suite.
+     *
+     * So the set lives here too. Removing a protection now costs an explicit,
+     * reviewable edit in TWO places instead of one, and ADDING a check reddens
+     * this test until the list is updated — that is the intended price, not a
+     * defect.
+     *
+     * The value is the provenance: what the check is, and which demonstrated
+     * false-pass or blocker it exists to prevent. Deleting a line means
+     * deleting that sentence too.
+     *
+     * @var array<string, string>
+     */
+    private const PINNED_GATE_CHECKS = [
+        'health' => 'ASSERT 1 — /health 200 served by the application itself (the step\'s acceptance criterion)',
+        'migrations' => 'ASSERT 2 — round 1 F2: 7/7 green against a container whose entire migration chain had failed',
+        'schema' => 'ASSERT 3 — round 1 F2: /health is DB-free, so it cannot tell "serves" from "serves against an '
+            . 'empty schema"',
+        'supervisor-states' => 'ASSERT 4 — blockers 2 and 3: a supervisord program in FATAL/BACKOFF',
+        'stability-program' => 'ASSERT 5 — round 1 F1 (DEMONSTRATED FALSE-PASS): the gate exited 0 against an app that '
+            . 'crash-restarted forever',
+        'stability-workers' => 'ASSERT 5b — round 2 finding 10: blocker 6\'s shape, workers reforking under a stable '
+            . 'master',
+        'stability-listener' => 'ASSERT 5c — round 3 finding 5: a crash-looping exit-on-fatal listener was invisible, '
+            . 'and it is the ONLY thing that turns a FATAL into a dead container',
+        'daemon-process' => 'ASSERT 6 — blocker 1 stated positively: start.php is the running process, not '
+            . 'public/index.php',
+        'no-cgi' => 'ASSERT 6 — blockers 1/3/4: no nginx, php-fpm or CGI front-controller process in the image',
+        'ws-in-container' => 'ASSERT 7 — the SyncPlay WS worker really listens on 8097',
+        'ws-published' => 'ASSERT 7 — round 1 F8 + round 2 finding 2 (DEMONSTRATED FALSE-PASS): the PUBLISHED mapping, '
+            . 'keyed on curl exit codes because a raw TCP connect cannot fail behind the userland proxy',
+        'spa-shell' => 'ASSERT 8 — VERIFY 2: the /app shell is served by Workerman, so nothing depended on the deleted '
+            . 'nginx',
+        'spa-asset' => 'ASSERT 8 — VERIFY 2: a hashed static asset is served by Workerman',
+        'spa-immutable' => 'ASSERT 8 — VERIFY 2: the immutable cache header nginx used to be credited with',
+        'healthcheck-declared' => 'ASSERT 9 — no HEALTHCHECK is why a container serving nothing read `Up 22 minutes`',
+        'healthcheck-healthy' => 'ASSERT 9 — the declared healthcheck must actually go healthy',
+        'healthcheck-start-period' => 'ASSERT 9 — round 2 finding 1 (DEMONSTRATED FALSE-PASS): a start-period longer '
+            . 'than a gate run makes `healthy` unfalsifiable',
+        'platform-reqs' => 'ASSERT 10 — `--ignore-platform-reqs` masked a missing ext-ldap in every published image',
+        'fatal-kills-container' => 'ASSERT 11 — round 1 F6 + round 2 finding 9: a FATAL program left '
+            . 'the container `Up` forever',
+        'fatal-exit-code-nonzero' => 'ASSERT 11 — round 2 finding 3: exiting 0 on a FATAL is indistinguishable from '
+            . '`docker stop`',
+    ];
+
+    /**
+     * The MACHINERY each of the above checks needs in order to mean anything.
+     *
+     * Same finding, one level down: a check id can survive in the registry
+     * while the block that computes it is replaced by a stub, and the id list
+     * alone cannot see that. These are the identifiers that only exist because
+     * of the assertion they belong to, so their absence is the deletion.
+     *
+     * @var array<string, list<string>>
+     */
+    private const PINNED_GATE_MACHINERY = [
+        'migrations' => ['PHLIX-MIGRATION-FAILURE'],
+        'schema' => ['schema_migrations'],
+        'supervisor-states' => ['sup_states'],
+        'stability-program' => ['STABILITY_WINDOW', 'sup_status_retry', 'STAB_EVENT_RE'],
+        'stability-workers' => ['worker_snapshot', 'WORKER_NAME_CHURN_BUDGET'],
+        'stability-listener' => ['FATAL_LISTENER_PROGRAM', 'STAB_LISTENER_RE'],
+        'ws-published' => ['WS_PORT'],
+        'healthcheck-start-period' => ['MAX_START_PERIOD', '{{json .Config.Healthcheck.StartPeriod}}'],
+        'fatal-kills-container' => ['CANARY_PROGRAM', 's163-fatal-canary', 'supervisorctl start'],
+        'fatal-exit-code-nonzero' => ['CANARY_WENT_FATAL', '.State.ExitCode'],
+    ];
+
     private string $tmpDir = '';
 
     /** Absolute path to the entrypoint under test. */
@@ -802,10 +889,34 @@ class DockerEntrypointTest extends TestCase
     }
 
     /**
-     * The placeholder string itself must not survive anywhere in the shipped
-     * example as an assignment, under ANY name. The two tests above enumerate
-     * names; this one enumerates the value, so a third variable cannot
-     * reintroduce it.
+     * The placeholder assignments in `.env.example` that are DELIBERATE, with
+     * the reason each one is.
+     *
+     * S163 review round 3, finding 4: the value-based guard below re-introduced
+     * a NAME filter (`secret`/`key`) while its failure message claimed to cover
+     * every "secret-shaped" variable. Replayed against the shipped file, that
+     * filter silently skipped four real placeholder assignments —
+     * `MYSQL_ROOT_PASSWORD`, `PHLIX_DB_PASSWORD`, `HUB_DB_PASSWORD` and
+     * `XDEBUG_TRIGGER=your-secret-trigger-value`, the last of which has the
+     * word `secret` in its VALUE. Round 2's finding 7 was "the guard was
+     * written for one variable and the defect moved one line"; a name filter
+     * is the same mistake with a bigger radius, so it is gone. The exceptions
+     * are enumerated HERE instead, where adding one is a visible edit.
+     *
+     * @var array<string, string> variable => why its placeholder must stay
+     */
+    private const ENV_EXAMPLE_PLACEHOLDER_EXEMPT = [
+        'MYSQL_ROOT_PASSWORD' => 'the mysql:8.0 entrypoint refuses to initialise a data '
+            . 'directory without one, so this line cannot be blank or commented out',
+        'PHLIX_DB_PASSWORD' => 'it is the password the compose file also feeds to that same '
+            . 'throwaway MySQL container; blanking one half breaks the example',
+        'HUB_DB_PASSWORD' => 'same, for the hub database in the server-hub / full-stack examples',
+    ];
+
+    /**
+     * No line in the shipped example may assign a known placeholder, under ANY
+     * name. The two tests above enumerate names; this one enumerates the
+     * VALUE, so a variable nobody thought of cannot reintroduce it.
      */
     public function testTheEnvExampleAssignsNoKnownPlaceholderSecret(): void
     {
@@ -814,6 +925,7 @@ class DockerEntrypointTest extends TestCase
         );
 
         $offenders = [];
+        $exemptSeen = [];
         foreach (preg_split('/\R/', $example) ?: [] as $line) {
             if (str_starts_with(ltrim($line), '#')) {
                 continue;
@@ -821,20 +933,38 @@ class DockerEntrypointTest extends TestCase
             if (!preg_match('/^\s*([A-Z0-9_]+)=(.+)$/', $line, $m)) {
                 continue;
             }
-            if (!str_contains(strtolower($m[1]), 'secret') && !str_contains(strtolower($m[1]), 'key')) {
+            if (preg_match('/change[_-]?me|changeme|your[_-]secret|placeholder/i', $m[2]) !== 1) {
                 continue;
             }
-            if (preg_match('/change[_-]?me|changeme|your[_-]secret|placeholder/i', $m[2]) === 1) {
-                $offenders[] = trim($line);
+            if (array_key_exists($m[1], self::ENV_EXAMPLE_PLACEHOLDER_EXEMPT)) {
+                $exemptSeen[] = $m[1];
+                continue;
             }
+            $offenders[] = trim($line);
         }
 
         self::assertSame(
             [],
             $offenders,
-            'docker/examples/.env.example assigns a known placeholder to a secret-shaped '
-            . 'variable; the entrypoint refuses to boot on these for PHLIX_SECRET_KEY, and '
-            . 'the others are one code change away from being live signing keys'
+            'docker/examples/.env.example assigns a known placeholder value. A committed '
+            . 'placeholder is public, and this repository has already shipped one that '
+            . 'became a live JWT + media-signing key the moment the entrypoint started '
+            . 'reading it. Blank it, or — if the example genuinely cannot work without a '
+            . 'value — add it to ENV_EXAMPLE_PLACEHOLDER_EXEMPT with the reason. Offending '
+            . 'lines: ' . implode(' | ', $offenders)
+        );
+
+        // The exemption list must not outlive what it exempts, or it becomes a
+        // pre-approval for a variable nobody has looked at.
+        sort($exemptSeen);
+        $expected = array_keys(self::ENV_EXAMPLE_PLACEHOLDER_EXEMPT);
+        sort($expected);
+        self::assertSame(
+            $expected,
+            $exemptSeen,
+            'ENV_EXAMPLE_PLACEHOLDER_EXEMPT no longer matches the file: an exempted '
+            . 'variable has been removed or renamed, so its exemption is now dead weight '
+            . 'that would silently cover a future variable of the same name'
         );
     }
 
@@ -894,6 +1024,93 @@ class DockerEntrypointTest extends TestCase
             . 'indistinguishable from a clean docker stop'
         );
         self::assertStringContainsString('PHLIX-SUPERVISOR-FATAL-EXIT', $run['stderr']);
+    }
+
+    /**
+     * S163 review round 3, finding 6 — the exit code the previous round
+     * introduced was documented NOWHERE an operator reads.
+     *
+     * `docker/README.md` and `docker/examples/README.md` must both name it,
+     * and the number they name must be the number the entrypoint actually
+     * exits with, read out of the script rather than retyped here. An
+     * operator-facing claim about a published artefact that nothing checks is
+     * how `docker/README.md` came to describe a base image this branch had
+     * already replaced.
+     */
+    public function testTheContainerExitCodeForAFatalIsDocumentedWhereOperatorsRead(): void
+    {
+        $root = dirname(__DIR__, 3);
+        $entrypoint = self::directivesOnly((string) file_get_contents(
+            $root . '/docker/docker-entrypoint.sh'
+        ));
+
+        self::assertSame(
+            1,
+            preg_match('/^\s*exit\s+(\d+)\s*$/m', substr(
+                $entrypoint,
+                (int) strpos($entrypoint, 'PHLIX-SUPERVISOR-FATAL-EXIT')
+            ), $m),
+            'the entrypoint must exit with a literal code after the FATAL banner'
+        );
+        $code = $m[1];
+        self::assertNotSame('0', $code, 'a FATAL must not exit 0');
+
+        foreach (['/docker/README.md', '/docker/examples/README.md'] as $doc) {
+            $contents = (string) file_get_contents($root . $doc);
+
+            // ⚠ Require the code and the word FATAL on the SAME line, as a
+            // backticked literal. A bare `/\b70\b/` looked fine until the
+            // control: mutating the script to `exit 1` left this test GREEN,
+            // because a lone "1" appears all over a README. A detector
+            // narrower than its rule fakes a zero; a detector LOOSER than its
+            // rule fakes a pass, and this one was loose for every small code.
+            self::assertMatchesRegularExpression(
+                '/`\*{0,2}' . preg_quote($code, '/') . '\*{0,2}`[^\n]*FATAL/i',
+                $contents,
+                $doc . ' must tell an operator what container exit code ' . $code
+                . ' means, on one line with the word FATAL — it is the only signal that '
+                . 'distinguishes a total application outage from a clean `docker stop`'
+            );
+            self::assertStringContainsString(
+                'restart:',
+                $contents,
+                $doc . ' must say what the shipped restart policy does with that exit code'
+            );
+        }
+    }
+
+    /**
+     * ... and the compose files an operator copies must carry the same warning
+     * at the line they would edit. Same finding: every shipped example uses
+     * `restart: unless-stopped`, which restarts on exit 70 as readily as on 0,
+     * turning a persistent FATAL into a migration-replaying restart loop.
+     */
+    public function testEveryShippedComposeExplainsTheRestartPolicyItPicks(): void
+    {
+        $root = dirname(__DIR__, 3);
+        $files = [
+            '/docker-compose.yml',
+            '/docker/examples/server-only/docker-compose.yml',
+            '/docker/examples/server-hub/docker-compose.yml',
+            '/docker/examples/full-stack/docker-compose.yml',
+        ];
+
+        foreach ($files as $file) {
+            $contents = (string) file_get_contents($root . $file);
+
+            self::assertStringContainsString(
+                'restart:',
+                $contents,
+                $file . ' should declare a restart policy'
+            );
+            self::assertMatchesRegularExpression(
+                '/^\s*#.*\b70\b/m',
+                $contents,
+                $file . ' must carry the exit-70 note next to its restart policy: an operator '
+                . 'editing this line is the person who needs to know that a supervised-program '
+                . 'FATAL now stops the container'
+            );
+        }
     }
 
     /**
@@ -1357,9 +1574,36 @@ class DockerEntrypointTest extends TestCase
             if (preg_match($installCommand, $line) !== 1) {
                 continue;
             }
+            // S163 review round 3, finding 3 (second half) — RE-SCOPED BY
+            // MEASUREMENT. The finding said `logicalLines()` does not strip
+            // comments, so a whole-line `# never install nginx` reddens this
+            // guard. Measured against the SHIPPED test: it does NOT —
+            // `directivesOnly()` above already drops whole-line comments and
+            // the guard stayed green. What it cannot drop is a comment
+            // TRAILING a real directive, and that one does redden:
+            // `RUN apt-get install -y curl  # nginx is deliberately absent`
+            // → `Failures: 1`. So the false-RED is real, one shape over.
+            $scannable = (string) preg_replace('/(?<=\s)#.*$/', '', $line);
+
+            // ... and the package pattern itself was narrower than the rule it
+            // enforces (finding 3, first half). Measured, one mutation at a
+            // time, against the shipped test: `nginx-light`, `nginx-full`,
+            // `nginx-extras` and `nginx-mod-http-brotli` all passed, because
+            // the trailing `(?![\w./-])` rejected the hyphen. Those are the
+            // standard Debian/Ubuntu packages that install /usr/sbin/nginx and
+            // .intel/.nvidia are apt-based, so it is the live shape. Two more
+            // found the same way: Alpine spells php-fpm `php83-fpm` (two
+            // digits, NO dot) and Debian ships nginx modules as
+            // `libnginx-mod-*`; both were misses too.
+            //
+            // The lookbehind still prevents a path (`/etc/nginx/…`) or a flag
+            // (`--with-nginx-dir`) from matching, so widening the suffix does
+            // not buy a false-RED.
             self::assertDoesNotMatchRegularExpression(
-                '#(?<![\w./-])(nginx|php-fpm|php\d(?:\.\d+)?-fpm)(?![\w./-])#',
-                $line,
+                '#(?<![\w./-])((?:lib)?nginx(?:-[a-z0-9.+]+)*'
+                . '|php-fpm(?:-[a-z0-9.+]+)*'
+                . '|php\d+(?:\.\d+)?-fpm(?:-[a-z0-9.+]+)*)(?![\w./-])#i',
+                $scannable,
                 $relative . ' installs nginx or php-fpm: ' . trim($line)
             );
         }
@@ -1446,7 +1690,11 @@ class DockerEntrypointTest extends TestCase
             'the gate must declare the list of checks it is required to reach'
         );
         $registered = array_values(array_filter(array_map('trim', explode("\n", $m[1]))));
-        self::assertGreaterThan(10, count($registered));
+        // Deliberately NO size assertion here. A lower bound
+        // (`assertGreaterThan(10, …)`) is what let two whole assertion blocks
+        // be deleted with this test green; the exact set is pinned in
+        // testTheBootGateReachesExactlyThePinnedSetOfChecks().
+        self::assertNotEmpty($registered);
 
         self::assertMatchesRegularExpression(
             '/produced NO verdict/',
@@ -1482,6 +1730,279 @@ class DockerEntrypointTest extends TestCase
             'these check ids are registered but nothing can ever report them: '
             . implode(', ', $neverReported)
         );
+    }
+
+    /**
+     * S163 round 4 — no job may build a runtime image against a FLOATING base
+     * tag.
+     *
+     * The pipeline is two-stage, and until this commit the second stage built
+     * `FROM ghcr.io/detain/phlix-base:latest` while the first stage's `push:`
+     * was `github.event_name != 'pull_request'`. So on a PR the new base was
+     * built and discarded and the runtime images were compiled against
+     * whatever base some earlier commit had published — the same "a green
+     * check measured the wrong artefact" defect this step exists to fix, one
+     * level up in the pipeline. It only became visible when this branch added
+     * `ext-ldap` to the base and stopped passing `--ignore-platform-reqs`.
+     *
+     * Every `PHLIX_BASE_IMAGE` must therefore name something built from THIS
+     * commit: the per-commit tag the base job now publishes, or the boot
+     * gate's locally-built `phlix-base-bootgate:<sha>`.
+     */
+    public function testNoWorkflowJobBuildsAgainstAFloatingBaseTag(): void
+    {
+        $workflow = (string) file_get_contents(
+            dirname(__DIR__, 3) . '/.github/workflows/docker.yml'
+        );
+
+        self::assertGreaterThan(
+            0,
+            // To END OF LINE, not `\S+`: a `${{ … }}` expression contains
+            // spaces, and `\S+` captured a bare `${{` — a detector that reads
+            // three characters of the thing it is judging.
+            preg_match_all('/PHLIX_BASE_IMAGE[=:]\s*(.+)$/m', $workflow, $m),
+            'the workflow must pass PHLIX_BASE_IMAGE somewhere'
+        );
+
+        foreach ($m[1] as $value) {
+            self::assertDoesNotMatchRegularExpression(
+                '/:latest\b/',
+                $value,
+                'PHLIX_BASE_IMAGE=' . $value . ' is a floating tag: a PR would build this '
+                . "commit's code against a base published by some other commit"
+            );
+            self::assertMatchesRegularExpression(
+                '/needs\.docker-base\.outputs\.base_ref|github\.sha|matrix\./',
+                $value,
+                'PHLIX_BASE_IMAGE=' . $value . ' must name a base built from THIS commit'
+            );
+        }
+
+        // ... and the per-commit tag has to actually be published on a PR, or
+        // the reference above resolves to nothing.
+        self::assertStringContainsString(
+            'TAGS="${BASE_IMAGE}:${GITHUB_SHA}"',
+            $workflow,
+            'the base job must publish an immutable per-commit tag for the dependent jobs'
+        );
+        self::assertMatchesRegularExpression(
+            '/if \[ "\$\{\{ github\.event_name \}\}" != "pull_request" \]; then\s*\n\s*TAGS="\$\{BASE_IMAGE\}:latest,/',
+            $workflow,
+            'and `:latest` must stay master/tag-only — a PR must not move the tag every '
+            . 'deployment pulls'
+        );
+        self::assertMatchesRegularExpression(
+            '/push:\s*\$\{\{\s*github\.event_name\s*!=\s*\'pull_request\'\s*\|\|/',
+            $workflow,
+            'the base job must also push on a (non-fork) pull request; '
+            . "`push: github.event_name != 'pull_request'` alone is what left PRs "
+            . 'building against a stale base'
+        );
+        // The digest check is the part that makes the reference trustworthy —
+        // a tag is mutable, a digest is not.
+        self::assertSame(
+            2,
+            substr_count($workflow, 'Verify the base image is the one built from this commit'),
+            'both dependent jobs (docker, docker-hub) must verify the base digest before building'
+        );
+    }
+
+    /**
+     * S163 review round 3, finding 2 — ASSERT 11 credited the container's
+     * death to the canary even when no FATAL was ever induced.
+     *
+     * The old guard was `[ "$FATAL_RUNNING" != "false" ] && [
+     * "$CANARY_WENT_FATAL" -eq 0 ]`, which cannot fire once the container is
+     * already dead; driven verbatim with `Running=false, canary-never-FATAL,
+     * exit 137` it printed two PASSes for something that never happened. The
+     * completeness registry cannot see a WRONG verdict — only a missing one —
+     * so the shape has to be pinned here.
+     */
+    public function testTheFatalCanaryVerdictRequiresAFatalToHaveHappened(): void
+    {
+        $directives = self::gateDirectives();
+
+        self::assertMatchesRegularExpression(
+            '/if \[ "\$CANARY_WENT_FATAL" -ne 1 \]; then/',
+            $directives,
+            'the induced FATAL is what licenses BOTH ASSERT 11 verdicts, so it must be '
+            . 'tested on its own and first'
+        );
+        self::assertDoesNotMatchRegularExpression(
+            '/\[ "\$FATAL_RUNNING" != "false" \]\s*&&\s*\[ "\$CANARY_WENT_FATAL" -eq 0 \]/',
+            $directives,
+            'that condition cannot fire for an already-dead container, so the else branch '
+            . 'credits the canary for a death it had nothing to do with'
+        );
+    }
+
+    /**
+     * S163 review round 3, finding 5 — the FATAL event listener needs its own
+     * stability verdict.
+     *
+     * Round 2 scoped the supervisord respawn count to the application to kill
+     * a false-RED that round 3 then measured and could not reproduce; the
+     * scoping made a crash-looping `exit-on-fatal` invisible (0 events counted
+     * against 6). The listener is the only mechanism that turns a FATAL into a
+     * dead container, so while it is flapping a total outage reads as `Up`
+     * again.
+     */
+    public function testTheGateWatchesTheFatalListenerAndNotOnlyTheApplication(): void
+    {
+        $directives = self::gateDirectives();
+
+        self::assertStringContainsString(
+            'FATAL_LISTENER_PROGRAM="${FATAL_LISTENER_PROGRAM:-exit-on-fatal}"',
+            $directives,
+            'the gate must know the listener program by name'
+        );
+        self::assertMatchesRegularExpression(
+            '/STAB_LISTENER_RE="[^"]*\$\{FATAL_LISTENER_PROGRAM\}[^"]*"/',
+            $directives,
+            'the listener needs its own event pattern; folding it back into STAB_EVENT_RE '
+            . 'either loses the signal or blames the application for it'
+        );
+        // Both directions: the application pattern must STAY scoped, so a
+        // listener respawn cannot redden the application's verdict either.
+        self::assertMatchesRegularExpression(
+            '/STAB_EVENT_RE="[^"]*\$\{APP_PROGRAM\}[^"]*"/',
+            $directives,
+            'the application event pattern must stay scoped to $APP_PROGRAM'
+        );
+    }
+
+    /**
+     * The boot gate must reach EXACTLY the pinned set of verdicts — no more,
+     * no fewer. See PINNED_GATE_CHECKS for why a count or a lower bound is not
+     * enough: two whole assertion blocks were deleted with everything green.
+     */
+    public function testTheBootGateReachesExactlyThePinnedSetOfChecks(): void
+    {
+        $registered = self::registeredGateChecks();
+        sort($registered);
+
+        $pinned = array_keys(self::PINNED_GATE_CHECKS);
+        sort($pinned);
+
+        $removed = array_values(array_diff($pinned, $registered));
+        $added = array_values(array_diff($registered, $pinned));
+
+        self::assertSame(
+            $pinned,
+            $registered,
+            "scripts/docker-boot-smoke.sh no longer reaches the pinned set of verdicts.\n"
+            . 'REMOVED (a protection has been deleted — every one of these exists because of a '
+            . 'blocker or a demonstrated false-pass; say why in the commit and delete it from '
+            . 'PINNED_GATE_CHECKS in the SAME diff): ' . (implode(', ', $removed) ?: '(none)') . "\n"
+            . 'ADDED (good — record it in PINNED_GATE_CHECKS with the reason it exists): '
+            . (implode(', ', $added) ?: '(none)')
+        );
+    }
+
+    /**
+     * A check that can only ever PASS is not a check. Every pinned id must
+     * have at least one `pass` site and at least one `fail` site, so a block
+     * cannot be hollowed out into an unconditional green while keeping its
+     * registry entry and its id.
+     */
+    public function testEveryPinnedCheckCanBothPassAndFail(): void
+    {
+        $directives = self::gateDirectives();
+
+        foreach (array_keys(self::PINNED_GATE_CHECKS) as $id) {
+            $quoted = preg_quote($id, '/');
+            self::assertMatchesRegularExpression(
+                '/(?:^|\s)pass\s+' . $quoted . '\s/m',
+                $directives,
+                "the boot gate has no `pass {$id}` site — " . self::PINNED_GATE_CHECKS[$id]
+            );
+            self::assertMatchesRegularExpression(
+                '/(?:^|\s)fail\s+' . $quoted . '\s/m',
+                $directives,
+                "the boot gate has no `fail {$id}` site, so that verdict can never be negative — "
+                . self::PINNED_GATE_CHECKS[$id]
+            );
+        }
+    }
+
+    /**
+     * ... and the block behind each check must still be there. An id is cheap
+     * to keep; the sampling loop, the canary program and the duration parsing
+     * are what actually produce the verdict.
+     */
+    public function testTheBootGateKeepsTheMachineryBehindEachPinnedCheck(): void
+    {
+        $directives = self::gateDirectives();
+
+        foreach (self::PINNED_GATE_MACHINERY as $id => $tokens) {
+            self::assertArrayHasKey(
+                $id,
+                self::PINNED_GATE_CHECKS,
+                'PINNED_GATE_MACHINERY names a check that is not pinned: ' . $id
+            );
+            foreach ($tokens as $token) {
+                self::assertStringContainsString(
+                    $token,
+                    $directives,
+                    "scripts/docker-boot-smoke.sh no longer contains `{$token}`, which is part of "
+                    . "the machinery behind the `{$id}` verdict — " . self::PINNED_GATE_CHECKS[$id]
+                );
+            }
+        }
+    }
+
+    /**
+     * `say "ASSERT k/N"` must be self-consistent: one N, and the numerators
+     * exactly 1..N. Deleting a block leaves a hole (1,2,3,4,6,…/11) that no
+     * id list can see, and renumbering is an edit a reviewer notices.
+     */
+    public function testTheBootGateAssertionHeadersAreSequentialAndComplete(): void
+    {
+        $directives = self::gateDirectives();
+
+        self::assertGreaterThan(
+            0,
+            preg_match_all('/^say "ASSERT (\d+)\/(\d+) /m', $directives, $m),
+            'the boot gate must announce its assertions as `ASSERT k/N`'
+        );
+
+        $denominators = array_values(array_unique($m[2]));
+        self::assertCount(
+            1,
+            $denominators,
+            'the boot gate declares more than one assertion total: ' . implode(', ', $denominators)
+        );
+
+        $total = (int) $denominators[0];
+        $numerators = array_map('intval', $m[1]);
+        sort($numerators);
+
+        self::assertSame(
+            range(1, $total),
+            $numerators,
+            'the boot gate announces ' . $total . ' assertions but its headers are ['
+            . implode(', ', $numerators) . '] — a gap means a block was deleted, '
+            . 'and a duplicate means one was copied'
+        );
+    }
+
+    /** The ids the gate's own EXPECTED_CHECKS registry carries. */
+    private static function registeredGateChecks(): array
+    {
+        self::assertSame(
+            1,
+            preg_match('/^EXPECTED_CHECKS=\'\n(.*?)\'$/ms', self::gateDirectives(), $m),
+            'the gate must declare the list of checks it is required to reach'
+        );
+
+        return array_values(array_filter(array_map('trim', explode("\n", $m[1]))));
+    }
+
+    private static function gateDirectives(): string
+    {
+        return self::directivesOnly((string) file_get_contents(
+            dirname(__DIR__, 3) . '/scripts/docker-boot-smoke.sh'
+        ));
     }
 
     /**

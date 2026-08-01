@@ -123,11 +123,15 @@ class DockerEntrypointTest extends TestCase
     {
         $baseEnv = [
             // The stub bin dir must win over the real toolchain; /usr/bin:/bin
-            // stay on PATH because the script uses `tr`.
+            // stay on PATH because the script uses `tr` and `od`.
             'PATH' => $this->tmpDir . '/bin:/usr/bin:/bin',
             'PHLIX_APP_ROOT' => $this->tmpDir . '/approot',
             'PHLIX_SUPERVISORD' => $this->tmpDir . '/bin/supervisord',
             'PHLIX_SUPERVISORD_CONF' => $this->tmpDir . '/supervisord.conf',
+            // Keep the JWT-secret persistence inside the sandbox: the real
+            // default is /var/phlix/config/jwt_secret, which a test host has no
+            // business writing to.
+            'PHLIX_JWT_SECRET_FILE' => $this->tmpDir . '/jwt_secret',
         ];
 
         $descriptors = [
@@ -445,7 +449,8 @@ class DockerEntrypointTest extends TestCase
         $script = "#!/bin/sh\n"
             . 'printf \'%s\n\' "$@" > "' . $this->tmpDir . "/php-ran\"\n"
             . '{ echo "DB_HOST=$DB_HOST"; echo "DB_PORT=$DB_PORT"; echo "DB_DATABASE=$DB_DATABASE";'
-            . ' echo "DB_USER=$DB_USER"; echo "DB_PASSWORD=$DB_PASSWORD"; } > "'
+            . ' echo "DB_USER=$DB_USER"; echo "DB_PASSWORD=$DB_PASSWORD";'
+            . ' echo "JWT_SECRET=$JWT_SECRET"; } > "'
             . $this->tmpDir . "/php-env\"\n"
             . "exit 0\n";
         file_put_contents($this->tmpDir . '/bin/php', $script);
@@ -511,6 +516,146 @@ class DockerEntrypointTest extends TestCase
         self::assertSame(0, $run['code']);
         $this->assertMigrationScriptWasInvoked();
         self::assertTrue($this->supervisordStarted());
+    }
+
+    // ------------------------------------------------------------------
+    // S163 — JWT_SECRET. `start.php:57-62` calls
+    // AuthServicesProvider::assertSecretConfigured() BEFORE any Worker exists
+    // and exit(1)s on an empty key, while `grep -rn JWT_SECRET
+    // docker-compose.yml docker/examples k8s/` returns NOTHING: every
+    // documented deployment sets PHLIX_SECRET_KEY, a name no PHP in this repo
+    // reads. So a correctly-configured container would have the daemon exit 1
+    // on every boot and supervisord BACKOFF then FATAL it. Exactly the
+    // PHLIX_DATABASE_* trap of S159 finding 5, one env var over.
+    // ------------------------------------------------------------------
+
+    public function testAnExplicitJwtSecretIsPassedThroughUnchanged(): void
+    {
+        $this->stubPhpRecordingEnv();
+        $this->stubSupervisord();
+
+        $run = $this->runEntrypoint([
+            'PHLIX_DATABASE_HOST' => 'mysql',
+            'JWT_SECRET' => 'operator-configured-secret',
+        ]);
+
+        self::assertSame(0, $run['code']);
+        self::assertStringContainsString(
+            "JWT_SECRET=operator-configured-secret\n",
+            (string) file_get_contents($this->tmpDir . '/php-env')
+        );
+        // An explicit secret must not be persisted over a mounted one.
+        self::assertFileDoesNotExist($this->tmpDir . '/jwt_secret');
+    }
+
+    public function testPhlixSecretKeyIsMappedOntoTheNameTheAppActuallyReads(): void
+    {
+        $this->stubPhpRecordingEnv();
+        $this->stubSupervisord();
+
+        $run = $this->runEntrypoint([
+            'PHLIX_DATABASE_HOST' => 'mysql',
+            'PHLIX_SECRET_KEY' => 'from-the-compose-file',
+        ]);
+
+        self::assertSame(0, $run['code']);
+        self::assertStringContainsString(
+            "JWT_SECRET=from-the-compose-file\n",
+            (string) file_get_contents($this->tmpDir . '/php-env')
+        );
+    }
+
+    public function testJwtSecretWinsOverThePhlixSecretKeyAlias(): void
+    {
+        $this->stubPhpRecordingEnv();
+        $this->stubSupervisord();
+
+        $run = $this->runEntrypoint([
+            'PHLIX_DATABASE_HOST' => 'mysql',
+            'PHLIX_SECRET_KEY' => 'stale-alias',
+            'JWT_SECRET' => 'real-secret',
+        ]);
+
+        self::assertSame(0, $run['code']);
+        self::assertStringContainsString(
+            "JWT_SECRET=real-secret\n",
+            (string) file_get_contents($this->tmpDir . '/php-env')
+        );
+    }
+
+    /**
+     * A bare `docker run` with no secret configured must still produce a
+     * working server — and the generated key must be PERSISTED, because one
+     * that changed on every restart would silently invalidate every session and
+     * every signed media URL.
+     */
+    public function testASecretIsGeneratedAndPersistedWhenNoneIsConfigured(): void
+    {
+        $this->stubPhpRecordingEnv();
+        $this->stubSupervisord();
+
+        $run = $this->runEntrypoint(['PHLIX_DATABASE_HOST' => 'mysql']);
+
+        self::assertSame(0, $run['code']);
+        self::assertTrue($this->supervisordStarted());
+        self::assertFileExists($this->tmpDir . '/jwt_secret');
+
+        $persisted = (string) file_get_contents($this->tmpDir . '/jwt_secret');
+        self::assertMatchesRegularExpression('/^[0-9a-f]{64}$/', $persisted);
+        self::assertStringContainsString(
+            "JWT_SECRET={$persisted}\n",
+            (string) file_get_contents($this->tmpDir . '/php-env'),
+            'the generated secret must reach the process supervisord starts'
+        );
+        self::assertStringContainsString('persisted it to', $run['stdout']);
+    }
+
+    public function testAPersistedSecretIsReusedOnTheNextBoot(): void
+    {
+        $this->stubPhpRecordingEnv();
+        $this->stubSupervisord();
+
+        $first = $this->runEntrypoint(['PHLIX_DATABASE_HOST' => 'mysql']);
+        self::assertSame(0, $first['code']);
+        $generated = (string) file_get_contents($this->tmpDir . '/jwt_secret');
+
+        $second = $this->runEntrypoint(['PHLIX_DATABASE_HOST' => 'mysql']);
+        self::assertSame(0, $second['code']);
+
+        self::assertSame(
+            $generated,
+            (string) file_get_contents($this->tmpDir . '/jwt_secret'),
+            'a restart must not mint a new signing key'
+        );
+        self::assertStringContainsString(
+            "JWT_SECRET={$generated}\n",
+            (string) file_get_contents($this->tmpDir . '/php-env')
+        );
+        self::assertStringContainsString('persisted at', $second['stdout']);
+    }
+
+    /**
+     * An unwritable (or unmounted) config volume must degrade LOUDLY, not
+     * silently — and must still start the server.
+     */
+    public function testAnUnwritableSecretPathWarnsButStillBoots(): void
+    {
+        $this->stubPhpRecordingEnv();
+        $this->stubSupervisord();
+
+        $run = $this->runEntrypoint([
+            'PHLIX_DATABASE_HOST' => 'mysql',
+            'PHLIX_JWT_SECRET_FILE' => $this->tmpDir . '/no-such-dir/jwt_secret',
+        ]);
+
+        self::assertSame(0, $run['code']);
+        self::assertTrue($this->supervisordStarted());
+        self::assertStringContainsString('PHLIX-JWT-SECRET-EPHEMERAL', $run['stderr']);
+        self::assertMatchesRegularExpression(
+            '/JWT_SECRET=[0-9a-f]{64}\n/',
+            (string) file_get_contents($this->tmpDir . '/php-env'),
+            'the app must still receive a usable key'
+        );
     }
 
     // ------------------------------------------------------------------
@@ -583,6 +728,175 @@ class DockerEntrypointTest extends TestCase
             'SUPERVISORD_CONF="${PHLIX_SUPERVISORD_CONF:-' . $conf[1] . '}"',
             $script,
             'the entrypoint default SUPERVISORD_CONF must match where ' . $relative . ' puts it'
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // S163 — the serving model, pinned.
+    //
+    // These are TEXT assertions and are deliberately the WEAK half of the
+    // guard: they cannot see a wrong binary name, a missing directory, a
+    // missing extension or a FATAL program. The real gate is
+    // `scripts/docker-boot-smoke.sh` / the `docker-boot-gate` CI job, which
+    // BOOTS each image. These exist only to make an accidental reintroduction
+    // fail in the fast suite instead of ten minutes into an image build.
+    // ------------------------------------------------------------------
+
+    /**
+     * Strip comment lines so an assertion cannot be satisfied — or defeated —
+     * by prose. These files document at length WHY nginx/php-fpm/
+     * `--ignore-platform-reqs`/`public/index.php` are gone, and a naive
+     * `assertStringNotContainsString` against the raw file matches that very
+     * explanation.
+     *
+     * @param string $contents      The file body.
+     * @param string $commentPrefix `#` for a Dockerfile, `;` for an ini/conf.
+     *
+     * @return string Only the directive lines.
+     */
+    private static function directivesOnly(string $contents, string $commentPrefix = '#'): string
+    {
+        $kept = [];
+        foreach (preg_split('/\R/', $contents) ?: [] as $line) {
+            if (!str_starts_with(ltrim($line), $commentPrefix)) {
+                $kept[] = $line;
+            }
+        }
+
+        return implode("\n", $kept);
+    }
+
+    public function testSupervisordStartsTheDaemonAndNothingElse(): void
+    {
+        $conf = self::directivesOnly(
+            (string) file_get_contents(dirname(__DIR__, 3) . '/docker/supervisord.conf'),
+            ';'
+        );
+
+        self::assertMatchesRegularExpression(
+            '/^command=php\s+\S*start\.php\s+start\s*$/m',
+            $conf,
+            'supervisord must run the Workerman daemon (start.php), not the CGI front controller'
+        );
+        self::assertStringNotContainsString(
+            'public/index.php',
+            $conf,
+            'public/index.php is the one-shot CGI front controller — it has no `start` verb'
+        );
+        self::assertDoesNotMatchRegularExpression(
+            '/^\[program:(nginx|php-fpm)\]/m',
+            $conf,
+            'the image runs the daemon only; nginx/php-fpm are not part of the serving path'
+        );
+        // supervisorctl was unusable — the one command an operator reaches for
+        // answered "no such file" while the container reported Up.
+        self::assertStringContainsString('[unix_http_server]', $conf);
+        self::assertStringContainsString('[supervisorctl]', $conf);
+        self::assertStringContainsString('[rpcinterface:supervisor]', $conf);
+    }
+
+    public function testTheImageNginxConfigIsGone(): void
+    {
+        self::assertFileDoesNotExist(
+            dirname(__DIR__, 3) . '/docker/nginx.conf',
+            'docker/nginx.conf was a second serving architecture that existed only in the images'
+        );
+    }
+
+    /**
+     * Docker reads `.dockerignore` ONLY from the build context root, and every
+     * build uses `context: .`. At `docker/.dockerignore` it was inert, which
+     * defeated `--no-dev` and shipped `.logs/` (api_key/token/password strings)
+     * inside the published image.
+     */
+    public function testTheDockerignoreLivesAtTheContextRoot(): void
+    {
+        $root = dirname(__DIR__, 3);
+
+        self::assertFileExists($root . '/.dockerignore');
+        self::assertFileDoesNotExist($root . '/docker/.dockerignore');
+
+        $ignore = (string) file_get_contents($root . '/.dockerignore');
+        self::assertStringContainsString('vendor/', $ignore);
+        // A bare `*.log` matches the context ROOT only, so it never covered
+        // `.logs/app-*.log`.
+        self::assertStringContainsString('.logs/', $ignore);
+    }
+
+    /**
+     * @dataProvider dockerfileProvider
+     */
+    public function testEveryDockerfileExposesThePortsTheDaemonBinds(string $relative): void
+    {
+        $contents = (string) file_get_contents(dirname(__DIR__, 3) . '/' . $relative);
+
+        self::assertMatchesRegularExpression(
+            '/^EXPOSE\s+8096\s+8097\s*$/m',
+            $contents,
+            $relative . ' must expose 8096 (HTTP) and 8097 (SyncPlay WS) — the ports start.php binds'
+        );
+        self::assertDoesNotMatchRegularExpression(
+            '/^EXPOSE.*\b(80|443|9000)\b/m',
+            $contents,
+            $relative . ' must not expose ports nothing listens on'
+        );
+    }
+
+    /**
+     * The absence of a HEALTHCHECK is why a container that 502'd every request
+     * for 22 minutes reported `Up 22 minutes`.
+     *
+     * @dataProvider dockerfileProvider
+     */
+    public function testEveryDockerfileDeclaresAHealthcheck(string $relative): void
+    {
+        $contents = (string) file_get_contents(dirname(__DIR__, 3) . '/' . $relative);
+
+        self::assertMatchesRegularExpression(
+            '/^HEALTHCHECK\s/m',
+            $contents,
+            $relative . ' must declare a HEALTHCHECK'
+        );
+        self::assertStringContainsString(
+            'http://127.0.0.1:8096/health',
+            $contents,
+            $relative . "'s HEALTHCHECK must probe the route the application owns"
+        );
+    }
+
+    /**
+     * @dataProvider dockerfileProvider
+     */
+    public function testNoDockerfileWiresNginxOrPhpFpmIntoTheImage(string $relative): void
+    {
+        $contents = self::directivesOnly(
+            (string) file_get_contents(dirname(__DIR__, 3) . '/' . $relative)
+        );
+
+        self::assertStringNotContainsString('nginx.conf', $contents, $relative);
+        self::assertDoesNotMatchRegularExpression(
+            '/^\s+(nginx|php-fpm|php8\.\d-fpm)\s*\\\\?$/m',
+            $contents,
+            $relative . ' must not install nginx or php-fpm'
+        );
+    }
+
+    /**
+     * `--ignore-platform-reqs` is what let ext-ldap — a HARD composer.json
+     * requirement — be absent from every image while the build stayed green.
+     *
+     * @dataProvider dockerfileProvider
+     */
+    public function testNoDockerfileMasksMissingPlatformRequirements(string $relative): void
+    {
+        $contents = self::directivesOnly(
+            (string) file_get_contents(dirname(__DIR__, 3) . '/' . $relative)
+        );
+
+        self::assertStringNotContainsString(
+            '--ignore-platform-reqs',
+            $contents,
+            $relative . ' must let a missing PHP extension fail the build'
         );
     }
 }

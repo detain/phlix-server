@@ -137,6 +137,68 @@ jobs:
             PHLIX_VERSION=${{ github.ref_name }}
             PHLIX_BASE_IMAGE=${{ env.BASE_IMAGE }}:latest
 
+  # --------------------------------------------------------------------------
+  # S163 — the BOOT gate.
+  #
+  # Every other job in this file is `docker/build-push-action` and nothing else.
+  # `docker build` NEVER executes CMD, ENTRYPOINT or HEALTHCHECK, so for the
+  # whole life of these images the runtime path was untested — and it was in
+  # fact dead: supervisord started `public/index.php` (the one-shot CGI front
+  # controller) instead of the `start.php` Workerman daemon, so HTTP :8096,
+  # SyncPlay WS :8097, the hub heartbeat, the relay tunnel, DLNA, metrics flush
+  # and every scheduled worker never started in any container. 14 green checks
+  # said nothing, and with no HEALTHCHECK Docker reported `Up` throughout.
+  #
+  # This job BOOTS each image against a throwaway MySQL and asserts it serves.
+  # It is deliberately NOT `needs: docker`: it builds its own images (including
+  # the shared base, locally) so a runtime image is never validated against a
+  # stale registry base — the pipeline is two-stage and a base change
+  # invalidates all three runtime images.
+  #
+  # Runs on pull_request too (the other jobs only push there), because the whole
+  # point is to catch a regression BEFORE it is published.
+  # --------------------------------------------------------------------------
+  docker-boot-gate:
+    name: Boot gate (${{ matrix.name }})
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: alpine
+            dockerfile: docker/Dockerfile
+            tag: phlix-boot:alpine
+          - name: intel
+            dockerfile: docker/Dockerfile.intel
+            tag: phlix-boot:intel
+          - name: nvidia
+            dockerfile: docker/Dockerfile.nvidia
+            tag: phlix-boot:nvidia
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      # The nvidia/cuda runtime base is multi-GB; the hosted runner needs the
+      # room. Cheap no-op for the other two.
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /usr/local/share/boost "$AGENT_TOOLSDIRECTORY" || true
+          df -h /
+
+      # No buildx/registry cache on purpose: this job must exercise the
+      # Dockerfiles exactly as an operator would, into the LOCAL daemon, so the
+      # image it boots is the image it built.
+      - name: Boot and smoke-test the image
+        run: |
+          chmod +x scripts/docker-boot-smoke.sh
+          ./scripts/docker-boot-smoke.sh "${{ matrix.dockerfile }}" "${{ matrix.tag }}"
+
   # TODO: hub Dockerfile lives in detain/phlix-hub; ensure the workflow picks it up
   # via the hub repo's release event. For now, this job clones the hub repo and
   # builds from its Dockerfile so the structure exists. If detain/phlix-hub does

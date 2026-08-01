@@ -23,8 +23,13 @@ services:
       context: .
       dockerfile: docker/Dockerfile
     container_name: phlix-server
+    # S163: the container runs the Workerman daemon directly (no nginx, no
+    # php-fpm), so the ports to publish are the ones start.php binds — 8096
+    # (HTTP: REST + SPA + static + per-request WS upgrade) and 8097 (SyncPlay
+    # WebSocket). Nothing has ever listened on 80 or 443 inside the image.
     ports:
-      - "8080:80"
+      - "8080:8096"
+      - "8097:8097"
     environment:
       - PHLIX_DATABASE_HOST=mysql
       - PHLIX_DATABASE_PORT=3306

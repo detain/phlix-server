@@ -28,8 +28,10 @@ services:
   phlix-server:
     image: ghcr.io/detain/phlix-server:latest
     container_name: phlix-server
+    # S163: 8096 = HTTP (REST + SPA + static + WS upgrade), 8097 = SyncPlay WS.
     ports:
-      - "32400:80"
+      - "32400:8096"
+      - "8097:8097"
     environment:
       - PHLIX_DATABASE_HOST=mysql-server
       - PHLIX_DATABASE_PORT=3306

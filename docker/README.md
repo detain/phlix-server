@@ -4,9 +4,70 @@ This directory contains the three Dockerfile variants Phlix ships:
 
 | Variant | Base image | Purpose | PHP path layout |
 |---|---|---|---|
-| `Dockerfile` | `php:8.3-fpm-alpine` | Default, software transcoding only | `/usr/local/etc/php/conf.d/zz-phlix.ini` (Alpine canonical) |
-| `Dockerfile.nvidia` | `nvidia/cuda:12.4.0-runtime-ubuntu22.04` | NVIDIA NVENC/NVDEC HW accel | `/etc/php/8.3/fpm/conf.d/99-phlix.ini` + symlink to Alpine path |
-| `Dockerfile.intel` | `ubuntu:22.04` | Intel QuickSync / VAAPI HW accel | `/etc/php/8.3/fpm/conf.d/99-phlix.ini` + symlink to Alpine path |
+| `Dockerfile` | `ghcr.io/detain/phlix-base` (`php:8.3-fpm-alpine`) | Default, software transcoding only | `/usr/local/etc/php/conf.d/zz-phlix.ini` (Alpine canonical) |
+| `Dockerfile.nvidia` | `nvidia/cuda:12.9.2-runtime-ubuntu24.04` | NVIDIA NVENC/NVDEC HW accel | `/etc/php/8.3/cli/conf.d/99-phlix.ini` + symlink to Alpine path |
+| `Dockerfile.intel` | `ubuntu:24.04` | Intel QuickSync / VAAPI HW accel | `/etc/php/8.3/cli/conf.d/99-phlix.ini` + symlink to Alpine path |
+
+All three land on **PHP 8.3**, matching CI. Production runs **8.5** — that gap
+is deliberate and recorded, not accidental; no gate currently runs the engine
+production runs.
+
+## Serving model — the Workerman daemon, and nothing else
+
+A container runs exactly one program: `php /var/www/html/start.php start`, under
+supervisord. **There is no nginx and no php-fpm in the image.** That mirrors
+production, where `scripts/install.sh` points HAProxy straight at
+`127.0.0.1:${HTTP_PORT}` ("WebSocket upgrade is detected per-request; both REST
+and WS traffic share the single HTTP port on the Workerman side"), and Workerman
+serves the `/app` SPA shell and all static assets itself
+(`HttpHandler::serveStatic()`). TLS and host routing belong to whatever fronts
+the container.
+
+Ports — exactly what `start.php` binds:
+
+| Port | Worker | Traffic |
+|---|---|---|
+| `8096` | `phlix-server-http` (count 14) | REST, the `/app` SPA, static assets, per-request WS upgrade. **This is the port to front.** |
+| `8097` | `phlix-server-ws` (count 1) | The SyncPlay WebSocket worker. |
+
+Nothing listens on 80 or 443. If you are migrating from an older compose file,
+change `"<host>:80"` to `"<host>:8096"`.
+
+### Verifying an image actually runs
+
+`docker build` never executes `CMD`, `ENTRYPOINT` or `HEALTHCHECK`, so a green
+build proves nothing about the runtime path — for the whole life of these images
+supervisord started `public/index.php` (the one-shot CGI front controller)
+instead of `start.php`, and no container had ever served a request. Boot it:
+
+```bash
+scripts/docker-boot-smoke.sh docker/Dockerfile        phlix-boot:alpine
+scripts/docker-boot-smoke.sh docker/Dockerfile.intel  phlix-boot:intel
+scripts/docker-boot-smoke.sh docker/Dockerfile.nvidia phlix-boot:nvidia
+```
+
+That script builds the image (rebuilding the shared base first, because the
+pipeline is two-stage), runs it against a throwaway MySQL on a private network,
+and asserts `/health` 200s, every supervisord program is `RUNNING`, `start.php`
+is the running process, `:8097` is listening, the SPA and its immutable assets
+are served, the container reaches `healthy`, and `composer check-platform-reqs`
+is clean. CI runs the same script in the `docker-boot-gate` job.
+
+### Configuration the container needs
+
+`docker/docker-entrypoint.sh` maps the names every documented deployment sets
+onto the names the application actually reads:
+
+| You set | The app reads |
+|---|---|
+| `PHLIX_DATABASE_HOST/PORT/NAME/USER/PASSWORD` | `DB_HOST` / `DB_PORT` / `DB_DATABASE` / `DB_USER` / `DB_PASSWORD` |
+| `PHLIX_SECRET_KEY` | `JWT_SECRET` |
+
+`start.php` refuses to boot without a JWT signing key. If neither `JWT_SECRET`
+nor `PHLIX_SECRET_KEY` is set, the entrypoint generates one and persists it to
+`/var/phlix/config/jwt_secret` so it survives restarts — **mount
+`/var/phlix/config`**, or every restart invalidates all sessions and signed
+media URLs (the entrypoint says so loudly if it cannot write the file).
 
 ## Base image (shared)
 
@@ -21,7 +82,7 @@ ARG PHLIX_BASE_IMAGE=ghcr.io/detain/phlix-base:latest
 FROM ${PHLIX_BASE_IMAGE}
 ```
 
-**Why:** editing the application Dockerfile (nginx/php config, composer steps,
+**Why:** editing the application Dockerfile (php config, composer steps,
 source copy) no longer recompiles Swoole/UV — Docker pulls the prebuilt base
 instead. The same base is reused by both **phlix-server** and **phlix-hub**, so
 the extensions are compiled once instead of once per image.
@@ -49,13 +110,16 @@ The default image inherits from Docker's official `php:8.3-fpm-alpine`, which
 places PHP config under `/usr/local/etc/php/conf.d/` — the canonical layout
 documented in the upstream `php` image.
 
-The NVIDIA variant must inherit from `nvidia/cuda:*-ubuntu22.04` because the
+The NVIDIA variant must inherit from `nvidia/cuda:*-ubuntu24.04` because the
 CUDA runtime is only distributed for glibc-based distributions (Ubuntu/Debian).
-The Intel variant must inherit from `ubuntu:22.04` because the
+The Intel variant must inherit from `ubuntu:24.04` because the
 `intel-media-va-driver-non-free` package is only available on Debian/Ubuntu.
 
 Neither HW-accel base image can use the upstream `php` image as a base, so
-they install PHP via the Debian package layout (`/etc/php/8.3/fpm/`).
+they install PHP via the Debian package layout (`/etc/php/8.3/cli/` — the CLI
+scan dir, because the daemon is a CLI process; it used to be written to the
+`fpm/` dir, which the application never reads, so every setting in
+`docker/php.ini` was inert).
 
 To keep operator-facing paths consistent across all three variants, the HW-accel
 images symlink the Alpine-canonical path to their Debian-layout file:

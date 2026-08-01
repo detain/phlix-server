@@ -51,6 +51,12 @@ RUN apk add --no-cache \
     c-ares-dev \
     liburing-dev \
     libssh2-dev \
+    # ext-ldap is a HARD requirement in composer.json ("ext-ldap": "*", used by
+    # directorytree/ldaprecord for the LDAP auth provider). It was absent from
+    # every image and masked by `composer install --ignore-platform-reqs`, so
+    # `composer check-platform-reqs` failed inside the built image and any LDAP
+    # code path would have fatalled at runtime. (S163)
+    openldap-dev \
     && docker-php-ext-install \
         pdo \
         pdo_mysql \
@@ -61,12 +67,46 @@ RUN apk add --no-cache \
         posix \
         bcmath \
         sockets \
+        ldap \
     && rm -rf /var/cache/apk/* /tmp/pear
+
+# ----------------------------------------------------------------------------
+# io_uring is OFF in the container by default. (S163)
+#
+# Docker's default seccomp profile BLOCKS io_uring_setup / io_uring_enter /
+# io_uring_register (removed from the allowlist by moby for security), so a
+# Swoole built `--enable-iouring --enable-uring-socket` dies the moment a worker
+# touches the ring:
+#
+#   ERROR  Iouring::Iouring(): Failed to initialize io_uring instance,
+#          Error: Operation not permitted[1]
+#   worker[phlix-server-http:102467] exit with status 256
+#
+# …repeated for every worker in a tight refork loop, so :8096 never came up.
+# Proven by A/B on the same image: with `--security-opt seccomp=unconfined`
+# `/health` returns 200 and the log contains ZERO `Iouring` lines; with the
+# default profile it never serves. Shipping an image that needs seccomp turned
+# OFF is not an option — that disables filtering for the whole container.
+#
+# The HOST build is deliberately NOT changed: `scripts/install.sh`
+# (phlix_build_swoole) keeps `--enable-iouring --enable-uring-socket`, and
+# `systemd/phlix-server.service` carries `LimitMEMLOCK=infinity` precisely so
+# io_uring initialises there. This ARG is the one place the two diverge, and it
+# is a runtime-sandbox difference, not a drift.
+#
+# Build with `--build-arg SWOOLE_IOURING=1` if your container runtime permits
+# the io_uring syscalls (a custom seccomp profile, or `seccomp=unconfined`).
+# ----------------------------------------------------------------------------
+ARG SWOOLE_IOURING=0
 
 # Build and install swoole
 RUN git clone --depth=1 https://github.com/swoole/swoole-src.git /tmp/swoole \
     && cd /tmp/swoole \
     && phpize \
+    && IOURING_FLAGS="" \
+    && if [ "$SWOOLE_IOURING" = "1" ]; then \
+           IOURING_FLAGS="--enable-iouring --enable-uring-socket"; \
+       fi \
     && ./configure \
         --enable-swoole \
         --enable-sockets \
@@ -80,8 +120,7 @@ RUN git clone --depth=1 https://github.com/swoole/swoole-src.git /tmp/swoole \
         --enable-swoole-coro-time \
         --enable-zstd \
         --enable-brotli \
-        --enable-iouring \
-        --enable-uring-socket \
+        $IOURING_FLAGS \
         --with-swoole-ssh2 \
         --enable-swoole-ftp \
     && make -j$(nproc) \

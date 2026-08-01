@@ -56,7 +56,9 @@ services:
       - "traefik.enable=true"
       - "traefik.http.routers.phlix-server.rule=Host(`server.example.com`)"
       - "traefik.http.routers.phlix-server.tls=true"
-      - "traefik.http.services.phlix-server.loadbalancer.server.port=80"
+      # S163: the container runs the Workerman daemon directly (no nginx, no
+      # php-fpm), so Traefik must target 8096 — the port start.php binds.
+      - "traefik.http.services.phlix-server.loadbalancer.server.port=8096"
     environment:
       - PHLIX_DATABASE_HOST=mysql-server
       - PHLIX_DATABASE_PORT=3306

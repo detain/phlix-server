@@ -120,6 +120,98 @@ class DockerEntrypointTest extends TestCase
         'fatal-exit-code-nonzero' => ['CANARY_WENT_FATAL', '.State.ExitCode'],
     ];
 
+    /**
+     * How many `pass <id>` and `fail <id>` sites each pinned check has.
+     *
+     * S163 review round 4, finding 1. `testEveryPinnedCheckCanBothPassAndFail`
+     * used to ask only whether a `fail <id>` token appeared ANYWHERE in the
+     * script. Thirteen of the twenty ids have 2-4 `fail` sites — the surplus
+     * ones are gate-setup and error paths (`could not read the process table`,
+     * `could not induce a FATAL … GATE SETUP failure`, `SKIPPED: KEEP=1`) — so
+     * those surplus sites SATISFIED the detector on behalf of the verdict that
+     * matters. Reproduced on the real file: downgrading
+     * `fail migrations "the entrypoint printed PHLIX-MIGRATION-FAILURE …"` (1
+     * match) to a `pass` left the whole suite at OK (93 tests, 525 assertions)
+     * — and that one line IS round 1's F2, the demonstrated false-pass where
+     * the gate went 7/7 against a container whose entire migration chain had
+     * failed.
+     *
+     * Scoping the detector to the check's own `say "ASSERT k/N"` block is
+     * necessary but NOT sufficient, and that was measured rather than assumed:
+     * a census of the shipped gate shows every one of the twenty ids already
+     * has all of its sites inside a single block, `migrations` included (all
+     * four of its `fail`s live in ASSERT 2). So the block scoping below is
+     * enforced — a verdict may not drift out of the block that computes it —
+     * and the COUNTS are what stop one site standing in for another.
+     *
+     * The price is the same one PINNED_GATE_CHECKS charges: adding or removing
+     * a branch inside a check is a real, reviewable edit in two files. That is
+     * the point, not a defect.
+     *
+     * @var array<string, array{pass: int, fail: int}>
+     */
+    private const PINNED_GATE_VERDICT_SITES = [
+        'health' => ['pass' => 1, 'fail' => 1],
+        'migrations' => ['pass' => 1, 'fail' => 4],
+        'schema' => ['pass' => 1, 'fail' => 3],
+        'supervisor-states' => ['pass' => 1, 'fail' => 4],
+        'stability-program' => ['pass' => 1, 'fail' => 1],
+        'stability-workers' => ['pass' => 1, 'fail' => 3],
+        'stability-listener' => ['pass' => 1, 'fail' => 2],
+        'daemon-process' => ['pass' => 1, 'fail' => 2],
+        'no-cgi' => ['pass' => 1, 'fail' => 2],
+        'ws-in-container' => ['pass' => 1, 'fail' => 1],
+        'ws-published' => ['pass' => 2, 'fail' => 4],
+        'spa-shell' => ['pass' => 1, 'fail' => 1],
+        'spa-asset' => ['pass' => 1, 'fail' => 2],
+        'spa-immutable' => ['pass' => 1, 'fail' => 2],
+        'healthcheck-declared' => ['pass' => 1, 'fail' => 1],
+        'healthcheck-healthy' => ['pass' => 1, 'fail' => 2],
+        'healthcheck-start-period' => ['pass' => 1, 'fail' => 2],
+        'platform-reqs' => ['pass' => 1, 'fail' => 1],
+        'fatal-kills-container' => ['pass' => 1, 'fail' => 4],
+        'fatal-exit-code-nonzero' => ['pass' => 1, 'fail' => 4],
+    ];
+
+    /**
+     * The THRESHOLD VALUES a verdict is computed against, pinned as the literal
+     * assignment in `scripts/docker-boot-smoke.sh`.
+     *
+     * S163 review round 4, finding 2. PINNED_GATE_MACHINERY pins identifier
+     * NAMES, so `MAX_START_PERIOD` and `STABILITY_WINDOW` had to keep existing
+     * but could hold any number at all. Reproduced on the real file, one match
+     * each: `${MAX_START_PERIOD:-120}` → `:-99999` and `${STABILITY_WINDOW:-90}`
+     * → `:-1` together left the suite at OK (93 tests, 525 assertions). At
+     * 99999 the gate's own `[ "$HC_START_S" -gt "$MAX_START_PERIOD" ]` can
+     * never be true, so `s163r3:sp180` — round 2 finding 1's demonstrated
+     * false-pass — would PASS; at a 1s window round 1's F1 crash-loop is
+     * unobservable.
+     *
+     * Deliberately NOT every number in the script. The rule is: a tunable is
+     * pinned when RELAXING it makes a check unable to go negative, i.e. when
+     * one digit re-admits a demonstrated false-pass. `BOOT_TIMEOUT` and
+     * `SUP_EXEC_RETRIES` are excluded on that rule — they bound how long the
+     * gate waits and how often it retries, not what it concludes, and
+     * shortening them produces a loud RED rather than a quiet green.
+     *
+     * @var array<string, string>
+     */
+    private const PINNED_GATE_THRESHOLDS = [
+        // Round 1 F1: the crash-loop window and its sampling interval. A short
+        // window, or an interval as long as the window, collapses the loop to a
+        // single sample — which a crash-looping container passes 5 times in 6.
+        'STABILITY_WINDOW' => 'STABILITY_WINDOW="${STABILITY_WINDOW:-90}"',
+        'STABILITY_SAMPLE' => 'STABILITY_SAMPLE="${STABILITY_SAMPLE:-15}"',
+        // Round 2 finding 1: a start period longer than a gate run makes
+        // `healthy` unfalsifiable.
+        'MAX_START_PERIOD' => 'MAX_START_PERIOD="${MAX_START_PERIOD:-120}"',
+        // Round 2 finding 10: the two budgets behind `stability-workers`.
+        // Pinning one and leaving the other free would be a detector narrower
+        // than the rule it states — the family of defect this round is closing.
+        'WORKER_DROP_TOLERANCE' => 'WORKER_DROP_TOLERANCE="${WORKER_DROP_TOLERANCE:-2}"',
+        'WORKER_NAME_CHURN_BUDGET' => 'WORKER_NAME_CHURN_BUDGET="${WORKER_NAME_CHURN_BUDGET:-1}"',
+    ];
+
     private string $tmpDir = '';
 
     /** Absolute path to the entrypoint under test. */
@@ -1900,27 +1992,95 @@ class DockerEntrypointTest extends TestCase
     }
 
     /**
-     * A check that can only ever PASS is not a check. Every pinned id must
-     * have at least one `pass` site and at least one `fail` site, so a block
-     * cannot be hollowed out into an unconditional green while keeping its
-     * registry entry and its id.
+     * A check that can only ever PASS is not a check — and, per round 4's
+     * finding 1, neither is one whose only remaining `fail` sites are
+     * gate-setup error paths.
+     *
+     * Every pinned id must therefore have EXACTLY the `pass`/`fail` sites
+     * PINNED_GATE_VERDICT_SITES records for it, and all of them inside the one
+     * `say "ASSERT k/N"` block that computes the verdict. Converting the
+     * primary `fail` into a `pass` moves a count; moving a verdict out of its
+     * block splits the ownership. Either reddens.
      */
     public function testEveryPinnedCheckCanBothPassAndFail(): void
     {
+        $sites = self::gateVerdictSites();
+
+        self::assertSame(
+            array_keys(self::PINNED_GATE_CHECKS),
+            array_keys(self::PINNED_GATE_VERDICT_SITES),
+            'PINNED_GATE_VERDICT_SITES must cover exactly the pinned checks, in the same order'
+        );
+
+        foreach (self::PINNED_GATE_VERDICT_SITES as $id => $expected) {
+            self::assertTrue(
+                $expected['pass'] >= 1 && $expected['fail'] >= 1,
+                "PINNED_GATE_VERDICT_SITES[{$id}] pins pass={$expected['pass']} fail={$expected['fail']}"
+                . ' — a check that can never be negative is not a check, and one that can never be '
+                . 'positive reddens every good image. ' . self::PINNED_GATE_CHECKS[$id]
+            );
+
+            $blocks = $sites[$id] ?? [];
+            self::assertCount(
+                1,
+                $blocks,
+                "the `{$id}` verdict is emitted from " . (count($blocks) ?: 'no')
+                . ' assertion block(s) [' . (implode(', ', array_keys($blocks)) ?: 'none')
+                . '] — it must be reached from exactly the one block that computes it, or a '
+                . 'gate-setup path elsewhere in the script can stand in for the real verdict. '
+                . self::PINNED_GATE_CHECKS[$id]
+            );
+
+            $block = (string) array_key_first($blocks);
+            self::assertSame(
+                $expected,
+                $blocks[$block],
+                "scripts/docker-boot-smoke.sh reaches `{$id}` from {$block} with pass="
+                . $blocks[$block]['pass'] . ' fail=' . $blocks[$block]['fail'] . ', not the pinned pass='
+                . $expected['pass'] . ' fail=' . $expected['fail'] . ".\n"
+                . 'A `fail` that became a `pass` is a protection being switched off — the surplus '
+                . "`fail {$id}` sites are gate-setup/error paths and MUST NOT cover for it. Adding "
+                . 'or removing a branch on purpose is fine: say why, and update '
+                . "PINNED_GATE_VERDICT_SITES in the SAME diff. " . self::PINNED_GATE_CHECKS[$id]
+            );
+        }
+    }
+
+    /**
+     * S163 review round 4, finding 2 — pinning the NAME of a threshold leaves
+     * its VALUE free, and a one-digit edit neuters the check that reads it.
+     *
+     * Both halves are guarded: the literal assignment in the gate, and the
+     * workflow step that invokes it (every tunable is `${VAR:-default}`, so an
+     * `env:` line in `.github/workflows/docker.yml` widens the threshold
+     * without touching the script at all).
+     */
+    public function testTheBootGateKeepsItsLoadBearingThresholdValues(): void
+    {
         $directives = self::gateDirectives();
 
-        foreach (array_keys(self::PINNED_GATE_CHECKS) as $id) {
-            $quoted = preg_quote($id, '/');
-            self::assertMatchesRegularExpression(
-                '/(?:^|\s)pass\s+' . $quoted . '\s/m',
+        foreach (self::PINNED_GATE_THRESHOLDS as $assignment) {
+            self::assertStringContainsString(
+                $assignment,
                 $directives,
-                "the boot gate has no `pass {$id}` site — " . self::PINNED_GATE_CHECKS[$id]
+                "scripts/docker-boot-smoke.sh no longer sets `{$assignment}`. This is a THRESHOLD a "
+                . 'verdict is compared against, not a preference: relaxing it makes the check unable '
+                . 'to go negative, which is how a demonstrated false-pass gets back in with every '
+                . 'other detector green. Changing it is allowed — say why, and update '
+                . 'PINNED_GATE_THRESHOLDS in the SAME diff.'
             );
-            self::assertMatchesRegularExpression(
-                '/(?:^|\s)fail\s+' . $quoted . '\s/m',
-                $directives,
-                "the boot gate has no `fail {$id}` site, so that verdict can never be negative — "
-                . self::PINNED_GATE_CHECKS[$id]
+        }
+
+        $workflow = (string) file_get_contents(
+            dirname(__DIR__, 3) . '/.github/workflows/docker.yml'
+        );
+        foreach (array_keys(self::PINNED_GATE_THRESHOLDS) as $name) {
+            self::assertDoesNotMatchRegularExpression(
+                '/^\s*' . preg_quote($name, '/') . '\s*:/m',
+                $workflow,
+                "the workflow sets `{$name}` in the gate step's environment, which overrides the "
+                . 'pinned default without editing the script — the same neutering the assignment '
+                . 'guard above exists to catch, one file over'
             );
         }
     }
@@ -1984,6 +2144,47 @@ class DockerEntrypointTest extends TestCase
             . implode(', ', $numerators) . '] — a gap means a block was deleted, '
             . 'and a duplicate means one was copied'
         );
+    }
+
+    /**
+     * Every `pass <id>` / `fail <id>` site in the gate, attributed to the
+     * `say "ASSERT k/N"` block it is reached from.
+     *
+     * @return array<string, array<string, array{pass: int, fail: int}>>
+     */
+    private static function gateVerdictSites(): array
+    {
+        $block = 'the preamble (before ASSERT 1)';
+        $raw = [];
+
+        foreach (preg_split('/\R/', self::gateDirectives()) ?: [] as $line) {
+            if (preg_match('/^say "ASSERT (\d+)\/\d+ /', $line, $header) === 1) {
+                $block = 'ASSERT ' . $header[1];
+            }
+            // Same shape as testTheBootGateRegistersEveryCheckItCanReport(): the
+            // optional `NN)` prefix is a `case` arm, and the id is captured
+            // GREEDILY so a typo cannot be silently skipped.
+            if (preg_match('/^\s*(?:\S+\)\s+)?(pass|fail)\s+(\S+)\s/', $line, $m) !== 1) {
+                continue;
+            }
+            // `fail "$1" …` inside uint_or_fail() forwards a caller's id.
+            if (str_contains($m[2], '$') || str_contains($m[2], '"')) {
+                continue;
+            }
+            $raw[$m[2]][$block][$m[1]] = ($raw[$m[2]][$block][$m[1]] ?? 0) + 1;
+        }
+
+        $sites = [];
+        foreach ($raw as $id => $blocks) {
+            foreach ($blocks as $name => $counts) {
+                $sites[$id][$name] = [
+                    'pass' => $counts['pass'] ?? 0,
+                    'fail' => $counts['fail'] ?? 0,
+                ];
+            }
+        }
+
+        return $sites;
     }
 
     /** The ids the gate's own EXPECTED_CHECKS registry carries. */

@@ -108,21 +108,43 @@ jobs:
           cache-from: |
             type=gha
             type=registry,ref=${{ env.BASE_IMAGE }}:buildcache
+          # `ignore-error=true` on the REGISTRY export only. (S163 round 5,
+          # finding 3.) A fork PR gets a read-only GITHUB_TOKEN, so writing
+          # `…:buildcache` 403s — and a buildkit cache-export failure fails the
+          # whole build STEP even though the image itself built fine. Measured
+          # on a real `docker buildx build` against an unreachable registry:
+          # without the flag it exited 1 (`ERROR: error writing layer blob`)
+          # AFTER the image had been built and loaded; with the flag the same
+          # error printed and it exited 0. Without this the base job would go
+          # RED here on a fork PR and the `base_ref` step below — the one that
+          # emits the documented warning — would never run at all.
+          # A cache is not an artefact: `push:` is a separate exporter and a
+          # failure to publish the image still fails hard.
           cache-to: |
             type=gha,mode=max
-            type=registry,ref=${{ env.BASE_IMAGE }}:buildcache,mode=max,image-manifest=true,oci-mediatypes=true
+            type=registry,ref=${{ env.BASE_IMAGE }}:buildcache,mode=max,image-manifest=true,oci-mediatypes=true,ignore-error=true
           build-args: |
             PHP_VERSION=8.3
 
       # A PR from a FORK gets a read-only GITHUB_TOKEN no matter what the
-      # `permissions:` block says, so the push above cannot succeed and there
-      # is no same-commit base for the dependent jobs to use. They are SKIPPED
-      # rather than quietly built against a stale registry base: a build that
-      # measures the wrong artefact is worse than no build, and the boot gate
-      # (which builds base + image locally and BOOTS them) still runs and is
-      # the check that actually proves anything. Every PR to this repository so
-      # far has come from a branch in this repository, so this is a documented
-      # corner, not the normal path.
+      # `permissions:` block says, so `push:` above is false and there is no
+      # same-commit base for the dependent jobs to build FROM. The job that
+      # CONSUMES the base is skipped rather than quietly built against a stale
+      # registry base: a build that measures the wrong artefact is worse than
+      # no build, and the boot gate (which builds base + image locally and
+      # BOOTS all three) needs only `contents: read`, so it still runs and is
+      # the check that actually proves anything.
+      #
+      # ⚠ What is KNOWN and what is INFERRED. (S163 round 5, finding 3.) Every
+      # PR this repository has had came from a branch in this repository, so
+      # this path has NEVER executed and nothing below is observed behaviour.
+      # What IS measured is the mechanism that used to break it: the registry
+      # cache export above needs `packages: write` too, and a cache-export
+      # failure fails the build step — so before `ignore-error=true` this job
+      # would have gone RED at the build and this step would never have run.
+      # The rest (login succeeds with a read-only token; `push: false` is what
+      # leaves the tag unpublished) is inference from the documented token
+      # scoping, not from a run.
       - name: Decide the base reference the dependent jobs must build FROM
         id: baseref
         env:
@@ -139,8 +161,14 @@ jobs:
     name: Build and Push phlix-server
     runs-on: ubuntu-latest
     needs: docker-base
-    # See the base job: no same-commit base ⇒ no runtime image build.
-    if: needs.docker-base.outputs.base_ref != ''
+    # NOT a job-level `if:` on base_ref. (S163 round 5, finding 3.) The guard
+    # belongs to the leg that consumes the base, and only ONE does:
+    # `grep -c PHLIX_BASE_IMAGE docker/Dockerfile*` is 3 for docker/Dockerfile
+    # and 0 for both `.intel` and `.nvidia`, which install PHP from apt and are
+    # self-contained. A job-level condition took all three legs away on a fork
+    # PR for a reason that applies to one of them — and `matrix` is not
+    # available in `jobs.<id>.if`, so the condition moves onto the steps.
+    # (Same `needs_base` key the boot-gate job below already uses.)
 
     permissions:
       contents: read
@@ -156,12 +184,15 @@ jobs:
           - dockerfile: docker/Dockerfile
             tag: latest
             platform: linux/amd64,linux/arm64
+            needs_base: true
           - dockerfile: docker/Dockerfile.nvidia
             tag: nvidia
             platform: linux/amd64
+            needs_base: false
           - dockerfile: docker/Dockerfile.intel
             tag: intel
             platform: linux/amd64
+            needs_base: false
 
     steps:
       - name: Checkout code
@@ -196,7 +227,12 @@ jobs:
       # the digest is not. Anything other than an exact match is a hard error —
       # never a fallback to `:latest`, which is what made the stale-base defect
       # invisible for the life of these images.
+      #
+      # Only the alpine leg: `.intel`/`.nvidia` carry no `PHLIX_BASE_IMAGE`, so
+      # this was a no-op there — and on a fork PR it would have been a no-op
+      # that exits 1 on the empty digest.
       - name: Verify the base image is the one built from this commit
+        if: ${{ matrix.needs_base && needs.docker-base.outputs.base_ref != '' }}
         env:
           BASE_REF: ${{ needs.docker-base.outputs.base_ref }}
           BASE_DIGEST: ${{ needs.docker-base.outputs.base_digest }}
@@ -217,7 +253,16 @@ jobs:
               exit 1 ;;
           esac
 
+      # This leg needs the base and there is none from this commit — say so
+      # where someone reading the run can see it, instead of a silently absent
+      # job. The other two legs are unaffected and build below.
+      - name: No same-commit base for this leg
+        if: ${{ matrix.needs_base && needs.docker-base.outputs.base_ref == '' }}
+        run: |
+          echo "::warning::Fork PR: GITHUB_TOKEN cannot write packages, so the base built from this commit could not be published. Skipping the ${{ matrix.tag }} image build (docker/Dockerfile is the only one that builds FROM the base) rather than building it against a stale base. The boot gate still builds and BOOTS all three images."
+
       - name: Build and push
+        if: ${{ !matrix.needs_base || needs.docker-base.outputs.base_ref != '' }}
         uses: docker/build-push-action@v7
         with:
           context: .
@@ -227,8 +272,14 @@ jobs:
           tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ matrix.tag }}
           labels: ${{ steps.meta.outputs.labels }}
           # Dedicated cache tag (not the image tag) — see the base job's note.
+          # `ignore-error=true` for the same reason as the base job: the two
+          # self-contained legs now RUN on a fork PR, where the read-only token
+          # cannot write `:buildcache-*` and an unignored cache-export failure
+          # would fail the build step — trading the old wrong skip for a new
+          # wrong red. The hub job below keeps its job-level guard (its
+          # Dockerfile DOES consume the base), so it needs no such flag.
           cache-from: type=gha,type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache-${{ matrix.tag }}
-          cache-to: type=gha,type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache-${{ matrix.tag }},mode=max,image-manifest=true,oci-mediatypes=true
+          cache-to: type=gha,type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache-${{ matrix.tag }},mode=max,image-manifest=true,oci-mediatypes=true,ignore-error=true
           build-args: |
             PHP_VERSION=8.3
             PHLIX_VERSION=${{ github.ref_name }}

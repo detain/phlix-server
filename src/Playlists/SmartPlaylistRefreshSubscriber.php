@@ -136,10 +136,13 @@ final class SmartPlaylistRefreshSubscriber
      *
      * {@see LibraryScanCompleted} is the live trigger — `MediaScanner` dispatches
      * it at the end of every scanned library path. {@see LibraryUpdated} is the
-     * event {@see SmartPlaylistRefreshHandler} was originally written for; it is
-     * subscribed too so the folder-watch path works the moment it is driven
-     * (today {@see \Phlix\Media\Library\FolderWatcher::checkForChanges()}, its
-     * only emitter, has no caller).
+     * event {@see SmartPlaylistRefreshHandler} was originally written for; its
+     * only emitter is {@see \Phlix\Media\Library\FolderWatcher::checkForChanges()}
+     * / `checkLibrary()`, which is now driven by
+     * {@see \Phlix\Media\Library\FolderWatchScheduler} in this same worker — but
+     * only when folder watching is enabled, and `config/folder_watch.php` ships
+     * it disabled. So on a default install this second subscription still
+     * receives nothing.
      *
      * @param ListenerRegistry $listeners The worker's listener registry.
      * @return array<int, string> The opaque listener ids.

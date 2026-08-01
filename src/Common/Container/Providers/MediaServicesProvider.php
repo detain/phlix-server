@@ -20,6 +20,7 @@ use Phlix\Common\Container\DegradedBuild;
 use Phlix\Common\Container\ServiceProviderInterface;
 use Phlix\Common\Logger\LogChannels;
 use Phlix\Media\Library\BookProgressStore;
+use Phlix\Media\Library\FolderWatchScheduler;
 use Phlix\Media\Library\FolderWatcher;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Library\LibraryManager;
@@ -131,6 +132,17 @@ final class MediaServicesProvider implements ServiceProviderInterface
         $ffmpegConfigForScan = is_array($appConfig['ffmpeg'] ?? null) ? $appConfig['ffmpeg'] : [];
         $maxConcurrentScanProbesRaw = $ffmpegConfigForScan['max_concurrent_scan_probes'] ?? null;
         $maxConcurrentScanProbes = is_int($maxConcurrentScanProbesRaw) ? $maxConcurrentScanProbesRaw : null;
+
+        // Folder-watch (config/folder_watch.php, composed into config/server.php).
+        // Absent or malformed config leaves the feature OFF — the same value the
+        // config file ships — so a partial entry point that never composes
+        // `folder_watch` cannot accidentally turn on filesystem polling.
+        $folderWatchConfig = is_array($appConfig['folder_watch'] ?? null) ? $appConfig['folder_watch'] : [];
+        $folderWatchEnabled = ($folderWatchConfig['enabled'] ?? false) === true;
+        $folderWatchIntervalRaw = $folderWatchConfig['interval_seconds'] ?? null;
+        $folderWatchInterval = is_int($folderWatchIntervalRaw) && $folderWatchIntervalRaw > 0
+            ? $folderWatchIntervalRaw
+            : 300;
 
         // TMDB API key — prefer $appConfig['tmdb']['api_key'] (loaded by the
         // bootstrap from config/tmdb.php when available), otherwise fall back
@@ -393,6 +405,26 @@ final class MediaServicesProvider implements ServiceProviderInterface
             FolderWatcher::class => autowire()
                 ->constructorParameter('logger', get('logger.media'))
                 ->constructorParameter('eventDispatcher', get(EventDispatcherInterface::class)),
+
+            // The driver that makes the watcher live. `FolderWatcher::watch()`
+            // is called only by LibraryManager::createLibrary(), and
+            // `checkForChanges()` had NO caller at all, so LibraryUpdated was
+            // never dispatched in production. This scheduler registers the
+            // libraries from the DB and polls them on a timer.
+            //
+            // Registered ONLY in the library-scan managed worker (start.php):
+            // PSR-14 dispatch is per-process and SmartPlaylistRefreshSubscriber
+            // — the only LibraryUpdated listener — lives there, so dispatching
+            // from anywhere else would reach nobody.
+            //
+            // `logger`, `enabled` and `intervalSeconds` are named explicitly
+            // because PHP-DI skips optional ctor params during autowiring; the
+            // `enabled` default is false, so an unbound param would silently
+            // pin the feature off regardless of config.
+            FolderWatchScheduler::class => autowire()
+                ->constructorParameter('logger', get('logger.media'))
+                ->constructorParameter('enabled', $folderWatchEnabled)
+                ->constructorParameter('intervalSeconds', $folderWatchInterval),
 
             MediaScanner::class => autowire()
                 ->constructorParameter('logger', get('logger.media'))

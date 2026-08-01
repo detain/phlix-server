@@ -142,9 +142,10 @@ final class SmartPlaylistRefreshSubscriberTest extends TestCase
 
     /**
      * LibraryUpdated — the event the handler was originally written for — must
-     * also be subscribed. It has no live dispatcher today
-     * (`FolderWatcher::checkForChanges()` has no caller), so this is the guard
-     * that the folder-watch path works the moment it is driven.
+     * also be subscribed. Its emitter (`FolderWatcher`) is now driven by
+     * `FolderWatchScheduler` in this same worker, but only when folder watching
+     * is enabled, and `config/folder_watch.php` ships it disabled. So this stays
+     * the guard that the folder-watch path works when an operator turns it on.
      */
     public function test_library_updated_dispatched_through_the_registry_reaches_the_subscriber(): void
     {

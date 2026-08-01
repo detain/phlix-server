@@ -148,6 +148,13 @@ class FolderWatcher
      * When changes are detected, dispatches LibraryUpdated events to
      * notify subscribers such as SmartPlaylistRefreshHandler.
      *
+     * The production driver ({@see FolderWatchScheduler}) does NOT call this:
+     * it calls {@see checkLibrary()}, one library per timer tick, because
+     * walking every watched directory in one call would block the library-scan
+     * worker's event loop for the sum of them. This all-libraries form has no
+     * production caller today and is retained as the check-everything entry
+     * point; it is exercised by the unit tests.
+     *
      * @return array<int, array{library_id: string, path: string, change_detected: bool}> Array of changes detected
      *
      * @example
@@ -165,24 +172,78 @@ class FolderWatcher
         $changes = [];
 
         foreach ($this->watchedPaths as $path => $info) {
-            $newChecksum = $this->calculateDirectoryChecksum($path);
-
-            if ($newChecksum !== $this->fileChecksums[$path]) {
-                $libraryId = $info['library_id'];
-                $changes[] = [
-                    'library_id' => $libraryId,
-                    'path' => $path,
-                    'change_detected' => true,
-                ];
-
-                $this->fileChecksums[$path] = $newChecksum;
-
-                // Dispatch LibraryUpdated event for smart playlist refresh
-                $this->dispatchLibraryUpdated($libraryId, $path);
+            $change = $this->checkPath($path, $info['library_id']);
+            if ($change !== null) {
+                $changes[] = $change;
             }
         }
 
         return $changes;
+    }
+
+    /**
+     * Checks only the watched paths belonging to one library.
+     *
+     * Same semantics as {@see checkForChanges()} — re-checksum, update the
+     * stored checksum, dispatch {@see LibraryUpdated} per changed path — but
+     * restricted to a single library, so a caller can spread the work of many
+     * libraries across several turns of an event loop instead of walking every
+     * watched directory in one blocking call.
+     *
+     * A library that was never passed to {@see watch()} yields an empty array
+     * and does no filesystem work.
+     *
+     * @param string $libraryId The library's unique identifier
+     * @return array<int, array{library_id: string, path: string, change_detected: bool}> Changes detected
+     *
+     * @see FolderWatchScheduler The production caller
+     *
+     * @since 0.14.0
+     */
+    public function checkLibrary(string $libraryId): array
+    {
+        $changes = [];
+
+        foreach ($this->watchedPaths as $path => $info) {
+            if ($info['library_id'] !== $libraryId) {
+                continue;
+            }
+
+            $change = $this->checkPath($path, $libraryId);
+            if ($change !== null) {
+                $changes[] = $change;
+            }
+        }
+
+        return $changes;
+    }
+
+    /**
+     * Re-checksums one watched path and dispatches on change.
+     *
+     * @param string $path The watched path to re-check
+     * @param string $libraryId The library the path belongs to
+     * @return array{library_id: string, path: string, change_detected: bool}|null
+     *     The change record, or null when the checksum is unchanged
+     */
+    private function checkPath(string $path, string $libraryId): ?array
+    {
+        $newChecksum = $this->calculateDirectoryChecksum($path);
+
+        if ($newChecksum === ($this->fileChecksums[$path] ?? null)) {
+            return null;
+        }
+
+        $this->fileChecksums[$path] = $newChecksum;
+
+        // Dispatch LibraryUpdated event for smart playlist refresh
+        $this->dispatchLibraryUpdated($libraryId, $path);
+
+        return [
+            'library_id' => $libraryId,
+            'path' => $path,
+            'change_detected' => true,
+        ];
     }
 
     /**

@@ -267,6 +267,53 @@ class MediaScanner
     private array $containerCache = [];
 
     /**
+     * S158 — MOVED-FILE ADOPTION CANDIDATES recorded during the current
+     * {@see LibraryManager::rescanLibrary()} pass, keyed by the media-item id
+     * that would be re-pointed.
+     *
+     * `null` means adoption tracking is NOT active and nothing is ever recorded.
+     * That is the default and it is deliberate: only a caller that will also run
+     * {@see LibraryManager::pruneRemovedItems()} in the same pass can decide
+     * whether an adoption is safe (see {@see adoptRecordedPath()}), so a plain
+     * `scan` job — which never prunes — records nothing and changes nothing.
+     *
+     * Lifecycle is explicit and bounded: {@see beginAdoptionTracking()} opens the
+     * map, the prune drains it one id at a time, and
+     * {@see endAdoptionTracking()} discards whatever is left. It is an INSTANCE
+     * property, never static, and it is emptied in a `finally` — so a long-lived
+     * Workerman worker cannot accumulate rows across rescans.
+     *
+     * @var array<string, array{
+     *     path: string,
+     *     probe: array{
+     *         duration_seconds: int|null,
+     *         source: array<string, mixed>|null,
+     *         streams: list<array<string, mixed>>
+     *     }|null
+     * }>|null
+     */
+    private ?array $adoptionCandidates = null;
+
+    /**
+     * Whether {@see MAX_ADOPTION_CANDIDATES} has already been reported for the
+     * current tracking window, so a pathological rescan logs once rather than
+     * once per file. Reset by {@see beginAdoptionTracking()}.
+     */
+    private bool $adoptionCapWarned = false;
+
+    /**
+     * Hard ceiling on {@see $adoptionCandidates} for ONE rescan pass.
+     *
+     * Each entry holds the new path plus the probe summary already taken for that
+     * file (a handful of scalars and its stream rows) — order a couple of KB. The
+     * cap therefore bounds the worst case at tens of MB in a resident worker even
+     * if an entire library is reorganised in one go, instead of scaling without
+     * limit with library size. Past the cap the extra rows simply behave as they
+     * did before S158 (the prune deletes them); one warning says so.
+     */
+    private const MAX_ADOPTION_CANDIDATES = 20000;
+
+    /**
      * Effective `scanner.ignore_patterns` list used by {@see shouldSkipFile()}.
      *
      * Never null: legacy construction substitutes a store-less instance that
@@ -1475,8 +1522,11 @@ class MediaScanner
                 if (is_array($byCanonical) && isset($byCanonical['id']) && is_string($byCanonical['id'])) {
                     // S158: the reused row keeps its identity, so it must also keep
                     // pointing at a file that EXISTS — otherwise the prune half of the
-                    // very same rescan deletes it. See adoptMovedPath().
-                    $this->adoptMovedPath($byCanonical, $path);
+                    // very same rescan deletes it. Nothing is written here: only the
+                    // prune knows whether it would actually delete this row, so the
+                    // candidate is RECORDED and the decision is made there. See
+                    // recordAdoptionCandidate() and adoptRecordedPath().
+                    $this->recordAdoptionCandidate($byCanonical, $path, $probeSummary);
                     $this->logger->debug('Reusing existing top-level item by canonical key', [
                         'item_id' => $byCanonical['id'],
                         'canonical_key' => $canonicalKey,
@@ -1595,16 +1645,51 @@ class MediaScanner
     }
 
     /**
-     * S158 — re-point a canonically-reused TOP-LEVEL row at the file that is
-     * actually on disk, when the path it records has vanished.
+     * S158 — open the moved-file ADOPTION window for one rescan pass.
+     *
+     * Must be paired with {@see endAdoptionTracking()} in a `finally`. While the
+     * window is open, {@see processFile()}'s canonical-reuse branch RECORDS the
+     * rows whose file appears to have moved; nothing is written until
+     * {@see adoptRecordedPath()} is called for a specific row by the code that
+     * has decided that row would otherwise be deleted.
+     *
+     * Only {@see LibraryManager::rescanLibrary()} opens the window, because it is
+     * the only caller that runs {@see LibraryManager::pruneRemovedItems()} in the
+     * same pass and can therefore make that decision.
+     */
+    public function beginAdoptionTracking(): void
+    {
+        $this->adoptionCandidates = [];
+        $this->adoptionCapWarned = false;
+    }
+
+    /**
+     * S158 — close the adoption window and drop every candidate still in it.
+     *
+     * Candidates that were never adopted are simply forgotten: the row keeps the
+     * path it had, which is exactly what happened before S158. Called from a
+     * `finally` so an exception mid-rescan cannot leave the map (or its memory)
+     * behind in a resident worker.
+     */
+    public function endAdoptionTracking(): void
+    {
+        $this->adoptionCandidates = null;
+        $this->adoptionCapWarned = false;
+    }
+
+    /**
+     * S158 — re-point ONE top-level row at the file the current scan found for
+     * it, INSTEAD of deleting it.
      *
      * ## The defect this closes
      *
-     * Move a top-level file (movie / video / photo / book / audiobook) to another
-     * folder and the next rescan used to DELETE its row and every piece of user
-     * data hanging off it. Neither half of the mechanism is wrong on its own —
-     * the damage is their interaction inside ONE {@see LibraryManager::rescanLibrary()}
-     * run:
+     * Move a top-level file (a `movie` from any video-content library, or a
+     * `photo` / `book` / `audiobook` / `audio` row — see
+     * {@see determineMediaType()}; `video` is a LIBRARY type that yields `movie`,
+     * not a media type this branch ever sees) to another folder and the next
+     * rescan used to DELETE its row and every piece of user data hanging off it.
+     * Neither half of the mechanism is wrong on its own — the damage is their
+     * interaction inside ONE {@see LibraryManager::rescanLibrary()} run:
      *
      *  1. {@see processFile()}'s `findByPath()` misses — the path changed.
      *  2. The canonical-key lookup HITS (the key is title+year, deliberately
@@ -1613,55 +1698,211 @@ class MediaScanner
      *     same film" goes, but it left `media_items.path` pointing at the OLD,
      *     now-nonexistent location, because reuse skipped `upsertByPath()`.
      *  3. `rescanLibrary()` then runs {@see LibraryManager::pruneRemovedItems()}
-     *     in the SAME run, which deletes every leaf whose recorded `path` fails
-     *     `file_exists()` — this row — cascading through the `ON DELETE CASCADE`
-     *     foreign keys into `user_item_data` and `watch_history`.
+     *     in the SAME run, which deletes that row — cascading through the
+     *     `ON DELETE CASCADE` foreign keys into `user_item_data` and
+     *     `watch_history`.
      *
      * Net effect: the item vanished for one rescan and came back on the next with
      * a NEW uuid, no watched flag, no favourite, no rating, no resume position.
      * Episodes were never affected — they carry a season `parent_id` and so never
      * enter the canonical branch at all.
      *
-     * ## Why the "old path is gone" guard is load-bearing
+     * ## Why the decision is the PRUNE's and not this file's — review F1
      *
-     * Canonical reuse serves TWO shapes and only one of them is a move:
+     * The first cut of this fix rewrote `path` from inside the scan, guarded only
+     * by `!file_exists($recordedPath)`, and claimed that was "the same predicate
+     * the prune uses". **It is not, and the difference lost user data.**
+     * `pruneRemovedItems()` deletes only on a FOUR-way conjunction: at least one
+     * configured root is a readable directory; the row's path is attributable to
+     * one of those accessible roots (a non-attributable row is explicitly KEPT);
+     * that owning root has ≥1 currently-present item (the per-root presence
+     * guard); and only then `!file_exists()`. Three of those four are
+     * whole-library aggregates that local filesystem state around one file cannot
+     * decide — no extra `is_dir()`/`file_exists()` test can stand in for them,
+     * because in the failing shape the abandoned root IS a readable directory.
      *
-     *  - **Moved** — the recorded path is gone, the scanned path exists. The row
-     *    must follow the file, so `path` is rewritten. This is the fix.
-     *  - **A genuine second copy** — the same film stored twice (differently
-     *    slugging titles, a duplicate rip), where the recorded path is STILL on
-     *    disk. Rewriting `path` there would make the row flap between two present
-     *    files depending on directory-iteration order, and would silently
-     *    re-point playback at the other copy. So that case is left exactly as it
-     *    was: reuse the row, keep the original path, change nothing.
+     * Measured consequence of getting that wrong (multi-root library, NAS
+     * unmounted leaving an empty-but-present mountpoint, a temporary local copy
+     * of the same film): the scan re-pointed the row off the SPARED NAS root onto
+     * the local root, the local copy was later deleted, and the row — now sitting
+     * under an accessible root with other present items — was deleted with its
+     * `user_item_data` and `watch_history`. That is precisely the symptom S158
+     * exists to prevent.
      *
-     * The presence test is deliberately the SAME predicate the prune uses
-     * (`file_exists()` after a targeted `clearstatcache()`), so this method
-     * rewrites the path in precisely the cases the prune would otherwise delete
-     * the row in — no wider, no narrower.
+     * So the invariant is: **adopt only where the prune would actually delete.**
+     * The scan records a candidate; the prune calls this method at the one point
+     * where it already knows the row is in the `gone` set of an accessible root
+     * whose presence guard has opened — i.e. one statement before the `DELETE`.
+     * A row the prune is SPARING is never passed here and is left completely
+     * alone, reproducing master byte-for-byte. Deletion and adoption are then one
+     * decision made in one place from one set of facts.
      *
-     * `media_items.path_hash` is a STORED generated column (migration 072/087),
-     * so MySQL recomputes it from the new `path` as part of the same UPDATE; the
-     * next rescan's `findByPath()`/`findPathsMap()` hash lookup therefore resolves
-     * the row at its new location with no further work. Nothing else on the row is
-     * path-derived: `name`/`sort_title`/`canonical_key` come from the FILENAME,
-     * which a directory move does not change (a rename that changed the title
-     * would change the canonical key too and never reach this branch).
+     * ## What is written — review F2
+     *
+     * `media_items.path_hash` is a STORED generated column (migrations 072/087),
+     * so MySQL recomputes it from the new `path` inside the same UPDATE and the
+     * next rescan resolves the row by plain hash lookup.
+     * `name`/`sort_title`/`canonical_key` are FILENAME-derived and a move does not
+     * change them.
+     *
+     * But canonical reuse explicitly also serves "the same film stored twice",
+     * so the adopted file may be a DIFFERENT physical copy — a different rip, a
+     * different resolution, a different codec. `duration_seconds`,
+     * `metadata_json.source` and `media_streams` are FILE-derived, they drive the
+     * scrubber length, the direct-play/HEVC guard, the ABR ladder and the HLS job
+     * key, and {@see backfillItemSourceMetadata()} will never repair them (it
+     * returns `'skipped'` the moment duration and source are both populated). So
+     * when the probe of the adopted file describes something other than what the
+     * row already records, all three are re-derived from that probe.
+     *
+     * That probe costs NOTHING extra: {@see processFile()} already ran it for
+     * this file before reaching the canonical branch (or `processScanBatch()`'s
+     * coroutine fan-out did), and the summary is carried on the candidate. No
+     * ffprobe is added to the ordinary scan path, and none is issued here.
      *
      * Failure is swallowed and logged, matching this file's per-file discipline:
-     * one unwritable row must never abort a whole library scan. The realistic
-     * failure is a `(library_id, path_hash)` unique-index collision from a
-     * concurrent worker that indexed the new path first — in which case the other
-     * row already covers the file and the prune will drop this one, which is the
-     * pre-S158 behaviour rather than a new regression.
+     * one unwritable row must never abort a library scan. The realistic failure
+     * is a `(library_id, path_hash)` unique-index collision from a concurrent
+     * worker that indexed the new path first — in which case that other row
+     * already covers the file, this one is not adopted, and the prune deletes it,
+     * which is the pre-S158 behaviour rather than a new regression.
+     *
+     * @param string $itemId The media item the caller is about to delete.
+     * @return bool True when the row was re-pointed and MUST NOT be deleted;
+     *         false when there was no candidate for it, or the adoption could not
+     *         be completed — in which case the caller proceeds exactly as before.
+     */
+    public function adoptRecordedPath(string $itemId): bool
+    {
+        if ($this->adoptionCandidates === null || !isset($this->adoptionCandidates[$itemId])) {
+            return false;
+        }
+
+        $candidate = $this->adoptionCandidates[$itemId];
+        // Consume it either way: a candidate is good for exactly one decision.
+        unset($this->adoptionCandidates[$itemId]);
+
+        $newPath = $candidate['path'];
+
+        // The walk saw this file; the prune runs afterwards. Re-ask, with this
+        // one entry cleared, so a file deleted in between is not adopted into a
+        // path that is already gone again.
+        clearstatcache(true, $newPath);
+        if (!file_exists($newPath)) {
+            return false;
+        }
+
+        try {
+            $row = $this->itemRepository->findById($itemId);
+        } catch (\Throwable $e) {
+            $this->logger->warning('Could not re-read a top-level item that was about to be adopted', [
+                'item_id' => $itemId,
+                'new_path' => $newPath,
+                'error' => $e->getMessage(),
+            ]);
+            return false;
+        }
+        if ($row === null) {
+            return false;
+        }
+
+        // Re-read rather than reuse the row the scan matched: a metadata job may
+        // have rewritten metadata_json since, and update() replaces the whole
+        // column — writing a stale blob back would silently revert that work.
+        $metadata = $this->existingMetadata($row);
+        $probe = $candidate['probe'];
+        $redescribe = $probe !== null && $this->probeContradictsItem($metadata, $probe);
+
+        /** @var array<string, mixed> $fields */
+        $fields = ['path' => $newPath];
+        if ($redescribe && $probe !== null) {
+            if ($probe['duration_seconds'] !== null) {
+                $metadata['duration_seconds'] = $probe['duration_seconds'];
+            }
+            if ($probe['source'] !== null) {
+                $metadata['source'] = $probe['source'];
+            }
+            $fields['metadata_json'] = $metadata;
+        }
+
+        try {
+            $this->itemRepository->update($itemId, $fields);
+        } catch (\Throwable $e) {
+            $this->logger->warning('Could not re-point a moved top-level item at its new path', [
+                'item_id' => $itemId,
+                'old_path' => is_string($row['path'] ?? null) ? $row['path'] : '',
+                'new_path' => $newPath,
+                'error' => $e->getMessage(),
+            ]);
+            return false;
+        }
+
+        // Streams AFTER the path write, not before: the path write is what saves
+        // the row from deletion, so it must not be held hostage to a stream
+        // replacement. persistStreams() is itself atomic and self-guarded, so a
+        // failure here leaves the PREVIOUS stream rows in place rather than a
+        // half-written set.
+        if ($redescribe && $probe !== null && $probe['streams'] !== []) {
+            if (!$this->persistStreams($itemId, $probe['streams'])) {
+                $this->logger->warning('Adopted item kept its previous media_streams; the replacement failed', [
+                    'item_id' => $itemId,
+                    'new_path' => $newPath,
+                ]);
+            }
+        }
+
+        $this->logger->info('Top-level item followed its file to a new path instead of being pruned', [
+            'item_id' => $itemId,
+            'old_path' => is_string($row['path'] ?? null) ? $row['path'] : '',
+            'new_path' => $newPath,
+            'source_redescribed' => $redescribe,
+        ]);
+
+        return true;
+    }
+
+    /**
+     * S158 — record, WITHOUT writing anything, that this top-level row's recorded
+     * file is gone while the file just scanned would fit it.
+     *
+     * Called from {@see processFile()}'s canonical-reuse branch. Whether the
+     * candidate is ever acted on is decided later and elsewhere — see
+     * {@see adoptRecordedPath()} for why that separation is the fix rather than
+     * an implementation detail.
+     *
+     * The `file_exists($recordedPath)` test here is a NARROWING pre-filter, not
+     * the safety guard it used to be pretending to be. It is deliberately no
+     * wider than the prune's own fourth condition, so it can only ever decline to
+     * record something the prune would have spared anyway; its job is (a) to keep
+     * the genuine "same film stored twice, both copies present" shape from
+     * allocating a candidate at all, and (b) to keep the map small. The authority
+     * is the prune.
+     *
+     * First candidate wins. Two files can canonically match one row in a single
+     * walk; keeping the first makes the outcome depend on directory-iteration
+     * order in exactly the same way the pre-S158 code did, rather than on which
+     * write landed last.
      *
      * @param array<string, mixed> $existing The hydrated row
      *        {@see ItemRepository::findTopLevelByCanonical()} matched.
      * @param string $path The path of the file currently being processed —
      *        already UTF-8-scrubbed by the caller.
+     * @param array{
+     *     duration_seconds: int|null,
+     *     source: array<string, mixed>|null,
+     *     streams: list<array<string, mixed>>
+     * }|null $probe The probe {@see processFile()} already took for `$path`, so
+     *        the adoption can re-derive file-derived state without a second
+     *        ffprobe. Null for a type that is never probed, or a failed probe.
      */
-    private function adoptMovedPath(array $existing, string $path): void
+    private function recordAdoptionCandidate(array $existing, string $path, ?array $probe): void
     {
+        // Tracking closed → nobody will decide → never record. A `scan` job that
+        // does not prune therefore behaves exactly as it did before S158.
+        if ($this->adoptionCandidates === null) {
+            return;
+        }
+
         $id = isset($existing['id']) && is_string($existing['id']) ? $existing['id'] : '';
         $recordedPath = isset($existing['path']) && is_string($existing['path']) ? $existing['path'] : '';
 
@@ -1669,33 +1910,76 @@ class MediaScanner
             return;
         }
 
+        if (isset($this->adoptionCandidates[$id])) {
+            return;
+        }
+
         // A long-lived Workerman worker can hold a stale stat() for this path
         // across rescans; clear just this entry so the answer reflects the
-        // current on-disk state — exactly what pruneRemovedItems() does with its
-        // whole-cache clear before asking the same question.
+        // current on-disk state — the same thing pruneRemovedItems() achieves
+        // with its whole-cache clear before asking the same question.
         clearstatcache(true, $recordedPath);
         if (file_exists($recordedPath)) {
             // Not a move: both copies are on disk. Keep the dedup behaviour.
             return;
         }
 
-        try {
-            $this->itemRepository->update($id, ['path' => $path]);
-        } catch (\Throwable $e) {
-            $this->logger->warning('Could not re-point a moved top-level item at its new path', [
-                'item_id' => $id,
-                'old_path' => $recordedPath,
-                'new_path' => $path,
-                'error' => $e->getMessage(),
-            ]);
+        if (count($this->adoptionCandidates) >= self::MAX_ADOPTION_CANDIDATES) {
+            if (!$this->adoptionCapWarned) {
+                $this->adoptionCapWarned = true;
+                $this->logger->warning(
+                    'Moved-file adoption candidate cap reached; further moved rows will be pruned as before',
+                    ['cap' => self::MAX_ADOPTION_CANDIDATES],
+                );
+            }
             return;
         }
 
-        $this->logger->info('Top-level item followed its file to a new path', [
-            'item_id' => $id,
-            'old_path' => $recordedPath,
-            'new_path' => $path,
-        ]);
+        $this->adoptionCandidates[$id] = ['path' => $path, 'probe' => $probe];
+    }
+
+    /**
+     * Whether a fresh probe describes a DIFFERENT file from the one the row's
+     * file-derived metadata already describes.
+     *
+     * Used to keep a plain directory move — where the adopted file IS the file
+     * the row was created from — from rewriting `metadata_json` for no reason
+     * (each such write flushes the whole genre-facet cache and re-syncs the
+     * `media_item_genres` join rows), while still repairing the row whenever the
+     * adopted copy is genuinely a different rip. A row that carries no `source`
+     * at all is always treated as contradicted, so a pre-probe row gets described
+     * for the first time.
+     *
+     * @param array<string, mixed> $metadata The row's current decoded metadata.
+     * @param array{
+     *     duration_seconds: int|null,
+     *     source: array<string, mixed>|null,
+     *     streams: list<array<string, mixed>>
+     * } $probe Probe summary of the file being adopted.
+     */
+    private function probeContradictsItem(array $metadata, array $probe): bool
+    {
+        if ($probe['source'] !== null) {
+            $recordedSource = isset($metadata['source']) && is_array($metadata['source'])
+                ? $metadata['source']
+                : null;
+            // Loose compare: the recorded copy has been through a JSON
+            // round-trip, so key ORDER is not a meaningful difference.
+            if ($recordedSource === null || $recordedSource != $probe['source']) {
+                return true;
+            }
+        }
+
+        if ($probe['duration_seconds'] !== null) {
+            $recordedDuration = isset($metadata['duration_seconds']) && is_numeric($metadata['duration_seconds'])
+                ? (int) $metadata['duration_seconds']
+                : null;
+            if ($recordedDuration !== $probe['duration_seconds']) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**

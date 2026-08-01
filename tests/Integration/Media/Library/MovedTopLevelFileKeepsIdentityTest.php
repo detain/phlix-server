@@ -41,6 +41,18 @@ use Workerman\MySQL\Connection;
  * nothing, so every case below drives the FULL `rescanLibrary()` path — real
  * scanner, real prune, real files on disk, one real MySQL.
  *
+ * ## Where the fix lives, and why the tests are shaped around the PRUNE
+ *
+ * The scan does not write the new path. It records the row as an adoption
+ * candidate; `pruneRemovedItems()` re-points it at the one place it already
+ * knows it would otherwise delete it. That matters here because three of the
+ * prune's four deletion conditions are whole-library aggregates (is any root
+ * accessible; is this row attributable to one of them; does that root have any
+ * present item at all) that no test of a single file can observe. So the cases
+ * below deliberately vary the SHAPE of the library — one root, two roots, a root
+ * whose presence guard is shut, a root that is an empty-but-present mountpoint —
+ * rather than repeating one shape with different file counts.
+ *
  * ## Why this test cannot be written against a test double
  *
  * The in-memory `Connection` doubles used across `tests/Unit` return canned rows
@@ -59,6 +71,7 @@ use Workerman\MySQL\Connection;
  * smallest shape that is honest about production.
  *
  * @covers \Phlix\Media\Library\MediaScanner
+ * @covers \Phlix\Media\Library\LibraryManager
  */
 final class MovedTopLevelFileKeepsIdentityTest extends TestCase
 {
@@ -318,6 +331,215 @@ final class MovedTopLevelFileKeepsIdentityTest extends TestCase
         );
     }
 
+    /**
+     * Review F1 — the ACCEPTANCE case. Adopting must never move a row OUT of the
+     * prune's protected set and INTO its kill zone.
+     *
+     * `pruneRemovedItems()` deletes on a four-way conjunction, and only one of
+     * those four is decidable from the filesystem around a single file. The first
+     * cut of this fix wrote `path` from inside the scan on `!file_exists()` alone
+     * and called that "the same predicate the prune uses"; it was not, and the
+     * difference cost user data. This is the measured shape:
+     *
+     *  1. a two-root library, the same film present on the NAS root;
+     *  2. the NAS unmounts leaving an empty-but-present mountpoint (autofs/NFS —
+     *     `is_dir()` still true, so the root IS accessible and IS attributable,
+     *     but it has ZERO present items so the per-root presence guard spares
+     *     every row under it);
+     *  3. the user drops a TEMPORARY copy of that film on the local root. The
+     *     scan-time fix re-pointed the spared row at that copy;
+     *  4. the temporary copy is deleted. The row now names a gone path inside an
+     *     accessible root that HAS other present items — nothing spares it — and
+     *     the prune deletes it, cascading user_item_data and watch_history.
+     *
+     * A parent-directory check cannot discriminate here: `/mnt/nas` is a readable
+     * directory throughout. The only correct gate is the prune's own decision, so
+     * the row must come through steps 3 and 4 exactly as it does on master.
+     */
+    public function testARowSparedByTheUnmountGuardIsNeverMigratedOntoAnotherRoot(): void
+    {
+        $local = $this->root . '/local';
+        $nas = $this->root . '/nas';
+        $stash = $this->root . '/nas-contents';
+        mkdir($local, 0775, true);
+        mkdir($nas, 0775, true);
+        mkdir($stash, 0775, true);
+
+        // A permanent unrelated film keeps the LOCAL root's presence guard open —
+        // which is what makes step 4 lethal.
+        $this->writeFile('local/Other Film (2001).mkv');
+        $nasFile = $this->writeFile('nas/Blade Runner (1982).mkv');
+
+        $libraryId = $this->createLibrary('movie', [$local, $nas]);
+        $manager = $this->manager();
+        $manager->rescanLibrary($libraryId);
+
+        $originalId = $this->itemIdAtPath($libraryId, $nasFile);
+        $this->assertNotSame('', $originalId, 'the first scan must index the film on the NAS root');
+        $this->recordUserData($originalId);
+
+        // The NAS unmounts: the mountpoint directory survives and is EMPTY.
+        self::assertTrue(rename($nasFile, $stash . '/Blade Runner (1982).mkv'));
+        clearstatcache(true);
+        $this->assertDirectoryExists($nas, 'the autofs/NFS shape leaves the mountpoint behind');
+
+        // A temporary local copy of the same film appears.
+        $tempCopy = $this->writeFile('local/Blade Runner (1982).mkv');
+
+        $second = $manager->rescanLibrary($libraryId);
+        $this->assertSame(0, $second->removed, 'the presence guard spares the whole NAS root');
+        $this->assertSame(
+            $nasFile,
+            $this->pathOf($originalId),
+            'the row must STAY on the unmounted root. Re-pointing it at the local copy migrates it out '
+            . 'of the set the presence guard is protecting and into a root where nothing spares it',
+        );
+
+        // The temporary copy goes away while the NAS is still down.
+        self::assertTrue(unlink($tempCopy));
+        clearstatcache(true);
+
+        $third = $manager->rescanLibrary($libraryId);
+        $this->assertSame(0, $third->removed, 'still nothing to prune — the NAS root is still spared');
+        $this->assertSame(
+            1,
+            $this->countRowsWithId($originalId),
+            'the original row must still exist; this assertion failing IS the data-loss bug',
+        );
+        $this->assertSame(1, $this->countUserData($originalId), 'and its user data with it');
+
+        // The NAS comes back. The row is still pointing at the right file, so it
+        // re-indexes in place with the SAME uuid — no canonical fallback needed.
+        self::assertTrue(rename($stash . '/Blade Runner (1982).mkv', $nasFile));
+        clearstatcache(true);
+        $fourth = $manager->rescanLibrary($libraryId);
+
+        $this->assertSame(0, $fourth->removed);
+        $this->assertSame(
+            [$originalId],
+            $this->idsAtPath($libraryId, $nasFile),
+            'after the remount the film is the SAME row it always was',
+        );
+        $this->assertSame(1, $this->countUserData($originalId));
+    }
+
+    /**
+     * Review F1, the general form: a row the prune is SPARING must be left
+     * completely alone, even when the scan found an obvious candidate file for it.
+     *
+     * One root; one film moves into a subdirectory and the only other film is
+     * genuinely deleted in the same window. The root's present count is therefore
+     * ZERO and the guard shuts, so nothing may be pruned AND nothing may be
+     * adopted — adopting would make the root present again and un-spare the
+     * genuinely-deleted row's user data in the same pass. Master's behaviour
+     * exactly: two stale-but-intact rows.
+     */
+    public function testAdoptionNeverFiresForARootWhosePresenceGuardIsShut(): void
+    {
+        $moved = $this->writeFile('Solaris (1972).mkv');
+        $deleted = $this->writeFile('Stalker (1979).mkv');
+
+        $libraryId = $this->createLibrary('movie');
+        $manager = $this->manager();
+        $manager->rescanLibrary($libraryId);
+
+        $movedId = $this->itemIdAtPath($libraryId, $moved);
+        $deletedId = $this->itemIdAtPath($libraryId, $deleted);
+        $this->assertNotSame('', $movedId);
+        $this->assertNotSame('', $deletedId);
+        $this->recordUserData($movedId);
+        $this->recordUserData($deletedId);
+
+        $this->movePath($moved, 'sub/Solaris (1972).mkv');
+        self::assertTrue(unlink($deleted));
+        clearstatcache(true);
+
+        $result = $manager->rescanLibrary($libraryId);
+
+        $this->assertSame(0, $result->removed, 'a root with zero present items is never pruned');
+        $this->assertSame(
+            $moved,
+            $this->pathOf($movedId),
+            'the spared row keeps its stale path: adopting it would raise the root\'s present count '
+            . 'from 0 to 1 and un-spare the row next to it in the very same pass',
+        );
+        $this->assertSame(
+            1,
+            $this->countUserData($deletedId),
+            'the neighbouring row the guard is protecting must keep its user data',
+        );
+    }
+
+    /**
+     * Review F2 — an adopted row must DESCRIBE the file it now points at.
+     *
+     * Canonical reuse explicitly serves "the same film stored twice", so the
+     * adopted file may be a different physical copy. `duration_seconds`,
+     * `metadata_json.source` and `media_streams` are FILE-derived and drive the
+     * scrubber length, the direct-play/HEVC guard, the ABR ladder and the HLS job
+     * key — and `backfillItemSourceMetadata()` returns `'skipped'` the moment
+     * duration and source are populated, so nothing would ever repair them.
+     *
+     * Two rips of one film with the same canonical key: 320x240/2s and
+     * 1280x720/6s. Delete the small one; the row must follow the big one AND stop
+     * claiming to be 320x240.
+     */
+    public function testAnAdoptedDifferentCopyRedescribesTheRowsFileDerivedState(): void
+    {
+        $ffmpeg = new FfmpegRunner('/usr/bin/ffmpeg', '/usr/bin/ffprobe', sys_get_temp_dir());
+        if (!$ffmpeg->isAvailable()) {
+            self::markTestSkipped('ffmpeg/ffprobe not available; this case is about probe-derived state');
+        }
+
+        $small = $this->root . '/A/Blade Runner (1982).mp4';
+        $large = $this->root . '/B/Blade.Runner.1982.1080p.mp4';
+        $companion = $this->root . '/A/Metropolis (1927).mp4';
+        $this->makeClip($small, 320, 240, 2);
+        $this->makeClip($large, 1280, 720, 6);
+        // A present companion so the prune's per-root guard is open — otherwise
+        // the row is spared and (correctly) never adopted at all.
+        $this->makeClip($companion, 160, 120, 1);
+
+        $libraryId = $this->createLibrary('movie');
+        $manager = $this->manager($ffmpeg);
+        $manager->rescanLibrary($libraryId);
+
+        $originalId = $this->itemIdAtPath($libraryId, $small);
+        $this->assertNotSame('', $originalId, 'the small copy must be the one indexed');
+        $this->assertSame(
+            [320, 240, 2],
+            $this->fileDerivedState($originalId),
+            'the row starts out describing the 320x240/2s copy',
+        );
+        $this->recordUserData($originalId);
+
+        self::assertTrue(unlink($small));
+        clearstatcache(true);
+
+        $result = $manager->rescanLibrary($libraryId);
+
+        $this->assertSame(0, $result->removed, 'the row follows the surviving copy instead of being pruned');
+        $this->assertSame(
+            [$originalId],
+            $this->idsAtPath($libraryId, $large),
+            'and it is still the SAME row, with its user data',
+        );
+        $this->assertSame(1, $this->countUserData($originalId));
+        $this->assertSame(
+            [1280, 720, 6],
+            $this->fileDerivedState($originalId),
+            'metadata_json.source, duration_seconds and media_streams must describe the copy the row '
+            . 'now points at. Keeping 320x240/2s gives a wrong scrubber length and feeds the '
+            . 'direct-play / HEVC-guard / ABR-ladder decisions and the HLS job key a file that is not there',
+        );
+
+        // Idempotent: a settled rescan changes nothing further.
+        $settled = $manager->rescanLibrary($libraryId);
+        $this->assertSame(0, $settled->removed);
+        $this->assertSame(0, $settled->added);
+        $this->assertSame([1280, 720, 6], $this->fileDerivedState($originalId));
+    }
+
     // ── helpers ──────────────────────────────────────────────────────────────
 
     private function db(): Connection
@@ -329,11 +551,16 @@ final class MovedTopLevelFileKeepsIdentityTest extends TestCase
         return $this->db;
     }
 
-    /** A real scanner + a real manager over the real connection — no doubles. */
-    private function manager(): LibraryManager
+    /**
+     * A real scanner + a real manager over the real connection — no doubles.
+     *
+     * @param FfmpegRunner|null $ffmpeg Wire a probe runner only for the case that
+     *        is about probe-derived state; the others must not pay for ffprobe.
+     */
+    private function manager(?FfmpegRunner $ffmpeg = null): LibraryManager
     {
         $itemRepository = new ItemRepository($this->db());
-        $scanner = new MediaScanner($this->db(), $itemRepository);
+        $scanner = new MediaScanner($this->db(), $itemRepository, null, null, null, $ffmpeg);
 
         return new LibraryManager(
             $this->db(),
@@ -346,16 +573,97 @@ final class MovedTopLevelFileKeepsIdentityTest extends TestCase
         );
     }
 
-    private function createLibrary(string $type): string
+    /**
+     * @param list<string>|null $paths Configured roots; defaults to the single
+     *        scratch root. A multi-root library is what makes the per-root
+     *        presence guard observable at all.
+     */
+    private function createLibrary(string $type, ?array $paths = null): string
     {
         $libraryId = $this->uuid();
         $this->db()->query(
             'INSERT INTO libraries (id, name, type, paths) VALUES (?, ?, ?, ?)',
-            [$libraryId, 'S158 ' . $type, $type, (string) json_encode([$this->root])],
+            [$libraryId, 'S158 ' . $type, $type, (string) json_encode($paths ?? [$this->root])],
         );
         $this->libraryIds[] = $libraryId;
 
         return $libraryId;
+    }
+
+    /** Synthesises a real, probeable clip at `$absolute`. */
+    private function makeClip(string $absolute, int $width, int $height, int $seconds): void
+    {
+        $dir = dirname($absolute);
+        if (!is_dir($dir)) {
+            mkdir($dir, 0775, true);
+        }
+        $cmd = sprintf(
+            '%s -y -hide_banner -loglevel error -f lavfi -i %s -c:v libx264 -pix_fmt yuv420p %s 2>/dev/null',
+            escapeshellarg('/usr/bin/ffmpeg'),
+            escapeshellarg(sprintf('testsrc=size=%dx%d:rate=10:duration=%d', $width, $height, $seconds)),
+            escapeshellarg($absolute),
+        );
+        exec($cmd, $out, $code);
+        self::assertSame(0, $code, 'failed to generate the test clip');
+        self::assertFileExists($absolute);
+    }
+
+    /**
+     * The row's FILE-derived state, read from all three places it lives:
+     * `metadata_json.source.{width,height}` and `metadata_json.duration_seconds`,
+     * cross-checked against the `media_streams` video row so a fix that updated
+     * only the JSON blob cannot pass.
+     *
+     * @return array{0:int,1:int,2:int} width, height, duration seconds.
+     */
+    private function fileDerivedState(string $itemId): array
+    {
+        $rows = $this->db()->query('SELECT metadata_json FROM media_items WHERE id = ?', [$itemId]);
+        self::assertIsArray($rows);
+        self::assertCount(1, $rows);
+        $decoded = json_decode((string) $rows[0]['metadata_json'], true);
+        self::assertIsArray($decoded);
+        $source = is_array($decoded['source'] ?? null) ? $decoded['source'] : [];
+
+        $streams = $this->db()->query(
+            'SELECT width, height FROM media_streams WHERE media_item_id = ? AND stream_type = ?',
+            [$itemId, 'video'],
+        );
+        self::assertIsArray($streams);
+        self::assertCount(1, $streams, 'exactly one video stream row is expected for these clips');
+        self::assertSame(
+            (int) $source['width'],
+            (int) $streams[0]['width'],
+            'media_streams must agree with metadata_json.source — they are written from the same probe',
+        );
+        self::assertSame((int) $source['height'], (int) $streams[0]['height']);
+
+        return [
+            (int) $source['width'],
+            (int) $source['height'],
+            (int) ($decoded['duration_seconds'] ?? 0),
+        ];
+    }
+
+    private function pathOf(string $itemId): string
+    {
+        $rows = $this->db()->query('SELECT path FROM media_items WHERE id = ?', [$itemId]);
+
+        return is_array($rows) && $rows !== [] ? (string) $rows[0]['path'] : '';
+    }
+
+    private function countRowsWithId(string $itemId): int
+    {
+        $rows = $this->db()->query('SELECT COUNT(*) AS c FROM media_items WHERE id = ?', [$itemId]);
+
+        return is_array($rows) && isset($rows[0]['c']) ? (int) $rows[0]['c'] : -1;
+    }
+
+    private function countUserData(string $itemId): int
+    {
+        $rows = $this->db()->query('SELECT COUNT(*) AS c FROM user_item_data WHERE item_id = ?', [$itemId]);
+
+        return is_array($rows) && isset($rows[0]['c']) ? (int) $rows[0]['c'] : -1;
     }
 
     /** Creates `$relative` under the scratch root and returns its absolute path. */

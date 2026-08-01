@@ -419,6 +419,148 @@ phlix_check_disabled_functions() {
   info "disable_functions preflight passed (no required functions disabled)."
 }
 
+# ---------------------------------------------------------------------------
+# Kernel / resource tuning
+# ---------------------------------------------------------------------------
+# Implements the applicable parts of Workerman's kernel-optimization appendix:
+#   https://www.workerman.net/doc/workerman/appendices/kernel-optimization.html
+#
+# Run on BOTH fresh install and `--update`, so an install that predates this
+# function picks the tuning up on the next update. Idempotent by construction:
+# we own two drop-in files outright and rewrite them wholesale rather than
+# editing /etc/sysctl.conf or /etc/security/limits.conf (shared with the distro
+# and with other packages).
+#
+# NOTE ON nofile: the limits.conf half is PAM-only and therefore does NOT
+# affect the daemon — systemd ignores /etc/security/limits.conf entirely. The
+# daemon's file-descriptor ceiling comes from LimitNOFILE= in the unit (see the
+# unit template in section 7 and the `--update` retrofit in do_update).
+PHLIX_SYSCTL_FILE="/etc/sysctl.d/99-phlix-net.conf"
+PHLIX_LIMITS_FILE="/etc/security/limits.d/99-phlix.conf"
+
+# $1 (optional): the account to grant the PAM nofile limits to. Defaults to
+# $SERVICE_USER. do_update passes the User= parsed out of the live unit, which
+# can differ (older installs run as www-data) — it is passed as an ARGUMENT
+# rather than by reassigning the global, because $SERVICE_USER is also read by
+# the chown steps on either side of the call in do_update and moving it there
+# would silently re-target them.
+phlix_apply_kernel_tuning() {
+  local limits_user="${1:-$SERVICE_USER}"
+
+  # Containers (docker/LXC) get a read-only or namespaced /proc/sys. Tuning is
+  # the host's job there, so detect and skip rather than failing the install.
+  if [ ! -w /proc/sys/net/core/somaxconn ] 2>/dev/null; then
+    warn "/proc/sys is not writable (container?) — skipping kernel tuning."
+    warn "Apply these on the HOST instead: see $PHLIX_SYSCTL_FILE in the repo docs."
+    return 0
+  fi
+
+  log "Applying kernel network tuning ($PHLIX_SYSCTL_FILE)"
+  mkdir -p "$(dirname "$PHLIX_SYSCTL_FILE")"
+  cat > "$PHLIX_SYSCTL_FILE" <<'SYSCTL_EOF'
+# Managed by phlix-server scripts/install.sh — rewritten on every --update.
+# Local edits WILL be lost; put operator overrides in a later-sorting file
+# (e.g. /etc/sysctl.d/99-zz-local.conf).
+#
+# Source: https://www.workerman.net/doc/workerman/appendices/kernel-optimization.html
+# Only the knobs that actually improve on a modern kernel's defaults are set
+# here. The ones from that page we deliberately SKIP are listed at the bottom
+# with the reason — please read it before "restoring" any of them.
+
+# Accept-queue cap. The kernel silently clamps EVERY listen() backlog to this
+# value, so without it Workerman's large backlog is truncated to the 4096
+# default (visible as Send-Q=4096 on the listen sockets in `ss -ltn`).
+net.core.somaxconn = 65535
+
+# Half-open (SYN_RECV) queue depth. Absorbs connection bursts and SYN floods
+# instead of dropping SYNs. Entries are allocated on demand, so a large cap
+# costs nothing at idle.
+net.ipv4.tcp_max_syn_backlog = 262144
+
+# Per-CPU ingress queue between the NIC and the protocol stack. The 1000
+# default is sized for 1GbE; raise it so bursts are queued, not dropped.
+net.core.netdev_max_backlog = 30000
+
+# Ephemeral port range for OUTBOUND sockets — relay tunnels to the hub, MySQL,
+# and metadata/artwork fetches all consume these.
+#
+# This WIDENS the range. Count is (high - low + 1), so dropping the floor adds
+# ports rather than removing them:
+#     kernel default  32768-60999 = 28232 ports
+#     this setting    16384-65535 = 49152 ports   (+20920, +74%)
+#     Workerman page  10240-65000 = 54761 ports
+#
+# We stop at 16384 instead of the page's 10240 floor. That trades 5609 ports
+# for keeping the whole registered-port band below 16384 free, so an ephemeral
+# outbound socket can never squat on a port some other daemon on this box wants
+# to bind later. It also keeps every port Phlix itself listens on (2206, 8096,
+# 8097, 8800, 8802-8805) outside the ephemeral range by construction — no
+# net.ipv4.ip_local_reserved_ports entry needed. Going below 16384 would
+# require one.
+net.ipv4.ip_local_port_range = 16384 65535
+
+# ---------------------------------------------------------------------------
+# Deliberately NOT set (all four are on the Workerman page). Do not add them:
+#
+#   fs.file-max = 6815744
+#     Modern kernels derive a far larger default from RAM. Writing the page's
+#     value LOWERS the system-wide cap by orders of magnitude.
+#
+#   net.ipv4.tcp_max_tw_buckets = 20000
+#     The kernel default is 262144. This is a CAP, not a target: once exceeded
+#     the kernel destroys TIME_WAIT sockets early and logs "TCP: time wait
+#     bucket table overflow". 20000 would be a 13x downgrade.
+#
+#   net.ipv4.tcp_tw_recycle = 0
+#     REMOVED from Linux in 4.12 (2017). The key does not exist, and listing a
+#     nonexistent key makes `sysctl --system` exit non-zero. It is also already
+#     off by definition. (The page itself flags this.)
+#
+#   net.netfilter.nf_conntrack_max = 2621440
+#     Only meaningful when a stateful firewall/NAT actually tracks this box's
+#     traffic. Each entry pins ~376 B of unswappable kernel memory (~1 GB at
+#     2.6M), and raising max WITHOUT also raising nf_conntrack_buckets just
+#     lengthens the hash chains. Raise both, together, only if
+#     /proc/sys/net/netfilter/nf_conntrack_count approaches nf_conntrack_max.
+# ---------------------------------------------------------------------------
+SYSCTL_EOF
+  chmod 644 "$PHLIX_SYSCTL_FILE"
+
+  # Apply just our file. Tolerate failure: a hardened/containerised kernel may
+  # refuse individual keys, and that must not abort an otherwise good install.
+  if sysctl -p "$PHLIX_SYSCTL_FILE" >/dev/null 2>&1; then
+    info "sysctl applied: somaxconn=$(sysctl -n net.core.somaxconn 2>/dev/null)," \
+         "syn_backlog=$(sysctl -n net.ipv4.tcp_max_syn_backlog 2>/dev/null)," \
+         "netdev_backlog=$(sysctl -n net.core.netdev_max_backlog 2>/dev/null)"
+  else
+    warn "sysctl -p $PHLIX_SYSCTL_FILE reported an error — values may not be live."
+    warn "Re-check with: sysctl -p $PHLIX_SYSCTL_FILE"
+  fi
+
+  # PAM limits: covers LOGIN SHELLS and hand-run CLI scripts
+  # (php scripts/run-library-scan-worker.php, backfill-*.php, …). It does NOT
+  # cover the systemd service — that is LimitNOFILE= in the unit.
+  log "Applying PAM nofile limits ($PHLIX_LIMITS_FILE)"
+  mkdir -p "$(dirname "$PHLIX_LIMITS_FILE")"
+  cat > "$PHLIX_LIMITS_FILE" <<LIMITS_EOF
+# Managed by phlix-server scripts/install.sh — rewritten on every --update.
+#
+# PAM-only: applies to login shells and CLI invocations, NOT to the
+# phlix-server systemd unit (systemd never reads limits.conf — the daemon's
+# ceiling is LimitNOFILE= in /etc/systemd/system/phlix-server.service).
+#
+# Soft is 65536 rather than the hard value: a very large SOFT limit makes any
+# tool that still loops 0..RLIMIT_NOFILE to close inherited descriptors crawl.
+# Anything that needs more can raise itself to the hard limit with ulimit -n.
+root                soft    nofile  65536
+root                hard    nofile  1048576
+${limits_user}      soft    nofile  65536
+${limits_user}      hard    nofile  1048576
+LIMITS_EOF
+  chmod 644 "$PHLIX_LIMITS_FILE"
+  info "PAM nofile: soft 65536 / hard 1048576 for root and '$limits_user'."
+}
+
 # Parse the User= line from a systemd unit. Empty when missing.
 phlix_systemd_unit_user() {
   [ -f "$1" ] || { printf ''; return; }
@@ -902,6 +1044,15 @@ do_uninstall() {
     [ -n "$hapcert" ] && { log "Removing HAProxy TLS certificate"; rm -f "$hapcert"; }
   fi
 
+  # 4z. Kernel-tuning drop-ins. Removing the files un-declares the tuning for
+  # the next boot, which is the correct uninstall behaviour. We deliberately do
+  # NOT restore the previous LIVE sysctl values: we never recorded them, and
+  # phlix-hub may be co-installed and still relying on the same knobs (it ships
+  # its own identically-valued drop-in, so its file survives this).
+  for f in "$PHLIX_SYSCTL_FILE" "$PHLIX_LIMITS_FILE"; do
+    [ -f "$f" ] && { log "Removing tuning drop-in $f"; rm -f "$f"; }
+  done
+
   # 5. Certbot artefacts
   [ -n "$cron" ] && { log "Removing certbot cron entry"; rm -f "$cron"; }
   [ -n "$hook" ] && { log "Removing certbot deploy hook"; rm -f "$hook"; }
@@ -1213,6 +1364,50 @@ do_update() {
     systemctl daemon-reload >/dev/null 2>&1 || true
   fi
 
+  # 4i. Kernel/resource tuning (Workerman kernel-optimization appendix). Two
+  # halves, because they use two different mechanisms:
+  #
+  #   (a) sysctl + PAM limits — rewritten wholesale by phlix_apply_kernel_tuning,
+  #       so this is a plain unconditional call.
+  #   (b) LimitNOFILE= in the unit — systemd IGNORES /etc/security/limits.conf,
+  #       so (a) does nothing for the daemon. Without this line the service
+  #       inherits systemd's soft 1024, which is reachable under load (one fd
+  #       per live connection + open HLS segment files) and surfaces as
+  #       "Too many open files" with clients dropped mid-stream.
+  #
+  # Retrofit LimitNOFILE only when absent, so an operator who tuned it by hand
+  # keeps their value. Anchored on LimitMEMLOCK= when present (both are
+  # resource limits and belong together), else inserted before ExecStart=.
+  #
+  # Resolve the real service user from the unit: installs predating the
+  # dedicated 'phlix' account run as www-data, and the PAM drop-in must name
+  # whoever the unit actually uses rather than this script's default. Passed as
+  # an argument — NOT by reassigning $SERVICE_USER, which the chown steps above
+  # and below this block also read.
+  local unit_user=""
+  unit_user="$(phlix_systemd_unit_user "$SERVICE_FILE")"
+  phlix_apply_kernel_tuning "${unit_user:-$SERVICE_USER}"
+
+  if [ -f "$SERVICE_FILE" ] && ! grep -q '^LimitNOFILE=' "$SERVICE_FILE" 2>/dev/null; then
+    log "Adding LimitNOFILE=1048576 to systemd unit (systemd default soft is 1024)"
+    if grep -q '^LimitMEMLOCK=' "$SERVICE_FILE" 2>/dev/null; then
+      sed -i "\\|^LimitMEMLOCK=|a\\
+\\
+# File-descriptor ceiling for the master and every worker it forks. systemd\\
+# does NOT read /etc/security/limits.conf, so this line is what the daemon\\
+# actually gets (default soft 1024 / hard 524288).\\
+LimitNOFILE=1048576" "$SERVICE_FILE"
+    else
+      sed -i "\\|^ExecStart=|i\\
+# File-descriptor ceiling for the master and every worker it forks. systemd\\
+# does NOT read /etc/security/limits.conf, so this line is what the daemon\\
+# actually gets (default soft 1024 / hard 524288).\\
+LimitNOFILE=1048576\\
+" "$SERVICE_FILE"
+    fi
+    systemctl daemon-reload >/dev/null 2>&1 || true
+  fi
+
   # 4f. Backfill env keys that newer code requires but an older install never
   # wrote. JWT_SECRET became a hard boot requirement in 0.55.0
   # (AuthServicesProvider::assertSecretConfigured) — an install that predates it
@@ -1449,10 +1644,17 @@ phlix_xdebug_disable() {
 # 2. Service user + directories
 # ---------------------------------------------------------------------------
 log "Ensuring system user '$SERVICE_USER' exists"
+# NOTE: phlix_apply_kernel_tuning runs AFTER this block — it writes a PAM
+# limits drop-in naming $SERVICE_USER, so the account must exist first.
 if ! id -u "$SERVICE_USER" >/dev/null 2>&1; then
   useradd --system --no-create-home --shell /usr/sbin/nologin "$SERVICE_USER"
   info "Created user '$SERVICE_USER'."
 fi
+
+# Kernel/resource tuning (Workerman kernel-optimization appendix). Needs
+# $SERVICE_USER to exist (PAM drop-in names it) and must land before the unit
+# is written in section 7. Also re-applied by do_update.
+phlix_apply_kernel_tuning
 
 log "Creating runtime directories"
 mkdir -p "$DATA_ROOT"/{config,data,logs,backups} "$LOG_DIR" "$RUN_DIR" "$(dirname "$ENV_FILE")"
@@ -1665,6 +1867,15 @@ TimeoutStartSec=30
 # with ENOMEM and workers intermittently drop connections (random 502s).
 # Lift the cap so io_uring initialises cleanly.
 LimitMEMLOCK=infinity
+
+# File-descriptor ceiling for the master and every worker it forks. systemd
+# does NOT read /etc/security/limits.conf, so this line — not the PAM drop-in
+# scripts/install.sh also writes — is what the daemon actually gets. The
+# systemd default is soft 1024 / hard 524288, and Workerman keeps one fd per
+# live connection: an HTTP worker serving HLS holds a socket per client plus
+# the open segment files, so a 1024 soft cap is reachable under load and
+# surfaces as "Too many open files" with clients dropped mid-stream.
+LimitNOFILE=1048576
 
 StandardOutput=journal
 StandardError=journal

@@ -483,6 +483,21 @@ final class MovedTopLevelFileKeepsIdentityTest extends TestCase
      * Two rips of one film with the same canonical key: 320x240/2s and
      * 1280x720/6s. Delete the small one; the row must follow the big one AND stop
      * claiming to be 320x240.
+     *
+     * ## Staged in three scans, and that is not incidental
+     *
+     * The first revision of this case created BOTH rips before the first scan.
+     * They share a canonical key, so exactly one gets a row and the other is
+     * deduped — **whichever the directory walk reaches first**. `readdir` order is
+     * not guaranteed and is not the same on every filesystem: it passed on two
+     * dev boxes and FAILED on the GitHub runner, where the large copy won and
+     * `itemIdAtPath($small)` came back empty. That is an order-dependent
+     * assumption, not a flake, and it is the same class of silent
+     * environment-to-environment difference this whole step exists to stop.
+     *
+     * So the small copy is indexed while it is the ONLY rip of that film on disk,
+     * which no iteration order can change. Every later step likewise resolves by
+     * path lookup, never by "whichever file was visited first".
      */
     public function testAnAdoptedDifferentCopyRedescribesTheRowsFileDerivedState(): void
     {
@@ -495,17 +510,23 @@ final class MovedTopLevelFileKeepsIdentityTest extends TestCase
         $large = $this->root . '/B/Blade.Runner.1982.1080p.mp4';
         $companion = $this->root . '/A/Metropolis (1927).mp4';
         $this->makeClip($small, 320, 240, 2);
-        $this->makeClip($large, 1280, 720, 6);
         // A present companion so the prune's per-root guard is open — otherwise
-        // the row is spared and (correctly) never adopted at all.
+        // the row is spared and (correctly) never adopted at all. Its canonical
+        // key differs from the film's, so it can never contend for the row.
         $this->makeClip($companion, 160, 120, 1);
 
+        // ── scan 1: the small rip is the only copy, so it IS the indexed row ──
         $libraryId = $this->createLibrary('movie');
         $manager = $this->manager($ffmpeg);
         $manager->rescanLibrary($libraryId);
 
         $originalId = $this->itemIdAtPath($libraryId, $small);
-        $this->assertNotSame('', $originalId, 'the small copy must be the one indexed');
+        $this->assertNotSame(
+            '',
+            $originalId,
+            'the small copy is the only rip of this film on disk at this point, so it must be the '
+            . 'indexed row no matter what order the walk visited the directory in',
+        );
         $this->assertSame(
             [320, 240, 2],
             $this->fileDerivedState($originalId),
@@ -513,6 +534,26 @@ final class MovedTopLevelFileKeepsIdentityTest extends TestCase
         );
         $this->recordUserData($originalId);
 
+        // ── scan 2: the second rip appears while the first is STILL on disk ──
+        // Deduped into the existing row (it is not a move), and because the row's
+        // own file is still there nothing may be re-pointed OR re-described.
+        $this->makeClip($large, 1280, 720, 6);
+        $duplicate = $manager->rescanLibrary($libraryId);
+
+        $this->assertSame(0, $duplicate->removed);
+        $this->assertSame(
+            [$originalId],
+            $this->idsAtPath($libraryId, $small),
+            'both copies are present, so the row must still name the one it was created from',
+        );
+        $this->assertSame([], $this->idsAtPath($libraryId, $large), 'the duplicate must not fork a second row');
+        $this->assertSame(
+            [320, 240, 2],
+            $this->fileDerivedState($originalId),
+            're-describing here would be wrong: the row still points at the 320x240 file',
+        );
+
+        // ── scan 3: the indexed copy is deleted; the row must follow the other ──
         self::assertTrue(unlink($small));
         clearstatcache(true);
 

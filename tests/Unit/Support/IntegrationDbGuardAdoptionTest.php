@@ -221,8 +221,16 @@ final class IntegrationDbGuardAdoptionTest extends TestCase
      * was added: it proves a multi-byte `media_streams.language` value survives
      * the write that byte-wise truncation used to fail with MySQL 1366, which
      * only a real utf8mb4 server can decide.
+     *
+     * 37 since S158's
+     * `tests/Integration/Media/Library/MovedTopLevelFileKeepsIdentityTest.php`:
+     * it proves a moved top-level file keeps its row id and its cascading user
+     * data. The in-memory `Connection` doubles return canned rows wholesale and
+     * ignore the statement's column list, so no double can show whether
+     * `media_items.path` was actually written, whether the STORED generated
+     * `path_hash` followed it, or whether the `ON DELETE CASCADE` fired.
      */
-    private const EXPECTED_ADOPTERS = 36;
+    private const EXPECTED_ADOPTERS = 37;
 
     /**
      * Bare function calls that are a MySQL reachability probe under any

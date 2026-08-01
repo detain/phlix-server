@@ -948,12 +948,29 @@ class LibraryManager
         // rescan has been timed, so no new figure is claimed. It is interruptible and
         // idempotent — {@see \Phlix\Media\Music\MusicLibraryScanner} flushes per album
         // and stamps only what it read — so re-running continues rather than restarts.
-        $scan = $this->scanLibrary($libraryId, $onProgress, true);
+        //
+        // ── S158: the moved-file ADOPTION window. ──────────────────────────────
+        //
+        // A top-level file that MOVED is found by the scan under its new path but
+        // matched to its existing row by canonical key, so the row keeps naming
+        // the old location and the prune below would delete it — taking
+        // user_item_data and watch_history with it. The scan therefore records
+        // those rows as adoption candidates and writes nothing; pruneRemovedItems()
+        // re-points them at the one point where it already knows it would
+        // otherwise delete them. Opened here and closed in `finally` so the
+        // candidate map cannot outlive the pass in a resident worker.
+        $this->scanner->beginAdoptionTracking();
 
-        // Prune only items whose source file is gone from disk, plus any now-empty
-        // series/season containers — but ONLY when the library storage is actually
-        // accessible, so a temporarily-unmounted root does not wipe the library.
-        $removed = $this->pruneRemovedItems($libraryId, $rootPaths);
+        try {
+            $scan = $this->scanLibrary($libraryId, $onProgress, true);
+
+            // Prune only items whose source file is gone from disk, plus any now-empty
+            // series/season containers — but ONLY when the library storage is actually
+            // accessible, so a temporarily-unmounted root does not wipe the library.
+            $removed = $this->pruneRemovedItems($libraryId, $rootPaths);
+        } finally {
+            $this->scanner->endAdoptionTracking();
+        }
 
         $after = $this->countLibraryItems($libraryId);
 
@@ -1297,7 +1314,19 @@ class LibraryManager
      *     if that root has AT LEAST ONE currently-present item. A root with ZERO
      *     present items is skipped entirely — it is indistinguishable between an
      *     unmounted-mountpoint leftover and a legitimately-emptied folder, and we
-     *     refuse to bulk-delete either.
+     *     refuse to bulk-delete either;
+     *  5. S158: gives each surviving deletion candidate one last chance to be a
+     *     MOVE rather than a removal. A row the scan matched by canonical key to
+     *     a file at a different path is re-pointed at that file instead of being
+     *     deleted — see {@see MediaScanner::adoptRecordedPath()}. This is the only
+     *     place that decision can be made correctly, because it is the only place
+     *     conditions 1–4 are known; it changes nothing for a row the guards above
+     *     spared, and adopted rows are NOT counted in the returned removal total.
+     *
+     * Adoption only ever happens for a caller that opened the window
+     * ({@see MediaScanner::beginAdoptionTracking()}) — i.e. `rescanLibrary()`. The
+     * standalone {@see self::pruneLibrary()} op did not scan, has no candidates,
+     * and behaves exactly as it always did.
      *
      * IMPORTANT intended tradeoff: a library (or root) that has been legitimately
      * fully emptied on disk will RETAIN its last items across a rescan — they are
@@ -1436,12 +1465,42 @@ class LibraryManager
         }
 
         $removed = 0;
+        $adopted = 0;
 
         // Phase 1: prune leaf items whose real source file is gone from disk and
         // whose owning root still has present items.
         foreach ($toDelete as $id) {
+            // S158 — THE one place where a moved file can be rescued, and the
+            // reason it is here rather than in the scan.
+            //
+            // Reaching this line means all four of the prune's conditions hold
+            // for this row: a configured root is a readable directory, the row is
+            // attributable to one of those roots, that root has ≥1 present item,
+            // and the row's own file is gone. Three of those are whole-library
+            // aggregates that the scan cannot compute for a single file — which
+            // is exactly why an earlier revision, which rewrote the path from
+            // inside the scan on `!file_exists()` alone, could move a row the
+            // presence guard was SPARING (an unmounted NAS whose mountpoint
+            // directory is still readable) into a root where nothing spares it,
+            // and lose it on a later rescan.
+            //
+            // So the scan only records a candidate and this loop decides. If the
+            // scanner found the file somewhere else, the row FOLLOWS it instead
+            // of being deleted; every row the guards above spared never reaches
+            // here and is untouched, which is master's behaviour exactly.
+            if ($this->scanner->adoptRecordedPath($id)) {
+                $adopted++;
+                continue;
+            }
             $this->db->query("DELETE FROM media_items WHERE id = ?", [$id]);
             $removed++;
+        }
+
+        if ($adopted > 0) {
+            $this->logger->info(
+                'Re-pointed moved top-level items at their new paths instead of pruning them',
+                ['library_id' => $libraryId, 'adopted' => $adopted],
+            );
         }
 
         // Phase 2: prune now-empty containers — seasons first (their parent

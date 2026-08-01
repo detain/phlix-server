@@ -2039,13 +2039,23 @@ class MediaScanner
         // candidate cap gets, with the consequence spelled out — the two
         // overflows mean different things and an operator has to be able to tell
         // which one happened.
+        //
+        // The wording deliberately does NOT promise survival. Being under budget
+        // is not a guarantee that the row lives: adoptRecordedPath() can still
+        // abandon the adoption because the file vanished again, because the row
+        // cannot be re-read, or because the UPDATE collided with a concurrent
+        // worker — and the prune then deletes the row and its user data exactly
+        // as it did before S158. "Keeps their identity" is true only of the
+        // adoptions that succeed, and the message says so.
         if ($probe !== null && $this->adoptionProbesHeld >= $this->maxAdoptionProbes) {
             $probe = null;
             if (!$this->adoptionProbeCapWarned) {
                 $this->adoptionProbeCapWarned = true;
                 $this->logger->warning(
-                    'Moved-file adoption probe budget reached; further moved rows keep their identity '
-                    . 'but their duration/source/streams will still describe the file they no longer point at',
+                    'Moved-file adoption probe budget reached; further moved rows that are successfully '
+                    . 'adopted keep their identity, but their duration/source/streams will still describe '
+                    . 'the file they no longer point at. This budget does not make an adoption succeed: '
+                    . 'one that fails for any other reason is still pruned, with its user data',
                     ['cap' => $this->maxAdoptionProbes],
                 );
             }

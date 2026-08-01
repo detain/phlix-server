@@ -733,6 +733,75 @@ final class MovedTopLevelFileKeepsIdentityTest extends TestCase
             $this->logLines('Moved-file adoption candidate cap reached'),
             'the two overflows mean different things and must not be confused for one another',
         );
+        $this->assertStringContainsString(
+            'is still pruned',
+            $warnings[0],
+            'the message must not promise survival. Being under budget does not make an adoption '
+            . 'succeed — it can still be abandoned because the file vanished again, because the row '
+            . 'cannot be re-read, or because the UPDATE collided — and the prune then takes the row '
+            . 'and its user data. An operator reading "keeps their identity" unconditionally would '
+            . 'discount exactly the case worth investigating',
+        );
+    }
+
+    /**
+     * Review round 3, F3, third reset — the probe COUNTER, not just its latch.
+     *
+     * `adoptionProbesHeld` has the same per-worker-leak shape as the two warning
+     * latches: without its reset the budget is spent once for the lifetime of the
+     * scanner, so the second rescan in a resident worker starts already over
+     * budget and silently stops re-describing anything.
+     *
+     * Budget of one, two rescans, one adoption each: with the reset both stay
+     * within budget and nothing is announced; without it the second rescan
+     * overflows.
+     */
+    public function testTheProbeBudgetIsRestoredForEachRescanNotSpentOncePerWorker(): void
+    {
+        $ffmpeg = new FfmpegRunner('/usr/bin/ffmpeg', '/usr/bin/ffprobe', sys_get_temp_dir());
+        if (!$ffmpeg->isAvailable()) {
+            self::markTestSkipped('ffmpeg/ffprobe not available; this case is about probe-derived state');
+        }
+
+        $this->makeClip($this->root . '/A/Companion (2001).mp4', 160, 120, 1);
+        $films = ['Blade Runner (1982)' => 'Blade.Runner.1982.1080p', 'Solaris (1972)' => 'Solaris.1972.1080p'];
+        foreach ($films as $title => $_) {
+            $this->makeClip($this->root . '/A/' . $title . '.mp4', 320, 240, 2);
+        }
+
+        $libraryId = $this->createLibrary('movie');
+        $logger = $this->capturingLogger();
+        $manager = $this->manager($ffmpeg, $logger, null, 1);
+        $manager->rescanLibrary($libraryId);
+
+        $ids = [];
+        foreach ($films as $title => $_) {
+            $ids[$title] = $this->itemIdAtPath($libraryId, $this->root . '/A/' . $title . '.mp4');
+            $this->assertNotSame('', $ids[$title]);
+        }
+
+        // One adoption per rescan — each on its own must fit inside a budget of 1.
+        foreach ($films as $title => $slug) {
+            $large = $this->root . '/B/' . $slug . '.mp4';
+            $this->makeClip($large, 1280, 720, 6);
+            self::assertTrue(unlink($this->root . '/A/' . $title . '.mp4'));
+            clearstatcache(true);
+
+            $result = $manager->rescanLibrary($libraryId);
+            $this->assertSame(0, $result->removed, "[$title] adopted, not pruned");
+            $this->assertSame([$ids[$title]], $this->idsAtPath($libraryId, $large));
+            $this->assertSame(
+                [1280, 720, 6],
+                $this->fileDerivedState($ids[$title]),
+                "[$title] must be re-described — a budget that is never given back stops this silently",
+            );
+        }
+
+        $this->assertSame(
+            [],
+            $this->logLines('Moved-file adoption probe budget reached'),
+            'neither rescan used more than its one slot, so neither may report an overflow',
+        );
     }
 
     /**
@@ -1157,6 +1226,292 @@ final class MovedTopLevelFileKeepsIdentityTest extends TestCase
         );
     }
 
+    /**
+     * Review round 3, F1 — the "same path" early return is REACHABLE, and my
+     * previous claim that it was not was fiction.
+     *
+     * I had written that none of the four conditions behind
+     * `MediaScanner.php`'s `$recordedPath === $path` guard "is producible by any
+     * scan path without hand-INSERTing a malformed row". That was analysis I had
+     * not executed. `processFile()` scrubs `$path` to valid UTF-8 AFTER
+     * `findByPath()`/`findPathsMap()` have already been handed the RAW bytes, so
+     * two files whose names differ only in encoding collapse onto ONE stored
+     * path — and the second one to be processed arrives at the canonical branch
+     * with its scrubbed path already equal to the row's.
+     *
+     * Measured with pcov on a real scan of exactly this fixture:
+     * `line 2000 => EXECUTED`.
+     *
+     * Order-independent by construction: BOTH spellings normalise to the same
+     * stored path, so whichever the walk reaches second is the one that hits the
+     * guard. What must hold either way is that nothing forks and nothing moves.
+     *
+     * ⚠ The scrub-ordering itself is a PRE-EXISTING defect, not S158's, and is
+     * deliberately not fixed here — see the worklog follow-up. This case pins
+     * only that S158's adoption machinery stays out of the way of it.
+     */
+    public function testAFilenameThatOnlyDiffersByEncodingIsDedupedAndNeverRePointed(): void
+    {
+        // 0xE9 is 'é' in Windows-1252; toValidUtf8() converts it to the same
+        // UTF-8 'é' the other file already carries.
+        $utf8 = $this->writeFile("Movies/Caf\xc3\xa9 (1999).mkv");
+        $this->writeFile("Movies/Caf\xe9 (1999).mkv");
+        $this->writeFile('Movies/Companion (2001).mkv');
+
+        $libraryId = $this->createLibrary('movie');
+        $logger = $this->capturingLogger('info');
+        $manager = $this->manager(null, $logger);
+
+        $result = $manager->rescanLibrary($libraryId);
+
+        $this->assertSame(
+            0,
+            $result->removed,
+            'the stored row names the valid-UTF-8 file, which is on disk, so nothing may be pruned',
+        );
+        $this->assertSame(
+            2,
+            $this->countItems($libraryId),
+            'the two spellings are ONE film: they must not fork a second top-level row',
+        );
+        $this->assertCount(
+            1,
+            $this->idsAtPath($libraryId, $utf8),
+            'and the surviving row is the one addressed by the valid-UTF-8 path',
+        );
+        $this->assertSame(
+            [],
+            $this->logLines('Top-level item followed its file to a new path'),
+            'the second spelling resolves to the SAME stored path, so there is no move to follow — '
+            . 're-pointing here would be a write with no meaning behind it',
+        );
+
+        // Idempotent: the same thing happens on every later rescan, forever.
+        $settled = $manager->rescanLibrary($libraryId);
+        $this->assertSame(0, $settled->removed);
+        $this->assertSame(0, $settled->added);
+        $this->assertSame(2, $this->countItems($libraryId));
+    }
+
+    /**
+     * Review round 3, F2 — the duration-only comparison is REACHABLE, and my
+     * previous claim that `processFile()` "cannot create it since it writes both
+     * from one probe" was flatly false.
+     *
+     * A container written to a NON-SEEKABLE output — a live capture, an
+     * in-progress download — cannot have its duration written back into the
+     * header, so it probes to a `source` with `duration NULL`. Measured here:
+     *
+     *   pipe.mkv   duration=NULL  source={"width":320,…,"video_bitrate":null,…}
+     *   seek.mkv   duration=3     source={"width":320,…,"video_bitrate":37002,…}
+     *
+     * A row built from the first therefore has a `source` and no duration, which
+     * is exactly the `: null` arm of the recorded-duration ternary.
+     *
+     * Reaching it also needs the SOURCE comparison not to decide first, and that
+     * is where the measurement matters: for Matroska, `video_bitrate` is
+     * `stream.bit_rate ?? format.bit_rate`, and `format.bit_rate` is derived from
+     * size÷duration — so a null bitrate IMPLIES a null duration and two mkvs can
+     * never have equal sources but different durations. The only shape left is an
+     * adopted file whose probe has no describable A/V source at all, which is
+     * what a botched remux that kept only the subtitle track produces
+     * (measured: `duration=4 source=NULL streams=0`). Then the source comparison
+     * cannot arbitrate and the duration comparison is the only thing standing
+     * between the row and a scrubber that lies about the whole film.
+     */
+    public function testAnAdoptionRepairsADurationWhenTheSourceComparisonCannotArbitrate(): void
+    {
+        $ffmpeg = new FfmpegRunner('/usr/bin/ffmpeg', '/usr/bin/ffprobe', sys_get_temp_dir());
+        if (!$ffmpeg->isAvailable()) {
+            self::markTestSkipped('ffmpeg/ffprobe not available; this case is about probe-derived state');
+        }
+
+        $capture = $this->root . '/Movies/Solaris (1972).mkv';
+        $this->makeUnseekableClip($capture, 320, 240, 3);
+        $this->makeClip($this->root . '/Movies/Companion (2001).mkv', 160, 120, 1);
+
+        $libraryId = $this->createLibrary('movie');
+        $manager = $this->manager($ffmpeg);
+        $manager->rescanLibrary($libraryId);
+
+        $originalId = $this->itemIdAtPath($libraryId, $capture);
+        $this->assertNotSame('', $originalId);
+        $metadata = $this->metadataOf($originalId);
+        $this->assertIsArray($metadata['source'] ?? null, 'the capture describes its video source');
+        $this->assertArrayNotHasKey(
+            'duration_seconds',
+            $metadata,
+            'but a non-seekable container cannot report one — this is the row shape the branch needs',
+        );
+        $this->recordUserData($originalId);
+
+        // The capture is replaced by a remux artefact that kept only a subtitle
+        // track: it has a duration, and no A/V source to compare against.
+        self::assertTrue(unlink($capture));
+        $remux = $this->root . '/Backup/Solaris.1972.mkv';
+        $this->makeSubtitleOnlyClip($remux);
+        clearstatcache(true);
+
+        $result = $manager->rescanLibrary($libraryId);
+
+        $this->assertSame(0, $result->removed, 'the row follows the file rather than being pruned');
+        $this->assertSame([$originalId], $this->idsAtPath($libraryId, $remux));
+        $this->assertSame(1, $this->countUserData($originalId));
+
+        $after = $this->metadataOf($originalId);
+        $this->assertSame(
+            4,
+            $after['duration_seconds'] ?? null,
+            'the duration comparison is the only one that could have fired here, and without it the '
+            . 'row keeps no duration at all while pointing at a file that has one',
+        );
+        $this->assertSame(
+            320,
+            (int) (is_array($after['source'] ?? null) ? ($after['source']['width'] ?? 0) : 0),
+            'the adopted file describes no A/V source, so the row must KEEP the source it had rather '
+            . 'than have it blanked',
+        );
+    }
+
+    /**
+     * Review round 3, F3 — the latch resets in `beginAdoptionTracking()`.
+     *
+     * Deleting them left every test green, and they are load-bearing: the
+     * scanner is a container singleton in a resident Swoole worker, so without
+     * the reset an overflow is announced once per worker LIFETIME instead of once
+     * per scan. An operator watching a long-lived process would see the first
+     * scan's warning and never another, for either cap.
+     *
+     * Two libraries scanned through the SAME scanner instance is the smallest
+     * shape that tells "once per scan" from "once per process" apart — and it is
+     * the production shape, not a contrivance.
+     */
+    public function testEachRescanAnnouncesAnOverflowAgainRatherThanOncePerWorker(): void
+    {
+        $libraries = [];
+        foreach (['one', 'two'] as $name) {
+            foreach (['Solaris (1972)', 'Stalker (1979)'] as $title) {
+                $this->writeFile("$name/Movies/$title.mkv");
+            }
+            $this->writeFile("$name/Movies/Companion (2001).mkv");
+            $libraries[$name] = $this->createLibrary('movie', [$this->root . '/' . $name]);
+        }
+
+        $logger = $this->capturingLogger();
+        // ONE scanner for both libraries — the container-singleton shape.
+        $manager = $this->manager(null, $logger, 1);
+
+        foreach ($libraries as $name => $libraryId) {
+            $manager->rescanLibrary($libraryId);
+            foreach (['Solaris (1972)', 'Stalker (1979)'] as $title) {
+                $this->movePath($this->root . "/$name/Movies/$title.mkv", "$name/Archive/$title.mkv");
+            }
+            $manager->rescanLibrary($libraryId);
+        }
+
+        $this->assertCount(
+            2,
+            $this->logLines('Moved-file adoption candidate cap reached'),
+            'each rescan overflowed, so each rescan must say so. One line here means the latch is '
+            . 'never reset and a resident worker goes quiet after its very first overflow',
+        );
+    }
+
+    /**
+     * Review round 3, F3, second half — the same reset for the PROBE latch.
+     *
+     * Split from the candidate case because they are different fields and a
+     * single test covering both would not say which one regressed.
+     */
+    public function testEachRescanAnnouncesTheProbeBudgetAgain(): void
+    {
+        $ffmpeg = new FfmpegRunner('/usr/bin/ffmpeg', '/usr/bin/ffprobe', sys_get_temp_dir());
+        if (!$ffmpeg->isAvailable()) {
+            self::markTestSkipped('ffmpeg/ffprobe not available; this case is about probe-derived state');
+        }
+
+        $logger = $this->capturingLogger();
+        $manager = $this->manager($ffmpeg, $logger, null, 0);
+
+        foreach (['one', 'two'] as $name) {
+            $small = $this->root . "/$name/A/Blade Runner (1982).mp4";
+            $this->makeClip($small, 320, 240, 2);
+            $this->makeClip($this->root . "/$name/A/Companion (2001).mp4", 160, 120, 1);
+            $libraryId = $this->createLibrary('movie', [$this->root . '/' . $name]);
+
+            $manager->rescanLibrary($libraryId);
+            $this->assertNotSame('', $this->itemIdAtPath($libraryId, $small), "[$name] indexed");
+
+            $this->makeClip($this->root . "/$name/B/Blade.Runner.1982.1080p.mp4", 1280, 720, 6);
+            self::assertTrue(unlink($small));
+            clearstatcache(true);
+            $manager->rescanLibrary($libraryId);
+        }
+
+        $this->assertCount(
+            2,
+            $this->logLines('Moved-file adoption probe budget reached'),
+            'the probe latch must be reset per scan too, for the same reason',
+        );
+    }
+
+    /**
+     * Review round 3, F4 — the first-candidate-wins guard.
+     *
+     * `testTwoFilesMatchingOneRowStillProduceExactlyOneAdoptedRow` asserts the
+     * OUTCOME, and the outcome is the same with or without the guard, so deleting
+     * the guard left it green. This case detects the guard itself, using the
+     * detector the reviewer supplied: with a probe budget of exactly ONE, the
+     * first candidate consumes the budget and the second must never be recorded
+     * at all — so a budget warning here means the row was re-recorded.
+     *
+     * Order-independent: it does not matter which of the two files is first, only
+     * that the second is turned away.
+     */
+    public function testASecondCandidateForTheSameRowIsNeverRecorded(): void
+    {
+        $ffmpeg = new FfmpegRunner('/usr/bin/ffmpeg', '/usr/bin/ffprobe', sys_get_temp_dir());
+        if (!$ffmpeg->isAvailable()) {
+            self::markTestSkipped('ffmpeg/ffprobe not available; the detector needs a real probe');
+        }
+
+        $original = $this->root . '/Movies/Solaris (1972).mp4';
+        $this->makeClip($original, 320, 240, 2);
+        $this->makeClip($this->root . '/Movies/Companion (2001).mp4', 160, 120, 1);
+
+        $libraryId = $this->createLibrary('movie');
+        $logger = $this->capturingLogger();
+        // Budget of exactly one: enough for the first candidate, nothing spare.
+        $manager = $this->manager($ffmpeg, $logger, null, 1);
+        $manager->rescanLibrary($libraryId);
+
+        $originalId = $this->itemIdAtPath($libraryId, $original);
+        $this->assertNotSame('', $originalId);
+        $this->recordUserData($originalId);
+
+        // One indexed copy disappears; TWO candidates for it appear.
+        self::assertTrue(unlink($original));
+        $a = $this->root . '/Archive/Solaris (1972).mp4';
+        $b = $this->root . '/Backup/Solaris.1972.mp4';
+        $this->makeClip($a, 320, 240, 2);
+        $this->makeClip($b, 640, 480, 4);
+        clearstatcache(true);
+
+        $result = $manager->rescanLibrary($libraryId);
+
+        $this->assertSame(0, $result->removed);
+        $this->assertSame(1, $this->countRowsWithId($originalId));
+        $this->assertSame(1, $this->countUserData($originalId));
+        $this->assertContains($this->pathOf($originalId), [$a, $b]);
+        $this->assertSame(
+            [],
+            $this->logLines('Moved-file adoption probe budget reached'),
+            'the budget of one was spent by the FIRST candidate. A warning here means the second file '
+            . 'was recorded over the top of it — which is a second probe payload held for one row, and '
+            . 'makes the adopted path depend on which write landed last',
+        );
+    }
+
     // ── helpers ──────────────────────────────────────────────────────────────
 
     private function db(): Connection
@@ -1287,6 +1642,58 @@ final class MovedTopLevelFileKeepsIdentityTest extends TestCase
         );
         exec($cmd, $out, $code);
         self::assertSame(0, $code, 'failed to generate the test clip');
+        self::assertFileExists($absolute);
+    }
+
+    /**
+     * A clip muxed to a NON-SEEKABLE output, so the container never gets its
+     * duration written back into the header.
+     *
+     * This is what a live capture or an in-progress download looks like on disk,
+     * and it is the only way to produce a row that has a `source` but no
+     * `duration_seconds` — the state review round 3 proved I was wrong to call
+     * impossible.
+     */
+    private function makeUnseekableClip(string $absolute, int $width, int $height, int $seconds): void
+    {
+        $dir = dirname($absolute);
+        if (!is_dir($dir)) {
+            mkdir($dir, 0775, true);
+        }
+        $cmd = sprintf(
+            '%s -y -hide_banner -loglevel error -f lavfi -i %s -c:v libx264 -pix_fmt yuv420p'
+            . ' -f matroska pipe:1 > %s 2>/dev/null',
+            escapeshellarg('/usr/bin/ffmpeg'),
+            escapeshellarg(sprintf('testsrc=size=%dx%d:rate=10:duration=%d', $width, $height, $seconds)),
+            escapeshellarg($absolute),
+        );
+        exec($cmd, $out, $code);
+        self::assertSame(0, $code, 'failed to generate the non-seekable clip');
+        self::assertFileExists($absolute);
+    }
+
+    /**
+     * A container carrying ONLY a subtitle track — what a botched remux leaves
+     * behind. It probes to a duration with NO describable A/V source, which is
+     * the one shape in which the source comparison cannot arbitrate an adoption.
+     */
+    private function makeSubtitleOnlyClip(string $absolute): void
+    {
+        $dir = dirname($absolute);
+        if (!is_dir($dir)) {
+            mkdir($dir, 0775, true);
+        }
+        $srt = $dir . '/' . basename($absolute) . '.srt';
+        file_put_contents($srt, "1\n00:00:00,000 --> 00:00:04,000\nhello\n\n");
+        $cmd = sprintf(
+            '%s -y -hide_banner -loglevel error -i %s -c:s srt %s 2>/dev/null',
+            escapeshellarg('/usr/bin/ffmpeg'),
+            escapeshellarg($srt),
+            escapeshellarg($absolute),
+        );
+        exec($cmd, $out, $code);
+        @unlink($srt);
+        self::assertSame(0, $code, 'failed to generate the subtitle-only container');
         self::assertFileExists($absolute);
     }
 

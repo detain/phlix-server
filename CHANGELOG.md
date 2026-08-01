@@ -7,6 +7,35 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased] - 2026-07-24
 
+### Added
+
+- **`scripts/install.sh` now applies the Workerman kernel tuning, on both fresh
+  install and `--update`.** Implements the applicable parts of the
+  [kernel-optimization appendix](https://www.workerman.net/doc/workerman/appendices/kernel-optimization.html):
+  - `LimitNOFILE=1048576` in the systemd unit. This is the one that mattered:
+    systemd does **not** read `/etc/security/limits.conf`, so the daemon was
+    running at systemd's soft default of **1024** open files — one fd per live
+    connection plus open HLS segment files, reachable under load and surfacing
+    as "Too many open files" with clients dropped mid-stream. Retrofitted into
+    existing units by `--update`, only when the directive is absent.
+  - `/etc/sysctl.d/99-phlix-net.conf` — `net.core.somaxconn=65535` (was 4096,
+    and it silently clamps every listen backlog), `tcp_max_syn_backlog=262144`,
+    `netdev_max_backlog=30000`, and `ip_local_port_range=16384 65535` (a
+    *widening* — 49,152 ephemeral ports vs the 28,232 of the 32768-60999
+    default; the floor stops at 16384 rather than the page's 10240 so the
+    registered-port band, which includes every port Phlix listens on, stays
+    outside the ephemeral range).
+  - `/etc/security/limits.d/99-phlix.conf` — nofile soft 65536 / hard 1048576
+    for `root` and the service user, covering login shells and hand-run CLI
+    scripts (systemd is unaffected by this file; see `LimitNOFILE` above).
+
+  Four settings from that page are deliberately **not** applied, each with the
+  reason recorded in the generated sysctl file: `fs.file-max` and
+  `tcp_max_tw_buckets` would *lower* modern kernel defaults,
+  `tcp_tw_recycle` was removed from Linux in 4.12, and `nf_conntrack_max` is
+  only meaningful behind a stateful firewall. `--uninstall` removes both
+  drop-ins.
+
 ### Fixed
 
 - **Assertions inside a callback can no longer pass a test while asserting `false`**

@@ -147,6 +147,59 @@ phlix_generate_secret() {
     return 1
 }
 
+# ---------------------------------------------------------------------------
+# FAIL CLOSED on a documented placeholder. (S163 review F3)
+#
+# The PHLIX_SECRET_KEY -> JWT_SECRET mapping below is what makes the shipped
+# compose examples work — and, before this guard, it also promoted
+# `docker/examples/.env.example`'s committed placeholder into a REAL, live
+# signing key: `/proc/1/environ` showed
+# `JWT_SECRET=change_me_generate_with_openssl` and the daemon happily served
+# 200s with it. Every reader of that file would have shared one publicly-known
+# key that signs both JWTs and media signed URLs.
+#
+# AuthServicesProvider::assertSecretConfigured() only rejects '' and
+# 'default-secret-change-me', so it could not catch this. The defect was
+# INTRODUCED by the mapping — the variable was inert before it — so the guard
+# belongs here, next to the mapping.
+#
+# Refusing to start is the correct failure: a container that boots with a
+# guessable signing key is worse than one that tells the operator to generate
+# a real one. Leaving the variable UNSET is fully supported and is now what the
+# example recommends — the block further down generates and persists a key.
+# ---------------------------------------------------------------------------
+phlix_is_placeholder_secret() {
+    case "$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')" in
+        change_me* | changeme* | change-me* | \
+        default-secret-change-me | \
+        your-secret-here | your_secret_here | \
+        secret | password | placeholder | example | test)
+            return 0
+            ;;
+        *) return 1 ;;
+    esac
+}
+
+for _candidate_var in JWT_SECRET PHLIX_SECRET_KEY; do
+    eval "_candidate_val=\${${_candidate_var}:-}"
+    if [ -n "$_candidate_val" ] && phlix_is_placeholder_secret "$_candidate_val"; then
+        echo "==========================================================" >&2
+        echo "PHLIX-PLACEHOLDER-SECRET: ${_candidate_var} is set to the" >&2
+        echo "documented placeholder value \"${_candidate_val}\"." >&2
+        echo "" >&2
+        echo "That string is committed to this repository, so it is public." >&2
+        echo "Using it would make every JWT and every signed media URL on this" >&2
+        echo "server forgeable by anyone. Refusing to start." >&2
+        echo "" >&2
+        echo "Either generate a real key:    openssl rand -hex 32" >&2
+        echo "or UNSET ${_candidate_var} entirely and let this entrypoint" >&2
+        echo "generate one and persist it to \${PHLIX_JWT_SECRET_FILE}." >&2
+        echo "==========================================================" >&2
+        exit 1
+    fi
+done
+unset _candidate_var _candidate_val
+
 [ -n "${JWT_SECRET:-}" ] || JWT_SECRET="${PHLIX_SECRET_KEY:-}"
 
 if [ -z "${JWT_SECRET:-}" ] && [ -r "$JWT_SECRET_FILE" ]; then

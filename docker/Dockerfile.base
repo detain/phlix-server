@@ -13,11 +13,31 @@
 # ("Base image") and .github/workflows/docker.yml.
 # ============================================================================
 ARG PHP_VERSION=8.3
-FROM php:${PHP_VERSION}-fpm-alpine
+# ----------------------------------------------------------------------------
+# `-cli`, not `-fpm`. (S163 review F4)
+#
+# The runtime images run the Workerman daemon and nothing else, so php-fpm was
+# dead weight — but not harmless dead weight: the `-fpm` flavour also carries
+# `EXPOSE 9000`, which meant the "daemon-only" Alpine image still advertised an
+# FPM port (visible on every `docker ps`), and it kept an `php-fpm` binary in
+# the image that the S163 supervisord config used to point at. The unit test
+# that was supposed to forbid nginx/php-fpm passed only because its data
+# provider never scanned THIS file.
+#
+# Consequence for phlix-hub, which FROMs this same published base: its
+# `[program:php-fpm]`/`[program:nginx]` lose their binaries. Those programs are
+# already 100% non-functional there (`exit status 78` FATAL and a
+# `fastcgi_pass` to a port nothing listens on — the same S163 defects), and the
+# hub image BUILD is unaffected because its Dockerfile only COPYs config. It
+# needs the same daemon-only treatment; recorded in the step worklog.
+# ----------------------------------------------------------------------------
+FROM php:${PHP_VERSION}-cli-alpine
 
-# Install system deps and PHP extensions
+# Install system deps and PHP extensions.
+# `supervisor` stays — it is the process manager the runtime images use.
+# `nginx` is GONE: nothing in the serving path uses it (docker/nginx.conf is
+# deleted), and shipping it invited the two-serving-models confusion back.
 RUN apk add --no-cache \
-    nginx \
     supervisor \
     mysql-client \
     libzip-dev \
@@ -99,8 +119,24 @@ RUN apk add --no-cache \
 # ----------------------------------------------------------------------------
 ARG SWOOLE_IOURING=0
 
+# ----------------------------------------------------------------------------
+# PIN the from-source builds. (S163 review F9)
+#
+# These used to `git clone --depth=1` the DEFAULT BRANCH of both repositories,
+# so the extension set in `phlix-base:latest` — a PUBLISHED artifact that
+# phlix-server and phlix-hub both build on — changed silently whenever upstream
+# pushed to master. Two builds of the same commit of this repo could produce
+# different images, and a boot gate that passes today could fail tomorrow with
+# no change here. Pinned to exactly what the S163 boot runs validated.
+#
+# To move: bump the ref, rebuild the base, and re-run
+# `scripts/docker-boot-smoke.sh` for all three images.
+# ----------------------------------------------------------------------------
+ARG SWOOLE_REF=v6.2.1
+ARG PHP_UV_REF=670a609efc36c9043be37bae4126f06ed30fde21
+
 # Build and install swoole
-RUN git clone --depth=1 https://github.com/swoole/swoole-src.git /tmp/swoole \
+RUN git clone --depth=1 --branch "${SWOOLE_REF}" https://github.com/swoole/swoole-src.git /tmp/swoole \
     && cd /tmp/swoole \
     && phpize \
     && IOURING_FLAGS="" \
@@ -129,8 +165,9 @@ RUN git clone --depth=1 https://github.com/swoole/swoole-src.git /tmp/swoole \
     && cd / && rm -rf /tmp/swoole
 
 # Build and install uv (php-uv)
-RUN git clone --depth=1 https://github.com/bwoebi/php-uv.git /tmp/php-uv \
+RUN git clone https://github.com/bwoebi/php-uv.git /tmp/php-uv \
     && cd /tmp/php-uv \
+    && git checkout --quiet "${PHP_UV_REF}" \
     && phpize \
     && ./configure --with-uv \
     && make -j$(nproc) \

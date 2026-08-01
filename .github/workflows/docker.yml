@@ -169,15 +169,20 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Only the Alpine image builds FROM the shared base; the two
+          # HW-accel variants install PHP from apt and are self-contained.
           - name: alpine
             dockerfile: docker/Dockerfile
             tag: phlix-boot:alpine
+            needs_base: true
           - name: intel
             dockerfile: docker/Dockerfile.intel
             tag: phlix-boot:intel
+            needs_base: false
           - name: nvidia
             dockerfile: docker/Dockerfile.nvidia
             tag: phlix-boot:nvidia
+            needs_base: false
 
     steps:
       - name: Checkout code
@@ -191,10 +196,44 @@ jobs:
                       /usr/local/share/boost "$AGENT_TOOLSDIRECTORY" || true
           df -h /
 
-      # No buildx/registry cache on purpose: this job must exercise the
-      # Dockerfiles exactly as an operator would, into the LOCAL daemon, so the
-      # image it boots is the image it built.
+      - name: Set up Docker Buildx
+        if: matrix.needs_base
+        uses: docker/setup-buildx-action@v4
+
+      # Build the shared base IN THIS JOB and hand it to the smoke script.
+      #
+      # Two constraints pull in opposite directions and both are satisfied here:
+      #   * the runtime image must never be validated against a STALE base (the
+      #     pipeline is two-stage; a base change invalidates all three), so the
+      #     base cannot simply be pulled from the registry;
+      #   * the base compiles Swoole and php-uv from source, and doing that
+      #     uncached on every PR is minutes of runner time for a layer that
+      #     rarely changes (S163 review F9).
+      # Building it here with a GHA cache gives a base that is by construction
+      # current with this commit, without recompiling when Dockerfile.base is
+      # untouched. `load: true` puts it in the local daemon so the smoke script
+      # can build FROM it. The sources are pinned (SWOOLE_REF / PHP_UV_REF), so
+      # a cache hit and a cold build produce the same extensions.
+      - name: Build shared base (cached, loaded locally)
+        if: matrix.needs_base
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: docker/Dockerfile.base
+          load: true
+          push: false
+          tags: phlix-base-bootgate:${{ github.sha }}
+          cache-from: type=gha,scope=bootgate-base
+          cache-to: type=gha,mode=max,scope=bootgate-base
+          build-args: |
+            PHP_VERSION=8.3
+
+      # The runtime image itself is built by the smoke script into the LOCAL
+      # daemon, uncached and unpushed, so the image it boots is exactly the
+      # image it built.
       - name: Boot and smoke-test the image
+        env:
+          PHLIX_BASE_IMAGE: ${{ matrix.needs_base && format('phlix-base-bootgate:{0}', github.sha) || '' }}
         run: |
           chmod +x scripts/docker-boot-smoke.sh
           ./scripts/docker-boot-smoke.sh "${{ matrix.dockerfile }}" "${{ matrix.tag }}"

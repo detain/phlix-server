@@ -658,6 +658,131 @@ class DockerEntrypointTest extends TestCase
         );
     }
 
+    /**
+     * S163 review F3 — the PHLIX_SECRET_KEY -> JWT_SECRET mapping turned
+     * `docker/examples/.env.example`'s COMMITTED placeholder into a live
+     * signing key: /proc/1/environ showed
+     * `JWT_SECRET=change_me_generate_with_openssl` and the daemon served 200s
+     * with it. `AuthServicesProvider::assertSecretConfigured()` rejects only
+     * '' and 'default-secret-change-me', so it could not catch this. The
+     * mapping introduced the defect, so the guard lives beside the mapping.
+     *
+     * @return array<string, array{string}>
+     */
+    public static function placeholderSecretProvider(): array
+    {
+        return [
+            'the value committed in docker/examples/.env.example' => ['change_me_generate_with_openssl'],
+            'the app sentinel' => ['default-secret-change-me'],
+            'change_me' => ['change_me'],
+            'changeme' => ['changeme'],
+            'uppercase' => ['CHANGE_ME_GENERATE_WITH_OPENSSL'],
+            'bare secret' => ['secret'],
+            'your-secret-here' => ['your-secret-here'],
+        ];
+    }
+
+    /**
+     * @dataProvider placeholderSecretProvider
+     */
+    public function testAPlaceholderJwtSecretRefusesToStart(string $placeholder): void
+    {
+        $this->stubPhp(0);
+        $this->stubSupervisord();
+
+        $run = $this->runEntrypoint([
+            'PHLIX_DATABASE_HOST' => 'mysql',
+            'JWT_SECRET' => $placeholder,
+        ]);
+
+        self::assertSame(1, $run['code'], 'a publicly-known signing key must fail CLOSED');
+        self::assertFalse($this->supervisordStarted(), 'the app must not start with a forgeable key');
+        self::assertStringContainsString('PHLIX-PLACEHOLDER-SECRET', $run['stderr']);
+    }
+
+    /**
+     * @dataProvider placeholderSecretProvider
+     */
+    public function testAPlaceholderPhlixSecretKeyRefusesToStart(string $placeholder): void
+    {
+        $this->stubPhp(0);
+        $this->stubSupervisord();
+
+        $run = $this->runEntrypoint([
+            'PHLIX_DATABASE_HOST' => 'mysql',
+            'PHLIX_SECRET_KEY' => $placeholder,
+        ]);
+
+        self::assertSame(1, $run['code']);
+        self::assertFalse($this->supervisordStarted());
+        self::assertStringContainsString('PHLIX-PLACEHOLDER-SECRET', $run['stderr']);
+    }
+
+    /**
+     * The guard must not fire on a real key — a false positive here is a total
+     * outage for anyone who legitimately generated one.
+     */
+    public function testARealSecretIsNotMistakenForAPlaceholder(): void
+    {
+        $this->stubPhpRecordingEnv();
+        $this->stubSupervisord();
+
+        $real = str_repeat('a1b2c3d4', 8);
+        $run = $this->runEntrypoint([
+            'PHLIX_DATABASE_HOST' => 'mysql',
+            'JWT_SECRET' => $real,
+        ]);
+
+        self::assertSame(0, $run['code']);
+        self::assertTrue($this->supervisordStarted());
+        self::assertStringNotContainsString('PHLIX-PLACEHOLDER-SECRET', $run['stderr']);
+        self::assertStringContainsString(
+            "JWT_SECRET={$real}\n",
+            (string) file_get_contents($this->tmpDir . '/php-env')
+        );
+    }
+
+    /**
+     * The shipped example must not hand anyone a working-looking secret.
+     */
+    public function testTheEnvExampleShipsNoUsablePhlixSecretKey(): void
+    {
+        $example = (string) file_get_contents(
+            dirname(__DIR__, 3) . '/docker/examples/.env.example'
+        );
+
+        self::assertDoesNotMatchRegularExpression(
+            '/^PHLIX_SECRET_KEY=.+$/m',
+            $example,
+            'docker/examples/.env.example must not ship a PHLIX_SECRET_KEY value — '
+            . 'the entrypoint generates and persists one when it is unset'
+        );
+    }
+
+    /**
+     * S163 review F6 — a FATAL program used to leave the container `Up` with
+     * nothing serving and nothing consuming `unhealthy`, which is the exact
+     * shape of the outage this step exists to fix.
+     */
+    public function testSupervisordTurnsAFatalProgramIntoADeadContainer(): void
+    {
+        $root = dirname(__DIR__, 3);
+        $conf = (string) file_get_contents($root . '/docker/supervisord.conf');
+
+        self::assertStringContainsString('[eventlistener:exit-on-fatal]', $conf);
+        self::assertMatchesRegularExpression('/^events=PROCESS_STATE_FATAL\s*$/m', $conf);
+
+        self::assertSame(
+            1,
+            preg_match('#^command=sh\s+(\S+supervisord-exit-on-fatal\.sh)\s*$#m', $conf, $m),
+            'the listener must be invoked as `sh <path>` so the file mode cannot break boot'
+        );
+        // The path is inside the image; map it back to the repo.
+        $inRepo = $root . '/docker/' . basename($m[1]);
+        self::assertFileExists($inRepo, 'supervisord.conf names a listener script that is not in the repo');
+        self::assertStringContainsString('kill -TERM 1', (string) file_get_contents($inRepo));
+    }
+
     // ------------------------------------------------------------------
     // S159 review finding 4 — the boot path must actually EXIST in the images.
     // All three Dockerfiles ended with `CMD ["sh", "/docker-entrypoint.sh"]`
@@ -677,6 +802,49 @@ class DockerEntrypointTest extends TestCase
             'intel' => ['docker/Dockerfile.intel'],
             'nvidia' => ['docker/Dockerfile.nvidia'],
         ];
+    }
+
+    /**
+     * EVERY Dockerfile in the repo, including the shared base.
+     *
+     * S163 review F4: `dockerfileProvider()` lists only the three RUNTIME
+     * images, so `testNoDockerfileWiresNginxOrPhpFpmIntoTheImage` and
+     * `testNoDockerfileMasksMissingPlatformRequirements` were green while
+     * `docker/Dockerfile.base` still did `FROM php:8.3-fpm-alpine` and
+     * `apk add nginx` — i.e. the Alpine image DID ship nginx + php-fpm and
+     * DID `EXPOSE 9000`, and the tests asserting otherwise passed by simply
+     * not looking. That is the same false-confidence failure this whole step
+     * exists to kill, so the fix is the PROVIDER, not just the Dockerfile.
+     *
+     * Kept separate from dockerfileProvider() because the base legitimately has
+     * no CMD/EXPOSE/HEALTHCHECK — it is not a runnable image.
+     *
+     * @return array<string, array{string}>
+     */
+    public static function allDockerfileProvider(): array
+    {
+        return self::dockerfileProvider() + ['base' => ['docker/Dockerfile.base']];
+    }
+
+    /**
+     * The provider guard: if a Dockerfile is added and not scanned, the
+     * "no nginx/php-fpm anywhere" assertions quietly stop covering it.
+     */
+    public function testEveryDockerfileInTheRepoIsCoveredByTheProvider(): void
+    {
+        $root = dirname(__DIR__, 3);
+        $found = glob($root . '/docker/Dockerfile*') ?: [];
+        $found = array_map(static fn (string $f): string => 'docker/' . basename($f), $found);
+        sort($found);
+
+        $covered = array_map(static fn (array $row): string => $row[0], self::allDockerfileProvider());
+        sort($covered);
+
+        self::assertSame(
+            $found,
+            $covered,
+            'allDockerfileProvider() must list every docker/Dockerfile* in the repo'
+        );
     }
 
     /**
@@ -865,7 +1033,7 @@ class DockerEntrypointTest extends TestCase
     }
 
     /**
-     * @dataProvider dockerfileProvider
+     * @dataProvider allDockerfileProvider
      */
     public function testNoDockerfileWiresNginxOrPhpFpmIntoTheImage(string $relative): void
     {
@@ -879,13 +1047,21 @@ class DockerEntrypointTest extends TestCase
             $contents,
             $relative . ' must not install nginx or php-fpm'
         );
+        // A `-fpm` base image ships php-fpm AND `EXPOSE 9000` no matter what
+        // the package list says — which is exactly how the Alpine image kept
+        // both while three tests said it had neither.
+        self::assertDoesNotMatchRegularExpression(
+            '/^FROM\s+\S*php:\S*-fpm/m',
+            $contents,
+            $relative . ' must not build on a -fpm base: it carries php-fpm and EXPOSE 9000'
+        );
     }
 
     /**
      * `--ignore-platform-reqs` is what let ext-ldap — a HARD composer.json
      * requirement — be absent from every image while the build stayed green.
      *
-     * @dataProvider dockerfileProvider
+     * @dataProvider allDockerfileProvider
      */
     public function testNoDockerfileMasksMissingPlatformRequirements(string $relative): void
     {

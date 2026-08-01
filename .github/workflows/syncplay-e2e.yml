@@ -64,6 +64,15 @@ jobs:
         run: composer install --no-interaction --prefer-dist
 
       - name: Apply database migrations
+        # ⚠ S159 — this step is a GATE: run-migrations.php exits 1 when a
+        # migration genuinely fails. An "already applied" replay is still 0,
+        # but only for the closed set of four MySQL error numbers in
+        # MigrationRunner::IDEMPOTENT_ERROR_CODES (1050/1060/1061/1091) — a
+        # replayed seed `INSERT` (1062), `ADD PRIMARY KEY` (1068) or duplicate
+        # FOREIGN KEY / CHECK constraint name (1826/3822) is a genuine failure
+        # by design; 1826/3822 are schema-scoped names, so the collision can be
+        # with a different table and the statement may have created nothing.
+        # Do not suppress a red here with `|| true` / `continue-on-error`.
         env:
           DB_HOST: 127.0.0.1
           DB_PORT: '3306'

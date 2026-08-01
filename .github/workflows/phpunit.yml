@@ -71,6 +71,30 @@ jobs:
         # tests run against the actual schema (table defs, foreign keys, bound
         # LIMIT queries) instead of a hand-rolled simulation. Idempotent: the
         # runner downgrades duplicate-column/key errors to notes.
+        #
+        # ⚠ S159 — this step is a GATE. Until S159 run-migrations.php printed
+        # "  Warning: <error>" for a genuinely failing migration and then exited
+        # 0 regardless, so this step could not go red and a broken migration
+        # reached master invisibly. It now exits 1 when the runner recorded a
+        # non-idempotent error. Do NOT "fix" a red here with `|| true` or
+        # `continue-on-error` — read the Warning lines and fix the migration.
+        #
+        # An "already applied" replay is still exit 0, so a re-run is not a
+        # failure — but only for a CLOSED LIST of four MySQL error numbers:
+        # 1050 table exists, 1060 duplicate column, 1061 duplicate key name,
+        # 1091 can't drop. A seed `INSERT` replayed (1062), `ADD PRIMARY KEY`
+        # replayed (1068) and a duplicate FOREIGN KEY / CHECK constraint NAME
+        # (1826 / 3822) are GENUINE failures on purpose, so a new migration must
+        # use `INSERT IGNORE` / guard its `ADD PRIMARY KEY` / guard its
+        # `ADD CONSTRAINT` rather than expect the squelch to cover it.
+        # 1826/3822 were considered for the set and REJECTED: those names are
+        # unique per SCHEMA, not per table, so the collision can be with another
+        # table entirely and the failing statement may have created nothing.
+        # See MigrationRunner::IDEMPOTENT_ERROR_CODES.
+        #
+        # Both directions are asserted by
+        # tests/Integration/Common/Database/MigrationFailureVisibilityTest.php,
+        # which runs in the PHPUnit step below.
         env:
           DB_HOST: 127.0.0.1
           DB_PORT: '3306'

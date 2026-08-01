@@ -657,7 +657,28 @@ php bin/phlix media:dedupe-paths           # preview duplicate-path merges (dry-
 php bin/phlix media:dedupe-paths --apply   # merge duplicate media items sharing a path
 ```
 
-`php bin/phlix migrate` is the supported equivalent of `php scripts/run-migrations.php` — both delegate to the same `Phlix\Common\Database\MigrationRunner` service, applying every `migrations/*.sql` file on each run (idempotent; no tracking table). More commands are added in later steps.
+`php bin/phlix migrate` is the supported equivalent of `php scripts/run-migrations.php` — both delegate to the same `Phlix\Common\Database\MigrationRunner` service. Re-running is safe: applied files are recorded in a `schema_migrations` ledger and skipped while their checksum matches, and a file that is re-applied tolerates the replay (statements use `IF NOT EXISTS`, and duplicate-column/duplicate-key errors are downgraded to notes because MySQL 8 has no `IF NOT EXISTS` on `ADD COLUMN`/`ADD INDEX`). More commands are added in later steps.
+
+**Exit codes (S159).** Both commands exit `0` when every statement applied *or* failed only with an idempotent "already applied" error, and `1` when at least one genuine, non-idempotent statement error was recorded. A failing run does **not** stop at the first error — later files are still attempted — but the failing file is deliberately left out of the ledger so the next run retries it. Consequences worth knowing:
+
+- `scripts/install.sh` runs under `set -euo pipefail`, so a failed migration **aborts** the install/update before the service is restarted.
+- `docker/docker-entrypoint.sh` prints a loud `PHLIX-MIGRATION-FAILURE` banner to stderr and, by default, **still starts the container** (a crash-looping media server is worse than a degraded one). Set `PHLIX_MIGRATIONS_STRICT=1` to make the container refuse to start instead. It also refuses to start when migrations could not run at all (no database host configured, or `scripts/run-migrations.php` missing).
+- `PHLIX_MIGRATIONS_DIR` overrides the directory that is scanned for `*.sql` (default `migrations/`). Honoured by **both** commands.
+
+⚠ **"Idempotent" is a closed list, not "anything a replay raises".** The squelch is decided on the MySQL **error number**, never on the exception text — the driver prefixes the whole failing statement to its message, so matching a phrase like `already exists` used to grep the migration's own SQL and reclassify hard failures as successes. The set is exactly four: `1050` table exists, `1060` duplicate column, `1061` duplicate key name, `1091` can't drop / check that column-key exists. Each names an object that can only be the one the failing statement was creating — a table in this schema, or a column/index, which are *table*-local.
+
+Everything else fails the run, **including several shapes a re-run can legitimately produce** — write the migration so they never fire:
+
+| Shape | MySQL | Write this instead |
+|---|---|---|
+| Seed row inserted twice | `1062` duplicate entry | `INSERT IGNORE` / `INSERT … ON DUPLICATE KEY UPDATE` |
+| `ALTER TABLE … ADD PRIMARY KEY` replayed | `1068` multiple primary key defined | guard it, or add the PK in `CREATE TABLE` |
+| `… CONSTRAINT <name> FOREIGN KEY` / `CHECK` replayed | `1826` / `3822` duplicate constraint name | guard the `ADD CONSTRAINT` (check `information_schema`, or `DROP … IF EXISTS` first) and give every constraint a schema-unique name |
+| `DROP TABLE`/`CREATE TRIGGER`/`CREATE FUNCTION` replayed | `1051` / `1359` / `1304` | use the `IF EXISTS` / `IF NOT EXISTS` form those statements accept |
+
+`1062` in particular is deliberate: it is also what `ADD UNIQUE` raises when the *existing data* violates the new constraint, which is the most valuable failure a migration can report. `1068` names no object, so a replay and a genuine "a different primary key is already there" are indistinguishable.
+
+`1826`/`3822` were **considered for the idempotent set and rejected** — do not add them. Foreign-key and CHECK-constraint names are unique **per schema**, not per table, so the object that already holds the name can belong to a *completely different* table, and the statement that failed can be a `CREATE TABLE` that consequently created **nothing**. Squelching them let such a file exit 0 *and* enter `schema_migrations`, so it was never retried — worse than no squelch at all.
 
 ### Admin SPA (admin-ui)
 

@@ -62,6 +62,12 @@ COPY . /var/www/html/
 # Composer install — fail the build on error.
 RUN composer install --no-dev --optimize-autoloader --ignore-platform-reqs
 
+# The CMD below names `/docker-entrypoint.sh`; `COPY . /var/www/html/` lands it
+# at /var/www/html/docker/docker-entrypoint.sh. Without this line the CMD
+# resolved to nothing and no container ever ran the entrypoint (S159 review
+# finding 4). Asserted by tests/Unit/Docker/DockerEntrypointTest.php.
+COPY docker/docker-entrypoint.sh /docker-entrypoint.sh
+
 EXPOSE 80 443
 
 CMD ["sh", "/docker-entrypoint.sh"]

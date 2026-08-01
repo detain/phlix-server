@@ -95,7 +95,18 @@ $containerProvider = static function () use (&$container, $config): ContainerInt
 /** @var callable(): \Workerman\MySQL\Connection $connectionProvider */
 $connectionProvider = static fn(): \Workerman\MySQL\Connection => ConnectionPool::getConnection('mysql');
 
-$runner = new MigrationRunner($connectionProvider, BASE_PATH . '/migrations');
+// PHLIX_MIGRATIONS_DIR (default `<repo>/migrations`) — the same override
+// `scripts/run-migrations.php` reads. S159 review finding 11: README documented
+// it under "Both commands", but only the script honoured it, so `bin/phlix
+// migrate` silently processed the repo's real migration set instead. Reading it
+// in both places keeps the two operator paths symmetrical, which is what the
+// "they cannot drift apart" claim is built on.
+$migrationsDirEnv = getenv('PHLIX_MIGRATIONS_DIR');
+$migrationsDir = (is_string($migrationsDirEnv) && $migrationsDirEnv !== '')
+    ? $migrationsDirEnv
+    : BASE_PATH . '/migrations';
+
+$runner = new MigrationRunner($connectionProvider, $migrationsDir);
 
 $cli = new Command();
 $cli->setName('Phlix Server CLI');

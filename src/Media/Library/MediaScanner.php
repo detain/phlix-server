@@ -1473,6 +1473,10 @@ class MediaScanner
             if ($canonicalKey !== '') {
                 $byCanonical = $this->itemRepository->findTopLevelByCanonical($libraryId, $mediaType, $canonicalKey);
                 if (is_array($byCanonical) && isset($byCanonical['id']) && is_string($byCanonical['id'])) {
+                    // S158: the reused row keeps its identity, so it must also keep
+                    // pointing at a file that EXISTS — otherwise the prune half of the
+                    // very same rescan deletes it. See adoptMovedPath().
+                    $this->adoptMovedPath($byCanonical, $path);
                     $this->logger->debug('Reusing existing top-level item by canonical key', [
                         'item_id' => $byCanonical['id'],
                         'canonical_key' => $canonicalKey,
@@ -1588,6 +1592,110 @@ class MediaScanner
         }
 
         return true;
+    }
+
+    /**
+     * S158 — re-point a canonically-reused TOP-LEVEL row at the file that is
+     * actually on disk, when the path it records has vanished.
+     *
+     * ## The defect this closes
+     *
+     * Move a top-level file (movie / video / photo / book / audiobook) to another
+     * folder and the next rescan used to DELETE its row and every piece of user
+     * data hanging off it. Neither half of the mechanism is wrong on its own —
+     * the damage is their interaction inside ONE {@see LibraryManager::rescanLibrary()}
+     * run:
+     *
+     *  1. {@see processFile()}'s `findByPath()` misses — the path changed.
+     *  2. The canonical-key lookup HITS (the key is title+year, deliberately
+     *     path-independent), so the scanner reuses the existing row and returns
+     *     `false` — correct as far as "do not mint a second top-level row for the
+     *     same film" goes, but it left `media_items.path` pointing at the OLD,
+     *     now-nonexistent location, because reuse skipped `upsertByPath()`.
+     *  3. `rescanLibrary()` then runs {@see LibraryManager::pruneRemovedItems()}
+     *     in the SAME run, which deletes every leaf whose recorded `path` fails
+     *     `file_exists()` — this row — cascading through the `ON DELETE CASCADE`
+     *     foreign keys into `user_item_data` and `watch_history`.
+     *
+     * Net effect: the item vanished for one rescan and came back on the next with
+     * a NEW uuid, no watched flag, no favourite, no rating, no resume position.
+     * Episodes were never affected — they carry a season `parent_id` and so never
+     * enter the canonical branch at all.
+     *
+     * ## Why the "old path is gone" guard is load-bearing
+     *
+     * Canonical reuse serves TWO shapes and only one of them is a move:
+     *
+     *  - **Moved** — the recorded path is gone, the scanned path exists. The row
+     *    must follow the file, so `path` is rewritten. This is the fix.
+     *  - **A genuine second copy** — the same film stored twice (differently
+     *    slugging titles, a duplicate rip), where the recorded path is STILL on
+     *    disk. Rewriting `path` there would make the row flap between two present
+     *    files depending on directory-iteration order, and would silently
+     *    re-point playback at the other copy. So that case is left exactly as it
+     *    was: reuse the row, keep the original path, change nothing.
+     *
+     * The presence test is deliberately the SAME predicate the prune uses
+     * (`file_exists()` after a targeted `clearstatcache()`), so this method
+     * rewrites the path in precisely the cases the prune would otherwise delete
+     * the row in — no wider, no narrower.
+     *
+     * `media_items.path_hash` is a STORED generated column (migration 072/087),
+     * so MySQL recomputes it from the new `path` as part of the same UPDATE; the
+     * next rescan's `findByPath()`/`findPathsMap()` hash lookup therefore resolves
+     * the row at its new location with no further work. Nothing else on the row is
+     * path-derived: `name`/`sort_title`/`canonical_key` come from the FILENAME,
+     * which a directory move does not change (a rename that changed the title
+     * would change the canonical key too and never reach this branch).
+     *
+     * Failure is swallowed and logged, matching this file's per-file discipline:
+     * one unwritable row must never abort a whole library scan. The realistic
+     * failure is a `(library_id, path_hash)` unique-index collision from a
+     * concurrent worker that indexed the new path first — in which case the other
+     * row already covers the file and the prune will drop this one, which is the
+     * pre-S158 behaviour rather than a new regression.
+     *
+     * @param array<string, mixed> $existing The hydrated row
+     *        {@see ItemRepository::findTopLevelByCanonical()} matched.
+     * @param string $path The path of the file currently being processed —
+     *        already UTF-8-scrubbed by the caller.
+     */
+    private function adoptMovedPath(array $existing, string $path): void
+    {
+        $id = isset($existing['id']) && is_string($existing['id']) ? $existing['id'] : '';
+        $recordedPath = isset($existing['path']) && is_string($existing['path']) ? $existing['path'] : '';
+
+        if ($id === '' || $recordedPath === '' || $path === '' || $recordedPath === $path) {
+            return;
+        }
+
+        // A long-lived Workerman worker can hold a stale stat() for this path
+        // across rescans; clear just this entry so the answer reflects the
+        // current on-disk state — exactly what pruneRemovedItems() does with its
+        // whole-cache clear before asking the same question.
+        clearstatcache(true, $recordedPath);
+        if (file_exists($recordedPath)) {
+            // Not a move: both copies are on disk. Keep the dedup behaviour.
+            return;
+        }
+
+        try {
+            $this->itemRepository->update($id, ['path' => $path]);
+        } catch (\Throwable $e) {
+            $this->logger->warning('Could not re-point a moved top-level item at its new path', [
+                'item_id' => $id,
+                'old_path' => $recordedPath,
+                'new_path' => $path,
+                'error' => $e->getMessage(),
+            ]);
+            return;
+        }
+
+        $this->logger->info('Top-level item followed its file to a new path', [
+            'item_id' => $id,
+            'old_path' => $recordedPath,
+            'new_path' => $path,
+        ]);
     }
 
     /**

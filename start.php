@@ -1095,6 +1095,43 @@ try {
                                 ['process' => $procKey, 'error' => $smartPlaylistBootError->getMessage()],
                             );
                         }
+
+                        // Folder watching — the missing DRIVER for the block
+                        // above's second event. FolderWatcher::checkForChanges()
+                        // is the only emitter of LibraryUpdated and had NO
+                        // caller anywhere in the repo, so that half of the
+                        // subscriber was inert. (Its watch list was empty here
+                        // too: FolderWatcher::watch() is called only from
+                        // LibraryManager::createLibrary(), i.e. in an HTTP
+                        // worker, and nothing repopulated it from the DB.)
+                        // FolderWatchScheduler does both — registers the
+                        // libraries, then polls them.
+                        //
+                        // Gated to `library-scan` for the same reason as the
+                        // block above: PSR-14 dispatch is per-process, and the
+                        // subscriber that listens for LibraryUpdated is
+                        // registered only here.
+                        //
+                        // SHIPS OFF (config/folder_watch.php `enabled => false`).
+                        // A change check is a full recursive stat() walk of a
+                        // library, and filesystem calls are not coroutine-hooked
+                        // in this runtime, so the walk blocks this worker's event
+                        // loop — and this is the worker that drains the scan-job
+                        // queue. When enabled, a tick touches at most ONE
+                        // library, with one deliberate exception: a tick whose
+                        // registration walk THREW also re-checks one library,
+                        // so a library that can never be registered cannot
+                        // starve the re-check phase for the others.
+                        // start() itself does no filesystem or DB work;
+                        // when disabled it arms no timer at all.
+                        try {
+                            $container->get(\Phlix\Media\Library\FolderWatchScheduler::class)->start();
+                        } catch (\Throwable $folderWatchBootError) {
+                            LoggerFactory::get(LogChannels::MEDIA)->error(
+                                'folder watch scheduler wiring failed (managed worker)',
+                                ['process' => $procKey, 'error' => $folderWatchBootError->getMessage()],
+                            );
+                        }
                     }
 
                     // Arms a Workerman\Timer that polls runOnce() every $pollSeconds.

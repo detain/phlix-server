@@ -90,6 +90,14 @@ return [
     // start.php), exactly like the ffmpeg/hub/relay/theme_music sub-arrays.
     'metrics' => require __DIR__ . '/metrics.php',
 
+    // Folder-watch config. Sourced here so MediaServicesProvider (which reads
+    // $config['folder_watch']) builds FolderWatchScheduler with the real
+    // enabled/interval knobs instead of its constructor defaults. Reaches BOTH
+    // entry points (public/index.php CGI path and the Workerman daemon in
+    // start.php), exactly like the ffmpeg/hub/relay/theme_music sub-arrays.
+    // Ships disabled: config/folder_watch.php sets 'enabled' => false.
+    'folder_watch' => require __DIR__ . '/folder_watch.php',
+
     // HLS streaming settings. `segment_dir` is the SINGLE source of truth for
     // where transcoded HLS variants (stream_0.m3u8 + segment_0_NNN.ts) live: the
     // TranscodeManager writes there and HlsController/HlsStreamer read from the

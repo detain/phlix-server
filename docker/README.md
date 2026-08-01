@@ -4,9 +4,18 @@ This directory contains the three Dockerfile variants Phlix ships:
 
 | Variant | Base image | Purpose | PHP path layout |
 |---|---|---|---|
-| `Dockerfile` | `ghcr.io/detain/phlix-base` (`php:8.3-fpm-alpine`) | Default, software transcoding only | `/usr/local/etc/php/conf.d/zz-phlix.ini` (Alpine canonical) |
+| `Dockerfile` | `ghcr.io/detain/phlix-base` (`php:8.3-cli-alpine`) | Default, software transcoding only | `/usr/local/etc/php/conf.d/zz-phlix.ini` (Alpine canonical) |
 | `Dockerfile.nvidia` | `nvidia/cuda:12.9.2-runtime-ubuntu24.04` | NVIDIA NVENC/NVDEC HW accel | `/etc/php/8.3/cli/conf.d/99-phlix.ini` + symlink to Alpine path |
 | `Dockerfile.intel` | `ubuntu:24.04` | Intel QuickSync / VAAPI HW accel | `/etc/php/8.3/cli/conf.d/99-phlix.ini` + symlink to Alpine path |
+
+> The shared base was `php:8.3-fpm-alpine` + `apk add nginx` until S163. A
+> `-fpm` base carries the `php-fpm` binary **and** `EXPOSE 9000` whatever the
+> package list says, so the Alpine image kept shipping both while three unit
+> tests asserted it shipped neither — they simply did not scan
+> `Dockerfile.base`. It is now `php:8.3-cli-alpine`, nginx is gone, and
+> `allDockerfileProvider()` in `tests/Unit/Docker/DockerEntrypointTest.php`
+> covers every `docker/Dockerfile*` in the repo, with a test that fails if a
+> new one is added outside the net.
 
 All three land on **PHP 8.3**, matching CI. Production runs **8.5** — that gap
 is deliberate and recorded, not accidental; no gate currently runs the engine
@@ -48,10 +57,23 @@ scripts/docker-boot-smoke.sh docker/Dockerfile.nvidia phlix-boot:nvidia
 
 That script builds the image (rebuilding the shared base first, because the
 pipeline is two-stage), runs it against a throwaway MySQL on a private network,
-and asserts `/health` 200s, every supervisord program is `RUNNING`, `start.php`
-is the running process, `:8097` is listening, the SPA and its immutable assets
-are served, the container reaches `healthy`, and `composer check-platform-reqs`
-is clean. CI runs the same script in the `docker-boot-gate` job.
+and makes 11 assertions: `/health` 200s; the migration step reported success;
+the schema really is there when reached with the application's own credentials;
+every supervisord program is `RUNNING`; the application AND its Workerman
+workers hold their pids across a 90 s window; `start.php` is the running
+process and no CGI/FPM/nginx process is; `:8097` answers both inside the
+container and through the published port mapping; the SPA shell and its
+immutable assets are served; the container reaches `healthy` and its
+HEALTHCHECK start period is short enough for `unhealthy` to be reachable;
+`composer check-platform-reqs` is clean; and — destructively, last — a program
+driven into FATAL kills the container with a **non-zero** exit code.
+
+It then checks **itself**: every assertion is registered by name and a check
+that produced no verdict fails the run. That guard exists because a check that
+silently never executed once let this gate print `ALL ASSERTIONS PASSED`
+against a broken image.
+
+CI runs the same script in the `docker-boot-gate` job.
 
 ### Configuration the container needs
 
@@ -106,7 +128,7 @@ here even though hub consumes it.
 
 ## Why the path layouts differ
 
-The default image inherits from Docker's official `php:8.3-fpm-alpine`, which
+The default image inherits from Docker's official `php:8.3-cli-alpine`, which
 places PHP config under `/usr/local/etc/php/conf.d/` — the canonical layout
 documented in the upstream `php` image.
 
@@ -125,7 +147,7 @@ To keep operator-facing paths consistent across all three variants, the HW-accel
 images symlink the Alpine-canonical path to their Debian-layout file:
 
 ```dockerfile
-ln -sf /etc/php/8.3/fpm/conf.d/99-phlix.ini /usr/local/etc/php/conf.d/zz-phlix.ini
+ln -sf /etc/php/8.3/cli/conf.d/99-phlix.ini /usr/local/etc/php/conf.d/zz-phlix.ini
 ```
 
 This means tooling, documentation, and `docker exec` commands can target a
@@ -139,13 +161,16 @@ tree caches across builds and is **not** invalidated by source-only edits:
 ```dockerfile
 # Layer 1 — invalidated only when composer.{json,lock} change.
 COPY composer.json composer.lock /var/www/html/
-RUN composer install --no-dev --prefer-dist --no-scripts --no-autoloader \
-                     --ignore-platform-reqs
+RUN composer install --no-dev --prefer-dist --no-scripts --no-autoloader
 
 # Layer 2 — invalidated on every source edit, but cheap (no network).
 COPY . /var/www/html/
 RUN composer dump-autoload --no-dev --optimize
 ```
+
+(That is `docker/Dockerfile`, the two-layer one. `Dockerfile.intel` and
+`Dockerfile.nvidia` run a single `composer install --no-dev
+--optimize-autoloader` after the source copy.)
 
 **Practical consequence for contributors:** touching any file under `src/`,
 `public/`, `config/`, or `migrations/` does NOT re-run `composer install`
@@ -156,9 +181,15 @@ everything downstream. The slow layers in this image are swoole and uv
 
 **Composer failures fail the build.** The previous `|| true` suffix was removed
 so CI surfaces missing/incompatible dependencies instead of producing a broken
-image. `--ignore-platform-reqs` is retained because the build environment may
-not have every runtime extension installed (it is fine — extensions are
-installed earlier in the Dockerfile and verified at container start).
+image.
+
+**`--ignore-platform-reqs` is gone from all three Dockerfiles (S163), and a
+unit test keeps it out.** It was described here as harmless ("extensions are
+installed earlier in the Dockerfile and verified at container start") and it was
+not: `ext-ldap` is a HARD `composer.json` requirement, it was absent from every
+image, the flag masked it at build time, and nothing verified it at container
+start either — no container had ever started. `composer check-platform-reqs`
+inside the built image is now an assertion in `scripts/docker-boot-smoke.sh`.
 
 ## Swoole build flags
 
@@ -195,7 +226,7 @@ perf benefit there.
 **Flags we intentionally do NOT pass:**
 
 - `--enable-swoole-thread` / `--enable-thread-context` — threaded swoole
-  builds require ZTS PHP, and the upstream `php:8.3-fpm-alpine` image is
+  builds require ZTS PHP, and the upstream `php:8.3-cli-alpine` image is
   NTS. Mixing NTS PHP with thread-enabled swoole crashes at module
   init. If a future image switches to ZTS PHP, these can be revisited.
 - `--enable-swoole-stdext` — replaces parts of PHP's `Standard`
@@ -243,7 +274,7 @@ which is what makes the swoole/uv layers reusable across PR builds.
 ## Alpine quirks
 
 - **No `phpenmod`.** That helper ships with the Debian `php` packages.
-  The upstream `php:8.3-fpm-alpine` image uses `docker-php-ext-install`
+  The upstream `php:8.3-cli-alpine` image uses `docker-php-ext-install`
   (or a hand-written `.ini` under `/usr/local/etc/php/conf.d/`) to wire
   extensions in — `phpenmod` does not exist on Alpine and shells out to
   it will fail with `command not found`.

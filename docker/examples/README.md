@@ -45,9 +45,34 @@ Production setup with Traefik handling HTTPS, WebSocket relay, and routing. Incl
 | `MYSQL_ROOT_PASSWORD` | MySQL root password | Yes |
 | `PHLIX_DB_PASSWORD` | Phlix server database password | Yes |
 | `HUB_DB_PASSWORD` | Phlix hub database password | Yes |
-| `PHLIX_SECRET_KEY` | Application secret key | Yes |
-| `HUB_SECRET_KEY` | Hub application secret | Yes |
+| `PHLIX_SECRET_KEY` | JWT + media signed-URL signing key. **Leave UNSET** unless you manage the key yourself — see below. | **No** |
+| `HUB_SECRET_KEY` | Hub application secret. Not read by any code today; leave unset. | **No** |
 | `PHLIX_HUB_PAIRING_CODE` | Server pairing code for hub | No |
+
+### About the secret keys
+
+`PHLIX_SECRET_KEY` used to be listed as **Required: Yes** and `.env.example`
+shipped it as `change_me_generate_with_openssl`. That combination handed every
+reader of this repository the same, publicly greppable key — and it signs both
+JWTs and media signed URLs, so it is admin-token forgery and signed-media-URL
+forgery in one variable.
+
+`docker/docker-entrypoint.sh` now **refuses to start** on that value and on
+every other obvious placeholder (`change_me*`, `changeme*`, `change-me*`,
+`secret`, `password`, `placeholder`, `example`, `test`, …). Leave the variable
+unset and the entrypoint generates a 256-bit key on first boot and persists it
+to `/var/phlix/config/jwt_secret` — a named volume in every scenario here, so
+it survives restarts. Set it only if you want to manage the key yourself:
+
+```bash
+PHLIX_SECRET_KEY=$(openssl rand -hex 32)
+```
+
+`HUB_SECRET_KEY` is passed through to the hub container by `server-hub/` and
+`full-stack/`, but no code in either repository reads it today. It shipped with
+the same committed placeholder — i.e. exactly the latent form of the defect
+above, one variable over — so it is now unset in `.env.example` too. If it ever
+becomes load-bearing, generate it the same way.
 
 ## Networking
 

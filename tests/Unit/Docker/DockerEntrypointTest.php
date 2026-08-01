@@ -132,6 +132,8 @@ class DockerEntrypointTest extends TestCase
             // default is /var/phlix/config/jwt_secret, which a test host has no
             // business writing to.
             'PHLIX_JWT_SECRET_FILE' => $this->tmpDir . '/jwt_secret',
+            // Same reasoning for the FATAL marker (real default /var/run/…).
+            'PHLIX_SUPERVISOR_FATAL_MARKER' => $this->tmpDir . '/fatal-marker',
         ];
 
         $descriptors = [
@@ -160,6 +162,23 @@ class DockerEntrypointTest extends TestCase
             'stdout' => $stdout,
             'stderr' => $stderr,
         ];
+    }
+
+    /**
+     * A stub supervisord that behaves like the real one does when the
+     * `exit-on-fatal` listener fires: it drops the marker file and then exits
+     * ZERO, because supervisord treats the listener's SIGTERM as a clean
+     * shutdown. (S163 review round 2, finding 3.)
+     */
+    private function stubSupervisordEnteringFatal(): void
+    {
+        $script = "#!/bin/sh\n"
+            . 'printf \'%s \' "$@" > "' . $this->tmpDir . "/supervisord-ran\"\n"
+            . 'printf \'%s\\n\' "ver:3.0 server:supervisor eventname:PROCESS_STATE_FATAL" '
+            . '> "$PHLIX_SUPERVISOR_FATAL_MARKER"' . "\n"
+            . 'exit 0' . "\n";
+        file_put_contents($this->tmpDir . '/bin/supervisord', $script);
+        chmod($this->tmpDir . '/bin/supervisord', 0755);
     }
 
     private function supervisordStarted(): bool
@@ -743,19 +762,79 @@ class DockerEntrypointTest extends TestCase
     }
 
     /**
-     * The shipped example must not hand anyone a working-looking secret.
+     * Every secret-shaped variable in the shipped example, not just the one
+     * that happened to be load-bearing.
+     *
+     * S163 review round 2, finding 7: the F3 fix commented out
+     * `PHLIX_SECRET_KEY` and left `HUB_SECRET_KEY=change_me_generate_with_openssl`
+     * on the very next line — the identical committed placeholder, inert only
+     * because no PHP reads that name YET, which is exactly the state
+     * `PHLIX_SECRET_KEY` was in before the entrypoint mapping made it live.
+     * The guard was written for one variable and the defect moved one line.
+     *
+     * @return array<string, array{string}>
      */
-    public function testTheEnvExampleShipsNoUsablePhlixSecretKey(): void
+    public static function exampleSecretVariableProvider(): array
+    {
+        return [
+            'PHLIX_SECRET_KEY' => ['PHLIX_SECRET_KEY'],
+            'HUB_SECRET_KEY' => ['HUB_SECRET_KEY'],
+        ];
+    }
+
+    /**
+     * The shipped example must not hand anyone a working-looking secret.
+     *
+     * @dataProvider exampleSecretVariableProvider
+     */
+    public function testTheEnvExampleShipsNoUsableSecretValue(string $variable): void
     {
         $example = (string) file_get_contents(
             dirname(__DIR__, 3) . '/docker/examples/.env.example'
         );
 
         self::assertDoesNotMatchRegularExpression(
-            '/^PHLIX_SECRET_KEY=.+$/m',
+            '/^' . preg_quote($variable, '/') . '=.+$/m',
             $example,
-            'docker/examples/.env.example must not ship a PHLIX_SECRET_KEY value — '
-            . 'the entrypoint generates and persists one when it is unset'
+            "docker/examples/.env.example must not ship a {$variable} value — a secret "
+            . 'committed to a public repository is a secret everyone has'
+        );
+    }
+
+    /**
+     * The placeholder string itself must not survive anywhere in the shipped
+     * example as an assignment, under ANY name. The two tests above enumerate
+     * names; this one enumerates the value, so a third variable cannot
+     * reintroduce it.
+     */
+    public function testTheEnvExampleAssignsNoKnownPlaceholderSecret(): void
+    {
+        $example = (string) file_get_contents(
+            dirname(__DIR__, 3) . '/docker/examples/.env.example'
+        );
+
+        $offenders = [];
+        foreach (preg_split('/\R/', $example) ?: [] as $line) {
+            if (str_starts_with(ltrim($line), '#')) {
+                continue;
+            }
+            if (!preg_match('/^\s*([A-Z0-9_]+)=(.+)$/', $line, $m)) {
+                continue;
+            }
+            if (!str_contains(strtolower($m[1]), 'secret') && !str_contains(strtolower($m[1]), 'key')) {
+                continue;
+            }
+            if (preg_match('/change[_-]?me|changeme|your[_-]secret|placeholder/i', $m[2]) === 1) {
+                $offenders[] = trim($line);
+            }
+        }
+
+        self::assertSame(
+            [],
+            $offenders,
+            'docker/examples/.env.example assigns a known placeholder to a secret-shaped '
+            . 'variable; the entrypoint refuses to boot on these for PHLIX_SECRET_KEY, and '
+            . 'the others are one code change away from being live signing keys'
         );
     }
 
@@ -780,7 +859,206 @@ class DockerEntrypointTest extends TestCase
         // The path is inside the image; map it back to the repo.
         $inRepo = $root . '/docker/' . basename($m[1]);
         self::assertFileExists($inRepo, 'supervisord.conf names a listener script that is not in the repo');
-        self::assertStringContainsString('kill -TERM 1', (string) file_get_contents($inRepo));
+        // directivesOnly: that file's COMMENTS explain `kill -TERM 1` at
+        // length, so matching the raw body would pass on the prose alone.
+        self::assertStringContainsString(
+            'kill -TERM 1',
+            self::directivesOnly((string) file_get_contents($inRepo))
+        );
+    }
+
+    /**
+     * S163 review round 2, finding 3 — the container must exit NON-ZERO.
+     *
+     * `kill -TERM 1` alone made supervisord exit 0, so `docker inspect` showed
+     * `"Status":"exited","ExitCode":0` and the failure was indistinguishable
+     * from `docker stop`: compose `restart: on-failure`, k8s `OnFailure`,
+     * `docker wait` and every exit-code alert read it as SUCCESS. The
+     * entrypoint therefore keeps PID 1 and translates the marker into exit 70.
+     *
+     * Driven for real: a stub supervisord that drops the marker and exits 0,
+     * exactly like the real one does when the listener signals it.
+     */
+    public function testAFatalMarkerMakesTheEntrypointExitNonZero(): void
+    {
+        $this->stubPhp(0);
+        $this->stubSupervisordEnteringFatal();
+
+        $run = $this->runEntrypoint(['PHLIX_DATABASE_HOST' => 'mysql']);
+
+        self::assertTrue($this->supervisordStarted());
+        self::assertSame(
+            70,
+            $run['code'],
+            'a FATAL program must give the CONTAINER a non-zero exit code; 0 is '
+            . 'indistinguishable from a clean docker stop'
+        );
+        self::assertStringContainsString('PHLIX-SUPERVISOR-FATAL-EXIT', $run['stderr']);
+    }
+
+    /**
+     * The other half of finding 3's fix: a CLEAN shutdown must still exit 0, or
+     * `docker stop` starts looking like a crash and `restart: on-failure` loops
+     * a container the operator deliberately stopped.
+     */
+    public function testACleanSupervisordShutdownStillExitsZero(): void
+    {
+        $this->stubPhp(0);
+        $this->stubSupervisord();
+
+        $run = $this->runEntrypoint(['PHLIX_DATABASE_HOST' => 'mysql']);
+
+        self::assertSame(0, $run['code']);
+        self::assertFileDoesNotExist($this->tmpDir . '/fatal-marker');
+        self::assertStringNotContainsString('PHLIX-SUPERVISOR-FATAL-EXIT', $run['stderr']);
+    }
+
+    /**
+     * A marker left behind by a PREVIOUS life of the same container (restart
+     * policies reuse the filesystem) must not make every later boot exit 70.
+     */
+    public function testAStaleFatalMarkerIsClearedAtBoot(): void
+    {
+        $this->stubPhp(0);
+        $this->stubSupervisord();
+        file_put_contents($this->tmpDir . '/fatal-marker', "stale\n");
+
+        $run = $this->runEntrypoint(['PHLIX_DATABASE_HOST' => 'mysql']);
+
+        self::assertSame(0, $run['code'], 'a stale marker must not poison later boots');
+        self::assertTrue($this->supervisordStarted());
+    }
+
+    /**
+     * The listener must write the marker BEFORE it signals PID 1 — the other
+     * order is a race the container loses by exiting 0.
+     */
+    public function testTheFatalListenerWritesTheMarkerBeforeSignalling(): void
+    {
+        // Comments in this file DESCRIBE `kill -TERM 1` at length, so the raw
+        // body would match the prose before the code.
+        $script = self::directivesOnly((string) file_get_contents(
+            dirname(__DIR__, 3) . '/docker/supervisord-exit-on-fatal.sh'
+        ));
+
+        $markerAt = strpos($script, '> "$FATAL_MARKER"');
+        $signalAt = strpos($script, 'kill -TERM 1');
+
+        self::assertIsInt($markerAt, 'the listener must write the FATAL marker file');
+        self::assertIsInt($signalAt);
+        self::assertMatchesRegularExpression(
+            '/^FATAL_MARKER="\$\{PHLIX_SUPERVISOR_FATAL_MARKER:-\S+\}"$/m',
+            $script,
+            'the marker path must be the one docker-entrypoint.sh checks, and overridable'
+        );
+        self::assertLessThan(
+            $signalAt,
+            $markerAt,
+            'the marker must be written BEFORE PID 1 is signalled, or the entrypoint '
+            . 'can wake up, find no marker and exit 0'
+        );
+    }
+
+    /**
+     * S163 review round 2, finding 5 — the F3 fix made the entrypoint REFUSE
+     * to boot on the value `docker/examples/.env.example` used to ship, and
+     * left `docker/examples/README.md` telling operators the variable is
+     * Required: Yes. An operator who follows the README sets it, most
+     * plausibly to the placeholder still visible on a neighbouring line, and
+     * gets a container that exits 1.
+     */
+    public function testTheExamplesReadmeDoesNotDemandASecretTheEntrypointGenerates(): void
+    {
+        $readme = (string) file_get_contents(
+            dirname(__DIR__, 3) . '/docker/examples/README.md'
+        );
+
+        foreach (['PHLIX_SECRET_KEY', 'HUB_SECRET_KEY'] as $variable) {
+            self::assertSame(
+                1,
+                preg_match('/^\|\s*`' . $variable . '`\s*\|([^|]*)\|([^|]*)\|/m', $readme, $m),
+                "docker/examples/README.md must document {$variable} in the env table"
+            );
+            self::assertDoesNotMatchRegularExpression(
+                '/^\s*\**Yes\**\s*$/',
+                $m[2],
+                "docker/examples/README.md marks {$variable} as Required, but the "
+                . 'entrypoint generates and persists a key when it is unset — and '
+                . 'refuses to start on the placeholder an operator would most likely copy'
+            );
+        }
+    }
+
+    /**
+     * S163 review round 2, finding 6 — `docker/README.md` is the operator-facing
+     * description of a PUBLISHED artefact and still named the base image this
+     * branch replaced. Tie the prose to the Dockerfile so it cannot drift again.
+     */
+    public function testTheDockerReadmeNamesTheBaseImageTheBaseDockerfileActuallyUses(): void
+    {
+        $root = dirname(__DIR__, 3);
+        $base = (string) file_get_contents($root . '/docker/Dockerfile.base');
+        $readme = (string) file_get_contents($root . '/docker/README.md');
+
+        self::assertSame(
+            1,
+            preg_match('/^FROM\s+php:\$\{PHP_VERSION\}-(\S+)\s*$/m', $base, $m),
+            'docker/Dockerfile.base must FROM an official php image'
+        );
+        $flavour = $m[1];
+
+        self::assertMatchesRegularExpression(
+            '/^\|\s*`Dockerfile`\s*\|[^|]*`php:8\.3-' . preg_quote($flavour, '/') . '`/m',
+            $readme,
+            "docker/README.md's variant table must name php:8.3-{$flavour}, the base "
+            . 'docker/Dockerfile.base actually builds on'
+        );
+        self::assertStringContainsString(
+            'php:8.3-' . $flavour . '`, which' . "\n" . 'places PHP config under',
+            $readme,
+            'the "Why the path layouts differ" section must name the same base'
+        );
+    }
+
+    /**
+     * S163 review round 2, finding 4 — `opcache.validate_timestamps = 0` rests
+     * on "the code in an image is immutable". It is not: the plugin installer
+     * extracts PHP into `var/plugins/<name>/` at runtime and the Dockerfiles
+     * create that directory for it, so a plugin UPDATE would keep executing
+     * the previously cached bytecode until the container restarted.
+     */
+    public function testOpcacheRevalidatesBecauseThePluginInstallerWritesPhpAtRuntime(): void
+    {
+        $root = dirname(__DIR__, 3);
+        $ini = self::directivesOnly(
+            (string) file_get_contents($root . '/docker/php.ini'),
+            ';'
+        );
+
+        self::assertDoesNotMatchRegularExpression(
+            '/^\s*opcache\.validate_timestamps\s*=\s*0\s*$/m',
+            $ini,
+            'docker/php.ini must not disable opcache timestamp validation: '
+            . 'src/Plugins/Installer/HttpInstaller.php writes PHP into var/plugins/ '
+            . 'inside the running container'
+        );
+        self::assertMatchesRegularExpression(
+            '/^\s*opcache\.validate_timestamps\s*=\s*1\s*$/m',
+            $ini,
+            'timestamp validation must be explicitly ON, not merely absent'
+        );
+        self::assertMatchesRegularExpression(
+            '/^\s*opcache\.revalidate_freq\s*=\s*\d+\s*$/m',
+            $ini,
+            'a revalidate_freq must bound the stat() cost the line above introduces'
+        );
+
+        // The premise this guards is a real code path, not a hypothesis.
+        self::assertStringContainsString(
+            'var/plugins',
+            (string) file_get_contents($root . '/src/Plugins/Installer/HttpInstaller.php'),
+            'if the plugin installer no longer writes into the image, revisit docker/php.ini'
+        );
     }
 
     // ------------------------------------------------------------------
@@ -934,6 +1212,25 @@ class DockerEntrypointTest extends TestCase
         return implode("\n", $kept);
     }
 
+    /**
+     * Dockerfile lines with `\`-continuations JOINED, so one `RUN` is one
+     * string no matter how its author chose to wrap it.
+     *
+     * S163 review round 2, finding 11: a check written against the wrapped
+     * form only ever saw the wrapped form.
+     *
+     * @return list<string>
+     */
+    private static function logicalLines(string $contents): array
+    {
+        $joined = (string) preg_replace('/\\\\\R\s*/', ' ', $contents);
+
+        return array_values(array_filter(
+            preg_split('/\R/', $joined) ?: [],
+            static fn (string $line): bool => trim($line) !== ''
+        ));
+    }
+
     public function testSupervisordStartsTheDaemonAndNothingElse(): void
     {
         $conf = self::directivesOnly(
@@ -1047,6 +1344,25 @@ class DockerEntrypointTest extends TestCase
             $contents,
             $relative . ' must not install nginx or php-fpm'
         );
+
+        // S163 review round 2, finding 11: the regex above only matches a
+        // package sitting alone on its own line-continuation, so a perfectly
+        // ordinary `RUN apk add --no-cache nginx` written on ONE line escaped
+        // it entirely. The provider fix widened WHICH files are scanned; this
+        // widens WHAT is scanned inside them. Join the continuations first,
+        // then look at every package-install command as a whole.
+        $installCommand = '/\b(apk\s+add|apt-get\s+(?:-\S+\s+)*install'
+            . '|apt\s+install|yum\s+install|dnf\s+install)\b/';
+        foreach (self::logicalLines($contents) as $line) {
+            if (preg_match($installCommand, $line) !== 1) {
+                continue;
+            }
+            self::assertDoesNotMatchRegularExpression(
+                '#(?<![\w./-])(nginx|php-fpm|php\d(?:\.\d+)?-fpm)(?![\w./-])#',
+                $line,
+                $relative . ' installs nginx or php-fpm: ' . trim($line)
+            );
+        }
         // A `-fpm` base image ships php-fpm AND `EXPOSE 9000` no matter what
         // the package list says — which is exactly how the Alpine image kept
         // both while three tests said it had neither.
@@ -1073,6 +1389,158 @@ class DockerEntrypointTest extends TestCase
             '--ignore-platform-reqs',
             $contents,
             $relative . ' must let a missing PHP extension fail the build'
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // S163 review round 2, finding 1 — the boot gate must be able to detect
+    // its OWN skipped assertions. These are the cheap textual half; the
+    // behavioural half is the gate's own "CHECK COMPLETENESS" section, proven
+    // by running it against a mutated copy.
+    // ------------------------------------------------------------------
+
+    /**
+     * `docker inspect -f '{{.Config.Healthcheck.StartPeriod}}'` renders a Go
+     * `time.Duration` through String() — "1m30s", not nanoseconds. Feeding
+     * that to `$(( ))` under `set -euo pipefail` abandons the rest of the
+     * enclosing block WITHOUT incrementing the failure count, so the gate
+     * printed ALL ASSERTIONS PASSED against an image whose HEALTHCHECK
+     * start-period had been reverted to the exact value round 1 removed.
+     * Only the `{{json …}}` form returns nanoseconds.
+     */
+    public function testTheBootGateReadsDurationsInTheirNumericForm(): void
+    {
+        $gate = (string) file_get_contents(
+            dirname(__DIR__, 3) . '/scripts/docker-boot-smoke.sh'
+        );
+        $directives = self::directivesOnly($gate);
+
+        self::assertDoesNotMatchRegularExpression(
+            '/inspect[^\n]*-f\s+\'\{\{\.Config\.Healthcheck\.(StartPeriod|Interval|Timeout)\}\}\'/',
+            $directives,
+            'the plain -f form renders a Go duration as "1m30s"; use {{json …}} for nanoseconds'
+        );
+        self::assertStringContainsString(
+            "{{json .Config.Healthcheck.StartPeriod}}",
+            $directives,
+            'the gate must still read the start period — round 2 fixed the Dockerfiles '
+            . 'and then guarded them with an assertion that never ran'
+        );
+    }
+
+    /**
+     * The gate must fail when a registered check produces no verdict. Assert
+     * the mechanism exists and that every check id `pass`/`fail` can emit is
+     * registered — an unregistered id is a check nothing would miss.
+     */
+    public function testTheBootGateRegistersEveryCheckItCanReport(): void
+    {
+        $gate = (string) file_get_contents(
+            dirname(__DIR__, 3) . '/scripts/docker-boot-smoke.sh'
+        );
+        $directives = self::directivesOnly($gate);
+
+        self::assertSame(
+            1,
+            preg_match('/^EXPECTED_CHECKS=\'\n(.*?)\'$/ms', $directives, $m),
+            'the gate must declare the list of checks it is required to reach'
+        );
+        $registered = array_values(array_filter(array_map('trim', explode("\n", $m[1]))));
+        self::assertGreaterThan(10, count($registered));
+
+        self::assertMatchesRegularExpression(
+            '/produced NO verdict/',
+            $directives,
+            'the gate must FAIL on a check that did not run, not merely count the ones that did'
+        );
+
+        // Capture the id GREEDILY (`\S+`, not a lowercase-only class): a class
+        // that stops at the first unexpected character silently skips the very
+        // line a typo introduced, which is how this control first came back
+        // green against a mutation it was written to catch.
+        preg_match_all('/^\s*(?:\S+\)\s+)?(?:pass|fail)\s+(\S+)\s/m', $directives, $calls);
+        $used = array_values(array_unique(array_filter(
+            $calls[1],
+            // `pass "$1" …` inside the uint_or_fail helper is a forwarded id,
+            // not a literal one.
+            static fn (string $id): bool => !str_contains($id, '$') && !str_contains($id, '"'),
+        )));
+        self::assertNotEmpty($used);
+
+        $unregistered = array_values(array_diff($used, $registered, ['gate-completeness']));
+        self::assertSame(
+            [],
+            $unregistered,
+            'these check ids are reported but not registered, so the completeness '
+            . 'check cannot notice if they stop running: ' . implode(', ', $unregistered)
+        );
+
+        $neverReported = array_values(array_diff($registered, $used));
+        self::assertSame(
+            [],
+            $neverReported,
+            'these check ids are registered but nothing can ever report them: '
+            . implode(', ', $neverReported)
+        );
+    }
+
+    /**
+     * Finding 2: a raw TCP connect through a published port cannot fail while
+     * Docker's userland proxy is enabled (the default, including on
+     * GitHub-hosted runners) — it accepts on the host port BEFORE dialling the
+     * container. The host-side WS check must therefore key on curl's exit code,
+     * which does discriminate: 52 healthy, 56 nothing listening, 7 no mapping.
+     */
+    public function testTheBootGateRejectsAnEmptyPublishedPort(): void
+    {
+        $gate = self::directivesOnly((string) file_get_contents(
+            dirname(__DIR__, 3) . '/scripts/docker-boot-smoke.sh'
+        ));
+
+        self::assertMatchesRegularExpression(
+            '/^\s*56\)\s+fail\s+ws-published/m',
+            $gate,
+            'curl exit 56 (connection reset behind the mapping) must FAIL the gate'
+        );
+        self::assertMatchesRegularExpression(
+            '/^\s*7\)\s+fail\s+ws-published/m',
+            $gate,
+            'curl exit 7 (no mapping at all) must FAIL the gate'
+        );
+        self::assertMatchesRegularExpression(
+            '/^\s*52\)\s+pass\s+ws-published/m',
+            $gate,
+            'curl exit 52 is the HEALTHY signal — the worker answered and closed the '
+            . 'unauthenticated upgrade; rejecting it reddens a good container'
+        );
+        self::assertDoesNotMatchRegularExpression(
+            '#^\s*if\s+timeout\s+\d+\s+bash\s+-c\s+"exec\s+3<>/dev/tcp/[^"]*"[^\n]*;\s*then\s*\n\s*pass\s#m',
+            $gate,
+            'a raw /dev/tcp connect to a PUBLISHED port cannot fail, so it must not be an assertion'
+        );
+    }
+
+    /**
+     * Finding 12: `30000 + RANDOM % 20000` sits inside the kernel ephemeral
+     * range (32768-60999 by default), so ~85% of draws could collide with an
+     * outbound socket and `docker run -p` then died under `set -e` with no
+     * diagnostic. Let Docker allocate instead.
+     */
+    public function testTheBootGateDoesNotPickItsOwnHostPorts(): void
+    {
+        $gate = self::directivesOnly((string) file_get_contents(
+            dirname(__DIR__, 3) . '/scripts/docker-boot-smoke.sh'
+        ));
+
+        self::assertDoesNotMatchRegularExpression(
+            '/\$\(\(\s*\d+\s*\+\s*RANDOM\s*%/',
+            $gate,
+            'the gate must not hand-pick a host port out of the kernel ephemeral range'
+        );
+        self::assertStringContainsString(
+            '-p 127.0.0.1::8096',
+            $gate,
+            'publish with an unspecified host port and read it back with `docker port`'
         );
     }
 }

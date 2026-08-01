@@ -22,6 +22,19 @@
 #
 # NB invoked as `sh <path>`, not executed directly, so the file's exec bit is
 # irrelevant to whether the container boots.
+#
+# ⚠ THE MARKER FILE IS LOAD-BEARING. (S163 review round 2, finding 3.)
+# `kill -TERM 1` on its own is NOT enough: supervisord treats SIGTERM as a
+# clean shutdown and exits 0, so `docker inspect` showed
+# `"Status":"exited","ExitCode":0` and the failure was indistinguishable from a
+# `docker stop` — `restart: on-failure`, k8s `OnFailure`, `docker wait` and
+# every exit-code alert read it as SUCCESS. There is no way to make supervisord
+# itself exit non-zero (it handles TERM/INT/QUIT identically, and PID 1 ignores
+# any signal it has no handler for), so `docker/docker-entrypoint.sh` keeps PID
+# 1 for itself, runs supervisord as a child, and exits 70 when this marker
+# exists. Write it BEFORE signalling.
+
+FATAL_MARKER="${PHLIX_SUPERVISOR_FATAL_MARKER:-/var/run/phlix-supervisor-fatal}"
 
 printf 'READY\n'
 
@@ -36,6 +49,9 @@ while read -r header; do
             echo "reported as a healthy 'Up' — check 'docker logs' and" >&2
             echo "/var/phlix/logs/phlix-error.log for the cause." >&2
             echo "==========================================================" >&2
+            # Order matters: the marker must exist before PID 1 wakes up.
+            printf '%s\n' "$header" > "$FATAL_MARKER" 2>/dev/null \
+                || echo "PHLIX-SUPERVISOR-FATAL: could not write ${FATAL_MARKER}; the container will exit 0 and look like a clean stop." >&2
             kill -TERM 1
             exit 0
             ;;

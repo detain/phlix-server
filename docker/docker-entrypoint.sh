@@ -294,4 +294,72 @@ else
     fi
 fi
 
-exec "$SUPERVISORD" -c "$SUPERVISORD_CONF"
+# ---------------------------------------------------------------------------
+# Run supervisord as a CHILD, not via `exec`, so a FATAL program can make the
+# CONTAINER exit NON-ZERO. (S163 review round 2, finding 3)
+#
+# This used to be `exec "$SUPERVISORD" …`, which made supervisord PID 1. That
+# looked right, and it defeated the whole point of the F6 event listener:
+# supervisord treats SIGTERM as a CLEAN SHUTDOWN and exits **0**, so
+# `docker inspect` reported
+#
+#     "Status":"exited","ExitCode":0,"Error":""
+#
+# after the application had given up. `restart: on-failure`, Kubernetes
+# `restartPolicy: OnFailure`, `docker wait` and every exit-code-based alert
+# read that as success — i.e. the total outage was still invisible, which is
+# the one thing S163 exists to fix. And supervisord cannot be made to exit
+# non-zero from inside: it installs handlers for TERM/INT/QUIT and shuts down
+# cleanly for all three, and a signal it does NOT handle is ignored outright
+# because PID 1 in a namespace has no default signal disposition.
+#
+# So PID 1 stays this shell, and it translates. `docker/supervisord-exit-on-fatal.sh`
+# touches $PHLIX_SUPERVISOR_FATAL_MARKER before it signals PID 1; if the marker
+# is present once supervisord has gone, the container exits 70 (EX_SOFTWARE)
+# instead of 0.
+#
+#   * `docker stop`  -> TERM to PID 1 -> forwarded -> clean shutdown, NO marker
+#                       -> exit 0. Unchanged from before.
+#   * program FATAL  -> listener writes the marker, TERMs PID 1 -> same clean
+#                       shutdown -> marker present -> exit 70.
+#
+# Orphan reaping is preserved: dash and busybox ash both implement `wait` with
+# `waitpid(-1)`, so any process reparented to PID 1 is still reaped while this
+# shell is blocked below (verified in the built image — no zombies after a full
+# gate run).
+# ---------------------------------------------------------------------------
+FATAL_MARKER="${PHLIX_SUPERVISOR_FATAL_MARKER:-/var/run/phlix-supervisor-fatal}"
+export PHLIX_SUPERVISOR_FATAL_MARKER="$FATAL_MARKER"
+# A container restarted in place keeps its filesystem, so a marker from the
+# previous life would make every subsequent boot exit 70.
+rm -f "$FATAL_MARKER" 2>/dev/null || true
+
+"$SUPERVISORD" -c "$SUPERVISORD_CONF" &
+SUPERVISORD_PID=$!
+
+phlix_forward_signal() {
+    kill -"$1" "$SUPERVISORD_PID" 2>/dev/null || true
+}
+trap 'phlix_forward_signal TERM' TERM
+trap 'phlix_forward_signal INT' INT
+trap 'phlix_forward_signal QUIT' QUIT
+
+# `wait` returns as soon as a TRAPPED signal has been handled, even though the
+# child is still running, so loop until the child is really gone.
+supervisord_status=0
+while true; do
+    supervisord_status=0
+    wait "$SUPERVISORD_PID" || supervisord_status=$?
+    kill -0 "$SUPERVISORD_PID" 2>/dev/null || break
+done
+
+if [ -f "$FATAL_MARKER" ]; then
+    echo "==========================================================" >&2
+    echo "PHLIX-SUPERVISOR-FATAL-EXIT: supervisord shut down because a" >&2
+    echo "supervised program entered FATAL. Exiting 70 so the failure is" >&2
+    echo "distinguishable from a clean 'docker stop' (which exits 0)." >&2
+    echo "==========================================================" >&2
+    exit 70
+fi
+
+exit "$supervisord_status"

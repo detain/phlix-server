@@ -321,6 +321,13 @@ phlix_build_swoole() {
     # change them there (the source of truth) and re-sync. --enable-iouring /
     # --enable-uring-socket build on any kernel but only activate at RUNTIME on
     # Linux kernel >= 5.6; older kernels silently fall back to epoll.
+    #
+    # ONE DELIBERATE DIVERGENCE (S163): the base image gates those two flags
+    # behind `ARG SWOOLE_IOURING`, default OFF, because Docker's default seccomp
+    # profile blocks the io_uring syscalls and every Workerman worker died with
+    # "Iouring::Iouring(): ... Operation not permitted" in a refork loop. A HOST
+    # install has no such sandbox — systemd/phlix-server.service even sets
+    # LimitMEMLOCK=infinity so io_uring initialises — so they stay ON here.
     ./configure \
       --enable-swoole \
       --enable-sockets \

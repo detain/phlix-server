@@ -30,6 +30,13 @@ jobs:
       contents: read
       packages: write
 
+    outputs:
+      # The EXACT base reference the dependent jobs must build FROM, and the
+      # digest it must resolve to. Empty when the base for this commit could
+      # not be published (fork PR) — see the `base_ref` step.
+      base_ref: ${{ steps.baseref.outputs.base_ref }}
+      base_digest: ${{ steps.base.outputs.digest }}
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -47,16 +54,53 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # ----------------------------------------------------------------------
+      # A PR MUST publish the immutable per-commit tag. (S163 round 4.)
+      #
+      # This job used to be `push: github.event_name != 'pull_request'`, i.e. a
+      # PR built the new base and threw it away — while the `docker` and
+      # `docker-hub` jobs below went on building FROM
+      # `ghcr.io/detain/phlix-base:latest`, the base published by some earlier
+      # commit. So every PR compiled this branch's code against last week's
+      # base, and the failure mode was exactly the one this whole step exists
+      # to fix: a green check that measured the wrong artefact.
+      #
+      # It stopped being silent on `fe876c5c`: this branch adds `ext-ldap` to
+      # the base and drops `--ignore-platform-reqs` from `docker/Dockerfile`,
+      # so `composer install` failed with `Root composer.json requires PHP
+      # extension ext-ldap` — with `/usr/local/etc/php/conf.d/docker-fpm.ini`
+      # in the error, i.e. the OLD `-fpm-alpine` base. (Only the alpine leg
+      # actually failed; the other two were CANCELLED by the matrix's default
+      # fail-fast, which is also fixed below.)
+      #
+      # `:latest` is still published only on master/tags — a PR must not move
+      # the tag every deployment pulls. What a PR now publishes is
+      # `:<full-sha>`, which is immutable and names the commit it came from,
+      # and the dependent jobs consume THAT and verify its digest.
+      # ----------------------------------------------------------------------
+      # Built as an explicit list (same shape as the hub job's `hubmeta`) rather
+      # than a conditional line inside `tags: |`, so there is never an empty
+      # entry whose handling depends on the action's input parsing.
+      - name: Compute base image tags
+        id: basetags
+        run: |
+          set -euo pipefail
+          TAGS="${BASE_IMAGE}:${GITHUB_SHA}"
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            TAGS="${BASE_IMAGE}:latest,${TAGS}"
+          fi
+          echo "tags=${TAGS}" >> "$GITHUB_OUTPUT"
+          echo "publishing: ${TAGS}"
+
       - name: Build and push base image
+        id: base
         uses: docker/build-push-action@v7
         with:
           context: .
           file: docker/Dockerfile.base
           platforms: linux/amd64,linux/arm64
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: |
-            ${{ env.BASE_IMAGE }}:latest
-            ${{ env.BASE_IMAGE }}:${{ github.sha }}
+          push: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+          tags: ${{ steps.basetags.outputs.tags }}
           # Registry cache MUST use a dedicated tag, not the image tag — pushing
           # `mode=max` cache to `:latest` pollutes the image manifest with a
           # buildkit cacheconfig blob, which later breaks `FROM …:latest`
@@ -64,33 +108,91 @@ jobs:
           cache-from: |
             type=gha
             type=registry,ref=${{ env.BASE_IMAGE }}:buildcache
+          # `ignore-error=true` on the REGISTRY export only. (S163 round 5,
+          # finding 3.) A fork PR gets a read-only GITHUB_TOKEN, so writing
+          # `…:buildcache` 403s — and a buildkit cache-export failure fails the
+          # whole build STEP even though the image itself built fine. Measured
+          # on a real `docker buildx build` against an unreachable registry:
+          # without the flag it exited 1 (`ERROR: error writing layer blob`)
+          # AFTER the image had been built and loaded; with the flag the same
+          # error printed and it exited 0. Without this the base job would go
+          # RED here on a fork PR and the `base_ref` step below — the one that
+          # emits the documented warning — would never run at all.
+          # A cache is not an artefact: `push:` is a separate exporter and a
+          # failure to publish the image still fails hard.
           cache-to: |
             type=gha,mode=max
-            type=registry,ref=${{ env.BASE_IMAGE }}:buildcache,mode=max,image-manifest=true,oci-mediatypes=true
+            type=registry,ref=${{ env.BASE_IMAGE }}:buildcache,mode=max,image-manifest=true,oci-mediatypes=true,ignore-error=true
           build-args: |
             PHP_VERSION=8.3
+
+      # A PR from a FORK gets a read-only GITHUB_TOKEN no matter what the
+      # `permissions:` block says, so `push:` above is false and there is no
+      # same-commit base for the dependent jobs to build FROM. The job that
+      # CONSUMES the base is skipped rather than quietly built against a stale
+      # registry base: a build that measures the wrong artefact is worse than
+      # no build, and the boot gate (which builds base + image locally and
+      # BOOTS all three) needs only `contents: read`, so it still runs and is
+      # the check that actually proves anything.
+      #
+      # ⚠ What is KNOWN and what is INFERRED. (S163 round 5, finding 3.) Every
+      # PR this repository has had came from a branch in this repository, so
+      # this path has NEVER executed and nothing below is observed behaviour.
+      # What IS measured is the mechanism that used to break it: the registry
+      # cache export above needs `packages: write` too, and a cache-export
+      # failure fails the build step — so before `ignore-error=true` this job
+      # would have gone RED at the build and this step would never have run.
+      # The rest (login succeeds with a read-only token; `push: false` is what
+      # leaves the tag unpublished) is inference from the documented token
+      # scoping, not from a run.
+      - name: Decide the base reference the dependent jobs must build FROM
+        id: baseref
+        env:
+          IS_FORK_PR: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
+        run: |
+          if [ "$IS_FORK_PR" = "true" ]; then
+            echo "::warning::Fork PR: GITHUB_TOKEN cannot write packages, so the base built from this commit could not be published. Skipping the runtime image builds rather than building them against a stale base. The boot gate still runs."
+            echo "base_ref=" >> "$GITHUB_OUTPUT"
+          else
+            echo "base_ref=${BASE_IMAGE}:${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+          fi
 
   docker:
     name: Build and Push phlix-server
     runs-on: ubuntu-latest
     needs: docker-base
+    # NOT a job-level `if:` on base_ref. (S163 round 5, finding 3.) The guard
+    # belongs to the leg that consumes the base, and only ONE does:
+    # `grep -c PHLIX_BASE_IMAGE docker/Dockerfile*` is 3 for docker/Dockerfile
+    # and 0 for both `.intel` and `.nvidia`, which install PHP from apt and are
+    # self-contained. A job-level condition took all three legs away on a fork
+    # PR for a reason that applies to one of them — and `matrix` is not
+    # available in `jobs.<id>.if`, so the condition moves onto the steps.
+    # (Same `needs_base` key the boot-gate job below already uses.)
 
     permissions:
       contents: read
       packages: write
 
     strategy:
+      # One leg failing must not CANCEL the other two. On `fe876c5c` only the
+      # alpine leg actually failed and the intel/nvidia legs were cancelled,
+      # which read as "all three are broken" and cost a round of diagnosis.
+      fail-fast: false
       matrix:
         include:
           - dockerfile: docker/Dockerfile
             tag: latest
             platform: linux/amd64,linux/arm64
+            needs_base: true
           - dockerfile: docker/Dockerfile.nvidia
             tag: nvidia
             platform: linux/amd64
+            needs_base: false
           - dockerfile: docker/Dockerfile.intel
             tag: intel
             platform: linux/amd64
+            needs_base: false
 
     steps:
       - name: Checkout code
@@ -120,7 +222,47 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=sha,prefix=
 
+      # Prove the base we are about to build FROM is the one THIS run produced,
+      # before spending twenty minutes compiling against it. A tag is mutable;
+      # the digest is not. Anything other than an exact match is a hard error —
+      # never a fallback to `:latest`, which is what made the stale-base defect
+      # invisible for the life of these images.
+      #
+      # Only the alpine leg: `.intel`/`.nvidia` carry no `PHLIX_BASE_IMAGE`, so
+      # this was a no-op there — and on a fork PR it would have been a no-op
+      # that exits 1 on the empty digest.
+      - name: Verify the base image is the one built from this commit
+        if: ${{ matrix.needs_base && needs.docker-base.outputs.base_ref != '' }}
+        env:
+          BASE_REF: ${{ needs.docker-base.outputs.base_ref }}
+          BASE_DIGEST: ${{ needs.docker-base.outputs.base_digest }}
+        run: |
+          set -euo pipefail
+          if [ -z "$BASE_DIGEST" ]; then
+            echo "::error::docker-base published no digest; refusing to build against an unverified base."
+            exit 1
+          fi
+          echo "expected: ${BASE_REF} @ ${BASE_DIGEST}"
+          INSPECT="$(docker buildx imagetools inspect "$BASE_REF")"
+          printf '%s\n' "$INSPECT" | head -20
+          case "$INSPECT" in
+            *"$BASE_DIGEST"*)
+              echo "OK: ${BASE_REF} resolves to the base built in this run." ;;
+            *)
+              echo "::error::${BASE_REF} does NOT resolve to ${BASE_DIGEST} — the runtime image would be built against a different base than this commit produced."
+              exit 1 ;;
+          esac
+
+      # This leg needs the base and there is none from this commit — say so
+      # where someone reading the run can see it, instead of a silently absent
+      # job. The other two legs are unaffected and build below.
+      - name: No same-commit base for this leg
+        if: ${{ matrix.needs_base && needs.docker-base.outputs.base_ref == '' }}
+        run: |
+          echo "::warning::Fork PR: GITHUB_TOKEN cannot write packages, so the base built from this commit could not be published. Skipping the ${{ matrix.tag }} image build (docker/Dockerfile is the only one that builds FROM the base) rather than building it against a stale base. The boot gate still builds and BOOTS all three images."
+
       - name: Build and push
+        if: ${{ !matrix.needs_base || needs.docker-base.outputs.base_ref != '' }}
         uses: docker/build-push-action@v7
         with:
           context: .
@@ -130,12 +272,119 @@ jobs:
           tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ matrix.tag }}
           labels: ${{ steps.meta.outputs.labels }}
           # Dedicated cache tag (not the image tag) — see the base job's note.
+          # `ignore-error=true` for the same reason as the base job: the two
+          # self-contained legs now RUN on a fork PR, where the read-only token
+          # cannot write `:buildcache-*` and an unignored cache-export failure
+          # would fail the build step — trading the old wrong skip for a new
+          # wrong red. The hub job below keeps its job-level guard (its
+          # Dockerfile DOES consume the base), so it needs no such flag.
           cache-from: type=gha,type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache-${{ matrix.tag }}
-          cache-to: type=gha,type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache-${{ matrix.tag }},mode=max,image-manifest=true,oci-mediatypes=true
+          cache-to: type=gha,type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache-${{ matrix.tag }},mode=max,image-manifest=true,oci-mediatypes=true,ignore-error=true
           build-args: |
             PHP_VERSION=8.3
             PHLIX_VERSION=${{ github.ref_name }}
-            PHLIX_BASE_IMAGE=${{ env.BASE_IMAGE }}:latest
+            PHLIX_BASE_IMAGE=${{ needs.docker-base.outputs.base_ref }}
+
+  # --------------------------------------------------------------------------
+  # S163 — the BOOT gate.
+  #
+  # Every other job in this file is `docker/build-push-action` and nothing else.
+  # `docker build` NEVER executes CMD, ENTRYPOINT or HEALTHCHECK, so for the
+  # whole life of these images the runtime path was untested — and it was in
+  # fact dead: supervisord started `public/index.php` (the one-shot CGI front
+  # controller) instead of the `start.php` Workerman daemon, so HTTP :8096,
+  # SyncPlay WS :8097, the hub heartbeat, the relay tunnel, DLNA, metrics flush
+  # and every scheduled worker never started in any container. 14 green checks
+  # said nothing, and with no HEALTHCHECK Docker reported `Up` throughout.
+  #
+  # This job BOOTS each image against a throwaway MySQL and asserts it serves.
+  # It is deliberately NOT `needs: docker`: it builds its own images (including
+  # the shared base, locally) so a runtime image is never validated against a
+  # stale registry base — the pipeline is two-stage and a base change
+  # invalidates all three runtime images.
+  #
+  # Runs on pull_request too (the other jobs only push there), because the whole
+  # point is to catch a regression BEFORE it is published.
+  # --------------------------------------------------------------------------
+  docker-boot-gate:
+    name: Boot gate (${{ matrix.name }})
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Only the Alpine image builds FROM the shared base; the two
+          # HW-accel variants install PHP from apt and are self-contained.
+          - name: alpine
+            dockerfile: docker/Dockerfile
+            tag: phlix-boot:alpine
+            needs_base: true
+          - name: intel
+            dockerfile: docker/Dockerfile.intel
+            tag: phlix-boot:intel
+            needs_base: false
+          - name: nvidia
+            dockerfile: docker/Dockerfile.nvidia
+            tag: phlix-boot:nvidia
+            needs_base: false
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      # The nvidia/cuda runtime base is multi-GB; the hosted runner needs the
+      # room. Cheap no-op for the other two.
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /usr/local/share/boost "$AGENT_TOOLSDIRECTORY" || true
+          df -h /
+
+      - name: Set up Docker Buildx
+        if: matrix.needs_base
+        uses: docker/setup-buildx-action@v4
+
+      # Build the shared base IN THIS JOB and hand it to the smoke script.
+      #
+      # Two constraints pull in opposite directions and both are satisfied here:
+      #   * the runtime image must never be validated against a STALE base (the
+      #     pipeline is two-stage; a base change invalidates all three), so the
+      #     base cannot simply be pulled from the registry;
+      #   * the base compiles Swoole and php-uv from source, and doing that
+      #     uncached on every PR is minutes of runner time for a layer that
+      #     rarely changes (S163 review F9).
+      # Building it here with a GHA cache gives a base that is by construction
+      # current with this commit, without recompiling when Dockerfile.base is
+      # untouched. `load: true` puts it in the local daemon so the smoke script
+      # can build FROM it. The sources are pinned (SWOOLE_REF / PHP_UV_REF), so
+      # a cache hit and a cold build produce the same extensions.
+      - name: Build shared base (cached, loaded locally)
+        if: matrix.needs_base
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: docker/Dockerfile.base
+          load: true
+          push: false
+          tags: phlix-base-bootgate:${{ github.sha }}
+          cache-from: type=gha,scope=bootgate-base
+          cache-to: type=gha,mode=max,scope=bootgate-base
+          build-args: |
+            PHP_VERSION=8.3
+
+      # The runtime image itself is built by the smoke script into the LOCAL
+      # daemon, uncached and unpushed, so the image it boots is exactly the
+      # image it built.
+      - name: Boot and smoke-test the image
+        env:
+          PHLIX_BASE_IMAGE: ${{ matrix.needs_base && format('phlix-base-bootgate:{0}', github.sha) || '' }}
+        run: |
+          chmod +x scripts/docker-boot-smoke.sh
+          ./scripts/docker-boot-smoke.sh "${{ matrix.dockerfile }}" "${{ matrix.tag }}"
 
   # TODO: hub Dockerfile lives in detain/phlix-hub; ensure the workflow picks it up
   # via the hub repo's release event. For now, this job clones the hub repo and
@@ -146,6 +395,9 @@ jobs:
     name: Build and Push phlix-hub
     runs-on: ubuntu-latest
     needs: docker-base
+    # Same exposure as the server job: this built FROM `…phlix-base:latest`,
+    # i.e. a base from some other commit, on every PR.
+    if: needs.docker-base.outputs.base_ref != ''
 
     permissions:
       contents: read
@@ -186,6 +438,27 @@ jobs:
           SHA="${GITHUB_SHA::12}"
           echo "tags=${{ env.REGISTRY }}/detain/phlix-hub:latest,${{ env.REGISTRY }}/detain/phlix-hub:${SHA}" >> "$GITHUB_OUTPUT"
 
+      - name: Verify the base image is the one built from this commit
+        env:
+          BASE_REF: ${{ needs.docker-base.outputs.base_ref }}
+          BASE_DIGEST: ${{ needs.docker-base.outputs.base_digest }}
+        run: |
+          set -euo pipefail
+          if [ -z "$BASE_DIGEST" ]; then
+            echo "::error::docker-base published no digest; refusing to build against an unverified base."
+            exit 1
+          fi
+          echo "expected: ${BASE_REF} @ ${BASE_DIGEST}"
+          INSPECT="$(docker buildx imagetools inspect "$BASE_REF")"
+          printf '%s\n' "$INSPECT" | head -20
+          case "$INSPECT" in
+            *"$BASE_DIGEST"*)
+              echo "OK: ${BASE_REF} resolves to the base built in this run." ;;
+            *)
+              echo "::error::${BASE_REF} does NOT resolve to ${BASE_DIGEST} — the hub image would be built against a different base than this commit produced."
+              exit 1 ;;
+          esac
+
       - name: Build and push phlix-hub
         uses: docker/build-push-action@v7
         with:
@@ -198,4 +471,4 @@ jobs:
           cache-from: type=gha,type=registry,ref=${{ env.REGISTRY }}/detain/phlix-hub:buildcache
           cache-to: type=gha,type=registry,ref=${{ env.REGISTRY }}/detain/phlix-hub:buildcache,mode=max,image-manifest=true,oci-mediatypes=true
           build-args: |
-            PHLIX_BASE_IMAGE=${{ env.BASE_IMAGE }}:latest
+            PHLIX_BASE_IMAGE=${{ needs.docker-base.outputs.base_ref }}

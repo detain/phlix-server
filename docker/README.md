@@ -4,9 +4,129 @@ This directory contains the three Dockerfile variants Phlix ships:
 
 | Variant | Base image | Purpose | PHP path layout |
 |---|---|---|---|
-| `Dockerfile` | `php:8.3-fpm-alpine` | Default, software transcoding only | `/usr/local/etc/php/conf.d/zz-phlix.ini` (Alpine canonical) |
-| `Dockerfile.nvidia` | `nvidia/cuda:12.4.0-runtime-ubuntu22.04` | NVIDIA NVENC/NVDEC HW accel | `/etc/php/8.3/fpm/conf.d/99-phlix.ini` + symlink to Alpine path |
-| `Dockerfile.intel` | `ubuntu:22.04` | Intel QuickSync / VAAPI HW accel | `/etc/php/8.3/fpm/conf.d/99-phlix.ini` + symlink to Alpine path |
+| `Dockerfile` | `ghcr.io/detain/phlix-base` (`php:8.3-cli-alpine`) | Default, software transcoding only | `/usr/local/etc/php/conf.d/zz-phlix.ini` (Alpine canonical) |
+| `Dockerfile.nvidia` | `nvidia/cuda:12.9.2-runtime-ubuntu24.04` | NVIDIA NVENC/NVDEC HW accel | `/etc/php/8.3/cli/conf.d/99-phlix.ini` + symlink to Alpine path |
+| `Dockerfile.intel` | `ubuntu:24.04` | Intel QuickSync / VAAPI HW accel | `/etc/php/8.3/cli/conf.d/99-phlix.ini` + symlink to Alpine path |
+
+> The shared base was `php:8.3-fpm-alpine` + `apk add nginx` until S163. A
+> `-fpm` base carries the `php-fpm` binary **and** `EXPOSE 9000` whatever the
+> package list says, so the Alpine image kept shipping both while three unit
+> tests asserted it shipped neither — they simply did not scan
+> `Dockerfile.base`. It is now `php:8.3-cli-alpine`, nginx is gone, and
+> `allDockerfileProvider()` in `tests/Unit/Docker/DockerEntrypointTest.php`
+> covers every `docker/Dockerfile*` in the repo, with a test that fails if a
+> new one is added outside the net.
+
+All three land on **PHP 8.3**, matching CI. Production runs **8.5** — that gap
+is deliberate and recorded, not accidental; no gate currently runs the engine
+production runs.
+
+## Serving model — the Workerman daemon, and nothing else
+
+A container runs exactly one program: `php /var/www/html/start.php start`, under
+supervisord. **There is no nginx and no php-fpm in the image.** That mirrors
+production, where `scripts/install.sh` points HAProxy straight at
+`127.0.0.1:${HTTP_PORT}` ("WebSocket upgrade is detected per-request; both REST
+and WS traffic share the single HTTP port on the Workerman side"), and Workerman
+serves the `/app` SPA shell and all static assets itself
+(`HttpHandler::serveStatic()`). TLS and host routing belong to whatever fronts
+the container.
+
+Ports — exactly what `start.php` binds:
+
+| Port | Worker | Traffic |
+|---|---|---|
+| `8096` | `phlix-server-http` (count 14) | REST, the `/app` SPA, static assets, per-request WS upgrade. **This is the port to front.** |
+| `8097` | `phlix-server-ws` (count 1) | The SyncPlay WebSocket worker. |
+
+Nothing listens on 80 or 443. If you are migrating from an older compose file,
+change `"<host>:80"` to `"<host>:8096"`.
+
+### Verifying an image actually runs
+
+`docker build` never executes `CMD`, `ENTRYPOINT` or `HEALTHCHECK`, so a green
+build proves nothing about the runtime path — for the whole life of these images
+supervisord started `public/index.php` (the one-shot CGI front controller)
+instead of `start.php`, and no container had ever served a request. Boot it:
+
+```bash
+scripts/docker-boot-smoke.sh docker/Dockerfile        phlix-boot:alpine
+scripts/docker-boot-smoke.sh docker/Dockerfile.intel  phlix-boot:intel
+scripts/docker-boot-smoke.sh docker/Dockerfile.nvidia phlix-boot:nvidia
+```
+
+That script builds the image (rebuilding the shared base first, because the
+pipeline is two-stage), runs it against a throwaway MySQL on a private network,
+and makes 11 assertions: `/health` 200s; the migration step reported success;
+the schema really is there when reached with the application's own credentials;
+every supervisord program is `RUNNING`; the application, its Workerman workers
+AND the `exit-on-fatal` event listener hold their pids across a 90 s window
+(the listener is the only thing that turns a FATAL into a dead container, so a
+listener that crash-loops is its own failure); `start.php` is the running
+process and no CGI/FPM/nginx process is; `:8097` answers both inside the
+container and through the published port mapping; the SPA shell and its
+immutable assets are served; the container reaches `healthy` and its
+HEALTHCHECK start period is short enough for `unhealthy` to be reachable;
+`composer check-platform-reqs` is clean; and — destructively, last — a program
+driven into FATAL kills the container with a **non-zero** exit code.
+
+It then checks **itself**: every assertion is registered by name and a check
+that produced no verdict fails the run. That guard exists because a check that
+silently never executed once let this gate print `ALL ASSERTIONS PASSED`
+against a broken image.
+
+CI runs the same script in the `docker-boot-gate` job.
+
+### Configuration the container needs
+
+`docker/docker-entrypoint.sh` maps the names every documented deployment sets
+onto the names the application actually reads:
+
+| You set | The app reads |
+|---|---|
+| `PHLIX_DATABASE_HOST/PORT/NAME/USER/PASSWORD` | `DB_HOST` / `DB_PORT` / `DB_DATABASE` / `DB_USER` / `DB_PASSWORD` |
+| `PHLIX_SECRET_KEY` | `JWT_SECRET` |
+
+`start.php` refuses to boot without a JWT signing key. If neither `JWT_SECRET`
+nor `PHLIX_SECRET_KEY` is set, the entrypoint generates one and persists it to
+`/var/phlix/config/jwt_secret` so it survives restarts — **mount
+`/var/phlix/config`**, or every restart invalidates all sessions and signed
+media URLs (the entrypoint says so loudly if it cannot write the file).
+
+### What the container's exit code means, and which `restart:` policy to use
+
+The container's PID 1 is `docker/docker-entrypoint.sh`, not supervisord.
+supervisord runs as its child so the entrypoint can translate a supervised
+program's collapse into an exit code an orchestrator can act on:
+
+| exit code | meaning |
+|---|---|
+| `0` | clean shutdown — `docker stop`, SIGTERM/SIGINT/SIGQUIT, or supervisord exiting normally |
+| **`70`** | **a supervised program entered FATAL.** The application is not running and supervisord has stopped retrying it. `docker logs` carries the `PHLIX-SUPERVISOR-FATAL` and `PHLIX-SUPERVISOR-FATAL-EXIT` banners; the cause is in `/var/phlix/logs/phlix-error.log`. |
+| anything else | supervisord's own exit status, passed through unchanged |
+
+70 is `EX_SOFTWARE` from `sysexits.h`. It exists because a FATAL used to leave
+the container sitting `Up` with nothing serving — the exact shape of the outage
+these images were fixed for — and because signalling supervisord makes it exit
+**0**, which `restart: on-failure`, k8s `restartPolicy: OnFailure`,
+`docker wait` and every exit-code alert read as success.
+
+**This changes what a FATAL does to a running deployment.** Every compose file
+here uses `restart: unless-stopped`, which restarts the container on *any*
+exit, so a persistent FATAL becomes a container-level restart loop that re-runs
+the whole migration chain on every cycle. That is still better than a silent
+`Up`, but pick deliberately:
+
+| policy | behaviour on exit 70 |
+|---|---|
+| `unless-stopped` (shipped) | restarts forever; survives a daemon restart. Fine when the cause is transient (a database that comes up late). |
+| `on-failure:5` | restarts at most five times, then leaves the container `Exited (70)` where monitoring and `docker ps -a` can see it. Use this if you alert on exit codes. |
+| `no` | leaves it dead on the first FATAL. |
+
+The HEALTHCHECK is the other half: the container goes `unhealthy` within
+`90 s + 3 × 30 s` if `/health` stops answering, which is what a k8s
+`livenessProbe` consumes. Neither signal is consumed by compose on its own —
+`unless-stopped` does not react to `unhealthy`.
 
 ## Base image (shared)
 
@@ -21,7 +141,7 @@ ARG PHLIX_BASE_IMAGE=ghcr.io/detain/phlix-base:latest
 FROM ${PHLIX_BASE_IMAGE}
 ```
 
-**Why:** editing the application Dockerfile (nginx/php config, composer steps,
+**Why:** editing the application Dockerfile (php config, composer steps,
 source copy) no longer recompiles Swoole/UV — Docker pulls the prebuilt base
 instead. The same base is reused by both **phlix-server** and **phlix-hub**, so
 the extensions are compiled once instead of once per image.
@@ -45,23 +165,26 @@ here even though hub consumes it.
 
 ## Why the path layouts differ
 
-The default image inherits from Docker's official `php:8.3-fpm-alpine`, which
+The default image inherits from Docker's official `php:8.3-cli-alpine`, which
 places PHP config under `/usr/local/etc/php/conf.d/` — the canonical layout
 documented in the upstream `php` image.
 
-The NVIDIA variant must inherit from `nvidia/cuda:*-ubuntu22.04` because the
+The NVIDIA variant must inherit from `nvidia/cuda:*-ubuntu24.04` because the
 CUDA runtime is only distributed for glibc-based distributions (Ubuntu/Debian).
-The Intel variant must inherit from `ubuntu:22.04` because the
+The Intel variant must inherit from `ubuntu:24.04` because the
 `intel-media-va-driver-non-free` package is only available on Debian/Ubuntu.
 
 Neither HW-accel base image can use the upstream `php` image as a base, so
-they install PHP via the Debian package layout (`/etc/php/8.3/fpm/`).
+they install PHP via the Debian package layout (`/etc/php/8.3/cli/` — the CLI
+scan dir, because the daemon is a CLI process; it used to be written to the
+`fpm/` dir, which the application never reads, so every setting in
+`docker/php.ini` was inert).
 
 To keep operator-facing paths consistent across all three variants, the HW-accel
 images symlink the Alpine-canonical path to their Debian-layout file:
 
 ```dockerfile
-ln -sf /etc/php/8.3/fpm/conf.d/99-phlix.ini /usr/local/etc/php/conf.d/zz-phlix.ini
+ln -sf /etc/php/8.3/cli/conf.d/99-phlix.ini /usr/local/etc/php/conf.d/zz-phlix.ini
 ```
 
 This means tooling, documentation, and `docker exec` commands can target a
@@ -75,13 +198,16 @@ tree caches across builds and is **not** invalidated by source-only edits:
 ```dockerfile
 # Layer 1 — invalidated only when composer.{json,lock} change.
 COPY composer.json composer.lock /var/www/html/
-RUN composer install --no-dev --prefer-dist --no-scripts --no-autoloader \
-                     --ignore-platform-reqs
+RUN composer install --no-dev --prefer-dist --no-scripts --no-autoloader
 
 # Layer 2 — invalidated on every source edit, but cheap (no network).
 COPY . /var/www/html/
 RUN composer dump-autoload --no-dev --optimize
 ```
+
+(That is `docker/Dockerfile`, the two-layer one. `Dockerfile.intel` and
+`Dockerfile.nvidia` run a single `composer install --no-dev
+--optimize-autoloader` after the source copy.)
 
 **Practical consequence for contributors:** touching any file under `src/`,
 `public/`, `config/`, or `migrations/` does NOT re-run `composer install`
@@ -92,9 +218,15 @@ everything downstream. The slow layers in this image are swoole and uv
 
 **Composer failures fail the build.** The previous `|| true` suffix was removed
 so CI surfaces missing/incompatible dependencies instead of producing a broken
-image. `--ignore-platform-reqs` is retained because the build environment may
-not have every runtime extension installed (it is fine — extensions are
-installed earlier in the Dockerfile and verified at container start).
+image.
+
+**`--ignore-platform-reqs` is gone from all three Dockerfiles (S163), and a
+unit test keeps it out.** It was described here as harmless ("extensions are
+installed earlier in the Dockerfile and verified at container start") and it was
+not: `ext-ldap` is a HARD `composer.json` requirement, it was absent from every
+image, the flag masked it at build time, and nothing verified it at container
+start either — no container had ever started. `composer check-platform-reqs`
+inside the built image is now an assertion in `scripts/docker-boot-smoke.sh`.
 
 ## Swoole build flags
 
@@ -131,7 +263,7 @@ perf benefit there.
 **Flags we intentionally do NOT pass:**
 
 - `--enable-swoole-thread` / `--enable-thread-context` — threaded swoole
-  builds require ZTS PHP, and the upstream `php:8.3-fpm-alpine` image is
+  builds require ZTS PHP, and the upstream `php:8.3-cli-alpine` image is
   NTS. Mixing NTS PHP with thread-enabled swoole crashes at module
   init. If a future image switches to ZTS PHP, these can be revisited.
 - `--enable-swoole-stdext` — replaces parts of PHP's `Standard`
@@ -179,7 +311,7 @@ which is what makes the swoole/uv layers reusable across PR builds.
 ## Alpine quirks
 
 - **No `phpenmod`.** That helper ships with the Debian `php` packages.
-  The upstream `php:8.3-fpm-alpine` image uses `docker-php-ext-install`
+  The upstream `php:8.3-cli-alpine` image uses `docker-php-ext-install`
   (or a hand-written `.ini` under `/usr/local/etc/php/conf.d/`) to wire
   extensions in — `phpenmod` does not exist on Alpine and shells out to
   it will fail with `command not found`.

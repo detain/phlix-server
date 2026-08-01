@@ -45,6 +45,12 @@ services:
     depends_on:
       mysql-hub:
         condition: service_healthy
+    # The Phlix container's PID 1 exits 70 when a supervised program enters
+    # FATAL (a total application outage), and 0 on a clean stop — see
+    # docker/README.md "What the container's exit code means".
+    # `unless-stopped` restarts on ANY exit, so a persistent fault becomes a
+    # restart loop that re-runs the migration chain each cycle. Swap to
+    # `on-failure:5` if you would rather it stay `Exited (70)` for monitoring.
     restart: unless-stopped
     networks:
       - phlix_network
@@ -56,7 +62,9 @@ services:
       - "traefik.enable=true"
       - "traefik.http.routers.phlix-server.rule=Host(`server.example.com`)"
       - "traefik.http.routers.phlix-server.tls=true"
-      - "traefik.http.services.phlix-server.loadbalancer.server.port=80"
+      # S163: the container runs the Workerman daemon directly (no nginx, no
+      # php-fpm), so Traefik must target 8096 — the port start.php binds.
+      - "traefik.http.services.phlix-server.loadbalancer.server.port=8096"
     environment:
       - PHLIX_DATABASE_HOST=mysql-server
       - PHLIX_DATABASE_PORT=3306

@@ -80,13 +80,17 @@ jobs:
         # `continue-on-error` — read the Warning lines and fix the migration.
         #
         # An "already applied" replay is still exit 0, so a re-run is not a
-        # failure — but only for a CLOSED LIST of MySQL error numbers: 1050
-        # table exists, 1060 duplicate column, 1061 duplicate key name, 1091
-        # can't drop, 1826 duplicate FK name, 3822 duplicate CHECK name. A seed
-        # `INSERT` replayed (1062) and `ADD PRIMARY KEY` replayed (1068) are
-        # GENUINE failures on purpose, so a new migration must use
-        # `INSERT IGNORE` / guard its `ADD PRIMARY KEY` rather than expect the
-        # squelch to cover it. See MigrationRunner::IDEMPOTENT_ERROR_CODES.
+        # failure — but only for a CLOSED LIST of four MySQL error numbers:
+        # 1050 table exists, 1060 duplicate column, 1061 duplicate key name,
+        # 1091 can't drop. A seed `INSERT` replayed (1062), `ADD PRIMARY KEY`
+        # replayed (1068) and a duplicate FOREIGN KEY / CHECK constraint NAME
+        # (1826 / 3822) are GENUINE failures on purpose, so a new migration must
+        # use `INSERT IGNORE` / guard its `ADD PRIMARY KEY` / guard its
+        # `ADD CONSTRAINT` rather than expect the squelch to cover it.
+        # 1826/3822 were considered for the set and REJECTED: those names are
+        # unique per SCHEMA, not per table, so the collision can be with another
+        # table entirely and the failing statement may have created nothing.
+        # See MigrationRunner::IDEMPOTENT_ERROR_CODES.
         #
         # Both directions are asserted by
         # tests/Integration/Common/Database/MigrationFailureVisibilityTest.php,

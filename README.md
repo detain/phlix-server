@@ -665,17 +665,20 @@ php bin/phlix media:dedupe-paths --apply   # merge duplicate media items sharing
 - `docker/docker-entrypoint.sh` prints a loud `PHLIX-MIGRATION-FAILURE` banner to stderr and, by default, **still starts the container** (a crash-looping media server is worse than a degraded one). Set `PHLIX_MIGRATIONS_STRICT=1` to make the container refuse to start instead. It also refuses to start when migrations could not run at all (no database host configured, or `scripts/run-migrations.php` missing).
 - `PHLIX_MIGRATIONS_DIR` overrides the directory that is scanned for `*.sql` (default `migrations/`). Honoured by **both** commands.
 
-⚠ **"Idempotent" is a closed list, not "anything a replay raises".** The squelch is decided on the MySQL **error number**, never on the exception text — the driver prefixes the whole failing statement to its message, so matching a phrase like `already exists` used to grep the migration's own SQL and reclassify hard failures as successes. The set is `1050` table exists, `1060` duplicate column, `1061` duplicate key name, `1091` can't drop / check that column-key exists, `1826` duplicate foreign-key constraint name, `3822` duplicate CHECK constraint name.
+⚠ **"Idempotent" is a closed list, not "anything a replay raises".** The squelch is decided on the MySQL **error number**, never on the exception text — the driver prefixes the whole failing statement to its message, so matching a phrase like `already exists` used to grep the migration's own SQL and reclassify hard failures as successes. The set is exactly four: `1050` table exists, `1060` duplicate column, `1061` duplicate key name, `1091` can't drop / check that column-key exists. Each names an object that can only be the one the failing statement was creating — a table in this schema, or a column/index, which are *table*-local.
 
-Everything else fails the run, **including two shapes a re-run can legitimately produce** — write the migration so they never fire:
+Everything else fails the run, **including several shapes a re-run can legitimately produce** — write the migration so they never fire:
 
 | Shape | MySQL | Write this instead |
 |---|---|---|
 | Seed row inserted twice | `1062` duplicate entry | `INSERT IGNORE` / `INSERT … ON DUPLICATE KEY UPDATE` |
 | `ALTER TABLE … ADD PRIMARY KEY` replayed | `1068` multiple primary key defined | guard it, or add the PK in `CREATE TABLE` |
+| `… CONSTRAINT <name> FOREIGN KEY` / `CHECK` replayed | `1826` / `3822` duplicate constraint name | guard the `ADD CONSTRAINT` (check `information_schema`, or `DROP … IF EXISTS` first) and give every constraint a schema-unique name |
 | `DROP TABLE`/`CREATE TRIGGER`/`CREATE FUNCTION` replayed | `1051` / `1359` / `1304` | use the `IF EXISTS` / `IF NOT EXISTS` form those statements accept |
 
 `1062` in particular is deliberate: it is also what `ADD UNIQUE` raises when the *existing data* violates the new constraint, which is the most valuable failure a migration can report. `1068` names no object, so a replay and a genuine "a different primary key is already there" are indistinguishable.
+
+`1826`/`3822` were **considered for the idempotent set and rejected** — do not add them. Foreign-key and CHECK-constraint names are unique **per schema**, not per table, so the object that already holds the name can belong to a *completely different* table, and the statement that failed can be a `CREATE TABLE` that consequently created **nothing**. Squelching them let such a file exit 0 *and* enter `schema_migrations`, so it was never retried — worse than no squelch at all.
 
 ### Admin SPA (admin-ui)
 

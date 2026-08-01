@@ -309,8 +309,18 @@ class MigrationFailureVisibilityTest extends TestCase
      * set really does stay a NOTE with exit 0 against real MySQL, so the
      * finding-1 fix cannot have been "make everything an error".
      *
-     * 1050 table exists / 1060 duplicate column / 1061 duplicate key name /
-     * 1091 can't drop, replayed from a second, un-recorded file.
+     * The set is EXACTLY these four — 1050 table exists / 1060 duplicate column
+     * / 1061 duplicate key name / 1091 can't drop — replayed from a second,
+     * un-recorded file. Each names an object that can only be the one the
+     * failing statement was creating: a table in this schema, or a column /
+     * index, both of which are TABLE-local.
+     *
+     * Round 1 of the review also asked for 1826 (duplicate FK name) and 3822
+     * (duplicate CHECK name) "because they are named-object collisions of the
+     * same shape". Round 2 rejected that: those names are unique per SCHEMA, so
+     * the collision can be with a different table entirely — see
+     * {@see testDuplicateConstraintNameOnCreateTableFailsAndIsNotRecorded()},
+     * which is the other half of this pair and must be read with it.
      */
     public function testEachIdempotentErrorNumberIsStillANoteWithExitZero(): void
     {
@@ -371,5 +381,86 @@ class MigrationFailureVisibilityTest extends TestCase
         self::assertSame(1, $replay['code'], "stdout:\n{$replay['stdout']}\nstderr:\n{$replay['stderr']}");
         self::assertStringContainsString('1062', $replay['stdout']);
         self::assertFalse($this->isRecordedInLedger($replayName));
+    }
+
+    /**
+     * S159 review ROUND 2, finding 1 — a duplicate FOREIGN KEY / CHECK
+     * constraint NAME (1826 / 3822) is class (b), and must stay class (b).
+     *
+     * Round 1 asked for both errnos in the idempotent set on the grounds that
+     * they are "named-object collisions, the same shape as 1050/1061". That is
+     * true of 1061 — index names are TABLE-local, so a collision is almost
+     * certainly the same index. It is FALSE here: in MySQL 8 a FOREIGN KEY name
+     * and a CHECK-constraint name are unique **per schema**
+     * (`information_schema.TABLE_CONSTRAINTS` / `CHECK_CONSTRAINTS` are keyed on
+     * `CONSTRAINT_SCHEMA` + `CONSTRAINT_NAME`), so the object already holding
+     * the name can belong to a completely different table — and, as below, the
+     * statement that failed can be a `CREATE TABLE` that therefore created
+     * NOTHING AT ALL.
+     *
+     * With those errnos squelched, both files below exited 0 with their tables
+     * absent AND their names written into `schema_migrations`, so they were
+     * never retried: classes (b) and (c) defeated at once, and strictly worse
+     * than the pre-S159 behaviour (master's substring list contains neither
+     * phrase, and `CREATE TABLE IF NOT EXISTS` does not contain "already
+     * exists", so master fails loudly on exactly this input).
+     *
+     * Nothing here is simulated: two brand-new tables, real MySQL, the real
+     * script's real exit code and the real ledger.
+     */
+    public function testDuplicateConstraintNameOnCreateTableFailsAndIsNotRecorded(): void
+    {
+        // Registered child-first so tearDown's DROP order respects the FK.
+        $child = $this->probeTable('fkchild');
+        $chk = $this->probeTable('chk');
+        $parent = $this->probeTable('fkparent');
+        // Never created — registered only so a partial run cannot leak them.
+        $fkClash = $this->probeTable('fkclash');
+        $chkClash = $this->probeTable('chkclash');
+
+        $fkName = 'fk_' . $this->tag;
+        $chkName = 'chk_' . $this->tag;
+
+        $this->writeMigration(
+            's159_' . $this->tag . '_1_constraints.sql',
+            "CREATE TABLE {$parent} (id INT NOT NULL PRIMARY KEY);\n"
+            . "CREATE TABLE {$child} (id INT NOT NULL PRIMARY KEY, pid INT NULL, "
+            . "CONSTRAINT {$fkName} FOREIGN KEY (pid) REFERENCES {$parent}(id));\n"
+            . "CREATE TABLE {$chk} (id INT NOT NULL PRIMARY KEY, v INT NULL, "
+            . "CONSTRAINT {$chkName} CHECK (v > 0));"
+        );
+        $first = $this->runMigrationsScript();
+        self::assertSame(0, $first['code'], "stdout:\n{$first['stdout']}\nstderr:\n{$first['stderr']}");
+
+        // Two NEW tables, each reusing a constraint name that belongs to a
+        // DIFFERENT table. `IF NOT EXISTS` cannot help: the table does not
+        // exist, so MySQL proceeds and fails on the schema-scoped name.
+        $fkFile = 's159_' . $this->tag . '_2_fk_clash.sql';
+        $chkFile = 's159_' . $this->tag . '_3_chk_clash.sql';
+        $this->writeMigration(
+            $fkFile,
+            "CREATE TABLE IF NOT EXISTS {$fkClash} (id INT NOT NULL PRIMARY KEY, pid INT NULL, "
+            . "CONSTRAINT {$fkName} FOREIGN KEY (pid) REFERENCES {$parent}(id));"
+        );
+        $this->writeMigration(
+            $chkFile,
+            "CREATE TABLE IF NOT EXISTS {$chkClash} (id INT NOT NULL PRIMARY KEY, v INT NULL, "
+            . "CONSTRAINT {$chkName} CHECK (v > 0));"
+        );
+
+        $clash = $this->runMigrationsScript();
+
+        self::assertSame(1, $clash['code'], "stdout:\n{$clash['stdout']}\nstderr:\n{$clash['stderr']}");
+        self::assertStringContainsString('1826', $clash['stdout']);
+        self::assertStringContainsString('3822', $clash['stdout']);
+        self::assertStringContainsString('Migrations FAILED', $clash['stderr']);
+        self::assertStringNotContainsString('Migrations complete.', $clash['stdout']);
+
+        // The statements created NOTHING …
+        self::assertFalse($this->tableExists($fkClash), 'the FK-clash CREATE TABLE created nothing');
+        self::assertFalse($this->tableExists($chkClash), 'the CHECK-clash CREATE TABLE created nothing');
+        // … so the files must be retried, not recorded (class (c)).
+        self::assertFalse($this->isRecordedInLedger($fkFile));
+        self::assertFalse($this->isRecordedInLedger($chkFile));
     }
 }

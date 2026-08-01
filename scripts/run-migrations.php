@@ -16,9 +16,12 @@
  * It now exits with {@see MigrationRunner::exitCodeFor()}:
  *
  *   - `0` — every statement applied, or failed only with an idempotent
- *     "already applied" error (duplicate column / duplicate key / table or
- *     index exists). A replay on a fully-migrated database is a SUCCESS and
- *     must stay one; see the MigrationRunner class docblock, class (a).
+ *     "already applied" error. A replay on a fully-migrated database is a
+ *     SUCCESS and must stay one; see the MigrationRunner class docblock,
+ *     class (a). ⚠ That class is a CLOSED LIST of MySQL error numbers
+ *     ({@see MigrationRunner::IDEMPOTENT_ERROR_CODES}), not "anything a replay
+ *     can raise": a replayed seed `INSERT` (1062) or `ADD PRIMARY KEY` (1068)
+ *     exits 1 on purpose.
  *   - `1` — at least one genuine, non-idempotent statement error was recorded.
  *
  * The run itself is unchanged: it is still CONTINUE-AND-REPORT, not
@@ -42,7 +45,8 @@
  * contract above can be PROVEN in both directions by a test that plants a
  * deliberately failing `.sql` in a scratch directory
  * (`tests/Integration/Common/Database/MigrationFailureVisibilityTest.php`)
- * without touching the repo's real migrations.
+ * without touching the repo's real migrations. `bin/phlix` reads the same
+ * variable (S159 review finding 11) so both operator paths behave alike.
  *
  * @copyright 2026 Joe Huss <detain@interserver.net>
  * @license   MIT
@@ -108,14 +112,10 @@ if ($exitCode === MigrationRunner::EXIT_SUCCESS) {
 } else {
     // stderr, not stdout: an installer or entrypoint that only surfaces stderr
     // still shows this, and it cannot be lost in a page of "Running migration:"
-    // lines.
-    fwrite(
-        STDERR,
-        "Migrations FAILED: " . count($result['errors']) . " error(s) in "
-        . count($result['applied']) . " file(s) attempted. The schema is "
-        . "HALF-MIGRATED — the failing file(s) were NOT recorded in "
-        . "schema_migrations and will be retried on the next run.\n"
-    );
+    // lines. The wording lives on MigrationRunner so `bin/phlix migrate` prints
+    // the SAME verdict (S159 review finding 3) and so it cannot claim a
+    // half-migrated schema on a run where nothing was attempted (finding 7).
+    fwrite(STDERR, MigrationRunner::failureSummary($result) . "\n");
 }
 
 exit($exitCode);

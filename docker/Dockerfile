@@ -32,6 +32,14 @@ COPY . /var/www/html/
 
 RUN composer dump-autoload --no-dev --optimize
 
+# The CMD below names `/docker-entrypoint.sh`. `COPY . /var/www/html/` lands
+# the file at /var/www/html/docker/docker-entrypoint.sh, NOT at `/`, so without
+# this line the CMD resolved to nothing and no container ever ran the
+# entrypoint — broken since the file's first commit (c2127f91) and invisible
+# because `docker build` never executes CMD. S159 review finding 4.
+# tests/Unit/Docker/DockerEntrypointTest.php asserts this pair.
+COPY docker/docker-entrypoint.sh /docker-entrypoint.sh
+
 EXPOSE 80 443
 
 CMD ["sh", "/docker-entrypoint.sh"]

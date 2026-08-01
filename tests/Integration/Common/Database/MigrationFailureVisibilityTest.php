@@ -263,4 +263,113 @@ class MigrationFailureVisibilityTest extends TestCase
         self::assertStringNotContainsString('Running migration:', $second['stdout']);
         self::assertStringContainsString('Migrations complete.', $second['stdout']);
     }
+
+    /**
+     * Direction 5 (S159 review finding 1) — a GENUINE hard failure whose own SQL
+     * happens to contain one of the old "already applied" phrases.
+     *
+     * `Workerman\MySQL\Connection` rethrows as `"SQL:" . $theWholeStatement .
+     * " " . $pdoMessage`, so the classifier used to grep the migration's own
+     * text. The statement below fails with errno 1146 (the table does not
+     * exist) yet the phrase `already exists` lives in its `COMMENT`, and the run
+     * reported `1 statement(s) skipped (already applied)` / `Migrations
+     * complete.` / **exit 0** — AND recorded the file in `schema_migrations`, so
+     * it was never retried. That defeated class (b) and class (c) at once and
+     * was strictly worse than the pre-S159 behaviour this step exists to fix.
+     *
+     * Nothing here is simulated: the phrase, the errno, the exit code and the
+     * ledger row all come from a real MySQL server.
+     */
+    public function testGenuineFailureWhoseSqlContainsAnIdempotentPhraseFailsAndIsNotRecorded(): void
+    {
+        $missing = 's159_' . $this->tag . '_no_such_table';
+        $name = 's159_' . $this->tag . '_trap.sql';
+
+        $this->writeMigration(
+            $name,
+            "ALTER TABLE {$missing} ADD COLUMN foo INT "
+            . "COMMENT 'reuse the row if it already exists';"
+        );
+
+        $run = $this->runMigrationsScript();
+
+        self::assertSame(1, $run['code'], "stdout:\n{$run['stdout']}\nstderr:\n{$run['stderr']}");
+        self::assertStringContainsString('1146', $run['stdout']);
+        self::assertStringContainsString('Migrations FAILED', $run['stderr']);
+        self::assertStringNotContainsString('Migrations complete.', $run['stdout']);
+        self::assertStringNotContainsString('skipped (already applied)', $run['stdout']);
+        self::assertFalse(
+            $this->isRecordedInLedger($name),
+            'a file that failed with errno 1146 must be retried, not recorded'
+        );
+    }
+
+    /**
+     * The other side of the same control: each error number in the idempotent
+     * set really does stay a NOTE with exit 0 against real MySQL, so the
+     * finding-1 fix cannot have been "make everything an error".
+     *
+     * 1050 table exists / 1060 duplicate column / 1061 duplicate key name /
+     * 1091 can't drop, replayed from a second, un-recorded file.
+     */
+    public function testEachIdempotentErrorNumberIsStillANoteWithExitZero(): void
+    {
+        $table = $this->probeTable('codes');
+
+        $this->writeMigration(
+            's159_' . $this->tag . '_1_create.sql',
+            "CREATE TABLE {$table} (id INT NOT NULL, n INT NULL, KEY k_n (n));"
+        );
+        $first = $this->runMigrationsScript();
+        self::assertSame(0, $first['code'], "stdout:\n{$first['stdout']}\nstderr:\n{$first['stderr']}");
+
+        $replayName = 's159_' . $this->tag . '_2_codes.sql';
+        $this->writeMigration(
+            $replayName,
+            // 1050, 1060, 1061, 1091 in that order.
+            "CREATE TABLE {$table} (id INT NOT NULL);\n"
+            . "ALTER TABLE {$table} ADD COLUMN n INT NULL;\n"
+            . "ALTER TABLE {$table} ADD KEY k_n (n);\n"
+            . "ALTER TABLE {$table} DROP COLUMN never_existed;"
+        );
+
+        $replay = $this->runMigrationsScript();
+
+        self::assertSame(0, $replay['code'], "stdout:\n{$replay['stdout']}\nstderr:\n{$replay['stderr']}");
+        // 5 = the four idempotent errnos above + the ledger skip of the already
+        // recorded `_1_create.sql` (skipped_count counts both, by design).
+        self::assertStringContainsString('5 statement(s) skipped (already applied)', $replay['stdout']);
+        self::assertStringNotContainsString('Warning:', $replay['stdout']);
+        self::assertTrue($this->isRecordedInLedger($replayName));
+    }
+
+    /**
+     * The two replay shapes that are class (b) ON PURPOSE (S159 review finding
+     * 2, decided rather than merely noted): a seed `INSERT` replayed raises
+     * 1062, which is also what `ADD UNIQUE` raises when the existing DATA
+     * violates the constraint — the most valuable failure a migration can
+     * report — so it must not be squelched. This test is the record of that
+     * decision: if someone adds 1062 to the idempotent set, it goes red.
+     */
+    public function testReplayedSeedInsertIsADeliberateFailureNotANote(): void
+    {
+        $table = $this->probeTable('seed');
+
+        $this->writeMigration(
+            's159_' . $this->tag . '_1_seed.sql',
+            "CREATE TABLE {$table} (k VARCHAR(8) NOT NULL PRIMARY KEY);\n"
+            . "INSERT INTO {$table} (k) VALUES ('a');"
+        );
+        $first = $this->runMigrationsScript();
+        self::assertSame(0, $first['code'], "stdout:\n{$first['stdout']}\nstderr:\n{$first['stderr']}");
+
+        $replayName = 's159_' . $this->tag . '_2_seed_again.sql';
+        $this->writeMigration($replayName, "INSERT INTO {$table} (k) VALUES ('a');");
+
+        $replay = $this->runMigrationsScript();
+
+        self::assertSame(1, $replay['code'], "stdout:\n{$replay['stdout']}\nstderr:\n{$replay['stderr']}");
+        self::assertStringContainsString('1062', $replay['stdout']);
+        self::assertFalse($this->isRecordedInLedger($replayName));
+    }
 }

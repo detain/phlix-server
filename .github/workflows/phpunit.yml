@@ -78,8 +78,17 @@ jobs:
         # reached master invisibly. It now exits 1 when the runner recorded a
         # non-idempotent error. Do NOT "fix" a red here with `|| true` or
         # `continue-on-error` — read the Warning lines and fix the migration.
+        #
         # An "already applied" replay is still exit 0, so a re-run is not a
-        # failure. Both directions are asserted by
+        # failure — but only for a CLOSED LIST of MySQL error numbers: 1050
+        # table exists, 1060 duplicate column, 1061 duplicate key name, 1091
+        # can't drop, 1826 duplicate FK name, 3822 duplicate CHECK name. A seed
+        # `INSERT` replayed (1062) and `ADD PRIMARY KEY` replayed (1068) are
+        # GENUINE failures on purpose, so a new migration must use
+        # `INSERT IGNORE` / guard its `ADD PRIMARY KEY` rather than expect the
+        # squelch to cover it. See MigrationRunner::IDEMPOTENT_ERROR_CODES.
+        #
+        # Both directions are asserted by
         # tests/Integration/Common/Database/MigrationFailureVisibilityTest.php,
         # which runs in the PHPUnit step below.
         env:

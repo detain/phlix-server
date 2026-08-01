@@ -65,8 +65,11 @@ jobs:
 
       - name: Apply database migrations
         # ⚠ S159 — this step is a GATE: run-migrations.php exits 1 when a
-        # migration genuinely fails (an "already applied" replay is still 0).
-        # Do not suppress it with `|| true` / `continue-on-error`.
+        # migration genuinely fails. An "already applied" replay is still 0,
+        # but only for the closed set of MySQL error numbers in
+        # MigrationRunner::IDEMPOTENT_ERROR_CODES — a replayed seed `INSERT`
+        # (1062) or `ADD PRIMARY KEY` (1068) is a genuine failure by design.
+        # Do not suppress a red here with `|| true` / `continue-on-error`.
         env:
           DB_HOST: 127.0.0.1
           DB_PORT: '3306'

@@ -15,6 +15,7 @@ use Phlix\Common\Database\MigrationRunner;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputInterface;
+use Symfony\Component\Console\Output\ConsoleOutputInterface;
 use Symfony\Component\Console\Output\OutputInterface;
 
 /**
@@ -41,10 +42,18 @@ final class MigrateCommand extends Command
      * an idempotent no-op) and {@see Command::FAILURE} (1) when the runner
      * reported one or more genuine, non-idempotent errors.
      *
-     * The failure decision itself is delegated to
-     * {@see MigrationRunner::exitCodeFor()} (S159) so this command and
-     * `scripts/run-migrations.php` — the two operator-facing migration paths —
-     * cannot drift apart on what counts as a failure.
+     * Both halves of the verdict are delegated to {@see MigrationRunner} (S159)
+     * so this command and `scripts/run-migrations.php` — the two
+     * operator-facing migration paths — cannot drift apart: the exit code
+     * comes from {@see MigrationRunner::exitCodeFor()} and, on failure, the
+     * sentence a human reads comes from
+     * {@see MigrationRunner::failureSummary()}. `Migrations complete.` is
+     * printed ONLY on success.
+     *
+     * The failure summary goes to stderr when the output supports a separate
+     * error stream, matching the script. The per-error `Warning:` lines stay on
+     * stdout in BOTH paths (`scripts/run-migrations.php` `echo`es them), so a
+     * deploy log grepping for `Warning:` keeps working.
      */
     protected function execute(InputInterface $input, OutputInterface $output): int
     {
@@ -76,15 +85,30 @@ final class MigrateCommand extends Command
             $output->writeln('  Warning: ' . $error);
         }
 
-        $output->writeln(sprintf(
-            'Migrations complete. (%d file(s), %d note(s), %d error(s))',
-            count($result['applied']),
-            count($result['notes']),
-            count($result['errors'])
-        ));
+        $exitCode = MigrationRunner::exitCodeFor($result);
 
-        return MigrationRunner::exitCodeFor($result) === MigrationRunner::EXIT_SUCCESS
-            ? Command::SUCCESS
-            : Command::FAILURE;
+        if ($exitCode === MigrationRunner::EXIT_SUCCESS) {
+            $output->writeln(sprintf(
+                'Migrations complete. (%d file(s), %d note(s), %d error(s))',
+                count($result['applied']),
+                count($result['notes']),
+                count($result['errors'])
+            ));
+        } else {
+            // NOT "Migrations complete." — this command used to print that word
+            // beside its own exit code 1 and a non-zero error count (S159 review
+            // finding 3). The verdict text is shared with
+            // `scripts/run-migrations.php` so the two operator paths agree on
+            // the sentence a human reads, not only on the exit code.
+            $errorOutput = $output instanceof ConsoleOutputInterface
+                ? $output->getErrorOutput()
+                : $output;
+            $errorOutput->writeln(MigrationRunner::failureSummary($result));
+        }
+
+        // `EXIT_SUCCESS`/`EXIT_FAILURE` ARE `Command::SUCCESS`/`Command::FAILURE`
+        // (see the constants), so re-deriving them through a ternary only added
+        // a branch to keep in sync (finding 10).
+        return $exitCode;
     }
 }

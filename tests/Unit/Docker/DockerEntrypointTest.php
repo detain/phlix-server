@@ -168,6 +168,24 @@ class DockerEntrypointTest extends TestCase
         return is_file($this->tmpDir . '/php-ran');
     }
 
+    /**
+     * The arguments the stub `php` was invoked with.
+     *
+     * S159 review finding 8: `stubPhp()` recorded `"$@"` and NOTHING ever read
+     * it, so the whole suite stayed green if the entrypoint were changed to run
+     * a different file. Every case that expects migrations to run now asserts
+     * WHICH script ran.
+     */
+    private function assertMigrationScriptWasInvoked(): void
+    {
+        self::assertTrue($this->migrationsRan(), 'the entrypoint must invoke php');
+        self::assertStringContainsString(
+            $this->tmpDir . '/approot/scripts/run-migrations.php',
+            (string) file_get_contents($this->tmpDir . '/php-ran'),
+            'the entrypoint must invoke scripts/run-migrations.php, not some other file'
+        );
+    }
+
     public function testCleanMigrationRunBootsTheContainer(): void
     {
         $this->stubPhp(0);
@@ -176,7 +194,7 @@ class DockerEntrypointTest extends TestCase
         $run = $this->runEntrypoint(['PHLIX_DATABASE_HOST' => 'mysql']);
 
         self::assertSame(0, $run['code']);
-        self::assertTrue($this->migrationsRan());
+        $this->assertMigrationScriptWasInvoked();
         self::assertTrue($this->supervisordStarted(), 'supervisord must be exec\'d after a clean migration run');
         self::assertStringContainsString('Running database migrations...', $run['stdout']);
         self::assertStringNotContainsString('PHLIX-MIGRATION-FAILURE', $run['stderr']);
@@ -200,6 +218,7 @@ class DockerEntrypointTest extends TestCase
         $run = $this->runEntrypoint(['PHLIX_DATABASE_HOST' => 'mysql']);
 
         self::assertSame(0, $run['code'], 'default boot-path behaviour is to start anyway');
+        $this->assertMigrationScriptWasInvoked();
         self::assertTrue($this->supervisordStarted());
         self::assertStringContainsString('PHLIX-MIGRATION-FAILURE', $run['stderr']);
         self::assertStringContainsString('exited 1', $run['stderr']);
@@ -236,7 +255,42 @@ class DockerEntrypointTest extends TestCase
         ]);
 
         self::assertSame(1, $run['code']);
+        $this->assertMigrationScriptWasInvoked();
         self::assertFalse($this->supervisordStarted(), 'strict mode must NOT start the app');
+        self::assertStringContainsString('refusing to start', $run['stderr']);
+    }
+
+    /**
+     * @return array<string, array{string}>
+     */
+    public static function paddedStrictValueProvider(): array
+    {
+        return [
+            'trailing space' => ['1 '],
+            'leading space' => [' true'],
+            'tab-padded' => ["\tyes\t"],
+        ];
+    }
+
+    /**
+     * A docker `env_file` preserves surrounding whitespace, so
+     * `PHLIX_MIGRATIONS_STRICT=1 ` used to fall through to boot-anyway — an
+     * opt-in that looks applied and is not (S159 review finding 6, secondary).
+     *
+     * @dataProvider paddedStrictValueProvider
+     */
+    public function testStrictModeIgnoresSurroundingWhitespace(string $strictValue): void
+    {
+        $this->stubPhp(1);
+        $this->stubSupervisord();
+
+        $run = $this->runEntrypoint([
+            'PHLIX_DATABASE_HOST' => 'mysql',
+            'PHLIX_MIGRATIONS_STRICT' => $strictValue,
+        ]);
+
+        self::assertSame(1, $run['code']);
+        self::assertFalse($this->supervisordStarted());
         self::assertStringContainsString('refusing to start', $run['stderr']);
     }
 
@@ -318,5 +372,217 @@ class DockerEntrypointTest extends TestCase
         self::assertSame(0, $run['code']);
         self::assertFalse($this->migrationsRan());
         self::assertTrue($this->supervisordStarted());
+    }
+
+    // ------------------------------------------------------------------
+    // S159 review finding 6 — STRICT must also cover the two ways migrations
+    // can fail to happen AT ALL. Before this, the operator who opted into
+    // "refuse to start unless the schema is current" got a silent boot on
+    // exactly the paths where nothing verified the schema.
+    // ------------------------------------------------------------------
+
+    public function testStrictModeRefusesToStartWhenNoDatabaseHostIsConfigured(): void
+    {
+        $this->stubPhp(0);
+        $this->stubSupervisord();
+
+        $run = $this->runEntrypoint(['PHLIX_MIGRATIONS_STRICT' => '1']);
+
+        self::assertSame(1, $run['code']);
+        self::assertFalse($this->migrationsRan());
+        self::assertFalse($this->supervisordStarted(), 'STRICT must not boot with an unverified schema');
+        self::assertStringContainsString('PHLIX-MIGRATIONS-NOT-RUN', $run['stderr']);
+        // A skip is NOT a migration failure, so the failure banner must not fire.
+        self::assertStringNotContainsString('PHLIX-MIGRATION-FAILURE', $run['stderr']);
+    }
+
+    public function testStrictModeRefusesToStartWhenTheScriptIsAbsent(): void
+    {
+        unlink($this->tmpDir . '/approot/scripts/run-migrations.php');
+        $this->stubPhp(0);
+        $this->stubSupervisord();
+
+        $run = $this->runEntrypoint([
+            'PHLIX_DATABASE_HOST' => 'mysql',
+            'PHLIX_MIGRATIONS_STRICT' => '1',
+        ]);
+
+        self::assertSame(1, $run['code']);
+        self::assertFalse($this->supervisordStarted());
+        self::assertStringContainsString('PHLIX-MIGRATIONS-NOT-RUN', $run['stderr']);
+    }
+
+    /**
+     * The default (non-strict) skip path stays a plain informational line — no
+     * failure banner on a boot where nothing went wrong.
+     */
+    public function testSkippingMigrationsIsAnnouncedButIsNotAFailure(): void
+    {
+        $this->stubPhp(0);
+        $this->stubSupervisord();
+
+        $run = $this->runEntrypoint([]);
+
+        self::assertSame(0, $run['code']);
+        self::assertTrue($this->supervisordStarted());
+        self::assertStringContainsString('Skipping database migrations', $run['stdout']);
+        self::assertStringNotContainsString('PHLIX-MIGRATION-FAILURE', $run['stderr']);
+        self::assertStringNotContainsString('PHLIX-MIGRATIONS-NOT-RUN', $run['stderr']);
+    }
+
+    // ------------------------------------------------------------------
+    // S159 review finding 5 — PHLIX_DATABASE_* is what every documented
+    // deployment sets and NO PHP in this repo reads. Without the mapping, a
+    // correctly-configured container would run migrations against the
+    // `127.0.0.1 / phlix` defaults and print the failure banner on every boot.
+    // ------------------------------------------------------------------
+
+    /**
+     * Install a stub `php` that records the DB_* environment it was given.
+     */
+    private function stubPhpRecordingEnv(): void
+    {
+        $script = "#!/bin/sh\n"
+            . 'printf \'%s\n\' "$@" > "' . $this->tmpDir . "/php-ran\"\n"
+            . '{ echo "DB_HOST=$DB_HOST"; echo "DB_PORT=$DB_PORT"; echo "DB_DATABASE=$DB_DATABASE";'
+            . ' echo "DB_USER=$DB_USER"; echo "DB_PASSWORD=$DB_PASSWORD"; } > "'
+            . $this->tmpDir . "/php-env\"\n"
+            . "exit 0\n";
+        file_put_contents($this->tmpDir . '/bin/php', $script);
+        chmod($this->tmpDir . '/bin/php', 0755);
+    }
+
+    public function testPhlixDatabaseEnvIsMappedOntoTheNamesConfigDatabaseActuallyReads(): void
+    {
+        $this->stubPhpRecordingEnv();
+        $this->stubSupervisord();
+
+        $run = $this->runEntrypoint([
+            'PHLIX_DATABASE_HOST' => 'mysql',
+            'PHLIX_DATABASE_PORT' => '3307',
+            'PHLIX_DATABASE_NAME' => 'phlix',
+            'PHLIX_DATABASE_USER' => 'phlix',
+            'PHLIX_DATABASE_PASSWORD' => 'phlix_secret',
+        ]);
+
+        self::assertSame(0, $run['code']);
+        $env = (string) file_get_contents($this->tmpDir . '/php-env');
+        self::assertStringContainsString("DB_HOST=mysql\n", $env);
+        self::assertStringContainsString("DB_PORT=3307\n", $env);
+        self::assertStringContainsString("DB_DATABASE=phlix\n", $env);
+        self::assertStringContainsString("DB_USER=phlix\n", $env);
+        self::assertStringContainsString("DB_PASSWORD=phlix_secret\n", $env);
+    }
+
+    /**
+     * An operator who configures the app with the names the app actually reads
+     * must never be overridden by a stale PHLIX_DATABASE_* left in a compose
+     * file.
+     */
+    public function testExplicitDbEnvWinsOverThePhlixDatabaseAliases(): void
+    {
+        $this->stubPhpRecordingEnv();
+        $this->stubSupervisord();
+
+        $run = $this->runEntrypoint([
+            'PHLIX_DATABASE_HOST' => 'stale-host',
+            'PHLIX_DATABASE_NAME' => 'stale-db',
+            'DB_HOST' => 'real-host',
+            'DB_DATABASE' => 'real-db',
+        ]);
+
+        self::assertSame(0, $run['code']);
+        $env = (string) file_get_contents($this->tmpDir . '/php-env');
+        self::assertStringContainsString("DB_HOST=real-host\n", $env);
+        self::assertStringContainsString("DB_DATABASE=real-db\n", $env);
+    }
+
+    /**
+     * `DB_HOST` alone is enough to make migrations run — the guard must not
+     * insist on the PHLIX_DATABASE_* spelling.
+     */
+    public function testDbHostAloneEnablesMigrations(): void
+    {
+        $this->stubPhp(0);
+        $this->stubSupervisord();
+
+        $run = $this->runEntrypoint(['DB_HOST' => 'mysql']);
+
+        self::assertSame(0, $run['code']);
+        $this->assertMigrationScriptWasInvoked();
+        self::assertTrue($this->supervisordStarted());
+    }
+
+    // ------------------------------------------------------------------
+    // S159 review finding 4 — the boot path must actually EXIST in the images.
+    // All three Dockerfiles ended with `CMD ["sh", "/docker-entrypoint.sh"]`
+    // and none of them ever copied the file to `/`, so no shipped container had
+    // run this script since c2127f91. A `docker build` never executes CMD, so
+    // every image Build job passed with the boot path dead. These assertions
+    // are the cheap permanent guard.
+    // ------------------------------------------------------------------
+
+    /**
+     * @return array<string, array{string}>
+     */
+    public static function dockerfileProvider(): array
+    {
+        return [
+            'alpine' => ['docker/Dockerfile'],
+            'intel' => ['docker/Dockerfile.intel'],
+            'nvidia' => ['docker/Dockerfile.nvidia'],
+        ];
+    }
+
+    /**
+     * @dataProvider dockerfileProvider
+     */
+    public function testEveryDockerfileCopiesTheEntrypointToThePathItsCmdNames(string $relative): void
+    {
+        $dockerfile = dirname(__DIR__, 3) . '/' . $relative;
+        self::assertFileExists($dockerfile);
+        $contents = (string) file_get_contents($dockerfile);
+
+        self::assertSame(
+            1,
+            preg_match('/^CMD \["sh", "([^"]+)"\]/m', $contents, $cmd),
+            $relative . ' must end with a CMD that runs the entrypoint with sh'
+        );
+
+        self::assertMatchesRegularExpression(
+            '/^COPY\s+docker\/docker-entrypoint\.sh\s+' . preg_quote($cmd[1], '/') . '\s*$/m',
+            $contents,
+            $relative . ' names ' . $cmd[1] . ' in CMD but never COPYs the entrypoint there'
+        );
+    }
+
+    /**
+     * The harness always overrides PHLIX_APP_ROOT / PHLIX_SUPERVISORD_CONF, so
+     * the DEFAULTS — the only values a real container uses — would otherwise be
+     * unasserted (S159 review finding 8, second half).
+     *
+     * @dataProvider dockerfileProvider
+     */
+    public function testEntrypointDefaultsMatchTheDockerfileLayout(string $relative): void
+    {
+        $dockerfile = (string) file_get_contents(dirname(__DIR__, 3) . '/' . $relative);
+        $script = (string) file_get_contents($this->entrypoint);
+
+        self::assertSame(1, preg_match('/^WORKDIR\s+(\S+)\s*$/m', $dockerfile, $workdir));
+        self::assertStringContainsString(
+            'APP_ROOT="${PHLIX_APP_ROOT:-' . $workdir[1] . '}"',
+            $script,
+            'the entrypoint default APP_ROOT must match ' . $relative . "'s WORKDIR"
+        );
+
+        self::assertSame(
+            1,
+            preg_match('#^COPY\s+docker/supervisord\.conf\s+(\S+)\s*$#m', $dockerfile, $conf)
+        );
+        self::assertStringContainsString(
+            'SUPERVISORD_CONF="${PHLIX_SUPERVISORD_CONF:-' . $conf[1] . '}"',
+            $script,
+            'the entrypoint default SUPERVISORD_CONF must match where ' . $relative . ' puts it'
+        );
     }
 }

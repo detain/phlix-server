@@ -154,4 +154,74 @@ class MigrateCommandTest extends TestCase
         $this->assertSame(Command::FAILURE, $exitCode);
         $this->assertStringContainsString('Warning: Syntax error near BAD', $tester->getDisplay());
     }
+
+    /**
+     * S159 review finding 3 — the human-readable half.
+     *
+     * This command used to print `Migrations complete. (1 file(s), 0 note(s),
+     * 1 error(s))` and return 1: the word "complete" next to a non-zero exit
+     * and a non-zero error count, while `scripts/run-migrations.php` correctly
+     * suppressed it and wrote `Migrations FAILED …` instead. The exit contract
+     * agreed; the sentence an operator reads did not.
+     */
+    public function testFailureDoesNotSayCompleteAndPrintsTheSharedFailedSummary(): void
+    {
+        $this->writeMigration('001.sql', 'BAD STATEMENT;');
+
+        $conn = $this->createMock(Connection::class);
+        $conn->method('query')->willThrowException(new RuntimeException('Syntax error near BAD'));
+
+        $runner = new MigrationRunner(fn() => $conn, $this->tmpDir);
+        $tester = $this->tester($runner);
+
+        $this->assertSame(Command::FAILURE, $tester->execute([]));
+
+        $output = $tester->getDisplay();
+        $this->assertStringNotContainsString('Migrations complete.', $output);
+        // Byte-identical to what `scripts/run-migrations.php` writes, because
+        // both render MigrationRunner::failureSummary().
+        $this->assertStringContainsString(
+            MigrationRunner::failureSummary([
+                'applied' => ['001.sql'],
+                'notes' => [],
+                'errors' => ['Syntax error near BAD'],
+                'skipped_count' => 0,
+            ]),
+            $output
+        );
+    }
+
+    /**
+     * A genuine failure whose SQL merely CONTAINS an idempotent phrase must
+     * still fail this path (S159 review finding 1). The message shape is the
+     * one MySQL 8.0.46 produces through the project's connection classes.
+     */
+    public function testGenuineErrorWhoseSqlContainsAnIdempotentPhraseStillFails(): void
+    {
+        $this->writeMigration(
+            '001.sql',
+            "ALTER TABLE gone ADD COLUMN foo INT COMMENT 'reuse the row if it already exists';"
+        );
+
+        $conn = $this->createMock(Connection::class);
+        $conn->method('query')->willReturnCallback(
+            static function (string $sql): array {
+                if (str_contains($sql, 'schema_migrations')) {
+                    return [];
+                }
+                throw new RuntimeException(
+                    'SQL:' . $sql . " SQLSTATE[42S02]: Base table or view not found: "
+                    . "1146 Table 'phlix.gone' doesn't exist"
+                );
+            }
+        );
+
+        $runner = new MigrationRunner(fn() => $conn, $this->tmpDir);
+        $tester = $this->tester($runner);
+
+        $this->assertSame(Command::FAILURE, $tester->execute([]));
+        $output = $tester->getDisplay();
+        $this->assertStringContainsString('Migrations FAILED', $output);
+        $this->assertStringNotContainsString('skipped (already applied)', $output);
+    }
 }

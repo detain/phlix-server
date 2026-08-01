@@ -36,9 +36,10 @@ use Workerman\MySQL\Connection;
  *     survives as the ledger's transition/fallback path (see {@see run()}).
  *   - Each file is split into individual statements (comments stripped) and
  *     every statement is run via {@see Connection::query()}.
- *   - Statement-level exceptions whose message matches a known
- *     "already applied" pattern (duplicate column / duplicate key /
- *     table-or-index already exists) are downgraded to notes rather than
+ *   - Statement-level exceptions carrying one of the known "already applied"
+ *     MySQL error numbers (duplicate column / duplicate key / duplicate
+ *     constraint name / table already exists / can't-drop — see
+ *     {@see IDEMPOTENT_ERROR_CODES}) are downgraded to notes rather than
  *     treated as failures (MySQL 8 has no `IF NOT EXISTS` on `ADD COLUMN` /
  *     `ADD INDEX`, so replays legitimately raise these).
  *   - Any other statement-level exception is recorded as an error; like the
@@ -56,16 +57,25 @@ use Workerman\MySQL\Connection;
  *
  * Three outcomes exist and must never be collapsed into one another:
  *
- *   (a) **"Already applied" replay** — a duplicate column / duplicate key /
- *       table-or-index-exists error raised by re-running a migration that was
+ *   (a) **"Already applied" replay** — one of the MySQL error numbers in
+ *       {@see IDEMPOTENT_ERROR_CODES} (duplicate column/key/FK/CHECK name,
+ *       table exists, can't-drop), raised by re-running a migration that was
  *       already applied. MySQL 8 has no `IF NOT EXISTS` on `ADD COLUMN` /
  *       `ADD INDEX`, so a legitimate replay raises these on nearly every file.
  *       Recorded as a NOTE, counted in `skipped_count`, **is not a failure**,
  *       and the file is still recorded in the ledger. Treating this class as a
  *       failure would redden every replay and the change would be reverted.
- *   (b) **Genuine statement error** — anything else. Recorded in `errors`, and
- *       {@see exitCodeFor()} maps a non-empty `errors` to exit code 1 so the
- *       failure is visible to a shell, to `set -e`, and to CI.
+ *       ⚠ The set is a CLOSED LIST, not "everything a replay can raise": a
+ *       seed `INSERT` replay (1062) and `ADD PRIMARY KEY` (1068) are class (b)
+ *       ON PURPOSE — see the constant for why — so a migration author must
+ *       write `INSERT IGNORE` / guard the `ADD PRIMARY KEY` rather than rely
+ *       on the squelch.
+ *   (b) **Genuine statement error** — anything else, decided on the driver's
+ *       error number and NOT on a substring of the exception message (which
+ *       contains the migration's own SQL — see {@see isAlreadyAppliedNote()}).
+ *       Recorded in `errors`, and {@see exitCodeFor()} maps a non-empty
+ *       `errors` to exit code 1 so the failure is visible to a shell, to
+ *       `set -e`, and to CI.
  *   (c) **A file that failed is left UNRECORDED** in the ledger, so it is
  *       re-attempted on the next run. This is the project's "re-run safe"
  *       contract and is the reason (d) below is safe.
@@ -118,6 +128,51 @@ final class MigrationRunner
      * `Symfony\Component\Console\Command\Command::FAILURE`.
      */
     public const EXIT_FAILURE = 1;
+
+    /**
+     * MySQL error numbers that a LEGITIMATE REPLAY of an already-applied
+     * migration raises — class (a) in the class docblock. Matched on the
+     * driver's errno, never on the rendered message (see
+     * {@see isAlreadyAppliedNote()} for why the message cannot be trusted).
+     *
+     *   - `1050` ER_TABLE_EXISTS_ERROR      — `CREATE TABLE` without `IF NOT EXISTS`
+     *   - `1060` ER_DUP_FIELDNAME           — `ALTER TABLE … ADD COLUMN`
+     *   - `1061` ER_DUP_KEYNAME             — `ALTER TABLE … ADD KEY` / `CREATE INDEX`
+     *   - `1091` ER_CANT_DROP_FIELD_OR_KEY  — `DROP COLUMN` / `DROP INDEX` already gone
+     *   - `1826` ER_FK_DUP_NAME             — `ADD CONSTRAINT … FOREIGN KEY`
+     *   - `3822` ER_CHECK_CONSTRAINT_DUP_NAME — `ADD CONSTRAINT … CHECK`
+     *
+     * MySQL 8 accepts `IF NOT EXISTS` on none of those clauses (only MariaDB
+     * does), which is why a replay legitimately raises them.
+     *
+     * `1826` and `3822` were added by the S159 review: like `1050` and `1061`
+     * they are NAMED-object collisions — MySQL is reporting "an object with
+     * this exact name already exists", which is precisely what a second run of
+     * the same file produces, and the name in the message lets an operator see
+     * which object it was.
+     *
+     * ## Deliberately NOT idempotent — a migration author must handle these
+     *
+     *   - `1062` ER_DUP_ENTRY ("Duplicate entry 'x' for key '…'"). This is what
+     *     `ALTER TABLE … ADD UNIQUE` raises when the EXISTING DATA violates the
+     *     new constraint — the single most valuable failure a migration can
+     *     report. Squelching it to make un-guarded seed `INSERT`s replayable
+     *     would hide real data corruption. Write `INSERT IGNORE` /
+     *     `INSERT … ON DUPLICATE KEY UPDATE` instead.
+     *   - `1068` ER_MULTIPLE_PRI_KEY ("Multiple primary key defined"). MySQL
+     *     names no object here, so "the same PK is already there" (a replay)
+     *     and "a DIFFERENT primary key already exists" (a genuine conflict
+     *     whose intended PK was never created) are indistinguishable. Guard
+     *     the `ADD PRIMARY KEY` in the migration instead.
+     *
+     * Other replay shapes outside this set — `1051` unknown table on a bare
+     * `DROP TABLE`, `1304`/`1359` duplicate routine/trigger — are likewise
+     * class (b). No file in `migrations/` uses them today; a future one should
+     * use the `IF EXISTS` / `IF NOT EXISTS` form those statements DO accept.
+     *
+     * @var list<int>
+     */
+    private const IDEMPOTENT_ERROR_CODES = [1050, 1060, 1061, 1091, 1826, 3822];
 
     /** @var callable(): Connection */
     private $connectionProvider;
@@ -336,6 +391,57 @@ final class MigrationRunner
     }
 
     /**
+     * The human-readable verdict for a FAILED run, shared by both operator
+     * paths (S159 review findings 3 and 7).
+     *
+     * Finding 3: `scripts/run-migrations.php` suppressed `"Migrations
+     * complete."` on failure while `bin/phlix migrate` still printed
+     * `"Migrations complete. (1 file(s), 0 note(s), 1 error(s))"` next to its
+     * own exit code 1. The exit contract agreed; the sentence a human reads
+     * did not. Both now render THIS string instead, so they cannot drift.
+     *
+     * Finding 7: the previous wording asserted, unconditionally, that "the
+     * schema is HALF-MIGRATED". Nothing checked that, and with an unreachable
+     * database it is simply false — so the message misdirected the operator at
+     * the exact moment they were debugging.
+     *
+     * ⚠ The obvious guard — "say it only when `applied` is empty" — does NOT
+     * work, and measuring beats assuming: `applied` lists files whose
+     * statements were ATTEMPTED, and the connection is resolved lazily per
+     * statement, so `DB_PORT=33999` against the real migration set produces
+     * `229 error(s) in 100 file(s) attempted`, not zero. The empty case is
+     * still special-cased (it is unambiguous), but for everything else this
+     * method states only what it can verify and then tells the operator how to
+     * tell the two situations apart, rather than picking one for them.
+     *
+     * @param array{applied: list<string>, notes: list<string>, errors: list<string>, skipped_count: int} $result
+     *        A {@see run()} result for which {@see exitCodeFor()} returned
+     *        {@see EXIT_FAILURE}.
+     */
+    public static function failureSummary(array $result): string
+    {
+        $errorCount = count($result['errors']);
+        $fileCount = count($result['applied']);
+
+        $summary = 'Migrations FAILED: ' . $errorCount . ' error(s) in '
+            . $fileCount . ' file(s) attempted.';
+
+        if ($fileCount === 0) {
+            return $summary . ' No migration file was executed at all, so the'
+                . ' schema is unchanged — the failure happened before any'
+                . ' statement ran (check that the database is reachable and the'
+                . ' credentials are correct).';
+        }
+
+        return $summary . ' The failing file(s) were NOT recorded in'
+            . ' schema_migrations and will be retried on the next run. Whether'
+            . ' the schema is now PARTIALLY MIGRATED depends on the errors'
+            . ' above: a bad statement leaves the statements before it applied,'
+            . ' while an unreachable or misconfigured database changes nothing'
+            . ' at all.';
+    }
+
+    /**
      * Bootstrap the ledger table (idempotent). Never aborts a run: if the
      * table cannot be created/verified we fall back to the historical
      * apply-every-file behaviour, which the duplicate-error squelch keeps safe.
@@ -416,17 +522,127 @@ final class MigrationRunner
     /**
      * Whether a note message belongs to the "already applied" class — the
      * idempotent duplicate/exists errors a replayed migration legitimately
-     * raises (duplicate column 1060, duplicate key 1061, table exists 1050,
-     * can't-drop 1091, …). Callers use this to collapse such notes into a
-     * single "N statements skipped (already applied)" summary line while
-     * still printing any other note in full.
+     * raises. Callers use this to collapse such notes into a single
+     * "N statements skipped (already applied)" summary line while still
+     * printing any other note in full; {@see isExpectedIdempotentError()} uses
+     * it to decide class (a) vs class (b).
+     *
+     * ## The decision is made on the DRIVER ERROR CODE, never on the raw message
+     *
+     * `Workerman\MySQL\Connection::execute()` (and this project's
+     * {@see PhlixMySQLConnection}) rethrow as
+     * `"SQL:" . $theWholeStatement . " " . $pdoMessage`, so the message a
+     * caller sees CONTAINS THE MIGRATION'S OWN SQL. A plain
+     * `str_contains($message, 'already exists')` therefore greps the
+     * migration text, and a genuine hard failure was silently reclassified as
+     * an idempotent replay. Reproduced against MySQL 8.0.46 with a single
+     * statement:
+     *
+     *     ALTER TABLE zz_no_such_table
+     *       ADD COLUMN foo INT COMMENT 'reuse the row if it already exists';
+     *
+     * → `SQL:ALTER TABLE … 'reuse the row if it already exists'
+     *    SQLSTATE[42S02]: Base table or view not found: 1146 Table … doesn't exist`
+     *
+     * — errno 1146, a hard failure, matched `'already exists'` from the
+     * COMMENT, was counted as a skip, exited 0 AND (because class (b) never
+     * fired) the file was RECORDED in `schema_migrations`, so it was never
+     * retried. That defeated classes (b) and (c) at once and was strictly
+     * worse than the pre-S159 behaviour. Any of the old phrases surviving in a
+     * `COMMENT`, an `ENUM`/`DEFAULT` value, a string literal or a C-style
+     * block comment was enough.
+     *
+     * So: everything before the LAST `SQLSTATE[` — i.e. the whole `SQL:…`
+     * prefix — is stripped first ({@see errorSegment()}), the MySQL errno is
+     * parsed out of what remains ({@see driverErrorCode()}), and only
+     * {@see IDEMPOTENT_ERROR_CODES} counts as class (a).
+     *
+     * The message-phrase test below survives ONLY as the fallback for a
+     * throwable that carries no PDO error segment at all (a mocked connection
+     * in a unit test, or one of the two `PDOException`s this project raises
+     * for a missing connection/statement). A message that DOES carry the
+     * `SQL:` prefix but no parseable error segment is deliberately treated as
+     * a genuine error rather than guessed at.
+     *
+     * @param string $message An exception message, as stored in the `notes` /
+     *        `errors` lists returned by {@see run()}.
      */
     public static function isAlreadyAppliedNote(string $message): bool
     {
-        return str_contains($message, 'Duplicate column name')
-            || str_contains($message, 'Duplicate key name')
-            || str_contains($message, 'check that column/key exists')
-            || str_contains($message, 'already exists');
+        $segment = self::errorSegment($message);
+        if ($segment === null) {
+            return false;
+        }
+
+        $code = self::driverErrorCode($segment);
+        if ($code !== null) {
+            return in_array($code, self::IDEMPOTENT_ERROR_CODES, true);
+        }
+
+        return str_contains($segment, 'Duplicate column name')
+            || str_contains($segment, 'Duplicate key name')
+            || str_contains($segment, 'Duplicate foreign key constraint name')
+            || str_contains($segment, 'Duplicate check constraint name')
+            || str_contains($segment, 'check that column/key exists')
+            || str_contains($segment, 'already exists');
+    }
+
+    /**
+     * Strip the `"SQL:" . $statement . " "` prefix that
+     * `Workerman\MySQL\Connection::execute()` and
+     * {@see PhlixMySQLConnection::query()} prepend, leaving only the driver's
+     * own error text.
+     *
+     * The PDO message always begins with `SQLSTATE[`, and the prefix is
+     * prepended, so the LAST occurrence is the real error even if the
+     * migration's SQL contains a literal `SQLSTATE[` of its own.
+     *
+     * @return string|null The driver error segment, or `null` when the message
+     *         is SQL-prefixed but carries no recognisable error segment — in
+     *         which case the caller must NOT squelch it (a message we cannot
+     *         separate from its SQL is never classified as idempotent).
+     */
+    private static function errorSegment(string $message): ?string
+    {
+        $pos = strrpos($message, 'SQLSTATE[');
+        if ($pos !== false) {
+            return substr($message, $pos);
+        }
+
+        if (str_starts_with($message, 'SQL:')) {
+            return null;
+        }
+
+        return $message;
+    }
+
+    /**
+     * Parse the MySQL error number out of a driver error segment.
+     *
+     * PDO renders `SQLSTATE[<state>]: <condition>: <errno> <text>`; measured
+     * shapes (MySQL 8.0.46, through the project's own connection classes):
+     *
+     *     SQLSTATE[42S01]: Base table or view already exists: 1050 Table 'x' already exists
+     *     SQLSTATE[42S21]: Column already exists: 1060 Duplicate column name 'v'
+     *     SQLSTATE[42000]: Syntax error or access violation: 1061 Duplicate key name 'k'
+     *     SQLSTATE[HY000]: General error: 1826 Duplicate foreign key constraint name 'fk'
+     *
+     * ⚠ The errno cannot be taken from the exception object: both rethrow
+     * sites build a fresh `PDOException` with `(int) $e->getCode()` — the
+     * SQLSTATE cast to int, e.g. `42` for `42S02` — and never copy
+     * `errorInfo`, which is `NULL` on the rethrown instance (verified by
+     * execution). The rendered segment is the only place the errno survives.
+     *
+     * @return int|null `null` when the segment carries no errno (e.g.
+     *         `SQLSTATE[HY000] [2002] Connection refused`).
+     */
+    private static function driverErrorCode(string $segment): ?int
+    {
+        if (preg_match('/^SQLSTATE\[[^\]]*\]:\s*[^:]*:\s*(\d+)\b/', $segment, $m) !== 1) {
+            return null;
+        }
+
+        return (int) $m[1];
     }
 
     /**
@@ -582,11 +798,17 @@ final class MigrationRunner
     }
 
     /**
-     * Some `ALTER TABLE ... ADD COLUMN` / `ADD INDEX` statements legitimately
-     * fail on re-runs because the column / index already exists. MySQL 8
-     * doesn't accept `IF NOT EXISTS` on those clauses (only MariaDB does), so
-     * we recognise the matching error text and downgrade those to notes
-     * rather than treating them as failures.
+     * Some `ALTER TABLE ... ADD COLUMN` / `ADD INDEX` / `ADD CONSTRAINT`
+     * statements legitimately fail on re-runs because the column / index /
+     * constraint already exists. MySQL 8 doesn't accept `IF NOT EXISTS` on
+     * those clauses (only MariaDB does), so we recognise the matching MySQL
+     * error number and downgrade those to notes rather than treating them as
+     * failures.
+     *
+     * The errno has to come out of the rendered message: both connection
+     * classes rethrow a fresh `PDOException` whose `errorInfo` is `NULL` and
+     * whose `getCode()` is the SQLSTATE cast to int. See
+     * {@see isAlreadyAppliedNote()} / {@see driverErrorCode()}.
      */
     private static function isExpectedIdempotentError(Throwable $e): bool
     {

@@ -257,6 +257,270 @@ class MigrationRunnerTest extends TestCase
         $this->assertFalse(MigrationRunner::isAlreadyAppliedNote("Unknown column 'y' in 'field list'"));
     }
 
+    // ------------------------------------------------------------------
+    // S159 review finding 1 — classification is on the MySQL error NUMBER,
+    // never on a substring of a message that carries the migration's own SQL.
+    //
+    // Every message below is verbatim output captured from MySQL 8.0.46
+    // through Phlix\Common\Database\PooledMySQLConnection, i.e. the exact
+    // string MigrationRunner::run() stores in notes[] / errors[].
+    // ------------------------------------------------------------------
+
+    /**
+     * @return array<string, array{0: string, 1: bool}>
+     */
+    public static function realDriverMessageProvider(): array
+    {
+        return [
+            // --- class (a): a legitimate replay ---
+            '1050 table exists' => [
+                "SQL:CREATE TABLE p_parent (id INT NOT NULL PRIMARY KEY) SQLSTATE[42S01]: "
+                . "Base table or view already exists: 1050 Table 'p_parent' already exists",
+                true,
+            ],
+            '1060 duplicate column' => [
+                "SQL:ALTER TABLE p_child ADD COLUMN v INT NULL SQLSTATE[42S21]: "
+                . "Column already exists: 1060 Duplicate column name 'v'",
+                true,
+            ],
+            '1061 duplicate key name' => [
+                "SQL:ALTER TABLE p_child ADD KEY k_pid (pid) SQLSTATE[42000]: "
+                . "Syntax error or access violation: 1061 Duplicate key name 'k_pid'",
+                true,
+            ],
+            '1091 cannot drop' => [
+                "SQL:ALTER TABLE p_child DROP COLUMN nope SQLSTATE[42000]: Syntax error or "
+                . "access violation: 1091 Can't DROP 'nope'; check that column/key exists",
+                true,
+            ],
+            '1826 duplicate foreign key name' => [
+                "SQL:ALTER TABLE p_child ADD CONSTRAINT fk_pc FOREIGN KEY (pid) REFERENCES "
+                . "p_parent(id) SQLSTATE[HY000]: General error: 1826 Duplicate foreign key "
+                . "constraint name 'fk_pc'",
+                true,
+            ],
+            '3822 duplicate check constraint name' => [
+                "SQL:ALTER TABLE p_chk ADD CONSTRAINT chk_n CHECK (n > 0) SQLSTATE[HY000]: "
+                . "General error: 3822 Duplicate check constraint name 'chk_n'.",
+                true,
+            ],
+
+            // --- class (b): genuine failures, deliberately NOT squelched ---
+            '1062 duplicate entry is a genuine failure' => [
+                "SQL:INSERT INTO p_seed (k) VALUES ('a') SQLSTATE[23000]: Integrity constraint "
+                . "violation: 1062 Duplicate entry 'a' for key 'p_seed.PRIMARY'",
+                false,
+            ],
+            '1068 multiple primary key is a genuine failure' => [
+                'SQL:ALTER TABLE p_pk ADD PRIMARY KEY (id) SQLSTATE[42000]: Syntax error or '
+                . 'access violation: 1068 Multiple primary key defined',
+                false,
+            ],
+            '1146 missing table' => [
+                "SQL:ALTER TABLE p_no_such ADD COLUMN foo INT SQLSTATE[42S02]: Base table or "
+                . "view not found: 1146 Table 'phlix.p_no_such' doesn't exist",
+                false,
+            ],
+            '1054 unknown column' => [
+                "SQL:SELECT nope FROM p_child SQLSTATE[42S22]: Column not found: 1054 Unknown "
+                . "column 'nope' in 'field list'",
+                false,
+            ],
+            '1064 syntax error' => [
+                'SQL:CREATE TABLE broken ( SQLSTATE[42000]: Syntax error or access violation: '
+                . '1064 You have an error in your SQL syntax',
+                false,
+            ],
+            'connection refused carries no errno' => [
+                'SQLSTATE[HY000] [2002] Connection refused',
+                false,
+            ],
+
+            // --- the finding-1 reproduction: the idempotent PHRASES live in
+            //     the statement text, the errno says the statement failed hard.
+            "1146 whose SQL contains 'already exists'" => [
+                "SQL:ALTER TABLE zz_no_such_table ADD COLUMN foo INT COMMENT 'reuse the row if "
+                . "it already exists' SQLSTATE[42S02]: Base table or view not found: 1146 Table "
+                . "'phlix.zz_no_such_table' doesn't exist",
+                false,
+            ],
+            "1064 whose SQL contains 'Duplicate column name'" => [
+                "SQL:ALTER TABLE t ADD COLUMN c VARCHAR(8) DEFAULT 'Duplicate column name' "
+                . "SQLSTATE[42000]: Syntax error or access violation: 1064 You have an error in "
+                . "your SQL syntax",
+                false,
+            ],
+            "1146 whose SQL contains 'check that column/key exists'" => [
+                "SQL:ALTER TABLE gone ADD COLUMN c INT COMMENT 'check that column/key exists' "
+                . "SQLSTATE[42S02]: Base table or view not found: 1146 Table 'phlix.gone' "
+                . "doesn't exist",
+                false,
+            ],
+            "1451 whose SQL contains 'Duplicate key name'" => [
+                "SQL:DELETE FROM p_parent /* Duplicate key name */ SQLSTATE[23000]: Integrity "
+                . "constraint violation: 1451 Cannot delete or update a parent row: a foreign "
+                . "key constraint fails",
+                false,
+            ],
+        ];
+    }
+
+    /**
+     * @dataProvider realDriverMessageProvider
+     */
+    public function testClassificationUsesTheDriverErrnoNotTheStatementText(
+        string $message,
+        bool $expectedIdempotent
+    ): void {
+        $this->assertSame($expectedIdempotent, MigrationRunner::isAlreadyAppliedNote($message));
+    }
+
+    /**
+     * End-to-end through `run()`: the reproduction from the review must be an
+     * ERROR (exit 1) and the file must be left OUT of the ledger so the next
+     * run retries it — class (b) AND class (c), both of which the phrase match
+     * defeated at once.
+     */
+    public function testGenuineFailureWhoseSqlContainsAnIdempotentPhraseIsNotRecorded(): void
+    {
+        $this->writeMigration(
+            '001_trap.sql',
+            "ALTER TABLE zz_no_such_table ADD COLUMN foo INT "
+            . "COMMENT 'reuse the row if it already exists';"
+        );
+
+        $recorded = [];
+        $conn = $this->createMock(Connection::class);
+        $conn->method('query')->willReturnCallback(
+            function (string $sql, $params = null) use (&$recorded): array {
+                if (str_starts_with(ltrim($sql), 'INSERT INTO schema_migrations')) {
+                    $recorded[] = $params;
+                    return [];
+                }
+                if (str_contains($sql, 'schema_migrations')) {
+                    return [];
+                }
+                throw new RuntimeException(
+                    'SQL:' . $sql . " SQLSTATE[42S02]: Base table or view not found: "
+                    . "1146 Table 'phlix.zz_no_such_table' doesn't exist"
+                );
+            }
+        );
+
+        $runner = new MigrationRunner(fn() => $conn, $this->tmpDir);
+        $result = $runner->run();
+
+        $this->assertSame([], $result['notes']);
+        $this->assertCount(1, $result['errors']);
+        $this->assertSame(0, $result['skipped_count']);
+        $this->assertSame(MigrationRunner::EXIT_FAILURE, MigrationRunner::exitCodeFor($result));
+        $this->assertSame([], $recorded, 'a genuinely failed file must NOT enter the ledger');
+    }
+
+    /**
+     * The inverse control: the same file shape, but a real duplicate-column
+     * replay, stays a note and IS recorded.
+     */
+    public function testRealDuplicateColumnReplayIsStillANoteAndIsRecorded(): void
+    {
+        $this->writeMigration('001_replay.sql', 'ALTER TABLE t ADD COLUMN v INT;');
+
+        $recorded = [];
+        $conn = $this->createMock(Connection::class);
+        $conn->method('query')->willReturnCallback(
+            function (string $sql, $params = null) use (&$recorded): array {
+                if (str_starts_with(ltrim($sql), 'INSERT INTO schema_migrations')) {
+                    $recorded[] = $params;
+                    return [];
+                }
+                if (str_contains($sql, 'schema_migrations')) {
+                    return [];
+                }
+                throw new RuntimeException(
+                    'SQL:' . $sql . " SQLSTATE[42S21]: Column already exists: "
+                    . "1060 Duplicate column name 'v'"
+                );
+            }
+        );
+
+        $runner = new MigrationRunner(fn() => $conn, $this->tmpDir);
+        $result = $runner->run();
+
+        $this->assertCount(1, $result['notes']);
+        $this->assertSame([], $result['errors']);
+        $this->assertSame(1, $result['skipped_count']);
+        $this->assertSame(MigrationRunner::EXIT_SUCCESS, MigrationRunner::exitCodeFor($result));
+        $this->assertCount(1, $recorded);
+    }
+
+    /**
+     * An SQL-prefixed message we cannot split from its statement is treated as
+     * a GENUINE error — the safe direction. Nothing produces this today (the
+     * prefix is only ever added around a PDO message, which always carries a
+     * SQLSTATE), but guessing would put the finding-1 hole straight back.
+     */
+    public function testSqlPrefixedMessageWithNoErrorSegmentIsNotSquelched(): void
+    {
+        $this->assertFalse(MigrationRunner::isAlreadyAppliedNote(
+            "SQL:ALTER TABLE t ADD COLUMN c INT COMMENT 'already exists' mysterious driver text"
+        ));
+    }
+
+    // ------------------------------------------------------------------
+    // S159 review finding 7 — the failure summary must not assert a state it
+    // never checked.
+    // ------------------------------------------------------------------
+
+    public function testFailureSummaryNeverAssertsASchemaStateItDidNotCheck(): void
+    {
+        $attempted = MigrationRunner::failureSummary([
+            'applied' => ['090_bad.sql'],
+            'notes' => [],
+            'errors' => ['SQLSTATE[42000]: … 1064 …'],
+            'skipped_count' => 0,
+        ]);
+        $this->assertStringContainsString('1 error(s) in 1 file(s) attempted', $attempted);
+        // The only claim about the schema is a conditional one plus how to
+        // decide it — never the bare "The schema is HALF-MIGRATED".
+        $this->assertStringNotContainsString('The schema is HALF-MIGRATED', $attempted);
+        $this->assertStringContainsString('depends on the errors above', $attempted);
+        $this->assertStringContainsString('NOT recorded in schema_migrations', $attempted);
+
+        // Nothing attempted at all: unambiguous, so say so plainly.
+        $nothingRan = MigrationRunner::failureSummary([
+            'applied' => [],
+            'notes' => [],
+            'errors' => ['SQLSTATE[HY000] [2002] Connection refused'],
+            'skipped_count' => 0,
+        ]);
+        $this->assertStringContainsString('0 file(s) attempted', $nothingRan);
+        $this->assertStringContainsString('the schema is unchanged', $nothingRan);
+        $this->assertStringContainsString('database is reachable', $nothingRan);
+        $this->assertStringNotContainsString('PARTIALLY MIGRATED', $nothingRan);
+    }
+
+    /**
+     * The shape an UNREACHABLE database actually produces (measured:
+     * `DB_PORT=33999` against the real 100-file set gives
+     * `229 error(s) in 100 file(s) attempted`). `applied` counts files
+     * ATTEMPTED, not files changed, so "applied is empty" is NOT a usable test
+     * for "nothing happened" — this pins that the summary does not pretend
+     * otherwise.
+     */
+    public function testFailureSummaryDoesNotMistakeAnUnreachableDatabaseForAHalfMigratedSchema(): void
+    {
+        $summary = MigrationRunner::failureSummary([
+            'applied' => array_map(static fn(int $i): string => sprintf('%03d.sql', $i), range(1, 100)),
+            'notes' => [],
+            'errors' => array_fill(0, 229, 'SQLSTATE[HY000] [2002] Connection refused'),
+            'skipped_count' => 0,
+        ]);
+
+        $this->assertStringContainsString('229 error(s) in 100 file(s) attempted', $summary);
+        $this->assertStringNotContainsString('The schema is HALF-MIGRATED', $summary);
+        $this->assertStringContainsString('unreachable or misconfigured database changes nothing', $summary);
+    }
+
     public function testEmptyDirectoryYieldsNoWorkAndNoConnection(): void
     {
         $connectionResolved = false;

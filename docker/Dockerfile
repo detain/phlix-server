@@ -18,7 +18,17 @@ COPY docker/nginx.conf /etc/nginx/http.d/default.conf
 
 COPY docker/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 
-RUN mkdir -p /var/www/html /var/phlix/{config,data,logs,backups} \
+# NB: the paths are written out. Docker runs `RUN` through `/bin/sh`, which on
+# Alpine is busybox ash and does NOT do brace expansion, so the original
+# `/var/phlix/{config,data,logs,backups}` created ONE directory with that
+# literal name. Nothing noticed while the CMD below was unreachable; the moment
+# the entrypoint was revived (see the COPY near the end of this file) the
+# container reached `exec supervisord` and died with "The directory named as
+# part of the path /var/phlix/logs/supervisord.log does not exist", exit 2.
+# A compose deployment masked it because it volume-mounts those four paths.
+# Dockerfile.intel / Dockerfile.nvidia already spell them out — this matches.
+RUN mkdir -p /var/www/html \
+        /var/phlix/config /var/phlix/data /var/phlix/logs /var/phlix/backups \
     && chown -R nobody:nobody /var/www/html /var/phlix
 
 WORKDIR /var/www/html

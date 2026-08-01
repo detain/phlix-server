@@ -40,6 +40,11 @@ final class MigrateCommand extends Command
      * Returns {@see Command::SUCCESS} (0) when every statement applied (or was
      * an idempotent no-op) and {@see Command::FAILURE} (1) when the runner
      * reported one or more genuine, non-idempotent errors.
+     *
+     * The failure decision itself is delegated to
+     * {@see MigrationRunner::exitCodeFor()} (S159) so this command and
+     * `scripts/run-migrations.php` — the two operator-facing migration paths —
+     * cannot drift apart on what counts as a failure.
      */
     protected function execute(InputInterface $input, OutputInterface $output): int
     {
@@ -78,6 +83,8 @@ final class MigrateCommand extends Command
             count($result['errors'])
         ));
 
-        return $result['errors'] === [] ? Command::SUCCESS : Command::FAILURE;
+        return MigrationRunner::exitCodeFor($result) === MigrationRunner::EXIT_SUCCESS
+            ? Command::SUCCESS
+            : Command::FAILURE;
     }
 }

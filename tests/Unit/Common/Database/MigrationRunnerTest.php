@@ -667,6 +667,164 @@ class MigrationRunnerTest extends TestCase
         $this->assertSame(['001.sql'], $result['applied']);
     }
 
+    // ------------------------------------------------------------------
+    // S159 — exitCodeFor(): the single definition of "this run FAILED",
+    // proven in BOTH directions and for all three failure classes.
+    // ------------------------------------------------------------------
+
+    /**
+     * S159 class (b): a genuine, non-idempotent statement error must be
+     * reachable as a NON-ZERO process exit code. This is the direction that was
+     * unreachable before S159 from `scripts/run-migrations.php`.
+     */
+    public function testExitCodeIsFailureWhenAGenuineErrorWasRecorded(): void
+    {
+        $this->writeMigration('001.sql', 'BAD STATEMENT;');
+
+        $conn = $this->connectionWithLedger([], static function (): array {
+            throw new RuntimeException('Syntax error near BAD STATEMENT');
+        });
+
+        $result = (new MigrationRunner(fn() => $conn, $this->tmpDir))->run();
+
+        $this->assertSame(['Syntax error near BAD STATEMENT'], $result['errors']);
+        $this->assertSame(MigrationRunner::EXIT_FAILURE, MigrationRunner::exitCodeFor($result));
+        $this->assertSame(1, MigrationRunner::exitCodeFor($result));
+    }
+
+    /**
+     * The other direction: a clean run exits 0.
+     */
+    public function testExitCodeIsSuccessForACleanRun(): void
+    {
+        $this->writeMigration('001.sql', 'CREATE TABLE a (id INT);');
+
+        $conn = $this->connectionWithLedger([], static fn(): array => []);
+
+        $result = (new MigrationRunner(fn() => $conn, $this->tmpDir))->run();
+
+        $this->assertSame([], $result['errors']);
+        $this->assertSame(MigrationRunner::EXIT_SUCCESS, MigrationRunner::exitCodeFor($result));
+        $this->assertSame(0, MigrationRunner::exitCodeFor($result));
+    }
+
+    /**
+     * S159 class (a): an "already applied" REPLAY must still exit 0. Collapsing
+     * this class into class (b) would redden every legitimate re-deploy — MySQL
+     * 8 has no `IF NOT EXISTS` on `ADD COLUMN`/`ADD INDEX`, so a replay raises
+     * one of these per statement — and the whole change would be reverted.
+     *
+     * @dataProvider idempotentMessageProvider
+     */
+    public function testExitCodeIsSuccessForAnAlreadyAppliedReplay(string $message): void
+    {
+        $this->writeMigration('001.sql', 'ALTER TABLE x ADD COLUMN y INT;');
+
+        $conn = $this->connectionWithLedger([], static function () use ($message): array {
+            throw new RuntimeException($message);
+        });
+
+        $result = (new MigrationRunner(fn() => $conn, $this->tmpDir))->run();
+
+        $this->assertSame([$message], $result['notes'], 'replay must be a NOTE, not an error');
+        $this->assertSame([], $result['errors']);
+        $this->assertSame(1, $result['skipped_count']);
+        $this->assertSame(MigrationRunner::EXIT_SUCCESS, MigrationRunner::exitCodeFor($result));
+    }
+
+    /**
+     * A steady-state boot where the ledger skips every file (nothing applied,
+     * nothing failed) is the HEALTHY case and must exit 0 — an empty `applied`
+     * list is not a failure signal.
+     */
+    public function testExitCodeIsSuccessWhenTheLedgerSkippedEverything(): void
+    {
+        $sql = "CREATE TABLE a (id INT);\n";
+        $this->writeMigration('001.sql', $sql);
+
+        $conn = $this->connectionWithLedger(
+            [['name' => '001.sql', 'checksum' => self::normalisedMd5($sql)]],
+            static function (): array {
+                throw new RuntimeException('no migration statement should have executed');
+            }
+        );
+
+        $result = (new MigrationRunner(fn() => $conn, $this->tmpDir))->run();
+
+        $this->assertSame([], $result['applied']);
+        $this->assertSame(1, $result['skipped_count']);
+        $this->assertSame(MigrationRunner::EXIT_SUCCESS, MigrationRunner::exitCodeFor($result));
+    }
+
+    /**
+     * S159 — the CONTINUE-AND-REPORT decision, asserted rather than assumed:
+     * a failing file does NOT stop later files, the run still reports failure
+     * via the exit code, and (class (c)) the failing file is left out of the
+     * ledger while the later, clean file is recorded.
+     */
+    public function testFailingFileDoesNotStopLaterFilesAndStillExitsNonZero(): void
+    {
+        $this->writeMigration('001_bad.sql', 'BAD STATEMENT;');
+        $this->writeMigration('002_good.sql', 'CREATE TABLE b (id INT);');
+
+        $executed = [];
+        $recorded = [];
+        $conn = $this->createMock(Connection::class);
+        $conn->method('query')->willReturnCallback(
+            function (string $sql, $params = null) use (&$executed, &$recorded) {
+                if (str_contains($sql, 'schema_migrations')) {
+                    if (stripos(ltrim($sql), 'SELECT') === 0) {
+                        return [];
+                    }
+                    if (stripos(ltrim($sql), 'INSERT') === 0 && is_array($params)) {
+                        $recorded[] = (string) $params[0];
+                    }
+                    return [];
+                }
+
+                $executed[] = $sql;
+                if (str_contains($sql, 'BAD')) {
+                    throw new RuntimeException('Syntax error near BAD STATEMENT');
+                }
+
+                return [];
+            }
+        );
+
+        $result = (new MigrationRunner(fn() => $conn, $this->tmpDir))->run();
+
+        // Continue-on-error: the later file still ran.
+        $this->assertSame(['BAD STATEMENT', 'CREATE TABLE b (id INT)'], $executed);
+        $this->assertSame(['001_bad.sql', '002_good.sql'], $result['applied']);
+        // …and the run is still reported as a FAILURE.
+        $this->assertSame(MigrationRunner::EXIT_FAILURE, MigrationRunner::exitCodeFor($result));
+        // Class (c): only the clean file entered the ledger, so the failing one
+        // is retried next run.
+        $this->assertSame(['002_good.sql'], $recorded);
+    }
+
+    /**
+     * `exitCodeFor()` is a pure function of the result shape — pinned directly
+     * so the mapping cannot drift while every runner-driven test above still
+     * passes.
+     */
+    public function testExitCodeForIsDecidedByErrorsAlone(): void
+    {
+        $this->assertSame(MigrationRunner::EXIT_SUCCESS, MigrationRunner::exitCodeFor([
+            'applied' => [],
+            'notes' => ['Duplicate column name "y"', 'Table "x" already exists'],
+            'errors' => [],
+            'skipped_count' => 99,
+        ]));
+
+        $this->assertSame(MigrationRunner::EXIT_FAILURE, MigrationRunner::exitCodeFor([
+            'applied' => ['001.sql'],
+            'notes' => [],
+            'errors' => ['Unknown column "y" in "field list"'],
+            'skipped_count' => 0,
+        ]));
+    }
+
     /**
      * Mirror of the runner's private checksum normalisation (strip full-line
      * `--` / `#` comments + per-line trailing whitespace, then md5), for tests

@@ -41,14 +41,59 @@ use Workerman\MySQL\Connection;
  *     table-or-index already exists) are downgraded to notes rather than
  *     treated as failures (MySQL 8 has no `IF NOT EXISTS` on `ADD COLUMN` /
  *     `ADD INDEX`, so replays legitimately raise these).
- *   - Any other statement-level exception is recorded as an error (the script
- *     printed these as `Warning:`); like the script, recording an error does
- *     not abort the run — remaining statements/files still execute.
+ *   - Any other statement-level exception is recorded as an error; like the
+ *     script, recording an error does not abort the run — remaining
+ *     statements/files still execute. See "Failure semantics" below: that is a
+ *     DECISION, and the visibility of such an error is carried by
+ *     {@see exitCodeFor()}, not by aborting the run.
  *
  * No I/O happens at construction: the connection is obtained lazily, only when
  * {@see run()} is invoked, via the supplied connection provider. This lets
  * `bin/phlix list` (and command construction in general) work in an
  * environment with no database.
+ *
+ * ## Failure semantics (S159 — DECIDED, not incidental)
+ *
+ * Three outcomes exist and must never be collapsed into one another:
+ *
+ *   (a) **"Already applied" replay** — a duplicate column / duplicate key /
+ *       table-or-index-exists error raised by re-running a migration that was
+ *       already applied. MySQL 8 has no `IF NOT EXISTS` on `ADD COLUMN` /
+ *       `ADD INDEX`, so a legitimate replay raises these on nearly every file.
+ *       Recorded as a NOTE, counted in `skipped_count`, **is not a failure**,
+ *       and the file is still recorded in the ledger. Treating this class as a
+ *       failure would redden every replay and the change would be reverted.
+ *   (b) **Genuine statement error** — anything else. Recorded in `errors`, and
+ *       {@see exitCodeFor()} maps a non-empty `errors` to exit code 1 so the
+ *       failure is visible to a shell, to `set -e`, and to CI.
+ *   (c) **A file that failed is left UNRECORDED** in the ledger, so it is
+ *       re-attempted on the next run. This is the project's "re-run safe"
+ *       contract and is the reason (d) below is safe.
+ *
+ * **The run is CONTINUE-AND-REPORT, not stop-on-first-error.** This was
+ * re-affirmed rather than changed, because:
+ *
+ *   - migration files are independent units; a failure in `085` does not make
+ *     `086` unsafe to apply, and stopping would leave every later file both
+ *     un-applied AND un-recorded — turning one bad file into a permanently
+ *     stalled schema on every subsequent boot;
+ *   - the (c) contract already guarantees a failed file is retried, so
+ *     continuing costs nothing in correctness;
+ *   - the defect S159 fixes is *visibility*, not execution order. Making the
+ *     exit code honest is the minimal change that makes the failure impossible
+ *     to miss on every path that has a caller able to check it.
+ *
+ * Consumers of the exit code:
+ *
+ *   - `bin/phlix migrate` ({@see \Phlix\Console\Commands\MigrateCommand}) — 0/1.
+ *   - `scripts/run-migrations.php` — 0/1 (S159; it previously always exited 0).
+ *   - `scripts/install.sh` — runs under `set -euo pipefail` with no `|| true`,
+ *     so a failed migration now ABORTS the install/update. Deliberate: that is
+ *     an attended, operator-driven path.
+ *   - `docker/docker-entrypoint.sh` — deliberately still boots the container on
+ *     a migration failure (a crash-looping media server is a worse outcome than
+ *     a degraded one), but prints a loud `PHLIX-MIGRATION-FAILURE` banner and
+ *     honours `PHLIX_MIGRATIONS_STRICT=1` to abort instead. See that file.
  */
 final class MigrationRunner
 {
@@ -59,6 +104,20 @@ final class MigrationRunner
      * fresh database where `076` has not yet been reached in sort order.
      */
     private const LEDGER_TABLE = 'schema_migrations';
+
+    /**
+     * Process exit code for a run in which every statement applied, or failed
+     * only with an idempotent "already applied" error (class (a) in the class
+     * docblock). Matches `Symfony\Component\Console\Command\Command::SUCCESS`.
+     */
+    public const EXIT_SUCCESS = 0;
+
+    /**
+     * Process exit code for a run that recorded at least one genuine,
+     * non-idempotent statement error (class (b)). Matches
+     * `Symfony\Component\Console\Command\Command::FAILURE`.
+     */
+    public const EXIT_FAILURE = 1;
 
     /** @var callable(): Connection */
     private $connectionProvider;
@@ -245,6 +304,35 @@ final class MigrationRunner
             'errors' => $errors,
             'skipped_count' => $skippedCount,
         ];
+    }
+
+    /**
+     * The single source of truth for "did this migration run FAIL?", expressed
+     * as a process exit code (S159).
+     *
+     * Every caller that owns a process exit status — `bin/phlix migrate` and
+     * `scripts/run-migrations.php` — routes through this method so the two
+     * operator paths can never disagree about what counts as a failure.
+     *
+     * Only `errors` decides. Specifically:
+     *
+     *   - `notes` do NOT fail the run, even when there are dozens of them: an
+     *     "already applied" duplicate-column/key error is what a legitimate
+     *     replay looks like (class (a) in the class docblock), and failing on
+     *     it would redden every re-deploy.
+     *   - `skipped_count` does NOT fail the run: it counts work that was
+     *     correctly not repeated.
+     *   - `applied` being empty does NOT fail the run: on a fully-migrated box
+     *     the ledger skips every file, which is the healthy steady state.
+     *
+     * @param array{applied: list<string>, notes: list<string>, errors: list<string>, skipped_count: int} $result
+     *        A {@see run()} result.
+     *
+     * @return int {@see EXIT_SUCCESS} or {@see EXIT_FAILURE}.
+     */
+    public static function exitCodeFor(array $result): int
+    {
+        return $result['errors'] === [] ? self::EXIT_SUCCESS : self::EXIT_FAILURE;
     }
 
     /**

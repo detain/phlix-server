@@ -1242,9 +1242,20 @@ do_update() {
     chown -R "$repo_owner:$repo_owner" "$ANIDB_CACHE_DIR" 2>/dev/null || true
   fi
 
-  # 4. Apply migrations. run-migrations.php currently has no tracking table
-  # (statements use `IF NOT EXISTS` and the runner swallows duplicate-key
-  # warnings), so re-running on each update is safe.
+  # 4. Apply migrations. Re-running on each update is safe: the runner keeps a
+  # `schema_migrations` ledger (SV-4.9) and skips a file it already recorded
+  # with a matching checksum, and any file it does re-run tolerates the replay
+  # because statements use `IF NOT EXISTS` and the runner downgrades duplicate
+  # column/key errors to notes.
+  #
+  # ⚠ S159: run-migrations.php now exits 1 when a GENUINE (non-idempotent)
+  # migration error was recorded — it used to always exit 0. Under this script's
+  # `set -euo pipefail` that ABORTS the update here, deliberately and with no
+  # `|| true`: this is an attended, operator-driven path, and continuing would
+  # restart the service against a half-migrated schema. State after such an
+  # abort is recoverable: the new code and vendor/ are on disk but the service
+  # has NOT been restarted, so the running process keeps serving the old code
+  # until the operator fixes the migration and re-runs the update.
   log "Running migrations"
   DB_PASSWORD="$env_db_pass" \
     php "$INSTALL_PATH/scripts/run-migrations.php"
@@ -1819,6 +1830,11 @@ chown root:"$SERVICE_USER" "$ENV_FILE"
 
 # ---------------------------------------------------------------------------
 # 6. Database migrations
+#
+# ⚠ S159: run-migrations.php exits 1 on a genuine (non-idempotent) migration
+# error, so `set -euo pipefail` aborts the install here. Deliberate and
+# un-suppressed — a fresh install that cannot build its schema must not go on to
+# install and start a systemd service against it.
 # ---------------------------------------------------------------------------
 log "Running database migrations"
 DB_PASSWORD="$DB_PASS" \

@@ -657,7 +657,13 @@ php bin/phlix media:dedupe-paths           # preview duplicate-path merges (dry-
 php bin/phlix media:dedupe-paths --apply   # merge duplicate media items sharing a path
 ```
 
-`php bin/phlix migrate` is the supported equivalent of `php scripts/run-migrations.php` — both delegate to the same `Phlix\Common\Database\MigrationRunner` service, applying every `migrations/*.sql` file on each run (idempotent; no tracking table). More commands are added in later steps.
+`php bin/phlix migrate` is the supported equivalent of `php scripts/run-migrations.php` — both delegate to the same `Phlix\Common\Database\MigrationRunner` service. Re-running is safe: applied files are recorded in a `schema_migrations` ledger and skipped while their checksum matches, and a file that is re-applied tolerates the replay (statements use `IF NOT EXISTS`, and duplicate-column/duplicate-key errors are downgraded to notes because MySQL 8 has no `IF NOT EXISTS` on `ADD COLUMN`/`ADD INDEX`). More commands are added in later steps.
+
+**Exit codes (S159).** Both commands exit `0` when every statement applied *or* failed only with an idempotent "already applied" error, and `1` when at least one genuine, non-idempotent statement error was recorded. A failing run does **not** stop at the first error — later files are still attempted — but the failing file is deliberately left out of the ledger so the next run retries it. Consequences worth knowing:
+
+- `scripts/install.sh` runs under `set -euo pipefail`, so a failed migration **aborts** the install/update before the service is restarted.
+- `docker/docker-entrypoint.sh` prints a loud `PHLIX-MIGRATION-FAILURE` banner to stderr and, by default, **still starts the container** (a crash-looping media server is worse than a degraded one). Set `PHLIX_MIGRATIONS_STRICT=1` to make the container refuse to start instead.
+- `PHLIX_MIGRATIONS_DIR` overrides the directory that is scanned for `*.sql` (default `migrations/`).
 
 ### Admin SPA (admin-ui)
 

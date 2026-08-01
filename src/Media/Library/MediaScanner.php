@@ -295,18 +295,43 @@ class MediaScanner
     private ?array $adoptionCandidates = null;
 
     /**
-     * Whether {@see MAX_ADOPTION_CANDIDATES} has already been reported for the
-     * current tracking window, so a pathological rescan logs once rather than
-     * once per file. Reset by {@see beginAdoptionTracking()}.
+     * Whether the candidate cap has already been reported for the current
+     * tracking window, so a pathological rescan logs once rather than once per
+     * file. Reset by {@see beginAdoptionTracking()}.
      */
     private bool $adoptionCapWarned = false;
 
     /**
+     * The same one-shot latch for the PROBE budget.
+     *
+     * Separate from {@see $adoptionCapWarned} because the two overflows have
+     * different consequences and an operator needs to be able to tell them
+     * apart: the candidate cap means rows were DELETED, the probe budget means
+     * rows were kept but may be MISDESCRIBED. Silence on the second one was a
+     * measured review finding — the row is adopted, keeps its old
+     * `source`/`duration` while pointing at a genuinely different file, and
+     * never self-repairs, so nothing downstream would ever surface it.
+     */
+    private bool $adoptionProbeCapWarned = false;
+
+    /**
      * Number of candidates in the current window that are carrying a probe
-     * summary, so {@see MAX_ADOPTION_PROBES} can be enforced without walking the
-     * map. Reset by {@see beginAdoptionTracking()}.
+     * summary, so the probe budget can be enforced without walking the map.
+     * Reset by {@see beginAdoptionTracking()}.
      */
     private int $adoptionProbesHeld = 0;
+
+    /**
+     * Effective ceiling on {@see $adoptionCandidates}; {@see MAX_ADOPTION_CANDIDATES}
+     * unless a caller injected a different one.
+     */
+    private int $maxAdoptionCandidates;
+
+    /**
+     * Effective probe-retention budget; {@see MAX_ADOPTION_PROBES} unless a
+     * caller injected a different one.
+     */
+    private int $maxAdoptionProbes;
 
     /**
      * Hard ceiling on {@see $adoptionCandidates} for ONE rescan pass.
@@ -321,6 +346,11 @@ class MediaScanner
      * generous because what is being protected here is row IDENTITY and the user
      * data cascading off it; a library-wide reorganisation is precisely the case
      * where losing rows to a stingy cap would be most damaging.
+     *
+     * DEFAULT only — the effective value is {@see $maxAdoptionCandidates}, which
+     * a caller may override via the constructor. That exists so the overflow
+     * branch is reachable from a test with a handful of files instead of twenty
+     * thousand; nothing in production passes it.
      */
     private const MAX_ADOPTION_CANDIDATES = 20000;
 
@@ -339,6 +369,9 @@ class MediaScanner
      * had, which is what the pre-review revision did for every adoption.
      *
      * Worst case with both limits: ~25 MB, transient, fully released.
+     *
+     * DEFAULT only — see {@see $maxAdoptionProbes} and the note on
+     * {@see MAX_ADOPTION_CANDIDATES} about why it is overridable.
      */
     private const MAX_ADOPTION_PROBES = 2000;
 
@@ -410,6 +443,19 @@ class MediaScanner
      *                           {@see shouldSkipFile()}. Null (legacy
      *                           construction) substitutes a store-less instance
      *                           = {@see ScanIgnorePatterns::DEFAULT_PATTERNS}.
+     * @param int|null $maxAdoptionCandidates S158: ceiling on the moved-file
+     *                           adoption window. Null (everything in production)
+     *                           uses {@see MAX_ADOPTION_CANDIDATES}. Exposed ONLY
+     *                           so the overflow branch is reachable from a test
+     *                           with a handful of files rather than twenty
+     *                           thousand — a test that shrank the constant
+     *                           instead would be testing a file it had rewritten.
+     *                           A negative value falls back to the default; 0 is
+     *                           honoured and means "never adopt".
+     * @param int|null $maxAdoptionProbes S158: how many of those candidates may
+     *                           retain their probe summary for the file-derived
+     *                           re-description. Same rationale, same null/negative
+     *                           handling; 0 means "adopt, but never re-describe".
      *
      * @since 0.14.0 TrailerFinder parameter added for extras detection
      * @since 0.35.0 SimilarityService parameter added for P4-S1
@@ -430,7 +476,9 @@ class MediaScanner
         ?CollectionService $collectionService = null,
         ?\Phlix\Media\MediaAsset\MediaAssetJobStore $mediaAssetJobStore = null,
         ?SimilarityJobStore $similarityJobStore = null,
-        ?ScanIgnorePatterns $ignorePatterns = null
+        ?ScanIgnorePatterns $ignorePatterns = null,
+        ?int $maxAdoptionCandidates = null,
+        ?int $maxAdoptionProbes = null
     ) {
         $this->db = $db;
         $this->itemRepository = $itemRepository;
@@ -454,6 +502,15 @@ class MediaScanner
         $this->collectionService = $collectionService;
         $this->mediaAssetJobStore = $mediaAssetJobStore;
         $this->similarityJobStore = $similarityJobStore;
+        // `>= 0`, not `> 0`: zero is a meaningful setting for both (never adopt /
+        // never re-describe) and is what makes the overflow branches reachable
+        // from a test. Only null or a negative falls back to the constant.
+        $this->maxAdoptionCandidates = ($maxAdoptionCandidates !== null && $maxAdoptionCandidates >= 0)
+            ? $maxAdoptionCandidates
+            : self::MAX_ADOPTION_CANDIDATES;
+        $this->maxAdoptionProbes = ($maxAdoptionProbes !== null && $maxAdoptionProbes >= 0)
+            ? $maxAdoptionProbes
+            : self::MAX_ADOPTION_PROBES;
     }
 
     /**
@@ -1690,6 +1747,7 @@ class MediaScanner
     {
         $this->adoptionCandidates = [];
         $this->adoptionCapWarned = false;
+        $this->adoptionProbeCapWarned = false;
         $this->adoptionProbesHeld = 0;
     }
 
@@ -1705,6 +1763,7 @@ class MediaScanner
     {
         $this->adoptionCandidates = null;
         $this->adoptionCapWarned = false;
+        $this->adoptionProbeCapWarned = false;
         $this->adoptionProbesHeld = 0;
     }
 
@@ -1955,12 +2014,12 @@ class MediaScanner
             return;
         }
 
-        if (count($this->adoptionCandidates) >= self::MAX_ADOPTION_CANDIDATES) {
+        if (count($this->adoptionCandidates) >= $this->maxAdoptionCandidates) {
             if (!$this->adoptionCapWarned) {
                 $this->adoptionCapWarned = true;
                 $this->logger->warning(
                     'Moved-file adoption candidate cap reached; further moved rows will be pruned as before',
-                    ['cap' => self::MAX_ADOPTION_CANDIDATES],
+                    ['cap' => $this->maxAdoptionCandidates],
                 );
             }
             return;
@@ -1971,8 +2030,25 @@ class MediaScanner
         // its own smaller budget, so a pathological mass move degrades to "moved
         // rows keep their old technical metadata" rather than "moved rows are
         // deleted".
-        if ($probe !== null && $this->adoptionProbesHeld >= self::MAX_ADOPTION_PROBES) {
+        //
+        // That degradation is QUIET unless it is announced: the row is adopted,
+        // keeps its old `source`/`duration` while pointing at a file that may be
+        // a different rip entirely, and never self-repairs
+        // ({@see backfillItemSourceMetadata()} returns 'skipped' once duration
+        // and source are populated). So it gets the same one-shot warning the
+        // candidate cap gets, with the consequence spelled out — the two
+        // overflows mean different things and an operator has to be able to tell
+        // which one happened.
+        if ($probe !== null && $this->adoptionProbesHeld >= $this->maxAdoptionProbes) {
             $probe = null;
+            if (!$this->adoptionProbeCapWarned) {
+                $this->adoptionProbeCapWarned = true;
+                $this->logger->warning(
+                    'Moved-file adoption probe budget reached; further moved rows keep their identity '
+                    . 'but their duration/source/streams will still describe the file they no longer point at',
+                    ['cap' => $this->maxAdoptionProbes],
+                );
+            }
         }
         if ($probe !== null) {
             $this->adoptionProbesHeld++;

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Phlix\Tests\Integration\Media\Library;
 
+use Phlix\Common\Logger\StructuredLogger;
 use Phlix\Media\Library\FolderWatcher;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Library\LibraryManager;
@@ -89,6 +90,9 @@ final class MovedTopLevelFileKeepsIdentityTest extends TestCase
     private string $userId = '';
 
     private string $profileId = '';
+
+    /** Set by {@see capturingLogger()}; read back by {@see logLines()}. */
+    private string $logFile = '';
 
     protected function setUp(): void
     {
@@ -581,6 +585,548 @@ final class MovedTopLevelFileKeepsIdentityTest extends TestCase
         $this->assertSame([1280, 720, 6], $this->fileDerivedState($originalId));
     }
 
+    /**
+     * The candidate cap: overflow rows behave exactly as they did before S158
+     * (the prune deletes them), and the operator is told ONCE.
+     *
+     * The cap is injected rather than reached honestly — twenty thousand moved
+     * files is not a test — and injected via the constructor rather than by
+     * rewriting the constant, because a test that edits the file it is testing
+     * is testing something else.
+     */
+    public function testTheCandidateCapIsAnnouncedOnceAndTheOverflowIsPrunedAsBefore(): void
+    {
+        $titles = ['Solaris (1972)', 'Stalker (1979)', 'Mirror (1975)'];
+        $from = [];
+        foreach ($titles as $title) {
+            $from[$title] = $this->writeFile('Movies/' . $title . '.mkv');
+        }
+        // Never moves, so the per-root presence guard is open and the prune
+        // really would delete every moved row.
+        $this->writeFile('Movies/Companion (2001).mkv');
+
+        $libraryId = $this->createLibrary('movie');
+        $logger = $this->capturingLogger();
+        $manager = $this->manager(null, $logger, 1);
+
+        $manager->rescanLibrary($libraryId);
+
+        $ids = [];
+        foreach ($titles as $title) {
+            $ids[$title] = $this->itemIdAtPath($libraryId, $from[$title]);
+            $this->assertNotSame('', $ids[$title]);
+            $this->recordUserData($ids[$title]);
+        }
+
+        foreach ($titles as $title) {
+            $this->movePath($from[$title], 'Archive/' . $title . '.mkv');
+        }
+
+        $result = $manager->rescanLibrary($libraryId);
+
+        $survivors = 0;
+        foreach ($ids as $id) {
+            $survivors += $this->countRowsWithId($id);
+        }
+        $this->assertSame(1, $survivors, 'exactly one row fits in a window of one');
+        $this->assertSame(
+            2,
+            $result->removed,
+            'the overflow is pruned exactly as it was before S158 — the cap trades rows for a memory '
+            . 'bound, and pretending otherwise would hide a real data loss',
+        );
+
+        $warnings = $this->logLines('Moved-file adoption candidate cap reached');
+        $this->assertCount(
+            1,
+            $warnings,
+            'the operator must be told, and told ONCE — a per-row warning on a library-wide '
+            . 'reorganisation is its own outage',
+        );
+        $this->assertStringContainsString('"cap":1', $warnings[0], 'the warning must name the cap it hit');
+    }
+
+    /**
+     * The probe budget: the row is still adopted — identity is never traded for
+     * memory — but it keeps describing the file it no longer points at, and that
+     * must not be silent.
+     *
+     * This was a review finding in its own right. The candidate cap logs; this
+     * one absorbed the degradation without a word, leaving an operator with a
+     * row whose `duration`/`source`/`media_streams` describe a different file and
+     * which never self-repairs, because `backfillItemSourceMetadata()` returns
+     * `'skipped'` the moment duration and source are populated.
+     */
+    public function testTheProbeBudgetIsAnnouncedOnceAndTheRowIsAdoptedButNotRedescribed(): void
+    {
+        $ffmpeg = new FfmpegRunner('/usr/bin/ffmpeg', '/usr/bin/ffprobe', sys_get_temp_dir());
+        if (!$ffmpeg->isAvailable()) {
+            self::markTestSkipped('ffmpeg/ffprobe not available; this case is about probe-derived state');
+        }
+
+        $small = $this->root . '/A/Blade Runner (1982).mp4';
+        $large = $this->root . '/B/Blade.Runner.1982.1080p.mp4';
+        $this->makeClip($small, 320, 240, 2);
+        $this->makeClip($this->root . '/A/Metropolis (1927).mp4', 160, 120, 1);
+
+        $libraryId = $this->createLibrary('movie');
+        $logger = $this->capturingLogger();
+        // Budget 0: every candidate is recorded, none keeps its probe.
+        $manager = $this->manager($ffmpeg, $logger, null, 0);
+
+        $manager->rescanLibrary($libraryId);
+        $originalId = $this->itemIdAtPath($libraryId, $small);
+        $this->assertNotSame('', $originalId);
+        $this->recordUserData($originalId);
+
+        $this->makeClip($large, 1280, 720, 6);
+        self::assertTrue(unlink($small));
+        clearstatcache(true);
+
+        $result = $manager->rescanLibrary($libraryId);
+
+        $this->assertSame(0, $result->removed, 'identity is never traded for memory: the row is still adopted');
+        $this->assertSame([$originalId], $this->idsAtPath($libraryId, $large));
+        $this->assertSame(1, $this->countUserData($originalId));
+        $this->assertSame(
+            [320, 240, 2],
+            $this->fileDerivedState($originalId),
+            'and this is the degradation the warning exists for: the row now points at the 1280x720 '
+            . 'copy while still describing the 320x240 one',
+        );
+
+        $warnings = $this->logLines('Moved-file adoption probe budget reached');
+        $this->assertCount(1, $warnings, 'announced, and announced once');
+        $this->assertStringContainsString('"cap":0', $warnings[0]);
+        $this->assertSame(
+            [],
+            $this->logLines('Moved-file adoption candidate cap reached'),
+            'the two overflows mean different things and must not be confused for one another',
+        );
+    }
+
+    /**
+     * A file that vanishes between the walk and the prune is not adopted into a
+     * path that is already gone again.
+     *
+     * Staged deterministically on `rescanLibrary()`'s progress sink, which fires
+     * once per processed file: acting on the LAST tick puts the deletion exactly
+     * in the window between the scan and the prune.
+     */
+    public function testAnAdoptionIsAbandonedWhenTheAdoptedFileVanishesBeforeThePrune(): void
+    {
+        $from = $this->writeFile('Movies/Solaris (1972).mkv');
+        $this->writeFile('Movies/Companion (2001).mkv');
+
+        $libraryId = $this->createLibrary('movie');
+        $manager = $this->manager();
+        $manager->rescanLibrary($libraryId);
+
+        $originalId = $this->itemIdAtPath($libraryId, $from);
+        $this->assertNotSame('', $originalId);
+
+        $to = $this->movePath($from, 'Archive/Solaris (1972).mkv');
+
+        $result = $manager->rescanLibrary($libraryId, [], $this->onLastFile(static function () use ($to): void {
+            unlink($to);
+            clearstatcache(true);
+        }));
+
+        $this->assertSame(1, $result->removed, 'the file really is gone now, so the row is pruned');
+        $this->assertSame(0, $this->countRowsWithId($originalId));
+    }
+
+    /**
+     * A concurrent worker that indexed the new path first: the adoption UPDATE
+     * hits the `(library_id, path_hash)` unique index.
+     *
+     * The requirement is not that this never happens — it is that it degrades to
+     * the pre-S158 outcome instead of becoming a new failure mode: the row is
+     * pruned as it always was, the connection is not poisoned, and the library
+     * settles on the next rescan.
+     */
+    public function testACompetingRowAtTheNewPathDegradesToThePreS158Outcome(): void
+    {
+        $from = $this->writeFile('Movies/Solaris (1972).mkv');
+        $this->writeFile('Movies/Companion (2001).mkv');
+
+        $libraryId = $this->createLibrary('movie');
+        $logger = $this->capturingLogger();
+        $manager = $this->manager(null, $logger);
+        $manager->rescanLibrary($libraryId);
+
+        $originalId = $this->itemIdAtPath($libraryId, $from);
+        $this->assertNotSame('', $originalId);
+
+        $to = $this->movePath($from, 'Archive/Solaris (1972).mkv');
+        $racerId = $this->uuid();
+
+        $db = $this->db();
+        $result = $manager->rescanLibrary($libraryId, [], $this->onLastFile(
+            function () use ($db, $libraryId, $racerId, $to): void {
+                $db->query(
+                    'INSERT INTO media_items (id, library_id, name, type, path) VALUES (?, ?, ?, ?, ?)',
+                    [$racerId, $libraryId, 'Solaris', 'movie', $to],
+                );
+            },
+        ));
+
+        $this->assertSame(1, $result->removed, 'unchanged from master: the row the other worker replaced is pruned');
+        $this->assertSame(0, $this->countRowsWithId($originalId));
+        $this->assertCount(
+            1,
+            $this->logLines('Could not re-point a moved top-level item at its new path'),
+            'the collision must be reported, not swallowed',
+        );
+
+        $probe = $db->query('SELECT 1 AS ok');
+        $this->assertIsArray($probe, 'a caught 1062 must not poison the connection for everything after it');
+
+        $settled = $manager->rescanLibrary($libraryId);
+        $this->assertSame(0, $settled->removed, 'and the library settles');
+        $this->assertSame(0, $settled->added);
+        $this->assertSame([$racerId], $this->idsAtPath($libraryId, $to));
+    }
+
+    /**
+     * The row cannot be re-read at adoption time — it is left to the prune.
+     *
+     * Two shapes, because they are different facts: the lookup THROWS (reported),
+     * and the row is simply GONE (nothing to report — something else already
+     * deleted it, and the prune's own DELETE is then a no-op).
+     *
+     * The database stays real; only `findById()` misbehaves.
+     */
+    public function testAnAdoptionIsAbandonedWhenTheRowCannotBeReRead(): void
+    {
+        foreach (['throws', 'missing'] as $mode) {
+            $from = $this->writeFile("$mode/Movies/Solaris (1972).mkv");
+            $this->writeFile("$mode/Movies/Companion (2001).mkv");
+
+            $libraryId = $this->createLibrary('movie', [$this->root . '/' . $mode]);
+            $logger = $this->capturingLogger();
+            $repository = $mode === 'throws'
+                ? new class ($this->db()) extends ItemRepository {
+                    public function findById(string $id): ?array
+                    {
+                        throw new \RuntimeException('re-read failed');
+                    }
+                }
+                : new class ($this->db()) extends ItemRepository {
+                    public function findById(string $id): ?array
+                    {
+                        return null;
+                    }
+                };
+            $manager = $this->manager(null, $logger, null, null, $repository);
+
+            $manager->rescanLibrary($libraryId);
+            $originalId = $this->itemIdAtPath($libraryId, $from);
+            $this->assertNotSame('', $originalId, "[$mode] the film must be indexed first");
+
+            $this->movePath($from, "$mode/Archive/Solaris (1972).mkv");
+            $result = $manager->rescanLibrary($libraryId);
+
+            $this->assertSame(1, $result->removed, "[$mode] the adoption is abandoned, so the prune proceeds");
+            $this->assertSame(0, $this->countRowsWithId($originalId), "[$mode] row pruned");
+            $this->assertCount(
+                $mode === 'throws' ? 1 : 0,
+                $this->logLines('Could not re-read a top-level item that was about to be adopted'),
+                "[$mode] a throw is reported; an already-deleted row is not an incident",
+            );
+        }
+    }
+
+    /**
+     * The stream replacement fails during an adoption.
+     *
+     * The path write must NOT be held hostage to it — that write is what saves
+     * the row from deletion. So the row keeps its identity and its new path, the
+     * previous `media_streams` are left intact rather than half-written, and the
+     * failure is reported.
+     */
+    public function testAnAdoptedRowKeepsItsPreviousStreamsWhenTheReplacementFails(): void
+    {
+        $ffmpeg = new FfmpegRunner('/usr/bin/ffmpeg', '/usr/bin/ffprobe', sys_get_temp_dir());
+        if (!$ffmpeg->isAvailable()) {
+            self::markTestSkipped('ffmpeg/ffprobe not available; this case is about probe-derived state');
+        }
+
+        $small = $this->root . '/A/Blade Runner (1982).mp4';
+        $large = $this->root . '/B/Blade.Runner.1982.1080p.mp4';
+        $this->makeClip($small, 320, 240, 2);
+        $this->makeClip($this->root . '/A/Metropolis (1927).mp4', 160, 120, 1);
+
+        $libraryId = $this->createLibrary('movie');
+        $logger = $this->capturingLogger();
+        // Fails ONLY the stream replacement, and only once the item already
+        // exists — so the first scan writes a real stream set to leave behind.
+        $repository = new class ($this->db()) extends ItemRepository {
+            public bool $failStreams = false;
+
+            /** @param list<array<string, mixed>> $streams */
+            public function replaceStreams(string $itemId, array $streams): void
+            {
+                if ($this->failStreams) {
+                    throw new \RuntimeException('stream replacement failed');
+                }
+                parent::replaceStreams($itemId, $streams);
+            }
+        };
+        $manager = $this->manager($ffmpeg, $logger, null, null, $repository);
+
+        $manager->rescanLibrary($libraryId);
+        $originalId = $this->itemIdAtPath($libraryId, $small);
+        $this->assertNotSame('', $originalId);
+        $this->assertSame([320, 240, 2], $this->fileDerivedState($originalId));
+
+        $this->makeClip($large, 1280, 720, 6);
+        self::assertTrue(unlink($small));
+        clearstatcache(true);
+        $repository->failStreams = true;
+
+        $result = $manager->rescanLibrary($libraryId);
+
+        $this->assertSame(0, $result->removed, 'the row is still saved: the path write does not depend on streams');
+        $this->assertSame([$originalId], $this->idsAtPath($libraryId, $large));
+        $this->assertCount(
+            1,
+            $this->logLines('Adopted item kept its previous media_streams'),
+            'a stream set left describing the wrong file must be reported',
+        );
+
+        $streams = $this->db()->query(
+            'SELECT width, height FROM media_streams WHERE media_item_id = ? AND stream_type = ?',
+            [$originalId, 'video'],
+        );
+        $this->assertIsArray($streams);
+        $this->assertCount(
+            1,
+            $streams,
+            'the PREVIOUS stream row must survive intact — a half-written or empty set would strand the '
+            . 'item, because persistStreams() only stamps streams_probed_at on success',
+        );
+        $this->assertSame(320, (int) $streams[0]['width']);
+    }
+
+    /**
+     * An exception mid-scan must still close the adoption window.
+     *
+     * Asserted behaviourally rather than by reflection: if the `finally` did not
+     * run, the candidate would still be sitting in the map and the NEXT
+     * standalone `pruneLibrary()` — an op that never scans and must therefore
+     * never adopt — would silently re-point the row instead of deleting it.
+     */
+    public function testTheAdoptionWindowIsClosedWhenTheScanThrows(): void
+    {
+        $from = $this->writeFile('Movies/Solaris (1972).mkv');
+        $this->writeFile('Movies/Companion (2001).mkv');
+
+        $libraryId = $this->createLibrary('movie');
+        $manager = $this->manager();
+        $manager->rescanLibrary($libraryId);
+
+        $originalId = $this->itemIdAtPath($libraryId, $from);
+        $this->assertNotSame('', $originalId);
+
+        $this->movePath($from, 'Archive/Solaris (1972).mkv');
+
+        $thrown = null;
+        try {
+            $manager->rescanLibrary($libraryId, [], $this->onLastFile(static function (): void {
+                throw new \RuntimeException('boom mid-scan');
+            }));
+        } catch (\Throwable $e) {
+            $thrown = $e;
+        }
+        $this->assertInstanceOf(\RuntimeException::class, $thrown, 'the scenario depends on the scan aborting');
+        $this->assertSame(
+            1,
+            $this->countRowsWithId($originalId),
+            'the aborted rescan never reached its prune, so nothing was deleted',
+        );
+
+        $pruned = $manager->pruneLibrary($libraryId);
+
+        $this->assertSame(
+            1,
+            $pruned,
+            'the standalone prune op does not scan, so it has no candidates and must behave exactly as '
+            . 'it did on master. Adopting here would mean a candidate leaked out of the aborted rescan',
+        );
+        $this->assertSame(0, $this->countRowsWithId($originalId));
+    }
+
+    /**
+     * Two files canonically matching ONE row in a single walk.
+     *
+     * Only the first recorded candidate is kept, so the outcome cannot depend on
+     * which write landed last. The assertions deliberately do NOT say which of
+     * the two wins — that is `readdir` order, and pinning it would be the very
+     * assumption that turned CI red once already. What must hold either way: one
+     * row, still the original, adopted onto one of the two real files.
+     */
+    public function testTwoFilesMatchingOneRowStillProduceExactlyOneAdoptedRow(): void
+    {
+        $from = $this->writeFile('Movies/Solaris (1972).mkv');
+        $this->writeFile('Movies/Companion (2001).mkv');
+
+        $libraryId = $this->createLibrary('movie');
+        $manager = $this->manager();
+        $manager->rescanLibrary($libraryId);
+
+        $originalId = $this->itemIdAtPath($libraryId, $from);
+        $this->assertNotSame('', $originalId);
+        $this->recordUserData($originalId);
+
+        // The one indexed copy disappears and TWO candidates for it appear.
+        self::assertTrue(unlink($from));
+        $a = $this->writeFile('Archive/Solaris (1972).mkv');
+        $b = $this->writeFile('Backup/Solaris.1972.mkv');
+        clearstatcache(true);
+
+        $result = $manager->rescanLibrary($libraryId);
+
+        $this->assertSame(0, $result->removed);
+        $this->assertSame(1, $this->countRowsWithId($originalId), 'the row survives');
+        $this->assertSame(1, $this->countUserData($originalId));
+        $this->assertContains(
+            $this->pathOf($originalId),
+            [$a, $b],
+            'and it points at one of the two real files',
+        );
+        $this->assertSame(
+            2,
+            $this->countItems($libraryId),
+            'two candidates must not fork a second top-level row for the same film',
+        );
+    }
+
+    /**
+     * A plain move of a probed file must NOT rewrite `metadata_json`.
+     *
+     * The adopted file IS the file the row was created from, so there is nothing
+     * to re-derive — and each needless `metadata_json` write flushes the whole
+     * genre-facet cache and re-syncs the join rows, which on a library-wide move
+     * is thousands of flushes for nothing. The decision has no other observable,
+     * so it is read off the record the adoption itself emits.
+     */
+    public function testAPlainMoveOfAProbedFileIsAdoptedWithoutRedescribingIt(): void
+    {
+        $ffmpeg = new FfmpegRunner('/usr/bin/ffmpeg', '/usr/bin/ffprobe', sys_get_temp_dir());
+        if (!$ffmpeg->isAvailable()) {
+            self::markTestSkipped('ffmpeg/ffprobe not available; this case is about probe-derived state');
+        }
+
+        $from = $this->root . '/Movies/Solaris (1972).mp4';
+        $this->makeClip($from, 320, 240, 2);
+        $this->makeClip($this->root . '/Movies/Companion (2001).mp4', 160, 120, 1);
+
+        $libraryId = $this->createLibrary('movie');
+        $logger = $this->capturingLogger('info');
+        $manager = $this->manager($ffmpeg, $logger);
+        $manager->rescanLibrary($libraryId);
+
+        $originalId = $this->itemIdAtPath($libraryId, $from);
+        $this->assertNotSame('', $originalId);
+
+        $to = $this->movePath($from, 'Archive/Solaris (1972).mp4');
+        $result = $manager->rescanLibrary($libraryId);
+
+        $this->assertSame(0, $result->removed);
+        $this->assertSame([$originalId], $this->idsAtPath($libraryId, $to));
+        $this->assertSame([320, 240, 2], $this->fileDerivedState($originalId), 'the description was already right');
+
+        $adoptions = $this->logLines('Top-level item followed its file to a new path');
+        $this->assertCount(1, $adoptions);
+        $this->assertStringContainsString(
+            '"source_redescribed":false',
+            $adoptions[0],
+            'the probe describes the same file the row already described, so nothing may be rewritten',
+        );
+    }
+
+    /**
+     * The two remaining `probeContradictsItem()` shapes, which the headline F2
+     * case does not reach because it differs in resolution and so returns on the
+     * FIRST comparison.
+     *
+     * (a) the row has NO recorded `source` at all — a row indexed before ffprobe
+     *     was wired — and must be described for the first time;
+     * (b) the `source` matches exactly but the recorded DURATION does not, which
+     *     is the state of a row whose duration came from the parsed filename
+     *     rather than from a probe (`processFile()` never overwrites a duration
+     *     the metadata already carried).
+     */
+    public function testAnAdoptionRedescribesARowWithNoSourceAndOneWithOnlyAWrongDuration(): void
+    {
+        $ffmpeg = new FfmpegRunner('/usr/bin/ffmpeg', '/usr/bin/ffprobe', sys_get_temp_dir());
+        if (!$ffmpeg->isAvailable()) {
+            self::markTestSkipped('ffmpeg/ffprobe not available; this case is about probe-derived state');
+        }
+
+        // ── (a) indexed with NO probe runner at all, then adopted with one ──
+        $from = $this->root . '/a/Movies/Solaris (1972).mp4';
+        $this->makeClip($from, 320, 240, 2);
+        $this->makeClip($this->root . '/a/Movies/Companion (2001).mp4', 160, 120, 1);
+
+        $libraryA = $this->createLibrary('movie', [$this->root . '/a']);
+        $this->manager()->rescanLibrary($libraryA);      // no ffmpeg: no source, no duration
+        $idA = $this->itemIdAtPath($libraryA, $from);
+        $this->assertNotSame('', $idA);
+        $metaA = $this->metadataOf($idA);
+        $this->assertArrayNotHasKey('source', $metaA, 'a scan with no probe runner leaves the row undescribed');
+
+        $toA = $this->movePath($from, 'a/Archive/Solaris (1972).mp4');
+        $this->manager($ffmpeg)->rescanLibrary($libraryA);
+
+        $this->assertSame([$idA], $this->idsAtPath($libraryA, $toA));
+        $this->assertSame(
+            [320, 240, 2],
+            $this->fileDerivedState($idA),
+            'a row with no recorded source is always contradicted, so the adoption describes it for the '
+            . 'first time rather than leaving it blank forever',
+        );
+
+        // ── (b) source identical (a byte-for-byte copy), duration wrong ──
+        $original = $this->root . '/b/Movies/Stalker (1979).mp4';
+        $this->makeClip($original, 320, 240, 2);
+        $this->makeClip($this->root . '/b/Movies/Companion (2002).mp4', 160, 120, 1);
+
+        $libraryB = $this->createLibrary('movie', [$this->root . '/b']);
+        $managerB = $this->manager($ffmpeg);
+        $managerB->rescanLibrary($libraryB);
+        $idB = $this->itemIdAtPath($libraryB, $original);
+        $this->assertNotSame('', $idB);
+
+        // A byte-identical copy under a differently-slugging name: same canonical
+        // key, and a probe that agrees with the row's `source` in every field.
+        $copy = $this->root . '/b/Backup/Stalker.1979.mp4';
+        mkdir(dirname($copy), 0775, true);
+        self::assertTrue(copy($original, $copy));
+
+        // Put the row in the state a filename-derived duration leaves it in.
+        $meta = $this->metadataOf($idB);
+        $meta['duration_seconds'] = 999;
+        $this->db()->query(
+            'UPDATE media_items SET metadata_json = ? WHERE id = ?',
+            [(string) json_encode($meta), $idB],
+        );
+        self::assertTrue(unlink($original));
+        clearstatcache(true);
+
+        $resultB = $managerB->rescanLibrary($libraryB);
+
+        $this->assertSame(0, $resultB->removed);
+        $this->assertSame([$idB], $this->idsAtPath($libraryB, $copy));
+        $this->assertSame(
+            [320, 240, 2],
+            $this->fileDerivedState($idB),
+            'the source matched on every field, so only the duration comparison could have caught this — '
+            . 'and 999 seconds is a scrubber that lies about the whole film',
+        );
+    }
+
     // ── helpers ──────────────────────────────────────────────────────────────
 
     private function db(): Connection
@@ -595,13 +1141,43 @@ final class MovedTopLevelFileKeepsIdentityTest extends TestCase
     /**
      * A real scanner + a real manager over the real connection — no doubles.
      *
-     * @param FfmpegRunner|null $ffmpeg Wire a probe runner only for the case that
-     *        is about probe-derived state; the others must not pay for ffprobe.
+     * @param FfmpegRunner|null       $ffmpeg Wire a probe runner only for the cases
+     *        that are about probe-derived state; the others must not pay for ffprobe.
+     * @param StructuredLogger|null   $logger Capturing logger, for the cases whose
+     *        subject IS the log line (an overflow an operator must be told about,
+     *        or the `source_redescribed` decision, which has no other observable).
+     * @param int|null $maxAdoptionCandidates Shrink the adoption window so its
+     *        overflow branch is reachable with a handful of files.
+     * @param int|null $maxAdoptionProbes Shrink the probe budget, likewise.
+     * @param ItemRepository|null $itemRepository Substitute a repository that
+     *        fails a specific write, to reach the guarded failure branches. The
+     *        DATABASE stays real — only the one method under study misbehaves.
      */
-    private function manager(?FfmpegRunner $ffmpeg = null): LibraryManager
-    {
-        $itemRepository = new ItemRepository($this->db());
-        $scanner = new MediaScanner($this->db(), $itemRepository, null, null, null, $ffmpeg);
+    private function manager(
+        ?FfmpegRunner $ffmpeg = null,
+        ?StructuredLogger $logger = null,
+        ?int $maxAdoptionCandidates = null,
+        ?int $maxAdoptionProbes = null,
+        ?ItemRepository $itemRepository = null,
+    ): LibraryManager {
+        $itemRepository ??= new ItemRepository($this->db());
+        $scanner = new MediaScanner(
+            $this->db(),
+            $itemRepository,
+            $logger,
+            null,
+            null,
+            $ffmpeg,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            $maxAdoptionCandidates,
+            $maxAdoptionProbes,
+        );
 
         return new LibraryManager(
             $this->db(),
@@ -609,9 +1185,44 @@ final class MovedTopLevelFileKeepsIdentityTest extends TestCase
             new FolderWatcher(),
             // Only ever consulted for `music` libraries, which this test has none of.
             new MusicLibraryService($this->db(), new MusicLibraryScanner($this->db(), new FfmpegRunner())),
-            null,
+            $logger,
             $itemRepository,
         );
+    }
+
+    /**
+     * A logger that writes to a file this test can read back.
+     *
+     * Several branches below have NO other observable: an overflow that is
+     * silently absorbed, or the `source_redescribed` decision inside an
+     * otherwise-identical adoption. Asserting on the record is the only way to
+     * show which branch ran — and "the operator is told" is itself the
+     * requirement for the two cap overflows.
+     */
+    private function capturingLogger(string $level = 'warning'): StructuredLogger
+    {
+        if (!is_dir($this->root)) {
+            mkdir($this->root, 0775, true);
+        }
+        $this->logFile = $this->root . '/phlix-' . bin2hex(random_bytes(4)) . '.log';
+
+        return new StructuredLogger('media', [
+            'handlers' => [['type' => 'stream', 'path' => $this->logFile, 'level' => $level]],
+        ]);
+    }
+
+    /** @return list<string> Captured log lines containing `$needle`. */
+    private function logLines(string $needle): array
+    {
+        if ($this->logFile === '' || !is_file($this->logFile)) {
+            return [];
+        }
+        $lines = file($this->logFile, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+        if ($lines === false) {
+            return [];
+        }
+
+        return array_values(array_filter($lines, static fn(string $l): bool => str_contains($l, $needle)));
     }
 
     /**
@@ -684,6 +1295,39 @@ final class MovedTopLevelFileKeepsIdentityTest extends TestCase
             (int) $source['height'],
             (int) ($decoded['duration_seconds'] ?? 0),
         ];
+    }
+
+    /**
+     * A `rescanLibrary()` progress sink that runs `$action` exactly once, on the
+     * LAST processed file.
+     *
+     * That tick is the deterministic way to act in the window BETWEEN the scan
+     * and the prune — which is where a racing worker lands, and the only place
+     * several of the adoption failure branches are reachable from. Deliberately
+     * not a race: a race would be one runner away from proving nothing.
+     */
+    private function onLastFile(callable $action): callable
+    {
+        $fired = false;
+
+        return static function (int $processed, int $total) use ($action, &$fired): void {
+            if ($fired || $processed < $total) {
+                return;
+            }
+            $fired = true;
+            $action();
+        };
+    }
+
+    /** @return array<string, mixed> The row's decoded `metadata_json`. */
+    private function metadataOf(string $itemId): array
+    {
+        $rows = $this->db()->query('SELECT metadata_json FROM media_items WHERE id = ?', [$itemId]);
+        self::assertIsArray($rows);
+        self::assertCount(1, $rows);
+        $decoded = json_decode((string) $rows[0]['metadata_json'], true);
+
+        return is_array($decoded) ? $decoded : [];
     }
 
     private function pathOf(string $itemId): string

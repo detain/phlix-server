@@ -74,6 +74,17 @@ final class SampleThemePluginTest extends TestCase
      * — see `PluginLoader::enable()`), so the file is required by path here.
      * That require is itself an assertion: a syntax error or a renamed class in
      * the shipped sample turns this whole test class red.
+     *
+     * The unconditional `require_once` is deliberate and is only safe because
+     * {@see \Phlix\Tests\Integration\Plugins\SampleThemeLifecycleTest} — the
+     * only other place that brings this class name into a PHP process, from an
+     * INSTALLED COPY under a temp dir — is `#[RunInSeparateProcess]`. Include
+     * guards key on the resolved file path, so without that isolation a
+     * full-suite run under `executionOrder="random"` aborts here with
+     * "Cannot declare class ... because the name is already in use". Do not
+     * "fix" a recurrence by wrapping this in `class_exists()`: that would
+     * silently stop loading the shipped file in half the orderings, which is
+     * precisely the proof this method exists to provide.
      */
     private function samplePlugin(): object
     {
@@ -81,6 +92,14 @@ final class SampleThemePluginTest extends TestCase
 
         $fqcn = $this->manifest()->entry;
         self::assertTrue(class_exists($fqcn), "Manifest entry class {$fqcn} must exist.");
+
+        // ...and it must be the SHIPPED file that satisfied it, not a copy some
+        // other test left declared in this process. See the note above.
+        self::assertSame(
+            realpath(self::PLUGIN_DIR . '/src/SampleThemePlugin.php'),
+            (new \ReflectionClass($fqcn))->getFileName(),
+            "Manifest entry class {$fqcn} was declared from somewhere other than the shipped sample plugin.",
+        );
 
         /** @var object $instance */
         $instance = new $fqcn();

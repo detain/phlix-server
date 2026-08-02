@@ -14,6 +14,8 @@ use Phlix\Plugins\Util\RecursiveDelete;
 use Phlix\Server\Http\Controllers\ThemesController;
 use Phlix\Server\Http\Request;
 use Phlix\Theming\ThemeSourceRegistry;
+use PHPUnit\Framework\Attributes\PreserveGlobalState;
+use PHPUnit\Framework\Attributes\RunInSeparateProcess;
 use PHPUnit\Framework\TestCase;
 use Workerman\MySQL\Connection;
 
@@ -43,6 +45,27 @@ require_once __DIR__ . '/InstallEnableDisableTest.php';
  *
  * Only the `plugins` TABLE is faked (in memory), so no live MySQL is needed;
  * that is the same compromise `InstallEnableDisableTest` makes.
+ *
+ * ## Why the test method is PROCESS-ISOLATED
+ *
+ * This test and `Phlix\Tests\Unit\Plugins\SampleThemePluginTest` both bring the
+ * class `Phlix\PluginSampleTheme\SampleThemePlugin` into the process, but from
+ * two DIFFERENT files: the unit test from the shipped
+ * `examples/plugins/phlix-plugin-sample-theme/src/`, this one from the COPY the
+ * installer wrote under a temp `plugins_base_dir`, via that copy's
+ * composer-generated `vendor/autoload.php`. PHP's include guards key on the
+ * resolved file PATH, so the second of the two to load fatals with
+ * "Cannot declare class ... because the name is already in use" — and
+ * `phpunit.xml` sets `executionOrder="random"`, so which one is second is not
+ * fixed. (It only bites in a full-suite run; either suite alone loads it once.)
+ *
+ * Isolating this method is what keeps BOTH tests at full strength. Without it
+ * the only non-fatal orderings are ones where the class is already declared
+ * when the second test reaches it, and `class_exists()` then short-circuits —
+ * so exactly one of the two loads would be silently skipped, at random. In its
+ * own process this test really does exercise the installed copy's generated
+ * autoloader every run, and the unit test really does load the shipped file
+ * every run.
  */
 final class SampleThemeLifecycleTest extends TestCase
 {
@@ -87,6 +110,8 @@ final class SampleThemeLifecycleTest extends TestCase
     /**
      * @group integration
      */
+    #[RunInSeparateProcess]
+    #[PreserveGlobalState(false)]
     public function test_sample_theme_plugin_reaches_the_themes_endpoint_and_leaves_cleanly(): void
     {
         if (trim((string) shell_exec('which composer 2>/dev/null')) === '') {
@@ -119,6 +144,24 @@ final class SampleThemeLifecycleTest extends TestCase
         $loader->enable('phlix-plugin-sample-theme');
         $this->assertSame(self::SAMPLE_IDS, $registry->ids());
         $this->assertSame(['sample-theme'], $registry->sourceNames());
+
+        // The entry class must have come from the INSTALLED COPY's generated
+        // autoloader, not from the shipped `examples/` tree. This is the
+        // assertion that keeps #[RunInSeparateProcess] honest: drop the
+        // attribute and, in the orderings where the unit test ran first, the
+        // class is already declared from `examples/` and PluginLoader's
+        // `class_exists()` short-circuits — this test would then be silently
+        // exercising nothing of the install. Here that becomes a loud red
+        // instead of an invisible downgrade (or, in the other ordering, a
+        // whole-suite "cannot declare class" abort).
+        $entryFile = (new \ReflectionClass($manifest->entry))->getFileName();
+        $this->assertIsString($entryFile);
+        $this->assertStringStartsWith(
+            $this->pluginsBaseDir . '/phlix-plugin-sample-theme/',
+            $entryFile,
+            'The entry class was loaded from outside the installed copy — process isolation is not in effect, '
+            . 'so this test is no longer proving that the installed plugin autoloads.',
+        );
 
         // 3. The endpoint the SPA reads now serves them, behind the built-ins.
         $listed = $this->listedThemeIds($container);

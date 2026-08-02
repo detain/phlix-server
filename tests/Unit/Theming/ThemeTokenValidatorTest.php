@@ -156,7 +156,15 @@ final class ThemeTokenValidatorTest extends TestCase
         yield 'backslash newline splice'    => ["#ff\\\nf"];
         yield 'NUL in the middle'           => ["#f\x00ff"];
         yield 'non-ascii bytes'             => ["\xff\xfe#fff"];
-        yield 'over-long value'             => ['#' . str_repeat('a', 200)];
+        yield 'over-long malformed value'   => ['#' . str_repeat('a', 200)];
+        // Grammar-VALID but over the length cap: only MAX_VALUE_LENGTH can
+        // refuse this one, so it is what pins the cap.
+        yield 'over-long but valid shape'   => ['rgb(' . str_repeat('0', 200) . ',0,0)'];
+        // Only the literal-space separator (rather than \s) refuses these:
+        // an accepted value must never be able to carry a newline or tab.
+        yield 'newline between arguments'   => ["rgba(1,\n2, 3, 0.5)"];
+        yield 'tab between arguments'       => ["rgba(1,\t2, 3, 0.5)"];
+        yield 'newline after open paren'    => ["rgb(\n0, 0, 0)"];
         yield 'empty value'                 => [''];
         yield 'whitespace-only value'       => ['   '];
         yield 'bare keyword red'            => ['red'];

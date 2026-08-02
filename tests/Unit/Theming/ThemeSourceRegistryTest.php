@@ -262,16 +262,29 @@ final class ThemeSourceRegistryTest extends TestCase
         );
     }
 
+    /**
+     * Each link in the chain contributes ONE distinct token, so the number of
+     * resolved keys is exactly the number of links walked. That makes the depth
+     * cap directly observable: raise it or lower it and this goes red.
+     */
     public function testResolveTokensIsBoundedByMaxExtendsDepth(): void
     {
         $registry = new ThemeSourceRegistry();
 
+        // 12 distinct allowlisted tokens, one per link — more links than the cap.
+        $perLink = [
+            '--bg', '--surface', '--surface-2', '--surface-3',
+            '--text', '--text-muted', '--text-subtle', '--text-faint',
+            '--border', '--border-subtle', '--border-strong', '--accent',
+        ];
+        $links = count($perLink);
+        $this->assertGreaterThan(ThemeSourceRegistry::MAX_EXTENDS_DEPTH, $links, 'the chain must overrun the cap');
+
         $themes = [];
-        $links = ThemeSourceRegistry::MAX_EXTENDS_DEPTH + 4;
         for ($i = 0; $i < $links; $i++) {
             $themes[] = $this->theme(
                 'acme-' . $i,
-                ['--surface-' . (($i % 2) + 2) => '#00000' . ($i % 10)],
+                [$perLink[$i] => '#00000' . ($i % 10)],
                 $i + 1 < $links ? 'acme-' . ($i + 1) : null,
             );
         }
@@ -279,8 +292,14 @@ final class ThemeSourceRegistryTest extends TestCase
 
         $resolved = $registry->resolveTokens('acme-0');
 
-        $this->assertLessThanOrEqual(2, count($resolved), 'only two distinct keys are used in the chain');
-        $this->assertSame('#000000', $resolved['--surface-2'], 'the nearest link still wins');
+        $this->assertCount(
+            ThemeSourceRegistry::MAX_EXTENDS_DEPTH,
+            $resolved,
+            'exactly MAX_EXTENDS_DEPTH links may be walked',
+        );
+        $this->assertSame('#000000', $resolved['--bg'], 'the nearest link still wins');
+        $this->assertArrayHasKey('--text-faint', $resolved, 'the 8th link is inside the cap');
+        $this->assertArrayNotHasKey('--border', $resolved, 'the 9th link is beyond the cap');
     }
 
     public function testResolveTokensOnAnUnknownIdIsEmpty(): void

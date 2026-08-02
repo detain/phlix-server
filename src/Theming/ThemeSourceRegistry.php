@@ -238,8 +238,16 @@ final class ThemeSourceRegistry
      * that is NOT registered here (e.g. one of the SPA's built-in ids) simply
      * ends the walk — the caller layers the result over that built-in itself.
      *
-     * Cycle-safe by construction: a visited set stops a `a → b → a` chain, and
+     * Cycle-safe by construction: a visited set stops an `a → b → a` chain, and
      * {@see MAX_EXTENDS_DEPTH} bounds the walk regardless.
+     *
+     * ⚠ Those two guards are redundant **with respect to the returned map**, and
+     * the S84 mutation run proved it: deleting the visited set leaves every test
+     * green, because the depth cap still terminates the walk and the requested
+     * theme is merged last either way. The visited set is kept for the work it
+     * saves and because it is the natural terminator for a cycle; do not read it
+     * as a covered invariant. The depth cap IS pinned — in both directions — by
+     * `ThemeSourceRegistryTest::testResolveTokensIsBoundedByMaxExtendsDepth()`.
      *
      * @param string $id Theme id to resolve.
      * @return array<string, string> Flattened token map; empty when the id is

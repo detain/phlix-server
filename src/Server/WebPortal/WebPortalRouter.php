@@ -46,6 +46,7 @@ use Phlix\Media\Streaming\ClientCapabilities;
 use Phlix\Server\Http\Controllers\MediaUserDataController;
 use Phlix\Server\Http\Controllers\MediaPosterController;
 use Phlix\Server\Http\Controllers\MediaRatingsController;
+use Phlix\Server\Http\Controllers\ThemesController;
 use Phlix\Server\Http\Controllers\TranscodeController;
 use Phlix\Server\Http\Controllers\UserAvatarController;
 use Phlix\Media\Storage\AvatarStorage;
@@ -119,6 +120,13 @@ class WebPortalRouter
     private ?TranscodeController $transcodeController;
 
     /**
+     * @var ThemesController|null Serves the S85 theme catalogue (built-in +
+     *      plugin-registered token maps); null when not wired, in which case
+     *      the two routes answer 503 rather than a misleadingly empty list.
+     */
+    private ?ThemesController $themesController;
+
+    /**
      * Admin settings store, used for the server-wide defaults applied to users
      * who have never saved their own preferences. Null in contexts that cannot
      * supply one, in which case the hardcoded fallbacks stand.
@@ -171,6 +179,8 @@ class WebPortalRouter
      *        when null the history endpoints respond 503 instead of faking success)
      * @param UserProfileManager|null $profileManager Resolves user profiles (optional;
      *        when null the history endpoints respond 503 instead of faking success)
+     * @param ThemesController|null $themesController Serves the S85 theme catalogue (optional;
+     *        when null the two theme endpoints respond 503 instead of an empty catalogue)
      * @param UserItemDataRepository|null $userItemData Per-user favorites/ratings (optional)
      * @param MediaUserDataController|null $mediaUserDataController Favorite/rating routes (optional)
      * @param AuditLogger|null $auditLogger Security-event logger for admin operations (optional)
@@ -218,7 +228,8 @@ class WebPortalRouter
         ?CollectionService $collectionService = null,
         ?MusicLibraryService $musicLibraryService = null,
         ?StreamProbeBackfill $streamBackfill = null,
-        ?\Phlix\Admin\SettingsRepository $settings = null
+        ?\Phlix\Admin\SettingsRepository $settings = null,
+        ?ThemesController $themesController = null
     ) {
         // SessionManager and AuthManager are accepted for future middleware wiring
         // but not stored — see WebPortalRouter routes for authenticated endpoints.
@@ -240,6 +251,7 @@ class WebPortalRouter
         $this->userAvatarController = $userAvatarController;
         $this->mediaRatingsController = $mediaRatingsController;
         $this->transcodeController = $transcodeController;
+        $this->themesController = $themesController;
         $this->settings = $settings;
         $this->similarityService = $similarityService;
         $this->recommendationService = $recommendationService;
@@ -362,6 +374,23 @@ class WebPortalRouter
 
             // P4-S3: TMDB box-set collection with members
             $r->get('/api/v1/collections/{id}', [$this, 'getCollection']);
+
+            // S85: theme catalogue — the SPA's built-in token maps plus every
+            // theme a plugin contributed through the S84 ThemeSourceInterface
+            // capability arm.
+            //
+            // Registered HERE, on WebPortalRouter, and not on Application's
+            // router, because this is the one registrar BOTH entry points
+            // dispatch /api/* to: public/index.php sends every non-admin /api/
+            // path straight here (it never consults Application's router at
+            // all), and HttpHandler tries Application first and falls through
+            // to here on a 404. A registration on Application alone would serve
+            // the Workerman daemon and 404 under CGI/FPM.
+            //
+            // Static segment, so no {id} route can swallow it, and nothing else
+            // in either router owns /api/v1/themes.
+            $r->get('/api/v1/themes', [$this, 'listThemes']);
+            $r->get('/api/v1/themes/{id}', [$this, 'getTheme']);
 
             // P7-S1: Music library API (Artist→Album→Track hierarchy).
             //
@@ -2374,6 +2403,58 @@ class WebPortalRouter
             'collection' => $collection,
             'members' => array_values($members),
         ]);
+    }
+
+    /**
+     * Lists every theme the server knows about (S85).
+     *
+     * A thin delegation to {@see ThemesController::index()}, which merges the
+     * host's built-in token maps with the plugin-contributed ones. The route is
+     * registered on this router because it is the single registrar both HTTP
+     * entry points dispatch `/api/*` to — see the comment on the registration.
+     *
+     * @param Request $request The HTTP request.
+     * @param array<string, string> $params Route parameters (unused).
+     *
+     * @return Response `200` with `{"themes": [...]}`; `503` when the theming
+     *         controller is not wired, which is loud on purpose — an empty
+     *         `themes` array would look like "no plugin themes installed" and
+     *         hide a broken container wiring indefinitely.
+     *
+     * @api_endpoint GET /api/v1/themes
+     *
+     * @requires Authentication
+     */
+    public function listThemes(Request $request, array $params): Response
+    {
+        if ($this->themesController === null) {
+            return (new Response())->status(503)->json(['error' => 'Theming is not configured']);
+        }
+
+        return $this->themesController->index($request, $params);
+    }
+
+    /**
+     * Returns a single theme by id (S85).
+     *
+     * @param Request $request The HTTP request.
+     * @param array<string, string> $params Route parameters including `id`.
+     *
+     * @return Response `200` with `{"theme": {...}}`, `404` with
+     *         `{"error": "Theme not found"}` for an unknown id, or `503` when
+     *         the theming controller is not wired.
+     *
+     * @api_endpoint GET /api/v1/themes/{id}
+     *
+     * @requires Authentication
+     */
+    public function getTheme(Request $request, array $params): Response
+    {
+        if ($this->themesController === null) {
+            return (new Response())->status(503)->json(['error' => 'Theming is not configured']);
+        }
+
+        return $this->themesController->show($request, $params);
     }
 
     /**

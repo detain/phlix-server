@@ -152,6 +152,54 @@ final class ThemeTokenValidator
      */
     public static function validate(array $payload, ?string $sourceName = null): TokenTheme
     {
+        return self::build($payload, $sourceName, false);
+    }
+
+    /**
+     * Validate one of the host's own built-in theme payloads.
+     *
+     * Identical to {@see validate()} in every respect except the `id` rule:
+     * a built-in payload's id must be one of {@see RESERVED_IDS}, which
+     * {@see validate()} refuses precisely so a plugin can never claim one.
+     * Note the relaxation is also a TIGHTENING — this entry point accepts
+     * *only* the three reserved ids, so it cannot be used to mint an arbitrary
+     * host theme that bypassed the slug rule.
+     *
+     * It exists so {@see BuiltInThemes} does not have to construct
+     * {@see TokenTheme} directly. That keeps a single trust boundary in front
+     * of `GET /api/v1/themes`: plugin-supplied and host-supplied token maps are
+     * checked by the same grammar, against the same allowlist, so "it came from
+     * the host" is never a reason a value skipped sanitising.
+     *
+     * @param array<array-key, mixed> $payload Raw payload from
+     *        {@see BuiltInThemes}, shaped `{"id","name","dark"?,"extends"?,"tokens"}`.
+     *
+     * @return TokenTheme The validated, sanitised theme, with a null source.
+     *
+     * @throws InvalidThemeDefinition On any unknown key, malformed field,
+     *         non-reserved id, non-allowlisted token name or non-conforming
+     *         token value.
+     *
+     * @since 0.44.0
+     */
+    public static function validateBuiltIn(array $payload): TokenTheme
+    {
+        return self::build($payload, null, true);
+    }
+
+    /**
+     * Shared implementation behind {@see validate()} and
+     * {@see validateBuiltIn()}.
+     *
+     * @param array<array-key, mixed> $payload Raw payload.
+     * @param string|null $sourceName Provenance recorded on the result.
+     * @param bool $builtIn Whether to apply the built-in id rule instead of the
+     *        plugin one — the ONLY difference between the two entry points.
+     *
+     * @throws InvalidThemeDefinition
+     */
+    private static function build(array $payload, ?string $sourceName, bool $builtIn): TokenTheme
+    {
         $origin = $sourceName === null ? 'host' : "plugin source '{$sourceName}'";
 
         foreach (array_keys($payload) as $key) {
@@ -165,7 +213,9 @@ final class ThemeTokenValidator
             }
         }
 
-        $id = self::readId($payload['id'] ?? null, $origin);
+        $id = $builtIn
+            ? self::readBuiltInId($payload['id'] ?? null, $origin)
+            : self::readId($payload['id'] ?? null, $origin);
         $name = self::readName($payload['name'] ?? null, $origin, $id);
         $dark = self::readDark($payload['dark'] ?? false, $origin, $id);
         $extends = self::readExtends($payload['extends'] ?? null, $origin, $id);
@@ -225,6 +275,31 @@ final class ThemeTokenValidator
                 'Theme from %s claims the reserved built-in theme id "%s"; reserved ids are: %s.',
                 $origin,
                 $raw,
+                implode(', ', self::RESERVED_IDS),
+            ));
+        }
+
+        return $raw;
+    }
+
+    /**
+     * `id` for a HOST built-in: required, and one of {@see RESERVED_IDS}.
+     *
+     * Deliberately a membership test rather than the slug pattern plus an
+     * exemption: the built-in entry point can then only ever produce the three
+     * themes {@see BuiltInThemes} ships, and cannot become a general-purpose
+     * way to register a host theme under any id at all.
+     *
+     * @param mixed $raw The `id` field as supplied.
+     *
+     * @throws InvalidThemeDefinition
+     */
+    private static function readBuiltInId(mixed $raw, string $origin): string
+    {
+        if (!is_string($raw) || !in_array($raw, self::RESERVED_IDS, true)) {
+            throw new InvalidThemeDefinition(sprintf(
+                'Built-in theme from %s has an invalid "id"; expected one of: %s.',
+                $origin,
                 implode(', ', self::RESERVED_IDS),
             ));
         }

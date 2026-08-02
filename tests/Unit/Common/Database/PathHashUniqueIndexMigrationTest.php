@@ -61,6 +61,29 @@ final class PathHashUniqueIndexMigrationTest extends TestCase
     }
 
     /**
+     * Strip full-line `--`/`#` comments, leaving only executable SQL.
+     *
+     * ⚠ Every assertion about what 096 DOES must go through this, never through
+     * the raw {@see read()}. 096 carries a ~90-line header that quotes the very
+     * statements and strings these tests match — including the `ALTER TABLE
+     * media_items ADD UNIQUE INDEX ...` line and the `SELECT \`...cleanup_072.php\``
+     * remedy — so a raw-text match is satisfied by the commentary alone and
+     * proves nothing about what {@see \Phlix\Common\Database\MigrationRunner}
+     * actually executes.
+     *
+     * MEASURED, not assumed: with 096's executable adder block moved wholesale
+     * into the comment block (the migration then does nothing at all), the raw
+     * versions of the three tests below stayed GREEN — `OK (5 tests, 19
+     * assertions)`. Against `executable()` the same mutation is caught. This is
+     * the S156 review's finding 3 applied to its S152 predecessor, which shipped
+     * first and never received the fix.
+     */
+    private static function executable(string $sql): string
+    {
+        return preg_replace('/^\s*(--|#).*$/m', '', $sql) ?? $sql;
+    }
+
+    /**
      * The adder exists and the runner will reach it AFTER 087's
      * `DROP INDEX idx_media_items_library_path_hash`. Sort order is the whole
      * game here: an adder that sorted before the drop would be undone by it on
@@ -86,10 +109,14 @@ final class PathHashUniqueIndexMigrationTest extends TestCase
      * The adder really adds the UNIQUE index, on exactly `(library_id,
      * path_hash)` in that order — a non-unique index, or a different column
      * order, would satisfy neither the dedupe constraint nor the `const` plan.
+     *
+     * Asserted against {@see self::executable()}, NOT the raw file: 096's header
+     * quotes this exact statement while explaining why a bare `ADD UNIQUE INDEX`
+     * is not enough, so a raw match survives deleting the statement itself.
      */
     public function testTheAdderAddsTheUniqueIndexOnLibraryIdThenPathHash(): void
     {
-        $sql = self::read(self::ADDER);
+        $sql = self::executable(self::read(self::ADDER));
 
         $this->assertMatchesRegularExpression(
             '/ALTER TABLE media_items ADD UNIQUE INDEX ' . self::INDEX_NAME . ' \(library_id, path_hash\)/',
@@ -103,10 +130,14 @@ final class PathHashUniqueIndexMigrationTest extends TestCase
      * identifier limit. An identifier longer than 64 characters raises error
      * 1059 ("Identifier name '...' is too long") instead of 1054, and the
      * operator loses the one thing that made the failure actionable.
+     *
+     * Against {@see self::executable()}: the header reproduces the same
+     * `SELECT \`media_items duplicate paths: ...\`` string verbatim when it
+     * documents outcome (b), so the raw file matches even with the guard gone.
      */
     public function testTheDirtyTableRemedyFitsInAMysqlIdentifierAndNamesTheFinalizer(): void
     {
-        $sql = self::read(self::ADDER);
+        $sql = self::executable(self::read(self::ADDER));
 
         $matched = preg_match('/\'SELECT `([^`]+)`\'/', $sql, $m);
         $this->assertSame(1, $matched, self::ADDER . ' must carry the remediation as a quoted identifier');
@@ -157,10 +188,14 @@ final class PathHashUniqueIndexMigrationTest extends TestCase
      * from `information_schema`, so a re-apply (checksum divergence, an empty
      * ledger, a manual re-run) is a no-op rather than a 1061 note or a table
      * rebuild.
+     *
+     * Against {@see self::executable()} for the same reason as the two tests
+     * above — the header discusses the `information_schema` probe and the
+     * `PREPARE` idiom at length.
      */
     public function testTheAdderChecksInformationSchemaBeforeAltering(): void
     {
-        $sql = self::read(self::ADDER);
+        $sql = self::executable(self::read(self::ADDER));
 
         $this->assertStringContainsString('information_schema.STATISTICS', $sql);
         $this->assertStringContainsString("INDEX_NAME = '" . self::INDEX_NAME . "'", $sql);

@@ -2969,17 +2969,21 @@ class MusicLibraryScanner
      * different, pre-existing test covering {@see \Phlix\Media\Library\ItemRepository}.)
      *
      * ⚠ **THE `const` PLAN REQUIRES THE `idx_media_items_library_path_hash` UNIQUE
-     * INDEX, AND `migrations/` ALONE DOES NOT CREATE IT.** Migration 087 line 48 does
-     * `DROP INDEX idx_media_items_library_path_hash`, and the only thing that re-adds
-     * it is `migrations/cleanup_072.php` (lines 121-125) — a MANUAL post-deploy
-     * finalizer. So after a clean `scripts/run-migrations.php` the index does not
-     * exist and this statement plans exactly as the pre-S151 form did
-     * (`ref` / `idx_library` / key_len 144 / rows ≈ 404). Production HAS the index
-     * (that is where the `const`/1-row plan was measured); an install that skipped the
-     * finalizer gets correctness but no speed-up. `MusicTrackPathHashLookupTest`
-     * CREATES the index itself when it is absent, so a green test proves the SQL
-     * shape, NOT that your database is in the state this speed-up needs — check with
-     * `SHOW CREATE TABLE media_items`.
+     * INDEX, AND THE MIGRATION CHAIN DOES CREATE IT — as of S152, not before.**
+     * Migration 087 (087:59-60) still does `DROP INDEX
+     * idx_media_items_library_path_hash`, but `migrations/096_path_hash_unique_index.sql`
+     * sorts after it and re-adds the index from inside
+     * `scripts/run-migrations.php`. Re-measured on a database built by the chain
+     * ALONE (MySQL 8.0.46, 2026-08-02): `const` / key_len 305 / rows 1.
+     *
+     * 🔴 **This paragraph used to say the exact opposite, and until 096 it was
+     * TRUE** — the index was re-added only by `migrations/cleanup_072.php`
+     * (now cleanup_072.php:147-153), a MANUAL post-deploy finalizer, so a fresh
+     * install planned exactly as the pre-S151 form did (`ref` / `idx_library` /
+     * key_len 144 / rows ≈ 404) while production, where the `const` plan was
+     * measured, looked correct. A measurement on one environment proved nothing
+     * about the other; that split WAS the S152 defect. `cleanup_072.php` now owns
+     * de-duplication only — do not move index creation back out of the chain.
      *
      * ⚠ **`path = ?` is NOT redundant and must not be removed.** The row is already
      * being fetched by the time it is evaluated, so it is free, and it turns "a SHA-1
@@ -3012,8 +3016,14 @@ class MusicLibraryScanner
      * 087 not" is a reachable state, and in it every `track` row has
      * `path_hash IS NULL`. `NULL = <hash>` is never true, so pass 1 would miss EVERY
      * file, the caller would fall through to `createMediaItem('track', …)` on each one,
-     * and nothing would catch it — 087's own first statement drops the unique index and
-     * only the manual `migrations/cleanup_072.php` re-adds it. That is a duplicated
+     * and nothing would catch it. ⚠ Note the reason carefully: the runner is
+     * CONTINUE-AND-REPORT, so a failed 087 does NOT stop
+     * `migrations/096_path_hash_unique_index.sql` from running and re-adding the unique
+     * index. The index is therefore present — it just does not constrain anything here,
+     * because `track` is outside migration 072's `CASE` list (072:40 covers only
+     * `episode, movie, audio, book`; 087:66 is what adds `track, audiobook`). Every
+     * track's `path_hash` stays NULL, and MySQL never collides NULLs under a UNIQUE
+     * index. That is a duplicated
      * track library (61 k rows on the reference install), from a deployment ordering
      * accident. The pre-S151 raw lookup was immune to the state of `path_hash`; this
      * keeps that immunity while still taking the fast path whenever the hash is there.

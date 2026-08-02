@@ -52,9 +52,19 @@ use Workerman\MySQL\Connection;
  * that would lock the table and blow memory. {@see dedupeAll()} loops until no
  * duplicate group remains.
  *
- * Run once, post-deploy, via `migrations/cleanup_090.php` (which also adds the
- * unique key). Safe to re-run: {@see dedupeAll()} is a no-op once no duplicates
- * remain and {@see addUniqueKey()} treats an already-present key as success.
+ * ⚠ **This class is no longer what puts the unique key on a fresh install.** As
+ * of S156, `migrations/097_playback_state_unique_key.sql` adds
+ * `uq_playback_state_session_media` from inside the migration chain; 097 refuses
+ * to alter a table that still holds duplicates and names
+ * `migrations/cleanup_090.php` in its error. So `cleanup_090.php` — and this
+ * class — now own **de-duplication only**, as the recovery path for an install
+ * that accumulated duplicates while the key was missing. (Before 097, migration
+ * 090 carried no executable statement and this class was the sole creator, which
+ * meant a chain-built database had no key at all: the S156 defect.)
+ *
+ * Run post-deploy via `migrations/cleanup_090.php` when 097 tells you to. Safe to
+ * re-run: {@see dedupeAll()} is a no-op once no duplicates remain and
+ * {@see addUniqueKey()} treats an already-present key as success.
  */
 final class PlaybackStateDeduper
 {

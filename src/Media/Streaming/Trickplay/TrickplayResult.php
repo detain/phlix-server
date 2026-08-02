@@ -29,7 +29,8 @@ final class TrickplayResult
      * @param int $interval_seconds Interval between thumbnails in seconds
      * @param int $grid_columns Number of grid columns
      * @param int $grid_rows Number of grid rows
-     * @param array<string, array{offset: int, size: int, start_index?: int, count?: int}> $image_files Map of image filename to metadata
+     * @param array<string, array{offset: int, size: int, start_index?: int, count?: int}> $image_files
+     *        Map of image filename to metadata
      * @param string $index_xml Path to the BIF index XML file
      */
     public function __construct(

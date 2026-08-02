@@ -229,8 +229,22 @@ final class IntegrationDbGuardAdoptionTest extends TestCase
      * ignore the statement's column list, so no double can show whether
      * `media_items.path` was actually written, whether the STORED generated
      * `path_hash` followed it, or whether the `ON DELETE CASCADE` fired.
+     *
+     * 39 since the S99/S101 AC audit added the two real-DB legs their existing
+     * coverage structurally could not have:
+     * `tests/Integration/Media/MediaListBackdropIntegrationTest.php` — the S101
+     * list backdrop read back through `ItemRepository::hydrateItem()`'s
+     * `metadata_json` decode, which every pre-existing S101 test skipped by
+     * handing the shaper an already-decoded `metadata` array (measured: with the
+     * decode removed, `WebPortalRouterMediaTest` stays 35/35 green and this file
+     * reddens); and
+     * `tests/Integration/Media/MusicScannerToApiReadPathIntegrationTest.php` —
+     * the S99 music API read back off rows the REAL `MusicLibraryScanner` wrote,
+     * where the sibling `MusicApiReadPathIntegrationTest` seeds its own `INSERT`s
+     * (measured: with the scanner's `duration_secs` write zeroed, that file stays
+     * 14/14 green and this one reddens).
      */
-    private const EXPECTED_ADOPTERS = 37;
+    private const EXPECTED_ADOPTERS = 39;
 
     /**
      * Bare function calls that are a MySQL reachability probe under any

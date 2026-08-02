@@ -1712,6 +1712,60 @@ final class MusicLibraryScannerTest extends TestCase
     }
 
     /**
+     * S96(d) — the "how many times is the tree walked?" claim must track the SOURCE.
+     *
+     * `countAudioFiles()`'s docblock is where S96(d) recorded its decision NOT to
+     * de-duplicate the traversal, and it justifies that with a walk count. The count
+     * silently went stale: S96 weighed **two** walks, then S122(b) added a **third**
+     * (`$lookahead`, the read-ahead pool's independent traversal) and nothing made the
+     * paragraph fail. It still said "TWICE" on 2026-08-02, in the shipped default
+     * configuration where `config/scanner.php`'s `music_read_concurrency` is 4 and the
+     * third walk therefore always runs.
+     *
+     * This is a CODE-DERIVED detector, not a string plant: it counts
+     * `$this->audioFileIterator(` call sites in the production file and requires the
+     * docblock to name that number in words. Adding or deleting a walk fails it, and
+     * so does editing the number in the prose without touching the code. It cannot
+     * catch a walk introduced by some other spelling — a `RecursiveIteratorIterator`
+     * built inline rather than through the shared iterator — which is the one shape a
+     * reader must still check by hand.
+     */
+    public function testTheWalkCountInThisDocblockMatchesTheSource(): void
+    {
+        $file = dirname(__DIR__, 4) . '/src/Media/Music/MusicLibraryScanner.php';
+        $this->assertFileExists($file);
+        $source = (string) file_get_contents($file);
+
+        // The declaration is `private function audioFileIterator(`, so counting the
+        // `$this->` form counts CALL sites only.
+        $walks = substr_count($source, '$this->audioFileIterator(');
+
+        $this->assertSame(
+            3,
+            $walks,
+            'MusicLibraryScanner calls audioFileIterator() ' . $walks . ' times: countAudioFiles() (the '
+            . 'progress denominator), the S122(b) read-ahead lookahead, and the tag-reading walk. If you '
+            . "added or removed one, update countAudioFiles()'s S96(d) docblock in the same commit — that "
+            . 'paragraph is the recorded justification for NOT de-duplicating the traversal and it is '
+            . 'worthless once the number is wrong.',
+        );
+
+        $this->assertStringContainsString(
+            'THE TREE IS WALKED THREE TIMES',
+            $source,
+            "countAudioFiles()'s S96(d) docblock must state the walk count the source actually has (" .
+            $walks . '). It read "WALKED TWICE" from S96 until 2026-08-02, i.e. across the whole of '
+            . 'S122, S145 and S148.',
+        );
+
+        $this->assertStringNotContainsString(
+            'THE TREE IS WALKED TWICE',
+            $source,
+            'the retracted S96(d) walk count must not come back.',
+        );
+    }
+
+    /**
      * A caller-supplied PSR-3 logger must actually be USED.
      *
      * The old `createLogger()` accepted only a `StructuredLogger` and silently threw

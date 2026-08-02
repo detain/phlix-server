@@ -58,9 +58,34 @@ use Workerman\MySQL\Connection;
  * write-up is why the two siblings went unnoticed for a whole step). The
  * array-returning reads this class serves the API from (`getAllTracks()`,
  * `findTrackByMediaItemId()`, `getTracksByAlbumIds()`) never had the bug — they
- * carry the raw UUID. ⚠ `phlix-contracts`' `src/Music.ts` still declares
- * `mediaItemId: number` and is a separate, cross-repo follow-up (filed as S123);
- * nothing reads it today, and no served payload emits the field.
+ * carry the raw UUID.
+ *
+ * ✅ **The cross-repo half is CLOSED TOO — S123 shipped on 2026-08-01 and this
+ * paragraph used to deny it (S95/S96/S121 AC audit, 2026-08-02).** It asserted that
+ * `phlix-contracts`' `src/Music.ts` had not yet been fixed and pointed the reader at
+ * S123 as an open follow-up. (The retracted sentence is quoted verbatim in
+ * {@see \Phlix\Tests\Unit\Media\Music\MusicDtoMediaItemIdTest::testTheServiceDocblockDoesNotRepeatTheRetractedContractsClaim()}
+ * and deliberately NOT reproduced here, because that test's needle is the wording
+ * itself — repeating it in this file would make the guard fail on its own fix.)
+ * Measured against the sibling checkout, not inferred: `phlix-contracts` master is
+ * `5d337e7`
+ * *"fix(music)!: mediaItemId is a CHAR(36) UUID string, not a number (S123)"*,
+ * `package.json` is `0.4.0`, tag `v0.4.0` exists, and all three shapes in
+ * `src/Music.ts` now declare `mediaItemId: string | null` — matching this repo's
+ * `?string`. `phlix-mobile-client` has already bumped its pin to `#v0.4.0`;
+ * `phlix-ui`, `phlix-tizen-client` and `phlix-windows-client` still pin `#v0.3.12`,
+ * so those three consume the OLD `number` type until their pin moves. That is a
+ * per-client pin bump, not an open defect in either repo.
+ *
+ * ⚠ **"No served payload emits the field" needs one qualification.** It is true of
+ * the *field*: {@see \Phlix\Server\Http\Controllers\MusicController}'s
+ * `formatArtist()` emits no id at all, and no response key is named
+ * `media_item_id` / `mediaItemId`. The *value* is nevertheless served —
+ * `formatTrack()` reads `media_item_id` off the raw row and emits it as the
+ * track's `id` and inside the signed `stream_url`. It comes from `getAllTracks()`,
+ * one of the array-returning reads named above that never had the coercion bug, so
+ * the DTO fix did not change any byte of that payload. Read the sentence as "no
+ * client can observe the DTO property", not as "this column is never served".
  *
  * @author Phlix Development Team
  * @version 1.0.0

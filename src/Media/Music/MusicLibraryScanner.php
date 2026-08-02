@@ -34,10 +34,18 @@ use Workerman\MySQL\Connection;
  * artist/album/track entries with a `media_items` FK.
  *
  * **Progress.** {@see self::scanDirectory()} accepts an optional
- * `(processed, total, currentPath)` callback and ticks it once per audio file
- * during the (slow) tag-reading pass, so the async scan worker can stream a real
- * percentage onto the job row instead of leaving the UI frozen. Use
+ * `(processed, total, currentPath, counts)` callback and ticks it once per audio
+ * file during the (slow) tag-reading pass, so the async scan worker can stream a
+ * real percentage onto the job row instead of leaving the UI frozen. Use
  * {@see self::countAudioFiles()} to pre-compute the denominator.
+ *
+ * ⚠ The 4th parameter is S96(b)'s live counter snapshot and this paragraph omitted
+ * it until the 2026-08-02 AC audit, contradicting the S96 bullet 12 lines below
+ * that calls it "the fourth argument". A **3-parameter sink is still valid** —
+ * PHP ignores surplus arguments to a user-defined function, which is what keeps
+ * the pre-S96 video/photo/book sinks working — so the omission was incomplete
+ * rather than false, but a reader who wrote a new sink from this line alone would
+ * have shipped one that reports `items_added: 0` forever.
  *
  * **Incremental flush (S95).** The scan used to be two-phase: tag-probe EVERY
  * audio file under the path into one in-memory map, and only then run the upsert
@@ -347,8 +355,27 @@ class MusicLibraryScanner
      * would process — using the SAME extension + skip filters — so a caller can
      * pre-compute the progress denominator without reading any tags.
      *
-     * **S96(d) — YES, THE TREE IS WALKED TWICE, AND THAT IS THE RIGHT TRADE.
-     * MEASURED, DO NOT "OPTIMISE" IT AWAY.** This walk costs **0.0069 ms/file**
+     * **S96(d) — YES, THE TREE IS WALKED THREE TIMES, AND THAT IS THE RIGHT TRADE.
+     * MEASURED, DO NOT "OPTIMISE" IT AWAY.**
+     *
+     * ⚠ **This said TWICE until the S95/S96/S121 AC audit (2026-08-02), and it had been
+     * wrong since S122.** S96(d) weighed exactly two walks — this one and the tag-reading
+     * walk. S122(b) then added a THIRD, the read-ahead lookahead in
+     * {@see self::scanDirectory()} (`$lookahead`), which is a second independent
+     * traversal of the same tree used to warm the page cache. It is gated on
+     * `MusicScanPrefetcher::poolSize() > 0`, i.e. on `config/scanner.php`'s
+     * `music_read_concurrency`, whose **shipped default is 4** — so three walks is the
+     * DEFAULT configuration, not an edge case. Only `music_read_concurrency = 1` gets
+     * the two-walk shape this paragraph used to describe. The count is now pinned
+     * against the source by
+     * {@see \Phlix\Tests\Unit\Media\Music\MusicLibraryScannerTest::testTheWalkCountInThisDocblockMatchesTheSource()},
+     * so a fourth walk cannot land while this text still says three.
+     *
+     * The trade is unchanged by the third walk, and S122 measured it on the same terms:
+     * the lookahead reads no tags either, and `RecursiveIteratorIterator` is
+     * deterministic over an unchanged tree, so the two cursors agree.
+     *
+     * This walk costs **0.0069 ms/file**
      * (median of 5 runs over a warm 10,000-file synthetic tree on PHP 8.3.6): ≈0.4 s
      * for the 61,135-file production music path, against a scan that took **4 h 09 m**
      * to its first durable write — about 0.003 % of the job. Removing the second walk

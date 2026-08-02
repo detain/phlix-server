@@ -556,6 +556,53 @@ final class MusicDtoMediaItemIdTest extends TestCase
     }
 
     /**
+     * S121's third acceptance criterion — *"the documented-bug comment matches
+     * reality"* — and the one that had gone stale by the 2026-08-02 AC audit.
+     *
+     * `MusicLibraryService`'s class docblock is the comment that criterion names. It
+     * closed with *"`phlix-contracts`' `src/Music.ts` **still declares**
+     * `mediaItemId: number` and is a separate, cross-repo follow-up (filed as S123)"*.
+     * S123 shipped on 2026-08-01 (`phlix-contracts` `5d337e7`, `v0.4.0`), so from that
+     * day the sentence asserted the opposite of the truth and pointed a reader at a
+     * follow-up that no longer existed. Nothing failed, because a comment has no test.
+     *
+     * ⚠ **KNOW WHAT THIS DOES AND DOES NOT PROVE.** It is a *retracted-wording* guard,
+     * the same shape as
+     * {@see \Phlix\Tests\Unit\Config\ManagedWorkersConfigTest::testTheStandaloneScanWorkerScriptForbidsASecondConsumer}
+     * uses for the reaper invariant. It detects the exact retracted claim coming back
+     * and it detects the replacement being deleted. It **cannot** detect the claim being
+     * restated in different words, and it **cannot** read `phlix-contracts` — that repo
+     * is a sibling checkout, not a dependency of this one, so there is nothing here to
+     * assert against. Re-verifying the cross-repo fact is a human step; this only keeps
+     * the retracted sentence dead.
+     */
+    public function testTheServiceDocblockDoesNotRepeatTheRetractedContractsClaim(): void
+    {
+        $file = dirname(__DIR__, 4) . '/src/Media/Music/MusicLibraryService.php';
+        $this->assertFileExists($file);
+        $source = (string) file_get_contents($file);
+
+        // The exact wording the docblock carried until 2026-08-02, quoted here only so
+        // this test can detect its return.
+        $this->assertStringNotContainsString(
+            'still declares',
+            $source,
+            'MusicLibraryService must not claim phlix-contracts "still declares mediaItemId: number". '
+            . 'S123 shipped 2026-08-01 (phlix-contracts 5d337e7, v0.4.0): all three shapes in '
+            . 'src/Music.ts are `mediaItemId: string | null`. S121\'s AC is that the documented-bug '
+            . 'comment matches reality, and that sentence stopped matching it.',
+        );
+
+        $this->assertStringContainsString(
+            'S123 shipped',
+            $source,
+            'the replacement paragraph recording that the cross-repo half of S121 is closed has been '
+            . 'removed. Do not delete it without replacing it — the sentence it supersedes is the one '
+            . 'a reader would otherwise re-derive from the S121 history.',
+        );
+    }
+
+    /**
      * The guard against over-correcting. `id`, `artist_id`, `album_id`,
      * `track_number`, `disc_number` and `duration_secs` really ARE
      * `int unsigned` columns (migration 065/070), so they must keep coercing to

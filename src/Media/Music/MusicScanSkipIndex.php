@@ -153,11 +153,15 @@ use Workerman\MySQL\Connection;
  * rejected because the lookup key would be `media_items.path`, which has **no
  * b-tree index** and cannot get one (`varchar(1000)` utf8mb4 = 4,000 bytes, over
  * InnoDB's 3,072-byte key limit on its own; migration 001 gives `media_items` only
- * `FULLTEXT idx_name`). The only usable point key is `(library_id, path_hash)`,
- * which is added out-of-band by `migrations/cleanup_072.php` and may legitimately
- * be absent. One statement against `idx_media_items_library_type` (migration 011)
- * has a cost that can be reasoned about; 61,135 statements whose plan depends on
- * whether an optional post-migration script was ever run does not.
+ * `FULLTEXT idx_name`). The only usable point key is `(library_id, path_hash)`.
+ * ⚠ As of S152 that index IS part of the migration chain
+ * (`migrations/096_path_hash_unique_index.sql`), so it is no longer "added
+ * out-of-band by `migrations/cleanup_072.php` and may legitimately be absent" —
+ * that sentence stood here until 096 and was the whole S152 defect.
+ * The conclusion is unchanged, but the reason is now simply cost: one statement
+ * against `idx_media_items_library_type` (migration 011) is cheaper to reason
+ * about than 61,135 point lookups, and the bulk load avoids OPENING the file,
+ * which no index can do.
  *
  * ⚠ **S151 changed the ARITHMETIC of that trade-off, not the conclusion.** The
  * per-file lookup this class exists to avoid ALSO runs, unavoidably, inside

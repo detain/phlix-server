@@ -467,10 +467,18 @@ class Router
      * framing defect this method exists to prevent; it produces the weaker,
      * recoverable "body on a HEAD" shape that `notFound()` above also has, and it is
      * fixed in the same follow-up change. Deliberately bounded rather than closed
-     * here so that every site of that one shape moves together. Pinned by
-     * `ApplicationHeadOnlyBoundaryTest`, which fails if a global middleware ever
-     * starts declaring a `Content-Length` on a short-circuit — that WOULD be the
-     * framing defect and must be fixed at once.
+     * here so that every site of that one shape moves together.
+     *
+     * ⚠ Pinned by `ApplicationHeadOnlyBoundaryTest` — but read what it pins, because
+     * this sentence used to claim more than was true and the S105 AC audit proved it:
+     * adding a THIRD global middleware that short-circuits with its own
+     * `Content-Length` left the whole Unit suite green. The alarm asserts (a) that
+     * `AccessScheduleMiddleware`'s refusals declare no `Content-Length`, (b) that the
+     * global stack is still exactly the two registrations this boundary was measured
+     * against — asserted on the COUNT, so a third fires it whatever it is — and (c)
+     * that nothing registers one from outside via `Application::getInstance()`. Any of
+     * those firing means re-doing this analysis, and a short-circuit that DOES declare
+     * a `Content-Length` must be fixed at once rather than deferred.
      *
      * @param Request  $request  The dispatched request (only `method` is read).
      * @param Response $response The response about to be returned.

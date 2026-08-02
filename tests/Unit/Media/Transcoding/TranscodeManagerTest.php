@@ -260,6 +260,58 @@ class TranscodeManagerTest extends TestCase
         // S11 regression guard: ensureHlsJob() must not re-emit a `dash_url`
         // pointing at the unbuilt /dash/{job}/manifest.mpd route (S56-S60).
         $this->assertArrayNotHasKey('dash_url', $result);
+        $this->assertNoDashKey($result);
+    }
+
+    /**
+     * S11 AC-audit residual — the OTHER `ensureHlsJob()` return array.
+     *
+     * S11 named two sites in `TranscodeManager` (the reused-job and fresh-job
+     * returns) but only the reused-job branch above got a guard. Re-adding
+     * `'dash_url' => "/dash/{$jobId}/manifest.mpd"` to the FRESH-job return left
+     * the whole Unit suite (8,469 tests) green, so half the fix was unpinned:
+     * the very first play of an item — the only branch that runs when no job
+     * exists yet — could start advertising the 404'ing key again unnoticed.
+     */
+    public function testEnsureHlsJobDoesNotAdvertiseDashOnTheFreshJobBranch(): void
+    {
+        $captured = [];
+        // Empty reuse row => findReusableJob() misses => the fresh-encode branch.
+        $db = $this->mockDb([], 0, ['path' => '/m.mkv'], [], $captured);
+        $ff = $this->createMock(FfmpegRunner::class);
+        $ff->method('probe')->willReturn([
+            'streams' => [
+                ['codec_type' => 'video', 'codec_name' => 'h264', 'width' => 1280, 'height' => 720],
+                ['codec_type' => 'audio', 'codec_name' => 'aac', 'channels' => 2],
+            ],
+            'format' => ['duration' => '25.0'],
+        ]);
+        $ff->method('startCmafTranscodeWithSubtitles')->willReturn(100);
+
+        $result = $this->manager($db, $ff)->ensureHlsJob('media-1', 'web');
+
+        // Prove we really are on the fresh branch and not silently reusing.
+        $this->assertFalse($result['reused'], 'fixture must exercise the fresh-encode return');
+        $this->assertArrayNotHasKey('dash_url', $result);
+        $this->assertNoDashKey($result);
+    }
+
+    /**
+     * No key of an `ensureHlsJob()` payload may advertise DASH under any spelling
+     * (`dash_url`, `dashUrl`, `dash_manifest`, …) while `/dash/{job}/manifest.mpd`
+     * is unbuilt. Catches a re-introduction that renames rather than restores.
+     *
+     * @param array<string, mixed> $payload
+     */
+    private function assertNoDashKey(array $payload): void
+    {
+        foreach (array_keys($payload) as $key) {
+            $this->assertStringNotContainsStringIgnoringCase(
+                'dash',
+                (string) $key,
+                'Transcode payloads must advertise no DASH endpoint until S56-S60 build one',
+            );
+        }
     }
 
     public function testEnsureHlsJobIgnoresReuseRowWhenDirMissing(): void

@@ -16,6 +16,46 @@
       <group>network</group>
     </exclude>
   </groups>
+  <!--
+    S141 — HOW TO READ THIS REPO'S COVERAGE NUMBERS. Read this before concluding
+    that a 0.00% file is untested.
+
+    The `<source>` block below is clean: every `src/` file appears in the clover.
+    The narrowing happens per-TEST instead. 358 of the 695 test files carry a
+    `@covers` annotation, and PHPUnit restricts each such test's recorded coverage
+    to the units it names — everything else that test executes is DISCARDED, with
+    no warning. So "this code is untested" and "this code's coverage was thrown
+    away by an annotation" are indistinguishable in the report.
+
+    Measured A/B on PHP 8.3.6 + PCOV 1.0.11, one test file, one annotation, nothing
+    else changed (`tests/Unit/Server/Core/MusicTracksRouteReachabilityTest.php`,
+    which builds a Router, registers routes through it and reads them back):
+
+      with    @covers \Phlix\Server\Core\Application
+        Phlix\Server\Http\Router   Lines:  0.00% (  0/210)   — absent from the report
+      with the annotation removed
+        Phlix\Server\Http\Router   Lines: 13.33% ( 28/210)
+
+    Whole-run statements for that file went 22 -> 130: the annotation discarded 83%
+    of what the test actually executed. This reproduces the original S141
+    measurement (MusicLibraryService.php 0.00% -> 16.04%) on an unrelated pair.
+
+    AUTHORITATIVE READING, until the project-wide policy decision in S141 is made:
+      * A non-zero figure is real and is a LOWER BOUND.
+      * A 0.00% figure means "no test NAMES this unit in a @covers" — it does NOT
+        mean no test executes it. Confirm by re-running the suspected test with its
+        @covers removed BEFORE writing new tests for that file, or the suite grows
+        duplicate tests that pin nothing new.
+      * The headline percentage, and therefore the DEFAULT_MIN_COVERAGE = 40.0 floor
+        in scripts/coverage-threshold-check.php, are UNDERSTATED by an unmeasured
+        margin. The floor is still meaningful as a ratchet; it is not an estimate of
+        how much of this codebase is exercised.
+
+    The open decision (S141): keep @covers everywhere and accept the narrowing, or
+    drop it and read whole-run coverage. It is not recorded here because it has not
+    been made — this comment records the MEASUREMENT and the reading, so that a 0%
+    is at least an explained zero rather than a silent one.
+  -->
   <coverage>
     <report>
       <html outputDirectory="coverage-report"/>

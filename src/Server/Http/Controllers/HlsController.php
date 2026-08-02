@@ -194,40 +194,24 @@ class HlsController
             $this->transcodeManager?->ensurePlaylistRegenerated($jobId);
         }
 
-        // LEGACY (pre-v9 jobs only) — DEAD for every job created after S49.
+        // S98 REMOVED the legacy folded-original alias that used to sit here.
         //
         // The v7/v8 ABR ladder FOLDED a re-encoded "Original" that was
-        // byte-identical to the top rung, and because the playlist writer iterates
-        // exactly that list, `media_voriginal.m3u8` was then never produced. A
-        // client requesting it directly (e.g. a persisted "Original" quality
-        // preference) got a 404 → fatal playback error, so this serve-time alias
-        // resolves it to the TOP available rung's playlist instead (served in
-        // place, no redirect — playlists are `no-cache`, so this is cache-safe).
+        // byte-identical to the top rung, so `media_voriginal.m3u8` was never
+        // produced and a client requesting it directly got a fatal 404. A
+        // serve-time alias resolved it to the top rung's playlist instead.
         //
-        // S49 removed the fold ({@see \Phlix\Media\Streaming\LadderResult::streamVariants()}):
-        // every v9+ job writes a real `media_voriginal.m3u8`, so the `!is_file()`
-        // guard below is never true for one and this alias never engages. It is
-        // retained only so that pre-v9 job directories still on disk — reachable by
-        // any already-issued signed URL — keep playing instead of hard-failing. That
-        // window is bounded: `sweepSegmentCache()` deletes a whole pre-v9 job dir
-        // after `SEGMENT_CACHE_MAX_AGE` idle (3 h by default) or under the LRU size
-        // budget, and once swept, the `ensurePlaylistRegenerated()` call above
-        // regenerates a real Original playlist even for a pre-v9 row (its persisted
-        // ladder always carried `original`).
+        // S49 removed the fold ({@see \Phlix\Media\Streaming\LadderResult::streamVariants()}),
+        // so every v9+ job writes a real `media_voriginal.m3u8` and the alias could
+        // never engage for one. It was kept only for pre-v9 job directories still on
+        // disk. That window closed: `sweepSegmentCache()` deletes a whole job dir
+        // after `SEGMENT_CACHE_MAX_AGE` idle (3 h) or under the LRU size budget, and
+        // the `ensurePlaylistRegenerated()` call ABOVE now writes a real Original
+        // playlist even for a pre-v9 row (its persisted ladder always carried
+        // `original`) — so regeneration, not aliasing, is what covers a swept dir.
         //
-        // SCHEDULED REMOVAL — tracked as part of **S59** (the transcode cluster's
-        // dead-code cleanup step, which lands several steps after S49 deploys):
-        // delete this block, {@see resolveTopVariantPlaylist()} and the two
-        // `testLegacyPreV9…` tests in `HlsControllerTest`.
-        //
-        // Applied ONLY to the `original` alias, and only when that playlist is
-        // genuinely absent — a truly unknown rung still 404s.
-        if ($file === 'media_voriginal.m3u8' && !is_file("{$dir}/{$file}")) {
-            $topVariant = $this->resolveTopVariantPlaylist($dir);
-            if ($topVariant !== null) {
-                $file = $topVariant;
-            }
-        }
+        // A missing `media_voriginal.m3u8` is therefore now a plain 404, exactly
+        // like any other genuinely absent rung.
 
         return $this->serveJobFile($request, $dir, $file);
     }
@@ -244,73 +228,5 @@ class HlsController
         // media_a{id}.m3u8 (audio-only).
         return $file === 'master.m3u8'
             || preg_match('/^media_(v\w+|a\d+|0)\.m3u8$/i', $file) === 1;
-    }
-
-    /**
-     * Resolve the TOP (highest-BANDWIDTH) per-variant media playlist for a job,
-     * used as the serve-time alias for a FOLDED `original` variant playlist.
-     *
-     * LEGACY (pre-v9 jobs only) — see the call site in {@see serveFile()}: S49
-     * removed the fold, so no job created after it can reach this method. Delete it
-     * with its call site in **S59** (the transcode cluster's dead-code cleanup step),
-     * by which point no pre-v9 job directory can still be served.
-     *
-     * The master playlist lists one `#EXT-X-STREAM-INF:...BANDWIDTH=N` line per
-     * rung, each immediately followed by its `media_v{id}.m3u8` URI (highest-first
-     * per {@see \Phlix\Media\Streaming\LadderResult::streamVariants()}). We parse
-     * every such pair and pick the highest-BANDWIDTH variant whose playlist file
-     * ACTUALLY exists on disk — deriving "top rung" from the job's real rung set,
-     * not a hardcoded name or a trusted master ordering.
-     *
-     * Guards: `media_voriginal.m3u8` is excluded from the candidate set (it is the
-     * folded alias being resolved — never self-select, so no serve loop), and only
-     * an existing file is returned. Returns null when there is no master, no video
-     * stream-inf, or no usable variant on disk — in which case the caller keeps the
-     * original request and lets it 404 (a genuinely missing job is NOT masked).
-     *
-     * @param string $dir Absolute job directory.
-     */
-    private function resolveTopVariantPlaylist(string $dir): ?string
-    {
-        $masterPath = "{$dir}/master.m3u8";
-        if (!is_file($masterPath)) {
-            return null;
-        }
-        $contents = @file_get_contents($masterPath);
-        if (!is_string($contents) || $contents === '') {
-            return null;
-        }
-
-        $bestFile = null;
-        $bestBandwidth = -1;
-        $pendingBandwidth = null;
-        foreach (preg_split('/\r\n|\r|\n/', $contents) ?: [] as $rawLine) {
-            $line = trim($rawLine);
-            if (str_starts_with($line, '#EXT-X-STREAM-INF:')) {
-                $pendingBandwidth = preg_match('/(?:^|,)BANDWIDTH=(\d+)/', $line, $m) === 1
-                    ? (int) $m[1]
-                    : 0;
-                continue;
-            }
-            // Only the URI line immediately following a STREAM-INF is a candidate.
-            if ($pendingBandwidth === null || $line === '' || $line[0] === '#') {
-                continue;
-            }
-            $uri = $line;
-            $bandwidth = $pendingBandwidth;
-            $pendingBandwidth = null;
-            if (
-                $uri === 'media_voriginal.m3u8'
-                || preg_match('/^media_v[a-z0-9]+\.m3u8$/', $uri) !== 1
-            ) {
-                continue;
-            }
-            if ($bandwidth > $bestBandwidth && is_file("{$dir}/{$uri}")) {
-                $bestBandwidth = $bandwidth;
-                $bestFile = $uri;
-            }
-        }
-
-        return $bestFile;
     }
 }

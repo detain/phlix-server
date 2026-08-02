@@ -215,6 +215,120 @@ final class ApplicationHeadOnlyBoundaryTest extends TestCase
     }
 
     /**
+     * S105 AC-audit residual (review r2's open finding, reproduced by execution).
+     *
+     * The three tests above are only half a defence, and the missing half is the
+     * half that matters. Test 3 proves what a Content-Length-declaring short-circuit
+     * WOULD do, but it builds that middleware **synthetically inside itself**; test 4
+     * proves the hole is latent, but it hard-codes **`AccessScheduleMiddleware`**.
+     * Neither looks at what is actually registered. So a *third* global middleware
+     * declaring a `Content-Length` on a short-circuit — the unrecoverable RFC 9110
+     * §8.6 shape the class docblock says "must be fixed at once" — was caught by
+     * nothing: adding one to `Application::__construct()` left the entire Unit suite
+     * (8,470 tests) GREEN with an identical assertion count.
+     *
+     * This asserts the **count** instead of the identity, so it fires on a third
+     * registration regardless of what that registration is. Both spellings are
+     * covered: `Application::middleware()` is public, and the only way to reach it
+     * from outside the class is the `Application::getInstance()` singleton.
+     *
+     * ⚠ Stopping rule, so this cannot be quietly deleted as noise: if it fires,
+     * the fix is to analyse the new middleware and — if it cannot short-circuit with
+     * a `Content-Length` — raise the expected count here with that reasoning written
+     * down. It is not to delete the assertion. If a `getInstance()` caller appears
+     * that does not register middleware, the second assertion already ignores it.
+     */
+    public function testNoThirdGlobalMiddlewareHasAppearedSinceThisBoundaryWasMeasured(): void
+    {
+        $applicationFile = (string) (new ReflectionClass(Application::class))->getFileName();
+
+        $this->assertSame(
+            2,
+            $this->countGlobalRegistrations($applicationFile),
+            'A global middleware was added or removed. The head-only boundary was measured against '
+            . 'exactly two (ThemeMiddleware, which always calls $next, and AccessScheduleMiddleware, '
+            . 'whose refusals declare no Content-Length). Re-do that analysis for the new one: if it can '
+            . 'short-circuit while declaring a Content-Length, a HEAD it refuses ships TWO of them '
+            . '(RFC 9110 §8.6, unrecoverable) because Router::markHeadOnly() is never reached.',
+        );
+
+        $this->assertSame(
+            [],
+            $this->productionFilesRegisteringMiddlewareOnTheSingleton(),
+            'Application::middleware() is public and Application::getInstance() is the way to reach it '
+            . 'from outside the class. A registration made there bypasses the count above.',
+        );
+    }
+
+    /**
+     * Count real `$this->middleware(...)` CALLS in a file.
+     *
+     * Tokenised rather than `substr_count()`ed on purpose: the first version of this
+     * guard counted the raw string and promptly failed on its own commit, because the
+     * docblock it added to `Application::dispatch()` mentions `$this->middleware(...)`
+     * in prose. A counter that a comment can move is not a counter.
+     */
+    private function countGlobalRegistrations(string $file): int
+    {
+        $tokens = token_get_all((string) file_get_contents($file));
+        $count = 0;
+
+        foreach ($tokens as $i => $token) {
+            // The call is the 4-token run: T_VARIABLE '$this', T_OBJECT_OPERATOR,
+            // T_STRING 'middleware', '('. Comments and doc comments are single
+            // T_COMMENT / T_DOC_COMMENT tokens, so prose can never match.
+            if (!is_array($token) || $token[0] !== T_VARIABLE || $token[1] !== '$this') {
+                continue;
+            }
+            $operator = $tokens[$i + 1] ?? null;
+            $name = $tokens[$i + 2] ?? null;
+            $paren = $tokens[$i + 3] ?? null;
+
+            if (
+                is_array($operator) && $operator[0] === T_OBJECT_OPERATOR
+                && is_array($name) && $name[0] === T_STRING && $name[1] === 'middleware'
+                && $paren === '('
+            ) {
+                ++$count;
+            }
+        }
+
+        return $count;
+    }
+
+    /**
+     * Files under `src/` that both obtain the `Application` singleton AND call
+     * `->middleware(` — i.e. could register a global middleware from outside
+     * `Application` itself. A file that merely uses `getInstance()` is ignored.
+     *
+     * @return list<string> Repo-relative paths, empty when nothing does this.
+     */
+    private function productionFilesRegisteringMiddlewareOnTheSingleton(): array
+    {
+        $root = dirname(__DIR__, 4) . '/src';
+        $found = [];
+
+        /** @var iterable<\SplFileInfo> $files */
+        $files = new \RecursiveIteratorIterator(
+            new \RecursiveDirectoryIterator($root, \FilesystemIterator::SKIP_DOTS),
+        );
+
+        foreach ($files as $file) {
+            if (!$file->isFile() || $file->getExtension() !== 'php') {
+                continue;
+            }
+            $body = (string) file_get_contents($file->getPathname());
+            if (str_contains($body, 'Application::getInstance()') && str_contains($body, '->middleware(')) {
+                $found[] = substr($file->getPathname(), strlen($root) + 1);
+            }
+        }
+
+        sort($found);
+
+        return $found;
+    }
+
+    /**
      * A real `AccessScheduleService` (it is `final`, so it cannot be mocked) over a
      * mocked connection returning the given `access_schedules` rows.
      *

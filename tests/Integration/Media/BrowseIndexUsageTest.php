@@ -96,6 +96,12 @@ final class BrowseIndexUsageTest extends TestCase
 
     private string $libraryId = '';
 
+    /**
+     * Monotonic per-row counter feeding {@see fixtureId()} (S111). Static so it keeps
+     * counting across every `setUp()` in the process, not just within one test.
+     */
+    private static int $fixtureSeq = 0;
+
     protected function setUp(): void
     {
         parent::setUp();
@@ -120,7 +126,7 @@ final class BrowseIndexUsageTest extends TestCase
         }
 
         $db = $this->db();
-        $this->libraryId = $this->uuid();
+        $this->libraryId = $this->fixtureId();
         $db->query(
             'INSERT INTO libraries (id, name, type, paths) VALUES (?, ?, ?, ?)',
             [$this->libraryId, 'Browse Index Usage Lib', 'movie', json_encode(['/tmp/phlix-browse-index-test'])],
@@ -137,6 +143,11 @@ final class BrowseIndexUsageTest extends TestCase
             $rating = ['G', 'PG', 'PG-13', 'R', 'NC-17'][$i % 5];
 
             $repo->create([
+                // Supply the id explicitly (S111). Without it ItemRepository falls
+                // back to Uuid::v4(), which is mt_rand()-based — that fallback, not
+                // this class's own helper, is what produced the colliding
+                // `media_items.PRIMARY` values under a pinned --random-order-seed.
+                'id' => $this->fixtureId(),
                 'library_id' => $this->libraryId,
                 'name' => $name,
                 'type' => 'movie',
@@ -305,6 +316,72 @@ final class BrowseIndexUsageTest extends TestCase
     }
 
     /**
+     * S111 pin: no fixture id is reproducible from a pinned `mt_rand()` seed, and
+     * every id this run inserted is distinct.
+     *
+     * Reproduced before the fix on a real MySQL 8.0: two separate processes run with
+     * `--random-order-seed=4242` emitted byte-identical sets of all 300
+     * `media_items` ids, and planting one of them beforehand made the run die with
+     * `Duplicate entry 'ac4ac379-…' for key 'media_items.PRIMARY'` — the exact
+     * failure this step exists to remove.
+     *
+     * Asserts the property, not the implementation: re-seeding `mt_rand()` to a
+     * fixed value between two calls must NOT yield the same id.
+     */
+    public function testFixtureIdsAreRunUniqueAndNotDerivedFromMtRand(): void
+    {
+        // (1) The ids actually inserted by this run are all distinct.
+        $rows = $this->db()->query(
+            'SELECT id FROM media_items WHERE library_id = ?',
+            [$this->libraryId],
+        );
+        $ids = array_column(is_array($rows) ? $rows : [], 'id');
+        $this->assertCount(self::ROW_COUNT, $ids, 'the fixture must have inserted every row');
+        $this->assertCount(
+            self::ROW_COUNT,
+            array_unique($ids),
+            'every inserted media_items id must be distinct',
+        );
+
+        // (1b) …and they came from fixtureId(), not from ItemRepository's
+        //      mt_rand()-based Uuid::v4() fallback. fixtureId() puts a monotonic
+        //      counter in the final 12-hex field, so this setUp's rows carry a
+        //      CONSECUTIVE run of counter values. Uuid::v4() fills that field with
+        //      48 random bits, which cannot be consecutive. This is the assertion
+        //      that reddens if the explicit 'id' argument is dropped.
+        $counters = array_map(
+            static fn (string $id): int => (int) hexdec(substr($id, -12)),
+            $ids,
+        );
+        sort($counters);
+        $this->assertSame(
+            range($counters[0], $counters[0] + self::ROW_COUNT - 1),
+            $counters,
+            'media_items ids must come from fixtureId() (consecutive counters), not Uuid::v4()',
+        );
+
+        // (2) Pinning mt_rand's seed must not reproduce an id. This is exactly what
+        //     the old mt_rand()-based helper failed, and it reddens if either the
+        //     helper or the ItemRepository::create() 'id' argument regresses.
+        mt_srand(4242);
+        $first = $this->fixtureId();
+        mt_srand(4242);
+        $second = $this->fixtureId();
+        $this->assertNotSame(
+            $first,
+            $second,
+            'a pinned mt_rand seed must not reproduce a fixture id (S111)',
+        );
+
+        // (3) Still a well-formed CHAR(36) v4-shaped UUID.
+        $this->assertSame(36, strlen($first));
+        $this->assertMatchesRegularExpression(
+            '/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-8[0-9a-f]{3}-[0-9a-f]{12}$/',
+            $first,
+        );
+    }
+
+    /**
      * Run EXPLAIN and return the first (driving-table) plan row as an assoc array.
      *
      * `Connection::query()` only returns fetched rows when the statement's
@@ -386,18 +463,39 @@ final class BrowseIndexUsageTest extends TestCase
         }
     }
 
-    private function uuid(): string
+    /**
+     * A `CHAR(36)` fixture id that is unique per ROW and per RUN, drawn from the
+     * CSPRNG and a counter — never from `mt_rand()` (S111).
+     *
+     * PHPUnit's `--random-order-seed` calls `mt_srand()`, which is the standard way
+     * to reproduce an order-dependent failure. The previous implementation of this
+     * helper — and `ItemRepository`'s `Uuid::v4()` fallback, which used to supply the
+     * `media_items` ids because the fixture passed none — were both `mt_rand()`-based,
+     * so a pinned seed made every fixture id in the process byte-for-byte
+     * reproducible. Any row surviving an earlier same-seed run then collided with
+     * `Duplicate entry '…' for key 'media_items.PRIMARY'`, i.e. the debugging tool
+     * itself was unusable on this class.
+     *
+     * Two independent sources, so uniqueness does not rest on either alone:
+     *  - a run-unique prefix from `random_bytes()`, which `mt_srand()` cannot steer;
+     *  - a per-row monotonic counter in the final field, which makes intra-run
+     *    uniqueness provable rather than merely probable.
+     *
+     * The output keeps the v4/variant-8 nibbles so it is shaped like every other id
+     * in the schema.
+     */
+    private function fixtureId(): string
     {
+        $prefix = bin2hex(random_bytes(9));
+        $seq = sprintf('%012x', ++self::$fixtureSeq);
+
         return sprintf(
-            '%04x%04x-%04x-%04x-%04x-%04x%04x%04x',
-            mt_rand(0, 0xffff),
-            mt_rand(0, 0xffff),
-            mt_rand(0, 0xffff),
-            mt_rand(0, 0x0fff) | 0x4000,
-            mt_rand(0, 0x3fff) | 0x8000,
-            mt_rand(0, 0xffff),
-            mt_rand(0, 0xffff),
-            mt_rand(0, 0xffff)
+            '%s-%s-4%s-8%s-%s',
+            substr($prefix, 0, 8),
+            substr($prefix, 8, 4),
+            substr($prefix, 12, 3),
+            substr($prefix, 15, 3),
+            $seq
         );
     }
 }

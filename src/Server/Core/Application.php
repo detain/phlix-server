@@ -2124,8 +2124,20 @@ class Application
      * with the other sites of that shape ({@see Router::notFound()},
      * {@see \Phlix\Server\Workerman\HttpHandler}'s SPA/static/404 replies). A global
      * middleware that declares its own `Content-Length` on a short-circuit WOULD ship
-     * two; `ApplicationHeadOnlyBoundaryTest` pins both halves of that so neither can
-     * drift silently.
+     * two.
+     *
+     * ⚠ **What `ApplicationHeadOnlyBoundaryTest` actually pins** — the earlier wording
+     * here ("pins both halves so neither can drift silently") overstated it, and the
+     * S105 AC audit reproduced the gap: a THIRD global middleware short-circuiting with
+     * its own `Content-Length` left the whole Unit suite green. Corrected, the alarm
+     * now covers three concrete drifts: `AccessScheduleMiddleware` starting to declare
+     * a `Content-Length`; a third `$this->middleware(...)` registration appearing below
+     * (asserted on the COUNT, so it fires whatever the middleware is); and a
+     * registration smuggled in from another `src/` file via
+     * {@see self::getInstance()}. It does NOT cover the two existing middlewares
+     * changing *shape* other than that — though `ThemeMiddleware::onHttpRequest()`
+     * calls `$next()` as its first statement and only decorates the result, so making
+     * it short-circuit is itself a deliberate behaviour change, not drift.
      *
      * @param Request $request The HTTP request to dispatch.
      *

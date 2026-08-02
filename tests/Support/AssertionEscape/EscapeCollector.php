@@ -10,11 +10,15 @@ namespace Phlix\Tests\Support\AssertionEscape;
  * ## The defect class this exists to catch
  *
  * PHPUnit's `ExpectationFailedException` extends `AssertionFailedError` extends
- * `PHPUnit\Framework\Exception` extends `RuntimeException` (verified by executing
- * `class_parents(ExpectationFailedException::class)` — see the S120 worklog). So an
- * assertion that runs inside a callback which is invoked inside
- * `try { … } catch (\Throwable)` or `catch (\RuntimeException)` is caught by the code
- * doing the catching, and never reaches PHPUnit's outcome. Two observed forms:
+ * `PHPUnit\Framework\Exception` extends `RuntimeException` extends `Exception`
+ * (verified by executing `class_parents(ExpectationFailedException::class)` — see the
+ * S120 worklog). So an assertion that runs inside a callback which production invokes
+ * inside a `try` is caught by whichever of `catch (\Throwable)`, `catch (\Exception)`
+ * or `catch (\RuntimeException)` that `try` carries, and never reaches PHPUnit's
+ * outcome. A `return` inside a `finally` discards the in-flight exception too, with no
+ * `catch` anywhere — so "grep for the two catch types" is NOT a sound way to find these
+ * (all four shapes were planted and confirmed swallowed on 2026-08-02). Two observed
+ * forms:
  *
  *  - the catch is in the test's OWN body → the test goes fully **GREEN** while the
  *    assertion said `false`. Silently vacuous.
@@ -37,7 +41,9 @@ namespace Phlix\Tests\Support\AssertionEscape;
  * The collector sees exactly what `Assert::assertThat()` emits. Three failure paths
  * throw an `AssertionFailedError`/`ExpectationFailedException` WITHOUT going through
  * `assertThat()`, and therefore emit no `AssertionFailed` event at all (all read at
- * PHPUnit 10.5.64):
+ * PHPUnit 10.5.64); a fourth blind spot is the budget rule itself. All four are covered
+ * by `scripts/assertion-escape-audit.php --probe`, which decides a site by MUTATION
+ * rather than by event, and is the reason that script is kept alongside this one.
  *
  *  1. `Assert::fail()` — `vendor/phpunit/phpunit/src/Framework/Assert.php:2282` throws
  *     `AssertionFailedError` directly, so a swallowed `$this->fail(...)` is invisible
@@ -60,7 +66,28 @@ namespace Phlix\Tests\Support\AssertionEscape;
  *     `catch (\Throwable)`/`catch (\RuntimeException)` is eaten silently and emits
  *     nothing. Currently HARMLESS because there are none to eat: a token scan over all
  *     701 files under `tests/` finds 0 `markTestSkipped`/`markTestIncomplete` calls
- *     lexically inside an anonymous `function` body.
+ *     lexically inside an anonymous `function` body. (Re-derived 2026-08-02 with an
+ *     independent nikic/php-parser AST walk over the now-753 files: still 0.)
+ *  4. THE BUDGET ITSELF, when the VISIBLE failure emits no event. This one is
+ *     different in kind from 1-3: the swallowed assertion IS seen, and the collector
+ *     discards it anyway. `FAILED_OUTCOME_BUDGET = 1` assumes that a test whose outcome
+ *     is `failed` failed *through* an `assertThat()` assertion, which spends the budget.
+ *     When the visible failure comes from a path in 1-2 instead — `Assert::fail()`, or a
+ *     mock invocation-count/parameter rule — the budget is never spent and it absorbs
+ *     exactly one genuinely swallowed assertion. Reported as no violation at all.
+ *     NOT hypothetical: this is precisely how
+ *     `tests/Unit/Playlists/SmartPlaylistRefreshSubscriberTest::test_drain_tick_refreshes_the_linked_smart_collections`
+ *     escaped both this guard and CI between S120 shipping and 2026-08-02. Breaking the
+ *     production binding it pinned turned the test red on
+ *     `refreshSmartCollection … called 0 times` — a mock rule, no event — while this
+ *     collector stayed silent and `scripts/assertion-escape-check.php` exited 0.
+ *     Deliberately NOT closed here: separating "the event that became the outcome" from
+ *     "an event that was swallowed" needs message correlation between `AssertionFailed`
+ *     and `Failed::throwable()`, whose texts differ by construction (the first carries
+ *     the constraint description, the second the rendered diff). A correlation heuristic
+ *     that mis-fires reports healthy tests as vacuous, and a noisy guard gets deleted —
+ *     which costs more than this gap. `--probe` decides the same site correctly and
+ *     without heuristics: it reports it `DEGRADED` and exits 1 (verified 2026-08-02).
  *
  * ## Known false-positive class — and why there is deliberately no opt-out
  *
@@ -111,6 +138,12 @@ final class EscapeCollector
      * A test that FAILS is expected to emit exactly one `AssertionFailed` — the one
      * that propagated and became the failure. Anything above that budget was
      * swallowed. A test with any other outcome has a budget of zero.
+     *
+     * ⚠ This is a heuristic, not a measurement, and it is blind spot 4 in the class
+     * docblock: it assumes the visible failure went through `Assert::assertThat()`. If
+     * it did not (`Assert::fail()`, a mock parameter/invocation rule), the budget goes
+     * unspent and hides one real escape. Do NOT "fix" that by lowering the budget to 0 —
+     * every honest single-assertion failure in the suite would then be reported.
      */
     private const FAILED_OUTCOME_BUDGET = 1;
 

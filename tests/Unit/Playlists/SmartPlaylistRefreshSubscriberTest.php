@@ -199,25 +199,34 @@ final class SmartPlaylistRefreshSubscriberTest extends TestCase
      */
     public function test_drain_tick_refreshes_the_linked_smart_collections(): void
     {
+        // S120: the callback RECORDS, the assertions run OUTSIDE it. drainTick()
+        // wraps refreshLibrary() in `catch (Throwable)`
+        // (src/Playlists/SmartPlaylistRefreshSubscriber.php:198-205) precisely so a
+        // failed refresh cannot kill the worker's timer — and an
+        // ExpectationFailedException raised inside this callback is a Throwable, so
+        // that catch eats it. Asserting in here is asserting into a black hole: the
+        // test still goes red, but on `refreshSmartCollection ... called 0 times`,
+        // which names neither the query nor the binding that was actually wrong.
+        /** @var list<array{sql: string, params: array<int, mixed>|null}> $queries */
+        $queries = [];
+
         $db = $this->createMock(Connection::class);
         $db->method('query')->willReturnCallback(
             /**
              * @param array<int, mixed>|null $params
              * @return array<int, array<string, mixed>>
              */
-            function (string $sql, ?array $params = null): array {
-                if (str_contains($sql, 'FROM smart_playlists')) {
-                    $this->assertSame(['lib-123'], $params);
+            function (string $sql, ?array $params = null) use (&$queries): array {
+                $queries[] = ['sql' => $sql, 'params' => $params];
 
+                if (str_contains($sql, 'FROM smart_playlists')) {
                     return $this->playlistRows();
                 }
                 if (str_contains($sql, 'FROM collections')) {
-                    $this->assertSame(['pl-1'], $params);
-
                     return $this->collectionRows();
                 }
 
-                $this->fail('unexpected query during a refresh: ' . $sql);
+                return [];
             }
         );
 
@@ -231,6 +240,34 @@ final class SmartPlaylistRefreshSubscriberTest extends TestCase
 
         $sub->drainTick();
 
+        $this->assertCount(
+            2,
+            $queries,
+            'A drain of one library with one smart playlist and one linked collection is '
+            . "exactly two queries: the library's smart playlists, then the collections "
+            . 'linked to that playlist. Queries seen: '
+            . implode(' | ', array_column($queries, 'sql')),
+        );
+        $this->assertStringContainsString(
+            'FROM smart_playlists',
+            $queries[0]['sql'],
+            'the first query of a drain must be the smart-playlist lookup',
+        );
+        $this->assertSame(
+            ['lib-123'],
+            $queries[0]['params'],
+            'the smart-playlist lookup must be scoped to the drained library',
+        );
+        $this->assertStringContainsString(
+            'FROM collections',
+            $queries[1]['sql'],
+            'the second query of a drain must be the linked-collection lookup',
+        );
+        $this->assertSame(
+            ['pl-1'],
+            $queries[1]['params'],
+            'the collection lookup must be scoped to the playlist just read',
+        );
         $this->assertSame(0, $sub->pendingCount(), 'the drained library must leave the pending set');
     }
 

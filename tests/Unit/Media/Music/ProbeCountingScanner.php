@@ -114,11 +114,26 @@ final class ProbeCountingScanner extends MusicLibraryScanner
     }
 
     /**
-     * 1 = no reader pool. These tests are about the skip predicate; spawning three
-     * child processes per scan would only add noise and wall time.
+     * Reads-in-flight this scanner asks {@see MusicScanPrefetcher} for.
+     *
+     * DEFAULTS TO 1 — no reader pool. Most of these tests are about the skip predicate,
+     * and spawning three child processes per scan would only add noise and wall time.
+     *
+     * ⚠ **It is settable because "1" was itself a coverage hole.** With the pool off,
+     * `scanDirectory()` never creates the read-ahead walk at all, so the gate that
+     * decides WHICH files the pool is asked to warm
+     * (`!canSkip(...) || !$skipIndex->isUnchanged($ahead)`) was unreachable from this
+     * file — and a mutant that replaced it with `if (true)` passed the entire music
+     * suite (347 tests) while making a rescan hand every unchanged file to a reader
+     * child, i.e. re-reading the whole library over the mount on exactly the scan
+     * S122(a) exists to make free. Set this to
+     * {@see \Phlix\Media\Music\MusicScanPrefetcher::DEFAULT_READERS} to exercise it; see
+     * {@see MusicScanUnchangedSkipTest::testARescanOfAnUnchangedLibraryWarmsNothingWithThePoolOn()}.
      */
+    public int $concurrency = 1;
+
     protected function readConcurrency(): int
     {
-        return 1;
+        return $this->concurrency;
     }
 }

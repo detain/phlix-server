@@ -13,6 +13,7 @@ namespace Phlix\Tests\Unit\Media\Music;
 
 use Phlix\Common\Logger\StructuredLogger;
 use Phlix\Media\Music\MusicLibraryScanner;
+use Phlix\Media\Music\MusicScanPrefetcher;
 use Phlix\Media\Music\MusicScanSkipIndex;
 use Phlix\Media\Transcoding\FfmpegRunner;
 use PHPUnit\Framework\Attributes\CoversClass;
@@ -867,6 +868,85 @@ final class MusicScanUnchangedSkipTest extends TestCase
         self::assertIsArray($summary);
         self::assertSame(1, $summary['readers_in_flight'] ?? null, 'the scanner itself is the only reader');
         self::assertSame(0, $summary['prefetched'] ?? null, 'nothing can be prefetched with no pool');
+    }
+
+    /**
+     * ⭐ **S122(b) — WITH THE POOL ON, A RESCAN OF AN UNCHANGED LIBRARY WARMS NOTHING.**
+     *
+     * ⚠ **Added by the S122/S148 AC audit (2026-08-02), because this was a hole big
+     * enough to drive the whole step through.** Every other test in this file runs at
+     * `readConcurrency() === 1`, where `scanDirectory()` does not even create the
+     * read-ahead walk — so the gate that decides which files the pool is asked to warm,
+     *
+     * ```php
+     * if (!$this->canSkip($mayAdopt, $readEveryFile) || !$skipIndex->isUnchanged($ahead)) {
+     *     $prefetcher->submit($ahead->getPathname());
+     * }
+     * ```
+     *
+     * was unreachable from the entire suite. Mutating it to `if (true)` — i.e. hand the
+     * pool EVERY file the lookahead sees — left `tests/Unit/Media/Music/` plus
+     * `tests/Integration/Media/` at **OK (347 tests, 8781 assertions)**, while measured
+     * end to end on a 24-file library it took a rescan's `prefetched` from **0 to 24**.
+     * That mutant re-opens every unchanged file in the reader children, over the same
+     * mount, on exactly the scan S122(a) exists to make free; the main walk's probe count
+     * stays at 0, so no probe-count assertion can see it.
+     *
+     * Both directions are asserted, because either one alone is satisfiable by a broken
+     * pool: the FIRST scan must warm all three files (or "0 on the rescan" would just
+     * mean the pool never started), and the SECOND must warm none.
+     *
+     * `prefetch_dropped` is checked at 0 as well: a submission the pool could not place
+     * is still a submission the gate should not have made, and counting only `prefetched`
+     * would let a saturated pool hide the regression.
+     */
+    public function testARescanOfAnUnchangedLibraryWarmsNothingWithThePoolOn(): void
+    {
+        [$dir, $db] = $this->fixture(3);
+        $logger = new RecordingLogger();
+        $scanner = $this->scanner($db, $logger);
+        $scanner->concurrency = MusicScanPrefetcher::DEFAULT_READERS;
+
+        $scanner->scanDirectory($dir, null, 'lib-1');
+
+        $first = $logger->contextOf('Music directory scan complete');
+        self::assertIsArray($first);
+        self::assertSame(
+            MusicScanPrefetcher::DEFAULT_READERS,
+            $first['readers_in_flight'] ?? null,
+            'the pool must actually be running, or everything below passes vacuously'
+        );
+        self::assertSame(
+            3,
+            $first['prefetched'] ?? null,
+            'a FIRST scan reads every file, so the read-ahead must be offered every file'
+        );
+
+        $scanner->resetProbes();
+        $scanner->scanDirectory($dir, null, 'lib-1');
+
+        $second = $logger->contextOf('Music directory scan complete');
+        self::assertIsArray($second);
+        self::assertSame(0, $scanner->probeCount, 'the main walk still skips all three');
+        self::assertSame(
+            MusicScanPrefetcher::DEFAULT_READERS,
+            $second['readers_in_flight'] ?? null,
+            'and the pool is still up on the rescan — this is not the pool-disabled case'
+        );
+        self::assertSame(
+            0,
+            $second['prefetched'] ?? null,
+            'THE POINT: a file the walk will not open must not be handed to a reader either. '
+            . 'The lookahead consults the SAME canSkip() + isUnchanged() pair the walk does, so '
+            . 'the two cannot disagree about which files are read. Measured at 24 with the gate '
+            . 'mutated to `if (true)`, against 0 here.'
+        );
+        self::assertSame(
+            0,
+            $second['prefetch_dropped'] ?? null,
+            'and nothing was even offered, so nothing could be dropped — a saturated pool must '
+            . 'not be able to disguise a submission the gate should have suppressed'
+        );
     }
 
     /**

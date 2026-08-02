@@ -40,12 +40,14 @@ use Phlix\Media\Metadata\MetadataManager;
 use Phlix\Media\Metadata\OpdsFeedBuilder;
 use Phlix\Server\Http\Controllers\BookController;
 use Phlix\Server\Http\Controllers\MediaUserDataController;
+use Phlix\Server\Http\Controllers\ThemesController;
 use Phlix\Server\Http\Controllers\TranscodeController;
 use Phlix\Server\Http\Controllers\UserAvatarController;
 use Phlix\Server\Http\Controllers\PhotoController;
 use Phlix\Server\WebPortal\WebPortalRouter;
 use Phlix\Session\PlaybackController;
 use Phlix\Session\SessionManager;
+use Phlix\Theming\ThemeSourceRegistry;
 use Psr\Container\ContainerInterface;
 use Workerman\MySQL\Connection;
 
@@ -176,6 +178,15 @@ final class WebPortalServicesProvider implements ServiceProviderInterface
                         ? new TranscodeController($transcodeManager, $transcodeRatingGate)
                         : null;
 
+                    // S85: theme catalogue endpoints. Resolve the registry from
+                    // the container (never `new ThemeSourceRegistry()`) — it
+                    // must be the SAME container-scoped instance PluginLoader
+                    // registers plugin themes into, or the endpoint would answer
+                    // "no plugin themes" for the life of the worker.
+                    /** @var ThemeSourceRegistry $themeSourceRegistry */
+                    $themeSourceRegistry = $c->get(ThemeSourceRegistry::class);
+                    $themesController = new ThemesController($themeSourceRegistry);
+
                     $settingsRepo = null;
                     if ($c->has(\Phlix\Admin\SettingsRepository::class)) {
                         $resolved = $c->get(\Phlix\Admin\SettingsRepository::class);
@@ -210,6 +221,7 @@ final class WebPortalServicesProvider implements ServiceProviderInterface
                         null, // StreamProbeBackfill (not wired in this context)
                         // Backs the `subtitles.default_language` server-wide default.
                         $settingsRepo,
+                        $themesController,
                     );
                 }
             ),

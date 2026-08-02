@@ -7,6 +7,56 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased] - 2026-07-24
 
+### Fixed
+
+- **S120 AC audit — the assertion-escape guard was one deletable line from silent, and
+  the defect class had already recurred.** Auditing S120 by planting escapes rather than
+  by reading the guard turned up three things a green CI run could not have shown.
+  - **A live escape that shipped after S120.**
+    `SmartPlaylistRefreshSubscriberTest::test_drain_tick_refreshes_the_linked_smart_collections`
+    asserted inside a `willReturnCallback` reached through
+    `SmartPlaylistRefreshSubscriber::drainTick()`, which wraps `refreshLibrary()` in
+    `catch (Throwable)` so a failed refresh cannot kill the worker's timer. Breaking the
+    production line the test pinned (`SmartPlaylistRepository::findByLibraryId()`'s bound
+    parameter) turned the test red on `refreshSmartCollection … called 0 times` — naming
+    neither the query nor the binding. Fixed with S102's remedy (the callback RECORDS,
+    the assertions run OUTSIDE it); the same mutation now fails on *"the smart-playlist
+    lookup must be scoped to the drained library"* with the actual diff.
+  - **Deleting one line from `phpunit.xml` disabled the whole guard, silently.** With the
+    `<extensions><bootstrap>` registration removed, a run containing twelve deliberately
+    planted escapes — eight of which the guard reported a moment earlier — wrote no
+    report and `php scripts/assertion-escape-check.php` printed "no escapes reported" and
+    exited 0. Deleting the workflow step was equally silent. New
+    `tests/Unit/Support/AssertionEscapeGuardWiringTest.php` closes both, plus the check
+    script's two exit paths; each of its assertions was verified by mutating the line it
+    protects (registration deleted, registration commented out, CI step removed,
+    `continue-on-error` added, `if: always()` dropped, check step moved ahead of PHPUnit,
+    `exit(1)` → `exit(0)`, script deleted — eight mutants, eight named failures).
+  - **A fourth blind spot, previously undocumented.** `FAILED_OUTCOME_BUDGET = 1` assumes
+    a failing test failed *through* an `assertThat()` assertion. When the visible failure
+    is `Assert::fail()` or a mock parameter/invocation rule — neither of which emits an
+    event — the budget goes unspent and absorbs one genuinely swallowed assertion. That
+    is exactly how the escape above stayed invisible. Documented rather than closed:
+    separating the two would need message correlation between `AssertionFailed` and
+    `Failed::throwable()`, whose texts differ by construction, and a heuristic that
+    mis-fires reports healthy tests as vacuous. `scripts/assertion-escape-audit.php
+    --probe` decides the same site correctly (`DEGRADED`, exit 1) with no heuristic.
+
+### Changed
+
+- **S120 doc corrections, each contradicted by execution.**
+  - `failOnPhpunitWarning` **defaults to `true`** (`vendor/phpunit/phpunit/phpunit.xsd:184`;
+    `.../TextUI/Configuration/Xml/Loader.php:833`), so "`phpunit.xml` does not set it,
+    therefore a subscriber cannot change the exit code" — asserted in
+    `scripts/assertion-escape-check.php` and `AssertionEscapeGuardExtension` — was wrong
+    in both halves. A subscriber that throws makes an otherwise-green run exit 1. The
+    separate check script remains the right design, but for legibility, not necessity.
+  - The swallowing mechanism is wider than the documented `catch (\Throwable)` /
+    `catch (\RuntimeException)`: `ExpectationFailedException` reaches `\Exception`, and a
+    `return` inside a `finally` discards the exception with no `catch` at all. All four
+    shapes were planted and confirmed swallowed, so a grep for the two catch types is not
+    a sound search for this defect.
+
 ### Added
 
 - **`scripts/install.sh` now applies the Workerman kernel tuning, on both fresh

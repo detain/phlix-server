@@ -25,9 +25,25 @@
  * `AssertionFailedError` directly), mock parameter/invocation rules
  * (`.../MockObject/Runtime/Rule/Parameters.php:117` → `.../Constraint/Constraint.php:106`),
  * and `markTestSkipped()`/`markTestIncomplete()`. None of those emit an
- * `AssertionFailed` event (PHPUnit 10.5.64). This script closes those gaps by mutation:
- * it plants a named tripwire immediately before the first assertion in each closure,
- * runs the owning test, and reads the verdict off the run.
+ * `AssertionFailed` event (PHPUnit 10.5.64). It is blind to a fourth shape too: when
+ * the VISIBLE failure is one of those no-event paths, the runtime guard's
+ * `FAILED_OUTCOME_BUDGET = 1` goes unspent and silently absorbs one genuinely swallowed
+ * assertion (`EscapeCollector`, blind spot 4).
+ *
+ * This script closes all four gaps by mutation: it plants a named tripwire immediately
+ * before the first assertion in each closure, runs the owning test, and reads the
+ * verdict off the run. Both no-event shapes were confirmed on 2026-08-02 by planting
+ * them: a swallowed `Assert::fail()` probes `VACUOUS`, and a swallowed assertion whose
+ * test then fails via `Assert::fail()` probes `DEGRADED` — exit 1 in both cases, while
+ * the runtime guard reported nothing.
+ *
+ * ⚠ CONSEQUENCE, and the reason to actually run this periodically rather than trusting
+ * the CI step: this script is NOT wired into any workflow (one PHPUnit invocation per
+ * site is too slow, and the Integration site is a known flake, so a CI failure could be
+ * environmental). On 2026-08-02 a probe of the whole tree found a real escape that had
+ * landed after S120 shipped and that CI could not see —
+ * `tests/Unit/Playlists/SmartPlaylistRefreshSubscriberTest.php` (now fixed). Run this
+ * after adding any test that asserts inside a `willReturnCallback`.
  *
  * ## Verdicts
  *

@@ -35,13 +35,24 @@ use PHPUnit\TextUI\Configuration\Configuration;
  * and prints a block to STDERR. It deliberately does NOT try to fail the run from
  * inside the event system: `DirectDispatcher::dispatch()`
  * (`vendor/phpunit/phpunit/src/Event/Dispatcher/DirectDispatcher.php`, read at 10.5.64)
- * catches every `Throwable` a subscriber raises and demotes it to a PHPUnit warning,
- * which changes the exit code only under `failOnPhpunitWarning`
- * (`vendor/phpunit/phpunit/src/TextUI/ShellExitCodeCalculator.php:140-142`). This
- * repo's `phpunit.xml` (line 2) sets `failOnWarning="true"` — a different counter — and
- * does NOT set `failOnPhpunitWarning`, so under this repo's configuration a subscriber
- * cannot change the exit code. `scripts/assertion-escape-check.php` reads the report
- * file and is what turns a violation into a non-zero exit for CI.
+ * catches every `Throwable` a subscriber raises and demotes it to a PHPUnit warning.
+ * `scripts/assertion-escape-check.php` reads the report file and is what turns a
+ * violation into a NAMED non-zero exit for CI.
+ *
+ * ⚠ CORRECTED 2026-08-02 (S120 AC audit). This docblock used to add that the demoted
+ * warning "changes the exit code only under `failOnPhpunitWarning`", which this repo
+ * "does NOT set, so a subscriber cannot change the exit code". Both halves of that
+ * inference are unsound: `failOnPhpunitWarning` **defaults to `true`**
+ * (`vendor/phpunit/phpunit/phpunit.xsd:184`, and
+ * `.../TextUI/Configuration/Xml/Loader.php:833` passes `true` as the default), so an
+ * unset attribute is an ENABLED one. Verified by execution: a subscriber that throws
+ * makes an otherwise-green run exit 1 with `PHPUnit Warnings: 1`. Keeping the check in
+ * a separate script is still the right call — it names the failure instead of leaving a
+ * bare warning in the tail — but it is a legibility argument, not a necessity one.
+ *
+ * The wiring is pinned by `tests/Unit/Support/AssertionEscapeGuardWiringTest.php`,
+ * because deleting the `<bootstrap>` line that registers THIS class from `phpunit.xml`
+ * used to be entirely silent: no report, no warning, check script exit 0.
  */
 final class AssertionEscapeGuardExtension implements Extension
 {

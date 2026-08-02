@@ -119,10 +119,16 @@ jobs:
       - name: S120 assertion-escape guard
         # ADDITIVE step — it reads the report the PHPUnit extension registered in
         # phpunit.xml leaves behind when a test contained an assertion failure that did
-        # not decide the test's outcome (an ExpectationFailedException swallowed by a
-        # catch (\Throwable) / catch (\RuntimeException) between the assertion and
-        # PHPUnit). No report file => exit 0. `if: always()` so it still reports when
-        # the suite itself failed, which is exactly when a degraded message hurts most.
+        # not decide the test's outcome (an ExpectationFailedException swallowed between
+        # the assertion and PHPUnit — by catch (\Throwable), catch (\Exception) or
+        # catch (\RuntimeException), or by a `return` inside a `finally`).
+        # No report file => exit 0. `if: always()` so it still reports when the suite
+        # itself failed, which is exactly when a degraded message hurts most.
+        #
+        # Do NOT delete this step, add continue-on-error to it, or drop `if: always()`.
+        # tests/Unit/Support/AssertionEscapeGuardWiringTest.php parses this file and
+        # fails on each of those three edits, and on the removal of the <bootstrap>
+        # registration in phpunit.xml that feeds it.
         if: always()
         run: php scripts/assertion-escape-check.php
 

@@ -46,7 +46,8 @@ final class MetadataHttpResult
     private const PROVIDER_NOT_FOUND_STATUS_CODE = 34;
 
     /**
-     * @param MetadataFailureKind        $kind               Why the request failed (or {@see MetadataFailureKind::None}).
+     * @param MetadataFailureKind        $kind               Why the request failed
+     *                                                       (or {@see MetadataFailureKind::None}).
      * @param int|null                   $httpStatus         HTTP status, or null when no response arrived.
      * @param array<string, mixed>|null  $rawBody            Decoded body, kept even for
      *                                                       failures (diagnostics only).

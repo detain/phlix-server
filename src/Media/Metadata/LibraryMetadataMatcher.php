@@ -883,11 +883,14 @@ class LibraryMetadataMatcher
         // branches, nor applyToSeason()/applyToEpisode()/enrichSeriesChildren()
         // downstream, run. No-op at the shipped default (overwrite on).
         if ($this->shouldSkipOverwrite($item)) {
-            $this->logger->info('LibraryMetadataMatcher: interactive apply skipped — overwrite disabled, item already resolved', [
-                'item_id' => $itemId,
-                'tmdb_id' => $tmdbId,
-                'mode' => $mode,
-            ]);
+            $this->logger->info(
+                'LibraryMetadataMatcher: interactive apply skipped — overwrite disabled, item already resolved',
+                [
+                    'item_id' => $itemId,
+                    'tmdb_id' => $tmdbId,
+                    'mode' => $mode,
+                ]
+            );
             return [
                 'item_id' => $itemId,
                 'mode' => $mode,
@@ -1519,9 +1522,12 @@ class LibraryMetadataMatcher
         // season/episode overwrite sites) never runs. No-op at the shipped
         // default (overwrite on).
         if ($this->shouldSkipOverwrite($seriesItem)) {
-            $this->logger->debug('LibraryMetadataMatcher: skip series re-match — overwrite disabled, series already resolved', [
-                'item_id' => $id,
-            ]);
+            $this->logger->debug(
+                'LibraryMetadataMatcher: skip series re-match — overwrite disabled, series already resolved',
+                [
+                    'item_id' => $id,
+                ]
+            );
             return false;
         }
 

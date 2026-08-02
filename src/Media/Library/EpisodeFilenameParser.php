@@ -226,8 +226,9 @@ final class EpisodeFilenameParser
      * Broadcast Pilot". FINAL/MA/DVD/FIX/LIMITED/EXTENDED/THEATRICAL/PROPER-style
      * English words are therefore excluded here; re-measured after the run-rule
      * rewrite, this list truncates 36 of those 25,061 provider titles and every
-     * one of the 36 is itself release junk ("720p.WEB.x264-GalaxyTV", "1080p"). `EpisodeFilenameParserTest::testEpisodeTitleNotNoiseStripped()`
-     * pins the "Extended" half of that decision.
+     * one of the 36 is itself release junk ("720p.WEB.x264-GalaxyTV", "1080p").
+     * `EpisodeFilenameParserTest::testEpisodeTitleNotNoiseStripped()` pins the
+     * "Extended" half of that decision.
      *
      * @var list<string>
      */

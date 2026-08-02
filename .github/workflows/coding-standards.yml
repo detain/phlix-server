@@ -45,7 +45,19 @@ jobs:
           ./vendor/bin/phpcs --version
 
       - name: Run PHPCS
-        run: ./vendor/bin/phpcs --standard=PSR12 -n --colors src/
+        # S109. This used to pass `-n`, which suppresses WARNINGS entirely. That
+        # is how S100's PSR-12 regression reached review: the gate was green
+        # while 8 warnings across 7 files sat in src/ unreported. All 8 (every
+        # one a `Generic.Files.LineLength` over-120) were reflowed in the same
+        # commit that removed this flag, because removing it first would have
+        # turned master red. Do NOT re-add `-n`, and do not silence a finding
+        # with an inline `phpcs:ignore` — reflow the line instead.
+        #
+        # Scope note: this gate covers `src/` only. `scripts/`, `bin/`,
+        # `migrations/`, `public/`, `config/` and `tests/` are still unsniffed
+        # for errors as well as warnings. Widening the path set is a separate
+        # atomic change with its own baseline to reflow first.
+        run: ./vendor/bin/phpcs --standard=PSR12 --colors src/
 
   phpstan:
     name: PHPStan Static Analysis

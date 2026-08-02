@@ -290,20 +290,16 @@ class HlsControllerTest extends TestCase
         $this->assertSame($playlist, $this->bodyOf($res));
     }
 
-    public function testLegacyPreV9FoldedOriginalPlaylistResolvesToTopRung(): void
+    public function testFoldedOriginalPlaylistIsNoLongerAliasedToTopRung(): void
     {
-        // LEGACY (pre-v9 job directories only). The v7/v8 ladder FOLDED "original"
-        // (byte-identical to the top rung), so the master listed no
-        // media_voriginal.m3u8 and it was never produced. A client that still
-        // requests it directly must transparently receive the TOP
-        // (highest-BANDWIDTH) rung's playlist instead of a 404.
+        // S98 REMOVAL PIN. This is the exact fixture the deleted pre-v9 alias
+        // existed for: a folded job dir whose master lists real rungs that ARE on
+        // disk, but with NO media_voriginal.m3u8. The alias used to answer 200 with
+        // the highest-BANDWIDTH rung's bytes; it is gone, so this is now a plain
+        // 404 like any other absent rung.
         //
-        // S49 removed the fold, so no v9+ job can reach this path — every one of
-        // them writes a real media_voriginal.m3u8 (see
-        // TranscodeManagerTest::testEnsureHlsJobWritesOriginalPlaylistFor…). This
-        // alias is retained for one release so already-issued signed URLs for
-        // pre-v9 job dirs keep playing until the cache sweep ages them out; delete
-        // it, resolveTopVariantPlaylist() and this test together in the follow-up.
+        // This test is the red-on-revert guard for the removal — restoring the
+        // alias turns the 404 back into a 200 carrying $top.
         $manager = $this->createMock(TranscodeManager::class);
         $manager->expects($this->never())->method('ensureSegment');
 
@@ -316,26 +312,56 @@ class HlsControllerTest extends TestCase
         $top = "#EXTM3U\n#EXT-X-VERSION:3\n#EXTINF:2.0,\nseg-v1080p-00000.ts\n";
         $this->writeJobFile('job-fold', 'media_v1080p.m3u8', $top);
         $this->writeJobFile('job-fold', 'media_v720p.m3u8', "#EXTM3U\nseg-v720p-00000.ts\n");
-        // media_voriginal.m3u8 intentionally NOT written (folded).
+        // media_voriginal.m3u8 intentionally NOT written (the pre-v9 folded shape).
 
         $res = $this->controller($manager)->serveFile(
             new Request(),
             ['job_id' => 'job-fold', 'file' => 'media_voriginal.m3u8']
         );
 
+        $this->assertSame(404, $res->statusCode);
+        // And specifically NOT the top rung's bytes served under an alias.
+        $this->assertNotSame($top, $this->bodyOf($res));
+    }
+
+    public function testMissingOriginalPlaylistIsRegeneratedRatherThanAliased(): void
+    {
+        // S98 REPLACEMENT PATH. Regeneration — not aliasing — is what now covers a
+        // job whose media_voriginal.m3u8 is absent (e.g. an LRU-swept dir). The
+        // ensurePlaylistRegenerated() call runs BEFORE the (now deleted) alias site
+        // and writes a REAL Original playlist, which is then served verbatim.
+        $manager = $this->createMock(TranscodeManager::class);
+        $manager->expects($this->never())->method('ensureSegment');
+
+        $regenerated = "#EXTM3U\n#EXT-X-VERSION:7\n#EXTINF:2.0,\nseg-voriginal-00000.ts\n";
+        $manager->expects($this->once())
+            ->method('ensurePlaylistRegenerated')
+            ->with('job-regen')
+            ->willReturnCallback(function (string $jobId) use ($regenerated): bool {
+                $this->writeJobFile($jobId, 'media_voriginal.m3u8', $regenerated);
+                return true;
+            });
+
+        // Dir exists but the Original playlist does not — the swept-then-replayed
+        // signed-URL case.
+        $this->writeJobFile('job-regen', 'master.m3u8', "#EXTM3U\n#EXT-X-VERSION:7\n");
+
+        $res = $this->controller($manager)->serveFile(
+            new Request(),
+            ['job_id' => 'job-regen', 'file' => 'media_voriginal.m3u8']
+        );
+
         $this->assertSame(200, $res->statusCode);
         $this->assertSame('application/vnd.apple.mpegurl', $res->headers['Content-Type']);
-        // Served the highest-BANDWIDTH rung's playlist bytes, not the 720p one.
-        $this->assertSame($top, $this->bodyOf($res));
+        $this->assertSame($regenerated, $this->bodyOf($res));
     }
 
     public function testOriginalPlaylistServedVerbatimWhenPresent(): void
     {
         // The normal case for every v9+ job (S49: the Original is always written):
-        // media_voriginal.m3u8 is served verbatim and the legacy top-rung alias
-        // never engages. Note the master here deliberately DOES list the original —
-        // a pre-v9 copy-original job shape — to prove the alias is skipped purely on
-        // the file's presence, not on what the master says.
+        // media_voriginal.m3u8 is served verbatim. Note the master here deliberately
+        // DOES list the original — a pre-v9 copy-original job shape — to prove the
+        // bytes come from the file on disk, not from anything the master says.
         $master = "#EXTM3U\n#EXT-X-VERSION:3\n"
             . "#EXT-X-STREAM-INF:BANDWIDTH=8000000,RESOLUTION=1920x1080,CODECS=\"avc1.640029,mp4a.40.2\"\n"
             . "media_voriginal.m3u8\n"
@@ -368,22 +394,6 @@ class HlsControllerTest extends TestCase
         $res = $this->controller()->serveFile(
             new Request(),
             ['job_id' => 'job-unk', 'file' => 'media_v2160p.m3u8']
-        );
-
-        $this->assertSame(404, $res->statusCode);
-    }
-
-    public function testLegacyPreV9FoldedOriginalStill404sWhenNoTopRungOnDisk(): void
-    {
-        // Guard on the same legacy alias: if the master lists only original
-        // (nothing else on disk to alias to), the request has no top rung to fall
-        // back to and stays a 404 — the fallback cannot invent a non-existent
-        // playlist, and must never mask a genuinely missing job.
-        $this->writeJobFile('job-empty', 'master.m3u8', "#EXTM3U\n#EXT-X-VERSION:3\n");
-
-        $res = $this->controller()->serveFile(
-            new Request(),
-            ['job_id' => 'job-empty', 'file' => 'media_voriginal.m3u8']
         );
 
         $this->assertSame(404, $res->statusCode);

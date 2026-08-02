@@ -29,6 +29,7 @@ use Phlix\Plugins\Installer\HttpInstaller;
 use Phlix\Plugins\PluginLoader;
 use Phlix\Plugins\Repository\PluginRepository;
 use Phlix\Plugins\Signature\SignatureVerifier;
+use Phlix\Theming\ThemeSourceRegistry;
 use Psr\Container\ContainerInterface;
 use Workerman\MySQL\Connection;
 
@@ -170,6 +171,13 @@ final class PluginsProvider implements ServiceProviderInterface
                     /** @var SubtitleSourceRegistry $subtitleSourceRegistry */
                     $subtitleSourceRegistry = $c->get(SubtitleSourceRegistry::class);
 
+                    // S84: the process-scoped theme-source registry the
+                    // loader (de)registers plugin ThemeSourceInterface
+                    // instances into on enable/disable — the third arm of
+                    // the same pattern.
+                    /** @var ThemeSourceRegistry $themeSourceRegistry */
+                    $themeSourceRegistry = $c->get(ThemeSourceRegistry::class);
+
                     return new PluginLoader(
                         $installer,
                         $composer,
@@ -181,6 +189,7 @@ final class PluginsProvider implements ServiceProviderInterface
                         $logger,
                         $sourceRegistry,
                         $subtitleSourceRegistry,
+                        $themeSourceRegistry,
                     );
                 }
             ),

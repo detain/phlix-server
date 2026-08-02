@@ -34,6 +34,9 @@ use Phlix\Shared\Metadata\MetadataSourceInterface;
 use Phlix\Shared\Plugin\ConfigurableInterface;
 use Phlix\Shared\Plugin\EventNameMap;
 use Phlix\Shared\Plugin\LifecycleInterface;
+use Phlix\Theming\Exception\InvalidThemeDefinition;
+use Phlix\Theming\ThemeSourceInterface;
+use Phlix\Theming\ThemeSourceRegistry;
 use Psr\Container\ContainerInterface;
 use ReflectionClass;
 use ReflectionException;
@@ -95,6 +98,7 @@ class PluginLoader
         private ?StructuredLogger $logger = null,
         private readonly ?SourceRegistry $sourceRegistry = null,
         private readonly ?SubtitleSourceRegistry $subtitleSourceRegistry = null,
+        private readonly ?ThemeSourceRegistry $themeSourceRegistry = null,
     ) {
     }
 
@@ -315,8 +319,9 @@ class PluginLoader
      * Wire an already-loaded, persisted-enabled plugin into THIS worker's
      * dispatch surfaces: run its (de-blocked, boot-safe) `onEnable()`, subscribe
      * its {@see LifecycleInterface::subscribedEvents()} into this worker's
-     * {@see ListenerRegistry}, and register any {@see MetadataSourceInterface}
-     * into this worker's {@see SourceRegistry}.
+     * {@see ListenerRegistry}, and register any {@see MetadataSourceInterface},
+     * {@see SubtitleSourceInterface} or {@see ThemeSourceInterface} into this
+     * worker's corresponding capability registry.
      *
      * This is the boot re-attach primitive shared by {@see self::enable()} and
      * {@see self::bootstrapEnabled()}. It performs NO persistence and writes NO
@@ -482,7 +487,60 @@ class PluginLoader
             $this->subtitleSourceRegistry->register($instance);
         }
 
+        // First-class THEME-source registration (S84), the third arm of the
+        // same pattern. Replaces the never-called manifest `theme` key path
+        // ({@see \Phlix\Theming\ThemeRegistry::registerFromPlugin()}), which
+        // took a whole plugin-supplied CSS FILE; this one takes a token map
+        // the host validates exhaustively against the @phlix/tokens
+        // allowlist. Deregistered in disable() for a leak-free cycle.
+        //
+        // Unlike the two arms above, this one can REFUSE: a token that fails
+        // {@see \Phlix\Theming\ThemeTokenValidator}'s grammar is a CSS
+        // injection attempt, and failing the enable is the only honest
+        // answer. Because this happens after the listeners were subscribed,
+        // unwind them first — a plugin whose enable failed must not be left
+        // handling events.
+        if ($this->themeSourceRegistry !== null && $instance instanceof ThemeSourceInterface) {
+            try {
+                $this->themeSourceRegistry->register($instance);
+            } catch (InvalidThemeDefinition $e) {
+                $this->unwire($name, $instance);
+                throw new PluginEnableException(sprintf(
+                    'Plugin %s provided an invalid theme: %s',
+                    $name,
+                    $e->getMessage(),
+                ), 0, $e);
+            }
+        }
+
         return $registeredSource;
+    }
+
+    /**
+     * Roll a partially-wired plugin back out of THIS worker.
+     *
+     * Undoes exactly what {@see self::wire()} did before it failed:
+     * unsubscribes the listeners it registered, drops the metadata/subtitle
+     * source registrations, and forgets the entry instance. Persistence is
+     * untouched — `wire()` never writes any, and `enable()` fails before its
+     * `setEnabled(true)`.
+     *
+     * @param string $name     Manifest name of the plugin being unwound.
+     * @param object $instance The entry instance `wire()` built.
+     */
+    private function unwire(string $name, object $instance): void
+    {
+        foreach ($this->activeSubscriptions[$name] ?? [] as [$eventClass, $callable]) {
+            $this->listenerRegistry->unsubscribe($eventClass, $callable);
+        }
+        unset($this->activeSubscriptions[$name], $this->entryInstances[$name]);
+
+        if ($this->sourceRegistry !== null && $instance instanceof MetadataSourceInterface) {
+            $this->sourceRegistry->deregisterInstance($instance);
+        }
+        if ($this->subtitleSourceRegistry !== null && $instance instanceof SubtitleSourceInterface) {
+            $this->subtitleSourceRegistry->deregisterInstance($instance);
+        }
     }
 
     /**
@@ -709,6 +767,12 @@ class PluginLoader
             // enable → disable cycle leaves the registry as it started.
             if ($this->subtitleSourceRegistry !== null && $instance instanceof SubtitleSourceInterface) {
                 $this->subtitleSourceRegistry->deregisterInstance($instance);
+            }
+            // Mirror for theme sources (S84): removes every theme this source
+            // contributed, so an enable → disable cycle leaves the theme
+            // registry exactly as it started.
+            if ($this->themeSourceRegistry !== null && $instance instanceof ThemeSourceInterface) {
+                $this->themeSourceRegistry->deregisterInstance($instance);
             }
             try {
                 $instance->onDisable();

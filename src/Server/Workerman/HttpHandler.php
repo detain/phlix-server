@@ -33,7 +33,6 @@ use Phlix\Server\Http\Response;
 use Phlix\Server\WebPortal\Controllers\SharedUiController;
 use Phlix\Server\WebPortal\WebPortalRouter;
 use Phlix\Stats\Metrics\MetricsCollector;
-use Phlix\Theming\ThemeMiddleware;
 use Psr\Container\ContainerInterface;
 use Throwable;
 use Workerman\Connection\TcpConnection;
@@ -234,9 +233,6 @@ final class HttpHandler
             //    owns every /api/*, /health, /system/info, /.well-known,
             //    /hls/, /dash/, /stream/, /opds/, and the browser-form
             //    auth aliases (/auth/login, /auth/register, /auth/refresh).
-            //    Its constructor wires ThemeMiddleware into the middleware
-            //    chain, so HTML responses produced by routes here already
-            //    have `{$theme_css|raw}` / `{$theme_js|raw}` substituted.
             $httpLogger->debug("HttpHandler.__invoke Application::dispatch [uid={$requestUid}]");
             $appResponse = $this->application->dispatch($request);
             $httpLogger->debug(
@@ -282,12 +278,16 @@ final class HttpHandler
             // 2) Fall through to the page-rendering routes (home, login,
             //    library, search, settings, admin SSR pages, /music,
             //    /books, /audiobooks, /photo). These aren't in
-            //    Application's router so we have to dispatch and apply
-            //    ThemeMiddleware ourselves.
-            $httpLogger->debug("HttpHandler.__invoke page rendering (ThemeMiddleware) [uid={$requestUid}]");
-            /** @var ThemeMiddleware $theme */
-            $theme = $this->container->get(ThemeMiddleware::class);
-            $response = $theme->onHttpRequest($request, fn (Request $req): Response => $this->dispatch($req));
+            //    Application's router, so dispatch them here.
+            //
+            //    S84: this call used to be wrapped in ThemeMiddleware, which
+            //    string-replaced the Smarty placeholders `{$theme_css|raw}` /
+            //    `{$theme_js|raw}` in the rendered body. Nothing has emitted
+            //    those since the Smarty page renderer was deleted, so the
+            //    wrapper was a no-op on every response; it was removed with
+            //    the middleware rather than left running.
+            $httpLogger->debug("HttpHandler.__invoke page rendering [uid={$requestUid}]");
+            $response = $this->dispatch($request);
             $httpLogger->debug(
                 "HttpHandler.__invoke page rendering done [uid={$requestUid}] [status={$response->statusCode}]"
             );

@@ -29,7 +29,6 @@ use Phlix\Server\Http\Response;
 use Phlix\Server\Http\Router;
 use Phlix\Server\Http\Routes\AdminRoutes;
 use Phlix\Session\SyncPlay\SyncPlayManager;
-use Phlix\Theming\ThemeMiddleware;
 use Psr\Container\ContainerInterface;
 use Throwable;
 
@@ -91,14 +90,14 @@ class Application
         $this->router = new Router($container);
         $this->loadRoutes();
 
-        // Register ThemeMiddleware from container if available
-        if ($container->has(ThemeMiddleware::class)) {
-            /** @var ThemeMiddleware */
-            $themeMiddleware = $container->get(ThemeMiddleware::class);
-            $this->middleware(function (Request $request, callable $next) use ($themeMiddleware): Response {
-                return $themeMiddleware->onHttpRequest($request, $next);
-            });
-        }
+        // S84: ThemeMiddleware used to be registered here as the FIRST global
+        // middleware. It substituted the Smarty placeholders
+        // `{$theme_css|raw}` / `{$theme_js|raw}` in an already-rendered HTML
+        // body; no template has emitted either since the Smarty page renderer
+        // was deleted (the `/app` SPA themes itself from @phlix/tokens), so
+        // the substitution ran on every HTML response and never matched. It
+        // was removed rather than left inert — see ThemeSourceRegistry for
+        // the replacement, a validated token-map capability registry.
 
         // Register AccessScheduleMiddleware from container if available
         // Runs after auth to enforce time-based access restrictions
@@ -2128,16 +2127,18 @@ class Application
      *
      * ⚠ **What `ApplicationHeadOnlyBoundaryTest` actually pins** — the earlier wording
      * here ("pins both halves so neither can drift silently") overstated it, and the
-     * S105 AC audit reproduced the gap: a THIRD global middleware short-circuiting with
+     * S105 AC audit reproduced the gap: an EXTRA global middleware short-circuiting with
      * its own `Content-Length` left the whole Unit suite green. Corrected, the alarm
      * now covers three concrete drifts: `AccessScheduleMiddleware` starting to declare
-     * a `Content-Length`; a third `$this->middleware(...)` registration appearing below
-     * (asserted on the COUNT, so it fires whatever the middleware is); and a
+     * a `Content-Length`; the `$this->middleware(...)` registration COUNT below changing
+     * at all (so it fires whatever the middleware is, and on a removal too); and a
      * registration smuggled in from another `src/` file via
-     * {@see self::getInstance()}. It does NOT cover the two existing middlewares
-     * changing *shape* other than that — though `ThemeMiddleware::onHttpRequest()`
-     * calls `$next()` as its first statement and only decorates the result, so making
-     * it short-circuit is itself a deliberate behaviour change, not drift.
+     * {@see self::getInstance()}. It does NOT cover the remaining middleware changing
+     * *shape* other than that.
+     *
+     * S84 lowered that count from two to one: `ThemeMiddleware` — the pass-through half
+     * of the original measurement — was retired along with the Smarty placeholders it
+     * substituted, leaving `AccessScheduleMiddleware` as the only global middleware.
      *
      * @param Request $request The HTTP request to dispatch.
      *

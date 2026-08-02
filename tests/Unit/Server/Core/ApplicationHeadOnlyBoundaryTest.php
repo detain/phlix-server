@@ -64,9 +64,13 @@ final class ApplicationHeadOnlyBoundaryTest extends TestCase
 
     /**
      * The guarantee SURVIVES the global chain: a pass-through global middleware
-     * (the shape `Application::__construct()` registers `ThemeMiddleware` with —
-     * it always calls `$next`) leaves the router's flag, and therefore the single
-     * `Content-Length`, intact.
+     * — one that always calls `$next` — leaves the router's flag, and therefore
+     * the single `Content-Length`, intact.
+     *
+     * `ThemeMiddleware` was the registered example of this shape until S84 retired
+     * it. The property is not tied to that class, so the test keeps its synthetic
+     * pass-through: it pins what the CHAIN does to a `HEAD`, which is still worth
+     * pinning for the next pass-through middleware that gets registered.
      */
     public function testTheRouterHeadOnlyGuaranteeSurvivesTheGlobalMiddlewareChain(): void
     {
@@ -221,35 +225,50 @@ final class ApplicationHeadOnlyBoundaryTest extends TestCase
      * half that matters. Test 3 proves what a Content-Length-declaring short-circuit
      * WOULD do, but it builds that middleware **synthetically inside itself**; test 4
      * proves the hole is latent, but it hard-codes **`AccessScheduleMiddleware`**.
-     * Neither looks at what is actually registered. So a *third* global middleware
+     * Neither looks at what is actually registered. So an EXTRA global middleware
      * declaring a `Content-Length` on a short-circuit — the unrecoverable RFC 9110
      * §8.6 shape the class docblock says "must be fixed at once" — was caught by
      * nothing: adding one to `Application::__construct()` left the entire Unit suite
      * (8,470 tests) GREEN with an identical assertion count.
      *
-     * This asserts the **count** instead of the identity, so it fires on a third
-     * registration regardless of what that registration is. Both spellings are
-     * covered: `Application::middleware()` is public, and the only way to reach it
-     * from outside the class is the `Application::getInstance()` singleton.
+     * This asserts the **count** instead of the identity, so it fires on any change
+     * to the registration list regardless of what that registration is. Both
+     * spellings are covered: `Application::middleware()` is public, and the only way
+     * to reach it from outside the class is the `Application::getInstance()`
+     * singleton.
      *
      * ⚠ Stopping rule, so this cannot be quietly deleted as noise: if it fires,
      * the fix is to analyse the new middleware and — if it cannot short-circuit with
      * a `Content-Length` — raise the expected count here with that reasoning written
      * down. It is not to delete the assertion. If a `getInstance()` caller appears
      * that does not register middleware, the second assertion already ignores it.
+     *
+     * ## Count history (each change gets a line, per the stopping rule)
+     *
+     *  - measured at **2**: `ThemeMiddleware` (pass-through) + `AccessScheduleMiddleware`.
+     *  - **S84 → 1**: `ThemeMiddleware` was RETIRED. Analysis for the lowering, which
+     *    the stopping rule demands in both directions: it was the pass-through half of
+     *    the pair, so removing it cannot introduce a short-circuit and the two-length
+     *    defect stays out of reach; and it substituted the Smarty placeholders
+     *    `{$theme_css|raw}` / `{$theme_js|raw}`, which no template has emitted since
+     *    the Smarty page renderer was deleted, so nothing observable changed on the
+     *    wire. `AccessScheduleMiddleware` — still the only middleware that can
+     *    short-circuit, still declaring no `Content-Length` (test 4) — is now the only
+     *    global middleware at all.
      */
     public function testNoThirdGlobalMiddlewareHasAppearedSinceThisBoundaryWasMeasured(): void
     {
         $applicationFile = (string) (new ReflectionClass(Application::class))->getFileName();
 
         $this->assertSame(
-            2,
+            1,
             $this->countGlobalRegistrations($applicationFile),
-            'A global middleware was added or removed. The head-only boundary was measured against '
-            . 'exactly two (ThemeMiddleware, which always calls $next, and AccessScheduleMiddleware, '
-            . 'whose refusals declare no Content-Length). Re-do that analysis for the new one: if it can '
-            . 'short-circuit while declaring a Content-Length, a HEAD it refuses ships TWO of them '
-            . '(RFC 9110 §8.6, unrecoverable) because Router::markHeadOnly() is never reached.',
+            'A global middleware was added or removed. The head-only boundary is currently measured '
+            . 'against exactly one (AccessScheduleMiddleware, whose refusals declare no Content-Length; '
+            . 'ThemeMiddleware was the second until S84 retired it). Re-do that analysis for the new '
+            . 'one: if it can short-circuit while declaring a Content-Length, a HEAD it refuses ships '
+            . 'TWO of them (RFC 9110 §8.6, unrecoverable) because Router::markHeadOnly() is never '
+            . 'reached. Then update the count history in this test docblock.',
         );
 
         $this->assertSame(

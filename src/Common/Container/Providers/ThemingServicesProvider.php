@@ -12,23 +12,27 @@ declare(strict_types=1);
 namespace Phlix\Common\Container\Providers;
 
 use DI\ContainerBuilder;
-use Phlix\Auth\UserProfileManager;
 use Phlix\Common\Container\ServiceProviderInterface;
-use Phlix\Theming\Theme;
-use Phlix\Theming\ThemeMiddleware;
 use Phlix\Theming\ThemeRegistry;
+use Phlix\Theming\ThemeSourceRegistry;
 use Workerman\MySQL\Connection;
 
 use function DI\autowire;
 use function DI\factory;
-use function DI\get;
 
 /**
- * Registers the theming subsystem: ThemeRegistry and ThemeMiddleware.
+ * Registers the theming subsystem: ThemeRegistry and ThemeSourceRegistry.
  *
- * Built-in themes are registered from config/themes.php during registry
- * construction. Plugin themes are registered via registerFromPlugin()
- * during the plugin bootstrap phase.
+ * Built-in CSS themes are registered from config/themes.php during
+ * {@see ThemeRegistry} construction. Plugin token-map themes land in
+ * {@see ThemeSourceRegistry}, which {@see \Phlix\Plugins\PluginLoader}
+ * (de)registers on plugin enable/disable via the
+ * {@see \Phlix\Theming\ThemeSourceInterface} capability arm.
+ *
+ * `ThemeMiddleware` used to be registered here too. It was retired in S84:
+ * it string-replaced two Smarty placeholders (`{$theme_css|raw}` /
+ * `{$theme_js|raw}`) into rendered HTML, and no template has emitted either
+ * since the Smarty page renderer was deleted — the `/app` SPA themes itself.
  *
  * @internal Phlix-internal service provider.
  *
@@ -66,9 +70,12 @@ final class ThemingServicesProvider implements ServiceProviderInterface
                 }
             ),
 
-            ThemeMiddleware::class => autowire()
-                ->constructorParameter('registry', get(ThemeRegistry::class))
-                ->constructorParameter('profiles', get(UserProfileManager::class)),
+            // S84 capability registry. Plain autowire is safe here precisely
+            // because the class declares NO constructor — there is no
+            // optional dependency for PHP-DI's autowire() to silently skip.
+            // It holds only its own two maps, so one container-scoped
+            // instance per worker is exactly right.
+            ThemeSourceRegistry::class => autowire(),
         ];
 
         $builder->addDefinitions($definitions);

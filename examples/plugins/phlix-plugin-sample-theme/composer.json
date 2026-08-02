@@ -1,0 +1,11 @@
+{
+    "name": "phlix/plugin-sample-theme",
+    "description": "Reference implementation of a Phlix ui-theme plugin (S86): two token-map themes registered through ThemeSourceInterface.",
+    "type": "phlix-plugin",
+    "license": "MIT",
+    "autoload": {
+        "psr-4": {
+            "Phlix\\PluginSampleTheme\\": "src/"
+        }
+    }
+}

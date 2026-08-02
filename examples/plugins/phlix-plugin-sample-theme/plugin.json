@@ -1,0 +1,9 @@
+{
+    "name": "phlix-plugin-sample-theme",
+    "version": "1.0.0",
+    "phlix_min_server_version": "0.44.0",
+    "type": "ui-theme",
+    "entry": "Phlix\\PluginSampleTheme\\SampleThemePlugin",
+    "events": [],
+    "signature": null
+}

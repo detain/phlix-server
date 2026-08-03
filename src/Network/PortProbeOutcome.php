@@ -89,6 +89,13 @@ enum PortProbeOutcome: string
      * was reported at all", which the old fallback treated as open
      * (`$errno === 0` was half of its `return`). An unmeasurable probe must
      * never read as success.
+     *
+     * This case is NOT theoretical on the coroutine arm: measured, one swoole
+     * 6.2.2 build reports `errCode = 0` with an empty `errMsg` for a connection
+     * that was genuinely refused, so a refused port legitimately lands here
+     * instead of on {@see self::Refused}. See the table in
+     * {@see StunClient::probeViaCoroutineSocket()}. Both answer "not open",
+     * which is why the verdict is stable even where the classification is not.
      */
     case Failed = 'failed';
 

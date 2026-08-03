@@ -62,6 +62,23 @@ use Throwable;
  * — that is necessary, not sufficient. To show the production fork flipped, make
  * the branch observable (StunClient logs a `transport` field for exactly this
  * reason) or mutate the coroutine arm and watch the named test go red.
+ *
+ * ⚠ A PHP WARNING raised inside the coroutine cannot be attributed to a test.
+ * Measured while mutation-testing S169: forcing StunClient's BLOCKING arm to run
+ * inside the coroutine turned three tests into
+ * `PHPUnit\Event\Code\NoTestCaseObjectOnCallStackException: Cannot find TestCase
+ * object on call stack`, raised from the `fsockopen()` line. PHPUnit's error
+ * handler walks the PHP call stack for the enclosing TestCase and a coroutine has
+ * its own stack, so any diagnostic — even from an `@`-suppressed call — errors the
+ * test out instead of failing it with something readable. So: run only the
+ * NON-BLOCKING implementation inside this helper. If the code under test raises
+ * warnings, that error message is the symptom, not a bug in the harness.
+ *
+ * The S120 escape guard is satisfied by all of this: a failing assertion inside
+ * the body does decide the test's outcome via the re-throw, so it emits one
+ * `AssertionFailed` for one failed test and no escape is recorded (verified by
+ * running a deliberately-false assertion through it and checking
+ * scripts/assertion-escape-check.php stayed clean).
  */
 trait RunsInCoroutine
 {

@@ -193,6 +193,18 @@ class StunClient
             // Read errCode BEFORE close(). It does survive close() on swoole
             // 6.2.1 (measured) but nothing documents that, and the classified
             // answer must not depend on it.
+            //
+            // ⚠ MEASURED — errCode is NOT reliably populated, so the CLASSIFICATION
+            // (not the verdict) varies by swoole build. Connect to a closed
+            // loopback port, same host, same test:
+            //   swoole 6.2.1 / PHP 8.3.6  -> connect=false errCode=111 "Connection refused"
+            //   swoole 6.2.2 / PHP 8.4.21 -> connect=false errCode=111 "Connection refused"
+            //   swoole 6.2.2 / PHP 8.3.32 -> connect=false errCode=0   errMsg=""
+            // SO_ERROR is no help: getOption(SOL_SOCKET, SO_ERROR) reads 0 in all
+            // three (the kernel's pending error has already been consumed). So a
+            // failed connect can arrive with nothing but "it failed", which maps
+            // to PortProbeOutcome::Failed — not open, which is the answer callers
+            // need. Do NOT make the bool depend on the classification.
             $errno = (int) $sock->errCode;
             $sock->close();
 

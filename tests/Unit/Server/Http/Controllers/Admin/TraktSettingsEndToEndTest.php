@@ -33,7 +33,6 @@ use Workerman\MySQL\Connection;
  * but "a saved client_id actually changes what TraktOAuthController does". Every
  * one of them runs against the REAL `config/` directory, so the shim is under
  * test rather than mocked away.
- *
  */
 final class TraktSettingsEndToEndTest extends TestCase
 {

@@ -55,7 +55,6 @@ use Workerman\MySQL\Connection;
  * degenerate to single-row checks. {@see self::INTERRUPT_AT} and
  * {@see self::FLUSHED_BEFORE_INTERRUPT} are derived from ALBUMS — see their
  * arithmetic before changing it.
- *
  */
 final class MusicScanIncrementalFlushIntegrationTest extends TestCase
 {

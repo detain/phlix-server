@@ -32,7 +32,6 @@ use Phlix\Media\Metadata\TmdbProvider;
  * only carries `episode_title` when `stringOrNull()` accepted the provider's
  * value. That is easy to break with a well-meant "always set the key" refactor,
  * hence these tests rather than a comment.
- *
  */
 class LibraryMetadataMatcherEpisodeTitleFallbackTest extends TestCase
 {

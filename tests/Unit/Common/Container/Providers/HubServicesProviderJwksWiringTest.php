@@ -13,7 +13,6 @@ use Phlix\Common\RateLimit\RateLimitProfiles;
 use Phlix\Hub\HubClient;
 use Phlix\Server\Http\Controllers\HubJwksController;
 use Phlix\Server\Http\Request;
-use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -27,7 +26,6 @@ use PHPUnit\Framework\TestCase;
  *
  * The JWKS profile itself is registered in {@see AuthServicesProvider} (all
  * providers merge into one container), so both providers are registered here.
- *
  */
 final class HubServicesProviderJwksWiringTest extends TestCase
 {

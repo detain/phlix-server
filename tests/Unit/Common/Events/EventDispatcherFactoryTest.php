@@ -20,7 +20,6 @@ use Stringable;
 
 /**
  * Unit tests for {@see EventDispatcherFactory}.
- *
  */
 final class EventDispatcherFactoryTest extends TestCase
 {

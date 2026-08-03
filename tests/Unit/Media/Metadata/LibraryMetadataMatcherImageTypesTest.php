@@ -16,7 +16,6 @@ use Phlix\Media\Metadata\MovieMetadataResolver;
  * {@see LibraryMetadataMatcher}: a disabled image type's flat metadata key is
  * dropped before persistence; enabled types are stored; with no LibraryManager
  * wired nothing is filtered (back-compat).
- *
  */
 class LibraryMetadataMatcherImageTypesTest extends TestCase
 {

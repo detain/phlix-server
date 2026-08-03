@@ -16,7 +16,6 @@ use Phlix\Common\Logger\LogChannels;
  *
  * Verifies that anidb/myanimelist plugins can register and be returned
  * when calling getProvidersForType('anime').
- *
  */
 final class MetadataManagerAnimeIntegrationTest extends TestCase
 {

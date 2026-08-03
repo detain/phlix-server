@@ -30,7 +30,6 @@ use Workerman\MySQL\Connection;
  * the admin UI showed the key as configured.
  *
  * These tests fail against that implementation.
- *
  */
 final class WebPortalRouterTmdbKeyTest extends TestCase
 {

@@ -16,7 +16,6 @@ use Workerman\MySQL\Connection;
  * that replaces the unbounded per-worker static array. Backed by the
  * `login_rate_limit` table (migration 074). The DB is mocked so the tests run
  * without a MySQL server.
- *
  */
 final class DbLoginRateLimitStoreTest extends TestCase
 {

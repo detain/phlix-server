@@ -25,7 +25,6 @@ use Workerman\Worker;
  * persisted `next_retry_at` and the actual Timer delay never drift apart
  * (both are derived from a single jittered delay), and max attempts caps
  * retries.
- *
  */
 class WebhookServiceTest extends TestCase
 {

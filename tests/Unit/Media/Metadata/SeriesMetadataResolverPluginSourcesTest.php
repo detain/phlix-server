@@ -12,7 +12,6 @@ use PHPUnit\Framework\TestCase;
 
 /**
  * F2 plugin-source dispatch on {@see SeriesMetadataResolver}.
- *
  */
 final class SeriesMetadataResolverPluginSourcesTest extends TestCase
 {

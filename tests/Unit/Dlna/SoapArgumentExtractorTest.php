@@ -17,7 +17,6 @@ use SimpleXMLElement;
  * helper's own contract — namespace-agnostic action matching, direct-child-only
  * argument reads (the DIDL-Lite bleed guard), XXE safety, and the defensive
  * XPath literal quoting — so the single-sourced logic cannot silently regress.
- *
  */
 final class SoapArgumentExtractorTest extends TestCase
 {

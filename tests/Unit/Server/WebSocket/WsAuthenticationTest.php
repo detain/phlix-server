@@ -17,7 +17,6 @@ use Phlix\Tests\Unit\Server\WebSocket\TestConnection;
 
 /**
  * Unit tests for WebSocket JWT authentication and server-derived member_id.
- *
  */
 class WsAuthenticationTest extends TestCase
 {
@@ -89,7 +88,6 @@ class WsAuthenticationTest extends TestCase
      * SV-4.7: auth runs at the handshake stage (onWebSocketConnect), where the
      * upgrade request's query string is populated — not at TCP-accept (onConnect,
      * where $_GET is empty/stale under Workerman).
-     *
      */
     public function testValidTokenAuthenticatesConnection(): void
     {
@@ -150,7 +148,6 @@ class WsAuthenticationTest extends TestCase
      * SV-4.7 Gap 2 (FLIPPED from the old insecure assertion): when a JWT secret
      * is configured, a token-less handshake MUST be rejected — the previous test
      * asserted the opposite (allowed unauthenticated), which is the vulnerability.
-     *
      */
     public function testMissingTokenRejectedWhenSecretConfigured(): void
     {
@@ -178,7 +175,6 @@ class WsAuthenticationTest extends TestCase
     /**
      * SV-4.7 Gap 2: with NO JWT secret configured (dev), a token-less handshake
      * is allowed as an anonymous, unauthenticated connection.
-     *
      */
     public function testMissingTokenAllowedWhenNoSecretConfigured(): void
     {

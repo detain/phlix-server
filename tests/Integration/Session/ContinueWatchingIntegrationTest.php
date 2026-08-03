@@ -50,7 +50,6 @@ use Workerman\MySQL\Connection;
  * movie keeps its own poster. CI applies all migrations to the `phlix_test` MySQL
  * service before the suite; locally, with no reachable MySQL, it self-skips —
  * the same guard {@see \Phlix\Tests\Integration\Stats\MetricsReadQueriesTest} uses.
- *
  */
 final class ContinueWatchingIntegrationTest extends TestCase
 {

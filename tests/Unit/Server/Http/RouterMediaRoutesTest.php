@@ -14,7 +14,6 @@ use Phlix\Server\Http\Router;
  * music, books, audiobooks, photos) is uniformly mounted under `/api/v1`.
  * OPDS is the deliberate exception — it follows the OPDS 1.2 spec path
  * (`/opds/v1.2`) and must stay un-prefixed.
- *
  */
 final class RouterMediaRoutesTest extends TestCase
 {

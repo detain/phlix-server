@@ -51,7 +51,6 @@ use Workerman\MySQL\Connection;
  * schema side of the same defect is additionally pinned with no database at all by
  * {@see \Phlix\Tests\Unit\Media\MediaItemTypeDriftTest}, which parses the
  * migration SQL.
- *
  */
 final class PlaybackEventMediaTypeEnumTest extends TestCase
 {

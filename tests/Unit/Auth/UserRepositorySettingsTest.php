@@ -12,7 +12,6 @@ use Workerman\MySQL\Connection;
  * Verifies the SQL built by {@see UserRepository::updateSettings()} is a valid
  * upsert. The previous implementation spliced "col = ?" fragments into the
  * INSERT column list, producing invalid SQL that threw on a first-ever save.
- *
  */
 final class UserRepositorySettingsTest extends TestCase
 {

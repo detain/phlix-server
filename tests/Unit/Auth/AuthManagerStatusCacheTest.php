@@ -26,7 +26,6 @@ use ReflectionProperty;
  *    covered separately in {@see \Phlix\Tests\Unit\Server\Http\Controllers\Admin\AdminUserControllerTest};
  *  - the cache is bounded (LRU) so a worker cannot accumulate one entry per
  *    distinct user forever.
- *
  */
 final class AuthManagerStatusCacheTest extends TestCase
 {

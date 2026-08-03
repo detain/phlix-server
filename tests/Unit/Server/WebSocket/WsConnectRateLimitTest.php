@@ -31,7 +31,6 @@ use PHPUnit\Framework\TestCase;
  * (X-Forwarded-For / X-Real-IP) via the same {@see \Phlix\Common\Http\TrustedProxyResolver}
  * the HTTP limiters use, so distinct clients behind the loopback proxy get
  * distinct buckets.
- *
  */
 final class WsConnectRateLimitTest extends TestCase
 {

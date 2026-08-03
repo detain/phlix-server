@@ -15,7 +15,6 @@ use PHPUnit\Framework\TestCase;
  * `-c:v` encoder) when the probed registry reports an available HW encoder, and
  * returns null (so the caller falls back to the libx264 software path) when it
  * does not.
- *
  */
 final class FfmpegRunnerHwaccelTest extends TestCase
 {

@@ -16,7 +16,6 @@ use PHPUnit\Framework\TestCase;
  * the clamps hold, a hostile or malformed `server_settings` row degrades to the
  * shipped default rather than to an unbounded lifetime, and the
  * refresh >= access invariant is enforced.
- *
  */
 final class TokenTtlPolicyTest extends TestCase
 {

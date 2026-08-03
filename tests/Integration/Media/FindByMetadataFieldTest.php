@@ -24,7 +24,6 @@ use Workerman\MySQL\Connection;
  * self-skips. The unit tests
  * {@see \Phlix\Tests\Unit\Media\Library\ItemRepositoryTest} cover the query
  * shape + injection-safety with a mock regardless.
- *
  */
 final class FindByMetadataFieldTest extends TestCase
 {

@@ -20,7 +20,6 @@ use Workerman\MySQL\Connection;
  * SV-0.1 provider boot: resolving {@see FfmpegRunner} through
  * {@see TranscodeServicesProvider} calls both `setConfig()` (with the merged
  * single-source hwaccel config) and `probeHardwareAcceleration()` once at boot.
- *
  */
 final class TranscodeServicesProviderTest extends TestCase
 {

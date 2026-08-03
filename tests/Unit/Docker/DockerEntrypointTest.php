@@ -28,7 +28,6 @@ use PHPUnit\Framework\TestCase;
  *
  * The middle two are only observable because the script now inspects the exit
  * code; under `|| true` they were indistinguishable from the first.
- *
  */
 class DockerEntrypointTest extends TestCase
 {

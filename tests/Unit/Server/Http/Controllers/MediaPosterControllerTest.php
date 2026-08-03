@@ -15,7 +15,6 @@ use Phlix\Server\Http\Request;
 /**
  * Unit tests for {@see MediaPosterController} — Step 15.1/15.2 poster candidate
  * listing and poster selection endpoints.
- *
  */
 class MediaPosterControllerTest extends TestCase
 {

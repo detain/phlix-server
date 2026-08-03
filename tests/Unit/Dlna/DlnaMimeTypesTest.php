@@ -21,7 +21,6 @@ use PHPUnit\Framework\TestCase;
  * ({@see DlnaMimeTypes::FALLBACK}) rather than guessed — that fallback is what
  * makes the stream route answer 415 instead of serving bytes under a made-up
  * type.
- *
  */
 final class DlnaMimeTypesTest extends TestCase
 {

@@ -51,7 +51,6 @@ use Workerman\MySQL\Connection;
  *
  * If anyone reverts a controller to a plain wholesale replace, the tests below fail
  * with a message naming the incident. Self-skips with no MySQL; runs in CI.
- *
  */
 final class AuthProviderSettingsPreservationRealDbIntegrationTest extends TestCase
 {

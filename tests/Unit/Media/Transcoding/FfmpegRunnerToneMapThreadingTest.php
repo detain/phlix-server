@@ -21,7 +21,6 @@ use ReflectionMethod;
  * caused the per-segment ffprobe storm S-F4 / SV-1.1 targets) — and fall back to
  * the legacy per-segment re-derive ONLY when the threaded string is absent
  * (pre-SV-1.1(b) persisted params / un-rescanned items).
- *
  */
 final class FfmpegRunnerToneMapThreadingTest extends TestCase
 {

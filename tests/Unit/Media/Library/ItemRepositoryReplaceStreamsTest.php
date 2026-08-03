@@ -44,7 +44,6 @@ use Throwable;
  * checks against real MySQL 8.0 on BOTH `DB_POOL_ENABLED` modes are recorded in
  * `steps/detail-endpoint-stream-backfill.worklog.md`; neither substitutes for the
  * other.
- *
  */
 class ItemRepositoryReplaceStreamsTest extends TestCase
 {

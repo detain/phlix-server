@@ -19,7 +19,6 @@ use Workerman\MySQL\Connection;
  *
  * Every assertion is paired with a "the file default says otherwise" check, so
  * a test can never pass merely because the config file happened to agree.
- *
  */
 final class EffectiveConfigTest extends TestCase
 {

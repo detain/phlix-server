@@ -19,7 +19,6 @@ use Workerman\MySQL\Connection;
 
 /**
  * Unit tests for NewsletterGenerator class.
- *
  */
 class NewsletterGeneratorTest extends TestCase
 {

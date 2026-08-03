@@ -20,7 +20,6 @@ use PHPUnit\Framework\TestCase;
  * `}` rule-termination, `!important`, and functional-notation smuggling. They
  * pass because {@see ThemeTokenValidator} accepts only four narrow grammars —
  * there is no substring blocklist to out-spell.
- *
  */
 final class ThemeTokenValidatorTest extends TestCase
 {

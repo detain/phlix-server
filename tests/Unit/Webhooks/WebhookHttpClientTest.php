@@ -18,7 +18,6 @@ use Workerman\Http\ConnectionPool;
  * than hanging for the full request timeout — this requires a connect timeout
  * distinct from (and shorter than) the total request timeout on both the
  * async (workerman/http-client) and blocking-cURL-fallback code paths.
- *
  */
 class WebhookHttpClientTest extends TestCase
 {

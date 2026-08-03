@@ -26,7 +26,6 @@ use PHPUnit\Framework\TestCase;
  *
  * These tests exercise the in-memory fallback rate-limit store (no
  * DbLoginRateLimitStore is injected), keyed on the default 127.0.0.1 client IP.
- *
  */
 final class AuthManagerProviderRateLimitTest extends TestCase
 {

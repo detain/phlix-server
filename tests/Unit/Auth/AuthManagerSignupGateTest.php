@@ -27,7 +27,6 @@ use RuntimeException;
  * Mirrors the existing AuthManager test setup (createMock UserRepository,
  * real JwtHandler, mocked AuditLogger, silent StructuredLogger). The
  * SettingsRepository is mocked and stubbed to return the signup mode.
- *
  */
 final class AuthManagerSignupGateTest extends TestCase
 {

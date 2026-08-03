@@ -19,7 +19,6 @@ use Workerman\MySQL\Connection;
  * item_similar), that the candidate scan is bounded to the job's library (not
  * the O(N²) full-table scan the original finding flagged), and that a failing
  * job is drained rather than retried forever.
- *
  */
 final class SimilarityWorkerTest extends TestCase
 {

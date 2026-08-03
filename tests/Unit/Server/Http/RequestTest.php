@@ -7,7 +7,6 @@ use Phlix\Server\Http\Request;
 
 /**
  * Unit tests for Request class.
- *
  */
 class RequestTest extends TestCase
 {
@@ -76,7 +75,6 @@ class RequestTest extends TestCase
      * SV-4.15 HIGH: getTrustedClientIp() is trusted-proxy-aware. Behind the
      * loopback proxy the rightmost (appended) XFF entry is the real client; the
      * forged leftmost value is ignored.
-     *
      */
     public function testGetTrustedClientIpReturnsRealClientNotForgedLeftmost(): void
     {
@@ -92,7 +90,6 @@ class RequestTest extends TestCase
 
     /**
      * A direct (non-loopback) peer must ignore a client-supplied X-Forwarded-For.
-     *
      */
     public function testGetTrustedClientIpIgnoresXffFromUntrustedPeer(): void
     {

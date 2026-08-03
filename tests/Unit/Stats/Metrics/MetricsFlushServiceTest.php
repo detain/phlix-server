@@ -18,7 +18,6 @@ use Workerman\MySQL\Connection;
  * captured (SQL + bindings) so we can assert the UPSERT / DELETE SQL fragments,
  * the exact bound parameters (worker id, counts, DATETIME strings) and — across
  * two flushes — the per-connection byte-rate computation.
- *
  */
 final class MetricsFlushServiceTest extends TestCase
 {

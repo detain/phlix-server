@@ -29,7 +29,6 @@ use Workerman\MySQL\Connection;
  * a bad column — fails loudly. CI applies all migrations to the `phlix_test`
  * MySQL service before the suite (see phpunit.yml); locally, with no reachable
  * MySQL, it self-skips.
- *
  */
 final class MetricsReadQueriesTest extends TestCase
 {

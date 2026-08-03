@@ -28,7 +28,6 @@ use Workerman\MySQL\Connection;
  * Mutation-verified: restoring the literal `1` in `getStreamLimit()` reddens
  * the two `getStreamLimit` tests while the accessor tests stay green — which is
  * exactly the half-wired state worth catching.
- *
  */
 final class DefaultConcurrentStreamsTest extends TestCase
 {

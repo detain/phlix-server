@@ -27,7 +27,6 @@ use PHPUnit\Framework\TestCase;
  * username is present. An over-limit request throws {@see RateLimitException},
  * which the central mapping (SV-4.15(c)) turns into a 429 + `Retry-After` +
  * `code=rate_limited`.
- *
  */
 final class WebAuthnControllerRateLimitTest extends TestCase
 {

@@ -14,7 +14,6 @@ use PHPUnit\Framework\TestCase;
  * explicit `$nowTs`), so these tests exercise time-bucketing, the latency
  * histogram at its bucket boundaries, error classification, the route
  * cardinality cap and the connection lifecycle without any clock stubbing.
- *
  */
 final class MetricsRegistryTest extends TestCase
 {

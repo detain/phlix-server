@@ -39,7 +39,6 @@ use Workerman\MySQL\Connection;
  * migration-009 `provider`/`external_id` columns. It only ever mutates rows it
  * created (namespaced by a per-run token) and cleans them up in tearDown, so it
  * is safe against a shared CI `phlix_test` schema.
- *
  */
 final class UserRepositoryExternalIdIntegrationTest extends TestCase
 {

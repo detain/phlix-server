@@ -96,7 +96,6 @@ use ReflectionMethod;
  * {@see MediaScanner::logDegenerateVideoStreams()}, so an operator can SEE the
  * junk rows and decide, and a one-off DELETE against a measured library stays
  * available to them.
- *
  */
 final class MediaScannerDegenerateVideoStreamTest extends TestCase
 {

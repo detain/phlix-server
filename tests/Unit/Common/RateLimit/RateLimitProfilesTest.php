@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace Phlix\Tests\Unit\Common\RateLimit;
 
 use Phlix\Common\RateLimit\RateLimitProfiles;
-use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -13,7 +12,6 @@ use PHPUnit\Framework\TestCase;
  * exactly the six previously-UNLIMITED server auth surfaces, with the documented
  * container ids, config keys, defaults, and backend classification. `login` is
  * DELIBERATELY absent (it keeps DbLoginRateLimitStore).
- *
  */
 final class RateLimitProfilesTest extends TestCase
 {

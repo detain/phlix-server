@@ -14,7 +14,6 @@ use Workerman\Connection\TcpConnection;
 
 /**
  * Unit tests for WebSocketServer and SyncPlayManager initialization.
- *
  */
 class WebSocketServerTest extends TestCase
 {
@@ -179,7 +178,6 @@ class WebSocketServerTest extends TestCase
      * internal worker that never listens. Previously they bound to an internal
      * worker created after `Worker::runAll()`, so in production the pool was
      * never populated and pongs never reached `recordPong()` (S-F28 dead).
-     *
      */
     public function testCallbacksBindToInjectedListeningWorker(): void
     {
@@ -222,7 +220,6 @@ class WebSocketServerTest extends TestCase
      * guard — always false because Timer is a class — meant none of them ever
      * armed; the WebSocketServer constructor creates a Worker so Timer::add is
      * usable here.)
-     *
      */
     public function testOnStartRegistersReaperAndPingTimers(): void
     {
@@ -253,7 +250,6 @@ class WebSocketServerTest extends TestCase
      * A half-open socket (peer silently gone) does not answer server pings, so
      * after the non-response limit is reached the ping sweep must close and
      * reap the connection within the ping window (S-F28).
-     *
      */
     public function testPingSweepReapsNonRespondingConnection(): void
     {
@@ -280,7 +276,6 @@ class WebSocketServerTest extends TestCase
     /**
      * A connection that answers pings (pong received) has its outstanding-ping
      * count reset each sweep and must never be reaped.
-     *
      */
     public function testRespondingConnectionIsNeverReaped(): void
     {

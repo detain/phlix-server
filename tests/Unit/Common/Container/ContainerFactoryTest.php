@@ -57,7 +57,6 @@ use function DI\factory;
  * The tests stub the database {@see Connection} and the logger config so the
  * container can be exercised in isolation without touching MySQL or the
  * filesystem-bound logger handlers.
- *
  */
 final class ContainerFactoryTest extends TestCase
 {

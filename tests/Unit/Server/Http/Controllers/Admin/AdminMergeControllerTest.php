@@ -38,7 +38,6 @@ interface SeedableItemRepository
  * The controller is driven with REAL {@see DuplicateFinder} and
  * {@see SeriesMerger} instances over an in-memory {@see ItemRepository} double
  * so the assertions are non-vacuous end-to-end.
- *
  */
 final class AdminMergeControllerTest extends TestCase
 {

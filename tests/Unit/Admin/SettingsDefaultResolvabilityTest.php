@@ -25,7 +25,6 @@ use Workerman\MySQL\Connection;
  *
  * It deliberately does NOT mock the config dir — the point is to check the
  * schema against the files actually shipped.
- *
  */
 final class SettingsDefaultResolvabilityTest extends TestCase
 {

@@ -11,7 +11,6 @@ use Phlix\Common\RateLimit\DbRateLimiter;
 use Phlix\Common\RateLimit\RateLimiter;
 use Phlix\Common\RateLimit\RateLimiterInterface;
 use Phlix\Common\RateLimit\RateLimitProfiles;
-use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 use Workerman\MySQL\Connection;
 
@@ -21,7 +20,6 @@ use Workerman\MySQL\Connection;
  * surfaces as the shared DB-backed {@see DbRateLimiter}, and jwks / ws_connect
  * as the worker-local in-memory {@see RateLimiter} — with config-driven
  * `{max, window}` and DISTINCT instances. `login` is NOT registered here.
- *
  */
 final class AuthServicesProviderRateLimitTest extends TestCase
 {

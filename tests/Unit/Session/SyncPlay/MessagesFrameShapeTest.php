@@ -9,7 +9,6 @@ use Phlix\Session\SyncPlay\Messages;
 
 /**
  * Unit tests for SyncPlay message shape compliance (SP2).
- *
  */
 class MessagesFrameShapeTest extends TestCase
 {

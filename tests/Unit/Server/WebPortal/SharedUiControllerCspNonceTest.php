@@ -21,7 +21,6 @@ use PHPUnit\Framework\TestCase;
  * with a per-request CSP nonce that matches the nonce on the `<script>` tag,
  * so the inline script executes under the strict (`script-src 'self'`) policy
  * without weakening it to `'unsafe-inline'`.
- *
  */
 final class SharedUiControllerCspNonceTest extends TestCase
 {

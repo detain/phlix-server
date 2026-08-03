@@ -19,7 +19,6 @@ use Phlix\Theming\ThemeMediaFinder;
 /**
  * Verifies {@see LibraryMetadataMatcher} writes `metadata_json.theme_audio_url`
  * (M3) via the injected {@see ThemeMusicResolver}.
- *
  */
 final class LibraryMetadataMatcherThemeMusicTest extends TestCase
 {

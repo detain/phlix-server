@@ -17,7 +17,6 @@ use Phlix\Media\Library\LibraryManager;
 use Phlix\Media\Library\MediaScanner;
 use Phlix\Media\Library\ScanResult;
 use Phlix\Media\Music\MusicLibraryService;
-use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 use Workerman\MySQL\Connection;
 

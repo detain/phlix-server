@@ -12,7 +12,6 @@ use PHPUnit\Framework\TestCase;
 
 /**
  * Unit tests for {@see MetricsController} (S2).
- *
  */
 final class MetricsControllerTest extends TestCase
 {

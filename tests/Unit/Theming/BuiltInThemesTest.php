@@ -31,7 +31,6 @@ use PHPUnit\Framework\TestCase;
  * question to ask is "did colors.css move?", and the fix is to re-derive
  * `BuiltInThemes::PAYLOADS` from it and update the literal here. The fix is NOT
  * to relax the assertion to a count or a key check.
- *
  */
 final class BuiltInThemesTest extends TestCase
 {

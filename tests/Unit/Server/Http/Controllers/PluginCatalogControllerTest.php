@@ -28,7 +28,6 @@ use PHPUnit\Framework\TestCase;
  * in-memory settings double + an injected offline fetcher, so the controller
  * is exercised through the true aggregate path. {@see PluginLoader} and
  * {@see AuditLogger} are `final` → mocked with Mockery.
- *
  */
 final class PluginCatalogControllerTest extends TestCase
 {

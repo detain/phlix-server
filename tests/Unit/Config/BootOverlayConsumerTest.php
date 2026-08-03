@@ -36,7 +36,6 @@ use Workerman\MySQL\Connection;
  *
  * Disabling the overlay (deleting the `bootstrapAndOverlay()` call in
  * {@see self::boot()}) turns every one of them red.
- *
  */
 final class BootOverlayConsumerTest extends TestCase
 {

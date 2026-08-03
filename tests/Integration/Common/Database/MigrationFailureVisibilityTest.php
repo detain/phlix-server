@@ -24,7 +24,6 @@ use Workerman\MySQL\Connection;
  * `PHLIX_MIGRATIONS_DIR` points the script at a scratch directory so the repo's
  * real `migrations/` is never involved, and every object this test creates is
  * prefixed `s159_` and dropped in tearDown.
- *
  */
 class MigrationFailureVisibilityTest extends TestCase
 {

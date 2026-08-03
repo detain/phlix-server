@@ -22,7 +22,6 @@ use Workerman\MySQL\Connection;
  * Resolving {@see LiveTvManager} builds a {@see Recorder} that has its ffmpeg
  * path and back-reference LiveTvManager set (so {@see Recorder::resolveTunerStreamUrl()}
  * is reachable), and the whole stack is shared as singletons.
- *
  */
 final class LiveTvServicesProviderTest extends TestCase
 {

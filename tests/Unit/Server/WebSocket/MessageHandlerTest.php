@@ -10,7 +10,6 @@ use Phlix\Session\SyncPlay\Messages;
 
 /**
  * Unit tests for MessageHandler class.
- *
  */
 class MessageHandlerTest extends TestCase
 {
@@ -43,7 +42,6 @@ class MessageHandlerTest extends TestCase
      * SV-4.7 Gap 4: a privileged event (SyncPlay control) from an
      * unauthenticated connection is rejected with NOT_AUTHENTICATED and NOT
      * dispatched to the registered handler.
-     *
      */
     public function testPrivilegedEventFromUnauthenticatedConnectionIsRejected(): void
     {
@@ -80,7 +78,6 @@ class MessageHandlerTest extends TestCase
     /**
      * SV-4.7 Gap 4: subscribe_dashboard is privileged; an unauthenticated
      * subscription is rejected before now-playing data is streamed.
-     *
      */
     public function testSubscribeDashboardRejectedForUnauthenticated(): void
     {
@@ -117,7 +114,6 @@ class MessageHandlerTest extends TestCase
     /**
      * SV-4.7 Gap 4: a privileged event from an AUTHENTICATED connection is
      * dispatched normally.
-     *
      */
     public function testPrivilegedEventFromAuthenticatedConnectionDispatches(): void
     {
@@ -145,7 +141,6 @@ class MessageHandlerTest extends TestCase
     /**
      * SV-4.7 Gap 4/6: a public event (ping) is never gated — it dispatches for an
      * unauthenticated connection with no NOT_AUTHENTICATED error.
-     *
      */
     public function testPublicEventNotGatedForUnauthenticated(): void
     {

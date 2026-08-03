@@ -47,7 +47,6 @@ use Workerman\MySQL\Connection;
  * persistence read/write goes through real MySQL. CI applies all migrations to
  * the `phlix_test` service before the suite; locally, with no reachable MySQL,
  * it self-skips (same guard as {@see \Phlix\Tests\Integration\Auth\NextUpIntegrationTest}).
- *
  */
 final class LibraryOptionsAutoCollectionsIntegrationTest extends TestCase
 {

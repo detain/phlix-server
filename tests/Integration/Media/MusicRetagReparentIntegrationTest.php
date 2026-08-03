@@ -53,7 +53,6 @@ use Workerman\MySQL\Connection;
  * asserting only "a new album row exists" would pass against the defect.
  *
  * Self-skips with no reachable MySQL; runs for real in CI.
- *
  */
 final class MusicRetagReparentIntegrationTest extends TestCase
 {

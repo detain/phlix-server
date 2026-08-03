@@ -18,7 +18,6 @@ use Psr\Container\ContainerInterface;
  * structural guard against the S44 dead-OIDC bug (a provider shipping with its
  * routes unregistered): the routes are asserted here, so a missing one is a
  * failing test rather than silent dead code.
- *
  */
 final class AuthProviderRouteRegistrarTest extends TestCase
 {

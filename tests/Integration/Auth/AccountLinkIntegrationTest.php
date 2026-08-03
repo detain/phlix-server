@@ -79,7 +79,6 @@ use Workerman\MySQL\Connection;
  * so it runs against a bare scratch DB and is a no-op create on a migrated one.
  * It only ever mutates rows it creates (namespaced by a per-run token, removed in
  * tearDown via ON DELETE CASCADE), so it is safe against a shared `phlix_test`.
- *
  */
 final class AccountLinkIntegrationTest extends TestCase
 {

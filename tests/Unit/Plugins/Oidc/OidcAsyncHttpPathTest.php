@@ -19,7 +19,6 @@ use Workerman\Http\Response as WorkermanResponse;
  * IdTokenValidator::fetchJwks() all route their outbound HTTP through an
  * injected {@see OidcHttpClient}. These tests inject a DOUBLE so the flow is
  * proven end-to-end with NO real network.
- *
  */
 final class OidcAsyncHttpPathTest extends TestCase
 {

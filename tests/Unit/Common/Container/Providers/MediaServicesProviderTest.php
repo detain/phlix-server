@@ -25,7 +25,6 @@ use PHPUnit\Framework\TestCase;
 
 /**
  * Smoke test for {@see MediaServicesProvider}.
- *
  */
 final class MediaServicesProviderTest extends TestCase
 {

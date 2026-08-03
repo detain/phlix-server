@@ -33,7 +33,6 @@ use PHPUnit\Framework\TestCase;
  * And the S84 guarantee itself is re-asserted here: the plugin path still
  * refuses the reserved ids, including when it is called with a null source name
  * (the "host" origin), so the S85 refactor cannot have loosened it.
- *
  */
 final class ThemeTokenValidatorBuiltInTest extends TestCase
 {

@@ -49,7 +49,6 @@ use Workerman\MySQL\Connection;
  * CI applies all migrations to the `phlix_test` MySQL service before the suite;
  * locally, with no reachable MySQL, it self-skips — the same guard
  * {@see \Phlix\Tests\Integration\Auth\NextUpIntegrationTest} uses.
- *
  */
 final class MusicTracksQueryIntegrationTest extends TestCase
 {

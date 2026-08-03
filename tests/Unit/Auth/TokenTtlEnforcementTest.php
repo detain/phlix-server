@@ -43,7 +43,6 @@ use PHPUnit\Framework\TestCase;
  *
  * Mutation-verified: restoring the literal at any one of the four sites turns
  * exactly that site's test red while the others stay green.
- *
  */
 final class TokenTtlEnforcementTest extends TestCase
 {

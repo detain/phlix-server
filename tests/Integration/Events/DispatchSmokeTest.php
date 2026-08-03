@@ -25,7 +25,6 @@ use function DI\factory;
  *
  * Satisfies the §0.4 integration-boundary requirement for the events
  * subsystem.
- *
  */
 final class DispatchSmokeTest extends TestCase
 {

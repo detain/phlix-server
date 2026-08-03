@@ -9,7 +9,6 @@ use Phlix\Media\Metadata\ImageType;
 
 /**
  * Unit tests for {@see ImageType} (M5 image-type catalogue + enablement helpers).
- *
  */
 class ImageTypeTest extends TestCase
 {

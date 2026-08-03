@@ -19,7 +19,6 @@ use Workerman\MySQL\Connection;
 
 /**
  * Unit tests for MusicLibraryManager.
- *
  */
 class MusicLibraryManagerTest extends TestCase
 {

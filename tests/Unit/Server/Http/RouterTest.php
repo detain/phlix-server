@@ -12,7 +12,6 @@ use Workerman\Protocols\Http\Response as WorkermanResponse;
 
 /**
  * Unit tests for Router class.
- *
  */
 class RouterTest extends TestCase
 {
@@ -91,7 +90,6 @@ class RouterTest extends TestCase
      * static-route map. Registering `.../stream` FIRST must make a `.../stream`
      * request hit the playlist handler, and a segment name fall through to the
      * segment handler. Guards against a future re-ordering regression.
-     *
      */
     public function testTimeshiftStreamRouteDispatchesToPlaylistBeforeSegment(): void
     {
@@ -119,7 +117,6 @@ class RouterTest extends TestCase
     /**
      * The companion assertion: a real segment name (which does not end in /stream)
      * falls through to the segment handler with both params captured.
-     *
      */
     public function testTimeshiftSegmentRouteDispatchesToSegmentHandler(): void
     {
@@ -162,7 +159,6 @@ class RouterTest extends TestCase
      * `$container->get($class)` (enabling constructor injection) rather than
      * `new $class()`. The container is asserted to be consulted exactly once
      * with the class name, and the instance IT returns is the one invoked.
-     *
      */
     public function testStringHandlerResolvedViaContainer(): void
     {
@@ -190,7 +186,6 @@ class RouterTest extends TestCase
      * SV-4.8 fallback branch: with NO container, a string handler is
      * instantiated directly via `new $class()`. Because no container exists,
      * the marked Response can only come from that direct instantiation.
-     *
      */
     public function testStringHandlerFallsBackToDirectInstantiation(): void
     {
@@ -215,7 +210,6 @@ class RouterTest extends TestCase
      * `{slug}` route that would also match `/fast` is registered alongside;
      * its closure must never run, proving the regex loop is skipped on a
      * static hit (independent of registration order).
-     *
      */
     public function testStaticRouteServedBeforeParametricMatcher(): void
     {
@@ -244,7 +238,6 @@ class RouterTest extends TestCase
      * handler with body suppression (headOnly = true). A parametric GET route
      * is also present so the HEAD→GET fallback guard (isset routes['GET']) is
      * satisfied — mirroring production, where parametric GET routes always exist.
-     *
      */
     public function testHeadRequestResolvesStaticGetRouteViaHeadFallback(): void
     {
@@ -271,7 +264,6 @@ class RouterTest extends TestCase
      * guard also consults $staticRoutes['GET']. This is the static-only edge
      * that testHeadRequestResolvesStaticGetRouteViaHeadFallback does NOT cover
      * (that test also registers a parametric GET route).
-     *
      */
     public function testHeadResolvesStaticOnlyGetRouteWithNoParametricGetRoutes(): void
     {
@@ -293,7 +285,6 @@ class RouterTest extends TestCase
      * case. With BOTH a parametric and a static GET route present, a HEAD to a
      * path that matches NO GET route (neither map) still 404s — the fallback is
      * entered (a GET route exists) but dispatchAsHead() finds no match.
-     *
      */
     public function testHeadStillReturns404WhenNoGetRouteMatchesPath(): void
     {
@@ -330,7 +321,6 @@ class RouterTest extends TestCase
      * header array is precisely the mistake that let this defect ship twice. So this
      * asserts `(string) $response->toWorkermanResponse()`, and a CONTROL renders the
      * same shape through the framework encoder to show the defect is real.
-     *
      */
     public function testAHeadRegisteredRouteThatForgetsTheFlagStillPutsOneContentLengthOnTheWire(): void
     {
@@ -397,7 +387,6 @@ class RouterTest extends TestCase
      * Same guarantee on the O(1) STATIC map: a HEAD-registered path with no
      * `{param}` lands in `$staticRoutes['HEAD']`, which is a different arm of
      * `dispatch()` (and therefore a separate `markHeadOnly()` call site).
-     *
      */
     public function testAStaticHeadRegisteredRouteIsFlaggedByTheRouterToo(): void
     {
@@ -425,7 +414,6 @@ class RouterTest extends TestCase
      * A middleware SHORT-CIRCUIT on a HEAD-registered route is flagged as well —
      * both short-circuit arms of `dispatch()` route through `markHeadOnly()`, so a
      * gate's own reply cannot ship a body on a HEAD either.
-     *
      */
     public function testAMiddlewareShortCircuitOnAHeadRouteIsFlaggedHeadOnly(): void
     {
@@ -464,7 +452,6 @@ class RouterTest extends TestCase
      * so it misses `dispatchAsHead()`'s O(1) static lookup and lands on the handler
      * arm; and its handler declares the real `Content-Length` **and** returns the
      * buffered body while never touching `headOnly`.
-     *
      */
     public function testTheGetToHeadFallbackFlagsAParametricRouteHandlerOnTheWire(): void
     {
@@ -524,7 +511,6 @@ class RouterTest extends TestCase
      * declares no `Content-Length` of its own, so the flag's whole effect is
      * dropping the body (and letting Workerman state `Content-Length: 0`) — which
      * is what RFC 9110 §9.3.2 requires of a `HEAD` reply.
-     *
      */
     public function testTheGetToHeadFallbackFlagsAParametricMiddlewareShortCircuitOnTheWire(): void
     {
@@ -571,7 +557,6 @@ class RouterTest extends TestCase
      * `$staticRoutes['HEAD']`, an arm the existing short-circuit test never reaches
      * (its static case arrives through the GET→HEAD fallback instead, which is a
      * different `markHeadOnly()` call).
-     *
      */
     public function testAStaticHeadRegisteredRouteBehindAGateIsFlaggedOnTheWire(): void
     {
@@ -618,7 +603,6 @@ class RouterTest extends TestCase
      *
      * DISCRIMINATING: drop the `$request->method === 'HEAD'` test in
      * `markHeadOnly()` and this goes red on both the flag and the wire bytes.
-     *
      */
     public function testAGetIsNeverFlaggedHeadOnlyEvenWhenItsBodyCameOutEmpty(): void
     {
@@ -663,7 +647,6 @@ class RouterTest extends TestCase
      * SV-4.8 guard: a resolved array/DI string handler whose method returns a
      * non-Response value triggers BadMethodCallException. This covers the
      * is_array()+container path of callHandler(), previously untested.
-     *
      */
     public function testResolvedHandlerReturningNonResponseThrows(): void
     {
@@ -701,7 +684,6 @@ class RouterTest extends TestCase
      * `try/finally` with a plain post-callback restore and `/after` carries the
      * throwing group's middleware, so both the registration assertion and the
      * dispatch assertion below go red.
-     *
      */
     public function testAThrowInsideAGroupDoesNotLeakItsMiddlewareOntoLaterRoutes(): void
     {
@@ -766,7 +748,6 @@ class RouterTest extends TestCase
      * DISCRIMINATING: dropping the `finally` makes `/inner-boom` leak, so `/c` is
      * registered under the wrong prefix (`/inner-boom/c`) with two middleware
      * instead of one, and all three assertions on it fail.
-     *
      */
     public function testANestedGroupRestoresThePreviousPrefixAndMiddlewareNotEmptyOnes(): void
     {

@@ -22,7 +22,6 @@ use Workerman\MySQL\Connection;
  * {@see \Phlix\Tests\Unit\Media\Library\SortTitleTest} and
  * {@see \Phlix\Tests\Unit\Media\Library\ItemRepositoryTest} cover the logic with
  * a mock regardless.
- *
  */
 final class SortTitleOrderingTest extends TestCase
 {

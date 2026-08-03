@@ -8,7 +8,6 @@ use Phlix\Server\WebSocket\ConnectionInterface;
 
 /**
  * Unit tests for ConnectionPool class.
- *
  */
 class ConnectionPoolTest extends TestCase
 {

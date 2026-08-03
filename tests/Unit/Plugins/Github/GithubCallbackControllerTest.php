@@ -24,7 +24,6 @@ use PHPUnit\Framework\TestCase;
  * cookie, the same-origin redirect allowlist on BOTH legs, the absolute
  * `redirect_uri` contract, cookie session delivery, and provider-scoped account
  * resolution.
- *
  */
 final class GithubCallbackControllerTest extends TestCase
 {

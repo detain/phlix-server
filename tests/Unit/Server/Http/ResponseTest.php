@@ -9,7 +9,6 @@ use Phlix\Server\Http\Response;
 
 /**
  * Unit tests for Response class.
- *
  */
 class ResponseTest extends TestCase
 {
@@ -103,7 +102,6 @@ class ResponseTest extends TestCase
      * Runs in a separate process because {@see Response::send()} calls
      * `header()` / `http_response_code()`, which must not leak process-global
      * header state into other tests.
-     *
      */
     #[RunInSeparateProcess]
     #[PreserveGlobalState(false)]
@@ -140,7 +138,6 @@ class ResponseTest extends TestCase
      * entire file and computes `Content-Length` / `Accept-Ranges` without forcing
      * 206 or emitting `Content-Range` — mirroring Workerman's `withFile()` with a
      * zero offset/length.
-     *
      */
     #[RunInSeparateProcess]
     #[PreserveGlobalState(false)]
@@ -176,7 +173,6 @@ class ResponseTest extends TestCase
      * and {@see Response::streamFileToOutput()} no-ops (its `fopen()` failure guard)
      * so nothing is streamed — the response completes cleanly with the caller's
      * original status and no body rather than throwing or emitting bogus headers.
-     *
      */
     #[RunInSeparateProcess]
     #[PreserveGlobalState(false)]

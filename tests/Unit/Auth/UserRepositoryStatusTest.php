@@ -14,7 +14,6 @@ use Workerman\MySQL\Connection;
  *
  * Mirrors {@see UserRepositoryAdminTest}: createMock(Connection) and assert on
  * the SQL + bound params passed to query().
- *
  */
 final class UserRepositoryStatusTest extends TestCase
 {

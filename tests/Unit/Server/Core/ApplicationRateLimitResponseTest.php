@@ -20,7 +20,6 @@ use PHPUnit\Framework\TestCase;
  * and `public/index.php`'s exception handler — so they cannot drift. Exercising
  * it directly (as the hub does for its mirror helper) pins the status,
  * Retry-After header and JSON body shape once.
- *
  */
 final class ApplicationRateLimitResponseTest extends TestCase
 {

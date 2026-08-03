@@ -31,7 +31,6 @@ use Workerman\MySQL\Connection;
  * this program exists to prevent, and it would pass every resolvability test.
  * So this file asserts the overlay reaches the real array shape, rather than
  * assuming it.
- *
  */
 final class RateLimitSettingsReachabilityTest extends TestCase
 {

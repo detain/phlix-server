@@ -9,7 +9,6 @@ use Phlix\Tests\Fixtures\Events\SampleEvent;
 
 /**
  * Smoke test for {@see \Phlix\Common\Events\AbstractEvent}.
- *
  */
 final class AbstractEventTest extends TestCase
 {

@@ -24,7 +24,6 @@ use Workerman\MySQL\Connection;
  *    never the old `music_*` value that hard-errors under STRICT_TRANS_TABLES;
  *  - the scan streams per-file progress instead of leaving the UI frozen;
  *  - tags are read once (getID3 first, ffprobe fallback) and reused.
- *
  */
 final class MusicLibraryScannerTest extends TestCase
 {

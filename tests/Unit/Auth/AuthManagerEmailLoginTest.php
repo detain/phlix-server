@@ -17,7 +17,6 @@ use PHPUnit\Framework\TestCase;
  * identifier: it tries findByUsername first, then falls back to findByEmail.
  * This is what lets the SPA "Username or email" login field work when the user
  * types the email they registered with.
- *
  */
 final class AuthManagerEmailLoginTest extends TestCase
 {

@@ -27,7 +27,6 @@ use PHPUnit\Framework\TestCase;
  * central mapping (SV-4.15(c), {@see Application::rateLimitResponse()}) turns into
  * a 429 + `Retry-After` + `code=rate_limited` response. An under-limit request
  * proceeds to {@see AuthManager} normally.
- *
  */
 final class AuthControllerRateLimitTest extends TestCase
 {

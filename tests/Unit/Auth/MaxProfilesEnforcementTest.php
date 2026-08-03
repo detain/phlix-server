@@ -31,7 +31,6 @@ use Workerman\MySQL\Connection;
  *
  * Mutation-verified: restoring `UserProfileManager::MAX_PROFILES_PER_USER` at
  * either site turns exactly that site's test red.
- *
  */
 final class MaxProfilesEnforcementTest extends TestCase
 {

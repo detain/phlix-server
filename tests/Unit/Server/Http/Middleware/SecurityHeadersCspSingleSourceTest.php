@@ -29,7 +29,6 @@ use PHPUnit\Framework\TestCase;
  *
  * These tests assert the emitted header, not the builder, so they fail on that
  * mutation instead of merely re-testing the string `contentSecurityPolicy()` returns.
- *
  */
 final class SecurityHeadersCspSingleSourceTest extends TestCase
 {

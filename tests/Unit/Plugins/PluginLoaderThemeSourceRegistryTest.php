@@ -38,7 +38,6 @@ use Psr\Container\ContainerInterface;
  * It also pins the arm's one behavioural difference from its two siblings: a
  * theme carrying a CSS-injection payload FAILS THE ENABLE rather than being
  * quietly dropped, and leaves nothing wired behind it.
- *
  */
 final class PluginLoaderThemeSourceRegistryTest extends TestCase
 {

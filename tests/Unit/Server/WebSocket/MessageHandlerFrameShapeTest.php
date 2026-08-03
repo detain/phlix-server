@@ -14,7 +14,6 @@ use Workerman\Worker;
 
 /**
  * Unit tests for frame shape handling (SP2 - flat canonical wire format).
- *
  */
 class MessageHandlerFrameShapeTest extends TestCase
 {

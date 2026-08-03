@@ -20,7 +20,6 @@ use Workerman\MySQL\Connection;
 
 /**
  * Tests for MediaItemController::shufflePlay().
- *
  */
 class MediaItemControllerShufflePlayTest extends TestCase
 {

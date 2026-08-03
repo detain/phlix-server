@@ -13,7 +13,6 @@ use Workerman\MySQL\Connection;
  * Cache behavior tests for {@see UserRepository}.
  *
  * Tests cache hit, cache miss, and cache invalidation scenarios.
- *
  */
 final class UserRepositoryCacheTest extends TestCase
 {

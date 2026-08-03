@@ -35,7 +35,6 @@ use Workerman\MySQL\Connection;
  * Coverage spans BOTH dispatch paths (§7): `MediaItemController` (reached via
  * `public/index.php` / `Application`) and `WebPortalRouter` (reached via
  * `start.php` and the relay dispatcher).
- *
  */
 final class PaginationClampTest extends TestCase
 {

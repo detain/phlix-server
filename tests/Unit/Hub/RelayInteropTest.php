@@ -43,7 +43,6 @@ use function substr;
  * Each assertion is about the OTHER side's exact wire bytes, not a self
  * round-trip: bytes built the hub's way must parse with the server's codec,
  * and bytes built the server's way must equal the hub's golden output.
- *
  */
 final class RelayInteropTest extends TestCase
 {

@@ -43,7 +43,6 @@ use Workerman\MySQL\Connection;
  * fan-out caps, name-keyed lookups and the >1,000th-row track at volumes a real
  * scan would make far too slow here; this covers the writer/reader contract those
  * volumes assume.
- *
  */
 final class MusicScannerToApiReadPathIntegrationTest extends TestCase
 {

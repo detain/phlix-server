@@ -86,7 +86,6 @@ use Workerman\MySQL\Connection;
  * without a red test.
  *
  * With no reachable MySQL the test self-skips, like {@see \Phlix\Tests\Integration\Media\PathHashIndexUsageTest}.
- *
  */
 final class MusicTrackPathHashLookupTest extends TestCase
 {

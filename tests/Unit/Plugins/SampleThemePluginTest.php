@@ -42,7 +42,6 @@ use PHPUnit\Framework\TestCase;
  * md5 is asserted explicitly so that changing the plugin fails LOUDLY here with
  * a message naming the sibling file, instead of silently desynchronising the
  * two repos.
- *
  */
 final class SampleThemePluginTest extends TestCase
 {

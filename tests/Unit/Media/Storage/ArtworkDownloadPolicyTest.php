@@ -27,7 +27,6 @@ use PHPUnit\Framework\TestCase;
  * The override value used throughout is FALSE, which differs from the shipped
  * default of TRUE, so a matcher left on the literal produces a visibly
  * different result (downloads happen) rather than coincidentally agreeing.
- *
  */
 final class ArtworkDownloadPolicyTest extends TestCase
 {

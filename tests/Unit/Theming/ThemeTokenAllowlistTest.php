@@ -18,7 +18,6 @@ use PHPUnit\Framework\TestCase;
  * below, so adding, removing or renaming a token here fails until the
  * expectation is updated too, and the diff shows a reviewer exactly which
  * property became settable by a plugin.
- *
  */
 final class ThemeTokenAllowlistTest extends TestCase
 {

@@ -16,7 +16,6 @@ use Phlix\Media\Music\MusicLibraryScanner;
 use Phlix\Media\Music\MusicScanPrefetcher;
 use Phlix\Media\Music\MusicScanSkipIndex;
 use Phlix\Media\Transcoding\FfmpegRunner;
-use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 use Workerman\MySQL\Connection;
 

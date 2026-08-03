@@ -28,7 +28,6 @@ use PHPUnit\Framework\TestCase;
  * that delegates to this method, so the throw propagates through the same
  * dispatch path the central mapping catches. An under-limit request returns the
  * normal JWKS body.
- *
  */
 final class HubJwksControllerRateLimitTest extends TestCase
 {

@@ -27,7 +27,6 @@ use Psr\Container\ContainerInterface;
  * The controller is constructed with a null container + seeded temp config dir
  * (mirroring {@see AdminHubControllerTest}); the "no outbound POST" test uses a
  * container returning a HubClient whose HTTP client asserts it is never invoked.
- *
  */
 final class HealthControllerTest extends TestCase
 {

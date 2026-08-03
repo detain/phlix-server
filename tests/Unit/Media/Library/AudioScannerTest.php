@@ -11,7 +11,6 @@ use Workerman\MySQL\Connection;
 
 /**
  * Unit tests for AudioScanner tag harvesting functionality.
- *
  */
 class AudioScannerTest extends TestCase
 {

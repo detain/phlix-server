@@ -18,7 +18,6 @@ use Phlix\Media\Storage\ArtworkStorage;
  * artwork URLs (a `poster_srcset` of `/api/v1/artwork/...` variants and a local
  * `poster_url`), NOT the raw TMDB CDN URL. Without the DI wiring the field is
  * null and `cacheArtworkLocally()` is a no-op (regression this guards).
- *
  */
 class LibraryMetadataMatcherArtworkTest extends TestCase
 {

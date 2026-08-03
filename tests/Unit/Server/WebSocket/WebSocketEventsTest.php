@@ -10,7 +10,6 @@ use Phlix\Session\SyncPlay\Messages;
 
 /**
  * SV-4.7 Gap 6: privileged-vs-public event classification.
- *
  */
 class WebSocketEventsTest extends TestCase
 {

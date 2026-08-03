@@ -27,7 +27,6 @@ use Workerman\MySQL\Connection;
  * rehearse the finalizer). If the key is absent here, the migration chain is
  * broken — that is the finding, not an environment gap. The only skip is
  * "no MySQL".
- *
  */
 final class PlaybackStateUniqueKeyPresentTest extends TestCase
 {

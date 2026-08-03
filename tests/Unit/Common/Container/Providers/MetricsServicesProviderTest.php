@@ -25,7 +25,6 @@ use function DI\factory;
  * metrics services resolve, that they are SHARED (one registry per worker, so
  * the hooks and the flush timer share the same counters), and that the
  * `enabled` flag threaded from config reaches the collector.
- *
  */
 final class MetricsServicesProviderTest extends TestCase
 {

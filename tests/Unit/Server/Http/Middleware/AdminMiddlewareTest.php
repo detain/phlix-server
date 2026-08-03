@@ -14,7 +14,6 @@ use support\Context;
 
 /**
  * Unit tests for {@see AdminMiddleware} (Step A.5).
- *
  */
 final class AdminMiddlewareTest extends TestCase
 {

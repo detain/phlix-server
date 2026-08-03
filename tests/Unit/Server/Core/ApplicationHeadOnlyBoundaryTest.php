@@ -46,7 +46,6 @@ use Workerman\Protocols\Http\Response as WorkermanResponse;
  *
  * No database: `Application` is built with `newInstanceWithoutConstructor()` and
  * only its `$router` / `$middleware` are populated, which is all `dispatch()` reads.
- *
  */
 final class ApplicationHeadOnlyBoundaryTest extends TestCase
 {

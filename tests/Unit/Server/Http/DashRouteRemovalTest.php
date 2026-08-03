@@ -20,7 +20,6 @@ use PHPUnit\Framework\TestCase;
  *  - `DashController` must not sprout the phantom method names the dead helper
  *    referenced (the real DASH surface is `getManifest()` + `serveFile()`, wired
  *    in `Application::loadStreamingRoutes()` and left untouched).
- *
  */
 final class DashRouteRemovalTest extends TestCase
 {

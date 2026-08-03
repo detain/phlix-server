@@ -32,7 +32,6 @@ use Psr\Container\ContainerInterface;
  * {@see SubtitleSourceRegistry} after {@see PluginLoader::enable()} and is gone
  * after {@see PluginLoader::disable()} (leak-free), driven by the typed
  * interface — NOT method_exists()/FQCN sniffing.
- *
  */
 final class PluginLoaderSubtitleSourceRegistryTest extends TestCase
 {

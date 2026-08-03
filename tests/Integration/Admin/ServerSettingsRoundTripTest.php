@@ -17,7 +17,6 @@ use Workerman\MySQL\Connection;
  * exercised by writing via {@see SettingsRepository::set()} and then reading
  * the value back through a *fresh* repository instance pointed at the same
  * simulated store — a restart's only durable carry-over is the DB row.
- *
  */
 final class ServerSettingsRoundTripTest extends TestCase
 {

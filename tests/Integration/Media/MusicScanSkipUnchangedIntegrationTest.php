@@ -48,7 +48,6 @@ use Workerman\MySQL\Connection;
  * only thing worth asserting.
  *
  * Self-skips with no reachable MySQL; runs for real in CI.
- *
  */
 final class MusicScanSkipUnchangedIntegrationTest extends TestCase
 {

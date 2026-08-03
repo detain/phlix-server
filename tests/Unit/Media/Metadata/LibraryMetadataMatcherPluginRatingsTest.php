@@ -14,7 +14,6 @@ use ReflectionMethod;
 /**
  * F2 caller-side rating persistence: the matcher (which owns the media_item_id)
  * upserts a resolve() result's `plugin_ratings` via {@see \Phlix\Media\Metadata\RatingService}.
- *
  */
 final class LibraryMetadataMatcherPluginRatingsTest extends TestCase
 {

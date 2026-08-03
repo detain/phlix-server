@@ -21,7 +21,6 @@ use Workerman\MySQL\Connection;
  * each scenario drives exactly one code path. Real-DB row-count-safety, batching,
  * keeper selection (max updated_at / tie-break max id) and the post-key upsert
  * behaviour are proven in the integration test — not re-mocked here.
- *
  */
 final class PlaybackStateDeduperTest extends TestCase
 {

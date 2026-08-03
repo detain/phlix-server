@@ -23,7 +23,6 @@ use PHPUnit\Framework\TestCase;
  * preset control wired only through the software path would be a control that
  * silently does nothing on any box with a GPU — while appearing to work in
  * every unit test of the software builder.
- *
  */
 final class EncodeSettingsCommandTest extends TestCase
 {

@@ -62,7 +62,6 @@ use PHPUnit\Framework\TestCase;
  * proves the healing itself against real rows.
  *
  * Self-skips with no reachable MySQL; runs for real in CI.
- *
  */
 final class MusicScanWriteAmplificationIntegrationTest extends TestCase
 {

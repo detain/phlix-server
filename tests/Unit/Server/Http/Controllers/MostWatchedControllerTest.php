@@ -16,7 +16,6 @@ use PHPUnit\Framework\TestCase;
  * S31: public "Most Watched" rail — GLOBAL trending fed by
  * StatsCollector::getTopMedia(), shaped through MediaItemShaper like the other
  * media-list rails, and gated by AuthMiddleware to match the home-rail audience.
- *
  */
 final class MostWatchedControllerTest extends TestCase
 {

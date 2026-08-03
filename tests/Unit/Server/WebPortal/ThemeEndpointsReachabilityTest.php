@@ -62,7 +62,6 @@ use function DI\factory;
  * `Application` alone would work in the daemon and 404 under CGI/FPM.
  * {@see testBothEntryPointsRouteApiRequestsToTheWebPortalRouter()} pins that
  * premise so this reasoning cannot rot silently.
- *
  */
 final class ThemeEndpointsReachabilityTest extends TestCase
 {

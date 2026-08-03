@@ -10,7 +10,6 @@ use PHPUnit\Framework\TestCase;
 /**
  * SV-4.15 HIGH fix: trusted-proxy-aware client-IP resolution used to build
  * spoof-resistant rate-limit keys.
- *
  */
 final class TrustedProxyResolverTest extends TestCase
 {

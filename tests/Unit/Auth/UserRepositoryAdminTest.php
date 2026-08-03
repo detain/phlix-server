@@ -11,7 +11,6 @@ use Workerman\MySQL\Connection;
 /**
  * Targeted tests for the admin-flag helpers added to
  * {@see UserRepository} in Step A.5.
- *
  */
 final class UserRepositoryAdminTest extends TestCase
 {

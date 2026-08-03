@@ -16,7 +16,6 @@ use PHPUnit\Framework\TestCase;
  * Auth (401/403) is enforced by {@see \Phlix\Server\Http\Middleware\AdminMiddleware}
  * upstream of this controller; here we assert the controller's behaviour given an
  * already-authenticated-admin request.
- *
  */
 final class AdminProfileControllerTest extends TestCase
 {

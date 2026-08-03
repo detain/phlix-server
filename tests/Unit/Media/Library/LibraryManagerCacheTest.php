@@ -13,7 +13,6 @@ use Workerman\MySQL\Connection;
 
 /**
  * Tests for LibraryManager cache behavior.
- *
  */
 class LibraryManagerCacheTest extends TestCase
 {

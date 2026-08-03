@@ -39,7 +39,6 @@ use Workerman\MySQL\Connection;
  *
  * CI applies all migrations to the `phlix_test` MySQL service before the suite; locally,
  * with no reachable MySQL, it self-skips.
- *
  */
 final class MusicScanMediaItemBackfillIntegrationTest extends TestCase
 {

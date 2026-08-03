@@ -43,7 +43,6 @@ use SplFileInfo;
  * `catch (\RuntimeException)`, and this class contains no `try`/`catch` of its own,
  * so no `ExpectationFailedException` can be swallowed. Each test below was proven
  * RED by restoring the `is_numeric()` coercion it names.
- *
  */
 final class MusicDtoMediaItemIdTest extends TestCase
 {

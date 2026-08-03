@@ -12,7 +12,6 @@ use Workerman\MySQL\Connection;
 
 /**
  * Unit tests for the server-wide settings store (Step 0.5).
- *
  */
 final class SettingsRepositoryTest extends TestCase
 {

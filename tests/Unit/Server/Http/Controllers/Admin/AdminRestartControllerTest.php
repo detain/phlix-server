@@ -26,7 +26,6 @@ use PHPUnit\Framework\TestCase;
  *    SIGUSR1 (its non-graceful one);
  *  - the signal is **deferred** rather than fired inline, so the JSON ack
  *    flushes before the workers cycle.
- *
  */
 final class AdminRestartControllerTest extends TestCase
 {

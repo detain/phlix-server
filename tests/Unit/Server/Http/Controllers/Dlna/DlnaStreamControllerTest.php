@@ -34,7 +34,6 @@ use Workerman\MySQL\Connection;
  * `Response::materializeFileWindow()` collapses a `withFile()` response into the
  * exact status + headers + windowed body that the event loop would put on the
  * wire, so the byte-level assertions here are the real output, not a proxy for it.
- *
  */
 final class DlnaStreamControllerTest extends TestCase
 {

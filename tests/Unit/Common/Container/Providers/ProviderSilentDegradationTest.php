@@ -36,7 +36,6 @@ use function DI\value;
  * both directions — a bound-but-broken store warns, and an absent store (a
  * perfectly normal shape for the unit containers throughout this suite) does
  * NOT.
- *
  */
 final class ProviderSilentDegradationTest extends TestCase
 {

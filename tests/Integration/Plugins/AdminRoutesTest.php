@@ -67,7 +67,6 @@ use Workerman\MySQL\Connection;
  * loader / repository / audit-logger collaborators, then sends
  * synthetic {@see Request} objects through the router and asserts both
  * the HTTP response and the side-effects on the collaborators.
- *
  */
 final class AdminRoutesTest extends TestCase
 {

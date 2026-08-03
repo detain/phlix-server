@@ -11,7 +11,6 @@ use PHPUnit\Framework\TestCase;
  * Every fixture in this file is a REAL `/search/tv` payload shape captured from
  * the live library's own titles, so the guards are pinned against the data that
  * produced the defect rather than against invented strings.
- *
  */
 final class SeriesCandidateSelectorTest extends TestCase
 {

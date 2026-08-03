@@ -22,7 +22,6 @@ use Workerman\MySQL\Connection;
  * help text advises that "a 16-core CPU with an NVIDIA GPU can typically handle
  * 6–8". An admin who followed that advice and set 8 still got 4: a setting that
  * was documented, validated, persisted — and inert.
- *
  */
 final class TranscodeManagerConcurrencyLimitTest extends TestCase
 {

@@ -22,7 +22,6 @@ use PHPUnit\Framework\TestCase;
  * upstream and is covered by the middleware's own tests. The controller is
  * constructed with a null container + a seeded temp config dir, so the reads/
  * writes are exercised without any container wiring.
- *
  */
 final class AdminHubControllerTest extends TestCase
 {

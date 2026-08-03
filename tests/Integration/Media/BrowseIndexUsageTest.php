@@ -58,7 +58,6 @@ use Workerman\MySQL\Connection;
  * idx_library + idx_type can lure the optimizer into an index_merge that
  * defeats the composite index's no-filesort benefit on some distributions —
  * worth weighing when S10 revisits redundant indexes.)
- *
  */
 final class BrowseIndexUsageTest extends TestCase
 {

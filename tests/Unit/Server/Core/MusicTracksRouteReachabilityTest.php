@@ -48,7 +48,6 @@ use Workerman\MySQL\Connection;
  * production never executes. This class asserts the registrar production actually
  * runs, and asserts the HANDLER as well as the path, so repointing the route at a
  * different controller or method is caught too.
- *
  */
 final class MusicTracksRouteReachabilityTest extends TestCase
 {

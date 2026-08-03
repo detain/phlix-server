@@ -1,0 +1,125 @@
+<?php
+
+namespace Swoole\Coroutine;
+
+/**
+ * S128 — the ONE Swoole class PHPStan cannot resolve without `ext-swoole` loaded.
+ *
+ * ## Why this file has to exist (and why waiting for upstream is not a plan)
+ *
+ * PHPStan bundles `jetbrains/phpstorm-stubs` inside `vendor/phpstan/phpstan/phpstan.phar`.
+ * Listed from the phar on 2026-08-03, that ships **19** stubs in the `Swoole\Coroutine`
+ * namespace — `Channel.stub`, `System.stub`, `Socket.stub`, `Http/Client.stub`,
+ * `MySQL.stub`, `Scheduler.stub`, … — and **no `WaitGroup.stub`**.
+ *
+ * That is not an upstream oversight, it is a category difference, measured by
+ * reflection against the loaded extension (swoole 6.2.1):
+ *
+ *     Swoole\Coroutine\Channel    isInternal()=true   getFileName()=false
+ *     Swoole\Coroutine\WaitGroup  isInternal()=false  isUserDefined()=true
+ *                                 getFileName()='@swoole/library/core/Coroutine/WaitGroup.php'
+ *
+ * `WaitGroup` is a **PHP** class that the extension compiles into its own binary and
+ * loads at startup (swoole's "library"). phpstorm-stubs describes EXTENSION classes, so a
+ * PHP-level library class is structurally out of its scope and will not arrive there.
+ *
+ * ## What went wrong without it
+ *
+ * `.github/workflows/coding-standards.yml`'s phpstan job runs `setup-php` with
+ * `extensions: json` — no swoole. This dev box HAS swoole, so PHPStan used reflection,
+ * resolved the class and reported nothing; CI had neither the extension nor a stub and
+ * failed the `Run PHPStan on tests/` step with 10 `class.notFound` errors, all in
+ * `tests/Integration/Media/Transcoding/PooledConnectionConcurrencyTest.php`
+ * (lines 260, 263, 273, 277, 360, 364, 395, 402, 440, 445). A local
+ * `[OK] No errors` was correct and still blind: the condition cannot be expressed on a
+ * box where the extension is installed, short of
+ * `PHP_INI_SCAN_DIR=<dir-without-swoole.ini>` — which is how it is now reproduced, and
+ * how any change to this file must be verified.
+ *
+ * ## ⚠ HOW IT IS REGISTERED: `scanFiles`, NOT `stubFiles`
+ *
+ * This file lives under a directory called `phpstan-stubs/`, but it is registered in
+ * `phpstan-tests.neon` under **`scanFiles:`**. That distinction is load-bearing and was
+ * measured, not assumed:
+ *
+ *     stubFiles: [this file]   swoole absent -> STILL 10 class.notFound errors
+ *     scanFiles: [this file]   swoole absent -> [OK] No errors
+ *
+ * A PHPStan stub only **overrides** a class the reflection provider can already find; it
+ * does not **introduce** an unknown one. Two controls, so this is not a misdiagnosis of
+ * this particular file: PHPStan is loud about a stub path that does not exist ("Stub file
+ * … does not exist"), so the path was resolving; and a stripped-down copy with no
+ * docblock behaved identically, so the docblock was not at fault. `scanFiles` reads a
+ * file for the symbols it DECLARES, which is what was needed — the same mechanism, for
+ * the same reason, as the `scripts/bootstrap_env.php` entry beside it.
+ *
+ * Because it is only ever READ and never executed or autoloaded, it keeps the `.stub`
+ * extension: nothing can `require` it by accident, PHPUnit cannot collect it, and neither
+ * gate treats it as a project file (`phpcs` reads `src/` and `tests/`; PHPStan's `paths`
+ * are `src` and `tests`).
+ *
+ * ## Why a stub, and not the two other things this repo already does
+ *
+ * 1. **`src/Media/Library/MediaScanner.php:1054-1066` AVOIDS the class**, and says so:
+ *    production code hand-rolls a two-channel join rather than use `WaitGroup`, purely
+ *    because of this stub gap. That works, but it is a permanent tax on every future
+ *    file. A stub removes the constraint instead of routing around it.
+ *    ⚠ This file is deliberately registered in `phpstan-tests.neon` ONLY. `src/` does
+ *    not use `WaitGroup` today, so adding it to `phpstan.neon` would change nothing and
+ *    the src config stays untouched — verified: the src gate is `[OK] No errors` both
+ *    with and without the extension. If production ever wants `WaitGroup`, adding this
+ *    same file to `phpstan.neon`'s `scanFiles` is what makes MediaScanner's workaround
+ *    optional — that is the forward path, recorded here rather than guessed at later.
+ * 2. **`phpstan.neon` uses `excludePaths`** for two Swoole-using `src/` files. Excluding
+ *    the test file would drop a whole real-DB pool-concurrency integration test from the
+ *    gate S128 just built — the single file in that set most worth type-checking — and
+ *    that is precisely the silent narrowing `StaticAnalysisScopeTest` exists to notice.
+ *    Measured aside that weakens the precedent anyway: `Swoole\Coroutine\Http\Client`
+ *    (the class the `Arr/WorkermanArrTransport.php` exclusion is about) DOES resolve
+ *    with no extension loaded, so that exclusion is not evidence that exclusion is the
+ *    right tool for a missing-stub problem.
+ * 3. **Installing swoole in the phpstan CI job** (which the psalm job in that same file
+ *    already does, per S146) would fix CI and nothing else: a swoole-less box still
+ *    reports the 10 errors, the production constraint above stays, and the gate starts
+ *    depending on a PECL build succeeding forever — the repo's own recorded way for a
+ *    gate to get switched off. It stays available, and would be the right answer if this
+ *    stub ever had to grow past one class.
+ *
+ * ## Fidelity — this was NOT hand-designed
+ *
+ * Every signature below was dumped by `ReflectionClass` from the REAL loaded extension
+ * (swoole 6.2.1), including the default values. The class is not final, has no parent, no
+ * interfaces and no constants. Its three properties (`$chan`, `$count`, `$waiting`) are
+ * `protected` and are deliberately omitted: no code PHPStan analyses can reach them, and
+ * every member listed here is drift surface.
+ *
+ * `tests/Unit/Support/StaticAnalysisScopeTest.php` re-derives the real class by
+ * reflection and fails if this file's public API stops matching it — so on any box with
+ * the extension installed, this declaration is VERIFIED rather than trusted. That is the
+ * answer to the one genuine weakness of a hand-written declaration. On a box without the
+ * extension that check skips, because there is nothing to compare against; CI's phpstan
+ * job is exactly such a box, which is why the check lives in the test suite (whose job
+ * DOES load swoole) and not in the analysis step.
+ */
+class WaitGroup
+{
+    public function __construct(int $delta = 0)
+    {
+    }
+
+    public function add(int $delta = 1): void
+    {
+    }
+
+    public function done(): void
+    {
+    }
+
+    public function wait(float $timeout = -1.0): bool
+    {
+    }
+
+    public function count(): int
+    {
+    }
+}

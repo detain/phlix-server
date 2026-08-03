@@ -251,6 +251,204 @@ final class StaticAnalysisScopeTest extends TestCase
         );
     }
 
+    /**
+     * `phpstan-tests.neon` with its comment lines removed.
+     *
+     * ⚠ Every assertion about that file must run against DIRECTIVES, never against its
+     * prose. The first version of the `stubFiles` guard below asserted over the raw text
+     * and failed on its own commit, because the comment explaining why `stubFiles` is the
+     * wrong key names the key. That is the FOURTH detector in this repo to fire on its own
+     * documentation (S105's middleware counter, the phlix-docs `.shell__main` case,
+     * CoverageMetadataPolicyTest, this) — so the rule is now explicit: strip the comments,
+     * then assert.
+     */
+    private function phpstanTestsDirectives(): string
+    {
+        $raw = file_get_contents(self::PHPSTAN_TESTS);
+        self::assertIsString($raw);
+
+        $kept = [];
+        foreach (explode("\n", $raw) as $line) {
+            if (str_starts_with(ltrim($line), '#')) {
+                continue;
+            }
+
+            $kept[] = $line;
+        }
+
+        $directives = implode("\n", $kept);
+
+        // Anti-vacuity: stripping must not have eaten the file. If it did, "does not
+        // contain" would be trivially true.
+        self::assertStringContainsString('level:', $directives, 'comment stripping ate the config');
+        self::assertStringContainsString('paths:', $directives, 'comment stripping ate the config');
+
+        return $directives;
+    }
+
+    /**
+     * `scanFiles` is an exclusion list wearing different clothes, so it gets the same
+     * "assertSame, not assertContains" treatment as the phpcs excludes below: every entry
+     * teaches PHPStan about a symbol it would otherwise reject, and one added quietly can
+     * hide a genuine `class.notFound`/`function.notFound` — the identifier a plain typo
+     * produces.
+     *
+     * ⚠ The WaitGroup entry is the one that must not be lost. CI's phpstan job installs
+     * `extensions: json` only, so without it that job fails with 10 `class.notFound`
+     * errors — while this box, which HAS swoole, reports `[OK]`. Measured 2x2:
+     *
+     * | | entry present | entry absent |
+     * | swoole loaded  | [OK]  | [OK] (inert) |
+     * | swoole absent  | [OK]  | **10 errors** |
+     */
+    public function testTheTestsConfigScansOnlyTheDocumentedSymbolFiles(): void
+    {
+        $cfg = $this->phpstanTestsDirectives();
+
+        preg_match('/^\s*scanFiles:\s*$(?<body>(?:\n\s*-\s*\S+)*)/m', $cfg, $m);
+        self::assertArrayHasKey('body', $m, 'phpstan-tests.neon must declare scanFiles');
+
+        preg_match_all('/^\s*-\s*(\S+)\s*$/m', $m['body'], $entries);
+        $scanned = $entries[1];
+        sort($scanned);
+
+        self::assertSame(
+            [
+                'phpstan-stubs/Swoole/Coroutine/WaitGroup.stub',
+                'scripts/bootstrap_env.php',
+            ],
+            $scanned,
+            'phpstan-tests.neon may scan exactly these files. Each one suppresses a whole '
+            . 'class of "symbol not found" error, so adding a third needs its reason in '
+            . 'that config and a change to this assertion in the same commit.',
+        );
+
+        foreach ($scanned as $rel) {
+            self::assertFileExists(
+                realpath(self::REPO) . '/' . $rel,
+                $rel . ' is scanned by phpstan-tests.neon but does not exist. PHPStan is '
+                . 'loud about this, but only when it runs — assert it here too.',
+            );
+        }
+
+        // ⚠ `stubFiles` was tried FIRST and does not work: a stub only OVERRIDES a class
+        // the reflection provider can already find, it does not INTRODUCE an unknown one,
+        // so the no-swoole run still reported all 10 errors. Anyone "tidying" this into
+        // the more obvious-looking key would silently reintroduce the CI failure, and the
+        // local run would stay green. Hence the guard, and the reason beside it.
+        self::assertStringNotContainsString(
+            'stubFiles:',
+            $cfg,   // comment-stripped: the prose above it legitimately names the key
+            'do not move these entries to stubFiles: a stub cannot introduce an unknown '
+            . 'class, so the no-swoole CI job would go back to 10 class.notFound errors '
+            . 'while a local run with ext-swoole stayed green. See the header of '
+            . 'phpstan-stubs/Swoole/Coroutine/WaitGroup.stub for the measurement.',
+        );
+    }
+
+    /**
+     * The hand-written `WaitGroup` declaration must keep matching the real extension.
+     *
+     * This is the one genuine weakness of writing a declaration by hand: it can drift
+     * from the class it describes and nothing would notice, because the environment that
+     * NEEDS it (CI, no swoole) is exactly the environment that cannot check it. So the
+     * check lives here, in the suite, whose CI job DOES load swoole — and skips where
+     * there is nothing to compare against.
+     */
+    public function testTheWaitGroupDeclarationStillMatchesTheRealExtension(): void
+    {
+        if (!extension_loaded('swoole')) {
+            self::markTestSkipped(
+                'ext-swoole is not loaded, so there is no real class to compare against. '
+                . 'This is the expected state in CI\'s phpstan job and NOT in its phpunit job.',
+            );
+        }
+
+        $class = 'Swoole\Coroutine\WaitGroup';
+        self::assertTrue(class_exists($class), $class . ' must exist when swoole is loaded');
+
+        $real = new \ReflectionClass($class);
+
+        // Anti-circularity: prove we are reflecting the EXTENSION's class and not some
+        // other declaration that happened to get autoloaded — including, in principle,
+        // the scanned file itself. It is a PHP class inside swoole's bundled library,
+        // which is exactly why phpstorm-stubs cannot ship it.
+        self::assertStringContainsString(
+            'swoole',
+            (string) $real->getFileName(),
+            'the reflected WaitGroup must be the one swoole ships, or this comparison is '
+            . 'circular and proves nothing',
+        );
+
+        $file = file_get_contents(
+            realpath(self::REPO) . '/phpstan-stubs/Swoole/Coroutine/WaitGroup.stub',
+        );
+        self::assertIsString($file);
+
+        // Whitespace-insensitive so reformatting is not a failure, but types and default
+        // values are compared exactly — those are the parts that matter to the analyser.
+        $squash = static fn (string $s): string => (string) preg_replace('/\s+/', '', $s);
+        $haystack = $squash($file);
+
+        $expectedNames = [];
+        foreach ($real->getMethods(\ReflectionMethod::IS_PUBLIC) as $method) {
+            $expectedNames[] = $method->getName();
+
+            $params = [];
+            foreach ($method->getParameters() as $param) {
+                $type = $param->getType();
+                $piece = ($type instanceof \ReflectionNamedType ? $type->getName() . ' ' : '')
+                    . '$' . $param->getName();
+                if ($param->isDefaultValueAvailable()) {
+                    $piece .= ' = ' . var_export($param->getDefaultValue(), true);
+                }
+                $params[] = $piece;
+            }
+
+            $returnType = $method->getReturnType();
+            $signature = 'public function ' . $method->getName()
+                . '(' . implode(', ', $params) . ')'
+                . ($returnType instanceof \ReflectionNamedType ? ': ' . $returnType->getName() : '');
+
+            self::assertStringContainsString(
+                $squash($signature),
+                $haystack,
+                sprintf(
+                    "phpstan-stubs/Swoole/Coroutine/WaitGroup.stub has drifted from the real "
+                    . "ext-swoole %s. Expected to find:\n    %s\nRe-derive it with "
+                    . 'ReflectionClass rather than editing by hand — the whole point of that '
+                    . 'file is that it was not designed, it was dumped.',
+                    phpversion('swoole') ?: 'swoole',
+                    $signature,
+                ),
+            );
+        }
+
+        // Anti-vacuity: if reflection returned nothing, every assertion above passed
+        // without comparing anything.
+        self::assertGreaterThanOrEqual(
+            4,
+            count($expectedNames),
+            'reflection found almost no public methods on WaitGroup, so the comparison above '
+            . 'was vacuous',
+        );
+
+        // And the declaration must not claim MORE than the real class has: an invented
+        // method would let a test call something that does not exist at run time and still
+        // pass analysis.
+        preg_match_all('/public function (\w+)\s*\(/', $file, $declared);
+        sort($expectedNames);
+        $declaredNames = $declared[1];
+        sort($declaredNames);
+        self::assertSame(
+            $expectedNames,
+            $declaredNames,
+            'the declared public method set must equal the real one exactly — a method '
+            . 'listed here but absent from the extension would pass analysis and fail at '
+            . 'run time',
+        );
+    }
+
     public function testThePhpcsTestsRulesetIsScopedAndExcludesOnlyTheDocumentedSniffs(): void
     {
         $doc = new DOMDocument();

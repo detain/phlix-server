@@ -58,13 +58,49 @@ parameters:
         - tests
     bootstrapFiles:
         - vendor/autoload.php
-    # tests/Unit/Scripts/BootstrapEnvTest.php `require_once`s this script for its two
-    # function definitions (phlix_parse_env_file, phlix_bootstrap_cli_env). PHPStan does
-    # not follow a runtime require, so without this the three calls read as calls to
-    # functions that do not exist — the same identifier a genuine typo would produce.
-    # scanFiles (not bootstrapFiles) because the script must be READ for symbols, not
-    # EXECUTED: including it would run its auto-bootstrap during analysis.
+    # ⚠ CI's phpstan job runs setup-php with `extensions: json` — NO swoole. This box has
+    # it, so PHPStan resolved Swoole\Coroutine\WaitGroup by reflection and reported
+    # nothing, while CI failed `Run PHPStan on tests/` with 10 class.notFound errors in
+    # tests/Integration/Media/Transcoding/PooledConnectionConcurrencyTest.php. A local
+    # green was CORRECT and still blind.
+    #
+    # phpstorm-stubs (bundled in phpstan.phar) ships 19 Swoole\Coroutine stubs and no
+    # WaitGroup — because WaitGroup is a PHP class inside the extension's own library
+    # (isUserDefined()=true, '@swoole/library/core/Coroutine/WaitGroup.php'), not an
+    # extension class, so it is out of scope for a stub set that describes extensions.
+    # Read that stub's header for the full reasoning and for the two alternatives
+    # (avoidance, as src/Media/Library/MediaScanner.php:1054 does; excludePaths, as
+    # phpstan.neon does) and why neither was chosen.
+    #
+    # ⚠ REPRODUCE THE CI CONDITION before touching this. -d flags are not inherited by
+    # child processes and an extension cannot be unloaded, so copy the ini scan dir
+    # without swoole and point PHP_INI_SCAN_DIR (env vars ARE inherited) at it:
+    #   for f in /etc/php/8.3/cli/conf.d/*.ini; do grep -qi swoole "$f" || cp "$f" DIR/; done
+    #   PHP_INI_SCAN_DIR=DIR php vendor/bin/phpstan analyse -c phpstan-tests.neon
+    # Both configs must be clean WITH and WITHOUT the extension.
+    #
+    # ⚠ `stubFiles:` DOES NOT WORK for this and I measured it before settling on
+    # scanFiles. A stub only OVERRIDES a class the reflection provider can already find;
+    # it does not introduce an unknown one. With the identical file registered as a
+    # stubFile, the no-swoole run still reported all 10 class.notFound errors. Two
+    # controls, so this is not a guess about my own file: PHPStan is loud about a stub
+    # path that does not exist ("Stub file … does not exist"), so the path resolved; and
+    # a stripped-down copy with no docblock behaved identically, so the docblock was not
+    # at fault. `scanFiles:` READS a file for the symbols it declares, which is exactly
+    # what is needed here — the same mechanism, and the same reason, as the
+    # bootstrap_env.php entry below.
     scanFiles:
+        # The one Swoole class PHPStan cannot resolve without ext-swoole. Read that
+        # file's header: it is a PHP class inside the extension's own library, so
+        # phpstorm-stubs (which describes EXTENSION classes) structurally cannot ship it.
+        - phpstan-stubs/Swoole/Coroutine/WaitGroup.stub
+        # tests/Unit/Scripts/BootstrapEnvTest.php `require_once`s this script for its two
+        # function definitions (phlix_parse_env_file, phlix_bootstrap_cli_env). PHPStan
+        # does not follow a runtime require, so without this the three calls read as
+        # calls to functions that do not exist — the same identifier a genuine typo would
+        # produce. scanFiles (not bootstrapFiles) because these files must be READ for
+        # symbols, never EXECUTED: including bootstrap_env.php would run its
+        # auto-bootstrap during analysis.
         - scripts/bootstrap_env.php
     treatPhpDocTypesAsCertain: false
     # Empty, and it stays empty. A config-level ignore is invisible at the code it

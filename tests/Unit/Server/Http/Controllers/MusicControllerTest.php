@@ -25,8 +25,6 @@ use PHPUnit\Framework\MockObject\MockObject;
  * underlying SQL returns real artist/album/year values against real MySQL — which
  * a mocked connection structurally cannot show — lives in
  * {@see \Phlix\Tests\Integration\Media\MusicApiReadPathIntegrationTest}.
- *
- * @covers \Phlix\Server\Http\Controllers\MusicController
  */
 class MusicControllerTest extends TestCase
 {

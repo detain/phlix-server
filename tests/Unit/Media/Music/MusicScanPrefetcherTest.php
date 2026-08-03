@@ -12,7 +12,6 @@ declare(strict_types=1);
 namespace Phlix\Tests\Unit\Media\Music;
 
 use Phlix\Media\Music\MusicScanPrefetcher;
-use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 use Psr\Log\NullLogger;
 
@@ -28,7 +27,6 @@ use Psr\Log\NullLogger;
  *
  * @internal
  */
-#[CoversClass(MusicScanPrefetcher::class)]
 final class MusicScanPrefetcherTest extends TestCase
 {
     /** @var list<string> Paths to clean up. */

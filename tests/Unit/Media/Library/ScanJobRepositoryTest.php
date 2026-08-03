@@ -17,8 +17,6 @@ use Workerman\MySQL\Connection;
  * every public method, both branches of {@see ScanJobRepository::claimNext()},
  * the {@see ScanJobRepository::enqueue()} invalid-type reject, and the
  * {@see ScanJobRepository::getHistoryForLibrary()} `$limit` clamp.
- *
- * @covers \Phlix\Media\Library\ScanJobRepository
  */
 final class ScanJobRepositoryTest extends TestCase
 {

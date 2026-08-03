@@ -21,8 +21,6 @@ use PHPUnit\Framework\TestCase;
  * S48 review r1 Findings 12 (`configured` must mean the same thing as the
  * bootstrapper's buildability test), 3 (a save refreshes the live provider) and 1
  * (an operator-configured redirect_uri must be absolute).
- *
- * @covers \Phlix\Plugins\Github\Controller\GithubAdminController
  */
 final class GithubAdminControllerTest extends TestCase
 {

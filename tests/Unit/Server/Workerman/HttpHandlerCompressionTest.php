@@ -14,7 +14,6 @@ use Psr\Container\ContainerInterface;
 use Workerman\Protocols\Http\Request as WorkermanRequest;
 
 /**
- * @covers \Phlix\Server\Workerman\HttpHandler
  *
  * Pins the S4 response-compression behaviour of {@see HttpHandler::compressResponse()}
  * and its helpers: text/JSON/HTML bodies are gzip'd when the client supports it and

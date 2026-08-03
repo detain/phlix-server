@@ -16,8 +16,6 @@ use PHPUnit\Framework\TestCase;
  * behind HTTP Basic auth on the OPDS feeds. Unlike login() it issues no tokens
  * and creates no session; it answers "valid credentials for an active account?"
  * and returns the user id (or null).
- *
- * @covers \Phlix\Auth\AuthManager
  */
 final class AuthManagerVerifyCredentialsTest extends TestCase
 {

@@ -22,8 +22,6 @@ use PHPUnit\Framework\TestCase;
  * {@see \Phlix\Tests\Unit\Server\WebPortal\ThemeEndpointsReachabilityTest}.
  * Keeping the two apart matters here: a controller test that passes against a
  * controller nothing dispatches to is precisely the failure S94/S99 shipped.
- *
- * @covers \Phlix\Server\Http\Controllers\ThemesController
  */
 final class ThemesControllerTest extends TestCase
 {

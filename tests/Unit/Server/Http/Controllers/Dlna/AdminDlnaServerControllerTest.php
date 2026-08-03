@@ -29,8 +29,6 @@ use PHPUnit\Framework\TestCase;
  * These tests mock the settings store and the reload scheduler — NO real signal
  * is ever sent — and drive `EffectiveConfig` with a throwaway config dir so the
  * per-worker `running` view is deterministic.
- *
- * @covers \Phlix\Server\Http\Controllers\Dlna\AdminDlnaServerController
  */
 final class AdminDlnaServerControllerTest extends TestCase
 {

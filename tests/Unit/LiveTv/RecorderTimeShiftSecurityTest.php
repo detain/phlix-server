@@ -24,9 +24,6 @@ use Workerman\MySQL\Connection;
  *  2. Path-jail: {@see Recorder::removeBufferDir()} must REFUSE to delete anything
  *     outside the `<storage_path>/timeshift/` subtree (traversal / out-of-jail).
  *
- * @covers \Phlix\LiveTv\Recorder::spawnTimeShiftBuffer
- * @covers \Phlix\LiveTv\Recorder::launchDetached
- * @covers \Phlix\LiveTv\Recorder::removeBufferDir
  *
  * @since SV-3.1 f (fix pass)
  */

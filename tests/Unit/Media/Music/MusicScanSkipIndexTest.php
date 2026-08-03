@@ -12,7 +12,6 @@ declare(strict_types=1);
 namespace Phlix\Tests\Unit\Media\Music;
 
 use Phlix\Media\Music\MusicScanSkipIndex;
-use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 use Psr\Log\NullLogger;
 use SplFileInfo;
@@ -24,7 +23,6 @@ use Workerman\MySQL\Connection;
  *
  * @internal
  */
-#[CoversClass(MusicScanSkipIndex::class)]
 final class MusicScanSkipIndexTest extends TestCase
 {
     /** @var list<string> Files to remove. */

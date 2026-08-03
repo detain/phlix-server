@@ -12,9 +12,6 @@ use Psr\Log\LogLevel;
 use ReflectionClass;
 use Stringable;
 
-/**
- * @covers \Phlix\Common\Events\StructuredLoggerPsrAdapter
- */
 final class StructuredLoggerPsrAdapterTest extends TestCase
 {
     public function test_forwards_psr_string_levels_to_monolog_levels(): void

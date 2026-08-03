@@ -15,8 +15,6 @@ use PHPUnit\Framework\TestCase;
  * shared {@see MetricsRegistry} (enabled) or no-ops on the hot path (disabled).
  * A fixed clock makes the delegated timestamp deterministic so we can assert the
  * exact bucket the registry recorded into.
- *
- * @covers \Phlix\Stats\Metrics\MetricsCollector
  */
 final class MetricsCollectorTest extends TestCase
 {

@@ -7,9 +7,6 @@ namespace Phlix\Tests\Unit\Plugins\Util;
 use Phlix\Plugins\Util\DirectoryOwnership;
 use PHPUnit\Framework\TestCase;
 
-/**
- * @covers \Phlix\Plugins\Util\DirectoryOwnership
- */
 final class DirectoryOwnershipTest extends TestCase
 {
     private string $tmpDir = '';

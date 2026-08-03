@@ -29,8 +29,6 @@ use Psr\Container\ContainerInterface;
  * These tests drive the private loader directly via reflection so they do not
  * need a live MySQL (the real Application constructor eagerly resolves DB-backed
  * controllers).
- *
- * @covers \Phlix\Server\Core\Application
  */
 final class DlnaAdminRoutesTest extends TestCase
 {

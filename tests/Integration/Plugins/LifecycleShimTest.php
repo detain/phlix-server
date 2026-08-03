@@ -13,8 +13,6 @@ use Psr\Container\ContainerInterface;
  * Guard for the `interface … extends …` bridge that keeps
  * `Phlix\Plugins\Contract\LifecycleInterface` (pre-0.11 FQCN) usable
  * after the contract moved to `Phlix\Shared\Plugin\LifecycleInterface`.
- *
- * @coversNothing
  */
 final class LifecycleShimTest extends TestCase
 {

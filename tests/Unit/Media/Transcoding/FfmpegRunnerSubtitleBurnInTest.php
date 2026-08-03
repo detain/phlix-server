@@ -21,8 +21,6 @@ use Phlix\Media\Transcoding\Hwaccel\HwaccelRegistry;
  * enabled (via the new `subtitle_burn_in` segment param) actually includes
  * the (colon/backslash-escaping-corrected) subtitle filter in its `-vf`
  * filter chain, for both the software and HW-accelerated segment builders.
- *
- * @covers \Phlix\Media\Transcoding\FfmpegRunner
  */
 final class FfmpegRunnerSubtitleBurnInTest extends TestCase
 {

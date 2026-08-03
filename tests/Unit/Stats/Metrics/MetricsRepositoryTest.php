@@ -16,8 +16,6 @@ use Workerman\MySQL\Connection;
  * the cross-worker aggregation hydration, the derived rates / error rate, the
  * histogram percentile approximation output, and the SELECT-leading contract
  * (the driver returns NULL for a WITH/CTE-leading statement).
- *
- * @covers \Phlix\Stats\Metrics\MetricsRepository
  */
 final class MetricsRepositoryTest extends TestCase
 {

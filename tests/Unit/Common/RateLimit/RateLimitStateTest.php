@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace Phlix\Tests\Unit\Common\RateLimit;
 
 use Phlix\Common\RateLimit\RateLimitState;
-use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -14,7 +13,6 @@ use PHPUnit\Framework\TestCase;
  * Pins the readonly constructor fields and the `retryAfter()` floor-at-0
  * contract used to render `Retry-After` headers.
  */
-#[CoversClass(RateLimitState::class)]
 final class RateLimitStateTest extends TestCase
 {
     public function testExposesConstructorValuesAsReadonlyFields(): void

@@ -8,9 +8,6 @@ use PHPUnit\Framework\TestCase;
 use Phlix\Plugins\Oidc\DiscoveryDocument;
 use RuntimeException;
 
-/**
- * @covers \Phlix\Plugins\Oidc\DiscoveryDocument
- */
 final class DiscoveryDocumentTest extends TestCase
 {
     private string $cacheDir;

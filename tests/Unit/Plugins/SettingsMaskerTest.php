@@ -10,9 +10,6 @@ use Phlix\Plugins\Manifest;
 use Phlix\Plugins\SettingsMasker;
 use PHPUnit\Framework\TestCase;
 
-/**
- * @covers \Phlix\Plugins\SettingsMasker
- */
 final class SettingsMaskerTest extends TestCase
 {
     public function test_mask_replaces_secret_values_with_placeholder(): void
@@ -155,10 +152,6 @@ final class SettingsMaskerTest extends TestCase
         $this->assertSame('', $schema['bare']['label']);
     }
 
-    /**
-     * @param array<string, mixed> $values
-     * @param array<string, array<string, mixed>> $manifestSettings
-     */
     public function test_secret_status_reports_set_and_length_without_leaking_value(): void
     {
         $plugin = $this->plugin(

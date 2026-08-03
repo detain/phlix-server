@@ -20,8 +20,6 @@ use Workerman\MySQL\Connection;
  * - Wrong state still wipes entry (security)
  * - TTL expiration behavior
  * - Concurrent access via transactions
- *
- * @covers \Phlix\Server\Integrations\Lastfm\DbLastfmOAuthStateStore
  */
 final class DbLastfmOAuthStateStoreTest extends TestCase
 {

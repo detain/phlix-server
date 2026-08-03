@@ -5,8 +5,6 @@ declare(strict_types=1);
 namespace Phlix\Tests\Unit\Common\RateLimit;
 
 use Phlix\Common\RateLimit\DbRateLimiter;
-use Phlix\Common\RateLimit\RateLimitState;
-use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 use Workerman\MySQL\Connection;
 
@@ -24,8 +22,6 @@ use Workerman\MySQL\Connection;
  * with no real sleeps. The DB is mocked so the tests run without a MySQL server
  * (matching the repo's {@see \Phlix\Auth\DbLoginRateLimitStore} test idiom).
  */
-#[CoversClass(DbRateLimiter::class)]
-#[CoversClass(RateLimitState::class)]
 final class DbRateLimiterTest extends TestCase
 {
     /**

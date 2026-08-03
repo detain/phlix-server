@@ -12,8 +12,6 @@ use Phlix\Tests\Fixtures\Events\SampleEvent;
 
 /**
  * Unit tests for {@see ListenerRegistry}.
- *
- * @covers \Phlix\Common\Events\ListenerRegistry
  */
 final class ListenerRegistryTest extends TestCase
 {

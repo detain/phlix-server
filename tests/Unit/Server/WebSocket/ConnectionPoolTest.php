@@ -8,27 +8,15 @@ use Phlix\Server\WebSocket\ConnectionInterface;
 
 /**
  * Unit tests for ConnectionPool class.
- *
- * @covers \Phlix\Server\WebSocket\ConnectionPool
  */
 class ConnectionPoolTest extends TestCase
 {
-    /**
-     * @covers \Phlix\Server\WebSocket\ConnectionPool::getInstance
-     */
     public function testCanGetInstance(): void
     {
         $pool = ConnectionPool::getInstance();
         $this->assertInstanceOf(ConnectionPool::class, $pool);
     }
 
-    /**
-     * @covers \Phlix\Server\WebSocket\ConnectionPool::add
-     * @covers \Phlix\Server\WebSocket\ConnectionPool::remove
-     * @covers \Phlix\Server\WebSocket\ConnectionPool::get
-     * @covers \Phlix\Server\WebSocket\ConnectionPool::count
-     * @covers \Phlix\Server\WebSocket\ConnectionPool::clear
-     */
     public function testCanAddAndRemoveConnection(): void
     {
         $pool = ConnectionPool::getInstance();
@@ -45,9 +33,6 @@ class ConnectionPoolTest extends TestCase
         $this->assertEquals(0, $pool->count());
     }
 
-    /**
-     * @covers \Phlix\Server\WebSocket\ConnectionPool::findByUserId
-     */
     public function testCanFindByUserId(): void
     {
         $pool = ConnectionPool::getInstance();

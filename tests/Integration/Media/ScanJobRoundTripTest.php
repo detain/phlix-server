@@ -25,8 +25,6 @@ use Workerman\MySQL\Connection;
  * to test without a server); the unit test
  * {@see \Phlix\Tests\Unit\Media\Library\ScanJobRepositoryTest} covers every
  * method with a mocked connection regardless.
- *
- * @covers \Phlix\Media\Library\ScanJobRepository
  */
 final class ScanJobRoundTripTest extends TestCase
 {

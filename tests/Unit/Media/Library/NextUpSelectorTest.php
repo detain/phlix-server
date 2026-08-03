@@ -15,8 +15,6 @@ use PHPUnit\Framework\TestCase;
  * `series-grouping.ts` and the watch-state classification derived from
  * `playback_state`, in isolation from MySQL. The real-DB wiring is proven by
  * {@see \Phlix\Tests\Integration\Auth\NextUpIntegrationTest}.
- *
- * @covers \Phlix\Media\Library\NextUpSelector
  */
 final class NextUpSelectorTest extends TestCase
 {

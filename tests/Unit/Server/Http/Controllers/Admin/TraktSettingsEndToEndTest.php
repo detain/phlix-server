@@ -33,9 +33,6 @@ use Workerman\MySQL\Connection;
  * but "a saved client_id actually changes what TraktOAuthController does". Every
  * one of them runs against the REAL `config/` directory, so the shim is under
  * test rather than mocked away.
- *
- * @covers \Phlix\Server\Http\Controllers\Admin\AdminSettingsController
- * @covers \Phlix\Admin\SettingsRepository
  */
 final class TraktSettingsEndToEndTest extends TestCase
 {
@@ -65,6 +62,13 @@ final class TraktSettingsEndToEndTest extends TestCase
      * (the shim) is genuinely exercised, not stubbed.
      *
      * @param array<string, mixed> $seed Pre-existing overrides.
+     *
+     * S128: the intersection is what lets the assertions below read `->stored` and
+     * `->types`. The native return type can only name the parent class, which has
+     * neither property, so at PHPStan level 2 each read is an error against a
+     * property that demonstrably exists on the returned double.
+     *
+     * @return SettingsRepository&object{stored: array<string, mixed>, types: array<string, string>}
      */
     private function repository(array $seed = []): SettingsRepository
     {

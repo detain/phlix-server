@@ -27,9 +27,6 @@ use Workerman\MySQL\Connection;
  * (e.g. `['nfo']` in place of the six shipped patterns), so a scanner left on
  * its literal list produces a visibly different count rather than
  * coincidentally agreeing.
- *
- * @covers \Phlix\Media\Library\ScanIgnorePatterns
- * @covers \Phlix\Media\Library\MediaScanner
  */
 final class ScanIgnorePatternsTest extends TestCase
 {

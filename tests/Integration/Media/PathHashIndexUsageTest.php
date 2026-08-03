@@ -42,8 +42,6 @@ use Workerman\MySQL\Connection;
  * {@see PathHashUniqueIndexPresentTest}.
  *
  * Like {@see BrowseIndexUsageTest}, with no reachable MySQL the test self-skips.
- *
- * @covers \Phlix\Media\Library\ItemRepository
  */
 final class PathHashIndexUsageTest extends TestCase
 {

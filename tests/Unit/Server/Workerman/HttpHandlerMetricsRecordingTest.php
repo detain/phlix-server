@@ -16,7 +16,6 @@ use Workerman\Connection\TcpConnection;
 use Workerman\Protocols\Http\Request as WorkermanRequest;
 
 /**
- * @covers \Phlix\Server\Workerman\HttpHandler
  *
  * Pins the metrics-recording behaviour of {@see HttpHandler} — the per-request
  * `finally` hook that feeds {@see \Phlix\Stats\Metrics}. Two audit findings are

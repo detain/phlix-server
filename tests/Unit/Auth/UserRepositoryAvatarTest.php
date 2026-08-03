@@ -8,9 +8,6 @@ use Phlix\Auth\UserRepository;
 use PHPUnit\Framework\TestCase;
 use Workerman\MySQL\Connection;
 
-/**
- * @covers \Phlix\Auth\UserRepository::clearAvatar
- */
 final class UserRepositoryAvatarTest extends TestCase
 {
     public function test_clear_avatar_calls_correct_sql_with_user_id_bound(): void

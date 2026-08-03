@@ -79,9 +79,6 @@ use Workerman\MySQL\Connection;
  * so it runs against a bare scratch DB and is a no-op create on a migrated one.
  * It only ever mutates rows it creates (namespaced by a per-run token, removed in
  * tearDown via ON DELETE CASCADE), so it is safe against a shared `phlix_test`.
- *
- * @covers \Phlix\Server\Http\Controllers\AccountLinkController
- * @covers \Phlix\Auth\UserIdentityRepository
  */
 final class AccountLinkIntegrationTest extends TestCase
 {
@@ -202,6 +199,13 @@ final class AccountLinkIntegrationTest extends TestCase
         // DB really rejected it — this is the backstop, not the pre-check path.
         $this->assertSame(
             1,
+            // S128: raceRepositoryMissingFirstPrecheck() returns an ANONYMOUS subclass
+            // that declares createAttempts(). A return type can only name
+            // UserIdentityRepository, and unlike a property an extra METHOD cannot be
+            // expressed as an object-shape intersection. Suppressed WITH its identifier,
+            // so the day the method lands on the real repository — or the double stops
+            // declaring it — this line goes red as an unmatched suppression.
+            // @phpstan-ignore method.notFound
             $raceRepo->createAttempts(),
             'B must have attempted create() (the pre-check was forced to miss)',
         );

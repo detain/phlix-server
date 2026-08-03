@@ -11,10 +11,6 @@ use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
 use Workerman\MySQL\Connection;
 
-/**
- * @covers \Phlix\Plugins\Repository\PluginRepository
- * @covers \Phlix\Plugins\InstalledPlugin
- */
 final class PluginRepositoryTest extends TestCase
 {
     private Connection&MockObject $db;

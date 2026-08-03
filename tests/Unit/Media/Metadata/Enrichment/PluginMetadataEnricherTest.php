@@ -18,9 +18,6 @@ use Phlix\Media\Metadata\Resolution\SourceRegistry;
 use Phlix\Tests\Unit\Media\Metadata\Resolution\FakeMetadataSource;
 use PHPUnit\Framework\TestCase;
 
-/**
- * @covers \Phlix\Media\Metadata\Enrichment\PluginMetadataEnricher
- */
 final class PluginMetadataEnricherTest extends TestCase
 {
     private function logger(): StructuredLogger

@@ -21,8 +21,6 @@ use function DI\value;
  * definition, one where the container is ALREADY misbehaving, so the helper must
  * not become the second thing that fails — and it must always carry enough
  * detail to tell a connection refusal apart from an auth failure.
- *
- * @covers \Phlix\Common\Container\DegradedBuild
  */
 final class DegradedBuildTest extends TestCase
 {

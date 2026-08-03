@@ -123,7 +123,8 @@ final class DlnaStreamRouteTest extends TestCase
             {
                 if (!isset($this->map[$id])) {
                     throw new class ('Not found: ' . $id) extends \RuntimeException implements
-                        NotFoundExceptionInterface {
+                        NotFoundExceptionInterface
+                    {
                     };
                 }
 

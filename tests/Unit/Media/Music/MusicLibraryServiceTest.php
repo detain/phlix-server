@@ -13,8 +13,6 @@ use Workerman\MySQL\Connection;
 /**
  * Unit tests for {@see MusicLibraryService}, focused on the scan/progress
  * forwarding added for the music-scan-hang fix.
- *
- * @covers \Phlix\Media\Music\MusicLibraryService
  */
 final class MusicLibraryServiceTest extends TestCase
 {

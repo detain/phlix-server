@@ -15,7 +15,6 @@ use Psr\Container\ContainerInterface;
 use Workerman\Protocols\Http\Request as WorkermanRequest;
 
 /**
- * @covers \Phlix\Server\Workerman\HttpHandler
  *
  * Tests for {@see HttpHandler::serveUserAvatar()} — the private method invoked
  * inline from {@see HttpHandler::__invoke()} to serve avatar bytes for

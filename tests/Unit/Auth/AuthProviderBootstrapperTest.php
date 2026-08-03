@@ -13,9 +13,6 @@ use Phlix\Plugins\Ldap\Plugin as LdapPlugin;
 use Phlix\Plugins\Oidc\Plugin as OidcPlugin;
 use Phlix\Tests\Unit\Plugins\Github\InMemoryPluginSettingsRepository;
 
-/**
- * @covers \Phlix\Auth\AuthProviderBootstrapper
- */
 final class AuthProviderBootstrapperTest extends TestCase
 {
     private string $oidcDir;

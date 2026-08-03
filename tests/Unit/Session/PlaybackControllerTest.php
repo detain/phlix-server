@@ -9,9 +9,6 @@ use Phlix\Session\SessionManager;
 use PHPUnit\Framework\TestCase;
 use Workerman\MySQL\Connection;
 
-/**
- * @covers \Phlix\Session\PlaybackController
- */
 final class PlaybackControllerTest extends TestCase
 {
     /** @var array{query: string, params: array<int|string, mixed>}|null */

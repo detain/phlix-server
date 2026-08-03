@@ -43,9 +43,6 @@ use Workerman\MySQL\Connection;
  * fan-out caps, name-keyed lookups and the >1,000th-row track at volumes a real
  * scan would make far too slow here; this covers the writer/reader contract those
  * volumes assume.
- *
- * @covers \Phlix\Server\Http\Controllers\MusicController
- * @covers \Phlix\Media\Music\MusicLibraryService
  */
 final class MusicScannerToApiReadPathIntegrationTest extends TestCase
 {

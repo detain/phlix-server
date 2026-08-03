@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace Phlix\Tests\Unit\Auth;
 
 use Phlix\Auth\RateLimitException;
-use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -15,10 +14,7 @@ use PHPUnit\Framework\TestCase;
  * the window resets, floored at 0, defaulting to `time()` when no clock is
  * supplied. The formula is single-sourced through
  * {@see \Phlix\Common\RateLimit\RateLimitState::retryAfter()}.
- *
- * @covers \Phlix\Auth\RateLimitException
  */
-#[CoversClass(RateLimitException::class)]
 final class RateLimitExceptionTest extends TestCase
 {
     public function testRetryAfterSecondsReturnsExactSecondsWhenNowSupplied(): void

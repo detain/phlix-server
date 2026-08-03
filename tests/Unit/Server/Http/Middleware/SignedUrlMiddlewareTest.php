@@ -10,9 +10,6 @@ use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
 use PHPUnit\Framework\TestCase;
 
-/**
- * @covers \Phlix\Server\Http\Middleware\SignedUrlMiddleware
- */
 final class SignedUrlMiddlewareTest extends TestCase
 {
     private SignedUrl $signer;

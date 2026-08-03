@@ -1,0 +1,131 @@
+# S128 — PHPStan for tests/. A SEPARATE config on purpose.
+#
+# ┌───────────────────────────────────────────────────────────────────────────────┐
+# │ src/ KEEPS LEVEL 9 WITH NO BASELINE AND NO ignoreErrors. Nothing in this file  │
+# │ touches that. `phpstan.neon` is the src/ config; do not merge the two.         │
+# └───────────────────────────────────────────────────────────────────────────────┘
+#
+# ⚠ THE TRAP THIS FILE EXISTS BECAUSE OF. Before S128, `phpstan.neon` said
+# `paths: [src]` — but that was never what made tests/ unanalysed, and "just add
+# tests to paths" would NOT have fixed it. The CI step is
+#
+#     ./vendor/bin/phpstan analyze src/ --level=9 --no-progress --error-format=github
+#
+# and a path given on the COMMAND LINE overrides `parameters.paths` entirely. So
+# adding `tests` to phpstan.neon would have changed local runs and left CI analysing
+# exactly `src/`, with a green gate and a config that lied about its own scope. That
+# is why the fix is a second config plus a second CI step that names it, and why
+# tests/Unit/Support/StaticAnalysisScopeTest.php asserts the WORKFLOW, not the config.
+#
+# LEVEL 2, chosen from a measured ladder rather than aspiration. Every level was run
+# against `tests/` on origin/master @ 12bdea6c (phpstan 2.2.5, PHP 8.3.6):
+#
+#     level 0 ->   6 errors        level 5 -> 138
+#     level 1 ->   9               level 6 -> 152
+#     level 2 ->  51               level 7 -> 214
+#     level 3 ->  52               level 8 -> 274
+#     level 4 ->  86               level 9 -> 532
+#
+# Level 2 is the highest level whose fallout was fixable AT SOURCE inside one atomic
+# change — all 51 fixed, zero `ignoreErrors`, zero baseline. It is also the level that
+# earns its keep for test code specifically: level 2 is where PHPStan checks methods,
+# properties and functions on ALL expressions, so a test that calls a production method
+# that no longer exists becomes a static error instead of a runtime surprise on the one
+# branch that reaches it. The 51 included three calls to functions that do not exist at
+# all and one call to a repository method that was never defined.
+#
+# ⚠ RAISING THIS IS WORTH REAL MONEY, and level 4 is the next rung, not level 3.
+# Level 4 adds 34 errors that are almost all TEST-INTEGRITY defects of exactly the kind
+# this program keeps finding by hand — measured, with identifiers:
+#
+#     10 x *.alreadyNarrowedType   tautological assertions: assertTrue(true),
+#                                  assertIsString('literal'), assertNull(null)
+#      2 x method.impossibleType   an assertion that can never hold, e.g.
+#                                  assertNotNull(null) — so the line is unreachable
+#      2 x catch.neverThrown       dead catch of AssertionFailedError (cf. S120)
+#      1 x foreach.emptyArray      a loop body that never runs (cf. S110's vacuous loop)
+#      4 x *.alwaysTrue/alwaysFalse   conditions with one possible outcome
+#     11 x return.unusedType       nullable returns on test doubles that never return null
+#      4 x other
+#
+# Each of those is a test asserting less than it appears to. Closing them is a separate
+# step with its own mutation evidence — NOT a config change — because the fix for a
+# tautological assertion is a judgement about what the test meant to pin. Do not
+# "resolve" them by adding ignoreErrors here.
+parameters:
+    level: 2
+    paths:
+        - tests
+    bootstrapFiles:
+        - vendor/autoload.php
+    # ⚠ CI's phpstan job runs setup-php with `extensions: json` — NO swoole. This box has
+    # it, so PHPStan resolved Swoole\Coroutine\WaitGroup by reflection and reported
+    # nothing, while CI failed `Run PHPStan on tests/` with 10 class.notFound errors in
+    # tests/Integration/Media/Transcoding/PooledConnectionConcurrencyTest.php. A local
+    # green was CORRECT and still blind.
+    #
+    # phpstorm-stubs (bundled in phpstan.phar) ships 19 Swoole\Coroutine stubs and no
+    # WaitGroup — because WaitGroup is a PHP class inside the extension's own library
+    # (isUserDefined()=true, '@swoole/library/core/Coroutine/WaitGroup.php'), not an
+    # extension class, so it is out of scope for a stub set that describes extensions.
+    # Read that stub's header for the full reasoning and for the two alternatives
+    # (avoidance, as src/Media/Library/MediaScanner.php:1054 does; excludePaths, as
+    # phpstan.neon does) and why neither was chosen.
+    #
+    # ⚠ REPRODUCE THE CI CONDITION before touching this. -d flags are not inherited by
+    # child processes and an extension cannot be unloaded, so copy the ini scan dir
+    # without swoole and point PHP_INI_SCAN_DIR (env vars ARE inherited) at it:
+    #   for f in /etc/php/8.3/cli/conf.d/*.ini; do grep -qi swoole "$f" || cp "$f" DIR/; done
+    #   PHP_INI_SCAN_DIR=DIR php vendor/bin/phpstan analyse -c phpstan-tests.neon
+    # Both configs must be clean WITH and WITHOUT the extension.
+    #
+    # ⚠ `stubFiles:` DOES NOT WORK for this and I measured it before settling on
+    # scanFiles. A stub only OVERRIDES a class the reflection provider can already find;
+    # it does not introduce an unknown one. With the identical file registered as a
+    # stubFile, the no-swoole run still reported all 10 class.notFound errors. Two
+    # controls, so this is not a guess about my own file: PHPStan is loud about a stub
+    # path that does not exist ("Stub file … does not exist"), so the path resolved; and
+    # a stripped-down copy with no docblock behaved identically, so the docblock was not
+    # at fault. `scanFiles:` READS a file for the symbols it declares, which is exactly
+    # what is needed here — the same mechanism, and the same reason, as the
+    # bootstrap_env.php entry below.
+    scanFiles:
+        # The one Swoole class PHPStan cannot resolve without ext-swoole. Read that
+        # file's header: it is a PHP class inside the extension's own library, so
+        # phpstorm-stubs (which describes EXTENSION classes) structurally cannot ship it.
+        - phpstan-stubs/Swoole/Coroutine/WaitGroup.stub
+        # tests/Unit/Scripts/BootstrapEnvTest.php `require_once`s this script for its two
+        # function definitions (phlix_parse_env_file, phlix_bootstrap_cli_env). PHPStan
+        # does not follow a runtime require, so without this the three calls read as
+        # calls to functions that do not exist — the same identifier a genuine typo would
+        # produce. scanFiles (not bootstrapFiles) because these files must be READ for
+        # symbols, never EXECUTED: including bootstrap_env.php would run its
+        # auto-bootstrap during analysis.
+        - scripts/bootstrap_env.php
+    treatPhpDocTypesAsCertain: false
+    # Empty, and it stays empty. A config-level ignore is invisible at the code it
+    # excuses and matches by pattern, so it keeps excusing new code that happens to look
+    # the same — that is how an ignore list becomes the baseline this repo forbids. If
+    # this list is ever non-empty the level was wrong: lower the level and record the new
+    # ladder position instead.
+    #
+    # SEVEN suppressions DO exist, all of them INLINE, each naming its identifier and its
+    # reason at the line it excuses. They are the cases where PHP's type system genuinely
+    # cannot describe a test double:
+    #
+    #   1 x method.notFound          an anonymous subclass declaring an extra METHOD (a
+    #     AccountLinkIntegrationTest    property can be expressed as an object-shape
+    #                                   intersection; a method cannot)
+    #   3 x method.notFound          Mockery::shouldReceive()'s
+    #     PluginLoaderTest              ExpectationInterface|HigherOrderMessage union
+    #                                   (needs phpstan/phpstan-mockery, not a dependency)
+    #   2 x method.notFound          a closure that RECEIVES a PHPUnit MockObject but can
+    #     RequestAuthenticatorTest      only be typed as the production interface
+    #   1 x assign.propertyReadOnly  a write to an object-SHAPE field, where the concrete
+    #     PooledMySQLConnectionTest     type is an anonymous class built inside a factory
+    #
+    # `reportUnmatchedIgnoredErrors` is left at its default (true), which is the point:
+    # each of the seven becomes an `ignore.unmatchedLine` error the moment it stops being
+    # needed. Two DEAD suppressions were deleted in this same change for exactly that
+    # reason — they had been silencing nothing, invisibly, because tests/ was unanalysed.
+    ignoreErrors: []

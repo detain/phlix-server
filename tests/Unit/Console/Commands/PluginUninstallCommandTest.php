@@ -12,9 +12,6 @@ use Symfony\Component\Console\Application;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Tester\CommandTester;
 
-/**
- * @covers \Phlix\Console\Commands\PluginUninstallCommand
- */
 class PluginUninstallCommandTest extends TestCase
 {
     private function tester(PluginLoader $loader): CommandTester

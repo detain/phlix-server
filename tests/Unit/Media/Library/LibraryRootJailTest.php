@@ -25,8 +25,6 @@ use Workerman\MySQL\Connection;
  * refused (resolution happens before comparison), a sibling directory sharing a
  * name prefix is refused, and an unresolvable root set refuses EVERYTHING rather
  * than degrading to allow-all.
- *
- * @covers \Phlix\Media\Library\LibraryRootJail
  */
 final class LibraryRootJailTest extends TestCase
 {

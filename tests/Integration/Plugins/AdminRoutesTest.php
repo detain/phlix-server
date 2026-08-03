@@ -67,10 +67,6 @@ use Workerman\MySQL\Connection;
  * loader / repository / audit-logger collaborators, then sends
  * synthetic {@see Request} objects through the router and asserts both
  * the HTTP response and the side-effects on the collaborators.
- *
- * @covers \Phlix\Server\Http\Routes\AdminRoutes
- * @covers \Phlix\Server\Http\Controllers\PluginAdminController
- * @covers \Phlix\Server\Http\Middleware\AdminMiddleware
  */
 final class AdminRoutesTest extends TestCase
 {
@@ -699,7 +695,14 @@ final class AdminRoutesTest extends TestCase
         $this->assertSame(1, $this->audit->permissionDenied);
         // The consequence that matters: the gate ran BEFORE the controller, so the
         // plugin's testCredentials() was never invoked with the submitted secret.
-        $this->assertSame([], $this->loader->entryInstance->calls);
+        // S128: read through a narrowed local. `entryInstance` is declared
+        // `object|false`, so `->calls` on it is an error at PHPStan level 2 — and the
+        // assertInstanceOf is not ceremony, it is the thing that makes the next line
+        // mean "the REAL fake was installed and recorded nothing" rather than
+        // "something falsy happened".
+        $entry = $this->loader->entryInstance;
+        $this->assertInstanceOf(FakeCredentialTestingPlugin::class, $entry);
+        $this->assertSame([], $entry->calls);
     }
 
     public function test_test_credentials_route_reaches_controller_and_returns_result(): void

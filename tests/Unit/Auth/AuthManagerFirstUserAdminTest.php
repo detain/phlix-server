@@ -18,8 +18,6 @@ use Workerman\MySQL\Connection;
  *
  *  - Empty `users` table → newly-registered user is promoted to admin.
  *  - Non-empty `users` table → newly-registered user stays non-admin.
- *
- * @covers \Phlix\Auth\AuthManager
  */
 final class AuthManagerFirstUserAdminTest extends TestCase
 {

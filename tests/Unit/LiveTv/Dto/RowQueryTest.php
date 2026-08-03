@@ -8,9 +8,6 @@ use PHPUnit\Framework\TestCase;
 use Phlix\LiveTv\Dto\ResultSet;
 use Phlix\LiveTv\Dto\RowQuery;
 
-/**
- * @covers \Phlix\LiveTv\Dto\RowQuery
- */
 class RowQueryTest extends TestCase
 {
     /**

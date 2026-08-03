@@ -28,13 +28,6 @@ use Phlix\Plugins\Signature\SignatureVerifier;
 use PHPUnit\Framework\TestCase;
 use Psr\Container\ContainerInterface;
 
-/**
- * @covers \Phlix\Plugins\PluginLoader
- * @covers \Phlix\Plugins\InstalledPlugin
- * @covers \Phlix\Plugins\Exception\PluginInstallException
- * @covers \Phlix\Plugins\Exception\PluginEnableException
- * @covers \Phlix\Plugins\Exception\PluginNotFoundException
- */
 final class PluginLoaderTest extends TestCase
 {
     use MockeryPHPUnitIntegration;
@@ -226,17 +219,28 @@ final class PluginLoaderTest extends TestCase
 
         $this->makeLoader()->installFromDirectory('/path/to/source');
 
-        self::assertSame('secret-access', $captured['access_token'] ?? null,
-            'An update must not destroy stored credentials.');
-        self::assertSame('secret-refresh', $captured['refresh_token'] ?? null,
-            'An update must not destroy stored credentials.');
-        self::assertSame('detain', $captured['username'] ?? null,
-            'A stored value must beat the manifest default, not the other way round.');
+        self::assertSame(
+            'secret-access',
+            $captured['access_token'] ?? null,
+            'An update must not destroy stored credentials.'
+        );
+        self::assertSame(
+            'secret-refresh',
+            $captured['refresh_token'] ?? null,
+            'An update must not destroy stored credentials.'
+        );
+        self::assertSame(
+            'detain',
+            $captured['username'] ?? null,
+            'A stored value must beat the manifest default, not the other way round.'
+        );
 
         // A key the manifest newly declares must still arrive with its default,
         // so an upgrade that adds a setting is not left with it missing.
-        self::assertTrue($captured['new_option'] ?? null,
-            'A newly declared manifest setting must pick up its default.');
+        self::assertTrue(
+            $captured['new_option'] ?? null,
+            'A newly declared manifest setting must pick up its default.'
+        );
     }
 
     /**
@@ -1038,11 +1042,19 @@ final class PluginLoaderTest extends TestCase
         /** @var ContainerInterface&FactoryInterface&MockInterface $container */
         $container = Mockery::mock(ContainerInterface::class, FactoryInterface::class);
         // Autowiring the array-settings constructor fails, exactly as PHP-DI does.
+        // S128: Mockery::shouldReceive() is declared ExpectationInterface|
+        // HigherOrderMessage, and ->with()/->andThrow() live only on the first arm.
+        // Resolving this properly needs phpstan/phpstan-mockery, which this repo does not
+        // depend on. Suppressed per line with its identifier rather than config-wide, so
+        // it clears itself if that extension is ever added.
         $container->shouldReceive('get')
+            // @phpstan-ignore method.notFound
             ->with(SettingsCtorFakePlugin::class)
             ->andThrow(new \RuntimeException('Parameter $settings has no value defined or guessable'));
         // The fallback binds the persisted settings to the `settings` parameter.
+        // See above — Mockery's shouldReceive() union.
         $container->shouldReceive('make')
+            // @phpstan-ignore method.notFound
             ->with(SettingsCtorFakePlugin::class, ['settings' => $settings])
             ->andReturnUsing(function (string $cls, array $params) use (&$built): object {
                 $built = new SettingsCtorFakePlugin($params['settings']);
@@ -1076,7 +1088,9 @@ final class PluginLoaderTest extends TestCase
         // be filled by the array fallback → the clean resolution error is surfaced.
         /** @var ContainerInterface&FactoryInterface&MockInterface $container */
         $container = Mockery::mock(ContainerInterface::class, FactoryInterface::class);
+        // See above — Mockery's shouldReceive() union.
         $container->shouldReceive('get')
+            // @phpstan-ignore method.notFound
             ->andThrow(new \RuntimeException('Parameter $apiKey has no value defined or guessable'));
         $container->shouldNotReceive('make');
 
@@ -1463,7 +1477,10 @@ final class SettingsCtorFakePlugin implements LifecycleInterface
  */
 final class ScalarCtorFakePlugin implements LifecycleInterface
 {
-    public function __construct(string $apiKey)
+    // S128: promoted rather than deleted. A required SCALAR first parameter is the
+    // whole point of this fixture (the opensubtitles shape the array fallback cannot
+    // fill), so the parameter must stay; promotion is what makes it read as used.
+    public function __construct(public readonly string $apiKey)
     {
     }
 

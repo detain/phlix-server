@@ -18,8 +18,6 @@ use PHPUnit\Framework\TestCase;
  * Covers the JSON/SPA OAuth surface ({@see LastfmController::apiAuthorize()} /
  * {@see LastfmController::apiCallback()}). The legacy Smarty SSR connect page
  * retired with the rest of the server-side Smarty UI (D-SRV-DEL).
- *
- * @covers \Phlix\Server\Http\Controllers\Admin\LastfmController
  */
 final class LastfmControllerTest extends TestCase
 {

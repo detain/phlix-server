@@ -17,7 +17,6 @@ use Phlix\Server\Http\Controllers\AuthController;
 use Phlix\Server\Http\Controllers\AuthProviderController;
 use Phlix\Server\Http\Controllers\WebAuthnController;
 use Phlix\Server\Http\Request;
-use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 use Workerman\MySQL\Connection;
 
@@ -29,10 +28,7 @@ use Workerman\MySQL\Connection;
  * `constructorParameter()` bindings — so this verifies the container actually
  * injects a WORKING limiter by resolving the controller from the container
  * (with mock managers) and driving a surface over its budget end-to-end.
- *
- * @covers \Phlix\Common\Container\Providers\AuthServicesProvider
  */
-#[CoversClass(AuthServicesProvider::class)]
 final class AuthServicesProviderControllerWiringTest extends TestCase
 {
     public function testAuthControllerRegisterIsWiredToADbBackedLimiter(): void

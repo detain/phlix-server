@@ -11,7 +11,6 @@ use Workerman\MySQL\Connection;
 /**
  * Unit tests for {@see LastfmSessionRepository}.
  *
- * @covers \Phlix\Server\Integrations\Lastfm\LastfmSessionRepository
  *
  * @package Phlix\Tests\Unit\Server\Integrations\Lastfm
  * @since 0.15.0

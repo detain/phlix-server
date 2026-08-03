@@ -9,9 +9,6 @@ use Phlix\Plugins\Exception\PluginInstallException;
 use Phlix\Plugins\Installer\ComposerRunner;
 use PHPUnit\Framework\TestCase;
 
-/**
- * @covers \Phlix\Plugins\Installer\ComposerRunner
- */
 final class ComposerRunnerTest extends TestCase
 {
     private string $tmpDir = '';

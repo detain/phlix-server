@@ -17,8 +17,6 @@ use Workerman\MySQL\Connection;
  * Verifies AuthManager records user-activity stats (login/logout) into the
  * StatsCollector when one is wired — the source the admin dashboard activity
  * feed reads from. Without this wiring stats_user_activity stays empty.
- *
- * @covers \Phlix\Auth\AuthManager
  */
 final class AuthManagerStatsTest extends TestCase
 {

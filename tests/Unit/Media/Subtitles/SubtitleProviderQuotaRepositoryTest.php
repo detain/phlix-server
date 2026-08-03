@@ -8,9 +8,6 @@ use Phlix\Media\Subtitles\Quota\SubtitleProviderQuotaRepository;
 use PHPUnit\Framework\TestCase;
 use Workerman\MySQL\Connection;
 
-/**
- * @covers \Phlix\Media\Subtitles\Quota\SubtitleProviderQuotaRepository
- */
 final class SubtitleProviderQuotaRepositoryTest extends TestCase
 {
     public function testGetReturnsNullWhenNoRow(): void

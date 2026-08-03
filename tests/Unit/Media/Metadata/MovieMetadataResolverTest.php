@@ -12,9 +12,6 @@ use Phlix\Media\Metadata\Resolution\PriorityConfig;
 use Phlix\Media\Metadata\TmdbProvider;
 use RuntimeException;
 
-/**
- * @covers \Phlix\Media\Metadata\MovieMetadataResolver
- */
 class MovieMetadataResolverTest extends TestCase
 {
     protected function setUp(): void

@@ -8,9 +8,6 @@ use PHPUnit\Framework\TestCase;
 use Phlix\Auth\UserIdentityRepository;
 use Workerman\MySQL\Connection;
 
-/**
- * @covers \Phlix\Auth\UserIdentityRepository
- */
 final class UserIdentityRepositoryTest extends TestCase
 {
     public function test_create_inserts_identity_row_with_all_columns(): void

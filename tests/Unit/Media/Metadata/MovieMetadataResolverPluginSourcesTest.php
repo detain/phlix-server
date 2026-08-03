@@ -14,8 +14,6 @@ use PHPUnit\Framework\TestCase;
 
 /**
  * F2 plugin-source dispatch on {@see MovieMetadataResolver}.
- *
- * @covers \Phlix\Media\Metadata\MovieMetadataResolver
  */
 final class MovieMetadataResolverPluginSourcesTest extends TestCase
 {

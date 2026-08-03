@@ -47,9 +47,6 @@ use Workerman\MySQL\Connection;
  * This test is therefore run under BOTH values — see the S-note in the PR body.
  * Nothing here branches on the mode; {@see IntegrationDbGuard} already makes the
  * two behave identically at acquisition time.
- *
- * @covers \Phlix\Media\Library\MediaScanner::streamLanguage
- * @covers \Phlix\Media\Library\ItemRepository::addStream
  */
 final class StreamLanguageUtf8RoundTripTest extends TestCase
 {

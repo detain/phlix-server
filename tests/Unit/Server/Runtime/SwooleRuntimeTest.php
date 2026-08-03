@@ -7,9 +7,6 @@ namespace Phlix\Tests\Unit\Server\Runtime;
 use Phlix\Server\Runtime\SwooleRuntime;
 use PHPUnit\Framework\TestCase;
 
-/**
- * @covers \Phlix\Server\Runtime\SwooleRuntime
- */
 final class SwooleRuntimeTest extends TestCase
 {
     public function test_coroutine_enabled_defaults_to_true(): void

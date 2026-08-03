@@ -7,9 +7,6 @@ namespace Phlix\Tests\Unit\Media\Metadata\Enrichment;
 use Phlix\Media\Metadata\Enrichment\SourceRateLimiter;
 use PHPUnit\Framework\TestCase;
 
-/**
- * @covers \Phlix\Media\Metadata\Enrichment\SourceRateLimiter
- */
 final class SourceRateLimiterTest extends TestCase
 {
     public function testSourceIsDueUntilMarkedThenNotUntilIntervalElapses(): void

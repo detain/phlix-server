@@ -27,14 +27,19 @@ use PHPUnit\Framework\TestCase;
  * username is present. An over-limit request throws {@see RateLimitException},
  * which the central mapping (SV-4.15(c)) turns into a 429 + `Retry-After` +
  * `code=rate_limited`.
- *
- * @covers \Phlix\Server\Http\Controllers\WebAuthnController
  */
 final class WebAuthnControllerRateLimitTest extends TestCase
 {
     /**
      * Recording {@see RateLimiterInterface} double capturing every key and
      * reporting a fixed limited/not-limited state.
+     *
+     * S128: the intersection is what lets the assertions below read `->hits`. The
+     * native return type can only name the interface, and the interface has no such
+     * property, so at PHPStan level 2 every `$limiter->hits` read is an error against
+     * a property that demonstrably exists.
+     *
+     * @return RateLimiterInterface&object{hits: list<string>}
      */
     private function makeLimiter(bool $limited): RateLimiterInterface
     {

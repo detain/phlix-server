@@ -7,9 +7,6 @@ namespace Phlix\Tests\Unit\Media\Metadata\Enrichment;
 use Phlix\Media\Metadata\Enrichment\PluginEnrichmentQueue;
 use PHPUnit\Framework\TestCase;
 
-/**
- * @covers \Phlix\Media\Metadata\Enrichment\PluginEnrichmentQueue
- */
 final class PluginEnrichmentQueueTest extends TestCase
 {
     public function testEnqueueDeDuplicatesAndBoundsSize(): void

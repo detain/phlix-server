@@ -13,8 +13,6 @@ use Workerman\MySQL\Connection;
  * Finding 11: consumption must be ATOMIC — the SELECT takes a `FOR UPDATE` row
  * lock so two concurrent callbacks carrying the same state cannot both read it
  * before either DELETE lands.
- *
- * @covers \Phlix\Plugins\OAuth2\DbOAuth2StateStore
  */
 final class DbOAuth2StateStoreTest extends TestCase
 {

@@ -7,9 +7,6 @@ namespace Phlix\Tests\Unit\Media\Library;
 use PHPUnit\Framework\TestCase;
 use Phlix\Media\Library\SeasonDirectoryClassifier;
 
-/**
- * @covers \Phlix\Media\Library\SeasonDirectoryClassifier
- */
 class SeasonDirectoryClassifierTest extends TestCase
 {
     /**

@@ -28,8 +28,6 @@ use PHPUnit\Framework\TestCase;
  * that delegates to this method, so the throw propagates through the same
  * dispatch path the central mapping catches. An under-limit request returns the
  * normal JWKS body.
- *
- * @covers \Phlix\Server\Http\Controllers\HubJwksController
  */
 final class HubJwksControllerRateLimitTest extends TestCase
 {
@@ -37,6 +35,13 @@ final class HubJwksControllerRateLimitTest extends TestCase
      * A recording {@see RateLimiterInterface} double: captures every key passed
      * to {@see hit()} and reports a fixed limited/not-limited state so tests can
      * assert BOTH the trip behaviour and the exact key that was built.
+     *
+     * S128: the intersection is what lets the assertions below read `->hits`. The
+     * native return type can only name the interface, and the interface has no such
+     * property, so at PHPStan level 2 every `$limiter->hits` read is an error against
+     * a property that demonstrably exists.
+     *
+     * @return RateLimiterInterface&object{hits: list<string>}
      */
     private function makeLimiter(bool $limited): RateLimiterInterface
     {

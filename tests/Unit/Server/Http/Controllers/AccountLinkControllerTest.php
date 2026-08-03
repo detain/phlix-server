@@ -15,8 +15,6 @@ use Phlix\Server\Http\Request;
 
 /**
  * S45 — the authenticated account-linking endpoints (list + LDAP link).
- *
- * @covers \Phlix\Server\Http\Controllers\AccountLinkController
  */
 final class AccountLinkControllerTest extends TestCase
 {

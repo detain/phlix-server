@@ -13,9 +13,6 @@ use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
 use PHPUnit\Framework\MockObject\MockObject;
 
-/**
- * @covers \Phlix\Server\Http\Controllers\AuthProviderController
- */
 final class AuthProviderControllerTest extends TestCase
 {
     /** @var AuthProviderRegistry&MockObject */

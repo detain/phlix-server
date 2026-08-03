@@ -8,9 +8,6 @@ use Phlix\Media\Metadata\Resolution\PriorityConfig;
 use Phlix\Media\Metadata\Resolution\PriorityFieldResolver;
 use PHPUnit\Framework\TestCase;
 
-/**
- * @covers \Phlix\Media\Metadata\Resolution\PriorityConfig
- */
 final class PriorityConfigTest extends TestCase
 {
     /** The canonical config/metadata.php default map. */

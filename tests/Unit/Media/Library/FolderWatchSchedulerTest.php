@@ -30,8 +30,6 @@ use RuntimeException;
  * never be registered cannot starve the re-check phase for the others. The
  * bound is pinned by the all-succeeding shapes below; the exception is pinned
  * by {@see testAnUnregisterableLibraryDoesNotStarveTheHealthyOnes()}.
- *
- * @covers \Phlix\Media\Library\FolderWatchScheduler
  */
 final class FolderWatchSchedulerTest extends TestCase
 {

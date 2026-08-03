@@ -16,8 +16,6 @@ use Workerman\MySQL\Connection;
  * the documented order for every filter combination, that a DB row maps into the
  * exact all-scalar typed shape (NULLs → `''`, progress → float), and that a
  * non-array `query()` result degrades to `[]`.
- *
- * @covers \Phlix\Admin\WatchHistoryService
  */
 final class WatchHistoryServiceTest extends TestCase
 {

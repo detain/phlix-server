@@ -30,8 +30,6 @@ use function DI\value;
  * The stub values below differ from the shipped defaults in both cases, so a
  * policy that quietly fell back to its literal fails rather than coincidentally
  * agreeing.
- *
- * @covers \Phlix\Common\Container\Providers\MediaServicesProvider
  */
 final class MediaServicesProviderSettingsWiringTest extends TestCase
 {

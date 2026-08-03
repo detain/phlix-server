@@ -96,11 +96,6 @@ use ReflectionMethod;
  * {@see MediaScanner::logDegenerateVideoStreams()}, so an operator can SEE the
  * junk rows and decide, and a one-off DELETE against a measured library stays
  * available to them.
- *
- * @covers \Phlix\Media\Library\MediaScanner::summarizeProbe
- * @covers \Phlix\Media\Library\MediaScanner::videoStreamDefects
- * @covers \Phlix\Media\Library\MediaScanner::defectsIncludeGeometry
- * @covers \Phlix\Media\Library\MediaScanner::logDegenerateVideoStreams
  */
 final class MediaScannerDegenerateVideoStreamTest extends TestCase
 {

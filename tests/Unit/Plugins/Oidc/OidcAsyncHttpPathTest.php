@@ -19,11 +19,6 @@ use Workerman\Http\Response as WorkermanResponse;
  * IdTokenValidator::fetchJwks() all route their outbound HTTP through an
  * injected {@see OidcHttpClient}. These tests inject a DOUBLE so the flow is
  * proven end-to-end with NO real network.
- *
- * @covers \Phlix\Plugins\Oidc\DiscoveryDocument
- * @covers \Phlix\Plugins\Oidc\IdTokenValidator
- * @covers \Phlix\Plugins\Oidc\OidcProvider
- * @covers \Phlix\Plugins\Oidc\OidcHttpClient
  */
 final class OidcAsyncHttpPathTest extends TestCase
 {
@@ -159,7 +154,7 @@ final class OidcAsyncHttpPathTest extends TestCase
 
         $client = $this->createMock(OidcHttpClient::class);
         $client->method('get')->willReturnCallback(
-            function (string $url) use ($providerUrl, $jwksJson, $userinfoJson): ResponseInterface {
+            function (string $url) use ($jwksJson, $userinfoJson): ResponseInterface {
                 if (str_contains($url, '/keys')) {
                     return $this->response($jwksJson);
                 }

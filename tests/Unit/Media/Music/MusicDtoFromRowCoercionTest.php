@@ -56,10 +56,6 @@ use PHPUnit\Framework\TestCase;
  * `RuntimeException`) can be caught by the code under test. Proven by mutation
  * rather than asserted: every test below was driven RED by breaking the exact
  * line it names.
- *
- * @covers \Phlix\Media\Music\MusicArtist
- * @covers \Phlix\Media\Music\MusicAlbum
- * @covers \Phlix\Media\Music\MusicTrack
  */
 final class MusicDtoFromRowCoercionTest extends TestCase
 {

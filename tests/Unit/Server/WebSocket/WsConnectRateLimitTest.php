@@ -31,8 +31,6 @@ use PHPUnit\Framework\TestCase;
  * (X-Forwarded-For / X-Real-IP) via the same {@see \Phlix\Common\Http\TrustedProxyResolver}
  * the HTTP limiters use, so distinct clients behind the loopback proxy get
  * distinct buckets.
- *
- * @covers \Phlix\Server\WebSocket\WebSocketServer
  */
 final class WsConnectRateLimitTest extends TestCase
 {
@@ -49,6 +47,13 @@ final class WsConnectRateLimitTest extends TestCase
     /**
      * A recording {@see RateLimiterInterface} double: captures each key passed to
      * {@see hit()} and reports a fixed limited/not-limited state.
+     *
+     * S128: the intersection is what lets the assertions below read `->hits`. The
+     * native return type can only name the interface, and the interface has no such
+     * property, so at PHPStan level 2 every `$limiter->hits` read is an error against
+     * a property that demonstrably exists.
+     *
+     * @return RateLimiterInterface&object{hits: list<string>}
      */
     private function makeLimiter(bool $limited): RateLimiterInterface
     {

@@ -277,7 +277,7 @@ final class IntegrationDbGuardAdoptionTest extends TestCase
      * in_array('tcp', stream_get_wrappers(), true)  -> false
      * stream_get_wrappers()   -> https,ftps,compress.zlib,php,file,glob,data,http,…
      * stream_get_transports() -> tcp,udp,unix,udg,ssl,tls,tlsv1.*,async.*
-     * @fopen('tcp://127.0.0.1:3306', 'r')  -> false, and error_get_last() is
+     * \@fopen('tcp://127.0.0.1:3306', 'r')  -> false, and error_get_last() is
      *   "fopen(tcp://127.0.0.1:3306): Failed to open stream: No such file or
      *    directory" — the FILE wrapper's ENOENT, i.e. the argument was treated
      *    as a filename. The same address via @stream_socket_client() returns
@@ -614,8 +614,8 @@ final class IntegrationDbGuardAdoptionTest extends TestCase
      * {@see NETWORK_URL_CALLS} for why that matters).
      *
      * ```
-     * @fopen('tcp://' . $host . ':' . $port, 'r')   matches
-     * @fopen("tcp://$host:$port", 'r')              does NOT match — see below
+     * \@fopen('tcp://' . $host . ':' . $port, 'r')   matches
+     * \@fopen("tcp://$host:$port", 'r')              does NOT match — see below
      * fopen($this->tempDir . '/x.mp4', 'w')         does not match
      * ```
      *

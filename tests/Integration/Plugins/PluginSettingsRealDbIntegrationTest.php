@@ -42,9 +42,6 @@ use Workerman\MySQL\Connection;
  * service and applies every migration before the suite. Only rows this run
  * created are touched, keyed by a per-run token, and they are removed in
  * tearDown.
- *
- * @covers \Phlix\Plugins\Repository\PluginSettingsRepository
- * @covers \Phlix\Plugins\PluginDbSettings
  */
 final class PluginSettingsRealDbIntegrationTest extends TestCase
 {

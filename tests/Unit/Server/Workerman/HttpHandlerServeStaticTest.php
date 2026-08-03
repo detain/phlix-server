@@ -14,7 +14,6 @@ use Workerman\Protocols\Http\Request as WorkermanRequest;
 use Workerman\Protocols\Http\Response as WorkermanResponse;
 
 /**
- * @covers \Phlix\Server\Workerman\HttpHandler
  *
  * Pins the S4 immutable-cache behaviour of {@see HttpHandler::serveStatic()}: the
  * content-hashed Vite bundle under `/assets/app/**` gets a long-lived immutable

@@ -17,7 +17,6 @@ use Phlix\Media\Library\LibraryManager;
 use Phlix\Media\Library\MediaScanner;
 use Phlix\Media\Library\ScanResult;
 use Phlix\Media\Music\MusicLibraryService;
-use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 use Workerman\MySQL\Connection;
 
@@ -45,7 +44,6 @@ use Workerman\MySQL\Connection;
  *
  * @internal
  */
-#[CoversClass(LibraryManager::class)]
 final class LibraryRescanFullReadTest extends TestCase
 {
     /** @var list<string> Scratch directories to remove. */

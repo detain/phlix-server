@@ -17,44 +17,88 @@
     </exclude>
   </groups>
   <!--
-    S141 — HOW TO READ THIS REPO'S COVERAGE NUMBERS. Read this before concluding
-    that a 0.00% file is untested.
+    ============================================================================
+    S141 — HOW TO READ THIS REPO'S COVERAGE NUMBERS. This is the ONE
+    authoritative statement; nothing else in the repo gets to contradict it.
+    ============================================================================
 
-    The `<source>` block below is clean: every `src/` file appears in the clover.
-    The narrowing happens per-TEST instead. 358 of the 695 test files carry a
-    `@covers` annotation, and PHPUnit restricts each such test's recorded coverage
-    to the units it names — everything else that test executes is DISCARDED, with
-    no warning. So "this code is untested" and "this code's coverage was thrown
-    away by an annotation" are indistinguishable in the report.
+    THE POLICY (decided 2026-08-03, on the measurement below):
+    **This repo carries NO PHPUnit coverage metadata in tests/.** No `@covers`,
+    no `@coversNothing`, no `#[CoversClass]` / `#[CoversMethod]` /
+    `#[CoversFunction]` / `#[CoversNothing]`. Coverage is read WHOLE-RUN: a
+    file's figure is everything the suite executed in it.
 
-    Measured A/B on PHP 8.3.6 + PCOV 1.0.11, one test file, one annotation, nothing
-    else changed (`tests/Unit/Server/Core/MusicTracksRouteReachabilityTest.php`,
-    which builds a Router, registers routes through it and reads them back):
+    THEREFORE:
+      * A 0.00% file is a file the suite NEVER EXECUTES. That reading is now
+        sound, and it was not before.
+      * A non-zero figure is what the suite executed. It is NOT a claim that
+        every executed line is asserted — see "the cost", below.
+      * The headline statement percentage, and the MIN_COVERAGE floor in
+        scripts/coverage-threshold-check.php, are a ratchet over that figure.
 
-      with    @covers \Phlix\Server\Core\Application
-        Phlix\Server\Http\Router   Lines:  0.00% (  0/210)   — absent from the report
-      with the annotation removed
-        Phlix\Server\Http\Router   Lines: 13.33% ( 28/210)
+    tests/Unit/Support/CoverageMetadataPolicyTest.php enforces all of it and
+    fails if metadata reappears, if this comment is deleted, or if
+    phpunit.xml starts requiring coverage metadata. Do NOT re-add an annotation
+    to silence it.
 
-    Whole-run statements for that file went 22 -> 130: the annotation discarded 83%
-    of what the test actually executed. This reproduces the original S141
-    measurement (MusicLibraryService.php 0.00% -> 16.04%) on an unrelated pair.
+    WHY — measured, not assumed. PHP 8.3.6 + PCOV 1.0.11, the CI invocation
+    (`php -d max_execution_time=0 vendor/bin/phpunit` with the clover report),
+    real MySQL 8.0, one identical random seed, the SAME tree twice with only the
+    603 annotation lines removed on the second pass. Both runs: Tests 8971,
+    Skipped 7, same failures.
 
-    AUTHORITATIVE READING, until the project-wide policy decision in S141 is made:
-      * A non-zero figure is real and is a LOWER BOUND.
-      * A 0.00% figure means "no test NAMES this unit in a @covers" — it does NOT
-        mean no test executes it. Confirm by re-running the suspected test with its
-        @covers removed BEFORE writing new tests for that file, or the suite grows
-        duplicate tests that pin nothing new.
-      * The headline percentage, and therefore the DEFAULT_MIN_COVERAGE = 40.0 floor
-        in scripts/coverage-threshold-check.php, are UNDERSTATED by an unmeasured
-        margin. The floor is still meaningful as a ratchet; it is not an estimate of
-        how much of this codebase is exercised.
+      metric (Clover /coverage/project/metrics)   with @covers    without
+      statements                                  65.49%          67.22%
+                                                  41939/64039     43045/64039
+      methods                                     3110/6057       3231/6057
+      classes                                     160/672         175/672
 
-    The open decision (S141): keep @covers everywhere and accept the narrowing, or
-    drop it and read whole-run coverage. It is not recorded here because it has not
-    been made — this comment records the MEASUREMENT and the reading, so that a 0%
-    is at least an explained zero rather than a silent one.
+      files reporting 0.00% .................... 143             101
+        of which FALSE zeros (executed anyway) ..  42               0
+        of which reach 100% once un-narrowed ....   6               -
+      files that LOST coverage .................   -               0
+
+    So 42 of the 143 zeros — 29% of them — were files the suite runs and the
+    report called untested; six of those are executed in FULL. That is the
+    defect: "untested" and "attributed elsewhere by an annotation" were
+    indistinguishable, silently, and the natural reaction to a 0% file is to
+    write duplicate tests for behaviour that is already covered. (S96 and S121
+    each came within one step of doing exactly that.)
+
+    The mechanism, for the record: PHPUnit 10.5
+    `Framework/TestRunner.php:163` asks `Metadata/Api/CodeCoverage.php` for the
+    lines to be covered, and php-code-coverage
+    `CodeCoverage::applyCoversAndUsesFilter()` then does one of three things —
+    `false` (@coversNothing) CLEARS the whole run's data for that test, a
+    NON-EMPTY list keeps only the named units' listed lines and DELETES every
+    other file, and `[]` (no metadata) keeps everything. No warning is emitted
+    in any of the three cases.
+
+    Two further reasons the annotations had to go rather than be completed:
+      * The report was not one measurement but two incompatible ones mixed —
+        369 of 707 test files narrowed, 338 did not. An aggregate over that
+        mixture is not a measurement of anything.
+      * The annotations were inert as documentation and destructive as
+        configuration: this file sets neither `requireCoverageMetadata` nor
+        `beStrictAboutCoverageMetadata`, which are the only two settings that
+        make coverage metadata load-bearing. Nothing checked that a `@covers`
+        was correct, complete, or even resolvable.
+
+    THE COST, stated rather than hidden: whole-run coverage counts a line that
+    was merely EXECUTED, not necessarily asserted. 67.22% is therefore an upper
+    bound on "behaviour pinned by an assertion" in exactly the way 65.49% was a
+    lower bound on "code the suite runs". The defences against vacuous
+    execution are separate and already in place — the S120 assertion-escape
+    extension registered below, scripts/assertion-escape-audit.php in probe mode, and
+    per-step mutation testing. Coverage is not, and was never, that defence.
+
+    ONE DOCUMENTED EXCEPTION.
+    tests/Unit/Server/Http/Controllers/Admin/AdminSettingsControllerTest.php
+    still carries a `@covers`. A concurrent writer owned that file (uncommitted)
+    when this policy landed, so it was deliberately left alone rather than have
+    two writers edit one file. It is named explicitly in
+    CoverageMetadataPolicyTest's allow-list, and that test FAILS once the
+    annotation is gone, so the exception cannot rot into a permanent hole.
   -->
   <coverage>
     <report>

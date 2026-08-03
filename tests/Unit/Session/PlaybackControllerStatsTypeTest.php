@@ -15,8 +15,6 @@ use Workerman\MySQL\Connection;
  * S31: the playback-start stats row must carry the REAL media_items.type, not
  * the previously hardcoded 'movie'. Without this, Top Media / Most Watched
  * aggregate every episode/track/photo play under 'movie'.
- *
- * @covers \Phlix\Session\PlaybackController
  */
 final class PlaybackControllerStatsTypeTest extends TestCase
 {

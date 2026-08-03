@@ -16,7 +16,6 @@ use Workerman\Protocols\Http\Request as WorkermanRequest;
 use Workerman\Protocols\Http\Response as WorkermanResponse;
 
 /**
- * @covers \Phlix\Server\Workerman\HttpHandler
  *
  * X8: pins that GET /media/{id}/stream serves a music track (type='track')
  * media_item Range-safe with the correct audio/* Content-Type. Without the

@@ -10,9 +10,6 @@ use Phlix\Stats\StatsCollector;
 use Phlix\Stats\StorageSnapshotHelper;
 use Workerman\MySQL\Connection;
 
-/**
- * @covers \Phlix\Stats\StorageSnapshotHelper
- */
 class StorageSnapshotHelperTest extends TestCase
 {
     /**

@@ -48,9 +48,6 @@ use Workerman\MySQL\Connection;
  * only thing worth asserting.
  *
  * Self-skips with no reachable MySQL; runs for real in CI.
- *
- * @covers \Phlix\Media\Music\MusicLibraryScanner
- * @covers \Phlix\Media\Music\MusicScanSkipIndex
  */
 final class MusicScanSkipUnchangedIntegrationTest extends TestCase
 {

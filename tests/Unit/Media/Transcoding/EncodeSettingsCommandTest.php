@@ -23,8 +23,6 @@ use PHPUnit\Framework\TestCase;
  * preset control wired only through the software path would be a control that
  * silently does nothing on any box with a GPU — while appearing to work in
  * every unit test of the software builder.
- *
- * @covers \Phlix\Media\Transcoding\FfmpegRunner
  */
 final class EncodeSettingsCommandTest extends TestCase
 {
@@ -137,12 +135,14 @@ final class EncodeSettingsCommandTest extends TestCase
         // so it is built and seeded by reflection.
         $registryRef = new \ReflectionClass(HwaccelRegistry::class);
         $registry = $registryRef->newInstanceWithoutConstructor();
-        foreach ([
+        foreach (
+            [
             'capabilities' => [$vendor => $capability],
             'initialized' => true,
             'vendor_priority' => [$vendor => 1],
             'config' => ['fallback_to_software' => false],
-        ] as $prop => $value) {
+            ] as $prop => $value
+        ) {
             if (!$registryRef->hasProperty($prop)) {
                 continue;
             }

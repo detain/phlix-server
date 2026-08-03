@@ -51,10 +51,6 @@ use Workerman\MySQL\Connection;
  *
  * If anyone reverts a controller to a plain wholesale replace, the tests below fail
  * with a message naming the incident. Self-skips with no MySQL; runs in CI.
- *
- * @covers \Phlix\Plugins\Github\Controller\GithubAdminController
- * @covers \Phlix\Plugins\Oidc\Controller\OidcAdminController
- * @covers \Phlix\Plugins\PluginDbSettings
  */
 final class AuthProviderSettingsPreservationRealDbIntegrationTest extends TestCase
 {

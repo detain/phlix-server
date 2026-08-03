@@ -43,9 +43,6 @@ use Throwable;
  *     bug the epoch guard prevents would leave a wrong value stuck here).
  *  3. Sustained churn with far more coroutines than pool slots does not leak or
  *     deadlock on the pool's blocking acquire() path.
- *
- * @covers \Phlix\Common\Database\PooledMySQLConnection
- * @covers \Phlix\Media\Transcoding\TranscodeManager
  */
 final class PooledConnectionConcurrencyTest extends TestCase
 {

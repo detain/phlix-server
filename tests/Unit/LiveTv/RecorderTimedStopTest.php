@@ -19,9 +19,6 @@ use Workerman\MySQL\Connection;
  *   - endRecording() applies the padding authoritatively and transitions the
  *     row to completed (including the orphan-reconcile safety net).
  *
- * @covers \Phlix\LiveTv\Recorder::effectiveEndTime
- * @covers \Phlix\LiveTv\Recorder::getRecordingsDueToStop
- * @covers \Phlix\LiveTv\Recorder::endRecording
  *
  * @since SV-3.1c
  */

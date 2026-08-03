@@ -58,8 +58,6 @@ use function DI\factory;
  * through reflection against the canonical provider stack with only the MySQL
  * {@see Connection} doubled, so this cannot pass by re-declaring the routes the
  * way the test wishes they were written.
- *
- * @covers \Phlix\Server\Core\Application
  */
 final class ApplicationPlaybackAuthGateTest extends TestCase
 {

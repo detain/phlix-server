@@ -57,13 +57,6 @@ use function DI\factory;
  * The tests stub the database {@see Connection} and the logger config so the
  * container can be exercised in isolation without touching MySQL or the
  * filesystem-bound logger handlers.
- *
- * @covers \Phlix\Common\Container\ContainerFactory
- * @covers \Phlix\Common\Container\Providers\CoreServicesProvider
- * @covers \Phlix\Common\Container\Providers\AuthServicesProvider
- * @covers \Phlix\Common\Container\Providers\MediaServicesProvider
- * @covers \Phlix\Common\Container\Providers\SessionServicesProvider
- * @covers \Phlix\Common\Container\Providers\WebPortalServicesProvider
  */
 final class ContainerFactoryTest extends TestCase
 {

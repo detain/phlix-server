@@ -37,8 +37,6 @@ use Workerman\MySQL\Connection;
  * `IF NOT EXISTS`, so it is a no-op on a fully-migrated DB and safe on a bare
  * scratch database. It only mutates rows it created (namespaced by a per-run
  * token) and cleans them up in tearDown (users delete CASCADEs identities).
- *
- * @covers \Phlix\Auth\UserRepository
  */
 final class S47LoginRepointIntegrationTest extends TestCase
 {

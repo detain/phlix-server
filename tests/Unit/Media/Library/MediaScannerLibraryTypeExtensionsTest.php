@@ -39,8 +39,6 @@ use Workerman\MySQL\Connection;
  * These share words and conflating them has caused production bugs, so the
  * assertions below pin each mapping independently rather than asserting one
  * generic rule.
- *
- * @covers \Phlix\Media\Library\MediaScanner
  */
 final class MediaScannerLibraryTypeExtensionsTest extends TestCase
 {

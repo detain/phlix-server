@@ -22,9 +22,6 @@ use Workerman\MySQL\Connection;
  * so NO real ffmpeg runs in CI; the tuner URL is provided by a mock
  * {@see LiveTvManager}. Every OTHER Recorder method runs its real implementation.
  *
- * @covers \Phlix\LiveTv\Recorder::startTimeShift
- * @covers \Phlix\LiveTv\Recorder::stopTimeShift
- * @covers \Phlix\LiveTv\Recorder::getTimeShift
  *
  * @since SV-3.1 f-b
  */

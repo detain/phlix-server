@@ -22,8 +22,6 @@ use PHPUnit\Framework\TestCase;
  *
  * The controller is driven with a REAL {@see SourceRegistry} so the assertions
  * are non-vacuous end-to-end.
- *
- * @covers \Phlix\Server\Http\Controllers\Admin\AdminMetadataSourceController
  */
 final class AdminMetadataSourceControllerTest extends TestCase
 {

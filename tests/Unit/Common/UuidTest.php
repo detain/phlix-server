@@ -7,9 +7,6 @@ namespace Phlix\Tests\Unit\Common;
 use PHPUnit\Framework\TestCase;
 use Phlix\Common\Uuid;
 
-/**
- * @covers \Phlix\Common\Uuid
- */
 final class UuidTest extends TestCase
 {
     public function testV4ReturnsString(): void

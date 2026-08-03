@@ -34,8 +34,6 @@ use PHPUnit\Framework\TestCase;
  *    re-queried once per item.
  * 4. A resolver that throws is logged and never escapes into the caller: a
  *    metadata lookup must not fail because the settings store did.
- *
- * @covers \Phlix\Media\Metadata\TmdbProvider
  */
 final class TmdbProviderMissingKeyTest extends TestCase
 {

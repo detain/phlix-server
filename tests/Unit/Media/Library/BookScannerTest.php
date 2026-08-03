@@ -12,7 +12,6 @@ use Workerman\MySQL\Connection;
 /**
  * Unit tests for BookScanner EPUB/PDF/CBZ harvesting functionality.
  *
- * @covers \Phlix\Media\Library\BookScanner
  * @since 0.17.0
  */
 class BookScannerTest extends TestCase

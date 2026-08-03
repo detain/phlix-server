@@ -19,8 +19,6 @@ use PHPUnit\Framework\TestCase;
  * defined), so the no-op/pass cases run in-process while the throwing cases are
  * exercised in a forced non-test child PHP process where those constants are
  * absent.
- *
- * @covers \Phlix\Common\Container\Providers\AuthServicesProvider::assertSecretConfigured
  */
 final class AuthServicesProviderSecretGuardTest extends TestCase
 {

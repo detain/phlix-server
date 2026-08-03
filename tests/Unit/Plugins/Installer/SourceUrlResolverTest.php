@@ -7,9 +7,6 @@ namespace Phlix\Tests\Unit\Plugins\Installer;
 use Phlix\Plugins\Installer\SourceUrlResolver;
 use PHPUnit\Framework\TestCase;
 
-/**
- * @covers \Phlix\Plugins\Installer\SourceUrlResolver
- */
 final class SourceUrlResolverTest extends TestCase
 {
     /**

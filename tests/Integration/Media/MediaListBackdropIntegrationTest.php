@@ -47,9 +47,6 @@ use Workerman\MySQL\Connection;
  * `Application`'s router 404s. `/api/v1/media` has exactly ONE registration
  * repo-wide (`WebPortalRouter.php:309`), so proving the key here proves it on
  * both paths.
- *
- * @covers \Phlix\Media\Library\MediaItemShaper
- * @covers \Phlix\Media\Library\ItemRepository
  */
 final class MediaListBackdropIntegrationTest extends TestCase
 {

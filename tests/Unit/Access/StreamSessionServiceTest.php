@@ -14,8 +14,6 @@ use Workerman\Worker;
  *
  * Verifies the heartbeat timer is one-shot, keyed + deduped per session, torn
  * down on stream release, and does not accumulate across many start/stop cycles.
- *
- * @covers \Phlix\Access\StreamSessionService
  */
 class StreamSessionServiceTest extends TestCase
 {

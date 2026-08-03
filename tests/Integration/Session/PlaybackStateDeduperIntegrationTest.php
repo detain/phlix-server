@@ -62,8 +62,6 @@ use Workerman\MySQL\Connection;
  *
  * The drop in setUp is still required: this fixture seeds hundreds of duplicate
  * `(session_id, media_item_id)` groups, which the key exists to forbid.
- *
- * @covers \Phlix\Session\PlaybackStateDeduper
  */
 final class PlaybackStateDeduperIntegrationTest extends TestCase
 {

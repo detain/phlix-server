@@ -17,8 +17,6 @@ use Workerman\MySQL\Connection;
  * admin-managed `server_settings` row, so on a deployment where the key is
  * set from the admin UI (and `TMDB_API_KEY` is not exported) every one of
  * them resolved to an empty string permanently.
- *
- * @covers \Phlix\Media\Metadata\TmdbApiKeyResolver
  */
 final class TmdbApiKeyResolverTest extends TestCase
 {

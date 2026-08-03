@@ -18,9 +18,6 @@ use Phlix\Plugins\PluginLoader;
 use Phlix\Tests\Unit\Plugins\MockeryExpectationTrait;
 use PHPUnit\Framework\TestCase;
 
-/**
- * @covers \Phlix\Plugins\Catalog\PluginUpdateService
- */
 final class PluginUpdateServiceTest extends TestCase
 {
     use MockeryPHPUnitIntegration;

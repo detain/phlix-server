@@ -10,11 +10,6 @@ use Phlix\Shared\Plugin\ManifestType;
 use Phlix\Shared\Plugin\ManifestValidationError;
 use PHPUnit\Framework\TestCase;
 
-/**
- * @covers \Phlix\Plugins\Manifest
- * @covers \Phlix\Shared\Plugin\ManifestValidationError
- * @covers \Phlix\Plugins\Exception\InvalidManifestException
- */
 final class ManifestTest extends TestCase
 {
     private const FIXTURE_DIR = __DIR__ . '/../../Fixtures/Plugins';

@@ -14,9 +14,6 @@ use Psr\Container\ContainerInterface;
  * Exercises the S48 DB-backed plugin settings path ({@see \Phlix\Plugins\PluginDbSettings})
  * through the GitHub plugin: the DB round-trip, the one-time settings.json → DB
  * import (backward-compat), and the no-DB file fallback.
- *
- * @covers \Phlix\Plugins\PluginDbSettings
- * @covers \Phlix\Plugins\Github\Plugin
  */
 final class GithubPluginDbSettingsTest extends TestCase
 {

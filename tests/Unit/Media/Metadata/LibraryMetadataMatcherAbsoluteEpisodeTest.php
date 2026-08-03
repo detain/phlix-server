@@ -22,8 +22,6 @@ use Phlix\Media\Metadata\SeriesMetadataResolver;
  *
  * Each fixture reproduces a real production series' shape, and the refuse cases
  * are the ones that would have been silently mis-assigned by a naive prefix sum.
- *
- * @covers \Phlix\Media\Metadata\LibraryMetadataMatcher
  */
 class LibraryMetadataMatcherAbsoluteEpisodeTest extends TestCase
 {

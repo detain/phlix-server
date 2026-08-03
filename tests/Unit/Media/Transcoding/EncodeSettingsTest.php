@@ -21,8 +21,6 @@ use PHPUnit\Framework\TestCase;
  *  2. **At the shipped defaults the fingerprint is empty**, which is what keeps
  *     the transcode job key — and therefore the existing segment cache — intact
  *     when this feature is deployed.
- *
- * @covers \Phlix\Media\Transcoding\EncodeSettings
  */
 final class EncodeSettingsTest extends TestCase
 {

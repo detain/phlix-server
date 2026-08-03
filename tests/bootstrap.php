@@ -1,7 +1,5 @@
 <?php
 
-declare(strict_types=1);
-
 /**
  * PHPUnit bootstrap.
  *
@@ -25,6 +23,8 @@ declare(strict_types=1);
  * This affects only the test process; production code keeps its real Workerman
  * event loop, which delivers and drains timers normally.
  */
+
+declare(strict_types=1);
 
 require __DIR__ . '/../vendor/autoload.php';
 

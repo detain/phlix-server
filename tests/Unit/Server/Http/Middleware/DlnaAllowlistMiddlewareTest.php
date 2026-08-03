@@ -26,8 +26,6 @@ use Workerman\MySQL\Connection;
  * request through, returning a {@see Response} (403) short-circuits it. Where a
  * pure policy decision is asserted, {@see DlnaAllowlistMiddleware::isAllowed()}
  * is called directly to keep the input (the exact client IP) unambiguous.
- *
- * @covers \Phlix\Server\Http\Middleware\DlnaAllowlistMiddleware
  */
 final class DlnaAllowlistMiddlewareTest extends TestCase
 {

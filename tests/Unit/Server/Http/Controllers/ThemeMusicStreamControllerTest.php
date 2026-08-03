@@ -17,8 +17,6 @@ use Phlix\Theming\ThemeMediaFinder;
  *
  * Covers: serving a cached Plex theme (audio/mpeg) full + ranged; serving a local
  * Emby/Kodi theme; 400 empty id; 404 unknown item; 404 no theme available.
- *
- * @covers \Phlix\Server\Http\Controllers\ThemeMusicStreamController
  */
 final class ThemeMusicStreamControllerTest extends TestCase
 {

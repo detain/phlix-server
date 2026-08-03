@@ -30,8 +30,6 @@ use PHPUnit\Framework\TestCase;
  *
  * {@see PluginLoader} is `final` so PHPUnit can't double it; tests use
  * Mockery (already a project dev-dep) to mock it.
- *
- * @covers \Phlix\Server\Http\Controllers\PluginAdminController
  */
 final class PluginAdminControllerTest extends TestCase
 {

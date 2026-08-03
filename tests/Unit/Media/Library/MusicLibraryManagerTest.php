@@ -19,9 +19,6 @@ use Workerman\MySQL\Connection;
 
 /**
  * Unit tests for MusicLibraryManager.
- *
- * @covers \Phlix\Media\Library\MusicLibraryManager
- * @covers \Phlix\Media\Library\ScanResult
  */
 class MusicLibraryManagerTest extends TestCase
 {

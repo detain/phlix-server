@@ -17,9 +17,6 @@ use Symfony\Component\Console\Application;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Tester\CommandTester;
 
-/**
- * @covers \Phlix\Console\Commands\PluginInstallCommand
- */
 class PluginInstallCommandTest extends TestCase
 {
     private const DEFAULT_SOURCE = 'https://github.com/detain/phlix-plugins';

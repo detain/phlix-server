@@ -15,8 +15,6 @@ use PHPUnit\Framework\TestCase;
  * Pins the three properties the resident-memory host depends on: registration
  * is ALL-OR-NOTHING (a rejected token leaves nothing behind), an enable →
  * disable cycle leaks nothing, and no source can hijack another's theme id.
- *
- * @covers \Phlix\Theming\ThemeSourceRegistry
  */
 final class ThemeSourceRegistryTest extends TestCase
 {

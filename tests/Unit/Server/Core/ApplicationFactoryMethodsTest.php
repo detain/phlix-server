@@ -27,8 +27,6 @@ use Psr\Container\ContainerInterface;
  *
  * Tests the factory methods that create controllers with the proper
  * LibraryManager dependency (4-argument constructor: db, scanner, watcher, musicLibraryService).
- *
- * @covers \Phlix\Server\Core\Application
  */
 class ApplicationFactoryMethodsTest extends TestCase
 {

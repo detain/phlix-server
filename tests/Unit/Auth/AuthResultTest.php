@@ -7,9 +7,6 @@ namespace Phlix\Tests\Unit\Auth;
 use PHPUnit\Framework\TestCase;
 use Phlix\Shared\Auth\AuthResult;
 
-/**
- * @covers \Phlix\Shared\Auth\AuthResult
- */
 final class AuthResultTest extends TestCase
 {
     public function test_success_result(): void

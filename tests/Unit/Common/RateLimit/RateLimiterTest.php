@@ -6,7 +6,6 @@ namespace Phlix\Tests\Unit\Common\RateLimit;
 
 use Phlix\Common\RateLimit\RateLimiter;
 use Phlix\Common\RateLimit\RateLimitState;
-use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -19,8 +18,6 @@ use PHPUnit\Framework\TestCase;
  * an injected clock so windows advance deterministically with no real
  * sleeps.
  */
-#[CoversClass(RateLimiter::class)]
-#[CoversClass(RateLimitState::class)]
 final class RateLimiterTest extends TestCase
 {
     public function testHitIncrementsAndTripsLimitWithinWindow(): void

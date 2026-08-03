@@ -14,8 +14,6 @@ use PHPUnit\Framework\TestCase;
  * Every fixture reproduces a REAL defect measured against the live library
  * (2026-07-28), including the search-call budget: the guards must not turn one
  * `/search/tv` request into two on the common path.
- *
- * @covers \Phlix\Media\Metadata\SeriesMetadataResolver
  */
 final class SeriesMetadataResolverIdentityTest extends TestCase
 {

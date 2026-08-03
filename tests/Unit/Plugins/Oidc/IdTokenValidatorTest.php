@@ -11,9 +11,6 @@ use Phlix\Plugins\Oidc\IdTokenClaims;
 use Phlix\Plugins\Oidc\IdTokenValidator;
 use Phlix\Plugins\Oidc\OidcValidationException;
 
-/**
- * @covers \Phlix\Plugins\Oidc\IdTokenValidator
- */
 final class IdTokenValidatorTest extends TestCase
 {
     protected function setUp(): void

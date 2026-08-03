@@ -45,8 +45,6 @@ use function DI\value;
  * Both are asserted for the two shapes the failure actually takes: the store
  * resolves but its query throws, and the store does not resolve from the
  * container at all.
- *
- * @covers \Phlix\Common\Container\Providers\MediaServicesProvider
  */
 final class MediaServicesProviderTmdbKeyTest extends TestCase
 {

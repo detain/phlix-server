@@ -42,9 +42,6 @@ use PHPUnit\Framework\TestCase;
  * md5 is asserted explicitly so that changing the plugin fails LOUDLY here with
  * a message naming the sibling file, instead of silently desynchronising the
  * two repos.
- *
- * @covers \Phlix\Theming\ThemeSourceRegistry
- * @covers \Phlix\Server\Http\Controllers\ThemesController
  */
 final class SampleThemePluginTest extends TestCase
 {

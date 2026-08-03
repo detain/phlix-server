@@ -11,8 +11,6 @@ use PHPUnit\Framework\TestCase;
  * S48 review r1 Finding 1 (HIGH) — the OAuth2/OIDC `redirect_uri` must be an
  * ABSOLUTE URL; a path-only value can never match a provider's registered
  * callback and kills the flow with `redirect_uri_mismatch`.
- *
- * @covers \Phlix\Plugins\OAuth2\CallbackUrl
  */
 final class CallbackUrlTest extends TestCase
 {

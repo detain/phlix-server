@@ -10,9 +10,6 @@ use Phlix\Media\Metadata\SeriesMetadataResolver;
 use Phlix\Media\Metadata\TmdbProvider;
 use PHPUnit\Framework\TestCase;
 
-/**
- * @covers \Phlix\Media\Metadata\SeriesMetadataResolver
- */
 final class SeriesMetadataResolverTest extends TestCase
 {
     public function testResolveReturnsSeriesMetadataShapedForTheShaper(): void

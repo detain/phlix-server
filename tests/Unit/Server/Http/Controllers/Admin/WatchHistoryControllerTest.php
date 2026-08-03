@@ -17,8 +17,6 @@ use PHPUnit\Framework\TestCase;
  * given an already-authenticated admin request — limit clamping, the
  * userId/libraryId passthrough (present vs empty/absent → null), and the
  * `{success, data, count}` envelope with a 200 status.
- *
- * @covers \Phlix\Server\Http\Controllers\Admin\WatchHistoryController
  */
 final class WatchHistoryControllerTest extends TestCase
 {

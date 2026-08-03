@@ -20,8 +20,6 @@ use PHPUnit\Framework\TestCase;
  *
  * Mirrors {@see AuthControllerTest}: createMock(AuthManager::class) and assert
  * on the JSON response status + body.
- *
- * @covers \Phlix\Server\Http\Controllers\AuthController
  */
 final class AuthControllerSignupGateTest extends TestCase
 {

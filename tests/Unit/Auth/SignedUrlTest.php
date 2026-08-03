@@ -7,9 +7,6 @@ namespace Phlix\Tests\Unit\Auth;
 use Phlix\Auth\SignedUrl;
 use PHPUnit\Framework\TestCase;
 
-/**
- * @covers \Phlix\Auth\SignedUrl
- */
 final class SignedUrlTest extends TestCase
 {
     private const SECRET = 'unit-test-signing-secret';

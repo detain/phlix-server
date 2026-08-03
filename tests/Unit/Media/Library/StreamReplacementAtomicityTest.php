@@ -447,8 +447,11 @@ class StreamReplacementAtomicityTest extends TestCase
     private function makeScanner(TransactionalStreamsConnection $db, ?array $probeResult = null): MediaScanner
     {
         $ffmpeg = $this->recordingProbe($db, $probeResult);
-        /** @var Connection $conn */
-        $conn = $db;
-        return new MediaScanner($conn, new ItemRepository($db), null, null, null, $ffmpeg);
+
+        // S128: no @var round-trip needed — TransactionalStreamsConnection EXTENDS
+        // Workerman\MySQL\Connection (see tests/Unit/Media/Library/…Connection.php:81),
+        // so this already satisfies the constructor. The old `@var Connection $conn`
+        // widened a subclass to its parent, which PHPStan rejects as a non-subtype.
+        return new MediaScanner($db, new ItemRepository($db), null, null, null, $ffmpeg);
     }
 }

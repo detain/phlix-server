@@ -26,8 +26,6 @@ use PHPUnit\Framework\TestCase;
  * we lock the THIN handler wiring: auth gate (401), unconfigured-service (503),
  * the no-active-profile empty response, and the active-profile parental
  * RATING-GATE post-filter (mirrors continue-watching, keyed on `media_item_id`).
- *
- * @covers \Phlix\Server\WebPortal\WebPortalRouter
  */
 final class WebPortalRouterNextUpTest extends TestCase
 {
@@ -81,7 +79,6 @@ final class WebPortalRouterNextUpTest extends TestCase
     }
 
     /**
-     * @param list<array<string, mixed>> $nextUpItems what WatchHistory::getNextUp returns
      * @param array<string, string|null> $effective   media id => effective rating (for the gate)
      * @param array{id: string}|null     $activeProfile
      */

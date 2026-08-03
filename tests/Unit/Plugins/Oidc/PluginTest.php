@@ -7,9 +7,6 @@ namespace Phlix\Tests\Unit\Plugins\Oidc;
 use PHPUnit\Framework\TestCase;
 use Phlix\Plugins\Oidc\Plugin;
 
-/**
- * @covers \Phlix\Plugins\Oidc\Plugin
- */
 final class PluginTest extends TestCase
 {
     private string $pluginDir;

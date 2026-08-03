@@ -7,9 +7,6 @@ namespace Phlix\Tests\Unit\Common\Events\Playback;
 use Phlix\Shared\Events\Playback\PlaybackStarted;
 use PHPUnit\Framework\TestCase;
 
-/**
- * @covers \Phlix\Shared\Events\Playback\PlaybackStarted
- */
 final class PlaybackStartedTest extends TestCase
 {
     public function test_constructs_with_expected_payload(): void
@@ -41,7 +38,9 @@ final class PlaybackStartedTest extends TestCase
         );
 
         $this->expectException(\Error::class);
-        /** @phpstan-ignore-next-line  intentional readonly reassignment for test */
+        // S128: see AbstractEventTest — the suppression matched nothing at the tests/
+        // level and so was itself reported. Re-add it with an identifier if the level
+        // rises to where the readonly write is reported.
         $event->positionTicks = 2;
     }
 }

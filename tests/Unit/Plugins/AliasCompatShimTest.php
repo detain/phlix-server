@@ -12,8 +12,6 @@ use ReflectionClass;
  * `src/Plugins/AliasCompatShim.php` resolves to its corresponding
  * `Phlix\Shared\…` FQCN. Guarantees plugins that imported the
  * pre-0.11 FQCNs (e.g. `phlix-plugin-example` v0.1.0) keep working.
- *
- * @coversNothing
  */
 final class AliasCompatShimTest extends TestCase
 {

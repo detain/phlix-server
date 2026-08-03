@@ -14,9 +14,6 @@ use Workerman\Worker;
 
 /**
  * Unit tests for frame shape handling (SP2 - flat canonical wire format).
- *
- * @covers \Phlix\Server\WebSocket\MessageHandler
- * @covers \Phlix\Server\WebSocket\Connection
  */
 class MessageHandlerFrameShapeTest extends TestCase
 {
@@ -70,9 +67,6 @@ class MessageHandlerFrameShapeTest extends TestCase
         parent::tearDown();
     }
 
-    /**
-     * @covers \Phlix\Server\WebSocket\Connection::sendFlat
-     */
     public function testSendFlatProducesFlatCanonicalEnvelope(): void
     {
         $connection = $this->createConnection();
@@ -103,9 +97,6 @@ class MessageHandlerFrameShapeTest extends TestCase
         $this->assertEquals('member_1', $sent['your_id']);
     }
 
-    /**
-     * @covers \Phlix\Server\WebSocket\Connection::sendMessage
-     */
     public function testSendMessageProducesDeprecatedEnvelope(): void
     {
         $connection = $this->createConnection();
@@ -130,9 +121,6 @@ class MessageHandlerFrameShapeTest extends TestCase
         $this->assertArrayHasKey('your_id', $data);
     }
 
-    /**
-     * @covers \Phlix\Server\WebSocket\MessageHandler::handle
-     */
     public function testHandlePassesFlatMessageToSyncplayHandler(): void
     {
         $handler = $this->createMessageHandler();
@@ -165,9 +153,6 @@ class MessageHandlerFrameShapeTest extends TestCase
         $this->assertEquals('Test Group', $receivedPayload['group_name']);
     }
 
-    /**
-     * @covers \Phlix\Server\WebSocket\MessageHandler::handle
-     */
     public function testHandlePreservesDeprecatedEnvelopeBC(): void
     {
         $handler = $this->createMessageHandler();
@@ -196,9 +181,6 @@ class MessageHandlerFrameShapeTest extends TestCase
         $this->assertTrue($data['subscribed']);
     }
 
-    /**
-     * @covers \Phlix\Server\WebSocket\MessageHandler::handle
-     */
     public function testHandleRejectsUnsupportedProtocolVersion(): void
     {
         $handler = $this->createMessageHandler();

@@ -31,8 +31,6 @@ use function DI\factory;
  * Workerman, so the call site is asserted against its source, deliberately: the
  * failure being guarded is "the call site was never added", which no runtime
  * test in this suite can observe.
- *
- * @covers \Phlix\Common\Container\Providers\MediaServicesProvider
  */
 final class FolderWatchWiringTest extends TestCase
 {

@@ -28,13 +28,6 @@ use Workerman\MySQL\Connection;
  * ResultSet cursor mock — so these tests exercise the same read path as a live
  * database.
  *
- * @covers \Phlix\LiveTv\Recorder::hasRealDiskSpace
- * @covers \Phlix\LiveTv\Recorder::estimateRecordingSize
- * @covers \Phlix\LiveTv\Recorder::hasStorageSpace
- * @covers \Phlix\LiveTv\Recorder::getUsedStorageBytes
- * @covers \Phlix\LiveTv\Recorder::getAvailableStorageBytes
- * @covers \Phlix\LiveTv\Recorder::getStorageStats
- * @covers \Phlix\LiveTv\Recorder::startRecording
  *
  * @since SV-3.1 h2
  */

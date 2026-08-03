@@ -20,8 +20,6 @@ use Phlix\Server\Http\Request;
  * metadata match endpoints. Admin auth is asserted via the userId gate; the
  * controller's AdminMiddleware is left unset (matching the existing controller
  * test convention that assumes an authenticated admin).
- *
- * @covers \Phlix\Server\Http\Controllers\MediaMatchController
  */
 class MediaMatchControllerTest extends TestCase
 {

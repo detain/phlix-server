@@ -44,9 +44,6 @@ use Workerman\MySQL\Connection;
  * thing that happened, broke" — strictly worse than no badge at all.
  *
  * With no reachable MySQL the test self-skips.
- *
- * @covers \Phlix\Console\Commands\LibraryScanCommand
- * @covers \Phlix\Media\Library\ScanJobRepository
  */
 final class CliScanJobVisibilityTest extends TestCase
 {

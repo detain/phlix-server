@@ -12,8 +12,6 @@ use PHPUnit\Framework\TestCase;
  * single merged source of truth via {@see HwAccelConfig::get()}, and
  * config/ffmpeg.php's deprecated `hwaccel` block delegates to it (no
  * contradictory `enabled` flags at runtime).
- *
- * @covers \Phlix\Config\HwAccelConfig
  */
 final class HwAccelConfigTest extends TestCase
 {

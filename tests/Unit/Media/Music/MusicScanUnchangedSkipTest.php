@@ -16,7 +16,6 @@ use Phlix\Media\Music\MusicLibraryScanner;
 use Phlix\Media\Music\MusicScanPrefetcher;
 use Phlix\Media\Music\MusicScanSkipIndex;
 use Phlix\Media\Transcoding\FfmpegRunner;
-use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 use Workerman\MySQL\Connection;
 
@@ -40,8 +39,6 @@ use Workerman\MySQL\Connection;
  *
  * @internal
  */
-#[CoversClass(MusicLibraryScanner::class)]
-#[CoversClass(MusicScanSkipIndex::class)]
 final class MusicScanUnchangedSkipTest extends TestCase
 {
     /** @var list<string> Temp directories to remove. */

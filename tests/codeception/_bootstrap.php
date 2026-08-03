@@ -1,12 +1,12 @@
 <?php
 
-declare(strict_types=1);
-
 /**
  * Codeception bootstrap for SyncPlay e2e tests.
  *
  * This file is included before each test run to set up the environment.
  */
+
+declare(strict_types=1);
 
 // Define test constants
 define('SYNCPLAY_TEST_HOST', 'localhost');

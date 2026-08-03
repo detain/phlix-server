@@ -7,9 +7,6 @@ namespace Phlix\Tests\Unit\Common\Events\Playback;
 use Phlix\Shared\Events\Playback\PlaybackResumed;
 use PHPUnit\Framework\TestCase;
 
-/**
- * @covers \Phlix\Shared\Events\Playback\PlaybackResumed
- */
 final class PlaybackResumedTest extends TestCase
 {
     public function test_constructs_with_expected_payload(): void

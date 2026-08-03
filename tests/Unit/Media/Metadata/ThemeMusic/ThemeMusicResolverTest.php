@@ -18,8 +18,6 @@ use Phlix\Theming\ThemeMediaFinder;
  * + returns url + is idempotent; 404/timeout → null; disabled/off config → null
  * (and no fetch); non-integer tvdb → null with no fetch; movie type never uses
  * the Plex fallback.
- *
- * @covers \Phlix\Media\Metadata\ThemeMusic\ThemeMusicResolver
  */
 final class ThemeMusicResolverTest extends TestCase
 {

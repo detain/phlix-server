@@ -14,7 +14,6 @@ namespace Phlix\Tests\Unit\Media\Music;
 use Phlix\Common\Logger\StructuredLogger;
 use Phlix\Media\Music\MusicLibraryScanner;
 use Phlix\Media\Transcoding\FfmpegRunner;
-use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 use Workerman\MySQL\Connection;
 
@@ -36,7 +35,6 @@ use Workerman\MySQL\Connection;
  *
  * @internal
  */
-#[CoversClass(MusicLibraryScanner::class)]
 final class MusicScanTagReadCostTest extends TestCase
 {
     /** @var list<string> Fixtures to remove. */

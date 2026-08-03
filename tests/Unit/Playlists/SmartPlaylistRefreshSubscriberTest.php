@@ -33,8 +33,6 @@ use Workerman\MySQL\Connection;
  * The second half of the guard is just as important — the refresh is heavy and
  * blocking, so the event handler must NOT perform it inline on the dispatch
  * stack.
- *
- * @covers \Phlix\Playlists\SmartPlaylistRefreshSubscriber
  */
 final class SmartPlaylistRefreshSubscriberTest extends TestCase
 {

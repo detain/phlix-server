@@ -37,8 +37,6 @@ use Workerman\MySQL\Connection;
  * CI applies all migrations to the `phlix_test` MySQL service before the suite;
  * locally, with no reachable MySQL, it self-skips — the same guard
  * {@see \Phlix\Tests\Integration\Session\ContinueWatchingIntegrationTest} uses.
- *
- * @covers \Phlix\Auth\WatchHistory
  */
 final class NextUpIntegrationTest extends TestCase
 {

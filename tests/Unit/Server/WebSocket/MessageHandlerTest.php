@@ -10,14 +10,9 @@ use Phlix\Session\SyncPlay\Messages;
 
 /**
  * Unit tests for MessageHandler class.
- *
- * @covers \Phlix\Server\WebSocket\MessageHandler
  */
 class MessageHandlerTest extends TestCase
 {
-    /**
-     * @covers \Phlix\Server\WebSocket\MessageHandler::on
-     */
     public function testCanRegisterCallback(): void
     {
         $pool = ConnectionPool::getInstance();
@@ -31,10 +26,6 @@ class MessageHandlerTest extends TestCase
         });
     }
 
-    /**
-     * @covers \Phlix\Server\WebSocket\MessageHandler::broadcast
-     * @covers \Phlix\Server\WebSocket\MessageHandler::getConnectionCount
-     */
     public function testCanBroadcast(): void
     {
         $pool = ConnectionPool::getInstance();
@@ -51,8 +42,6 @@ class MessageHandlerTest extends TestCase
      * SV-4.7 Gap 4: a privileged event (SyncPlay control) from an
      * unauthenticated connection is rejected with NOT_AUTHENTICATED and NOT
      * dispatched to the registered handler.
-     *
-     * @covers \Phlix\Server\WebSocket\MessageHandler::handle
      */
     public function testPrivilegedEventFromUnauthenticatedConnectionIsRejected(): void
     {
@@ -89,8 +78,6 @@ class MessageHandlerTest extends TestCase
     /**
      * SV-4.7 Gap 4: subscribe_dashboard is privileged; an unauthenticated
      * subscription is rejected before now-playing data is streamed.
-     *
-     * @covers \Phlix\Server\WebSocket\MessageHandler::handle
      */
     public function testSubscribeDashboardRejectedForUnauthenticated(): void
     {
@@ -127,8 +114,6 @@ class MessageHandlerTest extends TestCase
     /**
      * SV-4.7 Gap 4: a privileged event from an AUTHENTICATED connection is
      * dispatched normally.
-     *
-     * @covers \Phlix\Server\WebSocket\MessageHandler::handle
      */
     public function testPrivilegedEventFromAuthenticatedConnectionDispatches(): void
     {
@@ -156,8 +141,6 @@ class MessageHandlerTest extends TestCase
     /**
      * SV-4.7 Gap 4/6: a public event (ping) is never gated — it dispatches for an
      * unauthenticated connection with no NOT_AUTHENTICATED error.
-     *
-     * @covers \Phlix\Server\WebSocket\MessageHandler::handle
      */
     public function testPublicEventNotGatedForUnauthenticated(): void
     {

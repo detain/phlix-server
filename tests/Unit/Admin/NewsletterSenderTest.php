@@ -12,8 +12,6 @@ use Workerman\MySQL\Connection;
 
 /**
  * Unit tests for NewsletterSender class.
- *
- * @covers \Phlix\Admin\NewsletterSender
  */
 class NewsletterSenderTest extends TestCase
 {

@@ -11,9 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Tests\Unit\Media\Music;
 
-use Phlix\Media\Music\MusicLibraryScanner;
 use Phlix\Media\Transcoding\FfmpegRunner;
-use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -52,7 +50,6 @@ use PHPUnit\Framework\TestCase;
  *
  * @internal
  */
-#[CoversClass(MusicLibraryScanner::class)]
 final class MusicScanReparentTest extends TestCase
 {
     /** `music_artists.id` of the wrong artist a track is re-pointed at. */

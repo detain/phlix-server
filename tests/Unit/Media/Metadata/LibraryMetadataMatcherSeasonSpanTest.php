@@ -15,8 +15,6 @@ use PHPUnit\Framework\TestCase;
  * The wiring for the resolver's season-coverage guard (bucket B): the matcher
  * must measure the local tree's highest NON-SPECIAL season and hand it to
  * {@see SeriesMetadataResolver::resolve()}.
- *
- * @covers \Phlix\Media\Metadata\LibraryMetadataMatcher
  */
 final class LibraryMetadataMatcherSeasonSpanTest extends TestCase
 {

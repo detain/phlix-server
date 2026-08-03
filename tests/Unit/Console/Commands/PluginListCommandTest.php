@@ -15,9 +15,6 @@ use Symfony\Component\Console\Application;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Tester\CommandTester;
 
-/**
- * @covers \Phlix\Console\Commands\PluginListCommand
- */
 class PluginListCommandTest extends TestCase
 {
     private function tester(PluginLoader $loader): CommandTester

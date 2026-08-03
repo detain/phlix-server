@@ -30,9 +30,6 @@ use Psr\Container\ContainerInterface;
  * {@see SourceRegistry} after {@see PluginLoader::enable()} and is gone after
  * {@see PluginLoader::disable()} (leak-free), driven by the typed interface —
  * NOT the old `method_exists()`/FQCN container-sniffing convention.
- *
- * @covers \Phlix\Plugins\PluginLoader
- * @covers \Phlix\Media\Metadata\Resolution\SourceRegistry
  */
 final class PluginLoaderSourceRegistryTest extends TestCase
 {

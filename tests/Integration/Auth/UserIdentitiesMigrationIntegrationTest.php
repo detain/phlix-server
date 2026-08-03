@@ -58,9 +58,6 @@ use Workerman\MySQL\Connection;
  * on a fully-migrated shared schema the IF-NOT-EXISTS creates are no-ops. It only
  * ever mutates rows it creates (namespaced by a per-run token, cleaned up in
  * tearDown via ON DELETE CASCADE), so it is safe against a shared `phlix_test`.
- *
- * @covers \Phlix\Auth\UserIdentityRepository
- * @covers \Phlix\Auth\UserRepository
  */
 final class UserIdentitiesMigrationIntegrationTest extends TestCase
 {

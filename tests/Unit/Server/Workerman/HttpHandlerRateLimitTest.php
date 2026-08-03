@@ -24,7 +24,6 @@ use Workerman\Protocols\Http\Request as WorkermanRequest;
 use Workerman\Protocols\Http\Response as WorkermanResponse;
 
 /**
- * @covers \Phlix\Server\Workerman\HttpHandler
  *
  * SV-4.15(c): the central {@see RateLimitException} -> HTTP 429 mapping on the
  * Workerman dispatch path, plus a regression for the latent login bug it fixes.

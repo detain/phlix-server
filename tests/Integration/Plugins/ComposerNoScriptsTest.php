@@ -16,8 +16,6 @@ use PHPUnit\Framework\TestCase;
  *
  * This runs the REAL composer binary (skipped if not on PATH), so it is the
  * definitive regression guard for the kill-switch.
- *
- * @covers \Phlix\Plugins\Installer\ComposerRunner
  */
 final class ComposerNoScriptsTest extends TestCase
 {

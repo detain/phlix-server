@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace Phlix\Tests\Unit\Common\RateLimit;
 
 use Phlix\Common\RateLimit\DbRateLimiter;
-use Phlix\Common\RateLimit\RateLimitState;
 use PHPUnit\Framework\TestCase;
 use Workerman\MySQL\Connection;
 

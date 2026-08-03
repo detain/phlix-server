@@ -11,7 +11,6 @@ declare(strict_types=1);
 
 namespace Phlix\Tests\Unit\Media\Music;
 
-use Phlix\Media\Music\MusicLibraryScanner;
 use Phlix\Media\Transcoding\FfmpegRunner;
 use PHPUnit\Framework\TestCase;
 

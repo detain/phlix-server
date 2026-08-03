@@ -10,9 +10,6 @@ use Phlix\Plugins\Oidc\Plugin;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
 
-/**
- * @covers \Phlix\Plugins\Oidc\Controller\OidcAdminController
- */
 final class OidcAdminControllerTest extends TestCase
 {
     private string $pluginDir;

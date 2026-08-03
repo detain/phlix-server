@@ -26,9 +26,6 @@ use function DI\factory;
  * Satisfies the §0.4 integration-boundary requirement for the events
  * subsystem.
  *
- * @covers \Phlix\Common\Events\EventDispatcherFactory
- * @covers \Phlix\Common\Events\ListenerRegistry
- * @covers \Phlix\Common\Container\Providers\EventServicesProvider
  */
 final class DispatchSmokeTest extends TestCase
 {

@@ -28,7 +28,6 @@ use Psr\Container\ContainerInterface;
  * (mirroring {@see AdminHubControllerTest}); the "no outbound POST" test uses a
  * container returning a HubClient whose HTTP client asserts it is never invoked.
  *
- * @covers \Phlix\Server\Http\Controllers\Admin\HealthController
  */
 final class HealthControllerTest extends TestCase
 {

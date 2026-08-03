@@ -7,9 +7,6 @@ namespace Phlix\Tests\Unit\Plugins\Util;
 use Phlix\Plugins\Util\RecursiveDelete;
 use PHPUnit\Framework\TestCase;
 
-/**
- * @covers \Phlix\Plugins\Util\RecursiveDelete
- */
 final class RecursiveDeleteTest extends TestCase
 {
     private string $tmpDir = '';

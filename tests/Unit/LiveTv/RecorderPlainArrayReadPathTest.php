@@ -29,9 +29,6 @@ use Workerman\MySQL\Connection;
  * `Connection::query()` actually returns and assert real rows come back. They
  * FAIL against the pre-fix `instanceof ResultSet`-only RowQuery.
  *
- * @covers \Phlix\LiveTv\Recorder::getRecording
- * @covers \Phlix\LiveTv\Recorder::getRecordingsDueToStop
- * @covers \Phlix\LiveTv\Recorder::resumeActiveRecordings
  *
  * @since SV-3.1-rowquery
  */

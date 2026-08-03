@@ -8,9 +8,6 @@ use PHPUnit\Framework\TestCase;
 use Phlix\Plugins\Oidc\IdTokenClaims;
 use Phlix\Plugins\Oidc\OidcUserInfo;
 
-/**
- * @covers \Phlix\Plugins\Oidc\OidcUserInfo
- */
 final class OidcUserInfoTest extends TestCase
 {
     public function test_from_id_token_claims(): void

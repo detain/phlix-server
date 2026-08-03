@@ -26,7 +26,6 @@ use PHPUnit\Framework\TestCase;
 /**
  * Smoke test for {@see MediaServicesProvider}.
  *
- * @covers \Phlix\Common\Container\Providers\MediaServicesProvider
  */
 final class MediaServicesProviderTest extends TestCase
 {

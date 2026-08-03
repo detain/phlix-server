@@ -18,8 +18,6 @@ use Phlix\Tests\Unit\Server\WebSocket\TestConnection;
 /**
  * Unit tests for WebSocket JWT authentication and server-derived member_id.
  *
- * @covers \Phlix\Server\WebSocket\WebSocketServer
- * @covers \Phlix\Session\SyncPlay\SyncPlayManager
  */
 class WsAuthenticationTest extends TestCase
 {
@@ -92,8 +90,6 @@ class WsAuthenticationTest extends TestCase
      * upgrade request's query string is populated — not at TCP-accept (onConnect,
      * where $_GET is empty/stale under Workerman).
      *
-     * @covers \Phlix\Server\WebSocket\WebSocketServer::onConnect
-     * @covers \Phlix\Server\WebSocket\WebSocketServer::onWebSocketConnect
      */
     public function testValidTokenAuthenticatesConnection(): void
     {
@@ -126,9 +122,6 @@ class WsAuthenticationTest extends TestCase
         $this->assertTrue($callTracker['send'], 'Welcome message should be sent');
     }
 
-    /**
-     * @covers \Phlix\Server\WebSocket\WebSocketServer::onWebSocketConnect
-     */
     public function testInvalidTokenClosesConnection(): void
     {
         $config = [
@@ -158,7 +151,6 @@ class WsAuthenticationTest extends TestCase
      * is configured, a token-less handshake MUST be rejected — the previous test
      * asserted the opposite (allowed unauthenticated), which is the vulnerability.
      *
-     * @covers \Phlix\Server\WebSocket\WebSocketServer::onWebSocketConnect
      */
     public function testMissingTokenRejectedWhenSecretConfigured(): void
     {
@@ -187,7 +179,6 @@ class WsAuthenticationTest extends TestCase
      * SV-4.7 Gap 2: with NO JWT secret configured (dev), a token-less handshake
      * is allowed as an anonymous, unauthenticated connection.
      *
-     * @covers \Phlix\Server\WebSocket\WebSocketServer::onWebSocketConnect
      */
     public function testMissingTokenAllowedWhenNoSecretConfigured(): void
     {
@@ -215,9 +206,6 @@ class WsAuthenticationTest extends TestCase
         $this->assertTrue($callTracker['send'], 'Welcome message should be sent');
     }
 
-    /**
-     * @covers \Phlix\Server\WebSocket\WebSocketServer::onWebSocketConnect
-     */
     public function testExpiredTokenRejectsConnection(): void
     {
         $config = [
@@ -245,9 +233,6 @@ class WsAuthenticationTest extends TestCase
         $this->assertCount(0, $pool->all());
     }
 
-    /**
-     * @covers \Phlix\Session\SyncPlay\SyncPlayManager::handleMessage
-     */
     public function testUnauthenticatedConnectionCannotCreateGroup(): void
     {
         $syncPlayManager = $this->createTestableSyncPlayManager();
@@ -283,9 +268,6 @@ class WsAuthenticationTest extends TestCase
         $this->assertEquals('NOT_AUTHENTICATED', $errorCode);
     }
 
-    /**
-     * @covers \Phlix\Session\SyncPlay\SyncPlayManager::handleMessage
-     */
     public function testUnauthenticatedConnectionCannotJoinGroup(): void
     {
         $syncPlayManager = $this->createTestableSyncPlayManager();
@@ -321,9 +303,6 @@ class WsAuthenticationTest extends TestCase
         $this->assertEquals('NOT_AUTHENTICATED', $errorCode);
     }
 
-    /**
-     * @covers \Phlix\Session\SyncPlay\SyncPlayManager::handleMessage
-     */
     public function testUnauthenticatedConnectionCannotControlPlayback(): void
     {
         $syncPlayManager = $this->createTestableSyncPlayManager();
@@ -359,9 +338,6 @@ class WsAuthenticationTest extends TestCase
         $this->assertEquals(3, $errorCount, 'Should reject 3 playback commands from unauthenticated connection');
     }
 
-    /**
-     * @covers \Phlix\Session\SyncPlay\SyncPlayManager::handleGroupCreate
-     */
     public function testServerDerivedMemberIdIsUsedInsteadOfClientSupplied(): void
     {
         $syncPlayManager = $this->createTestableSyncPlayManager();
@@ -395,9 +371,6 @@ class WsAuthenticationTest extends TestCase
         $this->assertArrayNotHasKey('client-claimed-member-id', $members, 'Should NOT use client-supplied member_id');
     }
 
-    /**
-     * @covers \Phlix\Session\SyncPlay\SyncPlayManager::handlePlaybackPlay
-     */
     public function testHostAuthorizationUsesServerDerivedMemberId(): void
     {
         $syncPlayManager = $this->createTestableSyncPlayManager();
@@ -435,9 +408,6 @@ class WsAuthenticationTest extends TestCase
         );
     }
 
-    /**
-     * @covers \Phlix\Session\SyncPlay\SyncPlayManager::handleGroupJoin
-     */
     public function testJoinGroupUsesServerDerivedMemberId(): void
     {
         $syncPlayManager = $this->createTestableSyncPlayManager();

@@ -12,9 +12,6 @@ use Phlix\Auth\ProviderManager;
 use Phlix\Auth\UserRepository;
 use Workerman\MySQL\Connection;
 
-/**
- * @covers \Phlix\Auth\ProviderManager
- */
 final class ProviderManagerTest extends TestCase
 {
     private AuthProviderRegistry $registry;

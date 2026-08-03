@@ -16,7 +16,6 @@ use Workerman\Protocols\Http\Request as WorkermanRequest;
 use Workerman\Protocols\Http\Response as WorkermanResponse;
 
 /**
- * @covers \Phlix\Server\Workerman\HttpHandler
  *
  * Authoritative end-to-end route test for GET /api/v1/artwork/{id}?size=.
  *

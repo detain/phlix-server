@@ -25,7 +25,6 @@ use RuntimeException;
  *  - a per-item exception is swallowed and the run continues (one bad item does
  *    not abort the whole library).
  *
- * @covers \Phlix\Media\Metadata\LibraryMetadataMatcher
  */
 class LibraryMetadataMatcherTest extends TestCase
 {

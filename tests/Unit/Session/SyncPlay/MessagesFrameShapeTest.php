@@ -10,13 +10,9 @@ use Phlix\Session\SyncPlay\Messages;
 /**
  * Unit tests for SyncPlay message shape compliance (SP2).
  *
- * @covers \Phlix\Session\SyncPlay\Messages
  */
 class MessagesFrameShapeTest extends TestCase
 {
-    /**
-     * @covers \Phlix\Session\SyncPlay\Messages::groupState
-     */
     public function testGroupStateFactoryProducesFlatEnvelope(): void
     {
         $message = Messages::groupState(
@@ -50,9 +46,6 @@ class MessagesFrameShapeTest extends TestCase
         $this->assertEquals('sp_abc123', $message['group_id']);
     }
 
-    /**
-     * @covers \Phlix\Session\SyncPlay\Messages::error
-     */
     public function testErrorFactoryUsesErrorCodeNotCode(): void
     {
         $message = Messages::error('NOT_IN_GROUP', 'You are not in a group');
@@ -68,9 +61,6 @@ class MessagesFrameShapeTest extends TestCase
         $this->assertEquals(Messages::PROTOCOL_VERSION, $message['protocol_version']);
     }
 
-    /**
-     * @covers \Phlix\Session\SyncPlay\Messages::timePong
-     */
     public function testTimePongFactoryProducesFlatEnvelope(): void
     {
         $message = Messages::timePong(1000000, 1000015);
@@ -91,9 +81,6 @@ class MessagesFrameShapeTest extends TestCase
         $this->assertEquals(1000015, $message['server_time']);
     }
 
-    /**
-     * @covers \Phlix\Session\SyncPlay\Messages::timePing
-     */
     public function testTimePingFactoryProducesFlatEnvelope(): void
     {
         $message = Messages::timePing(1000000);
@@ -112,9 +99,6 @@ class MessagesFrameShapeTest extends TestCase
         $this->assertEquals(1000000, $message['client_time']);
     }
 
-    /**
-     * @covers \Phlix\Session\SyncPlay\Messages::playbackPlay
-     */
     public function testPlaybackPlayFactoryProducesFlatEnvelope(): void
     {
         $message = Messages::playbackPlay('sp_abc123', 'member_1', 5000, 1234567890);
@@ -138,9 +122,6 @@ class MessagesFrameShapeTest extends TestCase
         $this->assertEquals(5000, $message['position']);
     }
 
-    /**
-     * @covers \Phlix\Session\SyncPlay\Messages::hostElect
-     */
     public function testHostElectFactoryProducesFlatEnvelope(): void
     {
         $message = Messages::hostElect('sp_abc123', 'member_new', 'member_old');
@@ -162,9 +143,6 @@ class MessagesFrameShapeTest extends TestCase
         $this->assertEquals('member_old', $message['elected_by']);
     }
 
-    /**
-     * @covers \Phlix\Session\SyncPlay\Messages::serialize
-     */
     public function testSerializeProducesValidFlatJson(): void
     {
         $message = Messages::groupState('sp_abc123', [], 'media_1', 0, 'stopped', null);
@@ -177,9 +155,6 @@ class MessagesFrameShapeTest extends TestCase
         $this->assertArrayNotHasKey('data', $decoded);
     }
 
-    /**
-     * @covers \Phlix\Session\SyncPlay\Messages::deserialize
-     */
     public function testDeserializeAcceptsFlatEnvelope(): void
     {
         $flatJson = json_encode([
@@ -199,9 +174,6 @@ class MessagesFrameShapeTest extends TestCase
         $this->assertEquals('Test Group', $result['message']['group_name']);
     }
 
-    /**
-     * @covers \Phlix\Session\SyncPlay\Messages::validate
-     */
     public function testValidateRejectsFutureProtocolVersion(): void
     {
         $message = [

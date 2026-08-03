@@ -17,7 +17,6 @@ use Workerman\MySQL\Connection;
  * histogram percentile approximation output, and the SELECT-leading contract
  * (the driver returns NULL for a WITH/CTE-leading statement).
  *
- * @covers \Phlix\Stats\Metrics\MetricsRepository
  */
 final class MetricsRepositoryTest extends TestCase
 {

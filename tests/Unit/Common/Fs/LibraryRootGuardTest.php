@@ -10,7 +10,6 @@ use Phlix\Common\Fs\LibraryRootGuard;
 /**
  * Unit tests for the central library-root path jail.
  *
- * @covers \Phlix\Common\Fs\LibraryRootGuard
  * @since 2.2.0
  */
 class LibraryRootGuardTest extends TestCase

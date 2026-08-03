@@ -51,7 +51,6 @@ use Workerman\MySQL\Connection;
  * service before the suite; locally, with no reachable MySQL, it self-skips —
  * the same guard {@see \Phlix\Tests\Integration\Stats\MetricsReadQueriesTest} uses.
  *
- * @covers \Phlix\Session\PlaybackController
  */
 final class ContinueWatchingIntegrationTest extends TestCase
 {

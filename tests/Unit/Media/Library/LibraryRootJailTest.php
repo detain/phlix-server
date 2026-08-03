@@ -26,7 +26,6 @@ use Workerman\MySQL\Connection;
  * name prefix is refused, and an unresolvable root set refuses EVERYTHING rather
  * than degrading to allow-all.
  *
- * @covers \Phlix\Media\Library\LibraryRootJail
  */
 final class LibraryRootJailTest extends TestCase
 {

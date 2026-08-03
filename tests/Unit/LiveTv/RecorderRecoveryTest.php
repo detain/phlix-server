@@ -19,8 +19,6 @@ use Workerman\MySQL\Connection;
  *   - status=recording + live pid → re-attached in memory
  *   - status=scheduled + start_time in past → re-armed via startRecording()
  *
- * @covers \Phlix\LiveTv\Recorder::resumeActiveRecordings
- * @covers \Phlix\LiveTv\Recorder::startRecording
  *
  * @since Wave 2 (post-O.7)
  */

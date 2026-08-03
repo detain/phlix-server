@@ -9,9 +9,6 @@ use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
 use PHPUnit\Framework\TestCase;
 
-/**
- * @covers \Phlix\Server\Http\Middleware\AuthMiddleware
- */
 final class AuthMiddlewareTest extends TestCase
 {
     public function testReturns401WhenUserIdIsNull(): void

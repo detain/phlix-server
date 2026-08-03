@@ -30,7 +30,6 @@ use Psr\Container\ContainerInterface;
  * need a live MySQL (the real Application constructor eagerly resolves DB-backed
  * controllers).
  *
- * @covers \Phlix\Server\Core\Application
  */
 final class DlnaAdminRoutesTest extends TestCase
 {

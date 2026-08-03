@@ -11,9 +11,6 @@ use Phlix\Plugins\Util\RecursiveDelete;
 use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
 
-/**
- * @covers \Phlix\Plugins\Installer\HttpInstaller
- */
 final class HttpInstallerTest extends TestCase
 {
     private string $base = '';

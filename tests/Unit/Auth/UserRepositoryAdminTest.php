@@ -12,7 +12,6 @@ use Workerman\MySQL\Connection;
  * Targeted tests for the admin-flag helpers added to
  * {@see UserRepository} in Step A.5.
  *
- * @covers \Phlix\Auth\UserRepository
  */
 final class UserRepositoryAdminTest extends TestCase
 {

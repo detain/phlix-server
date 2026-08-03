@@ -25,9 +25,6 @@ use Phlix\Plugins\Oidc\DiscoveryDocument;
 use Psr\Http\Message\ResponseInterface;
 use Workerman\Http\Response as WorkermanResponse;
 
-/**
- * @covers \Phlix\Plugins\Oidc\Controller\OidcCallbackController
- */
 final class OidcCallbackControllerTest extends TestCase
 {
     /**

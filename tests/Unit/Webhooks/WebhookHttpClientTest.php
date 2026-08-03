@@ -19,7 +19,6 @@ use Workerman\Http\ConnectionPool;
  * distinct from (and shorter than) the total request timeout on both the
  * async (workerman/http-client) and blocking-cURL-fallback code paths.
  *
- * @covers \Phlix\Webhooks\WebhookHttpClient
  */
 class WebhookHttpClientTest extends TestCase
 {

@@ -16,7 +16,6 @@ use PHPUnit\Framework\TestCase;
  * A fixed clock makes the delegated timestamp deterministic so we can assert the
  * exact bucket the registry recorded into.
  *
- * @covers \Phlix\Stats\Metrics\MetricsCollector
  */
 final class MetricsCollectorTest extends TestCase
 {

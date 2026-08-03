@@ -14,7 +14,6 @@ use Workerman\MySQL\Connection;
 /**
  * Tests for LibraryManager cache behavior.
  *
- * @covers \Phlix\Media\Library\LibraryManager
  */
 class LibraryManagerCacheTest extends TestCase
 {

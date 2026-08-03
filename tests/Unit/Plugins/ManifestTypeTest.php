@@ -7,9 +7,6 @@ namespace Phlix\Tests\Unit\Plugins;
 use Phlix\Shared\Plugin\ManifestType;
 use PHPUnit\Framework\TestCase;
 
-/**
- * @covers \Phlix\Shared\Plugin\ManifestType
- */
 final class ManifestTypeTest extends TestCase
 {
     /**

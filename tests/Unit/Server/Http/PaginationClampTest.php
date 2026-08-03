@@ -36,9 +36,6 @@ use Workerman\MySQL\Connection;
  * `public/index.php` / `Application`) and `WebPortalRouter` (reached via
  * `start.php` and the relay dispatcher).
  *
- * @covers \Phlix\Common\Http\PageLimit
- * @covers \Phlix\Server\Http\Request::queryPageSize
- * @covers \Phlix\Server\Http\Request::queryOffset
  */
 final class PaginationClampTest extends TestCase
 {

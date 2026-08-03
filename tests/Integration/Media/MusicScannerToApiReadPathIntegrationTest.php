@@ -44,8 +44,6 @@ use Workerman\MySQL\Connection;
  * scan would make far too slow here; this covers the writer/reader contract those
  * volumes assume.
  *
- * @covers \Phlix\Server\Http\Controllers\MusicController
- * @covers \Phlix\Media\Music\MusicLibraryService
  */
 final class MusicScannerToApiReadPathIntegrationTest extends TestCase
 {

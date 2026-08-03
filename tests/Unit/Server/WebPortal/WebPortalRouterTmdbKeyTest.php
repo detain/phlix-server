@@ -31,7 +31,6 @@ use Workerman\MySQL\Connection;
  *
  * These tests fail against that implementation.
  *
- * @covers \Phlix\Server\WebPortal\WebPortalRouter
  */
 final class WebPortalRouterTmdbKeyTest extends TestCase
 {

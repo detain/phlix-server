@@ -21,9 +21,6 @@ use PHPUnit\Framework\TestCase;
  * pass because {@see ThemeTokenValidator} accepts only four narrow grammars —
  * there is no substring blocklist to out-spell.
  *
- * @covers \Phlix\Theming\ThemeTokenValidator
- * @covers \Phlix\Theming\ThemeTokenAllowlist
- * @covers \Phlix\Theming\TokenTheme
  */
 final class ThemeTokenValidatorTest extends TestCase
 {

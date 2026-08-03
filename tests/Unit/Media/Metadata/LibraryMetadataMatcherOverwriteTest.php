@@ -33,8 +33,6 @@ use Phlix\Media\Metadata\TmdbProvider;
  * behaviour is identical to before the setting existed. Only when an admin
  * turns it OFF is an already-resolved item skipped WHOLESALE.
  *
- * @covers \Phlix\Media\Metadata\LibraryMetadataMatcher
- * @covers \Phlix\Media\Metadata\MetadataOverwritePolicy
  */
 class LibraryMetadataMatcherOverwriteTest extends TestCase
 {

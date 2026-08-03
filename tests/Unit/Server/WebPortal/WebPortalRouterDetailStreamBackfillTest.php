@@ -191,7 +191,6 @@ class WebPortalRouterDetailStreamBackfillTest extends TestCase
         // The SHAPED payload carries the ensured rows — proving shapeDetail was
         // handed the backfilled set, not a second un-backfilled read.
         $this->assertSame($fresh, $shaped['streams']);
-        /** @var list<array<string, mixed>> $streams */
         $streams = $shaped['streams'];
         $this->assertSame('hevc', $streams[0]['codec'], 'the player must get a KNOWN video codec');
     }

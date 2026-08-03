@@ -45,7 +45,6 @@ use Workerman\MySQL\Connection;
  *
  * @internal
  */
-#[CoversClass(LibraryManager::class)]
 final class LibraryRescanFullReadTest extends TestCase
 {
     /** @var list<string> Scratch directories to remove. */

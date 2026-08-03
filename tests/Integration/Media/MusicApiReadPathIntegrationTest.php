@@ -45,8 +45,6 @@ use Workerman\MySQL\Connection;
  * locally, with no reachable MySQL, it self-skips — the same guard
  * {@see MusicTracksQueryIntegrationTest} uses.
  *
- * @covers \Phlix\Server\Http\Controllers\MusicController
- * @covers \Phlix\Media\Music\MusicLibraryService
  */
 final class MusicApiReadPathIntegrationTest extends TestCase
 {

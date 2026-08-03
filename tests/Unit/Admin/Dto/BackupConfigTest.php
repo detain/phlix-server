@@ -8,10 +8,6 @@ use Phlix\Admin\Dto\BackupConfig;
 use Phlix\Admin\Dto\S3Config;
 use PHPUnit\Framework\TestCase;
 
-/**
- * @covers \Phlix\Admin\Dto\BackupConfig
- * @covers \Phlix\Admin\Dto\S3Config
- */
 final class BackupConfigTest extends TestCase
 {
     public function testDefaultsAreSafeForUnconfiguredEnvironments(): void

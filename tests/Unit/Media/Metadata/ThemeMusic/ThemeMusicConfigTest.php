@@ -10,7 +10,6 @@ use Phlix\Media\Metadata\ThemeMusic\ThemeMusicConfig;
 /**
  * Unit tests for {@see ThemeMusicConfig::fromArray()} coercion + gating.
  *
- * @covers \Phlix\Media\Metadata\ThemeMusic\ThemeMusicConfig
  */
 final class ThemeMusicConfigTest extends TestCase
 {

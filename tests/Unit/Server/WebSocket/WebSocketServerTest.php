@@ -15,8 +15,6 @@ use Workerman\Connection\TcpConnection;
 /**
  * Unit tests for WebSocketServer and SyncPlayManager initialization.
  *
- * @covers \Phlix\Server\WebSocket\WebSocketServer
- * @covers \Phlix\Session\SyncPlay\SyncPlayManager
  */
 class WebSocketServerTest extends TestCase
 {
@@ -27,10 +25,6 @@ class WebSocketServerTest extends TestCase
         ConnectionPool::getInstance()->clear();
     }
 
-    /**
-     * @covers \Phlix\Server\WebSocket\WebSocketServer::__construct
-     * @covers \Phlix\Server\WebSocket\WebSocketServer::getHandler
-     */
     public function testCanConstructWithConfig(): void
     {
         $config = [
@@ -44,10 +38,6 @@ class WebSocketServerTest extends TestCase
         $this->assertInstanceOf(MessageHandler::class, $server->getHandler());
     }
 
-    /**
-     * @covers \Phlix\Server\WebSocket\WebSocketServer::__construct
-     * @covers \Phlix\Server\WebSocket\WebSocketServer::getHandler
-     */
     public function testCanConstructWithInjectedMessageHandler(): void
     {
         $config = [
@@ -63,9 +53,6 @@ class WebSocketServerTest extends TestCase
         $this->assertSame($customHandler, $server->getHandler());
     }
 
-    /**
-     * @covers \Phlix\Server\WebSocket\WebSocketServer::setSyncPlayManager
-     */
     public function testCanSetSyncPlayManager(): void
     {
         $config = [
@@ -81,10 +68,6 @@ class WebSocketServerTest extends TestCase
         $server->setSyncPlayManager($syncPlayManager);
     }
 
-    /**
-     * @covers \Phlix\Session\SyncPlay\SyncPlayManager::initialize
-     * @covers \Phlix\Session\SyncPlay\SyncPlayManager::getStats
-     */
     public function testSyncPlayManagerCanBeInitializedWithMessageHandler(): void
     {
         $pool = ConnectionPool::getInstance();
@@ -103,11 +86,6 @@ class WebSocketServerTest extends TestCase
         $this->assertEquals(0, $stats['total_members']);
     }
 
-    /**
-     * @covers \Phlix\Session\SyncPlay\SyncPlayManager::createGroup
-     * @covers \Phlix\Session\SyncPlay\SyncPlayManager::getGroupState
-     * @covers \Phlix\Session\SyncPlay\SyncPlayManager::cleanupStaleGroups
-     */
     public function testSyncPlayManagerGroupOperations(): void
     {
         $pool = ConnectionPool::getInstance();
@@ -133,11 +111,6 @@ class WebSocketServerTest extends TestCase
         $this->assertEquals(0, $removed);
     }
 
-    /**
-     * @covers \Phlix\Session\SyncPlay\SyncPlayManager::joinGroup
-     * @covers \Phlix\Session\SyncPlay\SyncPlayManager::leaveGroup
-     * @covers \Phlix\Session\SyncPlay\SyncPlayManager::listGroups
-     */
     public function testSyncPlayManagerJoinAndLeaveGroup(): void
     {
         $pool = ConnectionPool::getInstance();
@@ -171,9 +144,6 @@ class WebSocketServerTest extends TestCase
         $this->assertEquals(1, $groups[0]['member_count']);
     }
 
-    /**
-     * @covers \Phlix\Session\SyncPlay\SyncPlayManager::getTimeSync
-     */
     public function testSyncPlayManagerGetTimeSync(): void
     {
         $syncPlayManager = new SyncPlayManager();
@@ -182,9 +152,6 @@ class WebSocketServerTest extends TestCase
         $this->assertInstanceOf(\Phlix\Session\SyncPlay\TimeSync::class, $timeSync);
     }
 
-    /**
-     * @covers \Phlix\Session\SyncPlay\SyncPlayManager::getMemberGroup
-     */
     public function testSyncPlayManagerGetMemberGroup(): void
     {
         $pool = ConnectionPool::getInstance();
@@ -213,8 +180,6 @@ class WebSocketServerTest extends TestCase
      * worker created after `Worker::runAll()`, so in production the pool was
      * never populated and pongs never reached `recordPong()` (S-F28 dead).
      *
-     * @covers \Phlix\Server\WebSocket\WebSocketServer::__construct
-     * @covers \Phlix\Server\WebSocket\WebSocketServer::getWorker
      */
     public function testCallbacksBindToInjectedListeningWorker(): void
     {
@@ -258,7 +223,6 @@ class WebSocketServerTest extends TestCase
      * armed; the WebSocketServer constructor creates a Worker so Timer::add is
      * usable here.)
      *
-     * @covers \Phlix\Server\WebSocket\WebSocketServer::onStart
      */
     public function testOnStartRegistersReaperAndPingTimers(): void
     {
@@ -290,7 +254,6 @@ class WebSocketServerTest extends TestCase
      * after the non-response limit is reached the ping sweep must close and
      * reap the connection within the ping window (S-F28).
      *
-     * @covers \Phlix\Server\WebSocket\WebSocketServer::pingConnections
      */
     public function testPingSweepReapsNonRespondingConnection(): void
     {
@@ -318,8 +281,6 @@ class WebSocketServerTest extends TestCase
      * A connection that answers pings (pong received) has its outstanding-ping
      * count reset each sweep and must never be reaped.
      *
-     * @covers \Phlix\Server\WebSocket\WebSocketServer::pingConnections
-     * @covers \Phlix\Server\WebSocket\WebSocketServer::onWebSocketPong
      */
     public function testRespondingConnectionIsNeverReaped(): void
     {
@@ -353,9 +314,6 @@ class WebSocketServerTest extends TestCase
         return count($status);
     }
 
-    /**
-     * @covers \Phlix\Server\WebSocket\WebSocketServer::touchActiveConnections
-     */
     public function testTouchActiveConnectionsRecordsLiveConnectionBytes(): void
     {
         $registry = new MetricsRegistry();
@@ -394,9 +352,6 @@ class WebSocketServerTest extends TestCase
         $this->assertSame(5678, $snapshot[$wsConnection->getId()]['bytes_out']);
     }
 
-    /**
-     * @covers \Phlix\Server\WebSocket\WebSocketServer::touchActiveConnections
-     */
     public function testTouchActiveConnectionsIsNoOpWithoutCollector(): void
     {
         $server = new WebSocketServer(['host' => '0.0.0.0', 'port' => 8097]);

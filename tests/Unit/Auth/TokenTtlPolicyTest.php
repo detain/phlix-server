@@ -17,7 +17,6 @@ use PHPUnit\Framework\TestCase;
  * shipped default rather than to an unbounded lifetime, and the
  * refresh >= access invariant is enforced.
  *
- * @covers \Phlix\Auth\TokenTtlPolicy
  */
 final class TokenTtlPolicyTest extends TestCase
 {

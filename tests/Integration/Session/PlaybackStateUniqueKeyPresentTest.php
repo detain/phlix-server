@@ -28,7 +28,6 @@ use Workerman\MySQL\Connection;
  * broken — that is the finding, not an environment gap. The only skip is
  * "no MySQL".
  *
- * @covers \Phlix\Common\Database\MigrationRunner
  */
 final class PlaybackStateUniqueKeyPresentTest extends TestCase
 {

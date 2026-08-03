@@ -22,10 +22,7 @@ use Workerman\MySQL\Connection;
  * as the worker-local in-memory {@see RateLimiter} — with config-driven
  * `{max, window}` and DISTINCT instances. `login` is NOT registered here.
  *
- * @covers \Phlix\Common\Container\Providers\AuthServicesProvider
  */
-#[CoversClass(AuthServicesProvider::class)]
-#[CoversClass(RateLimitProfiles::class)]
 final class AuthServicesProviderRateLimitTest extends TestCase
 {
     /**

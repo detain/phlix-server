@@ -22,7 +22,6 @@ use Workerman\MySQL\Connection;
  * keeper selection (max updated_at / tie-break max id) and the post-key upsert
  * behaviour are proven in the integration test — not re-mocked here.
  *
- * @covers \Phlix\Session\PlaybackStateDeduper
  */
 final class PlaybackStateDeduperTest extends TestCase
 {

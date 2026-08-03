@@ -9,9 +9,6 @@ use Phlix\Media\Metadata\Resolution\PluginSourceConsultation;
 use Phlix\Media\Metadata\Resolution\SourceRegistry;
 use PHPUnit\Framework\TestCase;
 
-/**
- * @covers \Phlix\Media\Metadata\Resolution\PluginSourceConsultation
- */
 final class PluginSourceConsultationTest extends TestCase
 {
     private function logger(): StructuredLogger

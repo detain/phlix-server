@@ -18,7 +18,6 @@ use PHPUnit\Framework\TestCase;
  * This is what lets the SPA "Username or email" login field work when the user
  * types the email they registered with.
  *
- * @covers \Phlix\Auth\AuthManager
  */
 final class AuthManagerEmailLoginTest extends TestCase
 {

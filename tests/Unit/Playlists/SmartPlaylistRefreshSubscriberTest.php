@@ -34,7 +34,6 @@ use Workerman\MySQL\Connection;
  * blocking, so the event handler must NOT perform it inline on the dispatch
  * stack.
  *
- * @covers \Phlix\Playlists\SmartPlaylistRefreshSubscriber
  */
 final class SmartPlaylistRefreshSubscriberTest extends TestCase
 {

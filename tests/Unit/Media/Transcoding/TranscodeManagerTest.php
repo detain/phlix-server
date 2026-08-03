@@ -3167,7 +3167,7 @@ class TranscodeManagerTest extends TestCase
         $final = "{$dir}/seg-v480p-00002.ts";
         $ff = $this->createMock(FfmpegRunner::class);
         $ff->expects($this->once())->method('startSegmentEncode')->willReturnCallback(
-            function (string $in, string $out) use (&$captOut): int {
+            function (string $in, string $out): int {
                 file_put_contents($out, 'encoded');
                 return 4321;
             }

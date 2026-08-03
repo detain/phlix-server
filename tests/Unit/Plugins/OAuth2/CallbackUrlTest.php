@@ -12,7 +12,6 @@ use PHPUnit\Framework\TestCase;
  * ABSOLUTE URL; a path-only value can never match a provider's registered
  * callback and kills the flow with `redirect_uri_mismatch`.
  *
- * @covers \Phlix\Plugins\OAuth2\CallbackUrl
  */
 final class CallbackUrlTest extends TestCase
 {

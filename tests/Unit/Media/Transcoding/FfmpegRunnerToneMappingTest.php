@@ -42,7 +42,6 @@ use ReflectionProperty;
  *    `yuv420p(tv, bt709, progressive)` output — a genuine successful
  *    tone-map, not merely a parseable command line.
  *
- * @covers \Phlix\Media\Transcoding\FfmpegRunner
  */
 final class FfmpegRunnerToneMappingTest extends TestCase
 {

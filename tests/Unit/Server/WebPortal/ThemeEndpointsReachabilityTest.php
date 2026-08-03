@@ -63,8 +63,6 @@ use function DI\factory;
  * {@see testBothEntryPointsRouteApiRequestsToTheWebPortalRouter()} pins that
  * premise so this reasoning cannot rot silently.
  *
- * @covers \Phlix\Server\WebPortal\WebPortalRouter
- * @covers \Phlix\Server\Http\Controllers\ThemesController
  */
 final class ThemeEndpointsReachabilityTest extends TestCase
 {

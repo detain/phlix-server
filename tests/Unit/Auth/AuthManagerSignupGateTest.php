@@ -28,9 +28,6 @@ use RuntimeException;
  * real JwtHandler, mocked AuditLogger, silent StructuredLogger). The
  * SettingsRepository is mocked and stubbed to return the signup mode.
  *
- * @covers \Phlix\Auth\AuthManager
- * @covers \Phlix\Auth\SignupDisabledException
- * @covers \Phlix\Auth\AccountInactiveException
  */
 final class AuthManagerSignupGateTest extends TestCase
 {

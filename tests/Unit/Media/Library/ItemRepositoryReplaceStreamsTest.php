@@ -45,7 +45,6 @@ use Throwable;
  * `steps/detail-endpoint-stream-backfill.worklog.md`; neither substitutes for the
  * other.
  *
- * @covers \Phlix\Media\Library\ItemRepository::replaceStreams
  */
 class ItemRepositoryReplaceStreamsTest extends TestCase
 {

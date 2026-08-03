@@ -27,7 +27,6 @@ use Workerman\MySQL\Connection;
  * that is the finding, not an environment gap. The only skips are "no MySQL"
  * and "migration 072 never applied".
  *
- * @covers \Phlix\Common\Database\MigrationRunner
  */
 final class PathHashUniqueIndexPresentTest extends TestCase
 {

@@ -22,7 +22,6 @@ use PHPUnit\Framework\TestCase;
  * {@see WebSocketServer::onWebSocketConnect}, where the same trusted-proxy-aware
  * resolution the connect rate-limiter uses yields the real client address.
  *
- * @covers \Phlix\Server\WebSocket\WebSocketServer
  */
 final class WsMetricsRemoteIpTest extends TestCase
 {

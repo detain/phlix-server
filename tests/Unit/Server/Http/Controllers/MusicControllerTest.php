@@ -26,7 +26,6 @@ use PHPUnit\Framework\MockObject\MockObject;
  * a mocked connection structurally cannot show — lives in
  * {@see \Phlix\Tests\Integration\Media\MusicApiReadPathIntegrationTest}.
  *
- * @covers \Phlix\Server\Http\Controllers\MusicController
  */
 class MusicControllerTest extends TestCase
 {

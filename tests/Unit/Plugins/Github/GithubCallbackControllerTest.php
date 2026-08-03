@@ -25,7 +25,6 @@ use PHPUnit\Framework\TestCase;
  * `redirect_uri` contract, cookie session delivery, and provider-scoped account
  * resolution.
  *
- * @covers \Phlix\Plugins\Github\Controller\GithubCallbackController
  */
 final class GithubCallbackControllerTest extends TestCase
 {

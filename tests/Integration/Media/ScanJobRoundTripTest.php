@@ -26,7 +26,6 @@ use Workerman\MySQL\Connection;
  * {@see \Phlix\Tests\Unit\Media\Library\ScanJobRepositoryTest} covers every
  * method with a mocked connection regardless.
  *
- * @covers \Phlix\Media\Library\ScanJobRepository
  */
 final class ScanJobRoundTripTest extends TestCase
 {

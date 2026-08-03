@@ -12,9 +12,6 @@ use Symfony\Component\Console\Application;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Tester\CommandTester;
 
-/**
- * @covers \Phlix\Console\Commands\BackupListCommand
- */
 class BackupListCommandTest extends TestCase
 {
     private function tester(BackupManager $manager): CommandTester

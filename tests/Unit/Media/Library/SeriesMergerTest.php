@@ -10,9 +10,6 @@ use Phlix\Media\Library\SeriesMerger;
 use PHPUnit\Framework\TestCase;
 use Workerman\MySQL\Connection;
 
-/**
- * @covers \Phlix\Media\Library\SeriesMerger
- */
 class SeriesMergerTest extends TestCase
 {
     public function testMergesOneEpisodeSeriesIntoHundredEpisodeSeriesWithNoOrphans(): void

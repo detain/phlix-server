@@ -59,8 +59,6 @@ use Workerman\MySQL\Connection;
  * ever mutates rows it creates (namespaced by a per-run token, cleaned up in
  * tearDown via ON DELETE CASCADE), so it is safe against a shared `phlix_test`.
  *
- * @covers \Phlix\Auth\UserIdentityRepository
- * @covers \Phlix\Auth\UserRepository
  */
 final class UserIdentitiesMigrationIntegrationTest extends TestCase
 {

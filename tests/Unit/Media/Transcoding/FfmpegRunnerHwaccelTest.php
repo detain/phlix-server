@@ -16,7 +16,6 @@ use PHPUnit\Framework\TestCase;
  * returns null (so the caller falls back to the libx264 software path) when it
  * does not.
  *
- * @covers \Phlix\Media\Transcoding\FfmpegRunner
  */
 final class FfmpegRunnerHwaccelTest extends TestCase
 {

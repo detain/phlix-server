@@ -10,9 +10,6 @@ use Psr\Log\LoggerInterface;
 use RuntimeException;
 use Workerman\MySQL\Connection;
 
-/**
- * @covers \Phlix\Common\Database\MigrationRunner
- */
 class MigrationRunnerTest extends TestCase
 {
     private string $tmpDir = '';

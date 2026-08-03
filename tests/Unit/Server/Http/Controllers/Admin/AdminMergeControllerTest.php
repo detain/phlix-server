@@ -39,7 +39,6 @@ interface SeedableItemRepository
  * {@see SeriesMerger} instances over an in-memory {@see ItemRepository} double
  * so the assertions are non-vacuous end-to-end.
  *
- * @covers \Phlix\Server\Http\Controllers\Admin\AdminMergeController
  */
 final class AdminMergeControllerTest extends TestCase
 {

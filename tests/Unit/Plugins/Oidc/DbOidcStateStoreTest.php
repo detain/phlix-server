@@ -8,9 +8,6 @@ use Phlix\Plugins\Oidc\DbOidcStateStore;
 use PHPUnit\Framework\TestCase;
 use Workerman\MySQL\Connection;
 
-/**
- * @covers \Phlix\Plugins\Oidc\DbOidcStateStore
- */
 final class DbOidcStateStoreTest extends TestCase
 {
     public function testPutStoresStateInDatabase(): void

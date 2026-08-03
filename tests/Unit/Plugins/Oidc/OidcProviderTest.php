@@ -13,9 +13,6 @@ use Phlix\Shared\Auth\ProviderInterface;
 use Phlix\Shared\Auth\UserInfo;
 use RuntimeException;
 
-/**
- * @covers \Phlix\Plugins\Oidc\OidcProvider
- */
 final class OidcProviderTest extends TestCase
 {
     private string $cacheDir;

@@ -19,7 +19,6 @@ use PHPUnit\Framework\TestCase;
  * expectation is updated too, and the diff shows a reviewer exactly which
  * property became settable by a plugin.
  *
- * @covers \Phlix\Theming\ThemeTokenAllowlist
  */
 final class ThemeTokenAllowlistTest extends TestCase
 {

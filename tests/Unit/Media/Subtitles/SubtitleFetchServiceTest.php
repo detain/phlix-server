@@ -16,9 +16,6 @@ use Phlix\Tests\Unit\Media\Subtitles\Fakes\FakeSubtitleSource;
 use PHPUnit\Framework\TestCase;
 use Workerman\MySQL\Connection;
 
-/**
- * @covers \Phlix\Media\Subtitles\SubtitleFetchService
- */
 final class SubtitleFetchServiceTest extends TestCase
 {
     private string $baseDir = '';

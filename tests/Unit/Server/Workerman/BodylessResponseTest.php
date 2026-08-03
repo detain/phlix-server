@@ -36,7 +36,6 @@ use Workerman\Protocols\Http\Response as WorkermanResponse;
  * for why a hard-coded expected-bytes string would let a Workerman bump break the
  * hand-copied header loop with a green suite.
  *
- * @covers \Phlix\Server\Workerman\BodylessResponse
  */
 final class BodylessResponseTest extends TestCase
 {

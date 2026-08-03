@@ -28,8 +28,6 @@ use support\Context;
  * extension required) and additionally cover the ext-swoole-absent
  * graceful-fallback branch in `start.php`.
  *
- * @covers \Phlix\Server\Http\RequestContext
- * @covers \support\Context
  * @package Phlix\Tests\Unit\Server\Coroutine
  * @since   0.10.x (Step 0.2b)
  */

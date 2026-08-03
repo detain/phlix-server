@@ -22,7 +22,6 @@ use PHPUnit\Framework\TestCase;
  *     the transcode job key — and therefore the existing segment cache — intact
  *     when this feature is deployed.
  *
- * @covers \Phlix\Media\Transcoding\EncodeSettings
  */
 final class EncodeSettingsTest extends TestCase
 {

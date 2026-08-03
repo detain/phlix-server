@@ -53,9 +53,6 @@ use Workerman\MySQL\Connection;
  * predicate reddens 2 of these 4 tests and planting a `''` fallback reddens a 3rd,
  * each with its named message.
  *
- * @covers \Phlix\Media\Music\MusicArtist
- * @covers \Phlix\Media\Music\MusicAlbum
- * @covers \Phlix\Media\Music\MusicTrack
  */
 final class MusicDtoMediaItemIdIntegrationTest extends TestCase
 {

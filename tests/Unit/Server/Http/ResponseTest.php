@@ -10,14 +10,9 @@ use Phlix\Server\Http\Response;
 /**
  * Unit tests for Response class.
  *
- * @covers \Phlix\Server\Http\Response
  */
 class ResponseTest extends TestCase
 {
-    /**
-     * @covers \Phlix\Server\Http\Response::json
-     * @covers \Phlix\Server\Http\Response::status
-     */
     public function testCanCreateJsonResponse(): void
     {
         $response = (new Response())->json(['key' => 'value']);
@@ -27,11 +22,6 @@ class ResponseTest extends TestCase
         $this->assertStringContainsString('"key"', $response->body);
     }
 
-    /**
-     * @covers \Phlix\Server\Http\Response::status
-     * @covers \Phlix\Server\Http\Response::header
-     * @covers \Phlix\Server\Http\Response::json
-     */
     public function testCanChainMethods(): void
     {
         $response = (new Response())
@@ -43,9 +33,6 @@ class ResponseTest extends TestCase
         $this->assertEquals('value', $response->headers['X-Custom']);
     }
 
-    /**
-     * @covers \Phlix\Server\Http\Response::html
-     */
     public function testCanCreateHtmlResponse(): void
     {
         $response = (new Response())->html('<h1>Hello</h1>');
@@ -53,9 +40,6 @@ class ResponseTest extends TestCase
         $this->assertEquals('text/html; charset=utf-8', $response->headers['Content-Type']);
     }
 
-    /**
-     * @covers \Phlix\Server\Http\Response::redirect
-     */
     public function testCanRedirect(): void
     {
         $response = (new Response())->redirect('https://example.com', 301);
@@ -64,9 +48,6 @@ class ResponseTest extends TestCase
         $this->assertEquals('https://example.com', $response->headers['Location']);
     }
 
-    /**
-     * @covers \Phlix\Server\Http\Response::noContent
-     */
     public function testNoContentResponse(): void
     {
         $response = (new Response())->noContent();
@@ -75,9 +56,6 @@ class ResponseTest extends TestCase
         $this->assertEquals('', $response->body);
     }
 
-    /**
-     * @covers \Phlix\Server\Http\Response::withFile
-     */
     public function testWithFileRecordsPathOffsetAndLength(): void
     {
         $response = (new Response())->status(206)->withFile('/tmp/seg.ts', 10, 20);
@@ -90,9 +68,6 @@ class ResponseTest extends TestCase
         $this->assertSame('', $response->body);
     }
 
-    /**
-     * @covers \Phlix\Server\Http\Response::toWorkermanResponse
-     */
     public function testToWorkermanResponseCarriesFileToWithFile(): void
     {
         $tmp = tempnam(sys_get_temp_dir(), 'phlix_resp_');
@@ -129,8 +104,6 @@ class ResponseTest extends TestCase
      * `header()` / `http_response_code()`, which must not leak process-global
      * header state into other tests.
      *
-     * @covers \Phlix\Server\Http\Response::send
-     * @covers \Phlix\Server\Http\Response::finalizeFileHeaders
      */
     #[RunInSeparateProcess]
     #[PreserveGlobalState(false)]
@@ -168,8 +141,6 @@ class ResponseTest extends TestCase
      * 206 or emitting `Content-Range` — mirroring Workerman's `withFile()` with a
      * zero offset/length.
      *
-     * @covers \Phlix\Server\Http\Response::send
-     * @covers \Phlix\Server\Http\Response::finalizeFileHeaders
      */
     #[RunInSeparateProcess]
     #[PreserveGlobalState(false)]
@@ -206,9 +177,6 @@ class ResponseTest extends TestCase
      * so nothing is streamed — the response completes cleanly with the caller's
      * original status and no body rather than throwing or emitting bogus headers.
      *
-     * @covers \Phlix\Server\Http\Response::send
-     * @covers \Phlix\Server\Http\Response::finalizeFileHeaders
-     * @covers \Phlix\Server\Http\Response::streamFileToOutput
      */
     #[RunInSeparateProcess]
     #[PreserveGlobalState(false)]

@@ -59,7 +59,6 @@ use Workerman\MySQL\Connection;
  * defeats the composite index's no-filesort benefit on some distributions —
  * worth weighing when S10 revisits redundant indexes.)
  *
- * @covers \Phlix\Media\Library\ItemRepository
  */
 final class BrowseIndexUsageTest extends TestCase
 {

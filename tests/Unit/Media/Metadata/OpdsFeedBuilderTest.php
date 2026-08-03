@@ -11,7 +11,6 @@ use Phlix\Media\Metadata\OpdsFeedBuilder;
 /**
  * Unit tests for OpdsFeedBuilder.
  *
- * @covers \Phlix\Media\Metadata\OpdsFeedBuilder
  * @since 0.17.0
  */
 class OpdsFeedBuilderTest extends TestCase

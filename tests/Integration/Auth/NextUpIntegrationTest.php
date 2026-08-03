@@ -38,7 +38,6 @@ use Workerman\MySQL\Connection;
  * locally, with no reachable MySQL, it self-skips — the same guard
  * {@see \Phlix\Tests\Integration\Session\ContinueWatchingIntegrationTest} uses.
  *
- * @covers \Phlix\Auth\WatchHistory
  */
 final class NextUpIntegrationTest extends TestCase
 {

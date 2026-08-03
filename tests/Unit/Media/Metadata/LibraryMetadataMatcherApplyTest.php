@@ -20,7 +20,6 @@ use Phlix\Media\Metadata\TmdbProvider;
  * {@see LibraryMetadataMatcher::searchCandidates()} and
  * {@see LibraryMetadataMatcher::applyMatch()}.
  *
- * @covers \Phlix\Media\Metadata\LibraryMetadataMatcher
  */
 class LibraryMetadataMatcherApplyTest extends TestCase
 {

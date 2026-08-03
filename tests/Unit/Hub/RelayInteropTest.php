@@ -44,8 +44,6 @@ use function substr;
  * round-trip: bytes built the hub's way must parse with the server's codec,
  * and bytes built the server's way must equal the hub's golden output.
  *
- * @covers \Phlix\Hub\RelayMessageFramer
- * @covers \Phlix\Hub\RelayConsumer
  */
 final class RelayInteropTest extends TestCase
 {

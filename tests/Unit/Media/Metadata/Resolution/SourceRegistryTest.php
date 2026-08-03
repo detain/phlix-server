@@ -8,9 +8,6 @@ use Phlix\Media\Metadata\Resolution\SourceRegistry;
 use Phlix\Shared\Metadata\MetadataSourceInterface;
 use PHPUnit\Framework\TestCase;
 
-/**
- * @covers \Phlix\Media\Metadata\Resolution\SourceRegistry
- */
 final class SourceRegistryTest extends TestCase
 {
     public function testRegisterMakesSourceLookupable(): void

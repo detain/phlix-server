@@ -18,7 +18,6 @@ use SimpleXMLElement;
  * argument reads (the DIDL-Lite bleed guard), XXE safety, and the defensive
  * XPath literal quoting — so the single-sourced logic cannot silently regress.
  *
- * @covers \Phlix\Dlna\SoapArgumentExtractor
  */
 final class SoapArgumentExtractorTest extends TestCase
 {

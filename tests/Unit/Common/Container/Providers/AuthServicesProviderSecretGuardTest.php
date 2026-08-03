@@ -20,7 +20,6 @@ use PHPUnit\Framework\TestCase;
  * exercised in a forced non-test child PHP process where those constants are
  * absent.
  *
- * @covers \Phlix\Common\Container\Providers\AuthServicesProvider::assertSecretConfigured
  */
 final class AuthServicesProviderSecretGuardTest extends TestCase
 {

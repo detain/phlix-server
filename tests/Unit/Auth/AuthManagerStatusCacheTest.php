@@ -27,7 +27,6 @@ use ReflectionProperty;
  *  - the cache is bounded (LRU) so a worker cannot accumulate one entry per
  *    distinct user forever.
  *
- * @covers \Phlix\Auth\AuthManager
  */
 final class AuthManagerStatusCacheTest extends TestCase
 {

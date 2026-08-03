@@ -17,7 +17,6 @@ use Workerman\MySQL\Connection;
  * `login_rate_limit` table (migration 074). The DB is mocked so the tests run
  * without a MySQL server.
  *
- * @covers \Phlix\Auth\DbLoginRateLimitStore
  */
 final class DbLoginRateLimitStoreTest extends TestCase
 {

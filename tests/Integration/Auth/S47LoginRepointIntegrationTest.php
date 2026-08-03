@@ -38,7 +38,6 @@ use Workerman\MySQL\Connection;
  * scratch database. It only mutates rows it created (namespaced by a per-run
  * token) and cleans them up in tearDown (users delete CASCADEs identities).
  *
- * @covers \Phlix\Auth\UserRepository
  */
 final class S47LoginRepointIntegrationTest extends TestCase
 {

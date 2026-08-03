@@ -7,9 +7,6 @@ namespace Phlix\Tests\Unit\Common\Events\Auth;
 use Phlix\Shared\Events\Auth\UserLoggedOut;
 use PHPUnit\Framework\TestCase;
 
-/**
- * @covers \Phlix\Shared\Events\Auth\UserLoggedOut
- */
 final class UserLoggedOutTest extends TestCase
 {
     public function test_constructs_with_expected_payload(): void

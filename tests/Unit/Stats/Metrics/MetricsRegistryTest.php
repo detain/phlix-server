@@ -15,7 +15,6 @@ use PHPUnit\Framework\TestCase;
  * histogram at its bucket boundaries, error classification, the route
  * cardinality cap and the connection lifecycle without any clock stubbing.
  *
- * @covers \Phlix\Stats\Metrics\MetricsRegistry
  */
 final class MetricsRegistryTest extends TestCase
 {

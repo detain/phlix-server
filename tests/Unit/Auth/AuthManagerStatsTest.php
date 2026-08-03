@@ -18,7 +18,6 @@ use Workerman\MySQL\Connection;
  * StatsCollector when one is wired — the source the admin dashboard activity
  * feed reads from. Without this wiring stats_user_activity stays empty.
  *
- * @covers \Phlix\Auth\AuthManager
  */
 final class AuthManagerStatsTest extends TestCase
 {

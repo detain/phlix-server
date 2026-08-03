@@ -8,9 +8,6 @@ use Phlix\Plugins\Catalog\CatalogEntry;
 use Phlix\Plugins\Catalog\CatalogEntryValidationException;
 use PHPUnit\Framework\TestCase;
 
-/**
- * @covers \Phlix\Plugins\Catalog\CatalogEntry
- */
 final class CatalogEntryTest extends TestCase
 {
     public function test_hydrates_a_full_entry(): void

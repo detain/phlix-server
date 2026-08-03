@@ -8,9 +8,6 @@ use PHPUnit\Framework\TestCase;
 use Phlix\Dlna\UpnpClassMap;
 use Phlix\Media\Library\MediaItemShaper;
 
-/**
- * @covers \Phlix\Dlna\UpnpClassMap
- */
 class UpnpClassMapTest extends TestCase
 {
     /**

@@ -19,7 +19,6 @@ use Psr\Container\ContainerInterface;
  * routes unregistered): the routes are asserted here, so a missing one is a
  * failing test rather than silent dead code.
  *
- * @covers \Phlix\Server\Http\AuthProviderRouteRegistrar
  */
 final class AuthProviderRouteRegistrarTest extends TestCase
 {

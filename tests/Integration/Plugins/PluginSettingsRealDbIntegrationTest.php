@@ -43,8 +43,6 @@ use Workerman\MySQL\Connection;
  * created are touched, keyed by a per-run token, and they are removed in
  * tearDown.
  *
- * @covers \Phlix\Plugins\Repository\PluginSettingsRepository
- * @covers \Phlix\Plugins\PluginDbSettings
  */
 final class PluginSettingsRealDbIntegrationTest extends TestCase
 {

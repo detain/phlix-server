@@ -206,6 +206,12 @@ final class PooledMySQLConnectionTest extends TestCase
         self::assertCount(1, $created, 'coroutine A must have opened exactly one connection');
 
         // Simulate the DB dropping the now-idle connection.
+        // S128: $created is annotated as a list of object{alive: bool, closes: int} so the
+        // assertions below can read those fields. PHPStan treats an object SHAPE as
+        // read-only, and the concrete type is an anonymous class built inside $factory,
+        // which cannot be named. The write is load-bearing — it IS how this test
+        // simulates the server dropping an idle connection.
+        // @phpstan-ignore assign.propertyReadOnly
         $created[0]->alive = false;
 
         // Coroutine B must evict the dead idle connection (closing it) and

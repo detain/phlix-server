@@ -23,7 +23,6 @@ use Workerman\MySQL\Connection;
  * path and back-reference LiveTvManager set (so {@see Recorder::resolveTunerStreamUrl()}
  * is reachable), and the whole stack is shared as singletons.
  *
- * @covers \Phlix\Common\Container\Providers\LiveTvServicesProvider
  */
 final class LiveTvServicesProviderTest extends TestCase
 {

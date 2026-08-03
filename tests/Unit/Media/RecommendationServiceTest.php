@@ -27,7 +27,6 @@ use Workerman\MySQL\Connection;
  * carry no `ORDER BY`, because prod runs with `ONLY_FULL_GROUP_BY` and rejects
  * `SELECT DISTINCT col ... ORDER BY other_col` outright (error 3065).
  *
- * @covers \Phlix\Media\RecommendationService
  */
 final class RecommendationServiceTest extends TestCase
 {

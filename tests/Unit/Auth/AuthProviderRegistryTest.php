@@ -10,9 +10,6 @@ use Phlix\Auth\AuthProviderRegistry;
 use Phlix\Shared\Auth\AuthResult;
 use Phlix\Shared\Auth\ProviderInterface;
 
-/**
- * @covers \Phlix\Auth\AuthProviderRegistry
- */
 final class AuthProviderRegistryTest extends TestCase
 {
     public function test_register_and_authenticate(): void

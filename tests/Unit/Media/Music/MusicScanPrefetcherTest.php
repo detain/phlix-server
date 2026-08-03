@@ -28,7 +28,6 @@ use Psr\Log\NullLogger;
  *
  * @internal
  */
-#[CoversClass(MusicScanPrefetcher::class)]
 final class MusicScanPrefetcherTest extends TestCase
 {
     /** @var list<string> Paths to clean up. */

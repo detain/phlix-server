@@ -23,7 +23,6 @@ use PHPUnit\Framework\TestCase;
  * Keeping the two apart matters here: a controller test that passes against a
  * controller nothing dispatches to is precisely the failure S94/S99 shipped.
  *
- * @covers \Phlix\Server\Http\Controllers\ThemesController
  */
 final class ThemesControllerTest extends TestCase
 {

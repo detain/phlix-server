@@ -50,7 +50,6 @@ use Workerman\MySQL\Connection;
  * locally, with no reachable MySQL, it self-skips — the same guard
  * {@see \Phlix\Tests\Integration\Auth\NextUpIntegrationTest} uses.
  *
- * @covers \Phlix\Media\Music\MusicLibraryService
  */
 final class MusicTracksQueryIntegrationTest extends TestCase
 {

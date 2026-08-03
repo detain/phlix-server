@@ -22,7 +22,6 @@ use ReflectionMethod;
  * the legacy per-segment re-derive ONLY when the threaded string is absent
  * (pre-SV-1.1(b) persisted params / un-rescanned items).
  *
- * @covers \Phlix\Media\Transcoding\FfmpegRunner
  */
 final class FfmpegRunnerToneMapThreadingTest extends TestCase
 {

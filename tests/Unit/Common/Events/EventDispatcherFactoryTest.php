@@ -21,7 +21,6 @@ use Stringable;
 /**
  * Unit tests for {@see EventDispatcherFactory}.
  *
- * @covers \Phlix\Common\Events\EventDispatcherFactory
  */
 final class EventDispatcherFactoryTest extends TestCase
 {

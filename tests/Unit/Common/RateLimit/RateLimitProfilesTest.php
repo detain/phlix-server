@@ -14,9 +14,7 @@ use PHPUnit\Framework\TestCase;
  * container ids, config keys, defaults, and backend classification. `login` is
  * DELIBERATELY absent (it keeps DbLoginRateLimitStore).
  *
- * @covers \Phlix\Common\RateLimit\RateLimitProfiles
  */
-#[CoversClass(RateLimitProfiles::class)]
 final class RateLimitProfilesTest extends TestCase
 {
     /**

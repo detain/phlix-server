@@ -20,7 +20,6 @@ use Workerman\MySQL\Connection;
  * the O(N²) full-table scan the original finding flagged), and that a failing
  * job is drained rather than retried forever.
  *
- * @covers \Phlix\Media\SimilarityWorker
  */
 final class SimilarityWorkerTest extends TestCase
 {

@@ -7,9 +7,6 @@ namespace Phlix\Tests\Unit\Auth;
 use PHPUnit\Framework\TestCase;
 use Phlix\Shared\Auth\UserInfo;
 
-/**
- * @covers \Phlix\Shared\Auth\UserInfo
- */
 final class UserInfoTest extends TestCase
 {
     public function test_smoke(): void

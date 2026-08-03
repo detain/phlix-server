@@ -14,9 +14,6 @@ use Symfony\Component\Console\Application;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Tester\CommandTester;
 
-/**
- * @covers \Phlix\Console\Commands\LibraryScanCommand
- */
 class LibraryScanCommandTest extends TestCase
 {
     private function tester(LibraryManager $manager): CommandTester

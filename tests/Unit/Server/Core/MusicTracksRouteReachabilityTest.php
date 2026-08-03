@@ -49,7 +49,6 @@ use Workerman\MySQL\Connection;
  * runs, and asserts the HANDLER as well as the path, so repointing the route at a
  * different controller or method is caught too.
  *
- * @covers \Phlix\Server\Core\Application
  */
 final class MusicTracksRouteReachabilityTest extends TestCase
 {

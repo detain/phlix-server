@@ -28,7 +28,6 @@ use PHPUnit\Framework\TestCase;
  * a 429 + `Retry-After` + `code=rate_limited` response. An under-limit request
  * proceeds to {@see AuthManager} normally.
  *
- * @covers \Phlix\Server\Http\Controllers\AuthController
  */
 final class AuthControllerRateLimitTest extends TestCase
 {
@@ -36,6 +35,13 @@ final class AuthControllerRateLimitTest extends TestCase
      * A recording {@see RateLimiterInterface} double: captures every key passed
      * to {@see hit()} and reports a fixed limited/not-limited state so tests can
      * assert BOTH the trip behaviour and the exact key that was built.
+     *
+     * S128: the intersection is what lets the assertions below read `->hits`. The
+     * native return type can only name the interface, and the interface has no such
+     * property, so at PHPStan level 2 every `$limiter->hits` read is an error against
+     * a property that demonstrably exists.
+     *
+     * @return RateLimiterInterface&object{hits: list<string>}
      */
     private function makeLimiter(bool $limited): RateLimiterInterface
     {

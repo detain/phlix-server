@@ -52,7 +52,6 @@ use PHPUnit\Framework\TestCase;
  *
  * @internal
  */
-#[CoversClass(MusicLibraryScanner::class)]
 final class MusicScanReparentTest extends TestCase
 {
     /** `music_artists.id` of the wrong artist a track is re-pointed at. */

@@ -8,9 +8,6 @@ use Phlix\Plugins\Repository\PluginSettingsRepository;
 use PHPUnit\Framework\TestCase;
 use Workerman\MySQL\Connection;
 
-/**
- * @covers \Phlix\Plugins\Repository\PluginSettingsRepository
- */
 final class PluginSettingsRepositoryTest extends TestCase
 {
     public function test_get_returns_decoded_settings_when_row_present(): void

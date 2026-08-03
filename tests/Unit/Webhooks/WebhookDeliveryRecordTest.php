@@ -12,7 +12,6 @@ use Phlix\Webhooks\WebhookDeliveryRecord;
  * Unit tests for WebhookDeliveryRecord's jittered retry-delay calculation
  * (SV-4.4 / S-F10): delay grows across attempts and is capped at MAX_ATTEMPTS.
  *
- * @covers \Phlix\Webhooks\WebhookDeliveryRecord
  */
 class WebhookDeliveryRecordTest extends TestCase
 {

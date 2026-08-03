@@ -35,7 +35,6 @@ use Workerman\MySQL\Connection;
  * exact status + headers + windowed body that the event loop would put on the
  * wire, so the byte-level assertions here are the real output, not a proxy for it.
  *
- * @covers \Phlix\Server\Http\Controllers\Dlna\DlnaStreamController
  */
 final class DlnaStreamControllerTest extends TestCase
 {

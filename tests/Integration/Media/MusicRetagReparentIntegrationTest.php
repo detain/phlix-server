@@ -54,7 +54,6 @@ use Workerman\MySQL\Connection;
  *
  * Self-skips with no reachable MySQL; runs for real in CI.
  *
- * @covers \Phlix\Media\Music\MusicLibraryScanner
  */
 final class MusicRetagReparentIntegrationTest extends TestCase
 {

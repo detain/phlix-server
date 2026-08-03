@@ -18,7 +18,6 @@ use Workerman\MySQL\Connection;
  * the value back through a *fresh* repository instance pointed at the same
  * simulated store — a restart's only durable carry-over is the DB row.
  *
- * @covers \Phlix\Admin\SettingsRepository
  */
 final class ServerSettingsRoundTripTest extends TestCase
 {

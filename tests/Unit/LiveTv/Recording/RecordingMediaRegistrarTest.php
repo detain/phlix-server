@@ -23,7 +23,6 @@ use Workerman\MySQL\Connection;
  *   - an already-linked recording is idempotent (no second insert);
  *   - the recordings library is find-or-created.
  *
- * @covers \Phlix\LiveTv\Recording\RecordingMediaRegistrar
  *
  * @since SV-3.1d
  */

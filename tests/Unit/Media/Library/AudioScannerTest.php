@@ -12,7 +12,6 @@ use Workerman\MySQL\Connection;
 /**
  * Unit tests for AudioScanner tag harvesting functionality.
  *
- * @covers \Phlix\Media\Library\AudioScanner
  */
 class AudioScannerTest extends TestCase
 {

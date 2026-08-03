@@ -10,10 +10,6 @@ use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
 use Workerman\MySQL\Connection;
 
-/**
- * @covers \Phlix\LiveTv\TimeShift\DbTimeShiftSessionStore
- * @covers \Phlix\LiveTv\TimeShift\TimeShiftSession
- */
 class DbTimeShiftSessionStoreTest extends TestCase
 {
     /** @return Connection&MockObject */

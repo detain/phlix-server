@@ -8,9 +8,6 @@ use Phlix\Media\Subtitles\SubtitleSourceRegistry;
 use Phlix\Tests\Unit\Media\Subtitles\Fakes\FakeSubtitleSource;
 use PHPUnit\Framework\TestCase;
 
-/**
- * @covers \Phlix\Media\Subtitles\SubtitleSourceRegistry
- */
 final class SubtitleSourceRegistryTest extends TestCase
 {
     public function testRegisterIsIdempotentAndDeregisterRemoves(): void

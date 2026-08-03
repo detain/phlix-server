@@ -24,8 +24,6 @@ use Workerman\MySQL\Connection;
  * with no real sleeps. The DB is mocked so the tests run without a MySQL server
  * (matching the repo's {@see \Phlix\Auth\DbLoginRateLimitStore} test idiom).
  */
-#[CoversClass(DbRateLimiter::class)]
-#[CoversClass(RateLimitState::class)]
 final class DbRateLimiterTest extends TestCase
 {
     /**

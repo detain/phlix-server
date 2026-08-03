@@ -1,0 +1,102 @@
+<?xml version="1.0"?>
+<ruleset name="Phlix-Tests">
+    <description>
+        S128 — PSR-12 for tests/, minus two sniffs that PSR-12 does not actually
+        require of test code. This file is DELIBERATELY separate from the src/ gate
+        (`phpcs --standard=PSR12 src/`), which stays untouched: src/ keeps full PSR-12
+        with zero exclusions.
+
+        THE MEASUREMENT THAT CHOSE THESE TWO EXCLUSIONS (origin/master @ 12bdea6c,
+        phpcs 3.13.5, `--standard=PSR12 tests/`):
+
+            A TOTAL OF 2155 ERRORS AND 288 WARNINGS WERE FOUND IN 293 FILES
+
+            PSR1.Methods.CamelCapsMethodName ............... 2065   (95.8% of errors)
+            PSR1.Classes.ClassDeclaration.MultipleClasses ..   63
+            everything else ................................   27
+            (+ 288 warnings: 286 Generic.Files.LineLength, 2 PSR1.Files.SideEffects)
+
+        Only 23 of the 2443 violations were auto-fixable by phpcbf, so "run phpcbf and
+        commit" was never on the table. The two sniff exclusions below account for 2128
+        of the 2155 errors; of the 27 that remained, 25 were FIXED (22 by phpcbf — call
+        signatures, control-structure spacing, an anonymous-class brace — and 3 file-level
+        docblocks moved above their `declare(strict_types=1);` by hand, per PSR-12 §3) and
+        2 are carved out per-file below. There is no baseline and no ignore list.
+
+        1. PSR1.Methods.CamelCapsMethodName — 2065 errors, and all 2065 were classified
+           rather than assumed: every one is a snake_case test method name
+           (`test_playback_started_dispatch_reaches_listener`, 1980 distinct names).
+           ZERO were acronym cases and ZERO were leading-uppercase, so this is one
+           deliberate naming convention, not accumulated sloppiness. PSR-12 §4.3
+           governs the declared API of production classes; PHPUnit test methods are
+           discovered by the `test` prefix and read as sentences, and snake_case is a
+           mainstream PHPUnit style. Renaming 1980 methods would be the largest
+           behaviour-free diff in the repo's history, would break every `--filter`
+           expression and `@depends` reference pointing at them, and would buy nothing.
+           src/ is unaffected: it passes this sniff today with 0 errors.
+
+        2. PSR1.Classes.ClassDeclaration.MultipleClasses — 63 errors. These are test
+           doubles declared in the same file as the test that uses them, which keeps a
+           double next to its only consumer and out of the autoloadable namespace.
+           Splitting 63 files' doubles into 63+ new files makes the suite harder to
+           read, not more correct.
+
+        WARNINGS ARE REPORTED AND DO NOT BLOCK — and the difference from `-n` matters.
+        phpcs exits non-zero on WARNINGS ALONE, so a gate that trusts its exit code
+        would be permanently red here over 288 pre-existing warnings, and the next
+        person would silence it with `-n`. That is precisely how S109's defect happened:
+        `-n` on the src/ gate SUPPRESSED 8 real PSR-12 warnings for months. So the
+        `ignore_warnings_on_exit` config below is set instead — it changes only the exit
+        code. Every warning is still counted and still printed in the job log, and the
+        "A TOTAL OF n ERRORS AND m WARNINGS" line is the thing to read. Do NOT add `-n`
+        and do NOT exclude Generic.Files.LineLength; src/ keeps both, and so does this.
+
+        The two remaining errors are carved out per-file below, each naming the thing
+        that makes fixing it wrong rather than merely inconvenient. The 2 SideEffects
+        warnings are deliberately NOT excluded: they cost nothing to leave visible, and
+        an exclusion that buys no green is just a narrower gate.
+
+        Anything added to the exclude list needs the same treatment: a count, a
+        classification of what the violations actually ARE, and a reason PSR-12 does not
+        require it of test code. tests/Unit/Support/StaticAnalysisScopeTest.php asserts
+        this file exists, targets tests/, and carries EXACTLY the exclusions below — so
+        the list cannot grow quietly, which is how an exclusion list becomes a baseline.
+    </description>
+
+    <file>tests</file>
+
+    <!--
+        Exit-code policy, NOT a suppression. See the note above: this makes phpcs exit 0
+        when only WARNINGS were found, while still finding, counting and printing every
+        one of them. `-n` would delete them from the report; this does not.
+    -->
+    <config name="ignore_warnings_on_exit" value="1"/>
+
+    <rule ref="PSR12">
+        <exclude name="PSR1.Methods.CamelCapsMethodName"/>
+        <exclude name="PSR1.Classes.ClassDeclaration.MultipleClasses"/>
+    </rule>
+
+    <!--
+        `_before` is Codeception's own hook name, resolved by the framework from that
+        exact spelling (Codeception\Module::_before). Renaming it does not rename the
+        thing that calls it — it just stops the hook from running.
+    -->
+    <rule ref="PSR2.Methods.MethodDeclaration">
+        <exclude-pattern>tests/codeception/Helper/SyncPlay.php</exclude-pattern>
+    </rule>
+
+    <!--
+        ⚠ TEMPORARY, and the only carve-out here that is not about the code being right.
+        This one blank line after a class brace is a two-second fix. A second writer
+        held this file uncommitted in this shared checkout when S128 landed, and two
+        writers must not edit one file, so it was excluded rather than fixed. The
+        violation is present in the COMMITTED version at origin/master too (verified:
+        phpcs with `standard=PSR12` and `sniffs=PSR12.Classes.OpeningBraceSpace` on a clean
+        `git archive HEAD` tree reports it at line 24), so this is not a working-copy
+        artifact. DELETE this rule and the blank line together.
+    -->
+    <rule ref="PSR12.Classes.OpeningBraceSpace">
+        <exclude-pattern>tests/Unit/Server/Http/Controllers/Admin/AdminSettingsControllerTest.php</exclude-pattern>
+    </rule>
+</ruleset>

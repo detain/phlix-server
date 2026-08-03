@@ -19,9 +19,6 @@ use Phlix\Shared\Events\Library\MediaItemAdded;
 use Phlix\Tests\Unit\Media\Metadata\Resolution\FakeMetadataSource;
 use PHPUnit\Framework\TestCase;
 
-/**
- * @covers \Phlix\Media\Metadata\Enrichment\BackgroundEnrichmentSubscriber
- */
 final class BackgroundEnrichmentSubscriberTest extends TestCase
 {
     private function logger(): StructuredLogger

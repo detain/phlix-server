@@ -70,7 +70,6 @@ use ReflectionClass;
  * `ENUM(` at all once masked, which makes it skipped rather than half-parsed.
  * Pinned by {@see testMigration011sDynamicAlterIsSkippedNotHalfParsed}.
  *
- * @covers \Phlix\Media\MediaItemType
  */
 final class MediaItemTypeDriftTest extends TestCase
 {

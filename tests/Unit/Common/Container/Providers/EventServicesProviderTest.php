@@ -18,9 +18,6 @@ use Phlix\Tests\Fixtures\Events\SampleEvent;
 use Psr\EventDispatcher\EventDispatcherInterface;
 use Psr\EventDispatcher\ListenerProviderInterface;
 
-/**
- * @covers \Phlix\Common\Container\Providers\EventServicesProvider
- */
 final class EventServicesProviderTest extends TestCase
 {
     private string $tempDir = '';

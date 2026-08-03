@@ -16,7 +16,6 @@ use Phlix\LiveTv\Relay\SegmentCache;
  *   - Cumulative-duration cap evicts independently of count cap.
  *   - size()/totalDuration()/stats() report accurate values.
  *
- * @covers \Phlix\LiveTv\Relay\SegmentCache
  *
  * @since Wave 2 (post-O.7)
  */

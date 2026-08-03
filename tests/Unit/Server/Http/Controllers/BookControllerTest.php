@@ -16,7 +16,6 @@ use Phlix\Server\Http\Response;
 /**
  * Unit tests for BookController.
  *
- * @covers \Phlix\Server\Http\Controllers\BookController
  * @since 0.17.0
  */
 class BookControllerTest extends TestCase

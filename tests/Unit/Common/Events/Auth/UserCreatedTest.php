@@ -7,9 +7,6 @@ namespace Phlix\Tests\Unit\Common\Events\Auth;
 use Phlix\Shared\Events\Auth\UserCreated;
 use PHPUnit\Framework\TestCase;
 
-/**
- * @covers \Phlix\Shared\Events\Auth\UserCreated
- */
 final class UserCreatedTest extends TestCase
 {
     public function test_constructs_with_expected_payload(): void

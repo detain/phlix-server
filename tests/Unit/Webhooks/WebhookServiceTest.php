@@ -26,7 +26,6 @@ use Workerman\Worker;
  * (both are derived from a single jittered delay), and max attempts caps
  * retries.
  *
- * @covers \Phlix\Webhooks\WebhookService
  */
 class WebhookServiceTest extends TestCase
 {

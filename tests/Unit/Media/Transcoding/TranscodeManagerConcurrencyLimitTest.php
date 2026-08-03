@@ -23,7 +23,6 @@ use Workerman\MySQL\Connection;
  * 6–8". An admin who followed that advice and set 8 still got 4: a setting that
  * was documented, validated, persisted — and inert.
  *
- * @covers \Phlix\Media\Transcoding\TranscodeManager
  */
 final class TranscodeManagerConcurrencyLimitTest extends TestCase
 {

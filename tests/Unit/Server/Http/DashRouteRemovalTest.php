@@ -21,7 +21,6 @@ use PHPUnit\Framework\TestCase;
  *    referenced (the real DASH surface is `getManifest()` + `serveFile()`, wired
  *    in `Application::loadStreamingRoutes()` and left untouched).
  *
- * @covers \Phlix\Server\Http\Router
  */
 final class DashRouteRemovalTest extends TestCase
 {

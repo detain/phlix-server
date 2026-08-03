@@ -17,7 +17,6 @@ use PHPUnit\Framework\TestCase;
  * StatsCollector::getTopMedia(), shaped through MediaItemShaper like the other
  * media-list rails, and gated by AuthMiddleware to match the home-rail audience.
  *
- * @covers \Phlix\Server\Http\Controllers\MostWatchedController
  */
 final class MostWatchedControllerTest extends TestCase
 {

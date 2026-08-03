@@ -31,7 +31,6 @@ use function DI\value;
  * policy that quietly fell back to its literal fails rather than coincidentally
  * agreeing.
  *
- * @covers \Phlix\Common\Container\Providers\MediaServicesProvider
  */
 final class MediaServicesProviderSettingsWiringTest extends TestCase
 {

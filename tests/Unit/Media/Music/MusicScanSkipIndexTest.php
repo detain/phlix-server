@@ -24,7 +24,6 @@ use Workerman\MySQL\Connection;
  *
  * @internal
  */
-#[CoversClass(MusicScanSkipIndex::class)]
 final class MusicScanSkipIndexTest extends TestCase
 {
     /** @var list<string> Files to remove. */

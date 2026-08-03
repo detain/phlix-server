@@ -13,7 +13,6 @@ use PHPUnit\Framework\TestCase;
  * Validator tests for the JSON-Schema gate extracted from
  * `Phlix\Plugins\Manifest::validate()` during Step B.3.
  *
- * @covers \Phlix\Plugins\Manifest\ManifestSchema
  */
 final class ManifestSchemaTest extends TestCase
 {

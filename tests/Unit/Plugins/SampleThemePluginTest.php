@@ -43,8 +43,6 @@ use PHPUnit\Framework\TestCase;
  * a message naming the sibling file, instead of silently desynchronising the
  * two repos.
  *
- * @covers \Phlix\Theming\ThemeSourceRegistry
- * @covers \Phlix\Server\Http\Controllers\ThemesController
  */
 final class SampleThemePluginTest extends TestCase
 {

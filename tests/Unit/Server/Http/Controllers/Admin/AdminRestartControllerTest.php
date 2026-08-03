@@ -27,8 +27,6 @@ use PHPUnit\Framework\TestCase;
  *  - the signal is **deferred** rather than fired inline, so the JSON ack
  *    flushes before the workers cycle.
  *
- * @covers \Phlix\Server\Http\Controllers\Admin\AdminRestartController
- * @covers \Phlix\Server\Runtime\PidFile
  */
 final class AdminRestartControllerTest extends TestCase
 {

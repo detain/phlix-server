@@ -21,7 +21,6 @@ use Phlix\Server\Http\Request;
  * controller's AdminMiddleware is left unset (matching the existing controller
  * test convention that assumes an authenticated admin).
  *
- * @covers \Phlix\Server\Http\Controllers\MediaMatchController
  */
 class MediaMatchControllerTest extends TestCase
 {

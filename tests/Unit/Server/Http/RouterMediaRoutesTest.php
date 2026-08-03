@@ -15,11 +15,6 @@ use Phlix\Server\Http\Router;
  * OPDS is the deliberate exception — it follows the OPDS 1.2 spec path
  * (`/opds/v1.2`) and must stay un-prefixed.
  *
- * @covers \Phlix\Server\Http\Router::music
- * @covers \Phlix\Server\Http\Router::books
- * @covers \Phlix\Server\Http\Router::audiobooks
- * @covers \Phlix\Server\Http\Router::photo
- * @covers \Phlix\Server\Http\Router::opds
  */
 final class RouterMediaRoutesTest extends TestCase
 {

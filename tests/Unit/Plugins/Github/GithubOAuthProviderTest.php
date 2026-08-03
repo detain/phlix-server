@@ -10,10 +10,6 @@ use Phlix\Shared\Auth\ProviderInterface;
 use Phlix\Tests\Unit\Plugins\OAuth2\FakeOAuth2HttpClient;
 use PHPUnit\Framework\TestCase;
 
-/**
- * @covers \Phlix\Plugins\Github\GithubOAuthProvider
- * @covers \Phlix\Plugins\OAuth2\AbstractOAuth2Provider
- */
 final class GithubOAuthProviderTest extends TestCase
 {
     private function makeProvider(FakeOAuth2HttpClient $http): GithubOAuthProvider

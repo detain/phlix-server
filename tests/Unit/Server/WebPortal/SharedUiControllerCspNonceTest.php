@@ -22,8 +22,6 @@ use PHPUnit\Framework\TestCase;
  * so the inline script executes under the strict (`script-src 'self'`) policy
  * without weakening it to `'unsafe-inline'`.
  *
- * @covers \Phlix\Server\WebPortal\Controllers\SharedUiController
- * @covers \Phlix\Server\Http\Middleware\SecurityHeaders
  */
 final class SharedUiControllerCspNonceTest extends TestCase
 {

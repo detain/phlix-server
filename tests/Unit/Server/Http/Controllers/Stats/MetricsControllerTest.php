@@ -13,7 +13,6 @@ use PHPUnit\Framework\TestCase;
 /**
  * Unit tests for {@see MetricsController} (S2).
  *
- * @covers \Phlix\Server\Http\Controllers\Stats\MetricsController
  */
 final class MetricsControllerTest extends TestCase
 {

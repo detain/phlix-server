@@ -34,7 +34,6 @@ use PHPUnit\Framework\TestCase;
  * refuses the reserved ids, including when it is called with a null source name
  * (the "host" origin), so the S85 refactor cannot have loosened it.
  *
- * @covers \Phlix\Theming\ThemeTokenValidator
  */
 final class ThemeTokenValidatorBuiltInTest extends TestCase
 {

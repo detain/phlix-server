@@ -15,7 +15,6 @@ use Workerman\MySQL\Connection;
 /**
  * Smoke test for {@see CoreServicesProvider}.
  *
- * @covers \Phlix\Common\Container\Providers\CoreServicesProvider
  */
 final class CoreServicesProviderTest extends TestCase
 {

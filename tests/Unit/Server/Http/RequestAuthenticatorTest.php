@@ -18,8 +18,6 @@ use Workerman\Protocols\Http\Request as WorkermanRequest;
 use Workerman\Protocols\Http\Response as WorkermanResponse;
 
 /**
- * @covers \Phlix\Server\Http\RequestAuthenticator
- * @covers \Phlix\Server\Workerman\HttpHandler
  *
  * SV-1.8 — CSRF Origin/Referer exact-match.
  *
@@ -437,6 +435,13 @@ final class RequestAuthenticatorTest extends TestCase
             $this->createMock(Application::class),
             static function (ContainerInterface $container): void {
                 // no services resolved on the 403 path
+                // S128: invokeHandler() hands this closure a PHPUnit MockObject, so
+                // ->method() exists at run time, but the parameter can only be typed as
+                // the interface the production code sees. A docblock on a closure passed
+                // as an argument is not read here, and this repo has no
+                // phpstan/phpstan-phpunit to narrow it. Per-line, with the identifier, so
+                // it self-clears if either of those changes.
+                // @phpstan-ignore method.notFound
                 $container->method('get')->willReturn(null);
             },
         );
@@ -473,6 +478,8 @@ final class RequestAuthenticatorTest extends TestCase
             $application,
             static function (ContainerInterface $container) use ($registry): void {
                 // armDirectCancelHook resolves the segment registry before dispatch.
+                // See the 403-path closure above — a MockObject typed as the interface.
+                // @phpstan-ignore method.notFound
                 $container->method('get')->willReturnCallback(
                     static fn (string $id): mixed =>
                         $id === SegmentProcessRegistry::class ? $registry : null

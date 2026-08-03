@@ -22,7 +22,6 @@ use Workerman\MySQL\Connection;
 use Workerman\Protocols\Http\Request as WorkermanRequest;
 
 /**
- * @covers \Phlix\Server\Workerman\HttpHandler
  *
  * SV-4.2-disconnect, Chunk 2: the direct-LAN disconnect→kill wiring.
  *

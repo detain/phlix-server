@@ -21,7 +21,6 @@ use Workerman\MySQL\Connection;
 /**
  * Tests for MediaItemController::shufflePlay().
  *
- * @covers \Phlix\Server\Http\Controllers\MediaItemController::shufflePlay
  */
 class MediaItemControllerShufflePlayTest extends TestCase
 {

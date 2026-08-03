@@ -8,7 +8,6 @@ use Phlix\Server\Http\Request;
 /**
  * Unit tests for Request class.
  *
- * @covers \Phlix\Server\Http\Request
  */
 class RequestTest extends TestCase
 {
@@ -27,9 +26,6 @@ class RequestTest extends TestCase
         parent::tearDown();
     }
 
-    /**
-     * @covers \Phlix\Server\Http\Request::getBearerToken
-     */
     public function testCanGetBearerToken(): void
     {
         $_SERVER['HTTP_AUTHORIZATION'] = 'Bearer test-token-123';
@@ -39,9 +35,6 @@ class RequestTest extends TestCase
         $this->assertEquals('test-token-123', $request->getBearerToken());
     }
 
-    /**
-     * @covers \Phlix\Server\Http\Request::getHeader
-     */
     public function testGetHeaderReturnsNullWhenNotPresent(): void
     {
         $_SERVER['REQUEST_METHOD'] = 'GET';
@@ -54,12 +47,6 @@ class RequestTest extends TestCase
         $this->assertNull($request->getHeader('X-Custom-Header'));
     }
 
-    /**
-     * @covers \Phlix\Server\Http\Request::isGet
-     * @covers \Phlix\Server\Http\Request::isPost
-     * @covers \Phlix\Server\Http\Request::isPut
-     * @covers \Phlix\Server\Http\Request::isDelete
-     */
     public function testIsMethods(): void
     {
         $_SERVER['REQUEST_METHOD'] = 'POST';
@@ -73,9 +60,6 @@ class RequestTest extends TestCase
         $this->assertFalse($request->isDelete());
     }
 
-    /**
-     * @covers \Phlix\Server\Http\Request::getClientIp
-     */
     public function testGetClientIpWithForwardedHeader(): void
     {
         $_SERVER['HTTP_X_FORWARDED_FOR'] = '192.168.1.1, 10.0.0.1';
@@ -93,7 +77,6 @@ class RequestTest extends TestCase
      * loopback proxy the rightmost (appended) XFF entry is the real client; the
      * forged leftmost value is ignored.
      *
-     * @covers \Phlix\Server\Http\Request::getTrustedClientIp
      */
     public function testGetTrustedClientIpReturnsRealClientNotForgedLeftmost(): void
     {
@@ -110,7 +93,6 @@ class RequestTest extends TestCase
     /**
      * A direct (non-loopback) peer must ignore a client-supplied X-Forwarded-For.
      *
-     * @covers \Phlix\Server\Http\Request::getTrustedClientIp
      */
     public function testGetTrustedClientIpIgnoresXffFromUntrustedPeer(): void
     {

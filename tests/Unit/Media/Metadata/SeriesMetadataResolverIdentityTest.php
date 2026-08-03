@@ -15,7 +15,6 @@ use PHPUnit\Framework\TestCase;
  * (2026-07-28), including the search-call budget: the guards must not turn one
  * `/search/tv` request into two on the common path.
  *
- * @covers \Phlix\Media\Metadata\SeriesMetadataResolver
  */
 final class SeriesMetadataResolverIdentityTest extends TestCase
 {

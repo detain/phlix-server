@@ -10,9 +10,6 @@ use Phlix\Plugins\Catalog\CatalogFetchException;
 use Phlix\Plugins\Catalog\PluginCatalogService;
 use PHPUnit\Framework\TestCase;
 
-/**
- * @covers \Phlix\Plugins\Catalog\PluginCatalogService
- */
 final class PluginCatalogServiceTest extends TestCase
 {
     private const DEFAULT_SOURCE = 'https://github.com/detain/phlix-plugins';

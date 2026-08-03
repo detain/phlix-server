@@ -7,9 +7,6 @@ namespace Phlix\Tests\Unit\Plugins;
 use Phlix\Plugins\PluginFieldHelp;
 use PHPUnit\Framework\TestCase;
 
-/**
- * @covers \Phlix\Plugins\PluginFieldHelp
- */
 final class PluginFieldHelpTest extends TestCase
 {
     protected function tearDown(): void

@@ -32,7 +32,6 @@ use PHPUnit\Framework\TestCase;
  * `BuiltInThemes::PAYLOADS` from it and update the literal here. The fix is NOT
  * to relax the assertion to a count or a key check.
  *
- * @covers \Phlix\Theming\BuiltInThemes
  */
 final class BuiltInThemesTest extends TestCase
 {

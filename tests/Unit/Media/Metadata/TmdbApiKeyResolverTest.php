@@ -18,7 +18,6 @@ use Workerman\MySQL\Connection;
  * set from the admin UI (and `TMDB_API_KEY` is not exported) every one of
  * them resolved to an empty string permanently.
  *
- * @covers \Phlix\Media\Metadata\TmdbApiKeyResolver
  */
 final class TmdbApiKeyResolverTest extends TestCase
 {

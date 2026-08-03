@@ -9,9 +9,6 @@ use Phlix\Media\Metadata\Resolution\PriorityConfig;
 use Phlix\Media\Metadata\Resolution\PriorityFieldResolver;
 use PHPUnit\Framework\TestCase;
 
-/**
- * @covers \Phlix\Media\Metadata\Resolution\LibraryPriorityResolver
- */
 final class LibraryPriorityResolverTest extends TestCase
 {
     /** A representative global effective map (config default <- admin override). */

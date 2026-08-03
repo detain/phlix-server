@@ -71,8 +71,6 @@ use Workerman\MySQL\Connection;
  * completely (measured: the row survives, merely stale). Two files is the
  * smallest shape that is honest about production.
  *
- * @covers \Phlix\Media\Library\MediaScanner
- * @covers \Phlix\Media\Library\LibraryManager
  */
 final class MovedTopLevelFileKeepsIdentityTest extends TestCase
 {

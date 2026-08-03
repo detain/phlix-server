@@ -14,7 +14,6 @@ use Psr\Container\ContainerInterface;
  * `Phlix\Plugins\Contract\LifecycleInterface` (pre-0.11 FQCN) usable
  * after the contract moved to `Phlix\Shared\Plugin\LifecycleInterface`.
  *
- * @coversNothing
  */
 final class LifecycleShimTest extends TestCase
 {

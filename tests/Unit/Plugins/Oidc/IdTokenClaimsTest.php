@@ -7,9 +7,6 @@ namespace Phlix\Tests\Unit\Plugins\Oidc;
 use PHPUnit\Framework\TestCase;
 use Phlix\Plugins\Oidc\IdTokenClaims;
 
-/**
- * @covers \Phlix\Plugins\Oidc\IdTokenClaims
- */
 final class IdTokenClaimsTest extends TestCase
 {
     public function test_from_array_creates_valid_claims(): void

@@ -13,7 +13,6 @@ use PHPUnit\Framework\TestCase;
  * config/ffmpeg.php's deprecated `hwaccel` block delegates to it (no
  * contradictory `enabled` flags at runtime).
  *
- * @covers \Phlix\Config\HwAccelConfig
  */
 final class HwAccelConfigTest extends TestCase
 {

@@ -21,7 +21,6 @@ use Workerman\MySQL\Connection;
  * {@see TranscodeServicesProvider} calls both `setConfig()` (with the merged
  * single-source hwaccel config) and `probeHardwareAcceleration()` once at boot.
  *
- * @covers \Phlix\Common\Container\Providers\TranscodeServicesProvider
  */
 final class TranscodeServicesProviderTest extends TestCase
 {

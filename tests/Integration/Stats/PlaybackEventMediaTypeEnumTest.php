@@ -52,8 +52,6 @@ use Workerman\MySQL\Connection;
  * {@see \Phlix\Tests\Unit\Media\MediaItemTypeDriftTest}, which parses the
  * migration SQL.
  *
- * @covers \Phlix\Stats\StatsCollector
- * @covers \Phlix\Admin\DashboardService
  */
 final class PlaybackEventMediaTypeEnumTest extends TestCase
 {

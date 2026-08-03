@@ -30,9 +30,7 @@ use Workerman\MySQL\Connection;
  * injects a WORKING limiter by resolving the controller from the container
  * (with mock managers) and driving a surface over its budget end-to-end.
  *
- * @covers \Phlix\Common\Container\Providers\AuthServicesProvider
  */
-#[CoversClass(AuthServicesProvider::class)]
 final class AuthServicesProviderControllerWiringTest extends TestCase
 {
     public function testAuthControllerRegisterIsWiredToADbBackedLimiter(): void

@@ -56,7 +56,6 @@ use Workerman\MySQL\Connection;
  * {@see self::FLUSHED_BEFORE_INTERRUPT} are derived from ALBUMS — see their
  * arithmetic before changing it.
  *
- * @covers \Phlix\Media\Music\MusicLibraryScanner
  */
 final class MusicScanIncrementalFlushIntegrationTest extends TestCase
 {

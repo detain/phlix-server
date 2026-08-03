@@ -25,7 +25,6 @@ use Workerman\MySQL\Connection;
  *  - the scan streams per-file progress instead of leaving the UI frozen;
  *  - tags are read once (getID3 first, ffprobe fallback) and reused.
  *
- * @covers \Phlix\Media\Music\MusicLibraryScanner
  */
 final class MusicLibraryScannerTest extends TestCase
 {

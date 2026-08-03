@@ -44,9 +44,6 @@ use PHPUnit\Framework\TestCase;
  * Mutation-verified: restoring the literal at any one of the four sites turns
  * exactly that site's test red while the others stay green.
  *
- * @covers \Phlix\Auth\JwtHandler
- * @covers \Phlix\Auth\AuthManager
- * @covers \Phlix\Server\Http\Controllers\AuthController
  */
 final class TokenTtlEnforcementTest extends TestCase
 {

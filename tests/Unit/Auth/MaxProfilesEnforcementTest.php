@@ -32,8 +32,6 @@ use Workerman\MySQL\Connection;
  * Mutation-verified: restoring `UserProfileManager::MAX_PROFILES_PER_USER` at
  * either site turns exactly that site's test red.
  *
- * @covers \Phlix\Auth\UserProfileManager
- * @covers \Phlix\Server\Http\Controllers\Admin\AdminProfileController
  */
 final class MaxProfilesEnforcementTest extends TestCase
 {

@@ -30,7 +30,6 @@ use Workerman\MySQL\Connection;
  * MySQL service before the suite (see phpunit.yml); locally, with no reachable
  * MySQL, it self-skips.
  *
- * @covers \Phlix\Stats\Metrics\MetricsRepository
  */
 final class MetricsReadQueriesTest extends TestCase
 {

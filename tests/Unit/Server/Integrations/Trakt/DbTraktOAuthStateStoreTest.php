@@ -21,7 +21,6 @@ use Workerman\MySQL\Connection;
  * - TTL expiration behavior
  * - Concurrent access via transactions
  *
- * @covers \Phlix\Server\Integrations\Trakt\DbTraktOAuthStateStore
  */
 final class DbTraktOAuthStateStoreTest extends TestCase
 {

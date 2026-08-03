@@ -19,8 +19,6 @@ use PHPUnit\Framework\TestCase;
  * an injected clock so windows advance deterministically with no real
  * sleeps.
  */
-#[CoversClass(RateLimiter::class)]
-#[CoversClass(RateLimitState::class)]
 final class RateLimiterTest extends TestCase
 {
     public function testHitIncrementsAndTripsLimitWithinWindow(): void

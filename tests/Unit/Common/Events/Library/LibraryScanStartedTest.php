@@ -7,9 +7,6 @@ namespace Phlix\Tests\Unit\Common\Events\Library;
 use Phlix\Shared\Events\Library\LibraryScanStarted;
 use PHPUnit\Framework\TestCase;
 
-/**
- * @covers \Phlix\Shared\Events\Library\LibraryScanStarted
- */
 final class LibraryScanStartedTest extends TestCase
 {
     public function test_constructs_with_expected_payload(): void

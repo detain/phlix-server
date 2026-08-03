@@ -9,9 +9,6 @@ use Phlix\Media\Library\DuplicateFinder;
 use Phlix\Media\Library\ItemRepository;
 use Workerman\MySQL\Connection;
 
-/**
- * @covers \Phlix\Media\Library\DuplicateFinder
- */
 class DuplicateFinderTest extends TestCase
 {
     /**

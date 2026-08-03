@@ -16,7 +16,6 @@ use RuntimeException;
  * S44 Path A: an `ldap:`-prefixed identifier is routed through
  * {@see AuthManager::loginWithProvider()} instead of the local password store.
  *
- * @covers \Phlix\Server\Http\Controllers\AuthController
  */
 final class AuthControllerLdapLoginTest extends TestCase
 {

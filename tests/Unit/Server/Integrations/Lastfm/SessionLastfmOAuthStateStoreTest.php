@@ -15,7 +15,6 @@ use PHPUnit\Framework\TestCase;
  * Mirrors the Trakt OAuth state-store tests; protects the Last.fm
  * account-linking CSRF fix (PR #260 follow-up).
  *
- * @covers \Phlix\Server\Integrations\Lastfm\SessionLastfmOAuthStateStore
  */
 final class SessionLastfmOAuthStateStoreTest extends TestCase
 {

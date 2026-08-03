@@ -8,9 +8,6 @@ use Phlix\Auth\SignedUrl;
 use Phlix\Media\Library\MediaItemShaper;
 use PHPUnit\Framework\TestCase;
 
-/**
- * @covers \Phlix\Media\Library\MediaItemShaper
- */
 final class MediaItemShaperTest extends TestCase
 {
     /**

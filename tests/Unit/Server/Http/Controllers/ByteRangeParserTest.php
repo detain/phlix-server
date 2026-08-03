@@ -8,9 +8,6 @@ use Phlix\Server\Http\Controllers\ByteRangeParser;
 use Phlix\Server\Http\Controllers\HlsController;
 use PHPUnit\Framework\TestCase;
 
-/**
- * @covers \Phlix\Server\Http\Controllers\ByteRangeParser
- */
 final class ByteRangeParserTest extends TestCase
 {
     public function testNullHeaderReturnsNull(): void

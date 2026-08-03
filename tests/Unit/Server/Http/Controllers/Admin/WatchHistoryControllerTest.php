@@ -18,7 +18,6 @@ use PHPUnit\Framework\TestCase;
  * userId/libraryId passthrough (present vs empty/absent → null), and the
  * `{success, data, count}` envelope with a 200 status.
  *
- * @covers \Phlix\Server\Http\Controllers\Admin\WatchHistoryController
  */
 final class WatchHistoryControllerTest extends TestCase
 {

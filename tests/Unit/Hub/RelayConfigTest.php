@@ -22,14 +22,16 @@ final class RelayConfigTest extends TestCase
 
     protected function setUp(): void
     {
-        foreach ([
+        foreach (
+            [
             'PHLIX_RELAY_TLS',
             'PHLIX_RELAY_TLS_VERIFY',
             'PHLIX_RELAY_TLS_CAFILE',
             'PHLIX_RELAY_ENABLED',
             'PHLIX_RELAY_HUB_URL',
             'PHLIX_RELAY_HUB_WS_URL',
-        ] as $key) {
+            ] as $key
+        ) {
             $this->savedEnv[$key] = getenv($key);
             putenv($key);
         }

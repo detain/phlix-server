@@ -18,7 +18,6 @@ use Phlix\Media\Metadata\AbsoluteEpisodeMapper;
  * The accept cases are the three series the guards admit; the refuse cases are
  * the five that would have been silently mis-assigned.
  *
- * @covers \Phlix\Media\Metadata\AbsoluteEpisodeMapper
  */
 class AbsoluteEpisodeMapperTest extends TestCase
 {

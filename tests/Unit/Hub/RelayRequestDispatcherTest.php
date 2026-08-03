@@ -35,7 +35,6 @@ use Psr\Container\ContainerInterface;
  * producer, would silently reopen it and nothing here would fail. These tests
  * therefore pin the deny on THIS side of the boundary, where the bytes live.
  *
- * @covers \Phlix\Hub\RelayRequestDispatcher
  */
 final class RelayRequestDispatcherTest extends TestCase
 {

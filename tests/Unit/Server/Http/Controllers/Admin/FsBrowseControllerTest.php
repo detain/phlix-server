@@ -20,7 +20,6 @@ use PHPUnit\Framework\TestCase;
  * Each test runs against a real sandbox directory tree built under
  * {@see sys_get_temp_dir()} in {@see setUp()} and torn down afterwards.
  *
- * @covers \Phlix\Server\Http\Controllers\Admin\FsBrowseController
  */
 final class FsBrowseControllerTest extends TestCase
 {

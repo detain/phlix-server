@@ -17,7 +17,6 @@ use Workerman\MySQL\Connection;
  * exact all-scalar typed shape (NULLs → `''`, progress → float), and that a
  * non-array `query()` result degrades to `[]`.
  *
- * @covers \Phlix\Admin\WatchHistoryService
  */
 final class WatchHistoryServiceTest extends TestCase
 {

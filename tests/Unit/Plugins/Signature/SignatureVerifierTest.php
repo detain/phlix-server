@@ -8,9 +8,6 @@ use Phlix\Plugins\Manifest;
 use Phlix\Plugins\Signature\SignatureVerifier;
 use PHPUnit\Framework\TestCase;
 
-/**
- * @covers \Phlix\Plugins\Signature\SignatureVerifier
- */
 final class SignatureVerifierTest extends TestCase
 {
     /**

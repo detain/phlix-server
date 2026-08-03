@@ -7,9 +7,6 @@ namespace Phlix\Tests\Unit\Plugins;
 use Phlix\Shared\Plugin\EventNameMap;
 use PHPUnit\Framework\TestCase;
 
-/**
- * @covers \Phlix\Shared\Plugin\EventNameMap
- */
 final class EventNameMapTest extends TestCase
 {
     public function test_fromAlias_returns_fqcn_for_known_alias(): void

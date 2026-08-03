@@ -7,9 +7,6 @@ namespace Phlix\Tests\Unit\Plugins\Catalog;
 use Phlix\Plugins\Catalog\CatalogSourceResolver;
 use PHPUnit\Framework\TestCase;
 
-/**
- * @covers \Phlix\Plugins\Catalog\CatalogSourceResolver
- */
 final class CatalogSourceResolverTest extends TestCase
 {
     /**

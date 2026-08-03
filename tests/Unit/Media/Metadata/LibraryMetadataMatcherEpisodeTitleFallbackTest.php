@@ -33,7 +33,6 @@ use Phlix\Media\Metadata\TmdbProvider;
  * value. That is easy to break with a well-meant "always set the key" refactor,
  * hence these tests rather than a comment.
  *
- * @covers \Phlix\Media\Metadata\LibraryMetadataMatcher
  */
 class LibraryMetadataMatcherEpisodeTitleFallbackTest extends TestCase
 {

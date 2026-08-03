@@ -29,7 +29,6 @@ use Workerman\MySQL\Connection;
  * the two `getStreamLimit` tests while the accessor tests stay green — which is
  * exactly the half-wired state worth catching.
  *
- * @covers \Phlix\Access\StreamSessionService
  */
 final class DefaultConcurrentStreamsTest extends TestCase
 {

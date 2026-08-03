@@ -20,7 +20,6 @@ use Workerman\MySQL\Connection;
  * there forever" music scan). Exercises the private scanMusicLibrary() directly
  * via reflection so we do not have to reconstruct fetchLibraryRow()'s DB shape.
  *
- * @covers \Phlix\Media\Library\LibraryManager
  */
 final class LibraryManagerMusicScanTest extends TestCase
 {

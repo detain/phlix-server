@@ -40,8 +40,6 @@ use Workerman\MySQL\Connection;
  *
  * @internal
  */
-#[CoversClass(MusicLibraryScanner::class)]
-#[CoversClass(MusicScanSkipIndex::class)]
 final class MusicScanUnchangedSkipTest extends TestCase
 {
     /** @var list<string> Temp directories to remove. */

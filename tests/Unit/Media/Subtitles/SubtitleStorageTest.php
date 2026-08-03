@@ -8,9 +8,6 @@ use Phlix\Media\Subtitles\SubtitleStorage;
 use Phlix\Shared\Subtitle\SubtitleFile;
 use PHPUnit\Framework\TestCase;
 
-/**
- * @covers \Phlix\Media\Subtitles\SubtitleStorage
- */
 final class SubtitleStorageTest extends TestCase
 {
     private string $baseDir = '';

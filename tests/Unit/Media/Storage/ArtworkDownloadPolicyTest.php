@@ -28,8 +28,6 @@ use PHPUnit\Framework\TestCase;
  * default of TRUE, so a matcher left on the literal produces a visibly
  * different result (downloads happen) rather than coincidentally agreeing.
  *
- * @covers \Phlix\Media\Storage\ArtworkDownloadPolicy
- * @covers \Phlix\Media\Metadata\LibraryMetadataMatcher
  */
 final class ArtworkDownloadPolicyTest extends TestCase
 {

@@ -44,9 +44,6 @@ use SplFileInfo;
  * so no `ExpectationFailedException` can be swallowed. Each test below was proven
  * RED by restoring the `is_numeric()` coercion it names.
  *
- * @covers \Phlix\Media\Music\MusicArtist
- * @covers \Phlix\Media\Music\MusicAlbum
- * @covers \Phlix\Media\Music\MusicTrack
  */
 final class MusicDtoMediaItemIdTest extends TestCase
 {

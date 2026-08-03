@@ -25,7 +25,6 @@ use Workerman\MySQL\Connection;
  * real `migrations/` is never involved, and every object this test creates is
  * prefixed `s159_` and dropped in tearDown.
  *
- * @coversNothing End-to-end behaviour of a script, not of one class.
  */
 class MigrationFailureVisibilityTest extends TestCase
 {

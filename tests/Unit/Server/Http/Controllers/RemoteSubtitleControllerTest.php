@@ -17,9 +17,6 @@ use Phlix\Tests\Unit\Media\Subtitles\Fakes\FakeSubtitleSource;
 use PHPUnit\Framework\TestCase;
 use Workerman\MySQL\Connection;
 
-/**
- * @covers \Phlix\Server\Http\Controllers\RemoteSubtitleController
- */
 final class RemoteSubtitleControllerTest extends TestCase
 {
     private string $baseDir = '';

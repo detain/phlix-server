@@ -14,7 +14,6 @@ use Workerman\MySQL\Connection;
  *
  * Tests cache hit, cache miss, and cache invalidation scenarios.
  *
- * @covers \Phlix\Auth\UserRepository
  */
 final class UserRepositoryCacheTest extends TestCase
 {

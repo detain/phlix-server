@@ -40,7 +40,6 @@ use Workerman\MySQL\Connection;
  * assertions below pin each mapping independently rather than asserting one
  * generic rule.
  *
- * @covers \Phlix\Media\Library\MediaScanner
  */
 final class MediaScannerLibraryTypeExtensionsTest extends TestCase
 {

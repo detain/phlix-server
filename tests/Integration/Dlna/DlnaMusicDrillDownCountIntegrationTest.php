@@ -54,8 +54,6 @@ use Workerman\MySQL\Connection;
  * Self-skips with no reachable MySQL, like every other test under
  * `tests/Integration/` (CI provisions one and applies the migrations first).
  *
- * @covers \Phlix\Media\Music\MusicLibraryService
- * @covers \Phlix\Dlna\LibraryBridge
  */
 final class DlnaMusicDrillDownCountIntegrationTest extends TestCase
 {

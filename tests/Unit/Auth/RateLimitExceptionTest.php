@@ -16,9 +16,7 @@ use PHPUnit\Framework\TestCase;
  * supplied. The formula is single-sourced through
  * {@see \Phlix\Common\RateLimit\RateLimitState::retryAfter()}.
  *
- * @covers \Phlix\Auth\RateLimitException
  */
-#[CoversClass(RateLimitException::class)]
 final class RateLimitExceptionTest extends TestCase
 {
     public function testRetryAfterSecondsReturnsExactSecondsWhenNowSupplied(): void

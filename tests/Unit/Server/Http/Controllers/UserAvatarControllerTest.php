@@ -12,9 +12,6 @@ use Phlix\Server\Http\Request;
 use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
 
-/**
- * @covers \Phlix\Server\Http\Controllers\UserAvatarController
- */
 final class UserAvatarControllerTest extends TestCase
 {
     private AvatarStorage $avatarStorage;

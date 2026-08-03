@@ -12,7 +12,6 @@ use PHPUnit\Framework\TestCase;
  * the live library's own titles, so the guards are pinned against the data that
  * produced the defect rather than against invented strings.
  *
- * @covers \Phlix\Media\Metadata\SeriesCandidateSelector
  */
 final class SeriesCandidateSelectorTest extends TestCase
 {

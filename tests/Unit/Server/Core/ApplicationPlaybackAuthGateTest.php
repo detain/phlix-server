@@ -59,7 +59,6 @@ use function DI\factory;
  * {@see Connection} doubled, so this cannot pass by re-declaring the routes the
  * way the test wishes they were written.
  *
- * @covers \Phlix\Server\Core\Application
  */
 final class ApplicationPlaybackAuthGateTest extends TestCase
 {

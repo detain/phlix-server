@@ -19,7 +19,6 @@ use Workerman\MySQL\Connection;
  * the exact bound parameters (worker id, counts, DATETIME strings) and — across
  * two flushes — the per-connection byte-rate computation.
  *
- * @covers \Phlix\Stats\Metrics\MetricsFlushService
  */
 final class MetricsFlushServiceTest extends TestCase
 {

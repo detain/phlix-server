@@ -40,7 +40,6 @@ use Workerman\MySQL\Connection;
  * created (namespaced by a per-run token) and cleans them up in tearDown, so it
  * is safe against a shared CI `phlix_test` schema.
  *
- * @covers \Phlix\Auth\UserRepository
  */
 final class UserRepositoryExternalIdIntegrationTest extends TestCase
 {

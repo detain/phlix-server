@@ -7,9 +7,6 @@ namespace Phlix\Tests\Unit\LiveTv\Dto;
 use PHPUnit\Framework\TestCase;
 use Phlix\LiveTv\Dto\RowAccess;
 
-/**
- * @covers \Phlix\LiveTv\Dto\RowAccess
- */
 class RowAccessTest extends TestCase
 {
     public function testStringPassesStringsThrough(): void

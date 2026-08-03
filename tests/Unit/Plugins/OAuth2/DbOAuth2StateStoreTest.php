@@ -14,7 +14,6 @@ use Workerman\MySQL\Connection;
  * lock so two concurrent callbacks carrying the same state cannot both read it
  * before either DELETE lands.
  *
- * @covers \Phlix\Plugins\OAuth2\DbOAuth2StateStore
  */
 final class DbOAuth2StateStoreTest extends TestCase
 {

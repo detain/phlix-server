@@ -19,7 +19,6 @@ use Phlix\Theming\ThemeMediaFinder;
  * (and no fetch); non-integer tvdb → null with no fetch; movie type never uses
  * the Plex fallback.
  *
- * @covers \Phlix\Media\Metadata\ThemeMusic\ThemeMusicResolver
  */
 final class ThemeMusicResolverTest extends TestCase
 {

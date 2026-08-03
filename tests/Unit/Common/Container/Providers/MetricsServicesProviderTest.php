@@ -26,7 +26,6 @@ use function DI\factory;
  * the hooks and the flush timer share the same counters), and that the
  * `enabled` flag threaded from config reaches the collector.
  *
- * @covers \Phlix\Common\Container\Providers\MetricsServicesProvider
  */
 final class MetricsServicesProviderTest extends TestCase
 {

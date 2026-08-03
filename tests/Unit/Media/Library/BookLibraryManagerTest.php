@@ -15,7 +15,6 @@ use Workerman\MySQL\Connection;
 /**
  * Unit tests for BookLibraryManager.
  *
- * @covers \Phlix\Media\Library\BookLibraryManager
  * @since 0.17.0
  */
 class BookLibraryManagerTest extends TestCase

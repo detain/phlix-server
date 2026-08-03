@@ -28,9 +28,7 @@ use PHPUnit\Framework\TestCase;
  * The JWKS profile itself is registered in {@see AuthServicesProvider} (all
  * providers merge into one container), so both providers are registered here.
  *
- * @covers \Phlix\Common\Container\Providers\HubServicesProvider
  */
-#[CoversClass(HubServicesProvider::class)]
 final class HubServicesProviderJwksWiringTest extends TestCase
 {
     public function testInjectedLimiterMatchesTheRegisteredJwksProfile(): void

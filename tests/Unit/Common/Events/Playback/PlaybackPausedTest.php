@@ -7,9 +7,6 @@ namespace Phlix\Tests\Unit\Common\Events\Playback;
 use Phlix\Shared\Events\Playback\PlaybackPaused;
 use PHPUnit\Framework\TestCase;
 
-/**
- * @covers \Phlix\Shared\Events\Playback\PlaybackPaused
- */
 final class PlaybackPausedTest extends TestCase
 {
     public function test_constructs_with_expected_payload(): void

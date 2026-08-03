@@ -33,8 +33,6 @@ use Psr\Container\ContainerInterface;
  * after {@see PluginLoader::disable()} (leak-free), driven by the typed
  * interface — NOT method_exists()/FQCN sniffing.
  *
- * @covers \Phlix\Plugins\PluginLoader
- * @covers \Phlix\Media\Subtitles\SubtitleSourceRegistry
  */
 final class PluginLoaderSubtitleSourceRegistryTest extends TestCase
 {

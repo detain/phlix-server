@@ -7,9 +7,6 @@ namespace Phlix\Tests\Unit\Media\Library;
 use Phlix\Media\Library\SortTitle;
 use PHPUnit\Framework\TestCase;
 
-/**
- * @covers \Phlix\Media\Library\SortTitle
- */
 final class SortTitleTest extends TestCase
 {
     /**

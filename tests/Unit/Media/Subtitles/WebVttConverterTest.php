@@ -7,9 +7,6 @@ namespace Phlix\Tests\Unit\Media\Subtitles;
 use Phlix\Media\Subtitles\WebVttConverter;
 use PHPUnit\Framework\TestCase;
 
-/**
- * @covers \Phlix\Media\Subtitles\WebVttConverter
- */
 final class WebVttConverterTest extends TestCase
 {
     public function testSubRipIsConvertedToWebVtt(): void

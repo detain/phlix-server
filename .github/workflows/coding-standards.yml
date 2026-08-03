@@ -53,11 +53,29 @@ jobs:
         # turned master red. Do NOT re-add `-n`, and do not silence a finding
         # with an inline `phpcs:ignore` — reflow the line instead.
         #
-        # Scope note: this gate covers `src/` only. `scripts/`, `bin/`,
-        # `migrations/`, `public/`, `config/` and `tests/` are still unsniffed
-        # for errors as well as warnings. Widening the path set is a separate
-        # atomic change with its own baseline to reflow first.
+        # Scope note: this gate covers `src/` only, and `tests/` is now covered by
+        # the separate step below (S128). `scripts/`, `bin/`, `migrations/`,
+        # `public/` and `config/` are still unsniffed for errors as well as
+        # warnings. Widening to those is a separate atomic change with its own
+        # baseline to reflow first.
         run: ./vendor/bin/phpcs --standard=PSR12 --colors src/
+
+      - name: Run PHPCS on tests/
+        # S128 — ADDITIVE. Before this, `tests/` was sniffed by nothing: the step
+        # above passes `src/` explicitly and the `test-server` job in
+        # phpunit.yml passes `src/Server/`. Two brand-new 451- and 358-line test
+        # files reached master through every gate without phpcs ever opening them.
+        #
+        # The standard is `phpcs-tests.xml`, NOT PSR12 — read that file's
+        # <description> for the measurement (2155 errors) and for why exactly two
+        # sniffs are excluded. src/ keeps unmodified PSR-12; nothing here relaxes it.
+        #
+        # ⚠ Do NOT add `-n` and do NOT add `|| true`. Warnings are non-blocking via
+        # `ignore_warnings_on_exit` INSIDE the ruleset, which still finds, counts
+        # and prints every one of them; `-n` would delete them from the report,
+        # which is exactly the S109 defect. Judge this step by the
+        # "A TOTAL OF n ERRORS AND m WARNINGS" line in the log.
+        run: ./vendor/bin/phpcs --standard=phpcs-tests.xml --colors
 
   phpstan:
     name: PHPStan Static Analysis
@@ -98,7 +116,27 @@ jobs:
           ./vendor/bin/phpstan --version
 
       - name: Run PHPStan
+        # ⚠ The `src/` and `--level=9` on this command line OVERRIDE
+        # `phpstan.neon`'s `paths` and `level`. That is not a style choice, it is a
+        # trap worth knowing about: S128 was originally written as "phpstan.neon has
+        # paths: [src], so add tests" — and doing only that would have changed local
+        # runs while leaving THIS step analysing exactly `src/`, with a green gate and
+        # a config file that lied about its own scope. Any change to what PHPStan
+        # reads has to happen HERE as well as in a config.
         run: ./vendor/bin/phpstan analyze src/ --level=9 --no-progress --error-format=github
+
+      - name: Run PHPStan on tests/
+        # S128 — ADDITIVE, and deliberately a SECOND config rather than more paths in
+        # the first one. `phpstan-tests.neon` pins `tests/` at level 2 with no
+        # baseline; `phpstan.neon` keeps `src/` at level 9 with no baseline. Merging
+        # them would force one level on both trees, and the measured fallout for
+        # tests/ at level 9 is 532 errors.
+        #
+        # No `--level` and no path here ON PURPOSE: both come from the config, so the
+        # level cannot drift between this file and that one. Read
+        # phpstan-tests.neon's header for the full measured ladder (levels 0-9) and
+        # for what raising it to level 4 would catch.
+        run: ./vendor/bin/phpstan analyse -c phpstan-tests.neon --no-progress --error-format=github
 
   smarty-escape-guard:
     name: Smarty Page-Rendering Guard (S1)

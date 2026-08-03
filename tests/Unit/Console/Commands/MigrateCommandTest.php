@@ -13,9 +13,6 @@ use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Tester\CommandTester;
 use Workerman\MySQL\Connection;
 
-/**
- * @covers \Phlix\Console\Commands\MigrateCommand
- */
 class MigrateCommandTest extends TestCase
 {
     private string $tmpDir = '';

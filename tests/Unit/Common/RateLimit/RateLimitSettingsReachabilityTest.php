@@ -32,8 +32,6 @@ use Workerman\MySQL\Connection;
  * So this file asserts the overlay reaches the real array shape, rather than
  * assuming it.
  *
- * @covers \Phlix\Config\EffectiveConfig
- * @covers \Phlix\Common\RateLimit\RateLimitProfiles
  */
 final class RateLimitSettingsReachabilityTest extends TestCase
 {

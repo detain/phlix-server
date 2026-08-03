@@ -10,7 +10,6 @@ use Phlix\Server\Integrations\Lastfm\LastfmApi;
 /**
  * Unit tests for {@see LastfmApi}.
  *
- * @covers \Phlix\Server\Integrations\Lastfm\LastfmApi
  *
  * @package Phlix\Tests\Unit\Server\Integrations\Lastfm
  * @since 0.15.0

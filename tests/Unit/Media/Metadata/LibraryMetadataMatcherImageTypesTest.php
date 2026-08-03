@@ -17,7 +17,6 @@ use Phlix\Media\Metadata\MovieMetadataResolver;
  * dropped before persistence; enabled types are stored; with no LibraryManager
  * wired nothing is filtered (back-compat).
  *
- * @covers \Phlix\Media\Metadata\LibraryMetadataMatcher
  */
 class LibraryMetadataMatcherImageTypesTest extends TestCase
 {

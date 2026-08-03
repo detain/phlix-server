@@ -14,7 +14,6 @@ use PHPUnit\Framework\TestCase;
  * Pins the readonly constructor fields and the `retryAfter()` floor-at-0
  * contract used to render `Retry-After` headers.
  */
-#[CoversClass(RateLimitState::class)]
 final class RateLimitStateTest extends TestCase
 {
     public function testExposesConstructorValuesAsReadonlyFields(): void

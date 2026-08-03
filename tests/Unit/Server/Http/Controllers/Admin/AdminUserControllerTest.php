@@ -18,7 +18,6 @@ use PHPUnit\Framework\TestCase;
  * upstream of this controller; here we assert the controller's behaviour given an
  * already-authenticated-admin request.
  *
- * @covers \Phlix\Server\Http\Controllers\Admin\AdminUserController
  */
 final class AdminUserControllerTest extends TestCase
 {

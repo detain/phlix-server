@@ -21,7 +21,6 @@ use PHPUnit\Framework\TestCase;
  * it directly (as the hub does for its mirror helper) pins the status,
  * Retry-After header and JSON body shape once.
  *
- * @covers \Phlix\Server\Core\Application::rateLimitResponse
  */
 final class ApplicationRateLimitResponseTest extends TestCase
 {

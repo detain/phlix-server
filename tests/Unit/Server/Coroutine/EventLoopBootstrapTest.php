@@ -25,7 +25,6 @@ use Workerman\Worker;
  * exists and the wrong one doesn't (as a static), so a future hand
  * "fixing" the typo back to the broken form fails CI.
  *
- * @covers \Workerman\Worker
  * @package Phlix\Tests\Unit\Server\Coroutine
  * @since   0.10.x (Step 0.2c cumulative-fix)
  */

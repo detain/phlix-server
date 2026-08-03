@@ -25,7 +25,6 @@ use Workerman\MySQL\Connection;
  * {@see \Phlix\Tests\Unit\Media\Library\ItemRepositoryTest} cover the query
  * shape + injection-safety with a mock regardless.
  *
- * @covers \Phlix\Media\Library\ItemRepository
  */
 final class FindByMetadataFieldTest extends TestCase
 {

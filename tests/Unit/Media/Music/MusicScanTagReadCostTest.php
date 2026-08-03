@@ -36,7 +36,6 @@ use Workerman\MySQL\Connection;
  *
  * @internal
  */
-#[CoversClass(MusicLibraryScanner::class)]
 final class MusicScanTagReadCostTest extends TestCase
 {
     /** @var list<string> Fixtures to remove. */

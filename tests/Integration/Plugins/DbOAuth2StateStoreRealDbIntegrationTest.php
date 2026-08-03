@@ -39,7 +39,6 @@ use Workerman\MySQL\Connection;
  * provisions `mysql:8.0` and applies every migration first). Only rows tagged
  * with this run's provider token are written, and they are deleted in tearDown.
  *
- * @covers \Phlix\Plugins\OAuth2\DbOAuth2StateStore
  */
 final class DbOAuth2StateStoreRealDbIntegrationTest extends TestCase
 {

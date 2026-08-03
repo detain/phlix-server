@@ -22,7 +22,6 @@ use PHPUnit\Framework\TestCase;
  * makes the stream route answer 415 instead of serving bytes under a made-up
  * type.
  *
- * @covers \Phlix\Dlna\DlnaMimeTypes
  */
 final class DlnaMimeTypesTest extends TestCase
 {

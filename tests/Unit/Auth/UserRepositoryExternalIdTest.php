@@ -8,9 +8,6 @@ use PHPUnit\Framework\TestCase;
 use Phlix\Auth\UserRepository;
 use Workerman\MySQL\Connection;
 
-/**
- * @covers \Phlix\Auth\UserRepository
- */
 final class UserRepositoryExternalIdTest extends TestCase
 {
     public function test_find_by_external_id(): void

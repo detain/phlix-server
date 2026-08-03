@@ -17,7 +17,6 @@ use PHPUnit\Framework\TestCase;
  * and creates no session; it answers "valid credentials for an active account?"
  * and returns the user id (or null).
  *
- * @covers \Phlix\Auth\AuthManager
  */
 final class AuthManagerVerifyCredentialsTest extends TestCase
 {

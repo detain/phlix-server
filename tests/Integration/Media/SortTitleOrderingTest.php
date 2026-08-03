@@ -23,8 +23,6 @@ use Workerman\MySQL\Connection;
  * {@see \Phlix\Tests\Unit\Media\Library\ItemRepositoryTest} cover the logic with
  * a mock regardless.
  *
- * @covers \Phlix\Media\Library\SortTitle
- * @covers \Phlix\Media\Library\ItemRepository
  */
 final class SortTitleOrderingTest extends TestCase
 {

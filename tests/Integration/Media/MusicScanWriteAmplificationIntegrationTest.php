@@ -63,7 +63,6 @@ use PHPUnit\Framework\TestCase;
  *
  * Self-skips with no reachable MySQL; runs for real in CI.
  *
- * @covers \Phlix\Media\Music\MusicLibraryScanner
  */
 final class MusicScanWriteAmplificationIntegrationTest extends TestCase
 {

@@ -33,6 +33,9 @@ class StunClient
     private const STUN_MAGIC_COOKIE = 0x2112A442;
     private const STUN_HEADER_SIZE = 20;
 
+    /** Connect timeout, in seconds, for {@see self::probePort()}. */
+    private const PROBE_TIMEOUT = 3.0;
+
     private LoggerInterface $logger;
     private string $stunServer;
     private int $stunPort;
@@ -104,53 +107,152 @@ class StunClient
     }
 
     /**
-     * Tests whether a given IP:port is reachable from the outside.
+     * Tests whether a given IP:port is OPEN — i.e. whether a client out on the
+     * internet could connect to it.
      *
-     * Attempts a TCP connect to the target. Returns true if the connection
-     * succeeds or is refused (meaning the port is accessible but nothing
-     * is listening). Returns false if the connection times out or fails
-     * in a way that indicates a firewall is blocking it.
+     * True **only** when a TCP handshake completes. A refused connection, a
+     * timeout, an unreachable network and an unclassifiable failure are all
+     * false: see {@see PortProbeOutcome} for the full rationale, in particular
+     * why ECONNREFUSED reads as "not forwarded" for this probe and not as
+     * "reachable, so good enough" (S169 — the old code returned `true` on both
+     * arms of the coroutine path, so it could never answer "no").
      *
-     * Uses Swoole\Coroutine\Socket for non-blocking connect when in coroutine context.
+     * Uses Swoole\Coroutine\Socket for a non-blocking connect when in coroutine
+     * context; falls back to blocking fsockopen only OUTSIDE a coroutine.
      *
      * @param string $ip   Target IP address.
      * @param int    $port Target port.
      *
-     * @return bool True if the port appears accessible from outside.
+     * @return bool True only if the port is open from outside.
      */
     public function testPortAccessibility(string $ip, int $port): bool
     {
+        return $this->probePort($ip, $port)->isOpen();
+    }
+
+    /**
+     * Probes ip:port with a single TCP connect and classifies what happened.
+     *
+     * The classification is what {@see testPortAccessibility()} reduces to a
+     * bool, and it is public because "why not open?" is the actionable half for
+     * an operator (`scripts/port-forward.php` prints it): "refused" points at
+     * the router's forwarding rules or a missing NAT-loopback, "timed out"
+     * points at a firewall dropping the packet, "unreachable" at routing.
+     *
+     * @param string $ip      Target IP address.
+     * @param int    $port    Target port.
+     * @param float  $timeout Connect timeout in seconds.
+     */
+    public function probePort(string $ip, int $port, float $timeout = self::PROBE_TIMEOUT): PortProbeOutcome
+    {
+        // The transport is recorded and logged because the two arms below are a
+        // production/test fork: PHPUnit never runs inside a coroutine
+        // (Swoole\Coroutine::getCid() returns -1 with the extension loaded), so
+        // for the whole life of this method the suite exercised only the
+        // blocking arm while every Swoole worker took the coroutine one. S170.
+        // A test that asserts this field knows WHICH branch it just pinned.
         if (self::inCoroutine() && class_exists(\Swoole\Coroutine\Socket::class)) {
-            try {
-                $sock = new \Swoole\Coroutine\Socket(AF_INET, SOCK_STREAM, 0);
-                // S146: Swoole\Coroutine\Socket has NO setTimeout() — verified
-                // absent from the class in swoole 6.2.2. The old call raised an
-                // \Error, which catch (RuntimeException) does not catch. The
-                // timeout is connect()'s third argument.
-                $connected = $sock->connect($ip, $port, 3.0);
-                $sock->close();
-
-                if ($connected) {
-                    return true;
-                }
-
-                // Connection refused (ECONNREFUSED) also means port is accessible
-                return true;
-            } catch (RuntimeException $e) {
-                // If we get a timeout or other error, port may be blocked
-                // ECONNREFUSED = 111, but Swoole may throw differently
-                return false;
-            }
+            $transport = 'coroutine';
+            $outcome = $this->probeViaCoroutineSocket($ip, $port, $timeout);
+        } else {
+            $transport = 'blocking';
+            $outcome = $this->probeViaBlockingSocket($ip, $port, $timeout);
         }
 
-        // Blocking fallback
-        $socket = @fsockopen('tcp://' . $ip, $port, $errno, $errstr, 3);
+        $this->logger->debug('STUN: port probe', [
+            'ip' => $ip,
+            'port' => $port,
+            'outcome' => $outcome->value,
+            'open' => $outcome->isOpen(),
+            'transport' => $transport,
+        ]);
+
+        return $outcome;
+    }
+
+    /**
+     * Non-blocking connect probe — the arm every Swoole worker takes.
+     *
+     * Deliberately does NOT degrade to the blocking fallback on failure: this
+     * runs inside a coroutine, where fsockopen() would stall the entire worker
+     * for up to $timeout.
+     *
+     * @param string $ip      Target IP address.
+     * @param int    $port    Target port.
+     * @param float  $timeout Connect timeout in seconds.
+     */
+    private function probeViaCoroutineSocket(string $ip, int $port, float $timeout): PortProbeOutcome
+    {
+        try {
+            $sock = new \Swoole\Coroutine\Socket(AF_INET, SOCK_STREAM, 0);
+            // S146: Swoole\Coroutine\Socket has NO setTimeout() — verified
+            // absent from the class in swoole 6.2.2. The old call raised an
+            // \Error, which catch (RuntimeException) does not catch. The
+            // timeout is connect()'s third argument.
+            $connected = $sock->connect($ip, $port, $timeout);
+            // Read errCode BEFORE close(). It does survive close() on swoole
+            // 6.2.1 (measured) but nothing documents that, and the classified
+            // answer must not depend on it.
+            //
+            // ⚠ MEASURED — errCode is NOT reliably populated, so the CLASSIFICATION
+            // (not the verdict) varies by swoole build. Connect to a closed
+            // loopback port, same host, same test:
+            //   swoole 6.2.1 / PHP 8.3.6  -> connect=false errCode=111 "Connection refused"
+            //   swoole 6.2.2 / PHP 8.4.21 -> connect=false errCode=111 "Connection refused"
+            //   swoole 6.2.2 / PHP 8.3.32 -> connect=false errCode=0   errMsg=""
+            // SO_ERROR is no help: getOption(SOL_SOCKET, SO_ERROR) reads 0 in all
+            // three (the kernel's pending error has already been consumed). So a
+            // failed connect can arrive with nothing but "it failed", which maps
+            // to PortProbeOutcome::Failed — not open, which is the answer callers
+            // need. Do NOT make the bool depend on the classification.
+            $errno = (int) $sock->errCode;
+            $sock->close();
+
+            if ($connected) {
+                return PortProbeOutcome::Open;
+            }
+
+            return PortProbeOutcome::fromErrno($errno);
+        } catch (\Throwable $e) {
+            // \Throwable, not RuntimeException: `new Swoole\Coroutine\Socket()`
+            // throws Swoole\Exception, which extends \Exception directly
+            // (measured: Swoole\Exception -> Exception), and the S146 note above
+            // records an \Error escaping the same way. An escaping throwable
+            // inside a coroutine is not a caught failure — it is an uncaught
+            // exception in that coroutine, so a port probe could take a worker
+            // with it. Log it, answer "not open".
+            $this->logger->warning('STUN: coroutine port probe threw', [
+                'ip' => $ip,
+                'port' => $port,
+                'exception' => $e::class,
+                'message' => $e->getMessage(),
+            ]);
+
+            return PortProbeOutcome::Failed;
+        }
+    }
+
+    /**
+     * Blocking connect probe — used only when NOT inside a coroutine (CLI
+     * scripts, and the unit suite).
+     *
+     * @param string $ip      Target IP address.
+     * @param int    $port    Target port.
+     * @param float  $timeout Connect timeout in seconds.
+     */
+    private function probeViaBlockingSocket(string $ip, int $port, float $timeout): PortProbeOutcome
+    {
+        $errno = 0;
+        $errstr = '';
+        $socket = @fsockopen('tcp://' . $ip, $port, $errno, $errstr, $timeout);
         if ($socket !== false) {
             fclose($socket);
-            return true;
+            return PortProbeOutcome::Open;
         }
 
-        return $errno === 111 || $errno === 0;
+        // Same classifier as the coroutine arm, so the two arms cannot drift
+        // apart again — which is the whole reason S169 went unnoticed.
+        return PortProbeOutcome::fromErrno($errno);
     }
 
     /**

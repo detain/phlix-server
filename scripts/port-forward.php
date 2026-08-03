@@ -116,8 +116,13 @@ function cmdInfo(): void
     echo "Public IP: " . ($publicIp ?? 'unavailable') . "\n";
 
     if ($publicIp !== null) {
-        $portOpen = $stun->testPortAccessibility($publicIp, $svc->getStatus()['port']);
-        echo "Port {$svc->getStatus()['port']} on {$publicIp}: " . ($portOpen ? 'OPEN' : 'BLOCKED/FILTERED') . "\n";
+        // S169: print the CLASSIFIED outcome, not just open/not-open. "refused"
+        // points at the router's forwarding rules (or a router with no NAT
+        // loopback, so this probe cannot see its own forward); "timed-out"
+        // points at a firewall dropping the packet; "unreachable" at routing.
+        $outcome = $stun->probePort($publicIp, $svc->getStatus()['port']);
+        echo "Port {$svc->getStatus()['port']} on {$publicIp}: "
+            . ($outcome->isOpen() ? 'OPEN' : 'NOT OPEN') . " ({$outcome->value})\n";
     }
 
     echo "\nUPnP IGD Discovery...\n";

@@ -84,6 +84,68 @@ class PortForwardServiceTest extends TestCase
         $this->assertNotNull($result['public_endpoint']);
     }
 
+    // ---------------------------------------------------------------------
+    // S169 — the `stun-already-open` shortcut, both ways.
+    //
+    // These two tests are the reason the STUN mocks in this file are no longer
+    // all `willReturn(true)`. `testPortAccessibility()` could not return false
+    // on its production path, and the only two doubles of it hard-coded `true`
+    // — so the mock and the bug agreed and nothing here could notice that a
+    // user behind a NAT with a CLOSED port was being told remote access works.
+    // ---------------------------------------------------------------------
+
+    public function testAutoConfigureDoesNotClaimStunOpenWhenThePortIsClosed(): void
+    {
+        $upnp = $this->createMock(UpnpIgdClient::class);
+        $stun = $this->createMock(StunClient::class);
+        $natpmp = $this->createMock(NatPmpClient::class);
+
+        $upnp->method('discoverGateway')->willReturn(null);
+        $natpmp->method('discoverGateway')->willReturn(null);
+        $stun->method('getPublicIp')->willReturn('198.51.100.42');
+        // A genuinely closed / unforwarded port. Before S169 this value was
+        // unreachable in production: both arms of the coroutine path returned true.
+        $stun->method('testPortAccessibility')->willReturn(false);
+
+        $service = new PortForwardService($upnp, $stun, $natpmp, new NullLogger(), 32400, true, $this->tmpDir);
+        $result = $service->autoConfigure();
+
+        $this->assertFalse($result['success'], 'a closed port must not be reported as configured');
+        $this->assertSame('failed', $result['method'], 'must fall through to the manual-instructions path');
+        $this->assertNull($result['public_endpoint']);
+
+        // Nothing may have been persisted as "already open", because a later
+        // getStatus() would then advertise remote access that does not work.
+        $status = $service->getStatus();
+        $this->assertFalse($status['enabled']);
+        $this->assertNotSame('stun-already-open', $status['method']);
+    }
+
+    public function testAutoConfigurePersistsStunAlreadyOpenOnlyWhenThePortIsOpen(): void
+    {
+        $upnp = $this->createMock(UpnpIgdClient::class);
+        $stun = $this->createMock(StunClient::class);
+        $natpmp = $this->createMock(NatPmpClient::class);
+
+        $upnp->method('discoverGateway')->willReturn(null);
+        $natpmp->method('discoverGateway')->willReturn(null);
+        $stun->method('getPublicIp')->willReturn('198.51.100.42');
+        $stun->method('testPortAccessibility')->willReturn(true);
+
+        $service = new PortForwardService($upnp, $stun, $natpmp, new NullLogger(), 32400, true, $this->tmpDir);
+        $result = $service->autoConfigure();
+
+        // The counterweight: the fix must not turn into "never claim open", or
+        // the test above would pass for the wrong reason.
+        $this->assertTrue($result['success']);
+        $this->assertSame('stun-open', $result['method']);
+        $this->assertSame('198.51.100.42:32400', $result['public_endpoint']);
+
+        $status = $service->getStatus();
+        $this->assertTrue($status['enabled']);
+        $this->assertSame('stun-already-open', $status['method']);
+    }
+
     public function testDiscoverHostnameCandidatesIncludesLanIp(): void
     {
         $upnp = $this->createMock(UpnpIgdClient::class);
@@ -112,6 +174,28 @@ class PortForwardServiceTest extends TestCase
 
         $publicCandidates = array_filter($candidates, fn($c) => $c['type'] === 'public');
         $this->assertNotEmpty($publicCandidates);
+    }
+
+    public function testDiscoverHostnameCandidatesOmitsPublicIpWhenPortClosed(): void
+    {
+        $upnp = $this->createMock(UpnpIgdClient::class);
+        $stun = $this->createMock(StunClient::class);
+        $natpmp = $this->createMock(NatPmpClient::class);
+
+        $stun->method('getPublicIp')->willReturn('198.51.100.42');
+        // S169 — a public IP is not a reachable URL. Advertising
+        // http://198.51.100.42:32400 to clients when the port is closed hands
+        // them an endpoint that cannot connect.
+        $stun->method('testPortAccessibility')->willReturn(false);
+
+        $service = new PortForwardService($upnp, $stun, $natpmp, new NullLogger(), 32400, true, $this->tmpDir);
+        $candidates = $service->discoverHostnameCandidates();
+
+        $publicCandidates = array_filter($candidates, fn($c) => $c['type'] === 'public');
+        $this->assertEmpty($publicCandidates, 'a closed port must not be advertised as a public URL');
+        // The LAN candidates are still there, so this is not passing because the
+        // whole list came back empty.
+        $this->assertNotEmpty($candidates);
     }
 
     public function testGetManualInstructionsReturnsValidStructure(): void

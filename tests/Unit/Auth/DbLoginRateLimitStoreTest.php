@@ -183,4 +183,129 @@ final class DbLoginRateLimitStoreTest extends TestCase
         $this->assertStringContainsString('DELETE', $captured['sql']);
         $this->assertSame(['9.9.9.9'], $captured['params']);
     }
+
+    /**
+     * S131 — the `null` arm, driven through production.
+     *
+     * `recordFailedAttempt()` guards its upsert so a brute-force attempt is
+     * still charged if the upsert wrote nothing. The guard used to read
+     * `$result === false` — a value `Workerman\MySQL\Connection::query()`
+     * cannot produce (it THROWS on error) — so it could never fire. `null` is
+     * the falsy value it DOES return for a zero-row INSERT.
+     *
+     * Deleting `|| $result === null` from
+     * {@see \Phlix\Common\Database\WriteResult::wroteNothing()} turns this
+     * RED: the fallback UPDATE stops being issued and the attempt goes
+     * uncharged, i.e. a free retry.
+     *
+     * @return void
+     */
+    public function test_an_upsert_that_wrote_nothing_still_charges_the_attempt_via_the_fallback_update(): void
+    {
+        $sqls = [];
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(
+            function (string $sql, array $params = []) use (&$sqls) {
+                $sqls[] = $sql;
+                if (str_contains($sql, 'INSERT') && str_contains($sql, 'ON DUPLICATE KEY UPDATE')) {
+                    // What the client really returns for a zero-row INSERT.
+                    return null;
+                }
+                return [];
+            }
+        );
+
+        $store = new DbLoginRateLimitStore($db);
+        $store->recordFailedAttempt('1.2.3.4');
+
+        $fallback = array_values(array_filter(
+            $sqls,
+            static fn (string $q): bool => str_starts_with(ltrim($q), 'UPDATE login_rate_limit')
+        ));
+        $this->assertCount(
+            1,
+            $fallback,
+            'an upsert that wrote nothing must fall back to the UPDATE, or the failed '
+            . 'login is never counted against the brute-force budget'
+        );
+    }
+
+    /**
+     * S131 — the `false` arm, driven through production.
+     *
+     * ⚠ Honest framing: `false` is a value THIS client never returns; the arm
+     * exists for defensive breadth (a driver swap, or a `lastInsertId()` that
+     * honours its declared `string|false`). This test reaches it through a
+     * double, which is the only way it CAN be reached — see
+     * {@see \Phlix\Common\Database\WriteResult}. It is here so that deleting
+     * the arm is a decision someone has to make deliberately, not a silent
+     * simplification.
+     *
+     * @return void
+     */
+    public function test_a_false_upsert_result_also_charges_the_attempt(): void
+    {
+        $sqls = [];
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(
+            function (string $sql, array $params = []) use (&$sqls) {
+                $sqls[] = $sql;
+                if (str_contains($sql, 'INSERT') && str_contains($sql, 'ON DUPLICATE KEY UPDATE')) {
+                    return false;
+                }
+                return [];
+            }
+        );
+
+        $store = new DbLoginRateLimitStore($db);
+        $store->recordFailedAttempt('5.6.7.8');
+
+        $fallback = array_values(array_filter(
+            $sqls,
+            static fn (string $q): bool => str_starts_with(ltrim($q), 'UPDATE login_rate_limit')
+        ));
+        $this->assertCount(1, $fallback, 'the false arm must still charge the attempt');
+    }
+
+    /**
+     * 🔴 S131 — `'0'` is a SUCCESSFUL upsert and must NOT trigger the fallback.
+     *
+     * `login_rate_limit`'s primary key is `ip VARCHAR(45)`, so there is no
+     * `AUTO_INCREMENT` and `lastInsertId()` answers the string `'0'` — which
+     * is FALSY in PHP. If this guard were ever "simplified" to `if (!$result)`
+     * every successful upsert would ALSO run the fallback UPDATE and each
+     * failed login would be counted TWICE, locking users out at half the
+     * configured budget.
+     *
+     * @return void
+     */
+    public function test_the_falsy_string_zero_is_a_successful_upsert_and_does_not_double_charge(): void
+    {
+        $sqls = [];
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(
+            function (string $sql, array $params = []) use (&$sqls) {
+                $sqls[] = $sql;
+                if (str_contains($sql, 'INSERT') && str_contains($sql, 'ON DUPLICATE KEY UPDATE')) {
+                    // lastInsertId() on a table with no AUTO_INCREMENT column.
+                    return '0';
+                }
+                return [];
+            }
+        );
+
+        $store = new DbLoginRateLimitStore($db);
+        $store->recordFailedAttempt('1.2.3.4');
+
+        $fallback = array_values(array_filter(
+            $sqls,
+            static fn (string $q): bool => str_starts_with(ltrim($q), 'UPDATE login_rate_limit')
+        ));
+        $this->assertSame(
+            [],
+            $fallback,
+            "'0' is what a successful INSERT returns on a table with no AUTO_INCREMENT; "
+            . 'treating it as a failure double-charges every failed login'
+        );
+    }
 }

@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Media\Music;
 
+use Phlix\Common\Database\WriteResult;
 use Phlix\Common\Logger\LogChannels;
 use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Common\Uuid;
@@ -334,20 +335,35 @@ class MusicLibraryScanner
      * are required, and each is pinned separately. Assume nothing about a keyword — or a
      * whitespace layout — you have not measured.
      *
-     * ⚠ **Six OTHER sites in `src/` consume an insert result with the same `=== false`
-     * check this replaced, and they are NOT fixed here** — `StreamSessionService`,
+     * ✅ **S131 CLOSED THE SIX OTHER SITES, AND THE PREDICATE NOW LIVES IN ONE PLACE.**
+     * This method is a delegate to {@see \Phlix\Common\Database\WriteResult::wroteNothing()},
+     * which carries the full contract table and both traps for the whole repo. The six
+     * `=== false` sites this docblock used to list as unfixed — `StreamSessionService`,
      * `DbLoginRateLimitStore`, `DbOidcStateStore`, `DbOAuth2StateStore`,
-     * `DbTraktOAuthStateStore`, `DbLastfmOAuthStateStore`. They are tracked as step
-     * **S131**, which is also where this helper is to be promoted somewhere all eleven
-     * sites can share it. None of them is a *falsy* test, so the `'0'` hazard does not
-     * bite them; the defect there is only the `null` blindness.
+     * `DbTraktOAuthStateStore`, `DbLastfmOAuthStateStore` — are handled there.
+     *
+     * ⚠ **One correction to what this docblock claimed about them.** It said *"none of
+     * them is a falsy test, so the `'0'` hazard does not bite them"*. True of the code as
+     * written, but it read as *"`'0'` cannot arise there"*, and that is wrong:
+     * `profile_stream_limits.profile_id` is a `CHAR(36)` PRIMARY KEY with no
+     * `AUTO_INCREMENT` (`migrations/063_device_stream_limits.sql:6-11`), so
+     * `StreamSessionService::updateStreamLimit()`'s `INSERT … ON DUPLICATE KEY UPDATE`
+     * returns the falsy string `'0'` on a real write. The hazard is live there; only the
+     * mistake is absent. It is now pinned by a test at that site.
+     *
+     * ⚠ **And the inventory of "eleven" was one short.** S131 re-derived it by walking
+     * every `->query()` whose SQL verb is `INSERT`/`REPLACE` (85 calls in `src/`, of which
+     * 74 discard the result entirely) rather than by grepping for `=== false`:
+     * {@see \Phlix\Media\Library\ScanJobRepository::startRunningIfIdle()} is a **twelfth**
+     * consumed insert result. It landed with S151, after this inventory was taken, and it
+     * was already correct — it tests `=== null` and documents the `'0'` trap in place.
      *
      * @param mixed $result Whatever `query()` returned for an INSERT.
      * @return bool True when the statement demonstrably wrote nothing.
      */
     private static function statementWroteNothing(mixed $result): bool
     {
-        return $result === false || $result === null;
+        return WriteResult::wroteNothing($result);
     }
 
     /**

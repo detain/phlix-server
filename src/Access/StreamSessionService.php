@@ -352,6 +352,18 @@ final class StreamSessionService
     /**
      * Clean up streams with stale heartbeats (no heartbeat for > 60 seconds).
      *
+     * ⚠ **S131 — the documented return was a lie, and it is a DELETE, not an
+     * insert.** This read `return $result !== false ? 1 : 0;`, which reported
+     * `1` for every sweep including one that removed nothing, and could never
+     * report `0` at all — the client has no `return false`. It is also not an
+     * insert result, so the {@see \Phlix\Common\Database\WriteResult} helper
+     * does not apply: for a `delete` the client returns `rowCount()`, an
+     * **int**, and `0` there means "ran, matched nothing", which is a
+     * different question from "wrote nothing because the write did not happen".
+     * The `is_int()` narrowing keeps the `null` shape
+     * ({@see \Phlix\Common\Database\WriteResult} trap 3 — a reformat that hides
+     * the leading `DELETE` keyword) reported as `0` rather than crashing.
+     *
      * @return int The number of stale streams removed.
      */
     public function cleanupStaleStreams(): int
@@ -360,7 +372,7 @@ final class StreamSessionService
             'DELETE FROM active_streams WHERE last_heartbeat_at < DATE_SUB(NOW(), INTERVAL 60 SECOND)',
         );
 
-        return $result !== false ? 1 : 0;
+        return is_int($result) ? $result : 0;
     }
 
     /**
@@ -398,15 +410,43 @@ final class StreamSessionService
     /**
      * Update the stream limit for a profile.
      *
+     * ## S131 — this is the one insert-result site where the strict helper is the WRONG predicate
+     *
+     * This method used to end `return $result !== false;`. That was dead code:
+     * `Workerman\MySQL\Connection::query()` has no `return false` at all and
+     * signals a failed write by THROWING, so the expression was always `true`.
+     * Returning `true` unconditionally is therefore byte-for-byte the same
+     * behaviour, with the contract stated instead of implied.
+     *
+     * ⚠ **Do NOT "finish the job" by writing
+     * `return !WriteResult::wroteNothing($result);`.** It looks like the
+     * obvious completion of S131 and it is a REGRESSION. Both falsy shapes
+     * {@see \Phlix\Common\Database\WriteResult::wroteNothing()} tests for are
+     * SUCCESS here:
+     *
+     *  - **`null`** — an `INSERT … ON DUPLICATE KEY UPDATE` whose values are
+     *    already current affects **0 rows**, and the client answers `null`
+     *    (measured against real MySQL 8, S96 review r3). The row already says
+     *    exactly what the caller asked for; reporting that as a failed update
+     *    is wrong.
+     *  - **`'0'`** — on a row that WAS written, `profile_stream_limits` has a
+     *    `CHAR(36)` PRIMARY KEY and no `AUTO_INCREMENT`
+     *    (`migrations/063_device_stream_limits.sql:6-11`), so
+     *    `lastInsertId()` returns the string `'0'`, which is FALSY in PHP. A
+     *    truthiness test here reads a successful write as a failure.
+     *
+     * Both shapes are pinned in `tests/Unit/Access/StreamSessionServiceTest.php`.
+     *
      * @param string   $profileId            The profile ID (UUID) to update.
      * @param int      $maxConcurrentStreams Maximum concurrent streams.
      * @param int|null $maxTotalBandwidthKbps Maximum total bandwidth in kbps, or null for unlimited.
      *
-     * @return bool True if the limit was updated.
+     * @return bool Always true. The write either succeeded or threw; there is
+     *              no failure value for this client to return.
      */
     public function updateStreamLimit(string $profileId, int $maxConcurrentStreams, ?int $maxTotalBandwidthKbps): bool
     {
-        $result = $this->db->query(
+        $this->db->query(
             'INSERT INTO profile_stream_limits (profile_id, max_concurrent_streams, max_total_bandwidth_kbps)'
             . ' VALUES (?, ?, ?)'
             . ' ON DUPLICATE KEY UPDATE max_concurrent_streams = VALUES(max_concurrent_streams),'
@@ -414,7 +454,7 @@ final class StreamSessionService
             [$profileId, $maxConcurrentStreams, $maxTotalBandwidthKbps],
         );
 
-        return $result !== false;
+        return true;
     }
 
     /**

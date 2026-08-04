@@ -315,4 +315,58 @@ final class DbOidcStateStoreTest extends TestCase
 
         $this->assertInstanceOf(\Phlix\Plugins\Oidc\OidcStateStore::class, $store);
     }
+
+    /**
+     * S131 — the `null` arm, driven through production.
+     *
+     * `put()` guards its INSERT so an unpersisted state is never handed back to
+     * the caller as if it had been stored — if it were, the OAuth callback
+     * would later find no row and fail the flow with a misleading error.
+     *
+     * The guard used to read `$result === false`, a value
+     * `Workerman\MySQL\Connection::query()` cannot produce (it THROWS on a
+     * real error). `null` is the falsy value it DOES return for a zero-row
+     * INSERT, and for any statement whose leading keyword it fails to
+     * recognise — a heredoc reformat is enough
+     * ({@see \Phlix\Common\Database\WriteResult} trap 3).
+     *
+     * Deleting `|| $result === null` from `WriteResult::wroteNothing()` turns
+     * this RED.
+     *
+     * @return void
+     */
+    public function test_put_throws_when_the_insert_wrote_nothing_null(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturn(null);
+
+        $store = new DbOidcStateStore($db, 600);
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('Failed to persist OIDC state to database');
+        $store->put('state', 'verifier', 'nonce');
+    }
+
+    /**
+     * 🔴 S131 — `'0'` is a SUCCESSFUL insert and must NOT throw.
+     *
+     * `oauth_state_store.id` is a `CHAR(36)` UUID minted in PHP with no
+     * `AUTO_INCREMENT` column, so `PDO::lastInsertId()` answers the string
+     * `'0'` — which is FALSY. "Simplifying" this guard to `if (!$result)`
+     * would make every single successfully-stored state throw, i.e. every
+     * OAuth login would 500 at the authorize step.
+     *
+     * @return void
+     */
+    public function test_a_successful_insert_returning_the_falsy_string_zero_does_not_throw(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturn('0');
+
+        $store = new DbOidcStateStore($db, 600);
+
+        $store->put('state', 'verifier', 'nonce');
+
+        $this->addToAssertionCount(1); // reaching here without a throw IS the assertion
+    }
 }

@@ -9,6 +9,56 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Added
 
+- **S131 — one predicate for "did this write anything", and a measured contract to go with
+  it.** New `Phlix\Common\Database\WriteResult::wroteNothing()`
+  (`src/Common/Database/WriteResult.php`) promotes the predicate S96 added privately as
+  `MusicLibraryScanner::statementWroteNothing()`, which now delegates to it. **Nothing was
+  broken:** there are zero falsy tests on an insert result anywhere in the repo, so this
+  closes an unguarded contract rather than a live defect.
+
+  **The contract, read out of `vendor/workerman/mysql/src/Connection.php::query()`
+  (`:1854-1869`) rather than inferred.** The client dispatches on the first
+  *space-delimited* token of the trimmed SQL: `select`/`show` → an array,
+  `update`/`delete`/`replace` → an `int` `rowCount()`, `insert` → `lastInsertId()` as a
+  **string** when rows were affected and **`null`** when none were, and anything it does
+  not recognise → `null`. A real error never returns at all — `execute()` (`:1742-1786`)
+  rethrows. Three consequences are now documented at the helper and pinned in
+  `tests/Unit/Common/Database/WriteResultTest.php`: (1) `false` is a value this client
+  never produces, so the `=== false` shape at the six unguarded sites was simultaneously
+  unreachable and blind to `null`; (2) 🔴 a SUCCESSFUL insert into a `CHAR(36)`-PK table
+  returns the string `'0'`, which is FALSY in PHP, so `if (!$result)` reads a success as a
+  failure; (3) the keyword match is whitespace-sensitive, so reformatting SQL into a
+  heredoc can move a site onto the `null` arm without changing a semantic.
+
+  **Applied to five of the six named sites, and deliberately NOT to the sixth.**
+  `DbOidcStateStore`, `DbOAuth2StateStore`, `DbTraktOAuthStateStore`,
+  `DbLastfmOAuthStateStore` (insert guards, plus their four `$deleteResult === false`
+  guards) and `DbLoginRateLimitStore` now route through the helper.
+  `StreamSessionService::updateStreamLimit()` does not: its
+  `INSERT … ON DUPLICATE KEY UPDATE` returns `null` when the values are already current
+  (measured against real MySQL 8) and the falsy string `'0'` when a row really is written
+  — and **both are success**, so inverting the helper into that return value would report
+  a failed update for an idempotent PUT. The site returns `true` (which is exactly what
+  `$result !== false` always evaluated to) with the reasoning stated in place, and both
+  shapes are pinned so the tempting "completion" reddens.
+
+  **Two corrections to the inventory.** It was quoted as 11 sites; re-derived by walking
+  every `->query()` whose verb is `INSERT`/`REPLACE` — 85 calls in `src/`, of which 74
+  discard the result outright — it is **12**: `ScanJobRepository::startRunningIfIdle()`
+  landed with S151 after the count was taken, and was already correct. And
+  `StreamSessionService::cleanupStaleStreams()` is a DELETE, not an insert: it returned a
+  constant `1` behind a `!== false` that could never be false, contradicting its own
+  `@return int The number of stale streams removed`. It now returns the `rowCount()`.
+
+  **The doubles were fixed too, because a fix that changes what a client returns must
+  change the double that impersonates it.** S96 proved that: deleting the `null` arm left
+  the entire scanner suite byte-identically green because no double could produce `null`.
+  `MusicLibraryScannerTest`'s two remaining callback doubles returned `int 1` for an
+  INSERT — a value the client cannot produce — and now return the measured shapes (`'0'`
+  for `media_items`, a string id elsewhere). Proof: removing the `null` arm is **15 RED**
+  across six files, removing the `false` arm is **12 RED**, and `return !$result;` — the
+  `'0'` trap — is **72 RED**.
+
 - **S180 — the assertion-escape PROBER now runs in CI, behind a tracked baseline.** S120
   shipped two halves and wired only one. The runtime guard (the `test` job's "S120
   assertion-escape guard" step) sees an escape only when the assertion actually fails and

@@ -266,10 +266,19 @@ fwrite(
         . "UNDECIDED, not verified, and the verdict can differ per box (see the NOT-REACHED\n"
         . "note in this file's header). Quote this run, not a remembered count.\n",
 );
+// Only bulk mode reconciles, so only bulk mode may claim to have reconciled. Saying
+// "the undecided set matches" after `--only` would be the exact species of claim S120
+// spent three review rounds removing: a tool asserting something true of a run it did
+// not perform.
 fwrite(
     STDOUT,
-    "The undecided set matches " . ProbeBaseline::RELATIVE_PATH . " exactly.\n"
-    . "⚠ This is ADDITIVE cover, not whole-suite safety: the scan is LEXICAL, so 186 closures\n"
+    $only === null
+        ? 'The undecided set matches ' . ProbeBaseline::RELATIVE_PATH . " exactly.\n"
+        : "--only was given: ONE site was decided and the baseline was NOT reconciled.\n",
+);
+fwrite(
+    STDOUT,
+    "⚠ This is ADDITIVE cover, not whole-suite safety: the scan is LEXICAL, so 186 closures\n"
     . "that reach an assertion only through a HELPER are invisible to it. The runtime guard\n"
     . "(phpunit.xml → AssertionEscapeGuardExtension) is what covers those.\n",
 );

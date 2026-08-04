@@ -142,6 +142,13 @@ final class ParentalControlsAdminRoutesTest extends TestCase
                 [],
                 'tags',
             ],
+            // ⚠ The body key here is the SERVER's spelling, `type`, because this
+            // file pins ROUTE RESOLUTION and a 400 would prove nothing about it.
+            // The client sends `tag_type` (`users.ts:650`), so creating a tag
+            // from the admin screen still 400s on the field name even now that
+            // the path resolves. That contract drift was flagged by S209 and is
+            // explicitly NOT S208's to fix — do not "align" this fixture without
+            // fixing the controller, or the mismatch becomes invisible again.
             'POST tags' => [
                 'POST',
                 "/api/v1/admin/profiles/{$profile}/tags",

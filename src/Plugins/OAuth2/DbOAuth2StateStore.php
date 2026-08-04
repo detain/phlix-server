@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Plugins\OAuth2;
 
+use Phlix\Common\Database\WriteResult;
 use Phlix\Common\Uuid;
 use Workerman\MySQL\Connection;
 
@@ -84,7 +85,13 @@ final class DbOAuth2StateStore implements OAuth2StateStore
             [$id, $this->provider, $state, $data, $expiresAt],
         );
 
-        if ($result === false) {
+        // This was `$result === false`, which could never fire: the client
+        // THROWS on a real error and has no `return false` at all. `null` — a
+        // zero-row INSERT, or an unrecognised leading keyword after a reformat
+        // — is the falsy value it does return, and an unpersisted state must
+        // not be handed to the caller as if it had been stored. See
+        // {@see WriteResult} for the measured return table and both traps.
+        if (WriteResult::wroteNothing($result)) {
             throw new \RuntimeException('Failed to persist OAuth2 state to database');
         }
     }
@@ -137,7 +144,27 @@ final class DbOAuth2StateStore implements OAuth2StateStore
                 [$this->provider, $state],
             );
 
-            if ($deleteResult === false) {
+            // ⚠ FAIL-CLOSED BUT NARROW, AND THE NARROWNESS IS DELIBERATE.
+            // For a `delete` the client returns `rowCount()` — an int — so
+            // neither `false` (the shape this replaced) nor `null` is
+            // reachable for the statement as written. The arm that CAN fire is
+            // `null`, and only if this SQL is reformatted so that `DELETE`
+            // stops being the first space-delimited token ({@see WriteResult}
+            // trap 3), at which point "we cannot tell whether the row was
+            // deleted" must not result in handing out a one-shot verifier.
+            //
+            // It does NOT catch `rowCount() === 0`. In THIS class that is fine:
+            // the SELECT above holds a `FOR UPDATE` row lock (review r1,
+            // Finding 11), so no concurrent consumer can have deleted the row
+            // between the read and this DELETE. ⚠ The three sibling stores —
+            // {@see \Phlix\Plugins\Oidc\DbOidcStateStore},
+            // {@see \Phlix\Server\Integrations\Trakt\DbTraktOAuthStateStore}
+            // and {@see \Phlix\Server\Integrations\Lastfm\DbLastfmOAuthStateStore}
+            // — do NOT take that lock, so for them a zero-row DELETE is a real
+            // double-consume signal that nothing tests. S131 measured it and
+            // deliberately left it: closing it is a behaviour change in an auth
+            // path that needs its own real-MySQL proof.
+            if (WriteResult::wroteNothing($deleteResult)) {
                 $this->db->rollBackTrans();
                 return null;
             }

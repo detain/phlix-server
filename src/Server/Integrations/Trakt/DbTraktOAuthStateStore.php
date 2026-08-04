@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Server\Integrations\Trakt;
 
+use Phlix\Common\Database\WriteResult;
 use Phlix\Common\Uuid;
 use Workerman\MySQL\Connection;
 
@@ -80,7 +81,13 @@ final class DbTraktOAuthStateStore implements TraktOAuthStateStore
             [$id, self::PROVIDER, $state, $data, $expiresAt]
         );
 
-        if ($result === false) {
+        // This was `$result === false`, which could never fire: the client
+        // THROWS on a real error and has no `return false` at all. `null` — a
+        // zero-row INSERT, or an unrecognised leading keyword after a reformat
+        // — is the falsy value it does return, and an unpersisted state must
+        // not be handed to the caller as if it had been stored. See
+        // {@see WriteResult} for the measured return table and both traps.
+        if (WriteResult::wroteNothing($result)) {
             throw new \RuntimeException('Failed to persist Trakt OAuth state to database');
         }
     }
@@ -140,7 +147,21 @@ final class DbTraktOAuthStateStore implements TraktOAuthStateStore
                 [self::PROVIDER, $state]
             );
 
-            if ($deleteResult === false) {
+            // ⚠ FAIL-CLOSED BUT NARROW, AND THE NARROWNESS IS DELIBERATE.
+            // For a `delete` the client returns `rowCount()` — an int — so
+            // neither `false` (the shape this replaced) nor `null` is
+            // reachable for the statement as written. The arm that CAN fire is
+            // `null`, and only if this SQL is reformatted so that `DELETE`
+            // stops being the first space-delimited token ({@see WriteResult}
+            // trap 3), at which point "we cannot tell whether the row was
+            // deleted" must not result in handing out a one-shot verifier.
+            //
+            // It does NOT catch `rowCount() === 0` — a concurrent consumer
+            // deleting the row between our non-locking SELECT and this DELETE,
+            // i.e. a double-consume of one-shot state. Treating that as a
+            // refusal is a behaviour change in an auth path and needs its own
+            // real-MySQL proof; S131 measured it and deliberately left it.
+            if (WriteResult::wroteNothing($deleteResult)) {
                 $this->db->rollBackTrans();
                 return null;
             }

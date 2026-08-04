@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Auth;
 
+use Phlix\Common\Database\WriteResult;
 use Workerman\MySQL\Connection;
 
 /**
@@ -130,7 +131,20 @@ final class DbLoginRateLimitStore
             [$ip, $resetAt, $now, $resetAt]
         );
 
-        if ($result === false) {
+        // This was `$result === false`, which could never fire: the client
+        // THROWS on a real error and has no `return false` at all.
+        //
+        // The arm that replaces it is `null`, which for an INSERT means MySQL
+        // reported zero affected rows. For THIS statement that is currently
+        // unreachable by a second route as well: `ON DUPLICATE KEY UPDATE
+        // attempts = attempts + 1` always changes the value, so MySQL reports 1
+        // (inserted) or 2 (updated), never 0. The guard is kept and widened
+        // because a brute-force budget must fail SAFE — if the upsert ever
+        // stops writing (a reformat that hides the `insert` keyword from
+        // {@see WriteResult} trap 3, or a future SQL change that can be a
+        // no-op), the fallback UPDATE below still charges the attempt rather
+        // than silently granting a free retry.
+        if (WriteResult::wroteNothing($result)) {
             // Fallback: try to update existing row
             $this->db->query(
                 'UPDATE login_rate_limit SET attempts = attempts + 1, reset_at = ? WHERE ip = ? AND reset_at > ?',

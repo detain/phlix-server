@@ -85,9 +85,15 @@ final class MusicLibraryScannerTest extends TestCase
                         // Columns: (id, library_id, type, name, path, metadata_json, ...)
                         // so the ENUM type is the THIRD bound parameter.
                         $mediaItemTypes[] = (string) (($params ?? [])[2] ?? '');
+                        // S131: `media_items` has a CHAR(36) PK and no AUTO_INCREMENT,
+                        // so a SUCCESSFUL insert returns the falsy string `'0'`. This
+                        // double returned `int 1` — a value the client cannot produce
+                        // — which made the `'0'` hazard unfalsifiable here. See
+                        // {@see \Phlix\Common\Database\WriteResult}.
+                        return '0';
                     }
                     $lastId++;
-                    return 1;
+                    return (string) $lastId;
                 }
                 // UPDATE / anything else.
                 return 1;
@@ -500,19 +506,24 @@ final class MusicLibraryScannerTest extends TestCase
                         'name' => (string) ($p[3] ?? ''),
                         'path' => (string) ($p[4] ?? ''),
                     ];
-                    return 1;
+                    // S131: `media_items` is a CHAR(36) PK with no AUTO_INCREMENT, so a
+                    // SUCCESSFUL insert returns the FALSY string `'0'`. This double used
+                    // to answer `int 1`, a value the client cannot produce, which left
+                    // the `'0'` hazard unfalsifiable at this site. See
+                    // {@see \Phlix\Common\Database\WriteResult}.
+                    return '0';
                 }
                 if (str_starts_with($t, 'INSERT INTO music_artists')) {
                     $autoInt++;
                     $artists[strtolower((string) ($p[0] ?? ''))] =
                         ['id' => $autoInt, 'media_item_id' => $p[2] ?? null];
-                    return 1;
+                    return (string) $autoInt;
                 }
                 if (str_starts_with($t, 'INSERT INTO music_albums')) {
                     $autoInt++;
                     $key = ((string) ($p[0] ?? '')) . '|' . strtolower((string) ($p[2] ?? ''));
                     $albums[$key] = ['id' => $autoInt, 'media_item_id' => $p[1] ?? null];
-                    return 1;
+                    return (string) $autoInt;
                 }
                 if (str_starts_with($t, 'INSERT INTO music_tracks')) {
                     $autoInt++;
@@ -531,7 +542,7 @@ final class MusicLibraryScannerTest extends TestCase
                         'disc_number' => $p[5] ?? 1,
                         'duration_secs' => $p[6] ?? 0,
                     ];
-                    return 1;
+                    return (string) $autoInt;
                 }
 
                 // UPDATE / anything else.

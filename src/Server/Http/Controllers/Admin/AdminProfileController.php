@@ -102,7 +102,7 @@ final class AdminProfileController
      * @param Request               $request The HTTP request (name required, rating optional 0-12).
      * @param array<string, string> $params  Path parameters ({userId} — a UUID string).
      *
-     * @return Response 201 { profile_id: int, message: string }
+     * @return Response 201 { profile_id: string, message: string }
      *                  | 400 { error: string }
      *                  | 404 { error: string }
      */
@@ -155,9 +155,15 @@ final class AdminProfileController
             $data['content_rating'] = self::RATING_MAP[$ratingInt] ?? 'R';
         }
 
+        // S233 defect (c): `UserProfileManager::create()` is typed `: string` and
+        // returns the CHAR(36) UUID it generated for `user_profiles.id`. Casting
+        // that to int yields 0 for every UUID that does not start with a digit,
+        // and a truncated prefix for the ones that do — either way a value that
+        // addresses no row. Emit the id exactly as the manager produced it, the
+        // way `AdminUserController::create` already does for `user_id`.
         $newId = $this->profileManager->create($userId, $data);
         return (new Response())->status(201)->json([
-            'profile_id' => (int) $newId,
+            'profile_id' => $newId,
             'message' => 'Profile created successfully',
         ]);
     }

@@ -112,7 +112,7 @@ final class AccessScheduleController
      * @param array<string, string> $params  Path parameters:
      *                                       - profileId: The profile ID.
      *
-     * @return Response 201 { schedule: array, message: string } | 400 { error }
+     * @return Response 201 { id: int, schedule_id: int, message: string } | 400 { error }
      */
     public function createForProfile(Request $request, array $params): Response
     {
@@ -151,7 +151,14 @@ final class AccessScheduleController
             $isActive,
         );
 
+        // S233 defect (b): the created id is returned under BOTH keys.
+        // `phlix-ui/src/api/admin/users.ts::createProfileSchedule` declares
+        // `Promise<{ id: number; message: string }>` and would read `undefined`
+        // from a `schedule_id`-only body; the shipped console client reads only
+        // `message`, so adding `id` breaks nothing. `schedule_id` is kept because
+        // dropping a key is the one change that COULD break an unseen consumer.
         return (new Response())->status(201)->json([
+            'id' => $scheduleId,
             'schedule_id' => $scheduleId,
             'message' => 'Schedule created successfully',
         ]);

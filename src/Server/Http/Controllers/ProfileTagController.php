@@ -90,11 +90,13 @@ final class ProfileTagController
      *
      * @param Request               $request The HTTP request with body:
      *                                       - tag: string (required)
-     *                                       - type: string (required, 'blocked' or 'allowed')
+     *                                       - tag_type | type: string (required,
+     *                                         'blocked' or 'allowed'; see the
+     *                                         two-spelling note below)
      * @param array<string, string> $params  Path parameters:
      *                                       - profileId: The profile ID.
      *
-     * @return Response 201 { tag: array, message: string } | 400 { error }
+     * @return Response 201 { id: int, tag_id: int, message: string } | 400 { error }
      */
     public function createForProfile(Request $request, array $params): Response
     {
@@ -112,11 +114,21 @@ final class ProfileTagController
 
         // Validate required fields
         $tag = is_string($data['tag'] ?? null) && $data['tag'] !== '' ? $data['tag'] : null;
-        $type = $this->validateTagType($data['type'] ?? null);
+        // S233 defect (a): the tag type arrives under TWO spellings and the
+        // handler must accept both. `phlix-ui/src/api/admin/users.ts::addProfileTag`
+        // posts `{tag, tag_type}` (the column name), while the shipped
+        // `phlix-console-client` `AdminClient::addProfileTag` posts `{tag, type}`.
+        // Reading only `type` 400'd every create from the admin SPA; renaming to
+        // only `tag_type` would 400 every create from the console client instead.
+        // Accepting both is the only direction that breaks neither, so do NOT
+        // "tidy" this back to a single key. `tag_type` is preferred when present
+        // so an explicitly invalid `tag_type` is rejected rather than silently
+        // falling through to a stale `type`.
+        $type = $this->validateTagType($data['tag_type'] ?? $data['type'] ?? null);
 
         if ($tag === null || $type === null) {
             return (new Response())->status(400)->json([
-                'error' => 'Missing or invalid required fields: tag, type',
+                'error' => 'Missing or invalid required fields: tag, tag_type (or type)',
             ]);
         }
 
@@ -129,7 +141,14 @@ final class ProfileTagController
 
         $tagId = $this->profileTagService->setTag($profileId, $tag, $type);
 
+        // S233 defect (b): the created id is returned under BOTH keys.
+        // `phlix-ui` declares `Promise<{ id: number; message: string }>` for this
+        // call and would read `undefined` from a `tag_id`-only body; the shipped
+        // console client reads only `message`, so adding `id` breaks nothing.
+        // `tag_id` is kept because dropping a key is the one change that COULD
+        // break an unseen consumer.
         return (new Response())->status(201)->json([
+            'id' => $tagId,
             'tag_id' => $tagId,
             'message' => 'Tag added successfully',
         ]);

@@ -7,6 +7,54 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased] - 2026-07-24
 
+### Added
+
+- **S180 — the assertion-escape PROBER now runs in CI, behind a tracked baseline.** S120
+  shipped two halves and wired only one. The runtime guard (the `test` job's "S120
+  assertion-escape guard" step) sees an escape only when the assertion actually fails and
+  only when the failure went through `Assert::assertThat()`. The static half —
+  `scripts/assertion-escape-audit.php --probe`, which plants a named tripwire before the
+  first assertion of every assertion-bearing closure and decides by EXECUTION whether it
+  can fail its test — was left out because one Integration site is a known flake, and a
+  gate that reds intermittently gets deleted. New job `assertion-escape-probe` in
+  `.github/workflows/phpunit.yml` runs it. **The two halves catch different things and the
+  static one caught the case that actually occurred:** the live escape found on 2026-08-02
+  (`SmartPlaylistRefreshSubscriberTest`) probed `DEGRADED` while the runtime guard reported
+  exit 0, silent.
+
+  **Census, re-measured rather than quoted** (dev box, `origin/master` @ `94881d73`). The
+  numbers in circulation disagreed and both were stale as a description of master: the
+  planning text said 23/19/4, this file's S120 entry said 20/17/3 — correct for the
+  20-closure tree S120 shipped against, which is why it carries "re-run the probe rather
+  than quoting a remembered count". Actual, with the exclusion applied:
+  `22 site(s) probed — 19 GATES, 3 NOT-REACHED, 0 VACUOUS, 0 DEGRADED, 1 EXCLUDED`, exit 0,
+  **identical with a live mysql:8.0.46 and with no database at all** — every probed site
+  uses a mocked connection. Full 23-site figure before the exclusion: 19 GATES + 4
+  NOT-REACHED without a DB, 20 GATES + 3 NOT-REACHED with one.
+
+  **The undecided count is now a checked fact, not folklore.**
+  `tests/Support/AssertionEscape/probe-baseline.json` enumerates the three `NOT-REACHED`
+  sites with a reason each — all three are a `$this->fail(…)` guard on a path that must not
+  be taken, so a probe *cannot* decide them; two are S120 census sites 10 and 14.
+  `ProbeBaseline::reconcile()` reds the gate in **both** directions: an observed
+  `NOT-REACHED` that is not listed, AND a listed entry that has started gating or has
+  disappeared. A list that only ever grows is how a gate becomes a permanent hole.
+
+  **The flake is excluded with its measurement, not on trust.**
+  `PooledConnectionConcurrencyTest::runChurn` probes non-deterministically — 19 `--only`
+  runs against a live MySQL gave 18 `GATES` and 1 `NOT-REACHED`, and the same file with no
+  tripwire at all failed 3 of 20 bare runs with `reader: pool exhausted: no idle connection
+  available after 10 s`. It flips between `GATES` and `NOT-REACHED`, which no single
+  baseline state can express, so *either* choice reds the gate over S137's pool defect
+  rather than over an assertion. Decide it by hand with
+  `--probe --only=<n>`, which deliberately ignores the exclusion list.
+
+  ⚠ **ADDITIVE, NOT A REPLACEMENT — a green here is not whole-suite safety.** The
+  enumeration is LEXICAL: 186 closures reach an assertion only through a HELPER and carry
+  no `assert*` token, so this job sees none of them. The runtime guard covers those. Both
+  the script header and the job's own output say so, because the failure mode to avoid is
+  someone deleting one half on the strength of the other being green.
+
 ### Fixed
 
 - **S120 AC audit — the assertion-escape guard was one deletable line from silent, and

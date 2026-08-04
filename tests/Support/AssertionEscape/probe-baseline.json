@@ -1,0 +1,49 @@
+{
+    "__doc": [
+        "S180 — the tracked baseline for `php scripts/assertion-escape-audit.php --probe`.",
+        "Read tests/Support/AssertionEscape/ProbeBaseline.php for the reconciliation rules.",
+        "",
+        "This file exists so that the UNDECIDED half of the probe census is a CHECKED FACT",
+        "instead of prose. Both directions red the gate: an observed NOT-REACHED that is not",
+        "listed here, AND a listed entry that has started gating or has disappeared. A",
+        "known-issues list that only ever grows is how a gate becomes a permanent hole.",
+        "",
+        "NOTHING HERE CAN SILENCE A `VACUOUS` OR `DEGRADED` VERDICT. Those are the findings",
+        "the gate exists for and they have no opt-out, by the same reasoning as",
+        "tests/Support/AssertionEscape/EscapeCollector.php's 'why there is deliberately no",
+        "opt-out'. `excluded` removes a site from the run entirely; it does not whitelist a",
+        "verdict.",
+        "",
+        "Sites are keyed on file + method, never on a line number: line numbers move on every",
+        "unrelated edit above them, and a baseline that needs re-blessing after every refactor",
+        "gets deleted."
+    ],
+    "excluded": [
+        {
+            "file": "tests/Integration/Media/Transcoding/PooledConnectionConcurrencyTest.php",
+            "method": "runChurn",
+            "recorded": "2026-08-03",
+            "reason": "S137 — THIS SITE CANNOT BE BASELINED, because its probe verdict is measurably non-deterministic in a way no single baseline state can express: it flips between GATES and NOT-REACHED. Measured 2026-08-03 against a scratch mysql:8.0.46 on 127.0.0.1:35180 with all 97 migrations applied (never production, never 3306): 19 valid `--probe --only=0` runs gave 18 GATES and 1 NOT-REACHED, and the same file run WITHOUT any tripwire (`phpunit <file> --no-coverage --no-extensions`, the prober's own invocation) failed 3 of 20 times all by itself, always with `reader: pool exhausted: no idle connection available after 10 s` reported by `assertSame([], $errors, …)` at :456. The mechanism links the two and is readable at the lines: the tripwire is planted immediately before `$this->assertIsArray($e)` at :423, i.e. AFTER `$e = $entry->invoke($manager, $jobId)` at :421, so when pool exhaustion makes every reader coroutine throw at :421 the tripwire never executes and the site probes NOT-REACHED instead of GATES. Baseline it as NOT-REACHED and the GATES runs red with BASELINE ENTRY NOW DECIDED; leave it out and the NOT-REACHED runs red with UNRECORDED NOT-REACHED. Either way the gate reds over a pool defect rather than over an assertion, and a rule that reds for reasons unrelated to the diff gets deleted. Two things make it worse: `runChurn` is a HELPER, not a `test*` method, so the prober runs the WHOLE file with no `--filter`, INCLUDING the `@group soak` pool-exhaustion test that is S137's epicentre. NOT VERIFIED, recorded as a hypothesis only: a DEGRADED verdict also looks structurally reachable, because the per-message `assertStringNotContainsStringIgnoringCase('2014'|'out of sync', $msg)` loop at :450-452 runs BEFORE the `assertSame([], $errors, '…' . implode(' | ', $errors))` at :456 that re-surfaces the tripwire text and quotes only the offending message — never observed across 19 probe runs plus 20 bare runs here, so do not repeat it as a finding. S137's recorded cause is the APPLICATION pool's own accounting under coroutine churn (MySQL-side Max_used_connections=8 against max_connections=151), which is out of S180's scope (Effort S) and which S137 explicitly warns against 'fixing' environmentally. DECIDE THIS SITE BY HAND on a box with MySQL: `php scripts/assertion-escape-audit.php --probe --only=<n>` deliberately ignores this list."
+        }
+    ],
+    "notReached": [
+        {
+            "file": "tests/Integration/Playlists/SmartPlaylistRefreshTest.php",
+            "method": "test_a_playlist_without_a_linked_collection_refreshes_nothing",
+            "recorded": "2026-08-03",
+            "reason": "The site is `$this->fail('unexpected query during a refresh: ' . $sql)` — the closure's guard against a THIRD query that must not happen. The two queries the test does make are handled by the two `if` arms above it, so the probed line is unreachable on the passing path BY DESIGN; making it run would mean breaking the behaviour under test. Deterministic on every box: this Integration test uses a mocked Workerman\\MySQL\\Connection and touches no database, so it probes NOT-REACHED with and without MySQL (both measured 2026-08-03)."
+        },
+        {
+            "file": "tests/Unit/Auth/UserRepositoryExternalIdTest.php",
+            "method": "test_find_or_create_falls_back_to_users_when_no_identity_row",
+            "recorded": "2026-08-03",
+            "reason": "S120 census site 10. The site is `$this->fail('no INSERT expected — the users fallback resolved: ' . $sql)` in a branch that is not supposed to be taken. The closure ITSELF is not in a swallowing context — S120 established that by execution: a tripwire planted at the closure's opening brace DID run and took the test red naming its own message. So the undecidedness is about this one guard line, not about the closure. Mocked connection, no database, deterministic on every box."
+        },
+        {
+            "file": "tests/Unit/Media/Library/LibraryManagerCacheTest.php",
+            "method": "testMultipleInstancesShareCache",
+            "recorded": "2026-08-03",
+            "reason": "S120 census site 14. The closure is NEVER INVOKED — that is the assertion: `$db2->method('query')->willReturnCallback(fn => $this->fail('Second instance should use cached data, not query DB'))` proves the second LibraryManager reads the shared cache instead of querying. S120 confirmed by planting a tripwire at the closure's opening brace: still not reached. A probe cannot decide a closure that must not run; the test's proof IS its non-execution. Mocked connection, no database, deterministic on every box."
+        }
+    ]
+}

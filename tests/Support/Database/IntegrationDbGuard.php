@@ -55,12 +55,14 @@ use Workerman\MySQL\Connection;
  *
  * ## Why absence must stay a skip
  *
- * `.github/workflows/phpunit.yml` runs two jobs. The `test` job provisions a
+ * `.github/workflows/phpunit.yml` runs three jobs. The `test` job provisions a
  * `mysql:8.0` service and applies every migration before PHPUnit, so these tests
- * execute for real there. The `test-server` job runs `tests/Unit/Server/` with
- * **no** MySQL service at all — port 3306 is closed and the guard must skip, or
- * that job goes red for a reason that is not a defect. The same applies to a
- * developer box with no MySQL installed.
+ * execute for real there, and `assertion-escape-probe` (S180) copies that service
+ * and migration step verbatim for the same reason — a test that self-skips there
+ * would make its probe verdict an environment artifact. The `test-server` job runs
+ * `tests/Unit/Server/` with **no** MySQL service at all — port 3306 is closed and
+ * the guard must skip, or that job goes red for a reason that is not a defect. The
+ * same applies to a developer box with no MySQL installed.
  *
  * ## Probe target == connection target
  *

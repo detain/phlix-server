@@ -255,3 +255,117 @@ jobs:
           if [ -f vendor/bin/phpcs ]; then
             ./vendor/bin/phpcs --standard=PSR12 src/Server/
           fi
+
+  assertion-escape-probe:
+    name: Assertion-Escape Prober (S180)
+    runs-on: ubuntu-latest
+    # ⚠ NOT because the prober is slow. That was the assumption S180 started from and
+    # it is FALSE, measured: the full 22-site bulk probe takes **7.2 s** wall clock on
+    # the dev box (`/usr/bin/time` → REAL=7.24 s), because every probed site is a fast
+    # mocked-DB test. The one genuinely slow site (~16 s: it runs a whole coroutine
+    # concurrency file) is the one the baseline excludes. Do not re-justify this job on
+    # runtime.
+    #
+    # The real reasons, in order:
+    #  1. ATTRIBUTION. A named check that can only mean "an assertion cannot fail its
+    #     test" is legible; the same finding buried in the 11-step "PHPUnit Test
+    #     Suite" job is not. The runtime half of S120's guard already lives there.
+    #  2. The prober SPLICES tripwires into tracked test files and restores them. That
+    #     belongs nowhere near the job that produces the coverage artifact.
+    #  3. Its own timeout, so it cannot be starved by the `test` job's 25 minutes.
+    timeout-minutes: 20
+
+    # ⚠ THERE IS DELIBERATELY NO `if:` ON THIS JOB OR ON ANY OF ITS STEPS.
+    # A skipped GitHub job reports conclusion `skipped`, and `skipped` COUNTS AS
+    # SUCCESS for a status check — so an `if:` here would be a gate that passes by
+    # not running, which is precisely the defect S120 exists to catch, one level up.
+    # tests/Unit/Support/AssertionEscapeProbeGateTest.php asserts the absence of an
+    # `if:` on BOTH this job and its probe step, and kills six more neutering edits.
+
+    services:
+      # Copied from the `test` job above, VERBATIM.
+      #
+      # MEASURED FIRST, so the reason is not a guess: no site this job probes needs
+      # MySQL today — all 22 use a mocked Workerman\MySQL\Connection, and the probe
+      # produced the identical 19 GATES / 3 NOT-REACHED census with a live
+      # mysql:8.0.46 and with no database at all. The service is here for the FUTURE
+      # case, and it is not hypothetical: a site whose test needs MySQL self-skips
+      # without one, so its tripwire never executes, so it probes NOT-REACHED — and
+      # the S180 baseline reconciliation would then red this job over an environment
+      # difference instead of over anything in the diff. Matching the `test` job's
+      # environment is what keeps a verdict here meaning the same thing as a verdict
+      # there.
+      #
+      # The ONE site that is genuinely unsafe to probe is excluded BY NAME in
+      # tests/Support/AssertionEscape/probe-baseline.json, with its measurement in the
+      # `reason` field. That is how the known flake is kept out — NOT by withholding
+      # the database, which would only have hidden it behind a second defect.
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: phlix_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          # Same list as the `test` job. pcov is kept even though every probe run
+          # passes --no-coverage: phpunit.xml configures a <coverage> section, and
+          # failOnWarning="true" turns "No code coverage driver available" into a
+          # failed run. php-uv is deliberately NOT built here (it costs minutes and
+          # nothing the prober runs needs it); if a probed test ever does, this job
+          # will say so loudly rather than skip.
+          extensions: mysql, pdo, pdo_mysql, json, gd, zip, fileinfo, swoole, pcov
+          coverage: pcov
+
+      - name: Install Composer dependencies
+        run: composer install --no-interaction --prefer-dist
+
+      - name: Apply database migrations
+        env:
+          DB_HOST: 127.0.0.1
+          DB_PORT: '3306'
+          DB_DATABASE: phlix_test
+          DB_USER: root
+          DB_PASSWORD: root
+        run: php scripts/run-migrations.php
+
+      - name: Probe every assertion-bearing closure
+        # S180. THE STATIC HALF of S120's guard. It plants a named tripwire before the
+        # first assertion in each assertion-bearing closure under tests/, runs the
+        # owning test, and reads the verdict off the run — so it decides, by
+        # execution, whether that assertion can fail its test at all.
+        #
+        # It catches what the RUNTIME guard cannot: an assertion failure that never
+        # reaches Assert::assertThat() emits no event, so Assert::fail(), mock
+        # parameter/invocation rules and markTestSkipped() are invisible to it. The
+        # live escape found on 2026-08-02
+        # (tests/Unit/Playlists/SmartPlaylistRefreshSubscriberTest.php) was exactly
+        # that shape: this prober reported it DEGRADED while the runtime guard
+        # reported exit 0, silent.
+        #
+        # ⚠ ADDITIVE, NOT A REPLACEMENT. The enumeration is LEXICAL: 186 closures
+        # reach an assertion only through a HELPER and carry no assert* token, so this
+        # job sees none of them. The runtime guard (the "S120 assertion-escape guard"
+        # step in the `test` job) covers those. A green here does NOT mean the suite
+        # is free of swallowed assertions — do not delete either half because the
+        # other one is green.
+        #
+        # Do NOT add `if:`, `continue-on-error:` or `|| true` to this step, and do not
+        # narrow it to a subset of sites. The undecided (NOT-REACHED) census is
+        # reconciled against tests/Support/AssertionEscape/probe-baseline.json in BOTH
+        # directions, so the honest way to change what this job accepts is to edit that
+        # JSON in a reviewable diff, with a reason.
+        run: php scripts/assertion-escape-audit.php --probe

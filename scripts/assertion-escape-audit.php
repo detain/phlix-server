@@ -37,13 +37,37 @@
  * test then fails via `Assert::fail()` probes `DEGRADED` — exit 1 in both cases, while
  * the runtime guard reported nothing.
  *
- * ⚠ CONSEQUENCE, and the reason to actually run this periodically rather than trusting
- * the CI step: this script is NOT wired into any workflow (one PHPUnit invocation per
- * site is too slow, and the Integration site is a known flake, so a CI failure could be
- * environmental). On 2026-08-02 a probe of the whole tree found a real escape that had
- * landed after S120 shipped and that CI could not see —
- * `tests/Unit/Playlists/SmartPlaylistRefreshSubscriberTest.php` (now fixed). Run this
- * after adding any test that asserts inside a `willReturnCallback`.
+ * ⚠ ADDITIVE, NOT A REPLACEMENT — and a green run here does NOT mean the suite is safe.
+ * The enumeration is LEXICAL: a closure only becomes a site if an `assert*`/`fail` token
+ * appears inside its own body. Measured on 2026-08-02 (nikic/php-parser AST walk, an
+ * independent tool): **186 closures call methods but contain no `assert*`/`fail` token
+ * at all**, so every assertion those reach through a HELPER is invisible here. The
+ * runtime guard (`AssertionEscapeGuardExtension`, counted events not tokens) is what
+ * covers them. Neither half subsumes the other; do not let this script's exit 0 be read
+ * as whole-suite safety, and do not delete the runtime guard because this exists.
+ *
+ * ## S180 — wired into CI, with a tracked baseline
+ *
+ * This script now runs in `.github/workflows/phpunit.yml`, job `assertion-escape-probe`,
+ * as its own job with its own timeout (one PHPUnit invocation per site is too slow to
+ * bolt onto the `test` job's 25 minutes). What made that safe is
+ * {@see \Phlix\Tests\Support\AssertionEscape\ProbeBaseline}: the UNDECIDED
+ * (`NOT-REACHED`) sites are enumerated in
+ * `tests/Support/AssertionEscape/probe-baseline.json` with a reason each, and this
+ * script reconciles what it observed against that list in BOTH directions — a new
+ * undecided site exits 1, and a listed site that starts gating (or disappears) also
+ * exits 1, so the list cannot rot into a permanent hole. It also carries the one
+ * `excluded` site whose probe verdict is measurably non-deterministic; read that entry's
+ * `reason` field for the measurement rather than trusting this sentence.
+ *
+ * ⚠ `--only=N` deliberately IGNORES the exclusion list, because deciding an excluded
+ * site by hand on a box that has what it needs is the recorded remedy for excluding it.
+ * Bulk mode (no `--only`) is the CI path and honours the list.
+ *
+ * On 2026-08-02 a probe of the whole tree found a real escape that had landed after
+ * S120 shipped and that CI could not see —
+ * `tests/Unit/Playlists/SmartPlaylistRefreshSubscriberTest.php` (now fixed). That is the
+ * case this gate exists for, and it is why the gate is worth its runtime.
  *
  * ## Verdicts
  *
@@ -56,15 +80,18 @@
  *                   gets a misleading diff. **Violation.**
  *  - `NOT-REACHED`— the tripwire line never executed, so the probe decided nothing.
  *                   Typical of a `$this->fail('must not happen')` guard inside a
- *                   branch that is not supposed to be taken. Listed, never a violation.
+ *                   branch that is not supposed to be taken. Never a violation ON ITS
+ *                   OWN — but since S180 it MUST be recorded in
+ *                   `tests/Support/AssertionEscape/probe-baseline.json`, and an
+ *                   unrecorded one exits 1.
  *
  * `NOT-REACHED` is ENVIRONMENT-DEPENDENT and a census that quotes it must say so. A
- * test that self-skips without a live database — e.g. the Integration site in
+ * test that self-skips without a live database probes `NOT-REACHED` on a box with no DB
+ * and can probe `GATES` on a box with one — measured both ways on
  * `tests/Integration/Media/Transcoding/PooledConnectionConcurrencyTest.php`, which is
- * also a known pre-existing flake under coroutine churn — probes `NOT-REACHED` on a box
- * with no DB and can probe `GATES` on a box with one. The same site has been observed
- * both ways on this branch. Never quote a bare count: re-run the probe and quote the
- * run, and say which box it ran on.
+ * also a known pre-existing flake under coroutine churn (S137) and is the one site the
+ * S180 baseline EXCLUDES for exactly that reason. Never quote a bare count: re-run the
+ * probe and quote the run, and say which box it ran on and whether it had a database.
  *
  * ## Safety
  *
@@ -74,13 +101,22 @@
  * destroy uncommitted work.
  *
  * Usage:
- *   php scripts/assertion-escape-audit.php            # list the sites
- *   php scripts/assertion-escape-audit.php --probe    # decide each one (slow: one
- *                                                     # phpunit invocation per site)
+ *   php scripts/assertion-escape-audit.php            # list the sites ([EXCLUDED] marked)
+ *   php scripts/assertion-escape-audit.php --probe    # decide each one + reconcile against
+ *                                                     # the baseline. This is the CI gate.
+ *                                                     # Slow: one phpunit invocation per site.
  *   php scripts/assertion-escape-audit.php --probe --only=42
+ *                                                     # decide ONE site. Ignores the exclusion
+ *                                                     # list and skips reconciliation, because
+ *                                                     # reconciliation over 1 of N sites would
+ *                                                     # be meaningless.
  */
 
 declare(strict_types=1);
+
+require_once __DIR__ . '/../vendor/autoload.php';
+
+use Phlix\Tests\Support\AssertionEscape\ProbeBaseline;
 
 const TRIPWIRE_MESSAGE = 'S120-ASSERTION-ESCAPE-TRIPWIRE';
 
@@ -94,14 +130,27 @@ foreach ($argv as $arg) {
     }
 }
 
+// Loaded BEFORE anything is probed, and a failure here is fatal rather than
+// degraded-to-default. A gate that cannot read its own baseline must not report
+// success — the same rule scripts/coverage-threshold-check.php follows.
+try {
+    $baseline = ProbeBaseline::fromFile($root . '/' . ProbeBaseline::RELATIVE_PATH);
+} catch (\RuntimeException $e) {
+    fwrite(STDERR, $e->getMessage() . "\n");
+
+    exit(1);
+}
+
 $sites = collectSites($root . '/tests');
 
 if (!$probe) {
     foreach ($sites as $i => $site) {
+        $relative = substr($site['file'], strlen($root) + 1);
         printf(
-            "%3d  %s:%d  closure@%d  %s\n",
+            "%3d  %s%s:%d  closure@%d  %s\n",
             $i,
-            substr($site['file'], strlen($root) + 1),
+            $baseline->exclusionReason($relative, $site['method']) === null ? '' : '[EXCLUDED] ',
+            $relative,
             $site['assertLine'],
             $site['closureLine'],
             $site['method'],
@@ -115,20 +164,39 @@ if (!$probe) {
 $violations = [];
 $tally = ['GATES' => 0, 'VACUOUS' => 0, 'DEGRADED' => 0, 'NOT-REACHED' => 0, 'ERROR' => 0];
 $probed = 0;
+/** @var list<array{file: string, method: string, verdict: string}> $observations */
+$observations = [];
+/** @var list<array{file: string, method: string}> $skipped */
+$skipped = [];
 
 foreach ($sites as $i => $site) {
     if ($only !== null && $only !== $i) {
         continue;
     }
 
+    $relative = substr($site['file'], strlen($root) + 1);
+
+    // `--only` is the hand-decide path and deliberately probes an excluded site;
+    // bulk mode is the CI path and honours the exclusion list.
+    $exclusionReason = $only === null ? $baseline->exclusionReason($relative, $site['method']) : null;
+
+    if ($exclusionReason !== null) {
+        $skipped[] = ['file' => $relative, 'method' => $site['method']];
+        printf("%3d  %-11s %s:%d  %s\n", $i, 'EXCLUDED', $relative, $site['assertLine'], $site['method']);
+        printf("     └─ %s\n", $exclusionReason);
+
+        continue;
+    }
+
     $verdict = probeSite($root, $site);
     $probed++;
     $tally[$verdict] = ($tally[$verdict] ?? 0) + 1;
+    $observations[] = ['file' => $relative, 'method' => $site['method'], 'verdict' => $verdict];
     printf(
         "%3d  %-11s %s:%d  %s\n",
         $i,
         $verdict,
-        substr($site['file'], strlen($root) + 1),
+        $relative,
         $site['assertLine'],
         $site['method'],
     );
@@ -138,29 +206,53 @@ foreach ($sites as $i => $site) {
     }
 }
 
+// Reconciliation needs the WHOLE enumeration, so it is meaningless for a single
+// site. `--only` therefore reports its verdict and nothing else.
+$baselineViolations = $only === null ? $baseline->reconcile($observations, $skipped) : [];
+
 // Report the CENSUS, never a bare "all good". The previous wording here claimed
 // "every probed assertion gates its test", which is false the moment any site comes
 // back NOT-REACHED: such a site was probed and DECIDED NOTHING. Print the tally so a
 // reader can only quote a number that came with its undecided remainder attached.
 $summary = sprintf(
-    "\nS120: %d site(s) probed — %d GATES, %d NOT-REACHED, %d VACUOUS, %d DEGRADED%s.\n",
+    "\nS120: %d site(s) probed — %d GATES, %d NOT-REACHED, %d VACUOUS, %d DEGRADED%s%s.\n",
     $probed,
     $tally['GATES'],
     $tally['NOT-REACHED'],
     $tally['VACUOUS'],
     $tally['DEGRADED'],
     $tally['ERROR'] > 0 ? sprintf(', %d ERROR', $tally['ERROR']) : '',
+    $skipped === [] ? '' : sprintf(', %d EXCLUDED (not probed, reasons above)', count($skipped)),
 );
 
-if ($violations !== []) {
+if ($violations !== [] || $baselineViolations !== []) {
     fwrite(STDERR, $summary);
-    fwrite(STDERR, "\nS120: " . count($violations) . " assertion(s) cannot fail their test as written:\n");
 
-    foreach ($violations as $violation) {
-        fwrite(STDERR, '  ' . $violation . "\n");
+    if ($violations !== []) {
+        fwrite(STDERR, "\nS120: " . count($violations) . " assertion(s) cannot fail their test as written:\n");
+
+        foreach ($violations as $violation) {
+            fwrite(STDERR, '  ' . $violation . "\n");
+        }
+
+        fwrite(STDERR, "\nRemedy: have the callback RECORD what it saw and assert OUTSIDE the callback.\n");
     }
 
-    fwrite(STDERR, "\nRemedy: have the callback RECORD what it saw and assert OUTSIDE the callback.\n");
+    if ($baselineViolations !== []) {
+        // A DIFFERENT class of failure from the one above, kept in its own block so a
+        // reader is never left guessing which one reddened the job: nothing here says
+        // an assertion is vacuous, only that the UNDECIDED census moved without anyone
+        // recording why.
+        fwrite(
+            STDERR,
+            "\nS180: " . count($baselineViolations) . " probe-baseline discrepancy(ies) — the set of\n"
+            . "UNDECIDED sites no longer matches " . ProbeBaseline::RELATIVE_PATH . ":\n",
+        );
+
+        foreach ($baselineViolations as $violation) {
+            fwrite(STDERR, '  ' . $violation . "\n");
+        }
+    }
 
     exit(1);
 }
@@ -173,6 +265,22 @@ fwrite(
         : "Every site that EXECUTED its tripwire gates its test. The NOT-REACHED sites are\n"
         . "UNDECIDED, not verified, and the verdict can differ per box (see the NOT-REACHED\n"
         . "note in this file's header). Quote this run, not a remembered count.\n",
+);
+// Only bulk mode reconciles, so only bulk mode may claim to have reconciled. Saying
+// "the undecided set matches" after `--only` would be the exact species of claim S120
+// spent three review rounds removing: a tool asserting something true of a run it did
+// not perform.
+fwrite(
+    STDOUT,
+    $only === null
+        ? 'The undecided set matches ' . ProbeBaseline::RELATIVE_PATH . " exactly.\n"
+        : "--only was given: ONE site was decided and the baseline was NOT reconciled.\n",
+);
+fwrite(
+    STDOUT,
+    "⚠ This is ADDITIVE cover, not whole-suite safety: the scan is LEXICAL, so 186 closures\n"
+    . "that reach an assertion only through a HELPER are invisible to it. The runtime guard\n"
+    . "(phpunit.xml → AssertionEscapeGuardExtension) is what covers those.\n",
 );
 
 exit(0);

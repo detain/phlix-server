@@ -92,8 +92,8 @@ final class PooledConnectionConcurrencyTest extends TestCase
         // hazard src/Common/Database/ConnectionPool.php:142-146 documents as
         // "API must be called in the coroutine". Pre-S126 this setUp() did no PDO
         // I/O at all, so S126 added that exposure here; swoole 6.2.1 is loaded on
-        // the dev box and in both .github/workflows/phpunit.yml jobs (:37, :170),
-        // so it is a live path in the job that has MySQL. It is NOT fixed below.
+        // the dev box and in all three .github/workflows/phpunit.yml jobs (grep
+        // `extensions:`), so it is a live path wherever MySQL is. NOT fixed below.
         // Closing it means running the guard inside Coroutine::run() (which
         // changes how markTestSkipped's exception propagates, so it needs the
         // MySQL-backed CI job to verify and cannot be validated on a box with no

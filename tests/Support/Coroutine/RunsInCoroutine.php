@@ -132,4 +132,62 @@ trait RunsInCoroutine
 
         return $result;
     }
+
+    /**
+     * Same as {@see self::runInCoroutine()}, but PHP diagnostics raised inside the
+     * coroutine are RECORDED instead of erroring the test out.
+     *
+     * ## Why this is not optional for code with a blocking fallback — S197
+     *
+     * The docblock above records that a PHP warning raised inside a coroutine
+     * cannot be attributed to a test. Re-measured 2026-08-03, and it is worse than
+     * "avoid the blocking implementation": `@`-suppression does **not** help. `@`
+     * sets error_reporting to 0 for the call but PHPUnit's error handler is still
+     * invoked, walks the PHP call stack, fails to find the enclosing TestCase and
+     * raises
+     *
+     *     PHPUnit\Event\Code\NoTestCaseObjectOnCallStackException:
+     *     Cannot find TestCase object on call stack
+     *
+     * so the test ERRORS rather than fails. Reproduced by connecting to a closed
+     * loopback port with `@fsockopen()` inside `runInCoroutine()`.
+     *
+     * That matters because the four `getLocalIpViaUdpSocket()` methods in
+     * `src/Network/` degrade to `@fsockopen('8.8.8.8', 53, …)` after their
+     * coroutine attempt fails — the degradation IS the behaviour under test, so it
+     * has to run, and whether it warns depends on whether the box can reach
+     * 8.8.8.8:53. Without this helper such a test passes on the dev box (measured:
+     * connects in 1.2 ms) and errors on a CI runner with no egress — the exact
+     * "verdict depends on the host's firewall policy" defect the S169 notes in
+     * StunClientTest condemn.
+     *
+     * Diagnostics are returned rather than swallowed so a caller can still assert
+     * on them, and the handler is restored in a `finally` so it cannot leak into
+     * the next test.
+     *
+     * @param callable(): mixed $body Body to execute inside the coroutine.
+     *
+     * @return array{result: mixed, diagnostics: list<string>} The body's value and
+     *         every diagnostic raised while it ran, as "errno: message".
+     */
+    protected function runInCoroutineCapturingDiagnostics(callable $body): array
+    {
+        /** @var list<string> $diagnostics */
+        $diagnostics = [];
+
+        $result = $this->runInCoroutine(static function () use ($body, &$diagnostics): mixed {
+            set_error_handler(static function (int $errno, string $errstr) use (&$diagnostics): bool {
+                $diagnostics[] = $errno . ': ' . $errstr;
+                return true;
+            });
+
+            try {
+                return $body();
+            } finally {
+                restore_error_handler();
+            }
+        });
+
+        return ['result' => $result, 'diagnostics' => $diagnostics];
+    }
 }

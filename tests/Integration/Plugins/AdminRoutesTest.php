@@ -5,6 +5,10 @@ declare(strict_types=1);
 namespace Phlix\Tests\Integration\Plugins;
 
 use DateTimeImmutable;
+use Phlix\Access\AccessScheduleService;
+use Phlix\Access\ProfileAccessPolicy;
+use Phlix\Access\ProfileTagService;
+use Phlix\Access\StreamSessionService;
 use Phlix\Auth\AuthProviderBootstrapper;
 use Phlix\Auth\AuthProviderRegistry;
 use Phlix\Auth\UserProfileManager;
@@ -42,7 +46,10 @@ use Phlix\Server\Http\Controllers\Admin\DashboardController;
 use Phlix\Server\Http\Controllers\Admin\FsBrowseController;
 use Phlix\Server\Http\Controllers\Admin\LogController;
 use Phlix\Server\Http\Controllers\Admin\WatchHistoryController;
+use Phlix\Server\Http\Controllers\AccessScheduleController;
 use Phlix\Server\Http\Controllers\AuthProviderController;
+use Phlix\Server\Http\Controllers\ProfileTagController;
+use Phlix\Server\Http\Controllers\StreamLimitController;
 use Phlix\Plugins\Catalog\PluginCatalogService;
 use Phlix\Plugins\Catalog\PluginUpdateService;
 use Phlix\Server\Http\Controllers\PluginAdminController;
@@ -162,6 +169,27 @@ final class AdminRoutesTest extends TestCase
         $webhookService = $this->createMock(WebhookService::class);
         $adminWebhooksController = new AdminWebhooksController($webhookService);
 
+        // Parental-controls controllers (S208). AdminRoutes::register() eagerly
+        // resolves all three at bind time; the plugin-only tests below never
+        // dispatch to /profiles/{id}/schedules|tags|stream-limits, so services
+        // over a mocked Connection are sufficient here. The access policy is
+        // built from the same in-memory fakes the admin middleware uses, so the
+        // gating tests further down see a coherent user/profile world.
+        $parentalDb = $this->createMock(Connection::class);
+        $profileAccessPolicy = new ProfileAccessPolicy($profileManager, $this->users);
+        $accessScheduleController = new AccessScheduleController(
+            new AccessScheduleService($parentalDb),
+            $profileAccessPolicy,
+        );
+        $profileTagController = new ProfileTagController(
+            new ProfileTagService($parentalDb),
+            $profileAccessPolicy,
+        );
+        $streamLimitController = new StreamLimitController(
+            new StreamSessionService($parentalDb),
+            $profileAccessPolicy,
+        );
+
         $container = new class (
             $this->loader,
             $this->users,
@@ -184,6 +212,9 @@ final class AdminRoutesTest extends TestCase
             $adminTranscodingController,
             $adminWebhooksController,
             new SettingsRepository($this->createMock(Connection::class)),
+            $accessScheduleController,
+            $profileTagController,
+            $streamLimitController,
         ) implements ContainerInterface {
             private Plugin $oidcPlugin;
             private LdapPlugin $ldapPlugin;
@@ -211,6 +242,9 @@ final class AdminRoutesTest extends TestCase
                 private readonly AdminTranscodingController $adminTranscodingController,
                 private readonly AdminWebhooksController $adminWebhooksController,
                 private readonly SettingsRepository $settingsRepository,
+                private readonly AccessScheduleController $accessScheduleController,
+                private readonly ProfileTagController $profileTagController,
+                private readonly StreamLimitController $streamLimitController,
             ) {
                 $tempDir = sys_get_temp_dir() . '/phlix_oidc_test_' . uniqid('', true);
                 mkdir($tempDir, 0775, true);
@@ -285,6 +319,9 @@ final class AdminRoutesTest extends TestCase
                     MetricsController::class => $this->metricsController,
                     AdminTranscodingController::class => $this->adminTranscodingController,
                     AdminWebhooksController::class => $this->adminWebhooksController,
+                    AccessScheduleController::class => $this->accessScheduleController,
+                    ProfileTagController::class => $this->profileTagController,
+                    StreamLimitController::class => $this->streamLimitController,
                     default => throw new \RuntimeException("no binding for $id"),
                 };
             }
@@ -315,6 +352,9 @@ final class AdminRoutesTest extends TestCase
                     MetricsController::class,
                     AdminTranscodingController::class,
                     AdminWebhooksController::class,
+                    AccessScheduleController::class,
+                    ProfileTagController::class,
+                    StreamLimitController::class,
                 ], true);
             }
         };

@@ -30,7 +30,7 @@ final class AccessSchedule
      * Create a new AccessSchedule instance.
      *
      * @param int           $id         Unique identifier for the schedule.
-     * @param int           $profileId  The profile this schedule belongs to.
+     * @param string        $profileId  The profile (CHAR(36) UUID) this schedule belongs to.
      * @param string        $name       Human-readable name for the schedule.
      * @param string        $startTime  Start time in HH:MM:SS format.
      * @param string        $endTime    End time in HH:MM:SS format.
@@ -39,7 +39,7 @@ final class AccessSchedule
      */
     public function __construct(
         public readonly int $id,
-        public readonly int $profileId,
+        public readonly string $profileId,
         public readonly string $name,
         public readonly string $startTime,
         public readonly string $endTime,
@@ -60,7 +60,13 @@ final class AccessSchedule
     public static function fromRow(array $row): self
     {
         $id = isset($row['id']) && is_numeric($row['id']) ? (int) $row['id'] : 0;
-        $profileId = isset($row['profile_id']) && is_numeric($row['profile_id']) ? (int) $row['profile_id'] : 0;
+        // `access_schedules.profile_id` is CHAR(36) — a `user_profiles.id` UUID
+        // (see the explicit "FIX:" note at the head of migration 061). It used
+        // to be narrowed with `is_numeric()` + `(int)`, which no UUID can pass,
+        // so EVERY hydrated schedule carried `profileId === 0` and shipped
+        // `profile_id: 0` in `toArray()`. Narrow with `is_string()` — the same
+        // way {@see ProfileStreamLimit::fromRow()} already does.
+        $profileId = isset($row['profile_id']) && is_string($row['profile_id']) ? $row['profile_id'] : '';
         $name = isset($row['name']) && is_string($row['name']) ? $row['name'] : '';
         $startTime = isset($row['start_time']) && is_string($row['start_time']) ? $row['start_time'] : '00:00:00';
         $endTime = isset($row['end_time']) && is_string($row['end_time']) ? $row['end_time'] : '23:59:59';
@@ -144,7 +150,7 @@ final class AccessSchedule
      *
      * @return array{
      *     id: int,
-     *     profile_id: int,
+     *     profile_id: string,
      *     name: string,
      *     start_time: string,
      *     end_time: string,

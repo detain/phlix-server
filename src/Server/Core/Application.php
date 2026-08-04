@@ -1304,6 +1304,24 @@ class Application
      * access control windows. These routes are auth-gated and enforce
      * schedule restrictions via AccessScheduleMiddleware.
      *
+     * ## S208 decision: this NON-ADMIN registration is KEPT, not deleted
+     *
+     * The admin SPA calls the `/api/v1/admin/profiles/{id}/…` spelling, which
+     * {@see \Phlix\Server\Http\Routes\AdminRoutes} now registers. Deleting the
+     * un-prefixed set below would have been a breaking change for clients that
+     * already ship against it — `phlix-console-client`
+     * (`src/Api/Admin/AdminClient.php`), `phlix-mobile-client`
+     * (`src/api/ParentalControlsManager.ts`) and `phlix-roku-client`
+     * (`source/lib/ApiClient.brs`) all call the un-prefixed paths.
+     *
+     * Keeping them is only safe because the IDOR is closed in the HANDLERS
+     * rather than by the route prefix: each handler runs
+     * {@see \Phlix\Access\ProfileAccessPolicy::canManageProfile()} (own profile,
+     * or server admin) and each by-id handler re-checks that the record belongs
+     * to the `{profileId}` in the path. The group middleware below is plain
+     * {@see \Phlix\Server\Http\Middleware\AuthMiddleware}, and that is
+     * deliberately NOT the authorization gate.
+     *
      * Endpoints:
      * - GET    /api/v1/profiles/{profileId}/schedules       — list all schedules
      * - POST   /api/v1/profiles/{profileId}/schedules       — create a new schedule
@@ -1361,6 +1379,26 @@ class Application
     }
 
     /**
+     * Builds the parental-controls owner-or-admin gate for the no-container
+     * fallback paths (S208).
+     *
+     * The container path resolves {@see \Phlix\Access\ProfileAccessPolicy} by
+     * autowiring. This helper exists so the three hand-rolled fallbacks below
+     * cannot accidentally construct a controller WITHOUT the gate — the
+     * constructor parameter is required, so omitting it is a fatal error rather
+     * than a silent fail-open.
+     *
+     * @param \Workerman\MySQL\Connection $db Connection the fallback already holds.
+     */
+    private function profileAccessPolicy(\Workerman\MySQL\Connection $db): \Phlix\Access\ProfileAccessPolicy
+    {
+        return new \Phlix\Access\ProfileAccessPolicy(
+            new \Phlix\Auth\UserProfileManager($db),
+            new \Phlix\Auth\UserRepository($db),
+        );
+    }
+
+    /**
      * Returns an AccessScheduleController instance.
      *
      * @return \Phlix\Server\Http\Controllers\AccessScheduleController The controller instance.
@@ -1373,7 +1411,10 @@ class Application
             // Fallback: create with direct DB connection
             $db = $this->connectionPool->getPooledConnection('mysql');
             $accessScheduleService = new \Phlix\Access\AccessScheduleService($db);
-            return new \Phlix\Server\Http\Controllers\AccessScheduleController($accessScheduleService);
+            return new \Phlix\Server\Http\Controllers\AccessScheduleController(
+                $accessScheduleService,
+                $this->profileAccessPolicy($db),
+            );
         }
 
         /** @var \Phlix\Server\Http\Controllers\AccessScheduleController */
@@ -1393,7 +1434,10 @@ class Application
             // Fallback: create with direct DB connection
             $db = $this->connectionPool->getPooledConnection('mysql');
             $profileTagService = new \Phlix\Access\ProfileTagService($db);
-            return new \Phlix\Server\Http\Controllers\ProfileTagController($profileTagService);
+            return new \Phlix\Server\Http\Controllers\ProfileTagController(
+                $profileTagService,
+                $this->profileAccessPolicy($db),
+            );
         }
 
         /** @var \Phlix\Server\Http\Controllers\ProfileTagController */
@@ -1448,7 +1492,10 @@ class Application
                 $db,
                 new \Phlix\Admin\SettingsRepository($db),
             );
-            return new \Phlix\Server\Http\Controllers\StreamLimitController($streamSessionService);
+            return new \Phlix\Server\Http\Controllers\StreamLimitController(
+                $streamSessionService,
+                $this->profileAccessPolicy($db),
+            );
         }
 
         /** @var \Phlix\Server\Http\Controllers\StreamLimitController */

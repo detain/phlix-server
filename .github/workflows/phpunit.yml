@@ -268,8 +268,8 @@ jobs:
     #
     # The real reasons, in order:
     #  1. ATTRIBUTION. A named check that can only mean "an assertion cannot fail its
-    #     test" is legible; the same thing as step 5 of "PHPUnit Test Suite" is not.
-    #     The runtime half of S120's guard already lives there.
+    #     test" is legible; the same finding buried in the 11-step "PHPUnit Test
+    #     Suite" job is not. The runtime half of S120's guard already lives there.
     #  2. The prober SPLICES tripwires into tracked test files and restores them. That
     #     belongs nowhere near the job that produces the coverage artifact.
     #  3. Its own timeout, so it cannot be starved by the `test` job's 25 minutes.
@@ -279,7 +279,8 @@ jobs:
     # A skipped GitHub job reports conclusion `skipped`, and `skipped` COUNTS AS
     # SUCCESS for a status check — so an `if:` here would be a gate that passes by
     # not running, which is precisely the defect S120 exists to catch, one level up.
-    # tests/Unit/Support/AssertionEscapeGuardWiringTest.php asserts the absence.
+    # tests/Unit/Support/AssertionEscapeProbeGateTest.php asserts the absence of an
+    # `if:` on BOTH this job and its probe step, and kills six more neutering edits.
 
     services:
       # Copied from the `test` job above, VERBATIM.

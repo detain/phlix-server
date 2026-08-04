@@ -243,8 +243,16 @@ final class IntegrationDbGuardAdoptionTest extends TestCase
      * where the sibling `MusicApiReadPathIntegrationTest` seeds its own `INSERT`s
      * (measured: with the scanner's `duration_secs` write zeroed, that file stays
      * 14/14 green and this one reddens).
+     *
+     * 40 since S208's
+     * `tests/Integration/Access/ParentalControlsCrossProfileRealDbTest.php`: the
+     * cross-profile refusal it pins turns on `AccessSchedule::fromRow()` /
+     * `ProfileTag::fromRow()` hydrating a real `CHAR(36)` `profile_id` (both used
+     * to narrow it with `is_numeric()` + `(int)`, so every record carried
+     * `profileId === 0`), and a canned-row `Connection` double can only ever hand
+     * back the shape the test itself invented.
      */
-    private const EXPECTED_ADOPTERS = 39;
+    private const EXPECTED_ADOPTERS = 40;
 
     /**
      * Bare function calls that are a MySQL reachability probe under any

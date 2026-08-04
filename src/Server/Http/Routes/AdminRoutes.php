@@ -24,9 +24,12 @@ use Phlix\Server\Http\Controllers\Admin\DashboardController;
 use Phlix\Server\Http\Controllers\Admin\FsBrowseController;
 use Phlix\Server\Http\Controllers\Admin\LogController;
 use Phlix\Server\Http\Controllers\Admin\WatchHistoryController;
+use Phlix\Server\Http\Controllers\AccessScheduleController;
 use Phlix\Server\Http\Controllers\AuthProviderController;
 use Phlix\Server\Http\Controllers\PluginAdminController;
 use Phlix\Server\Http\Controllers\PluginCatalogController;
+use Phlix\Server\Http\Controllers\ProfileTagController;
+use Phlix\Server\Http\Controllers\StreamLimitController;
 use Phlix\Server\Http\Controllers\Stats\MetricsController;
 use Phlix\Server\Http\Controllers\Stats\StatsController;
 use Phlix\Plugins\Github\Controller\GithubAdminController;
@@ -70,6 +73,12 @@ use Psr\Container\ContainerInterface;
  *  - `POST   /api/v1/admin/media/merge`              → apply a duplicate merge
  *  - `GET    /api/v1/admin/metadata/sources`         → available metadata-source names
  *  - `GET    /api/v1/admin/watch-history`            → recent watch history (all users)
+ *  - `GET|POST /api/v1/admin/profiles/{profileId}/schedules`               → parental access schedules
+ *  - `GET|PUT|DELETE /api/v1/admin/profiles/{profileId}/schedules/{id}`    → one access schedule
+ *  - `GET|POST /api/v1/admin/profiles/{profileId}/tags`                    → parental tag filters
+ *  - `DELETE /api/v1/admin/profiles/{profileId}/tags/{tagId}`              → one tag filter
+ *  - `GET|PUT /api/v1/admin/profiles/{profileId}/stream-limits`            → concurrent-stream cap
+ *  - `GET    /api/v1/admin/profiles/{profileId}/active-streams`            → live streams for a profile
  *
  * Every route is gated by {@see AdminMiddleware} (which requires a
  * valid JWT in `Authorization: Bearer …` AND `users.is_admin = 1`).
@@ -266,6 +275,55 @@ final class AdminRoutes
                 $r->delete('/profiles/{id}', [$adminProfileController, 'delete']);
                 $r->post('/profiles/{id}/pin', [$adminProfileController, 'setPin']);
                 $r->delete('/profiles/{id}/pin', [$adminProfileController, 'deletePin']);
+
+                // Parental controls for a profile (S208).
+                //
+                // The admin SPA's Parental Controls screen
+                // (`phlix-ui/src/api/admin/users.ts`) calls all eight of these
+                // under `/api/v1/admin/profiles/{id}/…`, but they were only ever
+                // registered WITHOUT the `/admin` segment (see
+                // `Application::loadAccessScheduleRoutes()` and friends), so the
+                // whole screen 404'd. They are registered HERE — inside the group
+                // that carries AdminMiddleware — rather than by pointing the SPA
+                // at the ungated `/api/v1/profiles/…` set, which would have wired
+                // an admin screen to a plain-auth endpoint.
+                //
+                // The non-admin registrations remain (shipped console/mobile/roku
+                // clients call them) and now enforce the same owner-or-admin rule
+                // in the handler body; see `Phlix\Access\ProfileAccessPolicy`.
+                //
+                // No shadowing with `/profiles/{id}` or `/profiles/{id}/pin`: the
+                // Router anchors every compiled pattern with `#^…$#` and `{param}`
+                // compiles to `[^/]+`, so a 2-segment route cannot match a
+                // 3-segment path or vice-versa.
+                /** @var AccessScheduleController $accessScheduleController */
+                $accessScheduleController = $container->get(AccessScheduleController::class);
+
+                $r->get('/profiles/{profileId}/schedules', [$accessScheduleController, 'listForProfile']);
+                $r->post('/profiles/{profileId}/schedules', [$accessScheduleController, 'createForProfile']);
+                $r->get('/profiles/{profileId}/schedules/{scheduleId}', [$accessScheduleController, 'getSchedule']);
+                // The PUT is what S202 (the SPA's DELETE-then-CREATE ordering bug)
+                // depends on existing; it is registered now so that step has a
+                // target, even though today's SPA does not call it yet.
+                $r->put('/profiles/{profileId}/schedules/{scheduleId}', [$accessScheduleController, 'updateSchedule']);
+                $r->delete(
+                    '/profiles/{profileId}/schedules/{scheduleId}',
+                    [$accessScheduleController, 'deleteSchedule'],
+                );
+
+                /** @var ProfileTagController $profileTagController */
+                $profileTagController = $container->get(ProfileTagController::class);
+
+                $r->get('/profiles/{profileId}/tags', [$profileTagController, 'listForProfile']);
+                $r->post('/profiles/{profileId}/tags', [$profileTagController, 'createForProfile']);
+                $r->delete('/profiles/{profileId}/tags/{tagId}', [$profileTagController, 'deleteTag']);
+
+                /** @var StreamLimitController $streamLimitController */
+                $streamLimitController = $container->get(StreamLimitController::class);
+
+                $r->get('/profiles/{profileId}/stream-limits', [$streamLimitController, 'getStreamLimits']);
+                $r->put('/profiles/{profileId}/stream-limits', [$streamLimitController, 'updateStreamLimits']);
+                $r->get('/profiles/{profileId}/active-streams', [$streamLimitController, 'getActiveStreams']);
 
                 // Duplicate preview + merge (Step 1.6, Feature 1).
                 /** @var AdminMergeController $adminMergeController */

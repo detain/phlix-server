@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Server\Http\Controllers;
 
+use Phlix\Access\ProfileAccessPolicy;
 use Phlix\Access\StreamSessionService;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
@@ -21,10 +22,19 @@ use Phlix\Server\Http\Response;
  * Provides endpoints to view and update stream limits for profiles,
  * and to list currently active streams.
  *
- * Endpoints:
- * - GET    /api/v1/profiles/{profileId}/stream-limits   — get stream limits
- * - PUT    /api/v1/profiles/{profileId}/stream-limits   — update stream limits
- * - GET    /api/v1/profiles/{profileId}/active-streams  — list active streams
+ * Endpoints (registered under BOTH prefixes — `/api/v1/admin/…` for the admin
+ * SPA via {@see \Phlix\Server\Http\Routes\AdminRoutes}, plain `/api/v1/…` for
+ * the shipped native clients):
+ * - GET    /api/v1/[admin/]profiles/{profileId}/stream-limits   — get stream limits
+ * - PUT    /api/v1/[admin/]profiles/{profileId}/stream-limits   — update stream limits
+ * - GET    /api/v1/[admin/]profiles/{profileId}/active-streams  — list active streams
+ *
+ * ## Authorization (S208)
+ *
+ * Every handler runs {@see ProfileAccessPolicy::canManageProfile()} — owner of
+ * the profile, or a server admin — and answers 404 (never 403) otherwise. There
+ * is no by-id sub-resource here: the profile in the path IS the record, so the
+ * profile-level check is the whole ownership check.
  *
  * @package Phlix\Server\Http\Controllers
  */
@@ -34,9 +44,15 @@ final class StreamLimitController
      * Create a new StreamLimitController instance.
      *
      * @param StreamSessionService $streamSessionService Service for stream operations.
+     * @param ProfileAccessPolicy  $accessPolicy         Owner-or-admin gate (S208).
+     *                                                   REQUIRED, never nullable: an
+     *                                                   optional dependency here would
+     *                                                   be skipped by PHP-DI autowiring
+     *                                                   and silently fail open.
      */
     public function __construct(
         private readonly StreamSessionService $streamSessionService,
+        private readonly ProfileAccessPolicy $accessPolicy,
     ) {
     }
 
@@ -54,6 +70,11 @@ final class StreamLimitController
         $profileId = $this->parseProfileId($params['profileId'] ?? null);
         if ($profileId === null) {
             return (new Response())->status(400)->json(['error' => 'Invalid profile ID']);
+        }
+
+        $denied = $this->denyUnlessProfileManageable($request, $profileId);
+        if ($denied !== null) {
+            return $denied;
         }
 
         $limits = $this->streamSessionService->getStreamLimit($profileId);
@@ -79,6 +100,11 @@ final class StreamLimitController
         $profileId = $this->parseProfileId($params['profileId'] ?? null);
         if ($profileId === null) {
             return (new Response())->status(400)->json(['error' => 'Invalid profile ID']);
+        }
+
+        $denied = $this->denyUnlessProfileManageable($request, $profileId);
+        if ($denied !== null) {
+            return $denied;
         }
 
         $data = $request->body;
@@ -128,12 +154,36 @@ final class StreamLimitController
             return (new Response())->status(400)->json(['error' => 'Invalid profile ID']);
         }
 
+        $denied = $this->denyUnlessProfileManageable($request, $profileId);
+        if ($denied !== null) {
+            return $denied;
+        }
+
         $streams = $this->streamSessionService->getActiveStreamsForProfile($profileId);
 
         return (new Response())->json([
             'active_streams' => $streams,
             'count' => count($streams),
         ]);
+    }
+
+    /**
+     * Refuse the request unless the caller owns `$profileId` or is an admin (S208).
+     *
+     * @param Request $request   The incoming request (supplies `userId`).
+     * @param string  $profileId Profile id taken from the path.
+     *
+     * @return Response|null 404 to short-circuit, or null to continue.
+     */
+    private function denyUnlessProfileManageable(Request $request, string $profileId): ?Response
+    {
+        if ($this->accessPolicy->canManageProfile($request->userId, $profileId)) {
+            return null;
+        }
+
+        // 404 rather than 403: a 403 would confirm the profile exists to a
+        // caller who is not entitled to know that.
+        return (new Response())->status(404)->json(['error' => 'Profile not found']);
     }
 
     /**

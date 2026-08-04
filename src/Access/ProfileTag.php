@@ -36,13 +36,13 @@ final class ProfileTag
      * Create a new ProfileTag instance.
      *
      * @param int    $id        Unique identifier for the profile tag.
-     * @param int    $profileId The profile this tag belongs to.
+     * @param string $profileId The profile (CHAR(36) UUID) this tag belongs to.
      * @param string $tag       The tag string (e.g., 'violence', 'nudity').
      * @param string $tagType   Either 'blocked' or 'allowed'.
      */
     public function __construct(
         public readonly int $id,
-        public readonly int $profileId,
+        public readonly string $profileId,
         public readonly string $tag,
         public readonly string $tagType,
     ) {
@@ -59,7 +59,13 @@ final class ProfileTag
     public static function fromRow(array $row): self
     {
         $id = isset($row['id']) && is_numeric($row['id']) ? (int) $row['id'] : 0;
-        $profileId = isset($row['profile_id']) && is_numeric($row['profile_id']) ? (int) $row['profile_id'] : 0;
+        // `profile_tags.profile_id` is CHAR(36) — a `user_profiles.id` UUID
+        // (see the explicit "FIX:" note at the head of migration 062). It used
+        // to be narrowed with `is_numeric()` + `(int)`, which no UUID can pass,
+        // so EVERY hydrated tag carried `profileId === 0` and shipped
+        // `profile_id: 0` in `toArray()`. Narrow with `is_string()` — the same
+        // way {@see ProfileStreamLimit::fromRow()} already does.
+        $profileId = isset($row['profile_id']) && is_string($row['profile_id']) ? $row['profile_id'] : '';
         $tag = isset($row['tag']) && is_string($row['tag']) ? $row['tag'] : '';
         $tagType = isset($row['tag_type']) && is_string($row['tag_type']) ? $row['tag_type'] : self::TYPE_BLOCKED;
 
@@ -96,7 +102,7 @@ final class ProfileTag
      *
      * @return array{
      *     id: int,
-     *     profile_id: int,
+     *     profile_id: string,
      *     tag: string,
      *     tag_type: string
      * }

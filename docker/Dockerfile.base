@@ -91,22 +91,41 @@ RUN apk add --no-cache \
     && rm -rf /var/cache/apk/* /tmp/pear
 
 # ----------------------------------------------------------------------------
-# io_uring is OFF in the container by default. (S163)
+# io_uring is OFF in the container by default. (S163; measurements corrected in
+# S200 — the original note here recorded an A/B control that does not
+# reproduce, and gave advice that is necessary but not sufficient.)
 #
-# Docker's default seccomp profile BLOCKS io_uring_setup / io_uring_enter /
-# io_uring_register (removed from the allowlist by moby for security), so a
-# Swoole built `--enable-iouring --enable-uring-socket` dies the moment a worker
-# touches the ring:
+# A Swoole built `--enable-iouring --enable-uring-socket` hits TWO stacked
+# blockers in a container. In the order they are REACHED:
 #
-#   ERROR  Iouring::Iouring(): Failed to initialize io_uring instance,
-#          Error: Operation not permitted[1]
-#   worker[phlix-server-http:102467] exit with status 256
+#   1. seccomp. Docker's default profile BLOCKS io_uring_setup /
+#      io_uring_enter / io_uring_register (removed from the allowlist by moby
+#      for security), so the ring never opens at all:
+#        ERROR  Iouring::Iouring(): Failed to initialize io_uring instance,
+#               Error: Operation not permitted[1]
 #
-# …repeated for every worker in a tight refork loop, so :8096 never came up.
-# Proven by A/B on the same image: with `--security-opt seccomp=unconfined`
-# `/health` returns 200 and the log contains ZERO `Iouring` lines; with the
-# default profile it never serves. Shipping an image that needs seccomp turned
-# OFF is not an option — that disables filtering for the whole container.
+#   2. kernel version. Lift seccomp and the ring DOES open — and Swoole 6.2.1
+#      then rejects the kernel, because its io_uring path uses ops added in 6.9:
+#        ERROR  Iouring::Iouring(): The Iouring::ftruncate() requires `6.9`
+#               or higher Linux kernel
+#
+# Both are fatal: the process exits 1. (S163 observed this at daemon level as
+# every worker exiting and reforking, so :8096 never came up.) So turning
+# seccomp off does NOT make an io_uring image serve on a pre-6.9 kernel — it
+# only swaps blocker 1 for blocker 2 — and it was never an option anyway,
+# because it disables syscall filtering for the whole container.
+#
+# Reproduce. The probe MUST force the ring with SWOOLE_HOOK_ALL; a bare
+# `Swoole\Server` start never touches io_uring and so exits 0 on every arm,
+# discriminating nothing:
+#
+#   docker run --rm --network none [--security-opt seccomp=unconfined] IMAGE \
+#     php -r 'Swoole\Runtime::enableCoroutine(SWOOLE_HOOK_ALL); Swoole\Coroutine\run(fn() => print(strlen(file_get_contents("/etc/hostname")) . "\n"));'
+#
+# On a 6.8.0 host that prints error 1 under the default profile and error 2
+# under `seccomp=unconfined`. It prints `13` and exits 0 only on an image built
+# with SWOOLE_IOURING=0 (this default) — where `php --ri swoole` prints no
+# io_uring line at all.
 #
 # The HOST build is deliberately NOT changed: `scripts/install.sh`
 # (phlix_build_swoole) keeps `--enable-iouring --enable-uring-socket`, and
@@ -114,8 +133,11 @@ RUN apk add --no-cache \
 # io_uring initialises there. This ARG is the one place the two diverge, and it
 # is a runtime-sandbox difference, not a drift.
 #
-# Build with `--build-arg SWOOLE_IOURING=1` if your container runtime permits
-# the io_uring syscalls (a custom seccomp profile, or `seccomp=unconfined`).
+# Build with `--build-arg SWOOLE_IOURING=1` only if BOTH hold: your container
+# runtime permits the io_uring syscalls (a custom seccomp profile, or
+# `seccomp=unconfined`), AND the host kernel is >= 6.9. Permitting the syscalls
+# is necessary but NOT sufficient — on an older kernel you get an image that
+# exits 1 as soon as anything touches the ring.
 # ----------------------------------------------------------------------------
 ARG SWOOLE_IOURING=0
 

@@ -13,7 +13,6 @@ namespace Phlix\Network;
 
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
-use RuntimeException;
 use Socket;
 
 /**
@@ -641,28 +640,37 @@ class UpnpIgdClient
     {
         if (self::inCoroutine() && class_exists(\Swoole\Coroutine\Socket::class)) {
             try {
-                $sock = new \Swoole\Coroutine\Socket(AF_INET, SOCK_DGRAM, 0);
+                $sock = $this->createCoroutineSocket(SOCK_DGRAM);
                 // S146: Swoole\Coroutine\Socket has NO setTimeout() — verified
                 // absent from the class in swoole 6.2.2. The old call raised an
-                // \Error ("Call to undefined method"), which the
-                // catch (RuntimeException) below does NOT catch, so this path
-                // aborted instead of degrading to the blocking fallback.
-                // The timeout is connect()'s third argument.
+                // \Error ("Call to undefined method"). The timeout is connect()'s
+                // third argument.
                 // Connect to 8.8.8.8:53 (DNS) to determine local IP
                 $connected = $sock->connect('8.8.8.8', 53, 2.0);
-                if ($connected) {
-                    $localAddr = $sock->getsockname();
-                    $sock->close();
-                    if ($localAddr !== false && is_array($localAddr)) {
-                        $host = $localAddr['host'] ?? null;
-                        if (is_string($host) && $host !== '') {
-                            return $host;
-                        }
+                // S197: exactly ONE close() on every path. The old shape closed
+                // inside the if AND again after it, so a connected socket whose
+                // local address was unusable was closed twice. Measured on swoole
+                // 6.2.1: the second close() returns false rather than throwing, so
+                // that was dead code and not a fault — but it read as a defect and
+                // only the redundant call is removed here.
+                $localAddr = $connected ? $sock->getsockname() : false;
+                $sock->close();
+                if ($localAddr !== false && is_array($localAddr)) {
+                    $host = $localAddr['host'] ?? null;
+                    if (is_string($host) && $host !== '') {
+                        return $host;
                     }
                 }
-                $sock->close();
-            } catch (RuntimeException $e) {
-                // Swoole socket failed, fall through to blocking fallback
+            } catch (\Throwable $e) {
+                // \Throwable, not RuntimeException: NOTHING this block can raise is
+                // a RuntimeException. Swoole\Exception and its subclass
+                // Swoole\Coroutine\Socket\Exception (what the constructor above is
+                // documented to raise) both extend \Exception DIRECTLY — measured
+                // 2026-08-03, `Swoole\Exception -> Exception -> END` — and the
+                // S146 note above records an \Error, which is not an Exception at
+                // all. The old catch (RuntimeException) therefore contained none of
+                // the three, and this block exists only to degrade to the blocking
+                // fallback below. S197.
             }
         }
 
@@ -681,5 +689,28 @@ class UpnpIgdClient
         }
 
         return null;
+    }
+
+    /**
+     * Constructs the coroutine socket used by {@see self::getLocalIpViaUdpSocket()}.
+     *
+     * ⚠ A SEAM, measured rather than assumed (S197): on swoole 6.2.1 / PHP 8.3.6 —
+     * the dev box and the CI runner — nothing inside that try block can be
+     * provoked into throwing. `connect()`, `getsockname()` and `close()` all
+     * return false and set `errCode`; a double `close()` returns false; cancelling
+     * the coroutine mid-connect returns false. And a genuinely failing `socket(2)`
+     * (reproduced with `setrlimit(RLIMIT_NOFILE, 16)` via FFI, and again with an
+     * invalid socket type) does not raise `Swoole\Coroutine\Socket\Exception` on
+     * this build — it SIGSEGVs inside `new`, through an enclosing
+     * `catch (\Throwable)`. So the widened catch could not otherwise be pinned by
+     * any test, and an unpinned catch clause is exactly how the narrow one
+     * survived. Overriding this method is how the test throws a real
+     * `Swoole\Exception` at the line production throws it from.
+     *
+     * @param int $type Socket type, e.g. SOCK_DGRAM.
+     */
+    protected function createCoroutineSocket(int $type): \Swoole\Coroutine\Socket
+    {
+        return new \Swoole\Coroutine\Socket(AF_INET, $type, 0);
     }
 }

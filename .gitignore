@@ -1,6 +1,18 @@
-# Ignore all Claude CLI personal files and state
-.claude/
-!.claude/settings.json
+# Ignore all Claude CLI personal files and state.
+# NB `.claude/*` not `.claude/` — git never descends into an EXCLUDED DIRECTORY,
+# so with `.claude/` the four `!` negations below are silently INERT and none of
+# these files can be staged. Excluding the directory's CONTENTS instead lets the
+# negations work. Verified: `git check-ignore -v .claude/rules/` used to report
+# the `.claude/` line as the match. The tell-tale symptom here was that hooks/,
+# skills/ and settings.json WERE tracked (force-added past the inert rule) while
+# rules/, created later, silently vanished.
+.claude/*
+# NOT `!.claude/settings.json`: the file hardcodes an absolute, machine- and
+# node-version-specific interpreter path (`/home/<user>/.nvm/versions/node/vX/bin/caliber`,
+# 4x), so every clone got hooks pointing at a path that does not exist for them.
+# It was tracked; this commit untracks it. Make those commands portable before
+# tracking it again (the Stop hook already shows how: `$CLAUDE_PROJECT_DIR`).
+.claude/settings.json
 !.claude/rules/
 !.claude/skills/
 !.claude/hooks/

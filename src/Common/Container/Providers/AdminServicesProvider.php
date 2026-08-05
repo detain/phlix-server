@@ -98,8 +98,18 @@ final class AdminServicesProvider implements ServiceProviderInterface
             MetricsController::class => autowire(),
 
             // Public "Most Watched" rail (S31). Autowires StatsCollector (above)
-            // + ItemRepository (MediaServicesProvider) — both live in this same
-            // container, so plain autowiring resolves them.
+            // + ItemRepository + RatingGate (both MediaServicesProvider) — all
+            // live in this same container, so plain autowiring resolves them.
+            //
+            // ⚠ S213: the controller's `$ratingGate` is REQUIRED and
+            // non-nullable ON PURPOSE, which is what makes this bare
+            // `autowire()` sufficient. PHP-DI SKIPS optional ctor params, so an
+            // optional gate here would be null in production forever and the
+            // rail would stay ungated — see the same trap already worked around
+            // by explicit `constructorParameter()` bindings on `RatingGate`
+            // ($users) and `MediaUserDataController` ($ratingGate) in
+            // MediaServicesProvider. Pinned by
+            // MostWatchedControllerContainerWiringTest.
             MostWatchedController::class => autowire(),
 
             DashboardService::class    => autowire(),

@@ -13,6 +13,7 @@ namespace Phlix\Server\Http\Controllers;
 
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Library\MediaItemShaper;
+use Phlix\Media\Library\RatingGate;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
 use Phlix\Stats\StatsCollector;
@@ -37,6 +38,13 @@ use Phlix\Stats\StatsCollector;
  * {@see \Phlix\Server\Http\Middleware\AuthMiddleware} to match the other
  * home-rail media endpoints (a signed-in user is required, same audience).
  *
+ * PARENTAL CAP (S213): being a server-wide aggregate, the raw top-media list is
+ * the SAME for everyone — including a rating-capped child profile. So the rail
+ * post-filters through the shared {@see RatingGate}, exactly like its twelve
+ * sibling surfaces ({@see \Phlix\Server\Http\Controllers\MediaItemController}
+ * and the eleven sites in {@see \Phlix\Server\WebPortal\WebPortalRouter}). A
+ * null filter (owner / un-capped profile / unauthenticated) is a strict no-op.
+ *
  * @package Phlix\Server\Http\Controllers
  * @since   S31
  */
@@ -48,12 +56,25 @@ final class MostWatchedController
     private const DEFAULT_LIMIT = 20;
 
     /**
-     * @param StatsCollector $stats Global playback-stats aggregate source.
-     * @param ItemRepository $items Media repository for hydrating the top IDs.
+     * @param StatsCollector $stats      Global playback-stats aggregate source.
+     * @param ItemRepository $items      Media repository for hydrating the top IDs.
+     * @param RatingGate     $ratingGate Shared parental-control access gate.
+     *
+     * ⚠ `$ratingGate` is deliberately REQUIRED and NON-NULLABLE. This controller
+     * is built by PHP-DI `autowire()`
+     * ({@see \Phlix\Common\Container\Providers\AdminServicesProvider}), and
+     * `autowire()` SILENTLY SKIPS optional constructor parameters — a
+     * `?RatingGate $ratingGate = null` would therefore be null in production
+     * forever (the rail ungated) while every unit test that hand-builds the
+     * controller with a gate stayed green. Same trap as `RatingGate::$users` and
+     * `MediaUserDataController::$ratingGate`, both of which had to be rescued
+     * with an explicit `constructorParameter()` binding. A required param cannot
+     * be skipped.
      */
     public function __construct(
         private readonly StatsCollector $stats,
         private readonly ItemRepository $items,
+        private readonly RatingGate $ratingGate,
     ) {
     }
 
@@ -68,6 +89,10 @@ final class MostWatchedController
      * {@see Request::queryPageSize()} so an unbounded `?limit=` cannot exhaust a
      * resident worker, and is then passed through
      * {@see StatsCollector::getTopMedia()}'s existing `LIMIT ?` signature.
+     *
+     * The hydrated rows are then passed through {@see RatingGate::filterItems()}
+     * so a rating-capped active profile never sees an over-cap title in the
+     * rail (S213); `total` reflects the POST-filter list.
      *
      * @param Request              $request The HTTP request (query.limit).
      * @param array<string,string> $params  Path parameters (unused).
@@ -95,6 +120,19 @@ final class MostWatchedController
         // order and silently drops any since-deleted item, so the rail stays in
         // popularity order and never references a missing row.
         $rows = $this->items->findByIds($ids);
+
+        // PARENTAL CAP (S213). The aggregate above is server-wide, so without
+        // this a PG-capped profile saw the server's most-watched R-rated titles
+        // on the first screen it ever loads. Filter on the RAW rows: findByIds()
+        // is a `SELECT *`, so each row still carries `content_rating`/`parent_id`
+        // and RatingGate settles most rows with zero extra DB work. `total` is
+        // recomputed from the filtered list below, so the count never leaks the
+        // number of hidden titles. Strict no-op when the filter is null (owner,
+        // un-capped profile, or unauthenticated).
+        $filter = $this->ratingGate->resolveFilterForUser($request->userId ?? '');
+        if ($filter !== null) {
+            $rows = $this->ratingGate->filterItems($rows, $filter, 'id');
+        }
 
         $items = array_map(
             static fn (array $item): array => MediaItemShaper::shape($item),

@@ -4,7 +4,10 @@ declare(strict_types=1);
 
 namespace Phlix\Tests\Unit\Server\Http\Controllers;
 
+use Phlix\Auth\UserProfileManager;
+use Phlix\Auth\UserRepository;
 use Phlix\Media\Library\ItemRepository;
+use Phlix\Media\Library\RatingGate;
 use Phlix\Server\Http\Controllers\MostWatchedController;
 use Phlix\Server\Http\Middleware\AuthMiddleware;
 use Phlix\Server\Http\Request;
@@ -16,9 +19,180 @@ use PHPUnit\Framework\TestCase;
  * S31: public "Most Watched" rail — GLOBAL trending fed by
  * StatsCollector::getTopMedia(), shaped through MediaItemShaper like the other
  * media-list rails, and gated by AuthMiddleware to match the home-rail audience.
+ *
+ * S213 adds the parental half: the aggregate is server-wide, so the rail must
+ * post-filter through {@see RatingGate} or a rating-capped child profile sees
+ * the server's most-watched R-rated titles on the first screen it loads.
  */
 final class MostWatchedControllerTest extends TestCase
 {
+    /**
+     * A REAL {@see RatingGate} (it is final — not mockable) over test doubles,
+     * resolving to `$filter` for any signed-in account.
+     *
+     * `$effective` seeds {@see ItemRepository::effectiveContentRatingsForIds()}
+     * for rows that carry no `content_rating` of their own.
+     *
+     * @param array{allowedRatings: list<string>, allowUnrated: bool}|null $filter
+     * @param array<string, string|null>                                   $effective
+     */
+    private function gateResolving(?array $filter, array $effective = []): RatingGate
+    {
+        $gateItems = $this->createMock(ItemRepository::class);
+        $gateItems->method('effectiveContentRatingsForIds')->willReturn($effective);
+
+        $profiles = $this->createMock(UserProfileManager::class);
+        $profiles->method('getActiveRatingFilter')->willReturn($filter);
+
+        // Non-admin account, so the owner shortcut does NOT short-circuit the cap.
+        $users = $this->createMock(UserRepository::class);
+        $users->method('findById')->willReturn(null);
+
+        return new RatingGate($gateItems, $profiles, $users);
+    }
+
+    /**
+     * The owner / un-capped-profile gate: a strict no-op, which is the posture
+     * every pre-S213 assertion in this file was written against.
+     */
+    private function unCappedGate(): RatingGate
+    {
+        return $this->gateResolving(null);
+    }
+
+    /**
+     * 🚨 S213 — THE DEFECT. A PG-capped active profile must receive ZERO
+     * over-cap rows from a fixture that contains both, and the envelope's
+     * `total` must count only what it can actually see (so the count does not
+     * leak how many titles were hidden).
+     *
+     * Asserted on the RETURNED ROWS, deliberately not on the route table or the
+     * middleware list: the route was always correctly registered and
+     * AuthMiddleware-gated, and the hole lived entirely inside the handler.
+     */
+    public function testACappedProfileGetsZeroOverCapRowsFromTheRail(): void
+    {
+        $stats = $this->createMock(StatsCollector::class);
+        $stats->method('getTopMedia')->willReturn([
+            ['media_item_id' => 'r-1',  'play_count' => 99],
+            ['media_item_id' => 'pg-1', 'play_count' => 50],
+            ['media_item_id' => 'nc-1', 'play_count' => 20],
+        ]);
+
+        $items = $this->createMock(ItemRepository::class);
+        $items->method('findByIds')->willReturn([
+            ['id' => 'r-1',  'name' => 'Very Adult Blockbuster', 'type' => 'movie',
+                'content_rating' => 'R', 'metadata' => []],
+            ['id' => 'pg-1', 'name' => 'Family Film', 'type' => 'movie',
+                'content_rating' => 'PG', 'metadata' => []],
+            ['id' => 'nc-1', 'name' => 'Adults Only', 'type' => 'movie',
+                'content_rating' => 'NC-17', 'metadata' => []],
+        ]);
+
+        $controller = new MostWatchedController(
+            $stats,
+            $items,
+            $this->gateResolving(['allowedRatings' => ['G', 'PG'], 'allowUnrated' => false])
+        );
+
+        $request = new Request();
+        $request->userId = 'kid-account';
+
+        $response = $controller->mostWatched($request, []);
+
+        $this->assertSame(200, $response->statusCode);
+        /** @var array<string, mixed> $body */
+        $body = json_decode($response->body, true);
+
+        $this->assertSame(
+            ['pg-1'],
+            array_column($body['items'], 'id'),
+            'An over-cap title reached a PG-capped profile on the home screen.'
+        );
+        $this->assertSame(1, $body['total'], 'total must count the POST-cap list.');
+    }
+
+    /**
+     * The inherited half: an episode row with a NULL own rating takes its
+     * SERIES rating, so a capped profile cannot reach an over-cap series'
+     * episodes through the rail either. Also pins that a genuinely-unrated row
+     * is refused when the cap forbids unrated content.
+     */
+    public function testTheCapUsesTheEFFECTIVERatingNotJustTheOwnColumn(): void
+    {
+        $stats = $this->createMock(StatsCollector::class);
+        $stats->method('getTopMedia')->willReturn([
+            ['media_item_id' => 'ep-of-r-series',  'play_count' => 9],
+            ['media_item_id' => 'ep-of-pg-series', 'play_count' => 8],
+            ['media_item_id' => 'orphan',          'play_count' => 7],
+        ]);
+
+        $items = $this->createMock(ItemRepository::class);
+        $items->method('findByIds')->willReturn([
+            // Episodes carry NULL content_rating; the series above them decides.
+            ['id' => 'ep-of-r-series', 'name' => 'E1', 'type' => 'episode',
+                'content_rating' => null, 'parent_id' => 'series-r', 'metadata' => []],
+            ['id' => 'ep-of-pg-series', 'name' => 'E1', 'type' => 'episode',
+                'content_rating' => null, 'parent_id' => 'series-pg', 'metadata' => []],
+            // No parent and no rating: genuinely unrated.
+            ['id' => 'orphan', 'name' => 'Mystery', 'type' => 'movie',
+                'content_rating' => null, 'metadata' => []],
+        ]);
+
+        $controller = new MostWatchedController(
+            $stats,
+            $items,
+            $this->gateResolving(
+                ['allowedRatings' => ['TV-G', 'TV-PG'], 'allowUnrated' => false],
+                ['series-r' => 'TV-MA', 'series-pg' => 'TV-PG']
+            )
+        );
+
+        $request = new Request();
+        $request->userId = 'kid-account';
+
+        $response = $controller->mostWatched($request, []);
+
+        /** @var array<string, mixed> $body */
+        $body = json_decode($response->body, true);
+        $this->assertSame(['ep-of-pg-series'], array_column($body['items'], 'id'));
+    }
+
+    /**
+     * THE NOISE CONTROL, and the reason the gate is safe to apply
+     * unconditionally: the account OWNER / an un-capped profile resolves a null
+     * filter, and the rail is then byte-for-byte what it was before S213 — the
+     * same rows, in the same order, with the same total.
+     */
+    public function testAnUnCappedProfileSeesTheRailUnchanged(): void
+    {
+        $stats = $this->createMock(StatsCollector::class);
+        $stats->method('getTopMedia')->willReturn([
+            ['media_item_id' => 'r-1',  'play_count' => 99],
+            ['media_item_id' => 'pg-1', 'play_count' => 50],
+        ]);
+
+        $items = $this->createMock(ItemRepository::class);
+        $items->method('findByIds')->willReturn([
+            ['id' => 'r-1',  'name' => 'Adult', 'type' => 'movie',
+                'content_rating' => 'R', 'metadata' => []],
+            ['id' => 'pg-1', 'name' => 'Family', 'type' => 'movie',
+                'content_rating' => 'PG', 'metadata' => []],
+        ]);
+
+        $controller = new MostWatchedController($stats, $items, $this->unCappedGate());
+
+        $request = new Request();
+        $request->userId = 'owner-account';
+
+        $response = $controller->mostWatched($request, []);
+
+        /** @var array<string, mixed> $body */
+        $body = json_decode($response->body, true);
+        $this->assertSame(['r-1', 'pg-1'], array_column($body['items'], 'id'));
+        $this->assertSame(2, $body['total']);
+    }
+
     /**
      * The endpoint returns the top media, in play-count order, shaped and
      * TYPE-CORRECT (episode stays 'episode', track stays 'track' — never
@@ -45,7 +219,7 @@ final class MostWatchedControllerTest extends TestCase
                 ['id' => 'm2', 'name' => 'Track One', 'type' => 'track', 'metadata' => []],
             ]);
 
-        $controller = new MostWatchedController($stats, $items);
+        $controller = new MostWatchedController($stats, $items, $this->unCappedGate());
 
         $response = $controller->mostWatched(new Request(), []);
 
@@ -81,7 +255,7 @@ final class MostWatchedControllerTest extends TestCase
         $items = $this->createMock(ItemRepository::class);
         $items->method('findByIds')->willReturn([]);
 
-        $controller = new MostWatchedController($stats, $items);
+        $controller = new MostWatchedController($stats, $items, $this->unCappedGate());
 
         $request = new Request();
         $request->query = ['limit' => '5'];
@@ -111,7 +285,7 @@ final class MostWatchedControllerTest extends TestCase
         $items = $this->createMock(ItemRepository::class);
         $items->method('findByIds')->willReturn([]);
 
-        $controller = new MostWatchedController($stats, $items);
+        $controller = new MostWatchedController($stats, $items, $this->unCappedGate());
 
         $request = new Request();
         $request->query = ['limit' => '999'];
@@ -144,7 +318,7 @@ final class MostWatchedControllerTest extends TestCase
             ->with([])
             ->willReturn([]);
 
-        $controller = new MostWatchedController($stats, $items);
+        $controller = new MostWatchedController($stats, $items, $this->unCappedGate());
 
         $response = $controller->mostWatched(new Request(), []);
 
@@ -186,7 +360,7 @@ final class MostWatchedControllerTest extends TestCase
                 ['id' => 'beta',  'name' => 'B', 'type' => 'movie', 'metadata' => []],
             ]);
 
-        $controller = new MostWatchedController($stats, $items);
+        $controller = new MostWatchedController($stats, $items, $this->unCappedGate());
 
         $response = $controller->mostWatched(new Request(), []);
 
@@ -223,7 +397,7 @@ final class MostWatchedControllerTest extends TestCase
                 ['id' => 'good-2', 'name' => 'Two', 'type' => 'movie', 'metadata' => []],
             ]);
 
-        $controller = new MostWatchedController($stats, $items);
+        $controller = new MostWatchedController($stats, $items, $this->unCappedGate());
 
         $response = $controller->mostWatched(new Request(), []);
 
@@ -245,7 +419,7 @@ final class MostWatchedControllerTest extends TestCase
         $stats->method('getTopMedia')->willReturn([]);
         $items = $this->createMock(ItemRepository::class);
         $items->method('findByIds')->willReturn([]);
-        $controller = new MostWatchedController($stats, $items);
+        $controller = new MostWatchedController($stats, $items, $this->unCappedGate());
 
         $router = new Router();
         $router->group(

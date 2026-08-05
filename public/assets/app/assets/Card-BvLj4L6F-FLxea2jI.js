@@ -1,2 +1,0 @@
-import{r as e}from"./pinia-BVT-Qm9z.js";import{A as t,N as n,_ as r,u as i,xt as a}from"./runtime-core.esm-bundler-BsKpGOEM.js";var o=e(r({__name:`Card`,props:{padding:{type:Boolean,default:!0}},setup(e){return(r,o)=>(t(),i(`div`,{class:a([`phlix-card`,{"phlix-card--no-padding":!e.padding}])},[n(r.$slots,`default`,{},void 0,!0)],2))}}),[[`__scopeId`,`data-v-0e99c3b2`]]);export{o as t};
-//# sourceMappingURL=Card-BvLj4L6F-FLxea2jI.js.map

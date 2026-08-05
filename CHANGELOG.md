@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] - 2026-07-24
+## [Unreleased]
 
 ### Fixed
 
@@ -2380,8 +2380,6 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   - `config/ffmpeg.php` gains a `loudness` block (`enabled` defaults to **false**) that, when enabled, applies an EBU R128 `loudnorm` audio filter (`I`/`LRA`/`TP`) to **re-encoded** audio on every segment-assembly path (software, hwaccel, and audio-only). **Copy-audio rungs** (e.g. the `original` variant, `-c:a copy`) and **direct-play sessions bypass loudness normalization by design** — you cannot filter a stream that is copied rather than decoded (documented in the config block).
   - The `X-Phlix-Client-Capabilities` request header (a JSON codec-support map, e.g. `{"eac3":false}`) is now honored on the `/playback-info` `direct_play` verdict: a client that declares it cannot decode the item's audio codec is steered to transcode instead of direct play. Absent/empty/invalid header → `direct_play` stays `true` (backward compatible). The verdict keys on the same first (lowest-`stream_index`) audio stream the transcode copy-vs-encode decision uses, so the two agree.
 - **SV-1.9 — configurable segment-cache disk-space threshold.** New `hls.min_disk_space_bytes` config key (env `HLS_MIN_DISK_SPACE_BYTES`, default **500 MiB**). When free space on the segment-cache directory falls below the threshold, the server sweeps the cache and returns **`503`** with `Retry-After: 3` instead of failing an encode with `ENOSPC`.
-- **Plugin test credentials endpoint.** New `testCredentials` endpoint in `PluginAdminController` allows the admin UI to verify whether plugin credentials (e.g. API keys) are valid before saving them.
-- **Plugin `redirect_url` support.** `PluginLoader` now reads and validates the optional `redirect_url` field from plugin manifests, enabling OAuth-style callback URLs in first-party plugins.
 
 ### Fixed
 
@@ -2392,7 +2390,6 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 - **PHP 8.5 compatibility — removed deprecated no-op `curl_close()` / `imagedestroy()` calls.** Both have been no-ops since PHP 8.0 and emit `E_DEPRECATED` under PHP 8.5, which surfaced as fatal log-write failures during TV-series metadata matching (16 `curl_close()` sites across 13 files; 19 `imagedestroy()` sites in `ArtworkStorage`/`AvatarStorage`/`PhotoController`). Behavior is unchanged — the calls did nothing. (`finfo_close()` was already removed previously.)
 - **Admin Logs page — removed a redundant `[LEVEL] <datetime>` prefix** that ~37 Monolog call sites (across 6 worker/handler files) hand-built into their message strings. Monolog's `LineFormatter` already emits `[<iso8601>] <channel>.<LEVEL>: <message>`, so the hand-built prefix doubled the level and timestamp on every rendered line; each record is now a single, clean level/timestamp. (`error_log()` sites are untouched — there the prefix is the only metadata.) The client-side Logs renderer overhaul ships in `@phlix/ui` v0.82.0.
 - **Router `HEAD` fallback for static-only `GET` routes.** A `HEAD` request now correctly falls back to a purely-static `GET` route even when no parametric `GET` routes are registered (previously the fallback could 404 or warn on a null iteration).
-- **Plugin-safe `LoggerInterface` binding fix.** Added `LoggerInterface::class` as an alias to `StructuredLogger::class` in `CoreServicesProvider` so plugins that request `Psr\Log\LoggerInterface` from the container resolve correctly instead of failing to autowire.
 - **SV-4.16 — JWKS endpoint 500 on operator-supplied Ed25519 keys.** `GET /.well-known/jwks.json` returned an unhandled **500** whenever `config/hub-server-key.pem` was a standard PKCS#8 Ed25519 key (`-----BEGIN PRIVATE KEY-----`, as produced by `openssl genpkey -algorithm Ed25519`) — `Ed25519KeyManager::parsePem()` only accepted the app's custom `-----BEGIN ED25519 PRIVATE KEY-----` label wrapping a raw libsodium secret. The reader now accepts **both** formats: for PKCS#8 it validates the Ed25519 OID (`1.3.101.112`), extracts the 32-byte seed, and expands it via `sodium_crypto_sign_seed_keypair()` to the 64-byte secret the rest of the code expects (non-Ed25519 PKCS#8 keys are rejected at the OID gate; the native format parses exactly as before). The writer (`buildPem()`) still emits the native format — no key rotation or identity change. As defense-in-depth, `HubClient::getPublicKeysJwk()` now catches any key-load failure, logs it at **ERROR**, and serves a valid RFC 7517 `{"keys":[]}` at HTTP **200** instead of letting the exception escape as a 500 (the `429` rate-limit path is thrown before this and is unaffected).
 - **item-5+ — WebSocket connection metrics recorded the loopback proxy IP and invented phantom rows.** The `:8097` S2 connection metrics now record the resolved **real** client IP (derived like the auth surfaces, not the loopback HAProxy peer). Additionally, connections that fire a bare-TCP `onConnect` but never complete the WebSocket handshake (health checks, port scanners, aborted upgrades) no longer produce a phantom `metrics_connections` row mislabeled `kind=http` with a null IP: the server now only touches (via `onClose` and the periodic touch timer) connections it actually opened after the handshake.
 - **item-5a — noisy per-segment hardware-accel diagnostics.** The per-segment `[HWACCEL_DEBUG]` transcode logs were emitted at **ERROR** and carried a per-call `debug_backtrace()`; they are now logged at **debug** with the backtrace dropped, so normal hardware-accelerated playback no longer floods `error.log`.
@@ -2408,6 +2405,17 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 - **Test-coverage hardening.** Added missing behavioral tests across SV-0.6 (TMDB collections UUID handling), SV-0.7 (marker/intro-detection worker supervision), SV-1.8 (CSRF Origin exact-match), SV-1.9 (ENOSPC guard), SV-4.8 (Router static-map fast path + DI string-handler resolution), and SV-4.12 (stale-job reaper glob), plus the SV-3.3 and SV-4.15 features above — closing "green-but-untested" gaps found during re-audit. No behavior change beyond the fixes listed above.
 - **Plugin catalog pinned to v2.1.8.** Bumped `OFFICIAL_PINNED_REF` (the tag of `detain/phlix-plugins` the admin **Plugins** catalog resolves against) to **v2.1.8**, shipping the trakt/musicbrainz/anilist PHP-8.5 `curl_close()` fixes to the catalog listing.
+
+## [1.2.3] — 2026-07-12
+
+### Fixed
+
+- **Plugin-safe `LoggerInterface` binding fix.** Added `LoggerInterface::class` as an alias to `StructuredLogger::class` in `CoreServicesProvider` so plugins that request `Psr\Log\LoggerInterface` from the container resolve correctly instead of failing to autowire.
+
+### Added
+
+- **Plugin test credentials endpoint.** New `testCredentials` endpoint in `PluginAdminController` allows the admin UI to verify whether plugin credentials (e.g. API keys) are valid before saving them.
+- **Plugin `redirect_url` support.** `PluginLoader` now reads and validates the optional `redirect_url` field from plugin manifests, enabling OAuth-style callback URLs in first-party plugins.
 
 ## [SV-0.2] — 2026-07-10
 

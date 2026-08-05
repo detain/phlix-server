@@ -2645,6 +2645,75 @@ class Application
         // are reaped; on-demand seek jobs are inserted as 'completed' precisely
         // so this cannot tear them down mid-playback.
         $this->startTranscodeReaperTimer();
+
+        // Start the core (server application) update check — S74. Two arms: a
+        // one-shot catch-up a few minutes after boot, plus the steady-state
+        // daily poll. Registered LAST so a failure here cannot perturb the
+        // timers above; it is guarded internally as well.
+        $this->startCoreUpdateCheckTimer();
+    }
+
+    /**
+     * Arm the core update-check worker (S74 / updates.md #48).
+     *
+     * Reads `config/updates.php` for the poll interval — the same
+     * `_config_dir`-relative `include` {@see self::startBackupTimerIfEnabled()}
+     * uses — and hands it to
+     * {@see \Phlix\Server\Updates\CoreUpdateCheckWorker::start()}, which arms
+     * BOTH the boot catch-up and the steady-state poll. See that method for why
+     * a bare `Timer::add(86400, …)` is not sufficient on a box that is deployed
+     * to; it is the same defect that left `backups` empty on production.
+     *
+     * Fully guarded: this runs inside the forked `phlix-background-timers`
+     * worker, where an uncaught throwable takes the process down. Losing the
+     * update check must never cost availability.
+     *
+     * The `updates.check_enabled` toggle is deliberately NOT consulted here —
+     * it is read as an EFFECTIVE value on every tick by
+     * {@see \Phlix\Server\Updates\CoreUpdateCheckService::isCheckEnabled()}, so
+     * an admin flipping it takes effect without a restart. Gating the ARMING on
+     * it would silently require one.
+     *
+     * @return void
+     *
+     * @since S74 (core update check)
+     */
+    private function startCoreUpdateCheckTimer(): void
+    {
+        $logger = \Phlix\Common\Logger\LoggerFactory::get(\Phlix\Common\Logger\LogChannels::APPLICATION);
+
+        try {
+            $configDirRaw = $this->config['_config_dir'] ?? 'config';
+            $configDir = is_string($configDirRaw) ? $configDirRaw : 'config';
+            $updatesConfigFile = $configDir . '/updates.php';
+
+            $pollSeconds = \Phlix\Server\Updates\CoreUpdateCheckWorker::DEFAULT_POLL_SECONDS;
+            if (file_exists($updatesConfigFile)) {
+                /** @var mixed $updatesConfig */
+                $updatesConfig = include $updatesConfigFile;
+                if (is_array($updatesConfig) && is_int($updatesConfig['poll_seconds'] ?? null)) {
+                    /** @var int $configuredPoll */
+                    $configuredPoll = $updatesConfig['poll_seconds'];
+                    if ($configuredPoll > 0) {
+                        $pollSeconds = $configuredPoll;
+                    }
+                }
+            }
+
+            /** @var \Phlix\Server\Updates\CoreUpdateCheckWorker|null $worker */
+            $worker = $this->container?->get(\Phlix\Server\Updates\CoreUpdateCheckWorker::class);
+            if ($worker === null) {
+                $logger->debug('CoreUpdateCheckWorker not available; skipping update-check timer');
+
+                return;
+            }
+
+            $worker->start($pollSeconds);
+        } catch (\Throwable $e) {
+            $logger->error('Failed to start core update check timer', [
+                'error' => $e->getMessage(),
+            ]);
+        }
     }
 
     /**

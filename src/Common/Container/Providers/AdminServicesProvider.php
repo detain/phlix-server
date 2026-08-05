@@ -29,6 +29,7 @@ use Phlix\Server\Http\Controllers\Admin\AdminMetadataSourceController;
 use Phlix\Server\Http\Controllers\Admin\AdminRestartController;
 use Phlix\Server\Http\Controllers\Admin\AdminTranscodingController;
 use Phlix\Server\Http\Controllers\Admin\AdminSettingsController;
+use Phlix\Server\Http\Controllers\Admin\AdminUpdatesController;
 use Phlix\Server\Http\Controllers\Admin\AdminUserController;
 use Phlix\Server\Http\Controllers\Admin\AdminWebhooksController;
 use Phlix\Server\Http\Controllers\Admin\BackupController;
@@ -39,6 +40,10 @@ use Phlix\Server\Http\Controllers\Admin\WatchHistoryController;
 use Phlix\Server\Http\Controllers\MostWatchedController;
 use Phlix\Server\Http\Controllers\Stats\MetricsController;
 use Phlix\Server\Http\Controllers\Stats\StatsController;
+use Phlix\Server\Updates\AsyncVersionMarkerFetcher;
+use Phlix\Server\Updates\CoreUpdateCheckService;
+use Phlix\Server\Updates\CoreUpdateCheckWorker;
+use Phlix\Server\Updates\VersionMarkerFetcherInterface;
 use Phlix\Stats\StatsCollector;
 use Phlix\Webhooks\WebhookHttpClient;
 use Phlix\Webhooks\WebhookService;
@@ -234,6 +239,64 @@ final class AdminServicesProvider implements ServiceProviderInterface
                     return new AdminRestartController($pidFile);
                 }
             ),
+
+            // ----------------------------------------------------------------
+            // Core (server application) update check — S74 / updates.md #48.
+            //
+            // The fetcher is bound to the INTERFACE so a test can swap in a
+            // double without touching the service's own binding; production
+            // always gets the workerman/http-client callback-mode
+            // implementation. `config/updates.php` is read through
+            // SettingsRepository::getDefault(), which is a cached config-file
+            // read with NO database round-trip — important because
+            // AdminRoutes::register() resolves every controller it binds at
+            // route-bind time, i.e. on every worker boot.
+            // ----------------------------------------------------------------
+            VersionMarkerFetcherInterface::class => factory(
+                static function (ContainerInterface $c): VersionMarkerFetcherInterface {
+                    /** @var SettingsRepository $settings */
+                    $settings = $c->get(SettingsRepository::class);
+                    /** @var mixed $timeout */
+                    $timeout = $settings->getDefault('updates.timeout_seconds');
+
+                    return new AsyncVersionMarkerFetcher(
+                        is_int($timeout) && $timeout > 0 ? $timeout : 10,
+                    );
+                }
+            ),
+
+            CoreUpdateCheckService::class => factory(
+                static function (ContainerInterface $c): CoreUpdateCheckService {
+                    /** @var SettingsRepository $settings */
+                    $settings = $c->get(SettingsRepository::class);
+                    /** @var VersionMarkerFetcherInterface $fetcher */
+                    $fetcher = $c->get(VersionMarkerFetcherInterface::class);
+                    /** @var StructuredLogger $logger */
+                    $logger = $c->get(StructuredLogger::class);
+
+                    /** @var mixed $markerUrl */
+                    $markerUrl = $settings->getDefault('updates.marker_url');
+                    /** @var mixed $updateCommand */
+                    $updateCommand = $settings->getDefault('updates.update_command');
+
+                    return new CoreUpdateCheckService(
+                        $settings,
+                        $fetcher,
+                        $logger,
+                        is_string($markerUrl) && $markerUrl !== '' ? $markerUrl : '',
+                        is_string($updateCommand) ? $updateCommand : '',
+                    );
+                }
+            ),
+
+            // `logger` is named explicitly for the PHP-DI reason documented on
+            // BackupManager above: autowire() skips parameters that carry a
+            // default. This one has no default, but the binding is stated so the
+            // worker shares this container's initialised logger instance.
+            CoreUpdateCheckWorker::class => autowire()
+                ->constructorParameter('logger', get(StructuredLogger::class)),
+
+            AdminUpdatesController::class => autowire(),
         ]);
     }
 }

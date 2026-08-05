@@ -17,6 +17,7 @@ use Phlix\Server\Http\Controllers\Admin\AdminProfileController;
 use Phlix\Server\Http\Controllers\Admin\AdminRestartController;
 use Phlix\Server\Http\Controllers\Admin\AdminSettingsController;
 use Phlix\Server\Http\Controllers\Admin\AdminTranscodingController;
+use Phlix\Server\Http\Controllers\Admin\AdminUpdatesController;
 use Phlix\Server\Http\Controllers\Admin\AdminUserController;
 use Phlix\Server\Http\Controllers\Admin\AdminWebhooksController;
 use Phlix\Server\Http\Controllers\Admin\BackupController;
@@ -68,6 +69,8 @@ use Psr\Container\ContainerInterface;
  *  - `DELETE /api/v1/admin/plugins/{name}`           → uninstall
  *  - `GET    /api/v1/admin/settings`                 → effective settings
  *  - `PUT    /api/v1/admin/settings`                 → persist overrides
+ *  - `GET    /api/v1/admin/updates/status`           → core update-check status (S74)
+ *  - `PUT    /api/v1/admin/updates/settings`         → core update-check toggle (S74)
  *  - `GET    /api/v1/admin/fs/browse`                → list subdirectories
  *  - `GET    /api/v1/admin/libraries/{id}/duplicates` → preview duplicate groups
  *  - `POST   /api/v1/admin/media/merge`              → apply a duplicate merge
@@ -347,6 +350,20 @@ final class AdminRoutes
                 $r->post('/webhooks/subscriptions', [$webhooksController, 'createSubscription']);
                 $r->delete('/webhooks/subscriptions/{id}', [$webhooksController, 'deleteSubscription']);
                 $r->get('/webhooks/deliveries', [$webhooksController, 'getDeliveries']);
+
+                // Core (server application) update check — S74 / updates.md #48.
+                //
+                // Read-only status + one boolean toggle. There is deliberately
+                // NO apply action: `data.updateCommand` is a copy-to-clipboard
+                // string the operator pastes into a root shell, and this handler
+                // never invokes git/composer/systemctl. The status read performs
+                // no outbound I/O either — the marker fetch belongs to the
+                // count=1 background-timer worker, not to a request.
+                /** @var AdminUpdatesController $updatesController */
+                $updatesController = $container->get(AdminUpdatesController::class);
+
+                $r->get('/updates/status', [$updatesController, 'status']);
+                $r->put('/updates/settings', [$updatesController, 'updateSettings']);
             },
             [$adminMiddleware],
         );

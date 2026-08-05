@@ -14,6 +14,7 @@ use Phlix\Auth\AuthProviderRegistry;
 use Phlix\Auth\UserProfileManager;
 use Phlix\Auth\UserRepository;
 use Phlix\Common\Logger\AuditLogger;
+use Phlix\Common\Logger\StructuredLogger;
 use Phlix\Media\Library\DuplicateFinder;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Metadata\Resolution\SourceRegistry;
@@ -39,6 +40,7 @@ use Phlix\Server\Http\Controllers\Admin\AdminProfileController;
 use Phlix\Server\Http\Controllers\Admin\AdminRestartController;
 use Phlix\Server\Http\Controllers\Admin\AdminSettingsController;
 use Phlix\Server\Http\Controllers\Admin\AdminTranscodingController;
+use Phlix\Server\Http\Controllers\Admin\AdminUpdatesController;
 use Phlix\Server\Http\Controllers\Admin\AdminUserController;
 use Phlix\Server\Http\Controllers\Admin\AdminWebhooksController;
 use Phlix\Server\Http\Controllers\Admin\BackupController;
@@ -50,6 +52,8 @@ use Phlix\Server\Http\Controllers\AccessScheduleController;
 use Phlix\Server\Http\Controllers\AuthProviderController;
 use Phlix\Server\Http\Controllers\ProfileTagController;
 use Phlix\Server\Http\Controllers\StreamLimitController;
+use Phlix\Server\Updates\CoreUpdateCheckService;
+use Phlix\Server\Updates\VersionMarkerFetcherInterface;
 use Phlix\Plugins\Catalog\PluginCatalogService;
 use Phlix\Plugins\Catalog\PluginUpdateService;
 use Phlix\Server\Http\Controllers\PluginAdminController;
@@ -190,6 +194,26 @@ final class AdminRoutesTest extends TestCase
             $profileAccessPolicy,
         );
 
+        // Core update-check controller (S74). AdminRoutes::register() eagerly
+        // resolves it at bind time; the plugin-only tests below never dispatch
+        // to /updates/*, so a service over a mocked Connection is sufficient. The
+        // fetcher would throw if it were ever reached — nothing here polls.
+        $adminUpdatesController = new AdminUpdatesController(
+            new CoreUpdateCheckService(
+                new SettingsRepository($this->createMock(Connection::class)),
+                new class implements VersionMarkerFetcherInterface {
+                    public function fetch(string $url, callable $onDone): void
+                    {
+                        throw new \RuntimeException('No update-marker fetch expected in this test: ' . $url);
+                    }
+                },
+                $this->createMock(StructuredLogger::class),
+                'https://example.invalid/VERSION',
+                'noop',
+            ),
+            new AdminMiddleware($this->users, $this->audit),
+        );
+
         $container = new class (
             $this->loader,
             $this->users,
@@ -215,6 +239,7 @@ final class AdminRoutesTest extends TestCase
             $accessScheduleController,
             $profileTagController,
             $streamLimitController,
+            $adminUpdatesController,
         ) implements ContainerInterface {
             private Plugin $oidcPlugin;
             private LdapPlugin $ldapPlugin;
@@ -245,6 +270,7 @@ final class AdminRoutesTest extends TestCase
                 private readonly AccessScheduleController $accessScheduleController,
                 private readonly ProfileTagController $profileTagController,
                 private readonly StreamLimitController $streamLimitController,
+                private readonly AdminUpdatesController $adminUpdatesController,
             ) {
                 $tempDir = sys_get_temp_dir() . '/phlix_oidc_test_' . uniqid('', true);
                 mkdir($tempDir, 0775, true);
@@ -322,6 +348,7 @@ final class AdminRoutesTest extends TestCase
                     AccessScheduleController::class => $this->accessScheduleController,
                     ProfileTagController::class => $this->profileTagController,
                     StreamLimitController::class => $this->streamLimitController,
+                    AdminUpdatesController::class => $this->adminUpdatesController,
                     default => throw new \RuntimeException("no binding for $id"),
                 };
             }
@@ -355,6 +382,7 @@ final class AdminRoutesTest extends TestCase
                     AccessScheduleController::class,
                     ProfileTagController::class,
                     StreamLimitController::class,
+                    AdminUpdatesController::class,
                 ], true);
             }
         };

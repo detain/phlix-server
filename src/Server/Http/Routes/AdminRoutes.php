@@ -305,9 +305,14 @@ final class AdminRoutes
                 $r->get('/profiles/{profileId}/schedules', [$accessScheduleController, 'listForProfile']);
                 $r->post('/profiles/{profileId}/schedules', [$accessScheduleController, 'createForProfile']);
                 $r->get('/profiles/{profileId}/schedules/{scheduleId}', [$accessScheduleController, 'getSchedule']);
-                // The PUT is what S202 (the SPA's DELETE-then-CREATE ordering bug)
-                // depends on existing; it is registered now so that step has a
-                // target, even though today's SPA does not call it yet.
+                // The PUT is the admin SPA's schedule EDIT path. It was registered
+                // ahead of a caller for S202 (the DELETE-then-CREATE ordering bug
+                // that could destroy a child's time restriction); S202 has since
+                // shipped in `phlix-ui@087755e5`, whose
+                // `AdminUsersApi.updateProfileSchedule()`
+                // (`phlix-ui/src/api/admin/users.ts`) PUTs exactly this path with
+                // `{name, start_time, end_time, days_of_week, is_active}`. So this
+                // is a live route with a live caller — not a placeholder.
                 $r->put('/profiles/{profileId}/schedules/{scheduleId}', [$accessScheduleController, 'updateSchedule']);
                 $r->delete(
                     '/profiles/{profileId}/schedules/{scheduleId}',

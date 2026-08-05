@@ -60,9 +60,8 @@ Example: `v1.2.3` where:
 - [ ] PHPStan level 9 clean
 - [ ] PHPCS PSR-12 clean
 - [ ] Changelog updated
-- [ ] Version bumped in `composer.json`
+- [ ] Version bumped with `./scripts/release.sh` (see below — it bumps every source at once)
 - [ ] Docker images built and pushed
-- [ ] Helm chart version bumped
 - [ ] Draft release created and reviewed
 - [ ] Release notes reviewed
 
@@ -78,23 +77,35 @@ git checkout -b release/v1.2.0
 
 ### 2. Update Version
 
-Update `composer.json`:
-```json
-{
-  "version": "1.2.0",
-  "extra": {
-    "phlix": {
-      "minHubVersion": "1.2.0"
-    }
-  }
-}
+**Never edit the version by hand.** Run:
+
+```bash
+./scripts/release.sh [patch|minor|major] [--dry-run]
 ```
 
-Update Helm chart `Chart.yaml`:
-```yaml
-version: 1.2.0
-appVersion: "1.2.0"
-```
+`src/Common/Version.php::STRING` is the **authoritative** version source — it is
+what the API reports, what `PluginLoader` enforces `phlix_min_server_version`
+against, and what the S74 core-update check compares the published marker to.
+The script reads it and writes the bumped value to every mirror in one commit:
+
+| Source | Role |
+|---|---|
+| `src/Common/Version.php` `public const STRING` | authoritative |
+| `VERSION` (repo root) | the update marker every deployed server polls |
+| `k8s/helm/phlix/Chart.yaml` `version:` + `appVersion:` | Helm chart |
+
+`composer.json` deliberately carries **no** `version` field, and the script will
+never add one: the `composer-validate` CI job runs
+`composer validate --strict --no-check-publish`, which exits non-zero when the
+field is present (that was the decision in `f5375f7a`).
+
+The script refuses to release from a tree where those sources disagree, and
+`tests/Unit/Server/Updates/VersionSourcesAgreeTest.php` +
+`tests/Unit/Scripts/ReleaseScriptTest.php` keep any drift red in CI.
+
+`extra.phlix.minHubVersion` in `composer.json` is a compatibility floor, not a
+version of this package — bump it only when the server actually starts
+requiring a newer hub.
 
 ### 3. Update Changelog
 

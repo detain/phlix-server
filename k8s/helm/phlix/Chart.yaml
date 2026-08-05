@@ -2,9 +2,10 @@ apiVersion: v2
 name: phlix
 description: A Helm chart for Phlix Media Server
 type: application
-# Chart version (Helm artifact version) — bump independently of appVersion
+# Both fields are written by scripts/release.sh from the authoritative source,
+# src/Common/Version.php::STRING. Do not edit them by hand — they are pinned
+# equal to that constant by tests/Unit/Server/Updates/VersionSourcesAgreeTest.php.
 version: 1.2.3
-# appVersion mirrors composer.json version of phlix-server
 appVersion: "1.2.3"
 keywords:
   - media-server

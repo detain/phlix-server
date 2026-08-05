@@ -109,6 +109,17 @@ class BookController
      * resolvable userId — e.g. a bare signed-token serve), or when the gate is
      * unwired.
      *
+     * 🔓 S235 — the unauthenticated case above is a DELIBERATE, explicitly-named
+     * opt-out from {@see RatingGate::resolveFilterForUser()}'s fail-closed
+     * default, taken via {@see RatingGate::resolveFilterForSignedRequest()}.
+     * Every route that reaches this check sits behind
+     * {@see \Phlix\Server\Http\Middleware\SignedUrlMiddleware} (the OPDS feed
+     * group and the `read`/`cover`/`download` binary group), so "no userId" means
+     * "a valid signature was presented" — an e-reader or an `<img>`/`<a download>`
+     * cannot attach a Bearer header. An OPDS client using HTTP Basic DOES get a
+     * userId (the middleware sets it), so it stays capped; and the signed URLs
+     * themselves are minted only by the already-gated `getBook()` detail path.
+     *
      * @param array<string, mixed> $book The book row.
      */
     private function bookOverCap(Request $request, array $book): bool
@@ -117,7 +128,7 @@ class BookController
             return false;
         }
 
-        $filter = $this->ratingGate->resolveFilterForUser($request->userId ?? '');
+        $filter = $this->ratingGate->resolveFilterForSignedRequest($request->userId ?? '');
         if ($filter === null) {
             return false;
         }

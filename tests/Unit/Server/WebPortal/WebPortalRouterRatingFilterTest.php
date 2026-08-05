@@ -10,6 +10,7 @@ use Phlix\Auth\UserProfileManager;
 use Phlix\Auth\UserRepository;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Library\LibraryManager;
+use Phlix\Media\Library\RatingGate;
 use Phlix\Media\Markers\MarkerService;
 use Phlix\Media\Markers\PlaybackMarkerService;
 use Phlix\Server\Http\Request;
@@ -160,15 +161,34 @@ class WebPortalRouterRatingFilterTest extends TestCase
         $router->getMedia($this->cappedRequest(), []);
     }
 
-    public function testGetMediaAppliesNoFilterForUnauthenticatedRequest(): void
+    /**
+     * 🚨 S235 — this REPLACES `testGetMediaAppliesNoFilterForUnauthenticatedRequest`,
+     * which asserted the defect: "no userId → permissive". That equivalence of
+     * "no user" with "no cap" is exactly what let an anonymous caller reach
+     * `/api/v1/media/{id}/download`'s signed URL, so it is no longer the rule
+     * anywhere. An unidentified browse now carries a DENY-ALL cap into the
+     * listing SQL.
+     *
+     * Every route reaching this helper is inside this router's `AuthMiddleware`
+     * group, so the state is unreachable in production — this pins the safe
+     * DEFAULT, which is the point of the step.
+     *
+     * The cap's allow-list must also be NON-EMPTY: `ItemRepository::ratingCapClause()`
+     * treats an empty allow-list as "no filtering", so a `[]` cap would fail OPEN
+     * right here, in the one place the cap becomes SQL.
+     */
+    public function testGetMediaAppliesADenyAllCapForAnUnauthenticatedRequest(): void
     {
         $itemRepo = $this->createMock(ItemRepository::class);
         $itemRepo->expects($this->once())
             ->method('query')
-            ->with($this->callback(fn (array $params): bool => !isset($params['allowedRatings'])))
+            ->with($this->callback(function (array $params): bool {
+                return isset($params['allowedRatings'])
+                    && $params['allowedRatings'] === [RatingGate::NO_USER_RATING]
+                    && ($params['allowUnrated'] ?? null) === false;
+            }))
             ->willReturn(['items' => [], 'total' => 0, 'limit' => 50, 'offset' => 0]);
 
-        // No userId → no profile context → permissive.
         $router = $this->pg13Router($itemRepo, false);
         $router->getMedia(new Request(), []);
     }

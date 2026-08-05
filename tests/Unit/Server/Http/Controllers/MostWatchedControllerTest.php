@@ -61,6 +61,21 @@ final class MostWatchedControllerTest extends TestCase
     }
 
     /**
+     * The caller this handler actually has: a signed-in account. The route lives
+     * inside an `AuthMiddleware` group, so an unidentified request is 401'd
+     * before the handler runs — and since S235 the gate resolves a DENY-ALL cap
+     * for one, which would empty the rail. Fixtures here therefore name a user
+     * rather than defaulting to an anonymous `new Request()`.
+     */
+    private function signedInRequest(): Request
+    {
+        $request = new Request();
+        $request->userId = 'user-1';
+
+        return $request;
+    }
+
+    /**
      * 🚨 S213 — THE DEFECT. A PG-capped active profile must receive ZERO
      * over-cap rows from a fixture that contains both, and the envelope's
      * `total` must count only what it can actually see (so the count does not
@@ -221,7 +236,12 @@ final class MostWatchedControllerTest extends TestCase
 
         $controller = new MostWatchedController($stats, $items, $this->unCappedGate());
 
-        $response = $controller->mostWatched(new Request(), []);
+        // S235: a signed-in caller, because that is the only audience the route
+        // admits (see testAuthMiddlewareGuardsTheRail — an anonymous request is
+        // 401'd by AuthMiddleware and never reaches this handler). Since S235 an
+        // unidentified request resolves a DENY-ALL cap, so a `new Request()`
+        // fixture here would be claiming a caller the route rejects.
+        $response = $controller->mostWatched($this->signedInRequest(), []);
 
         $this->assertSame(200, $response->statusCode);
 
@@ -320,7 +340,12 @@ final class MostWatchedControllerTest extends TestCase
 
         $controller = new MostWatchedController($stats, $items, $this->unCappedGate());
 
-        $response = $controller->mostWatched(new Request(), []);
+        // S235: a signed-in caller, because that is the only audience the route
+        // admits (see testAuthMiddlewareGuardsTheRail — an anonymous request is
+        // 401'd by AuthMiddleware and never reaches this handler). Since S235 an
+        // unidentified request resolves a DENY-ALL cap, so a `new Request()`
+        // fixture here would be claiming a caller the route rejects.
+        $response = $controller->mostWatched($this->signedInRequest(), []);
 
         $this->assertSame(200, $response->statusCode);
         /** @var array<string, mixed> $body */
@@ -362,7 +387,12 @@ final class MostWatchedControllerTest extends TestCase
 
         $controller = new MostWatchedController($stats, $items, $this->unCappedGate());
 
-        $response = $controller->mostWatched(new Request(), []);
+        // S235: a signed-in caller, because that is the only audience the route
+        // admits (see testAuthMiddlewareGuardsTheRail — an anonymous request is
+        // 401'd by AuthMiddleware and never reaches this handler). Since S235 an
+        // unidentified request resolves a DENY-ALL cap, so a `new Request()`
+        // fixture here would be claiming a caller the route rejects.
+        $response = $controller->mostWatched($this->signedInRequest(), []);
 
         $this->assertSame(200, $response->statusCode);
         /** @var array<string, mixed> $body */
@@ -399,7 +429,12 @@ final class MostWatchedControllerTest extends TestCase
 
         $controller = new MostWatchedController($stats, $items, $this->unCappedGate());
 
-        $response = $controller->mostWatched(new Request(), []);
+        // S235: a signed-in caller, because that is the only audience the route
+        // admits (see testAuthMiddlewareGuardsTheRail — an anonymous request is
+        // 401'd by AuthMiddleware and never reaches this handler). Since S235 an
+        // unidentified request resolves a DENY-ALL cap, so a `new Request()`
+        // fixture here would be claiming a caller the route rejects.
+        $response = $controller->mostWatched($this->signedInRequest(), []);
 
         $this->assertSame(200, $response->statusCode);
         /** @var array<string, mixed> $body */

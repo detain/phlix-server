@@ -797,7 +797,6 @@ class WebPortalRouter
      * restricted view is never applied by accident:
      *
      *   - the profile manager is not wired;
-     *   - the request is unauthenticated (no `userId`);
      *   - the requesting account is an admin (the owner/manager — their browse
      *     stays exactly as today, regardless of any per-profile cap);
      *   - {@see UserProfileManager::getActiveRatingFilter()} returns null (no
@@ -806,6 +805,14 @@ class WebPortalRouter
      *
      * Otherwise returns `['allowedRatings' => string[], 'allowUnrated' => bool]`
      * — the concrete allow-list threaded into the listing SQL.
+     *
+     * 🚨 S235: an UNIDENTIFIED request (empty `userId`) is deliberately NOT in
+     * the permissive list any more. {@see RatingGate::resolveFilterForUser()}
+     * answers {@see RatingGate::denyAll()} for it, so every `if ($filter !==
+     * null)` guard below fails closed. Every route that reaches this helper is
+     * inside this router's `AuthMiddleware` group, so the state is unreachable
+     * in production — but it is now the safe default rather than the permissive
+     * one, which is the whole point of S235.
      *
      * @param Request $request The HTTP request (carries the authenticated userId).
      *
@@ -833,9 +840,10 @@ class WebPortalRouter
      * over-cap, the WHOLE subtree beneath it is blocked, so the caller returns an
      * empty result (0 items / 0 total / 0 buckets) consistently.
      *
-     * Strict no-op — returns false — for the owner/admin, an un-capped profile, an
-     * unauthenticated request, a non-drill-down (no `parentId`) browse, or when the
-     * gate is unwired.
+     * Strict no-op — returns false — for the owner/admin, an un-capped profile, a
+     * non-drill-down (no `parentId`) browse, or when the gate is unwired. An
+     * unidentified request is NOT a no-op since S235: it resolves a deny-all cap,
+     * so a drill-down without a user is blocked (the route is auth-gated anyway).
      *
      * @param Request $request The HTTP request (carries userId + `parentId`).
      */
@@ -1271,8 +1279,9 @@ class WebPortalRouter
         // here — the one place all three browse surfaces (getMedia, letter-index,
         // media-index) build their params — so the cap enforces itself on the
         // items, the COUNT(*) total, pagination and the A-Z rail alike. A no-op
-        // for the account owner, unauthenticated requests, and profiles with no
-        // (or a most-permissive) cap.
+        // for the account owner and profiles with no (or a most-permissive) cap.
+        // An unidentified request instead gets a deny-all cap (S235) that is
+        // deny-all in the SQL path too — see RatingGate::NO_USER_RATING.
         $params = $this->applyRatingFilter($request, $params);
 
         return $params;

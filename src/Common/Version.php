@@ -21,9 +21,16 @@ namespace Phlix\Common;
  * decide whether a plugin can be safely installed against the running
  * server.
  *
- * Update {@see self::STRING} in the same commit that bumps the
- * project version everywhere else — there is no central source apart
- * from this constant.
+ * This constant is the AUTHORITATIVE version source for the whole
+ * repository. `scripts/release.sh` reads it and propagates the bumped
+ * value to the root `VERSION` marker and to
+ * `k8s/helm/phlix/Chart.yaml` (`version` + `appVersion`) in one commit;
+ * never edit those by hand. `composer.json` deliberately carries NO
+ * `version` field — `composer validate --strict` (run by the
+ * `composer-validate` CI job) fails when one is present.
+ *
+ * `tests/Unit/Server/Updates/VersionSourcesAgreeTest.php` turns any
+ * drift between those sources into a red test.
  *
  * @package Phlix\Common
  * @since 0.10.0
@@ -37,7 +44,7 @@ final class Version
      *
      * @since 0.10.0
      */
-    public const STRING = '1.2.2';
+    public const STRING = '1.2.3';
 
     /**
      * Prevent instantiation — this class is a static constant holder only.

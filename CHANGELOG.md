@@ -7,6 +7,34 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased] - 2026-07-24
 
+### Fixed
+
+- **Reconciled the four version sources and repaired `scripts/release.sh` (S74 follow-up).**
+  `c17bb9ec` ("Release v1.2.3", 2026-07-12) bumped `k8s/helm/phlix/Chart.yaml` to 1.2.3 and
+  pushed the annotated tag `v1.2.3`, but never touched `Phlix\Common\Version::STRING`, which
+  stayed at 1.2.2 — so for three weeks the Helm chart, the git tag and the version the running
+  server reported over its own API disagreed, silently. `Version::STRING` and the root `VERSION`
+  marker are now **1.2.3**, matching the published tag and the chart.
+
+  `src/Common/Version.php::STRING` is now documented and enforced as the single authoritative
+  source. `scripts/release.sh` was rewritten to read it and bump **every** mirror in one commit
+  (`Version.php`, `VERSION`, `Chart.yaml` `version:` + `appVersion:`); it refuses to release from
+  a tree whose sources disagree, and it never writes a `composer.json` `version` field — that
+  field makes `composer validate --strict` (the `composer-validate` CI job) exit non-zero, which
+  is why `f5375f7a` deleted it.
+
+  The old script had been broken since that same `f5375f7a`: it read the version from the
+  composer key that had just been deleted, so it computed the empty string and produced
+  `New version: ..1`, wrote `version: ..1` into `Chart.yaml`, committed it, and then aborted on
+  `fatal: 'v..1' is not a valid tag name` — after the commit. It also parsed `--dry-run` only in
+  argument position 2, ran relative `sed`s against the caller's working directory, and swept any
+  already-staged file into the release commit. All four are fixed.
+
+  New pins: `tests/Unit/Server/Updates/VersionSourcesAgreeTest.php` (every source agrees;
+  composer.json declares no version field; the script's managed-file list matches) and
+  `tests/Unit/Scripts/ReleaseScriptTest.php` (runs the script for real in a throwaway git
+  sandbox). `RELEASE_PROCESS.md` no longer instructs releasers to hand-edit `composer.json`.
+
 ### Added
 
 - **S74 — the server can now tell an operator that a newer phlix-server exists.** New

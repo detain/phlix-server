@@ -43,8 +43,14 @@ class TranscodeController
 
     /**
      * Resolve the active profile's parental cap for the current request, or null
-     * (the permissive no-op) when the gate is unwired, the request is
-     * unauthenticated, or the profile/account is not capped (owner-safe).
+     * (the permissive no-op) when the gate is unwired or the profile/account is
+     * not capped (owner-safe).
+     *
+     * S235: an UNIDENTIFIED request is not permissive here — the gate answers
+     * {@see RatingGate::denyAll()} for an empty userId, so the guards below fail
+     * closed. Both routes that reach this are AuthMiddleware-gated anyway, so
+     * that state is unreachable in production; it is the correct default should
+     * either ever be made public.
      *
      * @return array{allowedRatings: list<string>, allowUnrated: bool}|null
      */
@@ -86,7 +92,8 @@ class TranscodeController
         // (by EFFECTIVE rating — episodes inherit their series) gets a 404 BEFORE
         // any transcode job is created or any signed HLS/DASH URL is minted, so no
         // playable stream is ever disclosed. No-op for the owner / un-capped
-        // profile / unauthenticated request. Mirrors MediaItemController's gate.
+        // profile; fail-CLOSED for an unidentified caller (S235). Mirrors
+        // MediaItemController's gate.
         $filter = $this->resolveRatingFilter($request);
         if ($filter !== null && $this->ratingGate !== null && !$this->ratingGate->isAllowed($mediaId, $filter)) {
             return (new Response())->status(404)->json(['error' => 'Item not found']);

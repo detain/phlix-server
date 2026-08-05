@@ -69,10 +69,98 @@ class RatingGateTest extends TestCase
         return $repo;
     }
 
-    public function testResolveFilterNullForEmptyUser(): void
+    /**
+     * S235 — the whole point of the step. This test REPLACES
+     * `testResolveFilterNullForEmptyUser`, which asserted the defect: while an
+     * empty user id resolved to `null`, "no user" and "no cap" shared one
+     * representation and every `if ($filter !== null && …)` guard in the server
+     * skipped the check for an anonymous caller.
+     */
+    public function testResolveFilterForAnEmptyUserIsADenyAllCapAndNotNull(): void
     {
         $gate = new RatingGate($this->itemsWithEffective(), $this->profiles($this->pg13Filter()), $this->users(false));
-        $this->assertNull($gate->resolveFilterForUser(''));
+
+        $filter = $gate->resolveFilterForUser('');
+
+        $this->assertNotNull($filter, '"no user" must not be represented as "no cap"');
+        $this->assertSame(RatingGate::denyAll(), $filter);
+    }
+
+    /**
+     * The deny-all cap must actually deny — both a rated item whose rating is
+     * well inside any ordinary cap, and a genuinely-unrated one.
+     */
+    public function testTheNoUserCapDeniesRatedAndUnratedItemsAlike(): void
+    {
+        $gate = new RatingGate($this->itemsWithEffective(['m-null' => null]), $this->profiles(null));
+        $deny = RatingGate::denyAll();
+
+        $this->assertFalse($gate->isAllowed(['id' => 'm1', 'content_rating' => 'G'], $deny));
+        $this->assertFalse($gate->isAllowed(['id' => 'm2', 'content_rating' => 'TV-Y'], $deny));
+        $this->assertFalse($gate->isAllowed(['id' => 'm-null', 'content_rating' => null], $deny));
+        $this->assertSame([], $gate->filterItems(
+            [['id' => 'm1', 'content_rating' => 'G'], ['id' => 'm-null', 'content_rating' => null]],
+            $deny
+        ));
+    }
+
+    /**
+     * 🔬 The trap this representation exists to avoid. The obvious spelling of
+     * "deny everything" — an EMPTY allow-list — is a silent FAIL-OPEN in the SQL
+     * enforcement path: {@see ItemRepository::ratingCapClause()} documents and
+     * implements "an empty allow-list yields an empty clause (no filtering)",
+     * and `WebPortalRouter::applyRatingFilter()` merges the resolved cap straight
+     * into those query params. So the cap MUST carry a non-empty allow-list,
+     * whose single entry matches no real `content_rating`.
+     *
+     * Measured end-to-end below rather than asserted structurally: the cap is
+     * threaded through the real `ItemRepository::query()` and the emitted SQL is
+     * captured.
+     */
+    public function testTheNoUserCapProducesARealSqlClauseSoTheBrowsePathCannotFailOpen(): void
+    {
+        $this->assertNotSame([], RatingGate::denyAll()['allowedRatings']);
+        $this->assertFalse(RatingGate::denyAll()['allowUnrated']);
+
+        $captured = [];
+        $db = $this->createMock(\Workerman\MySQL\Connection::class);
+        $db->method('query')->willReturnCallback(
+            static function (string $sql) use (&$captured): array {
+                $captured[] = $sql;
+                return [];
+            }
+        );
+
+        $repo = new ItemRepository($db);
+        $repo->query(RatingGate::denyAll() + ['limit' => 10, 'offset' => 0]);
+
+        $selects = array_filter($captured, static fn (string $s): bool => str_contains($s, 'content_rating IN'));
+        $this->assertNotSame([], $selects, 'the deny-all cap must reach the SQL as a real, narrowing clause');
+        foreach ($selects as $sql) {
+            $this->assertStringNotContainsString(
+                'content_rating IS NULL',
+                $sql,
+                'the deny-all cap must not re-admit unrated rows'
+            );
+        }
+    }
+
+    /**
+     * The explicitly-named opt-out used by the signed-URL serve paths (HLS/DASH
+     * files, OPDS/book bytes), where "no userId" means "a valid signature was
+     * presented" rather than "nobody asked". Failing closed there would 404 every
+     * `<video>`/e-reader fetch, so it stays permissive — and only there.
+     */
+    public function testResolveFilterForASignedRequestStaysPermissiveForAnEmptyUser(): void
+    {
+        $gate = new RatingGate($this->itemsWithEffective(), $this->profiles($this->pg13Filter()), $this->users(false));
+        $this->assertNull($gate->resolveFilterForSignedRequest(''));
+    }
+
+    public function testResolveFilterForASignedRequestStillCapsAnIdentifiedUser(): void
+    {
+        $gate = new RatingGate($this->itemsWithEffective(), $this->profiles($this->pg13Filter()), $this->users(false));
+        $this->assertSame($this->pg13Filter(), $gate->resolveFilterForSignedRequest('u1'));
     }
 
     public function testResolveFilterNullForAdminOwner(): void

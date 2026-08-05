@@ -89,8 +89,9 @@ class DashController
 
         // Serve-time parental re-check (Finding 1b): deny a capped profile any
         // file of an over-cap job before serving it, so a leaked/replayed signed
-        // URL cannot reach over-cap bytes. No-op for the owner / un-capped /
-        // unauthenticated request.
+        // URL cannot reach over-cap bytes. No-op for the owner / un-capped profile,
+        // and (S235, deliberately) for a signature-only request that carries no
+        // session userId — see TranscodeFileServer::transcodeJobOverCap().
         if ($this->transcodeJobOverCap($request, $jobId, $this->transcodeManager, $this->ratingGate)) {
             return (new Response())->status(404)->json(['error' => 'Not found']);
         }

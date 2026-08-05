@@ -154,15 +154,24 @@ trait TranscodeFileServer
      *
      * Strict no-op (returns false → serve) whenever the gate cannot restrict:
      *   - the gate/transcoder is unwired (legacy/no-container construction);
-     *   - {@see RatingGate::resolveFilterForUser()} yields null (owner/admin, no
-     *     active profile, no cap, or an unauthenticated request — e.g. a bare
-     *     signed-token manifest fetch that carries no session userId);
+     *   - {@see RatingGate::resolveFilterForSignedRequest()} yields null
+     *     (owner/admin, no active profile, no cap, or an unauthenticated request
+     *     — e.g. a bare signed-token manifest fetch that carries no session
+     *     userId);
      *   - the job → media-item mapping can't be resolved (a stale/evicted job row
      *     will 404 in {@see serveJobFile()} on its own).
      *
      * hls.js attaches the session Bearer to every segment XHR (and same-origin
      * requests carry the session cookie), so `$request->userId` is populated for
      * the actual byte-bearing segment requests, where this re-check bites.
+     *
+     * 🔓 S235 — this is a DELIBERATE, explicitly-named opt-out from the gate's
+     * fail-closed default for an unidentified request. These routes sit behind
+     * {@see \Phlix\Server\Http\Middleware\SignedUrlMiddleware}, so "no userId"
+     * here means "a valid signature was presented", not "nobody asked": the
+     * `<video>`/hls.js manifest fetch can attach no Bearer header at all, and
+     * failing closed on it would 404 every transcoded stream. Hence
+     * `resolveFilterForSignedRequest()` and NOT `resolveFilterForUser()`.
      *
      * @param Request               $request          The incoming request (for userId).
      * @param string                $jobId            Transcode job id.
@@ -181,7 +190,7 @@ trait TranscodeFileServer
             return false;
         }
 
-        $filter = $ratingGate->resolveFilterForUser($request->userId ?? '');
+        $filter = $ratingGate->resolveFilterForSignedRequest($request->userId ?? '');
         if ($filter === null) {
             return false;
         }

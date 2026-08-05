@@ -507,8 +507,10 @@ class Application
 
                         // Parental cap parity with WebPortalRouter's A-Z index: thread
                         // the ACTIVE profile's cap into the SAME bucket query so counts
-                        // match the capped rows. No-op (null filter) for the owner,
-                        // unauthenticated requests, and un-capped profiles.
+                        // match the capped rows. No-op (null filter) for the owner
+                        // and un-capped profiles; an unidentified request gets a
+                        // deny-all cap (S235). This route is AuthMiddleware-gated,
+                        // so that is a default, not a reachable state.
                         try {
                             /** @var \Phlix\Media\Library\RatingGate $ratingGate */
                             $ratingGate = $container->get(\Phlix\Media\Library\RatingGate::class);

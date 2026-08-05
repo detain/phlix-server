@@ -121,6 +121,40 @@ class BookControllerParentalTest extends TestCase
         $this->assertSame(404, $resp->statusCode);
     }
 
+    /**
+     * 🔓 S235 regression pin for the DELIBERATE opt-out.
+     *
+     * `/api/v1/books/{id}/download` and the whole `/opds/v1.2/…` group sit behind
+     * {@see SignedUrlMiddleware}, so a request arriving here with no `userId` has
+     * already presented a valid signature (or is an e-reader that authenticated
+     * with Basic — in which case the middleware DOES set a userId, and the cap
+     * still applies). S235 made an unidentified request fail CLOSED by default;
+     * `bookOverCap()` opts out via `resolveFilterForSignedRequest()`, and this
+     * test reddens if that opt-out is removed.
+     *
+     * The assertion is on the RESPONSE BODY, not just the status, because both
+     * outcomes are 404: the gate refuses with `"Book not found"`, whereas passing
+     * the gate reaches the library-root jail and yields `"File not found"` for
+     * this fixture's non-existent path. Only the latter proves the gate let it
+     * through.
+     */
+    public function testAnAnonymousSignedBookDownloadIsNotDeniedByTheGate(): void
+    {
+        $controller = $this->controller($this->book('NC-17'), $this->gate($this->pg13Filter()));
+
+        $anonymous = new Request();
+        $this->assertNull($anonymous->userId, 'fixture must really be anonymous');
+
+        $resp = $controller->downloadBook($anonymous, ['id' => 'b1']);
+
+        $this->assertSame(404, $resp->statusCode);
+        $this->assertStringContainsString(
+            'File not found',
+            $resp->body,
+            'the gate must NOT be what refused a signature-authorised fetch'
+        );
+    }
+
     public function testGetBookUnfilteredWhenGateUnwired(): void
     {
         $controller = $this->controller($this->book('NC-17'), null);

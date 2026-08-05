@@ -191,6 +191,63 @@ class TranscodeServeParentalTest extends TestCase
         $this->assertSame(200, $resp->statusCode);
     }
 
+    /**
+     * 🔓 S235 regression pin for the DELIBERATE opt-out.
+     *
+     * `/hls/{job}/{file}` sits behind {@see SignedUrlMiddleware}: a request that
+     * reaches this handler with no `userId` has already presented a valid
+     * signature (the `<video>`/hls.js manifest fetch can attach no Bearer
+     * header). S235 made the gate fail CLOSED for an unidentified request, which
+     * — had `transcodeJobOverCap()` kept calling `resolveFilterForUser()` —
+     * would have 404'd every transcoded stream on the server. It calls
+     * `resolveFilterForSignedRequest()` instead; this test reddens if that is
+     * ever "tidied" back.
+     *
+     * `getJobMediaItemId` is asserted NEVER called: the gate must short-circuit,
+     * not merely happen to allow.
+     */
+    public function testAnAnonymousSignedHlsFetchIsStillServed(): void
+    {
+        $this->writeSeg('job-ok', 'master.m3u8');
+
+        $manager = $this->createMock(TranscodeManager::class);
+        $manager->expects($this->never())->method('getJobMediaItemId');
+
+        $streamer = new HlsStreamer($this->segmentDir, 'http://localhost:8096', new QualitySelector());
+        $controller = new HlsController(
+            $streamer,
+            $manager,
+            $this->gate($this->pg13Filter(), false, ['m-mature' => 'NC-17'])
+        );
+
+        $anonymous = new Request();
+        $this->assertNull($anonymous->userId, 'fixture must really be anonymous');
+
+        $resp = $controller->serveFile($anonymous, ['job_id' => 'job-ok', 'file' => 'master.m3u8']);
+        $this->assertSame(200, $resp->statusCode);
+    }
+
+    /**
+     * The DASH half of the same opt-out (both controllers share the trait).
+     */
+    public function testAnAnonymousSignedDashFetchIsStillServed(): void
+    {
+        $this->writeSeg('job-ok', 'manifest.mpd');
+
+        $manager = $this->createMock(TranscodeManager::class);
+        $manager->expects($this->never())->method('getJobMediaItemId');
+
+        $controller = new DashController(
+            $this->segmentDir,
+            $manager,
+            $this->gate($this->pg13Filter(), false, ['m-mature' => 'NC-17'])
+        );
+
+        $anonymous = new Request();
+        $resp = $controller->serveFile($anonymous, ['job_id' => 'job-ok', 'file' => 'manifest.mpd']);
+        $this->assertSame(200, $resp->statusCode);
+    }
+
     public function testDashServeUnfilteredWhenGateUnwired(): void
     {
         $this->writeSeg('job-ok', 'manifest.mpd');

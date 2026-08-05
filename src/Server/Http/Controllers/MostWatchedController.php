@@ -43,7 +43,8 @@ use Phlix\Stats\StatsCollector;
  * post-filters through the shared {@see RatingGate}, exactly like its twelve
  * sibling surfaces ({@see \Phlix\Server\Http\Controllers\MediaItemController}
  * and the eleven sites in {@see \Phlix\Server\WebPortal\WebPortalRouter}). A
- * null filter (owner / un-capped profile / unauthenticated) is a strict no-op.
+ * null filter (owner / un-capped profile) is a strict no-op; an unidentified
+ * request resolves a deny-all cap instead (S235), never a null one.
  *
  * @package Phlix\Server\Http\Controllers
  * @since   S31
@@ -127,8 +128,10 @@ final class MostWatchedController
         // is a `SELECT *`, so each row still carries `content_rating`/`parent_id`
         // and RatingGate settles most rows with zero extra DB work. `total` is
         // recomputed from the filtered list below, so the count never leaks the
-        // number of hidden titles. Strict no-op when the filter is null (owner,
-        // un-capped profile, or unauthenticated).
+        // number of hidden titles. Strict no-op when the filter is null (owner or
+        // un-capped profile). An unidentified request gets a deny-all cap (S235),
+        // not a null one — the route is AuthMiddleware-gated, so that is a
+        // defence-in-depth default rather than a reachable state.
         $filter = $this->ratingGate->resolveFilterForUser($request->userId ?? '');
         if ($filter !== null) {
             $rows = $this->ratingGate->filterItems($rows, $filter, 'id');

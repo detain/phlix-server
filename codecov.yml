@@ -1,0 +1,87 @@
+# Codecov configuration for phlix-server.
+#
+# S195 (server half) — why this file exists.
+#
+# Until now this repo had no codecov.yml at all, so `codecov/project` ran on
+# Codecov's defaults: `target: auto` (compare against the base commit) with
+# `threshold: 0%`. That means ANY decrease, however small, posts a failure.
+#
+# This mirrors the fix already merged in phlix-hub (`codecov.yml`, PR #204), but
+# the numbers below are phlix-server's OWN measurements. Do not assume the two
+# repos share a noise profile — they do not, and the hub file says the same.
+#
+# MEASURED (2026-08-05, via the public Codecov API v2 — this repo is public, so
+# the numbers are readable without a token):
+#
+#   * `codecov/project` reds if and only if the rendered delta is strictly
+#     negative. It is NOT related to whether the PR touches src/: #626 changed
+#     three src/ files and FAILED at -0.07%, while #556, #564, #589 and #623
+#     changed no PHP at all and PASSED.
+#
+#   * Noise floor, measured over the five merged PRs in #555-#628 that change
+#     NO .php file whatsoever (so no legitimate coverage change is possible —
+#     note that a tests-only PR does NOT qualify, since adding tests moves
+#     coverage for real): #556 -0.01%, #564 +0.01%, #589 +0.04%, #623 +0.00%,
+#     #627 -0.03%, and #630 (this PR, which adds only this YAML file) -0.06%.
+#     Observed net range: **-0.06% .. +0.04%**.
+#
+#     NB the -0.06% is THIS PR's own run. The first five samples gave a range of
+#     -0.03%..+0.04%, and the sixth immediately exceeded it — so treat that range
+#     as a lower bound on the noise, not a measured maximum. The bound that does
+#     hold is the 0.120% line-universe figure below, which does not depend on how
+#     many runs happen to have been sampled.
+#
+#   * The flake universe, found by diffing Codecov's per-line reports for those
+#     same five src-identical pairs: 11 to 56 lines flip per pair, union
+#     **82 distinct lines across 10 files** — chiefly
+#     src/Chromecast/CastSession.php (48), src/Server/Core/Application.php (27),
+#     src/Hub/RelayConsumer.php (22), src/Common/Database/ConnectionPool.php (14)
+#     and src/Media/Metadata/Enrichment/BackgroundEnrichmentSubscriber.php (12).
+#     phpunit.xml sets executionOrder="random", so whether these lines execute
+#     depends on what an earlier test left behind (a live event loop, a pooled
+#     connection, a registered subscriber).
+#
+#     82 of 68,373 coverable lines = **0.120%** absolute worst case, i.e. if
+#     every flaky line flipped the same way at once.
+#
+# So the gate was not illegible — it was more sensitive (0%) than the suite it
+# measures is repeatable. A gate that reds on its own noise is the textbook way
+# for a rule to get tuned out, taking its real signal with it.
+#
+# THE FIX: raise the threshold above the measured noise floor. This keeps the
+# status ENFORCING and keeps it rendering the percentage and the comparison —
+# it is not `informational: true` (which would pass no matter what) and the
+# status is not removed. 0.5% is about 4x the absolute worst case (0.120%) and
+# about 8x the largest observed net swing (0.06%), while still being ~342 lines
+# out of 68,373 — far larger than any noise and far smaller than a real
+# regression (deleting a test class, skipping a suite).
+#
+#   NB the ratio is deliberately more conservative here than in phlix-hub, whose
+#   0.5% is only ~2.1x its 0.237% worst case. phlix-server has MORE flaky lines
+#   (82 vs 30) but is 5.4x larger, so they matter proportionally less.
+#
+# STOPPING RULE — do not widen this again. The flake universe is already broad
+# (10 files, and unlike hub's it is not confined to one subsystem). If it ever
+# exceeds **0.25% of coverable lines** (~171 lines today), that is the signal to
+# make the coverage deterministic — NOT to raise this number a second time.
+# De-flaking those 82 lines is the real fix and is filed as a follow-up.
+#
+# NOT CHANGED, deliberately:
+#   * `codecov/patch` keeps its defaults. It guards NEW code at threshold 0 and
+#     is what actually catches "this PR added untested lines", so raising the
+#     project threshold opens no hole for new code.
+#   * `removed_code_behavior` keeps its default (`adjust_base`), which is already
+#     working — see #556, which passed at a rendered -0.01% precisely because of
+#     it: "passed because coverage increased by 0% when compared to adjusted base".
+#   * No `strict_yaml_branch`, so Codecov uses the YAML on the branch being
+#     tested. A change to this file therefore takes effect on its own PR.
+#
+# Validate any edit before merging:
+#   curl --data-binary @codecov.yml https://codecov.io/validate
+
+coverage:
+  status:
+    project:
+      default:
+        target: auto
+        threshold: 0.5%

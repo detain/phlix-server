@@ -9,6 +9,41 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Added
 
+- **S74 — the server can now tell an operator that a newer phlix-server exists.** New
+  `Phlix\Server\Updates\` (`CoreUpdateCheckService`, `CoreUpdateCheckWorker`,
+  `CoreUpdateStatus`, `VersionMarkerFetcherInterface`, `AsyncVersionMarkerFetcher`), a new
+  repo-root `VERSION` marker, `config/updates.php`, and two admin endpoints:
+  `GET /api/v1/admin/updates/status` and `PUT /api/v1/admin/updates/settings`
+  (body `{"checkEnabled": bool}`), both inside the `AdminMiddleware`-gated group and both
+  carrying their own in-handler admin gate.
+
+  **No apply action, deliberately.** The status payload carries `updateCommand`, a
+  copy-to-clipboard `curl … | sudo bash -s -- --update -y` one-liner. The HTTP handler
+  never invokes git/composer/systemctl, and `testThereIsNoInlineApplyRoute` pins that
+  closed.
+
+  **The fetch is async and fork-free.** The step text prescribed
+  `PluginCatalogService::defaultFetcher()`; that shape forks on
+  `WorkerContext::inCoroutine()` and PHPUnit is never in a coroutine (`getCid()` is always
+  `-1`), so the arm production takes would have been structurally untestable — the S170
+  defect class. `AsyncVersionMarkerFetcher` uses `workerman/http-client` in **callback
+  mode** with BOTH `success` and `error` supplied, which keeps `Client::request()` out of
+  its coroutine-suspending branch (vendor `Client.php:78`) entirely. Nothing blocks the
+  worker and there is no untestable arm.
+
+  **The worker has two independent arms**, armed from
+  `Application::startBackgroundTimers()` on the count=1 `phlix-background-timers` worker:
+  a **one-shot boot catch-up** 300 s after start, plus the **persistent daily poll**. A
+  bare `Timer::add(86400, …)` fires only after 24 h of uninterrupted uptime and every
+  restart resets the countdown — the identical defect already shipped twice here (empty
+  `backups`, `PluginAutoUpdateWorker` never running). Both arms are pinned by separate
+  tests that FIRE the scheduled callbacks rather than reading intervals.
+
+  ⚠ **`VERSION` is a second source of truth for the version and must be bumped in lockstep
+  with `Phlix\Common\Version::STRING`.** `tests/Unit/Server/Updates/VersionMarkerFileTest.php`
+  makes drift a red test: behind the constant and no release ever announces itself; ahead
+  of it and every install nags about a release that was never cut.
+
 - **S131 — one predicate for "did this write anything", and a measured contract to go with
   it.** New `Phlix\Common\Database\WriteResult::wroteNothing()`
   (`src/Common/Database/WriteResult.php`) promotes the predicate S96 added privately as

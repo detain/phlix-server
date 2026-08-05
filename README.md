@@ -247,6 +247,17 @@ service:
 sudo bash /var/www/phlix/scripts/install.sh --update -y
 ```
 
+Or via the one-liner, which works regardless of where the server was installed because
+`--update` discovers the install path from the systemd unit. **This is the exact string the
+admin console's update banner offers for copy-to-clipboard** (`config/updates.php`'s
+`update_command`, surfaced by `GET /api/v1/admin/updates/status`) — the server never runs it
+for you:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/detain/phlix-server/master/scripts/install.sh \
+  | sudo bash -s -- --update -y
+```
+
 Pin to a specific tag or branch with `--branch`:
 
 ```bash

@@ -182,14 +182,25 @@ final readonly class MusicAlbum
      * `src/Media/Music/` and reflects EVERY class declaring a `mediaItemId`
      * property, so a fourth DTO cannot land with the old coercion unnoticed.
      *
-     * 🔴 **But that backstop covers 3 of the 5 sites, NOT all five.** It can only see
-     * classes that declare a `mediaItemId` **property**; the scanner's two copies are
-     * inline **local variables**, which is precisely the shape that produced two of
-     * the five sites — so **those two are pinned by NO test at all** and this docblock
-     * plus the grep recipe above are their only protection. Do not read "mechanical
-     * backstop" as covering them. Closing that gap needs a source-text or AST guard
-     * written against the POST-S96 scanner (S96 rewrites that file by ~448 lines, so
-     * writing one now would guarantee rework); it is filed as step **S127**.
+     * 🔴 **That backstop covers 3 of the 5 sites and structurally CANNOT cover the
+     * other 2.** It only sees classes that declare a `mediaItemId` **property**; the
+     * scanner's two copies are inline **local variables**, which is precisely the
+     * shape that produced two of the five sites. ✅ **S127 closed that gap
+     * (2026-08-05) with a second, differently-shaped guard:**
+     * {@see \Phlix\Tests\Unit\Media\Music\MusicScannerInlineMediaItemIdCoercionTest}
+     * reads `MusicLibraryScanner` through `PhpToken`, discards comments and
+     * whitespace, treats the row variable as a wildcard, and pins both inline sites
+     * with a failure message that names the METHOD and states the fix. **So all five
+     * sites are now guarded** — by two mechanisms, because one code shape is a
+     * property and the other is a local. Neither guard covers the other's sites; read
+     * the pair, not either alone.
+     *
+     * ⚠ Before S127 the two inline sites were **unattributable rather than
+     * unpinned**, and that was the whole difficulty: mutating either one to
+     * `is_numeric()` did red three `MusicScanUnchangedSkipTest` cases, but their
+     * messages are about file *stamping* and name neither `media_item_id` nor which
+     * site changed. Redness with an orphan message is not coverage. If you ever
+     * weaken the S127 guard, that is the state you are returning to.
      *
      * @param array<string, mixed> $row Database row
      * @return string|null The UUID, or null when the column is absent/NULL/empty

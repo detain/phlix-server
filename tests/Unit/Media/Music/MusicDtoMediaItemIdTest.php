@@ -219,8 +219,11 @@ final class MusicDtoMediaItemIdTest extends TestCase
      * declaring a second, differently-named class with the pre-S121
      * `public ?int $mediaItemId` and the suite stayed green. PSR-4 makes that shape
      * abnormal (and `phpcs`/autoloading would not find such a class either), so it is
-     * documented rather than chased here; a token/AST-level sweep is the shape that
-     * would close it, together with the scanner's two inline copies — **S127**.
+     * documented rather than chased here. A token/AST-level sweep is the shape that
+     * would close it; S127 built exactly that shape for the scanner's two inline
+     * copies ({@see MusicScannerInlineMediaItemIdCoercionTest}), but deliberately
+     * scoped it to `MusicLibraryScanner` rather than the whole tree, so this
+     * not-the-PSR-4-class hole is STILL OPEN here and is not covered there either.
      *
      * ⚠ That qualifier is about the CONTENTS of a file and says nothing about a class
      * that is perfectly PSR-4 — which is why it did not cover r4 finding 1, where a
@@ -254,10 +257,13 @@ final class MusicDtoMediaItemIdTest extends TestCase
      * comment at the `class_exists()` check for why, and r2 finding 3 for the
      * measurement that a silent skip makes the set-equality test below pass.
      *
-     * ⚠ **This covers 3 of the 5 predicate sites and cannot cover the other 2.** It
-     * reflects classes declaring a `mediaItemId` **property**; the scanner's two
-     * copies are inline locals, so the drift shape that produced two of the five
-     * sites is doc-only. Closing that is step **S127** — see the DTO docblocks.
+     * ⚠ **This covers 3 of the 5 predicate sites and structurally cannot cover the
+     * other 2.** It reflects classes declaring a `mediaItemId` **property**; the
+     * scanner's two copies are inline locals. ✅ Those two are pinned since S127
+     * (2026-08-05) by {@see MusicScannerInlineMediaItemIdCoercionTest}, a token-level
+     * guard over `MusicLibraryScanner`. **Do not fold the two guards together** — a
+     * property sweep and a token sweep answer different questions, and merging them
+     * would put every site behind whichever mechanism is weaker.
      *
      * Keys are the classes' FULLY-QUALIFIED names — they become the PHPUnit data-set
      * names — sorted with `ksort()`; each value is that same FQCN, as the single test

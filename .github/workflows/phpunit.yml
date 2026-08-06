@@ -250,11 +250,38 @@ jobs:
       - name: Run Server-specific tests
         run: ./vendor/bin/phpunit tests/Unit/Server/
 
-      - name: Check code style
+      - name: Assert PHPCS is actually installed
+        # S183. The "Check code style" step below used to be the whole gate, wrapped
+        # in `if [ -f vendor/bin/phpcs ]`. That is the shape S146 removed from
+        # coding-standards.yml's Psalm, PHPCS and Security-Audit steps — and this copy
+        # survived, in a DIFFERENT workflow file, for the same reason all the others
+        # did: the binary exists today, so the guard looks harmless.
+        #
+        # It is not. When `vendor/` is partial — an interrupted `composer install`, a
+        # cache restore that lands incompletely, the dependency being dropped from
+        # require-dev — the condition goes false, the body never runs, the step exits
+        # 0, and "Server Component Tests" reports GREEN having sniffed zero files.
+        # Nothing in the log says so. GitHub scores that identically to a real pass,
+        # and this repo has no branch protection to notice the difference.
+        #
+        # The absence path is the one that matters, so it is tested by execution, not
+        # by reading: tests/Unit/Support/WorkflowToolGateTest.php extracts THIS step's
+        # `run` body out of this file and runs it under bash in a scratch directory —
+        # once with no vendor/bin/phpcs (must exit non-zero and print `::error::`) and
+        # once with a stub binary present (must exit 0). Re-adding an
+        # `if [ -f ... ]` guard anywhere in this repo's workflows reds that test too.
         run: |
-          if [ -f vendor/bin/phpcs ]; then
-            ./vendor/bin/phpcs --standard=PSR12 src/Server/
+          if [ ! -f vendor/bin/phpcs ]; then
+            echo "::error::vendor/bin/phpcs is missing. squizlabs/php_codesniffer must stay in composer.json require-dev — do not re-add an 'if [ -f ... ]' guard around the style step (S146, S183)."
+            exit 1
           fi
+          ./vendor/bin/phpcs --version
+
+      - name: Check code style
+        # Unconditional on purpose — see the assertion step above. Do NOT add `-n`
+        # (S109: it deletes warnings from the report rather than making them
+        # non-blocking), `|| true`, `continue-on-error:` or an `if:`.
+        run: ./vendor/bin/phpcs --standard=PSR12 src/Server/
 
   assertion-escape-probe:
     name: Assertion-Escape Prober (S180)

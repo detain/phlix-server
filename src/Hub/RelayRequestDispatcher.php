@@ -12,6 +12,7 @@ declare(strict_types=1);
 namespace Phlix\Hub;
 
 use Phlix\Server\Core\Application;
+use Phlix\Server\Http\FastPath\PreRouterFastPaths;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
 use Phlix\Server\WebPortal\WebPortalRouter;
@@ -24,16 +25,22 @@ use function str_starts_with;
  * {@see \Phlix\Shared\Relay\RelayFrameType::HTTP_REQUEST} frame) through the
  * same local routers the Workerman HTTP daemon uses, returning a {@see Response}.
  *
- * This mirrors {@see \Phlix\Server\Workerman\HttpHandler} steps 1 and 1b:
+ * This mirrors {@see \Phlix\Server\Workerman\HttpHandler} steps 0, 1 and 1b:
+ *   0. {@see PreRouterFastPaths} — the image endpoints (`/api/v1/artwork/{id}`,
+ *      `/api/v1/users/{id}/avatar`) that run BEFORE the route table and are in
+ *      NO route table. S238: without this step a relayed browse rendered no
+ *      posters and no avatars, because `dispatch()` consulted only the two route
+ *      tables and both endpoints 404'd in both of them.
  *   1. The fully-populated {@see Application} router (owns every `/api/*`,
  *      `/health`, `/.well-known`, streaming, and auth routes).
  *   1b. {@see WebPortalRouter} for any `/api/` path the Application router 404s
  *       on (`/api/v1/libraries`, `/api/v1/media/{id}`, `/api/v1/users/me/*`).
  *
- * Static-file serving, the media byte-stream fast path, and the SSR
- * page-rendering fall-through are intentionally NOT mirrored here: Phase 1 of
- * the hub proxy carries JSON/browse traffic only. Binary media streaming over
- * the tunnel is a later phase.
+ * Static-file serving, the `/media/{id}/stream` direct-play fast path, and the
+ * SSR page-rendering fall-through are intentionally NOT mirrored here: Phase 1 of
+ * the hub proxy carries JSON/browse traffic (and now the small images that browse
+ * needs) only. Whether whole video files should travel the tunnel is S164's open
+ * question — see {@see PreRouterFastPaths} for why that one path stayed behind.
  *
  * The DLNA surface is HARD-DENIED before dispatch — see
  * {@see self::RELAY_DENIED_PREFIXES} for why the IP allowlist cannot be trusted
@@ -82,10 +89,15 @@ final class RelayRequestDispatcher
     /**
      * @param Application        $application The route-registered (un-booted) app router.
      * @param ContainerInterface $container   Container used to resolve {@see WebPortalRouter} lazily.
+     * @param PreRouterFastPaths $fastPaths   The pre-router image endpoints (S238). Required rather than
+     *                                        lazily resolved from `$container`: a container miss would
+     *                                        otherwise degrade silently back to the 404 this step exists
+     *                                        to remove.
      */
     public function __construct(
         private readonly Application $application,
         private readonly ContainerInterface $container,
+        private readonly PreRouterFastPaths $fastPaths,
     ) {
     }
 
@@ -104,6 +116,15 @@ final class RelayRequestDispatcher
             // Indistinguishable from "no such route", so the tunnel cannot even be
             // used to learn whether DLNA is switched on.
             return (new Response())->status(404)->text('Not found');
+        }
+
+        // S238 step 0: the pre-router image endpoints, which are in NO route
+        // table. Consulted at the same pipeline position HttpHandler uses — after
+        // the deny, before the router — so both transports serve them identically.
+        // Null means "not one of mine" and costs two failed preg_match calls.
+        $fastPath = $this->fastPaths->dispatch($request);
+        if ($fastPath !== null) {
+            return $fastPath;
         }
 
         $response = $this->application->dispatch($request);

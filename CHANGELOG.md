@@ -9,6 +9,46 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- **Relayed browse can render posters and avatars again (S238).** `GET /api/v1/artwork/{id}`
+  and `GET /api/v1/users/{id}/avatar` were private pre-router methods on `HttpHandler` and
+  appear in **no** route table. `Hub\RelayRequestDispatcher` consults only the two route
+  tables, so measured through the real composed container (345 `Application` routes + 47
+  `WebPortalRouter` routes) both paths answered **404** over the hub tunnel and a relayed
+  inline-browse could show **no images at all**.
+
+  The gate here is **not** the one S164 found for `/media/{id}/stream`. Both of these paths
+  do begin with `/api/`, so the `WebPortalRouter` second-chance fallback fires for them — and
+  404s as well, because the route is absent from both tables. So these two have exactly **one**
+  gate (missing registration) where `/media/{id}/stream` has two. The `/api/v1/media/1` control
+  answers **401** through that same fallback, which is what makes the 404s mean "no such route"
+  rather than "auth rejected before routing".
+
+  Both endpoints now live in the transport-neutral `Server\Http\FastPath\PreRouterFastPaths`,
+  consulted at the same pipeline position by **both** entry points: `HttpHandler::__invoke()`
+  (after auth, before the router) and `RelayRequestDispatcher::dispatch()` (after the DLNA hard
+  deny, before the router). One implementation, so the two transports cannot drift. Bytes still
+  stream lazily on both: `Response::toWorkermanResponse()` hands the file to Workerman's
+  event-loop `withFile()`, and `RelayConsumer::streamFileChunks()` chunks it over the tunnel.
+
+  **Auth is unchanged and was proved on both sides separately:** each endpoint still authorises
+  inline on a resolved session **or** a valid signed URL, before anything is stat'd or streamed.
+  An anonymous relayed request with no signature is still **401** on both paths, and a tampered
+  signature is still refused.
+
+  `/media/{id}/stream`, the third pre-router fast path, is **deliberately left where it is**:
+  whether direct-play should be relayable at all is S164's open product question, and moving it
+  would decide it silently while starting to carry whole video files over the tunnel.
+
+- **Avatars now declare `image/jpeg` instead of `application/octet-stream` (found while doing
+  S238).** `HttpHandler::serveUserAvatar()` passed the bare extension `"jpg"` to a helper that
+  begins by running `pathinfo(..., PATHINFO_EXTENSION)` of its own; on a dot-less `"jpg"` that
+  yields `""`, so no map entry ever matched and **every** avatar was served as
+  `application/octet-stream`. Browsers rendered them anyway only because these fast-path
+  responses carry no `X-Content-Type-Options: nosniff` — a guarantee that need not survive an
+  intermediary such as the relay this change makes the endpoint reachable through. `AvatarStorage`
+  re-encodes every upload to JPEG and `path()` only ever returns `<userId>.jpg`, so the type is
+  a constant.
+
 - **Reconciled the four version sources and repaired `scripts/release.sh` (S74 follow-up).**
   `c17bb9ec` ("Release v1.2.3", 2026-07-12) bumped `k8s/helm/phlix/Chart.yaml` to 1.2.3 and
   pushed the annotated tag `v1.2.3`, but never touched `Phlix\Common\Version::STRING`, which

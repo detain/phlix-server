@@ -5,7 +5,10 @@ declare(strict_types=1);
 namespace Phlix\Tests\Unit\Hub;
 
 use Phlix\Hub\RelayRequestDispatcher;
+use Phlix\Media\Storage\ArtworkStorage;
+use Phlix\Media\Storage\AvatarStorage;
 use Phlix\Server\Core\Application;
+use Phlix\Server\Http\FastPath\PreRouterFastPaths;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
 use Phlix\Server\WebPortal\WebPortalRouter;
@@ -63,6 +66,25 @@ final class RelayRequestDispatcherTest extends TestCase
         return $container;
     }
 
+    /**
+     * The S238 pre-router image stage, wired with storages that resolve nothing.
+     *
+     * None of the paths in THIS file are image paths, so the stage must decline
+     * every one of them and the dispatcher's behaviour below is unchanged. The
+     * doubles are here so a future edit that made the stage swallow an unrelated
+     * path would fail loudly rather than reach a real filesystem.
+     */
+    private function fastPaths(): PreRouterFastPaths
+    {
+        $artwork = $this->createMock(ArtworkStorage::class);
+        $artwork->method('variantPath')->willReturn(null);
+
+        $avatar = $this->createMock(AvatarStorage::class);
+        $avatar->method('path')->willReturn(null);
+
+        return new PreRouterFastPaths($artwork, $avatar);
+    }
+
     private function request(string $path, string $method = 'GET'): Request
     {
         $request = new Request();
@@ -89,7 +111,7 @@ final class RelayRequestDispatcherTest extends TestCase
         $app = $this->createMock(Application::class);
         $app->expects(self::never())->method('dispatch');
 
-        $dispatcher = new RelayRequestDispatcher($app, $this->container());
+        $dispatcher = new RelayRequestDispatcher($app, $this->container(), $this->fastPaths());
         $response = $dispatcher->dispatch($this->request($path, $method));
 
         self::assertSame(404, $response->statusCode, $method . ' ' . $path . ' must not be relayable.');
@@ -117,7 +139,11 @@ final class RelayRequestDispatcherTest extends TestCase
      */
     public function test_the_refusal_reveals_nothing_about_dlna(): void
     {
-        $dispatcher = new RelayRequestDispatcher($this->permissiveApplication(), $this->container());
+        $dispatcher = new RelayRequestDispatcher(
+            $this->permissiveApplication(),
+            $this->container(),
+            $this->fastPaths(),
+        );
         $response = $dispatcher->dispatch($this->request('/dlna/stream/aaaaaaaabbbbccccddddeeeeeeeeeeee'));
 
         self::assertSame(404, $response->statusCode);
@@ -134,7 +160,11 @@ final class RelayRequestDispatcherTest extends TestCase
      */
     public function test_ordinary_relay_traffic_still_reaches_the_router(string $path): void
     {
-        $dispatcher = new RelayRequestDispatcher($this->permissiveApplication(), $this->container());
+        $dispatcher = new RelayRequestDispatcher(
+            $this->permissiveApplication(),
+            $this->container(),
+            $this->fastPaths(),
+        );
         $response = $dispatcher->dispatch($this->request($path));
 
         self::assertSame(200, $response->statusCode);
@@ -165,7 +195,7 @@ final class RelayRequestDispatcherTest extends TestCase
         $app = $this->createMock(Application::class);
         $app->method('dispatch')->willReturn((new Response())->status(404)->text('no route'));
 
-        $dispatcher = new RelayRequestDispatcher($app, $this->container());
+        $dispatcher = new RelayRequestDispatcher($app, $this->container(), $this->fastPaths());
         $response = $dispatcher->dispatch($this->request('/api/v1/libraries'));
 
         self::assertSame(200, $response->statusCode);

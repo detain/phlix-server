@@ -2,70 +2,43 @@
 
 declare(strict_types=1);
 
-namespace Phlix\Tests\Unit\Server\Workerman;
+namespace Phlix\Tests\Unit\Server\Http\FastPath;
 
-use Phlix\Auth\AuthManager;
 use Phlix\Auth\SignedUrl;
+use Phlix\Media\Storage\ArtworkStorage;
 use Phlix\Media\Storage\AvatarStorage;
-use Phlix\Server\Core\Application;
-use Phlix\Server\Http\RequestAuthenticator;
-use Phlix\Server\Workerman\HttpHandler;
+use Phlix\Server\Http\FastPath\PreRouterFastPaths;
+use Phlix\Server\Http\Request;
 use PHPUnit\Framework\TestCase;
-use Psr\Container\ContainerInterface;
 use Workerman\Protocols\Http\Request as WorkermanRequest;
 
 /**
+ * Tests for the avatar endpoint of {@see PreRouterFastPaths} — GET
+ * /api/v1/users/{id}/avatar, served with either session or signed-URL auth.
  *
- * Tests for {@see HttpHandler::serveUserAvatar()} — the private method invoked
- * inline from {@see HttpHandler::__invoke()} to serve avatar bytes for
- * GET /api/v1/users/{id}/avatar with either session or signed-URL auth.
+ * ⚠ S238 MOVED THIS. It used to be `HttpHandler::serveUserAvatar()`, a private
+ * pre-router method reachable only from the Workerman HTTP daemon, which is why a
+ * relayed browse could render no avatars. The assertions are carried over
+ * unchanged and still run against the {@see \Workerman\Protocols\Http\Response}
+ * `HttpHandler` sends, via `Response::toWorkermanResponse()`.
  */
-final class HttpHandlerServeAvatarTest extends TestCase
+final class PreRouterFastPathsAvatarTest extends TestCase
 {
-    private AuthManager $authManager;
-    private RequestAuthenticator $authenticator;
     private AvatarStorage $avatarStorage;
-    private ContainerInterface $container;
-    private string $publicRoot;
-    private Application $application;
-    private HttpHandler $handler;
-    private \ReflectionMethod $reflection;
+    private PreRouterFastPaths $fastPaths;
 
     protected function setUp(): void
     {
         parent::setUp();
 
-        $this->authManager = $this->createMock(AuthManager::class);
-        $this->authenticator = new RequestAuthenticator($this->authManager);
-
         $tmpDir = sys_get_temp_dir() . '/avatar-handler-' . bin2hex(random_bytes(8));
         mkdir($tmpDir, 0755, true);
         $this->avatarStorage = new AvatarStorage($tmpDir);
 
-        $this->container = $this->createMock(ContainerInterface::class);
-        $this->container->method('get')
-            ->willReturnCallback(fn (string $id): mixed => match ($id) {
-                AvatarStorage::class => $this->avatarStorage,
-                default => null,
-            });
-
-        $this->publicRoot = sys_get_temp_dir() . '/phlix-public-' . bin2hex(random_bytes(8));
-        mkdir($this->publicRoot, 0755, true);
-
-        $this->application = $this->createMock(Application::class);
-
-        $this->handler = new HttpHandler(
-            $this->container,
-            $this->authenticator,
-            $this->publicRoot,
-            $this->application
+        $this->fastPaths = new PreRouterFastPaths(
+            $this->createMock(ArtworkStorage::class),
+            $this->avatarStorage,
         );
-
-        $this->reflection = new \ReflectionMethod(
-            HttpHandler::class,
-            'serveUserAvatar'
-        );
-        $this->reflection->setAccessible(true);
 
         putenv('JWT_SECRET=test-secret-for-avatar-url-test-32bytes!');
         SignedUrl::resetSharedForTesting();
@@ -77,14 +50,6 @@ final class HttpHandlerServeAvatarTest extends TestCase
 
         SignedUrl::resetSharedForTesting();
         putenv('JWT_SECRET');
-
-        $files = is_dir($this->publicRoot) ? array_diff(scandir($this->publicRoot), ['.', '..']) : [];
-        foreach ($files as $file) {
-            unlink($this->publicRoot . '/' . $file);
-        }
-        if (is_dir($this->publicRoot)) {
-            rmdir($this->publicRoot);
-        }
     }
 
     /**
@@ -100,38 +65,43 @@ final class HttpHandlerServeAvatarTest extends TestCase
         return new WorkermanRequest($requestLine);
     }
 
+    private function dispatch(
+        WorkermanRequest $wr,
+        ?string $userId = null,
+        ?PreRouterFastPaths $fastPaths = null,
+    ): ?\Workerman\Protocols\Http\Response {
+        $request = Request::fromWorkerman($wr);
+        $request->userId = $userId;
+
+        return ($fastPaths ?? $this->fastPaths)->dispatch($request)?->toWorkermanResponse();
+    }
+
     public function testServeAvatarReturnsNullForPost(): void
     {
         $wr = $this->makeWorkermanRequest('POST', '/api/v1/users/user-1/avatar');
 
-        $result = $this->reflection->invoke($this->handler, $wr, null);
-
-        $this->assertNull($result);
+        $this->assertNull($this->dispatch($wr));
     }
 
     public function testServeAvatarReturnsNullForNonAvatarPath(): void
     {
         $wr = $this->makeWorkermanRequest('GET', '/api/v1/media/123');
 
-        $result = $this->reflection->invoke($this->handler, $wr, null);
-
-        $this->assertNull($result);
+        $this->assertNull($this->dispatch($wr));
     }
 
     public function testServeAvatarReturnsNullForGetWithNoMatch(): void
     {
         $wr = $this->makeWorkermanRequest('GET', '/api/v1/users/avatar');
 
-        $result = $this->reflection->invoke($this->handler, $wr, null);
-
-        $this->assertNull($result);
+        $this->assertNull($this->dispatch($wr));
     }
 
     public function testServeAvatarReturns401WithNoSessionAndNoSignature(): void
     {
         $wr = $this->makeWorkermanRequest('GET', '/api/v1/users/user-1/avatar', []);
 
-        $result = $this->reflection->invoke($this->handler, $wr, null);
+        $result = $this->dispatch($wr);
 
         $this->assertInstanceOf(\Workerman\Protocols\Http\Response::class, $result);
         $this->assertSame(401, $result->getStatusCode());
@@ -149,7 +119,7 @@ final class HttpHandlerServeAvatarTest extends TestCase
             ['exp' => (string) $future, 'sig' => $sig . 'x'],
         );
 
-        $result = $this->reflection->invoke($this->handler, $wr, null);
+        $result = $this->dispatch($wr);
 
         $this->assertInstanceOf(\Workerman\Protocols\Http\Response::class, $result);
         $this->assertSame(401, $result->getStatusCode());
@@ -167,7 +137,7 @@ final class HttpHandlerServeAvatarTest extends TestCase
             ['exp' => (string) $past, 'sig' => $sig],
         );
 
-        $result = $this->reflection->invoke($this->handler, $wr, null);
+        $result = $this->dispatch($wr);
 
         $this->assertInstanceOf(\Workerman\Protocols\Http\Response::class, $result);
         $this->assertSame(401, $result->getStatusCode());
@@ -183,19 +153,7 @@ final class HttpHandlerServeAvatarTest extends TestCase
         $realStorage = new AvatarStorage($storageDir);
         $realStorage->store('user-1', $tmpAvatar);
 
-        $mockContainer = $this->createMock(ContainerInterface::class);
-        $mockContainer->method('get')
-            ->willReturnCallback(fn (string $id): mixed => match ($id) {
-                AvatarStorage::class => $realStorage,
-                default => null,
-            });
-
-        $handler = new HttpHandler(
-            $mockContainer,
-            $this->authenticator,
-            $this->publicRoot,
-            $this->application
-        );
+        $fastPaths = new PreRouterFastPaths($this->createMock(ArtworkStorage::class), $realStorage);
 
         $signer = SignedUrl::fromEnv();
         $signedUrl = $signer->mint('/api/v1/users/user-1/avatar');
@@ -206,10 +164,9 @@ final class HttpHandlerServeAvatarTest extends TestCase
             'sig' => $parsed['sig'],
         ]);
 
-        $result = $this->reflection->invoke($handler, $wr, null);
+        $result = $this->dispatch($wr, null, $fastPaths);
 
         $this->assertNotNull($result);
-        /** @var \Workerman\Protocols\Http\Response $result */
         $this->assertSame(200, $result->getStatusCode());
 
         unlink($tmpAvatar);
@@ -229,10 +186,46 @@ final class HttpHandlerServeAvatarTest extends TestCase
 
         $wr = $this->makeWorkermanRequest('GET', '/api/v1/users/user-1/avatar', []);
 
-        $result = $this->reflection->invoke($this->handler, $wr, 'user-1');
+        $result = $this->dispatch($wr, 'user-1');
 
         $this->assertInstanceOf(\Workerman\Protocols\Http\Response::class, $result);
         $this->assertSame(200, $result->getStatusCode());
+
+        unlink($tmpAvatar);
+    }
+
+    /**
+     * S238: the avatar bytes are JPEG and must SAY so.
+     *
+     * The pre-move code did `mimeFor(pathinfo($path, PATHINFO_EXTENSION))` — it
+     * handed the helper the bare extension `"jpg"`, from which the helper's own
+     * `pathinfo()` extracted `""`, so no map entry matched and EVERY avatar went
+     * out as `application/octet-stream`. It rendered anyway only because these
+     * fast-path responses carry no `X-Content-Type-Options: nosniff`, so browsers
+     * sniffed it — a guarantee that does not survive an intermediary such as the
+     * hub relay this step makes the endpoint reachable through.
+     */
+    public function testServeAvatarDeclaresJpegContentType(): void
+    {
+        $tmpAvatar = sys_get_temp_dir() . '/avatar-mime-' . bin2hex(random_bytes(8)) . '.jpg';
+        imagejpeg(imagecreatetruecolor(64, 64), $tmpAvatar, 85);
+
+        $this->avatarStorage->store('user-1', $tmpAvatar);
+
+        $result = $this->dispatch(
+            $this->makeWorkermanRequest('GET', '/api/v1/users/user-1/avatar', []),
+            'user-1',
+        );
+
+        $this->assertInstanceOf(\Workerman\Protocols\Http\Response::class, $result);
+        $this->assertSame(200, $result->getStatusCode());
+        $this->assertSame(
+            'image/jpeg',
+            $result->getHeader('Content-Type'),
+            'Avatars are JPEG (AvatarStorage re-encodes every upload and only ever writes <id>.jpg); '
+            . 'serving them as application/octet-stream relies on browser content sniffing, which an '
+            . 'intermediary need not provide.',
+        );
 
         unlink($tmpAvatar);
     }
@@ -241,7 +234,7 @@ final class HttpHandlerServeAvatarTest extends TestCase
     {
         $wr = $this->makeWorkermanRequest('GET', '/api/v1/users/user-1/avatar', []);
 
-        $result = $this->reflection->invoke($this->handler, $wr, 'user-1');
+        $result = $this->dispatch($wr, 'user-1');
 
         $this->assertInstanceOf(\Workerman\Protocols\Http\Response::class, $result);
         $this->assertSame(404, $result->getStatusCode());
@@ -259,7 +252,7 @@ final class HttpHandlerServeAvatarTest extends TestCase
             ['exp' => (string) $future, 'sig' => $sig],
         );
 
-        $result = $this->reflection->invoke($this->handler, $wr, null);
+        $result = $this->dispatch($wr);
 
         $this->assertInstanceOf(\Workerman\Protocols\Http\Response::class, $result);
         $this->assertSame(404, $result->getStatusCode());

@@ -865,7 +865,20 @@ try {
         /** @var ConnectionPool $relayConnectionPool */
         $relayConnectionPool = $container->get(ConnectionPool::class);
         $relayApplication = new Application($container, $config, $relayConnectionPool);
-        $relayDispatcher = new \Phlix\Hub\RelayRequestDispatcher($relayApplication, $container);
+
+        // S238: the pre-router image endpoints (/api/v1/artwork/{id},
+        // /api/v1/users/{id}/avatar) are in NO route table, so without this the
+        // relay dispatcher 404s both and a relayed browse renders no posters and
+        // no avatars. Resolved eagerly HERE (both storages are just a directory
+        // string) so a container misconfiguration fails at fork boot rather than
+        // silently degrading back to that 404 on the first poster request.
+        /** @var \Phlix\Server\Http\FastPath\PreRouterFastPaths $relayFastPaths */
+        $relayFastPaths = $container->get(\Phlix\Server\Http\FastPath\PreRouterFastPaths::class);
+        $relayDispatcher = new \Phlix\Hub\RelayRequestDispatcher(
+            $relayApplication,
+            $container,
+            $relayFastPaths,
+        );
 
         // Warm WebPortalRouter once in this relay fork for the same reason as the
         // HTTP worker above: RelayRequestDispatcher::dispatch() resolves it

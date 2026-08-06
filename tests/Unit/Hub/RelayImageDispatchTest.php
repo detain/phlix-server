@@ -337,18 +337,39 @@ final class RelayImageDispatchTest extends TestCase
 
     /**
      * The stage is not a catch-all: near-miss paths still fall through to the
-     * router and 404 there. Without this the 200s above could come from a matcher
+     * router and 404 THERE. Without this the 200s above could come from a matcher
      * that swallowed everything.
+     *
+     * ⚠ The status alone is NOT enough and must not be trimmed back to it. Both
+     * the router and the image stage answer 404 — the stage's own misses are
+     * `Avatar not found` / `{"error":"Artwork not found"}`, the router's is its
+     * `"error": "Not Found"` envelope — so a status-only assertion compares two
+     * 404s and proves nothing about which produced it. Measured: loosening
+     * `AVATAR_PATTERN` to swallow `/api/v1/users/avatar` left a status-only
+     * version of this test GREEN.
      *
      * @dataProvider nearMissPaths
      */
     public function testNearMissPathsFallThroughToTheRouter(string $path): void
     {
-        self::assertSame(
-            404,
-            $this->dispatch($this->relayedRequest($path))->statusCode,
-            "{$path} must not be captured by the image fast paths.",
+        $response = $this->dispatch($this->relayedRequest($path));
+
+        self::assertSame(404, $response->statusCode, "{$path} must not be served by the image fast paths.");
+        self::assertRouterProducedThe404($response, $path);
+    }
+
+    /**
+     * Assert the 404 came from the route table, not from the image stage.
+     */
+    private static function assertRouterProducedThe404(Response $response, string $path): void
+    {
+        self::assertStringContainsString(
+            '"error": "Not Found"',
+            $response->body,
+            "{$path} must be 404d by the ROUTER — this body is the image stage's own miss instead.",
         );
+        self::assertStringNotContainsString('Artwork not found', $response->body);
+        self::assertStringNotContainsString('Avatar not found', $response->body);
     }
 
     /**
@@ -371,7 +392,12 @@ final class RelayImageDispatchTest extends TestCase
         $request = $this->relayedRequest('/api/v1/artwork/item-1');
         $request->method = 'DELETE';
 
-        self::assertSame(404, $this->dispatch($request)->statusCode);
+        $response = $this->dispatch($request);
+
+        self::assertSame(404, $response->statusCode);
+        // Same trap as the near-miss cases: dropping the verb check would make the
+        // stage answer its OWN 404 here, which a status-only assertion cannot see.
+        self::assertRouterProducedThe404($response, 'DELETE /api/v1/artwork/item-1');
     }
 
     /**

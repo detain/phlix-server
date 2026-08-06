@@ -203,22 +203,80 @@ final readonly class MusicAlbum
     }
 
     /**
-     * Parses a datetime string into a DateTime object.
+     * Parses a `datetime` column value into a `\DateTime`, or `null` when the row
+     * carries no usable timestamp.
      *
-     * @param mixed $value DateTime string or object
+     * 🔴 **S143 — this helper used to FABRICATE a timestamp.** `new \DateTime('')`
+     * does not throw: PHP's parser reads an empty or whitespace-only string as
+     * "now", so `created_at => ''` produced **exactly the current second**, and
+     * `'0000-00-00 00:00:00'` — MySQL's zero date, which a `NOT NULL DATETIME`
+     * column yields under a non-strict SQL mode — produced **`-0001-11-30`**. Both
+     * were then indistinguishable from a timestamp the row really held.
+     *
+     * **A fabricated timestamp is worse than a missing one, and that is the whole
+     * reason this returns `null`.** A `null` is visibly absent, so anything that
+     * sorts, filters or reports by date can see it is not there. A fabricated
+     * "now" looks plausible forever and silently corrupts every one of those. This
+     * same helper already refuses to invent a value for the integer case — an int
+     * `created_at` is `null`, **not** a unix timestamp — so returning "now" here
+     * was violating the codebase's own standard in one branch of one function.
+     *
+     * **The type guard is `\DateTimeInterface`, not `\DateTime`, and that was a
+     * second, independent bug.** `\DateTimeImmutable` does **not** extend
+     * `\DateTime`; both implement `\DateTimeInterface`. So a perfectly valid
+     * immutable fell past `is_string()` and was dropped to `null` — and modern PHP
+     * produces `\DateTimeImmutable` by default. An immutable is now converted with
+     * `\DateTime::createFromInterface()`, which preserves the instant, the
+     * microseconds and the timezone. A mutable `\DateTime` is still returned **by
+     * identity**, and must stay that way — that is separately pinned.
+     *
+     * **What deliberately did NOT change: the string handed to the parser.**
+     * `trim()` decides emptiness only; any non-blank value is parsed byte-for-byte
+     * as before, so `' 2019-03-04 '` keeps parsing exactly as it always did.
+     * Widening what parses is not this fix's business.
+     *
+     * ⚠ **Do not read a green "already a DateTime" identity test as coverage of
+     * this path.** Before S143 the empty-input contract was pinned by NOTHING:
+     * adding `&& $value !== ''` to the old string guard left the whole suite green
+     * (measured on `f701b40c`, `Tests: 8978, Failures: 2`), while mutating the
+     * `instanceof` reddened three. The guard's EXISTENCE was pinned; its BREADTH
+     * was not. Both are now pinned by
+     * {@see \Phlix\Tests\Unit\Media\Music\MusicDtoParseDateTimeTest}.
+     *
+     * ⚠ This helper is byte-identical in `MusicArtist`, `MusicAlbum` and
+     * `MusicTrack`. Change all three together and re-check the md5s, or extract it.
+     *
+     * @param mixed $value A `datetime` column value, a `\DateTimeInterface`, or
+     *                     anything else — everything unusable becomes `null`.
+     * @return \DateTime|null `null` for a non-string, non-`\DateTimeInterface`
+     *                        value; for an empty or whitespace-only string; for
+     *                        MySQL's zero date (`0000-00-00…`); and for a string
+     *                        the parser rejects.
      */
     private static function parseDateTime(mixed $value): ?\DateTime
     {
         if ($value instanceof \DateTime) {
             return $value;
         }
-        if (is_string($value)) {
-            try {
-                return new \DateTime($value);
-            } catch (\Exception) {
-                return null;
-            }
+        if ($value instanceof \DateTimeInterface) {
+            return \DateTime::createFromInterface($value);
         }
-        return null;
+        if (!is_string($value)) {
+            return null;
+        }
+
+        // `''` and `'   '` BOTH parse as "now", and `'0000-00-00…'` parses as year
+        // -1. None of the three is a timestamp the row carried, so none may be
+        // handed back as one.
+        $trimmed = trim($value);
+        if ($trimmed === '' || str_starts_with($trimmed, '0000-00-00')) {
+            return null;
+        }
+
+        try {
+            return new \DateTime($value);
+        } catch (\Exception) {
+            return null;
+        }
     }
 }

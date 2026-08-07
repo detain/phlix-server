@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Console\Commands;
 
+use Phlix\Media\Library\PathDedupeRunner;
 use Phlix\Media\Library\PathDeduper;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
@@ -202,26 +203,13 @@ final class MediaDedupePathsCommand extends Command
         $output->writeln(sprintf('  Path: %s', $path));
         $output->writeln(sprintf('  %d duplicate(s):', count($items)));
 
-        // Score each item and pick the keeper
-        $scored = [];
-        foreach ($items as $item) {
-            $score = $deduper->scoreItem($item['id']);
-            $scored[] = [
-                'item' => $item,
-                'score' => $score,
-            ];
-        }
-
-        // Sort by score desc, then id asc (tiebreak)
-        usort($scored, static function (array $a, array $b): int {
-            if ($a['score'] !== $b['score']) {
-                return $b['score'] <=> $a['score'];
-            }
-            return strcmp($a['item']['id'], $b['item']['id']);
-        });
-
-        $keeper = $scored[0];
-        $losers = array_slice($scored, 1);
+        // Score each item and pick the keeper. The RULE (highest score wins,
+        // lowest id breaks the tie) lives in PathDedupeRunner because S77's
+        // `dedupe-paths` maintenance task applies the same one with no console
+        // to write to; re-typing it here is how the two would drift.
+        $ranked = PathDedupeRunner::rank($deduper, $items);
+        $keeper = $ranked['keeper'];
+        $losers = $ranked['losers'];
 
         // Display KEEP row
         $output->writeln(sprintf(
@@ -245,30 +233,23 @@ final class MediaDedupePathsCommand extends Command
         $totalKeep++;
         $totalDelete += count($losers);
 
-        // If applying, perform the merge
+        // If applying, perform the merge. The transaction, the repoint-then-
+        // delete ORDER and the rollback all live in PathDedupeRunner, shared
+        // with the maintenance task.
         if (!$isDryRun) {
             $output->write('    Applying... ');
 
-            try {
-                $deduper->beginTrans();
+            $outcome = PathDedupeRunner::mergeGroup(
+                $deduper,
+                $keeper['item']['id'],
+                PathDedupeRunner::loserIds($losers)
+            );
 
-                foreach ($losers as $s) {
-                    $loserId = $s['item']['id'];
-                    $keeperId = $keeper['item']['id'];
-
-                    // Repoint all referencing tables
-                    $deduper->repointReferencingTables($loserId, $keeperId);
-
-                    // Delete the loser row
-                    $deduper->deleteItem($loserId);
-                }
-
-                $deduper->commit();
-                $output->writeln('<info>done</info>');
-            } catch (Throwable $e) {
-                $deduper->rollback();
-                $output->writeln('<error>FAILED: ' . $e->getMessage() . '</error>');
-            }
+            $output->writeln(
+                $outcome['error'] === null
+                    ? '<info>done</info>'
+                    : '<error>FAILED: ' . $outcome['error'] . '</error>'
+            );
         }
 
         $output->writeln('');

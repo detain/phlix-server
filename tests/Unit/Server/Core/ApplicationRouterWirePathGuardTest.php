@@ -26,7 +26,8 @@ use function DI\factory;
  * S239 — WIRE-PATH guard for the router {@see Application} composes.
  *
  * S236 closed this exposure for {@see WebPortalRouter}'s 47 routes. `Application`
- * carries **345** routes across ~30 loaders and had the same hole: a route the
+ * carries **353** routes across ~30 loaders (345 when S239 measured it; S77 added the
+ * eight `/api/v1/admin/maintenance/*` endpoints) and had the same hole: a route the
  * clients depend on could be renamed or deleted with every server gate green.
  *
  * ## The measured holes this file closes
@@ -71,11 +72,11 @@ use function DI\factory;
  * This file covers `Application`'s router at two different strengths, and the
  * difference matters:
  *
- * - **All 345 rails, REGISTRATION-only.**
+ * - **All 353 rails, REGISTRATION-only.**
  *   {@see self::testTheRegisteredWirePathsMatchTheManifestExactly()} pins verb +
  *   exact path literal + handler class::method + middleware stack for every route,
  *   as a whole-list strict comparison. Renaming, deleting, re-verbing, re-handling
- *   or un-gating ANY of the 345 reds it.
+ *   or un-gating ANY of the 353 reds it.
  * - **Five rails are DISPATCH-covered:** `GET /health`,
  *   `GET /api/v1/media/most-watched`, `GET /dash/{job_id}/manifest`,
  *   `GET /dash/{job_id}/{file}` and `POST /api/v1/sessions/{id}/complete`. Of
@@ -151,7 +152,7 @@ final class ApplicationRouterWirePathGuardTest extends TestCase
      *
      * ## How it is rendered
      *
-     * - Class names are SHORT names. Verified unique: the 345 routes resolve to 67
+     * - Class names are SHORT names. Verified unique: the 353 routes resolve to 68
      *   distinct handler classes and 6 distinct middleware classes with no
      *   short-name collision, so shortening loses no identity.
      * - Ten handlers are closures registered inline in `Application.php` and render
@@ -239,6 +240,9 @@ final class ApplicationRouterWirePathGuardTest extends TestCase
         'GET /api/v1/admin/logs -> LogController::index [AdminMiddleware]',
         'GET /api/v1/admin/logs/tail -> LogController::tail [AdminMiddleware]',
         'GET /api/v1/admin/logs/tail-all -> LogController::tailAll [AdminMiddleware]',
+        'GET /api/v1/admin/maintenance/jobs -> MaintenanceController::jobs [AdminMiddleware]',
+        'GET /api/v1/admin/maintenance/jobs/{id} -> MaintenanceController::job [AdminMiddleware]',
+        'GET /api/v1/admin/maintenance/tasks -> MaintenanceController::tasks [AdminMiddleware]',
         'GET /api/v1/admin/metadata/sources -> AdminMetadataSourceController::index [AdminMiddleware]',
         'GET /api/v1/admin/metrics/connections -> MetricsController::connections [AdminMiddleware]',
         'GET /api/v1/admin/metrics/history -> MetricsController::history [AdminMiddleware]',
@@ -416,6 +420,14 @@ final class ApplicationRouterWirePathGuardTest extends TestCase
         'POST /api/v1/admin/livetv/guide/refresh -> AdminLiveTvController::refreshGuide [AdminMiddleware]',
         'POST /api/v1/admin/livetv/recordings -> AdminLiveTvController::createRecording [AdminMiddleware]',
         'POST /api/v1/admin/livetv/series-rules -> AdminLiveTvController::createSeriesRule [AdminMiddleware]',
+        'POST /api/v1/admin/maintenance/cleanup-orphaned-stats'
+            . ' -> MaintenanceController::cleanupOrphanedStats [AdminMiddleware]',
+        'POST /api/v1/admin/maintenance/dedupe-paths -> MaintenanceController::dedupePaths [AdminMiddleware]',
+        'POST /api/v1/admin/maintenance/reap-scan-jobs -> MaintenanceController::reapScanJobs [AdminMiddleware]',
+        'POST /api/v1/admin/maintenance/reap-transcode-jobs'
+            . ' -> MaintenanceController::reapTranscodeJobs [AdminMiddleware]',
+        'POST /api/v1/admin/maintenance/storage-snapshot'
+            . ' -> MaintenanceController::storageSnapshot [AdminMiddleware]',
         'POST /api/v1/admin/media/merge -> AdminMergeController::merge [AdminMiddleware]',
         'POST /api/v1/admin/plugins/catalog/sources -> PluginCatalogController::addSource [AdminMiddleware]',
         'POST /api/v1/admin/plugins/install -> PluginAdminController::install [AdminMiddleware]',
@@ -881,7 +893,7 @@ final class ApplicationRouterWirePathGuardTest extends TestCase
      * Whole-list strict comparison of the production route table against
      * {@see self::ROUTE_MANIFEST}. This is the part of the file that covers the
      * other 340 rails: renaming, deleting, re-verbing, re-pointing or un-gating
-     * ANY of the 345 registrations reds it with a readable diff.
+     * ANY of the 353 registrations reds it with a readable diff.
      *
      * It does NOT assert those rails' response envelopes — see the class
      * docblock's coverage statement for exactly which five are driven through

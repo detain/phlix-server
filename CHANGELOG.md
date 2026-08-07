@@ -7,6 +7,57 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- **Admin maintenance endpoints — the backend for the admin Tasks page (S77).** Eight routes on
+  `/api/v1/admin/maintenance/*`, inside `AdminRoutes`' `AdminMiddleware` group, with an explicit
+  in-body admin re-check in every handler (two of the five tasks are destructive, and a group's
+  middleware is one refactor away from being lost):
+
+  | Verb | Path | Mode |
+  |------|------|------|
+  | GET  | `/api/v1/admin/maintenance/tasks`                  | catalogue |
+  | GET  | `/api/v1/admin/maintenance/jobs`                   | recent queued runs (`?limit=`, `?task=`) |
+  | GET  | `/api/v1/admin/maintenance/jobs/{id}`              | one job, for polling |
+  | POST | `/api/v1/admin/maintenance/storage-snapshot`       | **queued** → `202` |
+  | POST | `/api/v1/admin/maintenance/reap-scan-jobs`         | sync → `200` |
+  | POST | `/api/v1/admin/maintenance/reap-transcode-jobs`    | sync → `200` |
+  | POST | `/api/v1/admin/maintenance/cleanup-orphaned-stats` | sync → `200` |
+  | POST | `/api/v1/admin/maintenance/dedupe-paths`           | **queued** → `202` |
+
+  **The sync/queued split is a property of the task, not of the caller.** `storage-snapshot`
+  `shell_exec`s `du -sb` per bucket over `/vault1` and `/vault2` (which on the live host hold the
+  whole media library) and `dedupe-paths` scans `media_items` whole with a transaction per
+  duplicate group — running either in a Workerman HTTP worker stalls every concurrent connection
+  on that process. Both are enqueued onto the new `maintenance_jobs` table (migration 098) and
+  drained by a 5-second timer inside the existing `count = 1` `phlix-background-timers` fork,
+  which is what makes "one maintenance job at a time" true. A repeat POST while the same task is
+  pending answers `200 {created: false}` with the EXISTING job, so a double-clicked button cannot
+  start two `du -sb` walks.
+
+  **`cleanup-orphaned-stats` closes out S14's deferred cleanup action.** S14 shipped the read-side
+  INNER JOINs so orphaned rows stopped appearing as blank dashboard entries; they were never
+  removed. It deletes from `stats_playback_events` (both `media_item_id` and `user_id`),
+  `stats_library_changes` and `stats_user_activity`, bounded by a per-table `LIMIT` that reports
+  `truncated: true` rather than looping. 🚨 It **refuses outright** when `media_items` or `users`
+  reports zero rows: `NOT EXISTS (SELECT 1 FROM media_items …)` is true for every row against an
+  empty parent, so a fresh install or half-restored backup would otherwise delete the entire
+  playback history in one click.
+
+  **`reap-scan-jobs` imposes a six-hour FLOOR on the age it will accept**, derived from the
+  4 h 09 m production music scan recorded in `LibraryScanWorker::start()`. `library_scan_jobs` has
+  no heartbeat column — `started_at` is the only age signal and it is never refreshed while a scan
+  runs — so honouring a short request would mark a healthy scan `failed` AND make
+  `hasActiveJobForLibrary()` report the library idle, re-opening the door to a second concurrent
+  scan over the same files. `ScanJobRepository::reapStaleJobs()` gained an optional age bound for
+  this; its default (null) is the unchanged boot catch-up contract, which still reaps every
+  `running` row and must stay reachable only from `LibraryScanWorker::start()`.
+
+  **`dedupe-paths` defaults to a DRY RUN.** `apply` must be strictly `true` — the string `"false"`
+  is truthy, and this deletes media rows. The keeper-selection and merge rules moved out of
+  `MediaDedupePathsCommand` into `Phlix\Media\Library\PathDedupeRunner` so the CLI and the task
+  share ONE copy rather than two that drift.
+
 ### Fixed
 
 - **DLNA Browse now advertises a stream URL that actually resolves, and a `protocolInfo` that

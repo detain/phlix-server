@@ -24,6 +24,7 @@ use Phlix\Server\Http\Controllers\Admin\BackupController;
 use Phlix\Server\Http\Controllers\Admin\DashboardController;
 use Phlix\Server\Http\Controllers\Admin\FsBrowseController;
 use Phlix\Server\Http\Controllers\Admin\LogController;
+use Phlix\Server\Http\Controllers\Admin\MaintenanceController;
 use Phlix\Server\Http\Controllers\Admin\WatchHistoryController;
 use Phlix\Server\Http\Controllers\AccessScheduleController;
 use Phlix\Server\Http\Controllers\AuthProviderController;
@@ -71,6 +72,14 @@ use Psr\Container\ContainerInterface;
  *  - `PUT    /api/v1/admin/settings`                 → persist overrides
  *  - `GET    /api/v1/admin/updates/status`           → core update-check status (S74)
  *  - `PUT    /api/v1/admin/updates/settings`         → core update-check toggle (S74)
+ *  - `GET    /api/v1/admin/maintenance/tasks`        → maintenance task catalogue (S77)
+ *  - `GET    /api/v1/admin/maintenance/jobs`         → recent queued maintenance runs (S77)
+ *  - `GET    /api/v1/admin/maintenance/jobs/{id}`    → one maintenance job, for polling (S77)
+ *  - `POST   /api/v1/admin/maintenance/storage-snapshot`       → queue a storage snapshot (S77)
+ *  - `POST   /api/v1/admin/maintenance/reap-scan-jobs`         → fail stale scan jobs (S77)
+ *  - `POST   /api/v1/admin/maintenance/reap-transcode-jobs`    → fail wedged transcodes (S77)
+ *  - `POST   /api/v1/admin/maintenance/cleanup-orphaned-stats` → delete orphaned stats rows (S77)
+ *  - `POST   /api/v1/admin/maintenance/dedupe-paths`           → queue a duplicate-path merge (S77)
  *  - `GET    /api/v1/admin/fs/browse`                → list subdirectories
  *  - `GET    /api/v1/admin/libraries/{id}/duplicates` → preview duplicate groups
  *  - `POST   /api/v1/admin/media/merge`              → apply a duplicate merge
@@ -369,6 +378,32 @@ final class AdminRoutes
 
                 $r->get('/updates/status', [$updatesController, 'status']);
                 $r->put('/updates/settings', [$updatesController, 'updateSettings']);
+
+                // One-off maintenance tasks — S77 / updates.md #49, the backend
+                // for the admin Tasks page (S78).
+                //
+                // Registered HERE rather than on a `Router::` static registrar of
+                // their own so they inherit this group's AdminMiddleware; every
+                // handler additionally re-checks admin in its own body, because
+                // two of the five tasks are destructive and a group's middleware
+                // is one refactor away from being lost.
+                //
+                // `/maintenance/tasks` and `/maintenance/jobs` are 3-segment
+                // literals and `/maintenance/jobs/{id}` is 4; the Router anchors
+                // every compiled pattern with `#^…$#` and `{param}` compiles to
+                // `[^/]+`, so none of them can shadow another regardless of
+                // registration order.
+                /** @var MaintenanceController $maintenanceController */
+                $maintenanceController = $container->get(MaintenanceController::class);
+
+                $r->get('/maintenance/tasks', [$maintenanceController, 'tasks']);
+                $r->get('/maintenance/jobs', [$maintenanceController, 'jobs']);
+                $r->get('/maintenance/jobs/{id}', [$maintenanceController, 'job']);
+                $r->post('/maintenance/storage-snapshot', [$maintenanceController, 'storageSnapshot']);
+                $r->post('/maintenance/reap-scan-jobs', [$maintenanceController, 'reapScanJobs']);
+                $r->post('/maintenance/reap-transcode-jobs', [$maintenanceController, 'reapTranscodeJobs']);
+                $r->post('/maintenance/cleanup-orphaned-stats', [$maintenanceController, 'cleanupOrphanedStats']);
+                $r->post('/maintenance/dedupe-paths', [$maintenanceController, 'dedupePaths']);
             },
             [$adminMiddleware],
         );

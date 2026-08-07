@@ -658,17 +658,52 @@ class ScanJobRepository
      * correctly needs per-job worker ownership (an owner id / heartbeat column), which
      * is a schema change outside S150/S151.
      *
-     * @param string $error Failure message stored on each reaped row.
+     * ## S77 added an OPTIONAL age bound — the default is unchanged
+     *
+     * The paragraph above is the contract for `$olderThanSeconds === null`, and
+     * {@see LibraryScanWorker::start()} still calls it that way: at boot, "reap
+     * everything running" is the only thing that closes the spinner-forever
+     * hang, because the reaper does not run again and an orphan younger than
+     * any threshold would never be reaped at all.
+     *
+     * The admin `reap-scan-jobs` maintenance task is the opposite situation —
+     * it runs on demand, repeatedly, while the server is live — so reaping
+     * every `running` row would fail scans that are healthy. It passes an age,
+     * which adds `started_at < NOW() - INTERVAL n SECOND`. That bound is
+     * WEAKER than per-job ownership would be (there is still no heartbeat
+     * column, so a long scan looks old rather than alive), which is why
+     * {@see \Phlix\Admin\Maintenance\MaintenanceTaskRunner::MIN_SCAN_JOB_AGE_SECONDS}
+     * imposes a six-hour FLOOR on what a caller may ask for, derived from the
+     * 4 h 09 m production music scan recorded in `LibraryScanWorker::start()`.
+     *
+     * A row with a NULL `started_at` is never age-reaped: it was never claimed,
+     * so it has no age, and treating "unknown" as "old" is the wrong direction.
+     *
+     * @param string   $error             Failure message stored on each reaped row.
+     * @param int|null $olderThanSeconds  NULL reaps EVERY `running` row (the boot
+     *        catch-up). An integer reaps only rows claimed longer ago than that.
      *
      * @return int Number of rows reaped.
      *
      * @since 0.35.0
      */
-    public function reapStaleJobs(string $error): int
+    public function reapStaleJobs(string $error, ?int $olderThanSeconds = null): int
     {
+        $ageClause = '';
+        if ($olderThanSeconds !== null) {
+            // Interpolated, not bound: `Workerman\MySQL\Connection` binds every
+            // value as a string and MySQL will not accept `INTERVAL '600'
+            // SECOND`. The value is an already-cast, non-negative `int`, so it
+            // cannot carry injection.
+            $ageClause = sprintf(
+                ' AND started_at IS NOT NULL AND started_at < (NOW() - INTERVAL %d SECOND)',
+                max(0, $olderThanSeconds),
+            );
+        }
+
         $affected = $this->db->query(
             "UPDATE library_scan_jobs SET status = 'failed', error = ?, completed_at = NOW()"
-            . " WHERE status = 'running'",
+            . " WHERE status = 'running'" . $ageClause,
             [$error],
         );
 

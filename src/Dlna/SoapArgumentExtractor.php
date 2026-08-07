@@ -18,8 +18,13 @@ use SimpleXMLElement;
  *
  * Shared by every UPnP/DLNA SOAP control path so they cannot diverge:
  *  - {@see \Phlix\Server\Http\Controllers\Dlna\DlnaContentDirectoryController}
- *    (the live `POST /dlna/content_directory` control route), and
- *  - {@see DlnaServer::processSoapRequest()}.
+ *    — **the live one**: `POST /dlna/content_directory`, registered in
+ *    `Application::loadCdsRoutes()`. This is the path a real control point
+ *    takes, and the only one whose coverage means anything in production; and
+ *  - {@see DlnaServer::processSoapRequest()} — ⚠ **no production caller**
+ *    (S218). Kept as a shared implementation so the two cannot drift, but see
+ *    that method's docblock before writing a test against it: a test that
+ *    exercises it proves nothing about the served endpoint.
  *
  * The core guarantee: an argument value is only ever read from a DIRECT CHILD
  * of the SOAP action element (which is itself located as a direct child of the

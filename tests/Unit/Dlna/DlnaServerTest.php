@@ -7,6 +7,25 @@ use PHPUnit\Framework\MockObject\MockObject;
 use Phlix\Dlna\DlnaServer;
 use Phlix\Media\Library\ItemRepository;
 
+/**
+ * ⚠ **`processSoapRequest()` is NOT the served SOAP path (S218).**
+ *
+ * The seven `$this->server->processSoapRequest(...)` calls below are, as of
+ * 2026-08-07, the ONLY callers of that method anywhere — src/, tests/, vendor/
+ * and the sibling repos under `/home/sites/phlix` were all searched, and
+ * `DlnaServer` does no dynamic dispatch. So these cases assert the behaviour of
+ * code no DLNA control point can reach, and they will stay green no matter what
+ * the served endpoint does.
+ *
+ * The served ContentDirectory control path is
+ * {@see \Phlix\Server\Http\Controllers\Dlna\DlnaContentDirectoryController::handle()}
+ * at `POST /dlna/content_directory`. New coverage for anything a renderer can
+ * observe belongs in
+ * `tests/Unit/Server/Http/Controllers/Dlna/DlnaContentDirectorySoapTest.php`
+ * (Browse) or `.../DlnaContentDirectorySearchLivePathTest.php` (Search), not
+ * here. These cases are retained because they still pin `DlnaServer`'s own
+ * shared behaviour — not because they cover the endpoint.
+ */
 class DlnaServerTest extends TestCase
 {
     private DlnaServer $server;

@@ -18,24 +18,70 @@ use RuntimeException;
 /**
  * Thin wrapper over an {@see \LdapRecord\Connection} for auth queries.
  *
- * ## Blocking I/O limitation (S44)
+ * ## Accepted blocking-I/O exception #1 (S44 / S44-b)
  *
- * Unlike the OIDC path — whose HTTP calls were moved onto the non-blocking
- * {@see \Phlix\Plugins\Oidc\OidcHttpClient} cooperative-wait client — the LDAP
- * connect/bind/search here is inherently BLOCKING. LdapRecord sits on PHP's
- * `ext-ldap`, whose socket operations are NOT covered by the Swoole runtime
- * hook, so there is no drop-in async client to yield to the event loop; a bind
- * against an unreachable server blocks the calling worker for up to the socket
- * timeout. This is bounded — every connection (both the service-bind connection
- * in {@see self::createConnection()} and the per-user bind in
- * {@see self::createUserConnection()}) sets a 5-second `timeout` — but it is a
- * real, deliberate exception to the "all NEW I/O must be non-blocking" rule:
- * faking async for ext-ldap would be dishonest. If LDAP latency ever becomes a
- * problem under load, the correct fix is to move the bind onto a dedicated
- * worker/queue rather than to pretend the current call is non-blocking.
+ * Unlike the OIDC path — whose HTTP calls run through
+ * {@see \Phlix\Plugins\Oidc\OidcHttpClient} — the LDAP connect/bind/search here
+ * is genuinely BLOCKING and cannot be made otherwise. LdapRecord sits on PHP's
+ * `ext-ldap`, i.e. on OpenLDAP's own C socket handling, which no Swoole runtime
+ * hook covers — not even `SWOOLE_HOOK_ALL`. There is no drop-in async client to
+ * yield to the event loop, and faking async for ext-ldap would be dishonest.
+ * This is therefore a **named, registered exception** to the "all NEW I/O must
+ * be non-blocking" rule; see `docs/dev/BLOCKING_IO_EXCEPTIONS.md`.
+ *
+ * ## The bound (S44-b — it did NOT previously exist)
+ *
+ * The pre-S44-b text claimed the stall was "bounded" by the 5-second `timeout`
+ * config key. **It was not.** LdapRecord maps `timeout` to
+ * `LDAP_OPT_NETWORK_TIMEOUT` only (`LdapRecord\Connection::configure()`), which
+ * bounds the TCP *connect* and nothing else. Measured against a server that
+ * ACCEPTS the connection and then never answers — a hung or half-open directory,
+ * the common real failure — `testConnection()`, `findUserDn()` and
+ * `authenticate()` all hung indefinitely (>300 s), and inside a real Workerman
+ * worker the whole event loop froze with them: a 100 ms sibling coroutine ticked
+ * 9 times in the first second and then **zero** times for the rest of the run.
+ *
+ * Both connections therefore also set `LDAP_OPT_TIMEOUT`
+ * ({@see self::OPERATION_TIMEOUT_SECONDS}), which bounds the synchronous
+ * bind/search result wait. Re-measured with it in place, the same hung server
+ * returned in 5 043 ms and the worker resumed ticking immediately after. The
+ * option survives LdapRecord's `array_replace()` in `configure()` because that
+ * call only overrides `LDAP_OPT_PROTOCOL_VERSION`, `LDAP_OPT_NETWORK_TIMEOUT`
+ * and `LDAP_OPT_REFERRALS`.
+ *
+ * So the exception is: **one HTTP worker stalls for at most
+ * {@see self::OPERATION_TIMEOUT_SECONDS} seconds per LDAP operation.** The bound
+ * is PER OPERATION, and some entry points issue more than one:
+ * {@see self::findUserDn()} retries via {@see self::searchForUserDn()} when a
+ * service bind DN is configured, so it is 2 operations, and a full
+ * {@see \Phlix\Plugins\Ldap\LdapProvider::authenticate()} against a hung server
+ * measured **10 037 ms** end to end (it short-circuits on `invalid_credentials`
+ * after the failed user bind). The two reachable entry points are the login path
+ * ({@see \Phlix\Auth\AuthManager::loginWithProvider()}, itself behind the per-IP
+ * brute-force throttle) and the admin `POST /admin/auth-providers/ldap/test`.
+ *
+ * If LDAP latency ever becomes a problem under load, the correct fix is to move
+ * the bind onto a dedicated worker/queue rather than to pretend the current call
+ * is non-blocking — or to shrink these constants.
  */
 class LdapConnection
 {
+    /**
+     * TCP connect timeout in seconds (`LDAP_OPT_NETWORK_TIMEOUT`, set by
+     * LdapRecord from the `timeout` config key).
+     */
+    public const NETWORK_TIMEOUT_SECONDS = 5;
+
+    /**
+     * Bind/search result-wait timeout in seconds (`LDAP_OPT_TIMEOUT`).
+     *
+     * Without this the worker stalls forever on a server that accepts the TCP
+     * connection and then goes silent — `LDAP_OPT_NETWORK_TIMEOUT` does not
+     * cover the operation wait. This constant IS the bound that makes the
+     * blocking-I/O exception above legitimate; do not remove it.
+     */
+    public const OPERATION_TIMEOUT_SECONDS = 5;
+
     /**
      * @var array<string, Connection>
      */
@@ -72,16 +118,7 @@ class LdapConnection
 
     private function createConnection(): Connection
     {
-        $config = [
-            'hosts' => [$this->host],
-            'port' => $this->port,
-            'base_dn' => $this->baseDn,
-            'username' => $this->bindDn,
-            'password' => $this->bindPw,
-            'use_ssl' => $this->ssl,
-            'use_tls' => !$this->ssl,
-            'timeout' => 5,
-        ];
+        $config = $this->connectionConfig($this->bindDn, $this->bindPw);
 
         $key = $this->host . ':' . $this->port . ':' . ($this->ssl ? 'ssl' : 'plain');
 
@@ -285,18 +322,38 @@ class LdapConnection
 
     private function createUserConnection(string $userDn, string $password): Connection
     {
-        $config = [
+        return new Connection($this->connectionConfig($userDn, $password));
+    }
+
+    /**
+     * Build the LdapRecord config shared by the service-bind connection and the
+     * per-user bind connection.
+     *
+     * BOTH timeouts are mandatory and neither substitutes for the other:
+     *  - `timeout`                → `LDAP_OPT_NETWORK_TIMEOUT`, bounds the TCP connect;
+     *  - `options[LDAP_OPT_TIMEOUT]` → bounds the bind/search result wait, which
+     *    is the case that actually hangs (see the class docblock). Passing it via
+     *    `options` is deliberate: `LdapRecord\Connection::configure()` uses the
+     *    `options` array as the BASE of an `array_replace()` and only overrides
+     *    protocol-version / network-timeout / referrals, so this survives.
+     *
+     * @return array<string, mixed>
+     */
+    private function connectionConfig(?string $username, ?string $password): array
+    {
+        return [
             'hosts' => [$this->host],
             'port' => $this->port,
             'base_dn' => $this->baseDn,
-            'username' => $userDn,
+            'username' => $username,
             'password' => $password,
             'use_ssl' => $this->ssl,
             'use_tls' => !$this->ssl,
-            'timeout' => 5,
+            'timeout' => self::NETWORK_TIMEOUT_SECONDS,
+            'options' => [
+                LDAP_OPT_TIMEOUT => self::OPERATION_TIMEOUT_SECONDS,
+            ],
         ];
-
-        return new Connection($config);
     }
 
     public static function clearCache(): void

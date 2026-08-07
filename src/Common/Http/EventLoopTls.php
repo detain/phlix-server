@@ -28,11 +28,35 @@ use Workerman\Worker;
  * TLS-buffered data, which is why the same code works there.
  *
  * Until the event adapter is fixed upstream, https requests made while the
- * Swoole event loop drives the process must use blocking cURL instead. cURL
- * is deliberately excluded from the curated coroutine hook mask
- * ({@see \Phlix\Server\Runtime\SwooleRuntime}), so it runs as a plain
- * blocking call — acceptable for the low-frequency control-plane and
- * metadata requests these clients serve.
+ * Swoole event loop drives the process must use cURL instead.
+ *
+ * ## Accepted blocking-I/O exception #2 (S44-b) — and a correction
+ *
+ * This docblock used to assert that the cURL fallback "runs as a plain blocking
+ * call" because cURL is excluded from the curated hook mask
+ * ({@see \Phlix\Server\Runtime\SwooleRuntime}). **Measured
+ * inside a real Workerman worker, that is false.**
+ * `Workerman\Events\Swoole::__construct()` executes
+ * `Coroutine::set(['hook_flags' => SWOOLE_HOOK_ALL])`, which runs per worker —
+ * i.e. AFTER `start.php` installs the curated allowlist in the master — so the
+ * mask actually in force in the worker is `SWOOLE_HOOK_ALL` (0x7fbff7ff), not
+ * the curated 0x42fe, and `SWOOLE_HOOK_NATIVE_CURL` IS set.
+ *
+ * A/B measurement, same worker, same https URL against a server that accepts and
+ * never answers, with a sibling coroutine ticking every 100 ms:
+ *
+ *  - mask as Workerman leaves it (`SWOOLE_HOOK_ALL`): fetch returned at 10 006 ms,
+ *    sibling ticked **99** times → the worker kept scheduling; the fetch YIELDS.
+ *  - curated mask re-applied in `onWorkerStart`: fetch returned at 10 005 ms,
+ *    sibling ticked **0** times → the worker was frozen for the full 10 s.
+ *
+ * Either way the stall is BOUNDED: both `CURLOPT_TIMEOUT` and
+ * `CURLOPT_CONNECTTIMEOUT` are set from the client's own timeout (10 s by
+ * default), and the measurements land on it to within 10 ms. So the worst case
+ * — if the vendor override is ever removed — is a bounded ≤10 s stall of one of
+ * the 14 HTTP workers on a low-frequency control-plane call, never an unbounded
+ * one. This is a **named, registered exception**; see
+ * `docs/dev/BLOCKING_IO_EXCEPTIONS.md`.
  *
  * @package Phlix\Common\Http
  * @since 0.15.0

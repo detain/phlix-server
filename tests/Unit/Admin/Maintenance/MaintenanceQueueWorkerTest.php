@@ -24,7 +24,20 @@ use RuntimeException;
 final class MaintenanceQueueWorkerTest extends TestCase
 {
     /**
+     * A queue-backed {@see MaintenanceJobRepository} double.
+     *
+     * ⚠ The `@return` intersection is load-bearing, not decoration. The native
+     * return type can only name the concrete class, so without this PHPStan
+     * narrows the result to `MaintenanceJobRepository` and every caller's
+     * `->expects(...)` becomes "Call to an undefined method" — 8 of them, which
+     * is exactly how this file reddened `Run PHPStan on tests/`
+     * (`phpstan-tests.neon`, level 2) while `phpstan analyze src/ -l9` stayed
+     * green. `createMock()` returns `MockObject&T`; a helper that wraps it has
+     * to say so. Same shape as {@see \Phlix\Tests\Unit\Server\Http\Controllers\Admin\WatchHistoryControllerTest::mockService()}.
+     *
      * @param list<array<string, mixed>> $queue Jobs handed out by claimNext(), in order.
+     *
+     * @return \PHPUnit\Framework\MockObject\MockObject&MaintenanceJobRepository
      */
     private function repository(array $queue): MaintenanceJobRepository
     {

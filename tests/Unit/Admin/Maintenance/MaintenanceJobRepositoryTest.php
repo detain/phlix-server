@@ -19,6 +19,11 @@ final class MaintenanceJobRepositoryTest extends TestCase
 
     /**
      * @param callable(string, array<int, mixed>): mixed $answer
+     *
+     * @return \PHPUnit\Framework\MockObject\MockObject&Connection The
+     *         intersection matters: a native return type can only name the
+     *         concrete class, and `phpstan-tests.neon` (level 2) then rejects
+     *         any `->expects()` a caller makes on the result.
      */
     private function connection(callable $answer): Connection
     {
@@ -193,7 +198,16 @@ final class MaintenanceJobRepositoryTest extends TestCase
      */
     public function test_claim_next_returns_null_when_another_drainer_won_the_race(): void
     {
-        $db = $this->connection(function (string $sql): mixed {
+        // ⚠ The "findById was never reached" claim is RECORDED here and asserted
+        // OUTSIDE the callback, per `.claude/rules/test-guards.md`. It was
+        // originally a `self::fail()` inside this closure — which reads as a
+        // tripwire but decides nothing: on the happy path it never executes, so
+        // `scripts/assertion-escape-audit.php --probe` (the S180 gate) correctly
+        // reported the site as NOT-REACHED and undecided. A flag plus an
+        // assertion in the test body is a fact the runner can check either way.
+        $sawFindById = false;
+
+        $db = $this->connection(function (string $sql) use (&$sawFindById): mixed {
             if (str_contains($sql, "WHERE status = 'queued' ORDER BY")) {
                 return [['id' => 'job-9']];
             }
@@ -201,10 +215,17 @@ final class MaintenanceJobRepositoryTest extends TestCase
                 return 0;
             }
 
-            self::fail('findById must not be reached after a lost claim.');
+            $sawFindById = true;
+
+            return [];
         });
 
         self::assertNull((new MaintenanceJobRepository($db))->claimNext());
+        self::assertFalse(
+            $sawFindById,
+            'findById must not be reached after a lost claim — re-reading the row would hand the '
+            . 'caller a job another drainer is already running.'
+        );
     }
 
     public function test_claim_next_returns_null_on_an_empty_queue(): void

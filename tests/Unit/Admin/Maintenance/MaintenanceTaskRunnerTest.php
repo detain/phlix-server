@@ -35,6 +35,11 @@ final class MaintenanceTaskRunnerTest extends TestCase
      *        orphan DELETEs embed `FROM \`media_items\`` inside their
      *        `NOT EXISTS`, so a key that short would answer the DELETE with the
      *        row-count result and every deletion would report zero.
+     *
+     * @return \PHPUnit\Framework\MockObject\MockObject&Connection The
+     *         intersection matters: a native return type can only name the
+     *         concrete class, and `phpstan-tests.neon` (level 2) then rejects
+     *         any `->expects()` a caller makes on the result.
      */
     private function connection(array $answers = []): Connection
     {

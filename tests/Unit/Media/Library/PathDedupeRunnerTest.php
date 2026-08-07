@@ -17,6 +17,11 @@ final class PathDedupeRunnerTest extends TestCase
 {
     /**
      * @param array<string, int> $scores
+     *
+     * @return \PHPUnit\Framework\MockObject\MockObject&PathDeduper The
+     *         intersection matters: a native return type can only name the
+     *         concrete class, and `phpstan-tests.neon` (level 2) then rejects
+     *         any `->expects()` a caller makes on the result.
      */
     private function deduper(array $scores = []): PathDeduper
     {

@@ -704,7 +704,7 @@ class WebPortalRouter
         $userId = $request->userId ?? '';
         if ($itemId !== '' && $userId !== '') {
             $hasProfile = $this->profileManager !== null
-                && $this->profileManager->getActiveProfile($userId) !== null;
+                && $this->resolveProfileId($request, $userId) !== null;
             if ($hasProfile) {
                 $shaped['stream_url'] = \Phlix\Auth\SignedUrl::fromEnv()->mint('/media/' . $itemId . '/stream');
             }
@@ -1904,14 +1904,14 @@ class WebPortalRouter
             ]);
         }
 
-        $profile = $this->profileManager->getActiveProfile($userId);
-        if ($profile === null) {
+        // S80: watch history is per PROFILE, so this must act on the profile THIS
+        // SESSION is running as. Reading the account-wide `is_active` flag here
+        // would let a tablet on a child profile delete the OWNER's history — a
+        // destructive write against the wrong profile, which is the worst shape
+        // this gap could take.
+        $profileId = $this->resolveProfileId($request, $userId);
+        if ($profileId === null) {
             return (new Response())->status(404)->json(['error' => 'No active profile found']);
-        }
-
-        $profileId = is_string($profile['id'] ?? null) ? $profile['id'] : '';
-        if ($profileId === '') {
-            return (new Response())->status(500)->json(['error' => 'Invalid profile ID']);
         }
 
         $mediaItemId = $params['mediaItemId'] ?? '';
@@ -1955,14 +1955,14 @@ class WebPortalRouter
             ]);
         }
 
-        $profile = $this->profileManager->getActiveProfile($userId);
-        if ($profile === null) {
+        // S80: watch history is per PROFILE, so this must act on the profile THIS
+        // SESSION is running as. Reading the account-wide `is_active` flag here
+        // would let a tablet on a child profile delete the OWNER's history — a
+        // destructive write against the wrong profile, which is the worst shape
+        // this gap could take.
+        $profileId = $this->resolveProfileId($request, $userId);
+        if ($profileId === null) {
             return (new Response())->status(404)->json(['error' => 'No active profile found']);
-        }
-
-        $profileId = is_string($profile['id'] ?? null) ? $profile['id'] : '';
-        if ($profileId === '') {
-            return (new Response())->status(500)->json(['error' => 'Invalid profile ID']);
         }
 
         $this->watchHistory->clearHistory($profileId);

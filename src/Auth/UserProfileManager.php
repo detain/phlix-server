@@ -121,6 +121,14 @@ class UserProfileManager
     public const MAX_NAME_LENGTH = 100;
 
     /**
+     * Name given to the profile {@see resolveProfileIdForUser()} creates for an
+     * account that has none, when the account's username cannot be used verbatim.
+     *
+     * @var string
+     */
+    public const DEFAULT_PROFILE_NAME = 'Profile';
+
+    /**
      * PIN length options for profile protection.
      *
      * @var int
@@ -336,6 +344,167 @@ class UserProfileManager
         }
 
         return $this->hydrateProfile($row);
+    }
+
+    /**
+     * Resolve the profile id that profile-scoped data should be read/written under
+     * for `$userId`, optionally honouring a specific `$requestedProfileId`.
+     *
+     * This is the single runtime counterpart of migration
+     * `100_user_item_data_profile_id.sql` and it enforces the same three rules the
+     * migration's backfill does, so a row written at runtime lands where the
+     * migration would have put it:
+     *
+     *   1. **A requested id is verified, never trusted.** When the caller supplies
+     *      a `profile_id`, ownership is re-derived from `user_profiles` against the
+     *      authenticated `$userId`. A profile belonging to another account — or one
+     *      that does not exist — raises {@see ProfileNotOwnedException}. This is the
+     *      horizontal-privilege boundary: without it, user A could read and write
+     *      user B's favorites simply by naming B's profile id in a request.
+     *   2. **Otherwise the active profile wins**, falling back to the earliest
+     *      created profile and then the lowest id — byte-for-byte the ordering used
+     *      by `migrations/079_activate_first_profiles.sql` and by group (C) of
+     *      migration 100.
+     *   3. **An account with no profile at all gets one**, named after its username,
+     *      exactly as `migrations/080_backfill_missing_profiles.sql` and group (B)
+     *      of migration 100 do. This case is live rather than theoretical:
+     *      {@see AuthManager::register()} and
+     *      {@see UserRepository::findOrCreateByExternalId()} both create accounts
+     *      without a profile, so every account created after migration 080 ran has
+     *      none. Since `user_item_data.profile_id` is NOT NULL after migration 100,
+     *      failing here instead would make such an account unable to favorite
+     *      anything at all.
+     *
+     * ⚠ Concurrency: two simultaneous first-writes for a profile-less account can
+     * both reach rule 3 and create a profile. That is why the fallback re-runs the
+     * rule-2 query after creating rather than returning the id it just inserted —
+     * both racers then converge on the same deterministic winner, so neither writes
+     * its data under a profile the other cannot see. The losing extra profile row is
+     * harmless and visible to the user; it is not cleaned up here because deleting a
+     * profile cascades `user_item_data` and `watch_history`.
+     *
+     * @param string      $userId             Authenticated account UUID.
+     * @param string|null $requestedProfileId Caller-supplied profile UUID, or null
+     *                                        to use the account's active/first
+     *                                        profile. An empty/whitespace string is
+     *                                        treated as null.
+     *
+     * @return string A profile UUID that is guaranteed to belong to `$userId`.
+     *
+     * @throws ProfileNotOwnedException  When `$requestedProfileId` is not owned by `$userId`.
+     * @throws \InvalidArgumentException When `$userId` is empty.
+     *
+     * @since S79 (profile-scoped user item data)
+     *
+     * @see \Phlix\Media\UserItemDataRepository The first consumer.
+     */
+    public function resolveProfileIdForUser(string $userId, ?string $requestedProfileId = null): string
+    {
+        if (trim($userId) === '') {
+            throw new \InvalidArgumentException('A user id is required to resolve a profile scope');
+        }
+
+        $requested = $requestedProfileId === null ? '' : trim($requestedProfileId);
+
+        if ($requested !== '') {
+            $ownedId = $this->firstIdFrom($this->db->query(
+                "SELECT id FROM user_profiles WHERE id = ? AND user_id = ? LIMIT 1",
+                [$requested, $userId]
+            ));
+
+            if ($ownedId === '') {
+                throw ProfileNotOwnedException::forRequestedProfile($userId, $requested);
+            }
+
+            return $ownedId;
+        }
+
+        $defaultId = $this->defaultProfileIdFor($userId);
+        if ($defaultId !== '') {
+            return $defaultId;
+        }
+
+        $this->createDefaultProfileFor($userId);
+
+        $created = $this->defaultProfileIdFor($userId);
+        if ($created === '') {
+            // The INSERT reported success but the row is not readable back. Treat
+            // that as a hard failure rather than inventing an id: a fabricated
+            // profile_id would violate `fk_user_item_data_profile` on the very next
+            // write, and silently returning '' would write data nobody can read.
+            throw new \RuntimeException(
+                'Failed to establish a default profile for user ' . $userId
+            );
+        }
+
+        return $created;
+    }
+
+    /**
+     * The account's active profile id, else its earliest-created, else its lowest
+     * id — the deterministic tiebreak shared with migrations 079 and 100.
+     *
+     * @param string $userId Account UUID.
+     *
+     * @return string The profile UUID, or '' when the account owns no profile.
+     */
+    private function defaultProfileIdFor(string $userId): string
+    {
+        return $this->firstIdFrom($this->db->query(
+            "SELECT id FROM user_profiles
+             WHERE user_id = ?
+             ORDER BY is_active DESC, created_at ASC, id ASC
+             LIMIT 1",
+            [$userId]
+        ));
+    }
+
+    /**
+     * Create the account's first profile, named after its username.
+     *
+     * The name is only used when it satisfies {@see create()}'s own validation
+     * predicate verbatim; anything else falls back to
+     * {@see self::DEFAULT_PROFILE_NAME} rather than being truncated, so this can
+     * never throw for a name reason (a multi-byte username can be short in
+     * characters yet over the byte limit `create()` measures).
+     *
+     * @param string $userId Account UUID.
+     *
+     * @return string The new profile UUID.
+     */
+    private function createDefaultProfileFor(string $userId): string
+    {
+        $row = UserRow::firstFromMixed($this->db->query(
+            "SELECT username FROM users WHERE id = ? LIMIT 1",
+            [$userId]
+        ));
+
+        $rawName = $row['username'] ?? null;
+        $name = is_string($rawName) ? trim($rawName) : '';
+        if (strlen($name) < self::MIN_NAME_LENGTH || strlen($name) > self::MAX_NAME_LENGTH) {
+            $name = self::DEFAULT_PROFILE_NAME;
+        }
+
+        return $this->create($userId, ['name' => $name]);
+    }
+
+    /**
+     * Extract the `id` column of the first row of a driver result as a string.
+     *
+     * @param mixed $result Raw `Connection::query()` return value.
+     *
+     * @return string The id, or '' when there is no row / no usable id.
+     */
+    private function firstIdFrom(mixed $result): string
+    {
+        $row = UserRow::firstFromMixed($result);
+        if ($row === null) {
+            return '';
+        }
+
+        $id = $row['id'] ?? null;
+
+        return is_string($id) ? $id : '';
     }
 
     /**

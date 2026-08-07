@@ -1814,10 +1814,14 @@ final class MovedTopLevelFileKeepsIdentityTest extends TestCase
 
     private function recordUserData(string $itemId): void
     {
+        // S79: `user_item_data.profile_id` is NOT NULL with no default after
+        // migration 100, so a seed that names only (user_id, item_id) now fails
+        // with MySQL error 1364. The row belongs to the same profile the
+        // watch_history row below does.
         $this->db()->query(
-            'INSERT INTO user_item_data (user_id, item_id, favorite, rating, like_level, watched)'
-            . ' VALUES (?, ?, 1, 9, 2, 1)',
-            [$this->userId, $itemId],
+            'INSERT INTO user_item_data (user_id, profile_id, item_id, favorite, rating, like_level, watched)'
+            . ' VALUES (?, ?, ?, 1, 9, 2, 1)',
+            [$this->userId, $this->profileId, $itemId],
         );
         $this->db()->query(
             'INSERT INTO watch_history (id, profile_id, media_item_id, position_ticks, duration_ticks)'

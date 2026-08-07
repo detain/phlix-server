@@ -251,8 +251,18 @@ final class IntegrationDbGuardAdoptionTest extends TestCase
      * to narrow it with `is_numeric()` + `(int)`, so every record carried
      * `profileId === 0`), and a canned-row `Connection` double can only ever hand
      * back the shape the test itself invented.
+     *
+     * 41 since S79's
+     * `tests/Integration/Media/UserItemDataProfileMigrationTest.php`: the claim it
+     * pins is that `migrations/100_user_item_data_profile_id.sql` preserves every
+     * existing `user_item_data` row under some profile. That is a row-count
+     * equality across a real `ALTER TABLE ... DROP PRIMARY KEY, ADD PRIMARY KEY`
+     * over live rows, which a canned-row `Connection` double cannot express at
+     * all. It is also the only adopter that opens its OWN connection to a scratch
+     * database it creates, because the pre-migration state it needs (a nullable
+     * `profile_id`) is unreachable on the shared, already-migrated `phlix_test`.
      */
-    private const EXPECTED_ADOPTERS = 40;
+    private const EXPECTED_ADOPTERS = 41;
 
     /**
      * Bare function calls that are a MySQL reachability probe under any

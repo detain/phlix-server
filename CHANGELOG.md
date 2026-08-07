@@ -77,6 +77,32 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Added
 
+- **S219 — the DLNA admin controller's production DI wiring is now pinned (test-only).**
+  `AdminDlnaServerController::setSettingsRepository()` / `::setRestartController()` have exactly
+  two production call sites, `Application::loadDlnaAdminRoutes()` at `Application.php:1089` and
+  `:1102`, and **every existing test wired the controller by hand.** Replacing the first call site
+  with a no-op left `DlnaAdminRoutesTest` + `tests/Unit/Server/Http/Controllers/Dlna` +
+  `tests/Unit/Dlna` at `OK (310 tests, 929 assertions)`. In production that same no-op makes every
+  DLNA start/stop answer `503 "DLNA settings store is unavailable…"`, because `applyEnabled()`
+  short-circuits on `$this->settings === null` before anything else — the admin toggle would just
+  stop working, silently.
+
+  New `tests/Unit/Server/Core/ApplicationDlnaAdminWiringGuardTest.php` (6 tests) never constructs
+  the wired controller. Following the S239 precedent, it reflects the `Router` a real `Application`
+  composed from `ContainerFactory::defaultProviders()` (only the MySQL `Connection` doubled) and
+  pulls the controller **back out of the route table**, which is where `loadDlnaAdminRoutes()` put
+  it. Those three routes bind an already-constructed instance, not a class-string, which is exactly
+  why the wiring has to be read off the registered object.
+
+  It pins: both collaborators present on the container-composed instance; all three DLNA admin
+  routes sharing that one instance (a per-route instance would leave two unwired); and the
+  production CONSEQUENCE — `stop()` on the composed controller answers **409** ("already disabled",
+  since `dlna.cds_enabled` ships false), not the unwired **503**. Because 409 and 503 are both
+  refusals, a hand-built unwired controller sits beside it as the CONTROL, answering 503 with the
+  unwired message — which is also the floor proving those fields genuinely can be null. The S239
+  300-route anti-vacuity floor is carried over so a hollowed loader or a hand-rolled container
+  (53 routes vs 345) fails loudly instead of passing vacuously.
+
 - **S74 — the server can now tell an operator that a newer phlix-server exists.** New
   `Phlix\Server\Updates\` (`CoreUpdateCheckService`, `CoreUpdateCheckWorker`,
   `CoreUpdateStatus`, `VersionMarkerFetcherInterface`, `AsyncVersionMarkerFetcher`), a new

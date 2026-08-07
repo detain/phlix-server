@@ -157,6 +157,19 @@ final class RelayConsumer
     /** @var int|null */
     private ?int $heartbeatTimer = null;
 
+    /**
+     * @var bool Whether a relay-state field changed since the last persist
+     *      ({@see markRelayStateDirty()}).
+     */
+    private bool $relayStateDirty = false;
+
+    /**
+     * @var bool Whether write-through of {@see markRelayStateDirty()} is
+     *      suspended while a known burst of session changes is processed
+     *      ({@see closeAllLocalConnections()}); the burst ends with one flush.
+     */
+    private bool $relayStateWritesSuspended = false;
+
     /** @var int Number of consecutive reconnection attempts (exponential backoff). */
     private int $reconnectAttempts = 0;
 
@@ -499,6 +512,8 @@ final class RelayConsumer
      */
     private function writeRelayState(): void
     {
+        $this->relayStateDirty = false;
+
         $this->stateStore?->writeRelayState([
             'connected' => $this->isConnected(),
             'active' => $this->isActive(),
@@ -507,7 +522,71 @@ final class RelayConsumer
             'lastDisconnectTime' => $this->getLastDisconnectTime(),
             'lastConnectError' => $this->lastConnectError,
             'lastConnectErrorAt' => $this->lastConnectErrorAt?->format('c'),
+            // S40 staleness gate: tell readers how often this fork refreshes the
+            // file, so a dead fork's frozen snapshot can be recognised as such
+            // instead of reporting `connected: true` forever
+            // ({@see RelayStateStore::isStateStale()}). While the tunnel is up
+            // the ping timer rewrites the state every pingInterval seconds.
+            'staleAfterSeconds' => max(
+                RelayStateStore::MIN_STALE_AFTER_SECONDS,
+                $this->config->pingInterval * 3,
+            ),
         ]);
+    }
+
+    /**
+     * Persist the changed session count (write-through, burst-coalesced).
+     *
+     * Used for the only high-frequency field — `activeSessions` — which changes
+     * on every relayed session open/close. Before S40 nothing wrote state at
+     * those moments (the only three writes were HELLO_ACK, disconnect and
+     * reconnect, all of which happen with `localConnections` EMPTY), so
+     * `activeSessions` was STRUCTURALLY pinned to 0 in `/api/v1/health/relay`
+     * and the admin relay status endpoint even with live relayed sessions.
+     *
+     * The write is immediate rather than timer-deferred: the call sites are one
+     * per relayed CLIENT channel (`onClientConnect`, `onLocalClose`,
+     * `closeLocalConnection`) — NOT per relayed HTTP request, which never
+     * touches `localConnections` — so the natural rate is a handful of ~50 µs
+     * atomic writes per minute. The one place that genuinely bursts is
+     * {@see closeAllLocalConnections()}, which suspends write-through and ends
+     * with a single flush. A deferred flush was tried first and rejected: it
+     * depends on a running event loop, which the relay fork does not have during
+     * `onWorkerStart`, and would silently drop the update there.
+     *
+     * @return void
+     *
+     * @since 0.20.0
+     */
+    private function markRelayStateDirty(): void
+    {
+        if ($this->stateStore === null) {
+            return;
+        }
+
+        $this->relayStateDirty = true;
+
+        if ($this->relayStateWritesSuspended) {
+            return;
+        }
+
+        $this->writeRelayState();
+    }
+
+    /**
+     * Persist the relay state if {@see markRelayStateDirty()} flagged a change.
+     *
+     * @return void
+     *
+     * @since 0.20.0
+     */
+    private function flushRelayStateIfDirty(): void
+    {
+        if (!$this->relayStateDirty) {
+            return;
+        }
+
+        $this->writeRelayState();
     }
 
     /**
@@ -1072,6 +1151,9 @@ final class RelayConsumer
         };
 
         $this->localConnections[$channelId] = $local;
+        // S40: activeSessions changed — persist it (coalesced) so the admin
+        // panel and /api/v1/health/relay stop reporting 0 live sessions.
+        $this->markRelayStateDirty();
 
         $local->connect();
 
@@ -2010,6 +2092,8 @@ final class RelayConsumer
         if (isset($this->localConnections[$channelId])) {
             unset($this->localConnections[$channelId]);
             unset($this->pausedForTunnelDrain[$channelId]);
+            // S40: activeSessions changed — persist it (coalesced).
+            $this->markRelayStateDirty();
             $this->logger->info('RelayConsumer: local connection closed', [
                 'channel_id' => $channelId,
             ]);
@@ -2052,6 +2136,8 @@ final class RelayConsumer
 
         unset($this->localConnections[$channelId]);
         unset($this->pausedForTunnelDrain[$channelId]);
+        // S40: activeSessions changed — persist it (coalesced).
+        $this->markRelayStateDirty();
         $conn->close();
     }
 
@@ -2064,11 +2150,23 @@ final class RelayConsumer
      */
     private function closeAllLocalConnections(): void
     {
-        foreach ($this->localConnections as $conn) {
-            $conn->close();
+        // Each close() re-enters onLocalClose(), which marks the persisted
+        // session count dirty — so without this guard a tunnel drop with N live
+        // sessions would cost N atomic state rewrites in a tight loop. Coalesce
+        // them into the single flush below.
+        $this->relayStateWritesSuspended = true;
+
+        try {
+            foreach ($this->localConnections as $conn) {
+                $conn->close();
+            }
+            $this->localConnections = [];
+            $this->pausedForTunnelDrain = [];
+        } finally {
+            $this->relayStateWritesSuspended = false;
         }
-        $this->localConnections = [];
-        $this->pausedForTunnelDrain = [];
+
+        $this->flushRelayStateIfDirty();
     }
 
     /**
@@ -2365,6 +2463,13 @@ final class RelayConsumer
         try {
             $this->heartbeatTimer = Timer::add($interval, function (): void {
                 $this->sendFrame(RelayFrameType::HEARTBEAT, '');
+                // S40: refresh the persisted snapshot on the same cadence the
+                // state file advertises as `staleAfterSeconds`. Without a
+                // periodic write the file would only ever be stamped at
+                // HELLO_ACK, so a long-lived healthy tunnel would look stale to
+                // the readers' staleness gate — and, conversely, a fork killed
+                // mid-session could never be distinguished from a quiet one.
+                $this->writeRelayState();
             });
         } catch (Throwable $e) {
             // Workerman Timer unavailable (e.g. outside the event loop / unit

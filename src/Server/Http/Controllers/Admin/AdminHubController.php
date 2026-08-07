@@ -496,12 +496,15 @@ final class AdminHubController
      *
      * @return Response JSON { connected, active, reconnectAttempts, activeSessions,
      *   lastDisconnectTime, lastConnectError, lastConnectErrorAt, disabled,
-     *   enrolled, updatedAt, endpoint, establishedAt }.
+     *   enrolled, stale, updatedAt, endpoint, establishedAt }.
      */
     public function relayStatus(Request $request, array $params): Response
     {
         try {
-            $state = $this->getRelayStateStore()->readRelayState();
+            // Staleness-gated read (S40): the relay fork's state file survives a
+            // crash/SIGKILL, so a raw read would keep reporting `connected: true`
+            // forever after the fork died. The gate only ever downgrades.
+            $state = $this->getRelayStateStore()->readLiveRelayState();
 
             // `disabled` reflects what will actually take effect on reload: the
             // persisted operator kill-switch OR the env var. `enrolled` and the
@@ -527,6 +530,10 @@ final class AdminHubController
                     ? $state['lastConnectErrorAt'] : null,
                 'disabled' => $disabled,
                 'enrolled' => $enrolled,
+                // True when `updatedAt` is older than the relay fork's declared
+                // refresh cadence: the fork is not running, and the liveness
+                // fields above have been forced down accordingly.
+                'stale' => ($state['stale'] ?? false) === true,
                 // When the relay fork last wrote state (staleness signal); null
                 // if the fork has never run / never written.
                 'updatedAt' => $updatedAt,
@@ -665,7 +672,9 @@ final class AdminHubController
     {
         try {
             $store = $this->getRelayStateStore();
-            $relayState = $store->readRelayState();
+            // Staleness-gated read (S40): never answer "pong, connected" out of
+            // a frozen file left behind by a relay fork that is no longer alive.
+            $relayState = $store->readLiveRelayState();
 
             $connected = ($relayState['connected'] ?? false) === true;
             $active = ($relayState['active'] ?? false) === true;

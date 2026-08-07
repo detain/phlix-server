@@ -70,6 +70,19 @@ final class HealthControllerTest extends TestCase
         return $decoded;
     }
 
+    /**
+     * A recent ISO-8601 `updatedAt`, i.e. one the S40 staleness gate accepts.
+     *
+     * These state files are refreshed by the relay/heartbeat forks on a fixed
+     * cadence, so a snapshot must be dated relative to NOW: a hard-coded
+     * calendar date silently ages past the gate and the fixture stops meaning
+     * "a live fork just wrote this".
+     */
+    private function fresh(int $secondsAgo = 0): string
+    {
+        return date('c', time() - $secondsAgo);
+    }
+
     private function seedRelayState(string $json): void
     {
         file_put_contents($this->dir . '/' . RelayStateStore::RELAY_STATE_FILE, $json);
@@ -120,14 +133,14 @@ final class HealthControllerTest extends TestCase
             'lastDisconnectTime' => '2026-07-23T10:00:00+00:00',
             'lastConnectError' => 'boom-socket',
             'lastConnectErrorAt' => '2026-07-23T09:59:00+00:00',
-            'updatedAt' => '2026-07-23T10:01:00+00:00',
+            'updatedAt' => $this->fresh(),
         ], JSON_THROW_ON_ERROR));
         $this->seedHeartbeatState(json_encode([
             'lastHeartbeatAttempt' => '2026-07-23T10:02:00+00:00',
             'lastSuccessfulHeartbeat' => '2026-07-23T10:02:00+00:00',
             'consecutiveFailures' => 0,
             'lastLatencyMs' => 42,
-            'updatedAt' => '2026-07-23T10:02:00+00:00',
+            'updatedAt' => $this->fresh(),
         ], JSON_THROW_ON_ERROR));
         $futureExp = time() + 86400;
         $this->seedEnrollment($futureExp);
@@ -150,6 +163,8 @@ final class HealthControllerTest extends TestCase
         self::assertSame('2026-07-23T10:02:00+00:00', $body['hub']['lastSuccessfulHeartbeat']);
         self::assertSame(0, $body['hub']['consecutiveFailures']);
         self::assertSame(42, $body['hub']['lastLatencyMs']);
+        self::assertFalse($body['relay']['stale']);
+        self::assertFalse($body['hub']['stale']);
         self::assertTrue($body['hub']['isEnrolled']);
         self::assertNotNull($body['hub']['enrollmentExpiresAt']);
         // getEnrollmentExpiry() builds a UTC DateTimeImmutable from the `@epoch`
@@ -199,18 +214,21 @@ final class HealthControllerTest extends TestCase
 
     public function testNetworkHealthHealthyFromPersistedState(): void
     {
+        $updatedAt = $this->fresh(5);
+
         $this->seedEnrollment();
         $this->seedHeartbeatState(json_encode([
             'lastSuccessfulHeartbeat' => '2026-07-23T10:02:00+00:00',
             'consecutiveFailures' => 0,
             'lastLatencyMs' => 42,
-            'updatedAt' => '2026-07-23T10:02:00+00:00',
+            'updatedAt' => $updatedAt,
         ], JSON_THROW_ON_ERROR));
 
         $body = $this->decode($this->controller()->networkHealth($this->request(), [])->body);
         self::assertSame(42, $body['latencyMs']);
         self::assertSame('healthy', $body['status']);
-        self::assertSame('2026-07-23T10:02:00+00:00', $body['measuredAt']);
+        // measuredAt echoes the state file's updatedAt verbatim.
+        self::assertSame($updatedAt, $body['measuredAt']);
         self::assertArrayNotHasKey('error', $body);
     }
 
@@ -221,7 +239,7 @@ final class HealthControllerTest extends TestCase
             'lastSuccessfulHeartbeat' => '2026-07-23T10:02:00+00:00',
             'consecutiveFailures' => 0,
             'lastLatencyMs' => 250,
-            'updatedAt' => '2026-07-23T10:02:00+00:00',
+            'updatedAt' => $this->fresh(),
         ], JSON_THROW_ON_ERROR));
 
         $body = $this->decode($this->controller()->networkHealth($this->request(), [])->body);
@@ -236,7 +254,7 @@ final class HealthControllerTest extends TestCase
             'lastSuccessfulHeartbeat' => '2026-07-23T10:02:00+00:00',
             'consecutiveFailures' => 0,
             'lastLatencyMs' => 750,
-            'updatedAt' => '2026-07-23T10:02:00+00:00',
+            'updatedAt' => $this->fresh(),
         ], JSON_THROW_ON_ERROR));
 
         $body = $this->decode($this->controller()->networkHealth($this->request(), [])->body);
@@ -251,7 +269,7 @@ final class HealthControllerTest extends TestCase
             'lastSuccessfulHeartbeat' => '2026-07-23T10:00:00+00:00',
             'consecutiveFailures' => 3,
             'lastLatencyMs' => null,
-            'updatedAt' => '2026-07-23T10:05:00+00:00',
+            'updatedAt' => $this->fresh(),
         ], JSON_THROW_ON_ERROR));
 
         $body = $this->decode($this->controller()->networkHealth($this->request(), [])->body);
@@ -299,7 +317,7 @@ final class HealthControllerTest extends TestCase
             'lastSuccessfulHeartbeat' => '2026-07-23T10:02:00+00:00',
             'consecutiveFailures' => 0,
             'lastLatencyMs' => 30,
-            'updatedAt' => '2026-07-23T10:02:00+00:00',
+            'updatedAt' => $this->fresh(),
         ], JSON_THROW_ON_ERROR));
 
         $httpClient = $this->createMock(HttpClientInterface::class);
@@ -332,5 +350,73 @@ final class HealthControllerTest extends TestCase
         self::assertSame(30, $body['latencyMs']);
         self::assertSame('healthy', $body['status']);
         // The mock's never()-expectations are verified at teardown: no POST fired.
+    }
+
+    // ---------------------------------------------------------------------
+    // S40 staleness gate. Trading the live probe for a cheap read introduced a
+    // failure mode the probe could not have: a state file survives a crash or
+    // SIGKILL, so without an age threshold a DEAD fork reads as healthy forever.
+    // ---------------------------------------------------------------------
+
+    public function testNetworkHealthOfflineWhenHeartbeatStateIsStale(): void
+    {
+        $this->seedEnrollment();
+        // A perfectly healthy snapshot — but two hours old: the heartbeat fork
+        // (60 s cadence, declaring staleAfterSeconds=180) is not running.
+        $this->seedHeartbeatState(json_encode([
+            'lastSuccessfulHeartbeat' => $this->fresh(7200),
+            'consecutiveFailures' => 0,
+            'lastLatencyMs' => 12,
+            'staleAfterSeconds' => 180,
+            'updatedAt' => $this->fresh(7200),
+        ], JSON_THROW_ON_ERROR));
+
+        $body = $this->decode($this->controller()->networkHealth($this->request(), [])->body);
+        self::assertSame('offline', $body['status'], 'a frozen snapshot must not read as healthy');
+        self::assertTrue($body['stale']);
+        self::assertStringContainsString('stale', (string) $body['error']);
+        // The measurement itself is still reported — it is a true historical
+        // fact — it just no longer describes the present.
+        self::assertSame(12, $body['latencyMs']);
+    }
+
+    public function testNetworkHealthStaysHealthyJustInsideTheDeclaredCadence(): void
+    {
+        // Control for the test above: same shape, age BELOW the threshold. Without
+        // this, a gate that simply always fired would look correct.
+        $this->seedEnrollment();
+        $this->seedHeartbeatState(json_encode([
+            'lastSuccessfulHeartbeat' => $this->fresh(120),
+            'consecutiveFailures' => 0,
+            'lastLatencyMs' => 12,
+            'staleAfterSeconds' => 180,
+            'updatedAt' => $this->fresh(120),
+        ], JSON_THROW_ON_ERROR));
+
+        $body = $this->decode($this->controller()->networkHealth($this->request(), [])->body);
+        self::assertSame('healthy', $body['status']);
+        self::assertArrayNotHasKey('stale', $body);
+    }
+
+    public function testRelayHealthForcesAStaleTunnelDown(): void
+    {
+        $this->seedRelayState(json_encode([
+            'connected' => true,
+            'active' => true,
+            'reconnectAttempts' => 0,
+            'activeSessions' => 4,
+            'lastDisconnectTime' => null,
+            'lastConnectError' => null,
+            'lastConnectErrorAt' => null,
+            'staleAfterSeconds' => 90,
+            'updatedAt' => $this->fresh(3600),
+        ], JSON_THROW_ON_ERROR));
+
+        $body = $this->decode($this->controller()->relayHealth($this->request(), [])->body);
+        self::assertFalse($body['relay']['connected'], 'a SIGKILLed relay fork must not read as connected');
+        self::assertFalse($body['relay']['active']);
+        self::assertSame(0, $body['relay']['activeSessions']);
+        self::assertTrue($body['relay']['stale']);
+        self::assertStringContainsString('stale', (string) $body['relay']['lastConnectError']);
     }
 }

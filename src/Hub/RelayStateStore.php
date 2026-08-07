@@ -56,6 +56,26 @@ final class RelayStateStore
     public const RELAY_CONTROL_FILE = 'relay-control.json';
 
     /**
+     * Fallback staleness threshold, in seconds, for a state file that does not
+     * declare its own `staleAfterSeconds` (e.g. one written before S40's
+     * staleness gate existed). 3x the 60 s hub-heartbeat cadence.
+     */
+    public const DEFAULT_STALE_AFTER_SECONDS = 180;
+
+    /** Lower clamp for a writer-declared `staleAfterSeconds`. */
+    public const MIN_STALE_AFTER_SECONDS = 30;
+
+    /** Upper clamp for a writer-declared `staleAfterSeconds`. */
+    public const MAX_STALE_AFTER_SECONDS = 3600;
+
+    /**
+     * Reason substituted into a stale relay state when its liveness fields are
+     * forced down (the writer fork stopped refreshing the file).
+     */
+    public const STALE_RELAY_REASON =
+        'relay tunnel state is stale — the phlix-relay-tunnel worker is not running';
+
+    /**
      * @var string Directory the state files live in (same as hub-enrollment.json).
      */
     private string $configDir;
@@ -130,6 +150,117 @@ final class RelayStateStore
     public function readHeartbeatState(): array
     {
         return $this->readState(self::HEARTBEAT_STATE_FILE);
+    }
+
+    /**
+     * Read the relay-tunnel state with the STALENESS GATE applied (S40).
+     *
+     * State files survive restarts, crashes and `SIGKILL`, and nothing removes
+     * them — so a raw read of a frozen file reports `connected: true` forever
+     * after the relay fork dies. That is strictly worse than the live probe the
+     * cheap-read design replaced, so every reader of the liveness fields must
+     * go through this method rather than {@see readRelayState()}.
+     *
+     * When the file has not been refreshed inside its declared cadence the
+     * liveness fields are forced DOWN (`connected`/`active` false,
+     * `activeSessions` 0) and {@see STALE_RELAY_REASON} is reported. The gate
+     * only ever downgrades — it never turns a "down" state into an "up" one —
+     * and it is a no-op for a state that is already down (so the S39
+     * kill-switch reason survives untouched however old the file is).
+     *
+     * @param int|null $now Unix time to compare against (tests); defaults to `time()`.
+     *
+     * @return array<string, mixed> The state, plus `stale => true` when the
+     *                              gate fired.
+     *
+     * @since 0.20.0
+     */
+    public function readLiveRelayState(?int $now = null): array
+    {
+        $state = $this->readRelayState();
+
+        $wasLive = ($state['connected'] ?? false) === true || ($state['active'] ?? false) === true;
+        if (!$wasLive || !self::isStateStale($state, $now)) {
+            return $state;
+        }
+
+        $state['connected'] = false;
+        $state['active'] = false;
+        $state['activeSessions'] = 0;
+        $state['stale'] = true;
+        $state['lastConnectError'] = self::STALE_RELAY_REASON;
+        $state['lastConnectErrorAt'] = (new \DateTimeImmutable())->setTimestamp($now ?? time())->format('c');
+
+        return $state;
+    }
+
+    /**
+     * Read the hub-heartbeat state, flagged with the staleness gate (S40).
+     *
+     * Same rationale as {@see readLiveRelayState()}: if the
+     * `phlix-hub-heartbeat` fork dies, its last successful tick stays in the
+     * file forever and `/api/v1/health/network` would report `healthy`
+     * indefinitely. Nothing is rewritten here (the recorded measurements stay
+     * honest as historical facts) — the reader is simply told they are too old
+     * to describe the present.
+     *
+     * @param int|null $now Unix time to compare against (tests); defaults to `time()`.
+     *
+     * @return array<string, mixed> The state, plus `stale => true` when it is
+     *                              past its declared cadence.
+     *
+     * @since 0.20.0
+     */
+    public function readLiveHeartbeatState(?int $now = null): array
+    {
+        $state = $this->readHeartbeatState();
+
+        if ($state !== [] && self::isStateStale($state, $now)) {
+            $state['stale'] = true;
+        }
+
+        return $state;
+    }
+
+    /**
+     * Whether a persisted state snapshot is older than its writer's cadence.
+     *
+     * The threshold is taken from the writer-declared `staleAfterSeconds` field
+     * (clamped to {@see MIN_STALE_AFTER_SECONDS}..{@see MAX_STALE_AFTER_SECONDS})
+     * so a reader never has to guess a fork's refresh interval, falling back to
+     * {@see DEFAULT_STALE_AFTER_SECONDS}.
+     *
+     * A NEVER-WRITTEN state (`[]`, i.e. missing file) is not stale — there is
+     * nothing to gate and the readers already treat it as offline. A non-empty
+     * state with no parseable `updatedAt` IS stale: {@see writeState()} stamps
+     * that field on every write, so its absence means the payload did not come
+     * from this store.
+     *
+     * @param array<string, mixed> $state A decoded state snapshot.
+     * @param int|null             $now   Unix time to compare against; defaults to `time()`.
+     *
+     * @return bool `true` when the snapshot is too old to describe the present.
+     *
+     * @since 0.20.0
+     */
+    public static function isStateStale(array $state, ?int $now = null): bool
+    {
+        if ($state === []) {
+            return false;
+        }
+
+        $updatedAt = $state['updatedAt'] ?? null;
+        $writtenAt = is_string($updatedAt) ? strtotime($updatedAt) : false;
+        if ($writtenAt === false) {
+            return true;
+        }
+
+        $declared = $state['staleAfterSeconds'] ?? null;
+        $threshold = is_numeric($declared)
+            ? max(self::MIN_STALE_AFTER_SECONDS, min(self::MAX_STALE_AFTER_SECONDS, (int) $declared))
+            : self::DEFAULT_STALE_AFTER_SECONDS;
+
+        return (($now ?? time()) - $writtenAt) > $threshold;
     }
 
     /**

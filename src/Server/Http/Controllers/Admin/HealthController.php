@@ -80,23 +80,31 @@ final class HealthController
      *         lastDisconnectTime: string|null,
      *         activeSessions: int,
      *         lastConnectError: string|null,
-     *         lastConnectErrorAt: string|null
+     *         lastConnectErrorAt: string|null,
+     *         stale: bool
      *     },
      *     hub: {
      *         lastSuccessfulHeartbeat: string|null,
      *         consecutiveFailures: int,
      *         lastLatencyMs: int|null,
+     *         stale: bool,
      *         isEnrolled: bool,
      *         enrollmentExpiresAt: string|null
      *     }
      * }.
+     *
+     * Both `stale` flags mark a state file the owning fork has stopped
+     * refreshing; when the relay one is set the liveness fields are already
+     * forced down by {@see RelayStateStore::readLiveRelayState()}.
      */
     public function relayHealth(Request $request, array $params): Response
     {
         try {
             $store = $this->getStateStore();
-            $relayState = $store->readRelayState();
-            $heartbeatState = $store->readHeartbeatState();
+            // Staleness-gated reads: a frozen state file from a dead fork must
+            // never read as `connected: true` / `healthy` (S40).
+            $relayState = $store->readLiveRelayState();
+            $heartbeatState = $store->readLiveHeartbeatState();
             $hubClient = $this->getHubClient();
 
             $relay = [
@@ -107,6 +115,7 @@ final class HealthController
                 'activeSessions' => $this->intOrZero($relayState['activeSessions'] ?? null),
                 'lastConnectError' => $this->nullableString($relayState['lastConnectError'] ?? null),
                 'lastConnectErrorAt' => $this->nullableString($relayState['lastConnectErrorAt'] ?? null),
+                'stale' => ($relayState['stale'] ?? false) === true,
             ];
 
             $lastSuccess = $this->nullableString($heartbeatState['lastSuccessfulHeartbeat'] ?? null);
@@ -117,6 +126,7 @@ final class HealthController
                     'lastSuccessfulHeartbeat' => $lastSuccess,
                     'consecutiveFailures' => $this->intOrZero($heartbeatState['consecutiveFailures'] ?? null),
                     'lastLatencyMs' => $this->nullableInt($heartbeatState['lastLatencyMs'] ?? null),
+                    'stale' => ($heartbeatState['stale'] ?? false) === true,
                     'isEnrolled' => $hubClient->loadEnrollment() !== null,
                     'enrollmentExpiresAt' => $hubClient->getEnrollmentExpiry()?->format('c'),
                 ],
@@ -155,11 +165,13 @@ final class HealthController
      *     latencyMs: int|null,
      *     status: 'healthy'|'degraded'|'offline',
      *     measuredAt: string,
+     *     stale?: bool,
      *     error?: string
      * }.
      *
      * Status is 'healthy' when the last heartbeat's latency < 100ms, 'degraded'
-     * at 100-500ms, and 'offline' when not enrolled, no heartbeat has yet
+     * at 100-500ms, and 'offline' when not enrolled, the persisted snapshot is
+     * STALE (the heartbeat fork stopped refreshing it), no heartbeat has yet
      * succeeded, the heartbeat is currently failing, or latency > 500ms.
      */
     public function networkHealth(Request $request, array $params): Response
@@ -177,12 +189,28 @@ final class HealthController
                 ]);
             }
 
-            $heartbeatState = $this->getStateStore()->readHeartbeatState();
+            $heartbeatState = $this->getStateStore()->readLiveHeartbeatState();
 
             $latencyMs = $this->nullableInt($heartbeatState['lastLatencyMs'] ?? null);
             $lastSuccess = $this->nullableString($heartbeatState['lastSuccessfulHeartbeat'] ?? null);
             $consecutiveFailures = $this->intOrZero($heartbeatState['consecutiveFailures'] ?? null);
             $measuredAt = $this->nullableString($heartbeatState['updatedAt'] ?? null) ?? date('c');
+            $stale = ($heartbeatState['stale'] ?? false) === true;
+
+            // A snapshot older than the heartbeat fork's declared cadence
+            // describes the past, not the present: report it as offline rather
+            // than serving a frozen `healthy` from a fork that has died (S40).
+            // The old live-probe implementation could not lie this way, so
+            // trading it for a cheap read REQUIRES this gate.
+            if ($stale) {
+                return (new Response())->json([
+                    'latencyMs' => $latencyMs,
+                    'status' => 'offline',
+                    'measuredAt' => $measuredAt,
+                    'stale' => true,
+                    'error' => 'Hub heartbeat state is stale — the phlix-hub-heartbeat worker is not running',
+                ]);
+            }
 
             // Offline when the fork has never recorded a successful heartbeat,
             // the heartbeat is currently failing, or there is no latency sample.

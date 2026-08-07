@@ -252,4 +252,160 @@ final class RelayStateStoreTest extends TestCase
         $store = new RelayStateStore($this->dir);
         $this->assertFalse($store->isRelayDisabled());
     }
+
+    // ---------------------------------------------------------------------
+    // S40: the staleness gate. State files survive a crash/SIGKILL and nothing
+    // deletes them, so without an age threshold a DEAD fork reads as healthy
+    // forever — strictly worse than the live probe the cheap read replaced.
+    // ---------------------------------------------------------------------
+
+    /**
+     * Seed the relay state file verbatim (bypassing writeState's timestamp).
+     *
+     * @param array<string, mixed> $state
+     */
+    private function seedRelay(array $state): void
+    {
+        file_put_contents(
+            $this->dir . '/' . RelayStateStore::RELAY_STATE_FILE,
+            json_encode($state, JSON_THROW_ON_ERROR)
+        );
+    }
+
+    public function test_is_state_stale_false_for_a_never_written_state(): void
+    {
+        $this->assertFalse(RelayStateStore::isStateStale([]));
+    }
+
+    public function test_is_state_stale_true_for_a_state_without_an_updated_at(): void
+    {
+        // Every writeState() stamps updatedAt, so its absence means the payload
+        // did not come from this store and cannot be trusted as current.
+        $this->assertTrue(RelayStateStore::isStateStale(['connected' => true]));
+    }
+
+    public function test_is_state_stale_uses_the_writer_declared_cadence(): void
+    {
+        $now = 1_800_000_000;
+        $state = static fn (int $ageSeconds, ?int $declared): array => array_filter([
+            'connected' => true,
+            'updatedAt' => date('c', $now - $ageSeconds),
+            'staleAfterSeconds' => $declared,
+        ], static fn (mixed $v): bool => $v !== null);
+
+        // Default threshold (180s) when the writer declares nothing.
+        $this->assertFalse(RelayStateStore::isStateStale($state(179, null), $now));
+        $this->assertTrue(RelayStateStore::isStateStale($state(181, null), $now));
+
+        // A declared 90s cadence (RelayConsumer at the 30s default ping) wins.
+        $this->assertFalse(RelayStateStore::isStateStale($state(89, 90), $now));
+        $this->assertTrue(RelayStateStore::isStateStale($state(91, 90), $now));
+
+        // Absurd declarations are clamped, so a writer cannot disable the gate.
+        $this->assertTrue(RelayStateStore::isStateStale($state(4000, 86400), $now));
+        $this->assertFalse(RelayStateStore::isStateStale($state(29, 1), $now));
+    }
+
+    public function test_read_live_relay_state_forces_a_stale_tunnel_down(): void
+    {
+        $this->seedRelay([
+            'connected' => true,
+            'active' => true,
+            'reconnectAttempts' => 0,
+            'activeSessions' => 3,
+            'lastDisconnectTime' => null,
+            'lastConnectError' => null,
+            'lastConnectErrorAt' => null,
+            'staleAfterSeconds' => 90,
+            'updatedAt' => date('c', time() - 3600),
+        ]);
+
+        $store = new RelayStateStore($this->dir);
+
+        // The RAW read still reports the frozen snapshot...
+        $this->assertTrue($store->readRelayState()['connected']);
+
+        // ...but the gated read never lets a dead fork read as connected.
+        $live = $store->readLiveRelayState();
+        $this->assertFalse($live['connected']);
+        $this->assertFalse($live['active']);
+        $this->assertSame(0, $live['activeSessions']);
+        $this->assertTrue($live['stale']);
+        $this->assertSame(RelayStateStore::STALE_RELAY_REASON, $live['lastConnectError']);
+    }
+
+    public function test_read_live_relay_state_leaves_a_fresh_tunnel_untouched(): void
+    {
+        $store = new RelayStateStore($this->dir);
+        $store->writeRelayState([
+            'connected' => true,
+            'active' => true,
+            'reconnectAttempts' => 0,
+            'activeSessions' => 3,
+            'staleAfterSeconds' => 90,
+        ]);
+
+        $live = $store->readLiveRelayState();
+        $this->assertTrue($live['connected']);
+        $this->assertTrue($live['active']);
+        $this->assertSame(3, $live['activeSessions']);
+        $this->assertArrayNotHasKey('stale', $live);
+    }
+
+    public function test_read_live_relay_state_preserves_an_already_down_reason(): void
+    {
+        // The S39 kill-switch writes once and never refreshes, so its state is
+        // "stale" by age — but it is already down, so the gate must not fire and
+        // must not overwrite the operator-facing reason.
+        $this->seedRelay([
+            'connected' => false,
+            'active' => false,
+            'activeSessions' => 0,
+            'lastConnectError' => 'relay disabled by operator kill-switch',
+            'updatedAt' => date('c', time() - 86400),
+        ]);
+
+        $live = (new RelayStateStore($this->dir))->readLiveRelayState();
+        $this->assertFalse($live['connected']);
+        $this->assertArrayNotHasKey('stale', $live);
+        $this->assertSame('relay disabled by operator kill-switch', $live['lastConnectError']);
+    }
+
+    public function test_read_live_heartbeat_state_flags_a_frozen_snapshot(): void
+    {
+        file_put_contents(
+            $this->dir . '/' . RelayStateStore::HEARTBEAT_STATE_FILE,
+            json_encode([
+                'lastSuccessfulHeartbeat' => date('c', time() - 7200),
+                'consecutiveFailures' => 0,
+                'lastLatencyMs' => 12,
+                'staleAfterSeconds' => 180,
+                'updatedAt' => date('c', time() - 7200),
+            ], JSON_THROW_ON_ERROR)
+        );
+
+        $store = new RelayStateStore($this->dir);
+        $this->assertArrayNotHasKey('stale', $store->readHeartbeatState());
+        $this->assertTrue($store->readLiveHeartbeatState()['stale']);
+    }
+
+    public function test_read_live_heartbeat_state_does_not_flag_a_fresh_snapshot(): void
+    {
+        $store = new RelayStateStore($this->dir);
+        $store->writeHeartbeatState([
+            'lastSuccessfulHeartbeat' => date('c'),
+            'consecutiveFailures' => 0,
+            'lastLatencyMs' => 12,
+            'staleAfterSeconds' => 180,
+        ]);
+
+        $this->assertArrayNotHasKey('stale', $store->readLiveHeartbeatState());
+    }
+
+    public function test_read_live_states_are_empty_when_no_fork_has_ever_written(): void
+    {
+        $store = new RelayStateStore($this->dir);
+        $this->assertSame([], $store->readLiveRelayState());
+        $this->assertSame([], $store->readLiveHeartbeatState());
+    }
 }

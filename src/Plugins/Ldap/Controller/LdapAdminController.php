@@ -25,35 +25,46 @@ use Phlix\Server\Http\Response;
  * keeps the stored password. It is NOT encrypted at rest, so a database dump
  * contains that credential.
  *
- * ## KNOWN GAP — this controller does NOT preserve absent keys
+ * ## Absent keys are PRESERVED (S117 — the gap S48 left open here)
  *
  * The store is a wholesale replace
- * ({@see \Phlix\Plugins\Repository\PluginSettingsRepository::save()}), and
- * {@see self::saveSettings()} rebuilds the whole document from the request body
- * with hardcoded fallbacks. So a partial payload RESETS every optional key it
- * omits — `port` → 389, `ssl` → false, `bind_dn`/`admin_group` → `''`,
- * `user_filter` → `(uid={{username}})` — rather than preserving it. Only `bind_pw`
- * is kept (the blank-keeps-existing branch).
+ * ({@see \Phlix\Plugins\Repository\PluginSettingsRepository::save()}), so this
+ * controller — not the store — is what stops a partial payload from erasing
+ * configuration. The invariant, for EVERY optional key:
  *
- * S48 closed exactly this shape on
+ *   **a key ABSENT from the request body is PRESERVED; only an explicitly empty
+ *   (or non-string / non-numeric) value clears it or resets it to its default.**
+ *
+ * Absent is never a deletion. Until S117 {@see self::saveSettings()} rebuilt the
+ * whole document from the request body with hardcoded fallbacks, so a partial
+ * payload RESET every optional key it omitted — `port` → 389, `ssl` → **false**,
+ * `bind_dn`/`admin_group` → `''`, `user_filter` → `(uid={{username}})`. Only
+ * `bind_pw` survived (its blank-keeps-existing branch). That is byte-for-byte the
+ * shape that wiped live Trakt OAuth tokens on production during a plugin update,
+ * and S48 closed it on
  * {@see \Phlix\Plugins\Oidc\Controller\OidcAdminController} and
- * {@see \Phlix\Plugins\Github\Controller\GithubAdminController} (it is the shape
- * that wiped live Trakt OAuth tokens on production), but LDAP was OUT OF SCOPE for
- * that step and is deliberately left as is rather than changed unreviewed. It is
- * not currently exploitable by a shipped client: the admin SPA's LDAP form always
- * posts the complete set of fields. It would bite a scripted caller — and note that
- * two of the resets are security-relevant (`ssl` → false downgrades to a plaintext
- * bind; a reset `user_filter` breaks Active Directory logins).
+ * {@see \Phlix\Plugins\Github\Controller\GithubAdminController} while leaving LDAP
+ * out of scope. Two of the LDAP resets are security-relevant in their own right:
+ * `ssl` → false **downgrades the directory bind to plaintext**, and a reset
+ * `user_filter` breaks Active Directory logins.
  *
- * If you make this consistent with the other two, use `array_key_exists()` per
- * optional key (never `isset()`/`??`, which cannot tell "absent" from "sent
- * empty"), and mirror the coverage in
+ * `array_key_exists()` — not `isset()`/`??`, which cannot tell "absent" from "sent
+ * as empty" — is how the distinction is made. `bind_pw` keeps its own, older rule
+ * (a blank value keeps the stored password) because the admin SPA deliberately
+ * posts it blank on every save. The guarantee is proven against real MySQL, by
+ * reading `plugin_settings.settings_json` back out of the table, in
  * `tests/Integration/Plugins/AuthProviderSettingsPreservationRealDbIntegrationTest.php`.
  *
  * @package Phlix\Plugins\Ldap\Controller
  */
 final class LdapAdminController
 {
+    /** Port used when none is stored and none is supplied. */
+    public const int DEFAULT_PORT = 389;
+
+    /** User-search filter used when none is stored and none is supplied. */
+    public const string DEFAULT_USER_FILTER = '(uid={{username}})';
+
     private Plugin $plugin;
 
     public function __construct(Plugin $plugin)
@@ -72,11 +83,11 @@ final class LdapAdminController
 
         return (new Response())->json([
             'host' => $settings['host'] ?? '',
-            'port' => $settings['port'] ?? 389,
+            'port' => $settings['port'] ?? self::DEFAULT_PORT,
             'ssl' => $settings['ssl'] ?? false,
             'base_dn' => $settings['base_dn'] ?? '',
             'bind_dn' => $settings['bind_dn'] ?? '',
-            'user_filter' => $settings['user_filter'] ?? '(uid={{username}})',
+            'user_filter' => $settings['user_filter'] ?? self::DEFAULT_USER_FILTER,
             'admin_group' => $settings['admin_group'] ?? '',
             'configured' => isset($settings['host']) && isset($settings['base_dn']),
         ]);
@@ -85,11 +96,11 @@ final class LdapAdminController
     /**
      * Save LDAP settings.
      *
-     * ⚠ Send the COMPLETE settings map: unlike the OIDC/GitHub equivalents this
-     * method does not preserve keys the body omits — see the class docblock's
-     * "KNOWN GAP". `host` and `base_dn` are required (`400 missing_host` /
-     * `missing_base_dn`), `port` must be 1-65535 (`400 invalid_port`), and a blank
-     * `bind_pw` keeps the stored password.
+     * `host` and `base_dn` are required (`400 missing_host` / `missing_base_dn`)
+     * and `port` must be 1-65535 (`400 invalid_port`); a rejected save mutates
+     * nothing. Every OTHER key may be omitted, and an omitted key KEEPS its stored
+     * value — see the class docblock's absent-key contract. A blank `bind_pw`
+     * keeps the stored password.
      *
      * @param Request $request
      * @param array<string, string> $params
@@ -99,14 +110,33 @@ final class LdapAdminController
     {
         $body = $request->body;
 
+        // S117 — a save is a WHOLESALE REPLACE of `plugin_settings.settings_json`,
+        // so every optional key must fall back to what is already STORED, not to a
+        // hardcoded default. Read the stored map first and merge per key with
+        // array_key_exists(): `isset()`/`??` cannot tell an ABSENT key (preserve)
+        // from one sent as empty/null (clear), which is the whole distinction. This
+        // is the shape that wiped live Trakt OAuth tokens on production; here an
+        // absent `ssl` would additionally have downgraded the directory bind to
+        // PLAINTEXT and an absent `user_filter` would have broken AD logins.
+        $existing = $this->plugin->getSettings();
+
         $host = is_string($body['host'] ?? null) ? trim($body['host']) : '';
-        $port = is_numeric($body['port'] ?? null) ? (int) $body['port'] : 389;
-        $ssl = isset($body['ssl']) ? (bool) $body['ssl'] : false;
         $baseDn = is_string($body['base_dn'] ?? null) ? trim($body['base_dn']) : '';
-        $bindDn = is_string($body['bind_dn'] ?? null) ? trim($body['bind_dn']) : '';
         $bindPw = is_string($body['bind_pw'] ?? null) ? $body['bind_pw'] : '';
-        $userFilter = is_string($body['user_filter'] ?? null) ? trim($body['user_filter']) : '(uid={{username}})';
-        $adminGroup = is_string($body['admin_group'] ?? null) ? trim($body['admin_group']) : '';
+
+        $port = self::defaultedPort(
+            array_key_exists('port', $body) ? $body['port'] : ($existing['port'] ?? null),
+        );
+        $ssl = (bool) (array_key_exists('ssl', $body) ? $body['ssl'] : ($existing['ssl'] ?? false));
+        $bindDn = self::trimmedString(
+            array_key_exists('bind_dn', $body) ? $body['bind_dn'] : ($existing['bind_dn'] ?? null),
+        );
+        $userFilter = self::defaultedUserFilter(
+            array_key_exists('user_filter', $body) ? $body['user_filter'] : ($existing['user_filter'] ?? null),
+        );
+        $adminGroup = self::trimmedString(
+            array_key_exists('admin_group', $body) ? $body['admin_group'] : ($existing['admin_group'] ?? null),
+        );
 
         if ($host === '') {
             return (new Response())->status(400)->json([
@@ -143,9 +173,11 @@ final class LdapAdminController
             $settings['bind_pw'] = $bindPw;
         }
 
-        $existingSettings = $this->plugin->getSettings();
-        if (isset($existingSettings['bind_pw']) && $bindPw === '') {
-            $settings['bind_pw'] = $existingSettings['bind_pw'];
+        // Keep the existing bind password when the operator saves without
+        // re-entering it (the admin SPA never echoes it back — maskSecrets()
+        // strips it from the read response).
+        if ($bindPw === '' && isset($existing['bind_pw'])) {
+            $settings['bind_pw'] = $existing['bind_pw'];
         }
 
         $this->plugin->saveSettings($settings);
@@ -154,6 +186,38 @@ final class LdapAdminController
             'message' => 'Settings saved successfully',
             'configured' => true,
         ]);
+    }
+
+    /**
+     * Normalise a port value: anything numeric wins, anything else (absent from
+     * BOTH the body and the stored map, or explicitly blank/null) falls back to
+     * {@see self::DEFAULT_PORT}. Range validation stays with the caller so an
+     * out-of-range value is REJECTED rather than silently defaulted.
+     */
+    private static function defaultedPort(mixed $port): int
+    {
+        return is_numeric($port) ? (int) $port : self::DEFAULT_PORT;
+    }
+
+    /**
+     * Normalise a user-search filter: a non-blank string wins, anything else falls
+     * back to {@see self::DEFAULT_USER_FILTER}. An EMPTY filter would match nothing
+     * and lock every LDAP user out, so it is never stored as such.
+     */
+    private static function defaultedUserFilter(mixed $filter): string
+    {
+        return is_string($filter) && trim($filter) !== ''
+            ? trim($filter)
+            : self::DEFAULT_USER_FILTER;
+    }
+
+    /**
+     * Normalise a plain optional string: trimmed when it is a string, `''`
+     * (i.e. cleared) for anything else.
+     */
+    private static function trimmedString(mixed $value): string
+    {
+        return is_string($value) ? trim($value) : '';
     }
 
     /**
@@ -166,7 +230,7 @@ final class LdapAdminController
         $body = $request->body;
 
         $host = is_string($body['host'] ?? null) ? trim($body['host']) : '';
-        $port = is_numeric($body['port'] ?? null) ? (int) $body['port'] : 389;
+        $port = self::defaultedPort($body['port'] ?? null);
         $ssl = isset($body['ssl']) ? (bool) $body['ssl'] : false;
         $baseDn = is_string($body['base_dn'] ?? null) ? trim($body['base_dn']) : '';
         $bindDn = is_string($body['bind_dn'] ?? null) ? trim($body['bind_dn']) : '';
@@ -186,7 +250,7 @@ final class LdapAdminController
             ]);
         }
 
-        $userFilter = is_string($body['user_filter'] ?? null) ? trim($body['user_filter']) : '(uid={{username}})';
+        $userFilter = self::defaultedUserFilter($body['user_filter'] ?? null);
 
         try {
             $connection = new \Phlix\Plugins\Ldap\LdapConnection(
@@ -231,7 +295,7 @@ final class LdapAdminController
                 'port' => [
                     'type' => 'int',
                     'description' => 'LDAP server port (389 for plain, 636 for SSL)',
-                    'default' => 389,
+                    'default' => self::DEFAULT_PORT,
                 ],
                 'ssl' => [
                     'type' => 'bool',
@@ -254,7 +318,7 @@ final class LdapAdminController
                 'user_filter' => [
                     'type' => 'string',
                     'description' => 'LDAP filter for user search (use {{username}} as placeholder)',
-                    'default' => '(uid={{username}})',
+                    'default' => self::DEFAULT_USER_FILTER,
                 ],
                 'admin_group' => [
                     'type' => 'string',

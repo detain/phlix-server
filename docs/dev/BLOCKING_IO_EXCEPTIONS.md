@@ -81,41 +81,65 @@ Regression guard: `tests/Unit/Plugins/Ldap/LdapConnectionTimeoutTest.php`.
 | Site | `src/Common/Http/EventLoopTls.php::requiresBlockingCurl()` and the `requestCurl()` fallback in `src/Plugins/OAuth2/OAuth2HttpClient.php` (inherited by `OidcHttpClient`), plus the same fallback in `Hub\HttpClient`, `Trakt\HttpClient`, `WebhookHttpClient`, `MetadataHttpClient`, `ArtworkStorage`, `S3Client`, `PluginCatalogService` |
 | Why it exists | Client-side TLS under `Workerman\Events\Swoole` stalls after the handshake: the adapter epolls the raw fd and never sees bytes OpenSSL has already buffered, so every async https request dies on a read timeout. |
 | Bound | `CURLOPT_TIMEOUT`, from the client's own `$timeout` (10 s default for `OidcHttpClient`/`OAuth2HttpClient`). `CURLOPT_CONNECTTIMEOUT` is set too but is a narrower duplicate — see below. |
-| Cost | In production: **none** — see below; the call yields. If the vendor override below ever disappears: ≤10 s of one of the 14 HTTP workers, on a control-plane call. |
+| Cost | **≤10 s of one of the 14 HTTP workers**, on a control-plane call. Every coroutine on that process is frozen for the duration, not just the caller's connection. |
 
-### Correction: this fallback does **not** block in production
+### Why the cost is stated as a stall when it currently is not one
 
-`start.php` installs a curated coroutine hook allowlist that deliberately drops
-`SWOOLE_HOOK_NATIVE_CURL`. Reasoning from that alone says every https OIDC
-discovery/token/userinfo/JWKS call freezes the worker. **Measurement says
-otherwise**, because `Workerman\Events\Swoole::__construct()` (vendor/workerman/
-workerman/src/Events/Swoole.php:59) runs
+Measured in a real worker today, this fetch does **not** freeze the process: a
+sibling coroutine ticking every 100 ms recorded **99 of an expected 100** ticks
+across a 10 s https fetch, in both the `onWorkerStart` coroutine and a child
+coroutine created after the hook re-assert. Control in the same worker: a plain
+http URL takes the async branch, 3 012 ms, 30 ticks, HTTP 200.
 
-```php
-Coroutine::set(['hook_flags' => SWOOLE_HOOK_ALL]);
+That yield is **not a design property and must not be relied on.** It happens
+because the curated hook allowlist is not actually in force in the worker, which
+is a latent defect, not a feature. When it is fixed, this call becomes a genuine
+10 s freeze — so the register states the stall, and the guard bounds it.
+
+### The curated hook mask does not reach the worker
+
+This is a separate and larger issue than S44-b; it is recorded here because it is
+the only reason exception 2 is currently cheap.
+
+`start.php` installs the curated allowlist (`SwooleRuntime::resolveHookFlags()`,
+0x42fe, `SWOOLE_HOOK_NATIVE_CURL` absent) in the master. Per worker,
+`Workerman\Events\Swoole::__construct()`
+(`vendor/workerman/workerman/src/Events/Swoole.php:59`) runs
+`Coroutine::set(['hook_flags' => SWOOLE_HOOK_ALL])` and clobbers it. `start.php`
+already anticipates this — `$applyCuratedCoroutineHooks()` (`:148-152`) re-asserts
+the curated mask at the top of every `onWorkerStart` (`:172`, `:549`, `:714`,
+`:778`, `:816`, `:1014`).
+
+**The re-assert does not take effect.** Workerman runs `onWorkerStart` inside a
+Swoole coroutine, and from there `Coroutine::set(['hook_flags' => …])` updates the
+reported option but cannot un-swap handlers that are already installed. Isolated
+A/B, 2 repeats, alternating order, both starting from hooks physically installed
+as `SWOOLE_HOOK_ALL`:
+
+```
+re-assert OUTSIDE any coroutine   REPORTED=0x42fe  curl=3003.7ms TICKS= 0  -> cURL unhooked (intended)
+re-assert INSIDE a coroutine      REPORTED=0x42fe  curl=3006.2ms TICKS=29  -> cURL still HOOKED
 ```
 
-per worker — after `start.php` has set the curated mask in the master. The mask
-actually in force inside the worker is therefore `SWOOLE_HOOK_ALL`, and native
-cURL is hooked.
+⚠️ **Both report `0x42fe`.** Reading `Swoole\Coroutine::getOptions()['hook_flags']`
+after the re-assert therefore **cannot** tell you whether it worked — the obvious
+check is the one that lies. The only reliable probe is behavioural: run a blocking
+call and see whether a sibling coroutine keeps ticking.
 
-A/B inside a real Workerman worker, alternating order, 3 repeats each, same
-https URL against a never-answering listener:
+Consequence: the SIGSEGV mitigation the allowlist exists for — keeping the
+FILE(io_uring) / PROC / CURL / blocking-function hooks off the PHP 8.5 /
+Swoole 6.2.1 / kernel-7 io_uring stack — **is not in force in any worker.** That
+needs its own step.
+
+Confirmed in a production-shaped harness that reproduces `start.php`'s master
+setup *and* the per-worker re-assert verbatim, 3 repeats each, alternating:
 
 ```
-MODE=asis     IN-FORCE=0x7fbff7ff (SWOOLE_HOOK_ALL) NATIVE_CURL=HOOKED
-MODE=asis     elapsed=10005.4ms resp=null SIBLING-TICKS=99   <- worker kept scheduling
-MODE=curated  IN-FORCE=0x42fe                       NATIVE_CURL=unhooked
-MODE=curated  elapsed=10004.6ms resp=null SIBLING-TICKS=0    <- worker frozen 10 s
+MODE=prod     hook_flags BEFORE re-assert=0x7fbff7ff AFTER=0x42fe  (reported)
+MODE=prod     onWorkerStart-coroutine  https  elapsed=10006.1ms SIBLING-TICKS=99
+MODE=prod     child-coroutine          https  elapsed=10005.7ms SIBLING-TICKS=99
+MODE=prod     child-coroutine CONTROL  http   elapsed= 3012.0ms SIBLING-TICKS=30  HTTP 200
 ```
-
-Two things follow. First, the exception is real but cheap: it is bounded at 10 s
-by `CURLOPT_TIMEOUT` (every run landed within 10 ms of it) and today it yields.
-Second — and this is a separate, larger issue than S44-b — **`SwooleRuntime`'s
-curated allowlist is dead inside the worker**: the SIGSEGV mitigation that mask
-exists for (dropping FILE/PROC/CURL/STDIO on the PHP 8.5 / Swoole 6.2.1 /
-io_uring stack) is silently reverted by the event-loop constructor. That deserves
-its own step; it is recorded here because it is what makes this exception cheap.
 
 ### Which cURL option is the bound
 

@@ -30,33 +30,38 @@ use Workerman\Worker;
  * Until the event adapter is fixed upstream, https requests made while the
  * Swoole event loop drives the process must use cURL instead.
  *
- * ## Accepted blocking-I/O exception #2 (S44-b) — and a correction
+ * ## Accepted blocking-I/O exception #2 (S44-b)
  *
- * This docblock used to assert that the cURL fallback "runs as a plain blocking
- * call" because cURL is excluded from the curated hook mask
- * ({@see \Phlix\Server\Runtime\SwooleRuntime}). **Measured
- * inside a real Workerman worker, that is false.**
- * `Workerman\Events\Swoole::__construct()` executes
- * `Coroutine::set(['hook_flags' => SWOOLE_HOOK_ALL])`, which runs per worker —
- * i.e. AFTER `start.php` installs the curated allowlist in the master — so the
- * mask actually in force in the worker is `SWOOLE_HOOK_ALL` (0x7fbff7ff), not
- * the curated 0x42fe, and `SWOOLE_HOOK_NATIVE_CURL` IS set.
- *
- * A/B measurement, same worker, same https URL against a server that accepts and
- * never answers, with a sibling coroutine ticking every 100 ms:
- *
- *  - mask as Workerman leaves it (`SWOOLE_HOOK_ALL`): fetch returned at 10 006 ms,
- *    sibling ticked **99** times → the worker kept scheduling; the fetch YIELDS.
- *  - curated mask re-applied in `onWorkerStart`: fetch returned at 10 005 ms,
- *    sibling ticked **0** times → the worker was frozen for the full 10 s.
- *
- * Either way the stall is BOUNDED: both `CURLOPT_TIMEOUT` and
- * `CURLOPT_CONNECTTIMEOUT` are set from the client's own timeout (10 s by
- * default), and the measurements land on it to within 10 ms. So the worst case
- * — if the vendor override is ever removed — is a bounded ≤10 s stall of one of
- * the 14 HTTP workers on a low-frequency control-plane call, never an unbounded
- * one. This is a **named, registered exception**; see
+ * Treat this call as a **bounded ≤10 s stall of one of the 14 HTTP workers**
+ * ({@see \Workerman\Worker}, `start.php:169`), on a low-frequency control-plane
+ * request. A stalled worker freezes every coroutine on that process, not just
+ * the caller's connection. The bound is `CURLOPT_TIMEOUT`, taken from the
+ * client's own timeout (10 s by default for
+ * {@see \Phlix\Plugins\OAuth2\OAuth2HttpClient}); measured, it fires to within
+ * 10 ms. This is a **named, registered exception**; see
  * `docs/dev/BLOCKING_IO_EXCEPTIONS.md`.
+ *
+ * ⚠️ **Do not "optimise" this on the grounds that cURL is currently hooked.**
+ * Measured in a real worker today, the fetch does NOT freeze the process — a
+ * sibling coroutine ticking every 100 ms recorded 99 of an expected 100 ticks
+ * across a 10 s fetch, in both the `onWorkerStart` coroutine and a child
+ * coroutine. That is **not** by design. It happens because the curated hook
+ * allowlist is not actually in force: `Workerman\Events\Swoole::__construct()`
+ * installs `SWOOLE_HOOK_ALL` per worker, and `start.php`'s remedy
+ * (`$applyCuratedCoroutineHooks()`, called at the top of each `onWorkerStart`)
+ * runs from INSIDE the worker coroutine, where
+ * `Swoole\Coroutine::set(['hook_flags' => …])` updates the reported option but
+ * cannot un-swap the already-installed handlers. So
+ * `Coroutine::getOptions()['hook_flags']` reports the curated 0x42fe while
+ * `SWOOLE_HOOK_NATIVE_CURL` is still physically hooked. Isolated A/B, 2 repeats,
+ * alternating: re-assert OUTSIDE a coroutine → 0 sibling ticks (unhooked, the
+ * intended state); re-assert INSIDE a coroutine → 29 ticks (still hooked), with
+ * BOTH reporting 0x42fe.
+ *
+ * Whenever that is fixed — and it should be, the mask exists to keep the
+ * io_uring/proc/curl hooks off a stack where they caused repeated SIGSEGVs —
+ * this call becomes a genuine 10 s freeze. The exception is written to be true
+ * either way: bounded, never unbounded. Do not build on the yield.
  *
  * @package Phlix\Common\Http
  * @since 0.15.0

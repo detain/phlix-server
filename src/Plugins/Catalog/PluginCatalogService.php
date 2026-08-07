@@ -144,8 +144,15 @@ final class PluginCatalogService
      * advanced**; `stable` — and any unrecognised/empty value, fail-safe — keeps
      * the audited {@see CatalogSourceResolver::OFFICIAL_PINNED_REF} pin. The
      * `PHLIX_PLUGINS_CATALOG_REF` env override still wins over the channel
-     * (env > setting > default). Per-entry `ref` + `artifactSha256` install-time
-     * verification is unaffected by the channel — it only widens *discovery*.
+     * (env > setting > default).
+     *
+     * Per-entry `ref` + `artifactSha256` install-time verification runs
+     * unchanged on both channels, but it checks the artifact against pins the
+     * catalog document asserts about itself. ⚠ On `dev` that document comes
+     * from a moving branch, so the anchor those pins are trusted against is
+     * mutable: whoever can push the branch can supply both the ref and the
+     * digest. The channel widens discovery *and* weakens the trust anchor —
+     * see {@see CatalogSourceResolver::CHANNEL_DEV}.
      *
      * @return CatalogSourceResolver::CHANNEL_STABLE|CatalogSourceResolver::CHANNEL_DEV
      *
@@ -206,8 +213,11 @@ final class PluginCatalogService
                     'description' => 'Opt-in / advanced: tracks the catalog repository\'s moving "'
                         . CatalogSourceResolver::DEV_REF
                         . '" branch to surface the newest, unreleased catalog entries. '
-                        . 'Every install is still individually verified by its pinned commit and '
-                        . 'artifact checksum, so this only affects what is discovered, not what is trusted.',
+                        . 'Every install is still verified against the commit and artifact checksum '
+                        . 'the catalog pins, but on this channel those pins are read from a moving '
+                        . 'branch instead of an audited release tag — so anyone able to push that '
+                        . 'branch can choose both the commit and the checksum you verify against. '
+                        . 'This channel changes what is discovered AND what you are trusting.',
                     'advanced'    => true,
                 ],
             ],

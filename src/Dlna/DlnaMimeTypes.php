@@ -54,11 +54,25 @@ namespace Phlix\Dlna;
  * wrong, and a renderer that trusts them fails mid-decode), but it is a change:
  * nothing pinned the old values, and it is called out in the CHANGELOG.
  *
- * The `type` fallback arms are deliberately NOT exhaustive over the 13-member
- * `media_items.type` ENUM here — making them exhaustive (and dropping the dead
- * `'image'` alias, which the scanner never emits; the ENUM member is `photo`)
- * belongs to S53 along with the rest of `getProtocolInfo()`. They only ever fire
- * for a path whose extension is unknown, which the stream route rejects anyway.
+ * ## The `type` fallback IS exhaustive (S53)
+ *
+ * {@see self::TYPE_FALLBACK_MIME} carries one entry per member of the 13-member
+ * `media_items.type` ENUM, keyed in column order off
+ * {@see \Phlix\Media\MediaItemType::ALL}, and
+ * {@see \Phlix\Tests\Unit\Dlna\DlnaTypeCoverageTest} fails the build if the two
+ * lists ever differ. Before S53 this was a four-arm `match` with a
+ * `default => FALLBACK`, so `episode`, `track` and `audiobook` — types the
+ * scanners actually write — silently resolved to `application/octet-stream`,
+ * and a 14th ENUM member would have joined them without a single test noticing.
+ * The dead `'image'` alias is gone with it: the column member is `photo`, and
+ * `image` has never been one.
+ *
+ * Container types (`series`, `season`, `album`, `artist`) map to
+ * {@see self::FALLBACK} on purpose — they name no bytes, so there is no honest
+ * MIME to give them; likewise `book`, whose `.epub`/`.pdf` no renderer plays.
+ *
+ * This arm only ever fires for a path whose extension is unknown, which the
+ * stream route rejects anyway.
  *
  * @package Phlix\Dlna
  * @since 1.7.0
@@ -127,6 +141,32 @@ final class DlnaMimeTypes
     ];
 
     /**
+     * Last-resort MIME per `media_items.type` — one entry per ENUM member.
+     *
+     * EXHAUSTIVE over {@see \Phlix\Media\MediaItemType::ALL}, in column order,
+     * and pinned to it by {@see \Phlix\Tests\Unit\Dlna\DlnaTypeCoverageTest}: a
+     * 14th ENUM member reddens that test rather than silently resolving to
+     * {@see self::FALLBACK}. Note `photo`, NOT `image` — see the class docblock.
+     *
+     * @var array<string, string>
+     */
+    public const TYPE_FALLBACK_MIME = [
+        'movie'     => 'video/mp4',
+        'series'    => self::FALLBACK,
+        'season'    => self::FALLBACK,
+        'episode'   => 'video/mp4',
+        'track'     => 'audio/mpeg',
+        'music'     => 'audio/mpeg',
+        'album'     => self::FALLBACK,
+        'artist'    => self::FALLBACK,
+        'video'     => 'video/mp4',
+        'audio'     => 'audio/mpeg',
+        'book'      => self::FALLBACK,
+        'photo'     => 'image/jpeg',
+        'audiobook' => 'audio/mpeg',
+    ];
+
+    /**
      * Resolve a MIME type from a file path's extension ALONE.
      *
      * @param string $path Any path (absolute or relative); only its extension
@@ -165,17 +205,13 @@ final class DlnaMimeTypes
 
         $type = is_string($item['type'] ?? null) ? $item['type'] : '';
 
-        // LibraryBridge's historical last-resort arm, kept as it was. It now fires
-        // far less often, because EXTENSION_MAP above is a superset of the table
-        // that used to precede it (see the class docblock). `'image'` is a legacy
-        // alias the scanner never emits (the ENUM member is `photo`) and is
-        // removed in S53 together with getProtocolInfo()'s dead arm.
-        return match ($type) {
-            'video', 'movie' => 'video/mp4',
-            'audio', 'music' => 'audio/mpeg',
-            'image', 'photo' => 'image/jpeg',
-            default => self::FALLBACK,
-        };
+        // LibraryBridge's historical last-resort arm, made EXHAUSTIVE over the
+        // column ENUM by S53 (it fires far less often than it used to, because
+        // EXTENSION_MAP above is a superset of the table that preceded it — see
+        // the class docblock). A `type` that is not a column member at all —
+        // e.g. the DIDL node type `item` — is not in the map and falls through
+        // to FALLBACK, which is correct: it names no media.
+        return self::TYPE_FALLBACK_MIME[$type] ?? self::FALLBACK;
     }
 
     /**

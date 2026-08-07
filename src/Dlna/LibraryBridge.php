@@ -12,6 +12,7 @@ declare(strict_types=1);
 namespace Phlix\Dlna;
 
 use Phlix\Common\Logger\StructuredLogger;
+use Phlix\Config\EffectiveConfig;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Music\MusicLibraryService;
 use Phlix\Media\Streaming\HlsStreamer;
@@ -47,10 +48,25 @@ class LibraryBridge
     private ?MusicLibraryService $musicLibrary;
 
     /**
+     * Absolute `http://{host}:{port}` origin the `<res>` stream URL hangs off.
+     *
+     * NULL means "resolve it lazily from the effective `dlna` config", which is
+     * what every test and any caller that does not know the HTTP port gets. The
+     * production factory passes {@see DlnaServer::getBaseUrl()} explicitly, so
+     * `<res>`, the device description's `URLBase` and the SSDP `LOCATION` are
+     * the same string by construction rather than by coincidence.
+     *
+     * @var string|null
+     */
+    private ?string $dlnaBaseUrl;
+
+    /**
      * @param ItemRepository $itemRepository Repository for accessing media items
      * @param HlsStreamer $hlsStreamer Service for generating HLS stream URLs
      * @param StructuredLogger|null $logger Optional logger for diagnostics
      * @param MusicLibraryService|null $musicLibrary Music hierarchy reader (S97)
+     * @param string|null $dlnaBaseUrl Origin for `<res>` URLs, e.g.
+     *        `http://192.168.1.10:8096`; null resolves it from config (S53)
      *
      * @since 0.12.0
      */
@@ -58,12 +74,14 @@ class LibraryBridge
         ItemRepository $itemRepository,
         HlsStreamer $hlsStreamer,
         ?StructuredLogger $logger = null,
-        ?MusicLibraryService $musicLibrary = null
+        ?MusicLibraryService $musicLibrary = null,
+        ?string $dlnaBaseUrl = null
     ) {
         $this->itemRepository = $itemRepository;
         $this->hlsStreamer = $hlsStreamer;
         $this->logger = $logger;
         $this->musicLibrary = $musicLibrary;
+        $this->dlnaBaseUrl = $dlnaBaseUrl === null ? null : rtrim($dlnaBaseUrl, '/');
     }
 
     /**
@@ -845,21 +863,68 @@ class LibraryBridge
     }
 
     /**
-     * Get the HLS stream URL for a media item.
+     * The absolute URL a DLNA renderer should fetch this item's bytes from.
      *
-     * Uses HlsStreamer to generate a proper HLS streaming URL for the media item.
+     * ## What this used to return, and why it could never work (S53)
+     *
+     * `$this->hlsStreamer->getStreamUrl($item)` — i.e.
+     * `{hls.base_url}/hls/{mediaItemId}/playlist.m3u8`. Four independent reasons
+     * a renderer could not play it:
+     *
+     * 1. It passes a **media-item id where `HlsStreamer` expects a JOB id**
+     *    ({@see HlsStreamer::getPlaylistUrl()}), so the path names a playlist
+     *    that does not exist even for an item that HAS been transcoded.
+     * 2. `/hls/*` sits behind `SignedUrlMiddleware`, and a DLNA renderer has no
+     *    way to present a token — DLNA has no authentication concept at all.
+     * 3. `hls.base_url` defaults to `http://localhost:8096`, which resolves on
+     *    the *renderer* to the renderer itself.
+     * 4. HLS is `.m3u8` + `.ts`; the DLNA renderers this server targets speak
+     *    progressive HTTP with byte ranges, not HLS.
+     *
+     * It now points at {@see DlnaRoutes::STREAM_PATTERN} — the authless,
+     * allowlist-gated, Range-serving route S52 shipped — on the SAME host the
+     * device description and the SSDP `LOCATION` advertise
+     * ({@see DlnaAdvertisedHost}).
      *
      * @param array<string, mixed> $item The media item array
-     * @return string HLS stream URL
+     *
+     * @return string Absolute `http://{host}:{port}/dlna/stream/{id}`, or `''`
+     *                when the row carries no usable id (nothing to point at, so
+     *                {@see ContentDirectory} emits no `<res>` at all).
      *
      * @since 0.12.0
      */
     public function getStreamUrl(array $item): string
     {
-        $itemId = $item['id'] ?? '';
+        $idRaw = $item['id'] ?? '';
+        $itemId = is_scalar($idRaw) ? (string) $idRaw : '';
+
         $this->logger?->debug('LibraryBridge: Getting stream URL', ['item_id' => $itemId]);
 
-        return $this->hlsStreamer->getStreamUrl($item);
+        if ($itemId === '') {
+            return '';
+        }
+
+        return $this->dlnaBaseUrl() . DlnaRoutes::stream($itemId);
+    }
+
+    /**
+     * The `<res>` origin, resolved once per bridge instance.
+     *
+     * @return string `http://{host}:{port}`, no trailing slash.
+     */
+    private function dlnaBaseUrl(): string
+    {
+        if ($this->dlnaBaseUrl !== null) {
+            return $this->dlnaBaseUrl;
+        }
+
+        /** @var array<string, mixed> $server */
+        $server = EffectiveConfig::file('server');
+        $serverSection = is_array($server['server'] ?? null) ? $server['server'] : [];
+        $port = is_numeric($serverSection['port'] ?? null) ? (int) $serverSection['port'] : 8096;
+
+        return $this->dlnaBaseUrl = DlnaAdvertisedHost::baseUrl($port);
     }
 
     /**

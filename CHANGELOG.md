@@ -9,6 +9,59 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- **DLNA Browse now advertises a stream URL that actually resolves, and a `protocolInfo` that
+  matches the bytes (S53).** `<res>` was built by `LibraryBridge::getStreamUrl()` →
+  `HlsStreamer`, which emitted `{hls.base_url}/hls/{mediaItemId}/playlist.m3u8`. That URL is not
+  merely "not found": measured against the composed route table it **does** match the registered
+  `/hls/{job_id}/{file}` route — it is *mis*routed. It passes a media-item id where a transcode
+  **job** id belongs, names a playlist file that does not exist, sits behind
+  `SignedUrlMiddleware` (which a renderer, having no credentials concept at all, can never
+  satisfy), and defaults to a `localhost` a TV resolves to itself. Every DLNA item was therefore
+  browsable and unplayable.
+
+  `<res>` now points at `DlnaRoutes::STREAM_PATTERN` — the authless, allowlist-gated,
+  Range-serving `/dlna/stream/{id}` route S52 shipped, whose `DlnaRoutes::stream()` builder had
+  had **zero callers in `src/`** until now. `DlnaResUrlIsRoutableTest` proves it end to end the
+  way a renderer does: it reads the URL out of a real Browse response, resolves its path against
+  the **production** route table (exact pattern equality — a substring test cannot tell a sibling
+  wildcard from the real route), then feeds the same URL back through `Application::dispatch()`
+  from an allowlisted peer and requires the file's bytes, under the exact MIME the same `<res>`
+  advertised.
+
+- **`protocolInfo` no longer claims an H.264 profile for every video (S53).**
+  `ContentDirectory::getProtocolInfo()` asserted `DLNA.ORG_PN=AVC_MP4_MP_HD` for anything typed
+  `video`/`movie` — a `.mkv`, an `.avi`, an MPEG-2 `.ts` alike. A renderer that trusts a
+  `DLNA.ORG_PN` starts a decoder for that exact profile and fails mid-stream. A profile is now
+  claimed only where the container settles the question, and the MIME is resolved through
+  `DlnaMimeTypes` by the same decisions, in the same order, that `DlnaStreamController` uses to
+  pick the served `Content-Type` — including the direct-play gate, so a `.iso` typed `movie` is
+  no longer announced `video/mp4` and then answered `415`. `DLNA.ORG_OP=01;DLNA.ORG_CI=0` are
+  now advertised, and are facts about that route: byte-seek yes, time-seek no, no transcode.
+
+- **The DLNA type table is exhaustive over the 13-member `media_items.type` ENUM (S53).**
+  `episode`, `track` and `audiobook` — the types the TV, music and audiobook scanners actually
+  write — all fell to a `default` arm, and a dead `'image'` arm pretended to cover stills (the
+  ENUM member is `photo`). `DlnaMimeTypes::TYPE_FALLBACK_MIME` now carries one entry per member,
+  keyed off `MediaItemType::ALL`, and `DlnaTypeCoverageTest` reddens if a 14th member is ever
+  added without a DLNA answer.
+
+- **🚨 A DLNA Browse response no longer leaks absolute filesystem paths (S53).**
+  `ContentDirectory::addItemMetadata()` ended in a no-`LibraryBridge` fallback that emitted
+  `$item['path']` — the media file's absolute on-disk path — as the `<res>` value. A CDS Browse
+  carries no authentication (the only gate is `DlnaAllowlistMiddleware`'s IP allowlist), so that
+  disclosed the server's directory layout to anything on the LAN, and it was not even playable.
+  The arm is deleted: a bridge-less ContentDirectory serves stub data and has nothing streamable
+  to point at, so it now correctly emits no `<res>` at all.
+
+- **`dlna.advertise_host` is honoured by the SSDP `LOCATION` header (S53).** `start.php`
+  constructs `new SsdpAdvertiser(null, …)`, so `getIpAddress()` ignored the setting entirely and
+  always auto-detected, while the device description **did** honour it. The two agreed only by
+  coincidence under the shipped default of `''`; the moment an operator set the key — exactly
+  what `config/dlna.php` tells them to do on a multi-homed or Docker host — a control point
+  fetched the description from one host and every URL inside it named another. The setting is
+  now read in one place, `Phlix\Dlna\DlnaAdvertisedHost`, by all three of the `LOCATION` header,
+  the description's service URLs and the `<res>` stream URL.
+
 - **Relayed browse can render posters and avatars again (S238).** `GET /api/v1/artwork/{id}`
   and `GET /api/v1/users/{id}/avatar` were private pre-router methods on `HttpHandler` and
   appear in **no** route table. `Hub\RelayRequestDispatcher` consults only the two route

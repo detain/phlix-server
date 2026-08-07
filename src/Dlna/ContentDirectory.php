@@ -924,7 +924,8 @@ class ContentDirectory
             );
         }
 
-        // Resource URL for streaming (HLS URL via LibraryBridge).
+        // Resource URL for streaming — the authless, allowlist-gated
+        // /dlna/stream/{id} route (S52), built by LibraryBridge::getStreamUrl().
         //
         // `res` belongs to the DIDL-Lite DEFAULT namespace
         // (urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/), declared as xmlns= on
@@ -936,25 +937,26 @@ class ContentDirectory
         // control points did not recognise the element as a resource at all and
         // treated the object as having no playable content.
         //
-        // NOTE: this is a correctness fix for the DIDL wire format ONLY. It does
-        // NOT make DLNA playback work end to end -- the stream URL must also be
-        // reachable without authentication, which it currently is not.
+        // 🚨 THERE IS DELIBERATELY NO `elseif` FALLBACK HERE. Until S53 this
+        // block ended with "no LibraryBridge? then emit $item['path']" — the
+        // ABSOLUTE FILESYSTEM PATH of the media file, as the resource value. A
+        // Browse response is unauthenticated on the allowlisted path, so that
+        // published the server's directory layout to anything on the LAN, and it
+        // was not even playable: no renderer can open `/srv/media/...`. A
+        // bridge-less ContentDirectory serves stub data and has nothing
+        // streamable to point at, so the honest answer is NO <res> element.
+        // {@see \Phlix\Tests\Unit\Dlna\DlnaResUrlIsRoutableTest} fails if a
+        // filesystem path ever reappears in a resource value.
         if ($this->libraryBridge !== null && !empty($item['id'])) {
             $streamUrl = $this->libraryBridge->getStreamUrl($item);
-            $protocolInfo = $this->getProtocolInfo($item);
-            $metadata .= sprintf(
-                '<res protocolInfo="%s">%s</res>',
-                htmlspecialchars($protocolInfo),
-                htmlspecialchars($streamUrl)
-            );
-        } elseif (!empty($item['path']) && is_scalar($item['path'])) {
-            // Fallback to file path if no LibraryBridge
-            $protocolInfo = $this->getProtocolInfo($item);
-            $metadata .= sprintf(
-                '<res protocolInfo="%s">%s</res>',
-                htmlspecialchars($protocolInfo),
-                htmlspecialchars((string) $item['path'])
-            );
+            if ($streamUrl !== '') {
+                $protocolInfo = $this->getProtocolInfo($item);
+                $metadata .= sprintf(
+                    '<res protocolInfo="%s">%s</res>',
+                    htmlspecialchars($protocolInfo),
+                    htmlspecialchars($streamUrl)
+                );
+            }
         }
 
         return $metadata;
@@ -975,55 +977,22 @@ class ContentDirectory
     /**
      * Get DLNA protocol info for an item.
      *
+     * Delegates to {@see DlnaProtocolInfo}, which resolves the MIME through the
+     * ONE {@see DlnaMimeTypes} table the stream route also serves under, so the
+     * advertised type and the delivered `Content-Type` cannot drift.
+     *
+     * This method used to own a four-arm `match` over `$item['type']` that was
+     * non-exhaustive over the 13-member `media_items.type` ENUM (`episode`,
+     * `track` and `audiobook` all fell to the empty default), carried a dead
+     * `'image'` arm (the ENUM member is `photo`), and asserted
+     * `DLNA.ORG_PN=AVC_MP4_MP_HD` for every video row regardless of what the
+     * container actually held. See that class's docblock for the derivation.
+     *
      * @param array<string, mixed> $item
      */
     private function getProtocolInfo(array $item): string
     {
-        $mimeTypeRaw = $item['mime_type'] ?? $this->getMimeType($item);
-        $mimeType = is_string($mimeTypeRaw) ? $mimeTypeRaw : $this->getMimeType($item);
-        $type = is_string($item['type'] ?? null) ? $item['type'] : 'video';
-
-        $dlnaProfile = match ($type) {
-            'video', 'movie' => 'DLNA.ORG_PN=AVC_MP4_MP_HD',
-            'audio', 'music' => 'DLNA.ORG_PN=AAC_ADTS',
-            'image', 'photo' => 'DLNA.ORG_PN=JPEG_LRG',
-            default => '',
-        };
-
-        return sprintf(
-            'http-get:*:%s:%s',
-            $mimeType,
-            $dlnaProfile !== '' ? $dlnaProfile : '*'
-        );
-    }
-
-    /**
-     * Get MIME type based on item type.
-     *
-     * @param array<string, mixed> $item
-     */
-    private function getMimeType(array $item): string
-    {
-        $pathRaw = $item['path'] ?? '';
-        $path = is_string($pathRaw) ? $pathRaw : '';
-        $extension = pathinfo($path, PATHINFO_EXTENSION);
-        if (!is_string($extension)) {
-            $extension = '';
-        }
-
-        return match (strtolower($extension)) {
-            'mp4', 'm4v' => 'video/mp4',
-            'mkv' => 'video/x-matroska',
-            'webm' => 'video/webm',
-            'avi' => 'video/x-msvideo',
-            'mp3' => 'audio/mpeg',
-            'aac' => 'audio/aac',
-            'flac' => 'audio/flac',
-            'wav' => 'audio/wav',
-            'jpg', 'jpeg' => 'image/jpeg',
-            'png' => 'image/png',
-            default => 'application/octet-stream',
-        };
+        return DlnaProtocolInfo::forItem($item);
     }
 
     /**

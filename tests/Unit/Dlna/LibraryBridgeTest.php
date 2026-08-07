@@ -349,26 +349,113 @@ class LibraryBridgeTest extends TestCase
     }
 
     /**
-     * @since 0.12.0
+     * S53: `<res>` points at the DLNA stream route, NOT at HLS.
+     *
+     * The previous body of this test pinned
+     * `http://localhost:8096/hls/media-stream-123/playlist.m3u8` — a URL that
+     * could never work: it passes a media-item id where {@see HlsStreamer}
+     * expects a transcode JOB id, names a playlist file that does not exist,
+     * sits behind `SignedUrlMiddleware` (which a renderer cannot satisfy), and
+     * defaults to a `localhost` a TV resolves to itself. See
+     * {@see LibraryBridge::getStreamUrl()} for the full derivation.
+     *
+     * `HlsStreamer` must not be consulted at all — asserted with `never()`,
+     * because a delegation left in place "just in case" is how the dead URL
+     * would come back.
+     *
+     * @since 1.7.0
      */
-    public function testGetStreamUrlUsesHlsStreamer(): void
+    public function testGetStreamUrlPointsAtTheDlnaStreamRouteAndNotHls(): void
     {
         $item = [
             'id' => 'media-stream-123',
             'name' => 'Test Stream',
             'type' => 'movie',
         ];
-        $expectedUrl = 'http://localhost:8096/hls/media-stream-123/playlist.m3u8';
 
-        $this->hlsStreamerMock
-            ->expects($this->once())
-            ->method('getStreamUrl')
-            ->with($item)
-            ->willReturn($expectedUrl);
+        $this->hlsStreamerMock->expects($this->never())->method('getStreamUrl');
 
-        $streamUrl = $this->bridge->getStreamUrl($item);
+        $bridge = new LibraryBridge(
+            $this->itemRepositoryMock,
+            $this->hlsStreamerMock,
+            null,
+            null,
+            'http://192.168.1.10:8096'
+        );
 
-        $this->assertEquals($expectedUrl, $streamUrl);
+        $this->assertSame(
+            'http://192.168.1.10:8096/dlna/stream/media-stream-123',
+            $bridge->getStreamUrl($item)
+        );
+    }
+
+    /**
+     * The advertised origin is the one the caller was given, verbatim — a
+     * trailing slash on it must not produce a `//dlna/stream/…` path, which
+     * some renderers refuse and which would no longer match the registered
+     * route pattern exactly.
+     *
+     * @since 1.7.0
+     */
+    public function testGetStreamUrlDoesNotDoubleTheSlashWhenTheBaseUrlHasOne(): void
+    {
+        $bridge = new LibraryBridge(
+            $this->itemRepositoryMock,
+            $this->hlsStreamerMock,
+            null,
+            null,
+            'http://192.168.1.10:8096/'
+        );
+
+        $this->assertSame(
+            'http://192.168.1.10:8096/dlna/stream/abc',
+            $bridge->getStreamUrl(['id' => 'abc'])
+        );
+    }
+
+    /**
+     * A row with no id has nothing to point at, so there is no URL to build.
+     *
+     * The empty string is the signal {@see \Phlix\Dlna\ContentDirectory} reads
+     * as "emit no `<res>`". Returning `http://host:8096/dlna/stream/` instead
+     * would advertise the collection path as if it were a resource.
+     *
+     * @since 1.7.0
+     */
+    public function testGetStreamUrlIsEmptyForARowWithNoId(): void
+    {
+        $bridge = new LibraryBridge(
+            $this->itemRepositoryMock,
+            $this->hlsStreamerMock,
+            null,
+            null,
+            'http://192.168.1.10:8096'
+        );
+
+        $this->assertSame('', $bridge->getStreamUrl(['name' => 'No id here']));
+        $this->assertSame('', $bridge->getStreamUrl(['id' => '']));
+    }
+
+    /**
+     * An id with URL-significant characters is percent-encoded, so it cannot
+     * escape the single path segment the route pattern matches.
+     *
+     * @since 1.7.0
+     */
+    public function testGetStreamUrlEncodesTheItemId(): void
+    {
+        $bridge = new LibraryBridge(
+            $this->itemRepositoryMock,
+            $this->hlsStreamerMock,
+            null,
+            null,
+            'http://192.168.1.10:8096'
+        );
+
+        $this->assertSame(
+            'http://192.168.1.10:8096/dlna/stream/a%2Fb%20c',
+            $bridge->getStreamUrl(['id' => 'a/b c'])
+        );
     }
 
     /**

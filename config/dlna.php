@@ -182,13 +182,21 @@ return [
      * constructor parameter `$baseUrl` while using it as a host.
      *
      * Leave empty to auto-detect the LAN-facing address via
-     * {@see \Phlix\Dlna\SsdpAdvertiser::detectLocalIp()} — the SAME detection
-     * the SSDP advertiser uses for its LOCATION header. That sharing is
-     * load-bearing: a control point fetches the description from LOCATION and
-     * then follows the URLs inside it, so if the two disagreed every browse
-     * request would go to the wrong host. Only set this explicitly if
-     * auto-detection picks the wrong interface (multi-homed hosts, Docker
-     * bridges), and make sure it is an address devices can actually reach.
+     * {@see \Phlix\Dlna\SsdpAdvertiser::detectLocalIp()}.
+     *
+     * This key is read in exactly ONE place — {@see \Phlix\Dlna\DlnaAdvertisedHost} —
+     * and THREE things read that: the SSDP `LOCATION` header, the device
+     * description's service URLs, and the `<res>` stream URL inside every Browse
+     * response. That sharing is load-bearing: a control point fetches the
+     * description from `LOCATION`, follows the URLs inside it, and then fetches
+     * the bytes from `<res>`, so any disagreement between the three sends part
+     * of the conversation to the wrong host. (Before S53 the SSDP advertiser
+     * ignored this key entirely and always auto-detected, so setting it broke
+     * exactly that chain.)
+     *
+     * Only set this explicitly if auto-detection picks the wrong interface
+     * (multi-homed hosts, Docker bridges), and make sure it is an address
+     * devices can actually reach.
      */
     'advertise_host' => '',
 ];

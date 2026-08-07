@@ -200,7 +200,23 @@ class SsdpAdvertiser extends Worker
     /**
      * Get the IP address used for advertisements.
      *
-     * @return string IP address
+     * ## S53: `dlna.advertise_host` used to be IGNORED here
+     *
+     * `start.php` constructs `new SsdpAdvertiser(null, …)`, so this method took
+     * the null branch in production and went straight to
+     * {@see self::detectLocalIp()}. Meanwhile the device description
+     * ({@see \Phlix\Common\Container\Providers\DlnaServicesProvider}) DID honour
+     * `dlna.advertise_host`. They agreed only by coincidence, under the shipped
+     * default of `''`; the moment an operator set the key — which is exactly
+     * what `config/dlna.php` tells them to do on a multi-homed or Docker host —
+     * the `LOCATION` named the auto-detected interface while every URL inside
+     * the document it pointed at named the configured one.
+     *
+     * The explicit constructor argument still wins (tests, and any caller that
+     * knows better); only the fallback changed, from "detect" to "the ONE
+     * resolver", which itself ends in the same detection.
+     *
+     * @return string IP address or host name
      *
      * @since 0.12.0
      */
@@ -210,7 +226,7 @@ class SsdpAdvertiser extends Worker
             return $this->ipAddress;
         }
 
-        return $this->detectLocalIpAddress();
+        return DlnaAdvertisedHost::host();
     }
 
     /**
@@ -366,18 +382,6 @@ class SsdpAdvertiser extends Worker
 
         // Fallback to localhost
         return '127.0.0.1';
-    }
-
-    /**
-     * Detect the local IP address for LOCATION header.
-     *
-     * @return string Local IP address
-     *
-     * @since 0.12.0
-     */
-    private function detectLocalIpAddress(): string
-    {
-        return self::detectLocalIp();
     }
 
     /**

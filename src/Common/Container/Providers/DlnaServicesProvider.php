@@ -20,9 +20,9 @@ use Phlix\Common\Logger\StructuredLogger;
 use Phlix\Config\EffectiveConfig;
 use Phlix\Dlna\CdsServer;
 use Phlix\Dlna\ContentDirectory;
+use Phlix\Dlna\DlnaAdvertisedHost;
 use Phlix\Dlna\DlnaServer;
 use Phlix\Dlna\LibraryBridge;
-use Phlix\Dlna\SsdpAdvertiser;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Music\MusicLibraryService;
 use Phlix\Media\Streaming\HlsStreamer;
@@ -100,12 +100,13 @@ final class DlnaServicesProvider implements ServiceProviderInterface
                     // "http://{host}:{port}" itself, so a `http://…` value here
                     // would produce "http://http://…". The constructor
                     // parameter is misleadingly named $baseUrl in that class;
-                    // strip any scheme/trailing slash an operator adds out of
-                    // habit rather than shipping a broken description.
-                    $host = is_string($dlna['advertise_host'] ?? null) && ($dlna['advertise_host'] ?? '') !== ''
-                        ? (string) $dlna['advertise_host']
-                        : SsdpAdvertiser::detectLocalIp();
-                    $host = rtrim(preg_replace('#^[a-z][a-z0-9+.-]*://#i', '', $host) ?? $host, '/');
+                    // any scheme/trailing slash an operator adds out of habit is
+                    // stripped rather than shipping a broken description.
+                    //
+                    // S53: this resolution moved into DlnaAdvertisedHost so the
+                    // SSDP LOCATION reads the SAME setting. It previously did
+                    // not — see that class's docblock.
+                    $host = DlnaAdvertisedHost::fromValue($dlna['advertise_host'] ?? null);
 
                     /** @var StructuredLogger $logger */
                     $logger = LoggerFactory::get(LogChannels::DLNA);
@@ -154,7 +155,17 @@ final class DlnaServicesProvider implements ServiceProviderInterface
                         );
                     }
 
-                    $server->setLibraryBridge(new LibraryBridge($items, $hls, $logger, $musicLibrary));
+                    // The FIFTH argument is what makes S53's `<res>` resolvable:
+                    // `getBaseUrl()` is the very string the device description
+                    // advertises as its origin, so the stream URL inside every
+                    // Browse response, the description's own service URLs and
+                    // the SSDP LOCATION are one host by construction. Passing it
+                    // explicitly (rather than letting LibraryBridge resolve it)
+                    // also means the bridge cannot pick a different port from
+                    // the one this server is actually listening on.
+                    $server->setLibraryBridge(
+                        new LibraryBridge($items, $hls, $logger, $musicLibrary, $server->getBaseUrl())
+                    );
 
                     return $server;
                 }

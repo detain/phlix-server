@@ -7,7 +7,9 @@ namespace Phlix\Tests\Unit\Dlna;
 use DOMDocument;
 use PHPUnit\Framework\TestCase;
 use Phlix\Dlna\ContentDirectory;
+use Phlix\Dlna\LibraryBridge;
 use Phlix\Media\Library\ItemRepository;
+use Phlix\Media\Streaming\HlsStreamer;
 
 /**
  * Consequence tests for the DIDL-Lite `<res>` element's XML NAMESPACE.
@@ -28,10 +30,22 @@ use Phlix\Media\Library\ItemRepository;
  *
  * ## What these tests do NOT claim
  *
- * This is a wire-format correctness fix ONLY. It does not make DLNA playback
- * work end to end: the advertised stream URL must additionally be reachable
- * WITHOUT authentication, which it is not today. DLNA also ships disabled by
- * default.
+ * This is a wire-format correctness fix ONLY — it says nothing about whether
+ * the advertised URL resolves. That question is S53's, and it is asserted
+ * against the PRODUCTION route table in
+ * {@see \Phlix\Tests\Unit\Dlna\DlnaResUrlIsRoutableTest}. DLNA also ships
+ * disabled by default.
+ *
+ * ## S53 changed the fixture, not the claims
+ *
+ * These tests used to run against a ContentDirectory with NO LibraryBridge,
+ * which reached `addItemMetadata()`'s no-bridge fallback — the arm that emitted
+ * the item's ABSOLUTE FILESYSTEM PATH as the resource value. S53 deleted that
+ * arm (it leaked the server's directory layout to any LAN peer and was not
+ * playable by anything), so a bridge-less ContentDirectory now correctly emits
+ * no `<res>` at all and there would be nothing here to make namespace
+ * assertions about. The bridge is wired below for that reason; the namespace
+ * questions are unchanged.
  *
  * ## Why the assertions are namespace-resolved
  *
@@ -49,6 +63,9 @@ final class DidlResNamespaceTest extends TestCase
     /** The upnp property namespace `res` must NOT live in. */
     private const NS_UPNP = 'urn:schemas-upnp-org:metadata-1-0/upnp/';
 
+    /** The origin the wired bridge advertises, fixed so assertions are exact. */
+    private const BASE_URL = 'http://192.168.1.10:8096';
+
     private ContentDirectory $contentDirectory;
 
     protected function setUp(): void
@@ -58,6 +75,13 @@ final class DidlResNamespaceTest extends TestCase
         $this->contentDirectory = new ContentDirectory(
             $this->createMock(ItemRepository::class)
         );
+        $this->contentDirectory->setLibraryBridge(new LibraryBridge(
+            $this->createMock(ItemRepository::class),
+            $this->createMock(HlsStreamer::class),
+            null,
+            null,
+            self::BASE_URL
+        ));
     }
 
     /**
@@ -159,11 +183,16 @@ final class DidlResNamespaceTest extends TestCase
      * `protocolInfo` and the resource value survive the namespace change
      * unchanged.
      *
-     * The expected value is the CURRENT output, pinned verbatim: the DLNA
-     * profile suffix is `*` because `getProtocolInfo()` switches on the item's
-     * `type` (here the DIDL node type `item`, not a media type like `video`).
-     * Whether that profile selection is right is a separate question -- this
-     * test exists to prove the namespace change did not perturb the attribute.
+     * The expected values are the CURRENT output, pinned verbatim. Both changed
+     * in S53 and the change is the point:
+     *
+     * - the value was `/media/movies/some-movie.mp4` — the ABSOLUTE FILESYSTEM
+     *   PATH, from the deleted no-bridge fallback — and is now the routable
+     *   `/dlna/stream/{id}` URL;
+     * - `protocolInfo`'s fourth field was a bare `*` (the old `match` fell to
+     *   its empty default for the DIDL node type `item`) and now carries the
+     *   profile implied by the `video/mp4` MIME plus the byte-seek/no-convert
+     *   flags that describe what the stream route actually does.
      */
     public function test_res_keeps_its_protocol_info_and_value(): void
     {
@@ -175,10 +204,29 @@ final class DidlResNamespaceTest extends TestCase
         self::assertInstanceOf(\DOMElement::class, $res);
 
         self::assertSame(
-            'http-get:*:video/mp4:*',
+            'http-get:*:video/mp4:DLNA.ORG_PN=AVC_MP4_MP_HD;DLNA.ORG_OP=01;DLNA.ORG_CI=0',
             $res->getAttribute('protocolInfo')
         );
-        self::assertSame('/media/movies/some-movie.mp4', $res->textContent);
+        self::assertSame(self::BASE_URL . '/dlna/stream/item-1', $res->textContent);
+    }
+
+    /**
+     * A ContentDirectory with NO LibraryBridge emits NO `<res>`.
+     *
+     * The deleted fallback used to fill that gap with `$item['path']`. Pinned
+     * here, next to the fixture that used to exercise it, so a future author
+     * who "restores the missing resource element" has to confront the reason it
+     * is missing.
+     */
+    public function test_a_bridgeless_content_directory_emits_no_resource_element(): void
+    {
+        $bridgeless = new ContentDirectory($this->createMock(ItemRepository::class));
+
+        $xml = $bridgeless->generateDidl([$this->videoItem()], true);
+        $dom = $this->parse($xml);
+
+        self::assertSame(0, $dom->getElementsByTagNameNS(self::NS_DIDL, 'res')->length);
+        self::assertStringNotContainsString('/media/movies/some-movie.mp4', $xml);
     }
 
     /**

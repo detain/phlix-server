@@ -666,7 +666,8 @@ final class AdminHubController
      * @param array<string, string> $params  Path parameters (unused).
      *
      * @return Response JSON { success, connected, active, latencyMs,
-     *   lastHeartbeatAt, latencySource } or 409 when the tunnel is not connected.
+     *   lastHeartbeatAt, heartbeatStale, latencySource } or 409 when the tunnel
+     *   is not connected (including when its state snapshot has gone stale).
      */
     public function relayPing(Request $request, array $params): Response
     {
@@ -694,7 +695,9 @@ final class AdminHubController
                 ]);
             }
 
-            $heartbeat = $store->readHeartbeatState();
+            // Staleness-gated (S40) so the caller can tell "42 ms, measured a
+            // moment ago" from "42 ms, measured before the heartbeat fork died".
+            $heartbeat = $store->readLiveHeartbeatState();
             $latencyMs = isset($heartbeat['lastLatencyMs']) && is_int($heartbeat['lastLatencyMs'])
                 ? $heartbeat['lastLatencyMs'] : null;
             $lastHeartbeatAt =
@@ -707,6 +710,9 @@ final class AdminHubController
                 'active' => $active,
                 'latencyMs' => $latencyMs,
                 'lastHeartbeatAt' => $lastHeartbeatAt,
+                // True when the heartbeat fork stopped refreshing its snapshot:
+                // `latencyMs` is then a historical fact, not a current one.
+                'heartbeatStale' => ($heartbeat['stale'] ?? false) === true,
                 // Signals the value is the last persisted measurement, not a
                 // live probe fired by this request.
                 'latencySource' => 'persisted',

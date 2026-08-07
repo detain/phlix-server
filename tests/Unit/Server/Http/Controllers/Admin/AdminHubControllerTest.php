@@ -335,6 +335,29 @@ final class AdminHubControllerTest extends TestCase
         self::assertSame(42, $body['latencyMs']);
         self::assertSame('2026-07-23T10:00:00+00:00', $body['lastHeartbeatAt']);
         self::assertSame('persisted', $body['latencySource']);
+        self::assertTrue(
+            $body['heartbeatStale'],
+            'that heartbeat snapshot carries no updatedAt, so it cannot be current'
+        );
+    }
+
+    public function testRelayPingMarksAFreshHeartbeatAsNotStale(): void
+    {
+        $this->seedRelayState(json_encode([
+            'connected' => true,
+            'active' => true,
+            'updatedAt' => $this->fresh(),
+        ], JSON_THROW_ON_ERROR));
+        $this->seedHeartbeatState(json_encode([
+            'lastLatencyMs' => 42,
+            'lastSuccessfulHeartbeat' => $this->fresh(30),
+            'staleAfterSeconds' => 180,
+            'updatedAt' => $this->fresh(30),
+        ], JSON_THROW_ON_ERROR));
+
+        $body = $this->decode($this->controller()->relayPing($this->request(), [])->body);
+        self::assertSame(42, $body['latencyMs']);
+        self::assertFalse($body['heartbeatStale']);
     }
 
     public function testRelayPingLatencyNullWhenNoHeartbeatRecorded(): void

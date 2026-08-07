@@ -100,6 +100,27 @@ class Request
     /** @var string|null Authenticated user ID (set by auth middleware) */
     public ?string $userId = null;
 
+    /**
+     * The profile this request runs as (S80).
+     *
+     * Set by {@see RequestAuthenticator::authenticate()} from the signed
+     * `profile_id` JWT claim, AFTER that claim has been re-verified against
+     * {@see $userId}. Null means either "unauthenticated" or "the account has no
+     * resolvable profile".
+     *
+     * ⚠ **Never assign this from request input.** It is derived from a token this
+     * server signed, and it is the value profile-scoped reads and writes are keyed
+     * on; taking it from a body, query string or path parameter would let user A
+     * name user B's profile and read B's favorites. Anything that genuinely needs
+     * to act on a caller-named profile must go through
+     * {@see \Phlix\Access\ProfileAccessPolicy} or
+     * {@see \Phlix\Auth\UserProfileManager::resolveProfileIdForUser()}, both of
+     * which re-derive ownership.
+     *
+     * @var string|null
+     */
+    public ?string $profileId = null;
+
     /** @var \Phlix\Hub\HubUserClaims|null Hub user claims (set by HubJwtMiddleware when using hub auth) */
     public ?\Phlix\Hub\HubUserClaims $hubUser = null;
 

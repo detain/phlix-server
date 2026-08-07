@@ -74,9 +74,9 @@ class MediaUserDataController
         if ($ctx instanceof Response) {
             return $ctx;
         }
-        [$userId, $itemId] = $ctx;
+        [$userId, $itemId, $profileId] = $ctx;
 
-        $this->userItemData->setFavorite($userId, $itemId, true);
+        $this->userItemData->setFavorite($userId, $itemId, true, $profileId);
 
         return (new Response())->json(['message' => 'Added to favorites']);
     }
@@ -94,9 +94,9 @@ class MediaUserDataController
         if ($ctx instanceof Response) {
             return $ctx;
         }
-        [$userId, $itemId] = $ctx;
+        [$userId, $itemId, $profileId] = $ctx;
 
-        $this->userItemData->setFavorite($userId, $itemId, false);
+        $this->userItemData->setFavorite($userId, $itemId, false, $profileId);
 
         return (new Response())->json(['message' => 'Removed from favorites']);
     }
@@ -117,7 +117,7 @@ class MediaUserDataController
         if ($ctx instanceof Response) {
             return $ctx;
         }
-        [$userId, $itemId] = $ctx;
+        [$userId, $itemId, $profileId] = $ctx;
 
         $raw = $request->input('rating');
         $rating = null;
@@ -134,7 +134,7 @@ class MediaUserDataController
         }
 
         try {
-            $this->userItemData->setRating($userId, $itemId, $rating);
+            $this->userItemData->setRating($userId, $itemId, $rating, $profileId);
         } catch (\InvalidArgumentException $e) {
             return (new Response())->status(400)->json(['error' => $e->getMessage()]);
         }
@@ -163,7 +163,7 @@ class MediaUserDataController
         if ($ctx instanceof Response) {
             return $ctx;
         }
-        [$userId, $itemId] = $ctx;
+        [$userId, $itemId, $profileId] = $ctx;
 
         $raw = $request->input('level');
         // Reject missing/null and non-integer input up front so only clean ints
@@ -182,7 +182,7 @@ class MediaUserDataController
         $level = (int) $raw;
 
         try {
-            $this->userItemData->setLikeLevel($userId, $itemId, $level);
+            $this->userItemData->setLikeLevel($userId, $itemId, $level, $profileId);
         } catch (\InvalidArgumentException $e) {
             return (new Response())->status(400)->json(['error' => $e->getMessage()]);
         }
@@ -203,9 +203,9 @@ class MediaUserDataController
         if ($ctx instanceof Response) {
             return $ctx;
         }
-        [$userId, $itemId] = $ctx;
+        [$userId, $itemId, $profileId] = $ctx;
 
-        $this->userItemData->setRating($userId, $itemId, null);
+        $this->userItemData->setRating($userId, $itemId, null, $profileId);
 
         return (new Response())->json(['message' => 'Rating cleared']);
     }
@@ -223,9 +223,9 @@ class MediaUserDataController
         if ($ctx instanceof Response) {
             return $ctx;
         }
-        [$userId, $itemId] = $ctx;
+        [$userId, $itemId, $profileId] = $ctx;
 
-        $this->userItemData->setWatched($userId, $itemId, true);
+        $this->userItemData->setWatched($userId, $itemId, true, $profileId);
 
         return (new Response())->json(['message' => 'Item marked as watched']);
     }
@@ -243,9 +243,9 @@ class MediaUserDataController
         if ($ctx instanceof Response) {
             return $ctx;
         }
-        [$userId, $itemId] = $ctx;
+        [$userId, $itemId, $profileId] = $ctx;
 
-        $this->userItemData->setWatched($userId, $itemId, false);
+        $this->userItemData->setWatched($userId, $itemId, false, $profileId);
 
         return (new Response())->json(['message' => 'Item marked as unwatched']);
     }
@@ -278,9 +278,9 @@ class MediaUserDataController
         $limit = $request->queryPageSize('limit', 50);
         $offset = $request->queryOffset();
 
-        $rows = $this->userItemData->getFavorites($userId, $limit, $offset);
+        $rows = $this->userItemData->getFavorites($userId, $limit, $offset, $this->sessionProfileId($request));
 
-        // Favorites are account-level, but the ACTIVE profile's parental cap
+        // Favorites are per PROFILE (S79), and the session's profile parental cap
         // still governs what it may see: an over-cap favorite (by effective
         // rating) is filtered out for a capped profile. No-op for the owner /
         // un-capped profile (null filter).
@@ -335,12 +335,19 @@ class MediaUserDataController
 
     /**
      * Shared guard: enforce auth (401), a present path id (400), and an existing
-     * media item (404). Returns the resolved [userId, itemId] tuple on success,
-     * or a ready-to-send error Response on failure.
+     * media item (404). Returns the resolved [userId, itemId, profileId] tuple on
+     * success, or a ready-to-send error Response on failure.
+     *
+     * S80: the third element is the profile THIS SESSION is running as, taken from
+     * `Request::$profileId` — which RequestAuthenticator set from the token's
+     * already-ownership-checked `profile_id` claim. It is deliberately read from
+     * the request OBJECT and never from `$params`, the query string or the body:
+     * a caller-named profile here would let user A write into user B's favorites.
+     * Null falls the repository back to the account's default profile.
      *
      * @param array<string, string> $params Route params including 'id'.
      *
-     * @return array{0: string, 1: string}|Response
+     * @return array{0: string, 1: string, 2: string|null}|Response
      */
     private function resolve(Request $request, array $params): array|Response
     {
@@ -358,6 +365,20 @@ class MediaUserDataController
             return (new Response())->status(404)->json(['error' => 'Item not found']);
         }
 
-        return [$userId, $itemId];
+        return [$userId, $itemId, $this->sessionProfileId($request)];
+    }
+
+    /**
+     * The profile this request runs as, or null for the account default.
+     *
+     * ⚠ Reads `Request::$profileId` ONLY. That field is populated from a JWT
+     * claim this server signed and then re-verified against the caller's
+     * `user_id`; nothing a client can set reaches it.
+     */
+    private function sessionProfileId(Request $request): ?string
+    {
+        $profileId = $request->profileId;
+
+        return is_string($profileId) && $profileId !== '' ? $profileId : null;
     }
 }

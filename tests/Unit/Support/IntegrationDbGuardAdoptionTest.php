@@ -261,8 +261,17 @@ final class IntegrationDbGuardAdoptionTest extends TestCase
      * all. It is also the only adopter that opens its OWN connection to a scratch
      * database it creates, because the pre-migration state it needs (a nullable
      * `profile_id`) is unreachable on the shared, already-migrated `phlix_test`.
+     *
+     * 42 since S80's
+     * `tests/Integration/Auth/ProfileContextPropagationTest.php`: it proves two
+     * live sessions of ONE account hold two DIFFERENT profiles at once, and that a
+     * token naming another account's profile degrades instead of reading that
+     * account's rows. Both turn on real `user_profiles` ownership rows and real
+     * per-profile `user_item_data` rows carrying three DISTINCT ratings — a canned
+     * `Connection` double would be asserting against values the test itself chose
+     * to hand back, which is precisely the leak it is meant to detect.
      */
-    private const EXPECTED_ADOPTERS = 41;
+    private const EXPECTED_ADOPTERS = 42;
 
     /**
      * Bare function calls that are a MySQL reachability probe under any

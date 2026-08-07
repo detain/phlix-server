@@ -952,34 +952,41 @@ final class HttpHandler
      */
     private function checkStreamLimit(WorkermanRequest $wr, string $userId): ?WorkermanResponse
     {
-        /** @var \Phlix\Auth\UserProfileManager $profileManager */
-        $profileManager = $this->container->get(\Phlix\Auth\UserProfileManager::class);
-        $profile = $profileManager->getActiveProfile($userId);
-        if ($profile === null) {
-            // No profile — fail closed (deny) rather than letting an unprofiled
-            // user through without stream tracking.
-            return new WorkermanResponse(
-                403,
-                ['Content-Type' => 'application/json; charset=utf-8'],
-                json_encode([
-                    'error' => 'StreamLimitExceeded',
-                    'denial_type' => 'profile_not_found',
-                    'message' => 'Profile not found; access denied',
-                ], JSON_THROW_ON_ERROR),
-            );
-        }
+        // S80: prefer the profile THIS SESSION is running as. This direct-play
+        // path bypasses the router entirely, so it never sees StreamLimitMiddleware
+        // and has to make the same choice for itself.
+        $profileId = RequestContext::getProfileId();
 
-        $profileId = $this->resolveStreamProfileId($profile);
-        if ($profileId === null) {
-            return new WorkermanResponse(
-                403,
-                ['Content-Type' => 'application/json; charset=utf-8'],
-                json_encode([
-                    'error' => 'StreamLimitExceeded',
-                    'denial_type' => 'profile_not_found',
-                    'message' => 'Profile not found; access denied',
-                ], JSON_THROW_ON_ERROR),
-            );
+        if ($profileId === null || $profileId === '') {
+            /** @var \Phlix\Auth\UserProfileManager $profileManager */
+            $profileManager = $this->container->get(\Phlix\Auth\UserProfileManager::class);
+            $profile = $profileManager->getActiveProfile($userId);
+            if ($profile === null) {
+                // No profile — fail closed (deny) rather than letting an unprofiled
+                // user through without stream tracking.
+                return new WorkermanResponse(
+                    403,
+                    ['Content-Type' => 'application/json; charset=utf-8'],
+                    json_encode([
+                        'error' => 'StreamLimitExceeded',
+                        'denial_type' => 'profile_not_found',
+                        'message' => 'Profile not found; access denied',
+                    ], JSON_THROW_ON_ERROR),
+                );
+            }
+
+            $profileId = $this->resolveStreamProfileId($profile);
+            if ($profileId === null) {
+                return new WorkermanResponse(
+                    403,
+                    ['Content-Type' => 'application/json; charset=utf-8'],
+                    json_encode([
+                        'error' => 'StreamLimitExceeded',
+                        'denial_type' => 'profile_not_found',
+                        'message' => 'Profile not found; access denied',
+                    ], JSON_THROW_ON_ERROR),
+                );
+            }
         }
 
         $deviceId = $this->getStreamDeviceId($wr);

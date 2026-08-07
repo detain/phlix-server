@@ -70,25 +70,35 @@ final class StreamLimitMiddleware
             return null;
         }
 
-        // Get the active profile for this user.
-        // P5: Profile IDs are CHAR(36) UUID strings. If we cannot resolve
-        // a profile ID, fail closed (deny access) rather than silently allowing
-        // unauthenticated or unprofiled users through the stream limit check.
-        $profile = $this->profileManager->getActiveProfile($userId);
-        if ($profile === null) {
-            return (new Response())->status(403)->json([
-                'error' => 'StreamLimitExceeded',
-                'denial_type' => 'profile_not_found',
-                'message' => 'Profile not found; access denied',
-            ]);
-        }
-        $profileId = $this->resolveProfileId($profile);
-        if ($profileId === null) {
-            return (new Response())->status(403)->json([
-                'error' => 'StreamLimitExceeded',
-                'denial_type' => 'profile_not_found',
-                'message' => 'Profile not found; access denied',
-            ]);
+        // S80: prefer the profile THIS SESSION is running as. Concurrent-stream
+        // budgets are per profile, so reading the account-wide `is_active` flag
+        // would charge every device on the account to whichever profile was
+        // switched to last — two tablets on two different child profiles would
+        // share one budget, and switching a profile on the TV would silently move
+        // the tablets' streams onto it.
+        $profileId = RequestContext::getProfileId();
+
+        if ($profileId === null || $profileId === '') {
+            // Get the active profile for this user.
+            // P5: Profile IDs are CHAR(36) UUID strings. If we cannot resolve
+            // a profile ID, fail closed (deny access) rather than silently allowing
+            // unauthenticated or unprofiled users through the stream limit check.
+            $profile = $this->profileManager->getActiveProfile($userId);
+            if ($profile === null) {
+                return (new Response())->status(403)->json([
+                    'error' => 'StreamLimitExceeded',
+                    'denial_type' => 'profile_not_found',
+                    'message' => 'Profile not found; access denied',
+                ]);
+            }
+            $profileId = $this->resolveProfileId($profile);
+            if ($profileId === null) {
+                return (new Response())->status(403)->json([
+                    'error' => 'StreamLimitExceeded',
+                    'denial_type' => 'profile_not_found',
+                    'message' => 'Profile not found; access denied',
+                ]);
+            }
         }
 
         // Extract device and session from the request

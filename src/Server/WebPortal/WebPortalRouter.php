@@ -757,7 +757,15 @@ class WebPortalRouter
             return null;
         }
 
-        return $this->userItemData->getItemData($userId, $itemId)
+        // S80: read the `user_data` block for the profile THIS SESSION is running
+        // as, so the detail page shows the child profile's own favorite/rating
+        // rather than the account's. `Request::$profileId` came from a claim this
+        // server signed and re-verified; it is never taken from request input.
+        $profileId = is_string($request->profileId) && $request->profileId !== ''
+            ? $request->profileId
+            : null;
+
+        return $this->userItemData->getItemData($userId, $itemId, $profileId)
             ?? ['favorite' => false, 'rating' => null, 'like_level' => 0, 'watched' => false];
     }
 
@@ -775,10 +783,21 @@ class WebPortalRouter
      */
     private function resolveProfileId(Request $request, string $userId): ?string
     {
+        // S80: the profile THIS SESSION is running as, published by
+        // RequestAuthenticator from the token's already-ownership-checked
+        // `profile_id` claim. Watch history is per profile, so reading the
+        // account-wide `is_active` flag here would write one device's progress
+        // into whichever profile another device last switched to.
+        if (is_string($request->profileId) && $request->profileId !== '') {
+            return $request->profileId;
+        }
+
         if ($this->profileManager === null) {
             return null;
         }
 
+        // Pre-S80 fallback: a token minted before the claim existed, or a caller
+        // that never passed through RequestAuthenticator.
         $profile = $this->profileManager->getActiveProfile($userId);
         if ($profile === null) {
             return null;

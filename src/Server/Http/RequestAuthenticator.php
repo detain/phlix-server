@@ -81,6 +81,25 @@ final class RequestAuthenticator
 
         $request->userId = $auth['user_id'];
 
+        // S80: publish the session's profile in the SAME place, on the SAME pass,
+        // for BOTH entry points (the Workerman handler and `public/index.php` each
+        // call this method before dispatch). Doing it here rather than in a
+        // middleware is deliberate: `AuthMiddleware` is instantiated inline as
+        // `new AuthMiddleware()` at nineteen sites in `Application.php` and would
+        // have to grow a dependency at all nineteen, and several surfaces —
+        // notably the pre-router fast paths and the direct-play
+        // `/media/{id}/stream` route — never reach a middleware group at all.
+        //
+        // `$auth['profile_id']` has already been ownership-checked by
+        // {@see \Phlix\Auth\AuthManager::resolveProfileForUser()}; it is not the
+        // raw claim.
+        $profileId = $auth['profile_id'] ?? null;
+        $request->profileId = is_string($profileId) && $profileId !== '' ? $profileId : null;
+
+        if ($request->profileId !== null) {
+            RequestContext::setProfileId($request->profileId);
+        }
+
         return true;
     }
 

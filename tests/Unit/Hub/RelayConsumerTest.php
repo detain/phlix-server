@@ -111,6 +111,35 @@ class FakeRelayConnection extends AsyncTcpConnection
     }
 }
 
+/**
+ * A local-connection double that records, at the moment it is closed, whether
+ * the relay state file exists — used to observe write amplification from INSIDE
+ * a mass-close burst.
+ */
+class StateFileProbingConnection extends FakeRelayConnection
+{
+    private string $watchPath;
+
+    /** @var \ArrayObject<int, bool> */
+    private \ArrayObject $seen;
+
+    /**
+     * @param \ArrayObject<int, bool> $seen Collector for the per-close observations.
+     */
+    public function __construct(string $address, string $watchPath, \ArrayObject $seen)
+    {
+        parent::__construct($address);
+        $this->watchPath = $watchPath;
+        $this->seen = $seen;
+    }
+
+    public function close(mixed $data = null, bool $raw = false): void
+    {
+        $this->seen[] = file_exists($this->watchPath);
+        parent::close($data, $raw);
+    }
+}
+
 class RelayConsumerTest extends TestCase
 {
     private RelayMessageFramer $codec;
@@ -141,8 +170,11 @@ class RelayConsumerTest extends TestCase
         return $mock;
     }
 
-    private function createConsumer(?RelayConfig $config = null, ?callable $httpDispatcher = null): RelayConsumer
-    {
+    private function createConsumer(
+        ?RelayConfig $config = null,
+        ?callable $httpDispatcher = null,
+        ?RelayStateStore $stateStore = null,
+    ): RelayConsumer {
         $config = $config ?? new RelayConfig(
             enabled: true,
             hubRelayWsUrl: 'ws://hub.example.com:8802',
@@ -170,6 +202,7 @@ class RelayConsumerTest extends TestCase
                 return $conn;
             },
             httpDispatcher: $httpDispatcher,
+            stateStore: $stateStore,
         );
     }
 
@@ -1838,5 +1871,178 @@ class RelayConsumerTest extends TestCase
             }
             @rmdir($dir);
         }
+    }
+
+    // ---------------------------------------------------------------------
+    // S40: activeSessions must track the live session count.
+    //
+    // The three original writeRelayState() call sites (HELLO_ACK, disconnect,
+    // reconnect) all run with localConnections EMPTY, so `activeSessions` was
+    // STRUCTURALLY pinned to 0 in /api/v1/health/relay and the admin relay
+    // status endpoint even with live relayed sessions.
+    // ---------------------------------------------------------------------
+
+    /** Run $body with a temp state dir, cleaning up afterwards. */
+    private function withStateDir(callable $body): void
+    {
+        $dir = sys_get_temp_dir() . '/phlix-relay-sessions-' . bin2hex(random_bytes(6));
+        mkdir($dir, 0700, true);
+
+        try {
+            $body(new RelayStateStore($dir));
+        } finally {
+            foreach (glob($dir . '/*') ?: [] as $f) {
+                @unlink($f);
+            }
+            @rmdir($dir);
+        }
+    }
+
+    public function test_active_session_count_is_persisted_when_a_client_connects(): void
+    {
+        $this->withStateDir(function (RelayStateStore $store): void {
+            $consumer = $this->createConsumer(null, null, $store);
+            $this->activate($consumer);
+
+            $this->assertSame(0, $store->readRelayState()['activeSessions']);
+
+            $this->hub->fireMessage($this->codec->encode(
+                RelayFrameType::CLIENT_CONNECT,
+                1,
+                json_encode(['client_id' => 'client-1', 'session_id' => 's1'], JSON_THROW_ON_ERROR),
+            ));
+
+            $this->assertSame(
+                1,
+                $store->readRelayState()['activeSessions'],
+                'a live relayed session must be visible in the persisted state'
+            );
+
+            $this->hub->fireMessage($this->codec->encode(
+                RelayFrameType::CLIENT_CONNECT,
+                2,
+                json_encode(['client_id' => 'client-2', 'session_id' => 's2'], JSON_THROW_ON_ERROR),
+            ));
+
+            $this->assertSame(2, $store->readRelayState()['activeSessions']);
+        });
+    }
+
+    public function test_active_session_count_is_persisted_when_a_client_disconnects(): void
+    {
+        $this->withStateDir(function (RelayStateStore $store): void {
+            $consumer = $this->createConsumer(null, null, $store);
+            $this->activate($consumer);
+
+            foreach ([1, 2] as $channel) {
+                $this->hub->fireMessage($this->codec->encode(
+                    RelayFrameType::CLIENT_CONNECT,
+                    $channel,
+                    json_encode(['client_id' => 'client-' . $channel, 'session_id' => 's'], JSON_THROW_ON_ERROR),
+                ));
+            }
+            $this->assertSame(2, $store->readRelayState()['activeSessions']);
+
+            // Hub-initiated close of channel 1 (closeLocalConnection path).
+            $this->hub->fireMessage($this->codec->encode(
+                RelayFrameType::CLIENT_DISCONNECT,
+                1,
+                json_encode(['client_id' => 'client-1'], JSON_THROW_ON_ERROR),
+            ));
+            $this->assertSame(1, $store->readRelayState()['activeSessions']);
+
+            // Local-side close of channel 2 (onLocalClose path).
+            $this->local(1)->close();
+            $this->assertSame(0, $store->readRelayState()['activeSessions']);
+        });
+    }
+
+    public function test_mass_session_close_coalesces_into_a_single_state_write(): void
+    {
+        // A tunnel drop closes every local connection in a tight loop, and each
+        // close re-enters onLocalClose(). Without the suspend/flush guard that
+        // would cost one atomic rewrite PER session. Probe: delete the state
+        // file, then record — from inside each close() — whether it has
+        // reappeared. Coalesced => nobody sees it; per-close writes => every
+        // close after the first does.
+        $dir = sys_get_temp_dir() . '/phlix-relay-burst-' . bin2hex(random_bytes(6));
+        mkdir($dir, 0700, true);
+        $path = $dir . '/' . RelayStateStore::RELAY_STATE_FILE;
+
+        try {
+            $store = new RelayStateStore($dir);
+            $hub = new FakeRelayConnection('ws://hub.example.com:8802');
+            /** @var \ArrayObject<int, bool> $seen */
+            $seen = new \ArrayObject();
+
+            $consumer = new RelayConsumer(
+                new RelayConfig(
+                    enabled: true,
+                    hubRelayWsUrl: 'ws://hub.example.com:8802',
+                    localHttpAddress: '127.0.0.1:8096',
+                ),
+                $this->createMockHubClient(),
+                new StructuredLogger('relay', []),
+                'server-uuid-123',
+                hubConnectionFactory: static fn (string $url): AsyncTcpConnection => $hub,
+                localConnectionFactory: static fn (string $url): AsyncTcpConnection
+                    => new StateFileProbingConnection($url, $path, $seen),
+                httpDispatcher: null,
+                stateStore: $store,
+            );
+
+            $consumer->start();
+            $hub->fireConnect();
+            $hub->fireMessage($this->codec->encodeHelloAck('relay-session-1', 'tunnel-1'));
+
+            foreach ([1, 2, 3] as $channel) {
+                $hub->fireMessage($this->codec->encode(
+                    RelayFrameType::CLIENT_CONNECT,
+                    $channel,
+                    json_encode(['client_id' => 'c' . $channel, 'session_id' => 's'], JSON_THROW_ON_ERROR),
+                ));
+            }
+            $this->assertSame(3, $store->readRelayState()['activeSessions']);
+
+            unlink($path);
+            $hub->close();
+
+            $this->assertSame(
+                [false, false, false],
+                $seen->getArrayCopy(),
+                'the mass close must not rewrite the state file once per session'
+            );
+            $this->assertSame(0, $store->readRelayState()['activeSessions']);
+            $this->assertFalse($store->readRelayState()['connected']);
+        } finally {
+            foreach (glob($dir . '/*') ?: [] as $f) {
+                @unlink($f);
+            }
+            @rmdir($dir);
+        }
+    }
+
+    public function test_relay_state_declares_its_refresh_cadence_for_the_staleness_gate(): void
+    {
+        $this->withStateDir(function (RelayStateStore $store): void {
+            $consumer = $this->createConsumer(
+                new RelayConfig(
+                    enabled: true,
+                    hubRelayWsUrl: 'ws://hub.example.com:8802',
+                    localHttpAddress: '127.0.0.1:8096',
+                    pingInterval: 30,
+                ),
+                null,
+                $store,
+            );
+            $this->activate($consumer);
+
+            $state = $store->readRelayState();
+            $this->assertSame(90, $state['staleAfterSeconds'], '3x the 30s ping cadence');
+            $this->assertFalse(
+                RelayStateStore::isStateStale($state),
+                'a state file just written by a live fork is not stale'
+            );
+        });
     }
 }

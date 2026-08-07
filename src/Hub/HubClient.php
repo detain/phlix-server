@@ -37,6 +37,14 @@ class HubClient
 {
     private const PROTOCOL_VERSION = 'v1';
     private const HEARTBEAT_INTERVAL = 60;
+
+    /**
+     * Seconds after {@see startHeartbeatLoop()} before the FIRST heartbeat tick
+     * (S40). Long enough for the fork's event loop to start turning, short
+     * enough that a booted/restarted box reports live latency almost at once
+     * instead of "no successful heartbeat recorded yet" for a whole interval.
+     */
+    private const FIRST_HEARTBEAT_DELAY = 2;
     private const ENROLLMENT_FILE = 'hub-enrollment.json';
 
     /** @var int Enrollment JWT lifetime in seconds (7 days). */
@@ -407,7 +415,20 @@ class HubClient
     /**
      * Starts the background heartbeat loop.
      *
-     * Registers a Workerman timer to call sendHeartbeat() every 60 seconds.
+     * Registers a Workerman timer to call sendHeartbeat() every 60 seconds,
+     * PLUS a one-shot {@see FIRST_HEARTBEAT_DELAY}-second timer for the very
+     * first tick. Without that first tick the fork records nothing for a full
+     * interval, so a freshly booted (or freshly restarted) box reported
+     * `offline` / "No successful heartbeat recorded yet" for up to 60 s — and a
+     * restarted box served the PRE-restart snapshot until the first tick landed.
+     *
+     * The first tick is scheduled rather than run inline because
+     * `startHeartbeatLoop()` is called from the `phlix-hub-heartbeat` fork's
+     * `onWorkerStart`, i.e. BEFORE that worker's event loop runs: an inline
+     * {@see sendHeartbeat()} would cooperatively wait on a loop that is not
+     * turning yet and record a spurious failure. A short delay puts the tick
+     * inside the running loop.
+     *
      * The heartbeat loop runs in the context of the Workerman worker.
      *
      * @return void
@@ -426,16 +447,46 @@ class HubClient
 
         $this->httpClient = new HttpClient($enrollment->hubBaseUrl, $enrollment->enrollmentJwt);
 
-        $this->heartbeatTimer = \Workerman\Timer::add(
+        $this->heartbeatTimer = $this->scheduleTimer(
             self::HEARTBEAT_INTERVAL,
             function (): void {
                 $this->performHeartbeatTick();
             },
+            true,
+        );
+
+        $this->scheduleTimer(
+            self::FIRST_HEARTBEAT_DELAY,
+            function (): void {
+                $this->performHeartbeatTick();
+            },
+            false,
         );
 
         $this->logger->info('Heartbeat loop started', [
             'interval' => self::HEARTBEAT_INTERVAL,
+            'first_tick_in' => self::FIRST_HEARTBEAT_DELAY,
         ]);
+    }
+
+    /**
+     * Register a Workerman timer (seam: overridden in tests).
+     *
+     * `Workerman\Timer::add()` throws outside a running Workerman environment,
+     * which is exactly where PHPUnit lives — so the heartbeat scheduling was
+     * unreachable from the suite. Routing both timers through this one
+     * protected method lets a test double record what was scheduled and drive
+     * the callbacks, without changing production behaviour.
+     *
+     * @param float|int $interval   Seconds.
+     * @param callable  $callback   Timer body.
+     * @param bool      $persistent Whether the timer repeats.
+     *
+     * @return int|null The timer id, or null when no timer could be armed.
+     */
+    protected function scheduleTimer(float|int $interval, callable $callback, bool $persistent): ?int
+    {
+        return \Workerman\Timer::add($interval, $callback, [], $persistent);
     }
 
     /**
@@ -505,6 +556,11 @@ class HubClient
             'lastSuccessfulHeartbeat' => $this->lastSuccessfulHeartbeat?->format('c'),
             'consecutiveFailures' => $this->consecutiveFailures,
             'lastLatencyMs' => $this->lastLatencyMs,
+            // S40 staleness gate: declare this fork's refresh cadence so a
+            // reader can tell a frozen file (fork dead) from a fresh one
+            // ({@see RelayStateStore::isStateStale()}). Without it a dead
+            // heartbeat fork reads as `healthy` forever.
+            'staleAfterSeconds' => self::HEARTBEAT_INTERVAL * 3,
         ]);
     }
 

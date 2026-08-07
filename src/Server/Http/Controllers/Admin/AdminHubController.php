@@ -496,12 +496,15 @@ final class AdminHubController
      *
      * @return Response JSON { connected, active, reconnectAttempts, activeSessions,
      *   lastDisconnectTime, lastConnectError, lastConnectErrorAt, disabled,
-     *   enrolled, updatedAt, endpoint, establishedAt }.
+     *   enrolled, stale, updatedAt, endpoint, establishedAt }.
      */
     public function relayStatus(Request $request, array $params): Response
     {
         try {
-            $state = $this->getRelayStateStore()->readRelayState();
+            // Staleness-gated read (S40): the relay fork's state file survives a
+            // crash/SIGKILL, so a raw read would keep reporting `connected: true`
+            // forever after the fork died. The gate only ever downgrades.
+            $state = $this->getRelayStateStore()->readLiveRelayState();
 
             // `disabled` reflects what will actually take effect on reload: the
             // persisted operator kill-switch OR the env var. `enrolled` and the
@@ -527,6 +530,10 @@ final class AdminHubController
                     ? $state['lastConnectErrorAt'] : null,
                 'disabled' => $disabled,
                 'enrolled' => $enrolled,
+                // True when `updatedAt` is older than the relay fork's declared
+                // refresh cadence: the fork is not running, and the liveness
+                // fields above have been forced down accordingly.
+                'stale' => ($state['stale'] ?? false) === true,
                 // When the relay fork last wrote state (staleness signal); null
                 // if the fork has never run / never written.
                 'updatedAt' => $updatedAt,
@@ -659,13 +666,16 @@ final class AdminHubController
      * @param array<string, string> $params  Path parameters (unused).
      *
      * @return Response JSON { success, connected, active, latencyMs,
-     *   lastHeartbeatAt, latencySource } or 409 when the tunnel is not connected.
+     *   lastHeartbeatAt, heartbeatStale, latencySource } or 409 when the tunnel
+     *   is not connected (including when its state snapshot has gone stale).
      */
     public function relayPing(Request $request, array $params): Response
     {
         try {
             $store = $this->getRelayStateStore();
-            $relayState = $store->readRelayState();
+            // Staleness-gated read (S40): never answer "pong, connected" out of
+            // a frozen file left behind by a relay fork that is no longer alive.
+            $relayState = $store->readLiveRelayState();
 
             $connected = ($relayState['connected'] ?? false) === true;
             $active = ($relayState['active'] ?? false) === true;
@@ -685,7 +695,9 @@ final class AdminHubController
                 ]);
             }
 
-            $heartbeat = $store->readHeartbeatState();
+            // Staleness-gated (S40) so the caller can tell "42 ms, measured a
+            // moment ago" from "42 ms, measured before the heartbeat fork died".
+            $heartbeat = $store->readLiveHeartbeatState();
             $latencyMs = isset($heartbeat['lastLatencyMs']) && is_int($heartbeat['lastLatencyMs'])
                 ? $heartbeat['lastLatencyMs'] : null;
             $lastHeartbeatAt =
@@ -698,6 +710,9 @@ final class AdminHubController
                 'active' => $active,
                 'latencyMs' => $latencyMs,
                 'lastHeartbeatAt' => $lastHeartbeatAt,
+                // True when the heartbeat fork stopped refreshing its snapshot:
+                // `latencyMs` is then a historical fact, not a current one.
+                'heartbeatStale' => ($heartbeat['stale'] ?? false) === true,
                 // Signals the value is the last persisted measurement, not a
                 // live probe fired by this request.
                 'latencySource' => 'persisted',

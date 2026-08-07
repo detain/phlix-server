@@ -848,13 +848,23 @@ try {
         // relay-control.json flag written by the admin "Disable" control (S39).
         // The persisted flag is why the toggle "takes effect on reload" — this
         // fork re-reads it on every graceful reload.
-        $relayDisabledEnv = in_array(
-            strtolower((string) (getenv('PHLIX_RELAY_DISABLED') ?: '')),
-            ['1', 'true', 'yes', 'on'],
-            true,
+        //
+        // S39 (kill-switch fix): the decision lives in RelayTunnelBoot because
+        // this file runs OUTSIDE PHPUnit and could never be pinned inline. It
+        // used to gate ONLY withAutoEnable() below while $consumer->start() ran
+        // unconditionally, so with hub_relay_ws_url set the admin "Disable"
+        // control was a complete no-op. The gate now suppresses the tunnel and
+        // persists an honest disabled state for the health/status readers.
+        $relayDisabled = \Phlix\Hub\RelayTunnelBoot::isOperatorDisabled(
+            getenv('PHLIX_RELAY_DISABLED'),
+            $relayStateStore,
         );
-        $relayDisabled = $relayDisabledEnv || $relayStateStore->isRelayDisabled();
-        if ($enrollment !== null && !$relayDisabled) {
+        if (!\Phlix\Hub\RelayTunnelBoot::allowBoot($relayDisabled, $relayStateStore, $logger)) {
+            // Kill-switch set: honest state persisted above; build nothing else
+            // in this fork (no Application, no consumer, no tunnel).
+            return;
+        }
+        if ($enrollment !== null) {
             $relayConfig = $relayConfig->withAutoEnable($enrollment->hubBaseUrl);
         }
 

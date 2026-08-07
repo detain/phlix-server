@@ -86,6 +86,18 @@ final class AdminHubControllerTest extends TestCase
         return $decoded;
     }
 
+    /**
+     * A recent ISO-8601 `updatedAt`, i.e. one the S40 staleness gate accepts.
+     *
+     * The relay fork refreshes its state file on a fixed cadence, so a "tunnel
+     * is up" fixture must be dated relative to NOW — a hard-coded calendar date
+     * ages past the gate and silently stops meaning "a live fork wrote this".
+     */
+    private function fresh(int $secondsAgo = 0): string
+    {
+        return date('c', time() - $secondsAgo);
+    }
+
     private function seedRelayState(string $json): void
     {
         file_put_contents($this->dir . '/' . RelayStateStore::RELAY_STATE_FILE, $json);
@@ -102,6 +114,8 @@ final class AdminHubControllerTest extends TestCase
 
     public function testRelayStatusReadsSeededStateFile(): void
     {
+        $updatedAt = $this->fresh();
+
         $this->seedRelayState(json_encode([
             'connected' => true,
             'active' => true,
@@ -110,7 +124,7 @@ final class AdminHubControllerTest extends TestCase
             'lastDisconnectTime' => '2026-07-23T10:00:00+00:00',
             'lastConnectError' => 'boom',
             'lastConnectErrorAt' => '2026-07-23T09:59:00+00:00',
-            'updatedAt' => '2026-07-23T10:01:00+00:00',
+            'updatedAt' => $updatedAt,
         ], JSON_THROW_ON_ERROR));
 
         $response = $this->controller()->relayStatus($this->request(), []);
@@ -124,9 +138,31 @@ final class AdminHubControllerTest extends TestCase
         self::assertSame('2026-07-23T10:00:00+00:00', $body['lastDisconnectTime']);
         self::assertSame('boom', $body['lastConnectError']);
         self::assertSame('2026-07-23T09:59:00+00:00', $body['lastConnectErrorAt']);
-        self::assertSame('2026-07-23T10:01:00+00:00', $body['updatedAt']);
+        self::assertSame($updatedAt, $body['updatedAt']);
         self::assertFalse($body['disabled']);
         self::assertFalse($body['enrolled']);
+        self::assertFalse($body['stale']);
+    }
+
+    public function testRelayStatusForcesAStaleTunnelDown(): void
+    {
+        // S40: the relay fork's state file survives its death, so a raw read
+        // would keep answering "connected" forever after a SIGKILL.
+        $this->seedRelayState(json_encode([
+            'connected' => true,
+            'active' => true,
+            'reconnectAttempts' => 0,
+            'activeSessions' => 4,
+            'staleAfterSeconds' => 90,
+            'updatedAt' => $this->fresh(3600),
+        ], JSON_THROW_ON_ERROR));
+
+        $body = $this->decode($this->controller()->relayStatus($this->request(), [])->body);
+        self::assertFalse($body['connected']);
+        self::assertFalse($body['active']);
+        self::assertSame(0, $body['activeSessions']);
+        self::assertTrue($body['stale']);
+        self::assertStringContainsString('stale', (string) $body['lastConnectError']);
     }
 
     public function testRelayStatusReportsOfflineWhenStateFileMissing(): void
@@ -279,7 +315,11 @@ final class AdminHubControllerTest extends TestCase
 
     public function testRelayPingReturnsPersistedLatencyNotLiveProbe(): void
     {
-        $this->seedRelayState(json_encode(['connected' => true, 'active' => true], JSON_THROW_ON_ERROR));
+        $this->seedRelayState(json_encode([
+            'connected' => true,
+            'active' => true,
+            'updatedAt' => $this->fresh(),
+        ], JSON_THROW_ON_ERROR));
         $this->seedHeartbeatState(json_encode([
             'lastLatencyMs' => 42,
             'lastSuccessfulHeartbeat' => '2026-07-23T10:00:00+00:00',
@@ -295,18 +335,64 @@ final class AdminHubControllerTest extends TestCase
         self::assertSame(42, $body['latencyMs']);
         self::assertSame('2026-07-23T10:00:00+00:00', $body['lastHeartbeatAt']);
         self::assertSame('persisted', $body['latencySource']);
+        self::assertTrue(
+            $body['heartbeatStale'],
+            'that heartbeat snapshot carries no updatedAt, so it cannot be current'
+        );
+    }
+
+    public function testRelayPingMarksAFreshHeartbeatAsNotStale(): void
+    {
+        $this->seedRelayState(json_encode([
+            'connected' => true,
+            'active' => true,
+            'updatedAt' => $this->fresh(),
+        ], JSON_THROW_ON_ERROR));
+        $this->seedHeartbeatState(json_encode([
+            'lastLatencyMs' => 42,
+            'lastSuccessfulHeartbeat' => $this->fresh(30),
+            'staleAfterSeconds' => 180,
+            'updatedAt' => $this->fresh(30),
+        ], JSON_THROW_ON_ERROR));
+
+        $body = $this->decode($this->controller()->relayPing($this->request(), [])->body);
+        self::assertSame(42, $body['latencyMs']);
+        self::assertFalse($body['heartbeatStale']);
     }
 
     public function testRelayPingLatencyNullWhenNoHeartbeatRecorded(): void
     {
         // Connected, but no heartbeat state file yet (S40 not shipped / no beat
         // recorded) → honest null, not a fabricated timing.
-        $this->seedRelayState(json_encode(['connected' => true, 'active' => true], JSON_THROW_ON_ERROR));
+        $this->seedRelayState(json_encode([
+            'connected' => true,
+            'active' => true,
+            'updatedAt' => $this->fresh(),
+        ], JSON_THROW_ON_ERROR));
 
         $body = $this->decode($this->controller()->relayPing($this->request(), [])->body);
         self::assertTrue($body['success']);
         self::assertNull($body['latencyMs']);
         self::assertSame('persisted', $body['latencySource']);
+    }
+
+    public function testRelayPingReturns409WhenTheStateFileIsStale(): void
+    {
+        // The tunnel "was" connected — but the fork stopped refreshing the file,
+        // so ping must not answer success out of a frozen snapshot (S40).
+        $this->seedRelayState(json_encode([
+            'connected' => true,
+            'active' => true,
+            'staleAfterSeconds' => 90,
+            'updatedAt' => $this->fresh(3600),
+        ], JSON_THROW_ON_ERROR));
+
+        $response = $this->controller()->relayPing($this->request(), []);
+        self::assertSame(409, $response->statusCode);
+
+        $body = $this->decode($response->body);
+        self::assertFalse($body['connected']);
+        self::assertStringContainsString('stale', (string) $body['lastConnectError']);
     }
 
     public function testRelayPingReturns409WhenNotConnected(): void

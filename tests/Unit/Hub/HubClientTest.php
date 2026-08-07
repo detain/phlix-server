@@ -685,4 +685,122 @@ class HubClientTest extends TestCase
         $this->assertStringContainsString('hub.ERROR', $logged);
         $this->assertStringContainsString('serving empty keyset', $logged);
     }
+
+    // ---------------------------------------------------------------------
+    // S40: the heartbeat loop must record a measurement IMMEDIATELY, not one
+    // interval later. `Timer::add()` only ever armed a repeating 60 s timer, so
+    // a freshly booted box reported `offline` / "No successful heartbeat
+    // recorded yet" for up to a minute, and a RESTARTED box served the
+    // pre-restart snapshot until the first tick landed.
+    // ---------------------------------------------------------------------
+
+    public function test_heartbeat_loop_arms_a_repeating_timer_and_an_immediate_first_tick(): void
+    {
+        $stateStore = new RelayStateStore($this->tmpDir);
+        $httpClient = $this->createMock(HttpClientInterface::class);
+        $httpClient->method('post')->willReturn(new HttpResponse(200, [], []));
+
+        $client = new RecordingTimerHubClient(
+            new Ed25519KeyManager($this->keyPath),
+            $httpClient,
+            new StructuredLogger('hub', []),
+            $this->tmpDir,
+            '0.11.0',
+            null,
+            '',
+            null,
+            518400,
+            $stateStore,
+        );
+        $client->storeEnrollment(
+            'jwt-token',
+            'https://hub.example.com/.well-known/jwks.json',
+            'server-uuid',
+            'https://hub.example.com',
+        );
+
+        $client->startHeartbeatLoop();
+
+        $this->assertCount(2, $client->scheduled, 'the repeating loop AND a first-tick timer');
+
+        $this->assertSame(60, $client->scheduled[0]['interval']);
+        $this->assertTrue($client->scheduled[0]['persistent'], 'the 60s loop repeats');
+
+        $this->assertFalse($client->scheduled[1]['persistent'], 'the first tick fires once');
+        $this->assertGreaterThan(0, $client->scheduled[1]['interval']);
+        $this->assertLessThanOrEqual(
+            5,
+            $client->scheduled[1]['interval'],
+            'the first tick must land in seconds, not after a whole 60s interval'
+        );
+
+        // startHeartbeatLoop() swaps in a real enrollment-scoped HttpClient;
+        // restore the mock so driving the callback touches no network.
+        (new \ReflectionProperty(HubClient::class, 'httpClient'))->setValue($client, $httpClient);
+
+        $this->assertSame([], $stateStore->readHeartbeatState(), 'nothing recorded before the first tick');
+
+        ($client->scheduled[1]['callback'])();
+
+        $state = $stateStore->readHeartbeatState();
+        $this->assertNotNull($state['lastSuccessfulHeartbeat'], 'the first tick records a measurement');
+        $this->assertSame(0, $state['consecutiveFailures']);
+    }
+
+    public function test_heartbeat_state_declares_its_refresh_cadence_for_the_staleness_gate(): void
+    {
+        $stateStore = new RelayStateStore($this->tmpDir);
+        $httpClient = $this->createMock(HttpClientInterface::class);
+        $httpClient->method('post')->willReturn(new HttpResponse(200, [], []));
+
+        $client = new HubClient(
+            new Ed25519KeyManager($this->keyPath),
+            $httpClient,
+            new StructuredLogger('hub', []),
+            $this->tmpDir,
+            '0.11.0',
+            null,
+            '',
+            null,
+            518400,
+            $stateStore,
+        );
+        $client->storeEnrollment(
+            'jwt-token',
+            'https://hub.example.com/.well-known/jwks.json',
+            'server-uuid',
+            'https://hub.example.com',
+        );
+
+        $this->invokeHeartbeatTick($client);
+
+        $state = $stateStore->readHeartbeatState();
+        $this->assertSame(180, $state['staleAfterSeconds'], '3x the 60s heartbeat cadence');
+        $this->assertFalse(
+            RelayStateStore::isStateStale($state),
+            'a snapshot the fork just wrote is not stale'
+        );
+    }
+}
+
+/**
+ * HubClient test double that records what {@see HubClient::startHeartbeatLoop()}
+ * schedules instead of arming real Workerman timers (which throw outside a
+ * running Workerman environment, i.e. everywhere in PHPUnit).
+ */
+final class RecordingTimerHubClient extends HubClient
+{
+    /** @var list<array{interval: float|int, callback: callable, persistent: bool}> */
+    public array $scheduled = [];
+
+    protected function scheduleTimer(float|int $interval, callable $callback, bool $persistent): ?int
+    {
+        $this->scheduled[] = [
+            'interval' => $interval,
+            'callback' => $callback,
+            'persistent' => $persistent,
+        ];
+
+        return count($this->scheduled);
+    }
 }

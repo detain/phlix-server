@@ -227,8 +227,8 @@ final class PreRouterFastPaths
      * GET /api/v1/artwork/{itemId}?size={size}
      *
      * Authorised by: resolved session (Bearer/cookie, or the hub-validated relay
-     * user) OR a valid signed-URL token minted over the `path?size=` resource
-     * spelling ({@see \Phlix\Auth\SignedUrl::mintArtwork()}).
+     * user) OR a valid signed-URL token, minted by {@see ArtworkStorage::url()}
+     * via {@see \Phlix\Auth\SignedUrl::mint()}.
      *
      * @param Request $request The request to match and serve.
      *
@@ -259,8 +259,25 @@ final class PreRouterFastPaths
                 ->body(json_encode(['error' => 'Invalid size parameter']) ?: '{"error":"Invalid size parameter"}');
         }
 
-        // Authorise: resolved session OR valid signed-URL token. The signed
-        // resource is the path WITH the size query, matching how the URL is minted.
+        // Authorise: resolved session OR valid signed-URL token.
+        //
+        // ⚠ MEASURED, because the surrounding comment used to claim otherwise and
+        // a whole verification premise was built on it: the `?size=` suffix below
+        // is NOT signed material. {@see \Phlix\Auth\SignedUrl::canonicalResource()}
+        // strips everything from the first `?` — deliberately, so the verifier
+        // (which only ever sees the query-less {@see Request::$path}) and the
+        // minter agree — and {@see \Phlix\Auth\SignedUrl::mint()} likewise signs
+        // only the path. Proven by execution: a token minted for
+        // `…/item-1?size=w342` verifies TRUE against `?size=original` and against
+        // the bare path, and FALSE against `…/item-2`. So the ITEM is bound and
+        // the VARIANT is not — one signed poster URL is valid for every size of
+        // that item, which is the intended, documented design.
+        //
+        // The suffix is kept verbatim rather than dropped so this call site still
+        // reads as "the resource this URL was minted over", and so that a future
+        // change to `canonicalResource()` that DOES bind the query keeps working
+        // here unchanged. Do not "simplify" it away, and do not write a test that
+        // asserts the size is signed — it is not, and never was.
         $unauthorized = $this->rejectUnlessSigned(
             $request,
             '/api/v1/artwork/' . $itemId . '?size=' . $size,
@@ -339,9 +356,14 @@ final class PreRouterFastPaths
      * `exp`/`sig` query pair must be a valid signature over `$signedResource` —
      * this is what lets `<img src="...">` work without an Authorization header.
      *
+     * ⚠ `$signedResource` is canonicalised by {@see SignedUrl::canonicalResource()}
+     * before hashing, which strips any query string. Passing a resource WITH a
+     * query is therefore harmless but not load-bearing — see the measured note in
+     * {@see serveArtwork()}. The PATH is what binds.
+     *
      * @param Request $request        The request being authorised.
-     * @param string  $signedResource The exact resource spelling the URL was
-     *                                minted over.
+     * @param string  $signedResource The resource spelling the URL was minted
+     *                                over (query, if any, is not hashed).
      *
      * @return Response|null A 401 to return immediately, or null to proceed.
      */

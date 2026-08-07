@@ -1079,15 +1079,43 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   `dev` is labelled **opt-in / advanced** server-side via `PluginCatalogService::channelInfo()`
   (the `dev` option carries `advanced: true` and a description explaining it tracks
   the moving `master` branch); the admin Plugins page renders that metadata verbatim.
-  The channel only affects the OFFICIAL catalog and only widens catalog **discovery**
-  — operator-added catalogs still resolve at `HEAD`, and **install-time integrity
-  verification is unchanged**: per-entry `ref` + `artifactSha256` still gate every
-  actual install on BOTH channels (`PluginCatalogService::pinFor()` /
-  `PluginLoader::install()` untouched), so `dev` never moves the trust boundary.
+  The channel only affects the OFFICIAL catalog; operator-added catalogs still resolve
+  at `HEAD`, and **install-time integrity verification is unchanged**: per-entry `ref` +
+  `artifactSha256` still gate every actual install on BOTH channels
+  (`PluginCatalogService::pinFor()` / `PluginLoader::install()` untouched).
+
+  ⚠ **Corrected (S217).** An earlier draft of this entry — and of the docblocks at
+  `CatalogSourceResolver`, `PluginCatalogService::channel()`/`channelInfo()` and
+  `PluginCatalogController::channel()` — claimed the channel *"only widens discovery"*
+  and that **"`dev` never moves the trust boundary"**. That overstates the guarantee and
+  is now withdrawn from all four sites. The digest check does survive, but `ref` and
+  `artifactSha256` are **self-asserted by the catalog document**: verification proves
+  only that the artifact matches what *that document* claimed. On `stable` the document
+  is read from `OFFICIAL_PINNED_REF`, an immutable release tag; on `dev` it is read from
+  `DEV_REF`, a moving branch — so anyone who can push that branch can pin their own
+  commit **and** its matching digest, and the install verifies. `dev` widens discovery
+  **and** swaps an immutable trust anchor for a mutable one. No behaviour changed; only
+  the claim did. The `channelInfo()` `dev` description the admin SPA renders verbatim was
+  reworded to say so.
+
   Passing `null` for the new `CatalogSourceResolver::normalize()` `$officialRef`
   argument reproduces the historic env-or-pinned behaviour byte-for-byte, so existing
   callers are unaffected. GitHub-Releases-API "always latest" (updates.md #27 option b)
   is intentionally deferred. Class (a) LIVE, `restart: false`.
+
+  **S217: `plugins.catalog.channel` now has a DECLARED default.** `config/plugins.php`
+  gains `'channel' => 'stable'`. Previously the key existed only as a code fallback
+  (`PluginCatalogService::channel()` returns `stable` for any non-`dev` value), so
+  `SettingsRepository::hasDefault('plugins.catalog.channel')` was **false** and
+  `getDefault()` returned `null`. Behaviour is unchanged today — the code fallback and
+  the config default agree — but the key is now resolvable, which is the precondition
+  for publishing it to `detain/phlix-shared`'s `server-settings.schema.json`. Publishing
+  it there *without* this default would have reddened
+  `tests/Unit/Admin/SettingsDefaultResolvabilityTest`, whose whole purpose is to catch a
+  schema key that renders in the admin UI, accepts a PUT and reports `null` forever.
+  `tests/Unit/Plugins/Catalog/CatalogChannelConfigDefaultTest.php` pins the default
+  against the real `config/` directory. The shared-schema half is an **upstream**
+  phlix-shared change and is deliberately NOT made here (`vendor/` is hand-patched).
 
 - **`metadata.overwrite_existing` — respect hand-corrected metadata on rescan.**
   A metadata (re)match unconditionally did `array_merge($existing, $resolved)` at

@@ -224,8 +224,11 @@ final class PluginCatalogController
      *
      * The `dev` option is flagged **opt-in / advanced** via its `description`
      * and its `advanced` flag so the admin UI can gate it clearly. Per-entry
-     * `ref` + `artifactSha256` verification still gates every install on both
-     * channels — the channel only widens catalog *discovery*, never trust.
+     * `ref` + `artifactSha256` verification still runs on both channels, but
+     * those pins are self-asserted by the catalog document: on `dev` the
+     * document is read from a moving branch, so ⚠ the channel widens catalog
+     * *discovery* **and** moves the trust anchor from an immutable release tag
+     * to a mutable one. See {@see \Phlix\Plugins\Catalog\CatalogSourceResolver::CHANNEL_DEV}.
      *
      * @param Request              $request The HTTP request.
      * @param array<string,string> $params  Path parameters (unused).

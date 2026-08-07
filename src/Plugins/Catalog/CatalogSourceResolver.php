@@ -85,11 +85,21 @@ final class CatalogSourceResolver
      *  - {@see CHANNEL_DEV} → {@see DEV_REF} (`master`), the moving default
      *    branch — **opt-in / advanced**.
      *
-     * The channel only widens catalog *discovery*: per-entry `ref` +
-     * `artifactSha256` verification still gates every actual install on BOTH
-     * channels (see {@see PluginCatalogService::pinFor()} +
-     * {@see \Phlix\Plugins\PluginLoader::install()}), so `dev` does not move the
-     * trust boundary.
+     * Per-entry `ref` + `artifactSha256` verification runs on BOTH channels
+     * (see {@see PluginCatalogService::pinFor()} +
+     * {@see \Phlix\Plugins\PluginLoader::install()}) — the digest check is never
+     * skipped. But note **what that check proves**: `ref` and `artifactSha256`
+     * are *self-asserted by the catalog document itself*, so verification only
+     * establishes that the downloaded artifact matches what that document
+     * claimed. It does not establish that the claim was audited.
+     *
+     * ⚠ `dev` therefore DOES move the trust anchor. On {@see CHANNEL_STABLE} the
+     * catalog document is read from {@see OFFICIAL_PINNED_REF}, an immutable
+     * release tag; on {@see CHANNEL_DEV} it is read from {@see DEV_REF}, a moving
+     * branch — so anyone who can push to that branch can pin their own commit
+     * *and* the matching digest, and the install verifies. `dev` widens
+     * discovery **and** replaces an immutable anchor with a mutable one; it is
+     * opt-in / advanced for that reason.
      */
     public const CHANNEL_STABLE = 'stable';
     public const CHANNEL_DEV = 'dev';

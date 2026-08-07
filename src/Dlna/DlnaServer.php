@@ -312,6 +312,24 @@ class DlnaServer
     /**
      * Process a SOAP request.
      *
+     * ⚠ **This method has NO production caller (S218 — verified 2026-08-07).**
+     *
+     * A repo-wide search for `processSoapRequest` (src/, tests/, vendor/, and
+     * the sibling repos under `/home/sites/phlix`) finds this definition, one
+     * docblock mention in {@see SoapArgumentExtractor}, and **seven callers,
+     * all inside `tests/Unit/Dlna/DlnaServerTest.php`.** `DlnaServer` performs
+     * no dynamic dispatch, so there is no hidden caller. The container does
+     * build this class, but only for {@see getContentDirectory()},
+     * {@see getScpdXml()} and the device description.
+     *
+     * The SOAP control path that IS served is
+     * {@see \Phlix\Server\Http\Controllers\Dlna\DlnaContentDirectoryController::handle()},
+     * mounted at `POST /dlna/content_directory` in `Application::loadCdsRoutes()`.
+     * Add coverage for a control-point-visible behaviour THERE — see
+     * `tests/Unit/Server/Http/Controllers/Dlna/DlnaContentDirectorySoapTest.php`
+     * (Browse) and `.../DlnaContentDirectorySearchLivePathTest.php` (Search).
+     * A green test against this method pins code no renderer can reach.
+     *
      * @param string $service The service name (e.g., 'ContentDirectory')
      * @param string $action The action name (e.g., 'Browse')
      * @param string $body The SOAP body XML

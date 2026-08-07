@@ -2021,6 +2021,31 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   nested same-named element does not bleed into the extracted arguments (mutation-verified against
   the old any-descendant walk).
 
+  **S218 follow-up — `u:Search` now has LIVE-path coverage, and the dead pointer is labelled.**
+  Before this, `grep -F 'u:Search' tests/` hit a docblock and `DlnaServerTest.php` only. Those cases
+  drive `DlnaServer::processSoapRequest()`, which has **no production caller**: a repo-wide search
+  (src/, tests/, `vendor/`, and the sibling repos under `/home/sites/phlix`) finds its definition,
+  one docblock mention, and seven callers — every one of them inside `DlnaServerTest.php` — and
+  `DlnaServer` performs no dynamic dispatch. The container builds the class only for
+  `getContentDirectory()`, `getScpdXml()` and the device description. So Search was covered only on
+  code no renderer can reach, while Browse alone was covered on the served path.
+
+  New `tests/Unit/Server/Http/Controllers/Dlna/DlnaContentDirectorySearchLivePathTest.php` (6 tests)
+  drives real namespaced `u:Search` envelopes with a real `SOAPACTION` header through
+  `DlnaContentDirectoryController::handle()` — the `POST /dlna/content_directory` route registered in
+  `Application::loadCdsRoutes()`. It pins: the arguments reaching `ContentDirectory::search()`
+  verbatim; a Browse **control** on the same driver taking the other `dispatchAction()` arm (so the
+  Search assertion is discriminating, not just "200 OK"); an end-to-end filter through a REAL
+  `ContentDirectory` (two rows in, one out — a Search that degraded to a Browse returns both); the
+  DIDL-bleed hardening in a Search-shaped variant (nested `<SearchCriteria>` inside `<Filter>`, no
+  top-level one); and UPnP error 800 surfacing as a fault rather than an empty 200. An
+  anti-vacuity floor asserts the fixture really is a namespaced `<u:Search>` first child of
+  `<Body>`, so the coverage cannot silently weaken below its own description.
+
+  `DlnaServer::processSoapRequest()`, `SoapArgumentExtractor`'s class docblock and `DlnaServerTest`'s
+  class docblock now each say, in place, that this path is not served and where live coverage
+  belongs. No behaviour changed.
+
 - **CSP `img-src` allowlists the TMDB image CDN so remote poster/backdrop/cast artwork renders**
   (updates.md #1). `SecurityHeaders::contentSecurityPolicy()` previously served artwork loaded
   directly from TMDB only under the default `'self'` policy, so any image not yet cached on our

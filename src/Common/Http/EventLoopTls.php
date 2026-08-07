@@ -28,11 +28,40 @@ use Workerman\Worker;
  * TLS-buffered data, which is why the same code works there.
  *
  * Until the event adapter is fixed upstream, https requests made while the
- * Swoole event loop drives the process must use blocking cURL instead. cURL
- * is deliberately excluded from the curated coroutine hook mask
- * ({@see \Phlix\Server\Runtime\SwooleRuntime}), so it runs as a plain
- * blocking call — acceptable for the low-frequency control-plane and
- * metadata requests these clients serve.
+ * Swoole event loop drives the process must use cURL instead.
+ *
+ * ## Accepted blocking-I/O exception #2 (S44-b)
+ *
+ * Treat this call as a **bounded ≤10 s stall of one of the 14 HTTP workers**
+ * ({@see \Workerman\Worker}, `start.php:169`), on a low-frequency control-plane
+ * request. A stalled worker freezes every coroutine on that process, not just
+ * the caller's connection. The bound is `CURLOPT_TIMEOUT`, taken from the
+ * client's own timeout (10 s by default for
+ * {@see \Phlix\Plugins\OAuth2\OAuth2HttpClient}); measured, it fires to within
+ * 10 ms. This is a **named, registered exception**; see
+ * `docs/dev/BLOCKING_IO_EXCEPTIONS.md`.
+ *
+ * ⚠️ **Do not "optimise" this on the grounds that cURL is currently hooked.**
+ * Measured in a real worker today, the fetch does NOT freeze the process — a
+ * sibling coroutine ticking every 100 ms recorded 99 of an expected 100 ticks
+ * across a 10 s fetch, in both the `onWorkerStart` coroutine and a child
+ * coroutine. That is **not** by design. It happens because the curated hook
+ * allowlist is not actually in force: `Workerman\Events\Swoole::__construct()`
+ * installs `SWOOLE_HOOK_ALL` per worker, and `start.php`'s remedy
+ * (`$applyCuratedCoroutineHooks()`, called at the top of each `onWorkerStart`)
+ * runs from INSIDE the worker coroutine, where
+ * `Swoole\Coroutine::set(['hook_flags' => …])` updates the reported option but
+ * cannot un-swap the already-installed handlers. So
+ * `Coroutine::getOptions()['hook_flags']` reports the curated 0x42fe while
+ * `SWOOLE_HOOK_NATIVE_CURL` is still physically hooked. Isolated A/B, 2 repeats,
+ * alternating: re-assert OUTSIDE a coroutine → 0 sibling ticks (unhooked, the
+ * intended state); re-assert INSIDE a coroutine → 29 ticks (still hooked), with
+ * BOTH reporting 0x42fe.
+ *
+ * Whenever that is fixed — and it should be, the mask exists to keep the
+ * io_uring/proc/curl hooks off a stack where they caused repeated SIGSEGVs —
+ * this call becomes a genuine 10 s freeze. The exception is written to be true
+ * either way: bounded, never unbounded. Do not build on the yield.
  *
  * @package Phlix\Common\Http
  * @since 0.15.0

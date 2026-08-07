@@ -17,6 +17,8 @@ use Phlix\Common\Logger\AuditLogger;
 use Phlix\Common\Logger\StructuredLogger;
 use Phlix\Media\Library\DuplicateFinder;
 use Phlix\Media\Library\ItemRepository;
+use Phlix\Media\Library\PathDeduper;
+use Phlix\Media\Library\ScanJobRepository;
 use Phlix\Media\Metadata\Resolution\SourceRegistry;
 use Phlix\Media\Transcoding\FfmpegRunner;
 use Phlix\Plugins\Exception\PluginNotFoundException;
@@ -32,6 +34,8 @@ use Phlix\Plugins\PluginLoader;
 use Phlix\Webhooks\WebhookService;
 use Phlix\Admin\BackupManager;
 use Phlix\Admin\DashboardService;
+use Phlix\Admin\Maintenance\MaintenanceJobRepository;
+use Phlix\Admin\Maintenance\MaintenanceTaskRunner;
 use Phlix\Admin\SettingsRepository;
 use Phlix\Admin\WatchHistoryService;
 use Phlix\Server\Http\Controllers\Admin\AdminMergeController;
@@ -47,6 +51,7 @@ use Phlix\Server\Http\Controllers\Admin\BackupController;
 use Phlix\Server\Http\Controllers\Admin\DashboardController;
 use Phlix\Server\Http\Controllers\Admin\FsBrowseController;
 use Phlix\Server\Http\Controllers\Admin\LogController;
+use Phlix\Server\Http\Controllers\Admin\MaintenanceController;
 use Phlix\Server\Http\Controllers\Admin\WatchHistoryController;
 use Phlix\Server\Http\Controllers\AccessScheduleController;
 use Phlix\Server\Http\Controllers\AuthProviderController;
@@ -214,6 +219,22 @@ final class AdminRoutesTest extends TestCase
             new AdminMiddleware($this->users, $this->audit),
         );
 
+        // Maintenance tasks (S77). AdminRoutes::register() eagerly resolves this
+        // at bind time too, so the stub container must bind it or every route
+        // test in this class dies during registration. The plugin-only tests
+        // below never dispatch to /maintenance/*, so a controller over mocked
+        // collaborators is sufficient.
+        $maintenanceDb = $this->createMock(Connection::class);
+        $maintenanceController = new MaintenanceController(
+            new MaintenanceJobRepository($maintenanceDb),
+            new MaintenanceTaskRunner(
+                $maintenanceDb,
+                new ScanJobRepository($maintenanceDb),
+                new PathDeduper($maintenanceDb),
+            ),
+            new AdminMiddleware($this->users, $this->audit),
+        );
+
         $container = new class (
             $this->loader,
             $this->users,
@@ -240,6 +261,7 @@ final class AdminRoutesTest extends TestCase
             $profileTagController,
             $streamLimitController,
             $adminUpdatesController,
+            $maintenanceController,
         ) implements ContainerInterface {
             private Plugin $oidcPlugin;
             private LdapPlugin $ldapPlugin;
@@ -271,6 +293,7 @@ final class AdminRoutesTest extends TestCase
                 private readonly ProfileTagController $profileTagController,
                 private readonly StreamLimitController $streamLimitController,
                 private readonly AdminUpdatesController $adminUpdatesController,
+                private readonly MaintenanceController $maintenanceController,
             ) {
                 $tempDir = sys_get_temp_dir() . '/phlix_oidc_test_' . uniqid('', true);
                 mkdir($tempDir, 0775, true);
@@ -349,6 +372,7 @@ final class AdminRoutesTest extends TestCase
                     ProfileTagController::class => $this->profileTagController,
                     StreamLimitController::class => $this->streamLimitController,
                     AdminUpdatesController::class => $this->adminUpdatesController,
+                    MaintenanceController::class => $this->maintenanceController,
                     default => throw new \RuntimeException("no binding for $id"),
                 };
             }
@@ -383,6 +407,7 @@ final class AdminRoutesTest extends TestCase
                     ProfileTagController::class,
                     StreamLimitController::class,
                     AdminUpdatesController::class,
+                    MaintenanceController::class,
                 ], true);
             }
         };

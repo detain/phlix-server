@@ -14,6 +14,9 @@ namespace Phlix\Common\Container\Providers;
 use DI\ContainerBuilder;
 use Phlix\Admin\BackupManager;
 use Phlix\Admin\DashboardService;
+use Phlix\Admin\Maintenance\MaintenanceJobRepository;
+use Phlix\Admin\Maintenance\MaintenanceQueueWorker;
+use Phlix\Admin\Maintenance\MaintenanceTaskRunner;
 use Phlix\Admin\SettingsRepository;
 use Phlix\Admin\WatchHistoryService;
 use Phlix\Auth\AuthManager;
@@ -21,7 +24,10 @@ use Phlix\Common\Container\ServiceProviderInterface;
 use Phlix\Common\Logger\AuditLogger;
 use Phlix\Common\Logger\StructuredLogger;
 use Phlix\Media\Library\DuplicateFinder;
+use Phlix\Media\Library\PathDeduper;
+use Phlix\Media\Library\ScanJobRepository;
 use Phlix\Media\Transcoding\FfmpegRunner;
+use Phlix\Media\Transcoding\TranscodeManager;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Library\SeriesMerger;
 use Phlix\Server\Http\Controllers\Admin\AdminMergeController;
@@ -36,7 +42,9 @@ use Phlix\Server\Http\Controllers\Admin\BackupController;
 use Phlix\Server\Http\Controllers\Admin\DashboardController;
 use Phlix\Server\Http\Controllers\Admin\FsBrowseController;
 use Phlix\Server\Http\Controllers\Admin\LogController;
+use Phlix\Server\Http\Controllers\Admin\MaintenanceController;
 use Phlix\Server\Http\Controllers\Admin\WatchHistoryController;
+use Phlix\Server\Http\Middleware\AdminMiddleware;
 use Phlix\Server\Http\Controllers\MostWatchedController;
 use Phlix\Server\Http\Controllers\Stats\MetricsController;
 use Phlix\Server\Http\Controllers\Stats\StatsController;
@@ -134,6 +142,56 @@ final class AdminServicesProvider implements ServiceProviderInterface
                 ->constructorParameter('logger', get(StructuredLogger::class))
                 ->constructorParameter('auditLogger', get(AuditLogger::class)),
             BackupController::class => autowire(),
+
+            // ── One-off maintenance tasks (S77 / updates.md #49) ─────────────
+            //
+            // The queue store and the duplicate-path service both take a single
+            // REQUIRED `Connection`, which is what makes a bare autowire() safe
+            // for them — PHP-DI skips OPTIONAL ctor params, so anything with a
+            // default has to be named explicitly below.
+            MaintenanceJobRepository::class => autowire(),
+            PathDeduper::class             => autowire(),
+
+            // The runner is a factory, not an autowire, for exactly that reason:
+            // its `$transcodeManager` is optional (that service needs ffmpeg
+            // config and a writable transcode root, so it is the one dependency
+            // here that can genuinely fail to build). An autowire() would leave
+            // it null in production and the `reap-transcode-jobs` task would
+            // report "TranscodeManager is unavailable" forever, while every
+            // hand-wired unit test passed. Resolved explicitly, and a real
+            // build failure degrades only that ONE task.
+            MaintenanceTaskRunner::class => factory(
+                static function (ContainerInterface $c): MaintenanceTaskRunner {
+                    $transcodeManager = null;
+                    try {
+                        /** @var TranscodeManager $transcodeManager */
+                        $transcodeManager = $c->get(TranscodeManager::class);
+                    } catch (\Throwable) {
+                        $transcodeManager = null;
+                    }
+
+                    /** @var Connection $db */
+                    $db = $c->get(Connection::class);
+                    /** @var ScanJobRepository $scanJobs */
+                    $scanJobs = $c->get(ScanJobRepository::class);
+                    /** @var PathDeduper $pathDeduper */
+                    $pathDeduper = $c->get(PathDeduper::class);
+
+                    return new MaintenanceTaskRunner($db, $scanJobs, $pathDeduper, $transcodeManager);
+                }
+            ),
+
+            // `adminGuard` is named explicitly for the same reason: it is the
+            // in-body second admin check on five endpoints, two of which are
+            // destructive, and an autowire() would silently leave it null —
+            // turning the belt-and-braces defence into a no-op that no
+            // hand-wired test could see.
+            MaintenanceController::class => autowire()
+                ->constructorParameter('adminGuard', get(AdminMiddleware::class)),
+
+            // Drained by a timer inside the `phlix-background-timers` fork; see
+            // Application::startMaintenanceQueueTimer().
+            MaintenanceQueueWorker::class => autowire(),
 
             // Server-wide settings store + admin API (Step 0.5).
             SettingsRepository::class      => autowire(),

@@ -2653,6 +2653,54 @@ class Application
         // daily poll. Registered LAST so a failure here cannot perturb the
         // timers above; it is guarded internally as well.
         $this->startCoreUpdateCheckTimer();
+
+        // Drain the `maintenance_jobs` queue — S77. This fork is `count = 1`,
+        // which is what makes "one maintenance job at a time" true; the HTTP
+        // worker only ENQUEUES, because these tasks shell out to `du -sb` and
+        // scan `media_items` whole.
+        $this->startMaintenanceQueueTimer();
+    }
+
+    /**
+     * Arm the maintenance-task queue drainer (S77 / updates.md #49).
+     *
+     * Two of the five admin maintenance tasks cannot run in an HTTP request:
+     * `storage-snapshot` shells out to `du -sb` per vault bucket and
+     * `dedupe-paths` scans `media_items` whole and then opens a transaction per
+     * duplicate group. Both would stall every concurrent connection on the
+     * worker that served the click, so the controller enqueues and
+     * {@see \Phlix\Admin\Maintenance\MaintenanceQueueWorker} drains here.
+     *
+     * Fully guarded, like every sibling above: this runs inside the forked
+     * `phlix-background-timers` process, where an uncaught throwable takes the
+     * process down and systemd restarts it. Losing maintenance must never cost
+     * the backup and snapshot timers that share the fork.
+     *
+     * @return void
+     *
+     * @since S77 (admin maintenance tasks)
+     */
+    private function startMaintenanceQueueTimer(): void
+    {
+        $logger = \Phlix\Common\Logger\LoggerFactory::get(\Phlix\Common\Logger\LogChannels::APPLICATION);
+
+        try {
+            /** @var \Phlix\Admin\Maintenance\MaintenanceQueueWorker|null $worker */
+            $worker = $this->container?->get(\Phlix\Admin\Maintenance\MaintenanceQueueWorker::class);
+
+            if (!$worker instanceof \Phlix\Admin\Maintenance\MaintenanceQueueWorker) {
+                $logger->debug('MaintenanceQueueWorker not available; skipping queue timer');
+
+                return;
+            }
+
+            $worker->start();
+            $logger->debug('Maintenance queue timer started');
+        } catch (\Throwable $e) {
+            $logger->error('Failed to start maintenance queue timer', [
+                'error' => $e->getMessage(),
+            ]);
+        }
     }
 
     /**

@@ -80,7 +80,7 @@ Regression guard: `tests/Unit/Plugins/Ldap/LdapConnectionTimeoutTest.php`.
 |---|---|
 | Site | `src/Common/Http/EventLoopTls.php::requiresBlockingCurl()` and the `requestCurl()` fallback in `src/Plugins/OAuth2/OAuth2HttpClient.php` (inherited by `OidcHttpClient`), plus the same fallback in `Hub\HttpClient`, `Trakt\HttpClient`, `WebhookHttpClient`, `MetadataHttpClient`, `ArtworkStorage`, `S3Client`, `PluginCatalogService` |
 | Why it exists | Client-side TLS under `Workerman\Events\Swoole` stalls after the handshake: the adapter epolls the raw fd and never sees bytes OpenSSL has already buffered, so every async https request dies on a read timeout. |
-| Bound | `CURLOPT_TIMEOUT` + `CURLOPT_CONNECTTIMEOUT`, both from the client's own `$timeout` (10 s default for `OidcHttpClient`/`OAuth2HttpClient`). |
+| Bound | `CURLOPT_TIMEOUT`, from the client's own `$timeout` (10 s default for `OidcHttpClient`/`OAuth2HttpClient`). `CURLOPT_CONNECTTIMEOUT` is set too but is a narrower duplicate — see below. |
 | Cost | In production: **none** — see below; the call yields. If the vendor override below ever disappears: ≤10 s of one of the 14 HTTP workers, on a control-plane call. |
 
 ### Correction: this fallback does **not** block in production
@@ -117,9 +117,24 @@ exists for (dropping FILE/PROC/CURL/STDIO on the PHP 8.5 / Swoole 6.2.1 /
 io_uring stack) is silently reverted by the event-loop constructor. That deserves
 its own step; it is recorded here because it is what makes this exception cheap.
 
+### Which cURL option is the bound
+
+`CURLOPT_TIMEOUT` is. `CURLOPT_CONNECTTIMEOUT` is a narrower duplicate: in
+libcurl the connection phase includes the TLS handshake, so an `https://`
+request to a silent peer is ended by `CURLOPT_CONNECTTIMEOUT` regardless.
+
+This matters because it makes the obvious test vacuous. Deleting the
+`curl_setopt($ch, CURLOPT_TIMEOUT, ...)` line and re-running an https-only
+version of the guard left it **fully green** — the connect timeout was doing the
+work. The same mutation against a plain `http://` peer (connection phase
+completes, then cURL waits for a response body that never comes) hung past 60 s.
+The guard therefore uses http for the load-bearing case. If you add a case here,
+make sure it can still distinguish those two options.
+
 Regression guards: `tests/Unit/Common/Http/EventLoopTlsTest.php` (routing
 predicate) and `tests/Unit/Plugins/OAuth2/OAuth2HttpClientTimeoutTest.php`
-(the cURL bound actually firing).
+(the cURL bound actually firing). The latter signals a lost bound by hanging,
+not by failing.
 
 ---
 

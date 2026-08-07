@@ -23,7 +23,9 @@ use Phlix\Server\Http\Controllers\TranscodeFileServer;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Library\RatingGate;
 use Phlix\Media\Storage\ArtworkStorage;
+use Phlix\Media\Storage\AvatarStorage;
 use Phlix\Media\Transcoding\SegmentProcessRegistry;
+use Phlix\Server\Http\FastPath\PreRouterFastPaths;
 use Phlix\Server\Http\Middleware\CorsManager;
 use Phlix\Server\Http\Middleware\SecurityHeaders;
 use Phlix\Server\Http\Request;
@@ -90,6 +92,15 @@ final class HttpHandler
      * Overflow is a non-issue (64-bit int).
      */
     private static int $directCancelSeq = 0;
+
+    /**
+     * Memoised {@see PreRouterFastPaths} for this worker (S238).
+     *
+     * An INSTANCE field, never a `static`: it holds no request state, and one per
+     * HttpHandler (i.e. one per worker) is bounded. Built on first use by
+     * {@see fastPaths()} from the container.
+     */
+    private ?PreRouterFastPaths $fastPaths = null;
 
     public function __construct(
         private readonly ContainerInterface $container,
@@ -192,20 +203,29 @@ final class HttpHandler
                 return;
             }
 
-            // Try user avatar serving (signed URL or authed session)
-            $avatarResp = $this->serveUserAvatar($wr, $request->userId);
-            if ($avatarResp !== null) {
-                $responseStatus = $avatarResp->getStatusCode();
-                $connection->send($avatarResp);
-                return;
-            }
-
-            // Try artwork (poster) serving (signed URL or authed session)
-            $artworkResp = $this->serveArtwork($wr, $request->userId);
-            if ($artworkResp !== null) {
-                $responseStatus = $artworkResp->getStatusCode();
-                $connection->send($artworkResp);
-                return;
+            // Avatar + artwork byte serving (signed URL or authed session).
+            //
+            // S238: these two used to be private methods here, which made them
+            // invisible to Hub\RelayRequestDispatcher — it consults only the two
+            // route tables, and neither endpoint is registered in either, so a
+            // relayed browse rendered no posters and no avatars. They now live in
+            // the transport-neutral PreRouterFastPaths, which the relay dispatcher
+            // consults at this same pipeline position. $request->userId is the
+            // authenticator's verdict from above, exactly as it was when the
+            // methods took it as an argument; Response::toWorkermanResponse()
+            // forwards the file to Workerman's event-loop withFile(), so the bytes
+            // still never enter worker memory.
+            // couldHandle() first so the storages are resolved from the container
+            // only for a request that IS one of these — the deleted private
+            // methods resolved theirs inside the matched branch, and every other
+            // HttpHandler caller must stay free of a dependency on them.
+            if (PreRouterFastPaths::couldHandle($request)) {
+                $imageResp = $this->fastPaths()->dispatch($request);
+                if ($imageResp !== null) {
+                    $responseStatus = $imageResp->statusCode;
+                    $connection->send($imageResp->toWorkermanResponse());
+                    return;
+                }
             }
 
             // SV-4.2-disconnect: arm the direct-LAN disconnect→kill hook before
@@ -723,200 +743,33 @@ final class HttpHandler
     }
 
     /**
-     * Byte-serve a user avatar image.
+     * The transport-neutral pre-router image endpoints (S238).
      *
-     * GET /api/v1/users/{id}/avatar
-     *
-     * Authorised by: resolved session (Bearer/cookie) OR valid signed-URL token
-     * (so <img src="..."> works without a Bearer header).
-     *
-     * Uses Workerman's native {@see WorkermanResponse::withFile()} so the image
-     * streams through the event loop without being read into worker memory.
+     * Memoised per WORKER, not per request: {@see PreRouterFastPaths} holds two
+     * readonly, stateless storage collaborators and no request state, so caching
+     * it here is a bounded per-worker singleton rather than the leaking
+     * `static` this codebase forbids. The storages come from the container on
+     * first use — the same resolution the deleted `serveArtwork()` /
+     * `serveUserAvatar()` did inline on every matching request.
      */
-    private function serveUserAvatar(WorkermanRequest $wr, ?string $userId = null): ?WorkermanResponse
+    private function fastPaths(): PreRouterFastPaths
     {
-        if ($wr->method() !== 'GET') {
-            return null;
+        if ($this->fastPaths !== null) {
+            return $this->fastPaths;
         }
 
-        // Match /api/v1/users/{id}/avatar — captures the userId
-        if (preg_match('#^/api/v1/users/([^/]+)/avatar$#', $wr->path(), $m) !== 1) {
-            return null;
-        }
-
-        $targetUserId = $m[1];
-
-        // Authorise: resolved session OR valid signed-URL token.
-        // A missing/invalid/expired token → 401 so the browser shows a broken image
-        // rather than a raw JSON error body on an <img> src.
-        if ($userId === null || $userId === '') {
-            $signer = \Phlix\Auth\SignedUrl::fromEnv();
-            $exp = $wr->get('exp');
-            $sig = $wr->get('sig');
-            if (!$signer->verify($wr->path(), is_string($exp) ? $exp : null, is_string($sig) ? $sig : null)) {
-                return new WorkermanResponse(
-                    401,
-                    ['Content-Type' => 'text/plain; charset=utf-8'],
-                    'Unauthorized',
-                );
-            }
-        }
-
-        // Get avatar path from AvatarStorage
-        /** @var \Phlix\Media\Storage\AvatarStorage $avatarStorage */
-        $avatarStorage = $this->container->get(\Phlix\Media\Storage\AvatarStorage::class);
-        $avatarPath = $avatarStorage->path($targetUserId);
-
-        if ($avatarPath === null || !is_file($avatarPath) || !is_readable($avatarPath)) {
-            return new WorkermanResponse(404, ['Content-Type' => 'text/plain; charset=utf-8'], 'Avatar not found');
-        }
-
-        // Set Content-Type from file extension (.jpg → image/jpeg)
-        $mime = $this->mimeFor(pathinfo($avatarPath, PATHINFO_EXTENSION));
-        $resp = new WorkermanResponse(200, ['Content-Type' => $mime]);
-        $resp->withFile($avatarPath);
-        return $resp;
-    }
-
-    /**
-     * Byte-serve a media item's artwork (poster) image.
-     *
-     * GET /api/v1/artwork/{itemId}?size={size}
-     *
-     * Authorised by: resolved session (Bearer/cookie) OR valid signed-URL token
-     * (so <img src="..."> works without a Bearer header).
-     *
-     * Uses Workerman's native {@see WorkermanResponse::withFile()} so the image
-     * streams through the event loop without being read into worker memory.
-     *
-     * @param WorkermanRequest $wr     The Workerman request
-     * @param string|null      $userId The authenticated user ID (null if not authenticated)
-     * @return WorkermanResponse|null Response or null if not an artwork request
-     */
-    private function serveArtwork(WorkermanRequest $wr, ?string $userId = null): ?WorkermanResponse
-    {
-        if ($wr->method() !== 'GET') {
-            return null;
-        }
-
-        // Match /api/v1/artwork/{itemId} — captures the itemId
-        if (preg_match('#^/api/v1/artwork/([^/]+)$#', $wr->path(), $m) !== 1) {
-            return null;
-        }
-
-        $itemId = $m[1];
-
-        // Get size parameter (default to 'original')
-        $size = is_string($wr->get('size')) ? $wr->get('size') : 'original';
-
-        // Validate size parameter
-        if (!$this->isValidArtworkSize($size)) {
-            return new WorkermanResponse(
-                400,
-                ['Content-Type' => 'application/json; charset=utf-8'],
-                json_encode(['error' => 'Invalid size parameter']) ?: '{"error":"Invalid size parameter"}',
-            );
-        }
-
-        // Authorise: resolved session OR valid signed-URL token.
-        if ($userId === null || $userId === '') {
-            $signer = \Phlix\Auth\SignedUrl::fromEnv();
-            $exp = $wr->get('exp');
-            $sig = $wr->get('sig');
-            $resourcePath = '/api/v1/artwork/' . $itemId . '?size=' . $size;
-            if (!$signer->verify($resourcePath, is_string($exp) ? $exp : null, is_string($sig) ? $sig : null)) {
-                return new WorkermanResponse(
-                    401,
-                    ['Content-Type' => 'text/plain; charset=utf-8'],
-                    'Unauthorized',
-                );
-            }
-        }
-
-        // Get artwork path from ArtworkStorage
-        /** @var ArtworkStorage $artworkStorage */
         $artworkStorage = $this->container->get(ArtworkStorage::class);
-        $artworkPath = $artworkStorage->variantPath($itemId, $size);
+        $avatarStorage = $this->container->get(AvatarStorage::class);
 
-        if ($artworkPath === null || !is_file($artworkPath) || !is_readable($artworkPath)) {
-            return new WorkermanResponse(
-                404,
-                ['Content-Type' => 'application/json; charset=utf-8'],
-                json_encode(['error' => 'Artwork not found']) ?: '{"error":"Artwork not found"}',
+        if (!$artworkStorage instanceof ArtworkStorage || !$avatarStorage instanceof AvatarStorage) {
+            // Loud, not silent: degrading to "no fast paths" would restore exactly
+            // the 404 S238 removed, and would do it invisibly.
+            throw new \RuntimeException(
+                'HttpHandler cannot serve artwork/avatars: the container did not yield the image storages.',
             );
         }
 
-        // Compute the validators for conditional caching (SV-2.5 pattern).
-        // ETag is the existing "<size>-<mtime>" hex tag (immutable-cache is kept);
-        // Last-Modified is derived from the same stat so both stay consistent.
-        $stat = stat($artworkPath);
-        $mtime = $stat !== false ? (int) $stat['mtime'] : 0;
-        $etag = $stat !== false ? sprintf('"%x-%x"', $stat['size'], $stat['mtime']) : '';
-        $lastModified = $mtime > 0 ? gmdate('D, d M Y H:i:s', $mtime) . ' GMT' : '';
-
-        // Honor conditional GET AFTER auth + size validation + the 404 existence
-        // check above — freshness is only ever decided for a request that would
-        // otherwise be served. If-None-Match (ETag) is authoritative; If-Modified-Since
-        // (Last-Modified) is the fallback for clients that don't send an ETag.
-        $ifNoneMatch = $wr->header('if-none-match');
-        $ifModifiedSince = $wr->header('if-modified-since');
-        $etagMatch = $etag !== '' && $ifNoneMatch === $etag;
-        $imsTs = is_string($ifModifiedSince) && $ifModifiedSince !== ''
-            ? strtotime($ifModifiedSince)
-            : false;
-        $notModified = ($ifNoneMatch === null || $ifNoneMatch === '')
-            && $mtime > 0
-            && $imsTs !== false
-            && $imsTs >= $mtime;
-
-        if ($etagMatch || $notModified) {
-            $headers304 = ['Cache-Control' => 'public, max-age=31536000, immutable'];
-            if ($etag !== '') {
-                $headers304['ETag'] = $etag;
-            }
-            if ($lastModified !== '') {
-                $headers304['Last-Modified'] = $lastModified;
-            }
-            // 304 carries the validators but NO body (do not attach the file).
-            return new WorkermanResponse(304, $headers304);
-        }
-
-        $headers = [
-            // The title logo (`size=logo`) is a transparency-preserving PNG; the
-            // poster variants are JPEG.
-            'Content-Type'  => $size === ArtworkStorage::LOGO_SIZE ? 'image/png' : 'image/jpeg',
-            'Cache-Control' => 'public, max-age=31536000, immutable',
-        ];
-        if ($etag !== '') {
-            $headers['ETag'] = $etag;
-        }
-        if ($lastModified !== '') {
-            $headers['Last-Modified'] = $lastModified;
-        }
-
-        $resp = new WorkermanResponse(200, $headers);
-        $resp->withFile($artworkPath);
-        return $resp;
-    }
-
-    /**
-     * Validate artwork size parameter against known variants.
-     */
-    private function isValidArtworkSize(string $size): bool
-    {
-        // 'original' and the transparency-safe title logo ('logo') are both valid.
-        if ($size === 'original' || $size === ArtworkStorage::LOGO_SIZE) {
-            return true;
-        }
-
-        if (preg_match('/^w\d+$/', $size) !== 1) {
-            return false;
-        }
-
-        // Validate against known widths
-        $widths = ArtworkStorage::WIDTHS;
-        $width = (int) substr($size, 1);
-        return in_array($width, $widths, true);
+        return $this->fastPaths = new PreRouterFastPaths($artworkStorage, $avatarStorage);
     }
 
     /**

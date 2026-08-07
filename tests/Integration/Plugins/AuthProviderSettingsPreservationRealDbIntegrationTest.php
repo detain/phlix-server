@@ -9,6 +9,8 @@ use Phlix\Common\Uuid;
 use Phlix\Plugins\Github\Controller\GithubAdminController;
 use Phlix\Plugins\Github\GithubOAuthProvider;
 use Phlix\Plugins\Github\Plugin as GithubPlugin;
+use Phlix\Plugins\Ldap\Controller\LdapAdminController;
+use Phlix\Plugins\Ldap\Plugin as LdapPlugin;
 use Phlix\Plugins\Oidc\Controller\OidcAdminController;
 use Phlix\Plugins\Oidc\Plugin as OidcPlugin;
 use Phlix\Plugins\Repository\PluginSettingsRepository;
@@ -42,6 +44,22 @@ use Workerman\MySQL\Connection;
  * Plus the neighbouring keep-on-blank rule for `client_secret`, which is the
  * closest analogue of the Trakt-token loss.
  *
+ * S117 extends the same guard to the THIRD bundled provider, LDAP, which S48 left
+ * on the old wholesale-replace shape. Four keys there, two of them
+ * security-relevant in their own right:
+ *
+ *   - `ssl` — a dropped `ssl` resets to `false`, **downgrading the directory bind
+ *     to plaintext**: the bind DN and its password then cross the network in the
+ *     clear. A silent TLS downgrade caused by omitting a field is the worst
+ *     failure mode in this file.
+ *   - `user_filter` — a dropped filter resets to the OpenLDAP-flavoured
+ *     `(uid={{username}})` default, which matches nothing on Active Directory, so
+ *     every LDAP login stops working.
+ *   - `port` (reset to 389 — the plaintext port, alongside the `ssl` downgrade)
+ *     and `admin_group`/`bind_dn` (silently emptied, dropping admin privileges).
+ *
+ * Plus `bind_pw`, LDAP's analogue of `client_secret`.
+ *
  * Every previous test of this behaviour ran against `InMemoryPluginSettingsRepository`.
  * This one drives the REAL controllers through the REAL
  * {@see PluginSettingsRepository} against REAL MySQL and then reads the row back
@@ -62,6 +80,8 @@ final class AuthProviderSettingsPreservationRealDbIntegrationTest extends TestCa
 
     private string $oidcKey = '';
 
+    private string $ldapKey = '';
+
     private string $pluginDir = '';
 
     protected function setUp(): void
@@ -79,6 +99,7 @@ final class AuthProviderSettingsPreservationRealDbIntegrationTest extends TestCa
         $token = substr(Uuid::v4(), 0, 8);
         $this->githubKey = 'itest-gh-' . $token;
         $this->oidcKey = 'itest-oidc-' . $token;
+        $this->ldapKey = 'itest-ldap-' . $token;
 
         // Empty scratch plugin dir: the trait must never fall back to (or write)
         // the real src/Plugins/*/settings.json.
@@ -86,13 +107,14 @@ final class AuthProviderSettingsPreservationRealDbIntegrationTest extends TestCa
         mkdir($this->pluginDir, 0755, true);
         GithubPlugin::setPluginDirectory($this->pluginDir);
         OidcPlugin::setPluginDirectory($this->pluginDir);
+        LdapPlugin::setPluginDirectory($this->pluginDir);
     }
 
     protected function tearDown(): void
     {
         $db = $this->db;
         if ($db !== null) {
-            foreach ([$this->githubKey, $this->oidcKey] as $key) {
+            foreach ([$this->githubKey, $this->oidcKey, $this->ldapKey] as $key) {
                 if ($key !== '') {
                     $db->query('DELETE FROM plugin_settings WHERE plugin_name = ?', [$key]);
                 }
@@ -104,6 +126,7 @@ final class AuthProviderSettingsPreservationRealDbIntegrationTest extends TestCa
         @rmdir($this->pluginDir);
         GithubPlugin::setPluginDirectory(dirname(__DIR__, 3) . '/src/Plugins/Github');
         OidcPlugin::setPluginDirectory(dirname(__DIR__, 3) . '/src/Plugins/Oidc');
+        LdapPlugin::setPluginDirectory(dirname(__DIR__, 3) . '/src/Plugins/Ldap');
 
         parent::tearDown();
     }
@@ -369,8 +392,244 @@ final class AuthProviderSettingsPreservationRealDbIntegrationTest extends TestCa
     }
 
     // -----------------------------------------------------------------------
+    // LDAP (S117) — the provider S48 left on the old shape. Its dropped keys do
+    // not just lose configuration: they downgrade the bind to PLAINTEXT.
+    // -----------------------------------------------------------------------
+
+    /**
+     * A partial LDAP save — only the two REQUIRED fields, exactly what a scripted
+     * `curl` that just wants to move the server to a new host would send — must
+     * leave `ssl`, `port`, `user_filter`, `bind_dn`, `admin_group` AND `bind_pw`
+     * intact in the `plugin_settings` row.
+     *
+     * The stored map here is a hardened Active Directory setup: LDAPS on 636 with
+     * an AD `sAMAccountName` filter. Every one of those is what the pre-S117
+     * wholesale replace threw away.
+     */
+    public function testPartialLdapSavePreservesSslPortFilterAndBindCredentials(): void
+    {
+        $repo = new PluginSettingsRepository($this->conn());
+        $repo->save($this->ldapKey, [
+            'host' => 'dc01.corp.example.org',
+            'port' => 636,
+            'ssl' => true,
+            'base_dn' => 'dc=corp,dc=example,dc=org',
+            'bind_dn' => 'cn=phlix-svc,ou=Service Accounts,dc=corp,dc=example,dc=org',
+            'bind_pw' => 'REAL-LDAP-BIND-PASSWORD',
+            'user_filter' => '(sAMAccountName={{username}})',
+            'admin_group' => 'cn=Phlix Admins,ou=Groups,dc=corp,dc=example,dc=org',
+        ]);
+
+        $controller = new LdapAdminController($this->ldapPlugin($repo));
+        $response = $controller->saveSettings($this->post([
+            'host' => 'dc02.corp.example.org',
+            'base_dn' => 'dc=corp,dc=example,dc=org',
+        ]), []);
+
+        $this->assertSame(200, $response->statusCode, (string) $response->body);
+
+        $row = $this->readRow($this->ldapKey);
+        $this->assertSame('dc02.corp.example.org', $row['host'] ?? null, 'the posted key must be updated');
+        $this->assertTrue(
+            $row['ssl'] ?? null,
+            'WHOLESALE-REPLACE REGRESSION: an absent ssl key was reset to false, SILENTLY DOWNGRADING THE '
+            . 'DIRECTORY BIND TO PLAINTEXT — the bind DN and its password would now cross the network in '
+            . 'the clear. Same shape that wiped live Trakt OAuth tokens on production.',
+        );
+        $this->assertSame(
+            636,
+            $row['port'] ?? null,
+            'WHOLESALE-REPLACE REGRESSION: an absent port was reset to 389, the plaintext port.',
+        );
+        $this->assertSame(
+            '(sAMAccountName={{username}})',
+            $row['user_filter'] ?? null,
+            'WHOLESALE-REPLACE REGRESSION: an absent user_filter was reset to the OpenLDAP default, which '
+            . 'matches nothing on Active Directory — every LDAP login stops working.',
+        );
+        $this->assertSame(
+            'cn=phlix-svc,ou=Service Accounts,dc=corp,dc=example,dc=org',
+            $row['bind_dn'] ?? null,
+            'WHOLESALE-REPLACE REGRESSION: an absent bind_dn was emptied.',
+        );
+        $this->assertSame(
+            'cn=Phlix Admins,ou=Groups,dc=corp,dc=example,dc=org',
+            $row['admin_group'] ?? null,
+            'WHOLESALE-REPLACE REGRESSION: an absent admin_group was emptied, dropping admin privileges '
+            . 'for every LDAP user.',
+        );
+        $this->assertSame(
+            'REAL-LDAP-BIND-PASSWORD',
+            $row['bind_pw'] ?? null,
+            'WHOLESALE-REPLACE REGRESSION: saving without re-entering the bind password destroyed it.',
+        );
+    }
+
+    /**
+     * The same guarantee across a WHOLE SEQUENCE of partial saves, which is what a
+     * real admin session looks like. A single-shot test can pass while the second
+     * save in a row loses the value it just preserved.
+     */
+    public function testRepeatedPartialLdapSavesNeverErodeTheStoredSettings(): void
+    {
+        $repo = new PluginSettingsRepository($this->conn());
+        $repo->save($this->ldapKey, [
+            'host' => 'dc00.corp.example.org',
+            'port' => 636,
+            'ssl' => true,
+            'base_dn' => 'dc=corp,dc=example,dc=org',
+            'bind_dn' => 'cn=phlix-svc,dc=corp,dc=example,dc=org',
+            'bind_pw' => 'bind-pw-0',
+            'user_filter' => '(sAMAccountName={{username}})',
+            'admin_group' => 'cn=Phlix Admins,dc=corp,dc=example,dc=org',
+        ]);
+        $controller = new LdapAdminController($this->ldapPlugin($repo));
+
+        foreach (['dc01', 'dc02', 'dc03'] as $host) {
+            $response = $controller->saveSettings($this->post([
+                'host' => $host . '.corp.example.org',
+                'base_dn' => 'dc=corp,dc=example,dc=org',
+            ]), []);
+            $this->assertSame(200, $response->statusCode, (string) $response->body);
+        }
+
+        $row = $this->readRow($this->ldapKey);
+        $this->assertSame('dc03.corp.example.org', $row['host'] ?? null);
+        $this->assertTrue($row['ssl'] ?? null, 'ssl must survive a SEQUENCE of partial saves, not just one');
+        $this->assertSame(636, $row['port'] ?? null);
+        $this->assertSame('(sAMAccountName={{username}})', $row['user_filter'] ?? null);
+        $this->assertSame('cn=phlix-svc,dc=corp,dc=example,dc=org', $row['bind_dn'] ?? null);
+        $this->assertSame('cn=Phlix Admins,dc=corp,dc=example,dc=org', $row['admin_group'] ?? null);
+        $this->assertSame('bind-pw-0', $row['bind_pw'] ?? null);
+    }
+
+    /**
+     * The other half of the contract, so "preserve" can never be implemented as
+     * "ignore": an EXPLICIT value really does change things. An operator moving a
+     * server back to plaintext must be able to, and clearing `bind_dn` /
+     * `admin_group` must stick — otherwise a permanent merge would be
+     * indistinguishable from the correct behaviour and a mistake could not be
+     * undone.
+     */
+    public function testExplicitValuesStillChangeLdapSettings(): void
+    {
+        $repo = new PluginSettingsRepository($this->conn());
+        $repo->save($this->ldapKey, [
+            'host' => 'dc01.corp.example.org',
+            'port' => 636,
+            'ssl' => true,
+            'base_dn' => 'dc=corp,dc=example,dc=org',
+            'bind_dn' => 'cn=phlix-svc,dc=corp,dc=example,dc=org',
+            'bind_pw' => 'bind-pw',
+            'user_filter' => '(sAMAccountName={{username}})',
+            'admin_group' => 'cn=Phlix Admins,dc=corp,dc=example,dc=org',
+        ]);
+
+        $controller = new LdapAdminController($this->ldapPlugin($repo));
+        $response = $controller->saveSettings($this->post([
+            'host' => 'dc01.corp.example.org',
+            'base_dn' => 'dc=corp,dc=example,dc=org',
+            'port' => 389,
+            'ssl' => false,
+            'bind_dn' => '',
+            'admin_group' => '   ',
+            'user_filter' => '  ',
+        ]), []);
+
+        $this->assertSame(200, $response->statusCode, (string) $response->body);
+        $row = $this->readRow($this->ldapKey);
+        $this->assertFalse($row['ssl'] ?? null, 'an explicit ssl=false must really disable TLS');
+        $this->assertSame(389, $row['port'] ?? null, 'an explicit port must really be stored');
+        $this->assertSame('', $row['bind_dn'] ?? null, 'an explicit empty bind_dn must clear it');
+        $this->assertSame('', $row['admin_group'] ?? null, 'an explicit blank admin_group must clear it');
+        $this->assertSame(
+            LdapAdminController::DEFAULT_USER_FILTER,
+            $row['user_filter'] ?? null,
+            'an explicitly blank user_filter must reset to the default — never stored as empty, which '
+            . 'would match nothing and lock every user out',
+        );
+        $this->assertSame('bind-pw', $row['bind_pw'] ?? null, 'clearing those must not touch the bind password');
+    }
+
+    /**
+     * A rejected save must not partially mutate the row: `missing_host`,
+     * `missing_base_dn` and `invalid_port` all have to write nothing at all.
+     *
+     * The port case matters most — it is the only rejection reached AFTER the
+     * absent-key merge has already computed a full replacement map, so an
+     * implementation that saved first and validated second would be caught here.
+     */
+    public function testARejectedLdapSaveLeavesTheStoredRowUntouched(): void
+    {
+        $repo = new PluginSettingsRepository($this->conn());
+        $stored = [
+            'host' => 'dc01.corp.example.org',
+            'port' => 636,
+            'ssl' => true,
+            'base_dn' => 'dc=corp,dc=example,dc=org',
+            'bind_dn' => 'cn=phlix-svc,dc=corp,dc=example,dc=org',
+            'bind_pw' => 'keep-bind-pw',
+            'user_filter' => '(sAMAccountName={{username}})',
+            'admin_group' => 'cn=Phlix Admins,dc=corp,dc=example,dc=org',
+        ];
+        $repo->save($this->ldapKey, $stored);
+
+        $controller = new LdapAdminController($this->ldapPlugin($repo));
+
+        $missingHost = $controller->saveSettings($this->post(['base_dn' => 'dc=x']), []);
+        $this->assertSame(400, $missingHost->statusCode);
+        $this->assertSame('missing_host', $this->errorCode($missingHost));
+
+        $missingBaseDn = $controller->saveSettings($this->post(['host' => 'dc09.corp.example.org']), []);
+        $this->assertSame(400, $missingBaseDn->statusCode);
+        $this->assertSame('missing_base_dn', $this->errorCode($missingBaseDn));
+
+        $badPort = $controller->saveSettings($this->post([
+            'host' => 'dc09.corp.example.org',
+            'base_dn' => 'dc=corp,dc=example,dc=org',
+            'port' => 70000,
+        ]), []);
+        $this->assertSame(400, $badPort->statusCode);
+        $this->assertSame('invalid_port', $this->errorCode($badPort));
+
+        $row = $this->readRow($this->ldapKey);
+        foreach ($stored as $key => $value) {
+            $this->assertSame($value, $row[$key] ?? null, "a rejected save must not mutate {$key}");
+        }
+    }
+
+    /**
+     * The absent-key merge must not INVENT settings on a first-ever save either:
+     * with no stored row, the documented defaults still apply.
+     */
+    public function testAFirstLdapSaveWithNoStoredRowUsesTheDocumentedDefaults(): void
+    {
+        $repo = new PluginSettingsRepository($this->conn());
+        $controller = new LdapAdminController($this->ldapPlugin($repo));
+
+        $response = $controller->saveSettings($this->post([
+            'host' => 'ldap.example.org',
+            'base_dn' => 'dc=example,dc=org',
+        ]), []);
+
+        $this->assertSame(200, $response->statusCode, (string) $response->body);
+        $row = $this->readRow($this->ldapKey);
+        $this->assertSame(LdapAdminController::DEFAULT_PORT, $row['port'] ?? null);
+        $this->assertFalse($row['ssl'] ?? null);
+        $this->assertSame(LdapAdminController::DEFAULT_USER_FILTER, $row['user_filter'] ?? null);
+        $this->assertSame('', $row['bind_dn'] ?? null);
+        $this->assertSame('', $row['admin_group'] ?? null);
+        $this->assertArrayNotHasKey('bind_pw', $row, 'no password was ever supplied, so none may be stored');
+    }
+
+    // -----------------------------------------------------------------------
     // helpers
     // -----------------------------------------------------------------------
+
+    private function ldapPlugin(PluginSettingsRepository $repo): LdapPlugin
+    {
+        return new LdapPlugin(new KeyedPluginSettingsStore($repo, $this->ldapKey));
+    }
 
     private function githubPlugin(PluginSettingsRepository $repo): GithubPlugin
     {

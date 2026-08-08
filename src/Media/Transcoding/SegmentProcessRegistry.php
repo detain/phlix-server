@@ -622,6 +622,21 @@ final class SegmentProcessRegistry
             if (file_exists($tmp)) {
                 @unlink($tmp);
             }
+            // S56: a CMAF encode writes three auxiliary temps BESIDE its
+            // `.part-<hex>` marker — `<tmp>.i` (init), `<tmp>.s0` (fragment) and
+            // `<tmp>.m3u8` (throwaway playlist). A signalled encode never runs its
+            // own cleanup, so without this they outlive the job until the LRU
+            // sweep removes the whole directory. `{$tmp}.*` is still keyed on THIS
+            // launcher's unique hex — it is not a `{$final}.part-*` family glob —
+            // so a concurrent sibling worker's live temps are untouched, which is
+            // the SV-4.2 re-review invariant above. On the MPEG-TS path no such
+            // sibling exists and the glob returns nothing.
+            $siblings = glob($tmp . '.*');
+            if (is_array($siblings)) {
+                foreach ($siblings as $sibling) {
+                    @unlink($sibling);
+                }
+            }
         };
     }
 

@@ -109,4 +109,33 @@ return [
      * `128`; normalised to ffmpeg's `<n>k` form and clamped to 32..512 kbps.
      */
     'audio_bitrate' => '128k',
+
+    /**
+     * On-demand segment container: `mpegts` (default) or `fmp4`.
+     *
+     * Addressed by the dotted setting key `transcoding.segment_format` and
+     * consumed by {@see \Phlix\Media\Transcoding\EncodeSettings::segmentFormat()}.
+     *
+     * ⚠ **`fmp4` IS NOT SERVABLE YET — leave this at `mpegts`.** S56 shipped
+     * segment PRODUCTION only: with `fmp4` a job writes `init-v{V}.m4s` +
+     * `seg-v{V}-NNNNN.m4s`, but the media playlists still advertise `.ts`
+     * (S57) and `HlsController::serveFile()` only routes `/^seg-v…\.ts$/`
+     * (S57/S59), so every segment request 404s. Turning this on today breaks
+     * playback for the affected jobs; it exists so S57–S60 can be built and
+     * verified against real fMP4 bytes.
+     *
+     * Deliberately absent from `phlix-shared/schemas/server-settings.schema.json`,
+     * which is what stops `AdminSettingsController` accepting it over the admin
+     * API — flipping it is an explicit edit of this file. S60 adds the schema
+     * entry together with the default flip (and the matching
+     * `TranscodeManager::JOB_KEY_VERSION` bump).
+     *
+     * The value is folded into `EncodeSettings::fingerprint()` and therefore
+     * into the transcode job reuse key, so a flip yields a fresh job id and a
+     * fresh job directory — `.ts` and `.m4s` segments can never co-mingle, and
+     * reverting the setting restores the original jobs.
+     *
+     * @since S56
+     */
+    'segment_format' => 'mpegts',
 ];

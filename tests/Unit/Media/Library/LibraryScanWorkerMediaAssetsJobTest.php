@@ -104,6 +104,13 @@ final class LibraryScanWorkerMediaAssetsJobTest extends TestCase
     {
         $progressWrites = [];
 
+        /**
+         * What the backfill saw, RECORDED rather than asserted — see the note on the
+         * closure below. Its initial value is the "never called at all" case, so the
+         * three outcomes are distinguishable in the failure message.
+         */
+        $sinkObserved = 'the backfill was never called';
+
         $jobs = $this->createMock(ScanJobRepository::class);
         $jobs->method('claimNext')->willReturn([
             'id' => 'job-1',
@@ -118,10 +125,27 @@ final class LibraryScanWorkerMediaAssetsJobTest extends TestCase
 
         $backfill = $this->createMock(MediaAssetBackfill::class);
         $backfill->method('reenqueueLibrary')->willReturnCallback(
-            static function (string $libraryId, ?callable $onProgress): MediaAssetBackfillResult {
-                self::assertNotNull($onProgress);
-                $onProgress(1, 2);
-                $onProgress(2, 2);
+            // ⚠ NOTHING IN THIS CLOSURE MAY ASSERT, and the reason is specific to
+            // this seam rather than a general style rule. The closure runs INSIDE
+            // `LibraryScanWorker::runOnce()`'s `try`, whose `catch (Throwable $e)`
+            // turns anything thrown here into `markFailed()` — including PHPUnit's
+            // own `ExpectationFailedException`. S180's prober measured it: a
+            // tripwire planted on the `self::assertNotNull($onProgress)` that used
+            // to sit here took the test red on the `assertSame($progressWrites)`
+            // below instead, and its own message never surfaced (verdict DEGRADED).
+            // The assertion could not fail its own test, and its failure would have
+            // been reported as an unrelated array diff. RECORD here, assert after
+            // `runOnce()` has returned.
+            static function (string $libraryId, ?callable $onProgress) use (&$sinkObserved): MediaAssetBackfillResult {
+                $sinkObserved = $onProgress === null
+                    ? 'the backfill was called with a NULL progress sink'
+                    : 'the backfill was called with a progress sink';
+
+                if ($onProgress !== null) {
+                    $onProgress(1, 2);
+                    $onProgress(2, 2);
+                }
+
                 return new MediaAssetBackfillResult(2, 2);
             }
         );
@@ -135,7 +159,14 @@ final class LibraryScanWorkerMediaAssetsJobTest extends TestCase
         );
         $worker->runOnce();
 
-        // Recorded inside the callback, asserted here — outside it.
+        // Both recorded inside callbacks, both asserted HERE — outside them, after
+        // the code under test has returned, where a failure decides the test.
+        $this->assertSame(
+            'the backfill was called with a progress sink',
+            $sinkObserved,
+            'the worker must hand the backfill a progress sink; without one the job '
+            . 'runs blind and scan-status shows no percentage for `media_assets`'
+        );
         $this->assertSame(
             [
                 ['job-1', ['items_found' => 2, 'items_updated' => 1]],

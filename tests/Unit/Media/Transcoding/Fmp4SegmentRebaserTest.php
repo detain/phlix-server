@@ -189,13 +189,22 @@ final class Fmp4SegmentRebaserTest extends TestCase
         $this->assertSame($segment, $this->rebased($segment, [1 => self::VIDEO_TIMESCALE], 0.0));
     }
 
-    public function test_the_offset_is_rounded_to_whole_ticks(): void
+    /**
+     * ROUNDED, not truncated. The two inputs below are chosen so that `round()`
+     * and an `(int)` cast disagree — 0.00006 s × 12288 = 0.73728 rounds to 1 and
+     * truncates to 0, and 0.00012 s × 12288 = 1.47456 rounds to 1 either way —
+     * so the pair distinguishes the two implementations instead of agreeing
+     * with both.
+     */
+    public function test_the_offset_is_rounded_to_whole_ticks_not_truncated(): void
     {
         $segment = self::moof(self::traf(1, self::tfdt(1, 0)));
 
-        // 6.5 s × 12288 = 79872 exactly; 0.0001 s × 12288 = 1.2288 → 1.
+        $this->assertSame(0, (int) (0.00006 * 12288), 'control: an (int) cast would truncate this to zero');
+        $this->assertSame([1], $this->tfdtValues($this->rebased($segment, [1 => 12288], 0.00006)));
+        $this->assertSame([1], $this->tfdtValues($this->rebased($segment, [1 => 12288], 0.00012)));
+        // 6.5 s × 12288 = 79872 exactly — an ordinary whole-tick case.
         $this->assertSame([79872], $this->tfdtValues($this->rebased($segment, [1 => 12288], 6.5)));
-        $this->assertSame([1], $this->tfdtValues($this->rebased($segment, [1 => 12288], 0.0001)));
     }
 
     public function test_a_version_0_tfdt_is_rebased_in_its_32_bit_field(): void

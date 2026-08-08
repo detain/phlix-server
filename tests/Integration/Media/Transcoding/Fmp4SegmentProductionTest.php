@@ -84,6 +84,41 @@ final class Fmp4SegmentProductionTest extends TestCase
         $this->assertSame('aac', $streams[1]['codec_name'] ?? null);
     }
 
+    /**
+     * One fragment per encode, covering the WHOLE requested window.
+     *
+     * The HLS muxer has no "never split" switch — the fMP4 branch says it with
+     * an `-hls_time` far above any segment length. If that ever regressed, the
+     * muxer would cut the 6 s window into several fragments, the publish chain
+     * would pick up only the first (`…s0`), and every segment would silently
+     * become a fraction of its advertised duration: a playlist whose `#EXTINF`
+     * says 6 s served by a 1 s fragment, i.e. a stall at every boundary.
+     * Nothing about the box structure or the start time would look wrong.
+     */
+    public function testOneEncodeYieldsOneFragmentCoveringTheWholeSegmentWindow(): void
+    {
+        $clip = $this->makeH264AacClip();
+
+        // Segment 0, so `format.duration` (an END time on the rebased timeline)
+        // is the fragment's LENGTH and nothing else.
+        $segment = $this->produce($clip, 'fmp4', '720p', 0);
+        $init = dirname($segment) . '/init-v720p.m4s';
+
+        $types = $this->topLevelBoxTypes($segment);
+        $this->assertSame(1, count(array_keys($types, 'moof', true)), 'exactly one fragment per encode');
+
+        $joined = $this->root . '/dur-' . bin2hex(random_bytes(3)) . '.mp4';
+        file_put_contents($joined, (string) file_get_contents($init) . (string) file_get_contents($segment));
+        $format = $this->ffprobeJson(['-show_format', $joined]);
+
+        $this->assertEqualsWithDelta(
+            6.0,
+            (float) ($format['format']['duration'] ?? 0.0),
+            0.35,
+            'the fragment must cover the full segment window, not just its first GOP'
+        );
+    }
+
     // ─────────────────────────────────────────────────────────────────
     // AC1 — HEVC / AC-3 5.1
     // ─────────────────────────────────────────────────────────────────

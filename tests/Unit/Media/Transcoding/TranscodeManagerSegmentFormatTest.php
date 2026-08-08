@@ -6,6 +6,8 @@ namespace Phlix\Tests\Unit\Media\Transcoding;
 
 use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
+use Phlix\Admin\SettingsRepository;
+use Phlix\Media\Transcoding\EncodeSettings;
 use Phlix\Media\Transcoding\FfmpegRunner;
 use Phlix\Media\Transcoding\SegmentBusyException;
 use Phlix\Media\Transcoding\TranscodeManager;
@@ -353,6 +355,158 @@ final class TranscodeManagerSegmentFormatTest extends TestCase
 
         $this->assertSame("{$dir}/seg-00000.ts", $path);
         $this->assertArrayNotHasKey('init_file', $seen['params']);
+    }
+
+    // ─────────────────────────────────────────────────────────────────
+    // job creation — where the container is STAMPED
+    // ─────────────────────────────────────────────────────────────────
+
+    /**
+     * Everything above reads the container back out of a job row. This is the
+     * other end: `computeSegmentParams()` is the single place that WRITES it,
+     * and it only writes it when the setting says so.
+     *
+     * The flag-off case asserts the key is absent rather than merely `mpegts`,
+     * because a job whose persisted `segment_params` JSON gained a key would no
+     * longer be byte-identical to a pre-S56 job.
+     */
+    public function test_job_creation_stamps_the_container_only_when_the_setting_is_fmp4(): void
+    {
+        $offParams = $this->createdJobSegmentParams('mpegts');
+        $onParams = $this->createdJobSegmentParams('fmp4');
+
+        $this->assertSame('libx264', $offParams['video_codec'] ?? null, 'control: the INSERT was captured');
+        $this->assertArrayNotHasKey('segment_format', $offParams);
+
+        $this->assertSame('libx264', $onParams['video_codec'] ?? null);
+        $this->assertSame('fmp4', $onParams['segment_format'] ?? null);
+    }
+
+    /**
+     * Runs a real `ensureHlsJob()` with the given setting and returns the
+     * `segment_params` JSON it persisted.
+     *
+     * @return array<string, mixed>
+     */
+    private function createdJobSegmentParams(string $format): array
+    {
+        $captured = [];
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(
+            static function (string $sql, ?array $params = null) use (&$captured): array {
+                $captured[] = [$sql, $params ?? []];
+                if (str_contains($sql, 'key_hash = ?') && str_contains($sql, 'IN (')) {
+                    return [];
+                }
+                if (str_contains($sql, 'COUNT(*)')) {
+                    return [['c' => 0]];
+                }
+                if (str_contains($sql, 'FROM media_items')) {
+                    return [['path' => '/m.mkv']];
+                }
+                return [];
+            }
+        );
+
+        $ff = $this->createMock(FfmpegRunner::class);
+        $ff->method('probe')->willReturn([
+            'streams' => [
+                ['codec_type' => 'video', 'codec_name' => 'h264', 'width' => 1280, 'height' => 720,
+                    'pix_fmt' => 'yuv420p', 'profile' => 'High'],
+                ['codec_type' => 'audio', 'codec_name' => 'aac', 'channels' => 2],
+            ],
+            'format' => ['duration' => '600.0'],
+        ]);
+        $ff->method('extractColorMetadata')->willReturn([
+            'color_space' => 'bt709',
+            'color_transfer' => 'bt709',
+            'color_primaries' => 'bt709',
+            'pix_fmt' => 'yuv420p',
+            'bit_depth' => 8,
+            'is_hdr' => false,
+        ]);
+
+        $repo = $this->createMock(SettingsRepository::class);
+        $repo->method('getEffective')->willReturnCallback(
+            /** @return mixed */
+            static fn (string $key) => $key === EncodeSettings::SEGMENT_FORMAT_KEY ? $format : null
+        );
+
+        $manager = new TranscodeManager(
+            $db,
+            $ff,
+            $this->segmentDir,
+            null,
+            6,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            50,
+            null,
+            null,
+            null,
+            new EncodeSettings($repo)
+        );
+        $manager->ensureHlsJob('media-1', 'web');
+
+        foreach ($captured as [$sql, $params]) {
+            if (!str_contains($sql, 'INSERT INTO transcode_jobs')) {
+                continue;
+            }
+            // Placeholder 13 is segment_params — see TranscodeManagerTest::capturedJobInsert().
+            $decoded = is_string($params[13] ?? null) ? json_decode($params[13], true) : null;
+            $this->assertIsArray($decoded);
+
+            return $decoded;
+        }
+        $this->fail('no transcode_jobs INSERT was captured');
+    }
+
+    // ─────────────────────────────────────────────────────────────────
+    // progress reporting
+    // ─────────────────────────────────────────────────────────────────
+
+    /**
+     * `countSegments()` is what feeds a job's reported progress. It globbed
+     * `chunk-*.m4s` and `seg-*.ts` only, so on the CMAF branch every flagged
+     * job would have reported ZERO produced segments forever.
+     *
+     * The `.part-` temp and the init are both in the fixture deliberately: a
+     * half-written segment must not count, and the init is one shared header
+     * per rendition rather than a media segment — counting it would overstate
+     * progress by the size of the ladder.
+     */
+    public function test_produced_segments_are_counted_in_both_containers(): void
+    {
+        $dir = $this->jobDir('counted');
+        foreach ([
+            'seg-v720p-00000.m4s',
+            'seg-v720p-00001.m4s',
+            'seg-v1080p-00000.m4s',
+            'seg-00000.ts',
+            'chunk-0.m4s',
+            'init-v720p.m4s',
+            'seg-v720p-00002.m4s.part-deadbeef',
+        ] as $name) {
+            file_put_contents("{$dir}/{$name}", 'x');
+        }
+
+        $count = $this->countSegments($dir);
+
+        $this->assertSame(5, $count, 'three .m4s + one .ts + one legacy chunk; not the init, not the temp');
+    }
+
+    private function countSegments(string $dir): int
+    {
+        $method = new \ReflectionMethod(TranscodeManager::class, 'countSegments');
+        $manager = $this->manager($this->mockDb([]), $this->createMock(FfmpegRunner::class));
+        $value = $method->invoke($manager, $dir);
+        $this->assertIsInt($value);
+
+        return $value;
     }
 
     // ─────────────────────────────────────────────────────────────────

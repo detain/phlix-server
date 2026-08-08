@@ -117,12 +117,12 @@ return [
      * consumed by {@see \Phlix\Media\Transcoding\EncodeSettings::segmentFormat()}.
      *
      * ⚠ **`fmp4` IS NOT SERVABLE YET — leave this at `mpegts`.** S56 shipped
-     * segment PRODUCTION only: with `fmp4` a job writes `init-v{V}.m4s` +
-     * `seg-v{V}-NNNNN.m4s`, but the media playlists still advertise `.ts`
-     * (S57) and `HlsController::serveFile()` only routes `/^seg-v…\.ts$/`
-     * (S57/S59), so every segment request 404s. Turning this on today breaks
-     * playback for the affected jobs; it exists so S57–S60 can be built and
-     * verified against real fMP4 bytes.
+     * segment PRODUCTION and S57 the matching playlists (`#EXT-X-MAP` +
+     * `seg-v{V}-NNNNN.m4s` at `#EXT-X-VERSION:7`), but
+     * `HlsController::serveFile()` still routes only `/^seg-v…\.ts$/` (S59),
+     * so every segment request 404s and the init segment is never even
+     * produced. Turning this on today breaks playback for the affected jobs;
+     * it exists so S57–S60 can be built and verified against real fMP4 bytes.
      *
      * Deliberately absent from `phlix-shared/schemas/server-settings.schema.json`,
      * which is what stops `AdminSettingsController` accepting it over the admin

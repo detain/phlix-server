@@ -688,7 +688,15 @@ class TranscodeManager
             $height,
             $bandwidth,
             $streamVariants,
-            $audioTracks
+            $audioTracks,
+            // S57: the container from the params THIS job is being created with —
+            // the same array that is about to be persisted as `segment_params` and
+            // read back per segment by segmentFormatOf(). Reading
+            // EncodeSettings::segmentFormat() again here would open a window in
+            // which an admin flipping the setting between computeSegmentParams()
+            // and this line wrote playlists for a container the job will never
+            // produce.
+            self::segmentFormatOf($segParams)
         );
 
         // Detect embedded TEXT subtitle tracks (ASS/SRT/mov_text — bitmap PGS/VobSub
@@ -2346,19 +2354,49 @@ class TranscodeManager
      */
     private function applySegmentFormat(array $row, array $segParams): array
     {
-        $raw = $row['segment_params'] ?? null;
-        if (!is_string($raw) || $raw === '') {
-            return $segParams;
-        }
-        $decoded = json_decode($raw, true);
-        if (!is_array($decoded)) {
-            return $segParams;
-        }
-        if (($decoded['segment_format'] ?? null) === EncodeSettings::FORMAT_FMP4) {
+        if (self::segmentFormatOfRow($row) === EncodeSettings::FORMAT_FMP4) {
             $segParams['segment_format'] = EncodeSettings::FORMAT_FMP4;
         }
 
         return $segParams;
+    }
+
+    /**
+     * The container a JOB was created with, read straight off its
+     * `transcode_jobs` row.
+     *
+     * The row-level peer of {@see segmentFormatOf()}, for the two callers that
+     * hold a row rather than a resolved `$segParams` array — S57's playlist
+     * regeneration ({@see ensurePlaylistRegenerated()}) and
+     * {@see applySegmentFormat()}. Both must agree with the per-segment
+     * resolution or a regenerated playlist would advertise one container while
+     * the producer wrote the other, so they share this ONE decode of the
+     * persisted JSON rather than each parsing it their own way.
+     *
+     * Anything unparseable degrades to the shipped MPEG-TS default, matching
+     * {@see segmentExtension()}: a corrupt `segment_params` can never invent a
+     * third naming scheme.
+     *
+     * @param array<string, mixed> $row The transcode_jobs row.
+     *
+     * @return string `mpegts` or `fmp4`.
+     *
+     * @since S57
+     */
+    private static function segmentFormatOfRow(array $row): string
+    {
+        $raw = $row['segment_params'] ?? null;
+        if (!is_string($raw) || $raw === '') {
+            return EncodeSettings::DEFAULT_SEGMENT_FORMAT;
+        }
+        $decoded = json_decode($raw, true);
+        if (!is_array($decoded)) {
+            return EncodeSettings::DEFAULT_SEGMENT_FORMAT;
+        }
+
+        // The VALUE is lifted here; the DECISION stays in segmentFormatOf(), so
+        // there is still exactly one place that says what counts as `fmp4`.
+        return self::segmentFormatOf(['segment_format' => $decoded['segment_format'] ?? null]);
     }
 
     /**
@@ -2513,6 +2551,21 @@ class TranscodeManager
      * (`media_a0.m3u8` = first audio stream), and ties every video variant to
      * the shared group via `AUDIO="aud"` on each `#EXT-X-STREAM-INF`.
      *
+     * fMP4 path (S57): `$segmentFormat` selects the container flavour, and the
+     * branch is INSIDE the builders rather than at a call site — this method has
+     * two callers (job creation and {@see ensurePlaylistRegenerated()}), and a
+     * regeneration that emitted the other flavour would 404 an evicted job for
+     * the rest of its life. The container is always the JOB's
+     * ({@see segmentFormatOf()} / {@see segmentFormatOfRow()}), never
+     * {@see EncodeSettings::segmentFormat()}: reading the live setting here
+     * would let an admin flipping it mid-playback rewrite a running job's
+     * playlists to name segments it will never produce.
+     *
+     * ⚠ With `fmp4` the resulting playlists name files the HLS serve path still
+     * rejects — `HlsController::serveFile()` matches only `\.ts$` — so a flagged
+     * job is playlist-correct and segment-correct but still 404s end to end
+     * until S59 routes `.m4s`. See {@see buildMediaPlaylist()}.
+     *
      * @param string                           $dir         Job directory.
      * @param float                            $duration    Source duration in seconds.
      * @param int                              $segSeconds  Target segment (EXTINF) length in seconds.
@@ -2524,6 +2577,9 @@ class TranscodeManager
      *     index:int, stream_index:int, language:string, label:string, default:bool, codec:string
      * }>|null $audioTracks Audio-track descriptors ({@see buildAudioTrackDescriptors()}),
      *     or null when the source has only one audio track.
+     * @param string $segmentFormat The JOB's container ({@see segmentFormatOf()} /
+     *     {@see segmentFormatOfRow()}) — NEVER {@see EncodeSettings::segmentFormat()},
+     *     see the S57 note above.
      */
     private function writeVodPlaylists(
         string $dir,
@@ -2533,12 +2589,19 @@ class TranscodeManager
         ?int $height,
         ?int $bandwidth,
         ?array $variants = null,
-        ?array $audioTracks = null
+        ?array $audioTracks = null,
+        string $segmentFormat = EncodeSettings::DEFAULT_SEGMENT_FORMAT
     ): void {
         if ($variants === null) {
             // Legacy single-variant path (BC for pre-A5 jobs / callers).
-            file_put_contents("{$dir}/master.m3u8", $this->buildMasterPlaylist($width, $height, $bandwidth));
-            file_put_contents("{$dir}/media_0.m3u8", $this->buildMediaPlaylist($duration, $segSeconds, null));
+            file_put_contents(
+                "{$dir}/master.m3u8",
+                $this->buildMasterPlaylist($width, $height, $bandwidth, $segmentFormat)
+            );
+            file_put_contents(
+                "{$dir}/media_0.m3u8",
+                $this->buildMediaPlaylist($duration, $segSeconds, null, $segmentFormat)
+            );
             return;
         }
 
@@ -2557,7 +2620,8 @@ class TranscodeManager
 
         $masterPlaylist = $this->buildMultiVariantMaster(
             $switchableVariants,
-            $hasMultiAudio ? $audioTracks : null
+            $hasMultiAudio ? $audioTracks : null,
+            $segmentFormat
         );
         file_put_contents("{$dir}/master.m3u8", $masterPlaylist);
 
@@ -2567,7 +2631,7 @@ class TranscodeManager
                 $audioId = 'a' . $track['index'];
                 file_put_contents(
                     "{$dir}/media_{$audioId}.m3u8",
-                    $this->buildAudioMediaPlaylist($duration, $segSeconds, $audioId)
+                    $this->buildAudioMediaPlaylist($duration, $segSeconds, $audioId, $segmentFormat)
                 );
             }
         }
@@ -2576,9 +2640,38 @@ class TranscodeManager
         foreach ($variants as $variant) {
             file_put_contents(
                 "{$dir}/media_v{$variant->id}.m3u8",
-                $this->buildMediaPlaylist($duration, $segSeconds, $variant->id)
+                $this->buildMediaPlaylist($duration, $segSeconds, $variant->id, $segmentFormat)
             );
         }
+    }
+
+    /**
+     * The `#EXT-X-VERSION` a playlist of this container must declare.
+     *
+     * `EXT-X-MAP` in a Media Playlist that contains Media Segments requires
+     * protocol version **6** (RFC 8216 §7 / §4.3.2.5), so the shipped `3` is
+     * illegal the moment the fMP4 branch emits one — a compliant client is
+     * entitled to reject the whole playlist. **7** rather than the bare minimum
+     * 6 because that is Apple's HLS Authoring Specification floor for fMP4
+     * (§2.1: "EXT-X-VERSION MUST be 7 or higher" for fragmented MP4), and
+     * every client that can play CMAF at all supports it.
+     *
+     * The Master Playlist is bumped in lockstep even though it carries no
+     * `EXT-X-MAP` itself: a Master declaring a LOWER version than the Media
+     * Playlists it references would tell a client the presentation is
+     * compatible with a protocol version its own media playlists are not.
+     *
+     * MPEG-TS keeps `3` exactly — that is the whole flag-off guarantee. A
+     * version bump alone is a fatal, silent regression for old clients, so it
+     * must never leak across the branch.
+     *
+     * @param string $format `mpegts` or `fmp4`.
+     *
+     * @since S57
+     */
+    private static function playlistVersion(string $format): int
+    {
+        return $format === EncodeSettings::FORMAT_FMP4 ? 7 : 3;
     }
 
     /**
@@ -2643,14 +2736,23 @@ class TranscodeManager
     /**
      * Builds the single-variant HLS master playlist text (legacy / pre-A5 jobs).
      *
+     * S57: the CODECS string is container-independent (`avc1.*`/`mp4a.40.2`
+     * name the codecs, not the packaging), so only the version moves —
+     * see {@see playlistVersion()}.
+     *
      * @param int|null $width     Variant pixel width, or null to omit RESOLUTION.
      * @param int|null $height    Variant pixel height, or null to omit RESOLUTION.
      * @param int|null $bandwidth Nominal variant bandwidth (bits/sec).
+     * @param string   $format    The job's container (`mpegts` | `fmp4`).
      *
      * @return string Master playlist text.
      */
-    private function buildMasterPlaylist(?int $width, ?int $height, ?int $bandwidth): string
-    {
+    private function buildMasterPlaylist(
+        ?int $width,
+        ?int $height,
+        ?int $bandwidth,
+        string $format = EncodeSettings::DEFAULT_SEGMENT_FORMAT
+    ): string {
         // avc1.640029 = H.264 High@4.1 (the segment encode target); mp4a.40.2 = AAC-LC.
         $attrs = 'BANDWIDTH=' . ($bandwidth !== null && $bandwidth > 0 ? $bandwidth : 3000000);
         if ($width !== null && $height !== null && $width > 0 && $height > 0) {
@@ -2659,7 +2761,7 @@ class TranscodeManager
         $attrs .= ',CODECS="avc1.640029,mp4a.40.2"';
 
         return "#EXTM3U\n"
-            . "#EXT-X-VERSION:3\n"
+            . '#EXT-X-VERSION:' . self::playlistVersion($format) . "\n"
             . "#EXT-X-STREAM-INF:{$attrs}\n"
             . "media_0.m3u8\n";
     }
@@ -2687,12 +2789,19 @@ class TranscodeManager
      *     index:int, stream_index?:int, language:string, label:string, default:bool, codec:string
      * }>|null $audioTracks Audio-track descriptors ({@see buildAudioTrackDescriptors()}),
      *     or null for single-audio.
+     * @param string $format The job's container (`mpegts` | `fmp4`) — S57. Only the
+     *     `#EXT-X-VERSION` moves: BANDWIDTH/RESOLUTION/CODECS and every `#EXT-X-MEDIA`
+     *     URI are identical in both containers, which is what lets the client code
+     *     (`phlix-ui`'s quality menu, which resolves levels by height) stay untouched.
      *
      * @return string Master playlist text.
      */
-    private function buildMultiVariantMaster(array $variants, ?array $audioTracks = null): string
-    {
-        $lines = ['#EXTM3U', '#EXT-X-VERSION:3'];
+    private function buildMultiVariantMaster(
+        array $variants,
+        ?array $audioTracks = null,
+        string $format = EncodeSettings::DEFAULT_SEGMENT_FORMAT
+    ): string {
+        $lines = ['#EXTM3U', '#EXT-X-VERSION:' . self::playlistVersion($format)];
 
         // P3B-S3: one shared audio group, one rendition per track, before the
         // video stream infs.
@@ -2767,26 +2876,54 @@ class TranscodeManager
      * identical for every variant — only the segment FILENAME prefix differs — so
      * hls.js can ABR-switch between variants at any boundary.
      *
+     * S57 — the fMP4 flavour. When the job's container is `fmp4` the playlist
+     * additionally carries ONE `#EXT-X-MAP:URI="init-v{id}.m4s"`, placed after
+     * the header tags and BEFORE the first `#EXTINF`: per RFC 8216 §4.3.2.5 an
+     * `EXT-X-MAP` applies to every Media Segment that follows it, so exactly one
+     * is needed for a VOD playlist whose segments all share an init. The init is
+     * byte-identical for every index of a variant (S56 dropped
+     * `-output_ts_offset` on the CMAF branch precisely so that would hold), so
+     * one URI per playlist is correct and not merely convenient. The segment
+     * names change extension only ({@see segmentFileName()}); the TIMELINE —
+     * count, `#EXTINF` values, `#EXT-X-TARGETDURATION` — is byte-identical
+     * across containers AND across variants, which is what keeps ABR switching
+     * working and what S58's shared `SegmentTemplate@duration` will rely on.
+     *
+     * ⚠ **The segments this playlist names are not servable yet.**
+     * `HlsController::serveFile()` routes only `/^seg-v([a-z0-9]+)-(\d{1,9})\.ts$/`
+     * (and its `seg-a…`/`seg-…` peers), so with the flag on every `.m4s` request
+     * falls through to the static lookup and 404s, and `init-v{id}.m4s` is never
+     * produced because nothing calls `ensureSegment()`. That wiring is S59. This
+     * step makes the playlist correct; it does not make the flag usable.
+     *
      * @param float       $duration   Source duration in seconds.
      * @param int         $segSeconds Target segment length in seconds.
      * @param string|null $variantId  Rendition id for `seg-v{id}-NNNNN.ts`, or null
      *                                for the legacy unprefixed `seg-NNNNN.ts`.
+     * @param string      $format     The job's container (`mpegts` | `fmp4`).
      *
      * @return string Media playlist text.
      */
-    private function buildMediaPlaylist(float $duration, int $segSeconds, ?string $variantId): string
-    {
+    private function buildMediaPlaylist(
+        float $duration,
+        int $segSeconds,
+        ?string $variantId,
+        string $format = EncodeSettings::DEFAULT_SEGMENT_FORMAT
+    ): string {
         $segSeconds = $segSeconds > 0 ? $segSeconds : 6;
         $count = (int) ceil($duration / $segSeconds);
 
         $lines = [
             '#EXTM3U',
-            '#EXT-X-VERSION:3',
+            '#EXT-X-VERSION:' . self::playlistVersion($format),
             '#EXT-X-PLAYLIST-TYPE:VOD',
             '#EXT-X-TARGETDURATION:' . $segSeconds,
             '#EXT-X-MEDIA-SEQUENCE:0',
             '#EXT-X-INDEPENDENT-SEGMENTS',
         ];
+        if ($format === EncodeSettings::FORMAT_FMP4) {
+            $lines[] = '#EXT-X-MAP:URI="' . self::initSegmentFileName($variantId) . '"';
+        }
         for ($i = 0; $i < $count; $i++) {
             $start = $i * $segSeconds;
             $len = min((float) $segSeconds, $duration - $start);
@@ -2794,7 +2931,7 @@ class TranscodeManager
                 break;
             }
             $lines[] = '#EXTINF:' . number_format($len, 6, '.', '') . ',';
-            $lines[] = self::segmentFileName($variantId, $i);
+            $lines[] = self::segmentFileName($variantId, $i, null, $format);
         }
         $lines[] = '#EXT-X-ENDLIST';
 
@@ -2807,25 +2944,39 @@ class TranscodeManager
      * Used by P3B-S3 for per-language audio tracks. The playlist references
      * audio segments via {@see self::segmentFileName()} with the audio group id.
      *
+     * S57: on the fMP4 branch the audio rendition gets its OWN
+     * `#EXT-X-MAP:URI="init-a{N}.m4s"` — the audio-only encode is a separate
+     * ffmpeg run producing a separate init, so pointing an audio playlist at a
+     * video variant's init (or omitting the tag because the video playlist
+     * already carries one) yields an unplayable audio group.
+     *
      * @param float  $duration   Source duration in seconds.
      * @param int    $segSeconds Target segment length in seconds.
      * @param string $audioId    Audio group identifier, e.g. `a0`, `a1`.
+     * @param string $format     The job's container (`mpegts` | `fmp4`).
      *
      * @return string Audio media playlist text.
      */
-    private function buildAudioMediaPlaylist(float $duration, int $segSeconds, string $audioId): string
-    {
+    private function buildAudioMediaPlaylist(
+        float $duration,
+        int $segSeconds,
+        string $audioId,
+        string $format = EncodeSettings::DEFAULT_SEGMENT_FORMAT
+    ): string {
         $segSeconds = $segSeconds > 0 ? $segSeconds : 6;
         $count = (int) ceil($duration / $segSeconds);
 
         $lines = [
             '#EXTM3U',
-            '#EXT-X-VERSION:3',
+            '#EXT-X-VERSION:' . self::playlistVersion($format),
             '#EXT-X-PLAYLIST-TYPE:VOD',
             '#EXT-X-TARGETDURATION:' . $segSeconds,
             '#EXT-X-MEDIA-SEQUENCE:0',
             '#EXT-X-INDEPENDENT-SEGMENTS',
         ];
+        if ($format === EncodeSettings::FORMAT_FMP4) {
+            $lines[] = '#EXT-X-MAP:URI="' . self::initSegmentFileName(null, $audioId) . '"';
+        }
         for ($i = 0; $i < $count; $i++) {
             $start = $i * $segSeconds;
             $len = min((float) $segSeconds, $duration - $start);
@@ -2834,7 +2985,7 @@ class TranscodeManager
             }
             $lines[] = '#EXTINF:' . number_format($len, 6, '.', '') . ',';
             // Audio-only segments: null variant + audio group id → seg-a{N}-NNNNN.ts
-            $lines[] = self::segmentFileName(null, $i, $audioId);
+            $lines[] = self::segmentFileName(null, $i, $audioId, $format);
         }
         $lines[] = '#EXT-X-ENDLIST';
 
@@ -4245,6 +4396,12 @@ class TranscodeManager
         }
 
         $variantsRaw = $row['variants'] ?? null;
+        // S57: an evicted job dir must regenerate the playlists of the container
+        // the job was CREATED with, whatever the live setting says now. Both
+        // branches below take it from this one read of the persisted row, so a
+        // regenerated playlist can never disagree with the segments
+        // segmentFormatOf() will go on producing.
+        $segmentFormat = self::segmentFormatOfRow($row);
         $duration = is_numeric($row['duration_seconds'] ?? null) ? (float) $row['duration_seconds'] : 0.0;
         $segSeconds = is_numeric($row['segment_seconds'] ?? null) ? (int) $row['segment_seconds'] :
             $this->segmentSeconds;
@@ -4356,7 +4513,8 @@ class TranscodeManager
                 $height,
                 $bandwidth,
                 $variants,
-                $audioTracks
+                $audioTracks,
+                $segmentFormat
             );
 
             return is_file("{$dir}/master.m3u8");
@@ -4376,7 +4534,17 @@ class TranscodeManager
         $height = is_numeric($segParams['height'] ?? null) ? (int) $segParams['height'] : null;
         $bandwidth = is_numeric($segParams['bandwidth'] ?? null) ? (int) $segParams['bandwidth'] : null;
 
-        $this->writeVodPlaylists($dir, $duration, $segSeconds, $width, $height, $bandwidth, null, null);
+        $this->writeVodPlaylists(
+            $dir,
+            $duration,
+            $segSeconds,
+            $width,
+            $height,
+            $bandwidth,
+            null,
+            null,
+            $segmentFormat
+        );
 
         return is_file("{$dir}/master.m3u8");
     }

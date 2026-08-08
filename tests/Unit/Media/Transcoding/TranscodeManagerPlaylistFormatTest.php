@@ -466,6 +466,60 @@ final class TranscodeManagerPlaylistFormatTest extends TestCase
         $media = (string) file_get_contents("{$dir}/media_0.m3u8");
         $this->assertStringContainsString('#EXT-X-MAP:URI="init.m4s"' . "\n", $media);
         $this->assertStringContainsString("seg-00000.m4s\n", $media);
+
+        // The legacy MASTER is a separate `buildMasterPlaylist()` hand-off, and
+        // was the one place `$segmentFormat` could be dropped without any other
+        // case noticing: a master at version 3 referencing a media playlist at
+        // version 7 is precisely the mismatch playlistVersion() exists to
+        // prevent. (Found by mutation M18 — it survived until this line.)
+        $this->assertStringContainsString(
+            "#EXT-X-VERSION:7\n",
+            (string) file_get_contents("{$dir}/master.m3u8")
+        );
+    }
+
+    /**
+     * A `segment_params` that will not decode must degrade to the SHIPPED
+     * container, never to fMP4.
+     *
+     * The direction matters and is not symmetric. Degrading to `mpegts` gives a
+     * corrupt row the behaviour every install already has. Degrading to `fmp4`
+     * would hand an unrecognisable row a playlist naming `.m4s` files that the
+     * producer — which resolves its own container through `segmentFormatOf()` on
+     * a DIFFERENT array — may well never write, i.e. a silent flip into the
+     * un-servable branch on the strength of unreadable data.
+     *
+     * (Found by mutation M29, which flipped exactly this fallback and survived.)
+     */
+    public function test_an_undecodable_segment_params_regenerates_as_mpegts(): void
+    {
+        $dir = $this->segmentDir . '/regen-corrupt';
+        mkdir($dir, 0755, true);
+
+        $row = [
+            'id' => 'regen-corrupt',
+            'hls_dir' => $dir,
+            'duration_seconds' => 12,
+            'segment_seconds' => 6,
+            // A truncated write: valid UTF-8, not valid JSON.
+            'segment_params' => '{"video_codec":"libx264","segment_format":"fmp4"',
+            'variants' => json_encode(['renditions' => [[
+                'id' => '720p',
+                'width' => 1280,
+                'height' => 720,
+                'bandwidth' => 3128000,
+                'codecs' => 'avc1.640029,mp4a.40.2',
+                'is_copy' => false,
+            ]]]),
+        ];
+
+        $manager = new TranscodeManager($this->rowDb($row), $this->createMock(FfmpegRunner::class), $this->segmentDir);
+        $this->assertTrue($manager->ensurePlaylistRegenerated('regen-corrupt'));
+
+        $media = (string) file_get_contents("{$dir}/media_v720p.m3u8");
+        $this->assertStringNotContainsString('#EXT-X-MAP', $media, 'a corrupt row must not be read as fMP4');
+        $this->assertStringContainsString("seg-v720p-00000.ts\n", $media);
+        $this->assertStringContainsString("#EXT-X-VERSION:3\n", $media);
     }
 
     /**

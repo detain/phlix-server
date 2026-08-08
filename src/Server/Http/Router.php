@@ -628,25 +628,6 @@ class Router
     }
 
     /**
-     * Registers the trickplay (thumbnail seek) routes.
-     *
-     * GET /trickplay/{jobId}/thumb-{index}.jpg  — thumbnail grid image
-     * GET /trickplay/{jobId}/index.xml          — BIF index XML
-     *
-     * @param string $controllerClass The TrickplayController class name
-     * @return self
-     *
-     * @since 0.11.0
-     */
-    public function trickplay(string $controllerClass): self
-    {
-        $this->get('/trickplay/{jobId}/thumb-{index}.jpg', [$controllerClass, 'getThumbnail']);
-        $this->get('/trickplay/{jobId}/index.xml', [$controllerClass, 'getIndex']);
-
-        return $this;
-    }
-
-    /**
      * Registers the marker (intro/outro/chapters) API routes.
      *
      * GET /api/v1/media/{id}/markers        — all markers for an item

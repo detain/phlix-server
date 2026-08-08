@@ -15,6 +15,7 @@ use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\MarkerService;
 use Phlix\Media\MarkerType;
 use Phlix\Media\Markers\ChapterMarkerService;
+use Phlix\Media\Streaming\Trickplay\BifWriter;
 use Phlix\Media\Transcoding\FfmpegRunner;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
@@ -32,8 +33,40 @@ use Workerman\MySQL\Connection;
  */
 class MediaAssetGenerationJob
 {
-    /** Default number of trickplay sprites (60 = 10x6 grid at 160x90) */
+    /**
+     * Default number of trickplay sprites.
+     *
+     * 60 thumbnails at 160x90 laid out by {@see FfmpegRunner} as **6 columns by
+     * 10 rows** — the `10x6` this comment used to claim was the transpose, and
+     * `config/trickplay.php`'s `grid_columns: 8` / `grid_rows: 4` belonged to the
+     * deleted second implementation and never described anything that ran.
+     */
     private const DEFAULT_TRICKPLAY_COUNT = 60;
+
+    /** Seconds between BIF frames that the frame count is derived from. */
+    private const BIF_TARGET_INTERVAL_SECONDS = 10;
+
+    /**
+     * Hard cap on BIF frames.
+     *
+     * The archive embeds every frame, so its size is linear in this number and
+     * it is downloaded whole by the device before scrubbing works. 600 frames at
+     * ~12 KB is roughly 7 MB; past a 100-minute runtime the effective interval
+     * stretches rather than the file growing without bound.
+     */
+    private const BIF_MAX_FRAMES = 600;
+
+    /** BIF frame width in pixels — Roku's recommended HD trickplay width. */
+    private const BIF_FRAME_WIDTH = 320;
+
+    /**
+     * File name of the BIF archive inside a media item's trickplay directory.
+     *
+     * Aliased from {@see BifWriter::FILENAME}, which
+     * {@see \Phlix\Media\Streaming\Trickplay\TrickplayController} also reads, so
+     * the written name and the served name are one string.
+     */
+    public const BIF_FILENAME = BifWriter::FILENAME;
 
     /** @var LoggerInterface Logger instance */
     private LoggerInterface $logger;
@@ -189,12 +222,14 @@ class MediaAssetGenerationJob
 
         // Honour the `trickplay.enabled` admin setting.
         //
-        // This is the LIVE trickplay implementation. There is a second, older one
-        // (TrickplayGenerator + TrickplayConfig, driven by config/trickplay.php's
-        // interval_seconds/grid_*/thumb_* keys) which is dead code: its only entry
-        // point is StreamManager::generateTrickplay(), which throws unless
-        // StreamManager::setTrickplay() has been called, and setTrickplay() has no
-        // callers anywhere in the tree.
+        // This is the ONLY trickplay implementation. There used to be a second,
+        // older one (TrickplayGenerator + TrickplayConfig, nominally driven by
+        // config/trickplay.php's interval_seconds/grid_*/thumb_* keys) whose only
+        // entry point was StreamManager::generateTrickplay(), which threw unless
+        // StreamManager::setTrickplay() had been called — and setTrickplay() had
+        // no callers anywhere in the tree. S275 confirmed that at runtime (pcov
+        // over a full media-asset run never even autoloaded the class) and
+        // deleted it, so this comment can no longer go stale against it.
         //
         // `trickplay.enabled` was therefore inert — an operator on production had
         // set it to 0 and sprites kept being generated. Gating here, on the path
@@ -228,6 +263,11 @@ class MediaAssetGenerationJob
                 'trickplay_timeline_path' => $timelinePath,
             ]);
 
+            // Best-effort, and deliberately NOT folded into this method's return
+            // value: the sprite sheet is what the web player needs, and losing
+            // the BIF must not mark the whole asset job failed.
+            $this->generateTrickplayBif($job, $spriteDir);
+
             return true;
         } catch (\Throwable $e) {
             $this->logger->warning('MediaAssetGenerationJob: trickplay generation failed', [
@@ -236,6 +276,68 @@ class MediaAssetGenerationJob
             ]);
 
             return false;
+        }
+    }
+
+    /**
+     * Write the Roku BIF archive next to the sprite sheet.
+     *
+     * Runs here, in the background media-asset worker, rather than on demand:
+     * the HTTP side is a resident Workerman event loop, and shelling ffmpeg
+     * across a whole video the first time somebody scrubs would stall every
+     * other connection in the worker for the length of a full decode pass.
+     * Pre-generating means the first scrub costs one static file read.
+     *
+     * @param MediaAssetJob $job       The job being processed.
+     * @param string        $spriteDir The item's trickplay directory.
+     *
+     * @return bool True if `thumbs.bif` was written.
+     */
+    private function generateTrickplayBif(MediaAssetJob $job, string $spriteDir): bool
+    {
+        $frames = [];
+
+        try {
+            $count = self::DEFAULT_TRICKPLAY_COUNT;
+            if ($job->duration > 0) {
+                $count = (int) ceil($job->duration / self::BIF_TARGET_INTERVAL_SECONDS);
+                $count = max(2, min(self::BIF_MAX_FRAMES, $count));
+            }
+
+            $extracted = $this->ffmpeg->generateBifFrames(
+                $job->path,
+                $spriteDir,
+                $count,
+                self::BIF_FRAME_WIDTH
+            );
+
+            if ($extracted === null) {
+                return false;
+            }
+
+            [$frames, $intervalMs] = $extracted;
+
+            BifWriter::writeFromFiles($frames, $intervalMs, $spriteDir . '/' . self::BIF_FILENAME);
+
+            $this->logger->info('MediaAssetGenerationJob: BIF written', [
+                'item_id' => $job->itemId,
+                'frames' => count($frames),
+                'interval_ms' => $intervalMs,
+            ]);
+
+            return true;
+        } catch (\Throwable $e) {
+            $this->logger->warning('MediaAssetGenerationJob: BIF generation failed', [
+                'item_id' => $job->itemId,
+                'error' => $e->getMessage(),
+            ]);
+
+            return false;
+        } finally {
+            // The per-frame JPEGs are an intermediate; only the archive is served.
+            foreach ($frames as $frame) {
+                @unlink($frame);
+            }
         }
     }
 }

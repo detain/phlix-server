@@ -455,13 +455,21 @@ class MediaItemController
     /**
      * GET /api/v1/media/{id}/trickplay
      *
-     * Returns the trickplay sprite and timeline URLs for a media item.
-     * These point to the existing /trickplay/{itemId}/ routes.
+     * Returns the trickplay artefact URLs for a media item. These point at the
+     * `/trickplay/{itemId}/` routes.
+     *
+     * `trickplay_bif_url` — the Roku trick-mode archive — is emitted **only when
+     * the `.bif` is actually on disk**, and the key is absent otherwise rather
+     * than present-and-null. The sprite/timeline pair is reported from the DB
+     * columns and is independent of it: an item can have one without the other
+     * (the BIF write is best-effort and runs after the sprite), so the two are
+     * resolved separately rather than sharing a branch.
      *
      * @param Request $request HTTP request
      * @param array<string, string> $params Route params with 'id' key
      *
-     * @return Response 200 with {sprite_url, timeline_url}, 404 if not found
+     * @return Response 200 with {sprite_url, timeline_url, trickplay_bif_url?},
+     *                  404 if the item does not exist
      */
     public function getTrickplay(Request $request, array $params): Response
     {
@@ -480,24 +488,26 @@ class MediaItemController
         $spritePath = is_string($item['trickplay_sprite_path'] ?? null) ? $item['trickplay_sprite_path'] : null;
         $timelinePath = is_string($item['trickplay_timeline_path'] ?? null) ? $item['trickplay_timeline_path'] : null;
 
-        if ($spritePath === null || $timelinePath === null) {
-            // Return empty success (not 404) so the UI gracefully handles missing
-            // trickplay without logging errors — trickplay may simply not be
-            // generated yet for this item, or the feature may be disabled.
-            return (new Response())->json([
-                'sprite_url' => null,
-                'timeline_url' => null,
-            ]);
+        // A missing sprite is an empty success (not a 404) so the UI handles
+        // "not generated yet" without logging errors.
+        $payload = [
+            'sprite_url' => null,
+            'timeline_url' => null,
+        ];
+
+        if ($spritePath !== null && $timelinePath !== null) {
+            $payload['sprite_url'] = $this->trickplayController->getSpriteUrl($itemId);
+            $payload['timeline_url'] = $this->trickplayController->getTimelineUrl($itemId);
         }
 
-        // Generate URLs using TrickplayController's URL-building methods
-        $spriteUrl = $this->trickplayController->getSpriteUrl($itemId);
-        $timelineUrl = $this->trickplayController->getTimelineUrl($itemId);
+        // Advertise the BIF only against the file system. Publishing a URL the
+        // server will answer with a 404 is the defect S261 and the MCP
+        // `available_scopes` list both shipped.
+        if ($this->trickplayController->hasBif($itemId)) {
+            $payload['trickplay_bif_url'] = $this->trickplayController->getBifUrl($itemId);
+        }
 
-        return (new Response())->json([
-            'sprite_url' => $spriteUrl,
-            'timeline_url' => $timelineUrl,
-        ]);
+        return (new Response())->json($payload);
     }
 
     /**

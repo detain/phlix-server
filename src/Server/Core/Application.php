@@ -1906,10 +1906,14 @@ class Application
      * and the job ID provides implicit scoping).
      *
      * Endpoints:
-     * - GET /trickplay/{jobId}/thumb-{index}.jpg — BIF thumbnail grid image
-     * - GET /trickplay/{jobId}/index.xml          — BIF index XML
-     * - GET /trickplay/{jobId}/sprite.jpg         — Sprite sheet image
-     * - GET /trickplay/{jobId}/timeline.json      — Timeline mapping JSON
+     * - GET /trickplay/{jobId}/sprite.jpg    — Sprite sheet image
+     * - GET /trickplay/{jobId}/thumbs.bif    — Roku BIF trick-mode archive
+     * - GET /trickplay/{jobId}/timeline.json — Timeline mapping JSON
+     *
+     * S275 removed `thumb-{index}.jpg` and `index.xml`. Only the deleted
+     * `TrickplayGenerator` wrote the `bif_NN.jpg`/`index.xml` files behind them,
+     * and a runtime probe proved that class was never even autoloaded during a
+     * media-asset run — they were routes over files nothing produces.
      *
      * @since 0.11.0
      */
@@ -1918,10 +1922,12 @@ class Application
         $controller = $this->getTrickplayController();
 
         // Public read-only routes — no auth required, job ID provides scoping.
-        // These are low-sensitivity placeholder thumbnails, not media content.
-        $this->router->get('/trickplay/{jobId}/thumb-{index}.jpg', [$controller, 'getThumbnail']);
-        $this->router->get('/trickplay/{jobId}/index.xml', [$controller, 'getIndex']);
+        // These are low-sensitivity preview thumbnails, not media content.
+        //
+        // Every path here ends in a distinct literal segment, so none can absorb
+        // another; `thumbs.bif` in particular is NOT matched by any sibling.
         $this->router->get('/trickplay/{jobId}/sprite.jpg', [$controller, 'getSprite']);
+        $this->router->get('/trickplay/{jobId}/thumbs.bif', [$controller, 'getBif']);
         $this->router->get('/trickplay/{jobId}/timeline.json', [$controller, 'getTimeline']);
     }
 
@@ -1934,7 +1940,7 @@ class Application
      */
     private function getTrickplayController(): \Phlix\Media\Streaming\Trickplay\TrickplayController
     {
-        // Load trickplay config (storage_dir and base_url).
+        // Load trickplay config (base_url only — see the storage note below).
         /** @var array<string, mixed> $trickplayConfig */
         $trickplayConfig = [];
         $configFile = dirname(__DIR__, 2) . '/config/trickplay.php';
@@ -1947,11 +1953,42 @@ class Application
             }
         }
 
-        $storageDir = is_string($trickplayConfig['storage_dir'] ?? null) ? $trickplayConfig['storage_dir'] :
-            '/var/trickplay';
         $baseUrl = is_string($trickplayConfig['base_url'] ?? null) ? $trickplayConfig['base_url'] : '';
 
-        return new \Phlix\Media\Streaming\Trickplay\TrickplayController($storageDir, $baseUrl);
+        return new \Phlix\Media\Streaming\Trickplay\TrickplayController(
+            $this->resolveTrickplayStorageDir(),
+            $baseUrl
+        );
+    }
+
+    /**
+     * Resolves the directory trickplay artefacts are served from.
+     *
+     * ⚠ This MUST be ffmpeg's `transcode_dir`, because that is where the only
+     * producer writes: `MediaAssetGenerationJob` builds its output path from
+     * `FfmpegRunner::getTranscodeDir() . '/trickplay/' . $itemId`, and
+     * `TrickplayController` appends the same `'/trickplay/' . $jobId` suffix.
+     *
+     * Until S275 this read `config/trickplay.php`'s `storage_dir` (`/var/trickplay`)
+     * while the producer wrote under `/var/transcodes`, so the two halves pointed
+     * at different trees and every artefact would have 404'd. Deriving both from
+     * one key removes the possibility of that drift instead of re-syncing two.
+     *
+     * @return string Absolute base directory (the `/trickplay/{id}` suffix is
+     *                appended by the controller).
+     */
+    private function resolveTrickplayStorageDir(): string
+    {
+        $configFile = dirname(__DIR__, 2) . '/config/ffmpeg.php';
+        if (file_exists($configFile)) {
+            /** @var mixed $ffmpegConfig */
+            $ffmpegConfig = include $configFile;
+            if (is_array($ffmpegConfig) && is_string($ffmpegConfig['transcode_dir'] ?? null)) {
+                return $ffmpegConfig['transcode_dir'];
+            }
+        }
+
+        return '/var/transcodes';
     }
 
     /**

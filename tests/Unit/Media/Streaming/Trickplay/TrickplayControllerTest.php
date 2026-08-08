@@ -5,7 +5,9 @@ declare(strict_types=1);
 namespace Phlix\Tests\Unit\Media\Streaming\Trickplay;
 
 use PHPUnit\Framework\TestCase;
+use Phlix\Media\Streaming\Trickplay\BifWriter;
 use Phlix\Media\Streaming\Trickplay\TrickplayController;
+use Phlix\Server\Http\Request;
 
 class TrickplayControllerTest extends TestCase
 {
@@ -36,73 +38,110 @@ class TrickplayControllerTest extends TestCase
         rmdir($dir);
     }
 
-    public function testGetThumbnailUrl(): void
+    /** A two-frame BIF archive, built by the production writer. */
+    private function sampleBif(): string
     {
-        $controller = new TrickplayController($this->tempDir, $this->baseUrl);
+        $jpeg = "\xFF\xD8\xFF\xE0\x00\x10JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00\xFF\xD9";
 
-        $url = $controller->getThumbnailUrl('job-123', 0);
-        $this->assertEquals('http://localhost:8096/trickplay/job-123/thumb-0.jpg', $url);
-
-        $url2 = $controller->getThumbnailUrl('job-123', 5);
-        $this->assertEquals('http://localhost:8096/trickplay/job-123/thumb-5.jpg', $url2);
+        return BifWriter::build([$jpeg, $jpeg], 10000);
     }
 
-    public function testGetIndexUrl(): void
+    public function testGetBifUrl(): void
     {
         $controller = new TrickplayController($this->tempDir, $this->baseUrl);
 
-        $url = $controller->getIndexUrl('job-123');
-        $this->assertEquals('http://localhost:8096/trickplay/job-123/index.xml', $url);
+        $this->assertSame(
+            'http://localhost:8096/trickplay/job-123/thumbs.bif',
+            $controller->getBifUrl('job-123')
+        );
     }
 
-    public function testGetThumbnailContentReturnsNullWhenNotFound(): void
+    public function testGetBifPathIsInsideTheJobDirectory(): void
     {
         $controller = new TrickplayController($this->tempDir, $this->baseUrl);
 
-        $content = $controller->getThumbnailContent('nonexistent-job', 0);
-        $this->assertNull($content);
+        $this->assertSame(
+            $this->tempDir . '/trickplay/job-123/thumbs.bif',
+            $controller->getBifPath('job-123')
+        );
     }
 
-    public function testGetIndexContentReturnsNullWhenNotFound(): void
+    public function testGetBifContentReturnsNullWhenNotFound(): void
     {
         $controller = new TrickplayController($this->tempDir, $this->baseUrl);
 
-        $content = $controller->getIndexContent('nonexistent-job');
-        $this->assertNull($content);
+        $this->assertNull($controller->getBifContent('nonexistent-job'));
     }
 
-    public function testGetIndexReturnsXmlContentType(): void
+    public function testGetBifContentReturnsTheRawArchiveBytes(): void
     {
         $controller = new TrickplayController($this->tempDir, $this->baseUrl);
+        $bif = $this->sampleBif();
+        file_put_contents($this->tempDir . '/trickplay/job-123/thumbs.bif', $bif);
 
-        $contentType = 'application/octet-stream';
+        $content = $controller->getBifContent('job-123');
 
-        $this->assertEquals($contentType, $contentType);
+        $this->assertSame($bif, $content);
+        // Pin the identity of what was served, not just its length: a handler
+        // that returned some other file of the same size would pass a strlen
+        // check. The magic is the cheapest unambiguous discriminator.
+        $this->assertSame(BifWriter::MAGIC, substr((string) $content, 0, 8));
     }
 
-    public function testGetThumbnailReturnsJpegContentType(): void
+    public function testHasBifIsFalseWhenAbsentAndTrueWhenPresent(): void
     {
         $controller = new TrickplayController($this->tempDir, $this->baseUrl);
 
-        $contentType = $controller->getThumbnailContentType('job-123', 0);
-        $this->assertEquals('application/octet-stream', $contentType);
+        $this->assertFalse($controller->hasBif('job-123'));
+
+        file_put_contents($this->tempDir . '/trickplay/job-123/thumbs.bif', $this->sampleBif());
+
+        $this->assertTrue($controller->hasBif('job-123'));
     }
 
-    public function testHasTrickplayReturnsFalseWhenNotExists(): void
+    public function testHasBifIsFalseForAnEmptyFile(): void
     {
         $controller = new TrickplayController($this->tempDir, $this->baseUrl);
+        file_put_contents($this->tempDir . '/trickplay/job-123/thumbs.bif', '');
 
-        $this->assertFalse($controller->hasTrickplay('nonexistent-job'));
+        // A zero-byte artefact is what a crashed or half-run producer leaves
+        // behind. Reporting it as present would advertise a URL that serves
+        // nothing usable.
+        $this->assertFalse($controller->hasBif('job-123'));
     }
 
-    public function testHasTrickplayReturnsTrueWhenExists(): void
+    public function testHasBifRejectsPathTraversalJobIds(): void
     {
         $controller = new TrickplayController($this->tempDir, $this->baseUrl);
 
-        // Create a dummy index file
-        file_put_contents($this->tempDir . '/trickplay/job-123/index.xml', '<ThumbList/>');
+        $this->assertFalse($controller->hasBif('../../etc'));
+        $this->assertNull($controller->getBifContent('../../etc'));
+    }
 
-        $this->assertTrue($controller->hasTrickplay('job-123'));
+    public function testGetBifHandlerServesTheArchive(): void
+    {
+        $controller = new TrickplayController($this->tempDir, $this->baseUrl);
+        $bif = $this->sampleBif();
+        file_put_contents($this->tempDir . '/trickplay/job-123/thumbs.bif', $bif);
+
+        $response = $controller->getBif(new Request(), [
+            'jobId' => 'job-123',
+        ]);
+
+        $this->assertSame(200, $response->statusCode);
+        $this->assertSame($bif, $response->body);
+        $this->assertSame((string) strlen($bif), $response->headers['Content-Length'] ?? null);
+    }
+
+    public function testGetBifHandlerReturns404WhenTheArchiveIsMissing(): void
+    {
+        $controller = new TrickplayController($this->tempDir, $this->baseUrl);
+
+        $response = $controller->getBif(new Request(), [
+            'jobId' => 'job-123',
+        ]);
+
+        $this->assertSame(404, $response->statusCode);
     }
 
     public function testGetJobDir(): void
@@ -113,38 +152,35 @@ class TrickplayControllerTest extends TestCase
         $this->assertEquals($this->tempDir . '/trickplay/job-123', $jobDir);
     }
 
-    public function testGetIndexContentReturnsContentWhenExists(): void
+    public function testGetSpriteContentReturnsContentWhenExists(): void
     {
         $controller = new TrickplayController($this->tempDir, $this->baseUrl);
 
-        $xmlContent = '<ThumbList><Thumbs><Thumb index="0" time="0" offset="0" length="4096"/></Thumbs></ThumbList>';
-        file_put_contents($this->tempDir . '/trickplay/job-123/index.xml', $xmlContent);
-
-        $content = $controller->getIndexContent('job-123');
-        $this->assertEquals($xmlContent, $content);
-    }
-
-    public function testGetThumbnailContentReturnsContentWhenExists(): void
-    {
-        $controller = new TrickplayController($this->tempDir, $this->baseUrl);
-
-        // Create a dummy JPEG file
         $jpegData = "\xFF\xD8\xFF\xE0\x00\x10JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00\xFF\xD9";
-        file_put_contents($this->tempDir . '/trickplay/job-123/bif_00.jpg', $jpegData);
+        file_put_contents($this->tempDir . '/trickplay/job-123/sprite.jpg', $jpegData);
 
-        $content = $controller->getThumbnailContent('job-123', 0);
-        $this->assertEquals($jpegData, $content);
+        $this->assertSame($jpegData, $controller->getSpriteContent('job-123'));
     }
 
-    public function testGetThumbnailContentTriesPngWhenJpgNotFound(): void
+    public function testGetTimelineContentReturnsContentWhenExists(): void
     {
         $controller = new TrickplayController($this->tempDir, $this->baseUrl);
 
-        // Create a dummy PNG file (8x8 transparent PNG)
-        $pngData = base64_decode('iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAADklEQVQI12Nk+M/wDwAE/wH8Ri8kYgAAAABJRU5ErkJggg==');
-        file_put_contents($this->tempDir . '/trickplay/job-123/bif_00.png', $pngData);
+        $json = '[{"time":1,"x":2,"y":2}]';
+        file_put_contents($this->tempDir . '/trickplay/job-123/timeline.json', $json);
 
-        $content = $controller->getThumbnailContent('job-123', 0);
-        $this->assertEquals($pngData, $content);
+        $this->assertSame($json, $controller->getTimelineContent('job-123'));
+    }
+
+    public function testDeletedHandlersAreGoneRatherThanLeftAsDeadRoutesTargets(): void
+    {
+        // S275 deleted getIndex()/getThumbnail() along with their routes, because
+        // only the (also deleted) TrickplayGenerator wrote index.xml/bif_NN.jpg.
+        // Asserting their ABSENCE keeps a later re-add from quietly restoring a
+        // route over a file nothing produces.
+        $this->assertFalse(method_exists(TrickplayController::class, 'getIndex'));
+        $this->assertFalse(method_exists(TrickplayController::class, 'getThumbnail'));
+        $this->assertFalse(method_exists(TrickplayController::class, 'getIndexContent'));
+        $this->assertFalse(method_exists(TrickplayController::class, 'getThumbnailContent'));
     }
 }

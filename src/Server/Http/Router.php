@@ -345,7 +345,7 @@ class Router
             }
             error_log('[DEBUG] ' . date('Y-m-d H:i:s.v') . ' Router::dispatch 404 [method=' . $method . '] [path=' .
                 $path . ']');
-            return $this->notFound();
+            return $this->notFound($request);
         }
 
         foreach ($this->routes[$method] as $pattern => $route) {
@@ -380,7 +380,7 @@ class Router
 
         error_log('[DEBUG] ' . date('Y-m-d H:i:s.v') . ' Router::dispatch 404 [method=' . $method . '] [path=' .
             $path . ']');
-        return $this->notFound();
+        return $this->notFound($request);
     }
 
     /**
@@ -423,7 +423,7 @@ class Router
             }
         }
 
-        return $this->notFound();
+        return $this->notFound($request);
     }
 
     /**
@@ -448,10 +448,19 @@ class Router
      *    stream route does, so it stays correct when invoked by any other
      *    dispatcher) is unaffected: this only ever assigns `true`.
      *
-     * 404s are intentionally NOT flagged: `notFound()` builds a JSON body and no
-     * `Content-Length`, so flagging it would change the bytes on the wire for a
-     * `HEAD` to an unregistered path. That body-on-a-HEAD-404 is pre-existing
-     * behaviour on both entrypoints and belongs to its own change.
+     * 404s are flagged too, since S113: {@see self::notFound()} routes its response
+     * through here, so a `HEAD` to an unregistered path answers with the 404's
+     * `Content-Length` and **no** body instead of shipping the 83-byte JSON envelope
+     * a `HEAD` must not carry (RFC 9110 §9.3.2). Until S113 they were deliberately
+     * left unflagged and that body reached the wire.
+     *
+     * The flag is set via {@see Response::asHeadReply()} rather than by assignment,
+     * because suppressing the body is only half of the RFC's requirement: the reply
+     * must still declare the length the equivalent `GET` would have returned, and a
+     * bare `headOnly = true` on a response that never set `Content-Length` makes the
+     * encoder derive one from the suppressed body — i.e. answer `Content-Length: 0`
+     * for an entity that is not empty. See that method for the derivation and for
+     * why a caller-set length always wins.
      *
      * ## The BOUNDARY of the guarantee — read this before trusting it
      *
@@ -487,7 +496,7 @@ class Router
     private function markHeadOnly(Request $request, Response $response): Response
     {
         if ($request->method === 'HEAD') {
-            $response->headOnly = true;
+            return $response->asHeadReply();
         }
 
         return $response;
@@ -929,16 +938,29 @@ class Router
     /**
      * Creates a 404 Not Found response.
      *
-     * @return Response The 404 response
+     * ## Why this takes the request (S113)
+     *
+     * {@see Response::json()} encodes with `JSON_PRETTY_PRINT`, so this envelope is
+     * an **83-byte** body — and until S113 every one of them reached the wire on a
+     * `HEAD` to an unregistered path, because the three call sites returned the
+     * response directly instead of through {@see self::markHeadOnly()}. RFC 9110
+     * §9.3.2 forbids a body on a `HEAD`: a header-only client leaves those 83 bytes
+     * buffered in the socket, so the NEXT response on a keep-alive connection is
+     * read starting 83 bytes late. Passing the request lets the one flag-writer in
+     * this class suppress the body while keeping `Content-Length: 83` — the length
+     * the equivalent `GET` really would have returned.
+     *
+     * @param Request $request The request being answered (only `method` is read).
+     * @return Response The 404 response, head-only when the request was a `HEAD`.
      */
-    private function notFound(): Response
+    private function notFound(Request $request): Response
     {
-        return (new Response())
+        return $this->markHeadOnly($request, (new Response())
             ->status(404)
             ->json([
                 'error' => 'Not Found',
                 'message' => 'The requested resource was not found',
-            ]);
+            ]));
     }
 
     /**

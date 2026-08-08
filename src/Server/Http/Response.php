@@ -447,6 +447,63 @@ class Response
     }
 
     /**
+     * Turn this response into a conformant `HEAD` reply: no body on the wire, but
+     * still declaring the `Content-Length` the equivalent `GET` would have carried.
+     *
+     * RFC 9110 §9.3.2 says a `HEAD` response is identical to the `GET` one **minus
+     * the content**: the header section — `Content-Length` included — must describe
+     * what a `GET` *would* have returned. Setting {@see $headOnly} alone gets only
+     * half of that. It suppresses the body on both entrypoints
+     * ({@see toWorkermanResponse()} and {@see send()}), but with no explicit
+     * `Content-Length` in {@see $headers} the encoder then derives one from the
+     * *suppressed* body and the client is told `Content-Length: 0` — conformant in
+     * framing, wrong in fact. So the length is pinned here, BEFORE the body is
+     * dropped:
+     *
+     *  - a file-backed response ({@see withFile()}) gets the same
+     *    `Content-Length` / `Accept-Ranges` / `Content-Range` (+206) that
+     *    {@see finalizeFileHeaders()} derives for the `GET`, which is byte-for-byte
+     *    what Workerman's own `withFile()` encode emits;
+     *  - a buffered response gets `strlen($body)` — the body it is about to stop
+     *    sending.
+     *
+     * A `Content-Length` the caller already set is authoritative and never
+     * overwritten: it is the one the handler measured (a byte window, a gzipped
+     * body — {@see \Phlix\Server\Workerman\HttpHandler::compressResponse()} refreshes
+     * it — or a DLNA `HEAD` probe), and recomputing it from a body that may already
+     * have been replaced would be the regression, not the fix. For the same reason
+     * this must run AFTER any body-rewriting decoration.
+     *
+     * Idempotent: calling it twice is the same as calling it once.
+     *
+     * Once the length is present, {@see toWorkermanResponse()} renders through
+     * {@see BodylessResponse}, so exactly ONE `Content-Length` reaches the wire
+     * rather than the caller's followed by Workerman's contradictory
+     * `Content-Length: 0` (invalid per RFC 9110 §8.6).
+     *
+     * @return self For method chaining.
+     */
+    public function asHeadReply(): self
+    {
+        $this->headOnly = true;
+
+        foreach (array_keys($this->headers) as $name) {
+            if (strcasecmp($name, 'Content-Length') === 0) {
+                return $this;
+            }
+        }
+
+        if ($this->filePath !== null) {
+            $this->finalizeFileHeaders();
+            return $this;
+        }
+
+        $this->headers['Content-Length'] = (string) strlen($this->body);
+
+        return $this;
+    }
+
+    /**
      * Computes and sets the `Content-Length` / `Accept-Ranges` / `Content-Range`
      * headers (and forces status 206) for a file-backed response in the CGI/FPM
      * fallback ({@see send()}), mirroring exactly what Workerman's native

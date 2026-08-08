@@ -36,7 +36,10 @@ use Workerman\Timer;
  * fine-grained maintenance ops — {@see LibraryManager::pruneLibrary()} (`prune`),
  * {@see LibraryManager::clearMetadata()} (`clear_metadata`),
  * {@see LibraryManager::clearArtwork()} (`clear_artwork`) or
- * {@see LibraryManager::deleteAllItems()} (`delete_all`) — and
+ * {@see LibraryManager::deleteAllItems()} (`delete_all`) — or
+ * {@see \Phlix\Media\MediaAsset\MediaAssetBackfill::reenqueueLibrary()} for a
+ * `media_assets` job (S284: re-prime the chapter/trickplay/BIF file queue for a
+ * library scanned before the trickplay producer worked) — and
  * records the outcome via {@see ScanJobRepository::markCompleted()} (success) or
  * {@see ScanJobRepository::markFailed()} (on any `\Throwable`).
  *
@@ -97,6 +100,24 @@ class LibraryScanWorker
     private StructuredLogger $logger;
 
     /**
+     * Re-enqueues the media-asset (chapter/trickplay/BIF) file queue for a
+     * library's EXISTING rows — the `media_assets` job type (S284).
+     *
+     * ⚠ **Nullable, and PHP-DI will leave it null unless it is NAMED at the
+     * wiring site.** `MediaServicesProvider` registers this class with
+     * `autowire()`, which SKIPS ctor params that have a default — so an optional
+     * dependency added here is silently absent in production unless a matching
+     * `->constructorParameter('mediaAssetBackfill', …)` is added too
+     * ([[project_di_provider_silent_degradation]]). When it IS null a
+     * `media_assets` job fails loudly via the catch below rather than being
+     * silently treated as a plain `scan`, which is the shape that would start an
+     * expensive rescan nobody asked for.
+     *
+     * @var \Phlix\Media\MediaAsset\MediaAssetBackfill|null
+     */
+    private ?\Phlix\Media\MediaAsset\MediaAssetBackfill $mediaAssetBackfill;
+
+    /**
      * @param ScanJobRepository      $jobs            Queue + progress store.
      * @param LibraryManager         $libraries       Existing scan engine.
      * @param LibraryMetadataMatcher $metadataMatcher Background metadata matcher
@@ -104,6 +125,9 @@ class LibraryScanWorker
      * @param StructuredLogger|null  $logger          Optional logger; defaults
      *                                                to the MEDIA channel via
      *                                                {@see \Phlix\Common\Logger\LoggerFactory}.
+     * @param \Phlix\Media\MediaAsset\MediaAssetBackfill|null $mediaAssetBackfill
+     *        Runs `media_assets` jobs. See the property docblock for why it must
+     *        be named explicitly in the container.
      *
      * @since 1.1b
      */
@@ -111,12 +135,14 @@ class LibraryScanWorker
         ScanJobRepository $jobs,
         LibraryManager $libraries,
         LibraryMetadataMatcher $metadataMatcher,
-        ?StructuredLogger $logger = null
+        ?StructuredLogger $logger = null,
+        ?\Phlix\Media\MediaAsset\MediaAssetBackfill $mediaAssetBackfill = null
     ) {
         $this->jobs = $jobs;
         $this->libraries = $libraries;
         $this->metadataMatcher = $metadataMatcher;
         $this->logger = $logger ?? \Phlix\Common\Logger\LoggerFactory::get(LogChannels::MEDIA);
+        $this->mediaAssetBackfill = $mediaAssetBackfill;
     }
 
     /**
@@ -266,6 +292,40 @@ class LibraryScanWorker
                         ]);
                     },
                 );
+            } elseif ($type === 'media_assets') {
+                // S284: re-prime the FILE-based media-asset queue for this
+                // library's existing rows. Reads no media file and writes no
+                // media_items — the ffmpeg work is done afterwards by
+                // MediaAssetWorker at its own bounded concurrency.
+                if ($this->mediaAssetBackfill === null) {
+                    // Loud, not silent. Falling through to the `else` branch would
+                    // start a full library SCAN for an operator who asked for a
+                    // targeted backfill — the single most expensive way to be
+                    // wrong here (a production music rescan ran 9 h 55 m).
+                    throw new \RuntimeException(
+                        'media_assets job requires a MediaAssetBackfill dependency; '
+                        . 'the container did not supply one'
+                    );
+                }
+                $backfill = $this->mediaAssetBackfill->reenqueueLibrary(
+                    $libraryId,
+                    function (int $processed, int $total) use ($jobId): void {
+                        $this->jobs->updateProgress($jobId, [
+                            'items_found'   => $total,
+                            'items_updated' => $processed,
+                        ]);
+                    },
+                );
+                // `items_added` is the number of media-asset jobs enqueued, which
+                // is what the admin surface should show as the work this job
+                // produced. It is GREATEST()-clamped by markCompleted(), and the
+                // live sink above never writes the column, so the prior value is
+                // always the column default 0 — the clamp cannot lower it.
+                $finalCounts = [
+                    'items_found'   => $backfill->scanned,
+                    'items_updated' => $backfill->scanned,
+                    'items_added'   => $backfill->enqueued,
+                ];
             } elseif ($type === 'delete_all') {
                 // Destructive: remove every item in the library (cascades user
                 // data). The controller gates this behind an explicit confirm.

@@ -1798,6 +1798,36 @@ class ItemRepository
     }
 
     /**
+     * Counts ALL media items in a library, of every type.
+     *
+     * The progress DENOMINATOR for library-wide passes that walk
+     * {@see self::getByLibrary()} — S284's media-asset re-enqueue is the first
+     * caller outside {@see LibraryManager}, which has carried its own private
+     * copy of this query since the maintenance ops landed.
+     *
+     * ⚠ It counts every row, container rows (series/seasons/artists/albums)
+     * included, so it is the denominator for "rows walked", not for "files
+     * eligible for processing". A caller that reports a narrower numerator must
+     * say so; {@see \Phlix\Media\MediaAsset\MediaAssetBackfillResult} splits the
+     * difference into explicit buckets for exactly this reason.
+     *
+     * @param string $libraryId The library's unique identifier.
+     *
+     * @return int Number of `media_items` rows in the library.
+     *
+     * @since 0.36.0 (S284)
+     */
+    public function countByLibrary(string $libraryId): int
+    {
+        $result = $this->db->query(
+            "SELECT COUNT(*) as count FROM media_items WHERE library_id = ?",
+            [$libraryId]
+        );
+
+        return $this->extractCount($result);
+    }
+
+    /**
      * Gets recently added media items from a library.
      *
      * @param string $libraryId The library's unique identifier

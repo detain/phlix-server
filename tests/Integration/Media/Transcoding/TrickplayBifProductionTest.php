@@ -9,8 +9,8 @@ use Phlix\Media\MediaAsset\MediaAssetGenerationJob;
 use Phlix\Media\MediaAsset\MediaAssetJob;
 use Phlix\Media\MediaAsset\MediaAssetJobStore;
 use Phlix\Media\MediaAsset\MediaAssetWorker;
-use Phlix\Media\Streaming\Trickplay\BifWriter;
 use Phlix\Media\Transcoding\FfmpegRunner;
+use Phlix\Tests\Support\Trickplay\AssertsWalkableBifArchives;
 use PHPUnit\Framework\TestCase;
 use Workerman\MySQL\Connection;
 
@@ -42,6 +42,13 @@ use Workerman\MySQL\Connection;
  */
 final class TrickplayBifProductionTest extends TestCase
 {
+    /**
+     * The byte-wise archive checks. S284 MOVED them into this trait so its own
+     * re-enqueue path could reuse them verbatim instead of writing a second,
+     * weaker walker; the assertions themselves are unchanged.
+     */
+    use AssertsWalkableBifArchives;
+
     private string $dir = '';
     private FfmpegRunner $runner;
 
@@ -208,58 +215,6 @@ final class TrickplayBifProductionTest extends TestCase
         // The intermediate frames are cleaned up — only the archive is served.
         $this->assertSame([], glob($jobDir . '/bifframe_*.jpg') ?: []);
 
-        $bif = (string) file_get_contents($bifPath);
-        $this->assertSame(BifWriter::MAGIC, substr($bif, 0, 8));
-
-        $payloads = $this->walkIndex($bif);
-        $this->assertGreaterThanOrEqual(2, count($payloads));
-        foreach ($payloads as $i => $payload) {
-            $this->assertSame("\xFF\xD8", substr($payload, 0, 2), "BIF payload {$i} is not a JPEG");
-            $this->assertSame("\xFF\xD9", substr($payload, -2), "BIF payload {$i} has no EOI marker");
-            // Each payload must be a JPEG a decoder actually accepts, not merely
-            // one that starts with the right two bytes.
-            $this->assertIsArray(getimagesizefromstring($payload), "BIF payload {$i} is not decodable");
-        }
-    }
-
-    /**
-     * Independent BIF reader, written from the published spec.
-     *
-     * @param string $bif Archive bytes.
-     *
-     * @return list<string> Payloads in index order.
-     */
-    private function walkIndex(string $bif): array
-    {
-        $this->assertGreaterThanOrEqual(64, strlen($bif));
-
-        /** @var array{1: int} $countField */
-        $countField = unpack('V', substr($bif, 12, 4));
-        $count = $countField[1];
-        $this->assertGreaterThan(0, $count);
-
-        $offsets = [];
-        for ($i = 0; $i <= $count; $i++) {
-            /** @var array{1: int} $ts */
-            $ts = unpack('V', substr($bif, 64 + 8 * $i, 4));
-            /** @var array{1: int} $off */
-            $off = unpack('V', substr($bif, 64 + 8 * $i + 4, 4));
-            if ($i === $count) {
-                $this->assertSame(0xFFFFFFFF, $ts[1], 'index terminator timestamp');
-                $this->assertSame(strlen($bif), $off[1], 'terminator offset must be the file length');
-            } else {
-                $this->assertSame($i, $ts[1], "index entry {$i} timestamp");
-            }
-            $offsets[] = $off[1];
-        }
-
-        $payloads = [];
-        for ($i = 0; $i < $count; $i++) {
-            $this->assertGreaterThanOrEqual(64 + 8 * ($count + 1), $offsets[$i]);
-            $this->assertGreaterThan($offsets[$i], $offsets[$i + 1]);
-            $payloads[] = substr($bif, $offsets[$i], $offsets[$i + 1] - $offsets[$i]);
-        }
-
-        return $payloads;
+        $this->assertWalkableBifArchive((string) file_get_contents($bifPath));
     }
 }

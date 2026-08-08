@@ -653,8 +653,16 @@ final class MediaServicesProvider implements ServiceProviderInterface
             // LibraryManager and the LibraryMetadataMatcher (for `metadata`
             // jobs) — are all autowired above; the optional StructuredLogger
             // defaults to the MEDIA channel.
+            // `mediaAssetBackfill` (S284) is NAMED for the same reason
+            // `metadataMatcher` is: PHP-DI's autowire() SKIPS ctor params that
+            // carry a default, so an optional dependency left implicit here is
+            // silently null in production and every `media_assets` job fails.
             LibraryScanWorker::class => autowire()
-                ->constructorParameter('metadataMatcher', get(LibraryMetadataMatcher::class)),
+                ->constructorParameter('metadataMatcher', get(LibraryMetadataMatcher::class))
+                ->constructorParameter(
+                    'mediaAssetBackfill',
+                    get(\Phlix\Media\MediaAsset\MediaAssetBackfill::class)
+                ),
 
             // Per-provider metadata coordinator. The LibraryManager is injected
             // (named — PHP-DI skips defaulted optional ctor params) so getImages
@@ -923,6 +931,17 @@ final class MediaServicesProvider implements ServiceProviderInterface
                     : '/tmp/phlix_media_asset_jobs';
                 return new \Phlix\Media\MediaAsset\MediaAssetJobStore($queueDir);
             }),
+
+            // S284: re-enqueue pass for the media-asset queue. Named parameters
+            // throughout — autowire() would resolve ItemRepository/FfmpegRunner by
+            // type anyway, but the store MUST come from the factory above so the
+            // backfill (producer) and the MediaAssetWorker (consumer) resolve the
+            // SAME queue directory when an operator overrides it.
+            \Phlix\Media\MediaAsset\MediaAssetBackfill::class => autowire()
+                ->constructorParameter('items', get(ItemRepository::class))
+                ->constructorParameter('store', get(MediaAssetJobStore::class))
+                ->constructorParameter('ffmpeg', get(FfmpegRunner::class))
+                ->constructorParameter('logger', get('logger.media')),
 
             // Generation job processor: wires FfmpegRunner, ItemRepository, and Connection.
             \Phlix\Media\MediaAsset\MediaAssetGenerationJob::class => autowire()

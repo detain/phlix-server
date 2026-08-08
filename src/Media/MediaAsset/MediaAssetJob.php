@@ -22,6 +22,21 @@ namespace Phlix\Media\MediaAsset;
 final class MediaAssetJob
 {
     /**
+     * Container extensions the media-asset pipeline can process.
+     *
+     * ⚠ **THE ONE DEFINITION.** It was spelled out three times — in
+     * {@see \Phlix\Media\Library\MediaScanner::processFile()} (the enqueue gate),
+     * in {@see MediaAssetGenerationJob::generateChapterThumbnails()} (the
+     * chapter-extraction gate) and, as of S284, in
+     * {@see MediaAssetBackfill} (the re-enqueue gate). Three copies of an
+     * eligibility list is how a backfill silently enqueues items the processor
+     * then refuses, so they all read this.
+     *
+     * @var list<string>
+     */
+    public const SUPPORTED_EXTENSIONS = ['mkv', 'mp4', 'webm'];
+
+    /**
      * @param string $itemId   Media item UUID
      * @param string $path     Absolute filesystem path to the source media file
      * @param int    $duration Media item duration in seconds (for trickplay timestamp generation)

@@ -59,6 +59,14 @@ class ScanJobRepository
      * (delete locally cached artwork), and the destructive `delete_all` (remove
      * every item) — reuse the SAME queue and are admitted by migration 084.
      *
+     * `media_assets` (migration 101, S284) re-enqueues the FILE-based media-asset
+     * queue — chapter thumbnails + trickplay sprite + Roku BIF — for a library's
+     * EXISTING rows. It exists because that queue's only producer is
+     * {@see \Phlix\Media\Library\MediaScanner::processFile()}, i.e. scan time, so
+     * an install scanned before S275 fixed the trickplay producer has no artefacts
+     * and no way to get any short of a full rescan. It reads no media files and
+     * writes no `media_items`.
+     *
      * The column is an ENUM, so this allowlist is the application-level guard
      * mirroring the accepted set of DB values.
      *
@@ -73,6 +81,7 @@ class ScanJobRepository
         'clear_metadata',
         'clear_artwork',
         'delete_all',
+        'media_assets',
     ];
 
     /**
@@ -222,6 +231,123 @@ class ScanJobRepository
         );
 
         return $id;
+    }
+
+    /**
+     * Enqueue a `queued` job for a library **only if that library has no
+     * `queued`/`running` job OF THE SAME TYPE**, in ONE statement.
+     *
+     * ## Why this exists (S284)
+     *
+     * {@see self::enqueue()} inserts unconditionally, which is right for `scan` —
+     * two scans of the same library are two distinct pieces of work an operator may
+     * legitimately want queued back to back. It is wrong for an idempotent
+     * BACKFILL: clicking "regenerate assets" twice must not leave two identical
+     * jobs in the queue that each re-walk the whole library. The requirement is
+     * literally "running it a second time does not duplicate queue rows", so the
+     * de-duplication has to be observable as a ROW COUNT, not merely as a
+     * downstream no-op.
+     *
+     * Check-then-insert is a TOCTOU (two concurrent admins both read "none active"
+     * and both insert), so the predicate is folded into the INSERT exactly as
+     * {@see self::startRunningIfIdle()} does. The same deadlock retry applies and
+     * for the same reason: `INSERT ... SELECT ... WHERE NOT EXISTS` takes locking
+     * reads on the `idx_lsj_library` range, so a concurrent inserter for the same
+     * library either blocks and then correctly refuses, or the pair deadlocks —
+     * and after one retry the winner has committed, so the loser's `NOT EXISTS` is
+     * false and it refuses. Without the retry a deadlock would surface as a thrown
+     * INSERT and the caller would have no way to tell it from a real failure.
+     *
+     * ⚠ **Scoped to `$type`, deliberately.** {@see self::hasActiveJobForLibrary()}
+     * is type-BLIND, so reusing it here would make a running `scan` (or a
+     * `metadata` match, which can run for hours) silently swallow an unrelated
+     * backfill request. Only a duplicate of the SAME operation is refused.
+     *
+     * ⚠ **`Connection::query()` returns `lastInsertId()` for an INSERT that
+     * affected rows, and `null` when it affected none.** `library_scan_jobs.id` is
+     * a CHAR(36) UUID with no AUTO_INCREMENT, so a SUCCESSFUL insert returns the
+     * string `'0'` — which is FALSY. This tests `!== null`; `if (!$result)` would
+     * read every successful insert as a refusal.
+     *
+     * @param string $libraryId Target library UUID.
+     * @param string $type      Job type; must be one of {@see self::ALLOWED_TYPES}.
+     *
+     * @return array{job_id: string, created: bool} `created` is TRUE when a row
+     *         was inserted. When FALSE, `job_id` is the id of the already-active
+     *         job of that type (or `''` if it finished in the interim, which is
+     *         benign — the caller only reports it).
+     *
+     * @throws InvalidArgumentException When `$type` is not one of
+     *                                  {@see self::ALLOWED_TYPES}.
+     *
+     * @since 0.36.0 (S284 — idempotent media-asset re-enqueue)
+     */
+    public function enqueueIfNoneActiveOfType(string $libraryId, string $type): array
+    {
+        $this->assertAllowedType($type);
+
+        $id = $this->generateUuid();
+
+        $sql = 'INSERT INTO library_scan_jobs (id, library_id, type, status)'
+            . " SELECT ?, ?, ?, 'queued' FROM DUAL WHERE NOT EXISTS ("
+            . '    SELECT 1 FROM library_scan_jobs active'
+            . '     WHERE active.library_id = ? AND active.type = ?'
+            . "       AND active.status IN ('queued', 'running')"
+            . ' )';
+        $params = [$id, $libraryId, $type, $libraryId, $type];
+
+        try {
+            $result = $this->db->query($sql, $params);
+        } catch (\Throwable $e) {
+            if (!$this->isRetryableLockError($e)) {
+                throw $e;
+            }
+            $result = $this->db->query($sql, $params);
+        }
+
+        if ($result !== null) {
+            return ['job_id' => $id, 'created' => true];
+        }
+
+        return [
+            'job_id' => $this->findActiveOfType($libraryId, $type) ?? '',
+            'created' => false,
+        ];
+    }
+
+    /**
+     * Id of the oldest `queued`/`running` job of a given type for a library.
+     *
+     * Exists so {@see self::enqueueIfNoneActiveOfType()} can tell a refused caller
+     * WHICH job is already doing the work, rather than answering an opaque "no".
+     * The admin UI polls `GET /api/v1/libraries/{id}/scan-status` with that id.
+     *
+     * @param string $libraryId Target library UUID.
+     * @param string $type      Job type to look for.
+     *
+     * @return string|null The job UUID, or null when no such job is active.
+     *
+     * @since 0.36.0 (S284)
+     */
+    public function findActiveOfType(string $libraryId, string $type): ?string
+    {
+        $rows = $this->db->query(
+            'SELECT id FROM library_scan_jobs'
+            . " WHERE library_id = ? AND type = ? AND status IN ('queued', 'running')"
+            . ' ORDER BY queued_at ASC LIMIT 1',
+            [$libraryId, $type],
+        );
+
+        if (!is_array($rows) || $rows === []) {
+            return null;
+        }
+
+        $row = $rows[0];
+        if (!is_array($row) || !is_string($row['id'] ?? null) || $row['id'] === '') {
+            return null;
+        }
+
+        return $row['id'];
     }
 
     /**

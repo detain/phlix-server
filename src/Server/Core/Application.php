@@ -1777,6 +1777,15 @@ class Application
         $this->router->post('/api/v1/libraries/{id}/clear-artwork', [$libraryController, 'clearArtwork']);
         $this->router->post('/api/v1/libraries/{id}/delete-all', [$libraryController, 'deleteAll']);
 
+        // S284: re-prime the FILE-based media-asset queue (chapter thumbnails,
+        // trickplay sprite, Roku BIF) for a library's EXISTING rows. That queue's
+        // only other producer is the scanner, so before this route an install
+        // scanned before S275 fixed the trickplay producer could never acquire a
+        // sprite/BIF short of a full rescan. Same 3-segment literal shape as the
+        // maintenance ops above, so no shadowing with the `{id}` routes, and the
+        // same in-controller admin gate (S272) rather than route-level middleware.
+        $this->router->post('/api/v1/libraries/{id}/regenerate-assets', [$libraryController, 'regenerateAssets']);
+
         // Theme media routes
         $this->router->get('/api/v1/libraries/{id}/theme-media', [$themeMediaController, 'getThemeMedia']);
         $this->router->post('/api/v1/libraries/{id}/theme-media/scan', [$themeMediaController, 'scanThemeMedia']);

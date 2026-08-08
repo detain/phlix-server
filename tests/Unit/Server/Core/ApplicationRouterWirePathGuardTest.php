@@ -102,6 +102,11 @@ use function DI\factory;
  *   below are correct and must stay `[]`; the gate is pinned instead by
  *   {@see \Phlix\Tests\Unit\Server\Http\Controllers\LibraryDestructiveRoutesAdminGateTest}.
  *   Before reading any `[]` as "ungated", grep the handler for its own guard.
+ *   S284 added a SEVENTH rail of the same shape —
+ *   `POST /api/v1/libraries/{id}/regenerate-assets` — which likewise shows `[]`
+ *   here and gates in `LibraryController::regenerateAssets()`; its 401/403/202
+ *   triple is pinned by
+ *   {@see \Phlix\Tests\Unit\Server\Http\Controllers\LibraryRegenerateAssetsAdminGateTest}.
  * - **Not on this router at all:** the pre-router fast paths
  *   (`/media/{id}/stream`, `/api/v1/artwork/{id}`, `/api/v1/users/{id}/avatar`)
  *   appear in NO route table by construction — S164 and S238 own those. And the
@@ -519,6 +524,7 @@ final class ApplicationRouterWirePathGuardTest extends TestCase
         'POST /api/v1/libraries/{id}/match-metadata -> LibraryController::matchMetadata []',
         'POST /api/v1/libraries/{id}/prune -> LibraryController::prune []',
         'POST /api/v1/libraries/{id}/refresh-metadata -> LibraryController::refreshMetadata []',
+        'POST /api/v1/libraries/{id}/regenerate-assets -> LibraryController::regenerateAssets []',
         'POST /api/v1/libraries/{id}/rescan -> LibraryController::rescan []',
         'POST /api/v1/libraries/{id}/scan -> LibraryController::scan []',
         'POST /api/v1/libraries/{id}/theme-media/scan -> ThemeMediaController::scanThemeMedia []',

@@ -15,15 +15,29 @@ use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
 
 /**
- * Trickplay Controller — HTTP handler for serving trickplay thumbnail images.
+ * Trickplay Controller — HTTP handler for serving trickplay artefacts.
  *
- * This controller serves thumbnail grid images and BIF index XML files
- * with the appropriate Content-Type headers for byte-range requests.
+ * Serves the three files the background media-asset worker writes per item:
+ * `sprite.jpg` and `timeline.json` (the web player's scrubber preview) and
+ * `thumbs.bif` (the Roku trick-mode archive).
+ *
+ * S275 removed `getIndex()`/`getThumbnail()` and their routes. They served
+ * `index.xml` and `bif_NN.jpg`, which only the deleted `TrickplayGenerator`
+ * could ever have produced — proven at runtime never to have run — so they were
+ * live routes over files nothing writes. Real BIF data is now `thumbs.bif`.
  *
  * @since 0.11.0
  */
 class TrickplayController
 {
+    /**
+     * File name of the Roku BIF archive within a job's trickplay directory.
+     *
+     * Aliased from {@see BifWriter::FILENAME} rather than re-spelled, so the
+     * name the producer writes and the name this class serves cannot drift.
+     */
+    public const BIF_FILENAME = BifWriter::FILENAME;
+
     /** @var string Base directory for trickplay files */
     private string $trickplayDir;
 
@@ -67,28 +81,55 @@ class TrickplayController
     }
 
     /**
-     * Returns the URL for the trickplay thumbnail image file.
+     * Returns the URL for the Roku BIF archive.
      *
      * @param string $jobId Transcode job identifier
-     * @param int $imageIndex Grid image index
      *
-     * @return string URL path to the thumbnail image
+     * @return string URL path to the `.bif` archive
+     *
+     * @since 0.103.0
      */
-    public function getThumbnailUrl(string $jobId, int $imageIndex): string
+    public function getBifUrl(string $jobId): string
     {
-        return $this->baseUrl . '/trickplay/' . $jobId . '/thumb-' . $imageIndex . '.jpg';
+        return $this->baseUrl . '/trickplay/' . $jobId . '/' . self::BIF_FILENAME;
     }
 
     /**
-     * Returns the URL for the BIF index XML.
+     * Absolute path of a job's BIF archive, whether or not it exists.
      *
      * @param string $jobId Transcode job identifier
      *
-     * @return string URL path to the BIF index XML
+     * @return string Filesystem path to the `.bif` archive
+     *
+     * @since 0.103.0
      */
-    public function getIndexUrl(string $jobId): string
+    public function getBifPath(string $jobId): string
     {
-        return $this->baseUrl . '/trickplay/' . $jobId . '/index.xml';
+        return $this->getJobDir($jobId) . '/' . self::BIF_FILENAME;
+    }
+
+    /**
+     * Whether a job's BIF archive is actually on disk.
+     *
+     * Callers advertise `trickplay_bif_url` on the strength of this and nothing
+     * else — a URL offered for a file that is not there is a 404 the client has
+     * been told to expect.
+     *
+     * @param string $jobId Transcode job identifier
+     *
+     * @return bool True if the `.bif` exists and is non-empty
+     *
+     * @since 0.103.0
+     */
+    public function hasBif(string $jobId): bool
+    {
+        if (!$this->isValidJobId($jobId)) {
+            return false;
+        }
+
+        $path = $this->getBifPath($jobId);
+
+        return is_file($path) && filesize($path) > 0;
     }
 
     /**
@@ -116,72 +157,33 @@ class TrickplayController
     }
 
     /**
-     * Returns the thumbnail image content.
-     *
-     * @param string $jobId Transcode job identifier
-     * @param int $imageIndex Grid image index
-     *
-     * @return string|null Image content or null if not found
-     */
-    public function getThumbnailContent(string $jobId, int $imageIndex): ?string
-    {
-        // Path traversal protection: validate jobId contains only safe characters
-        if (!$this->isValidJobId($jobId)) {
-            return null;
-        }
-        $jobDir = $this->trickplayDir . '/trickplay/' . $jobId;
-
-        // Try JPG first
-        $gridFile = 'bif_' . str_pad((string) $imageIndex, 2, '0', STR_PAD_LEFT) . '.jpg';
-        $imagePath = $jobDir . '/' . $gridFile;
-
-        if (!file_exists($imagePath)) {
-            // Try PNG fallback
-            $gridFile = 'bif_' . str_pad((string) $imageIndex, 2, '0', STR_PAD_LEFT) . '.png';
-            $imagePath = $jobDir . '/' . $gridFile;
-        }
-
-        // Final check if file exists
-        if (!file_exists($imagePath)) {
-            return null;
-        }
-
-        // Defense-in-depth: resolve real path and verify it's within trickplay directory
-        $realPath = realpath($imagePath);
-        if ($realPath === false || !str_starts_with($realPath, $this->trickplayDir)) {
-            return null;
-        }
-
-        $content = file_get_contents($imagePath);
-        return $content !== false ? $content : null;
-    }
-
-    /**
-     * Returns the BIF index XML content.
+     * Returns the Roku BIF archive content.
      *
      * @param string $jobId Transcode job identifier
      *
-     * @return string|null XML content or null if not found
+     * @return string|null Archive bytes or null if not found
+     *
+     * @since 0.103.0
      */
-    public function getIndexContent(string $jobId): ?string
+    public function getBifContent(string $jobId): ?string
     {
         // Path traversal protection: validate jobId
         if (!$this->isValidJobId($jobId)) {
             return null;
         }
-        $indexPath = $this->trickplayDir . '/trickplay/' . $jobId . '/index.xml';
+        $bifPath = $this->getBifPath($jobId);
 
         // Defense-in-depth: resolve real path and verify it's within trickplay directory
-        $realPath = realpath($indexPath);
+        $realPath = realpath($bifPath);
         if ($realPath === false || !str_starts_with($realPath, $this->trickplayDir)) {
             return null;
         }
 
-        if (!file_exists($indexPath)) {
+        if (!is_file($bifPath)) {
             return null;
         }
 
-        $content = file_get_contents($indexPath);
+        $content = file_get_contents($bifPath);
         return $content !== false ? $content : null;
     }
 
@@ -254,48 +256,6 @@ class TrickplayController
     }
 
     /**
-     * Gets the Content-Type for a thumbnail image.
-     *
-     * @param string $jobId Transcode job identifier
-     * @param int $imageIndex Grid image index
-     *
-     * @return string Content-Type header value
-     */
-    public function getThumbnailContentType(string $jobId, int $imageIndex): string
-    {
-        // Path traversal protection: validate jobId
-        if (!$this->isValidJobId($jobId)) {
-            return 'application/octet-stream';
-        }
-        $jobDir = $this->trickplayDir . '/trickplay/' . $jobId;
-        $jpgPath = $jobDir . '/bif_' . str_pad((string) $imageIndex, 2, '0', STR_PAD_LEFT) . '.jpg';
-        $pngPath = $jobDir . '/bif_' . str_pad((string) $imageIndex, 2, '0', STR_PAD_LEFT) . '.png';
-
-        if (file_exists($jpgPath)) {
-            return 'image/jpeg';
-        }
-
-        if (file_exists($pngPath)) {
-            return 'image/png';
-        }
-
-        return 'application/octet-stream';
-    }
-
-    /**
-     * Checks if trickplay files exist for a job.
-     *
-     * @param string $jobId Transcode job identifier
-     *
-     * @return bool True if trickplay exists
-     */
-    public function hasTrickplay(string $jobId): bool
-    {
-        $indexPath = $this->trickplayDir . '/trickplay/' . $jobId . '/index.xml';
-        return file_exists($indexPath);
-    }
-
-    /**
      * Gets the trickplay directory path for a job.
      *
      * @param string $jobId Transcode job identifier
@@ -308,71 +268,34 @@ class TrickplayController
     }
 
     /**
-     * HTTP handler for getting a thumbnail image.
+     * HTTP handler for getting the Roku BIF archive.
      *
-     * GET /trickplay/{jobId}/thumb-{index}.jpg
-     *
-     * @param Request $request HTTP request
-     * @param array<string, string> $params Route parameters (jobId, index)
-     *
-     * @return Response HTTP response with image content
-     *
-     * @since 0.11.0
-     */
-    public function getThumbnail(Request $request, array $params): Response
-    {
-        $jobId = $params['jobId'] ?? '';
-        $index = isset($params['index']) ? (int) $params['index'] : 0;
-
-        $content = $this->getThumbnailContent($jobId, $index);
-        if ($content === null) {
-            return (new Response())
-                ->status(404)
-                ->json([
-                    'error' => 'Not Found',
-                    'message' => 'Trickplay thumbnail not found',
-                ]);
-        }
-
-        $contentType = $this->getThumbnailContentType($jobId, $index);
-
-        return (new Response())
-            ->status(200)
-            ->header('Content-Type', $contentType)
-            ->header('Content-Length', (string) strlen($content))
-            ->header('Cache-Control', 'public, max-age=86400')
-            ->body($content);
-    }
-
-    /**
-     * HTTP handler for getting the BIF index XML.
-     *
-     * GET /trickplay/{jobId}/index.xml
+     * GET /trickplay/{jobId}/thumbs.bif
      *
      * @param Request $request HTTP request
      * @param array<string, string> $params Route parameters (jobId)
      *
-     * @return Response HTTP response with XML content
+     * @return Response HTTP response with the archive bytes
      *
-     * @since 0.11.0
+     * @since 0.103.0
      */
-    public function getIndex(Request $request, array $params): Response
+    public function getBif(Request $request, array $params): Response
     {
         $jobId = $params['jobId'] ?? '';
 
-        $content = $this->getIndexContent($jobId);
+        $content = $this->getBifContent($jobId);
         if ($content === null) {
             return (new Response())
                 ->status(404)
                 ->json([
                     'error' => 'Not Found',
-                    'message' => 'Trickplay index not found',
+                    'message' => 'Trickplay BIF not found',
                 ]);
         }
 
         return (new Response())
             ->status(200)
-            ->header('Content-Type', 'application/xml')
+            ->header('Content-Type', 'application/octet-stream')
             ->header('Content-Length', (string) strlen($content))
             ->header('Cache-Control', 'public, max-age=86400')
             ->body($content);

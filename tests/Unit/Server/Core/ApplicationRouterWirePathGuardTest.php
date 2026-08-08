@@ -401,9 +401,8 @@ final class ApplicationRouterWirePathGuardTest extends TestCase
         'GET /stream/theme-media/{libraryId}/audio -> ThemeMediaStreamController::streamAudio []',
         'GET /stream/theme-media/{libraryId}/video -> ThemeMediaStreamController::streamVideo []',
         'GET /system/info -> Closure@Application.php []',
-        'GET /trickplay/{jobId}/index.xml -> TrickplayController::getIndex []',
         'GET /trickplay/{jobId}/sprite.jpg -> TrickplayController::getSprite []',
-        'GET /trickplay/{jobId}/thumb-{index}.jpg -> TrickplayController::getThumbnail []',
+        'GET /trickplay/{jobId}/thumbs.bif -> TrickplayController::getBif []',
         'GET /trickplay/{jobId}/timeline.json -> TrickplayController::getTimeline []',
         'PATCH /api/v1/media/{id}/metadata -> MediaItemController::updateMetadata [AuthMiddleware]',
         'POST /api/v1/admin/auth-providers/github/config -> GithubAdminController::saveSettings [AdminMiddleware]',
@@ -1189,6 +1188,81 @@ final class ApplicationRouterWirePathGuardTest extends TestCase
             . ' under exactly that literal (S36/S236)'
         );
         $this->assertArrayNotHasKey(self::NEXT_UP_PATH . '-MUTATED', $routes['GET']);
+    }
+
+    // -----------------------------------------------------------------
+    // 6b. S275 — the trickplay BIF wire path
+    // -----------------------------------------------------------------
+
+    /** The Roku BIF archive route added by S275. */
+    private const BIF_PATH = '/trickplay/{jobId}/thumbs.bif';
+
+    /**
+     * The manifest above already compares the whole list exactly, so a deletion
+     * reds. This adds the half a manifest cannot cover: that the new literal is
+     * REACHED at dispatch rather than absorbed by a sibling. `/trickplay/` carries
+     * three registrations that differ only in their final segment, and a pattern
+     * that swallowed `thumbs.bif` would leave the manifest perfectly green while
+     * every Roku scrub was answered by the wrong handler
+     * ([[feedback_a_sibling_wildcard_absorbs_a_deleted_route]]).
+     */
+    public function testTheTrickplayBifWirePathIsRegisteredUnderItsExactPathLiteral(): void
+    {
+        $index = $this->pathIndex();
+
+        $this->assertArrayHasKey('GET', $index);
+        $this->assertArrayHasKey(
+            self::BIF_PATH,
+            $index['GET'],
+            'Application must register GET ' . self::BIF_PATH . ' under exactly that literal; '
+            . 'without it the trickplay_bif_url the media-item endpoint advertises has nothing '
+            . 'serving it.'
+        );
+
+        // The two paths S275 DELETED, stated separately: only the (also deleted)
+        // TrickplayGenerator ever wrote index.xml / bif_NN.jpg, so re-adding
+        // either would restore a route over a file nothing produces.
+        $this->assertArrayNotHasKey('/trickplay/{jobId}/index.xml', $index['GET']);
+        $this->assertArrayNotHasKey('/trickplay/{jobId}/thumb-{index}.jpg', $index['GET']);
+
+        $entry = $index['GET'][self::BIF_PATH];
+        $handler = $entry['handler'] ?? null;
+        $this->assertIsArray($handler, 'the route must be a [target, method] pair, not a closure');
+        $this->assertIsObject($handler[0]);
+        $this->assertSame('TrickplayController', $this->shortName($handler[0]::class));
+        $this->assertSame('getBif', $handler[1]);
+    }
+
+    /**
+     * Dispatch control, shaped like the session-complete one above: both replies
+     * are 404 and the BODIES tell them apart. A job with no archive reaches
+     * `TrickplayController::getBif()`, which answers its own
+     * `"Trickplay BIF not found"`; an unregistered sibling gets the ROUTER's
+     * `"The requested resource was not found"`. Comparing statuses alone would be
+     * the "a second 404 is not a control" mistake.
+     */
+    public function testDispatchingTheTrickplayBifPathReachesItsHandlerNotTheRouterMiss(): void
+    {
+        $application = $this->application();
+
+        $served = $application->dispatch($this->request('/trickplay/no-such-job/thumbs.bif'));
+        $this->assertSame(404, $served->statusCode);
+        $this->assertSame(
+            'Trickplay BIF not found',
+            $this->body($served)['message'] ?? null,
+            'GET /trickplay/{jobId}/thumbs.bif must reach TrickplayController::getBif and get the '
+            . "HANDLER's own miss. If a sibling /trickplay/ pattern absorbed it, or the "
+            . 'registration were deleted, the body would be the router\'s instead.'
+        );
+
+        $control = $application->dispatch($this->request('/trickplay/no-such-job/thumbs.bif-MUTATED'));
+        $this->assertSame(404, $control->statusCode);
+        $this->assertSame(
+            'The requested resource was not found',
+            $this->body($control)['message'] ?? null,
+            "the ROUTER's miss must be distinguishable from the handler's miss, otherwise the "
+            . 'assertion above cannot tell a served route from a deleted one'
+        );
     }
 
     // -----------------------------------------------------------------

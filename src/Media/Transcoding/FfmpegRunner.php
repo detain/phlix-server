@@ -2539,6 +2539,45 @@ class FfmpegRunner
         return $formatted === '' ? '0' : $formatted;
     }
 
+    /** Sprite-sheet columns; rows are derived from the requested thumb count. */
+    private const TRICKPLAY_SPRITE_COLUMNS = 6;
+
+    /** Sprite-sheet thumbnail width in pixels. */
+    private const TRICKPLAY_THUMB_WIDTH = 160;
+
+    /** Sprite-sheet thumbnail height in pixels. */
+    private const TRICKPLAY_THUMB_HEIGHT = 90;
+
+    /** Outer border the `tile` filter leaves around the whole sheet, in pixels. */
+    private const TRICKPLAY_MARGIN = 2;
+
+    /** Gap the `tile` filter leaves between adjacent thumbnails, in pixels. */
+    private const TRICKPLAY_PADDING = 1;
+
+    /**
+     * Formats a positive, finite seconds value for use inside an FFmpeg filter
+     * string, where shell quoting is not available.
+     *
+     * {@see seconds()}'s output is digits and at most one dot, so it is safe to
+     * interpolate — but only if the input was finite. An `INF`/`NAN` duration
+     * would make `sprintf('%.3f')` emit `inf`/`nan`, which is neither a number
+     * nor something to hand to a filtergraph. Returns null instead.
+     *
+     * @param float $value Seconds.
+     *
+     * @return string|null A bare decimal literal, or null if $value is unusable.
+     */
+    private static function filterSeconds(float $value): ?string
+    {
+        if (!\is_finite($value) || $value <= 0.0) {
+            return null;
+        }
+
+        $formatted = self::seconds($value);
+
+        return \preg_match('/^[0-9]+(\.[0-9]{1,3})?$/', $formatted) === 1 ? $formatted : null;
+    }
+
     /**
      * Generates trickplay sprite sheets for chapter-based scrubbing preview.
      *
@@ -2577,13 +2616,30 @@ class FfmpegRunner
             return null;
         }
 
+        if ($count < 1) {
+            return null;
+        }
+
         $interval = $duration / $count;
-        $cols = 6;
+        $cols = self::TRICKPLAY_SPRITE_COLUMNS;
         $rows = (int) ceil($count / $cols);
-        $thumbW = 160;
-        $thumbH = 90;
-        $margin = 2;
-        $padding = 1;
+        $thumbW = self::TRICKPLAY_THUMB_WIDTH;
+        $thumbH = self::TRICKPLAY_THUMB_HEIGHT;
+        $margin = self::TRICKPLAY_MARGIN;
+        $padding = self::TRICKPLAY_PADDING;
+
+        // Sample the MIDPOINT OF EACH INTERVAL rather than its start. That keeps
+        // the original intent — thumbnail 0 is not the black slate at t=0 — while
+        // still covering the whole file. The previous `-ss (duration / 2)` seeked
+        // to the middle of the VIDEO, so the sheet only ever showed its second
+        // half at twice the labelled time and the bottom rows came out empty.
+        $offset = $interval / 2.0;
+
+        $intervalArg = self::filterSeconds($interval);
+        $offsetArg = self::filterSeconds($offset);
+        if ($intervalArg === null || $offsetArg === null) {
+            return null;
+        }
 
         if (!is_dir($outputDir)) {
             if (!mkdir($outputDir, 0755, true) && !is_dir($outputDir)) {
@@ -2594,13 +2650,17 @@ class FfmpegRunner
         $spritePath = $outputDir . '/sprite.jpg';
         $timelinePath = $outputDir . '/timeline.json';
 
-        // Use the midpoint timestamp so the first frame capture is not black
-        // (often an opening slate/blank) when seeking to time 0.
-        $captureTime = self::seconds($duration / 2.0);
-
+        // `tile`'s layout option is an IMAGE SIZE — `6x10`, not `6:10`. Written
+        // with a colon it is parsed positionally as layout="6", which ffmpeg
+        // rejects with "Unable to parse option value \"6\" as image size" and
+        // the whole filtergraph fails, so NO sprite was ever produced.
+        // Interpolated bare, not via escapeshellarg(): the value sits inside the
+        // double-quoted -vf argument, where the single quotes escapeshellarg()
+        // adds would reach ffmpeg verbatim (`fps=1/'2'`). filterSeconds() has
+        // already restricted it to digits and one dot.
         $vfFilter = sprintf(
-            'fps=1/%s,scale=%d:%d,tile=%d:%d:margin=%d:padding=%d',
-            escapeshellarg(self::seconds($interval)),
+            'fps=1/%s,scale=%d:%d,tile=%dx%d:margin=%d:padding=%d',
+            $intervalArg,
             $thumbW,
             $thumbH,
             $cols,
@@ -2612,7 +2672,7 @@ class FfmpegRunner
             '%s -y -hide_banner -loglevel error -ss %s -i %s '
             . '-vf "%s" -frames:v 1 %s 2>&1',
             escapeshellarg($this->ffmpegPath),
-            escapeshellarg($captureTime),
+            escapeshellarg($offsetArg),
             escapeshellarg($videoPath),
             $vfFilter,
             escapeshellarg($spritePath)
@@ -2632,13 +2692,22 @@ class FfmpegRunner
 
         // Build timeline JSON: each entry maps thumbnail index to pixel offset
         // within the sprite sheet and the corresponding video timestamp.
+        //
+        // The `tile` filter lays a thumbnail's top-left corner at
+        // `margin + index * (size + padding)` — the margin is an outer border
+        // applied ONCE, not per cell. Measured against a real sheet: 6 columns of
+        // 160 px with margin 2 / padding 1 is 6*160 + 5*1 + 2*2 = 969 px wide,
+        // and column 5 begins at 2 + 5*161 = 807. The previous
+        // `index * (size + margin + padding)` drifted by `margin` per step and
+        // put column 5 at 815, so every preview after the first column was
+        // showing a slice of the wrong thumbnails.
         $timeline = [];
         for ($i = 0; $i < $count; $i++) {
             $row = (int) floor($i / $cols);
             $col = $i % $cols;
-            $x = $col * ($thumbW + $margin + $padding);
-            $y = $row * ($thumbH + $margin + $padding);
-            $time = $i * $interval;
+            $x = $margin + $col * ($thumbW + $padding);
+            $y = $margin + $row * ($thumbH + $padding);
+            $time = $offset + $i * $interval;
             $timeline[] = ['time' => $time, 'x' => $x, 'y' => $y];
         }
 
@@ -2646,6 +2715,133 @@ class FfmpegRunner
         file_put_contents($timelinePath, $json);
 
         return [$spritePath, $timelinePath];
+    }
+
+    /**
+     * Extracts the individual JPEG frames a Roku BIF archive is built from.
+     *
+     * A BIF is a container of whole JPEG files, so the frames cannot be carved
+     * out of `sprite.jpg`: that sheet is 160x90 per cell (half Roku's smallest
+     * recommended trickplay size) and re-encoding an already-compressed tile
+     * would compound the loss. This runs its own extraction pass at Roku's
+     * recommended width instead, and — like the sprite pass — samples the
+     * midpoint of each interval so frame 0 is not the opening black slate.
+     *
+     * Deliberately NOT folded into {@see generateTrickplaySprites()} as a second
+     * filtergraph output: a BIF failure must not also cost the caller the sprite
+     * the web player needs. The price is one extra decode pass, which is paid in
+     * the background media-asset worker, never on an HTTP request.
+     *
+     * The caller owns the returned files and is expected to delete them once the
+     * archive is written.
+     *
+     * @param string $videoPath Source video file path.
+     * @param string $outputDir Directory to write the frames into.
+     * @param int    $count     Number of frames to extract (default 60).
+     * @param int    $width     Frame width in pixels; height follows the source
+     *                          aspect ratio, rounded to an even number.
+     *
+     * @return array{0: list<string>, 1: int}|null `[frame paths in capture order,
+     *         milliseconds between consecutive frames]`, or null on failure.
+     *
+     * @since 0.103.0
+     */
+    public function generateBifFrames(
+        string $videoPath,
+        string $outputDir,
+        int $count = 60,
+        int $width = 320
+    ): ?array {
+        if ($count < 2 || $width < 2) {
+            return null;
+        }
+
+        $probe = $this->probe($videoPath);
+        if (!is_array($probe)) {
+            return null;
+        }
+
+        $format = $probe['format'] ?? null;
+        if (!is_array($format)) {
+            return null;
+        }
+
+        $rawDuration = $format['duration'] ?? null;
+        if (!is_numeric($rawDuration)) {
+            return null;
+        }
+
+        $duration = (float) $rawDuration;
+        $interval = $duration / $count;
+        $intervalArg = self::filterSeconds($interval);
+        $offsetArg = self::filterSeconds($interval / 2.0);
+        if ($intervalArg === null || $offsetArg === null) {
+            return null;
+        }
+
+        $intervalMs = (int) round($interval * 1000.0);
+        if ($intervalMs < 1) {
+            return null;
+        }
+
+        if (!is_dir($outputDir)) {
+            if (!mkdir($outputDir, 0755, true) && !is_dir($outputDir)) {
+                return null;
+            }
+        }
+
+        $pattern = $outputDir . '/bifframe_%05d.jpg';
+
+        $cmd = sprintf(
+            '%s -y -hide_banner -loglevel error -ss %s -i %s '
+            . '-vf "fps=1/%s,scale=%d:-2" -frames:v %d -qscale:v 4 %s 2>&1',
+            escapeshellarg($this->ffmpegPath),
+            escapeshellarg($offsetArg),
+            escapeshellarg($videoPath),
+            $intervalArg,
+            $width,
+            $count,
+            escapeshellarg($pattern)
+        );
+
+        $outputLines = [];
+        $exitCode = 0;
+        $this->runCoroutineAwareCommand($cmd, $outputLines, $exitCode);
+
+        // ffmpeg's image2 muxer numbers from 1. Walk the sequence and stop at the
+        // first gap, so a short tail (rounding, or a file that ends early) yields
+        // the frames that DO exist rather than a hole in the middle of the index.
+        $paths = [];
+        for ($i = 1; $i <= $count; $i++) {
+            $framePath = sprintf($pattern, $i);
+            if (!is_file($framePath) || filesize($framePath) === 0) {
+                break;
+            }
+            $paths[] = $framePath;
+        }
+
+        if ($exitCode !== 0 && $paths === []) {
+            $this->logger->warning('BIF frame extraction failed', [
+                'video' => $videoPath,
+                'output' => implode("\n", $outputLines),
+            ]);
+
+            return null;
+        }
+
+        if (count($paths) < 2) {
+            $this->logger->warning('BIF frame extraction produced too few frames', [
+                'video' => $videoPath,
+                'frames' => count($paths),
+            ]);
+            foreach ($paths as $stale) {
+                @unlink($stale);
+            }
+
+            return null;
+        }
+
+        return [$paths, $intervalMs];
     }
 
     /**

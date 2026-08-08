@@ -22,13 +22,16 @@ use Workerman\MySQL\Connection;
  * generated. It resolved to a real default in `config/trickplay.php`, so
  * `SettingsDefaultResolvabilityTest` passed it and always would.
  *
- * The reason it was hard to spot: there are TWO trickplay implementations.
- * `config/trickplay.php` describes the older one (`TrickplayGenerator` +
- * `TrickplayConfig`, with `interval_seconds`/`grid_*`/`thumb_*`), which is dead
- * code — its only entry point, `StreamManager::generateTrickplay()`, throws
- * unless `StreamManager::setTrickplay()` ran, and that setter has no callers.
- * The implementation that actually runs is this one, reached from
- * `MediaAssetWorker`, and it never consulted any setting.
+ * The reason it was hard to spot: there used to be TWO trickplay
+ * implementations. `config/trickplay.php` described the older one
+ * (`TrickplayGenerator` + `TrickplayConfig`, with
+ * `interval_seconds`/`grid_*`/`thumb_*`), which was dead code — its only entry
+ * point, `StreamManager::generateTrickplay()`, threw unless
+ * `StreamManager::setTrickplay()` ran, and that setter had no callers. S275
+ * confirmed that at runtime (a pcov trace over a full media-asset run never even
+ * autoloaded the class) and deleted the whole older path, along with the config
+ * keys that only described it. The implementation that actually runs is this
+ * one, reached from `MediaAssetWorker`, and it never consulted any setting.
  *
  * These assertions check the OBSERVABLE EFFECT — whether FFmpeg is asked to
  * produce sprites — never that a flag was read.

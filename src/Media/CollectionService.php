@@ -11,7 +11,9 @@ declare(strict_types=1);
 
 namespace Phlix\Media;
 
+use Phlix\Auth\SignedUrl;
 use Phlix\Media\Library\ItemRepository;
+use Phlix\Media\Metadata\BackdropSrcset;
 use Phlix\Media\Metadata\TmdbProvider;
 use Workerman\MySQL\Connection;
 
@@ -22,6 +24,39 @@ use Workerman\MySQL\Connection;
  * are groups of movies that TMDB tracks as a collection. This service syncs those groupings
  * into local database tables so the UI can display "Part of a Collection" metadata and
  * allow browsing all items in a collection.
+ *
+ * ## Artwork shaping contract (S104)
+ *
+ * The four read methods here are response-shaping exits: their return arrays go
+ * straight onto the wire via {@see \Phlix\Server\WebPortal\WebPortalRouter}. Rows
+ * do NOT pass through {@see \Phlix\Media\Library\MediaItemShaper}, so both of the
+ * transforms that shaper applies have to be applied here as well, and for the same
+ * reasons:
+ *
+ *  1. **Re-mint at RESPONSE time** — every emitted `poster_url`/`backdrop_url` runs
+ *     through {@see SignedUrl::refreshArtworkUrl()}. Artwork URLs are signed at
+ *     SCAN/enrich time with a bounded TTL and stored verbatim, so hours later every
+ *     stored signature is expired; a client that fetches artwork WITHOUT a session
+ *     authorises by signature alone and gets a 401 and a blank image. That is the
+ *     2026-07-19 production incident (expired signed artwork URLs → broken images
+ *     plus a re-download flood), whose fix was re-signing on the way OUT. This is
+ *     latent until S72 caches artwork locally as `/api/v1/artwork/…`; external
+ *     (TMDB) covers and null are returned unchanged, so it is a no-op until then.
+ *     Do NOT "optimise" this back to scan time.
+ *  2. **TMDB width-swap on backdrops** — the two {@see BackdropSrcset} size budgets
+ *     are deliberately different, and both appear here. The three collection-level
+ *     methods emit ONE box-set background per response, so they take the HERO budget
+ *     ({@see BackdropSrcset::largeUrl()}, `/original`) — a genuine step UP from the
+ *     `/w1280` this class stores in {@see self::getOrCreateCollection()}, since TMDB
+ *     re-renders from the master asset. {@see self::getCollectionMembers()} returns
+ *     up to N rows, so it takes the LIST-ROW budget
+ *     ({@see BackdropSrcset::rowUrl()}) instead and never advertises `/original`.
+ *     Non-TMDB and locally cached URLs have no width ladder and fall back to the
+ *     stored value, which is then re-minted by (1).
+ *
+ * Posters are deliberately NOT width-swapped: `MediaItemShaper` does not swap the
+ * single `poster_url` either (it keeps the stored width and derives a separate
+ * `poster_srcset`), and this service emits no srcset field.
  *
  * @author Phlix Development Team
  * @version 1.0.0
@@ -115,13 +150,18 @@ final class CollectionService
             return null;
         }
 
+        $storedPoster = is_string($row['poster_url'] ?? null) ? $row['poster_url'] : null;
+        $storedBackdrop = is_string($row['backdrop_url'] ?? null) ? $row['backdrop_url'] : null;
+
         return [
             'id' => is_int($row['id'] ?? null) ? $row['id'] : 0,
             'tmdb_collection_id' => is_int($row['tmdb_collection_id'] ?? null) ? $row['tmdb_collection_id'] : 0,
             'name' => is_string($row['name'] ?? null) ? $row['name'] : '',
             'overview' => is_string($row['overview'] ?? null) ? $row['overview'] : null,
-            'poster_url' => is_string($row['poster_url'] ?? null) ? $row['poster_url'] : null,
-            'backdrop_url' => is_string($row['backdrop_url'] ?? null) ? $row['backdrop_url'] : null,
+            'poster_url' => SignedUrl::refreshArtworkUrl($storedPoster),
+            'backdrop_url' => SignedUrl::refreshArtworkUrl(
+                BackdropSrcset::largeUrl($storedBackdrop) ?? $storedBackdrop
+            ),
         ];
     }
 
@@ -265,13 +305,22 @@ final class CollectionService
             if (!is_array($row)) {
                 continue;
             }
+            $storedPoster = is_string($row['poster_url'] ?? null) ? $row['poster_url'] : null;
+            $storedBackdrop = is_string($row['backdrop_url'] ?? null) ? $row['backdrop_url'] : null;
+
             $members[] = [
                 'id' => is_string($row['id'] ?? null) ? $row['id'] : '',
                 'name' => is_string($row['name'] ?? null) ? $row['name'] : '',
                 'type' => is_string($row['type'] ?? null) ? $row['type'] : '',
                 'metadata_json' => $row['metadata_json'] ?? null,
-                'poster_url' => is_string($row['poster_url'] ?? null) ? $row['poster_url'] : null,
-                'backdrop_url' => is_string($row['backdrop_url'] ?? null) ? $row['backdrop_url'] : null,
+                'poster_url' => SignedUrl::refreshArtworkUrl($storedPoster),
+                // LIST-ROW budget, not the hero one: this is up to N member rows
+                // per response, so `/original` is never advertised and the stored
+                // `/w500` steps UP to BackdropSrcset's row width — byte-identical
+                // to what MediaItemShaper::shape() does for a library row.
+                'backdrop_url' => SignedUrl::refreshArtworkUrl(
+                    BackdropSrcset::rowUrl($storedBackdrop) ?? $storedBackdrop
+                ),
                 'tmdb_part_order' => is_int($row['tmdb_part_order'] ?? null) ? $row['tmdb_part_order'] : 0,
             ];
         }
@@ -309,13 +358,18 @@ final class CollectionService
             return null;
         }
 
+        $storedPoster = is_string($row['poster_url'] ?? null) ? $row['poster_url'] : null;
+        $storedBackdrop = is_string($row['backdrop_url'] ?? null) ? $row['backdrop_url'] : null;
+
         return [
             'id' => is_int($row['id'] ?? null) ? $row['id'] : 0,
             'tmdb_collection_id' => is_int($row['tmdb_collection_id'] ?? null) ? $row['tmdb_collection_id'] : 0,
             'name' => is_string($row['name'] ?? null) ? $row['name'] : '',
             'overview' => is_string($row['overview'] ?? null) ? $row['overview'] : null,
-            'poster_url' => is_string($row['poster_url'] ?? null) ? $row['poster_url'] : null,
-            'backdrop_url' => is_string($row['backdrop_url'] ?? null) ? $row['backdrop_url'] : null,
+            'poster_url' => SignedUrl::refreshArtworkUrl($storedPoster),
+            'backdrop_url' => SignedUrl::refreshArtworkUrl(
+                BackdropSrcset::largeUrl($storedBackdrop) ?? $storedBackdrop
+            ),
         ];
     }
 
@@ -345,13 +399,18 @@ final class CollectionService
             return null;
         }
 
+        $storedPoster = is_string($row['poster_url'] ?? null) ? $row['poster_url'] : null;
+        $storedBackdrop = is_string($row['backdrop_url'] ?? null) ? $row['backdrop_url'] : null;
+
         return [
             'id' => is_int($row['id'] ?? null) ? $row['id'] : 0,
             'tmdb_collection_id' => is_int($row['tmdb_collection_id'] ?? null) ? $row['tmdb_collection_id'] : 0,
             'name' => is_string($row['name'] ?? null) ? $row['name'] : '',
             'overview' => is_string($row['overview'] ?? null) ? $row['overview'] : null,
-            'poster_url' => is_string($row['poster_url'] ?? null) ? $row['poster_url'] : null,
-            'backdrop_url' => is_string($row['backdrop_url'] ?? null) ? $row['backdrop_url'] : null,
+            'poster_url' => SignedUrl::refreshArtworkUrl($storedPoster),
+            'backdrop_url' => SignedUrl::refreshArtworkUrl(
+                BackdropSrcset::largeUrl($storedBackdrop) ?? $storedBackdrop
+            ),
         ];
     }
 }

@@ -284,6 +284,52 @@ final class FfmpegRunnerSegmentFormatTest extends TestCase
         $this->assertStringContainsString("-force_key_frames 'expr:eq(n,0)'", $cmd);
     }
 
+    /**
+     * The HLS muxer has no "never split" switch, so the CMAF branch says it with
+     * an `-hls_time` far above any segment length. If that ever shrank below the
+     * encode window, the muxer would cut it into several fragments, the publish
+     * chain would pick up only the first (`…s0`), and every segment would
+     * silently become a fraction of its advertised `#EXTINF` — a stall at every
+     * boundary, with the box structure and the start time still looking perfect.
+     *
+     * ## Why this case exists rather than the integration test alone
+     *
+     * Lowering the constant to 1 SURVIVED the whole suite, including the
+     * real-ffmpeg fragment-length assertion. The reason is not that the test was
+     * weak: with the encode flags this builder emits, the muxer physically
+     * CANNOT split. It only cuts at keyframes, and `-force_key_frames
+     * expr:eq(n,0)` plus libx264's default keyint (250 frames ≈ 10 s at 24 fps)
+     * means a 6 s window contains exactly one IDR, at frame 0. Measured:
+     * `-hls_time 1` over that window produced one segment (`x.s0`) and
+     * `ffprobe -show_entries frame=key_frame` counted 0 further keyframes.
+     * Positive control, so this is a real finding and not a broken measurement:
+     * the SAME `-hls_time 1` with `-g 24 -keyint_min 24 -sc_threshold 0`
+     * produced six segments.
+     *
+     * So the mutation is a no-op only for TODAY's GOP settings. The moment any
+     * rung sets a GOP shorter than a segment, the constant becomes load-bearing
+     * again — and nothing else in the suite would notice. This asserts the
+     * invariant directly instead.
+     */
+    public function test_the_cmaf_muxer_is_told_never_to_split_the_encode_window(): void
+    {
+        $cmd = $this->runner()->buildSegmentCommand(
+            '/media/in.mkv',
+            self::OUT_M4S,
+            252.0,
+            6.0,
+            $this->videoParams() + ['segment_format' => 'fmp4']
+        );
+
+        $this->assertSame(1, preg_match('/ -hls_time (\d+)/', $cmd, $m), 'control: an -hls_time is emitted at all');
+        $this->assertGreaterThanOrEqual(
+            3600,
+            (int) $m[1],
+            '-hls_time must exceed any segment length this server will ever ask for, so the muxer '
+            . 'emits exactly one fragment per encode'
+        );
+    }
+
     public function test_fmp4_audio_only_command_selects_the_cmaf_muxer(): void
     {
         $cmd = $this->runner()->buildAudioSegmentCommand(

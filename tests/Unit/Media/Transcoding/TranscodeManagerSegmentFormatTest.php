@@ -482,7 +482,7 @@ final class TranscodeManagerSegmentFormatTest extends TestCase
     public function test_produced_segments_are_counted_in_both_containers(): void
     {
         $dir = $this->jobDir('counted');
-        foreach ([
+        $files = [
             'seg-v720p-00000.m4s',
             'seg-v720p-00001.m4s',
             'seg-v1080p-00000.m4s',
@@ -490,7 +490,8 @@ final class TranscodeManagerSegmentFormatTest extends TestCase
             'chunk-0.m4s',
             'init-v720p.m4s',
             'seg-v720p-00002.m4s.part-deadbeef',
-        ] as $name) {
+        ];
+        foreach ($files as $name) {
             file_put_contents("{$dir}/{$name}", 'x');
         }
 

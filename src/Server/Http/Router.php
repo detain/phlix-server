@@ -474,9 +474,23 @@ class Router
      * refusals are `->status(403)->json([...])` and therefore declare **no**
      * `Content-Length` — so that path cannot produce the two-`Content-Length`
      * framing defect this method exists to prevent; it produces the weaker,
-     * recoverable "body on a HEAD" shape that `notFound()` above also has, and it is
-     * fixed in the same follow-up change. Deliberately bounded rather than closed
-     * here so that every site of that one shape moves together.
+     * recoverable "body on a HEAD" shape (RFC 9110 §9.3.2).
+     *
+     * ⚠ **This sentence used to say that shape "is fixed in the same follow-up
+     * change". S113 was that change, and it did NOT close this one — the claim is
+     * struck rather than left standing, because a stale promise reads as a
+     * guarantee.** S113 fixed the six sites it enumerated: `notFound()` here and
+     * five in {@see \Phlix\Server\Workerman\HttpHandler} (`serveStatic()`, the
+     * page-rendering send, the 429, the 500 and the `404 - Page not found` page).
+     * A global short-circuit is none of those: it is returned by
+     * `Application::dispatch()` and sent by HttpHandler's *matched-route* branch,
+     * which is correct precisely because the router has already flagged everything
+     * that reaches it. `AccessScheduleMiddleware` has no method gate (its `__invoke`
+     * tests only `RequestContext::hasUserId()`), so a `HEAD` from an authenticated
+     * user inside a blocked schedule window still receives the 403 envelope as a
+     * body. Closing it means flagging the reply where the global chain returns, and
+     * that is its own change with its own blast radius — not something to fold in
+     * silently under this comment.
      *
      * ⚠ Pinned by `ApplicationHeadOnlyBoundaryTest` — but read what it pins, because
      * this sentence used to claim more than was true and the S105 AC audit proved it:

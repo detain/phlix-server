@@ -90,6 +90,18 @@ use function DI\factory;
  *   ARR sync, Trakt, Last.fm, plugin admin and the auth-provider callbacks. Their
  *   response envelopes, status codes and handler behaviour are **NOT** asserted
  *   here. Do not read this file as an end-to-end guard for the whole router.
+ * - ⚠ **The middleware column records ROUTE-level middleware ONLY — an empty `[]`
+ *   is NOT evidence that a route is ungated.** A controller may apply its own gate
+ *   as the first statement of the handler, and this file cannot see that by
+ *   construction. S272 was filed as a security defect on exactly this misreading:
+ *   the six destructive `POST /api/v1/libraries/{id}/{scan,rescan,delete-all,prune,
+ *   clear-metadata,clear-artwork}` rails show `[]` here, yet all six call
+ *   `LibraryController::requireAdmin()` before doing anything, and were confirmed
+ *   at runtime against a booted server to answer anonymous → **401**, authenticated
+ *   NON-ADMIN → **403** `auth.not_admin`, admin → **202**. The manifest entries
+ *   below are correct and must stay `[]`; the gate is pinned instead by
+ *   {@see \Phlix\Tests\Unit\Server\Http\Controllers\LibraryDestructiveRoutesAdminGateTest}.
+ *   Before reading any `[]` as "ungated", grep the handler for its own guard.
  * - **Not on this router at all:** the pre-router fast paths
  *   (`/media/{id}/stream`, `/api/v1/artwork/{id}`, `/api/v1/users/{id}/avatar`)
  *   appear in NO route table by construction — S164 and S238 own those. And the
@@ -494,6 +506,13 @@ final class ApplicationRouterWirePathGuardTest extends TestCase
         'POST /api/v1/dlna/renderers/{id}/play -> RendererListController::playTo [AuthMiddleware]',
         'POST /api/v1/dlna/renderers/{id}/seek -> RendererListController::seek [AuthMiddleware]',
         'POST /api/v1/dlna/renderers/{id}/stop -> RendererListController::stop [AuthMiddleware]',
+        // ⚠ S272: the `[]` on the LibraryController rails below is CORRECT and must
+        // stay. These routes carry no ROUTE-level middleware, but every handler
+        // calls `LibraryController::requireAdmin()` as its first statement, so they
+        // ARE admin-gated — verified at runtime against a booted server (anonymous
+        // 401 / authenticated non-admin 403 `auth.not_admin` / admin 202). Do not
+        // "fix" this to `[AdminMiddleware]`. See the coverage statement above and
+        // LibraryDestructiveRoutesAdminGateTest, which pins the gate itself.
         'POST /api/v1/libraries -> LibraryController::create []',
         'POST /api/v1/libraries/{id}/clear-artwork -> LibraryController::clearArtwork []',
         'POST /api/v1/libraries/{id}/clear-metadata -> LibraryController::clearMetadata []',

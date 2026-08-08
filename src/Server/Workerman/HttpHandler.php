@@ -315,7 +315,13 @@ final class HttpHandler
             $decorated = $cors->decorate($request, $response);
             $decorated = $securityHeaders->decorate($decorated);
             $this->compressResponse($wr, $decorated);
-            $connection->send($decorated->toWorkermanResponse());
+            // S113 (site 2 + site 5): the page-rendering branch is the only one that
+            // never passes through a Router, so nothing else has flagged this reply
+            // head-only — every SPA shell, every legacy redirect and the
+            // `<h1>404 - Page not found</h1>` envelope from self::dispatch() shipped
+            // their bodies on a HEAD. AFTER compressResponse(), so the pinned length
+            // is the gzipped one when the body was gzipped.
+            $connection->send(self::headAware($wr, $decorated)->toWorkermanResponse());
         } catch (RateLimitException $e) {
             // SV-4.15(c): central 429 mapping for any rate-limiter trip that
             // bubbles out of dispatch (e.g. the existing login limiter in
@@ -339,7 +345,10 @@ final class HttpHandler
             }
             $rateResponse = (new SecurityHeaders())->decorate($rateResponse);
             $this->compressResponse($wr, $rateResponse);
-            $connection->send($rateResponse->toWorkermanResponse());
+            // S113 (site 3): the 429 is built outside any router — the limiter throws
+            // out of dispatch — so it too had no head-only flag and shipped its JSON
+            // envelope on a HEAD.
+            $connection->send(self::headAware($wr, $rateResponse)->toWorkermanResponse());
         } catch (Throwable $e) {
             $responseStatus = 500;
             LoggerFactory::get(LogChannels::HTTP)->error(
@@ -351,11 +360,18 @@ final class HttpHandler
                     'line' => $e->getLine(),
                 ],
             );
-            $connection->send(new WorkermanResponse(
-                500,
-                ['Content-Type' => 'text/html; charset=utf-8'],
-                '<h1>500 Internal Server Error</h1>',
-            ));
+            // S113 (site 4): the last-resort 500 is a raw Workerman response built by
+            // hand, so it never saw Response::$headOnly and shipped its HTML body on a
+            // HEAD. A crash is exactly when a desynced keep-alive connection is least
+            // welcome, so it is fixed here rather than excused as an edge case.
+            $errorBody = '<h1>500 Internal Server Error</h1>';
+            $errorHeaders = ['Content-Type' => 'text/html; charset=utf-8'];
+            if ($wr->method() === 'HEAD') {
+                $errorHeaders['Content-Length'] = (string) strlen($errorBody);
+                $connection->send(new BodylessResponse(500, $errorHeaders));
+            } else {
+                $connection->send(new WorkermanResponse(500, $errorHeaders, $errorBody));
+            }
         } finally {
             // SV-4.2-disconnect: neutralise the per-connection disconnect→kill hook
             // and clear the request's cancel group now the request has fully
@@ -584,7 +600,7 @@ final class HttpHandler
         if (strtolower((string) pathinfo($real, PATHINFO_EXTENSION)) === 'php') {
             return null;
         }
-        $resp = new WorkermanResponse(200, ['Content-Type' => self::mimeFor($real)]);
+        $headers = ['Content-Type' => self::mimeFor($real)];
         // The Vite-built web-ui bundle under /assets/app/** has content-hashed
         // filenames (e.g. index-DaB12cd3.js): the bytes for a given URL never
         // change, so it is safe to cache forever. `immutable` also tells browsers
@@ -598,10 +614,71 @@ final class HttpHandler
         $assetsAppRoot = $this->publicRoot . DIRECTORY_SEPARATOR . 'assets' . DIRECTORY_SEPARATOR . 'app'
             . DIRECTORY_SEPARATOR;
         if (str_starts_with($real, $assetsAppRoot)) {
-            $resp->header('Cache-Control', 'public, max-age=31536000, immutable');
+            $headers['Cache-Control'] = 'public, max-age=31536000, immutable';
         }
+
+        // S113 (site 1): this method had NO method check of any kind, so a
+        // `HEAD /assets/app/index-*.js` went through withFile() and Workerman
+        // streamed the entire file — RFC 9110 §9.3.2 forbids that body, and a
+        // header-only client leaves every one of those bytes buffered, desyncing the
+        // next reply on the keep-alive connection.
+        //
+        // The HEAD arm reproduces the header set a GET would have carried rather
+        // than reusing withFile(): Workerman derives `Content-Length` /
+        // `Accept-Ranges` inside `Protocols\Http::encode()` and `Last-Modified`
+        // inside `createHeadForFile()`, and BOTH of those are reached only by
+        // actually sending the file. Naming the values here keeps the reply
+        // truthful about the entity — Content-Length is the file's real size, never
+        // 0 — while opening nothing.
+        if ($wr->method() === 'HEAD') {
+            $headers['Content-Length'] = (string) filesize($real);
+            $headers['Accept-Ranges'] = 'bytes';
+            $mtime = filemtime($real);
+            if ($mtime !== false) {
+                $headers['Last-Modified'] = gmdate('D, d M Y H:i:s', $mtime) . ' GMT';
+            }
+
+            return new BodylessResponse(200, $headers);
+        }
+
+        $resp = new WorkermanResponse(200, $headers);
         $resp->withFile($real);
         return $resp;
+    }
+
+    /**
+     * Make a reply built OUTSIDE any router conformant for a `HEAD` request (S113).
+     *
+     * {@see \Phlix\Server\Http\Router::markHeadOnly()} covers everything the routers
+     * return, but two branches of {@see self::__invoke()} never reach a router at
+     * all — the page-rendering fall-through ({@see self::dispatch()}: the SPA shell,
+     * the legacy redirects and the `404 - Page not found` envelope) and the
+     * {@see RateLimitException} 429, which is built in the catch block after the
+     * limiter threw *through* the router. Both therefore shipped a body on a `HEAD`,
+     * which RFC 9110 §9.3.2 forbids: a header-only client leaves those bytes
+     * buffered and reads the NEXT reply on the keep-alive connection at the wrong
+     * offset.
+     *
+     * Delegates to {@see Response::asHeadReply()}, so the body is dropped while the
+     * `Content-Length` the equivalent `GET` would have returned is kept — never
+     * replaced by `Content-Length: 0`. A non-`HEAD` reply is returned untouched, so
+     * this can never make a GET claim a stale length.
+     *
+     * Call it AFTER {@see self::compressResponse()}: gzipping rewrites both the body
+     * and its `Content-Length`, and the length a `HEAD` must advertise is the one
+     * the equivalent `GET` would have shipped, i.e. the compressed size.
+     *
+     * @param WorkermanRequest $wr       The live request (only its method is read).
+     * @param Response         $response The reply about to be encoded.
+     * @return Response The same instance, for use in a `send()` expression.
+     */
+    private static function headAware(WorkermanRequest $wr, Response $response): Response
+    {
+        if ($wr->method() !== 'HEAD') {
+            return $response;
+        }
+
+        return $response->asHeadReply();
     }
 
     /**

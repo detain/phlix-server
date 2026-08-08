@@ -2214,11 +2214,18 @@ class Application
      * {@see \Phlix\Server\Http\Middleware\AccessScheduleMiddleware}, whose three
      * refusals declare no `Content-Length` of their own, so Workerman's generated one
      * is the only one on the wire — the recoverable "body on a HEAD" shape
-     * (RFC 9110 §9.3.2), not the unrecoverable two-length one, and it moves together
-     * with the other sites of that shape ({@see Router::notFound()},
-     * {@see \Phlix\Server\Workerman\HttpHandler}'s SPA/static/404 replies). A global
-     * middleware that declares its own `Content-Length` on a short-circuit WOULD ship
-     * two.
+     * (RFC 9110 §9.3.2), not the unrecoverable two-length one. A global middleware
+     * that declares its own `Content-Length` on a short-circuit WOULD ship two.
+     *
+     * ⚠ **This used to say the shape "moves together with the other sites of that
+     * shape". It did not.** S113 closed those six — {@see Router::notFound()} and
+     * five in {@see \Phlix\Server\Workerman\HttpHandler} — and left this one open,
+     * so the sentence is struck rather than left standing as a promise nothing
+     * keeps. `AccessScheduleMiddleware::__invoke()` has no method gate, so a `HEAD`
+     * from an authenticated user inside a blocked schedule window still gets the 403
+     * envelope as a body. It is reachable, it is bounded (one middleware, one
+     * shape), and it needs its own change: the flag has to be set where this chain
+     * returns, which is a different seam from anything S113 touched.
      *
      * ⚠ **What `ApplicationHeadOnlyBoundaryTest` actually pins** — the earlier wording
      * here ("pins both halves so neither can drift silently") overstated it, and the

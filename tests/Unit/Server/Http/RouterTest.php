@@ -6,6 +6,7 @@ use PHPUnit\Framework\TestCase;
 use Phlix\Server\Http\Router;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
+use Phlix\Server\Workerman\BodylessResponse;
 use Phlix\Tests\Unit\Server\Http\Fixtures\RouterFixtureController;
 use Psr\Container\ContainerInterface;
 use Workerman\Protocols\Http\Response as WorkermanResponse;
@@ -508,9 +509,16 @@ class RouterTest extends TestCase
      * handler arm above, the ENTIRE parametric fallback arm was untested.
      *
      * The gate is shaped like `DlnaAllowlistMiddleware`: a 403 JSON refusal that
-     * declares no `Content-Length` of its own, so the flag's whole effect is
-     * dropping the body (and letting Workerman state `Content-Length: 0`) — which
-     * is what RFC 9110 §9.3.2 requires of a `HEAD` reply.
+     * declares no `Content-Length` of its own.
+     *
+     * ⚠ S113 CHANGED THE EXPECTED BYTES HERE, deliberately. This test used to derive
+     * its expectation from `new WorkermanResponse(403, …, '')`, i.e. it pinned
+     * `Content-Length: 0` — conformant framing, but a lie about the entity. RFC 9110
+     * §9.3.2 makes a `HEAD` reply's header section describe what the equivalent `GET`
+     * would have returned, so `markHeadOnly()` now goes through
+     * {@see Response::asHeadReply()} and states the refusal's REAL length while still
+     * shipping no body. The expectation is still derived from an encoder rather than
+     * transcribed, so a Workerman bump that moves the bytes still fails loudly.
      */
     public function testTheGetToHeadFallbackFlagsAParametricMiddlewareShortCircuitOnTheWire(): void
     {
@@ -531,15 +539,23 @@ class RouterTest extends TestCase
         $wire = (string) $response->toWorkermanResponse();
         $json = (string) json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
 
-        // A refusal that set no length of its own is rendered by the FRAMEWORK
-        // encoder with an EMPTY body, so the expectation is derived from Workerman
-        // itself — the property is "same reply, no body".
+        // A refusal that set no length of its own is rendered head-only with the
+        // length its GET would have carried, so the expectation is derived from the
+        // encoder — the property is "same reply, no body, truthful length".
         $this->assertSame(
-            (string) new WorkermanResponse(403, ['Content-Type' => 'application/json'], ''),
+            (string) new BodylessResponse(403, [
+                'Content-Type'   => 'application/json',
+                'Content-Length' => (string) strlen($json),
+            ]),
             $wire,
             "a gated HEAD must ship the refusal head-only. Encoded bytes were:\n" . $wire,
         );
         $this->assertSame(1, substr_count($wire, 'Content-Length:'), 'exactly ONE Content-Length');
+        $this->assertStringContainsString(
+            'Content-Length: ' . strlen($json) . "\r\n",
+            $wire,
+            'a HEAD must declare the length the equivalent GET would have returned, not 0',
+        );
         $this->assertStringNotContainsString('dlna.forbidden', $wire, 'the JSON body must not reach a HEAD client');
         $this->assertSame(403, $response->statusCode);
         $this->assertTrue($response->headOnly, 'the fallback middleware arm must flag the reply head-only');
@@ -572,8 +588,14 @@ class RouterTest extends TestCase
         $response = $this->router->dispatch($this->makeRequest('HEAD', '/dlna/control'));
 
         $wire = (string) $response->toWorkermanResponse();
+        $refusalJson = (string) json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
+        // S113: see the sibling test above for why the expected length is the
+        // refusal's real size rather than the pre-S113 `Content-Length: 0`.
         $this->assertSame(
-            (string) new WorkermanResponse(403, ['Content-Type' => 'application/json'], ''),
+            (string) new BodylessResponse(403, [
+                'Content-Type'   => 'application/json',
+                'Content-Length' => (string) strlen($refusalJson),
+            ]),
             $wire,
             "the STATIC short-circuit arm must ship the refusal head-only. Encoded bytes were:\n" . $wire,
         );
@@ -585,7 +607,7 @@ class RouterTest extends TestCase
         // The same route on a GET keeps the framework encoder byte for byte, so this
         // test cannot pass by flagging everything.
         $get = $this->router->dispatch($this->makeRequest('GET', '/dlna/control'));
-        $json = (string) json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
+        $json = $refusalJson;
         $this->assertFalse($get->headOnly, 'a gated GET must never be flagged head-only');
         $this->assertSame(
             (string) new WorkermanResponse(403, ['Content-Type' => 'application/json'], $json),

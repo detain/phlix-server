@@ -362,7 +362,17 @@ final class AuthServicesProvider implements ServiceProviderInterface
                 // ×workers), leaving brute-force protection weak and leaky. With
                 // it wired, the brute-force budget is unified across workers and
                 // bounded by TTL cleanup (login_rate_limit table, migration 074).
-                ->constructorParameter('loginRateLimitStore', get(DbLoginRateLimitStore::class)),
+                ->constructorParameter('loginRateLimitStore', get(DbLoginRateLimitStore::class))
+                // S80: stamps the `profile_id` claim onto every minted token, and
+                // re-verifies the claim on every validateAccessToken(). Named for
+                // the same PHP-DI reason as everything above it — left unnamed,
+                // AuthManager::$profileManager stays null, no token ever carries a
+                // profile, and profile context silently collapses back to the
+                // account-wide `user_profiles.is_active` flag. That degradation is
+                // invisible to every hand-wired unit test, which is why
+                // tests/Unit/Auth/AuthManagerProfileClaimWiringGuardTest resolves
+                // this binding out of the real container.
+                ->constructorParameter('profileManager', get(UserProfileManager::class)),
 
             // SV-4.15(f): register/refresh get their OWN per-surface DB-backed
             // rate limiters. AuthController is otherwise autowired; the limiter

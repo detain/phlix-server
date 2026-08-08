@@ -74,27 +74,44 @@ final class AccessScheduleMiddleware
             return null;
         }
 
-        // Get the active profile for this user
-        $profile = $this->profileManager->getActiveProfile($userId);
-        if ($profile === null) {
-            // P5: No profile exists for an authenticated user — fail closed (deny
-            // access) rather than allowing an unprofiled user through. The user
-            // should set up a profile before access schedules apply.
-            return (new Response())->status(403)->json([
-                'error' => 'AccessScheduled',
-                'message' => 'No profile found; access denied',
-            ]);
-        }
+        // S80: prefer the profile THIS SESSION is running as, published by
+        // RequestAuthenticator from the token's verified `profile_id` claim.
+        //
+        // ⚠ This is the correctness fix the step called its biggest risk. Before
+        // S80 this middleware read `getActiveProfile()` — the account-wide
+        // `user_profiles.is_active` DB flag — and then OVERWROTE the request
+        // context with it. Under per-session profiles that would clobber the
+        // session's own profile on every request: a tablet watching as "Kid" would
+        // have its schedule, its tag filter and its stream limit silently
+        // evaluated against whichever profile the account last switched to on some
+        // other device.
+        $profileId = RequestContext::getProfileId();
 
-        // P5: Profile IDs are CHAR(36) UUID strings. If we cannot resolve
-        // a profile ID, fail closed (deny access) rather than silently allowing
-        // unauthenticated or unprofiled users through the schedule check.
-        $profileId = $this->resolveProfileId($profile);
-        if ($profileId === null) {
-            return (new Response())->status(403)->json([
-                'error' => 'AccessScheduled',
-                'message' => 'Profile not found; access denied',
-            ]);
+        if ($profileId === null || $profileId === '') {
+            // No session profile (a token minted before S80, or an account with no
+            // resolvable profile). Fall back to the account-wide active profile,
+            // which is exactly the pre-S80 behaviour.
+            $profile = $this->profileManager->getActiveProfile($userId);
+            if ($profile === null) {
+                // P5: No profile exists for an authenticated user — fail closed (deny
+                // access) rather than allowing an unprofiled user through. The user
+                // should set up a profile before access schedules apply.
+                return (new Response())->status(403)->json([
+                    'error' => 'AccessScheduled',
+                    'message' => 'No profile found; access denied',
+                ]);
+            }
+
+            // P5: Profile IDs are CHAR(36) UUID strings. If we cannot resolve
+            // a profile ID, fail closed (deny access) rather than silently allowing
+            // unauthenticated or unprofiled users through the schedule check.
+            $profileId = $this->resolveProfileId($profile);
+            if ($profileId === null) {
+                return (new Response())->status(403)->json([
+                    'error' => 'AccessScheduled',
+                    'message' => 'Profile not found; access denied',
+                ]);
+            }
         }
 
         // Check if access is allowed

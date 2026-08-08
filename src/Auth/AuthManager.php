@@ -68,6 +68,26 @@ class AuthManager
     private ?DbLoginRateLimitStore $loginRateLimitStore;
 
     /**
+     * Profile scope resolver, used to stamp the {@see JwtHandler::CLAIM_PROFILE_ID}
+     * claim onto freshly minted tokens (S80).
+     *
+     * ⚠ Optional ONLY because this constructor already has nine optional
+     * parameters and dozens of tests build the manager by hand. PHP-DI's
+     * `autowire()` skips optional parameters, so it MUST stay named explicitly in
+     * `AuthServicesProvider` — exactly as `settingsRepository`, `providerManager`
+     * and `loginRateLimitStore` above it are, and for the same reason. Left null,
+     * every token would be minted without a profile claim and every session would
+     * silently fall back to the account-wide `is_active` flag, i.e. S80 would be
+     * inert with a fully green suite.
+     * `tests/Unit/Auth/AuthManagerProfileClaimWiringGuardTest` is the net under
+     * that: it resolves this class from the REAL container and asserts the
+     * property is populated.
+     *
+     * @var UserProfileManager|null
+     */
+    private ?UserProfileManager $profileManager;
+
+    /**
      * In-memory fallback rate limit store used when no DbLoginRateLimitStore
      * is injected (tests / legacy callers).
      *
@@ -214,7 +234,8 @@ class AuthManager
         ?ProviderManager $providerManager = null,
         ?StatsCollector $statsCollector = null,
         ?SettingsRepository $settingsRepository = null,
-        ?DbLoginRateLimitStore $loginRateLimitStore = null
+        ?DbLoginRateLimitStore $loginRateLimitStore = null,
+        ?UserProfileManager $profileManager = null
     ) {
         $this->userRepository = $userRepository;
         $this->jwtHandler = $jwtHandler;
@@ -226,6 +247,7 @@ class AuthManager
         $this->statsCollector = $statsCollector;
         $this->settingsRepository = $settingsRepository;
         $this->loginRateLimitStore = $loginRateLimitStore;
+        $this->profileManager = $profileManager;
         // Built from the already-explicitly-wired settings store rather than
         // taken as its own optional ctor param: PHP-DI skips optional params
         // during autowiring, so an unnamed PasswordPolicy param would silently
@@ -1021,7 +1043,10 @@ class AuthManager
             throw new \InvalidArgumentException('Password change required');
         }
 
-        return $this->createAuthResponse($userId);
+        // S80: carry the session's profile across the re-mint. Without this a
+        // device that switched to a child profile would silently revert to the
+        // account default the first time its access token expired.
+        return $this->createAuthResponse($userId, JwtHandler::profileIdClaim($payload));
     }
 
     /**
@@ -1068,10 +1093,90 @@ class AuthManager
             return null;
         }
 
+        // S80: the profile the token was minted for, resolved through the owner
+        // check on every request. Returning the RAW claim here would hand the rest
+        // of the stack a profile the account may no longer own — a token stays
+        // valid for an hour after a profile is deleted or reassigned, so "signed"
+        // is not "current". resolveProfileForUser() re-derives ownership and
+        // degrades a stale claim to the account default rather than refusing the
+        // whole request, which would lock a user out of their own account until
+        // their token expired.
         return [
             'user_id' => $payload['sub'],
             'expires_at' => $payload['exp'],
+            'profile_id' => $this->resolveProfileForUser(
+                $userId,
+                JwtHandler::profileIdClaim($payload)
+            ),
         ];
+    }
+
+    /**
+     * Resolve the profile a request should run as, from a CLAIMED profile id.
+     *
+     * The single place S80's propagated profile is turned into a usable value,
+     * and the reason the propagation is safe:
+     *
+     *   - A claim is **verified, never trusted**. It goes through
+     *     {@see UserProfileManager::resolveProfileIdForUser()}, which re-derives
+     *     ownership from `user_profiles` against `$userId` on every call. Even
+     *     though a JWT claim is signed and so cannot be forged by a client, it can
+     *     be STALE: profiles are deleted, and an hour-long access token outlives
+     *     that.
+     *   - A **stale** claim DEGRADES to the account's default profile rather than
+     *     raising. Refusing would lock the user out of their own account for up to
+     *     an hour with no way to recover but waiting for expiry.
+     *   - A caller-supplied `profile_id` from a body, query string or path is
+     *     never routed through here — that path keeps
+     *     {@see ProfileNotOwnedException}'s hard refusal, because there it IS
+     *     attacker-controlled input rather than something this server signed.
+     *
+     * @param string      $userId          The authenticated account.
+     * @param string|null $claimedProfileId The profile named by the token, or null.
+     *
+     * @return string|null The profile this request runs as, or null when no
+     *                     resolver is wired (legacy hand-built managers in tests).
+     *
+     * @since S80 (profile-context propagation)
+     */
+    public function resolveProfileForUser(string $userId, ?string $claimedProfileId): ?string
+    {
+        $profiles = $this->profileManager;
+        if ($profiles === null || trim($userId) === '') {
+            return null;
+        }
+
+        try {
+            return $profiles->resolveProfileIdForUser($userId, $claimedProfileId);
+        } catch (ProfileNotOwnedException $e) {
+            // Stale, not hostile — the account no longer owns the profile the
+            // token names. Fall back to its default.
+            $this->logger->info('Token profile claim no longer owned; falling back to default', [
+                'user_id' => $userId,
+            ]);
+        } catch (\Throwable $e) {
+            // A profile could not be established at all (e.g. the DB is
+            // momentarily unavailable). Authentication itself must not fail for
+            // that reason, so return null and let the profile-scoped callers
+            // apply their own fail-closed policy.
+            $this->logger->warning('Could not resolve a profile for the request', [
+                'user_id' => $userId,
+                'error' => $e->getMessage(),
+            ]);
+
+            return null;
+        }
+
+        try {
+            return $profiles->resolveProfileIdForUser($userId, null);
+        } catch (\Throwable $e) {
+            $this->logger->warning('Could not resolve a default profile for the request', [
+                'user_id' => $userId,
+                'error' => $e->getMessage(),
+            ]);
+
+            return null;
+        }
     }
 
     /**
@@ -1125,24 +1230,45 @@ class AuthManager
      * // ]
      * ```
      */
-    private function createAuthResponse(string $userId): array
+    private function createAuthResponse(string $userId, ?string $profileId = null): array
     {
-        return $this->buildAuthResponse($userId);
+        return $this->buildAuthResponse($userId, $profileId);
     }
 
     /**
+     * Mint an access + refresh token pair, stamped with the session's profile.
+     *
+     * @param string      $userId    The authenticated account.
+     * @param string|null $profileId The profile this SESSION should run as. Null
+     *                               means "the account's default", which is what a
+     *                               fresh login gets; a profile switch (S81) and a
+     *                               token refresh both pass the session's current
+     *                               profile through so it survives the re-mint.
+     *                               The value is VERIFIED against `$userId` before
+     *                               it is stamped — see {@see self::resolveProfileForUser()}.
+     *
      * @return array{access_token: string, refresh_token: string, token_type: string, expires_in: int,
-     *     user: array<string, mixed>|null}
+     *     user: array<string, mixed>|null, profile_id: string|null}
      */
-    public function buildAuthResponse(string $userId): array
+    public function buildAuthResponse(string $userId, ?string $profileId = null): array
     {
-        $accessToken = $this->jwtHandler->createAccessToken($userId);
-        $refreshToken = $this->jwtHandler->createRefreshToken($userId);
+        $resolvedProfileId = $this->resolveProfileForUser($userId, $profileId);
+
+        // Both tokens carry the claim. If only the access token did, the first
+        // refresh an hour later would silently drop the device back to the
+        // account-wide default profile.
+        $claims = $resolvedProfileId === null
+            ? []
+            : [JwtHandler::CLAIM_PROFILE_ID => $resolvedProfileId];
+
+        $accessToken = $this->jwtHandler->createAccessToken($userId, $claims);
+        $refreshToken = $this->jwtHandler->createRefreshToken($userId, $claims);
         $user = $this->getUser($userId);
 
         return [
             'access_token' => $accessToken,
             'refresh_token' => $refreshToken,
+            'profile_id' => $resolvedProfileId,
             'token_type' => 'Bearer',
             // Read from the handler that just minted the token, NOT a literal.
             // This was a hardcoded 3600 independent of the handler's actual

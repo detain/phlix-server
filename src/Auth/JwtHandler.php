@@ -43,6 +43,29 @@ namespace Phlix\Auth;
  */
 class JwtHandler
 {
+    /**
+     * Claim carrying the profile a token was minted for (S80).
+     *
+     * ## Why the JWT and not `sessions.profile_id`
+     *
+     * The step offered two mechanisms. `sessions.profile_id` has existed since
+     * migration 002 and is DEAD SCHEMA — it is never written and never read (see
+     * {@see \Phlix\Auth\WatchHistory}, which documents scoping by `user_id`
+     * precisely because "profile_id is always NULL"). Reviving it would mean
+     * threading a session id into every request, and the hub RELAY path does not
+     * carry one. A JWT claim travels on every authenticated request through every
+     * entry point — the Workerman handler, `public/index.php`, and the relay — and
+     * two devices holding two tokens naturally hold two different active profiles,
+     * which is exactly the concurrency the step asks for. `is_active` in the
+     * database stays as the account-wide DEFAULT for a session that has not
+     * chosen; it is no longer the thing that decides a live request.
+     *
+     * ⚠ Signed does not mean current. See {@see self::profileIdClaim()}.
+     *
+     * @var string
+     */
+    public const CLAIM_PROFILE_ID = 'profile_id';
+
     /** @var string Secret key for HMAC signature */
     private string $secretKey;
 
@@ -171,7 +194,13 @@ class JwtHandler
      * without requiring the user to re-authenticate. Each refresh token
      * has a unique JTI (JWT ID) for potential revocation support.
      *
-     * @param string $userId Unique user identifier to include as subject
+     * @param string               $userId Unique user identifier to include as subject
+     * @param array<string, mixed> $claims Additional custom claims to include. S80
+     *                                     passes {@see self::CLAIM_PROFILE_ID} so the
+     *                                     session's profile survives a refresh — without
+     *                                     it, refreshing silently drops a device back to
+     *                                     the account-wide default profile after an hour.
+     *                                     Reserved claims below always win.
      *
      * @return string Signed JWT refresh token string
      *
@@ -181,19 +210,52 @@ class JwtHandler
      * // Returns: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyLTEyMy4uLn0.signature'
      * ```
      */
-    public function createRefreshToken(string $userId): string
+    public function createRefreshToken(string $userId, array $claims = []): string
     {
         $now = time();
-        $payload = [
+        $payload = array_merge($claims, [
             'iss' => 'phlix',
             'sub' => $userId,
             'iat' => $now,
             'exp' => $now + $this->refreshTtl(),
             'type' => 'refresh',
             'jti' => bin2hex(random_bytes(16)),
-        ];
+        ]);
 
         return $this->encode($payload);
+    }
+
+    /**
+     * Read the {@see self::CLAIM_PROFILE_ID} claim out of a decoded payload.
+     *
+     * ⚠ The value is the profile the token was MINTED for. It is signed, so it
+     * cannot be forged, but it can be STALE — the profile may have been renamed,
+     * deleted, or (after an account transfer) no longer be owned by the subject
+     * by the time the token is presented. Callers must therefore still put it
+     * through {@see UserProfileManager::resolveProfileIdForUser()} rather than
+     * using it directly to scope a query.
+     *
+     * @param array<string, mixed>|null $payload A payload from {@see self::validateToken()}.
+     *
+     * @return string|null The claimed profile UUID, or null when the token
+     *                     carries no profile (every token minted before S80).
+     *
+     * @since S80 (profile-context propagation)
+     */
+    public static function profileIdClaim(?array $payload): ?string
+    {
+        if ($payload === null) {
+            return null;
+        }
+
+        $value = $payload[self::CLAIM_PROFILE_ID] ?? null;
+        if (!is_string($value)) {
+            return null;
+        }
+
+        $value = trim($value);
+
+        return $value === '' ? null : $value;
     }
 
     /**

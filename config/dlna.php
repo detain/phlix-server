@@ -74,12 +74,26 @@ declare(strict_types=1);
 
 return [
     /**
-     * Announce this server to DLNA/UPnP devices via SSDP.
+     * Announce this server to DLNA/UPnP devices via SSDP, and answer their
+     * searches.
+     *
+     * Covers BOTH halves of SSDP discovery since 1.7.0: the 30-second alive
+     * `NOTIFY` this server multicasts, and the unicast reply it sends to an
+     * inbound `M-SEARCH`. Most control points use the second — waiting up to 30
+     * seconds for the next announcement is not an acceptable UI — so turning
+     * this off makes the server invisible to them too, not merely quiet.
      *
      * Enforced in {@see \Phlix\Dlna\SsdpAdvertiser::isEnabled()}, consulted by
      * that worker's `onWorkerStart`. The worker re-reads the EFFECTIVE value on
      * every graceful reload and idles without opening its multicast socket when
      * this is false, so an admin override applies on the next reload.
+     *
+     * ⚠️ One operational consequence worth knowing: the worker's UDP LISTEN
+     * socket on `0.0.0.0:1900` is bound by Workerman before `onWorkerStart`
+     * runs, so a disabled advertiser still HOLDS port 1900 — it simply never
+     * answers. It binds with `SO_REUSEPORT`, so this coexists with other SSDP
+     * software on the host rather than fighting it; and if the bind fails
+     * anyway, the worker logs a warning and carries on announcing.
      *
      * The value HERE (the file default) additionally drives the master-process
      * spawn decision in `start.php`, which cannot consult the settings store:

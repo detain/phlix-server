@@ -58,6 +58,16 @@ final class EncodeSettings
     public const PRESET_KEY = 'transcoding.preset';
     public const CRF_H264_KEY = 'transcoding.crf_h264';
     public const AUDIO_BITRATE_KEY = 'transcoding.audio_bitrate';
+    public const SEGMENT_FORMAT_KEY = 'transcoding.segment_format';
+
+    /** MPEG-TS on-demand segments (`seg-v{V}-NNNNN.ts`) — the shipped behaviour. */
+    public const FORMAT_MPEGTS = 'mpegts';
+
+    /** CMAF fragmented-MP4 segments (`init-v{V}.m4s` + `seg-v{V}-NNNNN.m4s`). */
+    public const FORMAT_FMP4 = 'fmp4';
+
+    /** @var list<string> The accepted `transcoding.segment_format` values. */
+    public const SEGMENT_FORMATS = [self::FORMAT_MPEGTS, self::FORMAT_FMP4];
 
     /**
      * Shipped x264/x265 preset. Matches the literal previously hardcoded at all
@@ -74,6 +84,12 @@ final class EncodeSettings
      * Shipped AAC bitrate. Matches the previously hardcoded literal.
      */
     public const DEFAULT_AUDIO_BITRATE = '128k';
+
+    /**
+     * Shipped on-demand segment container. MPEG-TS — i.e. exactly the
+     * behaviour that existed before {@see self::FORMAT_FMP4} was added.
+     */
+    public const DEFAULT_SEGMENT_FORMAT = self::FORMAT_MPEGTS;
 
     /**
      * The x264/x265 preset ladder, fastest first.
@@ -223,6 +239,50 @@ final class EncodeSettings
     }
 
     /**
+     * The effective on-demand segment container.
+     *
+     * ## ⚠ `fmp4` IS NOT SERVABLE YET — DO NOT ENABLE IN PRODUCTION
+     *
+     * S56 delivers segment PRODUCTION only. With this set to
+     * {@see self::FORMAT_FMP4} a job produces `init-v{V}.m4s` +
+     * `seg-v{V}-NNNNN.m4s` on disk, but:
+     *
+     *  - `TranscodeManager::buildMediaPlaylist()` still advertises `.ts` names
+     *    (that is S57's `EXT-X-MAP` rework), and
+     *  - `HlsController::serveFile()` only matches `/^seg-v…\.ts$/` — an
+     *    `.m4s` request is not even routed to {@see TranscodeManager::ensureSegment()}
+     *    (that is S57/S59's wiring).
+     *
+     * So turning this on TODAY yields a job whose segments are produced and
+     * then **404** at the player. It exists so S57–S59 can be built and tested
+     * against real fMP4 bytes, and so S60 can flip the default once the serve
+     * path exists. It is deliberately NOT exposed in
+     * `phlix-shared/schemas/server-settings.schema.json`, which means
+     * `AdminSettingsController` will REFUSE to set it over the admin API — the
+     * only way to turn it on is an explicit edit of `config/transcoding.php`
+     * (or a hand-inserted `settings` override row). That is intentional for
+     * this step.
+     *
+     * An unrecognised value falls back to the shipped default rather than
+     * reaching the encode path, for the same reason a bad `-preset` does.
+     *
+     * @return self::FORMAT_* One of {@see self::SEGMENT_FORMATS}.
+     *
+     * @since S56
+     */
+    public function segmentFormat(): string
+    {
+        $configured = $this->read(self::SEGMENT_FORMAT_KEY);
+        if (!is_string($configured)) {
+            return self::DEFAULT_SEGMENT_FORMAT;
+        }
+
+        $normalised = strtolower(trim($configured));
+
+        return $normalised === self::FORMAT_FMP4 ? self::FORMAT_FMP4 : self::DEFAULT_SEGMENT_FORMAT;
+    }
+
+    /**
      * A short token identifying this settings combination, or `''` when every
      * value is at its shipped default.
      *
@@ -238,16 +298,40 @@ final class EncodeSettings
         $preset = $this->preset();
         $crf = $this->crfH264();
         $audio = $this->audioBitrate();
+        $format = $this->segmentFormat();
 
         if (
             $preset === self::DEFAULT_PRESET
             && $crf === self::DEFAULT_CRF_H264
             && $audio === self::DEFAULT_AUDIO_BITRATE
+            && $format === self::DEFAULT_SEGMENT_FORMAT
         ) {
             return '';
         }
 
-        return substr(sha1($preset . '|' . $crf . '|' . $audio), 0, 12);
+        // S56: the segment container is folded in as a SUFFIX that is empty at
+        // the shipped default, NOT as a fourth always-present hash field. Two
+        // properties depend on that, and both would be lost by hashing
+        // `$preset|$crf|$audio|$format` unconditionally:
+        //
+        //  1. An install that has already moved the preset/CRF/bitrate keeps its
+        //     EXISTING fingerprint byte-for-byte while the container is at the
+        //     default, so merely deploying S56 invalidates nothing anywhere.
+        //     (That is also why S56 needs no JOB_KEY_VERSION bump: this method
+        //     supplies the invalidation, and only at the moment of the flip.)
+        //  2. Flipping the container is still guaranteed to change the key even
+        //     on such an install — `slow|23|128k` and `slow|23|128k|fmp4` are
+        //     different strings — so `.ts` and `.m4s` can never share a job dir.
+        //
+        // ⚠ S60 TRAP: when S60 flips DEFAULT_SEGMENT_FORMAT to `fmp4`, the
+        // suffix collapses back to '' for fmp4 and this method starts returning
+        // the mpegts value again — matching every pre-existing MPEG-TS job.
+        // S60 MUST therefore bump JOB_KEY_VERSION at the flip (and revert the
+        // bump if the flip is reverted). See the LINCHPIN note in
+        // `plan_updates_transcode_blueprint.md`.
+        $suffix = $format === self::DEFAULT_SEGMENT_FORMAT ? '' : ('|' . $format);
+
+        return substr(sha1($preset . '|' . $crf . '|' . $audio . $suffix), 0, 12);
     }
 
     /**

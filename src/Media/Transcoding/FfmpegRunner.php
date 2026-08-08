@@ -42,6 +42,45 @@ class FfmpegRunner
      */
     private const TIMEOUT_KILL_GRACE_SECONDS = 10;
 
+    /**
+     * `-hls_time` for the fMP4 branch. The on-demand encode already bounds its
+     * own window with `-ss`/`-t`, so the HLS muxer must NEVER cut a second
+     * segment out of it — a value far above any conceivable segment length is
+     * how you say "one fragment per run" to that muxer. (It has no "do not
+     * split" switch; `-hls_time 0` splits at every keyframe instead.)
+     *
+     * @since S56
+     */
+    private const FMP4_NEVER_SPLIT_SECONDS = 86400;
+
+    /**
+     * Suffix appended to the `.part-<hex>` temp for the init segment ffmpeg
+     * writes beside the fragment. `-hls_fmp4_init_filename` is resolved
+     * RELATIVE TO THE PLAYLIST'S DIRECTORY (measured, not assumed), so only the
+     * basename is passed to ffmpeg and the file lands in the job dir.
+     *
+     * @since S56
+     */
+    public const FMP4_INIT_TMP_SUFFIX = '.i';
+
+    /**
+     * Suffix + `%d` for the media fragment. The HLS muxer REFUSES a segment
+     * filename with no number template ("Invalid segment filename template"),
+     * so the fragment cannot be written straight to the `.part-<hex>` temp;
+     * with `-start_number 0` and no split, exactly `<tmp>.s0` is produced.
+     *
+     * @since S56
+     */
+    public const FMP4_MEDIA_TMP_SUFFIX = '.s';
+
+    /**
+     * Suffix for the throwaway playlist the HLS muxer insists on writing. S57
+     * generates the real media playlists; this one is discarded at publish.
+     *
+     * @since S56
+     */
+    public const FMP4_PLAYLIST_TMP_SUFFIX = '.m3u8';
+
     /** @var string Path to FFmpeg binary */
     private string $ffmpegPath;
 
@@ -1819,10 +1858,7 @@ class FfmpegRunner
             }
         }
 
-        // Anchor PTS to the absolute timeline position; no mux pre-roll.
-        $cmd .= ' -muxdelay 0 -muxpreload 0';
-        $cmd .= ' -output_ts_offset ' . $startArg;
-        $cmd .= ' -f mpegts ' . escapeshellarg($outFile);
+        $cmd .= self::muxerTail($params, $outFile, $startArg);
 
         return $cmd;
     }
@@ -1891,10 +1927,8 @@ class FfmpegRunner
             $cmd .= ' -af "' . $loudnormFilter . '"';
         }
 
-        // Same timeline anchoring as the video segments.
-        $cmd .= ' -muxdelay 0 -muxpreload 0';
-        $cmd .= ' -output_ts_offset ' . $startArg;
-        $cmd .= ' -f mpegts ' . escapeshellarg($outFile);
+        // Same timeline anchoring / container selection as the video segments.
+        $cmd .= self::muxerTail($params, $outFile, $startArg);
 
         return $cmd;
     }
@@ -2226,10 +2260,7 @@ class FfmpegRunner
             }
         }
 
-        // Anchor PTS to the absolute timeline position; no mux pre-roll.
-        $cmd .= ' -muxdelay 0 -muxpreload 0';
-        $cmd .= ' -output_ts_offset ' . $startArg;
-        $cmd .= ' -f mpegts ' . escapeshellarg($outFile);
+        $cmd .= self::muxerTail($params, $outFile, $startArg);
 
         return $cmd;
     }
@@ -2393,11 +2424,17 @@ class FfmpegRunner
         $tmp = $outFile . '.part-' . bin2hex(random_bytes(4));
         $cancelKey ??= $outFile;
 
+        // S56: on the CMAF branch the encode also emits the variant's init
+        // segment, which is published from the same atomic chain. `init_file` is
+        // the FINAL init path resolved by TranscodeManager (it is per-variant, not
+        // per-segment); null keeps the pre-S56 single-file publish.
+        $initFile = self::wantsFmp4($params) ? self::paramString($params, 'init_file') : null;
+
         // P3B multi-audio: an audio-only rendition segment never touches the video
         // pipeline (no hwaccel, no -c:v) — it is a cheap -vn AAC extract/encode.
         if (($params['audio_only'] ?? false) === true) {
             $encode = $this->buildAudioSegmentCommand($inputPath, $tmp, $start, $duration, $params);
-            return $this->launchDetachedSegment($encode, $tmp, $outFile, $cancelKey, $cancelGroup);
+            return $this->launchDetachedSegment($encode, $tmp, $outFile, $cancelKey, $cancelGroup, $initFile, $start);
         }
 
         // Try hardware acceleration first if enabled AND preferred in config.
@@ -2416,7 +2453,7 @@ class FfmpegRunner
             $encode = $this->buildSegmentCommand($inputPath, $tmp, $start, $duration, $params);
         }
 
-        return $this->launchDetachedSegment($encode, $tmp, $outFile, $cancelKey, $cancelGroup);
+        return $this->launchDetachedSegment($encode, $tmp, $outFile, $cancelKey, $cancelGroup, $initFile, $start);
     }
 
     /**
@@ -2434,6 +2471,10 @@ class FfmpegRunner
      * @param string      $outFile     The final segment path published on success.
      * @param string|null $cancelKey   Key to track the PID under (null = $outFile).
      * @param string|null $cancelGroup Cancel-group id (relay channel/request id).
+     * @param string|null $initFile    S56: final `init-v{V}.m4s` path for the CMAF
+     *                                 branch; null keeps the pre-S56 single-file publish.
+     * @param float       $start       S56: the segment's start on the VOD timeline,
+     *                                 handed to the fragment rebaser.
      *
      * @return int OS process id of the launched job (0 if launch failed).
      */
@@ -2442,9 +2483,18 @@ class FfmpegRunner
         string $tmp,
         string $outFile,
         ?string $cancelKey = null,
-        ?string $cancelGroup = null
+        ?string $cancelGroup = null,
+        ?string $initFile = null,
+        float $start = 0.0
     ): int {
-        $full = $this->buildDetachedSegmentCommand($encode, $tmp, $outFile, $this->getTranscodeTimeout());
+        $full = $this->buildDetachedSegmentCommand(
+            $encode,
+            $tmp,
+            $outFile,
+            $this->getTranscodeTimeout(),
+            $initFile,
+            $start
+        );
 
         $pid = shell_exec($full);
         if (!is_string($pid) || trim($pid) === '') {
@@ -2490,10 +2540,19 @@ class FfmpegRunner
      * {@see SegmentProcessRegistry::releaseAfterWaitTimeout()}). The `|| rm` only
      * fires when ffmpeg exits nonzero on its own.
      *
-     * @param string $encode      The FFmpeg command writing to `$tmp`.
-     * @param string $tmp         The `.part-*` temp path.
-     * @param string $outFile     The final published segment path.
-     * @param int    $timeoutSecs Timeout in seconds (0 = no timeout wrapper).
+     * @param string      $encode      The FFmpeg command writing to `$tmp`.
+     * @param string      $tmp         The `.part-*` temp path.
+     * @param string      $outFile     The final published segment path.
+     * @param int         $timeoutSecs Timeout in seconds (0 = no timeout wrapper).
+     * @param string|null $initFile    S56: when set, the CMAF publish chain is
+     *                                 emitted instead. **Null reproduces the
+     *                                 pre-S56 string byte-for-byte** — that is the
+     *                                 contract `FfmpegRunnerDetachedCommandTest`
+     *                                 pins, and it is what makes "flag off ⇒
+     *                                 unchanged" a claim about the shell chain and
+     *                                 not just about the ffmpeg arguments.
+     * @param float       $start       S56: segment start on the VOD timeline,
+     *                                 passed to the fragment rebaser.
      *
      * @return string The full `nohup setsid ... & echo $!` launch string.
      *
@@ -2503,12 +2562,16 @@ class FfmpegRunner
         string $encode,
         string $tmp,
         string $outFile,
-        int $timeoutSecs = 0
+        int $timeoutSecs = 0,
+        ?string $initFile = null,
+        float $start = 0.0
     ): string {
         // Atomic publish: rename on success, clean the temp on failure.
-        $inner = $encode
-            . ' && mv -f ' . escapeshellarg($tmp) . ' ' . escapeshellarg($outFile)
-            . ' || rm -f ' . escapeshellarg($tmp);
+        $inner = $initFile === null
+            ? $encode
+                . ' && mv -f ' . escapeshellarg($tmp) . ' ' . escapeshellarg($outFile)
+                . ' || rm -f ' . escapeshellarg($tmp)
+            : self::fmp4PublishChain($encode, $tmp, $outFile, $initFile, $start);
 
         // SV-4.2: wrap in timeout to enforce transcode_timeout for on-demand
         // segment encodes (previously only whole-file/CMAF/recording paths did).
@@ -2524,6 +2587,202 @@ class FfmpegRunner
         $log = dirname($outFile) . '/ffmpeg-segments.log';
         // `setsid` → own process group so a cancel can group-signal ffmpeg directly.
         return sprintf('nohup setsid %s >> %s 2>&1 & echo $!', $launched, escapeshellarg($log));
+    }
+
+    /**
+     * The CMAF variant of the atomic-publish chain (S56).
+     *
+     * ```
+     * touch <tmp>
+     *   && <ffmpeg>                              # writes <tmp>.s0, <tmp>.i, <tmp>.m3u8
+     *   && php fmp4-rebase-segment.php <tmp>.s0 <tmp>.i <start>
+     *   && mv -f <tmp>.i  <initFile>             # init FIRST — see below
+     *   && mv -f <tmp>.s0 <outFile>
+     * ; rm -f <tmp> <tmp>.i <tmp>.s0 <tmp>.m3u8
+     * ```
+     *
+     * Four things here are load-bearing:
+     *
+     *  1. **`touch <tmp>` up front.** The global in-flight cap and the
+     *     cross-worker dedup are both a glob for `seg-*.part-<8 hex>` over the
+     *     shared segment tree ({@see TranscodeManager::countInFlightSegmentEncodes()}).
+     *     On this branch ffmpeg writes `<tmp>.s0`, never `<tmp>` — so without an
+     *     explicit marker file the cap would see ZERO encodes in flight and the
+     *     `SegmentBusyException`/503 backpressure that fixed the seek cascade
+     *     would silently become a no-op. The marker is removed by the trailing
+     *     `rm` exactly when the encode is over.
+     *  2. **The rebase runs BEFORE any `mv`.** Once a fragment is published a
+     *     sibling worker may already be streaming it, so it must never be
+     *     visible with the wrong `tfdt`. Non-zero exit from the rebaser breaks
+     *     the `&&` chain and nothing is published — the same outcome as a failed
+     *     encode, which the poll already handles by timing out and retrying.
+     *  3. **The init is published BEFORE the media segment.** That gives the
+     *     invariant "if `seg-v{V}-NNNNN.m4s` exists then `init-v{V}.m4s` exists",
+     *     which is what lets S57/S59 serve an `EXT-X-MAP` target without any
+     *     extra orchestration. The init is byte-identical for every segment
+     *     index (see {@see muxerTail()}), so re-`mv`ing it per segment is an
+     *     idempotent atomic overwrite, not a race.
+     *  4. **`;` rather than `|| ` for the cleanup**, so the three auxiliary
+     *     temps are removed on the success path too. As with the MPEG-TS chain,
+     *     a `timeout`/signal kill skips this entirely; the launcher's own temps
+     *     are then cleaned by {@see SegmentProcessRegistry}'s temp cleaner.
+     *
+     * @param string $encode   The FFmpeg command.
+     * @param string $tmp      The `.part-<hex>` temp stem.
+     * @param string $outFile  Final media segment path.
+     * @param string $initFile Final init segment path.
+     * @param float  $start    Segment start on the VOD timeline.
+     *
+     * @since S56
+     */
+    private static function fmp4PublishChain(
+        string $encode,
+        string $tmp,
+        string $outFile,
+        string $initFile,
+        float $start
+    ): string {
+        $initTmp = $tmp . self::FMP4_INIT_TMP_SUFFIX;
+        // `-start_number 0` with no split means the one fragment is always `…s0`.
+        $mediaTmp = $tmp . self::FMP4_MEDIA_TMP_SUFFIX . '0';
+        $playlistTmp = $tmp . self::FMP4_PLAYLIST_TMP_SUFFIX;
+
+        $rebase = escapeshellarg(self::phpBinary())
+            . ' ' . escapeshellarg(self::rebaseScriptPath())
+            . ' ' . escapeshellarg($mediaTmp)
+            . ' ' . escapeshellarg($initTmp)
+            . ' ' . self::seconds($start);
+
+        return 'touch ' . escapeshellarg($tmp)
+            . ' && ' . $encode
+            . ' && ' . $rebase
+            . ' && mv -f ' . escapeshellarg($initTmp) . ' ' . escapeshellarg($initFile)
+            . ' && mv -f ' . escapeshellarg($mediaTmp) . ' ' . escapeshellarg($outFile)
+            . ' ; rm -f ' . escapeshellarg($tmp)
+            . ' ' . escapeshellarg($initTmp)
+            . ' ' . escapeshellarg($mediaTmp)
+            . ' ' . escapeshellarg($playlistTmp);
+    }
+
+    /**
+     * The PHP CLI binary to run {@see rebaseScriptPath()} with.
+     *
+     * `PHP_BINARY` is the interpreter this worker is itself running under, so it
+     * is the one guaranteed to have the extensions the autoloader needs. Same
+     * resolution {@see TranscodeManager} already uses for its `clean-vtt`
+     * helper (`$phpBinary ?? PHP_BINARY`), rather than a second convention.
+     *
+     * @since S56
+     */
+    private static function phpBinary(): string
+    {
+        return PHP_BINARY;
+    }
+
+    /**
+     * Absolute path to the fragment rebaser CLI, resolved from this file rather
+     * than from a config key so it cannot drift out of sync with the class it
+     * wraps.
+     *
+     * @since S56
+     */
+    private static function rebaseScriptPath(): string
+    {
+        return dirname(__DIR__, 3) . '/scripts/fmp4-rebase-segment.php';
+    }
+
+    /**
+     * True when `$params` asks for CMAF fragmented-MP4 segments rather than the
+     * shipped MPEG-TS ones.
+     *
+     * The key is threaded through `segment_params` by
+     * {@see TranscodeManager::computeSegmentParams()} and is ABSENT at the
+     * shipped default, so an unflagged job's params array — and therefore the
+     * persisted `transcode_jobs.segment_params` JSON — is byte-identical to
+     * pre-S56.
+     *
+     * @param array<string, mixed> $params
+     *
+     * @since S56
+     */
+    public static function wantsFmp4(array $params): bool
+    {
+        return ($params['segment_format'] ?? null) === EncodeSettings::FORMAT_FMP4;
+    }
+
+    /**
+     * The muxer half of a segment command — the ONLY part that differs between
+     * the MPEG-TS and CMAF fMP4 containers. Shared by all three segment
+     * builders ({@see buildSegmentCommand()},
+     * {@see buildAudioSegmentCommand()}, {@see buildHwaccelSegmentCommand()})
+     * so a container can never be wired into two of them and forgotten in the
+     * third.
+     *
+     * ## MPEG-TS branch (default)
+     *
+     * Byte-identical to the three hardcoded tails this replaced:
+     * `-muxdelay 0 -muxpreload 0 -output_ts_offset <start> -f mpegts <out>`.
+     *
+     * ## fMP4 branch
+     *
+     * `-f hls -hls_segment_type fmp4` was chosen over `-f dash` and over a bare
+     * `-f mp4 -movflags +frag_keyframe+empty_moov`, on measured output rather
+     * than on documentation:
+     *
+     *  - `-f mp4 -movflags +frag_keyframe+empty_moov` writes `ftyp`+`moov` into
+     *    EVERY media segment, which is non-conformant for a DASH
+     *    `SegmentTemplate@initialization` setup and forfeits the whole
+     *    one-segment-set-serves-HLS-and-DASH prize.
+     *  - `-f dash` rejects a `-seg_duration` large enough to guarantee a single
+     *    fragment (its range caps at 2147.48) and names outputs per
+     *    representation, which collides when video and audio share one run.
+     *  - `-f hls -hls_segment_type fmp4` produced exactly the wanted split: the
+     *    init is `ftyp`+`moov` only, and the fragment is
+     *    `styp`+`sidx`+`moof`+`mdat` with NO `ftyp`/`moov`.
+     *
+     * **`-output_ts_offset` is deliberately NOT emitted here** — that is not an
+     * oversight, it is the measurement. With it, the offset does not reach the
+     * fragment's `tfdt` at all; it reaches the `moov`'s `elst` as an empty
+     * edit, i.e. it is baked into the INIT segment, which is shared by every
+     * segment of the variant. Producing the init from segment 42 would then
+     * shift segments 0..41 by 42 × segment_seconds. Dropping it makes the init
+     * byte-identical whatever the segment index (verified by md5 across
+     * `-ss 0` and `-ss 6`), and the timeline position is written into the
+     * fragment afterwards by {@see Fmp4SegmentRebaser}. See that class for the
+     * six muxer configurations that were measured before this was accepted.
+     *
+     * @param array<string, mixed> $params   Encode params (`segment_format`).
+     * @param string               $outFile  The `.part-<hex>` temp the encode targets.
+     * @param string               $startArg Segment start, already formatted by {@see seconds()}.
+     *
+     * @return string The leading-space-prefixed muxer arguments.
+     *
+     * @since S56
+     */
+    private static function muxerTail(array $params, string $outFile, string $startArg): string
+    {
+        // Anchor PTS to the absolute timeline position; no mux pre-roll.
+        $tail = ' -muxdelay 0 -muxpreload 0';
+
+        if (!self::wantsFmp4($params)) {
+            $tail .= ' -output_ts_offset ' . $startArg;
+            $tail .= ' -f mpegts ' . escapeshellarg($outFile);
+
+            return $tail;
+        }
+
+        $tail .= ' -f hls';
+        $tail .= ' -hls_time ' . self::FMP4_NEVER_SPLIT_SECONDS;
+        $tail .= ' -hls_playlist_type vod -hls_list_size 0 -hls_segment_type fmp4 -start_number 0';
+        // Init filename is resolved against the playlist's directory, so pass a
+        // BASENAME here and put the playlist in the job dir beside it.
+        $tail .= ' -hls_fmp4_init_filename '
+            . escapeshellarg(basename($outFile) . self::FMP4_INIT_TMP_SUFFIX);
+        $tail .= ' -hls_segment_filename '
+            . escapeshellarg($outFile . self::FMP4_MEDIA_TMP_SUFFIX . '%d');
+        $tail .= ' ' . escapeshellarg($outFile . self::FMP4_PLAYLIST_TMP_SUFFIX);
+
+        return $tail;
     }
 
     /**

@@ -251,6 +251,33 @@ class TranscodeManager
     private const SEGMENT_INFLIGHT_STALE_GRACE_MS = 5000;
 
     /**
+     * Glob (relative to a job directory) matching exactly the atomic-write temps
+     * of in-flight segment encodes. Feeds BOTH the real-time global cap
+     * ({@see countInFlightSegmentEncodes()}) and the cross-worker dedup snapshot
+     * ({@see reconcileInFlightSegments()}).
+     *
+     * ⚠ S56 replaced the previous `seg-*.ts.part-*` with this. Two reasons, and
+     * both are correctness rather than tidiness:
+     *
+     *  1. `.ts` was hardcoded, so on the CMAF branch (`seg-…m4s.part-<hex>`) the
+     *     cap would have counted ZERO encodes in flight — the
+     *     `SEGMENT_MAX_INFLIGHT_GLOBAL` backpressure that fixed the seek cascade
+     *     would have been silently inert for every flagged job.
+     *  2. The trailing `*` had to become the EXACT eight characters
+     *     `bin2hex(random_bytes(4))` produces, because the CMAF encode writes
+     *     `<tmp>.i`, `<tmp>.s0` and `<tmp>.m3u8` beside the temp; `seg-*.part-*`
+     *     would have matched all four and inflated the count fourfold. `????????`
+     *     matches the eight-hex temp and nothing else, since a glob pattern must
+     *     match the whole basename.
+     *
+     * For an MPEG-TS temp the two patterns select an identical set — every temp
+     * is `{final}.part-{8 hex}` — which is what
+     * `TranscodeManagerSegmentFormatTest::testInFlightGlobSelectsTheSameMpegtsTempsAsThePreS56Pattern()`
+     * pins.
+     */
+    private const INFLIGHT_TEMP_GLOB = 'seg-*.part-????????';
+
+    /**
      * Columns {@see getJobRow()} selects — the exact set its callers read. Narrowed
      * from `SELECT *` so the per-segment hot path never fetches the wide row under the
      * serialized DB mutex on a cache miss.
@@ -895,6 +922,10 @@ class TranscodeManager
             // unconfigured; also inert on a video_only (-an) rung, where the audio-only
             // renditions carry the normalized sound instead.
             $segParams = $this->applyLoudnorm($segParams);
+            // S56: segmentParamsForRendition() rebuilds params from the ABR ladder
+            // and so carries NO job-level container either — merge the persisted
+            // `segment_format` back in (see applySegmentFormat()).
+            $segParams = $this->applySegmentFormat($row, $segParams);
             return $this->produceSegment($jobId, $row, $variant, $index, $segParams);
         }
 
@@ -1125,7 +1156,14 @@ class TranscodeManager
         $dir = is_string($row['hls_dir'] ?? null) && $row['hls_dir'] !== ''
             ? (string) $row['hls_dir']
             : "{$this->segmentDir}/{$jobId}";
-        $final = $dir . '/' . self::segmentFileName($variantId, $index);
+        // S56: the container is a property of the JOB (see segmentFormatOf()), so
+        // it decides both the cache-hit filename below and, on the CMAF branch,
+        // the per-variant init the encode publishes alongside the fragment.
+        $format = self::segmentFormatOf($segParams);
+        $final = $dir . '/' . self::segmentFileName($variantId, $index, null, $format);
+        if ($format === EncodeSettings::FORMAT_FMP4) {
+            $segParams['init_file'] = $dir . '/' . self::initSegmentFileName($variantId, null);
+        }
 
         if (is_file($final)) {
             $this->touchJobDir($dir); // mark the session active for the LRU sweep
@@ -1427,7 +1465,8 @@ class TranscodeManager
             @mkdir($dir, 0775, true);
         }
 
-        $final = "{$dir}/" . self::segmentFileName(null, $index, $audioId);
+        $format = self::segmentFormatOf($this->applySegmentFormat($row, []));
+        $final = "{$dir}/" . self::segmentFileName(null, $index, $audioId, $format);
         $start = (float) $index * $segSeconds;
         $segLen = min((float) $segSeconds, $duration - $start);
         if ($segLen <= 0.0) {
@@ -1443,6 +1482,13 @@ class TranscodeManager
             'audio_bitrate' => $this->encodeSettings->audioBitrate(),
             'audio_stream_index' => $audioStreamIndex,
         ];
+        // S56: this array is built fresh and never reads segment_params, so the
+        // job's container has to be merged back in here too — otherwise a flagged
+        // job would write `.m4s` video segments and `.ts` audio segments.
+        $segParams = $this->applySegmentFormat($row, $segParams);
+        if (self::segmentFormatOf($segParams) === EncodeSettings::FORMAT_FMP4) {
+            $segParams['init_file'] = "{$dir}/" . self::initSegmentFileName(null, $audioId);
+        }
         // SV-3.3(1B): in a multi-audio job the video segments are `-an`, so loudness
         // normalization can ONLY happen on this audio-only path — this $segParams is
         // built fresh here and never reads segment_params, so the target must be
@@ -1891,7 +1937,7 @@ class TranscodeManager
      */
     private function countInFlightSegmentEncodes(): int
     {
-        $parts = glob("{$this->segmentDir}/*/seg-*.ts.part-*");
+        $parts = glob("{$this->segmentDir}/*/" . self::INFLIGHT_TEMP_GLOB);
         return is_array($parts) ? count($parts) : 0;
     }
 
@@ -1930,7 +1976,7 @@ class TranscodeManager
         $this->lastInFlightReconcileMs = $now;
 
         $snapshot = [];
-        $parts = glob("{$this->segmentDir}/*/seg-*.ts.part-*");
+        $parts = glob("{$this->segmentDir}/*/" . self::INFLIGHT_TEMP_GLOB);
         if (is_array($parts)) {
             foreach ($parts as $part) {
                 $final = preg_replace('/\.part-[0-9a-f]+$/', '', $part);
@@ -2177,23 +2223,142 @@ class TranscodeManager
      * segment (the standard ABR case). When only `$audioId` is set, produces an
      * audio-only segment for the multi-audio HLS path.
      *
+     * S56 adds the container: the stems are unchanged, only the extension moves
+     * (`.ts` → `.m4s`) when the job was created with `transcoding.segment_format
+     * = fmp4`. Keeping the stems identical is what lets ONE segment set serve
+     * both HLS (S57) and DASH (S58).
+     *
      * @param string|null $variantId Rendition id (e.g. `1080p`, `original`) or null (legacy).
      * @param int         $index     Zero-based segment index.
      * @param string|null $audioId   Audio group id (e.g. `a0`) for audio-only segments (P3B-S3).
+     * @param string      $format    `mpegts` (default) or `fmp4` (S56).
      */
-    private static function segmentFileName(?string $variantId, int $index, ?string $audioId = null): string
-    {
+    private static function segmentFileName(
+        ?string $variantId,
+        int $index,
+        ?string $audioId = null,
+        string $format = EncodeSettings::DEFAULT_SEGMENT_FORMAT
+    ): string {
+        $ext = self::segmentExtension($format);
+
         if ($variantId === null && $audioId === null) {
-            return sprintf('seg-%05d.ts', $index);
+            return sprintf('seg-%05d.%s', $index, $ext);
         }
 
         // P3B-S3: audio-only segment when a variantId is not set but audioId is.
         if ($variantId === null && $audioId !== null) {
-            return sprintf('seg-%s-%05d.ts', $audioId, $index);
+            return sprintf('seg-%s-%05d.%s', $audioId, $index, $ext);
         }
 
         // Standard video+audio variant segment.
-        return sprintf('seg-v%s-%05d.ts', $variantId, $index);
+        return sprintf('seg-v%s-%05d.%s', $variantId, $index, $ext);
+    }
+
+    /**
+     * The CMAF init-segment filename for a variant or audio rendition (S56).
+     *
+     * One init per rendition, shared by every one of its media segments — it is
+     * what `#EXT-X-MAP:URI=` (S57) and `SegmentTemplate@initialization` (S58)
+     * will point at. Mirrors {@see self::segmentFileName()}'s three shapes so a
+     * legacy single-variant job gets a bare `init.m4s`.
+     *
+     * Only ever meaningful on the fMP4 branch: an MPEG-TS segment is
+     * self-contained and has no init.
+     *
+     * @param string|null $variantId Rendition id, or null (legacy / audio-only).
+     * @param string|null $audioId   Audio group id (e.g. `a0`), or null.
+     *
+     * @since S56
+     */
+    private static function initSegmentFileName(?string $variantId, ?string $audioId = null): string
+    {
+        if ($variantId === null && $audioId === null) {
+            return 'init.m4s';
+        }
+        if ($variantId === null) {
+            return sprintf('init-%s.m4s', $audioId);
+        }
+
+        return sprintf('init-v%s.m4s', $variantId);
+    }
+
+    /**
+     * Filename extension for an on-demand segment container. Anything other
+     * than the fMP4 sentinel degrades to the shipped `.ts`, so a corrupted or
+     * hand-edited `segment_params` can never invent a third naming scheme.
+     *
+     * @since S56
+     */
+    private static function segmentExtension(string $format): string
+    {
+        return $format === EncodeSettings::FORMAT_FMP4 ? 'm4s' : 'ts';
+    }
+
+    /**
+     * The container a JOB was created with, read from its persisted
+     * `segment_params` — deliberately NOT from the live setting.
+     *
+     * A job's playlists, its already-cached segments and its directory are all
+     * committed to one container at creation time. Reading the live setting per
+     * segment instead would mean an admin flipping `transcoding.segment_format`
+     * mid-playback silently changed the filename an in-progress job produces,
+     * 404ing every subsequent segment for viewers already on it. The flip is
+     * instead handled at the job-key level: it changes
+     * {@see EncodeSettings::fingerprint()}, so the NEXT `ensureHlsJob()` gets a
+     * different key, a fresh job id and a fresh directory.
+     *
+     * @param array<string, mixed> $segParams Resolved params for this segment.
+     *
+     * @return string `mpegts` or `fmp4`.
+     *
+     * @since S56
+     */
+    private static function segmentFormatOf(array $segParams): string
+    {
+        return ($segParams['segment_format'] ?? null) === EncodeSettings::FORMAT_FMP4
+            ? EncodeSettings::FORMAT_FMP4
+            : EncodeSettings::DEFAULT_SEGMENT_FORMAT;
+    }
+
+    /**
+     * Merges the JOB's persisted segment container into a freshly-rebuilt
+     * `$segParams`.
+     *
+     * The exact SV-3.3 landmine this codebase keeps hitting: `$segParams`
+     * reaches {@see produceSegment()} by three different routes and only ONE of
+     * them (the legacy single-variant path) is the persisted `segment_params`
+     * array itself. {@see segmentParamsForRendition()} rebuilds params from the
+     * ABR ladder and {@see produceAudioSegment()} builds a fresh array — neither
+     * carries a job-level setting unless it is merged back in, exactly as
+     * {@see applyToneMap()}, {@see applySubtitleBurnIn()} and
+     * {@see applyLoudnorm()} already do. Wiring only one site would produce
+     * `.m4s` video segments beside `.ts` audio segments in one job.
+     *
+     * Inert (no key added) for every job created at the shipped default, which
+     * is what keeps the flag-off params array byte-identical to pre-S56.
+     *
+     * @param array<string, mixed> $row       The transcode_jobs row.
+     * @param array<string, mixed> $segParams Segment params to augment.
+     *
+     * @return array<string, mixed> `$segParams`, with `segment_format` when the job has one.
+     *
+     * @since S56
+     */
+    private function applySegmentFormat(array $row, array $segParams): array
+    {
+        $raw = $row['segment_params'] ?? null;
+        if (!is_string($raw) || $raw === '') {
+            return $segParams;
+        }
+        $decoded = json_decode($raw, true);
+        if (!is_array($decoded)) {
+            return $segParams;
+        }
+        if (($decoded['segment_format'] ?? null) === EncodeSettings::FORMAT_FMP4) {
+            $segParams['segment_format'] = EncodeSettings::FORMAT_FMP4;
+        }
+
+        return $segParams;
     }
 
     /**
@@ -2274,6 +2439,15 @@ class TranscodeManager
         // re-encode (the copy→aac upgrade above guarantees a real encode to filter).
         // Inert (null) by default → byte-identical to pre-SV-3.3.
         $params = $this->applyLoudnorm($params);
+
+        // S56: stamp the container the job is being CREATED with, so every later
+        // segment of this job resolves its filename from the job rather than from
+        // the live setting (see segmentFormatOf()). Written only when the flag is
+        // on, so at the shipped default the persisted segment_params JSON — and
+        // therefore every byte of the flag-off path — is unchanged.
+        if ($this->encodeSettings->segmentFormat() === EncodeSettings::FORMAT_FMP4) {
+            $params['segment_format'] = EncodeSettings::FORMAT_FMP4;
+        }
 
         // SV-1.1(b): when computeHlsParams() flagged this item as needing HDR
         // tone-mapping, resolve the tone-map filter STRING once — here, from the
@@ -3293,11 +3467,17 @@ class TranscodeManager
     private function countSegments(string $dir): int
     {
         // Legacy linear CMAF jobs write `chunk-*.m4s`; on-demand jobs write
-        // `seg-*.ts` as they are requested (the `seg-*.ts.part-*` temps do not match
-        // the `.ts` glob, so half-written segments are not counted).
+        // `seg-*.ts` (or, S56 flagged, `seg-*.m4s`) as they are requested. The
+        // `.part-<hex>` temps do not match either extension glob, so half-written
+        // segments are not counted. `init-*.m4s` is deliberately excluded — it is
+        // one shared header per rendition, not a media segment, and counting it
+        // would overstate progress by the number of renditions.
         $cmaf = glob("{$dir}/chunk-*.m4s");
         $ts = glob("{$dir}/seg-*.ts");
-        return (is_array($cmaf) ? count($cmaf) : 0) + (is_array($ts) ? count($ts) : 0);
+        $fmp4 = glob("{$dir}/seg-*.m4s");
+        return (is_array($cmaf) ? count($cmaf) : 0)
+            + (is_array($ts) ? count($ts) : 0)
+            + (is_array($fmp4) ? count($fmp4) : 0);
     }
 
     /**

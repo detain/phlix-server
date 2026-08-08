@@ -1667,7 +1667,7 @@ class MediaScanner
         // (tests / legacy callers), generation is skipped — callers that need the
         // old inline behaviour should wire up the store.
         $ext = strtolower(pathinfo($path, PATHINFO_EXTENSION));
-        $supportsChapters = in_array($ext, ['mkv', 'mp4', 'webm'], true);
+        $supportsChapters = in_array($ext, MediaAssetJob::SUPPORTED_EXTENSIONS, true);
         if ($this->mediaAssetJobStore !== null && $this->ffmpeg !== null && $supportsChapters) {
             $duration = is_numeric($metadata['duration_seconds'] ?? null) ? (int) $metadata['duration_seconds'] : 0;
             $job = new MediaAssetJob((string) $itemId, $path, $duration);

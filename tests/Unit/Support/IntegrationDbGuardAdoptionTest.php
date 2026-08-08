@@ -270,8 +270,18 @@ final class IntegrationDbGuardAdoptionTest extends TestCase
      * per-profile `user_item_data` rows carrying three DISTINCT ratings — a canned
      * `Connection` double would be asserting against values the test itself chose
      * to hand back, which is precisely the leak it is meant to detect.
+     *
+     * 43 since S284's
+     * `tests/Integration/Media/Library/MediaAssetsJobRowIdempotencyTest.php`: the
+     * claim it pins is that a second `POST /api/v1/libraries/{id}/regenerate-assets`
+     * leaves the `library_scan_jobs` ROW COUNT at one. The de-duplication is a
+     * single `INSERT ... SELECT ... WHERE NOT EXISTS`, so its predicate has to be
+     * evaluated by MySQL — a canned-row `Connection` double could only report the
+     * SQL the test itself expected and could not tell a working guard from a
+     * broken one. It also proves migration 101 applied: without it the `type`
+     * ENUM rejects `media_assets` outright, a failure a double never surfaces.
      */
-    private const EXPECTED_ADOPTERS = 42;
+    private const EXPECTED_ADOPTERS = 43;
 
     /**
      * Bare function calls that are a MySQL reachability probe under any

@@ -2539,6 +2539,19 @@ class FfmpegRunner
         return $formatted === '' ? '0' : $formatted;
     }
 
+    /**
+     * File name of the trickplay sprite sheet inside an item's trickplay dir.
+     *
+     * Public because it is the only way a CONSUMER can ask "does this item
+     * already have a sprite?" without re-spelling the literal. S284's re-enqueue
+     * skips items whose artefacts already exist, and a second spelling of
+     * `sprite.jpg` there would silently stop matching the moment this one moved.
+     */
+    public const SPRITE_FILENAME = 'sprite.jpg';
+
+    /** File name of the trickplay timeline written beside {@see self::SPRITE_FILENAME}. */
+    public const TIMELINE_FILENAME = 'timeline.json';
+
     /** Sprite-sheet columns; rows are derived from the requested thumb count. */
     private const TRICKPLAY_SPRITE_COLUMNS = 6;
 
@@ -2647,8 +2660,8 @@ class FfmpegRunner
             }
         }
 
-        $spritePath = $outputDir . '/sprite.jpg';
-        $timelinePath = $outputDir . '/timeline.json';
+        $spritePath = $outputDir . '/' . self::SPRITE_FILENAME;
+        $timelinePath = $outputDir . '/' . self::TIMELINE_FILENAME;
 
         // `tile`'s layout option is an IMAGE SIZE — `6x10`, not `6:10`. Written
         // with a colon it is parsed positionally as layout="6", which ffmpeg

@@ -954,6 +954,89 @@ class LibraryController
     }
 
     /**
+     * Enqueue a media-asset re-generation pass for a library (`media_assets` job).
+     *
+     * Powers `POST /api/v1/libraries/{id}/regenerate-assets`.
+     *
+     * ## Why this endpoint exists (S284)
+     *
+     * The media-asset queue — chapter thumbnails, the trickplay sprite sheet and
+     * the Roku BIF — is a FILE queue whose only producer is the SCANNER. S275
+     * established that the sprite producer had failed 100 % of the time on every
+     * install, so no library anywhere holds a `sprite.jpg`, a `timeline.json` or a
+     * `thumbs.bif`; fixing the producer only helps items processed afterwards.
+     * This is the targeted way to re-prime that queue for rows that already exist.
+     *
+     * ⚠ **It is deliberately not "rescan".** A full rescan is expensive and S153
+     * recorded that a healing rescan creates MORE orphan container rows than it
+     * clears. The `media_assets` job opens no media file and writes no
+     * `media_items`; the ffmpeg work is then done by the existing
+     * `MediaAssetWorker` at its own bounded concurrency.
+     *
+     * ## Idempotency
+     *
+     * Two POSTs must not leave two jobs in the queue, so this uses
+     * {@see \Phlix\Media\Library\ScanJobRepository::enqueueIfNoneActiveOfType()}
+     * rather than the plain `enqueue()` every sibling action uses: a second
+     * request while a `media_assets` job for the same library is `queued`/`running`
+     * inserts NOTHING and reports the id of the job already doing the work. The
+     * refusal is scoped to this job type, so it never swallows a request because
+     * an unrelated `scan` happens to be running. Downstream, the backfill skips
+     * items whose artefacts are already on disk and the job store is itself keyed
+     * by item id — three independent layers, because "does not duplicate work" has
+     * to hold at the row, the file and the ffmpeg level.
+     *
+     * ⚠ **There is deliberately NO `force` flag.** Re-generating artefacts that
+     * are already on disk would need the flag to survive the round trip through
+     * the `library_scan_jobs` row, and that table has no per-job parameter column
+     * — so a `force` accepted here would be read by nothing and the endpoint would
+     * advertise a behaviour it does not have. It is filed as a follow-up rather
+     * than half-shipped. It costs nothing today: per S275 no install holds any
+     * trickplay artefact at all, so the skip never fires on a first backfill.
+     *
+     * ## Gate
+     *
+     * Admin-only, enforced by {@see self::requireAdmin()} INSIDE this handler —
+     * the same pattern as the six destructive library actions (S272), not a
+     * route-level middleware. `Application::getLibraryController()` calls
+     * `setAdminMiddleware()` whenever the container can supply one, which is the
+     * construction path every served request takes.
+     *
+     * @param array<string, string> $params Route params; `id` is the library UUID.
+     *
+     * @return Response `202` `{ job_id, status:"queued"|"already_queued",
+     *                  message }` · `404` library-missing · `401`/`403` auth.
+     */
+    public function regenerateAssets(Request $request, array $params): Response
+    {
+        $authResponse = $this->requireAdmin($request);
+        if ($authResponse !== null) {
+            return $authResponse;
+        }
+
+        $library = $this->libraryManager->getLibrary($params['id']);
+        if (!$library) {
+            return (new Response())->status(404)->json(['error' => 'Library not found']);
+        }
+
+        $outcome = $this->scanJobs->enqueueIfNoneActiveOfType($params['id'], 'media_assets');
+
+        if (!$outcome['created']) {
+            return (new Response())->status(202)->json([
+                'job_id' => $outcome['job_id'],
+                'status' => 'already_queued',
+                'message' => 'A media-asset regeneration job is already queued for this library.',
+            ]);
+        }
+
+        return (new Response())->status(202)->json([
+            'job_id' => $outcome['job_id'],
+            'status' => 'queued',
+            'message' => 'Media-asset regeneration queued (chapter thumbnails, trickplay sprite, BIF).',
+        ]);
+    }
+
+    /**
      * Return the latest scan job for a library (Step 1.1b).
      *
      * Powers `GET /api/v1/libraries/{id}/scan-status`. Admin-gated

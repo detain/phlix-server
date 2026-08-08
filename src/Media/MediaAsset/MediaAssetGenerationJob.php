@@ -156,8 +156,10 @@ class MediaAssetGenerationJob
         $itemId = $job->itemId;
         $ext = strtolower(pathinfo($path, PATHINFO_EXTENSION));
 
-        // Only containers that support chapters
-        if (!in_array($ext, ['mkv', 'mp4', 'webm'], true)) {
+        // Only containers that support chapters. Shares its list with the two
+        // ENQUEUE gates (the scanner and S284's backfill) via MediaAssetJob, so a
+        // producer can never queue an item this method would silently refuse.
+        if (!in_array($ext, MediaAssetJob::SUPPORTED_EXTENSIONS, true)) {
             return false;
         }
 

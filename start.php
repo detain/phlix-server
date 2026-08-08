@@ -1179,9 +1179,17 @@ try {
 // -----------------------------------------------------------------------------
 // 4f. DLNA/UPnP SSDP advertiser worker.
 //
-// The SsdpAdvertiser is a Workerman Worker that sends SSDP NOTIFY messages
-// to the multicast address 239.255.255.250:1900 every 30 seconds, allowing
-// DLNA/UPnP devices on the network to discover this media server.
+// The SsdpAdvertiser is a Workerman Worker that covers both halves of SSDP
+// discovery: it multicasts an SSDP NOTIFY to 239.255.255.250:1900 every 30
+// seconds (the passive half), and since S51 it also binds udp://0.0.0.0:1900,
+// joins that multicast group and answers inbound M-SEARCH datagrams with a
+// unicast response (the active half). Most control points discover by searching,
+// so without the second half a TV would only find this server if it happened to
+// be listening at the moment of an announcement.
+//
+// The listen socket uses SO_REUSEPORT and a bind failure is contained inside
+// SsdpAdvertiser::listen(), so a port-1900 conflict costs M-SEARCH replies
+// rather than the worker or the server.
 //
 // This worker must be instantiated BEFORE Worker::runAll() because Workerman
 // cannot fork a Worker post-runAll(). count=1 is sufficient since SSDP

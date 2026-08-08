@@ -243,20 +243,21 @@ final class EncodeSettings
      *
      * ## ⚠ `fmp4` IS NOT SERVABLE YET — DO NOT ENABLE IN PRODUCTION
      *
-     * S56 delivers segment PRODUCTION only. With this set to
-     * {@see self::FORMAT_FMP4} a job produces `init-v{V}.m4s` +
-     * `seg-v{V}-NNNNN.m4s` on disk, but:
+     * S56 delivers segment PRODUCTION and S57 the matching playlists. With this
+     * set to {@see self::FORMAT_FMP4} a job writes media playlists carrying
+     * `#EXT-X-MAP:URI="init-v{V}.m4s"` + `seg-v{V}-NNNNN.m4s` entries at
+     * `#EXT-X-VERSION:7`, and produces those files on disk — but:
      *
-     *  - `TranscodeManager::buildMediaPlaylist()` still advertises `.ts` names
-     *    (that is S57's `EXT-X-MAP` rework), and
-     *  - `HlsController::serveFile()` only matches `/^seg-v…\.ts$/` — an
+     *  - `HlsController::serveFile()` only matches `/^seg-v…\.ts$/`, so an
      *    `.m4s` request is not even routed to {@see TranscodeManager::ensureSegment()}
-     *    (that is S57/S59's wiring).
+     *    (that is S59's wiring), and
+     *  - nothing therefore ever triggers the encode that would create
+     *    `init-v{V}.m4s` in the first place.
      *
-     * So turning this on TODAY yields a job whose segments are produced and
-     * then **404** at the player. It exists so S57–S59 can be built and tested
-     * against real fMP4 bytes, and so S60 can flip the default once the serve
-     * path exists. It is deliberately NOT exposed in
+     * So turning this on TODAY yields a job whose playlists are correct and
+     * whose every segment request **404s**. It exists so S57–S59 can be built
+     * and tested against real fMP4 bytes, and so S60 can flip the default once
+     * the serve path exists. It is deliberately NOT exposed in
      * `phlix-shared/schemas/server-settings.schema.json`, which means
      * `AdminSettingsController` will REFUSE to set it over the admin API — the
      * only way to turn it on is an explicit edit of `config/transcoding.php`

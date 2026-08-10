@@ -204,6 +204,19 @@ final class AdminSettingsControllerTest extends TestCase
             'transcoding.preset'                        => 'string',
             'transcoding.crf_h264'                      => 'int',
             'transcoding.audio_bitrate'                 => 'string',
+            // phlix-shared v0.49.0 (S313): the on-demand segment container,
+            // enum mpegts|fmp4. The key has lived in config/transcoding.php
+            // since S56 but was DELIBERATELY absent from the schema, and that
+            // absence was exactly what made this controller answer "Unknown
+            // setting key." to every PUT of it — so the only way to change it
+            // was hand-editing the config file inside a running container.
+            // S313 declares it so S60's flag flip has a rollback path over the
+            // admin API before the flip lands. NOT the flip: the schema default
+            // is still mpegts. Enum enforcement and the accept/reject pair are
+            // covered in AdminSettingsSegmentFormatTest; the schema-enum vs
+            // EncodeSettings::SEGMENT_FORMATS correspondence in
+            // SegmentFormatSchemaEnumDriftTest.
+            'transcoding.segment_format'                => 'string',
             // Gates BOTH artwork download choke points (poster/backdrop and
             // the separate logo path) via ArtworkDownloadPolicy.
             'artwork.download_enabled'                  => 'bool',
@@ -330,7 +343,8 @@ final class AdminSettingsControllerTest extends TestCase
 
         $actual = AdminSettingsController::allowedKeys();
 
-        $this->assertCount(72, $actual);
+        // 72 -> 73 in phlix-shared v0.49.0: transcoding.segment_format (S313).
+        $this->assertCount(73, $actual);
         $this->assertEquals($expected, $actual);
     }
 
@@ -408,7 +422,8 @@ final class AdminSettingsControllerTest extends TestCase
 
         // schemaMeta() covers EVERY declared property, not just the typed ones
         // that reach allowedKeys().
-        $this->assertCount(72, $meta);
+        // 72 -> 73 in phlix-shared v0.49.0: transcoding.segment_format (S313).
+        $this->assertCount(73, $meta);
         foreach (array_keys(AdminSettingsController::allowedKeys()) as $key) {
             $this->assertArrayHasKey($key, $meta, sprintf('%s must carry a meta block', $key));
         }

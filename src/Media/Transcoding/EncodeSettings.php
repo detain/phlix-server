@@ -259,13 +259,16 @@ final class EncodeSettings
      * at all. Turning the flag on then yielded a job whose playlists were
      * correct and whose every segment request 404'd.
      *
-     * It remains OFF by default and deliberately NOT exposed in
-     * `phlix-shared/schemas/server-settings.schema.json`, which means
-     * `AdminSettingsController` will REFUSE to set it over the admin API — the
-     * only way to turn it on is an explicit edit of `config/transcoding.php`
-     * (or a hand-inserted `settings` override row). S60 owns the default flip,
-     * the schema entry and the {@see TranscodeManager::JOB_KEY_VERSION} bump
-     * that flip requires.
+     * It remains OFF by default, but it is no longer un-settable: S313
+     * (phlix-shared v0.49.0) declares the key in
+     * `phlix-shared/schemas/server-settings.schema.json` with
+     * `"enum": ["mpegts", "fmp4"]`, so `AdminSettingsController` now ACCEPTS a
+     * PUT of either member over the admin API and rejects anything else. That
+     * enum is {@see self::SEGMENT_FORMATS}, and
+     * `tests/Unit/Media/Transcoding/SegmentFormatSchemaEnumDriftTest.php`
+     * fails if either side moves alone. S313 changed no default; S60 still
+     * owns the default flip and the {@see TranscodeManager::JOB_KEY_VERSION}
+     * bump that flip requires.
      *
      * An unrecognised value falls back to the shipped default rather than
      * reaching the encode path, for the same reason a bad `-preset` does.

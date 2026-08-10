@@ -1010,9 +1010,10 @@ class FfmpegRunner
     /**
      * Builds the FFmpeg command line for {@see generateThumbnailBatch()}.
      *
-     * Extracted as its own public builder (matching {@see buildCmafCommand()} /
-     * {@see buildSegmentCommand()} etc.) so the command SHAPE is directly
-     * testable without invoking a real FFmpeg binary.
+     * Extracted as its own public builder (matching {@see buildSegmentCommand()}
+     * / {@see buildAudioSegmentCommand()} etc.) so the command SHAPE is directly
+     * testable without invoking a real FFmpeg binary. (It used to name
+     * `buildCmafCommand()` first; S59 deleted that orphan.)
      *
      * Each timestamp gets its **own** `-ss <timestamp> -i <inputPath>` pair so
      * every seek stays **input-side** (fast, demuxer-level keyframe seeking)

@@ -596,6 +596,96 @@ final class TranscodeManagerVodMpdTest extends TestCase
         );
     }
 
+    /**
+     * A job with exactly ONE audio track has that track MUXED into every video
+     * segment (`writeVodPlaylists()` only forms an audio group above one), so it
+     * must get no audio AdaptationSet and its video Representations must keep
+     * `mp4a.40.2`. The manifest would otherwise promise `seg-a0-NNNNN.m4s` files
+     * that nothing ever produces.
+     *
+     * (Found by mutation M5, which passed the descriptor list through
+     * unconditionally and survived every other case in this file.)
+     */
+    public function test_a_single_audio_track_is_muxed_and_gets_no_audio_adaptation_set(): void
+    {
+        $one = [self::audioTracks()[0]];
+        $dir = $this->write('one-audio', self::abrVariants(), $one, 'fmp4');
+
+        $this->assertSame(
+            ['video'],
+            array_map(
+                static fn (DOMElement $s): string => $s->getAttribute('contentType'),
+                $this->adaptationSets($dir)
+            )
+        );
+        $this->assertSame(
+            ['avc1.640029,mp4a.40.2', 'avc1.640029,mp4a.40.2'],
+            array_map(
+                static fn (DOMElement $r): string => $r->getAttribute('codecs'),
+                $this->children($this->videoSet($dir), 'Representation')
+            ),
+            'a single track stays muxed, so the video representations still carry it'
+        );
+        $this->assertFileDoesNotExist(
+            "{$dir}/media_a0.m3u8",
+            'control: the playlists agree — no audio group was formed either'
+        );
+    }
+
+    /**
+     * A DASH client ranks Representations by `@bandwidth`; an audio set
+     * advertising 0 would always look like the cheapest possible choice.
+     *
+     * (Found by mutation M14.)
+     */
+    public function test_an_audio_representation_advertises_the_nominal_aac_allowance(): void
+    {
+        $dir = $this->write('audio-bw', self::abrVariants(), self::audioTracks(), 'fmp4');
+
+        foreach ($this->adaptationSets($dir) as $set) {
+            if ($set->getAttribute('contentType') !== 'audio') {
+                continue;
+            }
+            $this->assertSame(
+                (string) Rendition::AUDIO_BANDWIDTH,
+                $this->children($set, 'Representation')[0]->getAttribute('bandwidth')
+            );
+            $this->assertSame('128000', $this->children($set, 'Representation')[0]->getAttribute('bandwidth'));
+        }
+    }
+
+    /**
+     * The manifest's NAME and the MPD's fixed attributes, asserted as literals.
+     *
+     * Every other test in this file reaches the manifest through
+     * `TranscodeManager::MPD_FILENAME` and `DashStreamer::PROFILE_ISOFF_LIVE`, so
+     * all of them SELF-ADJUST when those constants move — a check derived from
+     * its own subject. These are the values other components already hardcode:
+     * `DashController::getManifest()` advertises `/dash/{job}/manifest.mpd`, and
+     * `TranscodeFileServer::contentTypeFor()` types `mpd` as
+     * `application/dash+xml`. `type="static"` is likewise load-bearing: a
+     * `dynamic` MPD tells a client the presentation is LIVE, which changes
+     * segment availability to wall-clock and takes seeking away.
+     *
+     * (Found by mutations M33, M36 and M37 — all three survived the entire
+     * matrix on nothing but constant-following assertions.)
+     */
+    public function test_the_manifests_name_profile_and_type_are_the_literals_other_components_assume(): void
+    {
+        $this->assertSame('manifest.mpd', TranscodeManager::MPD_FILENAME);
+        $this->assertSame('urn:mpeg:dash:profile:isoff-live:2011', DashStreamer::PROFILE_ISOFF_LIVE);
+
+        $dir = $this->write('literals', self::abrVariants(), null, 'fmp4');
+        $this->assertFileExists("{$dir}/manifest.mpd");
+
+        $root = $this->manifest($dir)->documentElement;
+        $this->assertNotNull($root);
+        $this->assertSame('urn:mpeg:dash:profile:isoff-live:2011', $root->getAttribute('profiles'));
+        $this->assertSame('static', $root->getAttribute('type'));
+        $this->assertSame('PT2S', $root->getAttribute('minBufferTime'));
+        $this->assertSame('urn:mpeg:dash:schema:mpd:2011', $root->namespaceURI);
+    }
+
     // ─────────────────────────────────────────────────────────────────
     // the flag-off guarantee — literals from origin/master @ a146cb57
     // ─────────────────────────────────────────────────────────────────

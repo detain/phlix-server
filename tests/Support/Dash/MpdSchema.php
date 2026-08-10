@@ -22,6 +22,17 @@ use RuntimeException;
  *     can never receive an empty "valid" answer by accident.
  *  2. A missing schema file THROWS. It does not skip and it does not pass.
  *
+ * ⚠ **And it must never touch the network.** MEASURED: `xlink.xsd` ships an
+ * `xs:import` of `http://www.w3.org/2001/xml.xsd`, and libxml resolves that by
+ * HTTP. A mutation run made enough validations for w3.org to answer **HTTP 429
+ * Too Many Requests**, at which point `schemaValidate()` started reporting
+ * *every* document — including known-good ones — as invalid. So `xml.xsd` is
+ * vendored too, that one `schemaLocation` is repointed at it (the only edit
+ * made to any of the three files), and {@see self::errors()} additionally
+ * installs an external-entity loader that resolves ONLY the vendored files and
+ * refuses everything else. A refusal surfaces as a validation error, never as a
+ * pass.
+ *
  * `Phlix\Tests\Unit\Media\Transcoding\TranscodeManagerVodMpdTest::test_the_schema_validator_rejects_a_malformed_manifest()`
  * is the positive control for rule 1.
  */
@@ -57,6 +68,7 @@ final class MpdSchema
 
         $previous = libxml_use_internal_errors(true);
         libxml_clear_errors();
+        self::jailEntityLoader();
 
         try {
             $doc = new DOMDocument();
@@ -72,9 +84,35 @@ final class MpdSchema
 
             return self::drain('schemaValidate() returned false');
         } finally {
+            libxml_set_external_entity_loader(null);
             libxml_clear_errors();
             libxml_use_internal_errors($previous);
         }
+    }
+
+    /**
+     * Restricts libxml's schema resolution to the three vendored files.
+     *
+     * Anything else — above all the `http://www.w3.org/2001/xml.xsd` that
+     * `xlink.xsd` names — is refused by returning null, which libxml turns into
+     * a "failed to load external entity" error and therefore into a FAILED
+     * validation. There is no path by which an unresolvable dependency becomes a
+     * pass, and no path by which a run depends on w3.org being reachable or
+     * un-throttled.
+     */
+    private static function jailEntityLoader(): void
+    {
+        $dir = __DIR__;
+        libxml_set_external_entity_loader(
+            /**
+             * @param array{directory?: string|null} $context
+             */
+            static function (?string $publicId, string $systemId, array $context) use ($dir): ?string {
+                $local = $dir . '/' . basename(parse_url($systemId, PHP_URL_PATH) ?: $systemId);
+
+                return is_file($local) ? $local : null;
+            }
+        );
     }
 
     /**

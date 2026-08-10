@@ -269,6 +269,36 @@ class TranscodeManagerTest extends TestCase
     }
 
     /**
+     * The POSITIVE control for the case above — and it is not optional.
+     *
+     * S59 measured this: mutating the reused branch to a hard-coded
+     * `'dash_url' => null` SURVIVED the whole suite, because the only fixture
+     * that reached it had no `manifest.mpd` and so expected null either way. The
+     * assertion could not tell a computed null from a constant one. This case
+     * gives the reused branch a job dir that DOES carry a manifest, so the branch
+     * has to have consulted the disk to answer correctly.
+     */
+    public function testEnsureHlsJobAdvertisesTheDashUrlWhenTheReusedJobHasAManifest(): void
+    {
+        $existingDir = $this->segmentDir . '/existing-job';
+        mkdir($existingDir, 0755, true);
+        file_put_contents($existingDir . '/' . TranscodeManager::MPD_FILENAME, '<?xml version="1.0"?><MPD/>');
+        $captured = [];
+        $db = $this->mockDb(
+            ['id' => 'existing-job', 'hls_dir' => $existingDir, 'status' => 'running'],
+            0,
+            [],
+            ['status' => 'running'],
+            $captured
+        );
+
+        $result = $this->manager($db, $this->createMock(FfmpegRunner::class))->ensureHlsJob('media-1', 'web');
+
+        $this->assertTrue($result['reused'], 'fixture must exercise the REUSED return, not the fresh one');
+        $this->assertSame('/dash/existing-job/manifest.mpd', $result['dash_url']);
+    }
+
+    /**
      * The OTHER `ensureHlsJob()` return array — the fresh-job branch.
      *
      * S11 named two sites in `TranscodeManager` (the reused-job and fresh-job

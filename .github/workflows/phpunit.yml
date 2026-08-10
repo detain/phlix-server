@@ -52,6 +52,16 @@ jobs:
       - name: Install ffmpeg
         run: sudo apt-get install -y --no-install-recommends ffmpeg
 
+      - name: Setup Node.js
+        # S305. `tests/Support/Browser/hls-playback-probe.mjs` drives headless Chrome
+        # over the DevTools protocol using node's BUILT-IN global WebSocket (no ws, no
+        # puppeteer, no playwright), which requires node >= 22. Pinned to the same major
+        # as web-ui.yml so the two jobs cannot diverge. This is a tool-cache install, not
+        # a network clone of an unpinned third-party repo (cf. S309).
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
       - name: Get Composer cache directory
         id: composer-cache
         run: echo "dir=$(composer config cache-files-dir)" >> $GITHUB_OUTPUT
@@ -65,6 +75,26 @@ jobs:
 
       - name: Install Composer dependencies
         run: composer install --no-interaction --prefer-dist
+
+      - name: Install the browser E2E prerequisites (S305)
+        # Puts hls.js on disk and REFUSES to continue without a browser, node >= 22 and
+        # ffmpeg. Everything about hls.js — version, URL and sha512 — is read from
+        # web-ui/package-lock.json and the downloaded bytes are verified against that
+        # hash before extraction, so nothing here is fetched at an unpinned ref (S309).
+        #
+        # Before this step existed, the three Fmp4HlsPlaybackE2ETest cases skipped on
+        # EVERY CI run because hls.js was absent — `Skipped: 6` against master's 3,
+        # measured on PR #664 (run 31263130044) — and the job stayed green, because a
+        # skipped test reads as a pass.
+        #
+        # It runs after `composer install` because it uses the autoloader to reach
+        # tests/Support/Browser/BrowserProbeEnvironment.php — the single place that says
+        # where hls.js/chrome/node have to be, shared with the test that needs them.
+        #
+        # Do NOT add `continue-on-error`, `|| true`, an `if:`, or any of the script's
+        # `--lock/--dest/--tarball/--skip-binaries` options (they exist only for the
+        # offline unit test). tests/Unit/Support/BrowserE2EGateTest.php fails on each.
+        run: php scripts/ci-browser-e2e-prereqs.php
 
       - name: Apply database migrations
         # Apply every migration to the MySQL service DB so real-DB Integration
@@ -114,7 +144,34 @@ jobs:
         # stray SIGALRM from Workerman's pcntl Timer fallback when timer-using
         # units run outside an event loop. tests/bootstrap.php now swallows that
         # alarm so the suite always runs to completion.
-        run: php -d max_execution_time=0 ./vendor/bin/phpunit --coverage-clover coverage.xml --coverage-html coverage-report
+        #
+        # ⚠ S305 — `--log-junit junit.xml` is NOT optional decoration. It is the only
+        # per-case record of what ran, and the "S305 browser-E2E gate" step below reads
+        # it to prove the three headless-browser cases executed rather than skipped.
+        # Removing the flag makes that gate fail loudly (it does not degrade to a pass),
+        # and tests/Unit/Support/BrowserE2EGateTest.php fails on the edit as well.
+        #
+        # Budget: the three browser cases add ~100 s of real ffmpeg encoding plus real
+        # -time playback. Measured job duration before S305 was 5m39s (run 31426381912),
+        # so this job still finishes far inside `timeout-minutes: 25`.
+        run: php -d max_execution_time=0 ./vendor/bin/phpunit --coverage-clover coverage.xml --coverage-html coverage-report --log-junit junit.xml
+
+      - name: S305 browser-E2E gate
+        # ADDITIVE gate. It reads the JUnit report and fails when any of the three
+        # Fmp4HlsPlaybackE2ETest cases is ABSENT, SKIPPED, or executed with zero
+        # assertions — each by exact class+name, never by substring. It prints the total
+        # test-case count and the whole-run skip census so a run that inspected nothing
+        # cannot look like a clean pass.
+        #
+        # `if: always()` for the same reason the S120 guard has it, and one more: on a
+        # RED run the most valuable thing this gate can say is "yes, the browser cases
+        # ran, and they are what failed". `always()` is a condition that cannot evaluate
+        # false, so it is not the "gate that passes by not running" shape an ordinary
+        # `if:` would be — and the test named above pins it to exactly that expression.
+        #
+        # Do NOT delete this step, add `continue-on-error`, or drop `if: always()`.
+        if: always()
+        run: php scripts/assert-browser-e2e-ran.php junit.xml
 
       - name: S120 assertion-escape guard
         # ADDITIVE step — it reads the report the PHPUnit extension registered in

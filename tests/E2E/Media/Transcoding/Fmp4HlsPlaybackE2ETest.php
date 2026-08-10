@@ -7,6 +7,7 @@ namespace Phlix\Tests\E2E\Media\Transcoding;
 use PHPUnit\Framework\TestCase;
 use Phlix\Media\Transcoding\FfmpegRunner;
 use Phlix\Media\Transcoding\TranscodeManager;
+use Phlix\Tests\Support\Browser\BrowserProbeEnvironment;
 use Workerman\MySQL\Connection;
 
 /**
@@ -44,11 +45,22 @@ use Workerman\MySQL\Connection;
  *
  * The negative control below is not decoration: without it a probe that quietly
  * stopped loading anything would report "no fatal errors" and read as a pass.
+ *
+ * ⚠ **The `markTestSkipped()` calls below are load-bearing on a developer box and
+ * were a HOLE in CI.** S57 shipped them and, because the PHP workflow never
+ * installed hls.js, all three cases skipped on every CI run — `Skipped: 6` against
+ * master's 3, measured on PR #664 (run `31263130044`) — while the job stayed green,
+ * because a skipped test reads as a pass. S305 did NOT remove the guards: it makes
+ * CI supply every prerequisite (`scripts/ci-browser-e2e-prereqs.php`) and then
+ * asserts, from the JUnit report and by name, that these three cases executed
+ * (`scripts/assert-browser-e2e-ran.php`). The prerequisite paths live in
+ * {@see BrowserProbeEnvironment} so the workflow's idea of "installed" and this
+ * file's idea of "available" cannot drift apart.
  */
 final class Fmp4HlsPlaybackE2ETest extends TestCase
 {
-    private const FFMPEG = '/usr/bin/ffmpeg';
-    private const FFPROBE = '/usr/bin/ffprobe';
+    private const FFMPEG = BrowserProbeEnvironment::FFMPEG;
+    private const FFPROBE = BrowserProbeEnvironment::FFPROBE;
 
     /** Segment length, and therefore the boundary playback must cross. */
     private const SEG_SECONDS = 3;
@@ -66,26 +78,23 @@ final class Fmp4HlsPlaybackE2ETest extends TestCase
         if (!is_executable(self::FFMPEG) || !is_executable(self::FFPROBE)) {
             $this->markTestSkipped('ffmpeg/ffprobe not available');
         }
-        $node = $this->findNode();
+        $node = BrowserProbeEnvironment::node();
         if ($node === null) {
             $this->markTestSkipped('node (>= 22, for the built-in WebSocket client) not available');
         }
         $this->node = $node;
 
-        $chrome = $this->firstExecutable([
-            '/usr/bin/google-chrome-stable',
-            '/usr/bin/google-chrome',
-            '/usr/bin/chromium-browser',
-            '/usr/bin/chromium',
-        ]);
+        $chrome = BrowserProbeEnvironment::chrome();
         if ($chrome === null) {
             $this->markTestSkipped('no Chrome/Chromium binary — the hls.js check needs a real browser');
         }
         $this->chrome = $chrome;
 
-        $hlsjs = dirname(__DIR__, 4) . '/web-ui/node_modules/hls.js/dist/hls.min.js';
-        if (!is_file($hlsjs)) {
-            $this->markTestSkipped('web-ui/node_modules/hls.js is not installed (run npm ci in web-ui/)');
+        $hlsjs = BrowserProbeEnvironment::hlsJs();
+        if ($hlsjs === null) {
+            $this->markTestSkipped(
+                'web-ui/node_modules/hls.js is not installed (php scripts/ci-browser-e2e-prereqs.php)'
+            );
         }
         $this->hlsjs = $hlsjs;
 
@@ -396,52 +405,12 @@ final class Fmp4HlsPlaybackE2ETest extends TestCase
     // ─────────────────────────────────────────────────────────────────
     // environment
     // ─────────────────────────────────────────────────────────────────
-
-    /**
-     * Node >= 22, because the probe drives Chrome over the DevTools protocol
-     * with the built-in global `WebSocket` rather than pulling in an npm client.
-     * `node` is frequently not on a non-login shell's PATH (nvm), so a couple of
-     * conventional locations are tried before giving up.
-     */
-    private function findNode(): ?string
-    {
-        $candidates = [];
-        $which = trim((string) shell_exec('command -v node 2>/dev/null'));
-        if ($which !== '') {
-            $candidates[] = $which;
-        }
-        $candidates[] = '/usr/bin/node';
-        $candidates[] = '/usr/local/bin/node';
-        foreach (glob((string) getenv('HOME') . '/.nvm/versions/node/*/bin/node') ?: [] as $path) {
-            $candidates[] = $path;
-        }
-
-        foreach ($candidates as $candidate) {
-            if (!is_executable($candidate)) {
-                continue;
-            }
-            $version = trim((string) shell_exec(escapeshellarg($candidate) . ' --version 2>/dev/null'));
-            if (preg_match('/^v(\d+)\./', $version, $m) === 1 && (int) $m[1] >= 22) {
-                return $candidate;
-            }
-        }
-
-        return null;
-    }
-
-    /**
-     * @param list<string> $paths
-     */
-    private function firstExecutable(array $paths): ?string
-    {
-        foreach ($paths as $path) {
-            if (is_executable($path)) {
-                return $path;
-            }
-        }
-
-        return null;
-    }
+    //
+    // Discovery of node/chrome/hls.js moved to
+    // tests/Support/Browser/BrowserProbeEnvironment.php in S305, so that the CI
+    // step which INSTALLS the prerequisites and this file, which decides whether
+    // they are usable, cannot disagree. If they could, CI would satisfy the
+    // installer and still skip these cases.
 
     private function rrmdir(string $dir): void
     {

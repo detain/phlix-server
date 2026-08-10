@@ -14,31 +14,82 @@ namespace Phlix\Media\Streaming\Dash;
 use DOMElement;
 
 /**
- * DASH SegmentTemplate - Represents a DASH SegmentTemplate element.
+ * DASH SegmentTemplate — one `<SegmentTemplate>` element.
  *
- * SegmentTemplate provides a template for segment URLs, avoiding the need
- * to list every segment explicitly in the manifest. Used for efficient
- * live streaming where new segments appear continuously.
+ * A SegmentTemplate replaces an explicit per-segment list with a URL pattern the
+ * client expands itself, which is what makes an ON-DEMAND segment pipeline
+ * expressible in DASH at all: the manifest can describe segments that have not
+ * been encoded yet.
+ *
+ * ⚠ **`@duration` is in TIMESCALE units, not seconds.** MPD's default
+ * `@timescale` is **1**, so the pre-S58 code's `duration = seconds * 1000` with
+ * no `@timescale` declared a segment length of 6000 **seconds**. Both values are
+ * therefore explicit here and {@see self::DEFAULT_TIMESCALE} is emitted always,
+ * never left to the schema default.
+ *
+ * `$startNumber` defaults to **0** because every index this codebase produces is
+ * 0-based (`seg-v720p-00000.m4s`, `#EXT-X-MEDIA-SEQUENCE:0`), while DASH's own
+ * default is 1. A client that took the DASH default would ask for
+ * `seg-v720p-00001.m4s` first and never fetch segment 0 at all.
  *
  * @author Phlix Media Server Team
- * @version 1.0.0
+ * @version 2.0.0
  * @since 0.11.0
  * @see https://dashif.org/specifications/DASH-MPD.pdf
  */
 final class SegmentTemplate
 {
     /**
-     * @param int $duration Segment duration in seconds
-     * @param int $startNumber Starting segment number (usually 1)
-     * @param string $media Template for media segment URLs using $RepresentationID$ and $Number%05d$ placeholders
-     * @param string|null $initialization Template for initialization segment URL (or null for muxed content)
+     * Ticks per second for `@timescale`.
+     *
+     * Milliseconds: every segment length this server emits is a whole number of
+     * seconds ({@see \Phlix\Media\Transcoding\TranscodeManager}'s
+     * `segment_seconds`), so a millisecond timescale represents it exactly while
+     * leaving room for a future fractional length.
+     */
+    public const DEFAULT_TIMESCALE = 1000;
+
+    /**
+     * @param int         $duration       Segment length in `$timescale` units (NOT seconds).
+     * @param int         $timescale      Ticks per second.
+     * @param int         $startNumber    Index of the FIRST segment (0-based here — see the class docblock).
+     * @param string      $media          Media-segment URL template (`$RepresentationID$`, `$Number%05d$`).
+     * @param string|null $initialization Initialization-segment URL template, or null when there is none.
      */
     public function __construct(
         public readonly int $duration,
-        public readonly int $startNumber = 1,
+        public readonly int $timescale = self::DEFAULT_TIMESCALE,
+        public readonly int $startNumber = 0,
         public readonly string $media = '$RepresentationID$_$Number%05d$.m4s',
         public readonly ?string $initialization = null,
     ) {
+    }
+
+    /**
+     * Builds a SegmentTemplate whose `@duration` is given in whole seconds.
+     *
+     * The named constructor exists so a caller holding a segment length in
+     * seconds (which is how the whole transcode pipeline carries it) cannot
+     * accidentally pass seconds into `$duration`, which is in ticks.
+     *
+     * @param int         $seconds        Segment length in seconds.
+     * @param int         $startNumber    Index of the first segment.
+     * @param string      $media          Media-segment URL template.
+     * @param string|null $initialization Initialization-segment URL template.
+     */
+    public static function fromSeconds(
+        int $seconds,
+        int $startNumber,
+        string $media,
+        ?string $initialization = null,
+    ): self {
+        return new self(
+            $seconds * self::DEFAULT_TIMESCALE,
+            self::DEFAULT_TIMESCALE,
+            $startNumber,
+            $media,
+            $initialization,
+        );
     }
 
     /**
@@ -53,7 +104,8 @@ final class SegmentTemplate
         $doc = $ownerDoc ?? new \DOMDocument('1.0', 'UTF-8');
         $element = $doc->createElement('SegmentTemplate');
 
-        $element->setAttribute('duration', (string) ($this->duration * 1000));
+        $element->setAttribute('timescale', (string) $this->timescale);
+        $element->setAttribute('duration', (string) $this->duration);
         $element->setAttribute('startNumber', (string) $this->startNumber);
         $element->setAttribute('media', $this->media);
 
@@ -85,13 +137,21 @@ final class SegmentTemplate
     }
 
     /**
-     * Gets the segment duration in seconds.
+     * Gets the segment duration in `@timescale` units.
      *
-     * @return int Duration in seconds
+     * @return int Duration in ticks
      */
     public function getDuration(): int
     {
         return $this->duration;
+    }
+
+    /**
+     * Gets the timescale (ticks per second).
+     */
+    public function getTimescale(): int
+    {
+        return $this->timescale;
     }
 
     /**

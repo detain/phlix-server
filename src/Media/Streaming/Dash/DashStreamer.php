@@ -40,7 +40,31 @@ class DashStreamer
     /** @var string Base URL for streaming endpoints */
     private string $baseUrl;
 
-    /** @var array<string, array{id: string, content_type: string, bandwidth: int}> Cached adaptation set info */
+    /** MPD namespace — also the target namespace of the DASH-MPD schema. */
+    public const MPD_NAMESPACE = 'urn:mpeg:dash:schema:mpd:2011';
+
+    /**
+     * The only DASH profile a per-segment ON-DEMAND pipeline can claim.
+     *
+     * `isoff-on-demand` requires a single-file Representation described by a
+     * `SegmentBase`/`sidx` index, which is impossible when each segment is
+     * encoded separately on first request. `isoff-live` is the template-based
+     * profile, and it is legal for `type="static"` (VOD) content.
+     */
+    public const PROFILE_ISOFF_LIVE = 'urn:mpeg:dash:profile:isoff-live:2011';
+
+    /**
+     * `MPD@minBufferTime` — the buffer a client needs to play without
+     * underrunning at the advertised bandwidths.
+     *
+     * Mirrors `config/dash.php`'s `min_buffer_time`, which is **not wired to any
+     * entrypoint** (`start.php` loads only `config/server.php`); wiring or
+     * deleting that file belongs to S59, so the value is a constant here rather
+     * than a config read that would look live and never be.
+     */
+    public const MIN_BUFFER_TIME = 'PT2S';
+
+    /** @var array<int, array{id: int, content_type: string, bandwidth: int}> Cached adaptation set info */
     private array $adaptationSets = [];
 
     /**
@@ -67,7 +91,7 @@ class DashStreamer
      * generateMasterMpd(). Useful for clients to discover available
      * adaptation sets without parsing the MPD.
      *
-     * @return array<string, array{id: string, content_type: string, bandwidth: int}> Cached adaptation sets
+     * @return array<int, array{id: int, content_type: string, bandwidth: int}> Cached adaptation sets
      */
     public function getCachedAdaptationSets(): array
     {
@@ -75,44 +99,71 @@ class DashStreamer
     }
 
     /**
-     * Generates the DASH MPD master manifest listing all adaptation sets.
+     * Generates the VOD DASH MPD listing all adaptation sets.
      *
-     * Creates the root MPD document with DASH-IF live profile and all
-     * available adaptation sets for adaptive streaming.
+     * S58 rewrote this method. It previously hardcoded
+     * `mediaPresentationDuration="PT0H0M0S"` (an empty presentation) and
+     * `Period@duration="PT0H1M0S"` (a bogus one minute), so no client could ever
+     * have played what it described — hence `$durationSeconds` being a REQUIRED
+     * parameter rather than an optional one that defaults back to zero.
      *
-     * @param string $jobId Transcode job identifier
-     * @param array<int, AdaptationSet> $adaptationSets Array of adaptation sets
+     * `Period@duration` is gone: for a single-Period static presentation the
+     * MPD-level `mediaPresentationDuration` is the authority, and a second,
+     * independently-computed length is just a way for the two to disagree.
+     * `Period@start="PT0S"` is stated explicitly because the presentation
+     * timeline and the segment numbering both start at zero here.
+     *
+     * @param string $jobId Transcode job identifier — becomes `MPD@id`.
+     * @param list<AdaptationSet> $adaptationSets Adaptation sets, video first.
+     * @param float $durationSeconds Total presentation duration; must be > 0.
      *
      * @return string Complete MPD manifest XML content
      *
+     * @throws \InvalidArgumentException When the duration is not positive or there are no adaptation sets.
+     *
      * @example
      * ```php
-     * $videoSet = new AdaptationSet('video-1080', 'video', 'avc1.64001f', 1920, 1080, 5000000);
-     * $audioSet = new AdaptationSet('audio-en', 'audio', 'mp4a.40.2', 0, 0, 128000, 48000);
-     * $mpd = $streamer->generateMasterMpd('job-123', [$videoSet, $audioSet]);
+     * $template = SegmentTemplate::fromSeconds(
+     *     6, 0, 'seg-v$RepresentationID$-$Number%05d$.m4s', 'init-v$RepresentationID$.m4s'
+     * );
+     * $video = new AdaptationSet(0, 'video', 'video/mp4', $template, [
+     *     new Representation('1080p', 'avc1.640029,mp4a.40.2', 5128000, 1920, 1080),
+     * ], null, AdaptationSet::ROLE_MAIN);
+     * $mpd = $streamer->generateMasterMpd('job-123', [$video], 1234.5);
      * ```
      */
-    public function generateMasterMpd(string $jobId, array $adaptationSets): string
+    public function generateMasterMpd(string $jobId, array $adaptationSets, float $durationSeconds): string
     {
+        if ($durationSeconds <= 0.0) {
+            throw new \InvalidArgumentException('An MPD needs a positive mediaPresentationDuration');
+        }
+        if ($adaptationSets === []) {
+            // A Period with no AdaptationSet is schema-valid and completely
+            // unplayable; refusing is better than publishing one, because the
+            // file's mere existence would look like a working manifest.
+            throw new \InvalidArgumentException('An MPD needs at least one adaptation set');
+        }
+
         $doc = new DOMDocument('1.0', 'UTF-8');
         $doc->xmlStandalone = true;
 
         $mpd = $doc->createElement('MPD');
-        $mpd->setAttribute('xmlns', 'urn:mpeg:dash:schema:mpd:2011');
-        $mpd->setAttribute('profiles', 'urn:mpeg:dash:profile:isoff-live:2011');
+        $mpd->setAttribute('xmlns', self::MPD_NAMESPACE);
+        $mpd->setAttribute('id', $jobId);
+        $mpd->setAttribute('profiles', self::PROFILE_ISOFF_LIVE);
         $mpd->setAttribute('type', 'static');
-        $mpd->setAttribute('minBufferTime', 'PT2S');
-        $mpd->setAttribute('mediaPresentationDuration', 'PT0H0M0S');
+        $mpd->setAttribute('minBufferTime', self::MIN_BUFFER_TIME);
+        $mpd->setAttribute('mediaPresentationDuration', self::xsDuration($durationSeconds));
 
         $period = $doc->createElement('Period');
         $period->setAttribute('id', '1');
-        $period->setAttribute('duration', 'PT0H1M0S');
+        $period->setAttribute('start', 'PT0S');
 
         foreach ($adaptationSets as $set) {
             $this->adaptationSets[$set->id] = [
                 'id' => $set->id,
                 'content_type' => $set->contentType,
-                'bandwidth' => $set->bandwidth,
+                'bandwidth' => $set->maxBandwidth(),
             ];
             $period->appendChild($set->toXml($doc));
         }
@@ -125,10 +176,35 @@ class DashStreamer
     }
 
     /**
+     * Formats a duration in seconds as an `xs:duration`.
+     *
+     * Rounded UP to the millisecond, never down. The presentation length is what
+     * a client uses to decide how many segments the template expands to
+     * (`ceil(duration / segmentDuration)`), so a value even a microsecond short
+     * of the truth can drop the final, partial segment — the same reasoning that
+     * makes the HLS media playlist emit a short last `#EXTINF` rather than
+     * truncating.
+     *
+     * @param float $seconds Duration in seconds; must be > 0.
+     */
+    public static function xsDuration(float $seconds): string
+    {
+        return sprintf('PT%.3FS', ceil($seconds * 1000.0) / 1000.0);
+    }
+
+    /**
      * Generates a DASH MPD for a specific adaptation set.
      *
      * Creates a standalone MPD document for a single adaptation set,
      * useful for clients that only want one content type.
+     *
+     * ⚠ **Dead, and wrong — do not build on it.** It has zero production callers
+     * and emits a THIRD naming scheme (`$RepresentationID$_$Number%05d$.m4s`,
+     * `startNumber="1"`, `duration="6000"` with no `@timescale`) that matches
+     * neither what this server writes to disk (`seg-v{id}-NNNNN.m4s`,
+     * 0-based) nor what {@see self::generateMasterMpd()} now emits. It is left
+     * untouched only because deleting dead DASH code is S59's job; the live VOD
+     * manifest comes from `generateMasterMpd()`.
      *
      * @param string $jobId Transcode job identifier
      * @param int $setId Adaptation set index (0-based)

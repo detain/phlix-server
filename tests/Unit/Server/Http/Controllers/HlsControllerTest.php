@@ -691,6 +691,293 @@ class HlsControllerTest extends TestCase
         $this->assertSame("#EXTM3U\n", $this->bodyOf($res));
     }
 
+    // ─────────────────────────────────────────────────────────────────
+    // S310 — the fMP4 serve path
+    // ─────────────────────────────────────────────────────────────────
+
+    /**
+     * Every filename an fMP4 HLS playlist can reference, and the exact
+     * `ensureSegment($jobId, $variant, $index, $audioId)` call it must make.
+     *
+     * This is the join between S57's writer and this controller: the playlist
+     * writer emits an `#EXT-X-MAP` init plus these segment names, and until S310
+     * nothing on the serve side parsed a single one of them back into the
+     * arguments the producer needs. An init maps to index 0 of its OWN rendition
+     * because producing segment 0 is what publishes the init file.
+     *
+     * @return array<string, array{0:string, 1:string|null, 2:string|null, 3:int}>
+     */
+    public static function fmp4Shapes(): array
+    {
+        return [
+            'video init'      => ['init-v720p.m4s', '720p', null, 0],
+            'video segment'   => ['seg-v1080p-00042.m4s', '1080p', null, 42],
+            'video segment 0' => ['seg-v240p-00000.m4s', '240p', null, 0],
+            'original rung'   => ['seg-voriginal-00007.m4s', 'original', null, 7],
+            'audio init'      => ['init-a0.m4s', null, 'a0', 0],
+            'audio segment'   => ['seg-a1-00003.m4s', null, 'a1', 3],
+            'legacy init'     => ['init.m4s', null, null, 0],
+            'legacy segment'  => ['seg-00012.m4s', null, null, 12],
+        ];
+    }
+
+    /**
+     * @dataProvider fmp4Shapes
+     */
+    public function testEveryFmp4PlaylistReferenceShapeTriggersItsOwnEncode(
+        string $file,
+        ?string $variant,
+        ?string $audioId,
+        int $index
+    ): void {
+        $manager = $this->createMock(TranscodeManager::class);
+        $manager->expects($this->once())
+            ->method('ensureSegment')
+            ->with('job-fmp4', $variant, $index, $audioId)
+            ->willReturnCallback(function () use ($file): string {
+                // Produce the file the way the real encode does, so the static
+                // serve below has something to hand back.
+                $this->writeJobFile('job-fmp4', $file, 'FMP4BYTES');
+                return "{$this->segmentDir}/job-fmp4/{$file}";
+            });
+
+        $res = $this->controller($manager)->serveFile(
+            new Request(),
+            ['job_id' => 'job-fmp4', 'file' => $file]
+        );
+
+        $this->assertSame(200, $res->statusCode);
+        $this->assertSame('video/mp4', $res->headers['Content-Type']);
+        $this->assertSame('public, max-age=31536000', $res->headers['Cache-Control']);
+        $this->assertSame('FMP4BYTES', $this->bodyOf($res));
+    }
+
+    /**
+     * ⚠ The single most important case in this file.
+     *
+     * hls.js resolves `#EXT-X-MAP:URI="init-v{V}.m4s"` BEFORE it fetches any
+     * media segment, and the init has no producer of its own — it is published
+     * beside segment 0. So if the init arm is missing, the very first
+     * byte-bearing request of an fMP4 stream 404s, no encode is ever triggered,
+     * and the presentation is unreachable from its own opening request no matter
+     * what the segment arms do. The file is deliberately ABSENT beforehand:
+     * without that assertion a 200 could mean "it was already on disk".
+     */
+    public function testTheExtXMapInitIsProducedOnDemandRatherThanAssumedPresent(): void
+    {
+        $this->assertFileDoesNotExist("{$this->segmentDir}/job-map/init-v240p.m4s");
+
+        $manager = $this->createMock(TranscodeManager::class);
+        $manager->expects($this->once())
+            ->method('ensureSegment')
+            ->with('job-map', '240p', 0, null)
+            ->willReturnCallback(function (): string {
+                $this->writeJobFile('job-map', 'init-v240p.m4s', 'INITBYTES');
+                return "{$this->segmentDir}/job-map/init-v240p.m4s";
+            });
+
+        $res = $this->controller($manager)->serveFile(
+            new Request(),
+            ['job_id' => 'job-map', 'file' => 'init-v240p.m4s']
+        );
+
+        $this->assertSame(200, $res->statusCode);
+        $this->assertSame('INITBYTES', $this->bodyOf($res));
+        $this->assertFileExists("{$this->segmentDir}/job-map/init-v240p.m4s");
+    }
+
+    /**
+     * An fMP4 miss the producer cannot satisfy is a 404 DECISION, not a silent
+     * fall-through to the static lookup that would have answered before S310.
+     */
+    public function testAnUnproducibleFmp4SegmentIs404(): void
+    {
+        $manager = $this->createMock(TranscodeManager::class);
+        $manager->expects($this->once())
+            ->method('ensureSegment')
+            ->with('job-fmp4', '4321p', 0, null)
+            ->willReturn(null);
+
+        $res = $this->controller($manager)->serveFile(
+            new Request(),
+            ['job_id' => 'job-fmp4', 'file' => 'seg-v4321p-00000.m4s']
+        );
+
+        $this->assertSame(404, $res->statusCode);
+        /** @var array<string, mixed> $body */
+        $body = json_decode($res->body, true);
+        $this->assertSame('segment unavailable', $body['error']);
+    }
+
+    /**
+     * The pre-S310 behaviour, pinned as the thing that must NOT come back: with
+     * no transcoder the `.m4s` request must 404, not quietly serve whatever
+     * happens to be on disk. The file is deliberately PRESENT so a regression to
+     * "fall through to the static lookup" shows up as a 200 here.
+     */
+    public function testWithoutATranscoderAnFmp4RequestIs404NotASilentStaticServe(): void
+    {
+        $this->writeJobFile('job-nom', 'seg-v1080p-00000.m4s', 'STALEBYTES');
+
+        $res = $this->controller(null)->serveFile(
+            new Request(),
+            ['job_id' => 'job-nom', 'file' => 'seg-v1080p-00000.m4s']
+        );
+
+        $this->assertSame(404, $res->statusCode);
+        /** @var array<string, mixed> $body */
+        $body = json_decode($res->body, true);
+        $this->assertSame('segment unavailable', $body['error']);
+    }
+
+    /**
+     * The 503 contract carries across to the fMP4 arms unchanged. Omitting it
+     * would re-open the seek cascade on fMP4 jobs: a hard 404 is fatal to
+     * hls.js, a 503 is retried.
+     */
+    public function testAnFmp4SegmentReturns503WithRetryAfterWhenBusy(): void
+    {
+        $manager = $this->createMock(TranscodeManager::class);
+        $manager->expects($this->once())
+            ->method('ensureSegment')
+            ->with('job-fmp4', '720p', 12, null)
+            ->willThrowException(new SegmentBusyException('busy'));
+        $manager->expects($this->never())->method('sweepSegmentCache');
+
+        $res = $this->controller($manager)->serveFile(
+            new Request(),
+            ['job_id' => 'job-fmp4', 'file' => 'seg-v720p-00012.m4s']
+        );
+
+        $this->assertSame(503, $res->statusCode);
+        $this->assertSame('1', $res->headers['Retry-After'] ?? null);
+        /** @var array<string, mixed> $body */
+        $body = json_decode($res->body, true);
+        $this->assertSame('segment busy', $body['error']);
+    }
+
+    /**
+     * Cache-full sweeps THEN asks for the longer retry, on an fMP4 INIT — the
+     * request a client makes first, and therefore the one most likely to meet a
+     * full cache on a cold job. The sweep is asserted as a call, not inferred
+     * from the status code.
+     */
+    public function testAnFmp4InitReturns503AndSweepsWhenCacheFull(): void
+    {
+        $manager = $this->createMock(TranscodeManager::class);
+        $manager->expects($this->once())
+            ->method('ensureSegment')
+            ->with('job-fmp4', null, 0, 'a0')
+            ->willThrowException(new SegmentCacheFullException('cache full'));
+        $manager->expects($this->once())->method('sweepSegmentCache')->willReturn(0);
+
+        $res = $this->controller($manager)->serveFile(
+            new Request(),
+            ['job_id' => 'job-fmp4', 'file' => 'init-a0.m4s']
+        );
+
+        $this->assertSame(503, $res->statusCode);
+        $this->assertSame('3', $res->headers['Retry-After'] ?? null);
+        /** @var array<string, mixed> $body */
+        $body = json_decode($res->body, true);
+        $this->assertSame('segment cache full', $body['error']);
+    }
+
+    /**
+     * The control for the whole S310 widening: names that are NOT on-demand
+     * artefacts must still be served statically, with no transcoder call. The
+     * legacy `chunk-*.m4s` and `init-0.m4s` shapes are real files this server
+     * has always served verbatim, and `init-0.m4s` sits one character from the
+     * new `init-a{A}.m4s` arm — a router that took the whole token as the audio
+     * group would 404 a file that exists.
+     */
+    public function testStaticM4sNamesAreStillServedWithoutTouchingTheTranscoder(): void
+    {
+        $manager = $this->createMock(TranscodeManager::class);
+        $manager->expects($this->never())->method('ensureSegment');
+
+        $static = [
+            'chunk-0-00001.m4s' => 'CHUNKBYTES',
+            'init-0.m4s' => 'LEGACYINIT',
+            'media_v1080p.m3u8' => "#EXTM3U\n",
+        ];
+        foreach ($static as $file => $bytes) {
+            $this->writeJobFile('job-static', $file, $bytes);
+            $res = $this->controller($manager)->serveFile(
+                new Request(),
+                ['job_id' => 'job-static', 'file' => $file]
+            );
+            $this->assertSame(200, $res->statusCode, "{$file} must still serve statically");
+            $this->assertSame($bytes, $this->bodyOf($res), "{$file} bytes");
+        }
+    }
+
+    /**
+     * Range/conditional-GET semantics are unchanged for a PRODUCED fMP4 segment.
+     *
+     * The pre-S310 Range cases above all use `chunk-*.m4s`, which is a STATIC
+     * name that never touches the transcoder — so none of them can tell you the
+     * serve path still works once a request has gone through the producer
+     * first. This one does: the trigger fires, and the response is still a real
+     * 206 window over the produced file.
+     */
+    public function testAProducedFmp4SegmentStillHonoursByteRangeWith206(): void
+    {
+        $manager = $this->createMock(TranscodeManager::class);
+        $manager->expects($this->once())
+            ->method('ensureSegment')
+            ->with('job-rng', '240p', 1, null)
+            ->willReturnCallback(function (): string {
+                $this->writeJobFile('job-rng', 'seg-v240p-00001.m4s', 'ABCDEFGHIJ');
+                return "{$this->segmentDir}/job-rng/seg-v240p-00001.m4s";
+            });
+
+        $req = new Request();
+        $req->headers['Range'] = 'bytes=2-5';
+
+        $res = $this->controller($manager)->serveFile(
+            $req,
+            ['job_id' => 'job-rng', 'file' => 'seg-v240p-00001.m4s']
+        );
+
+        $this->assertSame(206, $res->statusCode);
+        $this->assertSame('video/mp4', $res->headers['Content-Type']);
+        $this->assertSame(2, $res->fileOffset);
+        $this->assertSame(4, $res->fileLength);
+        $this->assertSame('CDEF', $this->bodyOf($res));
+    }
+
+    /**
+     * Malformed fMP4 names get the same treatment their `.ts` peers do: never a
+     * 200, never a transcoder call.
+     */
+    public function testMalformedFmp4NamesAreNotRoutedToTheTranscoder(): void
+    {
+        $manager = $this->createMock(TranscodeManager::class);
+        $manager->expects($this->never())->method('ensureSegment');
+
+        $bad = [
+            'seg-v../../etc-00001.m4s',  // traversal via the variant field → 400
+            'init-v../../etc.m4s',       // traversal via the init variant field → 400
+            'seg-vABC-00001.m4s',        // uppercase rendition → no match → 404 static
+            'seg-v-00001.m4s',           // empty rendition → no match → 404 static
+            'init-v.m4s',                // empty init rendition → no match → 404 static
+            'init-a.m4s',                // empty init audio group → no match → 404 static
+        ];
+        foreach ($bad as $file) {
+            $res = $this->controller($manager)->serveFile(
+                new Request(),
+                ['job_id' => 'job-bad', 'file' => $file]
+            );
+            $this->assertContains(
+                $res->statusCode,
+                [400, 404],
+                "filename '{$file}' must be rejected, not served"
+            );
+            $this->assertNotSame(200, $res->statusCode);
+        }
+    }
+
     private function rrmdir(string $dir): void
     {
         if (!is_dir($dir)) {

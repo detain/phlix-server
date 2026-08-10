@@ -102,27 +102,16 @@ class DashController
      *
      * Every OTHER name the manifest can reference is produced on demand. S58's
      * `SegmentTemplate`s expand to six shapes, and all six route to the
-     * transcoder here:
+     * transcoder here via {@see SegmentRequestParser::parse()} — the shared
+     * filename → `ensureSegment()` router, which carries the per-shape argument
+     * table and the reason an init maps to index 0 of its own rendition.
      *
-     *   - `seg-v{V}-NNNNN.m4s` → `ensureSegment($jobId, '{V}', NNNNN)`
-     *   - `seg-a{A}-NNNNN.m4s` → `ensureSegment($jobId, null, NNNNN, 'a{A}')`
-     *   - `seg-NNNNN.m4s`      → `ensureSegment($jobId, null, NNNNN)` (legacy
-     *     single-variant job, whose MPD carries no `$RepresentationID$`)
-     *   - `init-v{V}.m4s`, `init-a{A}.m4s`, `init.m4s` → the SAME calls at index
-     *     0. An init segment has no producer of its own: it is published beside
-     *     the first fragment by the same atomic chain
-     *     ({@see \Phlix\Media\Transcoding\FfmpegRunner::startSegmentEncode()}'s
-     *     `init_file`), and is byte-identical whatever index produced it (see
-     *     {@see \Phlix\Media\Transcoding\FfmpegRunner::muxerTail()}), so
-     *     producing segment 0 is what makes the init exist. This matters
-     *     because a DASH client fetches `@initialization` FIRST — without this
-     *     arm the very first request of a fresh presentation would 404 and no
-     *     encode would ever be triggered.
+     * ⚠ **`.m4s` ONLY** ({@see SegmentRequestParser::DASH_EXTENSIONS}). A `.ts`
+     * name on this route is HlsController's artefact, not a DASH one, and must
+     * never start an encode here. S310 widened the HLS side to route BOTH
+     * containers; this side deliberately did not widen with it.
      *
-     * The variant/audio character class `[a-z0-9]+` is anchored inside `^…$` and
-     * excludes `.` `/` `\`, so it cannot smuggle a traversal sequence past the
-     * earlier {@see isSafeFilename()} gate; a filename matching none of the
-     * patterns falls through to a plain static lookup that 404s.
+     * A filename matching no arm falls through to a plain static lookup that 404s.
      *
      * An MPEG-TS job (the shipped default) has no `.m4s` in it and no
      * `manifest.mpd` either, so a `.m4s` request against one produces the job's
@@ -150,7 +139,7 @@ class DashController
 
         $dir = "{$this->segmentDir}/{$jobId}";
 
-        $target = self::parseSegmentRequest($file);
+        $target = SegmentRequestParser::parse($file, SegmentRequestParser::DASH_EXTENSIONS);
         if ($target !== null) {
             try {
                 $ready = $this->transcodeManager?->ensureSegment(
@@ -194,41 +183,5 @@ class DashController
         }
 
         return $this->serveJobFile($request, $dir, $file);
-    }
-
-    /**
-     * Maps a requested fMP4 filename onto the {@see TranscodeManager::ensureSegment()}
-     * arguments that produce it, or null when the name is not an on-demand
-     * artefact (a manifest, a subtitle sidecar, an unknown name).
-     *
-     * An init segment maps to index 0 of its own rendition: see
-     * {@see self::serveFile()} for why that is the producer of an init.
-     *
-     * @param string $file Requested filename, already {@see isSafeFilename()}-checked.
-     *
-     * @return array{variant: string|null, audioId: string|null, index: int}|null
-     */
-    private static function parseSegmentRequest(string $file): ?array
-    {
-        if (preg_match('/^seg-v([a-z0-9]+)-(\d{1,9})\.m4s$/', $file, $m) === 1) {
-            return ['variant' => $m[1], 'audioId' => null, 'index' => (int) $m[2]];
-        }
-        if (preg_match('/^seg-a([a-z0-9]+)-(\d{1,9})\.m4s$/', $file, $m) === 1) {
-            return ['variant' => null, 'audioId' => 'a' . $m[1], 'index' => (int) $m[2]];
-        }
-        if (preg_match('/^seg-(\d{1,9})\.m4s$/', $file, $m) === 1) {
-            return ['variant' => null, 'audioId' => null, 'index' => (int) $m[1]];
-        }
-        if (preg_match('/^init-v([a-z0-9]+)\.m4s$/', $file, $m) === 1) {
-            return ['variant' => $m[1], 'audioId' => null, 'index' => 0];
-        }
-        if (preg_match('/^init-a([a-z0-9]+)\.m4s$/', $file, $m) === 1) {
-            return ['variant' => null, 'audioId' => 'a' . $m[1], 'index' => 0];
-        }
-        if ($file === 'init.m4s') {
-            return ['variant' => null, 'audioId' => null, 'index' => 0];
-        }
-
-        return null;
     }
 }

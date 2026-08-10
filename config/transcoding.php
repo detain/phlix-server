@@ -116,13 +116,18 @@ return [
      * Addressed by the dotted setting key `transcoding.segment_format` and
      * consumed by {@see \Phlix\Media\Transcoding\EncodeSettings::segmentFormat()}.
      *
-     * ⚠ **`fmp4` IS NOT SERVABLE YET — leave this at `mpegts`.** S56 shipped
-     * segment PRODUCTION and S57 the matching playlists (`#EXT-X-MAP` +
-     * `seg-v{V}-NNNNN.m4s` at `#EXT-X-VERSION:7`), but
-     * `HlsController::serveFile()` still routes only `/^seg-v…\.ts$/` (S59),
-     * so every segment request 404s and the init segment is never even
-     * produced. Turning this on today breaks playback for the affected jobs;
-     * it exists so S57–S60 can be built and verified against real fMP4 bytes.
+     * ✅ **`fmp4` IS SERVABLE as of S310** — but it is still OFF BY DEFAULT and
+     * has not been cross-client verified, so leave it at `mpegts` unless you are
+     * deliberately testing the fMP4 path. S56 shipped segment PRODUCTION, S57
+     * the matching playlists (`#EXT-X-MAP` + `seg-v{V}-NNNNN.m4s` at
+     * `#EXT-X-VERSION:7`), S58 the DASH manifest, S59 the DASH serve trigger,
+     * and S310 the HLS one: `HlsController::serveFile()` routes `.ts` AND `.m4s`
+     * segments plus the three `init*.m4s` shapes through the shared
+     * {@see \Phlix\Server\Http\Controllers\SegmentRequestParser}, so a flagged
+     * job's init (which hls.js fetches first) and every segment after it are
+     * produced on demand and served. Between S56 and S310 turning this on broke
+     * playback outright; it now works, and what is unproven is the CLIENT
+     * matrix, which is S60's job.
      *
      * Deliberately absent from `phlix-shared/schemas/server-settings.schema.json`,
      * which is what stops `AdminSettingsController` accepting it over the admin

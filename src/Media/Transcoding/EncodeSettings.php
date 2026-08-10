@@ -241,28 +241,31 @@ final class EncodeSettings
     /**
      * The effective on-demand segment container.
      *
-     * ## ⚠ `fmp4` IS NOT SERVABLE YET — DO NOT ENABLE IN PRODUCTION
+     * ## ⚠ `fmp4` IS SERVABLE (S310) BUT NOT YET CROSS-CLIENT VERIFIED (S60)
      *
-     * S56 delivers segment PRODUCTION and S57 the matching playlists. With this
+     * S56 delivered segment PRODUCTION, S57 the matching HLS playlists, S58 the
+     * DASH manifest, S59 the DASH serve trigger and S310 the HLS one. With this
      * set to {@see self::FORMAT_FMP4} a job writes media playlists carrying
      * `#EXT-X-MAP:URI="init-v{V}.m4s"` + `seg-v{V}-NNNNN.m4s` entries at
-     * `#EXT-X-VERSION:7`, and produces those files on disk — but:
+     * `#EXT-X-VERSION:7`, and both serve paths route those names through
+     * {@see TranscodeManager::ensureSegment()} via the shared
+     * {@see \Phlix\Server\Http\Controllers\SegmentRequestParser} — including the
+     * init, which maps to index 0 of its own rendition and is what a client
+     * fetches FIRST.
      *
-     *  - `HlsController::serveFile()` only matches `/^seg-v…\.ts$/`, so an
-     *    `.m4s` request is not even routed to {@see TranscodeManager::ensureSegment()}
-     *    (that is S59's wiring), and
-     *  - nothing therefore ever triggers the encode that would create
-     *    `init-v{V}.m4s` in the first place.
+     * ⚠ Until S310 this paragraph said the opposite, and it was right to:
+     * `HlsController::serveFile()` matched `/^seg-v…\.ts$/` only, so an `.m4s`
+     * request never reached the producer and `init-v{V}.m4s` was never created
+     * at all. Turning the flag on then yielded a job whose playlists were
+     * correct and whose every segment request 404'd.
      *
-     * So turning this on TODAY yields a job whose playlists are correct and
-     * whose every segment request **404s**. It exists so S57–S59 can be built
-     * and tested against real fMP4 bytes, and so S60 can flip the default once
-     * the serve path exists. It is deliberately NOT exposed in
+     * It remains OFF by default and deliberately NOT exposed in
      * `phlix-shared/schemas/server-settings.schema.json`, which means
      * `AdminSettingsController` will REFUSE to set it over the admin API — the
      * only way to turn it on is an explicit edit of `config/transcoding.php`
-     * (or a hand-inserted `settings` override row). That is intentional for
-     * this step.
+     * (or a hand-inserted `settings` override row). S60 owns the default flip,
+     * the schema entry and the {@see TranscodeManager::JOB_KEY_VERSION} bump
+     * that flip requires.
      *
      * An unrecognised value falls back to the shipped default rather than
      * reaching the encode path, for the same reason a bad `-preset` does.

@@ -119,6 +119,68 @@ class TranscodeServeParentalTest extends TestCase
         $this->assertSame(404, $resp->statusCode);
     }
 
+    /**
+     * S310 — the gate must bite on the fMP4 names too, not just `\.ts$`.
+     *
+     * The check runs before the filename router, so widening the router could
+     * not have bypassed it by construction — but "could not by construction" is
+     * an argument, and this step's whole premise is that an argument like that
+     * went unchecked for four steps. Both fMP4 shapes are asserted, INIT FIRST:
+     * the init is the first byte-bearing request an fMP4 client makes, so it is
+     * the one a leaked signed URL would replay.
+     *
+     * `ensureSegment` is `never()`: an over-cap job must not even be encoded,
+     * which is the security invariant, not merely the 404.
+     */
+    public function testHlsServeBlocksOverCapJobForFmp4InitAndSegment(): void
+    {
+        foreach (['init-v1080p.m4s', 'seg-v1080p-00000.m4s'] as $file) {
+            $manager = $this->createMock(TranscodeManager::class);
+            $manager->method('getJobMediaItemId')->with('job-x')->willReturn('m-mature');
+            $manager->expects($this->never())->method('ensureSegment');
+
+            $streamer = new HlsStreamer($this->segmentDir, 'http://localhost:8096', new QualitySelector());
+            $controller = new HlsController(
+                $streamer,
+                $manager,
+                $this->gate($this->pg13Filter(), false, ['m-mature' => 'R'])
+            );
+
+            $resp = $controller->serveFile($this->cappedRequest(), ['job_id' => 'job-x', 'file' => $file]);
+            $this->assertSame(404, $resp->statusCode, "{$file} must be gated");
+        }
+    }
+
+    /**
+     * The positive control for the case above: the SAME two fMP4 names on a
+     * WITHIN-cap job do reach the producer and are served. Without this, the
+     * 404s above would be satisfied just as well by a controller that refused
+     * every `.m4s` — which is precisely what master did before S310.
+     */
+    public function testHlsServeAllowsFmp4InitAndSegmentForAWithinCapJob(): void
+    {
+        foreach (['init-v1080p.m4s', 'seg-v1080p-00000.m4s'] as $file) {
+            $manager = $this->createMock(TranscodeManager::class);
+            $manager->method('getJobMediaItemId')->with('job-ok')->willReturn('m-family');
+            $manager->expects($this->once())
+                ->method('ensureSegment')
+                ->willReturnCallback(function () use ($file): string {
+                    $this->writeSeg('job-ok', $file);
+                    return "{$this->segmentDir}/job-ok/{$file}";
+                });
+
+            $streamer = new HlsStreamer($this->segmentDir, 'http://localhost:8096', new QualitySelector());
+            $controller = new HlsController(
+                $streamer,
+                $manager,
+                $this->gate($this->pg13Filter(), false, ['m-family' => 'PG'])
+            );
+
+            $resp = $controller->serveFile($this->cappedRequest(), ['job_id' => 'job-ok', 'file' => $file]);
+            $this->assertSame(200, $resp->statusCode, "{$file} must be served for a within-cap job");
+        }
+    }
+
     public function testHlsServeAllowsWithinCapJob(): void
     {
         $this->writeSeg('job-ok', 'master.m3u8');

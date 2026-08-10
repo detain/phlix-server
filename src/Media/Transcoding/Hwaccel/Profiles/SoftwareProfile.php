@@ -18,7 +18,13 @@ use Phlix\Media\Transcoding\Hwaccel\HwaccelCapability;
  *
  * Wraps the existing libx264/libx265 logic with consistent preset/bitrate/CRF
  * mapping. This is the reference implementation - its behavior for libx264/libx265
- * must exactly match the existing FfmpegRunner::buildCmafCommand() output.
+ * must exactly match the existing FfmpegRunner segment-command output.
+ *
+ * S59 note: this used to name `FfmpegRunner::buildCmafCommand()` as the output it
+ * had to match. That method was the orphaned linear-CMAF path and was deleted with
+ * S59; the live comparison point is {@see \Phlix\Media\Transcoding\FfmpegRunner::buildSegmentCommand()}
+ * (and its hwaccel peer), which is what {@see \Phlix\Media\Transcoding\FfmpegRunner::startSegmentEncode()}
+ * actually launches.
  *
  * @since 0.11.0
  */

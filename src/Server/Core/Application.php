@@ -4302,11 +4302,20 @@ class Application
         $segmentDirRaw = $hlsConfig['segment_dir'] ?? null;
         $segmentDir = is_string($segmentDirRaw) ? $segmentDirRaw : sys_get_temp_dir() . '/phlix_hls';
 
-        // Serve-time parental re-check needs the job → media-item resolver
-        // (TranscodeManager) and the shared gate; both are optional (no-op when
-        // the container has not wired them, e.g. legacy/test contexts).
+        // S59: the TranscodeManager is now LOAD-BEARING, not merely the resolver
+        // for the parental re-check — DashController::serveFile() routes every
+        // `.m4s` request through ensureSegment() to produce it on demand. So it
+        // is resolved UNCONDITIONALLY, exactly as getHlsController() resolves it,
+        // rather than through a `has()` guard that could hand the controller a
+        // silent null and turn the whole on-demand path into a no-op 404.
+        //
+        // That guard was already unreachable: loadStreamingRoutes() calls
+        // getHlsController() on the line ABOVE this factory, and that one does an
+        // unconditional `get()` — so a container without a TranscodeManager can
+        // never reach here. Only the container-less legacy path can, and it
+        // returns early below.
         $transcodeManager = null;
-        if ($this->container !== null && $this->container->has(\Phlix\Media\Transcoding\TranscodeManager::class)) {
+        if ($this->container !== null) {
             /** @var \Phlix\Media\Transcoding\TranscodeManager $transcodeManager */
             $transcodeManager = $this->container->get(\Phlix\Media\Transcoding\TranscodeManager::class);
         }

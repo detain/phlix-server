@@ -569,9 +569,12 @@ class TranscodeManager
      *                                          stream can spread that config straight into `$options`.
      *
      * @return array{
-     *     job_id: string, status: string, master_url: string, hls_url: string, reused: bool,
+     *     job_id: string, status: string, master_url: string, hls_url: string, dash_url: string|null, reused: bool,
      *     subtitles: list<array{index: int, language: string, label: string, default: bool, url: string}>
      * }
+     *     `dash_url` (S59, restoring what S11 removed) is the job's `manifest.mpd`
+     *     URL, or **null** when the job published no manifest — which is every job
+     *     at the shipped `segment_format=mpegts` default. See {@see dashManifestUrl()}.
      *
      * @throws \InvalidArgumentException If the media item is not found.
      * @throws \RuntimeException If concurrency is exhausted, probing fails, or the
@@ -609,6 +612,7 @@ class TranscodeManager
                 'status' => $this->statusOf($existing),
                 'master_url' => "/hls/{$existing}/master.m3u8",
                 'hls_url' => "/hls/{$existing}/master.m3u8",
+                'dash_url' => $this->dashManifestUrl($existing),
                 'reused' => true,
                 'subtitles' => $this->subtitleTracksFor($existing),
             ];
@@ -835,6 +839,9 @@ class TranscodeManager
             'status' => self::STATUS_COMPLETED,
             'master_url' => "/hls/{$jobId}/master.m3u8",
             'hls_url' => "/hls/{$jobId}/master.m3u8",
+            // writeVodPlaylists() has already run against $hlsDir, so the
+            // manifest either exists now or was never going to (mpegts job).
+            'dash_url' => $this->dashManifestUrlIn($jobId, $hlsDir),
             'reused' => false,
             'subtitles' => $this->subtitleTrackUrls($jobId, $tracks),
         ];
@@ -3896,6 +3903,63 @@ class TranscodeManager
         $rows = RowMap::listFromMixed($result);
         $c = $rows[0]['c'] ?? 0;
         return is_numeric($c) ? (int) $c : 0;
+    }
+
+    /**
+     * The DASH manifest URL for a job, or null when the job has no manifest.
+     *
+     * S11 removed `dash_url` from the transcode payloads because it always
+     * pointed at a `/dash/{job}/manifest.mpd` that 404'd — no producer wrote an
+     * MPD and no serve path could have produced one. S58 built the producer and
+     * S59 the serve path, so the field is back — but it is back **gated on the
+     * manifest actually existing**, which is what makes re-introducing it safe:
+     *
+     *  - a job at the shipped `segment_format=mpegts` default gets NO manifest
+     *    ({@see writeVodMpd()} returns early), so it advertises `null`;
+     *  - so does an fMP4 job whose ladder was too degenerate to describe;
+     *  - only a job with a real `manifest.mpd` on disk advertises a URL.
+     *
+     * A file check, not a flag check, is deliberate: it is the same question the
+     * client is about to ask, so the answer cannot disagree with what the DASH
+     * route will serve. (And when the job dir has merely been swept,
+     * {@see \Phlix\Server\Http\Controllers\DashController::serveFile()}
+     * regenerates the manifest on the miss anyway.)
+     *
+     * @param string $jobId Job identifier.
+     *
+     * @return string|null `/dash/{jobId}/manifest.mpd`, or null when unpublished.
+     *
+     * @since S59
+     */
+    public function dashManifestUrl(string $jobId): ?string
+    {
+        if ($jobId === '') {
+            return null;
+        }
+
+        $row = $this->getJobRow($jobId);
+        $dir = is_string($row['hls_dir'] ?? null) && $row['hls_dir'] !== ''
+            ? (string) $row['hls_dir']
+            : "{$this->segmentDir}/{$jobId}";
+
+        return $this->dashManifestUrlIn($jobId, $dir);
+    }
+
+    /**
+     * {@see dashManifestUrl()} for a caller that already knows the job directory
+     * (the fresh-job branch of {@see ensureHlsJob()} has just written into it),
+     * so no row read is needed.
+     *
+     * @param string $jobId Job identifier.
+     * @param string $dir   The job's output directory.
+     *
+     * @since S59
+     */
+    private function dashManifestUrlIn(string $jobId, string $dir): ?string
+    {
+        return is_file("{$dir}/" . self::MPD_FILENAME)
+            ? "/dash/{$jobId}/" . self::MPD_FILENAME
+            : null;
     }
 
     /**

@@ -8,14 +8,16 @@ use PHPUnit\Framework\TestCase;
 use Phlix\Media\Transcoding\FfmpegRunner;
 
 /**
- * End-to-end exercise of the transcode pipeline against a REAL ffmpeg binary: it
- * generates a short clip, probes its codecs, and runs a detached CMAF transcode,
- * asserting that a valid DASH manifest + HLS master/media playlists and fMP4
- * segments are produced from a single encode. Skipped when ffmpeg/ffprobe are not
- * installed so the suite stays green on minimal CI images.
+ * Exercises {@see FfmpegRunner::probe()} against a REAL ffmpeg binary: generate a
+ * short clip, read its codecs back. Skipped when ffmpeg/ffprobe are not installed
+ * so the suite stays green on minimal CI images.
  *
- * (The former whole-file HLS cases were removed with FfmpegRunner::startHlsTranscode
- * in SV-4.13 — see the note above testDetachedCmafTranscodeProducesBothDashAndHls.)
+ * Everything else this file once held has been removed with the builders it
+ * covered — the whole-file HLS cases with `startHlsTranscode()` (SV-4.13) and the
+ * CMAF case with `startCmafTranscode()` (S59); see the two notes below. Real
+ * ffmpeg coverage of the LIVE encode path lives in
+ * {@see Fmp4SegmentProductionTest}, {@see VodMpdSegmentResolutionTest} and
+ * {@see DashOnDemandServeTest}.
  */
 class FfmpegHlsTranscodeTest extends TestCase
 {
@@ -75,46 +77,19 @@ class FfmpegHlsTranscodeTest extends TestCase
     // CMAF path below. Those two cases could no longer resolve the method (fatal
     // "Call to undefined method") so they were removed rather than left erroring.
 
-    public function testDetachedCmafTranscodeProducesBothDashAndHls(): void
-    {
-        $clip = "{$this->dir}/in.mkv";
-        $this->makeClip($clip);
-
-        $out = "{$this->dir}/cmaf";
-        mkdir($out, 0755, true);
-
-        $pid = $this->runner->startCmafTranscode($clip, $out, [
-            'video_codec' => 'libx264',
-            'preset' => 'ultrafast',
-            'crf' => 28,
-            'audio_codec' => 'aac',
-            'audio_bitrate' => '96k',
-            'segment_seconds' => 1,
-        ]);
-        $this->assertGreaterThan(0, $pid);
-
-        $deadline = microtime(true) + 30.0;
-        while (microtime(true) < $deadline && !file_exists("{$out}/.complete") && !file_exists("{$out}/.failed")) {
-            usleep(200000);
-        }
-
-        $log = is_file("{$out}/ffmpeg.log") ? (string) file_get_contents("{$out}/ffmpeg.log") : '';
-        $this->assertFileExists("{$out}/.complete", "cmaf failed: {$log}");
-
-        // DASH manifest + HLS master/media playlists from a single encode.
-        $this->assertFileExists("{$out}/manifest.mpd");
-        $this->assertFileExists("{$out}/master.m3u8");
-        $this->assertStringContainsString('<MPD', (string) file_get_contents("{$out}/manifest.mpd"));
-        $this->assertStringContainsString('#EXTM3U', (string) file_get_contents("{$out}/master.m3u8"));
-
-        // Shared fMP4 init + media segments.
-        $this->assertGreaterThanOrEqual(1, count(glob("{$out}/init-*.m4s") ?: []));
-        $chunks = glob("{$out}/chunk-*.m4s") ?: [];
-        $this->assertGreaterThanOrEqual(1, count($chunks));
-        foreach ($chunks as $c) {
-            $this->assertGreaterThan(0, (int) filesize($c));
-        }
-    }
+    // S59 REMOVED testDetachedCmafTranscodeProducesBothDashAndHls() here. It was
+    // the ONLY caller of FfmpegRunner::startCmafTranscode() anywhere, so it
+    // pinned an orphan: a whole-file `-f dash -hls_playlist 1` encode with zero
+    // callers in `src/`, writing `chunk-…m4s` names nothing in this codebase
+    // serves. S49's audit kept it deliberately, as the best available reference
+    // for CORRECT CMAF output — the plan said to delete it only once S56/S58 had
+    // their own real-ffmpeg tests. They now do, over the code that actually runs:
+    //   - Fmp4SegmentProductionTest (S56) — real ffmpeg, parsed ISO-BMFF boxes,
+    //     H.264/AAC and HEVC/AC-3, init/fragment split;
+    //   - VodMpdSegmentResolutionTest (S58) — the real writer's manifest, every
+    //     template expansion resolved to a file, `ffmpeg -i manifest.mpd`;
+    //   - DashOnDemandServeTest (S59) — the serve path producing those same
+    //     segments on demand.
 
     private function rrmdir(string $dir): void
     {

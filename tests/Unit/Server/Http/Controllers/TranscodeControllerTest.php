@@ -27,6 +27,7 @@ class TranscodeControllerTest extends TestCase
                 'status' => 'running',
                 'master_url' => '/hls/job-7/master.m3u8',
                 'hls_url' => '/hls/job-7/master.m3u8',
+                'dash_url' => null,
                 'reused' => false,
                 'subtitles' => [
                     ['index' => 0, 'language' => 'eng', 'label' => 'English', 'default' => true,
@@ -174,9 +175,83 @@ class TranscodeControllerTest extends TestCase
             'status' => 'running',
             'master_url' => '/hls/job-7/master.m3u8',
             'hls_url' => '/hls/job-7/master.m3u8',
+            // S59: an mpegts job (the shipped default) publishes no manifest, so
+            // ensureHlsJob() reports null here. See jobFixtureWithDash() for the
+            // fMP4 shape.
+            'dash_url' => null,
             'reused' => false,
             'subtitles' => [],
         ];
+    }
+
+    /**
+     * The same job as {@see jobFixture()} but for an fMP4 job that DID publish a
+     * `manifest.mpd`, so `ensureHlsJob()` reports the DASH URL.
+     *
+     * @return array<string, mixed>
+     */
+    private function jobFixtureWithDash(): array
+    {
+        return ['dash_url' => '/dash/job-7/manifest.mpd'] + $this->jobFixture();
+    }
+
+    /**
+     * `start()` signs `dash_url` with the SAME prefix-scoped signer as
+     * `master_url`, and passes through whatever the manager reported.
+     *
+     * The negative case ({@see testStartIncludesNullVariantsForLegacyJob()})
+     * cannot tell "the controller emits null" from "the controller does not emit
+     * the key at all with a null default", so this positive control sits beside
+     * it: with a manifest, a real signed URL must come out.
+     */
+    public function testStartSignsTheDashManifestUrlWhenTheJobPublishedOne(): void
+    {
+        $manager = $this->createMock(TranscodeManager::class);
+        $manager->method('ensureHlsJob')->willReturn($this->jobFixtureWithDash());
+        $manager->method('getJobVariants')->willReturn(null);
+        $controller = new TranscodeController($manager);
+
+        $response = $controller->start(new Request(), ['id' => 'media-1']);
+        $this->assertSame(200, $response->statusCode);
+        /** @var array<array-key, mixed> $body */
+        $body = json_decode($response->body, true);
+
+        $this->assertIsString($body['dash_url']);
+        $this->assertSignedUrlFor('/dash/job-7/manifest.mpd', $body['dash_url']);
+        // Not merely "a signature exists": it must be the DASH path, not a copy
+        // of the HLS one.
+        $this->assertNotSame($body['master_url'], $body['dash_url']);
+    }
+
+    /**
+     * `status()` takes its `dash_url` from {@see TranscodeManager::dashManifestUrl()}
+     * — keyed on the readiness job id — and signs it like `master_url`.
+     */
+    public function testStatusSignsTheDashManifestUrlFromTheManager(): void
+    {
+        $manager = $this->createMock(TranscodeManager::class);
+        $manager->method('getJobReadiness')->willReturn([
+            'job_id' => 'job-7',
+            'status' => 'completed',
+            'segments' => 0,
+            'playlist_ready' => true,
+            'progress' => 100.0,
+            'subtitles' => [],
+        ]);
+        $manager->expects($this->once())
+            ->method('dashManifestUrl')
+            ->with('job-7')
+            ->willReturn('/dash/job-7/manifest.mpd');
+        $manager->method('getJobVariants')->willReturn(null);
+        $controller = new TranscodeController($manager);
+
+        $response = $controller->status(new Request(), ['jobId' => 'job-7']);
+        $this->assertSame(200, $response->statusCode);
+        /** @var array<array-key, mixed> $body */
+        $body = json_decode($response->body, true);
+
+        $this->assertIsString($body['dash_url']);
+        $this->assertSignedUrlFor('/dash/job-7/manifest.mpd', $body['dash_url']);
     }
 
     /**
@@ -233,9 +308,12 @@ class TranscodeControllerTest extends TestCase
         foreach (['job_id', 'master_url', 'hls_url', 'status', 'reused', 'subtitles'] as $key) {
             $this->assertArrayHasKey($key, $body);
         }
-        // S11 regression guard: a 404'ing `dash_url` must never re-enter the
-        // start() payload while real DASH (S56-S60) is unbuilt.
-        $this->assertArrayNotHasKey('dash_url', $body);
+        // S59 replaces S11's `assertArrayNotHasKey`. The key is back, but it is
+        // whatever the MANAGER said — here the fixture's null — never a literal
+        // the controller synthesises. A controller that hardcoded
+        // "/dash/{job}/manifest.mpd" back (the S11 defect) fails on the null.
+        $this->assertArrayHasKey('dash_url', $body);
+        $this->assertNull($body['dash_url']);
     }
 
     public function testStatusIncludesSignedVariantsForMultiVariantJob(): void
@@ -284,9 +362,10 @@ class TranscodeControllerTest extends TestCase
         $body = json_decode($response->body, true);
         $this->assertArrayHasKey('variants', $body);
         $this->assertNull($body['variants']);
-        // S11 regression guard: the status() payload must not advertise a
-        // `dash_url` that always 404s (real DASH is S56-S60).
-        $this->assertArrayNotHasKey('dash_url', $body);
+        // Same for status(): the key is present and comes from
+        // TranscodeManager::dashManifestUrl(), which this mock leaves null.
+        $this->assertArrayHasKey('dash_url', $body);
+        $this->assertNull($body['dash_url']);
     }
 
     /**

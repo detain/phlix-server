@@ -797,155 +797,25 @@ class FfmpegRunner
         return $this->subtitleBurner()->getBurnInFilter($track, $style);
     }
 
-    /**
-     * Builds an FFmpeg command that muxes the input to CMAF (fMP4) output that
-     * serves BOTH DASH and HLS from a single encode.
-     *
-     * Uses FFmpeg's DASH muxer with `-hls_playlist 1`, so one pass writes:
-     *   - `manifest.mpd`              (DASH manifest)
-     *   - `master.m3u8` + `media_N.m3u8` (HLS master + media playlists, HLS v7 fMP4)
-     *   - `init-N.m4s` + `chunk-N-NNNNN.m4s` (shared CMAF init + media segments)
-     * All playlists/manifest reference segments by relative filename, so a generic
-     * per-job file server delivers them with no URI rewriting.
-     *
-     * Per-stream copy vs encode follows the same `video_codec` / `audio_codec`
-     * convention as {@see self::buildHlsCommand()} (`'copy'` to remux, an encoder
-     * name to transcode).
-     *
-     * @param string               $inputPath Source media file path.
-     * @param string               $outDir    Directory the manifest/playlists/segments are written to.
-     * @param array<string, mixed> $params    Encoding / segmenting parameters (see buildHlsCommand()).
-     *
-     * @return string Complete FFmpeg CMAF command.
-     *
-     * @since 0.24.0
-     */
-    public function buildCmafCommand(string $inputPath, string $outDir, array $params): string
-    {
-        $segSeconds = self::paramInt($params, 'segment_seconds') ?? 6;
-        if ($segSeconds < 1) {
-            $segSeconds = 6;
-        }
-
-        $cmd = sprintf('%s -y -hide_banner -loglevel error', escapeshellarg($this->ffmpegPath));
-        $cmd .= ' -i ' . escapeshellarg($inputPath);
-
-        // Explicit mapping: ONLY the first video + the first audio track. Anime/TV
-        // MKVs often carry embedded subtitle streams AND font ATTACHMENT / data
-        // (`bin_data`) streams; if the DASH/CMAF muxer pulls any of those into the
-        // A/V encode it produces extra representations or fails the mux outright.
-        // `-dn -sn` drop data + subtitle streams and `-map -0:t?` excludes any
-        // attachment so only the playable video+audio reach the CMAF output.
-        $cmd .= ' -map 0:v:0 -map 0:a:0? -map -0:t? -dn -sn';
-
-        // Video: copy a compatible stream as-is, otherwise encode.
-        $videoCodec = self::paramString($params, 'video_codec') ?? 'libx264';
-        if ($videoCodec === 'copy') {
-            $cmd .= ' -c:v copy';
-        } else {
-            $cmd .= ' -c:v ' . $videoCodec;
-            if ($videoCodec === 'libx264' || $videoCodec === 'libx265') {
-                $cmd .= ' -preset ' . (self::paramString($params, 'preset') ?? 'veryfast');
-                $defaultCrf = $videoCodec === 'libx265' ? 28 : 23;
-                $cmd .= ' -crf ' . (self::paramInt($params, 'crf') ?? $defaultCrf);
-            }
-            $width = self::paramInt($params, 'width');
-            $height = self::paramInt($params, 'height');
-            if ($width !== null && $height !== null) {
-                $cmd .= ' -vf "scale=' . $width . ':' . $height
-                    . ':force_original_aspect_ratio=decrease:force_divisible_by=2"';
-            }
-            // Closed, fixed-size GOP so segments are keyframe-aligned across both protocols.
-            $cmd .= ' -g 48 -keyint_min 48 -sc_threshold 0';
-            // Force an 8-bit 4:2:0 H.264 profile so a 10-bit (High 10) source is
-            // re-encoded into a stream browsers can actually decode.
-            $cmd .= self::browserSafeVideoFlags($videoCodec, $params);
-        }
-
-        // Audio: copy AAC as-is, otherwise encode to AAC.
-        $audioCodec = self::paramString($params, 'audio_codec') ?? 'aac';
-        if ($audioCodec === 'copy') {
-            $cmd .= ' -c:a copy';
-        } else {
-            $cmd .= ' -c:a ' . $audioCodec;
-            $cmd .= ' -b:a ' . (self::paramString($params, 'audio_bitrate') ?? '128k');
-            $cmd .= ' -ar ' . (self::paramInt($params, 'audio_sample_rate') ?? 48000);
-            $audioChannels = self::paramInt($params, 'audio_channels');
-            if ($audioChannels !== null) {
-                $cmd .= ' -ac ' . $audioChannels;
-            }
-        }
-
-        // DASH muxer with HLS playlist generation — one encode, both protocols.
-        $cmd .= ' -f dash';
-        $cmd .= ' -seg_duration ' . $segSeconds;
-        $cmd .= ' -use_template 1 -use_timeline 1';
-        $cmd .= ' -init_seg_name ' . escapeshellarg('init-$RepresentationID$.m4s');
-        $cmd .= ' -media_seg_name ' . escapeshellarg('chunk-$RepresentationID$-$Number%05d$.m4s');
-        $cmd .= ' -hls_playlist 1 -hls_master_name master.m3u8';
-        $cmd .= ' ' . escapeshellarg($outDir . '/manifest.mpd');
-
-        return $cmd;
-    }
-
-    /**
-     * Starts a CMAF transcode (DASH + HLS) as a detached background process.
-     *
-     * @param string               $inputPath Source media file path.
-     * @param string               $outDir    Output directory.
-     * @param array<string, mixed> $params    Parameters for {@see self::buildCmafCommand()}.
-     *
-     * @return int OS process id of the launched job (0 if launch failed).
-     *
-     * @since 0.24.0
-     */
-    public function startCmafTranscode(string $inputPath, string $outDir, array $params): int
-    {
-        return $this->startDetached($this->buildCmafCommand($inputPath, $outDir, $params), $outDir);
-    }
-
-    /**
-     * Starts a CMAF transcode and, in the same detached job, extracts the given
-     * text subtitle tracks to cleaned `sub-{index}.vtt` sidecars.
-     *
-     * The subtitle extraction commands are appended to the CMAF command with
-     * `&&` so they run AFTER the A/V encode (each is internally `|| true` so a
-     * failed track never aborts the job — the video is the hard requirement).
-     * The whole chain is launched once via {@see self::startDetached()}, so the
-     * Workerman worker never blocks on FFmpeg.
-     *
-     * @param string                       $inputPath     Source media file path.
-     * @param string                       $outDir        Output directory.
-     * @param array<string, mixed>         $params        Parameters for {@see self::buildCmafCommand()}.
-     * @param array<int, string>           $extractCmds   Extra `&&`-chainable extraction commands
-     *                                                    (built by {@see \Phlix\Media\Transcoding\Subtitles\SubtitleExtractor::buildExtractCommand()}).
-     *
-     * @return int OS process id of the launched job (0 if launch failed).
-     *
-     * @since 0.25.0
-     */
-    public function startCmafTranscodeWithSubtitles(
-        string $inputPath,
-        string $outDir,
-        array $params,
-        array $extractCmds = []
-    ): int {
-        $command = $this->buildCmafCommand($inputPath, $outDir, $params);
-
-        // Subtitle extraction is a TRAILING step that runs ONLY when the CMAF
-        // encode succeeded (see startDetached() — these go inside the `then`
-        // branch, AFTER `.complete` is written). Each extract group is itself
-        // `|| true`, so a failed track can never alter the already-decided job
-        // status, and the `|| true` can never bridge back to a failed encode.
-        $trailing = [];
-        foreach ($extractCmds as $extract) {
-            if (is_string($extract) && $extract !== '') {
-                $trailing[] = $extract;
-            }
-        }
-
-        return $this->startDetached($command, $outDir, $trailing);
-    }
+    // S59 REMOVED the orphaned linear-CMAF path that used to sit here:
+    // `buildCmafCommand()`, `startCmafTranscode()` and
+    // `startCmafTranscodeWithSubtitles()`.
+    //
+    // It ran ONE `-f dash -hls_playlist 1` encode of the whole file up front,
+    // emitting `manifest.mpd` + `master.m3u8` + `init-$RepresentationID$.m4s` +
+    // `chunk-…m4s`. Nothing in `src/` had called it since the pipeline moved to
+    // per-segment on-demand encodes: {@see TranscodeManager} launches every
+    // encode through {@see self::startSegmentEncode()}, and its filenames
+    // (`seg-v{id}-NNNNN.m4s` / `init-v{id}.m4s`, S56) are a different scheme
+    // from the `chunk-` one this emitted, so the two could never have served
+    // one job directory between them.
+    //
+    // It survived this long only as the best available REFERENCE for correct
+    // CMAF output, pinned by one integration test. S56's
+    // `Fmp4SegmentProductionTest` (real ffmpeg, parsed boxes) and S58's
+    // `VodMpdSegmentResolutionTest` (real segments, every template expansion,
+    // `ffmpeg -i manifest.mpd`) replaced that reference with one over the code
+    // that actually runs, so the orphan went with S59.
 
     /**
      * Launches an FFmpeg command fully detached from the PHP process.

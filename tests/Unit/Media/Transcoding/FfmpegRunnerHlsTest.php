@@ -18,78 +18,13 @@ class FfmpegRunnerHlsTest extends TestCase
         return new FfmpegRunner('/usr/bin/ffmpeg', '/usr/bin/ffprobe', '/tmp');
     }
 
-    public function testBuildCmafCommandEmitsDashWithHlsPlaylist(): void
-    {
-        $cmd = $this->runner()->buildCmafCommand('/in.mkv', '/out', [
-            'video_codec' => 'libx264',
-            'crf' => 23,
-            'audio_codec' => 'aac',
-            'segment_seconds' => 6,
-        ]);
-
-        // DASH muxer + HLS playlist generation from one encode.
-        $this->assertStringContainsString('-f dash', $cmd);
-        $this->assertStringContainsString('-hls_playlist 1', $cmd);
-        $this->assertStringContainsString('-hls_master_name master.m3u8', $cmd);
-        $this->assertStringContainsString('-seg_duration 6', $cmd);
-        $this->assertStringContainsString('manifest.mpd', $cmd);
-        // CMAF fMP4 segment templates.
-        $this->assertStringContainsString('init-$RepresentationID$.m4s', $cmd);
-        $this->assertStringContainsString('chunk-$RepresentationID$-$Number%05d$.m4s', $cmd);
-        // Explicit mapping: video required, audio optional.
-        $this->assertStringContainsString('-map 0:v:0', $cmd);
-        $this->assertStringContainsString('-map 0:a:0?', $cmd);
-        $this->assertStringContainsString('-c:v libx264', $cmd);
-    }
-
-    public function testBuildCmafCommandCopiesCompatibleStreams(): void
-    {
-        $cmd = $this->runner()->buildCmafCommand('/in.mkv', '/out', [
-            'video_codec' => 'copy',
-            'audio_codec' => 'copy',
-        ]);
-        $this->assertStringContainsString('-c:v copy', $cmd);
-        $this->assertStringContainsString('-c:a copy', $cmd);
-        $this->assertStringContainsString('-f dash', $cmd);
-        $this->assertStringNotContainsString('libx264', $cmd);
-    }
-
-    public function testBuildCmafCommandForcesBrowserDecodableH264Profile(): void
-    {
-        // A libx264 re-encode must pin an 8-bit 4:2:0 High@4.1 stream so a
-        // 10-bit (High 10) source can't yield an undecodable HLS variant.
-        $cmd = $this->runner()->buildCmafCommand('/in.mkv', '/out', [
-            'video_codec' => 'libx264',
-            'crf' => 23,
-            'audio_codec' => 'aac',
-        ]);
-        $this->assertStringContainsString('-pix_fmt yuv420p', $cmd);
-        $this->assertStringContainsString('-profile:v high', $cmd);
-        $this->assertStringContainsString('-level 4.1', $cmd);
-    }
-
-    public function testBuildCmafCommandHonorsExplicitPixFmtAndProfile(): void
-    {
-        $cmd = $this->runner()->buildCmafCommand('/in.mkv', '/out', [
-            'video_codec' => 'libx264',
-            'pix_fmt' => 'yuv420p',
-            'profile' => 'main',
-            'level' => '4.0',
-        ]);
-        $this->assertStringContainsString('-profile:v main', $cmd);
-        $this->assertStringContainsString('-level 4.0', $cmd);
-    }
-
-    public function testBuildCmafCommandCopyPathOmitsPixFmtFlags(): void
-    {
-        // A direct copy must NOT inject encoder-only flags.
-        $cmd = $this->runner()->buildCmafCommand('/in.mkv', '/out', [
-            'video_codec' => 'copy',
-            'audio_codec' => 'copy',
-        ]);
-        $this->assertStringNotContainsString('-pix_fmt', $cmd);
-        $this->assertStringNotContainsString('-profile:v', $cmd);
-    }
+    // S59 REMOVED five `buildCmafCommand()` command-string tests here. That
+    // builder — and `startCmafTranscode()` / `startCmafTranscodeWithSubtitles()`
+    // with it — was the orphaned linear-CMAF path: zero callers in `src/`, and a
+    // `chunk-$RepresentationID$-…m4s` naming scheme no producer or serve path in
+    // this codebase has ever used. The live CMAF coverage is
+    // `Fmp4SegmentProductionTest` (S56, real ffmpeg + parsed boxes) and
+    // `VodMpdSegmentResolutionTest` (S58, real segments + `ffmpeg -i manifest.mpd`).
 
     public function testStartDetachedReturnsPidAndIsNonBlocking(): void
     {
@@ -197,16 +132,19 @@ class FfmpegRunnerHlsTest extends TestCase
         $this->assertStringNotContainsString('|| true && touch', $cmd);
     }
 
-    public function testStartCmafTranscodeWithSubtitlesGuardsCompleteOnEncodeFailure(): void
+    public function testDetachedChainGuardsCompleteOnEncodeFailureWithTrailingExtracts(): void
     {
-        // End-to-end via the real with-subtitles path using sh stand-ins: a
-        // failing CMAF encode must produce .failed, never .complete, even with a
+        // End-to-end through the real detached chain using sh stand-ins: a
+        // failing encode must produce .failed, never .complete, even with a
         // (succeeding) subtitle-extract trailing command present.
+        // (Named for startCmafTranscodeWithSubtitles() until S59 deleted that
+        // orphan; the behaviour under test is buildDetachedCommand()'s, and it
+        // is the chain TranscodeManager::ensureHlsJob() still launches.)
         $dir = sys_get_temp_dir() . '/phlix_cmaf_subfail_' . uniqid();
         mkdir($dir, 0755, true);
 
         // Build the full chain exactly as production does, then swap the real
-        // CMAF command for `false` to simulate an encode failure deterministically.
+        // encode command for `false` to simulate a failure deterministically.
         $runner = $this->runner();
         $extract = '( true ) || true';
         $full = $runner->buildDetachedCommand('false', $dir, [$extract]);

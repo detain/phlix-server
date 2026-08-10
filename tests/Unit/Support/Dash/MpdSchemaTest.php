@@ -9,6 +9,8 @@ use DOMElement;
 use DOMXPath;
 use PHPUnit\Framework\TestCase;
 use Phlix\Tests\Support\Dash\MpdSchema;
+use ReflectionMethod;
+use RuntimeException;
 
 /**
  * The net under the S58 MPD validator itself.
@@ -87,5 +89,38 @@ final class MpdSchemaTest extends TestCase
     public function testAnEmptySourceIsAnErrorNotAnException(): void
     {
         $this->assertSame(['the manifest is empty'], MpdSchema::errors(''));
+    }
+
+    /**
+     * A missing schema must THROW. The tempting alternative — treat it as
+     * "nothing to check" and return no errors — turns every schema assertion in
+     * the suite into a no-op, which is exactly the failure this class exists to
+     * make impossible.
+     */
+    public function testAMissingSchemaThrowsRatherThanReportingEverythingValid(): void
+    {
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('The vendored DASH MPD schema is missing');
+
+        MpdSchema::errors('<MPD/>', dirname(MpdSchema::path()) . '/not-a-schema.xsd');
+    }
+
+    /**
+     * `schemaValidate()` returning false with an EMPTY libxml error list must
+     * still be a failure. No fixture can produce that state on demand — libxml
+     * always records something — which is precisely why the guard is asserted
+     * directly rather than through a document: a silent belt that is never
+     * exercised is a belt nobody would notice rotting.
+     */
+    public function testTheErrorDrainNeverReturnsAnEmptyListEvenWhenLibxmlRecordedNothing(): void
+    {
+        libxml_clear_errors();
+
+        $drain = new ReflectionMethod(MpdSchema::class, 'drain');
+        $drain->setAccessible(true);
+        /** @var list<string> $messages */
+        $messages = $drain->invoke(null, 'schemaValidate() returned false');
+
+        $this->assertSame(['schemaValidate() returned false but libxml recorded no error'], $messages);
     }
 }

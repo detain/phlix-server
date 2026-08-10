@@ -47,15 +47,19 @@ final class MpdSchema
     /**
      * Schema-validation errors for an MPD document.
      *
-     * @param string $xml The manifest source.
+     * @param string      $xml     The manifest source.
+     * @param string|null $xsdPath Schema override — a test seam, so the
+     *                             missing-schema branch is reachable without
+     *                             deleting a committed fixture. Null uses
+     *                             {@see self::path()}.
      *
      * @return list<string> Empty ONLY when the document validated; human-readable messages otherwise.
      *
      * @throws RuntimeException When the vendored schema is missing.
      */
-    public static function errors(string $xml): array
+    public static function errors(string $xml, ?string $xsdPath = null): array
     {
-        $xsd = self::path();
+        $xsd = $xsdPath ?? self::path();
         if (!is_file($xsd)) {
             throw new RuntimeException("The vendored DASH MPD schema is missing: {$xsd}");
         }

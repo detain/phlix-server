@@ -15,6 +15,10 @@ use Phlix\Common\Uuid;
 use Phlix\Common\Util\RowMap;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Streaming\AbrLadder;
+use Phlix\Media\Streaming\Dash\AdaptationSet;
+use Phlix\Media\Streaming\Dash\DashStreamer;
+use Phlix\Media\Streaming\Dash\Representation;
+use Phlix\Media\Streaming\Dash\SegmentTemplate;
 use Phlix\Media\Streaming\Rendition;
 use Phlix\Media\Streaming\SourceProfile;
 use Phlix\Media\Transcoding\Subtitles\SubtitleExtractor;
@@ -45,6 +49,20 @@ class TranscodeManager
 
     /** @var string Base directory for HLS segments */
     private string $segmentDir;
+
+    /**
+     * S58 — the MPD authoring library, used to publish `manifest.mpd` beside the
+     * HLS playlists.
+     *
+     * Constructed here rather than injected on purpose. The ctor's optional
+     * parameters are exactly the shape PHP-DI's `autowire()` SKIPS, so a
+     * `?DashStreamer $dashStreamer = null` would resolve to null under the
+     * container and silently emit no manifest at all — the failure mode this
+     * whole subsystem already suffered (`StreamManager::setDashStreamer()` has
+     * never had a caller, which is why the library was dead). A hard `new` of a
+     * dependency-free formatter cannot degrade.
+     */
+    private DashStreamer $dashStreamer;
 
     /** @var int Maximum concurrent transcode jobs allowed */
     private int $maxConcurrentTranscodes;
@@ -356,6 +374,48 @@ class TranscodeManager
     private const JOB_KEY_VERSION = 'v9';
 
     /**
+     * S58 — the VOD DASH manifest published in a job directory.
+     *
+     * The name `DashController::getManifest()` already advertises
+     * (`/dash/{job}/manifest.mpd`) and the one `TranscodeFileServer` already
+     * types as `application/dash+xml`.
+     */
+    public const MPD_FILENAME = 'manifest.mpd';
+
+    /**
+     * Fallback segment length (seconds) used when a caller supplies a
+     * non-positive one.
+     *
+     * ONE constant, because the HLS playlist timeline and the DASH
+     * `SegmentTemplate@duration` must agree exactly: a client derives the
+     * segment COUNT from `ceil(duration / segmentLength)` in both protocols, so
+     * two builders disagreeing about the fallback would hand DASH and HLS
+     * clients different timelines over identical files.
+     */
+    private const FALLBACK_SEGMENT_SECONDS = 6;
+
+    /**
+     * The codecs a LEGACY single-variant job (`variants IS NULL`, pre-A5) is
+     * assumed to carry: H.264 High@4.1 — the segment encode target — plus AAC-LC.
+     *
+     * One constant so the legacy master playlist's `CODECS=` and the legacy MPD
+     * Representation's `@codecs` name the same thing; a multi-variant job takes
+     * its codecs from the persisted {@see Rendition} instead.
+     *
+     * @since S58
+     */
+    private const LEGACY_CODECS = 'avc1.640029,mp4a.40.2';
+
+    /**
+     * Nominal bandwidth advertised for a legacy single-variant job whose row
+     * carries no `variant_bandwidth`. Shared by the master playlist and the MPD
+     * for the same reason as {@see LEGACY_CODECS}.
+     *
+     * @since S58
+     */
+    private const LEGACY_BANDWIDTH = 3000000;
+
+    /**
      * Fallback ceiling on simultaneously-running transcode jobs when the
      * caller supplies none. Mirrors `config/ffmpeg.php`'s
      * `max_concurrent_transcodes` default.
@@ -425,6 +485,11 @@ class TranscodeManager
         $this->db = $db;
         $this->ffmpeg = $ffmpeg;
         $this->segmentDir = $segmentDir;
+        // S58: the MPD writer resolves its own output path from the job dir it
+        // is handed, so DashStreamer's own segmentDir/baseUrl are unused by
+        // writeVodMpd(); they are passed for the sake of the class's other
+        // (dead, S59-owned) helpers.
+        $this->dashStreamer = new DashStreamer($segmentDir, '');
         $this->maxConcurrentTranscodes = ($maxConcurrentTranscodes !== null && $maxConcurrentTranscodes > 0)
             ? $maxConcurrentTranscodes
             : self::DEFAULT_MAX_CONCURRENT_TRANSCODES;
@@ -2602,6 +2667,7 @@ class TranscodeManager
                 "{$dir}/media_0.m3u8",
                 $this->buildMediaPlaylist($duration, $segSeconds, null, $segmentFormat)
             );
+            $this->writeVodMpd($dir, $duration, $segSeconds, $width, $height, $bandwidth, null, null, $segmentFormat);
             return;
         }
 
@@ -2610,6 +2676,13 @@ class TranscodeManager
 
         // SV-4.6: restrict the master's switchable ABR set — see switchableVariants().
         $switchableVariants = self::switchableVariants($variants);
+
+        // S58: the MPD gets the switchable set BEFORE the degenerate fallback
+        // below, so it stays empty when nothing is ABR-safe. HLS must remain
+        // playable at any cost and therefore falls back; DASH would have to
+        // claim `segmentAlignment="true"` over stream-copy segments that do not
+        // align, so it declines to publish instead. See writeVodMpd().
+        $mpdVariants = $switchableVariants;
 
         // Degenerate case: if NOTHING is switchable, fall back to all variants
         // (shouldn't happen in practice — AbrLadder always emits ≥1 transcode rung
@@ -2643,6 +2716,334 @@ class TranscodeManager
                 $this->buildMediaPlaylist($duration, $segSeconds, $variant->id, $segmentFormat)
             );
         }
+
+        // S58: the DASH view of the SAME files, from the SAME arguments. See
+        // writeVodMpd() for why it lives inside the writer rather than beside
+        // the writer's two call sites.
+        $this->writeVodMpd(
+            $dir,
+            $duration,
+            $segSeconds,
+            $width,
+            $height,
+            $bandwidth,
+            $mpdVariants,
+            $hasMultiAudio ? $audioTracks : null,
+            $segmentFormat
+        );
+    }
+
+    /**
+     * S58 — publishes the VOD DASH manifest (`manifest.mpd`) for a job, when the
+     * job's container makes one possible.
+     *
+     * **Why here.** `writeVodPlaylists()` has two production callers
+     * ({@see ensureHlsJob()} at job creation and
+     * {@see ensurePlaylistRegenerated()} after an LRU eviction) and S57 put the
+     * container branch INSIDE the writer for exactly this reason: a manifest
+     * written at one call site and not the other, or written from
+     * independently-recomputed arguments, is a manifest that can disagree with
+     * the playlists over the same bytes. Everything below is derived from the
+     * arguments the playlists were just built from — the same `$duration`, the
+     * same `$segSeconds`, the same `$switchableVariants` the master advertises,
+     * the same audio descriptors — so the two views cannot diverge without the
+     * playlists diverging too.
+     *
+     * **Only fMP4.** DASH carries ISO-BMFF segments; an MPEG-TS job's
+     * `seg-v720p-00000.ts` files have no `SegmentTemplate` expression at all and
+     * no init segment to point `@initialization` at. So on the shipped default
+     * this method writes NOTHING — a job directory at `segment_format=mpegts` is
+     * byte-for-byte what it was before S58, with no `manifest.mpd` in it.
+     *
+     * **Only ABR-switchable renditions.** The Representation set is exactly the
+     * master playlist's `#EXT-X-STREAM-INF` level set
+     * ({@see switchableVariants()}), which already withholds every stream-COPY
+     * rendition. That is not a convenience: `@segmentAlignment="true"` and a
+     * shared `SegmentTemplate@duration` are only true of encodes that force an
+     * IDR at each nominal boundary, and a `-c copy` rendition drifts to the
+     * nearest SOURCE GOP instead. Unlike the master playlist, which falls back
+     * to the full variant list when nothing is switchable (HLS must remain
+     * playable), a degenerate ladder here yields NO manifest — a DASH client has
+     * no way to be told "these boundaries are approximate", so an absent
+     * manifest is strictly better than a lying one.
+     *
+     * ⚠ **The files this manifest names are not servable yet.**
+     * `DashController::serveFile()` is still a pure static file server and
+     * `HlsController::serveFile()` routes only `\.ts$`, so nothing triggers an
+     * on-demand encode for a `.m4s` and nothing produces `init-v{id}.m4s`. A
+     * client fetching this manifest today gets 404s for every segment in it.
+     * That wiring is **S59**; this step makes the manifest correct, it does not
+     * make the flag usable end to end.
+     *
+     * Failure is swallowed and logged: the manifest is an addition to a job
+     * whose HLS deliverable is already written, and DASH has no client in this
+     * product today, so an MPD bug must never be able to fail job creation.
+     *
+     * @param string                              $dir            Job directory.
+     * @param float                               $duration       Source duration in seconds.
+     * @param int                                 $segSeconds     Target segment length in seconds.
+     * @param int|null                            $width          Legacy single-variant width.
+     * @param int|null                            $height         Legacy single-variant height.
+     * @param int|null                            $bandwidth      Legacy single-variant bandwidth (bps).
+     * @param list<Rendition>|null                $variants       ABR-switchable variants, or null for legacy.
+     * @param list<array<string, mixed>>|null     $audioTracks    Audio descriptors when the job has an audio group.
+     * @param string                              $segmentFormat  The job's container (`mpegts` | `fmp4`).
+     *
+     * @since S58
+     */
+    private function writeVodMpd(
+        string $dir,
+        float $duration,
+        int $segSeconds,
+        ?int $width,
+        ?int $height,
+        ?int $bandwidth,
+        ?array $variants,
+        ?array $audioTracks,
+        string $segmentFormat
+    ): void {
+        if ($segmentFormat !== EncodeSettings::FORMAT_FMP4) {
+            return;
+        }
+
+        try {
+            $sets = $this->buildMpdAdaptationSets(
+                $segSeconds,
+                $width,
+                $height,
+                $bandwidth,
+                $variants,
+                $audioTracks
+            );
+            if ($sets === []) {
+                $this->logger->warning('No DASH adaptation set could be built; manifest.mpd not written', [
+                    'dir' => $dir,
+                ]);
+                return;
+            }
+
+            // The job directory is named for the job id at both call sites
+            // (ensureHlsJob() creates `{$segmentDir}/{$jobId}`; the row's
+            // `hls_dir` is that same path), so the basename is the job id.
+            $xml = $this->dashStreamer->generateMasterMpd(basename($dir), $sets, $duration);
+            file_put_contents("{$dir}/" . self::MPD_FILENAME, $xml);
+        } catch (\Throwable $e) {
+            $this->logger->error('Failed to write DASH manifest', [
+                'dir' => $dir,
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    /**
+     * Builds the AdaptationSets for a job's VOD manifest: one video set holding
+     * every ABR rung, plus one audio set per audio track when the job carries a
+     * shared audio group.
+     *
+     * **One video AdaptationSet, N Representations — not N AdaptationSets.** A
+     * DASH client adapts BETWEEN the Representations of a single AdaptationSet;
+     * separate AdaptationSets are alternative content and are never switched
+     * automatically. Emitting one set per rung (which is what the plan's wording
+     * says, and what the pre-S58 `AdaptationSet` class produced) yields a
+     * manifest with no adaptation in it whatsoever.
+     *
+     * **One AdaptationSet per audio TRACK, though** — for the mirror-image
+     * reason. Two languages inside one set would let a player switch languages
+     * on a bandwidth dip. Each carries its own `@lang` and a `Role` of `main`
+     * (the default track) or `alternate`, which is DASH's expression of the HLS
+     * `DEFAULT=YES`/`NO` the master playlist emits from the SAME
+     * {@see defaultAudioPosition()}.
+     *
+     * The templates expand to the names S56 produces and S57's playlists
+     * advertise: `seg-v{id}-NNNNN.m4s` / `init-v{id}.m4s` for video,
+     * `seg-a{N}-NNNNN.m4s` / `init-a{N}.m4s` for audio, and the legacy
+     * unprefixed `seg-NNNNN.m4s` / `init.m4s` for a pre-A5 single-variant job.
+     *
+     * @param int                             $segSeconds  Target segment length in seconds.
+     * @param int|null                        $width       Legacy single-variant width.
+     * @param int|null                        $height      Legacy single-variant height.
+     * @param int|null                        $bandwidth   Legacy single-variant bandwidth (bps).
+     * @param list<Rendition>|null            $variants    ABR-switchable variants, or null for legacy.
+     * @param list<array<string, mixed>>|null $audioTracks Audio descriptors, or null when audio is muxed.
+     *
+     * @return list<AdaptationSet> Video set first, then one per audio track. Empty when nothing is describable.
+     *
+     * @since S58
+     */
+    private function buildMpdAdaptationSets(
+        int $segSeconds,
+        ?int $width,
+        ?int $height,
+        ?int $bandwidth,
+        ?array $variants,
+        ?array $audioTracks
+    ): array {
+        $segSeconds = self::normalizedSegmentSeconds($segSeconds);
+        // A separate audio group means the video renditions were encoded `-an`
+        // (see segmentParamsForRendition()'s `video_only`), so their CODECS must
+        // not keep advertising the AAC track that is no longer in them.
+        $hasAudioGroup = $audioTracks !== null && $audioTracks !== [];
+
+        $video = $this->buildMpdVideoAdaptationSet(
+            $segSeconds,
+            $width,
+            $height,
+            $bandwidth,
+            $variants,
+            $hasAudioGroup
+        );
+        if ($video === null) {
+            return [];
+        }
+
+        $sets = [$video];
+        if ($audioTracks === null) {
+            return $sets;
+        }
+
+        $defaultPos = self::defaultAudioPosition($audioTracks);
+        $nextId = 1;
+        foreach ($audioTracks as $position => $track) {
+            $relIndex = is_int($track['index'] ?? null) ? $track['index'] : $position;
+            $audioId = 'a' . $relIndex;
+            $sets[] = new AdaptationSet(
+                $nextId++,
+                'audio',
+                'audio/mp4',
+                SegmentTemplate::fromSeconds(
+                    $segSeconds,
+                    0,
+                    'seg-$RepresentationID$-$Number%05d$.m4s',
+                    'init-$RepresentationID$.m4s'
+                ),
+                [new Representation(
+                    $audioId,
+                    // Every audio-only rendition is re-encoded to AAC-LC stereo
+                    // by buildAudioSegmentCommand(), whatever the source codec
+                    // in the descriptor says.
+                    Rendition::AUDIO_CODEC,
+                    Rendition::AUDIO_BANDWIDTH
+                )],
+                self::mpdLanguage($track['language'] ?? null),
+                $position === $defaultPos ? AdaptationSet::ROLE_MAIN : AdaptationSet::ROLE_ALTERNATE
+            );
+        }
+
+        return $sets;
+    }
+
+    /**
+     * The single video AdaptationSet of a job's manifest, or null when the job
+     * has nothing DASH can describe.
+     *
+     * @param int                  $segSeconds    Normalised segment length in seconds.
+     * @param int|null             $width         Legacy single-variant width.
+     * @param int|null             $height        Legacy single-variant height.
+     * @param int|null             $bandwidth     Legacy single-variant bandwidth (bps).
+     * @param list<Rendition>|null $variants      ABR-switchable variants, or null for legacy.
+     * @param bool                 $hasAudioGroup True when audio lives in its own renditions.
+     *
+     * @since S58
+     */
+    private function buildMpdVideoAdaptationSet(
+        int $segSeconds,
+        ?int $width,
+        ?int $height,
+        ?int $bandwidth,
+        ?array $variants,
+        bool $hasAudioGroup
+    ): ?AdaptationSet {
+        if ($variants === null) {
+            // Legacy single-variant job: `media_0.m3u8` over unprefixed
+            // `seg-NNNNN.m4s`, so the template carries no $RepresentationID$ and
+            // the representation id is the playlist's own `0`.
+            $representations = [new Representation(
+                '0',
+                $hasAudioGroup ? self::videoOnlyCodecs(self::LEGACY_CODECS) : self::LEGACY_CODECS,
+                $bandwidth !== null && $bandwidth > 0 ? $bandwidth : self::LEGACY_BANDWIDTH,
+                $width !== null && $width > 0 ? $width : 0,
+                $height !== null && $height > 0 ? $height : 0
+            )];
+            $template = SegmentTemplate::fromSeconds($segSeconds, 0, 'seg-$Number%05d$.m4s', 'init.m4s');
+        } else {
+            if ($variants === []) {
+                return null;
+            }
+            $representations = [];
+            foreach ($variants as $variant) {
+                $representations[] = new Representation(
+                    $variant->id,
+                    $hasAudioGroup ? self::videoOnlyCodecs($variant->codecs) : $variant->codecs,
+                    $variant->bandwidth(),
+                    $variant->width,
+                    $variant->height
+                );
+            }
+            $template = SegmentTemplate::fromSeconds(
+                $segSeconds,
+                0,
+                'seg-v$RepresentationID$-$Number%05d$.m4s',
+                'init-v$RepresentationID$.m4s'
+            );
+        }
+
+        return new AdaptationSet(
+            0,
+            'video',
+            'video/mp4',
+            $template,
+            $representations,
+            null,
+            AdaptationSet::ROLE_MAIN
+        );
+    }
+
+    /**
+     * Strips the audio codec from an HLS `CODECS` string.
+     *
+     * A multi-audio job's video segments are encoded `-an`, so a Representation
+     * over them must not claim `mp4a.40.2` — a DASH client reads `@codecs` as
+     * the exhaustive list of what the Representation's segments contain and will
+     * set up a decoder (and, on some players, a `MediaSource` sourceBuffer) for
+     * an audio track that never arrives. The HLS master keeps the full string
+     * because there `CODECS` describes the variant PLUS its `AUDIO=` group.
+     *
+     * Falls back to the input when stripping would leave nothing, so a future
+     * audio-only rendition can never end up with an empty `@codecs`.
+     *
+     * @since S58
+     */
+    private static function videoOnlyCodecs(string $codecs): string
+    {
+        $kept = array_values(array_filter(
+            array_map('trim', explode(',', $codecs)),
+            static fn (string $codec): bool => $codec !== '' && $codec !== Rendition::AUDIO_CODEC
+        ));
+
+        return $kept === [] ? $codecs : implode(',', $kept);
+    }
+
+    /**
+     * An audio descriptor's language as a value the MPD schema accepts, or null
+     * to omit `@lang`.
+     *
+     * `AdaptationSet@lang` is `xs:language`, so an empty or malformed tag does
+     * not degrade — it makes the WHOLE manifest schema-invalid, where HLS would
+     * merely have emitted an odd `LANGUAGE=` attribute. `und` (ffprobe's
+     * "undetermined") is dropped for the same reason the playlist writer drops
+     * it: it carries no information.
+     *
+     * @param mixed $language Raw descriptor value.
+     *
+     * @since S58
+     */
+    private static function mpdLanguage(mixed $language): ?string
+    {
+        if (!is_string($language) || $language === '' || $language === 'und') {
+            return null;
+        }
+
+        return preg_match('/^[A-Za-z]{1,8}(-[A-Za-z0-9]{1,8})*$/', $language) === 1 ? $language : null;
     }
 
     /**
@@ -2672,6 +3073,53 @@ class TranscodeManager
     private static function playlistVersion(string $format): int
     {
         return $format === EncodeSettings::FORMAT_FMP4 ? 7 : 3;
+    }
+
+    /**
+     * The segment length a timeline builder must actually use.
+     *
+     * Behaviour-identical to the `$segSeconds > 0 ? $segSeconds : 6` guard that
+     * {@see buildMediaPlaylist()} and {@see buildAudioMediaPlaylist()} each
+     * carried; S58 lifted it out so the DASH `SegmentTemplate@duration` cannot
+     * fall back to a different number than the HLS `#EXTINF` grid it must line
+     * up with. See {@see FALLBACK_SEGMENT_SECONDS}.
+     *
+     * @since S58
+     */
+    private static function normalizedSegmentSeconds(int $segSeconds): int
+    {
+        return $segSeconds > 0 ? $segSeconds : self::FALLBACK_SEGMENT_SECONDS;
+    }
+
+    /**
+     * Position (list offset, NOT the audio-relative index) of the audio track
+     * that is the presentation's default.
+     *
+     * Exactly one rendition may be the default. The first descriptor flagged
+     * `default`, else the first track — defensive, since
+     * {@see buildAudioTrackDescriptors()} already guarantees one.
+     *
+     * S58 lifted this out of {@see buildMultiVariantMaster()} so the HLS
+     * `DEFAULT=YES` rendition and the MPD's `Role value="main"` AdaptationSet are
+     * decided by ONE piece of code. Two independent "pick the default"
+     * implementations over the same descriptor list is precisely how a job ends
+     * up defaulting to English on hls.js and to French on a DASH client.
+     *
+     * @param list<array<string, mixed>> $audioTracks Audio-track descriptors.
+     *
+     * @return int|null The default track's position, or null for an empty list.
+     *
+     * @since S58
+     */
+    private static function defaultAudioPosition(array $audioTracks): ?int
+    {
+        foreach ($audioTracks as $position => $track) {
+            if (($track['default'] ?? false) === true) {
+                return $position;
+            }
+        }
+
+        return array_key_first($audioTracks);
     }
 
     /**
@@ -2754,11 +3202,11 @@ class TranscodeManager
         string $format = EncodeSettings::DEFAULT_SEGMENT_FORMAT
     ): string {
         // avc1.640029 = H.264 High@4.1 (the segment encode target); mp4a.40.2 = AAC-LC.
-        $attrs = 'BANDWIDTH=' . ($bandwidth !== null && $bandwidth > 0 ? $bandwidth : 3000000);
+        $attrs = 'BANDWIDTH=' . ($bandwidth !== null && $bandwidth > 0 ? $bandwidth : self::LEGACY_BANDWIDTH);
         if ($width !== null && $height !== null && $width > 0 && $height > 0) {
             $attrs .= ",RESOLUTION={$width}x{$height}";
         }
-        $attrs .= ',CODECS="avc1.640029,mp4a.40.2"';
+        $attrs .= ',CODECS="' . self::LEGACY_CODECS . '"';
 
         return "#EXTM3U\n"
             . '#EXT-X-VERSION:' . self::playlistVersion($format) . "\n"
@@ -2806,16 +3254,9 @@ class TranscodeManager
         // P3B-S3: one shared audio group, one rendition per track, before the
         // video stream infs.
         if (is_array($audioTracks)) {
-            // Exactly one DEFAULT=YES: the first descriptor flagged default, else
-            // the first track (defensive — the builder already guarantees one).
-            $defaultPos = null;
-            foreach ($audioTracks as $position => $track) {
-                if (($track['default'] ?? false) === true) {
-                    $defaultPos = $position;
-                    break;
-                }
-            }
-            $defaultPos ??= array_key_first($audioTracks);
+            // Exactly one DEFAULT=YES — see defaultAudioPosition(), which the
+            // MPD's `Role value="main"` audio set also uses (S58).
+            $defaultPos = self::defaultAudioPosition($audioTracks);
             foreach ($audioTracks as $position => $track) {
                 // The AUDIO-RELATIVE index keys the per-track playlist filename
                 // (media_a0.m3u8 = first audio stream). Fall back to the list
@@ -2910,7 +3351,7 @@ class TranscodeManager
         ?string $variantId,
         string $format = EncodeSettings::DEFAULT_SEGMENT_FORMAT
     ): string {
-        $segSeconds = $segSeconds > 0 ? $segSeconds : 6;
+        $segSeconds = self::normalizedSegmentSeconds($segSeconds);
         $count = (int) ceil($duration / $segSeconds);
 
         $lines = [
@@ -2963,7 +3404,7 @@ class TranscodeManager
         string $audioId,
         string $format = EncodeSettings::DEFAULT_SEGMENT_FORMAT
     ): string {
-        $segSeconds = $segSeconds > 0 ? $segSeconds : 6;
+        $segSeconds = self::normalizedSegmentSeconds($segSeconds);
         $count = (int) ceil($duration / $segSeconds);
 
         $lines = [

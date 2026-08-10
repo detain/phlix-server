@@ -4,133 +4,176 @@ declare(strict_types=1);
 
 namespace Phlix\Tests\Unit\Media\Streaming\Dash;
 
+use DOMElement;
 use PHPUnit\Framework\TestCase;
 use Phlix\Media\Streaming\Dash\AdaptationSet;
+use Phlix\Media\Streaming\Dash\Representation;
+use Phlix\Media\Streaming\Dash\SegmentTemplate;
 
+/**
+ * S58 rewrote this class. Three of the four bugs it shipped are pinned here;
+ * the fourth (a missing `SegmentTemplate`) is the first test below.
+ */
 class AdaptationSetTest extends TestCase
 {
-    public function testToXmlVideo(): void
+    public function testToXmlAppendsTheSharedSegmentTemplateAndEveryRepresentation(): void
+    {
+        $element = $this->videoSet()->toXml();
+
+        $this->assertEquals('AdaptationSet', $element->nodeName);
+        $this->assertSame(['SegmentTemplate', 'Representation', 'Representation'], $this->childNames($element));
+    }
+
+    /**
+     * The content model of `AdaptationSetType` is an `xs:sequence`: Role, then
+     * SegmentTemplate, then Representation. Any other order makes the whole
+     * manifest schema-invalid, so the order is asserted, not assumed.
+     */
+    public function testTheChildOrderIsRoleThenSegmentTemplateThenRepresentations(): void
+    {
+        $element = $this->videoSet(AdaptationSet::ROLE_MAIN)->toXml();
+
+        $this->assertSame(
+            ['Role', 'SegmentTemplate', 'Representation', 'Representation'],
+            $this->childNames($element)
+        );
+    }
+
+    /**
+     * `AdaptationSetType/@id` is `xs:unsignedInt`. The pre-S58 class typed it
+     * `string` and emitted names like `video-1080`, which the schema rejects —
+     * the constructor's `int` is what makes that unrepresentable now.
+     */
+    public function testTheIdIsAnUnsignedIntegerNotAName(): void
+    {
+        $this->assertSame('0', $this->videoSet()->toXml()->getAttribute('id'));
+        $this->assertSame(0, $this->videoSet()->getId());
+    }
+
+    /**
+     * `@bandwidth` is a Representation attribute, not an AdaptationSet one. The
+     * pre-S58 class set it on both and the schema rejects it on the set.
+     */
+    public function testNoBandwidthAttributeIsEmittedOnTheSetItself(): void
+    {
+        $element = $this->videoSet()->toXml();
+
+        $this->assertFalse($element->hasAttribute('bandwidth'));
+        $this->assertSame('5128000', $this->children($element, 'Representation')[0]->getAttribute('bandwidth'));
+    }
+
+    public function testAVideoSetDeclaresItsMimeTypeAlignmentAndSap(): void
+    {
+        $element = $this->videoSet()->toXml();
+
+        $this->assertSame('video', $element->getAttribute('contentType'));
+        $this->assertSame('video/mp4', $element->getAttribute('mimeType'));
+        $this->assertSame('true', $element->getAttribute('segmentAlignment'));
+        $this->assertSame('1', $element->getAttribute('startWithSAP'));
+    }
+
+    public function testAnAudioSetCarriesItsLanguageAndRole(): void
     {
         $set = new AdaptationSet(
-            id: 'video-1080',
-            contentType: 'video',
-            codecs: 'avc1.64001f',
-            width: 1920,
-            height: 1080,
-            bandwidth: 5000000,
-            sampleRate: 0,
-            segments: []
+            1,
+            'audio',
+            'audio/mp4',
+            SegmentTemplate::fromSeconds(
+                6,
+                0,
+                'seg-$RepresentationID$-$Number%05d$.m4s',
+                'init-$RepresentationID$.m4s'
+            ),
+            [new Representation('a1', 'mp4a.40.2', 128000)],
+            'fra',
+            AdaptationSet::ROLE_ALTERNATE
         );
 
         $element = $set->toXml();
+        $role = $this->children($element, 'Role')[0];
 
-        $this->assertEquals('AdaptationSet', $element->nodeName);
-        $this->assertEquals('video-1080', $element->getAttribute('id'));
-        $this->assertEquals('video', $element->getAttribute('contentType'));
-        $this->assertEquals('1920', $element->getAttribute('width'));
-        $this->assertEquals('1080', $element->getAttribute('height'));
-        $this->assertEquals('5000000', $element->getAttribute('bandwidth'));
+        $this->assertSame('fra', $element->getAttribute('lang'));
+        $this->assertSame(AdaptationSet::ROLE_SCHEME, $role->getAttribute('schemeIdUri'));
+        $this->assertSame('alternate', $role->getAttribute('value'));
+        $this->assertSame('audio', $set->getContentType());
     }
 
-    public function testToXmlAudio(): void
+    /**
+     * `@lang` must be absent, not empty: `xs:language` does not admit an empty
+     * string and one would invalidate the whole document.
+     */
+    public function testALanguagelessSetOmitsTheAttributeEntirely(): void
     {
-        $set = new AdaptationSet(
-            id: 'audio-en',
-            contentType: 'audio',
-            codecs: 'mp4a.40.2',
-            width: 0,
-            height: 0,
-            bandwidth: 128000,
-            sampleRate: 48000,
-            segments: []
-        );
-
-        $element = $set->toXml();
-
-        $this->assertEquals('AdaptationSet', $element->nodeName);
-        $this->assertEquals('audio-en', $element->getAttribute('id'));
-        $this->assertEquals('audio', $element->getAttribute('contentType'));
-        $this->assertEquals('128000', $element->getAttribute('bandwidth'));
-        $this->assertEquals('48000', $element->getAttribute('audioSamplingRate'));
+        $this->assertFalse($this->videoSet()->toXml()->hasAttribute('lang'));
     }
 
-    public function testGetId(): void
+    public function testARolelessSetAppendsNoRoleElement(): void
     {
-        $set = new AdaptationSet(
-            id: 'video-1080',
-            contentType: 'video',
-            codecs: 'avc1.64001f',
-            width: 1920,
-            height: 1080,
-            bandwidth: 5000000
+        $this->assertSame(
+            ['SegmentTemplate', 'Representation', 'Representation'],
+            $this->childNames($this->videoSet()->toXml())
         );
-
-        $this->assertEquals('video-1080', $set->getId());
     }
 
-    public function testGetContentType(): void
+    public function testMaxBandwidthIsTheHighestRepresentation(): void
     {
-        $set = new AdaptationSet(
-            id: 'audio-en',
-            contentType: 'audio',
-            codecs: 'mp4a.40.2',
-            bandwidth: 128000
-        );
-
-        $this->assertEquals('audio', $set->getContentType());
+        $this->assertSame(5128000, $this->videoSet()->maxBandwidth());
+        $this->assertSame(2, $this->videoSet()->getRepresentationCount());
     }
 
-    public function testGetCodecs(): void
+    public function testMaxBandwidthOfAnEmptySetIsZero(): void
     {
-        $set = new AdaptationSet(
-            id: 'video-1080',
-            contentType: 'video',
-            codecs: 'avc1.64001f',
-            bandwidth: 5000000
-        );
+        $set = new AdaptationSet(0, 'video', 'video/mp4', SegmentTemplate::fromSeconds(6, 0, 'x'), []);
 
-        $this->assertEquals('avc1.64001f', $set->getCodecs());
+        $this->assertSame(0, $set->maxBandwidth());
+        $this->assertSame(0, $set->getRepresentationCount());
     }
 
-    public function testGetBandwidth(): void
+    private function videoSet(?string $role = null): AdaptationSet
     {
-        $set = new AdaptationSet(
-            id: 'video-1080',
-            contentType: 'video',
-            codecs: 'avc1.64001f',
-            bandwidth: 5000000
+        return new AdaptationSet(
+            0,
+            'video',
+            'video/mp4',
+            SegmentTemplate::fromSeconds(
+                6,
+                0,
+                'seg-v$RepresentationID$-$Number%05d$.m4s',
+                'init-v$RepresentationID$.m4s'
+            ),
+            [
+                new Representation('1080p', 'avc1.640029', 5128000, 1920, 1080),
+                new Representation('720p', 'avc1.640029', 3128000, 1280, 720),
+            ],
+            null,
+            $role
         );
-
-        $this->assertEquals(5000000, $set->getBandwidth());
     }
 
-    public function testGetSegmentCount(): void
+    /** @return list<string> */
+    private function childNames(DOMElement $element): array
     {
-        $set = new AdaptationSet(
-            id: 'video-1080',
-            contentType: 'video',
-            codecs: 'avc1.64001f',
-            bandwidth: 5000000,
-            segments: [
-                ['duration' => 6.0, 'url' => 'seg-0.m4s'],
-                ['duration' => 6.0, 'url' => 'seg-1.m4s'],
-                ['duration' => 6.0, 'url' => 'seg-2.m4s'],
-            ]
-        );
+        $out = [];
+        foreach ($element->childNodes as $node) {
+            if ($node instanceof DOMElement) {
+                $out[] = $node->nodeName;
+            }
+        }
 
-        $this->assertEquals(3, $set->getSegmentCount());
+        return $out;
     }
 
-    public function testGetSegmentCountReturnsZeroForEmptySegments(): void
+    /** @return list<DOMElement> */
+    private function children(DOMElement $element, string $name): array
     {
-        $set = new AdaptationSet(
-            id: 'video-1080',
-            contentType: 'video',
-            codecs: 'avc1.64001f',
-            bandwidth: 5000000,
-            segments: []
-        );
+        $out = [];
+        foreach ($element->childNodes as $node) {
+            if ($node instanceof DOMElement && $node->nodeName === $name) {
+                $out[] = $node;
+            }
+        }
+        $this->assertNotSame([], $out, "expected a <{$name}> child");
 
-        $this->assertEquals(0, $set->getSegmentCount());
+        return $out;
     }
 }

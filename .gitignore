@@ -31,6 +31,9 @@ vendor
 .phpunit.cache/
 coverage.xml
 coverage-report/
+# S305 — the per-case JUnit report the browser-E2E gate reads (CI writes it with
+# `--log-junit junit.xml`; it is a build artifact, never committed).
+junit.xml
 .phpunit.result.cache
 # S120 assertion-escape guard report (written only when a run has violations)
 .phpunit-assertion-escapes.json

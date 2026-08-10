@@ -180,7 +180,8 @@ class DashControllerTest extends TestCase
 
     /**
      * The manifest itself is NOT an on-demand artefact — it must never reach the
-     * segment producer. Control for the case above: if `parseSegmentRequest()`
+     * segment producer. Control for the case above: if
+     * {@see \Phlix\Server\Http\Controllers\SegmentRequestParser::parse()}
      * over-matched, the `never()` here would fire.
      */
     public function testTheManifestItselfNeverTriggersAnEncode(): void

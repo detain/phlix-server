@@ -39,11 +39,21 @@ use Phlix\Media\Transcoding\TranscodeManager;
  *     may or may not be a master level depending on the source — but it always
  *     exists on disk (S49).
  *
- * The `seg-…\.ts` segments are transcoded ON DEMAND the first time each is fetched
+ * The `seg-…` segments are transcoded ON DEMAND the first time each is fetched
  * (an `-ss` fast-seek encode), which lets the player seek anywhere — including past
  * what has been produced so far. All playlists (master + per-variant media) and
- * subtitle sidecars are static files served verbatim; only segment requests are
+ * subtitle sidecars are static files served verbatim; only segment/init requests are
  * routed through {@see TranscodeManager::ensureSegment()} to produce-or-serve.
+ *
+ * S310 — the fMP4 flavour. A job created with `transcoding.segment_format=fmp4`
+ * names `.m4s` segments and carries one `#EXT-X-MAP:URI="init-….m4s"` per rendition
+ * (S57). Both containers route through the same shared filename router
+ * ({@see SegmentRequestParser}, {@see SegmentRequestParser::HLS_EXTENSIONS}), so an
+ * fMP4 job's init and segments are produced on demand here exactly as an MPEG-TS
+ * job's are. Before S310 this controller matched `\.ts$` only: every `.m4s` fell
+ * through to the static lookup and 404'd, and the init — which hls.js fetches
+ * FIRST, before any media segment — had no producer at all. S56 could make the
+ * bytes and S57 could name them; nothing could serve them.
  */
 class HlsController
 {
@@ -98,25 +108,35 @@ class HlsController
      * `master.m3u8` / `media_0.m3u8` / `media_v{V}.m3u8` / `media_a{N}.m3u8` /
      * `sub-*.vtt` (and legacy `chunk-*.m4s`) are static files served verbatim by
      * {@see serveJobFile()} — no transcoder involvement (the multi-variant media
-     * playlists are written up front by {@see TranscodeManager}). Only segment
-     * requests are routed through the transcoder, which returns a cached segment
-     * immediately or transcodes it on demand first. Three segment shapes are
-     * recognized:
+     * playlists are written up front by {@see TranscodeManager}). Only segment and
+     * init requests are routed through the transcoder, which returns a cached
+     * segment immediately or transcodes it on demand first. S310 delegates the
+     * filename → `ensureSegment()` mapping to {@see SegmentRequestParser}, which
+     * carries the full per-shape argument table; the shapes this route accepts are
+     * {@see SegmentRequestParser::HLS_EXTENSIONS}:
      *
-     *   - Legacy `seg-NNNNN.ts` → `ensureSegment($jobId, null, NNNNN)` (the null
-     *     variant selects the single-variant `variants IS NULL` job path).
-     *   - Multi-variant `seg-v{V}-NNNNN.ts` → `ensureSegment($jobId, '{V}', NNNNN)`,
-     *     where `{V}` is a rendition id (`[a-z0-9]+`, e.g. `1080p`, `original`). An
-     *     unknown variant / out-of-range index resolves to 404 (self-heals via client
-     *     retry once the segment exists).
-     *   - Audio-only `seg-a{A}-NNNNN.ts` (P3B-S3) → `ensureSegment($jobId, null, NNNNN, '{A}')`,
-     *     where `{A}` is an audio stream index (e.g. `0`, `1`). Produces an audio-only
-     *     segment for multi-audio HLS playback.
+     *   - `seg-NNNNN.{ts,m4s}` (legacy single-variant `variants IS NULL` job),
+     *     `seg-v{V}-NNNNN.{ts,m4s}` (a rendition of the ABR ladder), and
+     *     `seg-a{A}-NNNNN.{ts,m4s}` (P3B-S3 audio-only). An unknown variant or an
+     *     out-of-range index resolves to 404 — a decision, and one that self-heals
+     *     via client retry once the segment exists.
+     *   - `init.m4s` / `init-v{V}.m4s` / `init-a{A}.m4s`, each mapping to index 0
+     *     of its OWN rendition. There is no `.ts` counterpart: only a CMAF job has
+     *     an init. hls.js resolves `#EXT-X-MAP` before it fetches any media
+     *     segment, so this is the FIRST byte-bearing request of an fMP4 stream —
+     *     until S310 added it, a flagged job was unreachable from its own opening
+     *     request no matter what else worked.
      *
-     * The variant character class `[a-z0-9]+` is anchored inside `^…$` and excludes
-     * `.` `/` `\`, so it is a defense-in-depth allowlist that cannot smuggle a
-     * traversal sequence; a filename that fails both regexes (and passes the earlier
-     * {@see isSafeFilename()} gate) falls through to a plain static lookup that 404s.
+     * An `.m4s` request against an MPEG-TS job (or the reverse) produces that job's
+     * own segment and then 404s on the requested name, because the container is
+     * committed at job creation and folded into the job key — see
+     * {@see \Phlix\Media\Transcoding\EncodeSettings::fingerprint()}. That is a
+     * genuinely-absent-file answer, not a mis-serve: `.ts` and `.m4s` can never
+     * co-mingle in one job directory.
+     *
+     * A filename matching no arm (and passing the earlier {@see isSafeFilename()}
+     * gate) falls through to a plain static lookup — which is what keeps the legacy
+     * `chunk-*.m4s` names and the subtitle sidecars serving verbatim.
      *
      * @param array<string, string> $params
      */
@@ -137,31 +157,26 @@ class HlsController
             return (new Response())->status(404)->json(['error' => 'Not found']);
         }
 
-        // On-demand MPEG-TS segment: produce (or serve cached) this segment before
-        // handing it to the static file server. Three filename shapes route here —
-        // the legacy unprefixed name (null variant), the multi-variant name (rendition
-        // id parsed from the URL), and the audio-only name (audio group id).
-        $variant = null;
-        $audioId = null;
-        $index = null;
-        if (preg_match('/^seg-v([a-z0-9]+)-(\d{1,9})\.ts$/', $file, $m) === 1) {
-            $variant = $m[1];
-            $index = (int) $m[2];
-        } elseif (preg_match('/^seg-a([a-z0-9]+)-(\d{1,9})\.ts$/', $file, $m) === 1) {
-            // P3B-S3 audio-only segment: seg-a{A}-NNNNN.ts → audio group id A, index NNNNN.
-            $audioId = 'a' . $m[1];
-            $index = (int) $m[2];
-        } elseif (preg_match('/^seg-(\d{1,9})\.ts$/', $file, $m) === 1) {
-            $index = (int) $m[1];
-        }
+        // On-demand segment or init: produce (or serve cached) it before handing it
+        // to the static file server. S310 replaced three inline `\.ts$` regexes here
+        // with the shared router, which adds the fMP4 shapes (`.m4s` segments plus
+        // the three init names) that S57's playlists have been naming since the flag
+        // existed. A name that is not an on-demand artefact parses to null and is
+        // served statically, exactly as before.
+        $target = SegmentRequestParser::parse($file, SegmentRequestParser::HLS_EXTENSIONS);
 
-        if ($index !== null) {
+        if ($target !== null) {
             try {
                 // A5 changed ensureSegment() to (jobId, variant, index): a null
                 // variant selects the legacy single-variant job; a rendition id
                 // string selects the matching rung of the multi-variant ladder.
                 // P3B-S3 adds $audioId for audio-only segment production.
-                $ready = $this->transcodeManager?->ensureSegment($jobId, $variant, $index, $audioId);
+                $ready = $this->transcodeManager?->ensureSegment(
+                    $jobId,
+                    $target['variant'],
+                    $target['index'],
+                    $target['audioId']
+                );
             } catch (SegmentBusyException $e) {
                 // Transient overload — tell the player to retry shortly rather than
                 // blocking a worker or timing out. hls.js treats 503 as a retryable

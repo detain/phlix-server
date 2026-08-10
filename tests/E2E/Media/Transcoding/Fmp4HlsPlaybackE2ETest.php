@@ -31,10 +31,16 @@ use Workerman\MySQL\Connection;
  *     BOUNDARY, and reports what the player did.
  *
  * ⚠ **What this does NOT prove.** The bytes are served by the probe's own static
- * HTTP server, not by `HlsController` — which still routes only `\.ts$`, so a
- * flagged job 404s on the real serve path until S59. This test therefore
- * establishes that the PLAYLISTS AND SEGMENTS are playable; it says nothing
- * about the app's serve path for them.
+ * HTTP server, not by `HlsController`. This test therefore establishes that the
+ * PLAYLISTS AND SEGMENTS are playable; it says nothing about the app's serve
+ * path for them. That serve path was, when this file was written, genuinely
+ * missing — `HlsController::serveFile()` matched `\.ts$` only, so a flagged job
+ * 404'd every `.m4s`. S310 added the `.m4s` and `init*.m4s` arms and proved them
+ * over real ffmpeg bytes in
+ * {@see \Phlix\Tests\Integration\Media\Transcoding\HlsFmp4OnDemandServeTest},
+ * which fetches a whole presentation THROUGH the controller. The two are
+ * complementary and neither subsumes the other: this one has a real browser and
+ * a fake server, that one has a real server and ffmpeg's demuxer for a client.
  *
  * The negative control below is not decoration: without it a probe that quietly
  * stopped loading anything would report "no fatal errors" and read as a pass.

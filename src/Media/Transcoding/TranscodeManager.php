@@ -2774,13 +2774,16 @@ class TranscodeManager
      * no way to be told "these boundaries are approximate", so an absent
      * manifest is strictly better than a lying one.
      *
-     * ⚠ **The files this manifest names are not servable yet.**
-     * `DashController::serveFile()` is still a pure static file server and
-     * `HlsController::serveFile()` routes only `\.ts$`, so nothing triggers an
-     * on-demand encode for a `.m4s` and nothing produces `init-v{id}.m4s`. A
-     * client fetching this manifest today gets 404s for every segment in it.
-     * That wiring is **S59**; this step makes the manifest correct, it does not
-     * make the flag usable end to end.
+     * ✅ **The files this manifest names are servable.** S59 gave
+     * `DashController::serveFile()` its on-demand trigger and S310 gave
+     * `HlsController::serveFile()` the matching `.m4s` arms; both now route
+     * through the shared
+     * {@see \Phlix\Server\Http\Controllers\SegmentRequestParser}, so every
+     * reference in this manifest — and every reference in the sibling HLS
+     * playlists over the SAME segment files — produces on demand and serves.
+     * What remains for **S60** is flipping the flag on by default (with the
+     * {@see self::JOB_KEY_VERSION} bump that flip requires) and cross-client
+     * verification; on the shipped default this method still writes nothing.
      *
      * Failure is swallowed and logged: the manifest is an addition to a job
      * whose HLS deliverable is already written, and DASH has no client in this
@@ -3337,12 +3340,18 @@ class TranscodeManager
      * across containers AND across variants, which is what keeps ABR switching
      * working and what S58's shared `SegmentTemplate@duration` will rely on.
      *
-     * ⚠ **The segments this playlist names are not servable yet.**
-     * `HlsController::serveFile()` routes only `/^seg-v([a-z0-9]+)-(\d{1,9})\.ts$/`
-     * (and its `seg-a…`/`seg-…` peers), so with the flag on every `.m4s` request
-     * falls through to the static lookup and 404s, and `init-v{id}.m4s` is never
-     * produced because nothing calls `ensureSegment()`. That wiring is S59. This
-     * step makes the playlist correct; it does not make the flag usable.
+     * ✅ **S310 made the segments this playlist names servable.**
+     * `HlsController::serveFile()` routes both containers through the shared
+     * {@see \Phlix\Server\Http\Controllers\SegmentRequestParser}, so a `.m4s`
+     * segment reaches {@see self::ensureSegment()} exactly as a `.ts` one does,
+     * and `init-v{id}.m4s` is produced by the index-0 arm — which is what a
+     * client's FIRST request (`#EXT-X-MAP`) resolves to. Between S57 and S310
+     * that was not true: every `.m4s` fell through to a static lookup and 404'd,
+     * and the init had no producer at all.
+     *
+     * The FLAG is still off by default (`config/transcoding.php`). Flipping it,
+     * together with the {@see self::JOB_KEY_VERSION} bump the flip requires, is
+     * S60.
      *
      * @param float       $duration   Source duration in seconds.
      * @param int         $segSeconds Target segment length in seconds.

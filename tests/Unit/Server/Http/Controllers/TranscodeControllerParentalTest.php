@@ -97,6 +97,7 @@ class TranscodeControllerParentalTest extends TestCase
             'status' => 'completed',
             'master_url' => '/hls/job-1/master.m3u8',
             'hls_url' => '/hls/job-1/master.m3u8',
+            'dash_url' => null,
             'reused' => false,
             'subtitles' => [],
         ]);
@@ -118,6 +119,7 @@ class TranscodeControllerParentalTest extends TestCase
             'status' => 'completed',
             'master_url' => '/hls/job-1/master.m3u8',
             'hls_url' => '/hls/job-1/master.m3u8',
+            'dash_url' => null,
             'reused' => false,
             'subtitles' => [],
         ]);
@@ -140,6 +142,7 @@ class TranscodeControllerParentalTest extends TestCase
             'status' => 'completed',
             'master_url' => '/hls/job-1/master.m3u8',
             'hls_url' => '/hls/job-1/master.m3u8',
+            'dash_url' => null,
             'reused' => false,
             'subtitles' => [],
         ]);
@@ -162,6 +165,7 @@ class TranscodeControllerParentalTest extends TestCase
             'status' => 'completed',
             'master_url' => '/hls/job-1/master.m3u8',
             'hls_url' => '/hls/job-1/master.m3u8',
+            'dash_url' => null,
             'reused' => false,
             'subtitles' => [],
         ]);

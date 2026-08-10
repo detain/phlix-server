@@ -250,21 +250,56 @@ class TranscodeManagerTest extends TestCase
             $captured
         );
         $ff = $this->createMock(FfmpegRunner::class);
-        $ff->expects($this->never())->method('startCmafTranscodeWithSubtitles');
 
         $result = $this->manager($db, $ff)->ensureHlsJob('media-1', 'web');
 
         $this->assertTrue($result['reused']);
         $this->assertSame('existing-job', $result['job_id']);
         $this->assertStringContainsString('/hls/existing-job/master.m3u8', $result['master_url']);
-        // S11 regression guard: ensureHlsJob() must not re-emit a `dash_url`
-        // pointing at the unbuilt /dash/{job}/manifest.mpd route (S56-S60).
-        $this->assertArrayNotHasKey('dash_url', $result);
-        $this->assertNoDashKey($result);
+        // S59 REPLACES S11's `assertArrayNotHasKey('dash_url')` here. S11 removed
+        // the key because it always pointed at a manifest nothing wrote; S59 built
+        // the producer (S58) and the serve path, so the key is back — but GATED on
+        // the manifest existing. This job dir has no `manifest.mpd`, so the key
+        // must be PRESENT and NULL: present, because a client checks `!= null`
+        // rather than guessing from key absence; null, because advertising a URL
+        // for a file that is not there is exactly the S11 defect.
+        $this->assertArrayHasKey('dash_url', $result);
+        $this->assertNull($result['dash_url'], 'a job with no manifest.mpd must advertise no DASH URL');
+        $this->assertNoOtherDashKey($result);
     }
 
     /**
-     * S11 AC-audit residual — the OTHER `ensureHlsJob()` return array.
+     * The POSITIVE control for the case above — and it is not optional.
+     *
+     * S59 measured this: mutating the reused branch to a hard-coded
+     * `'dash_url' => null` SURVIVED the whole suite, because the only fixture
+     * that reached it had no `manifest.mpd` and so expected null either way. The
+     * assertion could not tell a computed null from a constant one. This case
+     * gives the reused branch a job dir that DOES carry a manifest, so the branch
+     * has to have consulted the disk to answer correctly.
+     */
+    public function testEnsureHlsJobAdvertisesTheDashUrlWhenTheReusedJobHasAManifest(): void
+    {
+        $existingDir = $this->segmentDir . '/existing-job';
+        mkdir($existingDir, 0755, true);
+        file_put_contents($existingDir . '/' . TranscodeManager::MPD_FILENAME, '<?xml version="1.0"?><MPD/>');
+        $captured = [];
+        $db = $this->mockDb(
+            ['id' => 'existing-job', 'hls_dir' => $existingDir, 'status' => 'running'],
+            0,
+            [],
+            ['status' => 'running'],
+            $captured
+        );
+
+        $result = $this->manager($db, $this->createMock(FfmpegRunner::class))->ensureHlsJob('media-1', 'web');
+
+        $this->assertTrue($result['reused'], 'fixture must exercise the REUSED return, not the fresh one');
+        $this->assertSame('/dash/existing-job/manifest.mpd', $result['dash_url']);
+    }
+
+    /**
+     * The OTHER `ensureHlsJob()` return array — the fresh-job branch.
      *
      * S11 named two sites in `TranscodeManager` (the reused-job and fresh-job
      * returns) but only the reused-job branch above got a guard. Re-adding
@@ -272,8 +307,13 @@ class TranscodeManagerTest extends TestCase
      * the whole Unit suite (8,469 tests) green, so half the fix was unpinned:
      * the very first play of an item — the only branch that runs when no job
      * exists yet — could start advertising the 404'ing key again unnoticed.
+     *
+     * S59 keeps this case for the same reason and flips its sense: the branch
+     * must now emit the key, and must emit it as NULL for a job that published no
+     * manifest (this fixture is `segment_format=mpegts`, the shipped default). A
+     * branch that hardcoded the URL back would fail here exactly as it used to.
      */
-    public function testEnsureHlsJobDoesNotAdvertiseDashOnTheFreshJobBranch(): void
+    public function testEnsureHlsJobAdvertisesNoDashUrlOnTheFreshJobBranchWithoutAManifest(): void
     {
         $captured = [];
         // Empty reuse row => findReusableJob() misses => the fresh-encode branch.
@@ -286,30 +326,38 @@ class TranscodeManagerTest extends TestCase
             ],
             'format' => ['duration' => '25.0'],
         ]);
-        $ff->method('startCmafTranscodeWithSubtitles')->willReturn(100);
 
         $result = $this->manager($db, $ff)->ensureHlsJob('media-1', 'web');
 
         // Prove we really are on the fresh branch and not silently reusing.
         $this->assertFalse($result['reused'], 'fixture must exercise the fresh-encode return');
-        $this->assertArrayNotHasKey('dash_url', $result);
-        $this->assertNoDashKey($result);
+        $this->assertArrayHasKey('dash_url', $result);
+        $this->assertNull($result['dash_url'], 'an mpegts job writes no manifest.mpd, so it advertises none');
+        $this->assertNoOtherDashKey($result);
     }
 
     /**
-     * No key of an `ensureHlsJob()` payload may advertise DASH under any spelling
-     * (`dash_url`, `dashUrl`, `dash_manifest`, …) while `/dash/{job}/manifest.mpd`
-     * is unbuilt. Catches a re-introduction that renames rather than restores.
+     * `dash_url` is the ONE key an `ensureHlsJob()` payload may spell with "dash".
+     *
+     * S11's version of this helper forbade the substring outright, to catch a
+     * re-introduction that RENAMED rather than restored. S59 restores exactly one
+     * key, so the helper keeps its job by allow-listing exactly that spelling:
+     * a second DASH key under any other name (`dashUrl`, `dash_manifest`, …) is
+     * still a failure, and a client written against `dash_url` still cannot be
+     * silently switched to a different key.
      *
      * @param array<string, mixed> $payload
      */
-    private function assertNoDashKey(array $payload): void
+    private function assertNoOtherDashKey(array $payload): void
     {
         foreach (array_keys($payload) as $key) {
+            if ((string) $key === 'dash_url') {
+                continue;
+            }
             $this->assertStringNotContainsStringIgnoringCase(
                 'dash',
                 (string) $key,
-                'Transcode payloads must advertise no DASH endpoint until S56-S60 build one',
+                'the only DASH key a transcode payload may carry is `dash_url` (S59)',
             );
         }
     }
@@ -1109,7 +1157,6 @@ class TranscodeManagerTest extends TestCase
             ],
             'format' => ['duration' => '1447.025000'],
         ]);
-        $ff->method('startCmafTranscodeWithSubtitles')->willReturn(100);
 
         $this->manager($db, $ff)->ensureHlsJob('media-1', 'web');
 

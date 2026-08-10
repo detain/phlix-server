@@ -57,10 +57,12 @@ class DashStreamer
      * `MPD@minBufferTime` — the buffer a client needs to play without
      * underrunning at the advertised bandwidths.
      *
-     * Mirrors `config/dash.php`'s `min_buffer_time`, which is **not wired to any
-     * entrypoint** (`start.php` loads only `config/server.php`); wiring or
-     * deleting that file belongs to S59, so the value is a constant here rather
-     * than a config read that would look live and never be.
+     * This used to mirror `config/dash.php`'s `min_buffer_time`. S59 DELETED that
+     * file: no entrypoint ever loaded it (`start.php` loads only
+     * `config/server.php`, and `EffectiveConfig::file()` was never called with
+     * `'dash'`), so every key in it — `min_buffer_time` included — read as a live
+     * knob and was inert. The value is a constant here precisely so it cannot
+     * look configurable while never being read.
      */
     public const MIN_BUFFER_TIME = 'PT2S';
 

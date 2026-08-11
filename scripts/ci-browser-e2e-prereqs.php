@@ -318,11 +318,11 @@ $say(sprintf('ffmpeg: %s — %s', BrowserProbeEnvironment::FFMPEG, $describe(Bro
 
 $say(sprintf(
     'S305 browser-E2E prerequisites OK: hls.js %s, a browser, node >= %d and ffmpeg are all present, '
-    . 'so none of the %d required cases in %s may skip.',
+    . 'so none of the %d required cases across %s may skip.',
     $version,
     BrowserProbeEnvironment::MIN_NODE_MAJOR,
-    count(BrowserProbeEnvironment::REQUIRED_CASES),
-    BrowserProbeEnvironment::TEST_CLASS,
+    BrowserProbeEnvironment::requiredCaseCount(),
+    implode(' + ', array_keys(BrowserProbeEnvironment::REQUIRED_CASES_BY_CLASS)),
 ));
 
 exit(0);

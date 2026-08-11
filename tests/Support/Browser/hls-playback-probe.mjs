@@ -13,11 +13,27 @@
  *
  *   node hls-playback-probe.mjs --dir <jobdir> --hlsjs <hls.js> --chrome <bin>
  *                               [--playlist master.m3u8] [--seconds 3]
- *                               [--timeout 30000]
+ *                               [--timeout 30000] [--upstream <base url>]
  *
  * Exit code is 0 whenever the probe RAN (even if playback failed) and non-zero
  * only when it could not run at all — so a failed playback is a test failure
  * with a readable report, not an opaque crash.
+ *
+ * ## `--upstream` (S315)
+ *
+ * Without it, media bytes are read from `--dir` by this script: a FAKE server, which
+ * is what S57's header says it is and what stopped S57 from being evidence about
+ * `HlsController`. With it, every media request is PROXIED to
+ * `<upstream>/<filename>` — in practice the real `/hls/{job_id}/` route standing up
+ * on a port (`tests/Support/Browser/hls-controller-server.php`) — and the upstream's
+ * status and `content-type` are passed through verbatim, so a wrong content type or
+ * a 404 from the controller is visible to the browser rather than laundered here.
+ *
+ * The page itself keeps being served from this origin, so there is no CORS surface
+ * to configure and no chance of a preflight failure being read as a playback
+ * failure. `--dir` stays required either way: the probe never reads it in upstream
+ * mode, and the PHP test uses it as the denominator (it counts what is on disk
+ * before and after).
  */
 
 import { createServer } from 'node:http';
@@ -48,6 +64,8 @@ const chromeBin = arg('chrome', '/usr/bin/google-chrome-stable');
 const playlist = arg('playlist', 'master.m3u8');
 const seconds = Number(arg('seconds', '3'));
 const timeoutMs = Number(arg('timeout', '30000'));
+// S315. Null = read the bytes off disk (the original, fake-server behaviour).
+const upstream = arg('upstream', null);
 
 if (!dir || !hlsjs) {
   console.error('usage: --dir <jobdir> --hlsjs <hls.js path> [--chrome bin]');
@@ -133,6 +151,35 @@ const server = createServer(async (req, res) => {
       res.writeHead(400).end('bad path');
       return;
     }
+    // Chrome asks for /favicon.ico on every navigation. That is browser chrome, not
+    // part of the presentation, so it is answered here and NOT recorded: proxying it
+    // would plant a guaranteed 404 in the controller's own request census and make
+    // "did the serve path refuse anything?" unanswerable (S315).
+    if (name === 'favicon.ico') {
+      res.writeHead(204).end();
+      return;
+    }
+    if (upstream) {
+      // S315 — the bytes come from the real serve path over a real socket. The
+      // status and content-type are the UPSTREAM's: laundering either would hide
+      // exactly the failures this mode exists to expose (a 404 from the segment
+      // router, a mis-typed segment). No timeout is imposed — the controller
+      // legitimately blocks while ffmpeg produces an on-demand segment, and
+      // cutting that short here would read as "the controller stalled".
+      const headers = {};
+      if (req.headers.range) headers.range = req.headers.range;
+      const up = await fetch(`${upstream}/${name}`, { headers });
+      const body = Buffer.from(await up.arrayBuffer());
+      const contentType = up.headers.get('content-type') || 'application/octet-stream';
+      requests.push({ name, status: up.status, bytes: body.length, contentType, upstream: true });
+      res.writeHead(up.status, {
+        'content-type': contentType,
+        'content-length': body.length,
+        'access-control-allow-origin': '*',
+      });
+      res.end(body);
+      return;
+    }
     // Existence is checked BEFORE the header goes out. Streaming first and
     // patching the status on error is what makes a missing file arrive as an
     // empty 200 — which hls.js reports as `no EXTM3U delimiter`, i.e. a
@@ -151,8 +198,12 @@ const server = createServer(async (req, res) => {
       'access-control-allow-origin': '*',
     });
     res.end(body);
-  } catch {
-    if (!res.headersSent) res.writeHead(404);
+  } catch (e) {
+    // Recorded, never silent: an upstream that refused the connection would
+    // otherwise leave hls.js reporting a plain 404 and the request census showing
+    // nothing at all, which reads as "the player never asked".
+    requests.push({ name: basename(url.pathname), status: 0, bytes: 0, error: String(e && e.message) });
+    if (!res.headersSent) res.writeHead(502);
     res.end();
   }
 });
@@ -233,6 +284,10 @@ try {
   if (probe === null) throw new Error('the page never installed window.__probe');
   if (!probe.done) { probe.ok = false; probe.reason = 'timed out after ' + timeoutMs + 'ms'; }
   probe.playlist = playlist;
+  // Which server answered. Emitted so the PHP test can REFUSE a report produced in
+  // the wrong mode: a controller-backed case that silently fell back to reading the
+  // directory would otherwise pass while proving nothing (S315).
+  probe.upstream = upstream;
   probe.requests = requests;
   console.log(JSON.stringify(probe, null, 2));
   ws.close();

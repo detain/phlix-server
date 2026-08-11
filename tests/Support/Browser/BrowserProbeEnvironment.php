@@ -24,8 +24,9 @@ namespace Phlix\Tests\Support\Browser;
  * prerequisites and then **assert the cases executed**, by name. Two consumers
  * therefore need the same facts:
  *
- *   * {@see \Phlix\Tests\E2E\Media\Transcoding\Fmp4HlsPlaybackE2ETest} — decides
- *     whether it can run at all;
+ *   * {@see \Phlix\Tests\E2E\Media\Transcoding\Fmp4HlsPlaybackE2ETest} and (S315)
+ *     {@see \Phlix\Tests\E2E\Media\Transcoding\Fmp4HlsThroughControllerE2ETest} —
+ *     each decides whether it can run at all;
  *   * `scripts/ci-browser-e2e-prereqs.php` — installs hls.js and REFUSES to
  *     continue when a prerequisite is missing, so CI fails at the cheap step with
  *     a named reason instead of silently skipping three tests twenty minutes later.
@@ -34,9 +35,10 @@ namespace Phlix\Tests\Support\Browser;
  * the script and still skip the test. They share this class so they cannot.
  *
  * ⚠ This class is not the gate. The gate is `scripts/assert-browser-e2e-ran.php`,
- * which reads the JUnit report and fails when any of {@see REQUIRED_CASES} is
- * absent or skipped — that check does not go through this discovery code at all,
- * so breaking the discovery still reds CI rather than quietly disarming it.
+ * which reads the JUnit report and fails when any case in
+ * {@see REQUIRED_CASES_BY_CLASS} is absent or skipped — that check does not go
+ * through this discovery code at all, so breaking the discovery still reds CI rather
+ * than quietly disarming it.
  */
 final class BrowserProbeEnvironment
 {
@@ -64,6 +66,65 @@ final class BrowserProbeEnvironment
         'testRemovingTheExtXMapBreaksPlayback',
         'testHlsJsStillPlaysTheMpegTsVariant',
     ];
+
+    /**
+     * S315 — the second browser class: the same real hls.js in the same real Chrome,
+     * but fetching every byte from the REAL `/hls/{job_id}/{file}` route standing up
+     * on a socket, instead of from the probe's own static file server.
+     *
+     * It is a separate class rather than three more cases on the first one because
+     * the two prove different things and the distinction is exactly what S57's header
+     * warns about. Both must run in CI, and both are equally capable of skipping
+     * silently, so both are demanded here.
+     */
+    public const CONTROLLER_TEST_CLASS =
+        'Phlix\\Tests\\E2E\\Media\\Transcoding\\Fmp4HlsThroughControllerE2ETest';
+
+    /**
+     * The five cases of {@see CONTROLLER_TEST_CLASS} that must have EXECUTED.
+     *
+     * All five, for the same reason all three of {@see REQUIRED_CASES} are demanded:
+     * the EXT-X-MAP control and the concurrency control are what make the positive
+     * result mean anything (a serialising test server would stall the player and the
+     * red would be the harness), the default-still-mpegts guard is the only
+     * machine-readable statement in CI that S315 did not flip what S60 owns, and the
+     * leak guard is the one that already caught a harness defect no assertion saw.
+     *
+     * @var list<string>
+     */
+    public const CONTROLLER_REQUIRED_CASES = [
+        'testHlsJsPlaysAnFmp4PresentationServedEntirelyByTheRealController',
+        'testRemovingTheExtXMapBreaksPlaybackThroughTheController',
+        'testTheControllerBackedServerIsGenuinelyConcurrent',
+        'testTheShippedDefaultIsStillMpegTs',
+        'testTheHarnessServerShutsDownCleanlyAndLeaksNoListener',
+    ];
+
+    /**
+     * THE authoritative demand list: every browser case, keyed by the class that
+     * owns it. `scripts/assert-browser-e2e-ran.php` iterates this and nothing else,
+     * so adding a browser class without listing it here is the one way a new case
+     * can go on skipping invisibly — which is why
+     * `tests/Unit/Support/BrowserE2EGateTest.php` asserts the map covers every
+     * `tests/E2E/**` class that uses the probe.
+     *
+     * @var array<string, list<string>>
+     */
+    public const REQUIRED_CASES_BY_CLASS = [
+        self::TEST_CLASS => self::REQUIRED_CASES,
+        self::CONTROLLER_TEST_CLASS => self::CONTROLLER_REQUIRED_CASES,
+    ];
+
+    /** Total number of cases the CI gate demands, across every browser class. */
+    public static function requiredCaseCount(): int
+    {
+        $total = 0;
+        foreach (self::REQUIRED_CASES_BY_CLASS as $methods) {
+            $total += count($methods);
+        }
+
+        return $total;
+    }
 
     /**
      * Node's built-in global `WebSocket` (used to drive Chrome over the DevTools

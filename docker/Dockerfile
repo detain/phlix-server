@@ -61,8 +61,19 @@ WORKDIR /var/www/html
 # hard composer.json requirement) being absent from every image, so the build
 # stayed green while `composer check-platform-reqs` failed inside the shipped
 # container. Without the flag a missing extension fails the BUILD instead.
+#
+# S314: `composer install` alone is no longer sufficient to keep that property.
+# composer.json now sets `config.platform`, which pins the resolution platform
+# so every machine resolves the same lock — and as a side effect makes
+# `composer install` believe the override rather than inspect the real PHP.
+# `check-platform-reqs` does NOT honour the override, so it is what still fails
+# the BUILD. Measured against ghcr.io/detain/phlix-base:latest, which lacks
+# ext-exif: `composer install` exits 0, and this command exits 2 reporting
+# `ext-exif ... missing`. Without it the image builds and then dies at its first
+# `vendor/autoload.php` include (platform_check.php), i.e. at boot.
 COPY composer.json composer.lock /var/www/html/
-RUN composer install --no-dev --prefer-dist --no-scripts --no-autoloader
+RUN composer install --no-dev --prefer-dist --no-scripts --no-autoloader \
+    && composer check-platform-reqs --no-dev
 
 COPY . /var/www/html/
 

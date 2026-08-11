@@ -175,6 +175,22 @@ class PhlixMySQLConnection extends Connection
         // StructuredLogger for the robust, coroutine-safe backstop). This is a
         // best-effort, version-independent silencing of the vendor deprecation;
         // FIX 1 (WhatFailureGroupHandler) remains the authoritative guard.
+        //
+        // ⚠ S314 — DO NOT "FIX" THIS BY EDITING vendor/workerman/mysql. Until
+        // S314 the working tree carried a hand-edit of
+        // vendor/workerman/mysql/src/Connection.php:1719 swapping
+        // `PDO::MYSQL_ATTR_INIT_COMMAND` for `\Pdo\Mysql::ATTR_INIT_COMMAND`.
+        // It was deleted, on evidence: both constants are 1002; production runs
+        // the PRISTINE constant on PHP 8.5 with `error_reporting=22527`, whose
+        // E_DEPRECATED bit is CLEAR, so the deprecation never fires there; CI
+        // has always installed pristine because vendor/ is gitignored; and the
+        // set_error_handler() above already swallows it version-independently.
+        // The edit also made the vendor file depend on symfony/polyfill-php84's
+        // `Pdo\Mysql` stub, since that class does not exist on PHP 8.3 — the
+        // project's own declared minimum. A vendor hand-edit is invisible to
+        // git, to phpcs, to PHPStan and to Psalm, and it is silently reverted by
+        // the next `composer install`. If this deprecation ever needs a real
+        // fix, send walkor/mysql a PR guarded on `PHP_VERSION_ID >= 80400`.
         set_error_handler(static fn (): bool => true, E_DEPRECATED);
         try {
             parent::connect();

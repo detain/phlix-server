@@ -1591,8 +1591,17 @@ apt-get update -y
 apt-get install -y ca-certificates curl git unzip openssl >/dev/null
 # Distro PHP; Ubuntu 24.04 ships PHP 8.3 by default. ffmpeg is required for
 # transcoding; mysql-server for the database; haproxy for the reverse proxy.
+#
+# php-ldap (S314): `ext-ldap` has been a HARD composer.json requirement since
+# before S163, but this list never installed it — a fresh install's
+# `composer install` (line ~1707) would refuse. The live box happens to have it,
+# which is why the gap survived. Every OTHER member of the derived contract in
+# scripts/required-php-extensions.php is already covered here: ctype, exif,
+# fileinfo, iconv, posix and sockets ship in php8.3-common (pulled by php-cli);
+# dom/libxml/simplexml come with php-xml; hash, json, filter, openssl, pcntl,
+# random, sodium and zlib are built into the php8.3-cli binary on Ubuntu 24.04.
 apt-get install -y \
-  php-cli php-mysql php-mbstring php-curl php-xml php-bcmath php-gd php-zip php-xdebug \
+  php-cli php-mysql php-mbstring php-curl php-xml php-bcmath php-gd php-zip php-ldap php-xdebug \
   mysql-server ffmpeg >/dev/null
 if [ "$SKIP_HAPROXY" = "yes" ]; then
   info "Skipping HAProxy install (--no-proxy)."

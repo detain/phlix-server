@@ -88,6 +88,16 @@ RUN apk add --no-cache \
         bcmath \
         sockets \
         ldap \
+        # ext-exif is the SAME class of defect ext-ldap was, found by S314's
+        # call-site derivation. `php:8.3-cli-alpine` does not enable exif, and
+        # src/Media/Library/PhotoScanner.php:95 + BookScanner.php:306 call
+        # exif_read_data() UNGUARDED — so every photo/PDF scan in the published
+        # image would have fatalled with "Call to undefined function
+        # exif_read_data()". Measured against ghcr.io/detain/phlix-base:latest
+        # (PHP 8.3.33): exif was the ONLY member of the derived contract absent
+        # from that image. Declaring `ext-exif` in composer.json is what turned
+        # a silent runtime fatal into a build-time failure; this line is the fix.
+        exif \
     && rm -rf /var/cache/apk/* /tmp/pear
 
 # ----------------------------------------------------------------------------

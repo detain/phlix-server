@@ -82,7 +82,18 @@ COPY . /var/www/html/
 
 # Composer install — fail the build on error. `--ignore-platform-reqs` is
 # deliberately NOT passed; see the package list above.
+#
+# S314: `composer check-platform-reqs` is what keeps that S163 property alive.
+# composer.json now sets `config.platform`, which pins the resolution platform
+# so every machine produces the same lock — and, as a side effect, makes
+# `composer install` stop checking the REAL extension set (it believes the
+# override). `check-platform-reqs` does NOT honour the override: it reports the
+# actual environment, so a missing extension fails the BUILD here rather than
+# surfacing as a platform_check.php fatal the first time the daemon boots.
+# Measured: a build against a base without ext-exif passes `composer install`
+# and fails this command with `ext-exif ... missing`.
 RUN composer install --no-dev --optimize-autoloader \
+    && composer check-platform-reqs --no-dev \
     && mkdir -p /var/www/html/.logs /var/www/html/templates_c /var/www/html/var \
     && chown -R nobody:nogroup /var/www/html
 

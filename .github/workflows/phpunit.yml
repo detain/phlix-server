@@ -34,7 +34,12 @@ jobs:
         uses: shivammathur/setup-php@v2
         with:
           php-version: '8.3'
-          extensions: mysql, pdo, pdo_mysql, json, gd, zip, fileinfo, swoole, pcov
+          # S314 — the canonical contract from
+          # scripts/required-php-extensions.php (mirrored by composer.json's `require`
+          # and `config.platform`), plus this job's non-required extras. Needed in full
+          # because `config.platform-check: true` aborts every `vendor/autoload.php`
+          # include when one is missing.
+          extensions: ctype, curl, dom, exif, fileinfo, filter, gd, hash, iconv, json, ldap, libxml, mbstring, openssl, pcntl, pdo, pdo_mysql, posix, random, simplexml, sockets, sodium, zip, zlib, mysql, swoole, pcov
           # PCOV is dramatically faster than Xdebug for line-coverage, which keeps
           # the full ~3700-test suite comfortably inside timeout-minutes.
           coverage: pcov
@@ -285,7 +290,12 @@ jobs:
         uses: shivammathur/setup-php@v2
         with:
           php-version: '8.3'
-          extensions: json, pcntl, posix, swoole, pcov
+          # S314 — the canonical contract from
+          # scripts/required-php-extensions.php (mirrored by composer.json's `require`
+          # and `config.platform`), plus this job's non-required extras. Needed in full
+          # because `config.platform-check: true` aborts every `vendor/autoload.php`
+          # include when one is missing.
+          extensions: ctype, curl, dom, exif, fileinfo, filter, gd, hash, iconv, json, ldap, libxml, mbstring, openssl, pcntl, pdo, pdo_mysql, posix, random, simplexml, sockets, sodium, zip, zlib, swoole, pcov
           # phpunit.xml sets failOnWarning="true"; with no coverage driver the
           # runner emits "No code coverage driver available", which trips that
           # flag and fails the job. PCOV is cheap, so enable it here too.
@@ -411,7 +421,12 @@ jobs:
           # failed run. php-uv is deliberately NOT built here (it costs minutes and
           # nothing the prober runs needs it); if a probed test ever does, this job
           # will say so loudly rather than skip.
-          extensions: mysql, pdo, pdo_mysql, json, gd, zip, fileinfo, swoole, pcov
+          # S314 — the canonical contract from
+          # scripts/required-php-extensions.php (mirrored by composer.json's `require`
+          # and `config.platform`), plus this job's non-required extras. Needed in full
+          # because `config.platform-check: true` aborts every `vendor/autoload.php`
+          # include when one is missing.
+          extensions: ctype, curl, dom, exif, fileinfo, filter, gd, hash, iconv, json, ldap, libxml, mbstring, openssl, pcntl, pdo, pdo_mysql, posix, random, simplexml, sockets, sodium, zip, zlib, mysql, swoole, pcov
           coverage: pcov
 
       - name: Install Composer dependencies

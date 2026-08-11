@@ -19,7 +19,19 @@ jobs:
         uses: shivammathur/setup-php@v2
         with:
           php-version: '8.3'
-          extensions: json
+          # S314. THE canonical extension list, derived once from phlix-server's
+          # own call sites and recorded in scripts/required-php-extensions.php,
+          # which composer.json's `require` + `config.platform` mirror. Every job
+          # that runs `composer install` needs the whole set now, because
+          # `config.platform-check: true` makes vendor/composer/platform_check.php
+          # abort on ANY `vendor/autoload.php` include when one is missing — and
+          # phpcs loads the autoloader. This job used to declare `json` only.
+          #
+          # Naming an extension here is NOT the gate: shivammathur/setup-php's
+          # `fail_fast` defaults to false, so an extension it cannot install is a
+          # red cross in the log and a GREEN step. platform_check.php is the
+          # executed assertion; this line is what makes setup-php try.
+          extensions: ctype, curl, dom, exif, fileinfo, filter, gd, hash, iconv, json, ldap, libxml, mbstring, openssl, pcntl, pdo, pdo_mysql, posix, random, simplexml, sockets, sodium, zip, zlib
 
       - name: Install Composer dependencies
         run: composer install --no-interaction --prefer-dist
@@ -89,7 +101,11 @@ jobs:
         uses: shivammathur/setup-php@v2
         with:
           php-version: '8.3'
-          extensions: json
+          # S314 — the canonical list (see the phpcs job's comment and
+          # scripts/required-php-extensions.php). `composer install` here dumps an
+          # autoloader with platform_check.php in it, and phpstan includes that
+          # autoloader, so the whole contract has to be present.
+          extensions: ctype, curl, dom, exif, fileinfo, filter, gd, hash, iconv, json, ldap, libxml, mbstring, openssl, pcntl, pdo, pdo_mysql, posix, random, simplexml, sockets, sodium, zip, zlib
 
       - name: Install Composer dependencies
         run: composer install --no-interaction --prefer-dist
@@ -208,7 +224,13 @@ jobs:
           # minus pcov, which is coverage-only. Added for static analysis:
           # sockets + pcntl + posix (Discovery/Mdns, ProcessManager), ldap (the
           # LDAP auth plugin), ffi (ChromaPrintFfi) and curl.
-          extensions: mysql, pdo, pdo_mysql, json, gd, zip, fileinfo, swoole, sockets, pcntl, posix, ldap, ffi, curl
+          #
+          # S314 replaced the hand-maintained list with the canonical contract
+          # from scripts/required-php-extensions.php, plus the three this job
+          # needs that are NOT composer requirements: swoole and ffi (guarded at
+          # every call site, so not required — but Psalm still resolves their
+          # classes) and mysql (mysqli, same reason).
+          extensions: ctype, curl, dom, exif, ffi, fileinfo, filter, gd, hash, iconv, json, ldap, libxml, mbstring, mysql, openssl, pcntl, pdo, pdo_mysql, posix, random, simplexml, sockets, sodium, swoole, zip, zlib
 
       - name: Install Composer dependencies
         run: composer install --no-interaction --prefer-dist

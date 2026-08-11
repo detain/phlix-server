@@ -129,11 +129,17 @@ return [
      * playback outright; it now works, and what is unproven is the CLIENT
      * matrix, which is S60's job.
      *
-     * Deliberately absent from `phlix-shared/schemas/server-settings.schema.json`,
-     * which is what stops `AdminSettingsController` accepting it over the admin
-     * API — flipping it is an explicit edit of this file. S60 adds the schema
-     * entry together with the default flip (and the matching
-     * `TranscodeManager::JOB_KEY_VERSION` bump).
+     * ✅ **SETTABLE OVER THE ADMIN API as of S313** (phlix-shared v0.49.0).
+     * The key is now declared in
+     * `phlix-shared/schemas/server-settings.schema.json` with
+     * `"enum": ["mpegts", "fmp4"]`, so `AdminSettingsController` accepts a PUT
+     * of either member and rejects anything else with a per-key error.
+     * Editing this file is no longer the only way to change it — which is the
+     * point: S60 flips the default, and a flag that can only be flipped by
+     * hand-editing a config file inside a running container has no rollback
+     * path. **This literal is still the shipped default and S313 did not touch
+     * it**; S60 owns the flip, together with the matching
+     * `TranscodeManager::JOB_KEY_VERSION` bump.
      *
      * The value is folded into `EncodeSettings::fingerprint()` and therefore
      * into the transcode job reuse key, so a flip yields a fresh job id and a

@@ -199,22 +199,110 @@ final class BrowserE2EGateTest extends TestCase
 
     public function testEveryRequiredCaseIsARealMethodOnTheRealTestClass(): void
     {
-        $class = BrowserProbeEnvironment::TEST_CLASS;
+        $byClass = BrowserProbeEnvironment::REQUIRED_CASES_BY_CLASS;
 
-        $this->assertTrue(
-            class_exists($class),
-            $class . ' does not exist, so the CI gate is demanding cases from a class that was moved '
-            . 'or renamed. Update BrowserProbeEnvironment::TEST_CLASS in the same commit.',
+        $this->assertCount(
+            2,
+            $byClass,
+            'two browser classes: S57\'s fake-server one and S315\'s controller-backed one',
         );
+        $this->assertSame(3, count(BrowserProbeEnvironment::REQUIRED_CASES));
+        $this->assertSame(5, count(BrowserProbeEnvironment::CONTROLLER_REQUIRED_CASES));
+        $this->assertSame(8, BrowserProbeEnvironment::requiredCaseCount());
 
-        $this->assertCount(3, BrowserProbeEnvironment::REQUIRED_CASES);
-
-        foreach (BrowserProbeEnvironment::REQUIRED_CASES as $method) {
+        foreach ($byClass as $class => $methods) {
             $this->assertTrue(
-                method_exists($class, $method),
-                $class . '::' . $method . '() does not exist. The gate matches on exact class+name, '
-                . 'so a rename here silently becomes "case ABSENT" in CI — loud, but minutes later '
-                . 'and for a confusing reason.',
+                class_exists($class),
+                $class . ' does not exist, so the CI gate is demanding cases from a class that was moved '
+                . 'or renamed. Update BrowserProbeEnvironment::REQUIRED_CASES_BY_CLASS in the same commit.',
+            );
+
+            foreach ($methods as $method) {
+                $this->assertTrue(
+                    method_exists($class, $method),
+                    $class . '::' . $method . '() does not exist. The gate matches on exact class+name, '
+                    . 'so a rename here silently becomes "case ABSENT" in CI — loud, but minutes later '
+                    . 'and for a confusing reason.',
+                );
+            }
+        }
+    }
+
+    /**
+     * S315 — the map must cover EVERY browser class, and the expected set is derived
+     * from the `tests/E2E` directory rather than from the map itself.
+     *
+     * A gate whose demand list is read off its own subject self-adjusts: adding a
+     * fourth browser case to a class nobody listed would leave the gate green while
+     * that case skipped on every run, which is the exact S57 defect one level up.
+     * Here the two sides come from different places — the filesystem says which E2E
+     * classes drive the headless probe, the constant says which ones are demanded —
+     * so they can disagree, and a disagreement reds.
+     */
+    public function testEveryBrowserDrivingE2EClassIsListedInTheMap(): void
+    {
+        $found = [];
+        $directory = new \RecursiveIteratorIterator(
+            new \RecursiveDirectoryIterator(self::REPO . '/tests/E2E', \FilesystemIterator::SKIP_DOTS),
+        );
+        /** @var \SplFileInfo $file */
+        foreach ($directory as $file) {
+            if (!str_ends_with($file->getFilename(), 'Test.php')) {
+                continue;
+            }
+            $source = (string) file_get_contents($file->getPathname());
+            // "Drives the headless probe" = names the probe script. That is the
+            // property that makes a case skippable-on-a-browserless-box, which is
+            // the property the gate exists for.
+            if (!str_contains($source, 'hls-playback-probe.mjs')) {
+                continue;
+            }
+            $this->assertSame(
+                1,
+                preg_match('/^namespace\s+([^;]+);/m', $source, $ns),
+                'no namespace in ' . $file->getPathname(),
+            );
+            $found[] = trim($ns[1]) . '\\' . basename($file->getFilename(), '.php');
+        }
+
+        sort($found);
+        $declared = array_keys(BrowserProbeEnvironment::REQUIRED_CASES_BY_CLASS);
+        sort($declared);
+
+        $this->assertNotSame([], $found, 'the scan found NO browser-driving E2E class — it is measuring nothing');
+        $this->assertSame(
+            $declared,
+            $found,
+            'a tests/E2E class drives the headless probe but is not in '
+            . 'BrowserProbeEnvironment::REQUIRED_CASES_BY_CLASS (or vice versa). An unlisted class '
+            . 'skips silently on every CI run, which is the defect S305 exists to close.',
+        );
+    }
+
+    /**
+     * Every case a listed class DECLARES must be demanded, not just the ones whoever
+     * added the class happened to remember. A public `test*` method left out of the
+     * list is one that may skip forever with nothing noticing.
+     */
+    public function testEveryPublicCaseOnAListedClassIsDemanded(): void
+    {
+        foreach (BrowserProbeEnvironment::REQUIRED_CASES_BY_CLASS as $class => $methods) {
+            $declared = [];
+            foreach ((new \ReflectionClass($class))->getMethods(\ReflectionMethod::IS_PUBLIC) as $method) {
+                if ($method->getDeclaringClass()->getName() === $class && str_starts_with($method->getName(), 'test')) {
+                    $declared[] = $method->getName();
+                }
+            }
+            sort($declared);
+            $required = $methods;
+            sort($required);
+
+            $this->assertSame(
+                $declared,
+                $required,
+                $class . ' declares test cases the CI gate does not demand (or demands ones it does '
+                . 'not declare). Every browser case must be demanded — an undemanded one can skip on '
+                . 'every run and still read as a pass.',
             );
         }
     }
@@ -223,14 +311,15 @@ final class BrowserE2EGateTest extends TestCase
     // Layer 3 — the gate, in both directions, on its real exit code.
     // -----------------------------------------------------------------------
 
-    public function testTheGateAcceptsAReportWhereAllThreeCasesExecuted(): void
+    public function testTheGateAcceptsAReportWhereEveryRequiredCaseExecuted(): void
     {
+        $total = BrowserProbeEnvironment::requiredCaseCount();
         $result = $this->runGate($this->junit($this->executedCases()));
 
         $this->assertSame(0, $result['code'], $result['output']);
-        $this->assertStringContainsString('3/3 required cases EXECUTED', $result['output']);
+        $this->assertStringContainsString("{$total}/{$total} required cases", $result['output']);
         $this->assertStringContainsString(
-            '4 test cases in the run',
+            ($total + 1) . ' test cases in the run',
             $result['output'],
             'The denominator must be printed. A gate that inspected zero items exits 0 with LESS '
             . 'output than a real pass, which is indistinguishable from success without one.',
@@ -249,21 +338,29 @@ final class BrowserE2EGateTest extends TestCase
 
         $this->assertSame(1, $result['code'], $result['output']);
         $this->assertStringContainsString('were SKIPPED', $result['output']);
-        foreach (BrowserProbeEnvironment::REQUIRED_CASES as $method) {
-            $this->assertStringContainsString($method, $result['output'], 'every skipped case is named');
+        foreach ($this->requiredPairs() as $pair) {
+            $this->assertStringContainsString($pair['name'], $result['output'], 'every skipped case is named');
         }
     }
 
+    /**
+     * One case absent, tried ONCE PER CLASS. A single splice would only ever exercise
+     * the first class in the map, so a gate that stopped iterating after it would
+     * still pass this.
+     */
     public function testTheGateRejectsAReportWhereOneCaseIsAbsent(): void
     {
-        $cases = $this->executedCases();
-        array_splice($cases, 1, 1);
+        foreach ($this->requiredPairs() as $index => $pair) {
+            $cases = $this->executedCases();
+            array_splice($cases, $index, 1);
 
-        $result = $this->runGate($this->junit($cases));
+            $result = $this->runGate($this->junit($cases));
 
-        $this->assertSame(1, $result['code'], $result['output']);
-        $this->assertStringContainsString('ABSENT', $result['output']);
-        $this->assertStringContainsString(BrowserProbeEnvironment::REQUIRED_CASES[1], $result['output']);
+            $this->assertSame(1, $result['code'], $result['output']);
+            $this->assertStringContainsString('ABSENT', $result['output']);
+            $this->assertStringContainsString($pair['name'], $result['output']);
+            $this->assertStringContainsString($pair['class'], $result['output']);
+        }
     }
 
     /**
@@ -280,14 +377,18 @@ final class BrowserE2EGateTest extends TestCase
 
     public function testTheGateRejectsACaseThatExecutedButAssertedNothing(): void
     {
+        // The LAST required case, so this exercises the second class in the map too.
+        $pairs = $this->requiredPairs();
+        $last = count($pairs) - 1;
+
         $cases = $this->executedCases();
-        $cases[2]['assertions'] = 0;
+        $cases[$last]['assertions'] = 0;
 
         $result = $this->runGate($this->junit($cases));
 
         $this->assertSame(1, $result['code'], $result['output']);
         $this->assertStringContainsString('ZERO assertions', $result['output']);
-        $this->assertStringContainsString(BrowserProbeEnvironment::REQUIRED_CASES[2], $result['output']);
+        $this->assertStringContainsString($pairs[$last]['name'], $result['output']);
     }
 
     /**
@@ -305,7 +406,7 @@ final class BrowserE2EGateTest extends TestCase
         $this->assertStringContainsString('ABSENT', $absentByName['output']);
 
         $cases = $this->executedCases();
-        $cases[0]['class'] = 'Phlix\\Tests\\E2E\\Media\\Transcoding\\Fmp4HlsPlaybackE2ETestExtra';
+        $cases[0]['class'] .= 'Extra';
 
         $absentByClass = $this->runGate($this->junit($cases));
         $this->assertSame(1, $absentByClass['code'], $absentByClass['output']);
@@ -436,13 +537,33 @@ final class BrowserE2EGateTest extends TestCase
     // -----------------------------------------------------------------------
 
     /**
+     * The demand list flattened to (class, name) pairs, in the SAME order
+     * {@see executedCases()} emits them, so an index into one indexes the other.
+     *
+     * @return list<array{class: string, name: string}>
+     */
+    private function requiredPairs(): array
+    {
+        $pairs = [];
+        foreach (BrowserProbeEnvironment::REQUIRED_CASES_BY_CLASS as $class => $methods) {
+            foreach ($methods as $method) {
+                $pairs[] = ['class' => $class, 'name' => $method];
+            }
+        }
+
+        return $pairs;
+    }
+
+    /**
      * @return list<array{class: string, name: string, assertions: int, skipped?: bool, failure?: string}>
      */
     private function executedCases(): array
     {
         $cases = [];
-        foreach (BrowserProbeEnvironment::REQUIRED_CASES as $method) {
-            $cases[] = ['class' => BrowserProbeEnvironment::TEST_CLASS, 'name' => $method, 'assertions' => 7];
+        foreach (BrowserProbeEnvironment::REQUIRED_CASES_BY_CLASS as $class => $methods) {
+            foreach ($methods as $method) {
+                $cases[] = ['class' => $class, 'name' => $method, 'assertions' => 7];
+            }
         }
         // One unrelated case, so the printed denominator is not merely the required set.
         $cases[] = [

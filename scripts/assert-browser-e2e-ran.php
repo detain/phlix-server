@@ -179,8 +179,15 @@ $findCase = static function (DOMXPath $xpath, string $class, string $method): ?a
     ];
 };
 
-$class = BrowserProbeEnvironment::TEST_CLASS;
-$required = BrowserProbeEnvironment::REQUIRED_CASES;
+/**
+ * S315 — every browser class, not just S57's. The map is the authoritative demand
+ * list and this script iterates it whole: a class added to `tests/E2E` and left out
+ * of the map is the one way a new browser case can go on skipping invisibly, which
+ * is why `tests/Unit/Support/BrowserE2EGateTest.php` reconciles the map against the
+ * directory.
+ */
+$byClass = BrowserProbeEnvironment::REQUIRED_CASES_BY_CLASS;
+$requiredCount = BrowserProbeEnvironment::requiredCaseCount();
 
 /** @var list<string> $missing */
 $missing = [];
@@ -192,29 +199,32 @@ $assertedNothing = [];
 $lines = [];
 $wallClock = 0.0;
 
-foreach ($required as $method) {
-    $case = $findCase($xpath, $class, $method);
-    if ($case === null) {
-        $missing[] = $class . '::' . $method;
-        continue;
-    }
+foreach ($byClass as $class => $required) {
+    $lines[] = $class;
+    foreach ($required as $method) {
+        $case = $findCase($xpath, $class, $method);
+        if ($case === null) {
+            $missing[] = $class . '::' . $method;
+            continue;
+        }
 
-    $wallClock += $case['time'];
-    $lines[] = sprintf(
-        '  %-52s %-8s assertions=%d  %.1fs',
-        $method,
-        $case['status'],
-        $case['assertions'],
-        $case['time'],
-    );
+        $wallClock += $case['time'];
+        $lines[] = sprintf(
+            '  %-64s %-8s assertions=%d  %.1fs',
+            $method,
+            $case['status'],
+            $case['assertions'],
+            $case['time'],
+        );
 
-    if ($case['status'] === 'skipped') {
-        $wereSkipped[] = $class . '::' . $method;
-        continue;
-    }
+        if ($case['status'] === 'skipped') {
+            $wereSkipped[] = $class . '::' . $method;
+            continue;
+        }
 
-    if ($case['assertions'] < 1) {
-        $assertedNothing[] = $class . '::' . $method;
+        if ($case['assertions'] < 1) {
+            $assertedNothing[] = $class . '::' . $method;
+        }
     }
 }
 
@@ -224,10 +234,10 @@ if ($missing !== []) {
         . "They were not skipped — they are missing, so either the E2E test suite is no longer being "
         . "run (check the PHPUnit invocation still covers tests/E2E) or the cases were renamed or "
         . "deleted. Renaming them means renaming them in "
-        . "tests/Support/Browser/BrowserProbeEnvironment::REQUIRED_CASES too; deleting them is "
-        . "deleting the only evidence that a real player can play these playlists.",
+        . "tests/Support/Browser/BrowserProbeEnvironment::REQUIRED_CASES_BY_CLASS too; deleting them "
+        . "is deleting the only evidence that a real player can play these playlists.",
         count($missing),
-        count($required),
+        $requiredCount,
         basename($reportPath),
         implode("\n  ", $missing),
     ));
@@ -245,7 +255,7 @@ if ($wereSkipped !== []) {
         . "skip guards in the test — a developer box with no browser must still be able to run the "
         . "suite.",
         count($wereSkipped),
-        count($required),
+        $requiredCount,
         implode("\n  ", $wereSkipped),
     ));
 }
@@ -257,20 +267,21 @@ if ($assertedNothing !== []) {
         . "for another reason, read the PHPUnit output first: a case that errors before its first "
         . "assertion also lands here.)",
         count($assertedNothing),
-        count($required),
+        $requiredCount,
         implode("\n  ", $assertedNothing),
     ));
 }
 
 printf(
-    "S305 browser-E2E gate OK: %d/%d required cases EXECUTED in %s (%d test cases in the run, %d skipped).\n",
-    count($required),
-    count($required),
+    "S305 browser-E2E gate OK: %d/%d required cases across %d classes EXECUTED in %s "
+    . "(%d test cases in the run, %d skipped).\n",
+    $requiredCount,
+    $requiredCount,
+    count($byClass),
     basename($reportPath),
     $totalCases,
     count($skipped),
 );
-printf("%s\n", $class);
 printf("%s\n", implode("\n", $lines));
 printf("  browser cases wall clock: %.1fs\n", $wallClock);
 

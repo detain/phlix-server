@@ -416,12 +416,12 @@
             "source": {
                 "type": "git",
                 "url": "https://github.com/detain/phlix-shared.git",
-                "reference": "362465dcf339f3c944772e5bf3104d7206e8d5b5"
+                "reference": "383798f93264205d6f955f806b645cd7654174de"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/detain/phlix-shared/zipball/362465dcf339f3c944772e5bf3104d7206e8d5b5",
-                "reference": "362465dcf339f3c944772e5bf3104d7206e8d5b5",
+                "url": "https://api.github.com/repos/detain/phlix-shared/zipball/383798f93264205d6f955f806b645cd7654174de",
+                "reference": "383798f93264205d6f955f806b645cd7654174de",
                 "shasum": ""
             },
             "require": {

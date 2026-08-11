@@ -201,7 +201,11 @@ final class BrowserE2EGateTest extends TestCase
     {
         $byClass = BrowserProbeEnvironment::REQUIRED_CASES_BY_CLASS;
 
-        $this->assertCount(2, $byClass, 'two browser classes: S57\'s fake-server one and S315\'s controller-backed one');
+        $this->assertCount(
+            2,
+            $byClass,
+            'two browser classes: S57\'s fake-server one and S315\'s controller-backed one',
+        );
         $this->assertSame(3, count(BrowserProbeEnvironment::REQUIRED_CASES));
         $this->assertSame(5, count(BrowserProbeEnvironment::CONTROLLER_REQUIRED_CASES));
         $this->assertSame(8, BrowserProbeEnvironment::requiredCaseCount());

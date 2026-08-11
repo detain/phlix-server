@@ -362,7 +362,7 @@ final class Fmp4HlsThroughControllerE2ETest extends TestCase
      *
      *   - {@see self::SERVER_WORKERS} workers ⇒ at least one pair of requests
      *     genuinely in flight at the same instant, answered by ≥2 distinct pids;
-     *   - ONE worker, same fixture, same three requests ⇒ ZERO overlapping pairs and
+     *   - ONE worker, same fixture, same four requests ⇒ ZERO overlapping pairs and
      *     exactly one pid.
      *
      * The overlap arithmetic is the same in both, so "we found overlaps" cannot be a
@@ -370,10 +370,26 @@ final class Fmp4HlsThroughControllerE2ETest extends TestCase
      * AND drawn from a clock shared across processes on Linux — `microtime()` would
      * be comparable but not monotonic, and a per-process clock would make the
      * cross-pid comparison meaningless.
+     *
+     * FOUR requests against FOUR workers, not three: Workerman's children share one
+     * listen socket and the kernel decides which wakes, so the distribution is not
+     * round-robin. The only arrangement that produces zero overlaps on a concurrent
+     * server is ALL requests landing in ONE worker, and a fourth request makes that
+     * arrangement much rarer without changing what is being claimed. (Measured across
+     * five runs at three requests: 3, 3, 3, 2, 1 overlapping pairs — never 0, but the
+     * margin was thinner than it needed to be.)
      */
     public function testTheControllerBackedServerIsGenuinelyConcurrent(): void
     {
-        $files = ['seg-v360p-00000.m4s', 'seg-v360p-00001.m4s', 'seg-v360p-00002.m4s'];
+        // 12 s at 3 s ⇒ indices 0..3, and every one is a distinct `-ss` encode: only
+        // index 0's encode publishes the init, so no request here is a cache hit.
+        $files = [
+            'seg-v360p-00000.m4s',
+            'seg-v360p-00001.m4s',
+            'seg-v360p-00002.m4s',
+            'seg-v360p-00003.m4s',
+        ];
+        $expected = array_fill(0, count($files), 200);
 
         // ── the measurement ──────────────────────────────────────────
         $parallelJob = 's315-parallel';
@@ -382,10 +398,10 @@ final class Fmp4HlsThroughControllerE2ETest extends TestCase
 
         $parallel = $this->startServer($parallelJob, self::SERVER_WORKERS);
         $parallelStatuses = $this->fetchInParallel($parallel, $parallelJob, $files);
-        $this->assertSame([200, 200, 200], $parallelStatuses, 'the concurrent fetches did not all succeed');
+        $this->assertSame($expected, $parallelStatuses, 'the concurrent fetches did not all succeed');
 
         $parallelLog = $this->serverLog($parallel);
-        $this->assertCount(3, $parallelLog, 'denominator: exactly three requests were measured');
+        $this->assertCount(count($files), $parallelLog, 'denominator: every request was measured, once');
         foreach ($parallelLog as $entry) {
             $this->assertGreaterThan(
                 0,
@@ -404,20 +420,23 @@ final class Fmp4HlsThroughControllerE2ETest extends TestCase
 
         $serial = $this->startServer($serialJob, 1);
         $serialStatuses = $this->fetchInParallel($serial, $serialJob, $files);
-        $this->assertSame([200, 200, 200], $serialStatuses, 'the one-worker control did not serve the same three');
+        $this->assertSame($expected, $serialStatuses, 'the one-worker control did not serve the same set');
 
         $serialLog = $this->serverLog($serial);
-        $this->assertCount(3, $serialLog);
+        $this->assertCount(count($files), $serialLog);
         $serialOverlaps = $this->overlappingPairs($serialLog);
         $serialPids = $this->distinctPids($serialLog);
 
+        $maxPairs = count($files) * (count($files) - 1) / 2;
         $this->report(sprintf(
-            'concurrency: %d workers ⇒ %d/3 overlapping pairs across %d pids; '
-            . '1 worker ⇒ %d/3 overlapping pairs across %d pid(s); durations(ms) %s vs %s',
+            'concurrency: %d workers ⇒ %d/%d overlapping pairs across %d pids; '
+            . '1 worker ⇒ %d/%d overlapping pairs across %d pid(s); durations(ms) %s vs %s',
             self::SERVER_WORKERS,
             $overlaps,
+            $maxPairs,
             $pids,
             $serialOverlaps,
+            $maxPairs,
             $serialPids,
             $this->durationsMs($parallelLog),
             $this->durationsMs($serialLog)

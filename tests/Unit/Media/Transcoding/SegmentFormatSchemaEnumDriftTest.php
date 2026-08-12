@@ -48,9 +48,16 @@ use PHPUnit\Framework\TestCase;
  * reviewable change that has to touch two repositories.
  *
  * The independent literal in
- * {@see EncodeSettingsSegmentFormatTest::test_the_shipped_default_is_mpegts()}
+ * {@see EncodeSettingsSegmentFormatTest::test_the_shipped_default_is_fmp4()}
  * is the third anchor: it pins the constant itself, so "change both together"
  * cannot quietly become "change all three by regenerating".
+ *
+ * ⚠ **S60 opened one deliberate, documented divergence between the two repos:
+ * the `default` field.** The `enum` is still an exact bijection and everything
+ * above still holds for it. See
+ * {@see self::test_the_schema_default_is_the_one_documented_divergence_s60_leaves_to_phlix_shared()}
+ * for why the `default` could not move in the same commit, why the divergence is
+ * documentation-grade rather than functional, and how to close it.
  *
  * No coverage metadata here, per S141 / phpunit.xml: such a marker discards
  * every other file the test executes, and these cases deliberately drive
@@ -215,35 +222,91 @@ final class SegmentFormatSchemaEnumDriftTest extends TestCase
     }
 
     /**
-     * S313 is not S60: the schema must ship the SAME default the config file
-     * has always had.
+     * ⚠ THE ONE DIVERGENCE S60 SHIPPED KNOWINGLY, PINNED SO IT CANNOT WIDEN OR
+     * BE FORGOTTEN.
      *
-     * Flipping the default belongs to S60, together with the
-     * `TranscodeManager::JOB_KEY_VERSION` bump it requires. A schema default of
-     * `fmp4` here would be that flip smuggled in through a dependency bump —
-     * `AdminSettingsController::index()` reports the schema default as the
-     * effective value for any key with no override row, so it is not merely
-     * documentation.
+     * Until S60 this case was `…_and_s313_did_not_flip_it` and asserted a plain
+     * `assertSame(EncodeSettings::DEFAULT_SEGMENT_FORMAT, $property['default'])`.
+     * S60 flipped the phlix-server default to `fmp4`; the schema lives in
+     * **`detain/phlix-shared`**, a different repository, so its `default` (and
+     * the prose around it — `helpText` still says "Leave this on MPEG-TS", and
+     * `optionHelp.mpegts` still calls itself "The shipped default") cannot be
+     * corrected in the same commit. Correcting it needs a phlix-shared PR, a
+     * release and a `composer.lock` re-pin, exactly as S313 did.
+     *
+     * ## What this divergence does and does not cost
+     *
+     * It is **documentation-grade, not functional**, and that was checked rather
+     * than assumed:
+     *
+     *  - the EFFECTIVE value comes from `config/transcoding.php` via
+     *    `SettingsRepository::getDefault()` → `resolveDefault()`, which reads the
+     *    config files and never opens the schema. So the encoder and the
+     *    `GET /api/v1/admin/settings` `values` block both say `fmp4`.
+     *  - the schema `default` reaches only `AdminSettingsController`'s `meta`
+     *    block (`loadSchemaMeta()`, `'default' => $def['default']`), which the
+     *    SPA renders as annotation. **There is no reset-to-default endpoint** —
+     *    the route table is `GET` + `PUT` only — so nothing WRITES the schema
+     *    default anywhere.
+     *
+     * ⚠ The S313 docblock this case grew out of stated that
+     * "`AdminSettingsController::index()` reports the schema default as the
+     * effective value for any key with no override row". That is **not correct**
+     * — `index()` reports `getEffectiveMany()`, which is config-sourced. The
+     * claim is corrected here rather than repeated.
+     *
+     * ## How to remove this case
+     *
+     * Ship `"default": "fmp4"` (plus the surrounding prose) in phlix-shared,
+     * release, re-pin `composer.lock` — then this case reds, and the fix is to
+     * put back the single `assertSame(DEFAULT_SEGMENT_FORMAT, $property['default'])`
+     * it used to be. A red here is a REMINDER, never a licence to relax the
+     * comparison.
      */
-    public function test_schema_default_is_the_shipped_default_and_s313_did_not_flip_it(): void
+    public function test_the_schema_default_is_the_one_documented_divergence_s60_leaves_to_phlix_shared(): void
     {
         $property = $this->property();
 
-        self::assertSame(
-            EncodeSettings::DEFAULT_SEGMENT_FORMAT,
-            $property['default'] ?? null,
-            'The schema default must equal EncodeSettings::DEFAULT_SEGMENT_FORMAT.'
-        );
-        self::assertSame('mpegts', $property['default'] ?? null);
+        // The phlix-server side of the pair, by literal. This is the value that
+        // actually decides what the encoder does.
+        self::assertSame('fmp4', EncodeSettings::DEFAULT_SEGMENT_FORMAT);
 
-        // ... and the config literal it mirrors is unchanged too.
+        // The two halves that MUST agree, because both are phlix-server's and
+        // both feed the same answer: the constant the encode path falls back to,
+        // and the config literal `SettingsRepository::getDefault()` reads.
         $config = require dirname(__DIR__, 4) . '/config/transcoding.php';
         self::assertIsArray($config);
         self::assertSame(
-            'mpegts',
+            EncodeSettings::DEFAULT_SEGMENT_FORMAT,
             $config['segment_format'] ?? null,
-            'config/transcoding.php must still ship mpegts — the flip is S60, not S313.'
+            'config/transcoding.php and EncodeSettings::DEFAULT_SEGMENT_FORMAT must never drift: '
+            . 'the config file is what SettingsRepository::getDefault() reports as the effective '
+            . 'value, the constant is what the encoder falls back to.'
         );
+        self::assertSame('fmp4', $config['segment_format'] ?? null);
+
+        // The phlix-shared side, pinned by literal so it cannot move unnoticed
+        // in EITHER direction — including quietly to some third value.
+        self::assertSame(
+            'mpegts',
+            $property['default'] ?? null,
+            'The vendored phlix-shared schema default moved. If it is now "fmp4", the divergence '
+            . 'S60 documented is CLOSED: delete this case and restore the plain '
+            . 'assertSame(EncodeSettings::DEFAULT_SEGMENT_FORMAT, $property["default"]) it replaced.'
+        );
+
+        // The divergence, named. When phlix-shared catches up this line reds,
+        // which is the point: it is a tripwire, not a tolerance.
+        self::assertNotSame(
+            EncodeSettings::DEFAULT_SEGMENT_FORMAT,
+            $property['default'] ?? null,
+            'phlix-shared and phlix-server now AGREE on the segment-format default — good. '
+            . 'Restore the plain equality assertion and delete this case.'
+        );
+
+        // Whatever the schema advertises must at least still be a container the
+        // encoder understands, or the annotation names something unselectable.
+        self::assertContains($property['default'] ?? null, EncodeSettings::SEGMENT_FORMATS);
     }
 
     /**

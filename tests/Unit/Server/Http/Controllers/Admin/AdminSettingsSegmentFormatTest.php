@@ -172,7 +172,15 @@ final class AdminSettingsSegmentFormatTest extends TestCase
 
         self::assertSame('transcoding', $meta['group']);
         self::assertSame(EncodeSettings::SEGMENT_FORMATS, $meta['enum']);
+        // ⚠ S60: this is the SCHEMA's `default`, which lives in
+        // detain/phlix-shared and still reads `mpegts` while phlix-server's
+        // shipped default is `fmp4`. It is annotation only — the EFFECTIVE value
+        // in the `values` block comes from config/transcoding.php via
+        // SettingsRepository::getDefault(), and there is no reset endpoint that
+        // would write this. The divergence is pinned, explained and given a
+        // closing procedure in SegmentFormatSchemaEnumDriftTest.
         self::assertSame('mpegts', $meta['default']);
+        self::assertNotSame(EncodeSettings::DEFAULT_SEGMENT_FORMAT, $meta['default']);
         self::assertIsString($meta['label']);
         self::assertNotSame('', $meta['label']);
         self::assertIsString($meta['helpText']);
@@ -410,15 +418,23 @@ final class AdminSettingsSegmentFormatTest extends TestCase
     // ─────────────────────────────────────────────────────────────────
 
     /**
-     * With no override row, the effective value and the transcode job
-     * fingerprint are exactly what they were before S313.
+     * With no override row, the effective value is the SHIPPED DEFAULT and the
+     * transcode job fingerprint is `''`.
      *
      * The fingerprint is the load-bearing half. It is folded into
      * `TranscodeManager`'s job key, so a fingerprint that moved would
      * invalidate every cached encode on every installation on upgrade — a
      * fleet-wide re-encode triggered by a schema addition nobody asked for.
      * `''` is the value that keeps the key byte-identical to the pre-settings
-     * one.
+     * one, and it is what S313 (a pure schema addition) had to preserve.
+     *
+     * ⚠ S60 changed the expected VALUE here from `mpegts` to `fmp4` — the
+     * default moved — but not the claim, and specifically not the `''`. S60 is
+     * the one deploy that DOES invalidate every install's cache, and it does so
+     * through `TranscodeManager::JOB_KEY_VERSION` (`v9` → `v10`), never through
+     * this method: `fingerprint()` is empty at the shipped default whatever that
+     * default is, which is exactly why the bump was required. See
+     * {@see \Phlix\Tests\Unit\Media\Transcoding\TranscodeManagerTest::testEnsureHlsJobReuseKeyCarriesFormatVersion()}.
      */
     public function test_declaring_the_key_changes_nothing_for_an_install_that_never_calls_the_api(): void
     {
@@ -427,20 +443,22 @@ final class AdminSettingsSegmentFormatTest extends TestCase
 
         $settings = new EncodeSettings($repo);
 
-        self::assertSame('mpegts', $settings->segmentFormat());
+        self::assertSame('fmp4', $settings->segmentFormat());
         self::assertSame('', $settings->fingerprint());
 
         // ... and with no settings repository at all (the DI-degraded path).
-        self::assertSame('mpegts', (new EncodeSettings())->segmentFormat());
+        self::assertSame('fmp4', (new EncodeSettings())->segmentFormat());
         self::assertSame('', (new EncodeSettings())->fingerprint());
 
         // The control that stops the two assertions above passing vacuously:
         // an override DOES move the fingerprint, so `''` is a measurement of
-        // "unchanged", not of "fingerprint() always returns empty".
+        // "unchanged", not of "fingerprint() always returns empty". ⚠ S60
+        // reversed which member is the moving one: `fmp4` is now the free
+        // default, so `mpegts` is what has to be overridden to see a hash.
         $overridden = $this->createMock(SettingsRepository::class);
         $overridden->method('getEffective')->willReturnCallback(
             /** @return mixed */
-            static fn (string $key) => $key === self::KEY ? 'fmp4' : null
+            static fn (string $key) => $key === self::KEY ? 'mpegts' : null
         );
         self::assertNotSame('', (new EncodeSettings($overridden))->fingerprint());
     }

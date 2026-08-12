@@ -120,6 +120,123 @@ final class Fmp4SegmentProductionTest extends TestCase
     }
 
     // ─────────────────────────────────────────────────────────────────
+    // S60 — subtitle burn-in is not regressed by the container
+    // ─────────────────────────────────────────────────────────────────
+
+    /**
+     * ⚠ S60 AC: "multi-audio / subtitle-burn-in behaviour is verified not
+     * regressed" — for burn-in, MEASURED on real pixels rather than reasoned
+     * about.
+     *
+     * Reading the code says it cannot regress: `resolveSubtitleBurnInFilter()`
+     * appends a `subtitles=` entry to the `-vf` chain in `buildSegmentCommand()`,
+     * and the container is decided afterwards and separately, by `muxerTail()`.
+     * `SubtitleBurner` and `StreamManager` contain no `segment_format`/`fmp4`
+     * reference at all. But "I read the code and it looked independent" is not a
+     * measurement, and the pre-S60 coverage for burn-in was command-string
+     * assertions only (`FfmpegRunnerSubtitleBurnInTest`, `SubtitleBurnerTest`) —
+     * neither of which ever ran ffmpeg, let alone in the fMP4 branch.
+     *
+     * So: the SAME source, the SAME rendition, the SAME segment index, produced
+     * TWICE in the fMP4 container — once with `subtitle_burn_in_index` set and a
+     * real `sub-0.vtt` in the job directory, once without. The burned segment
+     * must still be a conformant CMAF fragment, must still decode against its
+     * init, and its decoded PICTURE must DIFFER from the control's.
+     *
+     * The determinism control is what makes "differs" mean "the subtitle was
+     * drawn": a third production, identical to the control, must decode to
+     * BYTE-IDENTICAL pixels. Without it, ffmpeg non-determinism alone would
+     * satisfy the difference.
+     */
+    public function test_subtitle_burn_in_still_reaches_the_picture_in_the_fmp4_container(): void
+    {
+        $clip = $this->makeH264AacClip();
+
+        $burnedDir = $this->root . '/burn-on';
+        mkdir($burnedDir, 0755, true);
+        // The sidecar `applySubtitleBurnIn()` looks for: `{hls_dir}/sub-{index}.vtt`.
+        // A full-frame block of text, so the difference is unmistakable.
+        file_put_contents(
+            "{$burnedDir}/sub-0.vtt",
+            "WEBVTT\n\n00:00:00.000 --> 00:00:12.000\n"
+            . "PHLIX BURN-IN TEST CAPTION\nSECOND LINE OF THE CAPTION\n"
+        );
+
+        $burned = $this->produce($clip, 'fmp4', '720p', 0, $burnedDir, ['subtitle_burn_in_index' => 0]);
+        $plain = $this->produce($clip, 'fmp4', '720p', 0, $this->root . '/burn-off');
+        $plainAgain = $this->produce($clip, 'fmp4', '720p', 0, $this->root . '/burn-off-2');
+
+        // The premise: burning in did not break the container. Everything the
+        // fMP4 acceptance criteria demand still holds of the burned segment.
+        $this->assertStringEndsWith('/seg-v720p-00000.m4s', $burned);
+        $this->assertInitShape($burnedDir . '/init-v720p.m4s');
+        $this->assertMediaSegmentShape($burned);
+        $this->assertBareSegmentIsNotSelfContained($burned);
+
+        $streams = $this->probeConcat($burnedDir . '/init-v720p.m4s', $burned);
+        $this->assertSame('h264', $streams[0]['codec_name'] ?? null);
+        $this->assertSame('aac', $streams[1]['codec_name'] ?? null);
+
+        $burnedPng = $this->decodeFirstFrame($burnedDir . '/init-v720p.m4s', $burned, 'burned');
+        $plainPng = $this->decodeFirstFrame(dirname($plain) . '/init-v720p.m4s', $plain, 'plain');
+        $plainAgainPng = $this->decodeFirstFrame(
+            dirname($plainAgain) . '/init-v720p.m4s',
+            $plainAgain,
+            'plain-again'
+        );
+
+        // The determinism control FIRST: without it, "the pictures differ" is
+        // satisfied by any two encodes of anything.
+        $this->assertSame(
+            md5_file($plainPng),
+            md5_file($plainAgainPng),
+            'two identical productions decoded to different pixels, so this encode is not '
+            . 'deterministic and a picture difference proves nothing about burn-in'
+        );
+
+        $this->assertNotSame(
+            md5_file($plainPng),
+            md5_file($burnedPng),
+            'the burned fMP4 segment decoded to the SAME picture as the un-burned one — the '
+            . 'subtitle filter did not reach the fMP4 branch'
+        );
+
+        fwrite(STDERR, sprintf(
+            "\n[S60] burn-in x fmp4: burned=%s plain=%s plainAgain=%s\n",
+            substr((string) md5_file($burnedPng), 0, 12),
+            substr((string) md5_file($plainPng), 0, 12),
+            substr((string) md5_file($plainAgainPng), 0, 12)
+        ));
+    }
+
+    /**
+     * Decodes the FIRST frame of `init ++ segment` to a PNG and returns its path.
+     *
+     * PNG rather than a raw frame so the comparison is over a lossless,
+     * self-describing artefact; `-frames:v 1` so it is one deterministic picture
+     * rather than a whole decode.
+     */
+    private function decodeFirstFrame(string $init, string $segment, string $tag): string
+    {
+        $joined = "{$this->root}/{$tag}.mp4";
+        file_put_contents($joined, (string) file_get_contents($init) . (string) file_get_contents($segment));
+
+        $png = "{$this->root}/{$tag}.png";
+        $cmd = sprintf(
+            '%s -y -hide_banner -loglevel error -i %s -frames:v 1 %s 2>&1',
+            escapeshellarg(self::FFMPEG),
+            escapeshellarg($joined),
+            escapeshellarg($png)
+        );
+        exec($cmd, $output, $code);
+        $this->assertSame(0, $code, "could not decode {$tag}: " . implode("\n", $output));
+        $this->assertFileExists($png);
+        $this->assertGreaterThan(0, (int) filesize($png), "{$tag} decoded to an empty PNG");
+
+        return $png;
+    }
+
+    // ─────────────────────────────────────────────────────────────────
     // AC1 — HEVC / AC-3 5.1
     // ─────────────────────────────────────────────────────────────────
 
@@ -221,8 +338,19 @@ final class Fmp4SegmentProductionTest extends TestCase
      * Drives a real `TranscodeManager::ensureSegment()` with a real
      * `FfmpegRunner` over a mocked job row, and returns the published path.
      */
-    private function produce(string $clip, string $format, string $variant, int $index, ?string $dir = null): string
-    {
+    /**
+     * @param array<string, mixed> $extraParams S60: merged into the persisted
+     *                                          `segment_params` — used to switch
+     *                                          subtitle burn-in on.
+     */
+    private function produce(
+        string $clip,
+        string $format,
+        string $variant,
+        int $index,
+        ?string $dir = null,
+        array $extraParams = []
+    ): string {
         $dir ??= $this->root . '/job-' . bin2hex(random_bytes(3));
         if (!is_dir($dir)) {
             mkdir($dir, 0755, true);
@@ -232,6 +360,7 @@ final class Fmp4SegmentProductionTest extends TestCase
         if ($format === 'fmp4') {
             $params['segment_format'] = 'fmp4';
         }
+        $params = $extraParams + $params;
         $row = [
             'id' => 'it-job',
             'hls_dir' => $dir,

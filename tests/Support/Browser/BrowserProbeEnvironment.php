@@ -81,14 +81,24 @@ final class BrowserProbeEnvironment
         'Phlix\\Tests\\E2E\\Media\\Transcoding\\Fmp4HlsThroughControllerE2ETest';
 
     /**
-     * The five cases of {@see CONTROLLER_TEST_CLASS} that must have EXECUTED.
+     * The six cases of {@see CONTROLLER_TEST_CLASS} that must have EXECUTED.
      *
-     * All five, for the same reason all three of {@see REQUIRED_CASES} are demanded:
-     * the EXT-X-MAP control and the concurrency control are what make the positive
-     * result mean anything (a serialising test server would stall the player and the
-     * red would be the harness), the default-still-mpegts guard is the only
-     * machine-readable statement in CI that S315 did not flip what S60 owns, and the
-     * leak guard is the one that already caught a harness defect no assertion saw.
+     * All of them, for the same reason all three of {@see REQUIRED_CASES} are
+     * demanded: the EXT-X-MAP control and the concurrency control are what make the
+     * positive result mean anything (a serialising test server would stall the
+     * player and the red would be the harness), the CSP control is what makes the
+     * positive case's CSP assertions mean anything (a page under a permissive policy
+     * and a page under none are indistinguishable, and both play), the
+     * shipped-default guard is the only machine-readable statement in CI about which
+     * container an install actually gets, and the leak guard is the one that already
+     * caught a harness defect no assertion saw.
+     *
+     * ⚠ These are matched BY NAME against `junit.xml` by
+     * `scripts/assert-browser-e2e-ran.php`, so renaming a case without editing this
+     * list reds the S305 gate — correctly. S60 renamed
+     * `testTheShippedDefaultIsStillMpegTs` (S315's scope guard, which existed to stop
+     * an earlier step flipping the default) to `testTheShippedDefaultIsFmp4`, because
+     * S60 IS the step that legitimately flips it.
      *
      * @var list<string>
      */
@@ -96,7 +106,8 @@ final class BrowserProbeEnvironment
         'testHlsJsPlaysAnFmp4PresentationServedEntirelyByTheRealController',
         'testRemovingTheExtXMapBreaksPlaybackThroughTheController',
         'testTheControllerBackedServerIsGenuinelyConcurrent',
-        'testTheShippedDefaultIsStillMpegTs',
+        'testRemovingBlobFromMediaSrcBlocksPlaybackUnderTheSamePolicy',
+        'testTheShippedDefaultIsFmp4',
         'testTheHarnessServerShutsDownCleanlyAndLeaksNoListener',
     ];
 

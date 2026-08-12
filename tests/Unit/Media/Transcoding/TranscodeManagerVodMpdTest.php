@@ -796,11 +796,35 @@ final class TranscodeManagerVodMpdTest extends TestCase
         )));
     }
 
-    public function test_job_creation_writes_no_manifest_when_the_setting_is_off(): void
+    /**
+     * ⚠ S60. This case read `…_when_the_setting_is_off` and passed `null` (no
+     * setting), because "absent" and "mpegts" were the same job while the
+     * DEFAULT was mpegts. They are not now: the rollback is an EXPLICIT
+     * `transcoding.segment_format = mpegts`, and an MPEG-TS job publishes no
+     * MPD (nothing produces `.m4s` for it to reference). Left as `null` this
+     * case would have asserted the absence of a file the shipped default now
+     * writes.
+     */
+    public function test_job_creation_writes_no_manifest_when_the_setting_is_rolled_back(): void
+    {
+        $dir = $this->ensureJobDir(EncodeSettings::FORMAT_MPEGTS);
+
+        $this->assertFileDoesNotExist("{$dir}/" . TranscodeManager::MPD_FILENAME);
+    }
+
+    /**
+     * ⚠ S60 — the arm the case above used to occupy, and the control for it:
+     * an install with NO override publishes the manifest, because the shipped
+     * default is fMP4. Both arms are needed; neither stands in for the other.
+     */
+    public function test_job_creation_writes_the_manifest_when_no_setting_is_configured(): void
     {
         $dir = $this->ensureJobDir(null);
 
-        $this->assertFileDoesNotExist("{$dir}/" . TranscodeManager::MPD_FILENAME);
+        $this->assertFileExists("{$dir}/" . TranscodeManager::MPD_FILENAME);
+        $this->assertSame([], MpdSchema::errors((string) file_get_contents(
+            "{$dir}/" . TranscodeManager::MPD_FILENAME
+        )));
     }
 
     /**
@@ -808,7 +832,13 @@ final class TranscodeManagerVodMpdTest extends TestCase
      * directory while the row lives on; the next request rebuilds it here. The
      * manifest has to come back with the playlists — and it has to come back in
      * the container the JOB was created with. The manager below is built with no
-     * `EncodeSettings` at all, so the LIVE value is the `mpegts` default.
+     * `EncodeSettings` at all, so the LIVE value is the shipped default —
+     * `mpegts` until S60, `fmp4` since. ⚠ That reversal means this arm can no
+     * longer tell "read the row" from "read the default";
+     * {@see self::test_regeneration_of_an_mpegts_job_writes_no_manifest()} is
+     * the arm that carries that claim now, and its fixture (`jobRow(..., null)`)
+     * is exactly a pre-S60 row: `segment_params` present, `segment_format`
+     * absent.
      */
     public function test_regeneration_writes_the_manifest_for_the_jobs_own_container(): void
     {

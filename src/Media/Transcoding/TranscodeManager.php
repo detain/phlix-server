@@ -370,8 +370,32 @@ class TranscodeManager
      * level set itself is unchanged from v8 — a pre-v9 job's DIRECTORY is simply
      * missing the Original media playlist, and its persisted ladder was written
      * under the old rules, so it must not be reused.
+     *
+     * `v10` (S60) = **fMP4 is the default container**
+     * ({@see EncodeSettings::DEFAULT_SEGMENT_FORMAT}). This bump is not
+     * cosmetic and it is not optional: {@see EncodeSettings::fingerprint()}
+     * returns `''` whenever every setting sits at its shipped default, and the
+     * container is folded in as a suffix that is empty AT the default — so the
+     * instant the default moved to `fmp4`, `fingerprint()` began returning the
+     * old MPEG-TS value (`''`) for the NEW default. Without this bump
+     * {@see findReusableJob()} would hand every pre-existing `.ts` job straight
+     * back for an fMP4 request, and the server would serve `.ts` bytes against
+     * `.m4s` playlists. `sha1(…|v9…)` and `sha1(…|v10…)` cannot collide, which
+     * is what closes it.
+     *
+     * ⚠ **Operational cost, stated plainly:** on the deploy that carries this,
+     * EVERY install's segment cache is orphaned. The first playback of every
+     * item re-encodes from scratch (CPU burst, first-play latency) and the v9
+     * directories linger until {@see sweepSegmentCache()} reclaims them — after
+     * {@see $cacheMaxAgeSeconds} idle (3 h by default) or under the LRU byte
+     * budget. That sweep globs `{$segmentDir}/*` and is therefore
+     * version-agnostic: it reaps a v9 directory exactly as it reaps a v10 one.
+     * Peak disk is both generations at once.
+     *
+     * ⚠ **Reverting the flip must revert this too** — see the S60 note in
+     * {@see EncodeSettings::fingerprint()}.
      */
-    private const JOB_KEY_VERSION = 'v9';
+    private const JOB_KEY_VERSION = 'v10';
 
     /**
      * S58 — the VOD DASH manifest published in a job directory.
@@ -2317,7 +2341,7 @@ class TranscodeManager
         ?string $variantId,
         int $index,
         ?string $audioId = null,
-        string $format = EncodeSettings::DEFAULT_SEGMENT_FORMAT
+        string $format = EncodeSettings::FORMAT_MPEGTS
     ): string {
         $ext = self::segmentExtension($format);
 
@@ -2387,6 +2411,20 @@ class TranscodeManager
      * {@see EncodeSettings::fingerprint()}, so the NEXT `ensureHlsJob()` gets a
      * different key, a fresh job id and a fresh directory.
      *
+     * ⚠ **The absent-key answer is the LITERAL `mpegts`, not
+     * {@see EncodeSettings::DEFAULT_SEGMENT_FORMAT}** (S60). It used to be the
+     * constant, which was indistinguishable while the constant WAS `mpegts`.
+     * The two are not the same claim: this method answers "what container is
+     * already on disk for this job?", and every job created before S60 persisted
+     * `segment_params` with no `segment_format` key at all — because
+     * {@see computeSegmentParams()} only ever writes the key for `fmp4`. Reading
+     * the absence through the constant would have re-labelled every one of those
+     * `.ts` job directories as fMP4 on the deploy that flipped it: their
+     * playlists would regenerate naming `.m4s` (via {@see segmentFormatOfRow()}),
+     * and every `.ts` request from a player already mid-session would burn an
+     * encode and then 404. `mpegts` here is a statement about persisted DATA and
+     * must never track the live default again.
+     *
      * @param array<string, mixed> $segParams Resolved params for this segment.
      *
      * @return string `mpegts` or `fmp4`.
@@ -2397,7 +2435,7 @@ class TranscodeManager
     {
         return ($segParams['segment_format'] ?? null) === EncodeSettings::FORMAT_FMP4
             ? EncodeSettings::FORMAT_FMP4
-            : EncodeSettings::DEFAULT_SEGMENT_FORMAT;
+            : EncodeSettings::FORMAT_MPEGTS;
     }
 
     /**
@@ -2445,9 +2483,11 @@ class TranscodeManager
      * the producer wrote the other, so they share this ONE decode of the
      * persisted JSON rather than each parsing it their own way.
      *
-     * Anything unparseable degrades to the shipped MPEG-TS default, matching
+     * Anything unparseable degrades to MPEG-TS, matching
      * {@see segmentExtension()}: a corrupt `segment_params` can never invent a
-     * third naming scheme.
+     * third naming scheme, and it must not be read as a flip either — see the
+     * S60 paragraph on {@see segmentFormatOf()} for why the literal, and not
+     * {@see EncodeSettings::DEFAULT_SEGMENT_FORMAT}, is the right answer here.
      *
      * @param array<string, mixed> $row The transcode_jobs row.
      *
@@ -2459,11 +2499,11 @@ class TranscodeManager
     {
         $raw = $row['segment_params'] ?? null;
         if (!is_string($raw) || $raw === '') {
-            return EncodeSettings::DEFAULT_SEGMENT_FORMAT;
+            return EncodeSettings::FORMAT_MPEGTS;
         }
         $decoded = json_decode($raw, true);
         if (!is_array($decoded)) {
-            return EncodeSettings::DEFAULT_SEGMENT_FORMAT;
+            return EncodeSettings::FORMAT_MPEGTS;
         }
 
         // The VALUE is lifted here; the DECISION stays in segmentFormatOf(), so
@@ -2662,7 +2702,7 @@ class TranscodeManager
         ?int $bandwidth,
         ?array $variants = null,
         ?array $audioTracks = null,
-        string $segmentFormat = EncodeSettings::DEFAULT_SEGMENT_FORMAT
+        string $segmentFormat = EncodeSettings::FORMAT_MPEGTS
     ): void {
         if ($variants === null) {
             // Legacy single-variant path (BC for pre-A5 jobs / callers).
@@ -3209,7 +3249,7 @@ class TranscodeManager
         ?int $width,
         ?int $height,
         ?int $bandwidth,
-        string $format = EncodeSettings::DEFAULT_SEGMENT_FORMAT
+        string $format = EncodeSettings::FORMAT_MPEGTS
     ): string {
         // avc1.640029 = H.264 High@4.1 (the segment encode target); mp4a.40.2 = AAC-LC.
         $attrs = 'BANDWIDTH=' . ($bandwidth !== null && $bandwidth > 0 ? $bandwidth : self::LEGACY_BANDWIDTH);
@@ -3257,7 +3297,7 @@ class TranscodeManager
     private function buildMultiVariantMaster(
         array $variants,
         ?array $audioTracks = null,
-        string $format = EncodeSettings::DEFAULT_SEGMENT_FORMAT
+        string $format = EncodeSettings::FORMAT_MPEGTS
     ): string {
         $lines = ['#EXTM3U', '#EXT-X-VERSION:' . self::playlistVersion($format)];
 
@@ -3365,7 +3405,7 @@ class TranscodeManager
         float $duration,
         int $segSeconds,
         ?string $variantId,
-        string $format = EncodeSettings::DEFAULT_SEGMENT_FORMAT
+        string $format = EncodeSettings::FORMAT_MPEGTS
     ): string {
         $segSeconds = self::normalizedSegmentSeconds($segSeconds);
         $count = (int) ceil($duration / $segSeconds);
@@ -3418,7 +3458,7 @@ class TranscodeManager
         float $duration,
         int $segSeconds,
         string $audioId,
-        string $format = EncodeSettings::DEFAULT_SEGMENT_FORMAT
+        string $format = EncodeSettings::FORMAT_MPEGTS
     ): string {
         $segSeconds = self::normalizedSegmentSeconds($segSeconds);
         $count = (int) ceil($duration / $segSeconds);

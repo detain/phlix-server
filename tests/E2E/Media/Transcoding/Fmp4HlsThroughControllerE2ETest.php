@@ -9,6 +9,8 @@ use Phlix\Admin\SettingsRepository;
 use Phlix\Media\Transcoding\EncodeSettings;
 use Phlix\Media\Transcoding\FfmpegRunner;
 use Phlix\Media\Transcoding\TranscodeManager;
+use Phlix\Server\Http\Request as HttpRequest;
+use Phlix\Server\WebPortal\Controllers\SharedUiController;
 use Phlix\Tests\Support\Browser\BrowserProbeEnvironment;
 use Phlix\Tests\Support\Browser\StubJobRowConnection;
 
@@ -58,15 +60,31 @@ use Phlix\Tests\Support\Browser\StubJobRowConnection;
  *  5. **A leak guard.** The harness's first working version left a five-process
  *     server running after every case and every test still passed
  *     ({@see testTheHarnessServerShutsDownCleanlyAndLeaksNoListener}).
+ *  6. **A CSP control (S60).** The page is served under the SPA's real
+ *     `Content-Security-Policy`, and
+ *     {@see testRemovingBlobFromMediaSrcBlocksPlaybackUnderTheSamePolicy} shows
+ *     that policy BITING — because a page served with a permissive policy and a
+ *     page served with none are indistinguishable, and both play.
  *
- * ## Scope — deliberately unchanged by this file
+ * ## ⚠ What S60 changed in this file
  *
- * `EncodeSettings::DEFAULT_SEGMENT_FORMAT` stays `mpegts` and
- * `TranscodeManager::JOB_KEY_VERSION` stays `v9`; both belong to S60. fMP4 is
- * selected here by an EXPLICIT `transcoding.segment_format` override read through
- * the real {@see EncodeSettings::segmentFormat()} (settable over the admin API since
- * S313), and {@see testTheShippedDefaultIsStillMpegTs} pins that the default did not
- * move. This step is a no-op for anyone who does not run the test suite.
+ * S315 wrote it against a master where the shipped default was `mpegts`, selected
+ * fMP4 by an EXPLICIT `transcoding.segment_format` override read through the real
+ * {@see EncodeSettings::segmentFormat()} (settable over the admin API since S313),
+ * and carried a scope guard asserting the default had not moved. **S60 is the step
+ * that legitimately moves it.** Three things follow:
+ *
+ *  - the scope guard is re-pointed, not removed —
+ *    {@see testTheShippedDefaultIsFmp4} pins the new default with equal strength
+ *    (and keeps an explicit-`mpegts` control, which is the documented rollback).
+ *    Its NAME is registered in {@see BrowserProbeEnvironment::REQUIRED_CASES_BY_CLASS},
+ *    which is updated in the same commit;
+ *  - the explicit override is KEPT rather than dropped in favour of the new
+ *    default. A fixture that stopped saying what it wanted would stop being able
+ *    to fail if the default moved back;
+ *  - CSP is now asserted here, which S315 deliberately declined to do (its page
+ *    carried no policy at all, so an assertion would have been a claim with no
+ *    measurement behind it).
  *
  * ⚠ The `markTestSkipped()` guards below are the same load-bearing ones S57 carries,
  * for the same reason (a developer box with no browser must still be able to run the
@@ -195,8 +213,27 @@ final class Fmp4HlsThroughControllerE2ETest extends TestCase
             'the AC is "produced on demand" — a 200 must not be able to mean "the file was already there"'
         );
 
+        // ⚠ S60 — the page is served under the SPA's REAL Content-Security-Policy.
+        //
+        // S315 ran this case with no policy at all and said so: nothing was
+        // edited, every URL was same-origin, and asserting CSP would have been a
+        // claim with no measurement behind it. The header below is not a
+        // reconstruction — it is read off a real `SharedUiController::shell()`
+        // response, i.e. the exact bytes the SPA that plays this content serves,
+        // built by `SecurityHeaders::contentSecurityPolicy()`. Under it Chrome
+        // has to permit: `/__hls.js` (`script-src 'self'`), the playlist and
+        // segment fetches (`connect-src 'self'`), hls.js's `blob:` transmux
+        // worker (`worker-src`) and the MSE `blob:` object URL on the `<video>`
+        // element (`media-src`). The nonce is taken from the SPA's HTML BODY, not
+        // from its header, so a header/body mismatch shows up as the inline
+        // script never running rather than being papered over.
+        //
+        // That the policy is genuinely ENFORCED (and not merely present) is the
+        // job of {@see testRemovingBlobFromMediaSrcBlocksPlaybackUnderTheSamePolicy()}.
+        $spa = $this->spaContentSecurityPolicy();
+
         $server = $this->startServer($jobId, self::SERVER_WORKERS);
-        $probe = $this->probe($dir, $server);
+        $probe = $this->probe($dir, $server, $spa['csp'], $spa['nonce']);
 
         // The probe really ran in controller-backed mode. A silent fallback to
         // reading the directory would pass every assertion below while proving the
@@ -206,6 +243,13 @@ final class Fmp4HlsThroughControllerE2ETest extends TestCase
             $probe['upstream'] ?? null,
             'the probe did not run in --upstream mode, so these bytes did NOT come from the controller'
         );
+        // …and it really ran under the policy, for the same reason.
+        $this->assertSame(
+            $spa['csp'],
+            $probe['csp'] ?? null,
+            'the probe did not serve the SPA policy, so nothing below is evidence about CSP'
+        );
+        $this->assertSame([], $probe['cspViolations'] ?? null, 'the SPA CSP refused something');
 
         $this->assertTrue(
             $probe['ok'] === true,
@@ -459,30 +503,124 @@ final class Fmp4HlsThroughControllerE2ETest extends TestCase
     }
 
     /**
-     * ⚠ THE SCOPE GUARD.
+     * ⚠ WAS THE SCOPE GUARD; IS NOW THE PIN.
      *
-     * fMP4 is reached above by an EXPLICIT `transcoding.segment_format` override read
-     * through the real settings path — never by moving a default. This case states
-     * that in both directions, because "the test passes" and "the shipped behaviour
-     * changed" would otherwise be indistinguishable from the outside.
+     * Until S60 this case was `testTheShippedDefaultIsStillMpegTs` and existed to
+     * stop an earlier step flipping the default by accident: fMP4 is reached above
+     * by an EXPLICIT `transcoding.segment_format` override read through the real
+     * settings path, and "the test passes" and "the shipped behaviour changed"
+     * would otherwise be indistinguishable from the outside.
+     *
+     * S60 is the step that legitimately flips it, so the guard is re-pointed
+     * rather than removed, with equal strength: the default, the config literal
+     * that mirrors it, and the empty fingerprint that made the
+     * `JOB_KEY_VERSION` bump necessary. ⚠ It is registered BY NAME in
+     * {@see BrowserProbeEnvironment::REQUIRED_CASES_BY_CLASS}, so the rename is
+     * mirrored there — `scripts/assert-browser-e2e-ran.php` iterates that map and
+     * a stale entry is a CI red, correctly.
      */
-    public function testTheShippedDefaultIsStillMpegTs(): void
+    public function testTheShippedDefaultIsFmp4(): void
     {
         $this->assertSame(
-            EncodeSettings::FORMAT_MPEGTS,
+            EncodeSettings::FORMAT_FMP4,
             EncodeSettings::DEFAULT_SEGMENT_FORMAT,
-            'S315 must not flip the default — that is S60\'s, together with the JOB_KEY_VERSION bump'
+            'S60 flipped this; reverting it must also revert TranscodeManager::JOB_KEY_VERSION to v9'
         );
-        $this->assertSame(EncodeSettings::FORMAT_MPEGTS, (new EncodeSettings())->segmentFormat());
+        $this->assertSame(EncodeSettings::FORMAT_FMP4, (new EncodeSettings())->segmentFormat());
         $this->assertSame(
             '',
             (new EncodeSettings())->fingerprint(),
-            'an empty fingerprint is what keeps every existing install\'s job key byte-identical'
+            'the fingerprint is empty at the shipped default WHATEVER that default is — which is '
+            . 'precisely why the flip could not express itself there and needed the JOB_KEY_VERSION bump'
         );
 
-        // The control: the override this file relies on DOES select fMP4, so the
-        // assertions above measure "unchanged" rather than "always mpegts".
+        // The config file is the other half of the same default and must agree:
+        // it is what SettingsRepository::getDefault() reports as the effective
+        // value when there is no override row.
+        $config = require dirname(__DIR__, 4) . '/config/transcoding.php';
+        $this->assertIsArray($config);
+        $this->assertSame(EncodeSettings::FORMAT_FMP4, $config['segment_format'] ?? null);
+
+        // The control, now pointing the other way: an EXPLICIT mpegts override —
+        // the documented rollback — must still resolve to MPEG-TS, so the
+        // assertions above measure "the default is fmp4" rather than "everything
+        // is fmp4 now".
+        $this->assertSame(EncodeSettings::FORMAT_MPEGTS, $this->mpegtsSettings()->segmentFormat());
         $this->assertSame(EncodeSettings::FORMAT_FMP4, $this->fmp4Settings()->segmentFormat());
+    }
+
+    /**
+     * ⚠ THE CSP CONTROL — the case that makes the `csp` assertions in
+     * {@see testHlsJsPlaysAnFmp4PresentationServedEntirelyByTheRealController()}
+     * mean something.
+     *
+     * S315 deliberately did NOT assert CSP, and gave the right reason: it edited
+     * nothing, every URL was same-origin, and an assertion would have been "a
+     * claim with no measurement behind it". Serving the real header solves half
+     * of that — but only half. A page served WITH a policy that happens to permit
+     * everything is indistinguishable from a page served with no policy at all,
+     * and both play. So the policy has to be shown to BITE.
+     *
+     * The mutation is one token: `blob:` removed from `media-src`, nothing else
+     * touched. That is the exact directive hls.js needs — it attaches an MSE
+     * `blob:` object URL to the `<video>` element — and it is one of the two
+     * directives `SecurityHeaders::contentSecurityPolicy()` carries `blob:` on.
+     * Under the mutated policy playback must FAIL and the browser must report a
+     * `media-src` violation by name.
+     *
+     * Cheap by design: it fails as soon as the blob URL is refused, so it does
+     * not pay for four seconds of real-time playback or for four on-demand
+     * encodes.
+     */
+    public function testRemovingBlobFromMediaSrcBlocksPlaybackUnderTheSamePolicy(): void
+    {
+        $shipped = $this->spaContentSecurityPolicy();
+        $mutated = str_replace("media-src 'self' blob:", "media-src 'self'", $shipped['csp']);
+        $this->assertNotSame(
+            $shipped['csp'],
+            $mutated,
+            'the mutation did not apply — SecurityHeaders no longer spells media-src the expected way, '
+            . 'so this control would have re-run the positive case and passed for the wrong reason'
+        );
+
+        $jobId = 's60-csp-control';
+        $dir = $this->buildJob($jobId);
+        $server = $this->startServer($jobId, self::SERVER_WORKERS);
+        $probe = $this->probe($dir, $server, $mutated, $shipped['nonce']);
+
+        $this->assertSame($mutated, $probe['csp'] ?? null, 'the mutated policy was not the one served');
+
+        $this->report(sprintf(
+            'CSP control: ok=%s, %d violations %s, %d hls.js errors',
+            $probe['ok'] === true ? 'true' : 'false',
+            count($probe['cspViolations'] ?? []),
+            json_encode(array_values(array_unique(array_map(
+                static fn (array $v): string => (string) ($v['effectiveDirective'] ?? '?'),
+                $probe['cspViolations'] ?? []
+            )))),
+            count($probe['errors'])
+        ));
+
+        $this->assertFalse(
+            $probe['ok'] === true,
+            'hls.js played with blob: removed from media-src, so the CSP header the harness serves is '
+            . 'NOT being enforced and the positive case proves nothing about CSP: '
+            . json_encode($probe, JSON_PRETTY_PRINT)
+        );
+        $this->assertContains(
+            'media-src',
+            array_map(
+                static fn (array $v): string => (string) ($v['effectiveDirective'] ?? ''),
+                $probe['cspViolations'] ?? []
+            ),
+            'the failure must be the media-src refusal specifically, not some unrelated breakage'
+        );
+
+        // …and the failure is not "the harness served nothing": the controller
+        // still answered the playlists, exactly as in the positive case.
+        $served = $this->serverLog($server);
+        $this->assertNotNull($this->firstServed($served, 'master.m3u8'));
+        $this->assertSame(200, $this->firstServed($served, 'master.m3u8')['status']);
     }
 
     /**
@@ -630,6 +768,84 @@ final class Fmp4HlsThroughControllerE2ETest extends TestCase
         );
 
         return new EncodeSettings($repository);
+    }
+
+    /**
+     * The real {@see EncodeSettings} reading an EXPLICIT `mpegts` override — the
+     * documented S60 rollback (`PUT /api/v1/admin/settings`). Used only as the
+     * control in {@see testTheShippedDefaultIsFmp4()}.
+     */
+    private function mpegtsSettings(): EncodeSettings
+    {
+        $repository = $this->createMock(SettingsRepository::class);
+        $repository->method('getEffective')->willReturnCallback(
+            /** @return mixed */
+            static fn (string $key) => $key === EncodeSettings::SEGMENT_FORMAT_KEY
+                ? EncodeSettings::FORMAT_MPEGTS
+                : null
+        );
+
+        return new EncodeSettings($repository);
+    }
+
+    /**
+     * The SPA's OWN `Content-Security-Policy` header and the nonce on its inline
+     * bootstrap `<script>`, taken from a real {@see SharedUiController::shell()}
+     * response over a minimal Vite-manifest fixture.
+     *
+     * Read off the response rather than rebuilt from
+     * {@see \Phlix\Server\Http\Middleware\SecurityHeaders::contentSecurityPolicy()}
+     * directly, because it is the SPA shell that is load-bearing here: `shell()`
+     * mints a per-request nonce, stamps it on the inline block AND passes it to
+     * the builder, and it is that pairing the browser has to accept. The nonce is
+     * extracted from the BODY, so the two sides of the pairing arrive here from
+     * different places and a mismatch cannot cancel out.
+     *
+     * @return array{csp: string, nonce: string}
+     */
+    private function spaContentSecurityPolicy(): array
+    {
+        $root = "{$this->root}/spa";
+        $appDir = "{$root}/assets/app/.vite";
+        mkdir($appDir, 0755, true);
+        file_put_contents(
+            "{$appDir}/manifest.json",
+            (string) json_encode(['index.html' => ['file' => 'assets/index-s60.js', 'isEntry' => true]])
+        );
+        file_put_contents(
+            "{$root}/assets/app/index.html",
+            '<!DOCTYPE html><html><head><title>Phlix</title></head><body></body></html>'
+        );
+
+        $response = (new SharedUiController($root))->shell(new HttpRequest());
+        $this->assertSame(200, $response->statusCode, 'the SPA shell fixture did not render');
+
+        $csp = $response->headers['Content-Security-Policy'] ?? '';
+        $this->assertIsString($csp);
+        $this->assertNotSame('', $csp, 'the SPA shell served no CSP header');
+
+        // The directives this whole exercise is about, asserted on the SPA's own
+        // response before the browser is ever asked. ⚠ ASSERT, NEVER EDIT — S60
+        // changes no CSP, and these three are what make browser HLS possible at
+        // all (hls.js drives an MSE `blob:` object URL and a `blob:`-sourced
+        // transmux Web Worker, and fetches every playlist/segment same-origin).
+        $this->assertStringContainsString("connect-src 'self';", $csp);
+        $this->assertStringContainsString("media-src 'self' blob:;", $csp);
+        $this->assertStringContainsString("worker-src 'self' blob:;", $csp);
+
+        $this->assertSame(
+            1,
+            preg_match('/<script nonce="([^"]+)">window\.__PHLIX__ = /', $response->body, $m),
+            'the SPA shell did not stamp a nonce on its inline bootstrap script'
+        );
+        $nonce = (string) $m[1];
+        $this->assertStringContainsString(
+            "'nonce-{$nonce}'",
+            $csp,
+            'the SPA shell\'s header and body nonces disagree'
+        );
+
+        return ['csp' => $csp, 'nonce' => $nonce];
     }
 
     private function makeClip(): string
@@ -974,21 +1190,31 @@ final class Fmp4HlsThroughControllerE2ETest extends TestCase
 
     /**
      * @param ServerHandle $server
+     * @param string|null  $csp   S60: the Content-Security-Policy to serve the page
+     *                            under, VERBATIM. Null = no policy at all (the
+     *                            pre-S60 behaviour), in which case nothing about
+     *                            CSP may be concluded from the result.
+     * @param string|null  $nonce The nonce to stamp on the page's own inline
+     *                            script. Required whenever `$csp` carries a
+     *                            `'nonce-…'` source, or the page's script does not
+     *                            run and the failure has nothing to do with media.
      *
      * @return array{
      *     ok: bool, reason: ?string, errors: list<array<string, mixed>>, upstream: ?string,
+     *     csp: ?string, scriptNonce: ?string,
+     *     cspViolations: list<array{effectiveDirective: ?string, blockedURI: ?string}>,
      *     initSegments: list<string>, fragments: list<string>, levels: list<array<string, mixed>>,
      *     requests: list<array{name: string, status: int, bytes: int}>,
      *     currentTime: float, decodedFrames: int, videoWidth: int, videoHeight: int
      * }
      */
-    private function probe(string $dir, array $server): array
+    private function probe(string $dir, array $server, ?string $csp = null, ?string $nonce = null): array
     {
         $script = dirname(__DIR__, 3) . '/Support/Browser/hls-playback-probe.mjs';
         $this->assertFileExists($script);
 
         $jobId = basename($dir);
-        $cmd = implode(' ', array_map('escapeshellarg', [
+        $args = [
             $this->node,
             $script,
             '--dir',
@@ -1005,7 +1231,16 @@ final class Fmp4HlsThroughControllerE2ETest extends TestCase
             (string) self::PLAY_TO_SECONDS,
             '--timeout',
             (string) self::PROBE_TIMEOUT_MS,
-        ])) . ' 2>&1';
+        ];
+        if ($csp !== null) {
+            $args[] = '--csp';
+            $args[] = $csp;
+        }
+        if ($nonce !== null) {
+            $args[] = '--script-nonce';
+            $args[] = $nonce;
+        }
+        $cmd = implode(' ', array_map('escapeshellarg', $args)) . ' 2>&1';
 
         exec($cmd, $output, $code);
         $text = implode("\n", $output);
@@ -1021,6 +1256,8 @@ final class Fmp4HlsThroughControllerE2ETest extends TestCase
         );
 
         /** @var array{ok: bool, reason: ?string, errors: list<array<string, mixed>>, upstream: ?string,
+         *      csp: ?string, scriptNonce: ?string,
+         *      cspViolations: list<array{effectiveDirective: ?string, blockedURI: ?string}>,
          *      initSegments: list<string>, fragments: list<string>, levels: list<array<string, mixed>>,
          *      requests: list<array{name: string, status: int, bytes: int}>, currentTime: float,
          *      decodedFrames: int, videoWidth: int, videoHeight: int} $decoded */

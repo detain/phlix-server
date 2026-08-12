@@ -353,6 +353,161 @@ final class FfmpegRunnerSegmentFormatTest extends TestCase
      * The hwaccel builder is the third `-f mpegts` site and the one most often
      * forgotten — it is why `v4` had to be bumped once already.
      */
+    // ─────────────────────────────────────────────────────────────────
+    // S60 — the flip changes the MUXER and nothing else
+    // ─────────────────────────────────────────────────────────────────
+
+    /**
+     * ⚠ S60 AC: "subtitle-burn-in behaviour is verified not regressed".
+     *
+     * The structural claim, isolated: the container is decided in
+     * {@see FfmpegRunner::muxerTail()}, which runs AFTER the filtergraph is
+     * assembled, so the `-vf` chain — tone-map, `subtitles=` burn-in, scale, in
+     * that order — must come out BYTE-IDENTICAL in both containers. Only the tail
+     * may differ.
+     *
+     * Asserted as an equality between the two extracted chains rather than as a
+     * `assertStringContainsString('subtitles=')` on the fMP4 one: "the fMP4
+     * command mentions subtitles" would still pass if the filter were emitted
+     * differently there (a different escape, a different position relative to
+     * `scale`, a dropped tone-map). Position matters — libass composites onto the
+     * pre-scale frame — so an equality is the only assertion that catches a
+     * reorder.
+     *
+     * The real-pixel half of this claim lives in
+     * `Fmp4SegmentProductionTest::test_subtitle_burn_in_still_reaches_the_picture_in_the_fmp4_container()`,
+     * which runs ffmpeg and compares decoded frames.
+     */
+    public function test_the_subtitle_burn_in_filter_chain_is_byte_identical_in_both_containers(): void
+    {
+        $vtt = sys_get_temp_dir() . '/phlix_s60_burnin_' . bin2hex(random_bytes(4)) . '.vtt';
+        file_put_contents($vtt, "WEBVTT\n\n00:00:00.000 --> 00:00:06.000\nhello\n");
+
+        try {
+            $params = $this->videoParams() + [
+                'require_hdr_tone_map' => true,
+                'tone_map_filter' => 'zscale=t=linear:npl=100,tonemap=hable',
+                'subtitle_burn_in' => ['path' => $vtt, 'format' => 'vtt'],
+            ];
+
+            $ts = $this->runner()->buildSegmentCommand('/media/in.mkv', self::OUT_TS, 252.0, 6.0, $params);
+            $m4s = $this->runner()->buildSegmentCommand(
+                '/media/in.mkv',
+                self::OUT_M4S,
+                252.0,
+                6.0,
+                ['segment_format' => 'fmp4'] + $params
+            );
+
+            $tsChain = $this->videoFilterChain($ts);
+            $m4sChain = $this->videoFilterChain($m4s);
+
+            // Denominator: the chain really contains all three stages, so an
+            // equality between two EMPTY chains cannot read as a pass.
+            $this->assertStringContainsString('tonemap=hable', $tsChain);
+            $this->assertStringContainsString('subtitles=', $tsChain);
+            $this->assertStringContainsString('scale=1280:720', $tsChain);
+            $this->assertSame(
+                ['zscale', 'tonemap', 'subtitles', 'scale'],
+                array_map(
+                    static fn (string $f): string => explode('=', $f, 2)[0],
+                    explode(',', $tsChain)
+                ),
+                'the burn-in must sit AFTER the tone-map and BEFORE the scale'
+            );
+
+            $this->assertSame(
+                $tsChain,
+                $m4sChain,
+                'the segment container changed the video filter chain. It must not: the container is '
+                . 'chosen by muxerTail() after the graph is built, and burn-in is a -vf filter.'
+            );
+
+            // …and the commands are NOT simply identical: the tails differ, which
+            // is what makes the equality above a statement about the filtergraph
+            // rather than about the flag being inert.
+            $this->assertNotSame($ts, $m4s);
+            $this->assertStringContainsString('-f mpegts', $ts);
+            $this->assertStringNotContainsString('-f mpegts', $m4s);
+        } finally {
+            @unlink($vtt);
+        }
+    }
+
+    /**
+     * ⚠ S60 AC: "multi-audio behaviour is verified not regressed".
+     *
+     * P3B multi-audio splits one job across TWO builders — `-an` video-only
+     * segments from {@see FfmpegRunner::buildSegmentCommand()} and `-vn`
+     * audio-only ones from {@see FfmpegRunner::buildAudioSegmentCommand()} — and
+     * `TranscodeManager::produceAudioSegment()` builds its `$segParams` FRESH,
+     * never reading the persisted array. That is the exact shape of the SV-3.3
+     * landmine: wire the container into one builder and a flagged job writes
+     * `.m4s` video beside `.ts` audio in one directory, which no playlist
+     * assertion and no per-builder test would catch.
+     *
+     * So both arms are driven here over the same job, in the same container.
+     * The real-ffmpeg, real-controller half is
+     * {@see \Phlix\Tests\Integration\Media\Transcoding\HlsFmp4OnDemandServeTest},
+     * which produces and serves `seg-a{N}-NNNNN.m4s` for a two-audio-track source.
+     */
+    public function test_both_multi_audio_arms_select_the_same_container(): void
+    {
+        $videoOnly = ['segment_format' => 'fmp4', 'video_only' => true] + $this->videoParams();
+        $audioOnly = ['segment_format' => 'fmp4'] + $this->audioParams();
+
+        $video = $this->runner()->buildSegmentCommand('/media/in.mkv', self::OUT_M4S, 252.0, 6.0, $videoOnly);
+        $audio = $this->runner()->buildAudioSegmentCommand(
+            '/media/in.mkv',
+            '/tmp/segs/job1/seg-a1-00042.m4s',
+            252.0,
+            6.0,
+            $audioOnly
+        );
+
+        foreach (['video' => $video, 'audio' => $audio] as $which => $cmd) {
+            $this->assertStringContainsString('-hls_segment_type fmp4', $cmd, $which);
+            $this->assertStringNotContainsString('-f mpegts', $cmd, $which);
+        }
+
+        // The multi-audio shape itself is intact in the fMP4 branch: the video
+        // segment carries no audio, the audio segment carries no video and maps
+        // the AUDIO-RELATIVE stream the rendition id names.
+        $this->assertStringContainsString(' -an', $video);
+        $this->assertStringContainsString(' -vn', $audio);
+        $this->assertStringContainsString('-map 0:a:1', $audio);
+
+        // The control: with the key absent, BOTH arms fall back to MPEG-TS
+        // together. A container wired into one builder only would pass the loop
+        // above and fail here (or vice versa).
+        $videoTs = $this->runner()->buildSegmentCommand(
+            '/media/in.mkv',
+            self::OUT_TS,
+            252.0,
+            6.0,
+            ['video_only' => true] + $this->videoParams()
+        );
+        $audioTs = $this->runner()->buildAudioSegmentCommand(
+            '/media/in.mkv',
+            '/tmp/segs/job1/seg-a1-00042.ts',
+            252.0,
+            6.0,
+            $this->audioParams()
+        );
+        foreach (['video' => $videoTs, 'audio' => $audioTs] as $which => $cmd) {
+            $this->assertStringContainsString('-f mpegts', $cmd, $which);
+            $this->assertStringNotContainsString('-hls_segment_type fmp4', $cmd, $which);
+        }
+    }
+
+    /**
+     * The `-vf "…"` chain of a built command, or `''` when there is none.
+     */
+    private function videoFilterChain(string $cmd): string
+    {
+        return preg_match('/ -vf "([^"]*)"/', $cmd, $m) === 1 ? $m[1] : '';
+    }
+
     public function test_the_hwaccel_builder_honours_both_containers(): void
     {
         $this->seedNvenc();

@@ -113,9 +113,10 @@ class DashController
      *
      * A filename matching no arm falls through to a plain static lookup that 404s.
      *
-     * An MPEG-TS job (the shipped default) has no `.m4s` in it and no
-     * `manifest.mpd` either, so a `.m4s` request against one produces the job's
-     * `.ts` segment and then 404s on the requested `.m4s` name — the same
+     * An MPEG-TS job — the `transcoding.segment_format = mpegts` rollback, and
+     * every job created before S60 flipped the default to `fmp4` — has no `.m4s`
+     * in it and no `manifest.mpd` either, so a `.m4s` request against one produces
+     * the job's `.ts` segment and then 404s on the requested `.m4s` name — the same
      * "genuinely absent file" answer it gave before S59.
      *
      * @param array<string, string> $params

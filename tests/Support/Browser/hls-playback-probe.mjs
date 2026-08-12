@@ -14,6 +14,7 @@
  *   node hls-playback-probe.mjs --dir <jobdir> --hlsjs <hls.js> --chrome <bin>
  *                               [--playlist master.m3u8] [--seconds 3]
  *                               [--timeout 30000] [--upstream <base url>]
+ *                               [--csp <header value>] [--script-nonce <nonce>]
  *
  * Exit code is 0 whenever the probe RAN (even if playback failed) and non-zero
  * only when it could not run at all — so a failed playback is a test failure
@@ -34,6 +35,30 @@
  * failure. `--dir` stays required either way: the probe never reads it in upstream
  * mode, and the PHP test uses it as the denominator (it counts what is on disk
  * before and after).
+ *
+ * ## `--csp` / `--script-nonce` (S60)
+ *
+ * Without `--csp` the page is served with NO Content-Security-Policy at all, so no
+ * policy is enforced and nothing about CSP can be concluded from a pass — which is
+ * why S315 declined to assert it. With `--csp <value>` the header is emitted on
+ * `/__page.html` verbatim and Chrome enforces it against everything the page then
+ * does: loading `/__hls.js` (`script-src`), fetching playlists and segments
+ * (`connect-src`), spinning up hls.js's `blob:` transmux worker (`worker-src`) and
+ * attaching the MSE `blob:` object URL to the `<video>` element (`media-src`).
+ *
+ * The value is passed IN rather than built here, so the caller can hand over the
+ * exact bytes production serves. `--script-nonce` is stamped on the page's own
+ * inline `<script>`: the SPA's real policy is `script-src 'self' 'nonce-…'`, under
+ * which an un-nonced inline script does not execute at all — so passing the header
+ * without the matching nonce would fail for a reason having nothing to do with
+ * media. The two are passed SEPARATELY (the caller reads the nonce out of the SPA's
+ * HTML body, not out of its CSP header), which makes a header/body nonce mismatch
+ * visible here rather than silently papered over.
+ *
+ * Violations are reported: the page listens for `securitypolicyviolation` and every
+ * event lands in `cspViolations` with its `effectiveDirective` and `blockedURI`.
+ * That gives the PHP test a denominator — 0 on a policy that permits playback, and
+ * a NAMED directive on one that does not.
  */
 
 import { createServer } from 'node:http';
@@ -66,23 +91,40 @@ const seconds = Number(arg('seconds', '3'));
 const timeoutMs = Number(arg('timeout', '30000'));
 // S315. Null = read the bytes off disk (the original, fake-server behaviour).
 const upstream = arg('upstream', null);
+// S60. Null = serve the page with NO policy, i.e. enforce nothing (pre-S60
+// behaviour, and what every case that does not ask about CSP still gets).
+const csp = arg('csp', null);
+const scriptNonce = arg('script-nonce', null);
 
 if (!dir || !hlsjs) {
   console.error('usage: --dir <jobdir> --hlsjs <hls.js path> [--chrome bin]');
   process.exit(2);
 }
 
+const NONCE_ATTR = scriptNonce ? ` nonce="${scriptNonce.replace(/"/g, '')}"` : '';
+
 const PAGE = (src, target) => `<!doctype html><meta charset="utf-8">
 <video id="v" muted playsinline></video>
 <script src="/__hls.js"></script>
-<script>
+<script${NONCE_ATTR}>
 window.__probe = {
   done: false, ok: false, reason: null, hlsSupported: null,
   errors: [], levels: [], fragments: [], initSegments: [],
   currentTime: 0, duration: null, videoWidth: 0, videoHeight: 0,
   bufferedEnd: 0, decodedFrames: 0, droppedFrames: 0,
+  cspViolations: [],
 };
 const p = window.__probe;
+// S60. Every directive the browser actually REFUSED, named. A policy that
+// permits playback produces an empty list; one that does not names the
+// directive that stopped it, which is the difference between "the CSP is fine"
+// and "nothing was enforced".
+document.addEventListener('securitypolicyviolation', (e) => {
+  p.cspViolations.push({
+    effectiveDirective: e.effectiveDirective || e.violatedDirective || null,
+    blockedURI: e.blockedURI || null,
+  });
+});
 const v = document.getElementById('v');
 function finish(ok, reason) { if (p.done) return; snapshot(); p.ok = ok; p.reason = reason; p.done = true; }
 function snapshot() {
@@ -137,7 +179,12 @@ const server = createServer(async (req, res) => {
   try {
     if (url.pathname === '/__page.html') {
       const body = PAGE(`/${playlist}`, seconds);
-      res.writeHead(200, { 'content-type': MIME['.html'] });
+      const headers = { 'content-type': MIME['.html'] };
+      // S60. Emitted VERBATIM — the caller hands over the exact bytes the SPA
+      // shell serves, so what the browser enforces here is what it enforces
+      // there. Absent by default, which is the pre-S60 behaviour.
+      if (csp) headers['content-security-policy'] = csp;
+      res.writeHead(200, headers);
       res.end(body);
       return;
     }
@@ -288,6 +335,11 @@ try {
   // the wrong mode: a controller-backed case that silently fell back to reading the
   // directory would otherwise pass while proving nothing (S315).
   probe.upstream = upstream;
+  // S60. Which policy was enforced, echoed back for the same reason `upstream`
+  // is: a case that asked for a CSP and silently got none would otherwise pass
+  // while proving nothing about CSP at all.
+  probe.csp = csp;
+  probe.scriptNonce = scriptNonce;
   probe.requests = requests;
   console.log(JSON.stringify(probe, null, 2));
   ws.close();

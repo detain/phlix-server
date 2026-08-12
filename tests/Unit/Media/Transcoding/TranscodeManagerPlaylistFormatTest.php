@@ -377,18 +377,47 @@ final class TranscodeManagerPlaylistFormatTest extends TestCase
     }
 
     /**
-     * The control for the case above: the SAME source, the SAME call, the
-     * setting absent. Without it, "the playlist says .m4s" could be true of
-     * every job on every install.
+     * ⚠ THE ROLLBACK, AT THE JOB-CREATION ENTRY POINT.
+     *
+     * This case read `…_when_the_setting_is_off` and passed `null` (no setting)
+     * until S60, because "the setting is absent" and "the setting is mpegts"
+     * were the same job while the DEFAULT was mpegts. They are different jobs
+     * now, and only one of them is the rollback: an operator who PUTs
+     * `transcoding.segment_format = mpegts` must get `.ts` playlists out of the
+     * real `ensureHlsJob()`, not merely out of `EncodeSettings`.
+     *
+     * It is also the control for the fMP4 case above — without an arm that
+     * produces `.ts`, "the playlist says `.m4s`" could be true of every job on
+     * every install for reasons having nothing to do with the setting.
      */
-    public function test_ensure_hls_job_writes_mpegts_playlists_when_the_setting_is_off(): void
+    public function test_ensure_hls_job_writes_mpegts_playlists_when_the_setting_is_rolled_back(): void
     {
-        $dir = $this->ensureJobDir(null);
+        $dir = $this->ensureJobDir(EncodeSettings::FORMAT_MPEGTS);
 
         $media = (string) file_get_contents("{$dir}/media_v720p.m3u8");
         $this->assertStringNotContainsString('#EXT-X-MAP', $media);
         $this->assertStringContainsString("seg-v720p-00000.ts\n", $media);
+        $this->assertStringNotContainsString('.m4s', $media);
         $this->assertStringContainsString("#EXT-X-VERSION:3\n", $media);
+    }
+
+    /**
+     * ⚠ S60 — what an install with NO override actually gets.
+     *
+     * The case above used to occupy this slot by passing `null`. Both arms are
+     * needed now: this one pins the DEFAULT (an untouched install writes fMP4),
+     * the one above pins the ROLLBACK (an explicit `mpegts` writes MPEG-TS), and
+     * neither can stand in for the other.
+     */
+    public function test_ensure_hls_job_writes_fmp4_playlists_when_no_setting_is_configured(): void
+    {
+        $dir = $this->ensureJobDir(null);
+
+        $media = (string) file_get_contents("{$dir}/media_v720p.m3u8");
+        $this->assertStringContainsString('#EXT-X-MAP:URI="init-v720p.m4s"' . "\n", $media);
+        $this->assertStringContainsString("seg-v720p-00000.m4s\n", $media);
+        $this->assertStringNotContainsString('.ts', $media);
+        $this->assertStringContainsString("#EXT-X-VERSION:7\n", $media);
     }
 
     /**
@@ -398,9 +427,16 @@ final class TranscodeManagerPlaylistFormatTest extends TestCase
      * job, that job would 404 for the rest of its life — the master is written
      * first and its mere presence short-circuits every later attempt.
      *
-     * The container comes from the ROW, never from the live setting: the manager
-     * below is built with no `EncodeSettings` at all (so the live value is the
-     * `mpegts` default) and must still regenerate fMP4.
+     * The container comes from the ROW, never from the live setting.
+     *
+     * ⚠ S60 REVERSED THIS CASE'S FORCE. It used to be the strong one: the
+     * manager is built with no `EncodeSettings`, so before the flip the live
+     * value was `mpegts` and reproducing fMP4 meant the row had won. Now the
+     * live default IS fMP4, so this arm can no longer tell "read the row" from
+     * "read the default" — {@see self::test_regeneration_of_an_unstamped_job_stays_on_mpegts()}
+     * is the arm that carries the claim, and it is now the load-bearing one.
+     * This case is kept because it still pins the fMP4 regeneration SHAPE
+     * (`EXT-X-MAP`, version 7, `.m4s`) against a swept directory.
      */
     public function test_regeneration_reproduces_the_jobs_own_container_not_the_live_setting(): void
     {
@@ -523,9 +559,28 @@ final class TranscodeManagerPlaylistFormatTest extends TestCase
     }
 
     /**
-     * The control for both regeneration cases: an identical row WITHOUT the
-     * stamp regenerates MPEG-TS. Without this, a regeneration that ignored the
-     * row and always emitted fMP4 would pass the two above.
+     * ⚠ THE CASE S60 TURNED FROM A CONTROL INTO THE MAIN EVENT.
+     *
+     * An identical row WITHOUT the stamp regenerates MPEG-TS. It was written as
+     * a control ("a regeneration that ignored the row and always emitted fMP4
+     * would pass the two above"), and while the shipped default was `mpegts` it
+     * could not distinguish "read the row" from "read the default".
+     *
+     * It can now, and what it measures is the second S60 trap — the one the
+     * `JOB_KEY_VERSION` bump does NOT cover. **Every job created before S60
+     * persisted a `segment_params` with no `segment_format` key at all**, because
+     * `computeSegmentParams()` only ever writes the key for `fmp4`. If
+     * `segmentFormatOf()` resolved that absence through
+     * `EncodeSettings::DEFAULT_SEGMENT_FORMAT` — which it did until S60, and
+     * which was invisible while the constant WAS `mpegts` — then on the deploy
+     * that flipped it every one of those `.ts` job directories would regenerate
+     * its playlists naming `.m4s`, and every `.ts` request from a player already
+     * mid-session would burn an encode and then 404. The bump stops old jobs
+     * being REUSED for a new request; it does nothing about old jobs a client
+     * already holds a URL for. This case is what stops that.
+     *
+     * The fixture is exactly a pre-S60 row: `segment_params` present and valid,
+     * `segment_format` absent.
      */
     public function test_regeneration_of_an_unstamped_job_stays_on_mpegts(): void
     {
@@ -554,6 +609,14 @@ final class TranscodeManagerPlaylistFormatTest extends TestCase
         $media = (string) file_get_contents("{$dir}/media_v720p.m3u8");
         $this->assertStringNotContainsString('#EXT-X-MAP', $media);
         $this->assertStringContainsString("seg-v720p-00000.ts\n", $media);
+        $this->assertStringNotContainsString('.m4s', $media);
+        $this->assertStringContainsString("#EXT-X-VERSION:3\n", $media);
+
+        // Not vacuous, and specifically not "this manager can only write
+        // MPEG-TS": the live default really is the other container, so an
+        // implementation that read the default instead of the row would have
+        // produced `.m4s` above.
+        $this->assertSame('fmp4', EncodeSettings::DEFAULT_SEGMENT_FORMAT);
     }
 
     // ─────────────────────────────────────────────────────────────────

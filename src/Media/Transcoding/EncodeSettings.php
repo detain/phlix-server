@@ -50,6 +50,14 @@ use Phlix\Admin\SettingsRepository;
  * fleet-wide re-encode. The key only diverges once an administrator actually
  * changes something, which is exactly when the old segments are stale.
  *
+ * ⚠ **S60 is the one deploy that DOES invalidate the whole cache, deliberately.**
+ * Because the fingerprint is empty at the default, moving
+ * {@see self::DEFAULT_SEGMENT_FORMAT} cannot express itself here — so the
+ * invalidation was done where it can be, by bumping
+ * {@see TranscodeManager::JOB_KEY_VERSION} to `v10` in the same commit. Expect
+ * every install's first playback of every item after that deploy to re-encode.
+ * See the S60 TRAP note in {@see self::fingerprint()}.
+ *
  * @package Phlix\Media\Transcoding
  * @since 1.3.0
  */
@@ -60,7 +68,10 @@ final class EncodeSettings
     public const AUDIO_BITRATE_KEY = 'transcoding.audio_bitrate';
     public const SEGMENT_FORMAT_KEY = 'transcoding.segment_format';
 
-    /** MPEG-TS on-demand segments (`seg-v{V}-NNNNN.ts`) — the shipped behaviour. */
+    /**
+     * MPEG-TS on-demand segments (`seg-v{V}-NNNNN.ts`) — the pre-S60 shipped
+     * behaviour, and still the rollback target.
+     */
     public const FORMAT_MPEGTS = 'mpegts';
 
     /** CMAF fragmented-MP4 segments (`init-v{V}.m4s` + `seg-v{V}-NNNNN.m4s`). */
@@ -86,10 +97,36 @@ final class EncodeSettings
     public const DEFAULT_AUDIO_BITRATE = '128k';
 
     /**
-     * Shipped on-demand segment container. MPEG-TS — i.e. exactly the
-     * behaviour that existed before {@see self::FORMAT_FMP4} was added.
+     * Shipped on-demand segment container. **S60 flipped this to
+     * {@see self::FORMAT_FMP4}**; it was {@see self::FORMAT_MPEGTS} from the
+     * beginning of the project until then.
+     *
+     * ## What the flip changes, and what it does NOT
+     *
+     * A job created from here on writes `#EXT-X-MAP:URI="init-v{V}.m4s"` +
+     * `seg-v{V}-NNNNN.m4s` media playlists at `#EXT-X-VERSION:7`, publishes a
+     * DASH `manifest.mpd` beside them, and serves both through
+     * {@see TranscodeManager::ensureSegment()}. MPEG-TS is NOT removed — it is
+     * one PUT away (`transcoding.segment_format = mpegts`, declared in
+     * phlix-shared's `server-settings.schema.json` since S313) and every
+     * `.ts` code path is still live and still tested.
+     *
+     * ## ⚠ This constant is NOT "what an unstamped job used"
+     *
+     * Every job created before S60 persisted a `segment_params` with **no**
+     * `segment_format` key, because {@see TranscodeManager::computeSegmentParams()}
+     * only ever wrote the key for `fmp4`. Those jobs hold `.ts` bytes on disk.
+     * So "the persisted params said nothing" must resolve to
+     * {@see self::FORMAT_MPEGTS} as a LITERAL, never to this constant — see
+     * {@see TranscodeManager::segmentFormatOf()}. Resolving an unstamped job
+     * through this constant would, at the instant of the flip, re-label every
+     * pre-existing MPEG-TS job on disk as fMP4: its playlists would regenerate
+     * naming `.m4s`, and every `.ts` request from a player mid-session would
+     * 404 after wasting an encode.
+     *
+     * @since S60 (was `FORMAT_MPEGTS` since S56)
      */
-    public const DEFAULT_SEGMENT_FORMAT = self::FORMAT_MPEGTS;
+    public const DEFAULT_SEGMENT_FORMAT = self::FORMAT_FMP4;
 
     /**
      * The x264/x265 preset ladder, fastest first.
@@ -241,11 +278,13 @@ final class EncodeSettings
     /**
      * The effective on-demand segment container.
      *
-     * ## ⚠ `fmp4` IS SERVABLE (S310) BUT NOT YET CROSS-CLIENT VERIFIED (S60)
+     * ## ⚠ `fmp4` IS THE DEFAULT AS OF S60
      *
      * S56 delivered segment PRODUCTION, S57 the matching HLS playlists, S58 the
-     * DASH manifest, S59 the DASH serve trigger and S310 the HLS one. With this
-     * set to {@see self::FORMAT_FMP4} a job writes media playlists carrying
+     * DASH manifest, S59 the DASH serve trigger, S310 the HLS one, S313 made the
+     * key settable over the admin API and S315 proved hls.js plays an fMP4
+     * presentation served entirely by the real `/hls/{job_id}/{file}` route. With
+     * this at {@see self::FORMAT_FMP4} a job writes media playlists carrying
      * `#EXT-X-MAP:URI="init-v{V}.m4s"` + `seg-v{V}-NNNNN.m4s` entries at
      * `#EXT-X-VERSION:7`, and both serve paths route those names through
      * {@see TranscodeManager::ensureSegment()} via the shared
@@ -253,22 +292,24 @@ final class EncodeSettings
      * init, which maps to index 0 of its own rendition and is what a client
      * fetches FIRST.
      *
-     * ⚠ Until S310 this paragraph said the opposite, and it was right to:
+     * ⚠ Before S310 this paragraph said the opposite, and it was right to:
      * `HlsController::serveFile()` matched `/^seg-v…\.ts$/` only, so an `.m4s`
      * request never reached the producer and `init-v{V}.m4s` was never created
      * at all. Turning the flag on then yielded a job whose playlists were
      * correct and whose every segment request 404'd.
      *
-     * It remains OFF by default, but it is no longer un-settable: S313
-     * (phlix-shared v0.49.0) declares the key in
-     * `phlix-shared/schemas/server-settings.schema.json` with
-     * `"enum": ["mpegts", "fmp4"]`, so `AdminSettingsController` now ACCEPTS a
-     * PUT of either member over the admin API and rejects anything else. That
-     * enum is {@see self::SEGMENT_FORMATS}, and
-     * `tests/Unit/Media/Transcoding/SegmentFormatSchemaEnumDriftTest.php`
-     * fails if either side moves alone. S313 changed no default; S60 still
-     * owns the default flip and the {@see TranscodeManager::JOB_KEY_VERSION}
-     * bump that flip requires.
+     * ## Rollback
+     *
+     * `mpegts` is NOT removed and is one admin PUT away — S313 (phlix-shared
+     * v0.49.0) declares the key in `server-settings.schema.json` with
+     * `"enum": ["mpegts", "fmp4"]`, so `AdminSettingsController` accepts a PUT of
+     * either member and rejects anything else. That enum is
+     * {@see self::SEGMENT_FORMATS}, and
+     * `tests/Unit/Media/Transcoding/SegmentFormatSchemaEnumDriftTest.php` fails
+     * if either side moves alone. Setting it back to `mpegts` changes
+     * {@see self::fingerprint()} (see the S60 note there), so the next
+     * `ensureHlsJob()` gets a different key, a fresh job id and a fresh
+     * directory of `.ts` segments.
      *
      * An unrecognised value falls back to the shipped default rather than
      * reaching the encode path, for the same reason a bad `-preset` does.
@@ -284,9 +325,19 @@ final class EncodeSettings
             return self::DEFAULT_SEGMENT_FORMAT;
         }
 
-        $normalised = strtolower(trim($configured));
-
-        return $normalised === self::FORMAT_FMP4 ? self::FORMAT_FMP4 : self::DEFAULT_SEGMENT_FORMAT;
+        // ⚠ S60. This was `=== FORMAT_FMP4 ? FORMAT_FMP4 : DEFAULT_SEGMENT_FORMAT`,
+        // which was correct only while the default WAS mpegts: it folded "the
+        // admin explicitly chose mpegts" into "fall back to the default". The
+        // moment S60 flipped the default that expression made
+        // `transcoding.segment_format = mpegts` return `fmp4` — i.e. it deleted
+        // the rollback path, silently, in the one method the rollback goes
+        // through. Each member of {@see self::SEGMENT_FORMATS} is now named
+        // explicitly and only an UNRECOGNISED value reaches the default.
+        return match (strtolower(trim($configured))) {
+            self::FORMAT_FMP4 => self::FORMAT_FMP4,
+            self::FORMAT_MPEGTS => self::FORMAT_MPEGTS,
+            default => self::DEFAULT_SEGMENT_FORMAT,
+        };
     }
 
     /**
@@ -330,12 +381,37 @@ final class EncodeSettings
         //     on such an install — `slow|23|128k` and `slow|23|128k|fmp4` are
         //     different strings — so `.ts` and `.m4s` can never share a job dir.
         //
-        // ⚠ S60 TRAP: when S60 flips DEFAULT_SEGMENT_FORMAT to `fmp4`, the
-        // suffix collapses back to '' for fmp4 and this method starts returning
-        // the mpegts value again — matching every pre-existing MPEG-TS job.
-        // S60 MUST therefore bump JOB_KEY_VERSION at the flip (and revert the
-        // bump if the flip is reverted). See the LINCHPIN note in
-        // `plan_updates_transcode_blueprint.md`.
+        // ⚠ S60 TRAP — SPRUNG, and disarmed by the JOB_KEY_VERSION bump.
+        //
+        // S60 flipped DEFAULT_SEGMENT_FORMAT to `fmp4`, so the suffix collapsed
+        // back to '' for fmp4 and this method went back to returning the MPEGTS
+        // value for the new default — which would have re-matched every
+        // pre-existing MPEG-TS job and served `.ts` bytes against `.m4s`
+        // playlists. What prevents that is
+        // {@see TranscodeManager::JOB_KEY_VERSION}, bumped `v9` → `v10` in the
+        // same commit: the key is `sha1(media|profile|VERSION . fingerprint())`,
+        // so `…|v9` and `…|v10` cannot collide however this method behaves.
+        //
+        // ⚠ REVERTING THE FLIP MUST ALSO REVERT THE BUMP — and the reason is the
+        // OPPOSITE of a second re-encode. Restore DEFAULT_SEGMENT_FORMAT (and the
+        // `config/transcoding.php` literal) to `mpegts` while leaving
+        // JOB_KEY_VERSION at `v10` and this method returns `''` again — the SAME
+        // `''` the fMP4 default produces, because the suffix is empty at whatever
+        // the default is. The key `sha1(media|profile|v10 . '')` is then
+        // byte-identical to the key the existing fMP4 jobs were inserted under,
+        // so {@see TranscodeManager::findReusableJob()} hands those jobs straight
+        // back and the box KEEPS SERVING `.m4s` while the config says `mpegts`.
+        // Nothing is orphaned and nothing re-encodes: the partial revert is a
+        // silent no-op on every item that has already been played, which is
+        // exactly the content an operator re-tests on. All three constants move
+        // together (defaults + JOB_KEY_VERSION back to `v9`) or none do.
+        //
+        // (An operator rolling back over the ADMIN API instead —
+        // `transcoding.segment_format = mpegts`, the supported route — touches no
+        // constant and DOES work: the suffix becomes `|mpegts`, the fingerprint
+        // becomes non-empty, the key moves, and they get a fresh `.ts` job. See
+        // `config/transcoding.php`'s rollback block. Both claims are measured in
+        // `tests/Unit/Media/Transcoding/TranscodeManagerRollbackKeyTest.php`.)
         $suffix = $format === self::DEFAULT_SEGMENT_FORMAT ? '' : ('|' . $format);
 
         return substr(sha1($preset . '|' . $crf . '|' . $audio . $suffix), 0, 12);

@@ -370,8 +370,46 @@ class TranscodeManager
      * level set itself is unchanged from v8 — a pre-v9 job's DIRECTORY is simply
      * missing the Original media playlist, and its persisted ladder was written
      * under the old rules, so it must not be reused.
+     *
+     * `v10` (S60) = **fMP4 is the default container**
+     * ({@see EncodeSettings::DEFAULT_SEGMENT_FORMAT}). This bump is not
+     * cosmetic and it is not optional: {@see EncodeSettings::fingerprint()}
+     * returns `''` whenever every setting sits at its shipped default, and the
+     * container is folded in as a suffix that is empty AT the default — so the
+     * instant the default moved to `fmp4`, `fingerprint()` began returning the
+     * old MPEG-TS value (`''`) for the NEW default. Without this bump
+     * {@see findReusableJob()} would hand every pre-existing `.ts` job straight
+     * back for an fMP4 request, and the server would serve `.ts` bytes against
+     * `.m4s` playlists. `sha1(…|v9…)` and `sha1(…|v10…)` cannot collide, which
+     * is what closes it.
+     *
+     * ⚠ **Operational cost, stated plainly:** on the deploy that carries this,
+     * EVERY install's segment cache is orphaned. The first playback of every
+     * item re-encodes from scratch (CPU burst, first-play latency) and the v9
+     * directories linger until {@see sweepSegmentCache()} reclaims them — after
+     * {@see $cacheMaxAgeSeconds} idle (3 h by default) or under the LRU byte
+     * budget. That sweep globs `{$segmentDir}/*` and is therefore
+     * version-agnostic: it reaps a v9 directory exactly as it reaps a v10 one.
+     * Peak disk is both generations at once.
+     *
+     * ⚠ **Reverting the flip must revert THIS constant too, and the reason is
+     * the opposite of "a second re-encode".** Revert
+     * {@see EncodeSettings::DEFAULT_SEGMENT_FORMAT} and the
+     * `config/transcoding.php` literal to `mpegts` but leave this at `v10`, and
+     * {@see EncodeSettings::fingerprint()} returns `''` again — the same `''` the
+     * fMP4 default produces — so the key is byte-identical to the one the
+     * existing fMP4 jobs were inserted under. {@see findReusableJob()} keys on
+     * nothing else, so it hands those fMP4 jobs back and the install keeps
+     * serving `.m4s` while its config says `mpegts`: no orphaning, no re-encode,
+     * a rollback that looks deployed and is not. All three constants move
+     * together (this one back to `v9`) or the revert is a no-op on every item
+     * that has already been played. The supported rollback needs no code change
+     * at all — `PUT transcoding.segment_format = mpegts` moves the fingerprint
+     * and therefore the key. Both claims are measured in
+     * `tests/Unit/Media/Transcoding/TranscodeManagerRollbackKeyTest.php`; see
+     * also the S60 note in {@see EncodeSettings::fingerprint()}.
      */
-    private const JOB_KEY_VERSION = 'v9';
+    private const JOB_KEY_VERSION = 'v10';
 
     /**
      * S58 — the VOD DASH manifest published in a job directory.
@@ -573,8 +611,11 @@ class TranscodeManager
      *     subtitles: list<array{index: int, language: string, label: string, default: bool, url: string}>
      * }
      *     `dash_url` (S59, restoring what S11 removed) is the job's `manifest.mpd`
-     *     URL, or **null** when the job published no manifest — which is every job
-     *     at the shipped `segment_format=mpegts` default. See {@see dashManifestUrl()}.
+     *     URL, or **null** when the job published no manifest. ⚠ S60 inverted which
+     *     is the common case: `fmp4` is the shipped default and every fMP4 job
+     *     publishes a manifest, so an untouched install now returns a URL here where
+     *     it used to return null. Null is left for an `mpegts` job (the rollback) and
+     *     for every job created before the flip. See {@see dashManifestUrl()}.
      *
      * @throws \InvalidArgumentException If the media item is not found.
      * @throws \RuntimeException If concurrency is exhausted, probing fails, or the
@@ -2311,13 +2352,17 @@ class TranscodeManager
      * @param string|null $variantId Rendition id (e.g. `1080p`, `original`) or null (legacy).
      * @param int         $index     Zero-based segment index.
      * @param string|null $audioId   Audio group id (e.g. `a0`) for audio-only segments (P3B-S3).
-     * @param string      $format    `mpegts` (default) or `fmp4` (S56).
+     * @param string      $format    `mpegts` or `fmp4` (S56). The parameter default is
+     *                               `mpegts` — a statement about a job whose container was
+     *                               never stamped, NOT about the shipped default, which S60
+     *                               moved to `fmp4`. Every production caller passes it
+     *                               explicitly, each time from the JOB's own resolution.
      */
     private static function segmentFileName(
         ?string $variantId,
         int $index,
         ?string $audioId = null,
-        string $format = EncodeSettings::DEFAULT_SEGMENT_FORMAT
+        string $format = EncodeSettings::FORMAT_MPEGTS
     ): string {
         $ext = self::segmentExtension($format);
 
@@ -2387,6 +2432,20 @@ class TranscodeManager
      * {@see EncodeSettings::fingerprint()}, so the NEXT `ensureHlsJob()` gets a
      * different key, a fresh job id and a fresh directory.
      *
+     * ⚠ **The absent-key answer is the LITERAL `mpegts`, not
+     * {@see EncodeSettings::DEFAULT_SEGMENT_FORMAT}** (S60). It used to be the
+     * constant, which was indistinguishable while the constant WAS `mpegts`.
+     * The two are not the same claim: this method answers "what container is
+     * already on disk for this job?", and every job created before S60 persisted
+     * `segment_params` with no `segment_format` key at all — because
+     * {@see computeSegmentParams()} only ever writes the key for `fmp4`. Reading
+     * the absence through the constant would have re-labelled every one of those
+     * `.ts` job directories as fMP4 on the deploy that flipped it: their
+     * playlists would regenerate naming `.m4s` (via {@see segmentFormatOfRow()}),
+     * and every `.ts` request from a player already mid-session would burn an
+     * encode and then 404. `mpegts` here is a statement about persisted DATA and
+     * must never track the live default again.
+     *
      * @param array<string, mixed> $segParams Resolved params for this segment.
      *
      * @return string `mpegts` or `fmp4`.
@@ -2397,7 +2456,7 @@ class TranscodeManager
     {
         return ($segParams['segment_format'] ?? null) === EncodeSettings::FORMAT_FMP4
             ? EncodeSettings::FORMAT_FMP4
-            : EncodeSettings::DEFAULT_SEGMENT_FORMAT;
+            : EncodeSettings::FORMAT_MPEGTS;
     }
 
     /**
@@ -2414,8 +2473,11 @@ class TranscodeManager
      * {@see applyLoudnorm()} already do. Wiring only one site would produce
      * `.m4s` video segments beside `.ts` audio segments in one job.
      *
-     * Inert (no key added) for every job created at the shipped default, which
-     * is what keeps the flag-off params array byte-identical to pre-S56.
+     * ⚠ S60 inverted this. Until the flip the merge was inert for every job at the
+     * shipped default, which is what kept the params array byte-identical to
+     * pre-S56. `fmp4` is the default now, so the merge FIRES for a job created at
+     * the default and is inert only for the two populations that hold `.ts` bytes:
+     * jobs created before S60, and jobs created under the `mpegts` rollback.
      *
      * @param array<string, mixed> $row       The transcode_jobs row.
      * @param array<string, mixed> $segParams Segment params to augment.
@@ -2445,9 +2507,11 @@ class TranscodeManager
      * the producer wrote the other, so they share this ONE decode of the
      * persisted JSON rather than each parsing it their own way.
      *
-     * Anything unparseable degrades to the shipped MPEG-TS default, matching
+     * Anything unparseable degrades to MPEG-TS, matching
      * {@see segmentExtension()}: a corrupt `segment_params` can never invent a
-     * third naming scheme.
+     * third naming scheme, and it must not be read as a flip either — see the
+     * S60 paragraph on {@see segmentFormatOf()} for why the literal, and not
+     * {@see EncodeSettings::DEFAULT_SEGMENT_FORMAT}, is the right answer here.
      *
      * @param array<string, mixed> $row The transcode_jobs row.
      *
@@ -2459,11 +2523,11 @@ class TranscodeManager
     {
         $raw = $row['segment_params'] ?? null;
         if (!is_string($raw) || $raw === '') {
-            return EncodeSettings::DEFAULT_SEGMENT_FORMAT;
+            return EncodeSettings::FORMAT_MPEGTS;
         }
         $decoded = json_decode($raw, true);
         if (!is_array($decoded)) {
-            return EncodeSettings::DEFAULT_SEGMENT_FORMAT;
+            return EncodeSettings::FORMAT_MPEGTS;
         }
 
         // The VALUE is lifted here; the DECISION stays in segmentFormatOf(), so
@@ -2552,9 +2616,22 @@ class TranscodeManager
 
         // S56: stamp the container the job is being CREATED with, so every later
         // segment of this job resolves its filename from the job rather than from
-        // the live setting (see segmentFormatOf()). Written only when the flag is
-        // on, so at the shipped default the persisted segment_params JSON — and
-        // therefore every byte of the flag-off path — is unchanged.
+        // the live setting (see segmentFormatOf()).
+        //
+        // ⚠ S60 INVERTED WHICH SIDE IS STAMPED. This comment used to read "written
+        // only when the flag is on, so at the shipped default the persisted JSON is
+        // unchanged" — true while the default was `mpegts`, and now false in the
+        // one direction that matters. `fmp4` IS the shipped default, so every job
+        // created from here on DOES carry the key, and only two populations lack
+        // it: jobs created before S60, and jobs created under the `mpegts`
+        // rollback. Both hold `.ts` bytes on disk.
+        //
+        // ⚠ Therefore "no `segment_format` key" must NEVER be read as "the shipped
+        // default". segmentFormatOf() resolves the absence to the LITERAL
+        // `FORMAT_MPEGTS` for exactly that reason (see its docblock): resolving it
+        // through DEFAULT_SEGMENT_FORMAT would have re-labelled every pre-S60 `.ts`
+        // directory as fMP4 on the deploy that flipped the default, regenerating
+        // its playlists as `.m4s` and 404ing every mid-session player.
         if ($this->encodeSettings->segmentFormat() === EncodeSettings::FORMAT_FMP4) {
             $params['segment_format'] = EncodeSettings::FORMAT_FMP4;
         }
@@ -2662,7 +2739,7 @@ class TranscodeManager
         ?int $bandwidth,
         ?array $variants = null,
         ?array $audioTracks = null,
-        string $segmentFormat = EncodeSettings::DEFAULT_SEGMENT_FORMAT
+        string $segmentFormat = EncodeSettings::FORMAT_MPEGTS
     ): void {
         if ($variants === null) {
             // Legacy single-variant path (BC for pre-A5 jobs / callers).
@@ -2758,9 +2835,12 @@ class TranscodeManager
      *
      * **Only fMP4.** DASH carries ISO-BMFF segments; an MPEG-TS job's
      * `seg-v720p-00000.ts` files have no `SegmentTemplate` expression at all and
-     * no init segment to point `@initialization` at. So on the shipped default
-     * this method writes NOTHING — a job directory at `segment_format=mpegts` is
-     * byte-for-byte what it was before S58, with no `manifest.mpd` in it.
+     * no init segment to point `@initialization` at. So this method writes NOTHING
+     * for an MPEG-TS job — such a directory is byte-for-byte what it was before
+     * S58, with no `manifest.mpd` in it. ⚠ S60 inverted which case that is: until
+     * the flip it was the shipped default and the manifest was the exception; the
+     * default is `fmp4` now, so every default job publishes one and the empty case
+     * is the `mpegts` rollback (and every pre-S60 job).
      *
      * **Only ABR-switchable renditions.** The Representation set is exactly the
      * master playlist's `#EXT-X-STREAM-INF` level set
@@ -2781,9 +2861,15 @@ class TranscodeManager
      * {@see \Phlix\Server\Http\Controllers\SegmentRequestParser}, so every
      * reference in this manifest — and every reference in the sibling HLS
      * playlists over the SAME segment files — produces on demand and serves.
-     * What remains for **S60** is flipping the flag on by default (with the
-     * {@see self::JOB_KEY_VERSION} bump that flip requires) and cross-client
-     * verification; on the shipped default this method still writes nothing.
+     * ✅ **S60 shipped the flip**: `fmp4` is the default
+     * ({@see EncodeSettings::DEFAULT_SEGMENT_FORMAT} +
+     * `config/transcoding.php`), carried by the {@see self::JOB_KEY_VERSION}
+     * `v9` → `v10` bump that flip required. So this method now writes a manifest
+     * for every job an untouched install creates, and writes nothing only for an
+     * `mpegts` job (the rollback, and every pre-S60 job). The client verification
+     * that accompanied the flip was hls.js through the real HLS route (S315) and a
+     * real DASH client over this manifest (S58); the native clients (Roku, Tizen,
+     * iOS, Android) were not exercised by it.
      *
      * Failure is swallowed and logged: the manifest is an addition to a job
      * whose HLS deliverable is already written, and DASH has no client in this
@@ -3072,9 +3158,10 @@ class TranscodeManager
      * Playlists it references would tell a client the presentation is
      * compatible with a protocol version its own media playlists are not.
      *
-     * MPEG-TS keeps `3` exactly — that is the whole flag-off guarantee. A
-     * version bump alone is a fatal, silent regression for old clients, so it
-     * must never leak across the branch.
+     * MPEG-TS keeps `3` exactly — that is the whole MPEG-TS guarantee, and since
+     * S60 that means the rollback and every pre-flip job rather than the shipped
+     * default. A version bump alone is a fatal, silent regression for old clients,
+     * so it must never leak across the branch.
      *
      * @param string $format `mpegts` or `fmp4`.
      *
@@ -3209,7 +3296,7 @@ class TranscodeManager
         ?int $width,
         ?int $height,
         ?int $bandwidth,
-        string $format = EncodeSettings::DEFAULT_SEGMENT_FORMAT
+        string $format = EncodeSettings::FORMAT_MPEGTS
     ): string {
         // avc1.640029 = H.264 High@4.1 (the segment encode target); mp4a.40.2 = AAC-LC.
         $attrs = 'BANDWIDTH=' . ($bandwidth !== null && $bandwidth > 0 ? $bandwidth : self::LEGACY_BANDWIDTH);
@@ -3257,7 +3344,7 @@ class TranscodeManager
     private function buildMultiVariantMaster(
         array $variants,
         ?array $audioTracks = null,
-        string $format = EncodeSettings::DEFAULT_SEGMENT_FORMAT
+        string $format = EncodeSettings::FORMAT_MPEGTS
     ): string {
         $lines = ['#EXTM3U', '#EXT-X-VERSION:' . self::playlistVersion($format)];
 
@@ -3349,9 +3436,12 @@ class TranscodeManager
      * that was not true: every `.m4s` fell through to a static lookup and 404'd,
      * and the init had no producer at all.
      *
-     * The FLAG is still off by default (`config/transcoding.php`). Flipping it,
-     * together with the {@see self::JOB_KEY_VERSION} bump the flip requires, is
-     * S60.
+     * ✅ **S60 made the fMP4 flavour the DEFAULT** (`config/transcoding.php` +
+     * {@see EncodeSettings::DEFAULT_SEGMENT_FORMAT}), carried by the
+     * {@see self::JOB_KEY_VERSION} `v9` → `v10` bump that flip required. So the
+     * `#EXT-X-MAP` branch above is what an untouched install now emits, and the
+     * `mpegts` flavour is the rollback (`PUT transcoding.segment_format = mpegts`)
+     * plus every job created before the flip.
      *
      * @param float       $duration   Source duration in seconds.
      * @param int         $segSeconds Target segment length in seconds.
@@ -3365,7 +3455,7 @@ class TranscodeManager
         float $duration,
         int $segSeconds,
         ?string $variantId,
-        string $format = EncodeSettings::DEFAULT_SEGMENT_FORMAT
+        string $format = EncodeSettings::FORMAT_MPEGTS
     ): string {
         $segSeconds = self::normalizedSegmentSeconds($segSeconds);
         $count = (int) ceil($duration / $segSeconds);
@@ -3418,7 +3508,7 @@ class TranscodeManager
         float $duration,
         int $segSeconds,
         string $audioId,
-        string $format = EncodeSettings::DEFAULT_SEGMENT_FORMAT
+        string $format = EncodeSettings::FORMAT_MPEGTS
     ): string {
         $segSeconds = self::normalizedSegmentSeconds($segSeconds);
         $count = (int) ceil($duration / $segSeconds);
@@ -3923,8 +4013,10 @@ class TranscodeManager
      * S59 the serve path, so the field is back — but it is back **gated on the
      * manifest actually existing**, which is what makes re-introducing it safe:
      *
-     *  - a job at the shipped `segment_format=mpegts` default gets NO manifest
-     *    ({@see writeVodMpd()} returns early), so it advertises `null`;
+     *  - a `segment_format=mpegts` job gets NO manifest ({@see writeVodMpd()}
+     *    returns early), so it advertises `null`. ⚠ S60 made `fmp4` the shipped
+     *    default, so that is now the rollback and the pre-flip jobs rather than
+     *    the common case;
      *  - so does an fMP4 job whose ladder was too degenerate to describe;
      *  - only a job with a real `manifest.mpd` on disk advertises a URL.
      *

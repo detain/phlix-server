@@ -111,42 +111,83 @@ return [
     'audio_bitrate' => '128k',
 
     /**
-     * On-demand segment container: `mpegts` (default) or `fmp4`.
+     * On-demand segment container: `fmp4` (default since S60) or `mpegts`.
      *
      * Addressed by the dotted setting key `transcoding.segment_format` and
      * consumed by {@see \Phlix\Media\Transcoding\EncodeSettings::segmentFormat()}.
+     * This literal MUST stay equal to
+     * {@see \Phlix\Media\Transcoding\EncodeSettings::DEFAULT_SEGMENT_FORMAT} —
+     * this file is what `SettingsRepository::getDefault()` reads when no admin
+     * override row exists, and the constant is what the encode path falls back
+     * to, so a drift between them means the effective value the admin API
+     * reports is not the one the encoder uses.
      *
-     * ✅ **`fmp4` IS SERVABLE as of S310** — but it is still OFF BY DEFAULT and
-     * has not been cross-client verified, so leave it at `mpegts` unless you are
-     * deliberately testing the fMP4 path. S56 shipped segment PRODUCTION, S57
-     * the matching playlists (`#EXT-X-MAP` + `seg-v{V}-NNNNN.m4s` at
-     * `#EXT-X-VERSION:7`), S58 the DASH manifest, S59 the DASH serve trigger,
-     * and S310 the HLS one: `HlsController::serveFile()` routes `.ts` AND `.m4s`
-     * segments plus the three `init*.m4s` shapes through the shared
-     * {@see \Phlix\Server\Http\Controllers\SegmentRequestParser}, so a flagged
-     * job's init (which hls.js fetches first) and every segment after it are
-     * produced on demand and served. Between S56 and S310 turning this on broke
-     * playback outright; it now works, and what is unproven is the CLIENT
-     * matrix, which is S60's job.
+     * ## Why the default is `fmp4` (S60)
      *
-     * ✅ **SETTABLE OVER THE ADMIN API as of S313** (phlix-shared v0.49.0).
-     * The key is now declared in
+     * S56 shipped segment PRODUCTION, S57 the matching playlists (`#EXT-X-MAP`
+     * + `seg-v{V}-NNNNN.m4s` at `#EXT-X-VERSION:7`), S58 the DASH manifest, S59
+     * the DASH serve trigger, S310 the HLS one (`HlsController::serveFile()`
+     * routes `.ts` AND `.m4s` segments plus the three `init*.m4s` shapes through
+     * {@see \Phlix\Server\Http\Controllers\SegmentRequestParser}), S313 made
+     * this key settable over the admin API, and S315 put a real headless Chrome
+     * running hls.js in front of the real `/hls/{job_id}/{file}` route and
+     * played an fMP4 presentation whose every byte the controller produced on
+     * demand. One segment set now serves both HLS and DASH.
+     *
+     * ## ⚠ ROLLBACK — read this before deploying, not after
+     *
+     * **Preferred route (no restart, no redeploy, no container edit): PUT the
+     * setting.** S313 declared the key in
      * `phlix-shared/schemas/server-settings.schema.json` with
-     * `"enum": ["mpegts", "fmp4"]`, so `AdminSettingsController` accepts a PUT
-     * of either member and rejects anything else with a per-key error.
-     * Editing this file is no longer the only way to change it — which is the
-     * point: S60 flips the default, and a flag that can only be flipped by
-     * hand-editing a config file inside a running container has no rollback
-     * path. **This literal is still the shipped default and S313 did not touch
-     * it**; S60 owns the flip, together with the matching
-     * `TranscodeManager::JOB_KEY_VERSION` bump.
+     * `"enum": ["mpegts", "fmp4"]`, so:
      *
-     * The value is folded into `EncodeSettings::fingerprint()` and therefore
-     * into the transcode job reuse key, so a flip yields a fresh job id and a
-     * fresh job directory — `.ts` and `.m4s` segments can never co-mingle, and
-     * reverting the setting restores the original jobs.
+     * ```
+     * PUT /api/v1/admin/settings   {"transcoding.segment_format": "mpegts"}
+     * ```
+     *
+     * is accepted, and anything else is rejected per-key. `restart: false` is
+     * honest here — `EncodeSettings::read()` resolves the value at ENCODE time,
+     * so the next transcode picks it up. Playback already in progress is
+     * unaffected: a job's container is committed at creation and read back from
+     * its own persisted `segment_params`, never from the live setting.
+     *
+     * What the rollback costs, precisely: the value is folded into
+     * `EncodeSettings::fingerprint()` and therefore into the job reuse key, so
+     * you get a **fresh job id and a fresh job directory** of `.ts` segments —
+     * anything played after the change re-encodes once. `.ts` and `.m4s` can
+     * never co-mingle in one directory. It does NOT return you to the
+     * pre-S60 job directories: S60 also bumped
+     * `TranscodeManager::JOB_KEY_VERSION` to `v10`, so those are orphaned
+     * either way and are reclaimed by `sweepSegmentCache()` on the usual idle /
+     * LRU terms.
+     *
+     * **Second route (a redeploy): revert the S60 commit.** That restores this
+     * literal AND `EncodeSettings::DEFAULT_SEGMENT_FORMAT` AND `JOB_KEY_VERSION`
+     * to `v9` together — all three, or the revert does nothing.
+     *
+     * ⚠ **Reverting only the two defaults is a SILENT NO-OP, not an extra
+     * re-encode.** `EncodeSettings::fingerprint()` is empty whenever every
+     * setting is at its shipped default, *whatever that default is*, so a revert
+     * of the two literals changes no component of
+     * `sha1(media|profile|JOB_KEY_VERSION . fingerprint())`. The key stays
+     * byte-identical to the one the existing fMP4 jobs were inserted under,
+     * `TranscodeManager::findReusableJob()` returns those jobs, and they keep
+     * serving `.m4s` playlists and `.m4s` segments on a box whose config now says
+     * `mpegts`. Only never-before-played items get `.ts`, so the result is a
+     * mixed fleet — and an operator re-testing on content they already played
+     * sees fMP4 still playing and concludes the revert failed to deploy. Reverting
+     * `JOB_KEY_VERSION` to `v9` as well is what actually moves the key.
+     * (Measured in `tests/Unit/Media/Transcoding/TranscodeManagerRollbackKeyTest.php`.)
+     *
+     * ## What the flip costs on first deploy
+     *
+     * `JOB_KEY_VERSION` v9 → v10 orphans every install's existing segment cache.
+     * Expect the first playback of every item to re-encode: a CPU burst, extra
+     * first-play latency, and both generations of job directory on disk until
+     * the LRU sweep reclaims the old ones (3 h idle by default, or sooner under
+     * the byte budget).
      *
      * @since S56
      */
-    'segment_format' => 'mpegts',
+    'segment_format' => 'fmp4',
 ];

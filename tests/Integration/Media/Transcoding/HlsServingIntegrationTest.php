@@ -5,8 +5,10 @@ declare(strict_types=1);
 namespace Phlix\Tests\Integration\Media\Transcoding;
 
 use PHPUnit\Framework\TestCase;
+use Phlix\Admin\SettingsRepository;
 use Phlix\Media\Streaming\HlsStreamer;
 use Phlix\Media\Streaming\QualitySelector;
+use Phlix\Media\Transcoding\EncodeSettings;
 use Phlix\Media\Transcoding\FfmpegRunner;
 use Phlix\Media\Transcoding\TranscodeManager;
 use Phlix\Server\Http\Controllers\HlsController;
@@ -23,6 +25,27 @@ use Workerman\MySQL\Connection;
  * and an out-of-range 404. (HlsController variant-filename PARSING lands in A6; this
  * test drives per-variant production through the manager directly.) The DB is mocked;
  * ffmpeg/filesystem are real. Skipped when ffmpeg is absent.
+ *
+ * ## ⚠ S60 — this file now runs the SAME chain in BOTH containers
+ *
+ * It used to run once, implicitly, at whatever `EncodeSettings` resolved with no
+ * override — which was MPEG-TS from the beginning of the project until S60. That
+ * made "MPEG-TS still works" and "the shipped default works" indistinguishable.
+ * They are different claims now and this file makes both, over real ffmpeg
+ * output:
+ *
+ *  - {@see self::testManagerPublishesVodPlaylistAndServesSegmentsOnDemand()} —
+ *    NO override, i.e. exactly what an install gets today: fMP4, `#EXT-X-MAP`,
+ *    a real `init-v240p.m4s` and `video/mp4` off the controller.
+ *  - {@see self::testTheMpegTsRollbackPublishesAndServesTheSameChain()} — an
+ *    EXPLICIT `transcoding.segment_format = mpegts`, i.e. the documented
+ *    rollback (`PUT /api/v1/admin/settings`), DEMONSTRATED rather than asserted:
+ *    the same source through the same code produces `.ts` and serves
+ *    `video/mp2t`.
+ *
+ * Each is the other's control. Without the fMP4 arm, "the `.ts` path works"
+ * could be true of a build that had silently ignored the flip; without the
+ * MPEG-TS arm, the rollback would be a claim with nothing behind it.
  */
 class HlsServingIntegrationTest extends TestCase
 {
@@ -49,8 +72,49 @@ class HlsServingIntegrationTest extends TestCase
         }
     }
 
+    /**
+     * ⚠ THE SHIPPED DEFAULT, END TO END, OVER REAL FFMPEG OUTPUT.
+     *
+     * No `transcoding.segment_format` override anywhere — this is what an
+     * install gets. Since S60 that is fMP4, so the playlist carries an
+     * `#EXT-X-MAP`, `ensureSegment()` publishes a real `init-v240p.m4s`
+     * alongside the fragment, and the controller types both `video/mp4`.
+     */
     public function testManagerPublishesVodPlaylistAndServesSegmentsOnDemand(): void
     {
+        $this->runTheWholeChain(null, 'm4s', 'video/mp4');
+    }
+
+    /**
+     * ⚠ THE ROLLBACK, DEMONSTRATED — not asserted.
+     *
+     * The documented rollback for S60 is
+     * `PUT /api/v1/admin/settings {"transcoding.segment_format":"mpegts"}`, and
+     * `EncodeSettings` reads that key at ENCODE time. So: same source, same
+     * manager, same controller, that one key set — and real ffmpeg has to
+     * produce `.ts` bytes that the real `HlsController` serves as `video/mp2t`,
+     * with no `#EXT-X-MAP` anywhere and no `.m4s` on disk.
+     *
+     * This is the case that would have caught the defect S60 nearly shipped:
+     * `EncodeSettings::segmentFormat()` mapped everything that was not `fmp4`
+     * onto the default, so at the instant of the flip an explicit `mpegts`
+     * resolved to `fmp4` and the rollback did nothing at all.
+     */
+    public function testTheMpegTsRollbackPublishesAndServesTheSameChain(): void
+    {
+        $this->runTheWholeChain(EncodeSettings::FORMAT_MPEGTS, 'ts', 'video/mp2t');
+    }
+
+    /**
+     * @param string|null $segmentFormat `transcoding.segment_format` override, or
+     *                                   null for "no override at all".
+     * @param string      $ext           The segment extension this must produce.
+     * @param string      $contentType   The type `HlsController` must serve it as.
+     */
+    private function runTheWholeChain(?string $segmentFormat, string $ext, string $contentType): void
+    {
+        $fmp4 = $ext === 'm4s';
+
         // An 8-second clip. At 2s segments the playlist has 4 entries (seg-00000..3).
         // A 640x480 source so the ABR ladder yields MULTIPLE transcoded rungs
         // (480p/360p/240p) in addition to the copy "original" — SV-4.6 excludes the
@@ -72,12 +136,36 @@ class HlsServingIntegrationTest extends TestCase
         exec($cmd, $o, $code);
         $this->assertSame(0, $code);
 
+        $repo = $this->createMock(SettingsRepository::class);
+        $repo->method('getEffective')->willReturnCallback(
+            /** @return mixed */
+            static fn (string $key) => $key === EncodeSettings::SEGMENT_FORMAT_KEY ? $segmentFormat : null
+        );
+
         $manager = new TranscodeManager(
             $this->mockDb($clip),
             $this->ffmpeg,
             $this->segmentDir,
             null,
-            2
+            2,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            new EncodeSettings($repo)
+        );
+
+        // The premise, stated before anything is measured: the settings seam
+        // really did resolve the container this arm claims to be exercising.
+        $this->assertSame(
+            $fmp4 ? EncodeSettings::FORMAT_FMP4 : EncodeSettings::FORMAT_MPEGTS,
+            (new EncodeSettings($repo))->segmentFormat()
         );
 
         $job = $manager->ensureHlsJob('media-1', 'web');
@@ -110,46 +198,99 @@ class HlsServingIntegrationTest extends TestCase
         $this->assertFileExists("{$this->segmentDir}/{$jobId}/media_voriginal.m3u8");
 
         // The 240p variant's media playlist is a COMPLETE VOD list (all segments +
-        // ENDLIST) up front, with per-variant seg-v240p-NNNNN.ts names.
+        // ENDLIST) up front, with per-variant seg-v240p-NNNNN.{ts,m4s} names.
         $media = $hls->serveFile($req, ['job_id' => $jobId, 'file' => 'media_v240p.m3u8']);
         $this->assertSame(200, $media->statusCode);
         $this->assertStringContainsString('#EXT-X-PLAYLIST-TYPE:VOD', $this->bodyOf($media));
         $this->assertStringContainsString('#EXT-X-ENDLIST', $this->bodyOf($media));
         // ~8s at 2s segments → 4 (or 5 if ffmpeg's real duration rounds up) entries.
-        $this->assertGreaterThanOrEqual(4, preg_match_all('/^seg-v240p-\d+\.ts$/m', $this->bodyOf($media)));
+        $this->assertGreaterThanOrEqual(
+            4,
+            preg_match_all('/^seg-v240p-\d+\.' . $ext . '$/m', $this->bodyOf($media))
+        );
+        // The container is visible in the playlist itself, in BOTH directions —
+        // an fMP4 presentation is unplayable without its EXT-X-MAP, and an
+        // MPEG-TS one must never grow one.
+        if ($fmp4) {
+            $this->assertStringContainsString(
+                '#EXT-X-MAP:URI="init-v240p.m4s"',
+                $this->bodyOf($media)
+            );
+            $this->assertStringContainsString('#EXT-X-VERSION:7', $this->bodyOf($media));
+            $this->assertStringNotContainsString('.ts', $this->bodyOf($media));
+        } else {
+            $this->assertStringNotContainsString('#EXT-X-MAP', $this->bodyOf($media));
+            $this->assertStringContainsString('#EXT-X-VERSION:3', $this->bodyOf($media));
+            $this->assertStringNotContainsString('.m4s', $this->bodyOf($media));
+        }
 
         // On-demand: the FIRST 240p segment is transcoded when requested.
         $seg0 = $manager->ensureSegment($jobId, '240p', 0);
         $this->assertNotNull($seg0);
-        $this->assertSame("{$this->segmentDir}/{$jobId}/seg-v240p-00000.ts", $seg0);
+        $this->assertSame("{$this->segmentDir}/{$jobId}/seg-v240p-00000.{$ext}", $seg0);
         $this->assertGreaterThan(0, (int) filesize($seg0));
+
+        // The fMP4 init is published by the index-0 encode and is what hls.js
+        // fetches FIRST. It is also the file that does not exist at all on the
+        // MPEG-TS arm, which is why it is asserted in both directions.
+        if ($fmp4) {
+            $this->assertFileExists("{$this->segmentDir}/{$jobId}/init-v240p.m4s");
+            $this->assertGreaterThan(
+                0,
+                (int) filesize("{$this->segmentDir}/{$jobId}/init-v240p.m4s")
+            );
+        } else {
+            $this->assertFileDoesNotExist("{$this->segmentDir}/{$jobId}/init-v240p.m4s");
+            $this->assertSame([], glob("{$this->segmentDir}/{$jobId}/*.m4s") ?: []);
+        }
 
         // Seek-anywhere: a LATER 240p segment is produced with NO earlier segment
         // encoded first — this is what the old linear encode could not do.
-        $this->assertFileDoesNotExist("{$this->segmentDir}/{$jobId}/seg-v240p-00003.ts");
+        $this->assertFileDoesNotExist("{$this->segmentDir}/{$jobId}/seg-v240p-00003.{$ext}");
         $seg3 = $manager->ensureSegment($jobId, '240p', 3);
         $this->assertNotNull($seg3);
-        $this->assertSame("{$this->segmentDir}/{$jobId}/seg-v240p-00003.ts", $seg3);
+        $this->assertSame("{$this->segmentDir}/{$jobId}/seg-v240p-00003.{$ext}", $seg3);
         $this->assertGreaterThan(0, (int) filesize($seg3));
 
         // The copy "original" passthrough (H.264 + AAC source) produces its own
-        // seg-voriginal-NNNNN.ts via -c copy.
+        // seg-voriginal-NNNNN.{ts,m4s} via -c copy.
         $origSeg = $manager->ensureSegment($jobId, 'original', 0);
         $this->assertNotNull($origSeg);
-        $this->assertSame("{$this->segmentDir}/{$jobId}/seg-voriginal-00000.ts", $origSeg);
+        $this->assertSame("{$this->segmentDir}/{$jobId}/seg-voriginal-00000.{$ext}", $origSeg);
         $this->assertGreaterThan(0, (int) filesize($origSeg));
 
         // A produced segment serves through HlsController's static path with the
         // right content-type.
-        $seg0Served = $hls->serveFile($req, ['job_id' => $jobId, 'file' => 'seg-v240p-00000.ts']);
+        $seg0Served = $hls->serveFile($req, ['job_id' => $jobId, 'file' => "seg-v240p-00000.{$ext}"]);
         $this->assertSame(200, $seg0Served->statusCode);
-        $this->assertSame('video/mp2t', $seg0Served->headers['Content-Type']);
+        $this->assertSame($contentType, $seg0Served->headers['Content-Type']);
         $this->assertGreaterThan(0, strlen($this->bodyOf($seg0Served)));
+
+        // …and, on the fMP4 arm, so does the init — through the SAME route, which
+        // is the request hls.js makes before any fragment (S310).
+        if ($fmp4) {
+            $initServed = $hls->serveFile($req, ['job_id' => $jobId, 'file' => 'init-v240p.m4s']);
+            $this->assertSame(200, $initServed->statusCode);
+            $this->assertSame('video/mp4', $initServed->headers['Content-Type']);
+            $this->assertGreaterThan(0, strlen($this->bodyOf($initServed)));
+        }
 
         // An out-of-range segment is null (→ 404), not an endless wait.
         $this->assertNull($manager->ensureSegment($jobId, '240p', 99));
         // An unknown variant is null, too.
         $this->assertNull($manager->ensureSegment($jobId, '4320p', 0));
+
+        // The denominators, on STDERR (phpunit.xml is strict about php://output).
+        fwrite(STDERR, sprintf(
+            "\n[S60] %s chain: setting=%s → %d %s segments + %d init on disk, "
+            . "controller typed seg as %s\n",
+            $fmp4 ? 'DEFAULT (fmp4)' : 'ROLLBACK (mpegts)',
+            var_export($segmentFormat, true),
+            count(glob("{$this->segmentDir}/{$jobId}/seg-*.{$ext}") ?: []),
+            $ext,
+            count(glob("{$this->segmentDir}/{$jobId}/init-*.m4s") ?: []),
+            (string) $seg0Served->headers['Content-Type']
+        ));
     }
 
     /**

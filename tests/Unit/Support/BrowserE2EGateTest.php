@@ -207,8 +207,12 @@ final class BrowserE2EGateTest extends TestCase
             'two browser classes: S57\'s fake-server one and S315\'s controller-backed one',
         );
         $this->assertSame(3, count(BrowserProbeEnvironment::REQUIRED_CASES));
-        $this->assertSame(5, count(BrowserProbeEnvironment::CONTROLLER_REQUIRED_CASES));
-        $this->assertSame(8, BrowserProbeEnvironment::requiredCaseCount());
+        // ⚠ S60 added the CSP control to the controller-backed class (5 → 6).
+        // These counts are typed literals on purpose: derived from the constants
+        // they would self-adjust, and the whole point is that shrinking the demand
+        // list has to be a deliberate, reviewed edit rather than a side effect.
+        $this->assertSame(6, count(BrowserProbeEnvironment::CONTROLLER_REQUIRED_CASES));
+        $this->assertSame(9, BrowserProbeEnvironment::requiredCaseCount());
 
         foreach ($byClass as $class => $methods) {
             $this->assertTrue(

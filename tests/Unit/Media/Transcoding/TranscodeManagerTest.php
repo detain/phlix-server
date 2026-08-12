@@ -7,8 +7,10 @@ namespace Phlix\Tests\Unit\Media\Transcoding;
 use PHPUnit\Framework\AssertionFailedError;
 use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
+use Phlix\Admin\SettingsRepository;
 use Phlix\Media\Streaming\AbrLadder;
 use Phlix\Media\Streaming\SourceProfile;
+use Phlix\Media\Transcoding\EncodeSettings;
 use Phlix\Media\Transcoding\FfmpegRunner;
 use Phlix\Media\Transcoding\SegmentBusyException;
 use Phlix\Media\Transcoding\SegmentCacheFullException;
@@ -103,6 +105,49 @@ class TranscodeManagerTest extends TestCase
     {
         $this->stubColorMetadata($ff);
         return new TranscodeManager($db, $ff, $this->segmentDir, null, 6);
+    }
+
+    /**
+     * A manager whose `transcoding.segment_format` is pinned EXPLICITLY.
+     *
+     * ⚠ S60. {@see self::manager()} passes no {@see EncodeSettings}, so it
+     * resolves the SHIPPED DEFAULT — which was `mpegts` until S60 and is `fmp4`
+     * now. Cases that are about MPEG-TS specifically (the `.ts` filenames, the
+     * no-manifest DASH branch) were relying on that coincidence and would
+     * silently become fMP4 cases; they use this instead, so what they exercise
+     * is stated rather than inherited.
+     */
+    private function managerWithSegmentFormat(
+        Connection $db,
+        FfmpegRunner $ff,
+        string $segmentFormat
+    ): TranscodeManager {
+        $this->stubColorMetadata($ff);
+
+        $repo = $this->createMock(SettingsRepository::class);
+        $repo->method('getEffective')->willReturnCallback(
+            /** @return mixed */
+            static fn (string $key) => $key === EncodeSettings::SEGMENT_FORMAT_KEY ? $segmentFormat : null
+        );
+
+        return new TranscodeManager(
+            $db,
+            $ff,
+            $this->segmentDir,
+            null,
+            6,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            new EncodeSettings($repo)
+        );
     }
 
     /**
@@ -310,8 +355,14 @@ class TranscodeManagerTest extends TestCase
      *
      * S59 keeps this case for the same reason and flips its sense: the branch
      * must now emit the key, and must emit it as NULL for a job that published no
-     * manifest (this fixture is `segment_format=mpegts`, the shipped default). A
-     * branch that hardcoded the URL back would fail here exactly as it used to.
+     * manifest. A branch that hardcoded the URL back would fail here exactly as
+     * it used to.
+     *
+     * ⚠ S60: `segment_format=mpegts` is no longer the shipped default, so this
+     * fixture now says so EXPLICITLY. Left implicit it would have become an fMP4
+     * job — which publishes a `manifest.mpd` and therefore legitimately DOES
+     * advertise a `dash_url`, turning the case into the opposite of what it
+     * claims to test.
      */
     public function testEnsureHlsJobAdvertisesNoDashUrlOnTheFreshJobBranchWithoutAManifest(): void
     {
@@ -327,12 +378,52 @@ class TranscodeManagerTest extends TestCase
             'format' => ['duration' => '25.0'],
         ]);
 
-        $result = $this->manager($db, $ff)->ensureHlsJob('media-1', 'web');
+        $result = $this
+            ->managerWithSegmentFormat($db, $ff, EncodeSettings::FORMAT_MPEGTS)
+            ->ensureHlsJob('media-1', 'web');
 
         // Prove we really are on the fresh branch and not silently reusing.
         $this->assertFalse($result['reused'], 'fixture must exercise the fresh-encode return');
         $this->assertArrayHasKey('dash_url', $result);
         $this->assertNull($result['dash_url'], 'an mpegts job writes no manifest.mpd, so it advertises none');
+        $this->assertNoOtherDashKey($result);
+    }
+
+    /**
+     * ⚠ S60's control for the case above, and the reason it had to become
+     * explicit.
+     *
+     * The SAME fixture, the SAME fresh-job branch, with no segment-format
+     * override at all — i.e. what an install actually gets today. It publishes a
+     * `manifest.mpd` and therefore advertises a `dash_url`. Without this, the
+     * `assertNull` above would read as "the fresh branch never advertises DASH",
+     * which is exactly the over-generalisation the pinned `mpegts` fixture used
+     * to license.
+     */
+    public function testEnsureHlsJobAdvertisesTheDashUrlOnTheFreshJobBranchAtTheShippedDefault(): void
+    {
+        $captured = [];
+        $db = $this->mockDb([], 0, ['path' => '/m.mkv'], [], $captured);
+        $ff = $this->createMock(FfmpegRunner::class);
+        $ff->method('probe')->willReturn([
+            'streams' => [
+                ['codec_type' => 'video', 'codec_name' => 'h264', 'width' => 1280, 'height' => 720],
+                ['codec_type' => 'audio', 'codec_name' => 'aac', 'channels' => 2],
+            ],
+            'format' => ['duration' => '25.0'],
+        ]);
+
+        $result = $this->manager($db, $ff)->ensureHlsJob('media-1', 'web');
+
+        $this->assertFalse($result['reused'], 'fixture must exercise the fresh-encode return');
+        $this->assertSame(
+            "/dash/{$result['job_id']}/manifest.mpd",
+            $result['dash_url'],
+            'at the S60 default a fresh job publishes an MPD, so it must advertise one'
+        );
+        $this->assertFileExists(
+            $this->capturedJobInsert($captured)['hls_dir'] . '/' . TranscodeManager::MPD_FILENAME
+        );
         $this->assertNoOtherDashKey($result);
     }
 
@@ -761,9 +852,12 @@ class TranscodeManagerTest extends TestCase
         $media = (string) file_get_contents("{$dir}/media_v720p.m3u8");
         $this->assertStringContainsString('#EXT-X-PLAYLIST-TYPE:VOD', $media);
         $this->assertStringContainsString('#EXT-X-ENDLIST', $media);
-        $this->assertStringContainsString('seg-v720p-00000.ts', $media);
-        $this->assertStringContainsString('seg-v720p-00004.ts', $media);
-        $this->assertStringNotContainsString('seg-v720p-00005.ts', $media);
+        // ⚠ S60: `.m4s`, not `.ts` — this fixture takes the SHIPPED DEFAULT and
+        // that default is now fMP4. The claim is unchanged (segments 0..4 exist,
+        // 5 does not); only the container the default produces moved.
+        $this->assertStringContainsString('seg-v720p-00000.m4s', $media);
+        $this->assertStringContainsString('seg-v720p-00004.m4s', $media);
+        $this->assertStringNotContainsString('seg-v720p-00005.m4s', $media);
         // The master lists non-copy variants only (SV-4.6: a copy variant — here
         // the "original", since a 720p H.264+AAC source is copy-eligible — is
         // excluded from the switchable ABR set because its segment boundaries may
@@ -837,9 +931,10 @@ class TranscodeManagerTest extends TestCase
         $original = (string) file_get_contents("{$dir}/media_voriginal.m3u8");
         $this->assertStringContainsString('#EXT-X-PLAYLIST-TYPE:VOD', $original);
         $this->assertStringContainsString('#EXT-X-ENDLIST', $original);
-        $this->assertStringContainsString('seg-voriginal-00000.ts', $original);
-        $this->assertStringContainsString('seg-voriginal-00004.ts', $original);
-        $this->assertStringNotContainsString('seg-voriginal-00005.ts', $original);
+        // ⚠ S60: `.m4s` at the shipped default (see testEnsureHlsJobWritesCompleteVodPlaylist).
+        $this->assertStringContainsString('seg-voriginal-00000.m4s', $original);
+        $this->assertStringContainsString('seg-voriginal-00004.m4s', $original);
+        $this->assertStringNotContainsString('seg-voriginal-00005.m4s', $original);
 
         // …and it is NOT advertised as a switchable ABR level in the master (SV-4.6),
         // which is what keeps the duplicate-BANDWIDTH defect from returning.
@@ -2757,15 +2852,32 @@ class TranscodeManagerTest extends TestCase
         $playlists = glob("{$dir}/media_v*.m3u8") ?: [];
         $this->assertGreaterThanOrEqual(2, count($playlists));
         $normalised = null;
+        $checked = 0;
         foreach ($playlists as $file) {
             $body = (string) file_get_contents($file);
-            // Strip the per-variant segment name so only the TIMELINE remains.
-            $timeline = preg_replace('/seg-v[^-]+-(\d{5})\.ts/', 'SEG-$1.ts', $body);
+            // Strip everything that is per-variant so only the TIMELINE remains:
+            // the segment names, and — since S60 made fMP4 the default — the
+            // `#EXT-X-MAP` init each variant names. Leaving the MAP in made this
+            // case compare "which variant is this" rather than "when does each
+            // segment start", which is not what it claims to measure.
+            $timeline = (string) preg_replace(
+                ['/seg-v[^-]+-(\d{5})\.(ts|m4s)/', '/init-v[^."]+\.m4s/'],
+                ['SEG-$1.$2', 'INIT.m4s'],
+                $body
+            );
             $normalised ??= $timeline;
             $this->assertSame($normalised, $timeline, "timing differs in {$file}");
             $this->assertStringContainsString('#EXT-X-PLAYLIST-TYPE:VOD', $body);
             $this->assertStringContainsString('#EXT-X-ENDLIST', $body);
+            $checked++;
         }
+
+        // The denominator: a normaliser that had swallowed the whole body would
+        // make every comparison trivially true, and a glob that matched nothing
+        // would make the loop a no-op that reads as a pass.
+        $this->assertSame(count($playlists), $checked);
+        $this->assertStringContainsString('#EXTINF:6.000000,', (string) $normalised);
+        $this->assertStringContainsString('SEG-00000.', (string) $normalised);
     }
 
     public function testEnsureSegmentResolvesRenditionVariant(): void
@@ -3102,7 +3214,10 @@ class TranscodeManagerTest extends TestCase
         $svManager = new TranscodeManager($svDb, $spy, $this->segmentDir, null, 6);
         foreach ([0, 1, 2, 3, 4] as $i) {
             $path = $svManager->ensureSegment('seg-job', null, $i);
-            $this->assertSame("{$svDir}/seg-" . sprintf('%05d', $i) . '.ts', $path);
+            // ⚠ S60: `.m4s` — `$base` is the segment_params the job was CREATED
+            // with above, and job creation at the shipped default now stamps
+            // `segment_format: fmp4`. The probe-count claim is unaffected.
+            $this->assertSame("{$svDir}/seg-" . sprintf('%05d', $i) . '.m4s', $path);
             $this->assertFileExists((string) $path);
         }
 
@@ -4098,7 +4213,12 @@ class TranscodeManagerTest extends TestCase
         $this->assertFileExists("{$dir}/media_a0.m3u8");
         $this->assertFileExists("{$dir}/media_a1.m3u8");
         $audio1 = (string) file_get_contents("{$dir}/media_a1.m3u8");
-        $this->assertStringContainsString('seg-a1-00000.ts', $audio1);
+        // ⚠ S60: `.m4s` at the shipped default. The audio-only rendition follows
+        // the JOB's container exactly as the video ones do — which is the
+        // multi-audio half of "not regressed by the flip": a mixed job would put
+        // `.m4s` video beside `.ts` audio in one directory.
+        $this->assertStringContainsString('seg-a1-00000.m4s', $audio1);
+        $this->assertStringContainsString('#EXT-X-MAP:URI="init-a1.m4s"', $audio1);
         $this->assertStringContainsString('#EXT-X-ENDLIST', $audio1);
 
         // The persisted variants JSON carries the descriptors with BOTH indexes.
@@ -4584,6 +4704,31 @@ class TranscodeManagerTest extends TestCase
         return new FfmpegRunner('/usr/bin/ffmpeg', '/usr/bin/ffprobe', '/tmp');
     }
 
+    /**
+     * ⚠ THE ASSERTION S60 RESTS ON, and it is not "the constant says v10".
+     *
+     * `EncodeSettings::fingerprint()` returns `''` whenever every setting is at
+     * its shipped default, and the container is folded into it as a suffix that
+     * is EMPTY at that default. So the moment S60 moved
+     * `DEFAULT_SEGMENT_FORMAT` to `fmp4`, `fingerprint()` began returning the
+     * value it had always returned for MPEG-TS. The fingerprint cannot express
+     * the flip (proven in
+     * {@see EncodeSettingsSegmentFormatTest::test_s60_the_fingerprint_cannot_tell_the_new_default_from_the_old_one()}),
+     * and `findReusableJob()` would otherwise have handed every pre-existing
+     * `.ts` job straight back to an fMP4 request — `.ts` bytes against `.m4s`
+     * playlists, on every install, on the deploy.
+     *
+     * So this case computes the key the SAME media item and profile had BEFORE
+     * the flip (`v9`, fingerprint `''`) and the key it has AFTER (`v10`,
+     * fingerprint `''`), and requires them to differ. Asserting
+     * `JOB_KEY_VERSION === 'v10'` would pass whatever the fingerprint did; the
+     * two sha1s are the thing that actually decides whether an old directory is
+     * reachable.
+     *
+     * Both literals are typed rather than read from the class. `v9` is not
+     * derivable from today's code at all, and deriving `v10` from the constant
+     * would make the comparison unfalsifiable.
+     */
     public function testEnsureHlsJobReuseKeyCarriesFormatVersion(): void
     {
         // The reuse key embeds a format version so every job persisted before the
@@ -4601,7 +4746,14 @@ class TranscodeManagerTest extends TestCase
 
         $this->manager($db, $ff)->ensureHlsJob('media-1', 'web');
 
-        $expectedKey = sha1('media-1|web|v9');
+        // The key an untouched install produced for this media+profile from S49
+        // until S60: JOB_KEY_VERSION `v9`, fingerprint `''` (every setting at its
+        // shipped default, container mpegts).
+        $preFlipKey = sha1('media-1|web|v9');
+        // The key the SAME media+profile produces now: `v10`, fingerprint still
+        // `''` (every setting at its shipped default, container fmp4).
+        $postFlipKey = sha1('media-1|web|v10');
+
         $reuseKey = null;
         $insertKey = null;
         foreach ($captured as [$sql, $params]) {
@@ -4612,9 +4764,38 @@ class TranscodeManagerTest extends TestCase
                 $insertKey = $params[6] ?? null; // placeholder 6 = key_hash
             }
         }
-        $this->assertSame($expectedKey, $reuseKey, 'reuse lookup must use the versioned key');
-        $this->assertSame($expectedKey, $insertKey, 'job row must persist the versioned key');
-        $this->assertNotSame(sha1('media-1|web'), $expectedKey, 'pre-version jobs can never match');
+
+        // Print both keys so a reader can see the divergence rather than take a
+        // boolean for it. STDERR, because phpunit.xml sets
+        // beStrictAboutOutputDuringTests with failOnRisky.
+        fwrite(STDERR, sprintf(
+            "\n[S60] job key for media-1|web:  v9 (pre-flip) = %s\n"
+            . "[S60]                            v10 (shipped) = %s\n"
+            . "[S60]      fingerprint at defaults, both sides = %s\n",
+            $preFlipKey,
+            $postFlipKey,
+            var_export((new EncodeSettings())->fingerprint(), true)
+        ));
+
+        $this->assertSame($postFlipKey, $reuseKey, 'reuse lookup must use the versioned key');
+        $this->assertSame($postFlipKey, $insertKey, 'job row must persist the versioned key');
+        $this->assertNotSame(sha1('media-1|web'), $postFlipKey, 'pre-version jobs can never match');
+
+        // ⚠ S60: the whole point. Same media, same profile, same (default)
+        // settings on both sides — and a DIFFERENT key, so `findReusableJob()`
+        // cannot return a pre-S60 MPEG-TS job directory to an fMP4 request.
+        $this->assertNotSame(
+            $preFlipKey,
+            $postFlipKey,
+            'the S60 flip would re-match every pre-existing .ts job: fingerprint() is empty at the '
+            . 'shipped default either side of it, so JOB_KEY_VERSION is the ONLY thing separating '
+            . 'a v9 mpegts job from a v10 fmp4 one'
+        );
+        $this->assertNotSame(
+            $preFlipKey,
+            $reuseKey,
+            'the reuse LOOKUP must not be able to find a pre-S60 job directory'
+        );
     }
 
     // --- Audit tests: the FS-glob helpers must see variant-prefixed filenames ---

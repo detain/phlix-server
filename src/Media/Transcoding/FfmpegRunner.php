@@ -2567,10 +2567,15 @@ class FfmpegRunner
      * shipped MPEG-TS ones.
      *
      * The key is threaded through `segment_params` by
-     * {@see TranscodeManager::computeSegmentParams()} and is ABSENT at the
-     * shipped default, so an unflagged job's params array — and therefore the
-     * persisted `transcode_jobs.segment_params` JSON — is byte-identical to
-     * pre-S56.
+     * {@see TranscodeManager::computeSegmentParams()}, which writes it only for
+     * `fmp4`. An unflagged job's params array — and therefore the persisted
+     * `transcode_jobs.segment_params` JSON — is byte-identical to pre-S56.
+     *
+     * ⚠ S60 inverted which jobs those are. The key was ABSENT at the shipped
+     * default until the flip; `fmp4` is the default now, so it is PRESENT on every
+     * job an untouched install creates, and absent only for an `mpegts` job (the
+     * rollback) and for every job created before the flip. Absence therefore means
+     * MPEG-TS as a fact about persisted data — never "whatever the default is".
      *
      * @param array<string, mixed> $params
      *

@@ -172,15 +172,31 @@ final class AdminSettingsSegmentFormatTest extends TestCase
 
         self::assertSame('transcoding', $meta['group']);
         self::assertSame(EncodeSettings::SEGMENT_FORMATS, $meta['enum']);
-        // ⚠ S60: this is the SCHEMA's `default`, which lives in
-        // detain/phlix-shared and still reads `mpegts` while phlix-server's
-        // shipped default is `fmp4`. It is annotation only — the EFFECTIVE value
-        // in the `values` block comes from config/transcoding.php via
-        // SettingsRepository::getDefault(), and there is no reset endpoint that
-        // would write this. The divergence is pinned, explained and given a
-        // closing procedure in SegmentFormatSchemaEnumDriftTest.
-        self::assertSame('mpegts', $meta['default']);
-        self::assertNotSame(EncodeSettings::DEFAULT_SEGMENT_FORMAT, $meta['default']);
+        // This is the SCHEMA's `default`, which lives in detain/phlix-shared,
+        // and it is what the SPA renders as the annotation beside the control.
+        // It is annotation ONLY — the EFFECTIVE value in the `values` block
+        // comes from config/transcoding.php via SettingsRepository::getDefault(),
+        // and there is no reset endpoint that would write it.
+        //
+        // ⚠ S60 flipped phlix-server to `fmp4` while the schema still said
+        // `mpegts`, and for that gap these two lines asserted the two DISAGREED,
+        // on purpose, so the catch-up release could not land unnoticed. S318 is
+        // that release (phlix-shared v0.49.1 + the composer.lock re-pin), so the
+        // divergence is CLOSED and the pin is now the convergence itself: the
+        // annotation an operator reads must BE the default the encoder obeys.
+        //
+        // Both directions red here. The first line compares two independently
+        // authored operands — the constant in this repo against the vendored
+        // JSON as the controller surfaced it — so either side moving alone
+        // fails; the second stops "move both together" from being done by
+        // regeneration rather than by decision.
+        //
+        // This is the CONTROLLER-side half of that pin. Its peer, which reads
+        // the vendored JSON directly instead of through loadSchemaMeta(), is
+        // SegmentFormatSchemaEnumDriftTest::
+        //   test_the_schema_default_is_the_shipped_default_in_both_repositories().
+        self::assertSame(EncodeSettings::DEFAULT_SEGMENT_FORMAT, $meta['default']);
+        self::assertSame('fmp4', $meta['default']);
         self::assertIsString($meta['label']);
         self::assertNotSame('', $meta['label']);
         self::assertIsString($meta['helpText']);

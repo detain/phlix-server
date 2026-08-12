@@ -412,16 +412,16 @@
         },
         {
             "name": "detain/phlix-shared",
-            "version": "v0.49.0",
+            "version": "v0.49.1",
             "source": {
                 "type": "git",
                 "url": "https://github.com/detain/phlix-shared.git",
-                "reference": "383798f93264205d6f955f806b645cd7654174de"
+                "reference": "653a755fc7b0888f43068ceddf3628f79fe2b427"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/detain/phlix-shared/zipball/383798f93264205d6f955f806b645cd7654174de",
-                "reference": "383798f93264205d6f955f806b645cd7654174de",
+                "url": "https://api.github.com/repos/detain/phlix-shared/zipball/653a755fc7b0888f43068ceddf3628f79fe2b427",
+                "reference": "653a755fc7b0888f43068ceddf3628f79fe2b427",
                 "shasum": ""
             },
             "require": {
@@ -455,9 +455,9 @@
             "description": "Shared interfaces, DTOs, event names, and protocol types used by both phlix-server and phlix-hub. Composer-installable, PHP 8.3+, zero I/O by charter — the only bundled network code is the blocking CurlArrTransport (CLI/test only); event-loop consumers MUST inject an async ArrTransportInterface.",
             "support": {
                 "issues": "https://github.com/detain/phlix-shared/issues",
-                "source": "https://github.com/detain/phlix-shared/tree/v0.49.0"
+                "source": "https://github.com/detain/phlix-shared/tree/v0.49.1"
             },
-            "time": "2026-08-10T23:12:00+00:00"
+            "time": "2026-08-12T19:24:49+00:00"
         },
         {
             "name": "directorytree/ldaprecord",

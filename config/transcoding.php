@@ -163,9 +163,21 @@ return [
      *
      * **Second route (a redeploy): revert the S60 commit.** That restores this
      * literal AND `EncodeSettings::DEFAULT_SEGMENT_FORMAT` AND `JOB_KEY_VERSION`
-     * to `v9` together. Reverting only the two defaults and leaving
-     * `JOB_KEY_VERSION` at `v10` orphans every cache a second time for no
-     * benefit — all three move together or none do.
+     * to `v9` together — all three, or the revert does nothing.
+     *
+     * ⚠ **Reverting only the two defaults is a SILENT NO-OP, not an extra
+     * re-encode.** `EncodeSettings::fingerprint()` is empty whenever every
+     * setting is at its shipped default, *whatever that default is*, so a revert
+     * of the two literals changes no component of
+     * `sha1(media|profile|JOB_KEY_VERSION . fingerprint())`. The key stays
+     * byte-identical to the one the existing fMP4 jobs were inserted under,
+     * `TranscodeManager::findReusableJob()` returns those jobs, and they keep
+     * serving `.m4s` playlists and `.m4s` segments on a box whose config now says
+     * `mpegts`. Only never-before-played items get `.ts`, so the result is a
+     * mixed fleet — and an operator re-testing on content they already played
+     * sees fMP4 still playing and concludes the revert failed to deploy. Reverting
+     * `JOB_KEY_VERSION` to `v9` as well is what actually moves the key.
+     * (Measured in `tests/Unit/Media/Transcoding/TranscodeManagerRollbackKeyTest.php`.)
      *
      * ## What the flip costs on first deploy
      *

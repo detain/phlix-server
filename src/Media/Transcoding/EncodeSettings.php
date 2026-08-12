@@ -392,14 +392,26 @@ final class EncodeSettings
         // same commit: the key is `sha1(media|profile|VERSION . fingerprint())`,
         // so `…|v9` and `…|v10` cannot collide however this method behaves.
         //
-        // ⚠ REVERTING THE FLIP MUST ALSO REVERT THE BUMP. Restoring
-        // DEFAULT_SEGMENT_FORMAT to `mpegts` while leaving JOB_KEY_VERSION at
-        // `v10` re-orphans every v10 job for a second time — a second fleet-wide
-        // re-encode for no benefit. (An operator rolling back over the ADMIN API
-        // instead — `transcoding.segment_format = mpegts`, the supported route —
-        // touches neither constant: the suffix becomes `|mpegts`, the
-        // fingerprint becomes non-empty, and they get a fresh `.ts` job. See
-        // `config/transcoding.php`'s rollback block.)
+        // ⚠ REVERTING THE FLIP MUST ALSO REVERT THE BUMP — and the reason is the
+        // OPPOSITE of a second re-encode. Restore DEFAULT_SEGMENT_FORMAT (and the
+        // `config/transcoding.php` literal) to `mpegts` while leaving
+        // JOB_KEY_VERSION at `v10` and this method returns `''` again — the SAME
+        // `''` the fMP4 default produces, because the suffix is empty at whatever
+        // the default is. The key `sha1(media|profile|v10 . '')` is then
+        // byte-identical to the key the existing fMP4 jobs were inserted under,
+        // so {@see TranscodeManager::findReusableJob()} hands those jobs straight
+        // back and the box KEEPS SERVING `.m4s` while the config says `mpegts`.
+        // Nothing is orphaned and nothing re-encodes: the partial revert is a
+        // silent no-op on every item that has already been played, which is
+        // exactly the content an operator re-tests on. All three constants move
+        // together (defaults + JOB_KEY_VERSION back to `v9`) or none do.
+        //
+        // (An operator rolling back over the ADMIN API instead —
+        // `transcoding.segment_format = mpegts`, the supported route — touches no
+        // constant and DOES work: the suffix becomes `|mpegts`, the fingerprint
+        // becomes non-empty, the key moves, and they get a fresh `.ts` job. See
+        // `config/transcoding.php`'s rollback block. Both claims are measured in
+        // `tests/Unit/Media/Transcoding/TranscodeManagerRollbackKeyTest.php`.)
         $suffix = $format === self::DEFAULT_SEGMENT_FORMAT ? '' : ('|' . $format);
 
         return substr(sha1($preset . '|' . $crf . '|' . $audio . $suffix), 0, 12);

@@ -142,9 +142,16 @@ class TranscodeController
             'hls_url' => $sign($job['hls_url']),
             // S59 restores what S11 removed. It is NOT the unconditional literal
             // S11 deleted: the manager returns null unless the job actually
-            // published a `manifest.mpd`, so an mpegts job (the shipped default)
-            // still advertises no DASH endpoint — and $sign passes null through
-            // untouched rather than minting a signature for nothing.
+            // published a `manifest.mpd`, so an mpegts job still advertises no
+            // DASH endpoint — and $sign passes null through untouched rather than
+            // minting a signature for nothing.
+            //
+            // ⚠ S60 made `fmp4` the shipped default, and every fMP4 job publishes
+            // a manifest. So this key is now POPULATED on an untouched install
+            // where it used to be null, and null is left for the
+            // `transcoding.segment_format = mpegts` rollback and for jobs created
+            // before the flip. That is a visible response change for any client
+            // branching on `dash_url != null`.
             'dash_url' => $sign($job['dash_url']),
             'status' => $job['status'],
             'reused' => $job['reused'],

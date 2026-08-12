@@ -94,10 +94,12 @@ use Phlix\Tests\Support\Browser\StubJobRowConnection;
  * with a non-zero assertion count — see
  * {@see BrowserProbeEnvironment::REQUIRED_CASES_BY_CLASS}.
  *
- * @phpstan-type ServerHandle array{id: int, proc: resource, pid: int, port: int,
- *                                  log: string, out: string, cmd: string}
+ * @phpstan-type ServerHandle array{id: int, proc: resource, pid: int, port: int, workers: int,
+ *                                  log: string, inflight: string, release: string, roll: string,
+ *                                  out: string, cmd: string}
  * @phpstan-type ServedRequest array{pid: int, name: string, status: int, contentType: ?string,
  *                                   fileBacked: bool, bytes: int, startNs: int, endNs: int}
+ * @phpstan-type Batch array{multi: \CurlMultiHandle, handles: array<string, \CurlHandle>}
  */
 final class Fmp4HlsThroughControllerE2ETest extends TestCase
 {
@@ -122,6 +124,30 @@ final class Fmp4HlsThroughControllerE2ETest extends TestCase
 
     /** Accepting processes in the controller-backed server. Mirrors `$httpWorker->count`. */
     private const SERVER_WORKERS = 4;
+
+    /**
+     * S317 — the server-side ceiling on a `/__hold/<name>` request, past which it
+     * answers 504. Comfortably longer than the whole concurrency case, so a hold only
+     * hits it when the release genuinely went missing; and when it does, the case reds
+     * on a status instead of passing after a stall.
+     */
+    private const HOLD_MAX_MS = 45_000;
+
+    /**
+     * S317 — how long a barrier step waits for a request's in-flight marker before
+     * declaring the server unable to begin it. Generous: the marker is written at the
+     * top of `onMessage`, so the only thing between the connect and the marker is an
+     * accept.
+     */
+    private const BARRIER_WAIT_SECONDS = 20.0;
+
+    /**
+     * S317 — how long the ONE-worker control is watched for a second request beginning
+     * while the first is still in flight. It must not begin one; three seconds against
+     * a multi-worker arm that begins each of its four in single-digit milliseconds is
+     * three orders of magnitude of margin.
+     */
+    private const CONTROL_QUIET_SECONDS = 3.0;
 
     /**
      * Wall clock for the whole probe. Generous because every segment is encoded
@@ -392,86 +418,182 @@ final class Fmp4HlsThroughControllerE2ETest extends TestCase
     }
 
     /**
-     * ⚠ THE HARNESS CONTROL, IN BOTH DIRECTIONS.
+     * ⚠ THE HARNESS CONTROL, IN BOTH DIRECTIONS — and, since S317, a DETERMINISTIC one.
      *
      * `TranscodeManager::ensureSegment()` polls for its encode with a blocking
      * `usleep()` whenever it is not inside a Swoole coroutine. A test server with one
      * accepting process therefore serialises every request, and hls.js's requests
      * pile up behind each other: the player stalls, and the stall reads as "the
      * controller is broken" when it is the harness. Any red measured on a serialising
-     * server would be a false one.
+     * server would be a false one. That claim is worth keeping, so it is MEASURED
+     * against a control that must produce the opposite answer.
      *
-     * So concurrency is MEASURED, not assumed, and measured against a control that
-     * must produce the opposite answer:
+     * ## ⚠ Why S317 rebuilt the measurement (the old one was a sampled race)
      *
-     *   - {@see self::SERVER_WORKERS} workers ⇒ at least one pair of requests
-     *     genuinely in flight at the same instant, answered by ≥2 distinct pids;
-     *   - ONE worker, same fixture, same four requests ⇒ ZERO overlapping pairs and
-     *     exactly one pid.
+     * S315 fired four segment requests at once with `curl_multi` and counted
+     * overlapping `[startNs, endNs]` windows, requiring ≥1 pair and ≥2 pids. That
+     * samples a race, and it reddened master twice (`31456728212`, `31616743619`,
+     * both `4 workers ⇒ 0/6 overlapping pairs across 1 pids`) and reproduces on a dev
+     * box about once in five runs. Two things had to go right and NEITHER was under
+     * the test's control:
      *
-     * The overlap arithmetic is the same in both, so "we found overlaps" cannot be a
-     * detector that always says yes. Timestamps are `hrtime()`, which is monotonic
-     * AND drawn from a clock shared across processes on Linux — `microtime()` would
-     * be comparable but not monotonic, and a per-process clock would make the
-     * cross-pid comparison meaningless.
+     *  - Workerman's children share ONE listen socket, so which child `accept()`s is
+     *    the kernel's choice — and when one child accepted all four connections it
+     *    then served them out of its own event loop, one at a time;
+     *  - and each response had to still be in flight when the next began.
      *
-     * FOUR requests against FOUR workers, not three: Workerman's children share one
-     * listen socket and the kernel decides which wakes, so the distribution is not
-     * round-robin. The only arrangement that produces zero overlaps on a concurrent
-     * server is ALL requests landing in ONE worker, and a fourth request makes that
-     * arrangement much rarer without changing what is being claimed. (Measured across
-     * five runs at three requests: 3, 3, 3, 2, 1 overlapping pairs — never 0, but the
-     * margin was thinner than it needed to be.)
+     * When both failed the four-worker arm printed EXACTLY what the one-worker control
+     * printed (`0/6 across 1 pid`), i.e. the discriminator vanished and the case was
+     * measuring nothing. Note what was NOT the cause: the failing local reproduction
+     * measured 600-710 ms per request, longer than several passing runs. Making the
+     * requests slower does not fix a distribution decided at accept time, and widening
+     * the sample cannot make a race deterministic (S315 already widened 3 → 4).
+     *
+     * ## What replaces it: a barrier the test owns
+     *
+     * `/__hold/<name>` (a harness endpoint on `hls-controller-server.php`) blocks in a
+     * `usleep()` poll — deliberately the same blocking shape `ensureSegment()` has
+     * outside a coroutine — until the test creates the release file. **A worker inside
+     * one cannot run its event loop, so it cannot accept another connection.** The
+     * server also appends an IN-FLIGHT marker the instant it dispatches a request,
+     * before answering it; the completed-request log can only say "a request
+     * finished", which is useless to a barrier.
+     *
+     * The four-worker arm therefore opens its requests ONE AT A TIME, each only after
+     * the previous one's marker exists:
+     *
+     *   hold-1 → begins on worker A, which is now blocked
+     *   hold-2 → cannot go to A; begins on B, now blocked
+     *   hold-3 → cannot go to A or B; begins on C, now blocked
+     *   a REAL on-demand fMP4 segment → must go to D, and is produced by a real
+     *     `ensureSegment()` encode and delivered end to end while A, B and C are
+     *     still inside their requests
+     *
+     * Only then are the holds released. So `hold-N.endNs` is later than every other
+     * request's `startNs` BY CONSTRUCTION, not by luck: all 6 pairs overlap and all 4
+     * pids differ, every run, on any scheduler. Nothing here depends on how the kernel
+     * distributes simultaneous accepts, on how many cores the runner has, or on how
+     * long an encode takes.
+     *
+     * ## The control still cannot exhibit the property
+     *
+     * ONE worker, same four requests, same order. The first hold takes the only
+     * worker; the other three connections are established (the listen backlog accepts
+     * them) and then measurably go NOWHERE — no second in-flight marker appears for
+     * {@see self::CONTROL_QUIET_SECONDS}, against a four-worker arm that begins each
+     * of its four in single-digit milliseconds. After the release it serves all four,
+     * serially, from one pid: 0/6 pairs. The overlap arithmetic is the same function
+     * on both arms, so "we found overlaps" cannot be a detector that always says yes.
+     *
+     * Timestamps are `hrtime()`, which is monotonic AND drawn from a clock shared
+     * across processes on Linux — `microtime()` would be comparable but not monotonic,
+     * and a per-process clock would make the cross-pid comparison meaningless.
+     *
+     * ⚠ The evidence line is load-bearing: the two CI reds above were diagnosable from
+     * a log alone because it prints its denominator and its raw durations. S317 keeps
+     * that line verbatim and adds the host's CPU count and the number of workers that
+     * actually forked — the addendum's hypothesis was that the runners which fail are
+     * provisioned differently, and the next occurrence should not need archaeology.
+     * The worker count is ASSERTED, never used to skip: "this environment cannot
+     * demonstrate concurrency" must red like anything else, because a skip reads as a
+     * pass and this very file shipped that defect once already.
      */
     public function testTheControllerBackedServerIsGenuinelyConcurrent(): void
     {
-        // 12 s at 3 s ⇒ indices 0..3, and every one is a distinct `-ss` encode: only
-        // index 0's encode publishes the init, so no request here is a cache hit.
-        $files = [
-            'seg-v360p-00000.m4s',
-            'seg-v360p-00001.m4s',
-            'seg-v360p-00002.m4s',
-            'seg-v360p-00003.m4s',
-        ];
-        $expected = array_fill(0, count($files), 200);
+        // Three held requests plus ONE real on-demand segment: exactly one per worker,
+        // which is also what makes "4 distinct pids" a statement about the whole pool.
+        $holds = ['hold-1', 'hold-2', 'hold-3'];
+        $segment = 'seg-v360p-00000.m4s';
+        $names = [...$holds, $segment];
+        $this->assertCount(
+            self::SERVER_WORKERS,
+            $names,
+            'the arm places one request per worker; that correspondence is the measurement'
+        );
+        $maxPairs = intdiv(count($names) * (count($names) - 1), 2);
+        $expected = array_fill_keys($names, 200);
 
-        // ── the measurement ──────────────────────────────────────────
-        $parallelJob = 's315-parallel';
+        // ── the measurement: SERVER_WORKERS workers ──────────────────
+        $parallelJob = 's317-parallel';
         $parallelDir = $this->buildJob($parallelJob);
-        $this->assertSame([], $this->m4sIn($parallelDir), 'every request below must be real encode work');
+        $this->assertSame(
+            [],
+            $this->m4sIn($parallelDir),
+            'the segment below must be real encode work — a cache hit would not occupy a worker at all'
+        );
 
         $parallel = $this->startServer($parallelJob, self::SERVER_WORKERS);
-        $parallelStatuses = $this->fetchInParallel($parallel, $parallelJob, $files);
-        $this->assertSame($expected, $parallelStatuses, 'the concurrent fetches did not all succeed');
+        $parallelBatch = $this->newBatch();
 
-        $parallelLog = $this->serverLog($parallel);
-        $this->assertCount(count($files), $parallelLog, 'denominator: every request was measured, once');
-        foreach ($parallelLog as $entry) {
-            $this->assertGreaterThan(
-                0,
-                $entry['endNs'] - $entry['startNs'],
-                'a zero-length interval cannot overlap anything — this measurement would be vacuous'
+        foreach ($holds as $hold) {
+            $this->addRequest($parallelBatch, $this->requestUrl($parallel, $parallelJob, $hold), $hold);
+            $this->assertTrue(
+                $this->pumpUntil(
+                    $parallelBatch,
+                    fn (): bool => $this->hasEntryNamed($parallel['inflight'], $hold),
+                    self::BARRIER_WAIT_SECONDS
+                ),
+                "{$hold} never began: with " . ($this->distinctPids($this->inFlight($parallel)))
+                . ' worker(s) already blocked, no other process accepted its connection'
             );
         }
 
-        $overlaps = $this->overlappingPairs($parallelLog);
-        $pids = $this->distinctPids($parallelLog);
+        // The real one, and the whole point: it has to be ACCEPTED, produced by a real
+        // `ensureSegment()` encode and answered while the other three processes are
+        // still inside their requests.
+        $this->addRequest($parallelBatch, $this->requestUrl($parallel, $parallelJob, $segment), $segment);
+        $this->assertTrue(
+            $this->pumpUntil(
+                $parallelBatch,
+                fn (): bool => $this->hasEntryNamed($parallel['log'], $segment),
+                self::BARRIER_WAIT_SECONDS
+            ),
+            'no process served the on-demand segment while the other three were held — the server is '
+            . 'NOT concurrent, and any playback stall measured against it would be the harness, not '
+            . 'HlsController'
+        );
 
-        // ── the control ──────────────────────────────────────────────
-        $serialJob = 's315-serial';
+        // Snapshot BEFORE the release: after it, everything begins anyway.
+        $begunUnderHold = $this->begun($parallel);
+        $this->releaseHolds($parallel);
+        $parallelStatuses = $this->drain($parallelBatch);
+
+        // ── the control: ONE worker, which must be UNABLE ────────────
+        $serialJob = 's317-serial';
         $serialDir = $this->buildJob($serialJob);
         $this->assertSame([], $this->m4sIn($serialDir));
 
         $serial = $this->startServer($serialJob, 1);
-        $serialStatuses = $this->fetchInParallel($serial, $serialJob, $files);
-        $this->assertSame($expected, $serialStatuses, 'the one-worker control did not serve the same set');
+        $serialBatch = $this->newBatch();
 
+        $this->addRequest($serialBatch, $this->requestUrl($serial, $serialJob, $holds[0]), $holds[0]);
+        $this->assertTrue(
+            $this->pumpUntil(
+                $serialBatch,
+                fn (): bool => $this->hasEntryNamed($serial['inflight'], $holds[0]),
+                self::BARRIER_WAIT_SECONDS
+            ),
+            'the one-worker control never began even its FIRST request, so it would fail for the wrong reason'
+        );
+
+        foreach (array_slice($names, 1) as $name) {
+            $this->addRequest($serialBatch, $this->requestUrl($serial, $serialJob, $name), $name);
+        }
+        $this->pumpFor($serialBatch, self::CONTROL_QUIET_SECONDS);
+        $begunWhileBlocked = $this->begun($serial);
+
+        $this->releaseHolds($serial);
+        $serialStatuses = $this->drain($serialBatch);
+
+        // ── the arithmetic, the same function on both arms ───────────
+        $parallelLog = $this->serverLog($parallel);
         $serialLog = $this->serverLog($serial);
-        $this->assertCount(count($files), $serialLog);
+        $overlaps = $this->overlappingPairs($parallelLog);
+        $pids = $this->distinctPids($parallelLog);
         $serialOverlaps = $this->overlappingPairs($serialLog);
         $serialPids = $this->distinctPids($serialLog);
 
-        $maxPairs = count($files) * (count($files) - 1) / 2;
+        // ⚠ The line the two CI reds were diagnosed from, unchanged in shape.
         $this->report(sprintf(
             'concurrency: %d workers ⇒ %d/%d overlapping pairs across %d pids; '
             . '1 worker ⇒ %d/%d overlapping pairs across %d pid(s); durations(ms) %s vs %s',
@@ -485,7 +607,56 @@ final class Fmp4HlsThroughControllerE2ETest extends TestCase
             $this->durationsMs($parallelLog),
             $this->durationsMs($serialLog)
         ));
+        // …and what S317 measured to get there, including the environment facts the
+        // addendum asked for.
+        $this->report(sprintf(
+            'barrier: cpus=%d, workers forked %d (parallel) / %d (control); began under hold %s; '
+            . 'control began %s in %.1fs; .m4s on disk 0 before ⇒ %d / %d after',
+            $this->cpuCount(),
+            count($this->workerRoll($parallel)),
+            count($this->workerRoll($serial)),
+            json_encode($begunUnderHold),
+            json_encode($begunWhileBlocked),
+            self::CONTROL_QUIET_SECONDS,
+            count($this->m4sIn($parallelDir)),
+            count($this->m4sIn($serialDir))
+        ), 'S317');
 
+        // The environment was CHECKED, and a check that fails reds — it never skips.
+        $this->assertCount(
+            self::SERVER_WORKERS,
+            $this->workerRoll($parallel),
+            'the server did not fork the processes this measurement hands its requests to'
+        );
+        $this->assertCount(1, $this->workerRoll($serial), 'the control forked more than one worker');
+
+        // Both arms answered the same four requests, and the segment is a real encode
+        // on both: the on-demand denominator, closed in each direction.
+        $this->assertSame($expected, $parallelStatuses, 'the concurrent fetches did not all succeed');
+        $this->assertSame($expected, $serialStatuses, 'the one-worker control did not serve the same set');
+        $this->assertContains($segment, $this->m4sIn($parallelDir), 'the segment was never produced');
+        $this->assertContains($segment, $this->m4sIn($serialDir));
+
+        $this->assertCount(count($names), $parallelLog, 'denominator: every request was measured, once');
+        $this->assertCount(count($names), $serialLog);
+        foreach ([...$parallelLog, ...$serialLog] as $entry) {
+            $this->assertGreaterThan(
+                0,
+                $entry['endNs'] - $entry['startNs'],
+                'a zero-length interval cannot overlap anything — this measurement would be vacuous'
+            );
+        }
+
+        // ── the control's property: it CANNOT begin a second request ──
+        $this->assertSame(
+            [$holds[0]],
+            $begunWhileBlocked,
+            sprintf(
+                'the ONE-worker control began a second request while its only worker was inside the '
+                . 'first (%.1fs of watching), so it does not serialise and is not a control',
+                self::CONTROL_QUIET_SECONDS
+            )
+        );
         $this->assertSame(
             0,
             $serialOverlaps,
@@ -493,13 +664,24 @@ final class Fmp4HlsThroughControllerE2ETest extends TestCase
         );
         $this->assertSame(1, $serialPids, 'the one-worker control used more than one process');
 
-        $this->assertGreaterThanOrEqual(
-            1,
-            $overlaps,
-            'the multi-worker server served every request one after another, so it is NOT concurrent — '
-            . 'any playback stall measured against it would be the harness, not HlsController'
+        // ── the claim ────────────────────────────────────────────────
+        $this->assertSame(
+            $names,
+            $begunUnderHold,
+            'the multi-worker server did not begin all four requests before any of them was released'
         );
-        $this->assertGreaterThanOrEqual(2, $pids, 'only one process ever answered');
+        $this->assertSame(
+            $maxPairs,
+            $overlaps,
+            'the barrier holds every request open until the last one has been answered, so every pair '
+            . 'must overlap; a smaller number means a request was completed early or never began'
+        );
+        $this->assertSame(
+            count($names),
+            $pids,
+            'the four requests were not answered by four distinct processes, so the server is not '
+            . 'serving concurrently across its whole worker pool'
+        );
     }
 
     /**
@@ -893,6 +1075,9 @@ final class Fmp4HlsThroughControllerE2ETest extends TestCase
         $slug = "{$jobId}-w{$workers}";
         $log = "{$this->root}/{$slug}-requests.jsonl";
         $out = "{$this->root}/{$slug}-server.out";
+        // S317. Passed EXPLICITLY rather than left to the server's derived default, so
+        // the barrier and the hold cannot disagree about which file releases it.
+        $release = "{$this->root}/{$slug}-hold.release";
 
         $lastError = '';
         for ($attempt = 0; $attempt < 3; $attempt++) {
@@ -917,6 +1102,8 @@ final class Fmp4HlsThroughControllerE2ETest extends TestCase
                 "--workers={$workers}",
                 '--segment-seconds=' . self::SEG_SECONDS,
                 '--max-wait-ms=' . self::SEGMENT_WAIT_MS,
+                "--hold-release={$release}",
+                '--hold-max-ms=' . self::HOLD_MAX_MS,
                 // Workerman's own command word. Passed here rather than injected by
                 // the script so the command in a failure message can be re-run.
                 'start',
@@ -934,7 +1121,12 @@ final class Fmp4HlsThroughControllerE2ETest extends TestCase
                 'proc' => $proc,
                 'pid' => (int) $status['pid'],
                 'port' => $port,
+                'workers' => $workers,
                 'log' => $log,
+                // S317 — the two side-files the server derives from the log path.
+                'inflight' => $log . '.inflight',
+                'roll' => $log . '.workers',
+                'release' => $release,
                 'out' => $out,
                 'cmd' => $cmd,
             ];
@@ -952,6 +1144,16 @@ final class Fmp4HlsThroughControllerE2ETest extends TestCase
     }
 
     /**
+     * Ready means TWO things, and S317 needs both.
+     *
+     * `/__ready` proves a worker is accepting — enough for the browser cases, which
+     * only need the port to answer. It does NOT prove the whole pool has forked, and
+     * repeating the probe would not either: which child answers it is the same kernel
+     * choice the concurrency barrier exists to stop depending on. So the roll call the
+     * children write in `onWorkerStart` is the second condition; without it the barrier
+     * could hand a connection to a worker that does not exist yet and wait for a marker
+     * that never comes.
+     *
      * @param ServerHandle $server
      */
     private function waitForReady(array $server): bool
@@ -964,13 +1166,49 @@ final class Fmp4HlsThroughControllerE2ETest extends TestCase
                 return false;
             }
             $body = @file_get_contents("http://127.0.0.1:{$server['port']}/__ready", false, $context);
-            if ($body === 'ready') {
+            if ($body === 'ready' && count($this->workerRoll($server)) >= $server['workers']) {
                 return true;
             }
             usleep(100_000);
         }
 
         return false;
+    }
+
+    /**
+     * The pids of the workers that have actually forked, from the roll call each one
+     * appends in `onWorkerStart`.
+     *
+     * @param ServerHandle $server
+     *
+     * @return list<int>
+     */
+    private function workerRoll(array $server): array
+    {
+        $pids = [];
+        foreach (preg_split('/\R/', (string) @file_get_contents($server['roll'])) ?: [] as $line) {
+            if (trim($line) !== '') {
+                $pids[] = (int) trim($line);
+            }
+        }
+
+        return array_values(array_unique($pids));
+    }
+
+    /**
+     * Usable CPUs, printed beside the concurrency measurement.
+     *
+     * Not used to decide anything — the barrier does not depend on core count, and a
+     * measurement that skipped itself on a small runner would read as a pass. It is
+     * here because the S317 addendum's hypothesis was that the CI runners which fail
+     * are provisioned differently from the ones which pass, and the next occurrence
+     * should be answerable from the log.
+     */
+    private function cpuCount(): int
+    {
+        $nproc = (int) trim((string) @shell_exec('nproc 2>/dev/null'));
+
+        return $nproc > 0 ? $nproc : 1;
     }
 
     /**
@@ -1069,15 +1307,30 @@ final class Fmp4HlsThroughControllerE2ETest extends TestCase
     {
         $this->assertFileExists($server['log'], 'the server never created its request log');
 
+        /** @var list<array{pid: int, name: string, status: int, contentType: ?string,
+         *      fileBacked: bool, bytes: int, startNs: int, endNs: int}> $entries */
+        $entries = $this->readJsonLines($server['log']);
+
+        return $entries;
+    }
+
+    /**
+     * One JSON object per line, skipping blanks. Shared by the completed-request log
+     * and S317's in-flight marker file, which the server writes in the same shape from
+     * the same process.
+     *
+     * @return list<array<string, mixed>>
+     */
+    private function readJsonLines(string $path): array
+    {
         $entries = [];
-        foreach (preg_split('/\R/', (string) file_get_contents($server['log'])) ?: [] as $line) {
+        foreach (preg_split('/\R/', (string) @file_get_contents($path)) ?: [] as $line) {
             if (trim($line) === '') {
                 continue;
             }
             $decoded = json_decode($line, true);
-            $this->assertIsArray($decoded, "unparseable line in the server request log: {$line}");
-            /** @var array{pid: int, name: string, status: int, contentType: ?string,
-             *      fileBacked: bool, bytes: int, startNs: int, endNs: int} $decoded */
+            $this->assertIsArray($decoded, "unparseable line in {$path}: {$line}");
+            /** @var array<string, mixed> $decoded */
             $entries[] = $decoded;
         }
 
@@ -1102,41 +1355,188 @@ final class Fmp4HlsThroughControllerE2ETest extends TestCase
         return null;
     }
 
+    // ─────────────────────────────────────────────────────────────────
+    // S317 — the barrier: requests opened one at a time, on the test's terms
+    // ─────────────────────────────────────────────────────────────────
+
     /**
-     * Three GETs issued at the same instant on three connections.
+     * The URL for one named request: a `/__hold/<name>` barrier request, or a real
+     * on-demand artefact on the real `/hls/{job_id}/{file}` route.
      *
      * @param ServerHandle $server
-     * @param list<string> $files
-     *
-     * @return list<int> the HTTP status of each, in the order requested
      */
-    private function fetchInParallel(array $server, string $jobId, array $files): array
+    private function requestUrl(array $server, string $jobId, string $name): string
     {
-        $multi = curl_multi_init();
-        $handles = [];
-        foreach ($files as $file) {
-            $handle = curl_init($this->upstreamOf($server, $jobId) . '/' . $file);
-            curl_setopt($handle, CURLOPT_RETURNTRANSFER, true);
-            curl_setopt($handle, CURLOPT_TIMEOUT, (int) ceil(self::SEGMENT_WAIT_MS / 1000) + 30);
-            curl_multi_add_handle($multi, $handle);
-            $handles[] = $handle;
+        return str_starts_with($name, 'hold-')
+            ? "http://127.0.0.1:{$server['port']}/__hold/{$name}"
+            : $this->upstreamOf($server, $jobId) . '/' . $name;
+    }
+
+    /**
+     * Releases every held request on a server, by creating the file the holds poll for.
+     *
+     * @param ServerHandle $server
+     */
+    private function releaseHolds(array $server): void
+    {
+        file_put_contents($server['release'], "release\n");
+        $this->assertFileExists($server['release'], 'the holds could not be released');
+    }
+
+    /**
+     * The names of the requests the server has BEGUN, in the order it began them.
+     *
+     * Read from the in-flight marker file, which the server appends to before it
+     * answers anything. The completed-request log cannot answer this question: it only
+     * ever says a request FINISHED, and a barrier that waited on that would be waiting
+     * for the very thing it is trying to keep open.
+     *
+     * @param ServerHandle $server
+     *
+     * @return list<string>
+     */
+    private function begun(array $server): array
+    {
+        return array_map(
+            static fn (array $entry): string => (string) ($entry['name'] ?? ''),
+            $this->inFlight($server)
+        );
+    }
+
+    /**
+     * Does a JSONL log already carry an entry with this exact `name`?
+     *
+     * ⚠ Deliberately assertion-free, and it is the ONLY reader the barrier's polling
+     * loops use. {@see begun()} and {@see serverLog()} assert once per line, which in a
+     * loop spinning every 20 ms made the case's assertion COUNT a function of how long
+     * the scheduler took — 120 on an idle box, 304 under load, for identical behaviour.
+     * A count that moves on its own is not evidence, and the S305 gate prints it.
+     *
+     * Exact field compare, never a substring: `hold-1` would otherwise be findable in
+     * any name that contained it.
+     */
+    private function hasEntryNamed(string $path, string $name): bool
+    {
+        foreach (preg_split('/\R/', (string) @file_get_contents($path)) ?: [] as $line) {
+            if (trim($line) === '') {
+                continue;
+            }
+            $decoded = json_decode($line, true);
+            if (is_array($decoded) && ($decoded['name'] ?? null) === $name) {
+                return true;
+            }
         }
 
+        return false;
+    }
+
+    /**
+     * @param ServerHandle $server
+     *
+     * @return list<array{pid: int, name: string, path: string, startNs: int}>
+     */
+    private function inFlight(array $server): array
+    {
+        /** @var list<array{pid: int, name: string, path: string, startNs: int}> $entries */
+        $entries = $this->readJsonLines($server['inflight']);
+
+        return $entries;
+    }
+
+    /**
+     * A `curl_multi` batch whose handles are added progressively — the barrier opens
+     * request N+1 only once request N is provably in flight, so the handles cannot all
+     * be registered up front the way S315's one-shot `fetchInParallel()` did.
+     *
+     * @return Batch
+     */
+    private function newBatch(): array
+    {
+        return ['multi' => curl_multi_init(), 'handles' => []];
+    }
+
+    /**
+     * @param Batch $batch
+     */
+    private function addRequest(array &$batch, string $url, string $key): void
+    {
+        $handle = curl_init($url);
+        $this->assertInstanceOf(\CurlHandle::class, $handle, "could not open a request for {$key}");
+        curl_setopt($handle, CURLOPT_RETURNTRANSFER, true);
+        // Longer than a hold's own ceiling plus a segment wait, so a curl timeout can
+        // only mean the server never answered — never that the client gave up first.
+        curl_setopt(
+            $handle,
+            CURLOPT_TIMEOUT,
+            (int) ceil((self::SEGMENT_WAIT_MS + self::HOLD_MAX_MS) / 1000) + 30
+        );
+        curl_multi_add_handle($batch['multi'], $handle);
+        $batch['handles'][$key] = $handle;
+
+        // A handle does nothing until the multi is pumped. Without this turn, a caller
+        // that immediately waits for the request's marker would be waiting for a
+        // request it has not sent.
+        $running = null;
+        curl_multi_exec($batch['multi'], $running);
+    }
+
+    /**
+     * Pumps the batch until `$ready()` says so, or the timeout expires.
+     *
+     * @param Batch $batch
+     */
+    private function pumpUntil(array $batch, callable $ready, float $timeoutSeconds): bool
+    {
+        $deadline = microtime(true) + $timeoutSeconds;
+        do {
+            $running = null;
+            curl_multi_exec($batch['multi'], $running);
+            if ($ready() === true) {
+                return true;
+            }
+            if (curl_multi_select($batch['multi'], 0.02) === -1) {
+                usleep(20_000);
+            }
+        } while (microtime(true) < $deadline);
+
+        return false;
+    }
+
+    /**
+     * Pumps for a fixed interval, waiting for nothing — the control's measurement is
+     * "given this long, did a SECOND request begin?", and the answer must be no.
+     *
+     * @param Batch $batch
+     */
+    private function pumpFor(array $batch, float $seconds): void
+    {
+        $this->pumpUntil($batch, static fn (): bool => false, $seconds);
+    }
+
+    /**
+     * Runs the batch to completion and closes it.
+     *
+     * @param Batch $batch
+     *
+     * @return array<string, int> HTTP status by key, in the order the requests were opened
+     */
+    private function drain(array $batch): array
+    {
         $running = null;
         do {
-            curl_multi_exec($multi, $running);
-            if ($running > 0) {
-                curl_multi_select($multi, 0.1);
+            curl_multi_exec($batch['multi'], $running);
+            if ($running > 0 && curl_multi_select($batch['multi'], 0.1) === -1) {
+                usleep(20_000);
             }
         } while ($running > 0);
 
         $statuses = [];
-        foreach ($handles as $handle) {
-            $statuses[] = (int) curl_getinfo($handle, CURLINFO_RESPONSE_CODE);
-            curl_multi_remove_handle($multi, $handle);
+        foreach ($batch['handles'] as $key => $handle) {
+            $statuses[$key] = (int) curl_getinfo($handle, CURLINFO_RESPONSE_CODE);
+            curl_multi_remove_handle($batch['multi'], $handle);
             curl_close($handle);
         }
-        curl_multi_close($multi);
+        curl_multi_close($batch['multi']);
 
         return $statuses;
     }
@@ -1174,12 +1574,18 @@ final class Fmp4HlsThroughControllerE2ETest extends TestCase
     }
 
     /**
+     * ⚠ One decimal place, not zero (S317). The control's later requests are answered
+     * in tens of MICROseconds once the release file is already there, and `%.0f`
+     * printed those as `0` — indistinguishable in the evidence line from the vacuous
+     * zero-length window `testTheControllerBackedServerIsGenuinelyConcurrent()`
+     * explicitly asserts against.
+     *
      * @param list<array{startNs: int, endNs: int}> $entries
      */
     private function durationsMs(array $entries): string
     {
         return '[' . implode(', ', array_map(
-            static fn (array $e): string => sprintf('%.0f', ($e['endNs'] - $e['startNs']) / 1_000_000),
+            static fn (array $e): string => sprintf('%.1f', ($e['endNs'] - $e['startNs']) / 1_000_000),
             $entries
         )) . ']';
     }
@@ -1318,10 +1724,14 @@ final class Fmp4HlsThroughControllerE2ETest extends TestCase
      * php://output would fail the run. These figures exist because a probe that
      * quietly stopped loading anything reports "no fatal errors" and reads as a
      * pass — the counts are how a reader tells the two apart without re-running.
+     *
+     * @param string $tag The step whose evidence this is. `[S315]` is left as the
+     *                    default so every line S315 shipped keeps its exact prefix:
+     *                    those lines are what made two CI reds diagnosable from a log.
      */
-    private function report(string $line): void
+    private function report(string $line, string $tag = 'S315'): void
     {
-        fwrite(STDERR, "\n[S315] {$line}\n");
+        fwrite(STDERR, "\n[{$tag}] {$line}\n");
     }
 
     private function rrmdir(string $dir): void

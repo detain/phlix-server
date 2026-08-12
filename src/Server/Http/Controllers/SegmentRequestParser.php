@@ -61,10 +61,19 @@ use Phlix\Media\Transcoding\TranscodeManager;
  */
 final class SegmentRequestParser
 {
-    /** MPEG-TS on-demand segment extension (the shipped default container). */
+    /**
+     * MPEG-TS on-demand segment extension — since S60 the documented ROLLBACK
+     * container, reached by an explicit `transcoding.segment_format=mpegts`.
+     *
+     * ⚠ It was "the shipped default" only until S60, which flipped
+     * {@see \Phlix\Media\Transcoding\EncodeSettings::DEFAULT_SEGMENT_FORMAT} to fMP4.
+     * S60 could not correct this line: the whole file was fenced to stay byte-identical
+     * to master for that step, so the flip could not be confused with a serve-path
+     * change. S317 carries the correction, and touches nothing else here.
+     */
     public const EXT_MPEGTS = 'ts';
 
-    /** fMP4/CMAF on-demand segment extension (`transcoding.segment_format=fmp4`). */
+    /** fMP4/CMAF on-demand segment extension — since S60 the shipped default container. */
     public const EXT_FMP4 = 'm4s';
 
     /**

@@ -243,19 +243,61 @@ final class LibraryControllerAdminGateIsStructuralTest extends TestCase
     /**
      * Constructing without the gate must be impossible, not merely unusual.
      *
-     * This is the "seen to work" arm: the two-argument call that 75 tests and one
-     * production fallback used to make now dies at the `new`.
+     * This is the "seen to work" arm: the two-argument construction that 75 tests
+     * and one production fallback used to make now dies before the object exists.
+     *
+     * ## Why this goes through reflection rather than writing `new`
+     *
+     * A literal `new LibraryController($a, $b)` is a STATIC arity error, so
+     * `phpstan analyse -c phpstan-tests.neon` (tests/, level 2) rejects the file
+     * outright with `arguments.count` — and that config forbids inline ignore
+     * comments, baselines, `assert()`, inline type overrides and casts, all for
+     * good reasons. (Nor can this docblock spell the ignore annotation out: the
+     * analyser parses the token wherever it appears, including in prose, and
+     * answers with `ignore.parseError`.) Suppressing was not an option and
+     * neither was deleting the case, so the call is made in a way the arity
+     * checker cannot see while the RUNTIME behaviour is identical:
+     * `ReflectionClass::newInstanceArgs()` builds the argument list at run time
+     * and PHP raises the same `ArgumentCountError` from the same place.
+     *
+     * ⚠ Reflection is what makes this test worth reading twice, so it carries its
+     * own POSITIVE CONTROL: the same reflective construction, given the gate,
+     * must succeed. Without that arm an `ArgumentCountError` below could equally
+     * be reflection failing for some unrelated reason, and the test would pass
+     * while proving nothing.
      */
     public function testConstructingWithoutTheAdminMiddlewareIsAFatalError(): void
     {
         $libraryManager = $this->createMock(LibraryManager::class);
         $scanJobs = $this->createMock(ScanJobRepository::class);
+        $class = new ReflectionClass(LibraryController::class);
 
+        // POSITIVE CONTROL — three arguments, i.e. WITH the gate, must construct.
+        $controlError = null;
+        try {
+            $class->newInstanceArgs([
+                $libraryManager,
+                $scanJobs,
+                new AdminMiddleware(
+                    $this->createMock(UserRepository::class),
+                    $this->createMock(AuditLogger::class)
+                ),
+            ]);
+        } catch (ArgumentCountError $e) {
+            $controlError = $e->getMessage();
+        }
+        self::assertNull(
+            $controlError,
+            'positive control: reflective construction WITH the middleware must succeed — if it '
+            . 'does not, the ArgumentCountError below is an artefact of reflection, not proof of '
+            . 'a required dependency'
+        );
+
+        // THE EXPERIMENT — the two-argument construction must be fatal.
         $this->expectException(ArgumentCountError::class);
+        $this->expectExceptionMessage('Too few arguments');
 
-        // @phpstan-ignore-next-line — the missing argument is the point of the test.
-        // @psalm-suppress TooFewArguments
-        new LibraryController($libraryManager, $scanJobs); // @phpcs:ignore
+        $class->newInstanceArgs([$libraryManager, $scanJobs]);
     }
 
     /**

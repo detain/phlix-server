@@ -51,6 +51,26 @@ use ReflectionProperty;
  *     would not catch `requireAdmin()` being changed to ignore the (still
  *     required) middleware.
  *
+ * ## S323 phase 2 — the drift detector was re-based on a WIDER enumeration
+ *
+ * As shipped, {@see self::testEveryRequireAdminCallSiteIsListed()} counted
+ * `requireAdmin()` CALL SITES in the controller source and asserted the count was
+ * 14. That population is the WRONG one: it only rises when a handler is added
+ * WITH a gate, and only falls when an existing gate is removed, so it is
+ * structurally blind to a FIFTEENTH handler added WITHOUT one — which is exactly
+ * the regression class this file exists to prevent. S323 phase 1 measured that
+ * blindness on the sibling controller: appending an ungated
+ * `Request`-taking handler left the whole pin green.
+ *
+ * It is now {@see self::testEveryRequestHandlerIsGatedOrExplicitlyExempt()},
+ * enumerating every public (including `static`) method declared on the controller
+ * that takes a {@see Request} — by native type OR by docblock — and requiring each
+ * to appear in exactly one of two HARDCODED lists:
+ * {@see self::adminGatedHandlerProvider()} or
+ * {@see self::UNGATED_REQUEST_HANDLERS}. The call-site count survives as a
+ * SECONDARY net (it still catches a gate deleted from a still-listed handler).
+ * Nothing the old assertion detected was traded away.
+ *
  * NB: this file carries NO coverage-metadata annotation, deliberately. Per this
  * repo's policy (S141, enforced by CoverageMetadataPolicyTest) such a marker in
  * `tests/` silently DISCARDS every other file the test executes. The policy check
@@ -70,8 +90,10 @@ final class LibraryControllerAdminGateIsStructuralTest extends TestCase
      * the handler body rather than being waved through OR refused.
      *
      * Hardcoded on purpose — a derived list would self-adjust to whatever the
-     * controller happens to do. {@see self::testEveryRequireAdminCallSiteIsListed()}
-     * is the drift detector that fails when the controller grows a fifteenth.
+     * controller happens to do.
+     * {@see self::testEveryRequestHandlerIsGatedOrExplicitlyExempt()} is the drift
+     * detector that fails when the controller grows a fifteenth handler — gated OR
+     * ungated.
      *
      * @return array<string, array{0: string, 1: int}>
      */
@@ -94,6 +116,26 @@ final class LibraryControllerAdminGateIsStructuralTest extends TestCase
             'GET    /api/v1/libraries/{id}/scan-history'      => ['scanHistory', 404],
         ];
     }
+
+    /**
+     * The public request handlers that are deliberately NOT admin-gated.
+     *
+     * Exactly two, and both are READS: `index()` (list libraries) and `show()`
+     * (one library). Neither writes on any path — both call `requireAuth()` and
+     * then only `LibraryManager::getAllLibraries()` / `getLibrary()` plus an
+     * optional `ItemRepository::countByType()`. They are AUTH-gated, not
+     * ADMIN-gated, and {@see self::testTheReadHandlersAreAuthOnlyNotAdminOnly()}
+     * pins that intended reachability in both directions: an anonymous caller is
+     * refused, an authenticated NON-admin is admitted.
+     *
+     * ⚠ Adding a name here is how you declare "this handler needs no admin gate".
+     * It is a deliberate, reviewable security decision and must come with a
+     * behavioural test that pins the intended reachability — never a way to
+     * silence {@see self::testEveryRequestHandlerIsGatedOrExplicitlyExempt()}.
+     *
+     * @var list<string>
+     */
+    private const UNGATED_REQUEST_HANDLERS = ['index', 'show'];
 
     /**
      * Build a controller whose gate treats exactly `admin-1` as an admin and
@@ -119,6 +161,53 @@ final class LibraryControllerAdminGateIsStructuralTest extends TestCase
             $scanJobs,
             new AdminMiddleware($users, $this->createMock(AuditLogger::class))
         );
+    }
+
+    /**
+     * Does `$method` take a {@see Request} — by NATIVE type OR by docblock?
+     *
+     * The docblock arm is not decoration. A method declared
+     * `public function purge($request, array $params): Response` carrying
+     * `@param Request $request` is dispatched by
+     * {@see \Phlix\Server\Http\Router::callHandler()} exactly like a natively
+     * typed one, and `phpstan analyse -c phpstan.neon.dist` (src/, level 9)
+     * reports `[OK]` on it — measured in S323 phase 1. A native-type-only match
+     * therefore left a whole ungated handler shape invisible to BOTH nets.
+     *
+     * A parameter with neither a native type nor a docblock type is the only
+     * remaining shape, and level 9 rejects that one (`missingType.parameter`), so
+     * between this method and the src/ analyser the population is closed.
+     *
+     * Deliberately over-inclusive: any `@param` whose type mentions `Request`
+     * counts. Over-inclusion only ever forces a handler to be CLASSIFIED, which
+     * is a review moment; under-inclusion is the fail-open.
+     */
+    private function declaresARequestParameter(ReflectionMethod $method): bool
+    {
+        foreach ($method->getParameters() as $parameter) {
+            $type = $parameter->getType();
+            if ($type instanceof ReflectionNamedType && $type->getName() === Request::class) {
+                return true;
+            }
+        }
+
+        $doc = $method->getDocComment();
+        if ($doc === false) {
+            return false;
+        }
+
+        $matches = [];
+        preg_match_all('/@param\s+(\S+)\s+&?\.{0,3}\$\w+/', $doc, $matches);
+        foreach ($matches[1] as $declared) {
+            foreach (explode('|', $declared) as $alternative) {
+                $segments = explode('\\', ltrim(trim($alternative), '?'));
+                if (end($segments) === 'Request') {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     /**
@@ -421,30 +510,164 @@ final class LibraryControllerAdminGateIsStructuralTest extends TestCase
     }
 
     /**
-     * Drift detector: the provider must list EVERY `requireAdmin()` call site in
-     * the controller.
+     * The two READS stay AUTH-only, and stay so for a REASON that is asserted.
      *
-     * Counted over the controller's source so a fifteenth admin-gated handler
-     * cannot be added without this file being updated. The count is the only thing
-     * derived from the subject; the handler list and its expectations above are
-     * hardcoded, so this cannot self-adjust to a regression.
+     * `index()` and `show()` are the entries in
+     * {@see self::UNGATED_REQUEST_HANDLERS}, and an exempt list without a
+     * behavioural pin is just a way to silence the drift detector. Both directions
+     * are asserted here:
+     *
+     *  - an ANONYMOUS caller is still refused (401 `auth.required`) — they are
+     *    exempt from the ADMIN gate, not from authentication; and
+     *  - an authenticated NON-ADMIN is ADMITTED (the handler's own 200/404) —
+     *    which is also the negative control for the three arms above: it proves
+     *    their 403s come from the admin gate on the fourteen mutations and not
+     *    from something global.
+     *
+     * A future "make everything admin-only" sweep therefore has to be a deliberate
+     * edit to this file rather than a silent behaviour change.
      */
-    public function testEveryRequireAdminCallSiteIsListed(): void
+    public function testTheReadHandlersAreAuthOnlyNotAdminOnly(): void
     {
-        $file = (new ReflectionClass(LibraryController::class))->getFileName();
-        self::assertIsString($file);
-        $source = file_get_contents($file);
-        self::assertIsString($source);
+        $expectedForNonAdmin = ['index' => 200, 'show' => 404]; // 404 = library missing
 
-        $callSites = substr_count($source, '$this->requireAdmin($request)');
+        foreach (self::UNGATED_REQUEST_HANDLERS as $handler) {
+            $anonymous = $this->makeController()->{$handler}(new Request(), ['id' => 'lib-1']);
+            self::assertSame(
+                401,
+                $anonymous->statusCode,
+                "{$handler}() is exempt from the ADMIN gate, not from authentication"
+            );
+
+            $request = new Request();
+            $request->userId = 'user-1'; // only 'admin-1' is an admin
+            $response = $this->makeController()->{$handler}($request, ['id' => 'lib-1']);
+
+            self::assertSame(
+                $expectedForNonAdmin[$handler],
+                $response->statusCode,
+                "{$handler}() must stay readable by an authenticated NON-admin — if this ever "
+                . 'becomes a 403 the change was intentional and belongs in this file, not in a '
+                . 'passing suite'
+            );
+            self::assertNotSame(
+                'auth.not_admin',
+                $this->decode($response)['code'] ?? null,
+                "{$handler}() must not refuse a non-admin on the admin branch"
+            );
+        }
+    }
+
+    /**
+     * Drift detector: EVERY public request handler on the controller must be
+     * classified — either admin-gated (in {@see self::adminGatedHandlerProvider()})
+     * or deliberately exempt (in {@see self::UNGATED_REQUEST_HANDLERS}).
+     *
+     * ## Why the enumeration is over handlers and not over `requireAdmin()` calls
+     *
+     * The first version of this test counted `requireAdmin()` call sites in the
+     * controller source and asserted the count was 14. That population is the
+     * WRONG one: it only rises when a handler is added WITH a gate and only falls
+     * when an existing gate is removed, so it is structurally blind to a fifteenth
+     * handler added WITHOUT one — which is precisely the regression class S282 and
+     * S323 exist to prevent. Measured in S323 phase 1 on the sibling controller:
+     * appending an ungated `Request`-taking handler left the whole file green; the
+     * same handler WITH a gate reddened it. A detector that cannot see the defect
+     * it is named for reads as a pass. This controller made it worse than the
+     * sibling did — the blind population here is ~16 methods, not 3.
+     *
+     * The enumeration is therefore over the population that OUGHT to be gated:
+     * every public method declared on the controller that takes a {@see Request}. A
+     * new one is unclassified until a human adds it to one of the two HARDCODED
+     * lists above, and that edit is the review moment. Only the enumeration is
+     * derived from the subject; both lists are hardcoded, so this cannot
+     * self-adjust to a regression.
+     *
+     * ## What "takes a Request" and "public method" mean here, and why
+     *
+     *  - **Statics are included.** `Router::callHandler()` does
+     *    `$instance->$method($request, $params)`, and PHP dispatches that to a
+     *    `public static` method without complaint. Excluding statics bought nothing
+     *    (there are none on this controller) and left an ungated static handler
+     *    invisible — measured in phase 1.
+     *  - **A docblock-declared `Request` counts**, not just a native type; see
+     *    {@see self::declaresARequestParameter()}. An untyped parameter with an
+     *    `@param Request` docblock passes PHPStan level 9 on src/, so the analyser
+     *    does not close that hole either.
+     *
+     * ⚠ Carries a POSITIVE CONTROL / explicit DENOMINATOR: reflection that returned
+     * an empty (or truncated) handler list would make the classification assertion
+     * below vacuously true, so the count is ASSERTED against a hardcoded 16 and the
+     * enumerated names are carried in that assertion's failure message. It is
+     * asserted rather than echoed on purpose — `phpunit.xml` sets
+     * `beStrictAboutOutputDuringTests="true"` with `failOnRisky="true"`, so a test
+     * that printed anything would fail the suite. Do not read "denominator" here as
+     * something that appears in CI output on a green run; nothing is printed. It is
+     * visible only when the count is wrong, which is the only moment it matters.
+     */
+    public function testEveryRequestHandlerIsGatedOrExplicitlyExempt(): void
+    {
+        $class = new ReflectionClass(LibraryController::class);
+
+        $handlers = [];
+        foreach ($class->getMethods(ReflectionMethod::IS_PUBLIC) as $method) {
+            // Statics are NOT skipped: `$instance->$method($request, $params)` in
+            // Router::callHandler() dispatches to a `public static` method without
+            // error, so an ungated static handler is every bit as reachable as an
+            // instance one.
+            if ($method->isConstructor()) {
+                continue;
+            }
+            if ($method->getDeclaringClass()->getName() !== LibraryController::class) {
+                continue;
+            }
+            if ($this->declaresARequestParameter($method)) {
+                $handlers[] = $method->getName();
+            }
+        }
+        sort($handlers);
+
+        // POSITIVE CONTROL / DENOMINATOR — an empty or short list would make the
+        // classification assertion below pass while measuring nothing.
+        self::assertCount(
+            16,
+            $handlers,
+            'expected 16 public Request-taking handlers on LibraryController; reflection '
+            . 'enumerated ' . count($handlers) . ': [' . implode(', ', $handlers) . ']. If the '
+            . 'controller really did gain or lose a handler, update adminGatedHandlerProvider() '
+            . 'or UNGATED_REQUEST_HANDLERS and this count together.'
+        );
+
+        /** @var list<string> $gatedRoutes */
+        $gatedRoutes = array_column(array_values(self::adminGatedHandlerProvider()), 0);
+
+        // De-duplicated on purpose. Two ROUTES may legitimately alias ONE handler,
+        // and that must be representable. Merged un-deduplicated it is not: the
+        // provider grows an entry, `$classified` grows past the handler count, and
+        // both array_diff() buckets in the message below render EMPTY because they
+        // dedupe — a permanent red with no stated cause that no edit to either
+        // hardcoded list could green. A gate that a CORRECT change cannot satisfy
+        // is how a rule gets deleted as noise.
+        $gated = array_values(array_unique($gatedRoutes));
+
+        $classified = array_merge($gated, self::UNGATED_REQUEST_HANDLERS);
+        sort($classified);
 
         self::assertSame(
-            14,
-            $callSites,
-            'LibraryController has ' . $callSites . ' requireAdmin() call sites but this file '
-            . 'covers 14. Add the new handler to adminGatedHandlerProvider().'
+            $classified,
+            $handlers,
+            'every public Request-taking method of LibraryController must be listed either in '
+            . 'adminGatedHandlerProvider() (admin-gated) or in UNGATED_REQUEST_HANDLERS '
+            . '(deliberately not gated). Unclassified: ['
+            . implode(', ', array_values(array_diff($handlers, $classified)))
+            . ']; listed but absent from the controller: ['
+            . implode(', ', array_values(array_diff($classified, $handlers)))
+            . ']; listed in BOTH lists, which is never right — a handler is gated or exempt, not '
+            . 'both: ['
+            . implode(', ', array_values(array_intersect($gated, self::UNGATED_REQUEST_HANDLERS)))
+            . ']. A NEW UNGATED handler lands in the first bucket — that is the S282 fail-open '
+            . 'coming back.'
         );
-        self::assertCount(14, self::adminGatedHandlerProvider());
 
         foreach (self::adminGatedHandlerProvider() as $route => [$method]) {
             self::assertTrue(
@@ -452,5 +675,22 @@ final class LibraryControllerAdminGateIsStructuralTest extends TestCase
                 "{$route} maps to LibraryController::{$method}(), which must exist"
             );
         }
+
+        // Secondary net, kept from the original detector: one requireAdmin() call
+        // per gated handler, counted over the source. Catches a gate deleted from a
+        // still-listed handler.
+        $file = $class->getFileName();
+        self::assertIsString($file);
+        $source = file_get_contents($file);
+        self::assertIsString($source);
+
+        $callSites = substr_count($source, '$this->requireAdmin($request)');
+
+        self::assertSame(
+            count($gated),
+            $callSites,
+            'LibraryController has ' . $callSites . ' requireAdmin() call sites but '
+            . count($gated) . ' DISTINCT handlers are listed as admin-gated.'
+        );
     }
 }

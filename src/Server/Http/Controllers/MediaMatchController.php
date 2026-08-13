@@ -49,20 +49,49 @@ class MediaMatchController
 
     private LibraryMetadataMatcher $matcher;
 
-    private ?AdminMiddleware $adminMiddleware = null;
-
-    public function __construct(ItemRepository $items, LibraryMetadataMatcher $matcher)
-    {
-        $this->items = $items;
-        $this->matcher = $matcher;
-    }
+    private readonly AdminMiddleware $adminMiddleware;
 
     /**
-     * Set the admin middleware (admin-only operations).
+     * @param ItemRepository $items Media item repository.
+     * @param LibraryMetadataMatcher $matcher TMDB search/apply engine.
+     * @param AdminMiddleware $adminMiddleware Admin gate for BOTH handlers
+     *        ({@see self::requireAdmin()}). REQUIRED — see below.
+     *
+     * ## S323 — the admin gate is a construction-time requirement
+     *
+     * This used to be `private ?AdminMiddleware $adminMiddleware = null;` filled
+     * by an OPTIONAL `setAdminMiddleware()` setter, with
+     * {@see self::requireAdmin()} wrapping its decision in
+     * `if ($this->adminMiddleware !== null)`. That combination **failed OPEN**: a
+     * controller built without the setter returned "authorised" from
+     * `requireAdmin()` without any admin decision having been taken, so
+     * `POST /api/v1/media/{id}/match/apply` — which overwrites an item's metadata
+     * and, for a series, its whole season/episode subtree — was reachable by any
+     * logged-in user.
+     *
+     * `requireAdmin()` checks `$request->userId` first, so the fail-open never
+     * reached an anonymous caller here (unlike `ThemeMediaController`, S323
+     * phase 1). The live wiring did call the setter, so the hole was latent — but
+     * "latent" is a property of today's wiring, not of the class, and PHP-DI's
+     * `autowire()` SKIPS optional parameters, which is how this estate has
+     * produced silently-null dependencies before.
+     *
+     * Making the dependency REQUIRED removes the null state entirely: the gate has
+     * no null branch left to take, and a construction that omits it is an
+     * `ArgumentCountError` at the `new`, not a security downgrade at request time.
+     *
+     * Do NOT re-introduce a nullable type, a default value, or a setter.
+     * `tests/Unit/Server/Http/Controllers/MediaMatchControllerAdminGateIsStructuralTest.php`
+     * fails on any of the three.
      */
-    public function setAdminMiddleware(AdminMiddleware $middleware): void
-    {
-        $this->adminMiddleware = $middleware;
+    public function __construct(
+        ItemRepository $items,
+        LibraryMetadataMatcher $matcher,
+        AdminMiddleware $adminMiddleware
+    ) {
+        $this->items = $items;
+        $this->matcher = $matcher;
+        $this->adminMiddleware = $adminMiddleware;
     }
 
     /**
@@ -378,6 +407,12 @@ class MediaMatchController
 
     /**
      * Require auth, then admin access. Returns an error Response, or null when OK.
+     *
+     * S323: there is deliberately NO `if ($this->adminMiddleware !== null)` guard
+     * here. The middleware is a required constructor dependency
+     * ({@see self::$adminMiddleware}), so the check is unconditional and this
+     * method can only return `null` — "proceed" — after an admin decision was
+     * actually taken. Re-adding a null guard would restore the S323 fail-open.
      */
     private function requireAdmin(Request $request): ?Response
     {
@@ -389,14 +424,13 @@ class MediaMatchController
             ]);
         }
 
-        if ($this->adminMiddleware !== null) {
-            $status = $this->adminMiddleware->checkAccess($request);
-            if ($status !== null) {
-                return (new Response())->status($status)->json([
-                    'error' => $status === 401 ? 'Unauthorized' : 'Forbidden',
-                    'code' => $status === 401 ? 'auth.required' : 'auth.not_admin',
-                ]);
-            }
+        // Unconditional; see the docblock above.
+        $status = $this->adminMiddleware->checkAccess($request);
+        if ($status !== null) {
+            return (new Response())->status($status)->json([
+                'error' => $status === 401 ? 'Unauthorized' : 'Forbidden',
+                'code' => $status === 401 ? 'auth.required' : 'auth.not_admin',
+            ]);
         }
 
         return null;

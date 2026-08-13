@@ -3781,8 +3781,19 @@ class Application
      *
      * Always resolved through the DI container in production so the
      * LibraryMetadataMatcher (and its admin-keyed TmdbProvider + resolvers) is
-     * autowired; the admin middleware is wired when available so both endpoints
-     * are admin-gated exactly like the whole-library match endpoint.
+     * autowired; the admin middleware is a REQUIRED constructor dependency so both
+     * endpoints are admin-gated exactly like the whole-library match endpoint.
+     *
+     * ## S323 — the admin gate is now a construction-time requirement
+     *
+     * The middleware used to be wired behind
+     * `if ($container->has(AdminMiddleware::class))`, so a container that could not
+     * supply it still yielded a working — but ungated — controller whose
+     * `apply()` overwrites an item's metadata subtree. The guard was live but
+     * always true; it is now removed, matching the shape S282 established on
+     * `getLibraryController()`: a container that cannot build the middleware throws
+     * at route-registration time (loud, at boot) instead of silently degrading the
+     * gate.
      *
      * @return \Phlix\Server\Http\Controllers\MediaMatchController The controller instance.
      */
@@ -3795,15 +3806,15 @@ class Application
         $itemRepository = $container->get(\Phlix\Media\Library\ItemRepository::class);
         /** @var \Phlix\Media\Metadata\LibraryMetadataMatcher */
         $matcher = $container->get(\Phlix\Media\Metadata\LibraryMetadataMatcher::class);
-        $controller = new \Phlix\Server\Http\Controllers\MediaMatchController($itemRepository, $matcher);
+        // NOT conditional on has(): the controller cannot exist without its gate.
+        /** @var \Phlix\Server\Http\Middleware\AdminMiddleware */
+        $adminMiddleware = $container->get(\Phlix\Server\Http\Middleware\AdminMiddleware::class);
 
-        if ($container->has(\Phlix\Server\Http\Middleware\AdminMiddleware::class)) {
-            /** @var \Phlix\Server\Http\Middleware\AdminMiddleware */
-            $adminMiddleware = $container->get(\Phlix\Server\Http\Middleware\AdminMiddleware::class);
-            $controller->setAdminMiddleware($adminMiddleware);
-        }
-
-        return $controller;
+        return new \Phlix\Server\Http\Controllers\MediaMatchController(
+            $itemRepository,
+            $matcher,
+            $adminMiddleware
+        );
     }
 
     /**

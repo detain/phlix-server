@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace Phlix\Tests\Unit\Server\Http\Controllers;
 
 use PHPUnit\Framework\TestCase;
+use Phlix\Auth\UserRepository;
+use Phlix\Common\Logger\AuditLogger;
 use Phlix\Common\Logger\StructuredLogger;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Metadata\Exception\TmdbUnconfiguredException;
@@ -13,16 +15,54 @@ use Phlix\Media\Metadata\MovieMetadataResolver;
 use Phlix\Media\Metadata\SeriesMetadataResolver;
 use Phlix\Media\Metadata\TmdbProvider;
 use Phlix\Server\Http\Controllers\MediaMatchController;
+use Phlix\Server\Http\Middleware\AdminMiddleware;
 use Phlix\Server\Http\Request;
 
 /**
  * Unit tests for {@see MediaMatchController} — the S5 interactive per-item
- * metadata match endpoints. Admin auth is asserted via the userId gate; the
- * controller's AdminMiddleware is left unset (matching the existing controller
- * test convention that assumes an authenticated admin).
+ * metadata match endpoints.
+ *
+ * ## S323 — every case here now runs THROUGH the admin gate
+ *
+ * This file's class docblock used to say the controller's "AdminMiddleware is
+ * left unset (matching the existing controller test convention that assumes an
+ * authenticated admin)". That convention WAS the fail-open: with no middleware,
+ * `requireAdmin()` took its `if ($this->adminMiddleware !== null)` branch and
+ * waved every authenticated request through with no admin decision at all, so
+ * every `authedRequest()` case below pinned the unguarded shape in effect. The
+ * gate is now a required constructor dependency and
+ * {@see self::makeController()} admits exactly `admin-1` — the user id
+ * `authedRequest()` sends. No assertion in this file changed.
+ *
+ * The gate's own three arms (anonymous / non-admin / admin) live in
+ * {@see MediaMatchControllerAdminGateIsStructuralTest}.
  */
 class MediaMatchControllerTest extends TestCase
 {
+    /**
+     * Build the controller with a REAL admin gate that admits exactly `admin-1`.
+     *
+     * Not a permissive stub: a request from any other user id is refused here
+     * exactly as it would be in production.
+     */
+    private function makeController(
+        ItemRepository $items,
+        LibraryMetadataMatcher $matcher
+    ): MediaMatchController {
+        $users = $this->createMock(UserRepository::class);
+        $users->method('findAdminById')->willReturnCallback(
+            static fn (string $id): ?array => $id === 'admin-1'
+                ? ['id' => $id, 'is_admin' => 1, 'status' => 'active']
+                : null
+        );
+
+        return new MediaMatchController(
+            $items,
+            $matcher,
+            new AdminMiddleware($users, $this->createMock(AuditLogger::class))
+        );
+    }
+
     /**
      * Build an authenticated request with optional query + body.
      *
@@ -52,7 +92,7 @@ class MediaMatchControllerTest extends TestCase
 
     public function testSearchRequiresAuth(): void
     {
-        $controller = new MediaMatchController(
+        $controller = $this->makeController(
             $this->createMock(ItemRepository::class),
             $this->createMock(LibraryMetadataMatcher::class),
         );
@@ -67,7 +107,7 @@ class MediaMatchControllerTest extends TestCase
         $items = $this->createMock(ItemRepository::class);
         $items->method('findById')->willReturn(null);
 
-        $controller = new MediaMatchController($items, $this->createMock(LibraryMetadataMatcher::class));
+        $controller = $this->makeController($items, $this->createMock(LibraryMetadataMatcher::class));
         $response = $controller->search($this->authedRequest(), ['id' => 'missing']);
 
         $this->assertSame(404, $response->statusCode);
@@ -89,7 +129,7 @@ class MediaMatchControllerTest extends TestCase
             ->with('Some Show', 'tv', 2011, 20)
             ->willReturn([['tmdb_id' => '1', 'type' => 'tv', 'title' => 'Some Show', 'year' => 2011]]);
 
-        $controller = new MediaMatchController($items, $matcher);
+        $controller = $this->makeController($items, $matcher);
         $response = $controller->search($this->authedRequest(), ['id' => 's1']);
 
         $this->assertSame(200, $response->statusCode);
@@ -111,7 +151,7 @@ class MediaMatchControllerTest extends TestCase
             ->with('The Matrix', 'movie', 1999, 20)
             ->willReturn([]);
 
-        $controller = new MediaMatchController($items, $matcher);
+        $controller = $this->makeController($items, $matcher);
         $response = $controller->search(
             $this->authedRequest(['query' => 'The Matrix', 'year' => '1999', 'type' => 'movie']),
             ['id' => 'm1'],
@@ -125,7 +165,7 @@ class MediaMatchControllerTest extends TestCase
         $items = $this->createMock(ItemRepository::class);
         $items->method('findById')->willReturn(['id' => 'm1', 'type' => 'movie', 'name' => '', 'metadata' => []]);
 
-        $controller = new MediaMatchController($items, $this->createMock(LibraryMetadataMatcher::class));
+        $controller = $this->makeController($items, $this->createMock(LibraryMetadataMatcher::class));
         $response = $controller->search($this->authedRequest(), ['id' => 'm1']);
 
         $this->assertSame(400, $response->statusCode);
@@ -140,7 +180,7 @@ class MediaMatchControllerTest extends TestCase
         $matcher = $this->createMock(LibraryMetadataMatcher::class);
         $matcher->method('searchCandidates')->willThrowException(new TmdbUnconfiguredException());
 
-        $controller = new MediaMatchController($items, $matcher);
+        $controller = $this->makeController($items, $matcher);
         $response = $controller->search($this->authedRequest(), ['id' => 'm1']);
 
         $this->assertSame(422, $response->statusCode);
@@ -155,7 +195,7 @@ class MediaMatchControllerTest extends TestCase
         $matcher = $this->createMock(LibraryMetadataMatcher::class);
         $matcher->method('searchCandidates')->willThrowException(new \RuntimeException('boom'));
 
-        $controller = new MediaMatchController($items, $matcher);
+        $controller = $this->makeController($items, $matcher);
         $response = $controller->search($this->authedRequest(), ['id' => 'm1']);
 
         $this->assertSame(502, $response->statusCode);
@@ -167,7 +207,7 @@ class MediaMatchControllerTest extends TestCase
         $items = $this->createMock(ItemRepository::class);
         $items->method('findById')->willReturn(['id' => 'm1', 'type' => 'movie', 'metadata' => []]);
 
-        $controller = new MediaMatchController($items, $this->createMock(LibraryMetadataMatcher::class));
+        $controller = $this->makeController($items, $this->createMock(LibraryMetadataMatcher::class));
         $response = $controller->apply($this->authedRequest([], []), ['id' => 'm1']);
 
         $this->assertSame(400, $response->statusCode);
@@ -179,7 +219,7 @@ class MediaMatchControllerTest extends TestCase
         $items = $this->createMock(ItemRepository::class);
         $items->method('findById')->willReturn(null);
 
-        $controller = new MediaMatchController($items, $this->createMock(LibraryMetadataMatcher::class));
+        $controller = $this->makeController($items, $this->createMock(LibraryMetadataMatcher::class));
         $response = $controller->apply($this->authedRequest([], ['tmdb_id' => '603']), ['id' => 'x']);
 
         $this->assertSame(404, $response->statusCode);
@@ -205,7 +245,7 @@ class MediaMatchControllerTest extends TestCase
                 'matched' => true, 'children_enriched' => 0,
             ]);
 
-        $controller = new MediaMatchController($items, $matcher);
+        $controller = $this->makeController($items, $matcher);
         $response = $controller->apply($this->authedRequest([], ['tmdb_id' => '603']), ['id' => 'm1']);
 
         $this->assertSame(200, $response->statusCode);
@@ -231,7 +271,7 @@ class MediaMatchControllerTest extends TestCase
                 'matched' => true, 'children_enriched' => 5,
             ]);
 
-        $controller = new MediaMatchController($items, $matcher);
+        $controller = $this->makeController($items, $matcher);
         $response = $controller->apply($this->authedRequest([], ['tmdb_id' => '1399']), ['id' => 's1']);
 
         $this->assertSame(200, $response->statusCode);
@@ -248,7 +288,7 @@ class MediaMatchControllerTest extends TestCase
             'matched' => false, 'children_enriched' => 0,
         ]);
 
-        $controller = new MediaMatchController($items, $matcher);
+        $controller = $this->makeController($items, $matcher);
         $response = $controller->apply($this->authedRequest([], ['tmdb_id' => '0']), ['id' => 'm1']);
 
         $this->assertSame(422, $response->statusCode);
@@ -263,7 +303,7 @@ class MediaMatchControllerTest extends TestCase
         $matcher = $this->createMock(LibraryMetadataMatcher::class);
         $matcher->method('applyMatch')->willThrowException(new TmdbUnconfiguredException());
 
-        $controller = new MediaMatchController($items, $matcher);
+        $controller = $this->makeController($items, $matcher);
         $response = $controller->apply($this->authedRequest([], ['tmdb_id' => '603']), ['id' => 'm1']);
 
         $this->assertSame(422, $response->statusCode);
@@ -281,7 +321,7 @@ class MediaMatchControllerTest extends TestCase
         $items = $this->createMock(ItemRepository::class);
         $items->method('findById')->willReturn(['id' => 'm1', 'type' => 'movie', 'name' => 'X', 'metadata' => []]);
 
-        $controller = new MediaMatchController($items, $this->matcherWithEmptyKey($items));
+        $controller = $this->makeController($items, $this->matcherWithEmptyKey($items));
         $response = $controller->search($this->authedRequest(), ['id' => 'm1']);
 
         $this->assertSame(422, $response->statusCode);
@@ -298,7 +338,7 @@ class MediaMatchControllerTest extends TestCase
         $items->method('findById')->willReturn(['id' => 'm1', 'type' => 'movie', 'metadata' => []]);
         $items->expects($this->never())->method('update');
 
-        $controller = new MediaMatchController($items, $this->matcherWithEmptyKey($items));
+        $controller = $this->makeController($items, $this->matcherWithEmptyKey($items));
         $response = $controller->apply($this->authedRequest([], ['tmdb_id' => '603']), ['id' => 'm1']);
 
         $this->assertSame(422, $response->statusCode);
@@ -335,7 +375,7 @@ class MediaMatchControllerTest extends TestCase
             $tmdb,
         );
 
-        $controller = new MediaMatchController($items, $matcher);
+        $controller = $this->makeController($items, $matcher);
         $response = $controller->search($this->authedRequest(), ['id' => 's1']);
 
         $this->assertSame(200, $response->statusCode);
@@ -378,7 +418,7 @@ class MediaMatchControllerTest extends TestCase
             ['tmdb_id' => '603', 'title' => 'The Matrix', 'year' => 1999],
         ]);
 
-        $controller = new MediaMatchController($items, $matcher);
+        $controller = $this->makeController($items, $matcher);
         $response = $controller->search($this->authedRequest(), ['id' => 'm1']);
 
         $this->assertSame(200, $response->statusCode);
@@ -408,7 +448,7 @@ class MediaMatchControllerTest extends TestCase
             ['tmdb_id' => '1', 'title' => 'Something', 'year' => 2000],
         ]);
 
-        $controller = new MediaMatchController($items, $matcher);
+        $controller = $this->makeController($items, $matcher);
         $response = $controller->search($this->authedRequest(), ['id' => 'm1']);
 
         $this->assertSame(200, $response->statusCode);
@@ -437,7 +477,7 @@ class MediaMatchControllerTest extends TestCase
         $matcher = $this->createMock(LibraryMetadataMatcher::class);
         $matcher->method('searchCandidates')->willReturn([['tmdb_id' => '1', 'title' => 'X', 'year' => 2020]]);
 
-        $controller = new MediaMatchController($items, $matcher);
+        $controller = $this->makeController($items, $matcher);
         $response = $controller->search($this->authedRequest(), ['id' => 'm1']);
 
         $this->assertSame(200, $response->statusCode);
@@ -463,7 +503,7 @@ class MediaMatchControllerTest extends TestCase
         $matcher = $this->createMock(LibraryMetadataMatcher::class);
         $matcher->method('searchCandidates')->willReturn([['tmdb_id' => '1', 'title' => 'X', 'year' => 2020]]);
 
-        $controller = new MediaMatchController($items, $matcher);
+        $controller = $this->makeController($items, $matcher);
         $response = $controller->search($this->authedRequest(), ['id' => 'm1']);
 
         $this->assertSame(200, $response->statusCode);
@@ -498,7 +538,7 @@ class MediaMatchControllerTest extends TestCase
             ['tmdb_id' => '99', 'title' => 'My Show', 'type' => 'tv', 'year' => 2021],
         ]);
 
-        $controller = new MediaMatchController($items, $matcher);
+        $controller = $this->makeController($items, $matcher);
         $response = $controller->search($this->authedRequest(), ['id' => 's1']);
 
         $this->assertSame(200, $response->statusCode);
@@ -539,7 +579,7 @@ class MediaMatchControllerTest extends TestCase
             ['tmdb_id' => '1', 'title' => 'Artist Name', 'type' => 'movie', 'year' => 2023],
         ]);
 
-        $controller = new MediaMatchController($items, $matcher);
+        $controller = $this->makeController($items, $matcher);
         $response = $controller->search($this->authedRequest(), ['id' => 'a1']);
 
         $this->assertSame(200, $response->statusCode);
@@ -573,7 +613,7 @@ class MediaMatchControllerTest extends TestCase
             ['tmdb_id' => '1', 'title' => 'X', 'type' => 'movie', 'year' => 2000],
         ]);
 
-        $controller = new MediaMatchController($items, $matcher);
+        $controller = $this->makeController($items, $matcher);
         $response = $controller->search($this->authedRequest(), ['id' => 'x1']);
 
         $this->assertSame(200, $response->statusCode);
@@ -602,7 +642,7 @@ class MediaMatchControllerTest extends TestCase
             ['tmdb_id' => '1', 'title' => 'X', 'year' => 1999],
         ]);
 
-        $controller = new MediaMatchController($items, $matcher);
+        $controller = $this->makeController($items, $matcher);
         $response = $controller->search($this->authedRequest(), ['id' => 'm1']);
 
         $this->assertSame(200, $response->statusCode);

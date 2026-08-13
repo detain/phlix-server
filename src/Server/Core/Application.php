@@ -4037,61 +4037,50 @@ class Application
     /**
      * Returns a ThemeMediaController instance.
      *
+     * ## S323 — the admin gate is now a construction-time requirement
+     *
+     * This factory used to have two escape hatches, either of which produced a
+     * controller whose `scanThemeMedia()`/`deleteThemeMedia()` failed OPEN to an
+     * ANONYMOUS caller (the gate there is inline, with no auth check in front of
+     * it):
+     *
+     *  1. a container-less fallback that built the controller from a hardcoded
+     *     `127.0.0.1/root/password` connection and never wired the middleware; and
+     *  2. an `if ($this->container->has(AdminMiddleware::class))` guard, so a
+     *     container that could not supply the middleware still yielded a working —
+     *     but ungated — controller.
+     *
+     * Branch 1 was dead: `$this->container` is assigned exactly once, in the
+     * constructor, from a NON-nullable `ContainerInterface` parameter, and nothing
+     * else ever writes it. Branch 2 was live but always true. Both are now removed,
+     * matching the shape S282 established on `getLibraryController()`: a missing
+     * container, or one that cannot build the middleware, throws at
+     * route-registration time (loud, at boot) instead of silently serving the two
+     * theme-media mutations to the world.
+     *
      * @return \Phlix\Server\Http\Controllers\ThemeMediaController The controller instance.
      */
     private function getThemeMediaController(): \Phlix\Server\Http\Controllers\ThemeMediaController
     {
-        if ($this->container === null) {
-            $db = new \Phlix\Common\Database\PhlixMySQLConnection(
-                '127.0.0.1',
-                3306,
-                'phlix',
-                'root',
-                'password'
-            );
-            $themeMediaRepository = new \Phlix\Theming\ThemeMediaRepository($db);
-            $themeMediaFinder = new \Phlix\Theming\ThemeMediaFinder();
-            $musicScanner = new \Phlix\Media\Music\MusicLibraryScanner(
-                $db,
-                new \Phlix\Media\Transcoding\FfmpegRunner()
-            );
-            $musicLibraryService = new \Phlix\Media\Music\MusicLibraryService($db, $musicScanner);
-            $libraryManager = new \Phlix\Media\Library\LibraryManager(
-                $db,
-                new \Phlix\Media\Library\MediaScanner(
-                    $db,
-                    new \Phlix\Media\Library\ItemRepository($db)
-                ),
-                new \Phlix\Media\Library\FolderWatcher(),
-                $musicLibraryService
-            );
-            return new \Phlix\Server\Http\Controllers\ThemeMediaController(
-                $themeMediaRepository,
-                $themeMediaFinder,
-                $libraryManager
-            );
-        }
+        $container = $this->container
+            ?? throw new \RuntimeException('Container required for ThemeMediaController');
 
         /** @var \Phlix\Theming\ThemeMediaRepository */
-        $themeMediaRepository = $this->container->get(\Phlix\Theming\ThemeMediaRepository::class);
+        $themeMediaRepository = $container->get(\Phlix\Theming\ThemeMediaRepository::class);
         /** @var \Phlix\Theming\ThemeMediaFinder */
-        $themeMediaFinder = $this->container->get(\Phlix\Theming\ThemeMediaFinder::class);
+        $themeMediaFinder = $container->get(\Phlix\Theming\ThemeMediaFinder::class);
         /** @var \Phlix\Media\Library\LibraryManager */
-        $libraryManager = $this->container->get(\Phlix\Media\Library\LibraryManager::class);
-        $controller = new \Phlix\Server\Http\Controllers\ThemeMediaController(
+        $libraryManager = $container->get(\Phlix\Media\Library\LibraryManager::class);
+        // NOT conditional on has(): the controller cannot exist without its gate.
+        /** @var \Phlix\Server\Http\Middleware\AdminMiddleware */
+        $adminMiddleware = $container->get(\Phlix\Server\Http\Middleware\AdminMiddleware::class);
+
+        return new \Phlix\Server\Http\Controllers\ThemeMediaController(
             $themeMediaRepository,
             $themeMediaFinder,
-            $libraryManager
+            $libraryManager,
+            $adminMiddleware
         );
-
-        // Wire admin middleware if available
-        if ($this->container->has(\Phlix\Server\Http\Middleware\AdminMiddleware::class)) {
-            /** @var \Phlix\Server\Http\Middleware\AdminMiddleware */
-            $adminMiddleware = $this->container->get(\Phlix\Server\Http\Middleware\AdminMiddleware::class);
-            $controller->setAdminMiddleware($adminMiddleware);
-        }
-
-        return $controller;
     }
 
     /**

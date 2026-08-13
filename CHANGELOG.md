@@ -7,6 +7,73 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Security
+
+- **The admin gate on the two theme-media mutation endpoints is now a construction-time
+  requirement, not an optional one (S323, phase 1 of 2).**
+  `POST /api/v1/libraries/{id}/theme-media/scan` and `DELETE /api/v1/libraries/{id}/theme-media`
+  are admin-only. Until now `ThemeMediaController` held its `AdminMiddleware` in a **nullable
+  property filled by an optional `setAdminMiddleware()` setter**, and each of the two handlers
+  wrapped its decision in `if ($this->adminMiddleware !== null)`. A controller constructed
+  without that setter therefore ran both handler bodies with **no admin decision having been
+  taken at all**.
+
+  **What that would have meant, stated precisely.** These two routes are registered bare in
+  `Application::loadLibraryRoutes()` — there is no `AuthMiddleware` group and no `requireAuth()`
+  ahead of the inline check — so the missing decision would not merely have degraded the routes
+  to "any logged-in user": they would have been reachable by an **anonymous** caller. That is a
+  more severe class than the same shape S282 removed from `LibraryController`, where an auth
+  layer still stood in front.
+
+  **This was latent, and no exploitation is claimed.** `ThemeMediaController` has exactly one
+  production construction site (`Application::getThemeMediaController()`), and it always wired
+  the middleware, so every controller this server has actually served requests from carried its
+  gate. The defect was in what the class *permitted*, not in what the shipped wiring *produced*;
+  the change removes the possibility structurally rather than closing an observed bypass. It
+  matters because "the wiring calls the setter" is a property of today's wiring and not of the
+  class, and because PHP-DI's `autowire()` skips optional parameters — the mechanism by which
+  this codebase has produced silently-null dependencies before.
+
+  The null state is now unrepresentable:
+
+  - `AdminMiddleware` is a **required, non-nullable, promoted `readonly`** fourth constructor
+    parameter; `setAdminMiddleware()` is deleted; `checkAccess()` is called unconditionally in
+    both `scanThemeMedia()` and `deleteThemeMedia()` — there is no null branch left to take.
+    Constructing the controller without a gate is an `ArgumentCountError` at the `new`
+    (demonstrated, not asserted from reading), rather than a silent authorization downgrade at
+    request time.
+  - `Application::getThemeMediaController()` loses **both** escape hatches: the dead
+    container-less fallback (`$this->container` is written exactly once, from a non-nullable
+    constructor parameter, so that branch was unreachable — and it hardcoded a
+    `127.0.0.1`/`root`/`password` connection) and the `if ($container->has(AdminMiddleware::class))`
+    wiring guard. A container that cannot supply the middleware now fails loudly at
+    route-registration time instead of yielding a working-but-ungated controller.
+
+  `GET /api/v1/libraries/{id}/theme-media` is a genuine read path and is deliberately **not**
+  admin-gated; that is unchanged, and is pinned as an explicit exemption rather than left
+  implicit.
+
+  **Why a structural test and not only behavioural ones.** A re-added setter that nobody calls
+  changes no behaviour, so no behavioural test can see it: re-introducing an empty
+  `setAdminMiddleware()` was measured to redden exactly one test — the structural pin — with the
+  whole behavioural suite still green. `ThemeMediaControllerAdminGateIsStructuralTest` therefore
+  rejects a nullable type, a default value, a re-added setter, and a re-added
+  `if ($this->adminMiddleware !== null)` guard, and enumerates every public `Request`-taking
+  handler on the controller so that a **new** handler added without a gate — including a `static`
+  one, or one whose `Request` parameter is declared only in a docblock — fails the suite until it
+  is classified as either admin-gated or explicitly exempt. Behavioural coverage pins all three
+  arms (anonymous → `401 auth.required`, authenticated non-admin → `403 auth.not_admin`, admin →
+  reaches the handler body) on both mutations, with the admin arm acting as the succeeding
+  control so a blanket-deny regression cannot read as a pass.
+
+  **This is phase 1 of 2 — S323 is not complete.** The identical optional-`setAdminMiddleware()`
+  shape is still present on `WebhookAdminController`, `MediaMatchController`,
+  `MediaPosterController` and `Arr\SyncController`; they are untouched here and are scheduled for
+  phase 2. Their exposure depends on each one's own route wiring and was **not** assessed in this
+  phase, so nothing about their severity is claimed either way. (Phase 2 also carries S282's pin,
+  which still enumerates `requireAdmin()` call sites rather than handlers and so has the
+  new-ungated-handler blind spot this phase closed here.)
+
 ### Added
 
 - **Admin maintenance endpoints — the backend for the admin Tasks page (S77).** Eight routes on

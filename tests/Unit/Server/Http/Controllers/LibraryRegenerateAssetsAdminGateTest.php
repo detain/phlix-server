@@ -30,11 +30,12 @@ use PHPUnit\Framework\TestCase;
  *
  * The controller here is built the way `Application::getLibraryController()`
  * builds it — a REAL {@see AdminMiddleware} over a mocked {@see UserRepository},
- * with `setAdminMiddleware()` called. That matters because
- * `requireAdmin()` currently FAILS OPEN when `$this->adminMiddleware` is null
- * (filed as S282, deliberately not fixed here): every test below therefore
- * exercises the wired path, which is the path a served request takes, and none of
- * them depends on the null path being safe.
+ * passed to the constructor. When this file was written `requireAdmin()` FAILED
+ * OPEN when `$this->adminMiddleware` was null (filed as S282), so wiring it
+ * explicitly was what made these tests mean anything. S282 has since removed the
+ * null state entirely — the middleware is a REQUIRED constructor parameter — so
+ * the wiring below is no longer a precaution, it is the only way to build the
+ * controller at all.
  *
  * ## Why three cases and not one
  *
@@ -71,15 +72,12 @@ final class LibraryRegenerateAssetsAdminGateTest extends TestCase
             $libraryExists ? ['id' => 'lib-1', 'name' => 'Movies'] : null
         );
 
-        $controller = new LibraryController(
+        // S282: required constructor parameter, not an optional setter.
+        return new LibraryController(
             $libraryManager,
-            $scanJobs ?? $this->createMock(ScanJobRepository::class)
-        );
-        $controller->setAdminMiddleware(
+            $scanJobs ?? $this->createMock(ScanJobRepository::class),
             new AdminMiddleware($users, $this->createMock(AuditLogger::class))
         );
-
-        return $controller;
     }
 
     /**

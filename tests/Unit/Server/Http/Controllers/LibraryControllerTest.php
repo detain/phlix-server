@@ -5,10 +5,13 @@ declare(strict_types=1);
 namespace Phlix\Tests\Unit\Server\Http\Controllers;
 
 use PHPUnit\Framework\TestCase;
+use Phlix\Auth\UserRepository;
+use Phlix\Common\Logger\AuditLogger;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Library\LibraryManager;
 use Phlix\Media\Library\ScanJobRepository;
 use Phlix\Server\Http\Controllers\LibraryController;
+use Phlix\Server\Http\Middleware\AdminMiddleware;
 use Phlix\Server\Http\Request;
 
 /**
@@ -33,12 +36,64 @@ use Phlix\Server\Http\Request;
  * enqueue a job via ScanJobRepository and return 202; the async
  * LibraryScanWorker drains the queue off the HTTP path.
  *
- * Note: Tests that require AdminMiddleware verification (admin access checks)
- * are covered separately in integration tests with a real database. Unit tests
- * here verify the core controller logic and auth-required behavior.
+ * ## The admin gate and this file (S282)
+ *
+ * Every construction here goes through {@see self::makeController()}, which
+ * supplies a real {@see AdminMiddleware} whose {@see UserRepository} treats the
+ * caller as an admin. That is deliberate: these tests are about handler BODIES
+ * (validation, options merging, job enqueueing, 404s), so the gate must allow.
+ *
+ * Until S282 the middleware was an OPTIONAL setter-injected dependency and this
+ * file never called the setter, which meant `requireAdmin()` took its
+ * `if ($this->adminMiddleware !== null)` branch and returned "authorised" without
+ * consulting anything. So the destructive happy paths below (`prune`,
+ * `clearMetadata`, `clearArtwork`, `deleteAll`) were asserting 202/400 through a
+ * gate that was not running — i.e. they PINNED the fail-open, even though no
+ * docblock here ever claimed that was the intent. The middleware is now a
+ * REQUIRED constructor parameter, so the null state cannot be reconstructed and
+ * these assertions are made behind a gate that actually ran.
+ *
+ * The gate's own behaviour (401 anonymous / 403 authenticated non-admin / success
+ * for an admin, on all fourteen admin-gated handlers) is proved in
+ * {@see \Phlix\Tests\Unit\Server\Http\Controllers\LibraryControllerAdminGateIsStructuralTest},
+ * with the six destructive routes additionally covered by
+ * {@see \Phlix\Tests\Unit\Server\Http\Controllers\LibraryDestructiveRoutesAdminGateTest}
+ * and `regenerate-assets` by
+ * {@see \Phlix\Tests\Unit\Server\Http\Controllers\LibraryRegenerateAssetsAdminGateTest}.
  */
 class LibraryControllerTest extends TestCase
 {
+    /**
+     * Build a {@see LibraryController} with an ALLOWING admin gate.
+     *
+     * The gate is a real {@see AdminMiddleware} (the class is `final`, so it
+     * cannot be doubled) over a mocked {@see UserRepository} that answers
+     * `findAdminById()` with an admin row for any non-empty id. Anonymous requests
+     * are still refused, because `requireAdmin()` runs its auth check first and
+     * never reaches the middleware — which is why the `*Returns401WhenUnauthenticated`
+     * tests below still assert 401 with an allow-everything gate wired.
+     *
+     * @param ItemRepository|null $itemRepository Omit to exercise the legacy
+     *                                            "no item repository" path.
+     */
+    private function makeController(
+        LibraryManager $libraryManager,
+        ScanJobRepository $scanJobs,
+        ?ItemRepository $itemRepository = null
+    ): LibraryController {
+        $users = $this->createMock(UserRepository::class);
+        $users->method('findAdminById')->willReturnCallback(
+            static fn (string $id): ?array => ['id' => $id, 'is_admin' => 1, 'status' => 'active']
+        );
+
+        return new LibraryController(
+            $libraryManager,
+            $scanJobs,
+            new AdminMiddleware($users, $this->createMock(AuditLogger::class)),
+            $itemRepository
+        );
+    }
+
     /**
      * Happy path: index() returns 200 with libraries list for authenticated user,
      * each enriched with item_count.
@@ -69,7 +124,7 @@ class LibraryControllerTest extends TestCase
             ]);
 
         $scanJobs = $this->createMock(ScanJobRepository::class);
-        $controller = new LibraryController($libraryManager, $scanJobs, $itemRepository);
+        $controller = $this->makeController($libraryManager, $scanJobs, $itemRepository);
 
         $request = new Request();
         $request->userId = 'user-1';
@@ -107,7 +162,7 @@ class LibraryControllerTest extends TestCase
 
         $scanJobs = $this->createMock(ScanJobRepository::class);
         // No ItemRepository injected.
-        $controller = new LibraryController($libraryManager, $scanJobs);
+        $controller = $this->makeController($libraryManager, $scanJobs);
 
         $request = new Request();
         $request->userId = 'user-1';
@@ -131,7 +186,7 @@ class LibraryControllerTest extends TestCase
         $libraryManager->expects($this->never())->method('getAllLibraries');
 
         $scanJobs = $this->createMock(ScanJobRepository::class);
-        $controller = new LibraryController($libraryManager, $scanJobs);
+        $controller = $this->makeController($libraryManager, $scanJobs);
 
         $request = new Request();
         // request->userId intentionally left null
@@ -156,7 +211,7 @@ class LibraryControllerTest extends TestCase
             ->willReturn(['id' => 'lib-1', 'name' => 'Movies', 'type' => 'video']);
 
         $scanJobs = $this->createMock(ScanJobRepository::class);
-        $controller = new LibraryController($libraryManager, $scanJobs);
+        $controller = $this->makeController($libraryManager, $scanJobs);
 
         $request = new Request();
         $request->userId = 'user-1';
@@ -184,7 +239,7 @@ class LibraryControllerTest extends TestCase
             ->willReturn(null);
 
         $scanJobs = $this->createMock(ScanJobRepository::class);
-        $controller = new LibraryController($libraryManager, $scanJobs);
+        $controller = $this->makeController($libraryManager, $scanJobs);
 
         $request = new Request();
         $request->userId = 'user-1';
@@ -206,7 +261,7 @@ class LibraryControllerTest extends TestCase
         $libraryManager->expects($this->never())->method('getLibrary');
 
         $scanJobs = $this->createMock(ScanJobRepository::class);
-        $controller = new LibraryController($libraryManager, $scanJobs);
+        $controller = $this->makeController($libraryManager, $scanJobs);
 
         $request = new Request();
         // request->userId intentionally left null
@@ -238,7 +293,7 @@ class LibraryControllerTest extends TestCase
             ->method('enqueue')
             ->with('new-lib-id', 'scan')
             ->willReturn('job-1');
-        $controller = new LibraryController($libraryManager, $scanJobs);
+        $controller = $this->makeController($libraryManager, $scanJobs);
 
         $request = new Request();
         $request->userId = 'admin-1';
@@ -273,7 +328,7 @@ class LibraryControllerTest extends TestCase
 
         $scanJobs = $this->createMock(ScanJobRepository::class);
         $scanJobs->method('enqueue')->willReturn('job-1');
-        $controller = new LibraryController($libraryManager, $scanJobs);
+        $controller = $this->makeController($libraryManager, $scanJobs);
 
         $request = new Request();
         $request->userId = 'admin-1';
@@ -304,7 +359,7 @@ class LibraryControllerTest extends TestCase
 
         $scanJobs = $this->createMock(ScanJobRepository::class);
         $scanJobs->method('enqueue')->willReturn('job-1');
-        $controller = new LibraryController($libraryManager, $scanJobs);
+        $controller = $this->makeController($libraryManager, $scanJobs);
 
         $request = new Request();
         $request->userId = 'admin-1';
@@ -334,7 +389,7 @@ class LibraryControllerTest extends TestCase
 
         $scanJobs = $this->createMock(ScanJobRepository::class);
         $scanJobs->method('enqueue')->willReturn('job-1');
-        $controller = new LibraryController($libraryManager, $scanJobs);
+        $controller = $this->makeController($libraryManager, $scanJobs);
 
         $request = new Request();
         $request->userId = 'admin-1';
@@ -381,7 +436,7 @@ class LibraryControllerTest extends TestCase
             }));
 
         $scanJobs = $this->createMock(ScanJobRepository::class);
-        $controller = new LibraryController($libraryManager, $scanJobs);
+        $controller = $this->makeController($libraryManager, $scanJobs);
 
         $request = new Request();
         $request->userId = 'admin-1';
@@ -424,7 +479,7 @@ class LibraryControllerTest extends TestCase
             }));
 
         $scanJobs = $this->createMock(ScanJobRepository::class);
-        $controller = new LibraryController($libraryManager, $scanJobs);
+        $controller = $this->makeController($libraryManager, $scanJobs);
 
         $request = new Request();
         $request->userId = 'admin-1';
@@ -456,7 +511,7 @@ class LibraryControllerTest extends TestCase
             }));
 
         $scanJobs = $this->createMock(ScanJobRepository::class);
-        $controller = new LibraryController($libraryManager, $scanJobs);
+        $controller = $this->makeController($libraryManager, $scanJobs);
 
         $request = new Request();
         $request->userId = 'admin-1';
@@ -482,7 +537,7 @@ class LibraryControllerTest extends TestCase
 
         $scanJobs = $this->createMock(ScanJobRepository::class);
         $scanJobs->method('enqueue')->willReturn('job-1');
-        $controller = new LibraryController($libraryManager, $scanJobs);
+        $controller = $this->makeController($libraryManager, $scanJobs);
 
         $request = new Request();
         $request->userId = 'admin-1';
@@ -531,7 +586,7 @@ class LibraryControllerTest extends TestCase
             }));
 
         $scanJobs = $this->createMock(ScanJobRepository::class);
-        $controller = new LibraryController($libraryManager, $scanJobs);
+        $controller = $this->makeController($libraryManager, $scanJobs);
 
         $request = new Request();
         $request->userId = 'admin-1';
@@ -569,7 +624,7 @@ class LibraryControllerTest extends TestCase
             }));
 
         $scanJobs = $this->createMock(ScanJobRepository::class);
-        $controller = new LibraryController($libraryManager, $scanJobs);
+        $controller = $this->makeController($libraryManager, $scanJobs);
 
         $request = new Request();
         $request->userId = 'admin-1';
@@ -596,7 +651,7 @@ class LibraryControllerTest extends TestCase
         $libraryManager->expects($this->never())->method('updateLibrary');
 
         $scanJobs = $this->createMock(ScanJobRepository::class);
-        $controller = new LibraryController($libraryManager, $scanJobs);
+        $controller = $this->makeController($libraryManager, $scanJobs);
 
         $request = new Request();
         $request->userId = 'admin-1';
@@ -629,7 +684,7 @@ class LibraryControllerTest extends TestCase
         $libraryManager->expects($this->never())->method('updateLibrary');
 
         $scanJobs = $this->createMock(ScanJobRepository::class);
-        $controller = new LibraryController($libraryManager, $scanJobs);
+        $controller = $this->makeController($libraryManager, $scanJobs);
 
         $request = new Request();
         $request->userId = 'admin-1';
@@ -673,7 +728,7 @@ class LibraryControllerTest extends TestCase
 
         $scanJobs = $this->createMock(ScanJobRepository::class);
         $scanJobs->method('enqueue')->willReturn('job-1');
-        $controller = new LibraryController($libraryManager, $scanJobs);
+        $controller = $this->makeController($libraryManager, $scanJobs);
 
         $request = new Request();
         $request->userId = 'admin-1';
@@ -716,7 +771,7 @@ class LibraryControllerTest extends TestCase
 
         $scanJobs = $this->createMock(ScanJobRepository::class);
         $scanJobs->method('enqueue')->willReturn('job-1');
-        $controller = new LibraryController($libraryManager, $scanJobs);
+        $controller = $this->makeController($libraryManager, $scanJobs);
 
         $request = new Request();
         $request->userId = 'admin-1';
@@ -741,7 +796,7 @@ class LibraryControllerTest extends TestCase
         $libraryManager->expects($this->never())->method('createLibrary');
 
         $scanJobs = $this->createMock(ScanJobRepository::class);
-        $controller = new LibraryController($libraryManager, $scanJobs);
+        $controller = $this->makeController($libraryManager, $scanJobs);
 
         $request = new Request();
         $request->userId = 'admin-1';
@@ -764,7 +819,7 @@ class LibraryControllerTest extends TestCase
         $libraryManager->expects($this->never())->method('createLibrary');
 
         $scanJobs = $this->createMock(ScanJobRepository::class);
-        $controller = new LibraryController($libraryManager, $scanJobs);
+        $controller = $this->makeController($libraryManager, $scanJobs);
 
         $request = new Request();
         $request->userId = 'admin-1';
@@ -792,7 +847,7 @@ class LibraryControllerTest extends TestCase
         $libraryManager->expects($this->never())->method('createLibrary');
 
         $scanJobs = $this->createMock(ScanJobRepository::class);
-        $controller = new LibraryController($libraryManager, $scanJobs);
+        $controller = $this->makeController($libraryManager, $scanJobs);
 
         $request = new Request();
         // request->userId intentionally left null
@@ -817,7 +872,7 @@ class LibraryControllerTest extends TestCase
             ->with('lib-1', ['name' => 'New Name']);
 
         $scanJobs = $this->createMock(ScanJobRepository::class);
-        $controller = new LibraryController($libraryManager, $scanJobs);
+        $controller = $this->makeController($libraryManager, $scanJobs);
 
         $request = new Request();
         $request->userId = 'admin-1';
@@ -862,7 +917,7 @@ class LibraryControllerTest extends TestCase
             }));
 
         $scanJobs = $this->createMock(ScanJobRepository::class);
-        $controller = new LibraryController($libraryManager, $scanJobs);
+        $controller = $this->makeController($libraryManager, $scanJobs);
 
         $request = new Request();
         $request->userId = 'admin-1';
@@ -895,7 +950,7 @@ class LibraryControllerTest extends TestCase
         $libraryManager->expects($this->never())->method('updateLibrary');
 
         $scanJobs = $this->createMock(ScanJobRepository::class);
-        $controller = new LibraryController($libraryManager, $scanJobs);
+        $controller = $this->makeController($libraryManager, $scanJobs);
 
         $request = new Request();
         $request->userId = 'admin-1';
@@ -921,7 +976,7 @@ class LibraryControllerTest extends TestCase
             ->with('lib-1');
 
         $scanJobs = $this->createMock(ScanJobRepository::class);
-        $controller = new LibraryController($libraryManager, $scanJobs);
+        $controller = $this->makeController($libraryManager, $scanJobs);
 
         $request = new Request();
         $request->userId = 'admin-1';
@@ -947,7 +1002,7 @@ class LibraryControllerTest extends TestCase
         $libraryManager->expects($this->never())->method('deleteLibrary');
 
         $scanJobs = $this->createMock(ScanJobRepository::class);
-        $controller = new LibraryController($libraryManager, $scanJobs);
+        $controller = $this->makeController($libraryManager, $scanJobs);
 
         $request = new Request();
         $request->userId = 'admin-1';
@@ -977,7 +1032,7 @@ class LibraryControllerTest extends TestCase
             ->with('lib-1', 'scan')
             ->willReturn('job-1');
 
-        $controller = new LibraryController($libraryManager, $scanJobs);
+        $controller = $this->makeController($libraryManager, $scanJobs);
 
         $request = new Request();
         $request->userId = 'admin-1';
@@ -1008,7 +1063,7 @@ class LibraryControllerTest extends TestCase
         $scanJobs = $this->createMock(ScanJobRepository::class);
         $scanJobs->expects($this->never())->method('enqueue');
 
-        $controller = new LibraryController($libraryManager, $scanJobs);
+        $controller = $this->makeController($libraryManager, $scanJobs);
 
         $request = new Request();
         $request->userId = 'admin-1';
@@ -1029,7 +1084,7 @@ class LibraryControllerTest extends TestCase
         $scanJobs = $this->createMock(ScanJobRepository::class);
         $scanJobs->expects($this->never())->method('enqueue');
 
-        $controller = new LibraryController($libraryManager, $scanJobs);
+        $controller = $this->makeController($libraryManager, $scanJobs);
 
         $request = new Request();
         // request->userId intentionally left null
@@ -1057,7 +1112,7 @@ class LibraryControllerTest extends TestCase
             ->with('lib-1', 'rescan')
             ->willReturn('job-2');
 
-        $controller = new LibraryController($libraryManager, $scanJobs);
+        $controller = $this->makeController($libraryManager, $scanJobs);
 
         $request = new Request();
         $request->userId = 'admin-1';
@@ -1095,7 +1150,7 @@ class LibraryControllerTest extends TestCase
         $scanJobs = $this->createMock(ScanJobRepository::class);
         $scanJobs->expects($this->never())->method('enqueue');
 
-        $controller = new LibraryController($libraryManager, $scanJobs);
+        $controller = $this->makeController($libraryManager, $scanJobs);
 
         $request = new Request();
         $request->userId = 'admin-1';
@@ -1116,7 +1171,7 @@ class LibraryControllerTest extends TestCase
         $scanJobs = $this->createMock(ScanJobRepository::class);
         $scanJobs->expects($this->never())->method('enqueue');
 
-        $controller = new LibraryController($libraryManager, $scanJobs);
+        $controller = $this->makeController($libraryManager, $scanJobs);
 
         $request = new Request();
         // request->userId intentionally left null
@@ -1144,7 +1199,7 @@ class LibraryControllerTest extends TestCase
             ->with('lib-1', 'metadata')
             ->willReturn('job-md');
 
-        $controller = new LibraryController($libraryManager, $scanJobs);
+        $controller = $this->makeController($libraryManager, $scanJobs);
 
         $request = new Request();
         $request->userId = 'admin-1';
@@ -1174,7 +1229,7 @@ class LibraryControllerTest extends TestCase
         $scanJobs = $this->createMock(ScanJobRepository::class);
         $scanJobs->expects($this->never())->method('enqueue');
 
-        $controller = new LibraryController($libraryManager, $scanJobs);
+        $controller = $this->makeController($libraryManager, $scanJobs);
 
         $request = new Request();
         $request->userId = 'admin-1';
@@ -1196,7 +1251,7 @@ class LibraryControllerTest extends TestCase
         $scanJobs = $this->createMock(ScanJobRepository::class);
         $scanJobs->expects($this->never())->method('enqueue');
 
-        $controller = new LibraryController($libraryManager, $scanJobs);
+        $controller = $this->makeController($libraryManager, $scanJobs);
 
         $request = new Request();
         // request->userId intentionally left null
@@ -1224,7 +1279,7 @@ class LibraryControllerTest extends TestCase
             ->with('lib-1', 'metadata_refresh')
             ->willReturn('job-mr');
 
-        $controller = new LibraryController($libraryManager, $scanJobs);
+        $controller = $this->makeController($libraryManager, $scanJobs);
 
         $request = new Request();
         $request->userId = 'admin-1';
@@ -1254,7 +1309,7 @@ class LibraryControllerTest extends TestCase
         $scanJobs = $this->createMock(ScanJobRepository::class);
         $scanJobs->expects($this->never())->method('enqueue');
 
-        $controller = new LibraryController($libraryManager, $scanJobs);
+        $controller = $this->makeController($libraryManager, $scanJobs);
 
         $request = new Request();
         $request->userId = 'admin-1';
@@ -1276,7 +1331,7 @@ class LibraryControllerTest extends TestCase
         $scanJobs = $this->createMock(ScanJobRepository::class);
         $scanJobs->expects($this->never())->method('enqueue');
 
-        $controller = new LibraryController($libraryManager, $scanJobs);
+        $controller = $this->makeController($libraryManager, $scanJobs);
 
         $request = new Request();
         // request->userId intentionally left null
@@ -1308,7 +1363,7 @@ class LibraryControllerTest extends TestCase
             ->with('lib-1', 'prune')
             ->willReturn('job-p');
 
-        $controller = new LibraryController($libraryManager, $scanJobs);
+        $controller = $this->makeController($libraryManager, $scanJobs);
 
         $request = new Request();
         $request->userId = 'admin-1';
@@ -1332,7 +1387,7 @@ class LibraryControllerTest extends TestCase
         $scanJobs = $this->createMock(ScanJobRepository::class);
         $scanJobs->expects($this->never())->method('enqueue');
 
-        $controller = new LibraryController($libraryManager, $scanJobs);
+        $controller = $this->makeController($libraryManager, $scanJobs);
         $request = new Request();
         $request->userId = 'admin-1';
 
@@ -1347,7 +1402,7 @@ class LibraryControllerTest extends TestCase
         $scanJobs = $this->createMock(ScanJobRepository::class);
         $scanJobs->expects($this->never())->method('enqueue');
 
-        $controller = new LibraryController($libraryManager, $scanJobs);
+        $controller = $this->makeController($libraryManager, $scanJobs);
         $request = new Request();
 
         $this->assertSame(401, $controller->prune($request, ['id' => 'lib-1'])->statusCode);
@@ -1370,7 +1425,7 @@ class LibraryControllerTest extends TestCase
             ->with('lib-1', 'clear_metadata')
             ->willReturn('job-cm');
 
-        $controller = new LibraryController($libraryManager, $scanJobs);
+        $controller = $this->makeController($libraryManager, $scanJobs);
         $request = new Request();
         $request->userId = 'admin-1';
 
@@ -1392,7 +1447,7 @@ class LibraryControllerTest extends TestCase
         $scanJobs = $this->createMock(ScanJobRepository::class);
         $scanJobs->expects($this->never())->method('enqueue');
 
-        $controller = new LibraryController($libraryManager, $scanJobs);
+        $controller = $this->makeController($libraryManager, $scanJobs);
         $request = new Request();
         $request->userId = 'admin-1';
 
@@ -1407,7 +1462,7 @@ class LibraryControllerTest extends TestCase
         $scanJobs = $this->createMock(ScanJobRepository::class);
         $scanJobs->expects($this->never())->method('enqueue');
 
-        $controller = new LibraryController($libraryManager, $scanJobs);
+        $controller = $this->makeController($libraryManager, $scanJobs);
         $request = new Request();
 
         $this->assertSame(401, $controller->clearMetadata($request, ['id' => 'lib-1'])->statusCode);
@@ -1430,7 +1485,7 @@ class LibraryControllerTest extends TestCase
             ->with('lib-1', 'clear_artwork')
             ->willReturn('job-ca');
 
-        $controller = new LibraryController($libraryManager, $scanJobs);
+        $controller = $this->makeController($libraryManager, $scanJobs);
         $request = new Request();
         $request->userId = 'admin-1';
 
@@ -1452,7 +1507,7 @@ class LibraryControllerTest extends TestCase
         $scanJobs = $this->createMock(ScanJobRepository::class);
         $scanJobs->expects($this->never())->method('enqueue');
 
-        $controller = new LibraryController($libraryManager, $scanJobs);
+        $controller = $this->makeController($libraryManager, $scanJobs);
         $request = new Request();
         $request->userId = 'admin-1';
 
@@ -1467,7 +1522,7 @@ class LibraryControllerTest extends TestCase
         $scanJobs = $this->createMock(ScanJobRepository::class);
         $scanJobs->expects($this->never())->method('enqueue');
 
-        $controller = new LibraryController($libraryManager, $scanJobs);
+        $controller = $this->makeController($libraryManager, $scanJobs);
         $request = new Request();
 
         $this->assertSame(401, $controller->clearArtwork($request, ['id' => 'lib-1'])->statusCode);
@@ -1488,7 +1543,7 @@ class LibraryControllerTest extends TestCase
         $scanJobs = $this->createMock(ScanJobRepository::class);
         $scanJobs->expects($this->never())->method('enqueue');
 
-        $controller = new LibraryController($libraryManager, $scanJobs);
+        $controller = $this->makeController($libraryManager, $scanJobs);
         $request = new Request();
         $request->userId = 'admin-1';
         // No confirm flag.
@@ -1520,7 +1575,7 @@ class LibraryControllerTest extends TestCase
             ->with('lib-1', 'delete_all')
             ->willReturn('job-da');
 
-        $controller = new LibraryController($libraryManager, $scanJobs);
+        $controller = $this->makeController($libraryManager, $scanJobs);
         $request = new Request();
         $request->userId = 'admin-1';
         $request->body = ['confirm' => true];
@@ -1552,7 +1607,7 @@ class LibraryControllerTest extends TestCase
             ->with('lib-1', 'delete_all')
             ->willReturn('job-da2');
 
-        $controller = new LibraryController($libraryManager, $scanJobs);
+        $controller = $this->makeController($libraryManager, $scanJobs);
         $request = new Request();
         $request->userId = 'admin-1';
         $request->query = ['confirm' => '1'];
@@ -1570,7 +1625,7 @@ class LibraryControllerTest extends TestCase
         $scanJobs = $this->createMock(ScanJobRepository::class);
         $scanJobs->expects($this->never())->method('enqueue');
 
-        $controller = new LibraryController($libraryManager, $scanJobs);
+        $controller = $this->makeController($libraryManager, $scanJobs);
         $request = new Request();
         $request->userId = 'admin-1';
         $request->body = ['confirm' => true];
@@ -1586,7 +1641,7 @@ class LibraryControllerTest extends TestCase
         $scanJobs = $this->createMock(ScanJobRepository::class);
         $scanJobs->expects($this->never())->method('enqueue');
 
-        $controller = new LibraryController($libraryManager, $scanJobs);
+        $controller = $this->makeController($libraryManager, $scanJobs);
         $request = new Request();
         $request->body = ['confirm' => true];
 
@@ -1626,7 +1681,7 @@ class LibraryControllerTest extends TestCase
             ->with('lib-1')
             ->willReturn($job);
 
-        $controller = new LibraryController($libraryManager, $scanJobs);
+        $controller = $this->makeController($libraryManager, $scanJobs);
 
         $request = new Request();
         $request->userId = 'admin-1';
@@ -1660,7 +1715,7 @@ class LibraryControllerTest extends TestCase
             ->with('lib-1')
             ->willReturn(null);
 
-        $controller = new LibraryController($libraryManager, $scanJobs);
+        $controller = $this->makeController($libraryManager, $scanJobs);
 
         $request = new Request();
         $request->userId = 'admin-1';
@@ -1689,7 +1744,7 @@ class LibraryControllerTest extends TestCase
         $scanJobs = $this->createMock(ScanJobRepository::class);
         $scanJobs->expects($this->never())->method('getLatestForLibrary');
 
-        $controller = new LibraryController($libraryManager, $scanJobs);
+        $controller = $this->makeController($libraryManager, $scanJobs);
 
         $request = new Request();
         $request->userId = 'admin-1';
@@ -1710,7 +1765,7 @@ class LibraryControllerTest extends TestCase
         $scanJobs = $this->createMock(ScanJobRepository::class);
         $scanJobs->expects($this->never())->method('getLatestForLibrary');
 
-        $controller = new LibraryController($libraryManager, $scanJobs);
+        $controller = $this->makeController($libraryManager, $scanJobs);
 
         $request = new Request();
         // request->userId intentionally left null
@@ -1742,7 +1797,7 @@ class LibraryControllerTest extends TestCase
             ->with('lib-1', 20)
             ->willReturn($rows);
 
-        $controller = new LibraryController($libraryManager, $scanJobs);
+        $controller = $this->makeController($libraryManager, $scanJobs);
 
         $request = new Request();
         $request->userId = 'admin-1';
@@ -1775,7 +1830,7 @@ class LibraryControllerTest extends TestCase
             ->with('lib-1', 5)
             ->willReturn([]);
 
-        $controller = new LibraryController($libraryManager, $scanJobs);
+        $controller = $this->makeController($libraryManager, $scanJobs);
 
         $request = new Request();
         $request->userId = 'admin-1';
@@ -1804,7 +1859,7 @@ class LibraryControllerTest extends TestCase
         $scanJobs = $this->createMock(ScanJobRepository::class);
         $scanJobs->expects($this->never())->method('getHistoryForLibrary');
 
-        $controller = new LibraryController($libraryManager, $scanJobs);
+        $controller = $this->makeController($libraryManager, $scanJobs);
 
         $request = new Request();
         $request->userId = 'admin-1';
@@ -1825,7 +1880,7 @@ class LibraryControllerTest extends TestCase
         $scanJobs = $this->createMock(ScanJobRepository::class);
         $scanJobs->expects($this->never())->method('getHistoryForLibrary');
 
-        $controller = new LibraryController($libraryManager, $scanJobs);
+        $controller = $this->makeController($libraryManager, $scanJobs);
 
         $request = new Request();
         // request->userId intentionally left null
@@ -1851,7 +1906,7 @@ class LibraryControllerTest extends TestCase
 
         $scanJobs = $this->createMock(ScanJobRepository::class);
         $scanJobs->method('enqueue')->willReturn('job-1');
-        $controller = new LibraryController($libraryManager, $scanJobs);
+        $controller = $this->makeController($libraryManager, $scanJobs);
 
         $request = new Request();
         $request->userId = 'admin-1';
@@ -1882,7 +1937,7 @@ class LibraryControllerTest extends TestCase
 
         $scanJobs = $this->createMock(ScanJobRepository::class);
         $scanJobs->method('enqueue')->willReturn('job-1');
-        $controller = new LibraryController($libraryManager, $scanJobs);
+        $controller = $this->makeController($libraryManager, $scanJobs);
 
         $request = new Request();
         $request->userId = 'admin-1';
@@ -1907,7 +1962,7 @@ class LibraryControllerTest extends TestCase
         $libraryManager->expects($this->never())->method('createLibrary');
 
         $scanJobs = $this->createMock(ScanJobRepository::class);
-        $controller = new LibraryController($libraryManager, $scanJobs);
+        $controller = $this->makeController($libraryManager, $scanJobs);
 
         $request = new Request();
         $request->userId = 'admin-1';
@@ -1942,7 +1997,7 @@ class LibraryControllerTest extends TestCase
 
         $scanJobs = $this->createMock(ScanJobRepository::class);
         $scanJobs->method('enqueue')->willReturn('job-1');
-        $controller = new LibraryController($libraryManager, $scanJobs);
+        $controller = $this->makeController($libraryManager, $scanJobs);
 
         $request = new Request();
         $request->userId = 'admin-1';
@@ -1987,7 +2042,7 @@ class LibraryControllerTest extends TestCase
             }));
 
         $scanJobs = $this->createMock(ScanJobRepository::class);
-        $controller = new LibraryController($libraryManager, $scanJobs);
+        $controller = $this->makeController($libraryManager, $scanJobs);
 
         $request = new Request();
         $request->userId = 'admin-1';
@@ -2024,7 +2079,7 @@ class LibraryControllerTest extends TestCase
             }));
 
         $scanJobs = $this->createMock(ScanJobRepository::class);
-        $controller = new LibraryController($libraryManager, $scanJobs);
+        $controller = $this->makeController($libraryManager, $scanJobs);
 
         $request = new Request();
         $request->userId = 'admin-1';
@@ -2066,7 +2121,7 @@ class LibraryControllerTest extends TestCase
             }));
 
         $scanJobs = $this->createMock(ScanJobRepository::class);
-        $controller = new LibraryController($libraryManager, $scanJobs);
+        $controller = $this->makeController($libraryManager, $scanJobs);
 
         $request = new Request();
         $request->userId = 'admin-1';
@@ -2095,7 +2150,7 @@ class LibraryControllerTest extends TestCase
         $libraryManager->expects($this->never())->method('updateLibrary');
 
         $scanJobs = $this->createMock(ScanJobRepository::class);
-        $controller = new LibraryController($libraryManager, $scanJobs);
+        $controller = $this->makeController($libraryManager, $scanJobs);
 
         $request = new Request();
         $request->userId = 'admin-1';
@@ -2149,7 +2204,7 @@ class LibraryControllerTest extends TestCase
 
         $scanJobs = $this->createMock(ScanJobRepository::class);
         $scanJobs->method('enqueue')->willReturn('job-1');
-        $controller = new LibraryController($libraryManager, $scanJobs);
+        $controller = $this->makeController($libraryManager, $scanJobs);
 
         $request = new Request();
         $request->userId = 'admin-1';
@@ -2210,7 +2265,7 @@ class LibraryControllerTest extends TestCase
             }));
 
         $scanJobs = $this->createMock(ScanJobRepository::class);
-        $controller = new LibraryController($libraryManager, $scanJobs);
+        $controller = $this->makeController($libraryManager, $scanJobs);
 
         $request = new Request();
         $request->userId = 'admin-1';
@@ -2253,7 +2308,7 @@ class LibraryControllerTest extends TestCase
             }));
 
         $scanJobs = $this->createMock(ScanJobRepository::class);
-        $controller = new LibraryController($libraryManager, $scanJobs);
+        $controller = $this->makeController($libraryManager, $scanJobs);
 
         $request = new Request();
         $request->userId = 'admin-1';
@@ -2293,7 +2348,7 @@ class LibraryControllerTest extends TestCase
             }));
 
         $scanJobs = $this->createMock(ScanJobRepository::class);
-        $controller = new LibraryController($libraryManager, $scanJobs);
+        $controller = $this->makeController($libraryManager, $scanJobs);
 
         $request = new Request();
         $request->userId = 'admin-1';
@@ -2319,7 +2374,7 @@ class LibraryControllerTest extends TestCase
         $libraryManager->expects($this->never())->method('updateLibrary');
 
         $scanJobs = $this->createMock(ScanJobRepository::class);
-        $controller = new LibraryController($libraryManager, $scanJobs);
+        $controller = $this->makeController($libraryManager, $scanJobs);
 
         $request = new Request();
         $request->userId = 'admin-1';

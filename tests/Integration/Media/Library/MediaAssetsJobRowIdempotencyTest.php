@@ -113,12 +113,13 @@ final class MediaAssetsJobRowIdempotencyTest extends TestCase
         $libraries = $this->createMock(LibraryManager::class);
         $libraries->method('getLibrary')->willReturn(['id' => $libraryId, 'name' => 'S284']);
 
-        $controller = new LibraryController($libraries, new ScanJobRepository($this->db));
-        $controller->setAdminMiddleware(
+        // S282: the middleware moved from an optional setter to a REQUIRED
+        // constructor parameter; the wiring proved here is unchanged.
+        return new LibraryController(
+            $libraries,
+            new ScanJobRepository($this->db),
             new AdminMiddleware($users, $this->createMock(AuditLogger::class))
         );
-
-        return $controller;
     }
 
     private function adminRequest(): Request

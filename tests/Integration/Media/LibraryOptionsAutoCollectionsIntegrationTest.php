@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Phlix\Tests\Integration\Media;
 
+use Phlix\Auth\UserRepository;
+use Phlix\Common\Logger\AuditLogger;
 use Phlix\Common\Uuid;
 use Phlix\Media\Library\FolderWatcher;
 use Phlix\Media\Library\LibraryManager;
@@ -12,6 +14,7 @@ use Phlix\Media\Library\ScanJobRepository;
 use Phlix\Media\Library\Dto\LibraryRow;
 use Phlix\Media\Music\MusicLibraryService;
 use Phlix\Server\Http\Controllers\LibraryController;
+use Phlix\Server\Http\Middleware\AdminMiddleware;
 use Phlix\Server\Http\Request;
 use Phlix\Tests\Support\Database\RequiresRealDatabase;
 use PHPUnit\Framework\TestCase;
@@ -82,7 +85,23 @@ final class LibraryOptionsAutoCollectionsIntegrationTest extends TestCase
         $scanJobs = $this->createMock(ScanJobRepository::class);
         $scanJobs->method('enqueue')->willReturn(Uuid::v4());
 
-        $this->controller = new LibraryController($manager, $scanJobs);
+        // S282: the admin gate is a REQUIRED constructor dependency, so it has to
+        // be supplied here too. A real AdminMiddleware over a mocked
+        // UserRepository that treats the single caller id this file uses
+        // ('s33-it-admin', see adminRequest()) as an admin — this test is about
+        // the options round trip, not the gate, so the gate must allow.
+        $users = $this->createMock(UserRepository::class);
+        $users->method('findAdminById')->willReturnCallback(
+            static fn (string $id): ?array => $id === 's33-it-admin'
+                ? ['id' => $id, 'is_admin' => 1, 'status' => 'active']
+                : null
+        );
+
+        $this->controller = new LibraryController(
+            $manager,
+            $scanJobs,
+            new AdminMiddleware($users, $this->createMock(AuditLogger::class))
+        );
     }
 
     protected function tearDown(): void

@@ -33,24 +33,43 @@ class LibraryController
      */
     private ?ItemRepository $itemRepository;
 
-    private ?AdminMiddleware $adminMiddleware = null;
+    /**
+     * Admin gate for the fourteen admin-only handlers on this controller.
+     *
+     * ## S282 — REQUIRED, non-nullable, and constructor-injected on purpose
+     *
+     * This used to be `private ?AdminMiddleware $adminMiddleware = null;` filled
+     * by an optional `setAdminMiddleware()` setter, and {@see self::requireAdmin()}
+     * wrapped its check in `if ($this->adminMiddleware !== null)`. That combination
+     * **failed OPEN**: any construction path that forgot the setter silently
+     * downgraded every destructive library action to auth-only, so any logged-in
+     * user could have reached `delete-all`. The live wiring did call the setter, so
+     * the hole was latent rather than exploited — but "latent" is a property of
+     * today's wiring, not of the class.
+     *
+     * Making the dependency a REQUIRED constructor parameter removes the null
+     * state entirely: `requireAdmin()` has no null branch left to take, and a
+     * construction that omits the middleware is an `ArgumentCountError` at the
+     * `new`, not a security downgrade at request time. It also removes the PHP-DI
+     * hazard where `autowire()` SKIPS optional parameters and leaves a dependency
+     * silently null.
+     *
+     * Do NOT re-introduce a nullable type, a default value, or a setter.
+     * `tests/Unit/Server/Http/Controllers/LibraryControllerAdminGateIsStructuralTest.php`
+     * fails on any of the three.
+     */
+    private AdminMiddleware $adminMiddleware;
 
     public function __construct(
         LibraryManager $libraryManager,
         ScanJobRepository $scanJobs,
+        AdminMiddleware $adminMiddleware,
         ?ItemRepository $itemRepository = null
     ) {
         $this->libraryManager = $libraryManager;
         $this->scanJobs = $scanJobs;
+        $this->adminMiddleware = $adminMiddleware;
         $this->itemRepository = $itemRepository;
-    }
-
-    /**
-     * Set the admin middleware (used for admin-only operations).
-     */
-    public function setAdminMiddleware(AdminMiddleware $middleware): void
-    {
-        $this->adminMiddleware = $middleware;
     }
 
     /**
@@ -266,6 +285,12 @@ class LibraryController
 
     /**
      * Require admin access for the request.
+     *
+     * S282: there is deliberately NO `if ($this->adminMiddleware !== null)` guard
+     * here. The middleware is a required constructor dependency
+     * ({@see self::$adminMiddleware}), so the check is unconditional and the method
+     * can only return `null` — "proceed" — after an admin decision was actually
+     * taken. Re-adding a null guard would restore the S282 fail-open.
      */
     private function requireAdmin(Request $request): ?Response
     {
@@ -275,15 +300,13 @@ class LibraryController
             return $authResponse;
         }
 
-        // Then check admin status
-        if ($this->adminMiddleware !== null) {
-            $status = $this->adminMiddleware->checkAccess($request);
-            if ($status !== null) {
-                return (new Response())->status($status)->json([
-                    'error' => $status === 401 ? 'Unauthorized' : 'Forbidden',
-                    'code' => $status === 401 ? 'auth.required' : 'auth.not_admin',
-                ]);
-            }
+        // Then check admin status — unconditional; see the docblock above.
+        $status = $this->adminMiddleware->checkAccess($request);
+        if ($status !== null) {
+            return (new Response())->status($status)->json([
+                'error' => $status === 401 ? 'Unauthorized' : 'Forbidden',
+                'code' => $status === 401 ? 'auth.required' : 'auth.not_admin',
+            ]);
         }
 
         return null;
@@ -998,9 +1021,9 @@ class LibraryController
      *
      * Admin-only, enforced by {@see self::requireAdmin()} INSIDE this handler —
      * the same pattern as the six destructive library actions (S272), not a
-     * route-level middleware. `Application::getLibraryController()` calls
-     * `setAdminMiddleware()` whenever the container can supply one, which is the
-     * construction path every served request takes.
+     * route-level middleware. Since S282 the {@see AdminMiddleware} is a REQUIRED
+     * constructor dependency, so there is no construction path — served or
+     * otherwise — on which the gate can be absent.
      *
      * @param array<string, string> $params Route params; `id` is the library UUID.
      *

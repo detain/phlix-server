@@ -3989,53 +3989,49 @@ class Application
     /**
      * Returns a LibraryController instance.
      *
+     * ## S282 — the admin gate is now a construction-time requirement
+     *
+     * This factory used to have two escape hatches, either of which produced a
+     * controller whose `requireAdmin()` failed OPEN:
+     *
+     *  1. a container-less fallback that built the controller from a hardcoded
+     *     `127.0.0.1/root/password` connection and never wired the middleware; and
+     *  2. an `if ($this->container->has(AdminMiddleware::class))` guard, so a
+     *     container that could not supply the middleware still yielded a working —
+     *     but ungated — controller.
+     *
+     * Branch 1 was dead: `$this->container` is assigned exactly once, in the
+     * constructor, from a NON-nullable `ContainerInterface` parameter, and nothing
+     * else ever writes it. Branch 2 was live but always true. Both are now removed:
+     * a missing container or a container that cannot build the middleware throws at
+     * route-registration time (loud, at boot) instead of silently returning a
+     * controller that lets any logged-in user run `delete-all`. This matches the
+     * `?? throw new \RuntimeException('Container required for ...')` shape the
+     * sibling factories in this class already use.
+     *
      * @return \Phlix\Server\Http\Controllers\LibraryController The controller instance.
      */
     private function getLibraryController(): \Phlix\Server\Http\Controllers\LibraryController
     {
-        if ($this->container === null) {
-            $db = new \Phlix\Common\Database\PhlixMySQLConnection(
-                '127.0.0.1',
-                3306,
-                'phlix',
-                'root',
-                'password'
-            );
-            $itemRepository = new \Phlix\Media\Library\ItemRepository($db);
-            $musicScanner = new \Phlix\Media\Music\MusicLibraryScanner(
-                $db,
-                new \Phlix\Media\Transcoding\FfmpegRunner()
-            );
-            $musicLibraryService = new \Phlix\Media\Music\MusicLibraryService($db, $musicScanner);
-            $libraryManager = new \Phlix\Media\Library\LibraryManager(
-                $db,
-                new \Phlix\Media\Library\MediaScanner(
-                    $db,
-                    $itemRepository
-                ),
-                new \Phlix\Media\Library\FolderWatcher(),
-                $musicLibraryService
-            );
-            $scanJobs = new \Phlix\Media\Library\ScanJobRepository($db);
-            return new \Phlix\Server\Http\Controllers\LibraryController($libraryManager, $scanJobs, $itemRepository);
-        }
+        $container = $this->container
+            ?? throw new \RuntimeException('Container required for LibraryController');
 
         /** @var \Phlix\Media\Library\LibraryManager */
-        $libraryManager = $this->container->get(\Phlix\Media\Library\LibraryManager::class);
+        $libraryManager = $container->get(\Phlix\Media\Library\LibraryManager::class);
         /** @var \Phlix\Media\Library\ScanJobRepository */
-        $scanJobs = $this->container->get(\Phlix\Media\Library\ScanJobRepository::class);
+        $scanJobs = $container->get(\Phlix\Media\Library\ScanJobRepository::class);
         /** @var \Phlix\Media\Library\ItemRepository */
-        $itemRepository = $this->container->get(\Phlix\Media\Library\ItemRepository::class);
-        $controller = new \Phlix\Server\Http\Controllers\LibraryController($libraryManager, $scanJobs, $itemRepository);
+        $itemRepository = $container->get(\Phlix\Media\Library\ItemRepository::class);
+        // NOT conditional on has(): the controller cannot exist without its gate.
+        /** @var \Phlix\Server\Http\Middleware\AdminMiddleware */
+        $adminMiddleware = $container->get(\Phlix\Server\Http\Middleware\AdminMiddleware::class);
 
-        // Wire admin middleware if available
-        if ($this->container->has(\Phlix\Server\Http\Middleware\AdminMiddleware::class)) {
-            /** @var \Phlix\Server\Http\Middleware\AdminMiddleware */
-            $adminMiddleware = $this->container->get(\Phlix\Server\Http\Middleware\AdminMiddleware::class);
-            $controller->setAdminMiddleware($adminMiddleware);
-        }
-
-        return $controller;
+        return new \Phlix\Server\Http\Controllers\LibraryController(
+            $libraryManager,
+            $scanJobs,
+            $adminMiddleware,
+            $itemRepository
+        );
     }
 
     /**

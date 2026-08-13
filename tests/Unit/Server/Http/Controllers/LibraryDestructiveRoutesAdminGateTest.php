@@ -99,15 +99,14 @@ final class LibraryDestructiveRoutesAdminGateTest extends TestCase
         // Any library id resolves, so a 404 can never be mistaken for a refusal.
         $libraryManager->method('getLibrary')->willReturn(['id' => 'lib-1', 'name' => 'Movies']);
 
-        $controller = new LibraryController(
+        // S282: the middleware moved from an optional setter to a REQUIRED
+        // constructor parameter. The object graph asserted here is unchanged —
+        // only the way it is assembled is.
+        return new LibraryController(
             $libraryManager,
-            $scanJobs ?? $this->createMock(ScanJobRepository::class)
-        );
-        $controller->setAdminMiddleware(
+            $scanJobs ?? $this->createMock(ScanJobRepository::class),
             new AdminMiddleware($users, $this->createMock(AuditLogger::class))
         );
-
-        return $controller;
     }
 
     /**

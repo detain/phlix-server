@@ -77,8 +77,10 @@ final class ThemeMediaControllerAdminGateIsStructuralTest extends TestCase
      * body rather than being waved through OR refused.
      *
      * Hardcoded on purpose — a derived list would self-adjust to whatever the
-     * controller happens to do. {@see self::testEveryCheckAccessCallSiteIsListed()}
-     * is the drift detector that fails when the controller grows a third.
+     * controller happens to do.
+     * {@see self::testEveryRequestHandlerIsGatedOrExplicitlyExempt()} is the drift
+     * detector that fails when the controller grows a third handler — gated OR
+     * ungated.
      *
      * @return array<string, array{0: string, 1: int}>
      */
@@ -89,6 +91,23 @@ final class ThemeMediaControllerAdminGateIsStructuralTest extends TestCase
             'DELETE /api/v1/libraries/{id}/theme-media'      => ['deleteThemeMedia', 404],
         ];
     }
+
+    /**
+     * The public request handlers that are deliberately NOT admin-gated.
+     *
+     * Exactly one entry, and it is the READ. `getThemeMedia()` exposes no
+     * mutation and is pinned as anonymously reachable by
+     * {@see self::testTheReadHandlerIsNotGated()}, which is also the negative
+     * control for the three behavioural arms.
+     *
+     * ⚠ Adding a name here is how you declare "this handler needs no admin
+     * gate". It is a deliberate, reviewable security decision and must come with
+     * a behavioural test that pins the intended reachability — never a way to
+     * silence {@see self::testEveryRequestHandlerIsGatedOrExplicitlyExempt()}.
+     *
+     * @var list<string>
+     */
+    private const UNGATED_REQUEST_HANDLERS = ['getThemeMedia'];
 
     /**
      * Build a controller whose gate treats exactly `admin-1` as an admin and
@@ -473,30 +492,85 @@ final class ThemeMediaControllerAdminGateIsStructuralTest extends TestCase
     }
 
     /**
-     * Drift detector: the provider must list EVERY `checkAccess()` call site in
-     * the controller.
+     * Drift detector: EVERY public request handler on the controller must be
+     * classified — either admin-gated (in {@see self::adminGatedHandlerProvider()})
+     * or deliberately exempt (in {@see self::UNGATED_REQUEST_HANDLERS}).
      *
-     * Counted over the controller's source so a third gated handler cannot be
-     * added without this file being updated. The count is the only thing derived
-     * from the subject; the handler list and its expectations above are hardcoded,
-     * so this cannot self-adjust to a regression.
+     * ## Why the enumeration is over handlers and not over `checkAccess()` calls
+     *
+     * The first version of this test counted `checkAccess()` call sites in the
+     * controller source and asserted the count was 2. That population is the
+     * WRONG one: it only rises when a handler is added WITH a gate and only falls
+     * when an existing gate is removed, so it is structurally blind to a third
+     * handler added WITHOUT one — which is precisely the regression class S323
+     * exists to prevent. Measured: appending an ungated
+     * `purgeThemeMedia(Request $request, array $params)` to the controller left
+     * the whole file green; the same method WITH a gate reddened it. A detector
+     * that cannot see the defect it is named for reads as a pass.
+     *
+     * The enumeration is therefore over the population that OUGHT to be gated:
+     * public, non-static, {@see Request}-taking methods declared on the
+     * controller. A new one is unclassified until a human adds it to one of the
+     * two HARDCODED lists above, and that edit is the review moment. Only the
+     * enumeration is derived from the subject; both lists are hardcoded, so this
+     * cannot self-adjust to a regression.
+     *
+     * ⚠ Carries a POSITIVE CONTROL and prints its DENOMINATOR: reflection that
+     * returned an empty (or truncated) handler list would make every assertion
+     * below vacuously true, so the count is asserted explicitly and the names are
+     * carried in the failure messages.
      */
-    public function testEveryCheckAccessCallSiteIsListed(): void
+    public function testEveryRequestHandlerIsGatedOrExplicitlyExempt(): void
     {
-        $file = (new ReflectionClass(ThemeMediaController::class))->getFileName();
-        self::assertIsString($file);
-        $source = file_get_contents($file);
-        self::assertIsString($source);
+        $class = new ReflectionClass(ThemeMediaController::class);
 
-        $callSites = substr_count($source, '$this->adminMiddleware->checkAccess($request)');
+        $handlers = [];
+        foreach ($class->getMethods(ReflectionMethod::IS_PUBLIC) as $method) {
+            if ($method->isConstructor() || $method->isStatic()) {
+                continue;
+            }
+            if ($method->getDeclaringClass()->getName() !== ThemeMediaController::class) {
+                continue;
+            }
+            foreach ($method->getParameters() as $parameter) {
+                $type = $parameter->getType();
+                if ($type instanceof ReflectionNamedType && $type->getName() === Request::class) {
+                    $handlers[] = $method->getName();
+                    break;
+                }
+            }
+        }
+        sort($handlers);
+
+        // POSITIVE CONTROL / DENOMINATOR — an empty or short list would make the
+        // classification assertion below pass while measuring nothing.
+        self::assertCount(
+            3,
+            $handlers,
+            'expected 3 public Request-taking handlers on ThemeMediaController; reflection '
+            . 'enumerated ' . count($handlers) . ': [' . implode(', ', $handlers) . ']. If the '
+            . 'controller really did gain or lose a handler, update adminGatedHandlerProvider() '
+            . 'or UNGATED_REQUEST_HANDLERS and this count together.'
+        );
+
+        /** @var list<string> $gated */
+        $gated = array_column(array_values(self::adminGatedHandlerProvider()), 0);
+
+        $classified = array_merge($gated, self::UNGATED_REQUEST_HANDLERS);
+        sort($classified);
 
         self::assertSame(
-            2,
-            $callSites,
-            'ThemeMediaController has ' . $callSites . ' checkAccess() call sites but this file '
-            . 'covers 2. Add the new handler to adminGatedHandlerProvider().'
+            $classified,
+            $handlers,
+            'every public Request-taking method of ThemeMediaController must be listed either in '
+            . 'adminGatedHandlerProvider() (admin-gated) or in UNGATED_REQUEST_HANDLERS '
+            . '(deliberately not gated). Unclassified: ['
+            . implode(', ', array_values(array_diff($handlers, $classified)))
+            . ']; listed but absent from the controller: ['
+            . implode(', ', array_values(array_diff($classified, $handlers)))
+            . ']. A NEW UNGATED handler lands in the first bucket — that is the S323 fail-open '
+            . 'coming back, and on this controller it admits ANONYMOUS callers.'
         );
-        self::assertCount(2, self::adminGatedHandlerProvider());
 
         foreach (self::adminGatedHandlerProvider() as $route => [$method]) {
             self::assertTrue(
@@ -504,5 +578,21 @@ final class ThemeMediaControllerAdminGateIsStructuralTest extends TestCase
                 "{$route} maps to ThemeMediaController::{$method}(), which must exist"
             );
         }
+
+        // Secondary net: one gate per gated handler, counted over the source.
+        // Catches a gate deleted from a still-listed handler.
+        $file = $class->getFileName();
+        self::assertIsString($file);
+        $source = file_get_contents($file);
+        self::assertIsString($source);
+
+        $callSites = substr_count($source, '$this->adminMiddleware->checkAccess($request)');
+
+        self::assertSame(
+            count($gated),
+            $callSites,
+            'ThemeMediaController has ' . $callSites . ' checkAccess() call sites but '
+            . count($gated) . ' handlers are listed as admin-gated.'
+        );
     }
 }

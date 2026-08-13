@@ -79,6 +79,12 @@ class ApplicationFactoryMethodsTest extends TestCase
      * - Gets LibraryManager from container
      * - Gets ScanJobRepository from container
      * - Gets ItemRepository from container
+     * - Gets AdminMiddleware from container — UNCONDITIONALLY (S282). It is a
+     *   required constructor dependency of LibraryController, and the factory no
+     *   longer calls `has()` on it: a container that cannot build the gate must
+     *   throw at boot rather than yield an ungated controller. Do not "fix" a
+     *   `Unexpected class: ...AdminMiddleware` here by re-adding a `has()`-style
+     *   branch — supply the middleware.
      * - Creates LibraryController with the correct dependencies
      */
     public function testGetLibraryControllerReturnsControllerFromContainer(): void
@@ -90,11 +96,8 @@ class ApplicationFactoryMethodsTest extends TestCase
         $scanJobs = $this->createMock(ScanJobRepository::class);
         $itemRepo = $this->createMock(ItemRepository::class);
 
-        // Configure has() to return true for AdminMiddleware
-        $this->container->method('has')
-            ->willReturnCallback(static function (string $class): bool {
-                return $class === \Phlix\Server\Http\Middleware\AdminMiddleware::class;
-            });
+        // No has() stub: S282 removed the `if ($container->has(AdminMiddleware::class))`
+        // escape hatch from getLibraryController(), so the factory never calls has().
 
         $this->container->method('get')
             ->willReturnCallback(function (string $class) use ($libraryManager, $scanJobs, $itemRepo): object {
@@ -131,6 +134,13 @@ class ApplicationFactoryMethodsTest extends TestCase
      * - Gets ThemeMediaRepository from container
      * - Gets ThemeMediaFinder from container
      * - Gets LibraryManager from container
+     * - Gets AdminMiddleware from container — UNCONDITIONALLY (S323). It is a
+     *   required constructor dependency of ThemeMediaController, and the factory
+     *   no longer calls `has()` on it: a container that cannot build the gate must
+     *   throw at boot rather than yield a controller whose two mutation handlers
+     *   are reachable ANONYMOUSLY. Do not "fix" a
+     *   `Unexpected class: ...AdminMiddleware` here by re-adding a `has()`-style
+     *   branch — supply the middleware.
      * - Creates ThemeMediaController with the correct dependencies
      */
     public function testGetThemeMediaControllerReturnsControllerFromContainer(): void
@@ -162,10 +172,8 @@ class ApplicationFactoryMethodsTest extends TestCase
                 };
             });
 
-        $this->container->method('has')
-            ->willReturnCallback(static function (string $class): bool {
-                return $class === \Phlix\Server\Http\Middleware\AdminMiddleware::class;
-            });
+        // No has() stub: S323 removed the `if ($container->has(AdminMiddleware::class))`
+        // escape hatch from getThemeMediaController(), so the factory never calls has().
 
         $ref = new \ReflectionClass(Application::class);
         $factoryMethod = $ref->getMethod('getThemeMediaController');

@@ -27,6 +27,22 @@ use Phlix\Theming\ThemeVideo;
  *
  * Uses createMock() for dependencies following the project's existing
  * controller-test conventions.
+ *
+ * ## S323 — every construction here now supplies the admin gate
+ *
+ * `AdminMiddleware` used to be optional (nullable property + `setAdminMiddleware()`
+ * setter) and the two mutation handlers wrapped their check in
+ * `if ($this->adminMiddleware !== null)`. Seven of the cases below built the
+ * controller WITHOUT a gate, sent an ANONYMOUS `new Request()` to
+ * `scanThemeMedia()`/`deleteThemeMedia()`, and asserted 200/400/404 — they were
+ * passing through a gate that never ran, and each says "Happy path"/"Negative" in
+ * its docblock without ever declaring that. Those same assertions are now made
+ * behind a gate that DID run and admitted `admin-1`. Two further cases
+ * (`test{Scan,Delete}ThemeMediaProceedsWhenNoMiddlewareSet`) did declare the
+ * fail-open as intended and are deleted; see the note where they used to be.
+ *
+ * The structural pin lives in
+ * {@see ThemeMediaControllerAdminGateIsStructuralTest}.
  */
 class ThemeMediaControllerTest extends TestCase
 {
@@ -57,7 +73,8 @@ class ThemeMediaControllerTest extends TestCase
         $controller = new ThemeMediaController(
             $themeMediaRepository,
             $themeMediaFinder,
-            $libraryManager
+            $libraryManager,
+            $this->makeAdminMiddleware(['id' => 'admin-1', 'is_admin' => 1])
         );
 
         $request = new Request();
@@ -97,7 +114,8 @@ class ThemeMediaControllerTest extends TestCase
         $controller = new ThemeMediaController(
             $themeMediaRepository,
             $themeMediaFinder,
-            $libraryManager
+            $libraryManager,
+            $this->makeAdminMiddleware(['id' => 'admin-1', 'is_admin' => 1])
         );
 
         $request = new Request();
@@ -130,7 +148,8 @@ class ThemeMediaControllerTest extends TestCase
         $controller = new ThemeMediaController(
             $themeMediaRepository,
             $themeMediaFinder,
-            $libraryManager
+            $libraryManager,
+            $this->makeAdminMiddleware(['id' => 'admin-1', 'is_admin' => 1])
         );
 
         $request = new Request();
@@ -162,7 +181,8 @@ class ThemeMediaControllerTest extends TestCase
         $controller = new ThemeMediaController(
             $themeMediaRepository,
             $themeMediaFinder,
-            $libraryManager
+            $libraryManager,
+            $this->makeAdminMiddleware(['id' => 'admin-1', 'is_admin' => 1])
         );
 
         $request = new Request();
@@ -218,10 +238,14 @@ class ThemeMediaControllerTest extends TestCase
             $controller = new ThemeMediaController(
                 $themeMediaRepository,
                 $themeMediaFinder,
-                $libraryManager
+                $libraryManager,
+                $this->makeAdminMiddleware(['id' => 'admin-1', 'is_admin' => 1])
             );
 
+            // S323: the gate is unconditional now, so this happy path has to
+            // arrive as an admin. It used to arrive ANONYMOUS and still get 200.
             $request = new Request();
+            $request->userId = 'admin-1';
 
             $response = $controller->scanThemeMedia($request, ['id' => 'lib-1']);
 
@@ -277,10 +301,14 @@ class ThemeMediaControllerTest extends TestCase
             $controller = new ThemeMediaController(
                 $themeMediaRepository,
                 $themeMediaFinder,
-                $libraryManager
+                $libraryManager,
+                $this->makeAdminMiddleware(['id' => 'admin-1', 'is_admin' => 1])
             );
 
+            // S323: the gate is unconditional now, so this happy path has to
+            // arrive as an admin. It used to arrive ANONYMOUS and still get 200.
             $request = new Request();
+            $request->userId = 'admin-1';
 
             $response = $controller->scanThemeMedia($request, ['id' => 'lib-1']);
 
@@ -311,10 +339,13 @@ class ThemeMediaControllerTest extends TestCase
         $controller = new ThemeMediaController(
             $themeMediaRepository,
             $themeMediaFinder,
-            $libraryManager
+            $libraryManager,
+            $this->makeAdminMiddleware(['id' => 'admin-1', 'is_admin' => 1])
         );
 
+        // S323: reaches the empty-id branch only because the gate ADMITTED it.
         $request = new Request();
+        $request->userId = 'admin-1';
 
         $response = $controller->scanThemeMedia($request, ['id' => '']);
 
@@ -343,10 +374,13 @@ class ThemeMediaControllerTest extends TestCase
         $controller = new ThemeMediaController(
             $themeMediaRepository,
             $themeMediaFinder,
-            $libraryManager
+            $libraryManager,
+            $this->makeAdminMiddleware(['id' => 'admin-1', 'is_admin' => 1])
         );
 
+        // S323: reaches the library lookup only because the gate ADMITTED it.
         $request = new Request();
+        $request->userId = 'admin-1';
 
         $response = $controller->scanThemeMedia($request, ['id' => 'nonexistent']);
 
@@ -377,10 +411,15 @@ class ThemeMediaControllerTest extends TestCase
         $controller = new ThemeMediaController(
             $themeMediaRepository,
             $themeMediaFinder,
-            $libraryManager
+            $libraryManager,
+            $this->makeAdminMiddleware(['id' => 'admin-1', 'is_admin' => 1])
         );
 
+        // S323: the gate is unconditional now, so this happy path has to arrive
+        // as an admin. It used to arrive ANONYMOUS and still get 200 — an
+        // unauthenticated DELETE of a library's theme media.
         $request = new Request();
+        $request->userId = 'admin-1';
 
         $response = $controller->deleteThemeMedia($request, ['id' => 'lib-1']);
 
@@ -408,10 +447,13 @@ class ThemeMediaControllerTest extends TestCase
         $controller = new ThemeMediaController(
             $themeMediaRepository,
             $themeMediaFinder,
-            $libraryManager
+            $libraryManager,
+            $this->makeAdminMiddleware(['id' => 'admin-1', 'is_admin' => 1])
         );
 
+        // S323: reaches the empty-id branch only because the gate ADMITTED it.
         $request = new Request();
+        $request->userId = 'admin-1';
 
         $response = $controller->deleteThemeMedia($request, ['id' => '']);
 
@@ -440,10 +482,13 @@ class ThemeMediaControllerTest extends TestCase
         $controller = new ThemeMediaController(
             $themeMediaRepository,
             $themeMediaFinder,
-            $libraryManager
+            $libraryManager,
+            $this->makeAdminMiddleware(['id' => 'admin-1', 'is_admin' => 1])
         );
 
+        // S323: reaches the library lookup only because the gate ADMITTED it.
         $request = new Request();
+        $request->userId = 'admin-1';
 
         $response = $controller->deleteThemeMedia($request, ['id' => 'nonexistent']);
 
@@ -488,8 +533,13 @@ class ThemeMediaControllerTest extends TestCase
      *
      * Used by the 401/403 gating tests to assert the gate short-circuits
      * BEFORE any side effect (no library lookup, no finder, no repo write).
+     *
+     * S323: the gate is now a constructor argument, so it is passed in here
+     * rather than bolted on afterwards with a setter.
+     *
+     * @param array<string, mixed>|null $adminRow Row returned by findAdminById().
      */
-    private function makeGatedControllerExpectingNoSideEffects(): ThemeMediaController
+    private function makeGatedControllerExpectingNoSideEffects(?array $adminRow): ThemeMediaController
     {
         $repository = $this->createMock(ThemeMediaRepository::class);
         $repository->expects($this->never())->method('upsert');
@@ -501,7 +551,12 @@ class ThemeMediaControllerTest extends TestCase
         $libraryManager = $this->createMock(LibraryManager::class);
         $libraryManager->expects($this->never())->method('getLibrary');
 
-        return new ThemeMediaController($repository, $finder, $libraryManager);
+        return new ThemeMediaController(
+            $repository,
+            $finder,
+            $libraryManager,
+            $this->makeAdminMiddleware($adminRow)
+        );
     }
 
     /**
@@ -510,8 +565,7 @@ class ThemeMediaControllerTest extends TestCase
      */
     public function testScanThemeMediaReturns401WhenUnauthenticated(): void
     {
-        $controller = $this->makeGatedControllerExpectingNoSideEffects();
-        $controller->setAdminMiddleware($this->makeAdminMiddleware(null));
+        $controller = $this->makeGatedControllerExpectingNoSideEffects(null);
 
         $request = new Request();
         // userId intentionally left null -> checkAccess() returns 401.
@@ -531,9 +585,8 @@ class ThemeMediaControllerTest extends TestCase
      */
     public function testScanThemeMediaReturns403WhenNotAdmin(): void
     {
-        $controller = $this->makeGatedControllerExpectingNoSideEffects();
         // findAdminById() => null => 403 for an authenticated non-admin.
-        $controller->setAdminMiddleware($this->makeAdminMiddleware(null));
+        $controller = $this->makeGatedControllerExpectingNoSideEffects(null);
 
         $request = new Request();
         $request->userId = 'user-1';
@@ -586,9 +639,13 @@ class ThemeMediaControllerTest extends TestCase
                 ->with('lib-1', $libraryPath)
                 ->willReturn($foundThemeMedia);
 
-            $controller = new ThemeMediaController($repository, $finder, $libraryManager);
             // admin row present => checkAccess() returns null => allowed.
-            $controller->setAdminMiddleware($this->makeAdminMiddleware(['id' => 'admin-1', 'is_admin' => 1]));
+            $controller = new ThemeMediaController(
+                $repository,
+                $finder,
+                $libraryManager,
+                $this->makeAdminMiddleware(['id' => 'admin-1', 'is_admin' => 1])
+            );
 
             $request = new Request();
             $request->userId = 'admin-1';
@@ -608,31 +665,16 @@ class ThemeMediaControllerTest extends TestCase
         }
     }
 
-    /**
-     * Gate: scanThemeMedia() proceeds normally when NO admin middleware is set
-     * (the unit-test happy path; the gate is skipped entirely).
-     */
-    public function testScanThemeMediaProceedsWhenNoMiddlewareSet(): void
-    {
-        $repository = $this->createMock(ThemeMediaRepository::class);
-        $finder = $this->createMock(ThemeMediaFinder::class);
-        $libraryManager = $this->createMock(LibraryManager::class);
-        $libraryManager->expects($this->once())
-            ->method('getLibrary')
-            ->with('lib-1')
-            ->willReturn(['id' => 'lib-1', 'name' => 'Movies', 'type' => 'video', 'paths' => []]);
-
-        // No setAdminMiddleware() call -> gate skipped.
-        $controller = new ThemeMediaController($repository, $finder, $libraryManager);
-
-        $request = new Request();
-
-        $response = $controller->scanThemeMedia($request, ['id' => 'lib-1']);
-
-        $this->assertSame(200, $response->statusCode);
-        $this->assertNotSame(401, $response->statusCode);
-        $this->assertNotSame(403, $response->statusCode);
-    }
+    // S323: `testScanThemeMediaProceedsWhenNoMiddlewareSet()` used to live here and
+    // `testDeleteThemeMediaProceedsWhenNoMiddlewareSet()` below it. Both built the
+    // controller WITHOUT a gate, sent an ANONYMOUS `new Request()`, and asserted
+    // 200 — they were the only tests in this repo that DECLARED the fail-open as
+    // intended behaviour, and what they pinned was anonymous write access to a
+    // library's theme media. The state they described is now unconstructable, so
+    // they are deleted rather than adapted. Their replacement is
+    // ThemeMediaControllerAdminGateIsStructuralTest::
+    // testConstructingWithoutTheAdminMiddlewareIsAFatalError(), which asserts that
+    // the three-argument construction they used is an ArgumentCountError.
 
     /**
      * Gate: deleteThemeMedia() returns 401 when AdminMiddleware denies with 401
@@ -640,8 +682,7 @@ class ThemeMediaControllerTest extends TestCase
      */
     public function testDeleteThemeMediaReturns401WhenUnauthenticated(): void
     {
-        $controller = $this->makeGatedControllerExpectingNoSideEffects();
-        $controller->setAdminMiddleware($this->makeAdminMiddleware(null));
+        $controller = $this->makeGatedControllerExpectingNoSideEffects(null);
 
         $request = new Request();
         // userId intentionally left null -> checkAccess() returns 401.
@@ -661,8 +702,7 @@ class ThemeMediaControllerTest extends TestCase
      */
     public function testDeleteThemeMediaReturns403WhenNotAdmin(): void
     {
-        $controller = $this->makeGatedControllerExpectingNoSideEffects();
-        $controller->setAdminMiddleware($this->makeAdminMiddleware(null));
+        $controller = $this->makeGatedControllerExpectingNoSideEffects(null);
 
         $request = new Request();
         $request->userId = 'user-1';
@@ -695,8 +735,12 @@ class ThemeMediaControllerTest extends TestCase
             ->with('lib-1')
             ->willReturn(['id' => 'lib-1', 'name' => 'Movies', 'type' => 'video']);
 
-        $controller = new ThemeMediaController($repository, $finder, $libraryManager);
-        $controller->setAdminMiddleware($this->makeAdminMiddleware(['id' => 'admin-1', 'is_admin' => 1]));
+        $controller = new ThemeMediaController(
+            $repository,
+            $finder,
+            $libraryManager,
+            $this->makeAdminMiddleware(['id' => 'admin-1', 'is_admin' => 1])
+        );
 
         $request = new Request();
         $request->userId = 'admin-1';
@@ -709,36 +753,6 @@ class ThemeMediaControllerTest extends TestCase
         /** @var array<array-key, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertTrue($body['deleted']);
-    }
-
-    /**
-     * Gate: deleteThemeMedia() proceeds normally when NO admin middleware is set.
-     */
-    public function testDeleteThemeMediaProceedsWhenNoMiddlewareSet(): void
-    {
-        $repository = $this->createMock(ThemeMediaRepository::class);
-        $repository->expects($this->once())
-            ->method('deleteByLibraryId')
-            ->with('lib-1');
-
-        $finder = $this->createMock(ThemeMediaFinder::class);
-
-        $libraryManager = $this->createMock(LibraryManager::class);
-        $libraryManager->expects($this->once())
-            ->method('getLibrary')
-            ->with('lib-1')
-            ->willReturn(['id' => 'lib-1', 'name' => 'Movies', 'type' => 'video']);
-
-        // No setAdminMiddleware() call -> gate skipped.
-        $controller = new ThemeMediaController($repository, $finder, $libraryManager);
-
-        $request = new Request();
-
-        $response = $controller->deleteThemeMedia($request, ['id' => 'lib-1']);
-
-        $this->assertSame(200, $response->statusCode);
-        $this->assertNotSame(401, $response->statusCode);
-        $this->assertNotSame(403, $response->statusCode);
     }
 
     /**
@@ -761,9 +775,13 @@ class ThemeMediaControllerTest extends TestCase
             ->with('lib-1')
             ->willReturn(['id' => 'lib-1', 'name' => 'Movies', 'type' => 'video']);
 
-        $controller = new ThemeMediaController($repository, $finder, $libraryManager);
         // Even with an admin gate that would deny (no userId), the READ proceeds.
-        $controller->setAdminMiddleware($this->makeAdminMiddleware(null));
+        $controller = new ThemeMediaController(
+            $repository,
+            $finder,
+            $libraryManager,
+            $this->makeAdminMiddleware(null)
+        );
 
         $request = new Request();
         // userId intentionally null: a gated endpoint would 401, the read must not.

@@ -29,35 +29,44 @@ use Phlix\Theming\ThemeMediaRepository;
 class ThemeMediaController
 {
     /**
-     * Admin gate for mutation endpoints (scan/delete). Wired by
-     * {@see \Phlix\Server\Core\Application::getThemeMediaController()} when an
-     * {@see AdminMiddleware} is available in the container; left null otherwise
-     * (e.g. in unit tests that exercise the happy path without auth).
-     */
-    private ?AdminMiddleware $adminMiddleware = null;
-
-    /**
      * @param ThemeMediaRepository $repository Theme media repository for caching
      * @param ThemeMediaFinder $finder Theme media finder for filesystem scanning
      * @param LibraryManager $libraryManager Library manager for library data
+     * @param AdminMiddleware $adminMiddleware Admin gate for the two mutation
+     *        endpoints ({@see self::scanThemeMedia()},
+     *        {@see self::deleteThemeMedia()}). REQUIRED — see below.
+     *
+     * ## S323 — the admin gate is a construction-time requirement
+     *
+     * This used to be `private ?AdminMiddleware $adminMiddleware = null;` filled
+     * by an OPTIONAL `setAdminMiddleware()` setter, with each mutation handler
+     * wrapping its decision in `if ($this->adminMiddleware !== null)`. That
+     * combination **failed OPEN**, and worse than the sibling controllers S282
+     * fixed: the check here is INLINE with no `requireAuth()` in front of it, so
+     * a controller built without the setter served `POST …/theme-media/scan` and
+     * `DELETE …/theme-media` to an **ANONYMOUS** caller, not merely to any
+     * logged-in one. The live wiring did call the setter, so the hole was latent
+     * — but "latent" is a property of today's wiring, not of the class, and
+     * PHP-DI's `autowire()` SKIPS optional parameters, which is how this estate
+     * has produced silently-null dependencies before.
+     *
+     * Making the dependency REQUIRED removes the null state entirely: the
+     * handlers have no null branch left to take, and a construction that omits
+     * the gate is an `ArgumentCountError` at the `new`, not a security downgrade
+     * at request time.
+     *
+     * Do NOT re-introduce a nullable type, a default value, or a setter.
+     * `tests/Unit/Server/Http/Controllers/ThemeMediaControllerAdminGateIsStructuralTest.php`
+     * fails on any of the three.
      *
      * @since 0.14.0
      */
     public function __construct(
         private readonly ThemeMediaRepository $repository,
         private readonly ThemeMediaFinder $finder,
-        private readonly LibraryManager $libraryManager
+        private readonly LibraryManager $libraryManager,
+        private readonly AdminMiddleware $adminMiddleware
     ) {
-    }
-
-    /**
-     * Set the admin middleware (used for admin-only operations).
-     *
-     * @param AdminMiddleware $middleware The admin gate to enforce on mutations.
-     */
-    public function setAdminMiddleware(AdminMiddleware $middleware): void
-    {
-        $this->adminMiddleware = $middleware;
     }
 
     /**
@@ -116,6 +125,13 @@ class ThemeMediaController
      *
      * POST /api/v1/libraries/{id}/theme-media/scan
      *
+     * Admin-only. S323: there is deliberately NO
+     * `if ($this->adminMiddleware !== null)` guard around the check — the
+     * middleware is a required constructor dependency, so the gate is
+     * unconditional and this handler can only run its body after an admin
+     * decision was actually taken. Re-adding a null guard would restore the
+     * S323 fail-open, which on this handler is ANONYMOUS access.
+     *
      * @param Request $request The HTTP request
      * @param array<string, string> $params Path parameters including 'id' (library ID)
      *
@@ -125,14 +141,12 @@ class ThemeMediaController
      */
     public function scanThemeMedia(Request $request, array $params): Response
     {
-        if ($this->adminMiddleware !== null) {
-            $status = $this->adminMiddleware->checkAccess($request);
-            if ($status !== null) {
-                return (new Response())->status($status)->json([
-                    'error' => $status === 401 ? 'Unauthorized' : 'Forbidden',
-                    'code' => $status === 401 ? 'auth.required' : 'auth.not_admin',
-                ]);
-            }
+        $status = $this->adminMiddleware->checkAccess($request);
+        if ($status !== null) {
+            return (new Response())->status($status)->json([
+                'error' => $status === 401 ? 'Unauthorized' : 'Forbidden',
+                'code' => $status === 401 ? 'auth.required' : 'auth.not_admin',
+            ]);
         }
 
         $libraryId = $params['id'] ?? '';
@@ -197,6 +211,9 @@ class ThemeMediaController
      *
      * DELETE /api/v1/libraries/{id}/theme-media
      *
+     * Admin-only. S323: the check is unconditional for the same reason as
+     * {@see self::scanThemeMedia()} — see that docblock.
+     *
      * @param Request $request The HTTP request
      * @param array<string, string> $params Path parameters including 'id' (library ID)
      *
@@ -206,14 +223,12 @@ class ThemeMediaController
      */
     public function deleteThemeMedia(Request $request, array $params): Response
     {
-        if ($this->adminMiddleware !== null) {
-            $status = $this->adminMiddleware->checkAccess($request);
-            if ($status !== null) {
-                return (new Response())->status($status)->json([
-                    'error' => $status === 401 ? 'Unauthorized' : 'Forbidden',
-                    'code' => $status === 401 ? 'auth.required' : 'auth.not_admin',
-                ]);
-            }
+        $status = $this->adminMiddleware->checkAccess($request);
+        if ($status !== null) {
+            return (new Response())->status($status)->json([
+                'error' => $status === 401 ? 'Unauthorized' : 'Forbidden',
+                'code' => $status === 401 ? 'auth.required' : 'auth.not_admin',
+            ]);
         }
 
         $libraryId = $params['id'] ?? '';

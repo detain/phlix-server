@@ -140,6 +140,53 @@ final class ThemeMediaControllerAdminGateIsStructuralTest extends TestCase
     }
 
     /**
+     * Does `$method` take a {@see Request} — by NATIVE type OR by docblock?
+     *
+     * The docblock arm is not decoration. A method declared
+     * `public function purge($request, array $params): Response` carrying
+     * `@param Request $request` is dispatched by
+     * {@see \Phlix\Server\Http\Router::callHandler()} exactly like a natively
+     * typed one, and `phpstan analyse -c phpstan.neon.dist` (src/, level 9)
+     * reports `[OK]` on it — measured. A native-type-only match therefore left a
+     * whole ungated handler shape invisible to BOTH nets.
+     *
+     * A parameter with neither a native type nor a docblock type is the only
+     * remaining shape, and level 9 rejects that one (`missingType.parameter`),
+     * so between this method and the src/ analyser the population is closed.
+     *
+     * Deliberately over-inclusive: any `@param` whose type mentions `Request`
+     * counts. Over-inclusion only ever forces a handler to be CLASSIFIED, which
+     * is a review moment; under-inclusion is the fail-open.
+     */
+    private function declaresARequestParameter(ReflectionMethod $method): bool
+    {
+        foreach ($method->getParameters() as $parameter) {
+            $type = $parameter->getType();
+            if ($type instanceof ReflectionNamedType && $type->getName() === Request::class) {
+                return true;
+            }
+        }
+
+        $doc = $method->getDocComment();
+        if ($doc === false) {
+            return false;
+        }
+
+        $matches = [];
+        preg_match_all('/@param\s+(\S+)\s+&?\.{0,3}\$\w+/', $doc, $matches);
+        foreach ($matches[1] as $declared) {
+            foreach (explode('|', $declared) as $alternative) {
+                $segments = explode('\\', ltrim(trim($alternative), '?'));
+                if (end($segments) === 'Request') {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /**
      * @return array<string, mixed>
      */
     private function decode(Response $response): array
@@ -509,16 +556,34 @@ final class ThemeMediaControllerAdminGateIsStructuralTest extends TestCase
      * that cannot see the defect it is named for reads as a pass.
      *
      * The enumeration is therefore over the population that OUGHT to be gated:
-     * public, non-static, {@see Request}-taking methods declared on the
-     * controller. A new one is unclassified until a human adds it to one of the
-     * two HARDCODED lists above, and that edit is the review moment. Only the
+     * every public method declared on the controller that takes a
+     * {@see Request}. A new one is unclassified until a human adds it to one of
+     * the two HARDCODED lists above, and that edit is the review moment. Only the
      * enumeration is derived from the subject; both lists are hardcoded, so this
      * cannot self-adjust to a regression.
      *
-     * ⚠ Carries a POSITIVE CONTROL and prints its DENOMINATOR: reflection that
-     * returned an empty (or truncated) handler list would make every assertion
-     * below vacuously true, so the count is asserted explicitly and the names are
-     * carried in the failure messages.
+     * ## What "takes a Request" and "public method" mean here, and why
+     *
+     *  - **Statics are included.** `Router::callHandler()` does
+     *    `$instance->$method($request, $params)`, and PHP dispatches that to a
+     *    `public static` method without complaint. Excluding statics bought
+     *    nothing (there are none on this controller) and left an ungated static
+     *    handler invisible — measured.
+     *  - **A docblock-declared `Request` counts**, not just a native type; see
+     *    {@see self::declaresARequestParameter()}. An untyped parameter with an
+     *    `@param Request` docblock passes PHPStan level 9 on src/, so the
+     *    analyser does not close that hole either.
+     *
+     * ⚠ Carries a POSITIVE CONTROL / explicit DENOMINATOR: reflection that
+     * returned an empty (or truncated) handler list would make the classification
+     * assertion below vacuously true, so the count is ASSERTED against a
+     * hardcoded 3 and the enumerated names are carried in that assertion's
+     * failure message. It is asserted rather than echoed on purpose —
+     * `phpunit.xml` sets `beStrictAboutOutputDuringTests="true"` with
+     * `failOnRisky="true"`, so a test that printed anything would fail the suite.
+     * Do not read "denominator" here as something that appears in CI output on a
+     * green run; nothing is printed. It is visible only when the count is wrong,
+     * which is the only moment it matters.
      */
     public function testEveryRequestHandlerIsGatedOrExplicitlyExempt(): void
     {
@@ -526,18 +591,20 @@ final class ThemeMediaControllerAdminGateIsStructuralTest extends TestCase
 
         $handlers = [];
         foreach ($class->getMethods(ReflectionMethod::IS_PUBLIC) as $method) {
-            if ($method->isConstructor() || $method->isStatic()) {
+            // Statics are NOT skipped: `$instance->$method($request, $params)` in
+            // Router::callHandler() dispatches to a `public static` method without
+            // error, so an ungated static handler is every bit as reachable as an
+            // instance one. Skipping them bought nothing (this controller has none)
+            // and opened a bypass — measured: an ungated `public static` handler
+            // left this test green.
+            if ($method->isConstructor()) {
                 continue;
             }
             if ($method->getDeclaringClass()->getName() !== ThemeMediaController::class) {
                 continue;
             }
-            foreach ($method->getParameters() as $parameter) {
-                $type = $parameter->getType();
-                if ($type instanceof ReflectionNamedType && $type->getName() === Request::class) {
-                    $handlers[] = $method->getName();
-                    break;
-                }
+            if ($this->declaresARequestParameter($method)) {
+                $handlers[] = $method->getName();
             }
         }
         sort($handlers);
@@ -553,8 +620,18 @@ final class ThemeMediaControllerAdminGateIsStructuralTest extends TestCase
             . 'or UNGATED_REQUEST_HANDLERS and this count together.'
         );
 
-        /** @var list<string> $gated */
-        $gated = array_column(array_values(self::adminGatedHandlerProvider()), 0);
+        /** @var list<string> $gatedRoutes */
+        $gatedRoutes = array_column(array_values(self::adminGatedHandlerProvider()), 0);
+
+        // De-duplicated on purpose. Two ROUTES may legitimately alias ONE handler
+        // (e.g. a `/rescan` alias for scanThemeMedia), and that must be
+        // representable. Merged un-deduplicated it was not: the provider grew a
+        // third entry, `$classified` grew to 4 against 3 handlers, and both
+        // array_diff() buckets in the message below rendered EMPTY because they
+        // dedupe — a permanent red with no stated cause that no edit to either
+        // hardcoded list could green. A gate that a CORRECT change cannot satisfy
+        // is how a rule gets deleted as noise.
+        $gated = array_values(array_unique($gatedRoutes));
 
         $classified = array_merge($gated, self::UNGATED_REQUEST_HANDLERS);
         sort($classified);
@@ -568,6 +645,9 @@ final class ThemeMediaControllerAdminGateIsStructuralTest extends TestCase
             . implode(', ', array_values(array_diff($handlers, $classified)))
             . ']; listed but absent from the controller: ['
             . implode(', ', array_values(array_diff($classified, $handlers)))
+            . ']; listed in BOTH lists, which is never right — a handler is gated or exempt, not '
+            . 'both: ['
+            . implode(', ', array_values(array_intersect($gated, self::UNGATED_REQUEST_HANDLERS)))
             . ']. A NEW UNGATED handler lands in the first bucket — that is the S323 fail-open '
             . 'coming back, and on this controller it admits ANONYMOUS callers.'
         );
@@ -592,7 +672,7 @@ final class ThemeMediaControllerAdminGateIsStructuralTest extends TestCase
             count($gated),
             $callSites,
             'ThemeMediaController has ' . $callSites . ' checkAccess() call sites but '
-            . count($gated) . ' handlers are listed as admin-gated.'
+            . count($gated) . ' DISTINCT handlers are listed as admin-gated.'
         );
     }
 }

@@ -4457,22 +4457,41 @@ class Application
     /**
      * Returns a WebhookAdminController instance.
      *
+     * ## S323 — the admin gate is now a construction-time requirement
+     *
+     * This factory used to wire the middleware behind
+     * `if ($this->container !== null && $this->container->has(AdminMiddleware::class))`,
+     * i.e. TWO escape hatches in one condition, either of which produced a
+     * controller whose five handlers failed OPEN to any logged-in user:
+     *
+     *  1. a null-container branch — dead, because `$this->container` is assigned
+     *     exactly once, in the constructor, from a NON-nullable
+     *     `ContainerInterface` parameter, and nothing else ever writes it; and
+     *  2. a `has(AdminMiddleware::class)` guard — live, but always true.
+     *
+     * Both are now removed, matching the shape S282 established on
+     * `getLibraryController()` and S323 phase 1 on `getThemeMediaController()`: a
+     * missing container, or one that cannot build the middleware, throws at
+     * route-registration time (loud, at boot) instead of silently serving the
+     * webhook admin surface to every authenticated user.
+     *
      * @return \Phlix\Server\Http\Controllers\Webhooks\WebhookAdminController The controller instance.
      */
     private function getWebhookAdminController(): \Phlix\Server\Http\Controllers\Webhooks\WebhookAdminController
     {
+        $container = $this->container
+            ?? throw new \RuntimeException('Container required for WebhookAdminController');
+
         $db = $this->createDatabaseConnection();
         $dispatcher = new \Phlix\Webhooks\WebhookDispatcher($db);
-        $controller = new \Phlix\Server\Http\Controllers\Webhooks\WebhookAdminController($dispatcher);
+        // NOT conditional on has(): the controller cannot exist without its gate.
+        /** @var \Phlix\Server\Http\Middleware\AdminMiddleware */
+        $adminMiddleware = $container->get(\Phlix\Server\Http\Middleware\AdminMiddleware::class);
 
-        // Wire admin middleware if available
-        if ($this->container !== null && $this->container->has(\Phlix\Server\Http\Middleware\AdminMiddleware::class)) {
-            /** @var \Phlix\Server\Http\Middleware\AdminMiddleware */
-            $adminMiddleware = $this->container->get(\Phlix\Server\Http\Middleware\AdminMiddleware::class);
-            $controller->setAdminMiddleware($adminMiddleware);
-        }
-
-        return $controller;
+        return new \Phlix\Server\Http\Controllers\Webhooks\WebhookAdminController(
+            $dispatcher,
+            $adminMiddleware
+        );
     }
 
     /**

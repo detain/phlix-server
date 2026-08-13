@@ -6,10 +6,13 @@ namespace Phlix\Tests\Unit\Webhooks;
 
 use DateTimeImmutable;
 use PHPUnit\Framework\TestCase;
+use Phlix\Auth\UserRepository;
+use Phlix\Common\Logger\AuditLogger;
 use Phlix\Common\Logger\StructuredLogger;
 use Phlix\Common\Net\SsrfGuard;
 use Phlix\Config\EffectiveConfig;
 use Phlix\Server\Http\Controllers\Webhooks\WebhookAdminController;
+use Phlix\Server\Http\Middleware\AdminMiddleware;
 use Phlix\Server\Http\Request;
 use Phlix\Webhooks\WebhookDispatcher;
 use Phlix\Webhooks\WebhookEvent;
@@ -201,6 +204,32 @@ final class WebhookTestDeliveryTest extends TestCase
     }
 
     /**
+     * Build the controller with a REAL admin gate that admits exactly `admin-1`
+     * — the user id {@see self::adminRequest()} sends.
+     *
+     * S323: the middleware is a required constructor dependency. Before that,
+     * these cases built the controller with no gate at all, so `requireAdmin()`
+     * waved the request through on its null branch; they pinned that fail-open in
+     * EFFECT while asserting only delivery behaviour. Every assertion below is
+     * unchanged — the request now simply reaches the handler through a gate that
+     * ran and admitted it.
+     */
+    private function controllerWith(WebhookDispatcher $dispatcher): WebhookAdminController
+    {
+        $users = $this->createMock(UserRepository::class);
+        $users->method('findAdminById')->willReturnCallback(
+            static fn (string $id): ?array => $id === 'admin-1'
+                ? ['id' => $id, 'is_admin' => 1, 'status' => 'active']
+                : null
+        );
+
+        return new WebhookAdminController(
+            $dispatcher,
+            new AdminMiddleware($users, $this->createMock(AuditLogger::class))
+        );
+    }
+
+    /**
      * @return array<string, mixed>
      */
     private function decodeBody(string $body): array
@@ -340,7 +369,7 @@ final class WebhookTestDeliveryTest extends TestCase
             ], $calls)
         );
 
-        $controller = new WebhookAdminController($dispatcher);
+        $controller = $this->controllerWith($dispatcher);
         $response = $controller->test($this->adminRequest(), ['id' => self::WEBHOOK_ID]);
 
         self::assertSame(200, $response->statusCode);
@@ -377,7 +406,7 @@ final class WebhookTestDeliveryTest extends TestCase
             $this->fakeHttpClient($this->httpOk(), $calls)
         );
 
-        $controller = new WebhookAdminController($dispatcher);
+        $controller = $this->controllerWith($dispatcher);
         $response = $controller->test($this->adminRequest(), ['id' => self::WEBHOOK_ID]);
 
         $body = $this->decodeBody($response->body);
@@ -413,7 +442,7 @@ final class WebhookTestDeliveryTest extends TestCase
             $this->fakeHttpClient($this->httpOk(), $calls)
         );
 
-        $controller = new WebhookAdminController($dispatcher);
+        $controller = $this->controllerWith($dispatcher);
         $response = $controller->test($this->adminRequest(), ['id' => self::WEBHOOK_ID]);
 
         self::assertSame(200, $response->statusCode);
@@ -441,7 +470,7 @@ final class WebhookTestDeliveryTest extends TestCase
             $this->fakeHttpClient($this->httpOk(), $calls)
         );
 
-        $controller = new WebhookAdminController($dispatcher);
+        $controller = $this->controllerWith($dispatcher);
         $response = $controller->test($this->adminRequest(), ['id' => 'no-such-webhook']);
 
         self::assertSame(404, $response->statusCode);

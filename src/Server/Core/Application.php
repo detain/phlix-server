@@ -3820,6 +3820,20 @@ class Application
     /**
      * Returns a MediaPosterController instance (Step 15.1/15.2).
      *
+     * ## S323 — the admin gate is now a construction-time requirement
+     *
+     * The middleware used to be wired behind
+     * `if ($container->has(AdminMiddleware::class))`, so a container that could not
+     * supply it still yielded a working — but ungated — controller whose
+     * `setPoster()` rewrites `metadata.poster_url`. The guard was live but always
+     * true; it is now removed, matching the shape S282 established on
+     * `getLibraryController()`.
+     *
+     * ⚠ This is one of TWO construction sites for this controller. The other is
+     * {@see \Phlix\Server\WebPortal\WebPortalRouter::registerRoutes()}, which
+     * hand-builds it for the CGI dispatch path. Both pass the gate as a required
+     * constructor argument; neither may go back to a setter.
+     *
      * @return \Phlix\Server\Http\Controllers\MediaPosterController The controller instance.
      */
     private function getMediaPosterController(): \Phlix\Server\Http\Controllers\MediaPosterController
@@ -3839,15 +3853,15 @@ class Application
         /** @var \Phlix\Media\Metadata\TmdbProvider */
         $tmdb = $container->get(\Phlix\Media\Metadata\TmdbProvider::class);
 
-        $controller = new \Phlix\Server\Http\Controllers\MediaPosterController($itemRepository, $tmdb);
+        // NOT conditional on has(): the controller cannot exist without its gate.
+        /** @var \Phlix\Server\Http\Middleware\AdminMiddleware */
+        $adminMiddleware = $container->get(\Phlix\Server\Http\Middleware\AdminMiddleware::class);
 
-        if ($container->has(\Phlix\Server\Http\Middleware\AdminMiddleware::class)) {
-            /** @var \Phlix\Server\Http\Middleware\AdminMiddleware */
-            $adminMiddleware = $container->get(\Phlix\Server\Http\Middleware\AdminMiddleware::class);
-            $controller->setAdminMiddleware($adminMiddleware);
-        }
-
-        return $controller;
+        return new \Phlix\Server\Http\Controllers\MediaPosterController(
+            $itemRepository,
+            $tmdb,
+            $adminMiddleware
+        );
     }
 
     /**

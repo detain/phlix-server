@@ -5,19 +5,60 @@ declare(strict_types=1);
 namespace Phlix\Tests\Unit\Server\Http\Controllers;
 
 use PHPUnit\Framework\TestCase;
+use Phlix\Auth\UserRepository;
+use Phlix\Common\Logger\AuditLogger;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Library\MediaItemShaper;
 use Phlix\Media\Metadata\Exception\TmdbUnconfiguredException;
 use Phlix\Media\Metadata\TmdbProvider;
 use Phlix\Server\Http\Controllers\MediaPosterController;
+use Phlix\Server\Http\Middleware\AdminMiddleware;
 use Phlix\Server\Http\Request;
 
 /**
  * Unit tests for {@see MediaPosterController} — Step 15.1/15.2 poster candidate
  * listing and poster selection endpoints.
+ *
+ * ## S323 — every case here now runs THROUGH the admin gate
+ *
+ * Before S323 the controller was built with no middleware at all, so
+ * `requireAdmin()` waved every authenticated request through on its
+ * `if ($this->adminMiddleware !== null)` branch. Every `authedRequest()` case
+ * below already sent `userId = 'admin-1'` and asserted a handler outcome, which
+ * meant they pinned that fail-open in EFFECT while their names and docblocks only
+ * ever described the handler. The gate is now a required constructor dependency
+ * and {@see self::makeController()} admits exactly `admin-1`. No assertion in this
+ * file changed.
+ *
+ * The gate's own three arms (anonymous / non-admin / admin) live in
+ * {@see MediaPosterControllerAdminGateIsStructuralTest}.
  */
 class MediaPosterControllerTest extends TestCase
 {
+    /**
+     * Build the controller with a REAL admin gate that admits exactly `admin-1`.
+     *
+     * Not a permissive stub: a request from any other user id is refused here
+     * exactly as it would be in production.
+     */
+    private function makeController(
+        ItemRepository $items,
+        TmdbProvider $tmdb
+    ): MediaPosterController {
+        $users = $this->createMock(UserRepository::class);
+        $users->method('findAdminById')->willReturnCallback(
+            static fn (string $id): ?array => $id === 'admin-1'
+                ? ['id' => $id, 'is_admin' => 1, 'status' => 'active']
+                : null
+        );
+
+        return new MediaPosterController(
+            $items,
+            $tmdb,
+            new AdminMiddleware($users, $this->createMock(AuditLogger::class))
+        );
+    }
+
     /**
      * @param array<string, mixed> $body
      */
@@ -31,7 +72,7 @@ class MediaPosterControllerTest extends TestCase
 
     public function testListPostersRequiresAuth(): void
     {
-        $controller = new MediaPosterController(
+        $controller = $this->makeController(
             $this->createMock(ItemRepository::class),
             $this->createMock(TmdbProvider::class),
         );
@@ -48,7 +89,7 @@ class MediaPosterControllerTest extends TestCase
         $items = $this->createMock(ItemRepository::class);
         $items->method('findById')->willReturn(null);
 
-        $controller = new MediaPosterController($items, $this->createMock(TmdbProvider::class));
+        $controller = $this->makeController($items, $this->createMock(TmdbProvider::class));
         $response = $controller->listPosters($this->authedRequest(), ['id' => 'missing']);
 
         $this->assertSame(404, $response->statusCode);
@@ -88,7 +129,7 @@ class MediaPosterControllerTest extends TestCase
         ]);
 
         $tmdb = $this->createMock(TmdbProvider::class);
-        $controller = new MediaPosterController($items, $tmdb);
+        $controller = $this->makeController($items, $tmdb);
         $response = $controller->listPosters($this->authedRequest(), ['id' => 'm1']);
 
         $this->assertSame(200, $response->statusCode);
@@ -161,7 +202,7 @@ class MediaPosterControllerTest extends TestCase
 
         $items->expects($this->once())->method('update')->with('m1', $this->anything());
 
-        $controller = new MediaPosterController($items, $tmdb);
+        $controller = $this->makeController($items, $tmdb);
         $response = $controller->listPosters($this->authedRequest(), ['id' => 'm1']);
 
         $this->assertSame(200, $response->statusCode);
@@ -185,7 +226,7 @@ class MediaPosterControllerTest extends TestCase
         $tmdb = $this->createMock(TmdbProvider::class);
         $tmdb->method('getImages')->willThrowException(new TmdbUnconfiguredException('TMDB not configured'));
 
-        $controller = new MediaPosterController($items, $tmdb);
+        $controller = $this->makeController($items, $tmdb);
         $response = $controller->listPosters($this->authedRequest(), ['id' => 'm1']);
 
         $this->assertSame(422, $response->statusCode);
@@ -207,7 +248,7 @@ class MediaPosterControllerTest extends TestCase
         $tmdb = $this->createMock(TmdbProvider::class);
         $tmdb->method('getImages')->willThrowException(new \RuntimeException('network error'));
 
-        $controller = new MediaPosterController($items, $tmdb);
+        $controller = $this->makeController($items, $tmdb);
         $response = $controller->listPosters($this->authedRequest(), ['id' => 'm1']);
 
         $this->assertSame(502, $response->statusCode);
@@ -241,7 +282,7 @@ class MediaPosterControllerTest extends TestCase
         ]);
 
         $tmdb = $this->createMock(TmdbProvider::class);
-        $controller = new MediaPosterController($items, $tmdb);
+        $controller = $this->makeController($items, $tmdb);
         $response = $controller->listPosters($this->authedRequest(), ['id' => 'm1']);
 
         $this->assertSame(200, $response->statusCode);
@@ -263,7 +304,7 @@ class MediaPosterControllerTest extends TestCase
         $tmdb = $this->createMock(TmdbProvider::class);
         $tmdb->expects($this->never())->method('getImages');
 
-        $controller = new MediaPosterController($items, $tmdb);
+        $controller = $this->makeController($items, $tmdb);
         $response = $controller->listPosters($this->authedRequest(), ['id' => 'm1']);
 
         $this->assertSame(200, $response->statusCode);
@@ -275,7 +316,7 @@ class MediaPosterControllerTest extends TestCase
 
     public function testSetPosterRequiresAuth(): void
     {
-        $controller = new MediaPosterController(
+        $controller = $this->makeController(
             $this->createMock(ItemRepository::class),
             $this->createMock(TmdbProvider::class),
         );
@@ -292,7 +333,7 @@ class MediaPosterControllerTest extends TestCase
         $items = $this->createMock(ItemRepository::class);
         $items->method('findById')->willReturn(null);
 
-        $controller = new MediaPosterController($items, $this->createMock(TmdbProvider::class));
+        $controller = $this->makeController($items, $this->createMock(TmdbProvider::class));
         $response = $controller->setPoster($this->authedRequest(['poster_url' => 'https://image.tmdb.org/t/p/w500/p.jpg']), ['id' => 'missing']);
 
         $this->assertSame(404, $response->statusCode);
@@ -303,7 +344,7 @@ class MediaPosterControllerTest extends TestCase
         $items = $this->createMock(ItemRepository::class);
         $items->method('findById')->willReturn(['id' => 'm1', 'type' => 'movie', 'metadata' => []]);
 
-        $controller = new MediaPosterController($items, $this->createMock(TmdbProvider::class));
+        $controller = $this->makeController($items, $this->createMock(TmdbProvider::class));
         $response = $controller->setPoster($this->authedRequest([]), ['id' => 'm1']);
 
         $this->assertSame(400, $response->statusCode);
@@ -335,7 +376,7 @@ class MediaPosterControllerTest extends TestCase
             ],
         ]);
 
-        $controller = new MediaPosterController($items, $this->createMock(TmdbProvider::class));
+        $controller = $this->makeController($items, $this->createMock(TmdbProvider::class));
         $response = $controller->setPoster(
             $this->authedRequest(['poster_url' => 'https://evil.example.com/poster.jpg']),
             ['id' => 'm1'],
@@ -356,7 +397,7 @@ class MediaPosterControllerTest extends TestCase
             'metadata' => ['images' => []],
         ]);
 
-        $controller = new MediaPosterController($items, $this->createMock(TmdbProvider::class));
+        $controller = $this->makeController($items, $this->createMock(TmdbProvider::class));
         $response = $controller->setPoster(
             $this->authedRequest(['poster_url' => 'https://image.tmdb.org/t/p/w500/p.jpg']),
             ['id' => 'm1'],
@@ -432,7 +473,7 @@ class MediaPosterControllerTest extends TestCase
             }),
         );
 
-        $controller = new MediaPosterController($items, $this->createMock(TmdbProvider::class));
+        $controller = $this->makeController($items, $this->createMock(TmdbProvider::class));
         $response = $controller->setPoster(
             $this->authedRequest(['poster_url' => 'https://image.tmdb.org/t/p/w500/p.jpg']),
             ['id' => 'm1'],
@@ -452,7 +493,7 @@ class MediaPosterControllerTest extends TestCase
         $items = $this->createMock(ItemRepository::class);
         $items->method('findById')->willReturn(['id' => 'm1', 'type' => 'movie', 'metadata' => []]);
 
-        $controller = new MediaPosterController($items, $this->createMock(TmdbProvider::class));
+        $controller = $this->makeController($items, $this->createMock(TmdbProvider::class));
         $response = $controller->setPoster($this->authedRequest(['poster_url' => '  ']), ['id' => 'm1']);
 
         $this->assertSame(400, $response->statusCode);

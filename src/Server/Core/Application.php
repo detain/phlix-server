@@ -4522,10 +4522,31 @@ class Application
     /**
      * Returns an Arr\SyncController instance.
      *
+     * ## S323 — the admin gate is now a construction-time requirement
+     *
+     * The middleware used to be wired behind
+     * `if ($this->container !== null && $this->container->has(AdminMiddleware::class))`,
+     * i.e. TWO escape hatches in one condition, either of which produced a
+     * controller whose three `/api/v1/admin/sync/*` handlers failed OPEN to any
+     * logged-in user:
+     *
+     *  1. a null-container branch — dead, because `$this->container` is assigned
+     *     exactly once, in the constructor, from a NON-nullable
+     *     `ContainerInterface` parameter, and nothing else ever writes it; and
+     *  2. a `has(AdminMiddleware::class)` guard — live, but always true.
+     *
+     * Both are now removed, matching the shape S282 established on
+     * `getLibraryController()`: a missing container, or one that cannot build the
+     * middleware, throws at route-registration time (loud, at boot) instead of
+     * silently serving the sync surface to every authenticated user.
+     *
      * @return \Phlix\Server\Http\Controllers\Arr\SyncController The controller instance.
      */
     private function getArrSyncController(): \Phlix\Server\Http\Controllers\Arr\SyncController
     {
+        $container = $this->container
+            ?? throw new \RuntimeException('Container required for Arr\SyncController');
+
         $db = $this->createDatabaseConnection();
 
         // Load ARR/Radarr configuration
@@ -4589,16 +4610,14 @@ class Application
             $syncer->setEnabled(false);
         }
 
-        $controller = new \Phlix\Server\Http\Controllers\Arr\SyncController($syncer);
+        // NOT conditional on has(): the controller cannot exist without its gate.
+        /** @var \Phlix\Server\Http\Middleware\AdminMiddleware */
+        $adminMiddleware = $container->get(\Phlix\Server\Http\Middleware\AdminMiddleware::class);
 
-        // Wire admin middleware if available
-        if ($this->container !== null && $this->container->has(\Phlix\Server\Http\Middleware\AdminMiddleware::class)) {
-            /** @var \Phlix\Server\Http\Middleware\AdminMiddleware */
-            $adminMiddleware = $this->container->get(\Phlix\Server\Http\Middleware\AdminMiddleware::class);
-            $controller->setAdminMiddleware($adminMiddleware);
-        }
-
-        return $controller;
+        return new \Phlix\Server\Http\Controllers\Arr\SyncController(
+            $syncer,
+            $adminMiddleware
+        );
     }
 
     /**

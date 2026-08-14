@@ -5,12 +5,17 @@ declare(strict_types=1);
 namespace Phlix\Tests\Unit\Support;
 
 use Countable;
+use FilesystemIterator;
 use LogicException;
 use PHPUnit\Framework\TestCase;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
 use Phlix\Tests\Support\Http\RouterDispatchableHandlers;
+use RecursiveDirectoryIterator;
+use RecursiveIteratorIterator;
 use ReflectionMethod;
+use SplFileInfo;
+use TypeError;
 
 /**
  * S323 review round 1 — the pin under {@see RouterDispatchableHandlers}, the
@@ -51,20 +56,45 @@ final class RouterDispatchableHandlersTest extends TestCase
     use RouterDispatchableHandlers;
 
     /**
-     * Directory holding the controller admin-gate pins that MUST share this
-     * predicate.
+     * Root of the tree holding the controller admin-gate pins that MUST share
+     * this predicate. Searched RECURSIVELY — see
+     * {@see self::testEveryAdminGatePinSharesThisPredicate()} for why a flat
+     * `glob()` was not enough.
      */
     private const PIN_DIRECTORY = __DIR__ . '/../Server/Http/Controllers';
 
     /**
-     * The complete dispatchable set of {@see RouterDispatchFixtureController},
-     * hardcoded.
+     * The PSR-4 namespace {@see self::PIN_DIRECTORY} maps to. Subdirectories
+     * extend it, so a pin at `Controllers/Admin/FooPin.php` is
+     * `…\Controllers\Admin\FooPin`.
+     */
+    private const PIN_NAMESPACE = 'Phlix\\Tests\\Unit\\Server\\Http\\Controllers';
+
+    /**
+     * Filename suffix that marks a file as an admin-gate structural pin.
+     */
+    private const PIN_SUFFIX = 'AdminGateIsStructuralTest.php';
+
+    /**
+     * The complete set {@see RouterDispatchableHandlers} enumerates for
+     * {@see RouterDispatchFixtureController}, hardcoded.
      *
      * Hardcoded and compared WHOLE, not spot-checked: a per-shape assertion
      * would let a predicate that over- or under-included some OTHER method pass.
-     * Every name here is a method `Router::callHandler()` would drive; every
-     * public method of the fixture absent from this list is one PHP would refuse
-     * to call, and each of those carries a comment saying which refusal.
+     *
+     * ⚠ This is a SUPERSET of what `Router::callHandler()` would really drive,
+     * deliberately, and saying otherwise is the mistake this file was written to
+     * correct. What is true of every name here is narrower: PHP refuses none of
+     * them on the strength of the DECLARED TYPE of parameter #1 or #2, which is
+     * the only question `routerWouldDispatch()` asks. Exactly one entry —
+     * `variadicRequest` — is a measured over-inclusion the router would actually
+     * refuse; see
+     * {@see self::testTheVariadicShapeIsAKnownFailSafeOverInclusion()}, which
+     * pins that gap by CALLING it rather than describing it. Over-inclusion is
+     * the safe direction: it forces a handler to be classified.
+     *
+     * Every public method of the fixture absent from this list is one PHP would
+     * refuse to call, and each of those carries a comment saying which refusal.
      *
      * @return list<string>
      */
@@ -186,6 +216,65 @@ final class RouterDispatchableHandlersTest extends TestCase
     }
 
     /**
+     * ⚠ Review round 2, finding 1 — the ONE known over-inclusion, MEASURED
+     * rather than described.
+     *
+     * `variadicRequest(Request ...$requests)` is enumerated as dispatchable, and
+     * PHP would in fact REFUSE the router's call: a variadic's declared type
+     * governs every argument it collects, so the `array $params` the router
+     * passes SECOND lands on the `Request` type and `TypeError`s.
+     * `routerWouldDispatch()` inspects `$parameters[0]` and `$parameters[1]` and
+     * never notices that a variadic occupying slot #1 also owns slot #2.
+     *
+     * This is deliberately NOT fixed in the predicate. The direction is
+     * fail-SAFE — over-inclusion forces a CLASSIFICATION, it cannot hide an
+     * ungated handler — and no route handler in `src/` is written in this shape.
+     * What is not acceptable is a docblock claiming a closure the code does not
+     * have: that is precisely how the original six-copy defect survived. So the
+     * gap is pinned here instead. If a future change makes the predicate exact,
+     * this test fails and says which line to update.
+     */
+    public function testTheVariadicShapeIsAKnownFailSafeOverInclusion(): void
+    {
+        self::assertTrue(
+            $this->routerWouldDispatch(
+                new ReflectionMethod(RouterDispatchFixtureController::class, 'variadicRequest')
+            ),
+            'the predicate over-includes variadicRequest() today. If it no longer does, remove the '
+            . 'name from expectedDispatchableHandlers() and retire this test together.'
+        );
+
+        $controller = new RouterDispatchFixtureController();
+        $request = new Request();
+
+        // POSITIVE CONTROL — the same dynamic call style Router::callHandler()
+        // uses DOES reach a real handler's body (the fixture bodies throw), so
+        // the TypeError below is a fact about the variadic and not about the way
+        // this test invokes things.
+        $control = 'nativeRequest';
+        $reachedTheBody = false;
+
+        try {
+            $controller->$control($request, []);
+        } catch (LogicException) {
+            $reachedTheBody = true;
+        }
+
+        self::assertTrue(
+            $reachedTheBody,
+            'control: $instance->nativeRequest($request, []) must reach the fixture body — if it '
+            . 'does not, the refusal asserted below proves nothing about variadics'
+        );
+
+        // THE MEASUREMENT — PHP refuses the router's exact call.
+        $subject = 'variadicRequest';
+
+        $this->expectException(TypeError::class);
+
+        $controller->$subject($request, []);
+    }
+
+    /**
      * Non-public methods are not dispatchable, whatever their signature.
      */
     public function testNonPublicMethodsAreNotEnumerated(): void
@@ -253,6 +342,53 @@ final class RouterDispatchableHandlersTest extends TestCase
     }
 
     /**
+     * ⚠ Review round 2, finding 5 — the per-METHOD slice each pin asserts over
+     * really is stripped.
+     *
+     * The pins' positive control ("`requireAdmin()` must contain the
+     * `checkAccess()` call") and their negative null-guard regex both read this
+     * slice. If the stripping silently did nothing — which is exactly what
+     * happens when a fragment reaches `token_get_all()` without an open tag, as
+     * it all comes back as one `T_INLINE_HTML` token — the assertions would
+     * quietly revert to raw-byte behaviour and nothing would say so.
+     *
+     * Carries its own control: the RAW slice must contain the comment marker,
+     * otherwise the absence asserted afterwards proves nothing.
+     */
+    public function testMethodSourceWithoutCommentsStripsTheSlice(): void
+    {
+        $method = new ReflectionMethod(MethodSliceFixture::class, 'gated');
+
+        $file = $method->getFileName();
+        self::assertIsString($file);
+
+        $lines = file($file, FILE_IGNORE_NEW_LINES);
+        self::assertIsArray($lines);
+
+        $start = $method->getStartLine() - 1;
+        $raw = implode("\n", array_slice($lines, $start, $method->getEndLine() - $start));
+
+        // CONTROL — the raw slice carries BOTH markers, so the disappearance of
+        // one below is the stripper's doing.
+        self::assertStringContainsString('MARKER_IN_A_COMMENT', $raw);
+        self::assertStringContainsString('MARKER_IN_CODE', $raw);
+
+        $stripped = $this->methodSourceWithoutComments($method);
+
+        self::assertStringNotContainsString(
+            'MARKER_IN_A_COMMENT',
+            $stripped,
+            'the method slice must be tokenised and its comments dropped — a comment quoting the '
+            . 'gate would otherwise satisfy the pins\' positive control with the real call deleted'
+        );
+        self::assertStringContainsString(
+            'MARKER_IN_CODE',
+            $stripped,
+            'stripping must keep the CODE: without this the pins would assert over an empty slice'
+        );
+    }
+
+    /**
      * `stripComments()` must not eat the code around the comments.
      */
     public function testStrippingPreservesCode(): void
@@ -281,36 +417,93 @@ final class RouterDispatchableHandlersTest extends TestCase
     }
 
     /**
-     * ONE implementation, enforced.
+     * ONE implementation, enforced — over the WHOLE pin tree, not one directory.
      *
      * The defect this whole file addresses was born of six verbatim copies, so a
      * seventh pin that reintroduces a private copy has to fail something. Every
-     * `*AdminGateIsStructuralTest` in the controllers directory must use this
-     * trait, and the file count is asserted so a glob that matched nothing
-     * cannot read as a pass.
+     * `*AdminGateIsStructuralTest` under the controllers tree must use this
+     * trait.
+     *
+     * ⚠ Review round 2, finding 3 — this discovery WAS a flat
+     * `glob(PIN_DIRECTORY . '/*AdminGateIsStructuralTest.php')` with the class
+     * name rebuilt from a hardcoded flat namespace.
+     * `tests/Unit/Server/Http/Controllers/` already contains `Admin/`, `Dlna/`
+     * and `Stats/`, and the next likely pin subject —
+     * `src/Server/Http/Controllers/Admin/MaintenanceController.php`, which still
+     * carries the S282 fail-open shape — would naturally be pinned at
+     * `…/Controllers/Admin/`. A flat glob cannot see there: the pin would be
+     * silently unguarded, free to fork the predicate again, and the count
+     * assertion would stay GREEN while guarding less. That is the failure mode
+     * this file exists to prevent, so the walk is now recursive and the class
+     * name is derived from the PATH.
+     *
+     * Three assertions, in order, each protecting the next:
+     *
+     *  1. the walk really DESCENDS (a recursive iterator that silently stopped
+     *     at depth 0 would reproduce the very bug being fixed, and nothing else
+     *     here would notice);
+     *  2. the pin count is the asserted denominator (a walk matching nothing
+     *     would make the loop vacuous);
+     *  3. every pin found uses the trait.
      */
     public function testEveryAdminGatePinSharesThisPredicate(): void
     {
-        $files = glob(self::PIN_DIRECTORY . '/*AdminGateIsStructuralTest.php');
-        self::assertIsArray($files);
-        sort($files);
+        $root = realpath(self::PIN_DIRECTORY);
+        self::assertIsString($root, 'the pin tree must exist: ' . self::PIN_DIRECTORY);
 
-        // DENOMINATOR — a glob matching nothing would make the loop below vacuous.
+        $files = [];
+        $nested = [];
+
+        /** @var iterable<SplFileInfo> $entries */
+        $entries = new RecursiveIteratorIterator(
+            new RecursiveDirectoryIterator($root, FilesystemIterator::SKIP_DOTS)
+        );
+
+        foreach ($entries as $entry) {
+            if (!$entry->isFile() || $entry->getExtension() !== 'php') {
+                continue;
+            }
+
+            $relative = substr($entry->getPathname(), strlen($root) + 1);
+
+            if (str_contains($relative, DIRECTORY_SEPARATOR)) {
+                $nested[] = $relative;
+            }
+
+            if (str_ends_with($entry->getFilename(), self::PIN_SUFFIX)) {
+                $files[$relative] = $entry->getPathname();
+            }
+        }
+
+        ksort($files);
+
+        // (1) CONTROL — the recursion is real. Asserted against files that are
+        // NOT pins, so it stays a control even when every pin sits at the root:
+        // it measures the walker, not the population being walked.
+        self::assertNotSame(
+            [],
+            $nested,
+            'control: the walk over ' . $root . ' visited no file in any SUBDIRECTORY, so it is '
+            . 'not recursive and the pin discovery below is as blind as the glob it replaced'
+        );
+
+        // (2) DENOMINATOR — a walk matching nothing would make the loop vacuous.
         self::assertCount(
             6,
             $files,
-            'expected 6 admin-gate structural pins; found ' . count($files) . ': ['
-            . implode(', ', array_map('basename', $files)) . ']. A NEW pin is welcome — add it to '
+            'expected 6 admin-gate structural pins under ' . $root . '; found ' . count($files)
+            . ': [' . implode(', ', array_keys($files)) . ']. A NEW pin is welcome — add it to '
             . 'this count in the same change, which is the review moment.'
         );
 
         $offenders = [];
-        foreach ($files as $file) {
-            $class = 'Phlix\\Tests\\Unit\\Server\\Http\\Controllers\\' . basename($file, '.php');
+        foreach ($files as $relative => $file) {
+            $class = self::PIN_NAMESPACE . '\\'
+                . str_replace(DIRECTORY_SEPARATOR, '\\', substr($relative, 0, -strlen('.php')));
             self::assertTrue(class_exists($class), "{$class} must be autoloadable");
 
             if (!in_array(RouterDispatchableHandlers::class, class_uses($class) ?: [], true)) {
-                $offenders[] = basename($file);
+                $offenders[] = $relative;
             }
         }
 
@@ -321,6 +514,24 @@ final class RouterDispatchableHandlersTest extends TestCase
             . 'forked the predicate — the exact duplication that let two handler shapes escape all '
             . 'six pins: ' . implode(', ', $offenders)
         );
+    }
+}
+
+/**
+ * A method carrying a marker in BOTH a comment and its code, so
+ * {@see RouterDispatchableHandlersTest::testMethodSourceWithoutCommentsStripsTheSlice()}
+ * can tell a real strip from a no-op.
+ *
+ * Deliberately NOT part of {@see RouterDispatchFixtureController}: adding a
+ * public method there would move the enumerated denominator and make one
+ * fixture answer two unrelated questions.
+ */
+final class MethodSliceFixture
+{
+    public function gated(): string
+    {
+        // MARKER_IN_A_COMMENT — prose, must not survive stripping.
+        return 'MARKER_IN_CODE';
     }
 }
 
@@ -415,11 +626,6 @@ class RouterDispatchFixtureController extends RouterDispatchFixtureBase
         throw new LogicException('fixture bodies are never executed');
     }
 
-    public function variadicRequest(Request ...$requests): Response
-    {
-        throw new LogicException('fixture bodies are never executed');
-    }
-
     /** @param mixed $params */
     public function untypedSecondParameter(Request $request, $params): Response
     {
@@ -432,6 +638,27 @@ class RouterDispatchFixtureController extends RouterDispatchFixtureBase
     }
 
     public function mixedSecondParameter(Request $request, mixed $params): Response
+    {
+        throw new LogicException('fixture bodies are never executed');
+    }
+
+    // ------------------------------------- enumerated, but the router would REFUSE it
+
+    /**
+     * ⚠ The one KNOWN over-inclusion (review round 2, finding 1). It sits on
+     * this side of the fixture, not among the dispatchable shapes, because
+     * `$instance->variadicRequest($request, [])` raises a **TypeError**: a
+     * variadic's declared type governs every argument it collects, so the
+     * `array` the router passes second is checked against `Request` too.
+     *
+     * The predicate answers `true` anyway — it asks only about the declared
+     * types of parameters #1 and #2 and does not model a variadic spanning both.
+     * That is fail-SAFE (a handler in this shape is forced into classification,
+     * never hidden), it is left unmodelled on purpose, and
+     * {@see RouterDispatchableHandlersTest::testTheVariadicShapeIsAKnownFailSafeOverInclusion()}
+     * measures the gap by calling the method rather than asserting it in prose.
+     */
+    public function variadicRequest(Request ...$requests): Response
     {
         throw new LogicException('fixture bodies are never executed');
     }

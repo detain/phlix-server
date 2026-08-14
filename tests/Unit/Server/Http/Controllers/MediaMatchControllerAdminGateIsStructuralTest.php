@@ -326,7 +326,8 @@ final class MediaMatchControllerAdminGateIsStructuralTest extends TestCase
      *
      * The required parameter removes the null STATE; this removes the null CHECK,
      * so nobody can re-add `?AdminMiddleware` and find a working guard waiting for
-     * it. Asserted over the method's own source lines.
+     * it. Asserted over the method's own source lines, TOKENISED with comments
+     * removed so that prose quoting the gate cannot stand in for it.
      *
      * Carries its own positive control: the same source slice must contain the
      * `checkAccess()` call. Without it, a pattern that matched nothing — because
@@ -335,15 +336,11 @@ final class MediaMatchControllerAdminGateIsStructuralTest extends TestCase
     public function testRequireAdminHasNoNullGuardAroundTheGate(): void
     {
         $method = new ReflectionMethod(MediaMatchController::class, 'requireAdmin');
-        $file = $method->getFileName();
-        self::assertIsString($file);
-
-        $lines = file($file, FILE_IGNORE_NEW_LINES);
-        self::assertIsArray($lines);
-
-        $start = $method->getStartLine() - 1;
-        $length = $method->getEndLine() - $start;
-        $source = implode("\n", array_slice($lines, $start, $length));
+        // Review round 2, finding 5: this slice is TOKENISED and its comments
+        // dropped, exactly like the counting net further down. Read raw, an
+        // inline comment quoting the gate would satisfy the positive control
+        // below with the real call deleted — the same trap, in the same file.
+        $source = $this->methodSourceWithoutComments($method);
 
         self::assertNotSame('', trim($source), 'could not read requireAdmin() source');
 

@@ -90,6 +90,14 @@ use RuntimeException;
  *  - **The acceptance table fails SAFE, not shut.** An unrecognised builtin
  *    type (a future PHP addition) counts as ACCEPTING, so the new shape lands
  *    in the "must be classified" bucket rather than vanishing.
+ *  - **A VARIADIC spanning both slots is not modelled**, and is a measured
+ *    over-inclusion. `foo(Request ...$requests)` is enumerated, but the router's
+ *    call `TypeError`s: a variadic's declared type governs argument #2 as well,
+ *    and only `$parameters[0]` / `$parameters[1]` are interrogated below. Left
+ *    unmodelled deliberately — the direction is fail-safe and no handler in
+ *    `src/` is written this way — but stated here rather than glossed over, and
+ *    pinned by CALLING it in `RouterDispatchableHandlersTest`
+ *    (`testTheVariadicShapeIsAKnownFailSafeOverInclusion()`).
  *
  * {@see \Phlix\Tests\Unit\Support\RouterDispatchableHandlersTest} is this
  * trait's own pin: it exercises the predicate against a fixture carrying every
@@ -257,8 +265,19 @@ trait RouterDispatchableHandlers
      * the count and can mask a gate deleted from a still-listed handler — the
      * single most repeated trap in this estate, with 8 recorded instances of a
      * step's own docblock recreating the exact string a check looks for.
-     * Tokenising removes the whole class of it, and matches how the rest of
-     * these pins already reason about controller source.
+     *
+     * ⚠ This removes the COMMENT class of that trap, and only that class
+     * (review round 2, finding 2 — the earlier wording, "removes the whole class
+     * of it", overstated it). A single-quoted string literal, a heredoc or a
+     * nowdoc containing the counted literal survives tokenising and still
+     * inflates a `substr_count()` over the result — measured on a fixture
+     * carrying the literal in a string, a nowdoc, real code and a `#` comment:
+     * raw 4, stripped 3. Comments are the realistic vector here (the six pinned
+     * controllers hold exactly one occurrence each, in code, and none of them
+     * quotes the gate in a string); closing the string case as well would need
+     * token-sequence matching rather than `substr_count()`. Stated rather than
+     * assumed, because a check whose whole purpose is that prose cannot mask a
+     * deleted gate must not itself rest on prose.
      *
      * Loud rather than lenient: an unreadable file throws instead of returning
      * an empty string, because an empty string would make every count 0 — and a
@@ -273,6 +292,58 @@ trait RouterDispatchableHandlers
         }
 
         return $this->stripComments($source);
+    }
+
+    /**
+     * The source of ONE method — from its `{` line to its `}` line — with
+     * comments removed.
+     *
+     * ⚠ Review round 2, finding 5. Each pin asserts over this slice twice: a
+     * positive control (`requireAdmin()` must contain the `checkAccess()` call)
+     * and a negative regex (it must not compare the middleware against null).
+     * Both used to read RAW bytes while the sibling counting net had already
+     * moved to {@see self::sourceWithoutComments()}, which left one file
+     * disagreeing with itself about which source it trusts — and left the
+     * control satisfiable by an inline comment quoting the gate with the real
+     * call deleted. The same trap, in the same file, as the one the counting net
+     * closed. Now both run over stripped source.
+     *
+     * Slicing cannot be done on the whole stripped file: removing a docblock
+     * removes its lines, so `getStartLine()`/`getEndLine()` no longer address
+     * what they named. The slice is therefore cut from the raw file FIRST and
+     * stripped after — which is also why the `<?php` prefix is prepended below:
+     * `token_get_all()` only lexes PHP after an open tag, and without one the
+     * whole fragment comes back as a single `T_INLINE_HTML` token with nothing
+     * stripped. That failure would be SILENT (the assertions would simply revert
+     * to raw behaviour), so
+     * {@see \Phlix\Tests\Unit\Support\RouterDispatchableHandlersTest::testMethodSourceWithoutCommentsStripsTheSlice()}
+     * measures it.
+     *
+     * Loud rather than lenient, for the same reason as
+     * {@see self::sourceWithoutComments()}: an unreadable file throws instead of
+     * yielding an empty string that every `assertStringContainsString()` would
+     * fail on for the wrong reason.
+     */
+    private function methodSourceWithoutComments(ReflectionMethod $method): string
+    {
+        $file = $method->getFileName();
+
+        if ($file === false) {
+            throw new RuntimeException(
+                'cannot read the source of the internal method ' . $method->getName()
+            );
+        }
+
+        $lines = file($file, FILE_IGNORE_NEW_LINES);
+
+        if ($lines === false) {
+            throw new RuntimeException("could not read controller source: {$file}");
+        }
+
+        $start = $method->getStartLine() - 1;
+        $length = $method->getEndLine() - $start;
+
+        return $this->stripComments("<?php\n" . implode("\n", array_slice($lines, $start, $length)));
     }
 
     /**

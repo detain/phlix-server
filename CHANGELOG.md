@@ -45,13 +45,16 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   The null state is now unrepresentable on all four: `AdminMiddleware` is a **required, non-nullable,
   `readonly`** constructor parameter, `setAdminMiddleware()` is deleted, and `checkAccess()` is called
   unconditionally. Constructing one without a gate is an `ArgumentCountError` at the `new`. Every
-  wiring site loses its `if ($container->has(AdminMiddleware::class))` escape hatch (five sites: one
-  each in `Application::getWebhookAdminController()`, `getMediaMatchController()`,
-  `getArrSyncController()`, and **both** `MediaPosterController` sites —
-  `Application::getMediaPosterController()` and `WebPortalRouter`'s admin group), and the dead
-  container-less fallback in `getWebhookAdminController()` / `getArrSyncController()` is replaced by
-  a loud `?? throw` at boot. A container that cannot supply the middleware now fails at
-  route-registration time instead of yielding a working-but-ungated controller.
+  `if ($container->has(AdminMiddleware::class))` escape hatch is deleted — **four** of them, one each
+  in `Application::getWebhookAdminController()`, `getMediaMatchController()`, `getArrSyncController()`
+  and `getMediaPosterController()`. `MediaPosterController`'s second construction site,
+  `WebPortalRouter`'s admin group, never had a `has()` guard: it called `setAdminMiddleware()` inside
+  an `if ($this->userRepository !== null && $this->auditLogger !== null)` wiring guard that is
+  fail-CLOSED (without those dependencies the poster routes are not registered at all — verified by
+  exercise: 404 on every call), and that call is now a constructor argument. The dead container-less
+  fallback in `getWebhookAdminController()` / `getArrSyncController()` is replaced by a loud
+  `?? throw` at boot. A container that cannot supply the middleware now fails at route-registration
+  time instead of yielding a working-but-ungated controller.
 
   **S282's `LibraryController` pin is re-based on the population that can actually regress.** It
   counted `requireAdmin()` CALL SITES and asserted 14 — a number that only rises when a handler is
@@ -71,7 +74,10 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   "would PHP let `$instance->$method($request, $params)` reach this body?" — rather than from a list
   of type spellings, and it carries its own pin over a fixture of every shape, both escaping
   spellings included. The secondary call-site counts now run over tokenised source with comments
-  stripped, so a docblock quoting the counted literal can no longer inflate them.
+  stripped — as do the per-method source slices the null-guard checks read — so a comment quoting
+  the counted literal can no longer inflate a count or stand in for the real call. (Tokenising
+  removes the COMMENT class of that trap and only that class: a string literal or heredoc holding
+  the same text still counts. Stated rather than glossed, and no controller does it.)
 
 - **The admin gate on the two theme-media mutation endpoints is now a construction-time
   requirement, not an optional one (S323, phase 1 of 2).**

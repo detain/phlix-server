@@ -79,6 +79,31 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   removes the COMMENT class of that trap and only that class: a string literal or heredoc holding
   the same text still counts. Stated rather than glossed, and no controller does it.)
 
+  **The pins that share the predicate are discovered recursively**, so the enforcement cannot be
+  side-stepped by filing the next pin in a subdirectory. `RouterDispatchableHandlersTest` walks
+  `tests/Unit/Server/Http/Controllers/` (all depths) for `*AdminGateIsStructuralTest.php`, derives
+  each class name from its path, and asserts the pin count — 6 today, re-measured rather than
+  assumed — plus that every pin found uses the trait. The previous flat `glob()` could not see a
+  pin under `Controllers/Admin/`, which is where the next one would naturally land.
+
+  **Existing tests that pinned the fail-open in EFFECT now run through a real gate.**
+  `SyncControllerTest`, `WebhookAdminControllerTest`, `MediaMatchControllerTest`,
+  `MediaPosterControllerTest` and `WebhookTestDeliveryTest` built these controllers with no
+  middleware at all while sending an admin user id and asserting a handler outcome — so they
+  depended on the null branch without ever saying so. Each now constructs a real `AdminMiddleware`
+  admitting exactly the user id it sends (not a permissive stub), with every existing assertion
+  unchanged.
+
+  ⚠ **"S323 is complete" means its five named controllers, not that this shape is gone from the
+  tree.** One instance survives, out of S323's scope and owned by **S338**:
+  `src/Server/Http/Controllers/Admin/MaintenanceController.php` holds
+  `private readonly ?AdminMiddleware $adminGuard = null` and its `requireAdmin()` returns
+  "authorised" when that dependency is absent. Its exposure is lower — the eight `/maintenance/*`
+  routes sit inside `AdminRoutes`' `[$adminMiddleware]` group, so the in-body check is a second gate
+  rather than the only one — but that is a property of the current route registration and not of the
+  class, which is the argument this change exists to reject. Recorded here rather than left in a
+  worklog.
+
 - **The admin gate on the two theme-media mutation endpoints is now a construction-time
   requirement, not an optional one (S323, phase 1 of 2).**
   `POST /api/v1/libraries/{id}/theme-media/scan` and `DELETE /api/v1/libraries/{id}/theme-media`

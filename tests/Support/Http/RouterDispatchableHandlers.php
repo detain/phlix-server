@@ -103,7 +103,13 @@ use RuntimeException;
  * trait's own pin: it exercises the predicate against a fixture carrying every
  * shape above — both escaping spellings included — with an asserted
  * denominator, so the closure claim in this docblock is measured rather than
- * asserted in prose.
+ * asserted in prose. It also decides WHERE a pin may live: it walks
+ * `tests/Unit/Server/Http/Controllers/` recursively, so a new pin filed outside
+ * that tree is invisible to the "one implementation" assertion.
+ *
+ * The prose home for this invariant — the recipe a controller that gates itself
+ * follows, and the whole family's current state — is the phlix-docs page
+ * `docs/dev/admin-gate-invariant.md`.
  */
 trait RouterDispatchableHandlers
 {

@@ -13,6 +13,7 @@ use Phlix\Server\Http\Controllers\ThemeMediaController;
 use Phlix\Server\Http\Middleware\AdminMiddleware;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
+use Phlix\Tests\Support\Http\RouterDispatchableHandlers;
 use Phlix\Theming\ThemeMediaFinder;
 use Phlix\Theming\ThemeMediaRepository;
 use ReflectionClass;
@@ -66,6 +67,8 @@ use ReflectionProperty;
  */
 final class ThemeMediaControllerAdminGateIsStructuralTest extends TestCase
 {
+    use RouterDispatchableHandlers;
+
     /**
      * Every admin-gated handler on {@see ThemeMediaController}, as
      * `[controller method => expected status on the ADMIN arm]`.
@@ -137,53 +140,6 @@ final class ThemeMediaControllerAdminGateIsStructuralTest extends TestCase
             $libraryManager,
             new AdminMiddleware($users, $this->createMock(AuditLogger::class))
         );
-    }
-
-    /**
-     * Does `$method` take a {@see Request} — by NATIVE type OR by docblock?
-     *
-     * The docblock arm is not decoration. A method declared
-     * `public function purge($request, array $params): Response` carrying
-     * `@param Request $request` is dispatched by
-     * {@see \Phlix\Server\Http\Router::callHandler()} exactly like a natively
-     * typed one, and `phpstan analyse -c phpstan.neon.dist` (src/, level 9)
-     * reports `[OK]` on it — measured. A native-type-only match therefore left a
-     * whole ungated handler shape invisible to BOTH nets.
-     *
-     * A parameter with neither a native type nor a docblock type is the only
-     * remaining shape, and level 9 rejects that one (`missingType.parameter`),
-     * so between this method and the src/ analyser the population is closed.
-     *
-     * Deliberately over-inclusive: any `@param` whose type mentions `Request`
-     * counts. Over-inclusion only ever forces a handler to be CLASSIFIED, which
-     * is a review moment; under-inclusion is the fail-open.
-     */
-    private function declaresARequestParameter(ReflectionMethod $method): bool
-    {
-        foreach ($method->getParameters() as $parameter) {
-            $type = $parameter->getType();
-            if ($type instanceof ReflectionNamedType && $type->getName() === Request::class) {
-                return true;
-            }
-        }
-
-        $doc = $method->getDocComment();
-        if ($doc === false) {
-            return false;
-        }
-
-        $matches = [];
-        preg_match_all('/@param\s+(\S+)\s+&?\.{0,3}\$\w+/', $doc, $matches);
-        foreach ($matches[1] as $declared) {
-            foreach (explode('|', $declared) as $alternative) {
-                $segments = explode('\\', ltrim(trim($alternative), '?'));
-                if (end($segments) === 'Request') {
-                    return true;
-                }
-            }
-        }
-
-        return false;
     }
 
     /**
@@ -378,7 +334,8 @@ final class ThemeMediaControllerAdminGateIsStructuralTest extends TestCase
      *
      * The required parameter removes the null STATE; this removes the null CHECK,
      * so nobody can re-add `?AdminMiddleware` and find a working guard waiting for
-     * it.
+     * it. Asserted over each handler's own source lines, TOKENISED with comments
+     * removed so that prose quoting the gate cannot stand in for it.
      *
      * Carries its own positive control: each source slice must contain the
      * `checkAccess()` call. Without it, a pattern that matched nothing — because
@@ -389,15 +346,11 @@ final class ThemeMediaControllerAdminGateIsStructuralTest extends TestCase
     public function testGatedHandlerHasNoNullGuardAroundTheGate(string $handler): void
     {
         $method = new ReflectionMethod(ThemeMediaController::class, $handler);
-        $file = $method->getFileName();
-        self::assertIsString($file);
-
-        $lines = file($file, FILE_IGNORE_NEW_LINES);
-        self::assertIsArray($lines);
-
-        $start = $method->getStartLine() - 1;
-        $length = $method->getEndLine() - $start;
-        $source = implode("\n", array_slice($lines, $start, $length));
+        // Review round 2, finding 5: this slice is TOKENISED and its comments
+        // dropped, exactly like the counting net further down. Read raw, an
+        // inline comment quoting the gate would satisfy the positive control
+        // below with the real call deleted — the same trap, in the same file.
+        $source = $this->methodSourceWithoutComments($method);
 
         self::assertNotSame('', trim($source), "could not read {$handler}() source");
 
@@ -562,17 +515,26 @@ final class ThemeMediaControllerAdminGateIsStructuralTest extends TestCase
      * enumeration is derived from the subject; both lists are hardcoded, so this
      * cannot self-adjust to a regression.
      *
-     * ## What "takes a Request" and "public method" mean here, and why
+     * ## What counts as a request handler, and why
      *
-     *  - **Statics are included.** `Router::callHandler()` does
-     *    `$instance->$method($request, $params)`, and PHP dispatches that to a
-     *    `public static` method without complaint. Excluding statics bought
-     *    nothing (there are none on this controller) and left an ungated static
-     *    handler invisible — measured.
-     *  - **A docblock-declared `Request` counts**, not just a native type; see
-     *    {@see self::declaresARequestParameter()}. An untyped parameter with an
-     *    `@param Request` docblock passes PHPStan level 9 on src/, so the
-     *    analyser does not close that hole either.
+     * The population is DERIVED FROM THE DISPATCHER, not from a list of type
+     * spellings: {@see RouterDispatchableHandlers::routerWouldDispatch()} asks, of
+     * every public method, whether PHP would let the one call
+     * `Router::callHandler()` makes — `$instance->$method($request, $params)` —
+     * reach its body. Statics count (PHP dispatches that to a `public static`
+     * method without complaint), inherited methods count, and a first parameter
+     * typed `mixed`, `object`, `Request|Response`, `?Request` or not at all counts,
+     * because every one of those accepts the `Request` the router passes.
+     *
+     * ⚠ The helper this replaced matched only a native type spelled `Request` or an
+     * `@param` mentioning `Request`, and claimed in its own docblock that "the
+     * population is closed". It was NOT: `mixed $request` and
+     * `Request|Response $request` were each measured slipping through all six
+     * copies of it AND through `phpstan analyse -c phpstan.neon.dist` (src/,
+     * level 9). Read the trait's docblock for what is and is not closed now. Do not
+     * re-derive the rule here and do not copy a private helper back into this file
+     * — one implementation, pinned by
+     * {@see \Phlix\Tests\Unit\Support\RouterDispatchableHandlersTest}.
      *
      * ⚠ Carries a POSITIVE CONTROL / explicit DENOMINATOR: reflection that
      * returned an empty (or truncated) handler list would make the classification
@@ -589,25 +551,7 @@ final class ThemeMediaControllerAdminGateIsStructuralTest extends TestCase
     {
         $class = new ReflectionClass(ThemeMediaController::class);
 
-        $handlers = [];
-        foreach ($class->getMethods(ReflectionMethod::IS_PUBLIC) as $method) {
-            // Statics are NOT skipped: `$instance->$method($request, $params)` in
-            // Router::callHandler() dispatches to a `public static` method without
-            // error, so an ungated static handler is every bit as reachable as an
-            // instance one. Skipping them bought nothing (this controller has none)
-            // and opened a bypass — measured: an ungated `public static` handler
-            // left this test green.
-            if ($method->isConstructor()) {
-                continue;
-            }
-            if ($method->getDeclaringClass()->getName() !== ThemeMediaController::class) {
-                continue;
-            }
-            if ($this->declaresARequestParameter($method)) {
-                $handlers[] = $method->getName();
-            }
-        }
-        sort($handlers);
+        $handlers = $this->dispatchableRequestHandlers(ThemeMediaController::class);
 
         // POSITIVE CONTROL / DENOMINATOR — an empty or short list would make the
         // classification assertion below pass while measuring nothing.
@@ -661,10 +605,15 @@ final class ThemeMediaControllerAdminGateIsStructuralTest extends TestCase
 
         // Secondary net: one gate per gated handler, counted over the source.
         // Catches a gate deleted from a still-listed handler.
+        //
+        // Counted over TOKENISED source with T_COMMENT/T_DOC_COMMENT removed, not
+        // over raw bytes: a docblock quoting the literal would otherwise inflate
+        // the count and mask exactly the deletion this net exists to catch. That
+        // trap — a step's own comment recreating the string a check counts — has 8
+        // recorded instances in this estate.
         $file = $class->getFileName();
         self::assertIsString($file);
-        $source = file_get_contents($file);
-        self::assertIsString($source);
+        $source = $this->sourceWithoutComments($file);
 
         $callSites = substr_count($source, '$this->adminMiddleware->checkAccess($request)');
 

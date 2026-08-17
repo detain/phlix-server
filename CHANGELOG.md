@@ -9,6 +9,101 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Security
 
+- **The admin gate on four more controllers is now a construction-time requirement, not an optional
+  one (S323, phase 2 of 2 — S323 is complete).** `WebhookAdminController`, `MediaMatchController`,
+  `MediaPosterController` and the TRaSH-Guides `Arr\SyncController` each held their `AdminMiddleware`
+  in a **nullable property filled by an optional `setAdminMiddleware()` setter**, with
+  `requireAdmin()` wrapping its decision in `if ($this->adminMiddleware !== null)` — the identical
+  shape phase 1 removed from `ThemeMediaController`. A controller built without the setter returned
+  "authorised" from `requireAdmin()` **without any admin decision having been taken**, across twelve
+  endpoints:
+
+  | Verb | Path | Controller |
+  |------|------|------------|
+  | GET    | `/api/v1/admin/webhooks`            | `WebhookAdminController` |
+  | POST   | `/api/v1/admin/webhooks`            | `WebhookAdminController` |
+  | PUT    | `/api/v1/admin/webhooks/{id}`       | `WebhookAdminController` |
+  | DELETE | `/api/v1/admin/webhooks/{id}`       | `WebhookAdminController` |
+  | POST   | `/api/v1/admin/webhooks/{id}/test`  | `WebhookAdminController` |
+  | GET    | `/api/v1/media/{id}/match/search`   | `MediaMatchController` |
+  | POST   | `/api/v1/media/{id}/match/apply`    | `MediaMatchController` |
+  | GET    | `/api/v1/media/{id}/posters`        | `MediaPosterController` |
+  | PUT    | `/api/v1/media/{id}/poster`         | `MediaPosterController` |
+  | POST   | `/api/v1/admin/sync/trash-guides`   | `Arr\SyncController` |
+  | GET    | `/api/v1/admin/sync/status`         | `Arr\SyncController` |
+  | PUT    | `/api/v1/admin/sync/enable`         | `Arr\SyncController` |
+
+  **The severity here is LOWER than phase 1's, and the difference is stated rather than implied.**
+  All four refuse an unauthenticated caller BEFORE consulting the middleware (`requireAuth()`, or the
+  equivalent empty-`$request->userId` check), so the missing decision would have degraded these
+  routes to **any authenticated user** — never, as in phase 1, to an anonymous one. As in phase 1 it
+  was **latent and no exploitation is claimed**: every production wiring site called the setter. The
+  change removes the possibility structurally rather than closing an observed bypass, because "the
+  wiring calls the setter" is a property of today's wiring and not of the class, and PHP-DI's
+  `autowire()` skips optional parameters.
+
+  The null state is now unrepresentable on all four: `AdminMiddleware` is a **required, non-nullable,
+  `readonly`** constructor parameter, `setAdminMiddleware()` is deleted, and `checkAccess()` is called
+  unconditionally. Constructing one without a gate is an `ArgumentCountError` at the `new`. Every
+  `if ($container->has(AdminMiddleware::class))` escape hatch is deleted — **four** of them, one each
+  in `Application::getWebhookAdminController()`, `getMediaMatchController()`, `getArrSyncController()`
+  and `getMediaPosterController()`. `MediaPosterController`'s second construction site,
+  `WebPortalRouter`'s admin group, never had a `has()` guard: it called `setAdminMiddleware()` inside
+  an `if ($this->userRepository !== null && $this->auditLogger !== null)` wiring guard that is
+  fail-CLOSED (without those dependencies the poster routes are not registered at all — verified by
+  exercise: 404 on every call), and that call is now a constructor argument. The dead container-less
+  fallback in `getWebhookAdminController()` / `getArrSyncController()` is replaced by a loud
+  `?? throw` at boot. A container that cannot supply the middleware now fails at route-registration
+  time instead of yielding a working-but-ungated controller.
+
+  **S282's `LibraryController` pin is re-based on the population that can actually regress.** It
+  counted `requireAdmin()` CALL SITES and asserted 14 — a number that only rises when a handler is
+  added WITH a gate, so it was structurally blind to a fifteenth handler added WITHOUT one. It now
+  enumerates every handler the router can dispatch and requires each to be listed as either
+  admin-gated or explicitly exempt; the call-site count survives as a secondary net, so nothing it
+  caught was traded away.
+
+  **The enumeration itself had a hole, found in review and closed in ONE place.** The
+  "does this method take a `Request`" helper was six verbatim private copies matching a native type
+  spelled `Request` or an `@param` mentioning `Request` — and asserting in its own docblock that the
+  population was closed. It was not: `public function purge(mixed $request, array $params)` and
+  `public function purge(Request|Response $request, array $params)` were each measured passing all
+  six pins **and** `phpstan analyse -c phpstan.neon.dist` (src/, level 9), while being fully
+  dispatchable. The predicate is now a single shared trait
+  (`tests/Support/Http/RouterDispatchableHandlers.php`) that derives the answer from the dispatcher —
+  "would PHP let `$instance->$method($request, $params)` reach this body?" — rather than from a list
+  of type spellings, and it carries its own pin over a fixture of every shape, both escaping
+  spellings included. The secondary call-site counts now run over tokenised source with comments
+  stripped — as do the per-method source slices the null-guard checks read — so a comment quoting
+  the counted literal can no longer inflate a count or stand in for the real call. (Tokenising
+  removes the COMMENT class of that trap and only that class: a string literal or heredoc holding
+  the same text still counts. Stated rather than glossed, and no controller does it.)
+
+  **The pins that share the predicate are discovered recursively**, so the enforcement cannot be
+  side-stepped by filing the next pin in a subdirectory. `RouterDispatchableHandlersTest` walks
+  `tests/Unit/Server/Http/Controllers/` (all depths) for `*AdminGateIsStructuralTest.php`, derives
+  each class name from its path, and asserts the pin count — 6 today, re-measured rather than
+  assumed — plus that every pin found uses the trait. The previous flat `glob()` could not see a
+  pin under `Controllers/Admin/`, which is where the next one would naturally land.
+
+  **Existing tests that pinned the fail-open in EFFECT now run through a real gate.**
+  `SyncControllerTest`, `WebhookAdminControllerTest`, `MediaMatchControllerTest`,
+  `MediaPosterControllerTest` and `WebhookTestDeliveryTest` built these controllers with no
+  middleware at all while sending an admin user id and asserting a handler outcome — so they
+  depended on the null branch without ever saying so. Each now constructs a real `AdminMiddleware`
+  admitting exactly the user id it sends (not a permissive stub), with every existing assertion
+  unchanged.
+
+  ⚠ **"S323 is complete" means its five named controllers, not that this shape is gone from the
+  tree.** One instance survives, out of S323's scope and owned by **S338**:
+  `src/Server/Http/Controllers/Admin/MaintenanceController.php` holds
+  `private readonly ?AdminMiddleware $adminGuard = null` and its `requireAdmin()` returns
+  "authorised" when that dependency is absent. Its exposure is lower — the eight `/maintenance/*`
+  routes sit inside `AdminRoutes`' `[$adminMiddleware]` group, so the in-body check is a second gate
+  rather than the only one — but that is a property of the current route registration and not of the
+  class, which is the argument this change exists to reject. Recorded here rather than left in a
+  worklog.
+
 - **The admin gate on the two theme-media mutation endpoints is now a construction-time
   requirement, not an optional one (S323, phase 1 of 2).**
   `POST /api/v1/libraries/{id}/theme-media/scan` and `DELETE /api/v1/libraries/{id}/theme-media`
@@ -66,13 +161,13 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   reaches the handler body) on both mutations, with the admin arm acting as the succeeding
   control so a blanket-deny regression cannot read as a pass.
 
-  **This is phase 1 of 2 — S323 is not complete.** The identical optional-`setAdminMiddleware()`
-  shape is still present on `WebhookAdminController`, `MediaMatchController`,
-  `MediaPosterController` and `Arr\SyncController`; they are untouched here and are scheduled for
-  phase 2. Their exposure depends on each one's own route wiring and was **not** assessed in this
-  phase, so nothing about their severity is claimed either way. (Phase 2 also carries S282's pin,
-  which still enumerates `requireAdmin()` call sites rather than handlers and so has the
-  new-ungated-handler blind spot this phase closed here.)
+  **This was phase 1 of 2, and it is superseded — read the phase-2 entry above for the current
+  state.** When this shipped, the identical optional-`setAdminMiddleware()` shape was still present
+  on `WebhookAdminController`, `MediaMatchController`, `MediaPosterController` and
+  `Arr\SyncController`, and S282's `LibraryController` pin still enumerated `requireAdmin()` call
+  sites rather than handlers. Both statements are now **historical**: phase 2 removed the shape from
+  all four controllers, assessed their exposure (auth-only degradation, not anonymous), and re-based
+  S282's pin on the wider enumeration. S323 is complete.
 
 ### Added
 

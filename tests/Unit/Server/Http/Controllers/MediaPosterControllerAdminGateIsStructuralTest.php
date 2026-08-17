@@ -8,9 +8,9 @@ use ArgumentCountError;
 use PHPUnit\Framework\TestCase;
 use Phlix\Auth\UserRepository;
 use Phlix\Common\Logger\AuditLogger;
-use Phlix\Media\Library\LibraryManager;
-use Phlix\Media\Library\ScanJobRepository;
-use Phlix\Server\Http\Controllers\LibraryController;
+use Phlix\Media\Library\ItemRepository;
+use Phlix\Media\Metadata\TmdbProvider;
+use Phlix\Server\Http\Controllers\MediaPosterController;
 use Phlix\Server\Http\Middleware\AdminMiddleware;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
@@ -21,82 +21,72 @@ use ReflectionNamedType;
 use ReflectionProperty;
 
 /**
- * S282 — the {@see AdminMiddleware} dependency of {@see LibraryController} is
- * STRUCTURALLY required, and every admin-gated handler is behind it.
+ * S323 phase 2 — the {@see AdminMiddleware} dependency of
+ * {@see MediaPosterController} is STRUCTURALLY required, and both handlers are
+ * behind it.
  *
  * ## The defect this file exists to make impossible
  *
- * `LibraryController` used to hold `private ?AdminMiddleware $adminMiddleware = null;`
- * filled by an OPTIONAL `setAdminMiddleware()` setter, and `requireAdmin()` wrapped
- * its decision in `if ($this->adminMiddleware !== null)`. A controller built without
- * the setter therefore returned "authorised" from `requireAdmin()` **without any
- * admin decision having been taken** — a fail-OPEN that downgraded fourteen
- * admin-only handlers, including `delete-all`, to auth-only.
+ * `MediaPosterController` used to hold
+ * `private ?AdminMiddleware $adminMiddleware = null;` filled by an OPTIONAL
+ * `setAdminMiddleware()` setter, and `requireAdmin()` wrapped its decision in
+ * `if ($this->adminMiddleware !== null)`. A controller built without the setter
+ * therefore returned "authorised" from `requireAdmin()` **without any admin
+ * decision having been taken**, leaving `GET /api/v1/media/{id}/posters` (which
+ * spends the server's TMDB quota and persists the fetched image block) and
+ * `PUT /api/v1/media/{id}/poster` (which rewrites `metadata.poster_url`)
+ * reachable by any logged-in user.
  *
- * Production always called the setter, so the hole was latent. That is a property
- * of the wiring, not of the class, and the wiring is exactly the thing a future
- * change can get wrong: PHP-DI's `autowire()` SKIPS optional parameters, and this
- * estate has already shipped silently-null dependencies that way.
+ * `requireAdmin()` checks `$request->userId` first, so — unlike S323 phase 1's
+ * `ThemeMediaController` — the hole never reached an ANONYMOUS caller. Production
+ * always called the setter, so it was latent; that is a property of the wiring,
+ * not of the class, and the wiring is exactly the thing a future change can get
+ * wrong: PHP-DI's `autowire()` SKIPS optional parameters, and this estate has
+ * already shipped silently-null dependencies that way.
+ *
+ * ⚠ This controller has TWO construction sites —
+ * {@see \Phlix\Server\Core\Application::getMediaPosterController()} for the
+ * Workerman daemon and {@see \Phlix\Server\WebPortal\WebPortalRouter} for the CGI
+ * dispatch path. Both now pass the gate as a constructor argument; a required
+ * parameter cannot be satisfied by a path that still uses a setter, so they can
+ * only move together.
  *
  * ## Two independent nets, because either alone can be defeated
  *
  *  1. **Structural** — reflection over the constructor, the property and the
- *     method list. This is what catches the three ways the optional shape can
- *     come back: a nullable property, a defaulted/omitted constructor parameter,
- *     or a re-introduced setter. A behavioural test alone would NOT catch a
- *     re-added setter, because a setter changes nothing until someone calls it.
- *  2. **Behavioural** — all fourteen admin-gated handlers driven three ways
- *     (anonymous / authenticated non-admin / admin). The 403 arm is the
- *     experiment; the admin arm is the succeeding control beside it, so a
- *     blanket-deny regression cannot read as a pass. A structural test alone
- *     would not catch `requireAdmin()` being changed to ignore the (still
- *     required) middleware.
- *
- * ## S323 phase 2 — the drift detector was re-based on a WIDER enumeration
- *
- * As shipped, {@see self::testEveryRequireAdminCallSiteIsListed()} counted
- * `requireAdmin()` CALL SITES in the controller source and asserted the count was
- * 14. That population is the WRONG one: it only rises when a handler is added
- * WITH a gate, and only falls when an existing gate is removed, so it is
- * structurally blind to a FIFTEENTH handler added WITHOUT one — which is exactly
- * the regression class this file exists to prevent. S323 phase 1 measured that
- * blindness on the sibling controller: appending an ungated
- * `Request`-taking handler left the whole pin green.
- *
- * It is now {@see self::testEveryRequestHandlerIsGatedOrExplicitlyExempt()},
- * enumerating every public (including `static` and inherited) method that
- * `Router::callHandler()` would actually dispatch — see
- * {@see RouterDispatchableHandlers} — and requiring each
- * to appear in exactly one of two HARDCODED lists:
- * {@see self::adminGatedHandlerProvider()} or
- * {@see self::UNGATED_REQUEST_HANDLERS}. The call-site count survives as a
- * SECONDARY net (it still catches a gate deleted from a still-listed handler).
- * Nothing the old assertion detected was traded away.
+ *     method list, plus a source-level check that `requireAdmin()` does not
+ *     compare the middleware against null. A behavioural test alone would NOT
+ *     catch a re-added setter, because a setter changes nothing until someone
+ *     calls it — measured in S282's M2 mutation and reproduced in phase 1.
+ *  2. **Behavioural** — both handlers driven three ways (anonymous /
+ *     authenticated non-admin / admin). The 403 arm is the experiment; the admin
+ *     arm is the succeeding control beside it, so a blanket-deny regression cannot
+ *     read as a pass. A structural test alone would not catch `requireAdmin()`
+ *     being changed to ignore the (still required) middleware.
  *
  * NB: this file carries NO coverage-metadata annotation, deliberately. Per this
  * repo's policy (S141, enforced by CoverageMetadataPolicyTest) such a marker in
  * `tests/` silently DISCARDS every other file the test executes. The policy check
  * matches the token itself, so it must not be spelled out even in prose.
  */
-final class LibraryControllerAdminGateIsStructuralTest extends TestCase
+final class MediaPosterControllerAdminGateIsStructuralTest extends TestCase
 {
     use RouterDispatchableHandlers;
 
     /**
-     * Every admin-gated handler on {@see LibraryController}, as
+     * Every admin-gated handler on {@see MediaPosterController}, as
      * `[controller method => expected status on the ADMIN arm]`.
      *
      * The admin-arm status is a BODY-ONLY outcome, never one the gate can emit:
-     * thirteen of the handlers look their library up first and the fixture makes
-     * `getLibrary()` return null, so they answer 404; `create()` does not read a
-     * library and answers 400 for an empty body. The gate emits only 401 and 403,
-     * so an admin arm that shows the expected status proves the request reached
-     * the handler body rather than being waved through OR refused.
+     * both handlers look the item up first and the fixture makes `findById()`
+     * return null, so they answer 404. The gate emits only 401 and 403, so an admin
+     * arm that shows 404 proves the request reached the handler body rather than
+     * being waved through OR refused.
      *
      * Hardcoded on purpose — a derived list would self-adjust to whatever the
      * controller happens to do.
      * {@see self::testEveryRequestHandlerIsGatedOrExplicitlyExempt()} is the drift
-     * detector that fails when the controller grows a fifteenth handler — gated OR
+     * detector that fails when the controller grows a third handler — gated OR
      * ungated.
      *
      * @return array<string, array{0: string, 1: int}>
@@ -104,48 +94,34 @@ final class LibraryControllerAdminGateIsStructuralTest extends TestCase
     public static function adminGatedHandlerProvider(): array
     {
         return [
-            'POST   /api/v1/libraries'                        => ['create', 400],
-            'PUT    /api/v1/libraries/{id}'                   => ['update', 404],
-            'DELETE /api/v1/libraries/{id}'                   => ['delete', 404],
-            'POST   /api/v1/libraries/{id}/scan'              => ['scan', 404],
-            'POST   /api/v1/libraries/{id}/rescan'            => ['rescan', 404],
-            'POST   /api/v1/libraries/{id}/match-metadata'    => ['matchMetadata', 404],
-            'POST   /api/v1/libraries/{id}/refresh-metadata'  => ['refreshMetadata', 404],
-            'POST   /api/v1/libraries/{id}/prune'             => ['prune', 404],
-            'POST   /api/v1/libraries/{id}/clear-metadata'    => ['clearMetadata', 404],
-            'POST   /api/v1/libraries/{id}/clear-artwork'     => ['clearArtwork', 404],
-            'POST   /api/v1/libraries/{id}/delete-all'        => ['deleteAll', 404],
-            'POST   /api/v1/libraries/{id}/regenerate-assets' => ['regenerateAssets', 404],
-            'GET    /api/v1/libraries/{id}/scan-status'       => ['scanStatus', 404],
-            'GET    /api/v1/libraries/{id}/scan-history'      => ['scanHistory', 404],
+            'GET /api/v1/media/{id}/posters' => ['listPosters', 404],
+            'PUT /api/v1/media/{id}/poster'  => ['setPoster', 404],
         ];
     }
 
     /**
      * The public request handlers that are deliberately NOT admin-gated.
      *
-     * Exactly two, and both are READS: `index()` (list libraries) and `show()`
-     * (one library). Neither writes on any path — both call `requireAuth()` and
-     * then only `LibraryManager::getAllLibraries()` / `getLibrary()` plus an
-     * optional `ItemRepository::countByType()`. They are AUTH-gated, not
-     * ADMIN-gated, and {@see self::testTheReadHandlersAreAuthOnlyNotAdminOnly()}
-     * pins that intended reachability in both directions: an anonymous caller is
-     * refused, an authenticated NON-admin is admitted.
+     * EMPTY: both endpoints on this controller are operator surfaces (the listing
+     * spends the server's TMDB quota and persists what it fetches, the setter
+     * rewrites `metadata.poster_url`). An empty exempt list makes the
+     * classification assertion STRICTER — every handler must be in the gated
+     * provider — never laxer, so it is not the "empty allow-list fails open" shape.
      *
      * ⚠ Adding a name here is how you declare "this handler needs no admin gate".
      * It is a deliberate, reviewable security decision and must come with a
-     * behavioural test that pins the intended reachability — never a way to
-     * silence {@see self::testEveryRequestHandlerIsGatedOrExplicitlyExempt()}.
+     * behavioural test that pins the intended reachability — never a way to silence
+     * {@see self::testEveryRequestHandlerIsGatedOrExplicitlyExempt()}.
      *
      * @var list<string>
      */
-    private const UNGATED_REQUEST_HANDLERS = ['index', 'show'];
+    private const UNGATED_REQUEST_HANDLERS = [];
 
     /**
-     * Build a controller whose gate treats exactly `admin-1` as an admin and
-     * whose `getLibrary()` resolves to nothing (see the provider docblock).
+     * Build a controller whose gate treats exactly `admin-1` as an admin and whose
+     * `findById()` resolves to nothing (see the provider docblock).
      */
-    private function makeController(): LibraryController
+    private function makeController(): MediaPosterController
     {
         $users = $this->createMock(UserRepository::class);
         $users->method('findAdminById')->willReturnCallback(
@@ -154,15 +130,18 @@ final class LibraryControllerAdminGateIsStructuralTest extends TestCase
                 : null
         );
 
-        $libraryManager = $this->createMock(LibraryManager::class);
-        $libraryManager->method('getLibrary')->willReturn(null);
+        $items = $this->createMock(ItemRepository::class);
+        $items->method('findById')->willReturn(null);
+        // No refused or admitted request may ever reach a write.
+        $items->expects(self::never())->method('update');
 
-        $scanJobs = $this->createMock(ScanJobRepository::class);
-        $scanJobs->expects(self::never())->method('enqueue');
+        // Nor may one reach TMDB.
+        $tmdb = $this->createMock(TmdbProvider::class);
+        $tmdb->expects(self::never())->method('getImages');
 
-        return new LibraryController(
-            $libraryManager,
-            $scanJobs,
+        return new MediaPosterController(
+            $items,
+            $tmdb,
             new AdminMiddleware($users, $this->createMock(AuditLogger::class))
         );
     }
@@ -190,8 +169,8 @@ final class LibraryControllerAdminGateIsStructuralTest extends TestCase
      */
     public function testAdminMiddlewareIsARequiredConstructorParameter(): void
     {
-        $ctor = (new ReflectionClass(LibraryController::class))->getConstructor();
-        self::assertNotNull($ctor, 'LibraryController must declare a constructor');
+        $ctor = (new ReflectionClass(MediaPosterController::class))->getConstructor();
+        self::assertNotNull($ctor, 'MediaPosterController must declare a constructor');
 
         $match = null;
         foreach ($ctor->getParameters() as $parameter) {
@@ -204,8 +183,8 @@ final class LibraryControllerAdminGateIsStructuralTest extends TestCase
 
         self::assertNotNull(
             $match,
-            'LibraryController::__construct() must take an AdminMiddleware. Setter injection '
-            . 'is what made the S282 fail-open possible; do not go back to it.'
+            'MediaPosterController::__construct() must take an AdminMiddleware. Setter injection '
+            . 'is what made the S323 fail-open possible; do not go back to it.'
         );
         self::assertFalse(
             $match->isOptional(),
@@ -230,23 +209,23 @@ final class LibraryControllerAdminGateIsStructuralTest extends TestCase
      */
     public function testAdminMiddlewarePropertyIsNonNullableAndHasNoDefault(): void
     {
-        $property = new ReflectionProperty(LibraryController::class, 'adminMiddleware');
+        $property = new ReflectionProperty(MediaPosterController::class, 'adminMiddleware');
 
         $type = $property->getType();
         self::assertInstanceOf(
             ReflectionNamedType::class,
             $type,
-            'LibraryController::$adminMiddleware must carry a declared type'
+            'MediaPosterController::$adminMiddleware must carry a declared type'
         );
         self::assertSame(AdminMiddleware::class, $type->getName());
         self::assertFalse(
             $type->allowsNull(),
-            'LibraryController::$adminMiddleware must NOT be nullable — `?AdminMiddleware` is '
-            . 'the exact shape S282 removed'
+            'MediaPosterController::$adminMiddleware must NOT be nullable — `?AdminMiddleware` is '
+            . 'the exact shape S323 removed'
         );
         self::assertFalse(
             $property->hasDefaultValue(),
-            'LibraryController::$adminMiddleware must have no default value'
+            'MediaPosterController::$adminMiddleware must have no default value'
         );
     }
 
@@ -255,14 +234,18 @@ final class LibraryControllerAdminGateIsStructuralTest extends TestCase
      *
      * Checked by SHAPE, not by name alone: any public method taking an
      * AdminMiddleware is a re-opened door, whatever it is called.
+     *
+     * This is the assertion no behavioural test can replace — S282's M2 mutation
+     * re-added the setter and the entire behavioural suite stayed green, because a
+     * setter changes nothing until someone calls it.
      */
     public function testControllerExposesNoAdminMiddlewareSetter(): void
     {
-        $class = new ReflectionClass(LibraryController::class);
+        $class = new ReflectionClass(MediaPosterController::class);
 
         self::assertFalse(
             $class->hasMethod('setAdminMiddleware'),
-            'setAdminMiddleware() must not exist — the middleware is constructor-injected (S282)'
+            'setAdminMiddleware() must not exist — the middleware is constructor-injected (S323)'
         );
 
         $offenders = [];
@@ -289,41 +272,39 @@ final class LibraryControllerAdminGateIsStructuralTest extends TestCase
     /**
      * Constructing without the gate must be impossible, not merely unusual.
      *
-     * This is the "seen to work" arm: the two-argument construction that 75 tests
-     * and one production fallback used to make now dies before the object exists.
-     *
      * ## Why this goes through reflection rather than writing `new`
      *
-     * A literal `new LibraryController($a, $b)` is a STATIC arity error, so
-     * `phpstan analyse -c phpstan-tests.neon` (tests/, level 2) rejects the file
-     * outright with `arguments.count` — and that config forbids inline ignore
-     * comments, baselines, `assert()`, inline type overrides and casts, all for
-     * good reasons. (Nor can this docblock spell the ignore annotation out: the
+     * A literal `new MediaPosterController($items, $tmdb)` is a STATIC arity
+     * error, so `phpstan analyse -c phpstan-tests.neon` (tests/, level 2) rejects
+     * the file outright with `arguments.count` — and that config forbids inline
+     * ignore comments, baselines, `assert()`, inline type overrides and casts, all
+     * for good reasons. (Nor can this docblock spell the ignore annotation out: the
      * analyser parses the token wherever it appears, including in prose, and
-     * answers with `ignore.parseError`.) Suppressing was not an option and
-     * neither was deleting the case, so the call is made in a way the arity
-     * checker cannot see while the RUNTIME behaviour is identical:
-     * `ReflectionClass::newInstanceArgs()` builds the argument list at run time
-     * and PHP raises the same `ArgumentCountError` from the same place.
+     * answers with `ignore.parseError`.) Suppressing was not an option and neither
+     * was deleting the case, so the call is made in a way the arity checker cannot
+     * see while the RUNTIME behaviour is identical:
+     * `ReflectionClass::newInstanceArgs()` builds the argument list at run time and
+     * PHP raises the same `ArgumentCountError` from the same place. This is the
+     * shape S282 arrived at after PR #675 went red on exactly this.
      *
      * ⚠ Reflection is what makes this test worth reading twice, so it carries its
-     * own POSITIVE CONTROL: the same reflective construction, given the gate,
-     * must succeed. Without that arm an `ArgumentCountError` below could equally
-     * be reflection failing for some unrelated reason, and the test would pass
-     * while proving nothing.
+     * own POSITIVE CONTROL: the same reflective construction, given the gate, must
+     * succeed. Without that arm an `ArgumentCountError` below could equally be
+     * reflection failing for some unrelated reason, and the test would pass while
+     * proving nothing.
      */
     public function testConstructingWithoutTheAdminMiddlewareIsAFatalError(): void
     {
-        $libraryManager = $this->createMock(LibraryManager::class);
-        $scanJobs = $this->createMock(ScanJobRepository::class);
-        $class = new ReflectionClass(LibraryController::class);
+        $items = $this->createMock(ItemRepository::class);
+        $tmdb = $this->createMock(TmdbProvider::class);
+        $class = new ReflectionClass(MediaPosterController::class);
 
         // POSITIVE CONTROL — three arguments, i.e. WITH the gate, must construct.
         $controlError = null;
         try {
             $class->newInstanceArgs([
-                $libraryManager,
-                $scanJobs,
+                $items,
+                $tmdb,
                 new AdminMiddleware(
                     $this->createMock(UserRepository::class),
                     $this->createMock(AuditLogger::class)
@@ -343,7 +324,7 @@ final class LibraryControllerAdminGateIsStructuralTest extends TestCase
         $this->expectException(ArgumentCountError::class);
         $this->expectExceptionMessage('Too few arguments');
 
-        $class->newInstanceArgs([$libraryManager, $scanJobs]);
+        $class->newInstanceArgs([$items, $tmdb]);
     }
 
     /**
@@ -360,7 +341,7 @@ final class LibraryControllerAdminGateIsStructuralTest extends TestCase
      */
     public function testRequireAdminHasNoNullGuardAroundTheGate(): void
     {
-        $method = new ReflectionMethod(LibraryController::class, 'requireAdmin');
+        $method = new ReflectionMethod(MediaPosterController::class, 'requireAdmin');
         // Review round 2, finding 5: this slice is TOKENISED and its comments
         // dropped, exactly like the counting net further down. Read raw, an
         // inline comment quoting the gate would satisfy the positive control
@@ -381,25 +362,26 @@ final class LibraryControllerAdminGateIsStructuralTest extends TestCase
             '/adminMiddleware\s*(!==|===|!=|==)\s*null|null\s*(!==|===|!=|==)\s*\$this->adminMiddleware/',
             $source,
             'requireAdmin() must not compare $this->adminMiddleware against null — that guard IS '
-            . 'the S282 fail-open'
+            . 'the S323 fail-open'
         );
     }
 
     // -----------------------------------------------------------------------
-    // Net 2 — behavioural, over all fourteen handlers
+    // Net 2 — behavioural, over both handlers
     // -----------------------------------------------------------------------
 
     /**
      * Arm 1 of 3 — anonymous. Expected 401 `auth.required`.
      *
-     * The floor of the control, and on its own worth little: a plain auth check
-     * emits the same 401.
+     * The floor of the control, and on its own worth little: `requireAdmin()`'s own
+     * userId check emits the same 401 with no middleware at all. Arm 2 is the
+     * experiment.
      *
      * @dataProvider adminGatedHandlerProvider
      */
     public function testAnonymousCallerIsRefused(string $method): void
     {
-        $response = $this->makeController()->{$method}(new Request(), ['id' => 'lib-1']);
+        $response = $this->makeController()->{$method}(new Request(), ['id' => 'm1']);
 
         self::assertSame(401, $response->statusCode, "{$method}() must 401 an anonymous caller");
         self::assertSame('auth.required', $this->decode($response)['code'] ?? null);
@@ -408,9 +390,10 @@ final class LibraryControllerAdminGateIsStructuralTest extends TestCase
     /**
      * Arm 2 of 3 — AUTHENTICATED NON-ADMIN. Expected 403 `auth.not_admin`.
      *
-     * This is the experiment. Before S282 an unwired controller answered this
-     * request with the handler's own success/404 response; the distinct
-     * `auth.not_admin` code proves the ADMIN branch decided it, not the auth branch.
+     * This is the experiment. Before S323 an unwired controller answered this
+     * request with the handler's own 404/200 response; the distinct
+     * `auth.not_admin` code proves the ADMIN branch decided it, not the auth
+     * branch.
      *
      * @dataProvider adminGatedHandlerProvider
      */
@@ -418,9 +401,9 @@ final class LibraryControllerAdminGateIsStructuralTest extends TestCase
     {
         $request = new Request();
         $request->userId = 'user-1'; // only 'admin-1' is an admin
-        $request->body = ['confirm' => true, 'name' => 'X', 'type' => 'movie', 'paths' => ['/x']];
+        $request->body = ['poster_url' => 'https://image.tmdb.org/t/p/w500/p.jpg'];
 
-        $response = $this->makeController()->{$method}($request, ['id' => 'lib-1']);
+        $response = $this->makeController()->{$method}($request, ['id' => 'm1']);
 
         self::assertSame(
             403,
@@ -437,9 +420,9 @@ final class LibraryControllerAdminGateIsStructuralTest extends TestCase
 
     /**
      * Arm 3 of 3 — authenticated ADMIN. Expected the handler's own body-only
-     * outcome (404 library-missing, or 400 for `create()`'s empty body).
+     * outcome (404, because the fixture's item does not exist).
      *
-     * The succeeding control beside the refusal: without it a gate that denied
+     * The succeeding control beside the refusals: without it a gate that denied
      * every request would pass arms 1 and 2 and look correct.
      *
      * @dataProvider adminGatedHandlerProvider
@@ -448,8 +431,9 @@ final class LibraryControllerAdminGateIsStructuralTest extends TestCase
     {
         $request = new Request();
         $request->userId = 'admin-1';
+        $request->body = ['poster_url' => 'https://image.tmdb.org/t/p/w500/p.jpg'];
 
-        $response = $this->makeController()->{$method}($request, ['id' => 'lib-1']);
+        $response = $this->makeController()->{$method}($request, ['id' => 'm1']);
 
         self::assertSame(
             $expected,
@@ -464,71 +448,18 @@ final class LibraryControllerAdminGateIsStructuralTest extends TestCase
     }
 
     /**
-     * The two READS stay AUTH-only, and stay so for a REASON that is asserted.
-     *
-     * `index()` and `show()` are the entries in
-     * {@see self::UNGATED_REQUEST_HANDLERS}, and an exempt list without a
-     * behavioural pin is just a way to silence the drift detector. Both directions
-     * are asserted here:
-     *
-     *  - an ANONYMOUS caller is still refused (401 `auth.required`) — they are
-     *    exempt from the ADMIN gate, not from authentication; and
-     *  - an authenticated NON-ADMIN is ADMITTED (the handler's own 200/404) —
-     *    which is also the negative control for the three arms above: it proves
-     *    their 403s come from the admin gate on the fourteen mutations and not
-     *    from something global.
-     *
-     * A future "make everything admin-only" sweep therefore has to be a deliberate
-     * edit to this file rather than a silent behaviour change.
-     */
-    public function testTheReadHandlersAreAuthOnlyNotAdminOnly(): void
-    {
-        $expectedForNonAdmin = ['index' => 200, 'show' => 404]; // 404 = library missing
-
-        foreach (self::UNGATED_REQUEST_HANDLERS as $handler) {
-            $anonymous = $this->makeController()->{$handler}(new Request(), ['id' => 'lib-1']);
-            self::assertSame(
-                401,
-                $anonymous->statusCode,
-                "{$handler}() is exempt from the ADMIN gate, not from authentication"
-            );
-
-            $request = new Request();
-            $request->userId = 'user-1'; // only 'admin-1' is an admin
-            $response = $this->makeController()->{$handler}($request, ['id' => 'lib-1']);
-
-            self::assertSame(
-                $expectedForNonAdmin[$handler],
-                $response->statusCode,
-                "{$handler}() must stay readable by an authenticated NON-admin — if this ever "
-                . 'becomes a 403 the change was intentional and belongs in this file, not in a '
-                . 'passing suite'
-            );
-            self::assertNotSame(
-                'auth.not_admin',
-                $this->decode($response)['code'] ?? null,
-                "{$handler}() must not refuse a non-admin on the admin branch"
-            );
-        }
-    }
-
-    /**
      * Drift detector: EVERY public request handler on the controller must be
      * classified — either admin-gated (in {@see self::adminGatedHandlerProvider()})
      * or deliberately exempt (in {@see self::UNGATED_REQUEST_HANDLERS}).
      *
      * ## Why the enumeration is over handlers and not over `requireAdmin()` calls
      *
-     * The first version of this test counted `requireAdmin()` call sites in the
-     * controller source and asserted the count was 14. That population is the
-     * WRONG one: it only rises when a handler is added WITH a gate and only falls
-     * when an existing gate is removed, so it is structurally blind to a fifteenth
-     * handler added WITHOUT one — which is precisely the regression class S282 and
-     * S323 exist to prevent. Measured in S323 phase 1 on the sibling controller:
-     * appending an ungated `Request`-taking handler left the whole file green; the
-     * same handler WITH a gate reddened it. A detector that cannot see the defect
-     * it is named for reads as a pass. This controller made it worse than the
-     * sibling did — the blind population here is ~16 methods, not 3.
+     * S282's pin counted `requireAdmin()` call sites in the controller source and
+     * asserted the count. That population is the WRONG one: it only rises when a
+     * handler is added WITH a gate and only falls when an existing gate is removed,
+     * so it is structurally blind to a third handler added WITHOUT one — which is
+     * precisely the regression class S323 exists to prevent. Measured in phase 1:
+     * appending an ungated handler to the controller left the whole file green.
      *
      * The enumeration is therefore over the population that OUGHT to be gated:
      * every public method declared on the controller that takes a {@see Request}. A
@@ -560,7 +491,7 @@ final class LibraryControllerAdminGateIsStructuralTest extends TestCase
      *
      * ⚠ Carries a POSITIVE CONTROL / explicit DENOMINATOR: reflection that returned
      * an empty (or truncated) handler list would make the classification assertion
-     * below vacuously true, so the count is ASSERTED against a hardcoded 16 and the
+     * below vacuously true, so the count is ASSERTED against a hardcoded 2 and the
      * enumerated names are carried in that assertion's failure message. It is
      * asserted rather than echoed on purpose — `phpunit.xml` sets
      * `beStrictAboutOutputDuringTests="true"` with `failOnRisky="true"`, so a test
@@ -570,16 +501,16 @@ final class LibraryControllerAdminGateIsStructuralTest extends TestCase
      */
     public function testEveryRequestHandlerIsGatedOrExplicitlyExempt(): void
     {
-        $class = new ReflectionClass(LibraryController::class);
+        $class = new ReflectionClass(MediaPosterController::class);
 
-        $handlers = $this->dispatchableRequestHandlers(LibraryController::class);
+        $handlers = $this->dispatchableRequestHandlers(MediaPosterController::class);
 
         // POSITIVE CONTROL / DENOMINATOR — an empty or short list would make the
         // classification assertion below pass while measuring nothing.
         self::assertCount(
-            16,
+            2,
             $handlers,
-            'expected 16 public Request-taking handlers on LibraryController; reflection '
+            'expected 2 public Request-taking handlers on MediaPosterController; reflection '
             . 'enumerated ' . count($handlers) . ': [' . implode(', ', $handlers) . ']. If the '
             . 'controller really did gain or lose a handler, update adminGatedHandlerProvider() '
             . 'or UNGATED_REQUEST_HANDLERS and this count together.'
@@ -603,7 +534,7 @@ final class LibraryControllerAdminGateIsStructuralTest extends TestCase
         self::assertSame(
             $classified,
             $handlers,
-            'every public Request-taking method of LibraryController must be listed either in '
+            'every public Request-taking method of MediaPosterController must be listed either in '
             . 'adminGatedHandlerProvider() (admin-gated) or in UNGATED_REQUEST_HANDLERS '
             . '(deliberately not gated). Unclassified: ['
             . implode(', ', array_values(array_diff($handlers, $classified)))
@@ -612,20 +543,19 @@ final class LibraryControllerAdminGateIsStructuralTest extends TestCase
             . ']; listed in BOTH lists, which is never right — a handler is gated or exempt, not '
             . 'both: ['
             . implode(', ', array_values(array_intersect($gated, self::UNGATED_REQUEST_HANDLERS)))
-            . ']. A NEW UNGATED handler lands in the first bucket — that is the S282 fail-open '
+            . ']. A NEW UNGATED handler lands in the first bucket — that is the S323 fail-open '
             . 'coming back.'
         );
 
         foreach (self::adminGatedHandlerProvider() as $route => [$method]) {
             self::assertTrue(
-                method_exists(LibraryController::class, $method),
-                "{$route} maps to LibraryController::{$method}(), which must exist"
+                method_exists(MediaPosterController::class, $method),
+                "{$route} maps to MediaPosterController::{$method}(), which must exist"
             );
         }
 
-        // Secondary net, kept from the original detector: one requireAdmin() call
-        // per gated handler, counted over the source. Catches a gate deleted from a
-        // still-listed handler.
+        // Secondary net: one requireAdmin() call per gated handler, counted over
+        // the source. Catches a gate deleted from a still-listed handler.
         //
         // Counted over TOKENISED source with T_COMMENT/T_DOC_COMMENT removed, not
         // over raw bytes: a docblock quoting the literal would otherwise inflate
@@ -641,7 +571,7 @@ final class LibraryControllerAdminGateIsStructuralTest extends TestCase
         self::assertSame(
             count($gated),
             $callSites,
-            'LibraryController has ' . $callSites . ' requireAdmin() call sites but '
+            'MediaPosterController has ' . $callSites . ' requireAdmin() call sites but '
             . count($gated) . ' DISTINCT handlers are listed as admin-gated.'
         );
     }

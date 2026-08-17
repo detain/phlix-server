@@ -3781,8 +3781,19 @@ class Application
      *
      * Always resolved through the DI container in production so the
      * LibraryMetadataMatcher (and its admin-keyed TmdbProvider + resolvers) is
-     * autowired; the admin middleware is wired when available so both endpoints
-     * are admin-gated exactly like the whole-library match endpoint.
+     * autowired; the admin middleware is a REQUIRED constructor dependency so both
+     * endpoints are admin-gated exactly like the whole-library match endpoint.
+     *
+     * ## S323 — the admin gate is now a construction-time requirement
+     *
+     * The middleware used to be wired behind
+     * `if ($container->has(AdminMiddleware::class))`, so a container that could not
+     * supply it still yielded a working — but ungated — controller whose
+     * `apply()` overwrites an item's metadata subtree. The guard was live but
+     * always true; it is now removed, matching the shape S282 established on
+     * `getLibraryController()`: a container that cannot build the middleware throws
+     * at route-registration time (loud, at boot) instead of silently degrading the
+     * gate.
      *
      * @return \Phlix\Server\Http\Controllers\MediaMatchController The controller instance.
      */
@@ -3795,19 +3806,33 @@ class Application
         $itemRepository = $container->get(\Phlix\Media\Library\ItemRepository::class);
         /** @var \Phlix\Media\Metadata\LibraryMetadataMatcher */
         $matcher = $container->get(\Phlix\Media\Metadata\LibraryMetadataMatcher::class);
-        $controller = new \Phlix\Server\Http\Controllers\MediaMatchController($itemRepository, $matcher);
+        // NOT conditional on has(): the controller cannot exist without its gate.
+        /** @var \Phlix\Server\Http\Middleware\AdminMiddleware */
+        $adminMiddleware = $container->get(\Phlix\Server\Http\Middleware\AdminMiddleware::class);
 
-        if ($container->has(\Phlix\Server\Http\Middleware\AdminMiddleware::class)) {
-            /** @var \Phlix\Server\Http\Middleware\AdminMiddleware */
-            $adminMiddleware = $container->get(\Phlix\Server\Http\Middleware\AdminMiddleware::class);
-            $controller->setAdminMiddleware($adminMiddleware);
-        }
-
-        return $controller;
+        return new \Phlix\Server\Http\Controllers\MediaMatchController(
+            $itemRepository,
+            $matcher,
+            $adminMiddleware
+        );
     }
 
     /**
      * Returns a MediaPosterController instance (Step 15.1/15.2).
+     *
+     * ## S323 — the admin gate is now a construction-time requirement
+     *
+     * The middleware used to be wired behind
+     * `if ($container->has(AdminMiddleware::class))`, so a container that could not
+     * supply it still yielded a working — but ungated — controller whose
+     * `setPoster()` rewrites `metadata.poster_url`. The guard was live but always
+     * true; it is now removed, matching the shape S282 established on
+     * `getLibraryController()`.
+     *
+     * ⚠ This is one of TWO construction sites for this controller. The other is
+     * {@see \Phlix\Server\WebPortal\WebPortalRouter::registerRoutes()}, which
+     * hand-builds it for the CGI dispatch path. Both pass the gate as a required
+     * constructor argument; neither may go back to a setter.
      *
      * @return \Phlix\Server\Http\Controllers\MediaPosterController The controller instance.
      */
@@ -3828,15 +3853,15 @@ class Application
         /** @var \Phlix\Media\Metadata\TmdbProvider */
         $tmdb = $container->get(\Phlix\Media\Metadata\TmdbProvider::class);
 
-        $controller = new \Phlix\Server\Http\Controllers\MediaPosterController($itemRepository, $tmdb);
+        // NOT conditional on has(): the controller cannot exist without its gate.
+        /** @var \Phlix\Server\Http\Middleware\AdminMiddleware */
+        $adminMiddleware = $container->get(\Phlix\Server\Http\Middleware\AdminMiddleware::class);
 
-        if ($container->has(\Phlix\Server\Http\Middleware\AdminMiddleware::class)) {
-            /** @var \Phlix\Server\Http\Middleware\AdminMiddleware */
-            $adminMiddleware = $container->get(\Phlix\Server\Http\Middleware\AdminMiddleware::class);
-            $controller->setAdminMiddleware($adminMiddleware);
-        }
-
-        return $controller;
+        return new \Phlix\Server\Http\Controllers\MediaPosterController(
+            $itemRepository,
+            $tmdb,
+            $adminMiddleware
+        );
     }
 
     /**
@@ -4457,31 +4482,71 @@ class Application
     /**
      * Returns a WebhookAdminController instance.
      *
+     * ## S323 — the admin gate is now a construction-time requirement
+     *
+     * This factory used to wire the middleware behind
+     * `if ($this->container !== null && $this->container->has(AdminMiddleware::class))`,
+     * i.e. TWO escape hatches in one condition, either of which produced a
+     * controller whose five handlers failed OPEN to any logged-in user:
+     *
+     *  1. a null-container branch — dead, because `$this->container` is assigned
+     *     exactly once, in the constructor, from a NON-nullable
+     *     `ContainerInterface` parameter, and nothing else ever writes it; and
+     *  2. a `has(AdminMiddleware::class)` guard — live, but always true.
+     *
+     * Both are now removed, matching the shape S282 established on
+     * `getLibraryController()` and S323 phase 1 on `getThemeMediaController()`: a
+     * missing container, or one that cannot build the middleware, throws at
+     * route-registration time (loud, at boot) instead of silently serving the
+     * webhook admin surface to every authenticated user.
+     *
      * @return \Phlix\Server\Http\Controllers\Webhooks\WebhookAdminController The controller instance.
      */
     private function getWebhookAdminController(): \Phlix\Server\Http\Controllers\Webhooks\WebhookAdminController
     {
+        $container = $this->container
+            ?? throw new \RuntimeException('Container required for WebhookAdminController');
+
         $db = $this->createDatabaseConnection();
         $dispatcher = new \Phlix\Webhooks\WebhookDispatcher($db);
-        $controller = new \Phlix\Server\Http\Controllers\Webhooks\WebhookAdminController($dispatcher);
+        // NOT conditional on has(): the controller cannot exist without its gate.
+        /** @var \Phlix\Server\Http\Middleware\AdminMiddleware */
+        $adminMiddleware = $container->get(\Phlix\Server\Http\Middleware\AdminMiddleware::class);
 
-        // Wire admin middleware if available
-        if ($this->container !== null && $this->container->has(\Phlix\Server\Http\Middleware\AdminMiddleware::class)) {
-            /** @var \Phlix\Server\Http\Middleware\AdminMiddleware */
-            $adminMiddleware = $this->container->get(\Phlix\Server\Http\Middleware\AdminMiddleware::class);
-            $controller->setAdminMiddleware($adminMiddleware);
-        }
-
-        return $controller;
+        return new \Phlix\Server\Http\Controllers\Webhooks\WebhookAdminController(
+            $dispatcher,
+            $adminMiddleware
+        );
     }
 
     /**
      * Returns an Arr\SyncController instance.
      *
+     * ## S323 — the admin gate is now a construction-time requirement
+     *
+     * The middleware used to be wired behind
+     * `if ($this->container !== null && $this->container->has(AdminMiddleware::class))`,
+     * i.e. TWO escape hatches in one condition, either of which produced a
+     * controller whose three `/api/v1/admin/sync/*` handlers failed OPEN to any
+     * logged-in user:
+     *
+     *  1. a null-container branch — dead, because `$this->container` is assigned
+     *     exactly once, in the constructor, from a NON-nullable
+     *     `ContainerInterface` parameter, and nothing else ever writes it; and
+     *  2. a `has(AdminMiddleware::class)` guard — live, but always true.
+     *
+     * Both are now removed, matching the shape S282 established on
+     * `getLibraryController()`: a missing container, or one that cannot build the
+     * middleware, throws at route-registration time (loud, at boot) instead of
+     * silently serving the sync surface to every authenticated user.
+     *
      * @return \Phlix\Server\Http\Controllers\Arr\SyncController The controller instance.
      */
     private function getArrSyncController(): \Phlix\Server\Http\Controllers\Arr\SyncController
     {
+        $container = $this->container
+            ?? throw new \RuntimeException('Container required for Arr\SyncController');
+
         $db = $this->createDatabaseConnection();
 
         // Load ARR/Radarr configuration
@@ -4545,16 +4610,14 @@ class Application
             $syncer->setEnabled(false);
         }
 
-        $controller = new \Phlix\Server\Http\Controllers\Arr\SyncController($syncer);
+        // NOT conditional on has(): the controller cannot exist without its gate.
+        /** @var \Phlix\Server\Http\Middleware\AdminMiddleware */
+        $adminMiddleware = $container->get(\Phlix\Server\Http\Middleware\AdminMiddleware::class);
 
-        // Wire admin middleware if available
-        if ($this->container !== null && $this->container->has(\Phlix\Server\Http\Middleware\AdminMiddleware::class)) {
-            /** @var \Phlix\Server\Http\Middleware\AdminMiddleware */
-            $adminMiddleware = $this->container->get(\Phlix\Server\Http\Middleware\AdminMiddleware::class);
-            $controller->setAdminMiddleware($adminMiddleware);
-        }
-
-        return $controller;
+        return new \Phlix\Server\Http\Controllers\Arr\SyncController(
+            $syncer,
+            $adminMiddleware
+        );
     }
 
     /**

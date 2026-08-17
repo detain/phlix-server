@@ -429,11 +429,18 @@ class WebPortalRouter
                     $r->delete('/api/v1/media/{id}', [$this, 'deleteMediaItem']);
 
                     // Candidate poster listing (Step 15.1) and poster selection (Step 15.2).
+                    //
+                    // S323: the gate is a REQUIRED constructor argument, not a
+                    // setter. This is one of TWO construction sites for this
+                    // controller — the other is
+                    // {@see \Phlix\Server\Core\Application::getMediaPosterController()}
+                    // — and they must move together: a required parameter cannot
+                    // be satisfied by a construction path that still uses a setter.
                     $posterController = new MediaPosterController(
                         $this->itemRepository,
                         new TmdbProvider($this->tmdbApiKey()),
+                        $adminMiddleware,
                     );
-                    $posterController->setAdminMiddleware($adminMiddleware);
                     $r->get('/api/v1/media/{id}/posters', [$posterController, 'listPosters']);
                     $r->put('/api/v1/media/{id}/poster', [$posterController, 'setPoster']);
                 },

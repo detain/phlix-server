@@ -4,8 +4,11 @@ declare(strict_types=1);
 
 namespace Phlix\Tests\Unit\Server\Http\Controllers\Arr;
 
+use Phlix\Auth\UserRepository;
+use Phlix\Common\Logger\AuditLogger;
 use Phlix\Server\Arr\CustomFormatSyncer;
 use Phlix\Server\Http\Controllers\Arr\SyncController;
+use Phlix\Server\Http\Middleware\AdminMiddleware;
 use Phlix\Server\Http\Request;
 use Phlix\Shared\Arr\SyncResult;
 use DateTimeImmutable;
@@ -15,6 +18,20 @@ use PHPUnit\Framework\TestCase;
  * Tests for SyncController.
  *
  * Covers all three controller actions: triggerSync, getSyncStatus, setEnabled.
+ *
+ * ## S323 — every case here now runs THROUGH the admin gate
+ *
+ * Before S323 the controller was built with no middleware at all, so
+ * `requireAdmin()` waved every authenticated request through on its
+ * `if ($this->adminMiddleware !== null)` branch. Each case below already sent
+ * `userId = 'admin-1'` and asserted a handler outcome, which meant they pinned
+ * that fail-open in EFFECT while their names and docblocks only ever described
+ * the handler. The gate is now a required constructor dependency and the fixture
+ * below admits exactly `admin-1`, so every assertion in this file is unchanged
+ * but is now reached by a request an admin decision actually admitted.
+ *
+ * The gate's own three arms (anonymous / non-admin / admin) live in
+ * {@see \Phlix\Tests\Unit\Server\Http\Controllers\SyncControllerAdminGateIsStructuralTest}.
  */
 final class SyncControllerTest extends TestCase
 {
@@ -24,7 +41,21 @@ final class SyncControllerTest extends TestCase
     protected function setUp(): void
     {
         $this->syncer = new FakeCustomFormatSyncer();
-        $this->controller = new SyncController($this->syncer);
+
+        // A REAL gate that admits exactly `admin-1` — the user id every case
+        // below sends. Not a permissive stub: a request from anyone else is
+        // refused here exactly as it would be in production.
+        $users = $this->createMock(UserRepository::class);
+        $users->method('findAdminById')->willReturnCallback(
+            static fn (string $id): ?array => $id === 'admin-1'
+                ? ['id' => $id, 'is_admin' => 1, 'status' => 'active']
+                : null
+        );
+
+        $this->controller = new SyncController(
+            $this->syncer,
+            new AdminMiddleware($users, $this->createMock(AuditLogger::class))
+        );
     }
 
     /**

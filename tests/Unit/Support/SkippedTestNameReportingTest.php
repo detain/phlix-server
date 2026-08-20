@@ -1054,6 +1054,171 @@ final class SkippedTestNameReportingTest extends TestCase
         self::assertStringContainsString('displayDetailsOnSkippedTests', $result['stderr']);
     }
 
+    /**
+     * The README's headline recipe is a PIPE (`./vendor/bin/phpunit 2>&1 | scripts/...`), and
+     * every other test here hands the script a FILE argument instead. That left the stdin path
+     * — the only form the documentation tells anyone to use — with no test at all: changing the
+     * `${1:--}` default so that stdin is never read left all 29 tests green (measured).
+     */
+    public function test_the_documented_stdin_pipeline_yields_the_same_set_as_a_file_argument(): void
+    {
+        $output = $this->runRealPhpunit([self::REAL_TEST_FILE]);
+        $this->assertTheFixtureStillSkipsExactlyOneTest($output);
+
+        $log = $this->fixtureFile('pipe.log', $output);
+
+        $viaArgument = $this->runScript($log);
+        $viaStdin = $this->runScriptPipedFrom($log);
+
+        self::assertSame(0, $viaStdin['exit'], 'the documented pipe form must work: ' . $viaStdin['stderr']);
+        self::assertSame([self::REAL_SKIPPED_NAME], $viaStdin['lines'], $viaStdin['stderr']);
+        self::assertSame(
+            $viaArgument['lines'],
+            $viaStdin['lines'],
+            'the pipe and the file argument must produce the SAME set, or the documented recipe '
+            . 'and the tested one are two different tools',
+        );
+    }
+
+    /**
+     * `--help` must be answered without reading stdin and without writing to stdout: the
+     * documented form has no argument, so a regression that treats `--help` as a FILENAME
+     * would either wait on an inherited terminal or emit usage text into the name set, where
+     * `comm` cannot tell prose from a skipped test.
+     */
+    public function test_the_help_flags_are_answered_on_stderr_and_never_pollute_the_set(): void
+    {
+        foreach (['-h', '--help'] as $flag) {
+            $result = $this->runScriptWithArgv([$flag]);
+
+            self::assertSame(0, $result['exit'], $flag . ' must exit 0: ' . $result['stderr']);
+            self::assertSame('', $result['stdout'], $flag . ': usage text on stdout would be read as a NAME');
+            self::assertStringContainsString('usage: skipped-test-names.sh', $result['stderr'], $flag);
+            self::assertStringContainsString(
+                '0/2/3/4/5/6',
+                $result['stderr'],
+                $flag . ': the usage must point at the exit contract, which is the only place the '
+                . 'refusal codes are documented',
+            );
+        }
+    }
+
+    /**
+     * A FILE argument that cannot be opened has its own exit-2 message, and it must not be
+     * reported as "this is not PHPUnit output": that cause sends the reader to re-run PHPUnit
+     * when the log was never opened at all. Deleting the guard keeps exit 2 and swaps in the
+     * wrong cause, and all 29 earlier tests stayed green under exactly that mutation.
+     */
+    public function test_a_file_argument_that_cannot_be_read_is_named_rather_than_called_junk(): void
+    {
+        $missing = $this->tmpDir . '/never-written.log';
+        self::assertFileDoesNotExist($missing);
+
+        $result = $this->runScriptWithArgv([$missing]);
+
+        self::assertSame(2, $result['exit'], $result['stderr']);
+        self::assertSame('', $result['stdout'], 'nothing may be written to the set from an unreadable input');
+        self::assertStringContainsString('cannot read', $result['stderr']);
+        self::assertStringContainsString(
+            $missing,
+            $result['stderr'],
+            'the refusal must name the path it could not read',
+        );
+        self::assertStringNotContainsString(
+            'no PHPUnit result summary',
+            $result['stderr'],
+            'an unopenable path is not "the wrong kind of input" — naming that cause sends the '
+            . 'reader to check the command that produced the log instead of the path',
+        );
+    }
+
+    /**
+     * The denominators on stderr are the whole defence against a parser that matched NOTHING
+     * reading as a pass, and nothing asserted that they are printed: replacing that `printf`
+     * with `true` left all 29 earlier tests green (measured). Asserted on the POPULATED and on
+     * the EMPTY set, because the empty one is the case a reader has to be able to audit.
+     */
+    public function test_the_denominators_are_printed_for_a_populated_and_for_an_empty_set(): void
+    {
+        $populated = $this->runScript($this->fixtureFile('denominators.log'));
+
+        self::assertSame(0, $populated['exit'], $populated['stderr']);
+        self::assertCount(4, $populated['lines'], $populated['stderr']);
+        self::assertStringContainsString('4 skipped test(s) in the run summaries', $populated['stderr']);
+        self::assertStringContainsString('4 declared by the detail lists', $populated['stderr']);
+        self::assertStringContainsString(
+            count($populated['lines']) . ' name(s) extracted',
+            $populated['stderr'],
+            'the number of names emitted must be printed beside the number PHPUnit declared, or '
+            . 'a set short by one cannot be spotted at all',
+        );
+
+        $empty = $this->runScript($this->fixtureFile(
+            'nothing.log',
+            "PHPUnit 10.5.64\n\nOK (9 tests, 12 assertions)\n",
+        ));
+
+        self::assertSame(0, $empty['exit'], $empty['stderr']);
+        self::assertSame([], $empty['lines']);
+        self::assertStringContainsString(
+            '0 name(s) extracted',
+            $empty['stderr'],
+            'an empty set must still publish its denominators, or it is indistinguishable from a '
+            . 'parser that matched nothing',
+        );
+        self::assertStringContainsString(
+            '1 PHPUnit result summary line(s) seen',
+            $empty['stderr'],
+            'the positive control must be printed with the empty set, not only used internally',
+        );
+    }
+
+    /**
+     * The falsifiability control for the whole step, which nothing else here supplies: does
+     * the attribute actually CAUSE the naming? Every other real-binary test runs WITH it, so
+     * all of them would still pass if PHPUnit named skipped tests by default and the attribute
+     * were decoration — a correct guard on a config that guards nothing. Measured against a
+     * generated config that differs from its own control by that one attribute and nothing
+     * else, with the real binary on both sides.
+     */
+    public function test_the_config_attribute_is_what_makes_the_real_binary_name_a_skip(): void
+    {
+        $with = $this->runRealPhpunitWithConfig($this->writeProbeConfig(true), [self::REAL_TEST_FILE]);
+        $without = $this->runRealPhpunitWithConfig($this->writeProbeConfig(false), [self::REAL_TEST_FILE]);
+
+        // Both runs skip the same single test and both publish the same COUNT, so a count
+        // comparison cannot tell them apart. That is the whole reason names were needed.
+        self::assertStringContainsString('Skipped: 1', $with, 'premise: the control run skips exactly one test');
+        self::assertStringContainsString(
+            'Skipped: 1',
+            $without,
+            'premise: dropping the attribute must change only the NAMES, not the count — if the '
+            . 'count moved too, this pair is measuring something else',
+        );
+
+        self::assertStringContainsString(
+            'skipped test:',
+            $with,
+            'premise: with the attribute the real binary prints the skipped-details list',
+        );
+        self::assertStringNotContainsString(
+            'skipped test:',
+            $without,
+            'PHPUnit named the skipped test WITHOUT displayDetailsOnSkippedTests, so the attribute '
+            . 'this step installs is decoration and the guard on it guards nothing. Re-derive the '
+            . 'mechanism before trusting anything else in this file.',
+        );
+
+        $named = $this->runScript($this->fixtureFile('attribute-on.log', $with));
+        self::assertSame(0, $named['exit'], $named['stderr']);
+        self::assertSame([self::REAL_SKIPPED_NAME], $named['lines'], $named['stderr']);
+
+        $lost = $this->runScript($this->fixtureFile('attribute-off.log', $without));
+        self::assertSame(4, $lost['exit'], $lost['stderr']);
+        self::assertSame([], $lost['lines'], 'no set may be written when the names were never printed');
+        self::assertStringContainsString('displayDetailsOnSkippedTests', $lost['stderr']);
+    }
+
     // ---------------------------------------------------------------------------------
     // helpers
     // ---------------------------------------------------------------------------------
@@ -1411,6 +1576,128 @@ final class SkippedTestNameReportingTest extends TestCase
             'stdout' => $stdout,
             // Deliberately NOT filtered: a blank line is a set member for `comm`, so it must
             // be able to fail an assertion rather than be dropped on the way in.
+            'lines' => $stdout === '' ? [] : explode("\n", rtrim($stdout, "\n")),
+            'stderr' => (string) file_get_contents($stderrFile),
+        ];
+    }
+
+    /**
+     * A config that differs from the repo's only in whether it asks for skipped-test NAMES, so
+     * a difference measured with it is that attribute and nothing else. Written into the
+     * fixture directory with ABSOLUTE paths and `cacheResult="false"`, so no cwd is involved
+     * and no artefact is left in the repo or in the fixture directory.
+     */
+    private function writeProbeConfig(bool $displaySkipped): string
+    {
+        $root = realpath(self::REPO);
+        self::assertIsString($root);
+
+        $attribute = $displaySkipped ? ' displayDetailsOnSkippedTests="true"' : '';
+        $path = $this->tmpDir . '/probe-config-' . ($displaySkipped ? 'on' : 'off') . '.xml';
+
+        file_put_contents($path, <<<XML
+            <?xml version="1.0" encoding="UTF-8"?>
+            <phpunit bootstrap="{$root}/tests/bootstrap.php" cacheResult="false" colors="false"{$attribute}>
+              <testsuites>
+                <testsuite name="S345Probe">
+                  <directory suffix="Test.php">{$root}/tests/Unit/Admin</directory>
+                </testsuite>
+              </testsuites>
+            </phpunit>
+            XML);
+
+        return $path;
+    }
+
+    /**
+     * `runRealPhpunit()` with a config chosen by the caller. Kept separate rather than folded
+     * into it, so the existing expectations keep running against the REPO's phpunit.xml.
+     *
+     * @param list<string> $args
+     */
+    private function runRealPhpunitWithConfig(string $config, array $args): string
+    {
+        $root = realpath(self::REPO);
+        self::assertIsString($root);
+        self::assertFileExists($root . '/vendor/bin/phpunit');
+
+        $command = 'cd ' . escapeshellarg($root) . ' && '
+            . escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg($root . '/vendor/bin/phpunit')
+            . ' -c ' . escapeshellarg($config)
+            . ' --no-coverage --colors=never';
+
+        foreach ($args as $argument) {
+            $command .= ' ' . escapeshellarg($argument);
+        }
+
+        $out = $this->tmpDir . '/phpunit-config-run.txt';
+        exec($command . ' > ' . escapeshellarg($out) . ' 2>&1');
+
+        $output = (string) file_get_contents($out);
+        @unlink($out);
+
+        self::assertStringContainsString(
+            'PHPUnit 10.5',
+            $output,
+            "the real phpunit binary produced no recognisable output with " . $config
+            . ", so nothing measured from it means anything:\n" . $output,
+        );
+
+        return $output;
+    }
+
+    /**
+     * The script with an explicit argv and stdin closed off, for the argument handling
+     * `runScript()` cannot reach (`--help`, and a path that will not open). stdin is
+     * redirected from `/dev/null` on purpose: a regression that falls through to reading it
+     * then FAILS here instead of hanging the suite on an inherited terminal.
+     *
+     * @param list<string> $argv
+     *
+     * @return array{exit: int, stdout: string, lines: list<string>, stderr: string}
+     */
+    private function runScriptWithArgv(array $argv): array
+    {
+        $command = escapeshellarg(self::SCRIPT);
+
+        foreach ($argv as $argument) {
+            $command .= ' ' . escapeshellarg($argument);
+        }
+
+        return $this->captureScript($command . ' < /dev/null');
+    }
+
+    /**
+     * The DOCUMENTED form: `<a run's output> | scripts/skipped-test-names.sh`, no argument.
+     *
+     * @return array{exit: int, stdout: string, lines: list<string>, stderr: string}
+     */
+    private function runScriptPipedFrom(string $file): array
+    {
+        return $this->captureScript('cat ' . escapeshellarg($file) . ' | ' . escapeshellarg(self::SCRIPT));
+    }
+
+    /**
+     * @return array{exit: int, stdout: string, lines: list<string>, stderr: string}
+     */
+    private function captureScript(string $command): array
+    {
+        $stdoutFile = $this->tmpDir . '/argv-stdout.txt';
+        $stderrFile = $this->tmpDir . '/argv-stderr.txt';
+
+        $exit = 0;
+        exec(
+            $command . ' > ' . escapeshellarg($stdoutFile) . ' 2> ' . escapeshellarg($stderrFile),
+            $ignored,
+            $exit,
+        );
+
+        $stdout = (string) file_get_contents($stdoutFile);
+
+        return [
+            'exit' => $exit,
+            'stdout' => $stdout,
+            // Not filtered, for the same reason as `runScript()`: a blank line is a set member.
             'lines' => $stdout === '' ? [] : explode("\n", rtrim($stdout, "\n")),
             'stderr' => (string) file_get_contents($stderrFile),
         ];

@@ -663,11 +663,24 @@ denominators on stderr, and **fails loudly** rather than printing an empty set w
 the input is not a PHPUnit run (exit 2), when the run skipped tests but printed no
 names and testdox does not explain them (exit 4), when every unnamed skip **is** a
 testdox skip (exit 5), when the numbers do not add up (exit 3) or when the set could not
-be written in full (exit 6). Every one of those codes names a cause that is true for the
-input that triggered it — a wrong diagnosis would send the next reader to fix the wrong
-thing, and the round-2 review of S345 caught exit 5 doing exactly that before it
-shipped. The script's header enumerates every exit path, the input class that reaches it
-and why its message holds for all of them.
+be written in full (exit 6). Each code names the cause its own arithmetic supports, and
+never attributes more to a cause than that cause can carry — a wrong diagnosis would send
+the next reader to fix the wrong thing, and rounds 2 and 3 of the S345 review each caught
+one doing exactly that before it shipped.
+
+⚠ That is **not** a guarantee that the code is right for every input, and the limit is
+worth knowing before you trust a diagnosis: all of the script's denominators are
+**input-wide sums**, so in a multi-run log — which is exactly what
+`gh run view <id> --log` gives you — a shortfall in one run can be paid for by a surplus
+in another, and the pair can net out to a code that is right for the sum and wrong for
+both runs. Two such inputs were measured in round 3 and are closed (and fixtured); a
+`--testdox` run that also skips a whole test SUITE is not, because a skipped suite
+produces no testdox glyph to attribute it to. The durable fix is **per-run segmentation**
+— evaluate the contract inside each run rather than over the whole input — which is filed
+as a follow-up and deliberately not done here. Until then, read a non-zero exit as "this
+input must not be compared", not always as "this named run is at fault". The script's
+header enumerates every exit path, the input class that reaches it, and its known limits
+by name.
 
 **Keep the suite hermetic w.r.t. the environment.** `PHLIX_DOMAIN` changes real
 behaviour (it is the OAuth callback-URL allowlist — see

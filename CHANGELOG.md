@@ -226,12 +226,22 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   (i.e. the attribute went missing, or that invocation did not load `phpunit.xml` — the first of
   those reproduced against master's own CI log), **5** when EVERY unnamed skip is a testdox skip,
   **3** when the numbers do not add up and **6** when the sorted set could not be written in full.
-  Each code names a cause that is TRUE for the input that produced it; a wrong diagnosis is worse
-  than none, so 5 is gated on the number of testdox SKIP lines and taken only when they cover the
-  whole shortfall — never on the mere presence of testdox-looking output, which would exonerate
-  `phpunit.xml` about a run whose only fault is `phpunit.xml`. When testdox covers part of the
-  shortfall both causes are named. The script's header enumerates every exit path, the input class
-  that reaches it and why its message holds for all of them.
+  Each code names the cause its own arithmetic supports and never attributes more to a cause than
+  that cause can carry; a wrong diagnosis is worse than none, so 5 is gated on the number of testdox
+  SKIP lines and taken only when they cover the whole shortfall — never on the mere presence of
+  testdox-looking output, which would exonerate `phpunit.xml` about a run whose only fault is
+  `phpunit.xml`. When testdox covers part of the shortfall both causes are named, and entries
+  declared by a `No tests executed!` run are subtracted out before the shortfall is computed,
+  because they have no skip count of their own to match.
+
+  ⚠ It is **not** claimed that every exit is right for every input. All of the denominators are
+  **input-wide sums**, so in a multi-run log (`gh run view <id> --log`) one run's shortfall can be
+  paid for by another run's surplus and net out to a code that is right for the sum and wrong for
+  both runs. Two such inputs were measured in round 3 of this step's review and are closed, with
+  fixtures; a `--testdox` run that also skips a whole test SUITE is not, because a skipped suite
+  produces no testdox glyph. The durable fix is **per-run segmentation** of the parser, which is
+  filed as a follow-up rather than done here. The script's header enumerates every exit path, the
+  input class that reaches it, and its known limits by name.
 
   `tests/Unit/Support/SkippedTestNameReportingTest.php` fails if the attribute is removed from
   `phpunit.xml`, if the script loses its executable bit, or if the README stops documenting the

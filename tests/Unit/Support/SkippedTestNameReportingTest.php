@@ -64,9 +64,13 @@ use Symfony\Component\Yaml\Yaml;
  *     count keeps being reported, and the loss shows up only the next time somebody
  *     needs a name set and no longer has one.
  *   * `scripts/skipped-test-names.sh` still turns that output into a sorted,
- *     `comm`-ready set — and every refusal path names a cause that is TRUE for the input
- *     that triggered it, because a parser that quietly matches NOTHING reads as a pass
- *     and a WRONG diagnosis is worse than none.
+ *     `comm`-ready set — and each refusal path names the cause its own arithmetic
+ *     supports, for every input measured here, because a parser that quietly matches
+ *     NOTHING reads as a pass and a WRONG diagnosis is worse than none. That is a set of
+ *     pinned inputs, NOT a proof over all inputs: the script's denominators are
+ *     input-wide sums, so a multi-run log can still net one run's shortfall against
+ *     another's surplus (see KNOWN LIMITS in `scripts/skipped-test-names.sh`, and the
+ *     per-run-segmentation follow-up it points at).
  *
  * It does NOT try to defend the script against being rewritten, and it does not assert
  * a skip COUNT anywhere. Asserting a count here would reintroduce the exact measure the
@@ -931,9 +935,137 @@ final class SkippedTestNameReportingTest extends TestCase
         self::assertStringContainsString('leaving 1 unexplained', $result['stderr']);
     }
 
+    /**
+     * Round-3 finding 1, measured verbatim. `declared` is an input-wide SUM, so the entries a
+     * `No tests executed!` run declares — which have no `Skipped: N` term of their own — used to
+     * cancel a DIFFERENT run's lost names. The shortfall then shrank to what testdox could
+     * carry, so exit 5 fired and told the reader "Do NOT change phpunit.xml" about a log
+     * containing a run whose list phpunit.xml had genuinely lost. That is round-2's HIGH,
+     * verbatim, one layer down.
+     *
+     * Two of the three halves are the real binary: two suite-skipping probe classes (declared 2,
+     * summarised 0) and a real `--testdox` run over a two-skip class (summarised 2, `↩`×2). The
+     * third is master's own pre-S345 count-only shape, i.e. `phpunit.xml` really broken for that
+     * run.
+     *
+     * Measured on the pristine script: exit 5, "all 2 skipped test(s) ... are accounted for by
+     * testdox output ... Do NOT change phpunit.xml".
+     */
+    public function test_a_no_totals_runs_entries_cannot_pay_for_another_runs_lost_names(): void
+    {
+        $suites = $this->runRealPhpunit([
+            $this->writeSuiteSkipProbe(),
+            $this->writeSuiteSkipProbe('B'),
+        ]);
+
+        // Premises, each with its own message, so a broken probe never reads as a broken script.
+        self::assertStringContainsString(
+            'There were 2 skipped test suites:',
+            $suites,
+            'the two probe classes no longer skip their whole suites, so this input is not the '
+            . 'no-totals shape any more — regenerate the probes, do not touch phpunit.xml',
+        );
+        self::assertStringNotContainsString('Tests: ', $suites, 'this shape publishes no totals line');
+
+        $testdox = $this->runRealPhpunit([$this->writeTwoTestSkipProbe(), '--testdox']);
+        self::assertStringContainsString(
+            'Skipped: 2',
+            $testdox,
+            'the two-skip probe no longer skips two tests, so testdox cannot be the thing that '
+            . 'over-carries the shortfall here',
+        );
+        self::assertSame(
+            2,
+            preg_match_all('/^ \x{21A9} /mu', $testdox),
+            'testdox must print one ↩ glyph per skipped TEST, or this fixture is not measuring '
+            . 'the attribution clamp',
+        );
+
+        $result = $this->runScript($this->fixtureFile(
+            'nototals-testdox-countonly.log',
+            $suites . "\n" . $testdox . "\n" . $this->countOnlyRun(2),
+        ));
+
+        self::assertSame(
+            4,
+            $result['exit'],
+            "the suite-skip run declared 2 entries with NO count of its own, so they cannot offset\n"
+            . "the count-only run's missing list. Exit 5 here is round-2's HIGH resurrected: it\n"
+            . "tells the reader to leave phpunit.xml alone about a log in which phpunit.xml IS a\n"
+            . "cause. stderr:\n" . $result['stderr'],
+        );
+        self::assertSame([], $result['lines'], 'no set may be written while names are missing');
+        self::assertStringNotContainsString(
+            'Do NOT change phpunit.xml',
+            $result['stderr'],
+            'the exoneration sentence may only appear when testdox accounts for EVERY unnamed '
+            . 'skip in the input, and here a count-only run has lost its list',
+        );
+        self::assertStringContainsString(
+            'BOTH causes are in play',
+            $result['stderr'],
+            'testdox carries part of this shortfall and the missing list carries the rest; both '
+            . 'must be named',
+        );
+    }
+
+    /**
+     * Round-3 finding 2, measured verbatim, and the worst outcome the exit contract exists to
+     * prevent: the SAME input-wide sum, with no `--testdox` anywhere, made the script hand `comm`
+     * a set short by one name and exit 0 — silent loss reported as success. The second run alone
+     * is a correct exit 4.
+     */
+    public function test_a_no_totals_run_does_not_turn_a_count_only_runs_lost_names_into_exit_0(): void
+    {
+        $alone = $this->runRealPhpunit([$this->writeSuiteSkipProbe()]);
+        self::assertStringContainsString(
+            'No tests executed!',
+            $alone,
+            'the probe class no longer skips its whole suite, so this is not the no-totals shape',
+        );
+
+        // Control: the same run on its own is legitimate and must still emit its name at exit 0.
+        $control = $this->runScript($this->fixtureFile('nototals-only.log', $alone));
+        self::assertSame(0, $control['exit'], $control['stderr']);
+        self::assertSame(['SUITE:Phlix\Tests\Scratch\S345SuiteSkipProbeTest'], $control['lines']);
+
+        // Control: the count-only run on its own is a correct exit 4.
+        $lost = $this->runScript($this->fixtureFile('countonly-1.log', $this->countOnlyRun(1)));
+        self::assertSame(4, $lost['exit'], $lost['stderr']);
+
+        $result = $this->runScript($this->fixtureFile(
+            'nototals-plus-countonly.log',
+            $alone . "\n" . $this->countOnlyRun(1),
+        ));
+
+        self::assertSame(
+            4,
+            $result['exit'],
+            "concatenating the two must not cancel them out: exit 0 here writes a set that is\n"
+            . "short by the count-only run's name, which is the one outcome this contract exists\n"
+            . "to prevent. stderr:\n" . $result['stderr'],
+        );
+        self::assertSame(
+            [],
+            $result['lines'],
+            'a set that is short by a name must NOT be written — `comm` cannot tell it from a '
+            . 'complete one',
+        );
+        self::assertStringContainsString('displayDetailsOnSkippedTests', $result['stderr']);
+    }
+
     // ---------------------------------------------------------------------------------
     // helpers
     // ---------------------------------------------------------------------------------
+
+    /**
+     * Master's own pre-S345 shape: a run that publishes a skip COUNT and no detail list at all.
+     */
+    private function countOnlyRun(int $skipped): string
+    {
+        return "PHPUnit 10.5.64\n\nOK, but there were issues!\n"
+            . 'Tests: 9, Assertions: 12, Skipped: ' . $skipped . ".\n";
+    }
 
     /**
      * The premise every real-binary expectation below rests on, asserted with its OWN
@@ -1112,11 +1244,50 @@ final class SkippedTestNameReportingTest extends TestCase
 
     /**
      * Writes a throwaway test class whose `setUpBeforeClass()` skips, which is how PHPUnit
-     * emits a testSuiteSkipped event. Returns its path.
+     * emits a testSuiteSkipped event. Returns its path. `$tag` yields a SECOND, distinct
+     * class so that one run can skip two suites (round-3 finding 1's input needs `There were
+     * 2 skipped test suites:` in a single run).
      */
-    private function writeSuiteSkipProbe(): string
+    private function writeSuiteSkipProbe(string $tag = ''): string
     {
-        $path = $this->tmpDir . '/S345SuiteSkipProbeTest.php';
+        $class = 'S345SuiteSkipProbe' . $tag . 'Test';
+        $path = $this->tmpDir . '/' . $class . '.php';
+
+        $template = <<<'PROBE'
+            <?php
+
+            declare(strict_types=1);
+
+            namespace Phlix\Tests\Scratch;
+
+            use PHPUnit\Framework\TestCase;
+
+            final class __CLASS_NAME__ extends TestCase
+            {
+                public static function setUpBeforeClass(): void
+                {
+                    self::markTestSkipped('S345 probe: the whole suite is skipped');
+                }
+
+                public function test_never_runs(): void
+                {
+                    self::assertTrue(true);
+                }
+            }
+            PROBE;
+
+        file_put_contents($path, str_replace('__CLASS_NAME__', $class, $template));
+
+        return $path;
+    }
+
+    /**
+     * Writes a throwaway test class with TWO unconditional test-level skips, so a `--testdox`
+     * run over it prints `Skipped: 2` and two `↩` glyphs. Returns its path.
+     */
+    private function writeTwoTestSkipProbe(): string
+    {
+        $path = $this->tmpDir . '/S345TwoSkipProbeTest.php';
 
         file_put_contents($path, <<<'PROBE'
             <?php
@@ -1127,16 +1298,16 @@ final class SkippedTestNameReportingTest extends TestCase
 
             use PHPUnit\Framework\TestCase;
 
-            final class S345SuiteSkipProbeTest extends TestCase
+            final class S345TwoSkipProbeTest extends TestCase
             {
-                public static function setUpBeforeClass(): void
+                public function test_first(): void
                 {
-                    self::markTestSkipped('S345 probe: the whole suite is skipped');
+                    self::markTestSkipped('S345 probe: skip 1 of 2');
                 }
 
-                public function test_never_runs(): void
+                public function test_second(): void
                 {
-                    self::assertTrue(true);
+                    self::markTestSkipped('S345 probe: skip 2 of 2');
                 }
             }
             PROBE);

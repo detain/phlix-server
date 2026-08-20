@@ -99,7 +99,10 @@
 # cross-check is simply absent for it; the detail list is then the only source. This
 # script accounts for that instead of reporting drift -- but only up to what THOSE runs
 # declared (`nototals_declared`, computed per run). One `No tests executed!` anywhere in
-# a whole-workflow log does not buy an unbounded excuse for every other run in it.
+# a whole-workflow log does not buy an unbounded excuse for every other run in it, and it
+# does not offset another run's MISSING names either: those entries are subtracted out
+# (`summarisable_declared`) before the shortfall is computed, because a list printed by a
+# run with no count is no evidence about a run that published one.
 #
 # =============================================================================
 # A PARSER THAT MATCHES NOTHING MUST NOT READ AS A PASS
@@ -137,38 +140,71 @@
 # about a run that skipped three tests. That is exactly the shape this step exists to
 # kill, so it must not be reintroduced by the tool that kills it.
 #
-# Every non-zero exit must name a cause that is TRUE for the input that produced it:
-# a wrong diagnosis is worse than none, because it sends the next reader to fix the
-# wrong thing. That is why 4 and 5 are separate codes, and why 3's message no longer
-# claims "fix this parser" when a missing list is the likelier cause. Enumerated, with
+# Each non-zero exit names the cause its own arithmetic supports, and never attributes
+# more to a cause than that cause can carry: a wrong diagnosis is worse than none, because
+# it sends the next reader to fix the wrong thing. That is why 4 and 5 are separate codes,
+# and why 3's message no longer claims "fix this parser" when a missing list is the likelier
+# cause. ⚠ It is NOT a guarantee that the code is right for every possible input -- KNOWN
+# LIMITS below lists the inputs measured to reach the wrong one, and why. Enumerated, with
 # the input class that reaches each exit and the claim its message makes:
 #
 #   2  summary == 0. NOTHING in the input matches any of PHPUnit's seven terminating
 #      summary lines. Claim: "not a PHPUnit run, an empty set proves nothing" -- true by
 #      construction; every terminating run prints one of those lines.
-#   5  summarised > declared AND testdox_skips >= (summarised - declared) > 0. Claim:
-#      every unnamed skip is a testdox skip, so the config cannot name them. True
+#   5  summarised > summarisable_declared AND testdox_skips >= the shortfall > 0. Claim:
+#      every unnamed skip is a testdox skip, so the config cannot name them. Supported
 #      because testdox skip lines are counted directly and never over-attributed.
-#   4  summarised > declared, declared == 0, and testdox_skips < the shortfall. Claim:
-#      the residual (shortfall minus testdox's share) was counted, not named and not
-#      testdox's, and no list was printed at all -- so either the attribute is off or
-#      phpunit.xml was not loaded. Those are the only two ways the default printer
-#      publishes a count with no list.
+#      ⚠ `summarisable_declared` is `declared` MINUS what the `No tests executed!` runs
+#      declared: those entries have no `Skipped: N` term of their own, and counting them
+#      here let them cancel a different run's lost names, at which point this branch
+#      exonerated a phpunit.xml that WAS at fault (round 3, finding 1 -- fixtured).
+#   4  the shortfall remains after testdox's share AND summarisable_declared == 0. Claim:
+#      the residual was counted, not named and not testdox's, and no run that published a
+#      totals line printed a list at all -- so either the attribute is off or phpunit.xml
+#      was not loaded. Those are the only two ways the default printer publishes a count
+#      with no list.
 #   3  three disjoint shapes, each stating its own arithmetic: (a) shortfall remains
-#      with a NON-empty list, so some run in the input printed no list -- partial set,
-#      not written; (b) declared > summarised beyond what the `No tests executed!` runs
-#      themselves declared -- unexplained over-count; (c) extracted != declared -- the
-#      ENTRY format drifted. Each message prints the numbers it derived its claim from.
+#      with a NON-empty summarisable list, so some run in the input printed no list --
+#      partial set, not written; (b) declared > summarised beyond what the
+#      `No tests executed!` runs themselves declared -- unexplained over-count; (c)
+#      extracted != declared -- the ENTRY format drifted. Each message prints the numbers
+#      it derived its claim from.
 #   6  the `sort` pipeline (or the caller's redirect) failed. Claim: stdout is truncated.
 #      True: the pipeline is the only writer of stdout and pipefail is on.
 #   0  none of the above: the two denominators agree and every declared name parsed.
 #
-# KNOWN LIMIT, recorded rather than hidden: a data-set label containing a literal
-# NEWLINE is emitted truncated at that newline (the entry spans two lines and the
-# denominators still agree, so this one shape escapes the cross-check). No data
-# provider in this repo produces one, and the truncation is stable across runs, so
-# `comm` is not corrupted by it -- but the denominator argument above does not cover
-# it, so do not claim that it does.
+# KNOWN LIMITS, recorded rather than hidden. These are the measured inputs for which the
+# exit code above can be the WRONG one, and they are why this header does not claim that
+# every exit names a true cause:
+#
+#   1. EVERY denominator here is an INPUT-WIDE SUM. `declared`, `summarised`,
+#      `testdox_skips` and `nototals_declared` are totals over the whole input, so in a
+#      MULTI-RUN log -- which is exactly what the documented `gh run view <id> --log`
+#      recipe produces -- a shortfall in one run can be paid for by a surplus in another,
+#      and the pair can net out to a code that is right for the sum and wrong for both
+#      runs. The `declared - nototals_declared` split closes the two inputs round 3 of
+#      S345's review measured (both are fixtures now), but it is a bounded correction, not
+#      a closure of the class. The DURABLE fix is per-RUN segmentation: split the input at
+#      the terminating summary lines and evaluate the contract inside each segment. That
+#      is deliberately NOT done here: it is FILED, with the measured inputs, as
+#      `S346-followup-perrun-segmentation.md` in the build program's step directory
+#      (outside this repo; its S-number is pending allocation), because a deferral left in
+#      a worklog is not a contract -- that is the S126 lesson S345 exists to enforce.
+#      Until it is: a non-zero exit tells you the input as a whole must not be compared;
+#      it does not always tell you which run in it is at fault.
+#   2. `--testdox` together with a skipped SUITE. `testdox_skips` is counted from ` ↩ `
+#      glyph lines, and TextUI/Output/TestDox/ResultPrinter emits a glyph per TEST result,
+#      so a testSuiteSkipped event under `--testdox` lands in `Skipped: N` with no glyph to
+#      attribute it to. Measured: `--testdox <suite-skip probe> <a 1-skip file>` exits 4
+#      accusing phpunit.xml, when the config is correct and testdox could not have named
+#      that skip either; `--testdox <suite-skip probe>` alone exits 0 with an EMPTY set,
+#      where the plain run on the same input correctly emits `SUITE:...`. `tests/`
+#      currently contains no skipped suite, so this is latent here. Same follow-up.
+#   3. a data-set label containing a literal NEWLINE is emitted truncated at that newline
+#      (the entry spans two lines and the denominators still agree, so this one shape
+#      escapes the cross-check). No data provider in this repo produces one, and the
+#      truncation is stable across runs, so `comm` is not corrupted by it -- but the
+#      denominator argument above does not cover it, so do not claim that it does.
 #
 # stdout carries ONLY the name set, so `comm` and `diff` can consume it directly.
 #
@@ -290,11 +326,26 @@ if [ "$summary" -eq 0 ]; then
     exit 2
 fi
 
+# Only the part of `declared` that belongs to runs which PUBLISHED a totals line can
+# offset `summarised`. Entries declared by a `No tests executed!` run have no `Skipped: N`
+# term of their own, so counting them here let them cancel a DIFFERENT run's lost names:
+# round 3 of this step's review measured a suite-skip run + a testdox run + a count-only
+# run netting out to exit 5 ("Do NOT change phpunit.xml") while the count-only run had
+# genuinely lost its list, and a suite-skip run + a count-only run netting out to exit 0
+# with a set short by one name. Both are pinned by fixtures in
+# tests/Unit/Support/SkippedTestNameReportingTest.php.
+#
+# ⚠ This is a BOUNDED correction, not a closure of the class: every denominator in this
+# script is an input-wide SUM, so a multi-run log can still net one run's shortfall against
+# another run's surplus. See KNOWN LIMITS in the header. The durable fix is per-run
+# segmentation, not another clamp.
+summarisable_declared=$((declared - nototals_declared))
+
 # The input under-reports names: skips were counted that no list named. Name the cause
 # that is TRUE for this input, and never attribute more to a cause than it can carry --
 # a wrong diagnosis is worse than none, because it sends the reader somewhere else.
-if [ "$summarised" -gt "$declared" ]; then
-    missing=$((summarised - declared))
+if [ "$summarised" -gt "$summarisable_declared" ]; then
+    missing=$((summarised - summarisable_declared))
 
     # `--testdox` can only explain the skips IT counted, and none at all when it skipped
     # nothing. Gating on `testdox_lines` instead would blame testdox for a plain run that
@@ -325,20 +376,32 @@ if [ "$summarised" -gt "$declared" ]; then
         also=""
     fi
 
-    if [ "$declared" -eq 0 ]; then
-        printf 'skipped-test-names: FATAL -- %s skipped test(s) in this input are counted, NOT named, and not explained by testdox, and no skipped-details list was printed at all. phpunit.xml has lost displayDetailsOnSkippedTests="true" (S345), or the invocation did not load phpunit.xml (a `-c`/`--configuration` pointing elsewhere, or `--no-configuration`). The name set cannot be recovered from this output; fix the config and re-run rather than reading the empty set as "nothing skipped".%s\n' \
-            "$residual" "$also" >&2
+    # `summarisable_declared`, not `declared`: a list printed by a `No tests executed!` run
+    # is not evidence that the runs which DID publish a count printed one. Attributing it
+    # to them is what let exit 5 exonerate phpunit.xml in round 3's finding 1.
+    if [ "$nototals_declared" -gt 0 ]; then
+        aside=" ($nototals_declared entry/entries WERE declared, by $no_totals run(s) reporting \`No tests executed!\`, but those have no count of their own to match and so cannot stand in for a run that published one.)"
+    else
+        aside=""
+    fi
+
+    if [ "$summarisable_declared" -eq 0 ]; then
+        printf 'skipped-test-names: FATAL -- %s skipped test(s) in this input are counted, NOT named, and not explained by testdox, and NO run that published a `Tests: ...` totals line printed a skipped-details list at all.%s phpunit.xml has lost displayDetailsOnSkippedTests="true" (S345), or the invocation did not load phpunit.xml (a `-c`/`--configuration` pointing elsewhere, or `--no-configuration`). The name set cannot be recovered from this output; fix the config and re-run rather than reading the empty set as "nothing skipped".%s\n' \
+            "$residual" "$aside" "$also" >&2
         exit 4
     fi
 
-    printf 'skipped-test-names: FATAL -- the run summaries report %s skipped test(s) but the detail lists declared only %s, so %s name(s) are missing. Some run in this input printed no skipped list: check that every invocation loads phpunit.xml (displayDetailsOnSkippedTests="true") and that none of them uses --testdox. The set below would be PARTIAL, so it is not written.%s\n' \
-        "$summarised" "$declared" "$missing" "$also" >&2
+    printf 'skipped-test-names: FATAL -- the run summaries report %s skipped test(s) but the runs that published a totals line declared only %s in their detail lists, so %s name(s) are missing.%s Some run in this input printed no skipped list: check that every invocation loads phpunit.xml (displayDetailsOnSkippedTests="true") and that none of them uses --testdox. The set below would be PARTIAL, so it is not written.%s\n' \
+        "$summarised" "$summarisable_declared" "$missing" "$aside" "$also" >&2
     exit 3
 fi
 
 # More declared than summarised is legitimate only for the runs that printed no totals
 # line at all (`No tests executed!`), and only up to what THOSE runs declared -- an
 # input-wide switch-off would excuse real drift anywhere else in the same log.
+# (`over > nototals_declared` below is the same comparison as the branch above, mirrored:
+# it is true exactly when `summarisable_declared > summarised`. The two branches therefore
+# cover the same arithmetic from both sides and cannot both fire.)
 if [ "$declared" -gt "$summarised" ]; then
     over=$((declared - summarised))
 

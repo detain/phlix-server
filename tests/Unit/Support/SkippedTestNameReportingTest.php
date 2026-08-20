@@ -6,6 +6,7 @@ namespace Phlix\Tests\Unit\Support;
 
 use DOMDocument;
 use PHPUnit\Framework\TestCase;
+use Symfony\Component\Yaml\Yaml;
 
 /**
  * S345 — a skip set must be comparable BY NAME, not by count.
@@ -40,7 +41,7 @@ use PHPUnit\Framework\TestCase;
  *   * `--testdox` can NEVER name a skipped test. PHPUnit builds the default result
  *     printer for a testdox run with `$displayDetailsOnSkippedTests` hardcoded `false`
  *     (`vendor/phpunit/phpunit/src/TextUI/Output/Facade.php:204-221`), so the config
- *     value is not consulted at all. `syncplay-e2e.yml:90` passed `--testdox`; the
+ *     value is not consulted at all. `syncplay-e2e.yml` passed `--testdox`; the
  *     fixture could not see it, and the script blamed `phpunit.xml` for it.
  *   * a skipped test SUITE is counted in the same `Skipped: N` (`SummaryPrinter.php:106`)
  *     but named under a DIFFERENT header, with no `::` in its entries — and a run in
@@ -126,6 +127,13 @@ final class SkippedTestNameReportingTest extends TestCase
         FAILURES!
         Tests: 9, Assertions: 12, Failures: 1, Skipped: 4.
         OUT;
+
+    /**
+     * Master's own pre-S345 shape: a skip COUNT and no detail list to read it from.
+     * Shared by every test about the diagnosis of a missing list, so they cannot drift
+     * apart from each other.
+     */
+    private const COUNT_ONLY = "PHPUnit 10.5.64\n\nOK, but there were issues!\nTests: 9, Assertions: 12, Skipped: 4.\n";
 
     /** @var list<string> */
     private const EXPECTED_NAMES = [
@@ -226,23 +234,37 @@ final class SkippedTestNameReportingTest extends TestCase
     /**
      * No workflow may pass `--testdox` to PHPUnit, because such a run adds to
      * `Skipped: N` and can never name those skips (Facade.php:204-221) — so a
-     * whole-workflow log stops being comparable. `syncplay-e2e.yml:90` used to.
+     * whole-workflow log stops being comparable. `syncplay-e2e.yml` used to.
+     *
+     * Re-derived from the workflow DIRECTORY, never from a list of file names, and
+     * round 2 of this step's review found two ways the first version of that
+     * re-derivation could be defeated while staying green: a `.yaml` extension (GitHub
+     * Actions accepts both) and a `\`-continuation line (the flag on its own line). Both
+     * are now pinned by their own fixtures below — {@see
+     * test_the_testdox_ban_discovers_yaml_as_well_as_yml_workflows} and {@see
+     * test_the_testdox_ban_sees_a_flag_on_a_shell_continuation_line} — because the real
+     * directory cannot exhibit either shape without reintroducing the defect.
      */
     public function test_no_workflow_invokes_phpunit_with_testdox(): void
     {
-        $files = glob(self::REPO . '/.github/workflows/*.yml') ?: [];
-        self::assertNotSame([], $files, 'no workflow files found — this guard would prove nothing');
+        $files = $this->workflowFiles(self::REPO . '/.github/workflows');
+
+        // Anti-vacuity: this guard is a search over these files, so an empty or shrunken
+        // list must fail rather than pass.
+        self::assertGreaterThanOrEqual(
+            6,
+            count($files),
+            'the workflow directory looks empty or the glob stopped matching — this guard '
+            . 'would then prove nothing: ' . implode(', ', array_map('basename', $files)),
+        );
 
         $offenders = [];
 
         foreach ($files as $file) {
-            foreach (explode("\n", (string) file_get_contents($file)) as $number => $line) {
-                $code = trim(preg_replace('/#.*$/', '', $line) ?? '');
-
-                if (str_contains($code, 'phpunit') && str_contains($code, '--testdox')) {
-                    $offenders[] = basename($file) . ':' . ($number + 1) . ' ' . $code;
-                }
-            }
+            $offenders = [...$offenders, ...$this->testdoxOffenders(
+                (string) file_get_contents($file),
+                basename($file),
+            )];
         }
 
         self::assertSame(
@@ -258,6 +280,150 @@ final class SkippedTestNameReportingTest extends TestCase
         );
     }
 
+    /**
+     * Fixture for the first hole: `glob('*.yml')` cannot see `new-suite.yaml`, and GitHub
+     * Actions runs both extensions. Measured before the fix: adding such a file with
+     * `--testdox` in it left the guard above green.
+     */
+    public function test_the_testdox_ban_discovers_yaml_as_well_as_yml_workflows(): void
+    {
+        file_put_contents($this->tmpDir . '/a.yml', "on: push\njobs: {}\n");
+        file_put_contents($this->tmpDir . '/b.yaml', "on: push\njobs: {}\n");
+        file_put_contents($this->tmpDir . '/c.txt', 'not a workflow');
+
+        self::assertSame(
+            ['a.yml', 'b.yaml'],
+            array_map('basename', $this->workflowFiles($this->tmpDir)),
+            'the workflow discovery must cover BOTH extensions GitHub Actions accepts, or a '
+            . '`.yaml` workflow can pass --testdox invisibly (S345 round-2 finding 2a)',
+        );
+    }
+
+    /**
+     * Fixture for the second hole: the flag on a `\`-continuation line of a `run: |`
+     * block. Measured before the fix: rewriting the syncplay step that way left the guard
+     * green, because the per-line check needed `phpunit` and `--testdox` on ONE line.
+     *
+     * The third case is the negative control that keeps the rule from being noisy:
+     * `--testdox-html`/`--testdox-text` are logging targets and do NOT put PHPUnit into
+     * testdox output mode (Cli/Builder.php:851-862 sets `$testdoxOutput` only for
+     * `--testdox`), so a substring match would fire on them wrongly.
+     */
+    public function test_the_testdox_ban_sees_a_flag_on_a_shell_continuation_line(): void
+    {
+        $wrapped = <<<'YAML'
+            on: push
+            jobs:
+              e2e:
+                steps:
+                  - name: Run E2E tests
+                    run: |
+                      ./vendor/bin/phpunit tests/E2E/Foo.php \
+                        --testdox \
+                        --colors=never
+            YAML;
+
+        self::assertNotSame(
+            [],
+            $this->testdoxOffenders($wrapped, 'wrapped.yml'),
+            'a `\`-continuation must be folded before matching, or wrapping the command hides '
+            . 'the flag from this guard (S345 round-2 finding 2b)',
+        );
+
+        $sameLine = str_replace(" \\\n    ", ' ', $wrapped);
+        self::assertNotSame(
+            [],
+            $this->testdoxOffenders($sameLine, 'oneline.yml'),
+            'the same command on one line must still be caught — this is the control that shows '
+            . 'the fixture above is not passing for an unrelated reason',
+        );
+
+        $clean = <<<'YAML'
+            on: push
+            jobs:
+              e2e:
+                steps:
+                  - name: Run E2E tests
+                    # --testdox is deliberately NOT passed to phpunit here (S345)
+                    run: |
+                      ./vendor/bin/phpunit tests/E2E/Foo.php \
+                        --testdox-html build/testdox.html \
+                        --colors=never   # a # inside a comment, and "a # in a quote"
+            YAML;
+
+        self::assertSame(
+            [],
+            $this->testdoxOffenders($clean, 'clean.yml'),
+            'the ban must not fire on prose in a comment, nor on --testdox-html/--testdox-text, '
+            . 'which do not put PHPUnit into testdox OUTPUT mode. A noisy rule gets deleted.',
+        );
+    }
+
+    /**
+     * The invocation-site claim made by `phpunit.xml`, this script's header, `README.md`
+     * and `CHANGELOG.md` — "five places" — RE-DERIVED, because round-1 found the number
+     * wrong and round-2 found the line numbers it cited stale by the same commit that
+     * wrote them. Line numbers are gone from those documents for that reason; this test
+     * is what keeps the remaining claim honest.
+     *
+     * The four workflow sites are derived from the parsed `run:` scalars. The fifth is the
+     * prober, which is a PHP `exec` rather than a workflow step, so it is asserted
+     * separately — including the property that makes it an exception rather than a bug
+     * (its output is captured into a variable, never echoed).
+     */
+    public function test_the_documented_invocation_sites_are_still_the_real_ones(): void
+    {
+        $perWorkflow = [];
+
+        foreach ($this->workflowFiles(self::REPO . '/.github/workflows') as $file) {
+            foreach ($this->runScalars((string) file_get_contents($file)) as $run) {
+                foreach ($this->logicalCommandLines($run) as $line) {
+                    if (str_contains($line, 'vendor/bin/phpunit')) {
+                        $perWorkflow[basename($file)] = ($perWorkflow[basename($file)] ?? 0) + 1;
+                    }
+                }
+            }
+        }
+
+        ksort($perWorkflow);
+
+        self::assertSame(
+            [
+                'phpunit.yml' => 2,
+                'syncplay-e2e.yml' => 2,
+            ],
+            $perWorkflow,
+            'the set of workflow steps that invoke PHPUnit has changed. Four of the five '
+            . '"places" documented in phpunit.xml, scripts/skipped-test-names.sh, README.md and '
+            . 'CHANGELOG.md are these; update those documents (by FILE, not by line number) and '
+            . 'this expectation together. A new invocation is exactly the case the config '
+            . 'attribute exists to cover, so check it does not pass --testdox either.',
+        );
+
+        $prober = (string) file_get_contents(self::REPO . '/scripts/assertion-escape-audit.php');
+
+        self::assertStringContainsString(
+            'vendor/bin/phpunit',
+            $prober,
+            'the fifth documented invocation site (the assertion-escape prober) no longer runs '
+            . 'PHPUnit — update the "five places" claim in the four documents that make it',
+        );
+        self::assertMatchesRegularExpression(
+            '/exec\(\$command[^;]*\$output/',
+            $prober,
+            'the prober no longer captures PHPUnit\'s output into a variable. If it echoes it '
+            . 'now, it is no longer an exception to the mechanism and the documents that call it '
+            . 'one are wrong.',
+        );
+        self::assertDoesNotMatchRegularExpression(
+            '/\b(passthru|system)\s*\(/',
+            $prober,
+            'the prober now writes a subprocess\'s output straight to its own stdout, so the '
+            . '"its output never leaves the process" exception documented in four places may no '
+            . 'longer hold — re-derive it before trusting those documents',
+        );
+    }
+
     // ---------------------------------------------------------------------------------
     // Shapes RE-DERIVED from the real phpunit binary
     // ---------------------------------------------------------------------------------
@@ -266,10 +432,14 @@ final class SkippedTestNameReportingTest extends TestCase
     {
         $output = $this->runRealPhpunit([self::REAL_TEST_FILE]);
 
+        $this->assertTheFixtureStillSkipsExactlyOneTest($output);
+
         self::assertStringContainsString(
             'skipped test:',
             $output,
-            'the real binary printed no skipped-details list, so phpunit.xml is not reaching it',
+            'the real binary counted a skip and printed no skipped-details list for it, so '
+            . 'phpunit.xml is not reaching this invocation (the fixture premise is asserted '
+            . 'separately above, so it is not the explanation here)',
         );
 
         $result = $this->runScript($this->fixtureFile('real.log', $output));
@@ -283,7 +453,7 @@ final class SkippedTestNameReportingTest extends TestCase
         $output = $this->runRealPhpunit([self::REAL_TEST_FILE, '--testdox']);
 
         // The premise, re-derived rather than assumed: testdox counts the skip and never names it.
-        self::assertStringContainsString('Skipped: 1', $output, 'the testdox run did not skip anything');
+        $this->assertTheFixtureStillSkipsExactlyOneTest($output);
         self::assertStringNotContainsString(
             'skipped test:',
             $output,
@@ -318,9 +488,25 @@ final class SkippedTestNameReportingTest extends TestCase
         // Suite skip ALONE: PHPUnit prints `No tests executed!` and NO `Tests:` line, so the
         // `Skipped: N` cross-check does not exist for this shape.
         $alone = $this->runRealPhpunit([$probe]);
-        self::assertStringContainsString('skipped test suite:', $alone, 'no suite-skip list in the real output');
-        self::assertStringContainsString('No tests executed!', $alone);
+
+        // The PROBE's premise first, and separately: `No tests executed!` with no totals line
+        // is what a whole-suite skip looks like, and it does not depend on phpunit.xml. If
+        // this is what broke, the list assertion below would blame the config for it.
+        self::assertStringContainsString(
+            'No tests executed!',
+            $alone,
+            'the probe class no longer skips its whole suite (markTestSkipped() in '
+            . 'setUpBeforeClass()), so nothing below is measuring the suite-skip shape — '
+            . 'regenerate the probe, do not touch phpunit.xml',
+        );
         self::assertStringNotContainsString('Tests: ', $alone, 'this shape is supposed to publish no totals line');
+
+        self::assertStringContainsString(
+            'skipped test suite:',
+            $alone,
+            'a suite really was skipped (asserted above) and the real binary named none of '
+            . 'them, so displayDetailsOnSkippedTests is not reaching this invocation',
+        );
 
         $result = $this->runScript($this->fixtureFile('suite-alone.log', $alone));
         self::assertSame(0, $result['exit'], $result['stderr'] . "\n--- phpunit output ---\n" . $alone);
@@ -356,6 +542,8 @@ final class SkippedTestNameReportingTest extends TestCase
         // exactly what defeats the positive control if escapes are not stripped.
         $output = $this->runRealPhpunit([self::REAL_TEST_FILE, '--colors=always']);
 
+        $this->assertTheFixtureStillSkipsExactlyOneTest($output);
+
         self::assertStringContainsString(
             "\033[",
             $output,
@@ -386,7 +574,9 @@ final class SkippedTestNameReportingTest extends TestCase
             // mechanism textually rather than reporting a pass that measured nothing.
             self::assertStringContainsString(
                 'write_status',
-                (string) file_get_contents(self::SCRIPT),
+                // CODE only: a header comment must not be able to satisfy a fallback that
+                // stands in for a measurement (S345 round-2 finding 4, same shape).
+                $this->scriptCode(),
                 '/dev/full is unavailable, so the truncated-write path cannot be exercised here; '
                 . "the script must still check the status of its `sort` pipeline",
             );
@@ -511,12 +701,16 @@ final class SkippedTestNameReportingTest extends TestCase
         if ($utf8Locale === null) {
             // No locale on this box reorders the pair, so the behavioural check above cannot
             // fail. Fall back to pinning the mechanism textually rather than reporting a pass
-            // that proves nothing.
+            // that proves nothing — and pin it against the script's CODE only. The literal
+            // `LC_ALL=C sort -u` also appears in the script's header comment (the copy-paste
+            // one-liner), so a str_contains over the whole file could be satisfied by the very
+            // prose this test exists to verify, and would pass with the real command mutated.
             self::assertStringContainsString(
                 'LC_ALL=C sort -u',
-                (string) file_get_contents(self::SCRIPT),
+                $this->scriptCode(),
                 'no locale on this box collates differently from C, so the byte-order property '
-                . 'cannot be measured here; the script must still pin LC_ALL=C explicitly',
+                . 'cannot be measured here; the script must still pin LC_ALL=C explicitly in its '
+                . 'CODE (the header comment does not count)',
             );
         }
     }
@@ -533,9 +727,7 @@ final class SkippedTestNameReportingTest extends TestCase
     public function test_a_run_that_skipped_tests_but_printed_no_names_is_refused(): void
     {
         // Exactly master's shape before S345: a count, and no detail list to read it from.
-        $countOnly = "PHPUnit 10.5.64\n\nOK, but there were issues!\nTests: 9, Assertions: 12, Skipped: 4.\n";
-
-        $result = $this->runScript($this->fixtureFile('countonly.log', $countOnly));
+        $result = $this->runScript($this->fixtureFile('countonly.log', self::COUNT_ONLY));
 
         self::assertSame(4, $result['exit'], 'a missing displayDetailsOnSkippedTests must be loud, not empty');
         self::assertSame([], $result['lines']);
@@ -606,9 +798,309 @@ final class SkippedTestNameReportingTest extends TestCase
         self::assertStringContainsString('No tests executed!', $result['stderr']);
     }
 
+    /**
+     * Round-2 finding 1, measured: exit 5 used to be gated on the mere PRESENCE of
+     * testdox-looking output, so a count-only run that shared a log with a ZERO-skip
+     * testdox run was told "Do NOT change phpunit.xml -- it is not the cause" while
+     * phpunit.xml WAS the cause. Both halves of the input are real here: the testdox half
+     * comes from the binary, the count-only half is master's own pre-S345 shape.
+     */
+    public function test_a_zero_skip_testdox_run_does_not_hijack_the_diagnosis_of_a_count_only_run(): void
+    {
+        $testdox = $this->runRealPhpunit([
+            self::REAL_TEST_FILE,
+            '--testdox',
+            '--filter',
+            'testListBackupsReturnsAllBackupsSorted',
+        ]);
+
+        // Premise, with its own message: this testdox run must skip NOTHING, or it is not
+        // the input class this test is about.
+        self::assertStringNotContainsString(
+            'Skipped:',
+            $testdox,
+            'the filtered testdox run skipped something after all, so this input is no longer '
+            . 'the "testdox present but explains nothing" class — pick another filter',
+        );
+
+        $result = $this->runScript($this->fixtureFile(
+            'zero-skip-testdox.log',
+            $testdox . "\n" . self::COUNT_ONLY,
+        ));
+
+        self::assertSame(
+            4,
+            $result['exit'],
+            "testdox that skipped NOTHING explains none of the missing names, so the true cause\n"
+            . "is the missing detail list. Exit 5 here would tell the reader to leave phpunit.xml\n"
+            . "alone about a run whose only fault IS phpunit.xml. stderr:\n" . $result['stderr'],
+        );
+        self::assertStringContainsString('displayDetailsOnSkippedTests', $result['stderr']);
+        self::assertStringNotContainsString(
+            'Do NOT change phpunit.xml',
+            $result['stderr'],
+            'the exoneration sentence may only appear when testdox accounts for EVERY unnamed '
+            . 'skip. This is the round-1 defect in mirror image and it must stay dead.',
+        );
+    }
+
+    /**
+     * Cheaper than a whole testdox run and the same defect: the detector greps the WHOLE
+     * input for testdox's glyphs, and the documented recipe is `gh run view --log`, which
+     * carries every tool's output. One unrelated line used to flip a correct exit 4 into a
+     * false exit 5.
+     */
+    public function test_one_stray_line_in_testdox_glyph_format_does_not_hijack_the_diagnosis(): void
+    {
+        $result = $this->runScript($this->fixtureFile(
+            'stray-glyph.log',
+            " \u{2714} some other tool says ok\n" . self::COUNT_ONLY,
+        ));
+
+        self::assertSame(
+            4,
+            $result['exit'],
+            "one line in testdox's glyph format, from anything at all, must not change the\n"
+            . "diagnosis of the run that actually lost its detail list. stderr:\n" . $result['stderr'],
+        );
+        self::assertStringNotContainsString('Do NOT change phpunit.xml', $result['stderr']);
+        self::assertStringContainsString(
+            'Evidence, not a cause',
+            $result['stderr'],
+            'the glyph lines should still be REPORTED — suppressing them would trade a false '
+            . 'diagnosis for a missing one',
+        );
+    }
+
+    /**
+     * The middle case: testdox explains SOME of the shortfall. Neither "it is testdox, leave
+     * the config alone" nor "the config is the only cause" is true, so both are named and the
+     * config is not exonerated.
+     */
+    public function test_testdox_that_explains_only_part_of_the_shortfall_names_both_causes(): void
+    {
+        $testdox = $this->runRealPhpunit([self::REAL_TEST_FILE, '--testdox']);
+        $this->assertTheFixtureStillSkipsExactlyOneTest($testdox);
+
+        $result = $this->runScript($this->fixtureFile(
+            'partial-testdox.log',
+            $testdox . "\n" . self::COUNT_ONLY,
+        ));
+
+        self::assertSame(4, $result['exit'], $result['stderr']);
+        self::assertStringContainsString(
+            'BOTH causes are in play',
+            $result['stderr'],
+            'one testdox skip cannot account for five missing names; the message must name the '
+            . 'residual as well',
+        );
+        self::assertStringNotContainsString('Do NOT change phpunit.xml', $result['stderr']);
+    }
+
+    /**
+     * Round-2 finding 5: `No tests executed!` anywhere in the input used to switch the
+     * over-count check off for the whole input, so a genuinely drifting second run rode in
+     * free. The allowance is now bounded by what the no-totals runs themselves declared.
+     */
+    public function test_a_no_totals_run_does_not_excuse_over_counting_elsewhere_in_the_same_log(): void
+    {
+        $alone = $this->runRealPhpunit([$this->writeSuiteSkipProbe()]);
+        self::assertStringContainsString('No tests executed!', $alone, 'the probe stopped skipping its suite');
+
+        // Control: on its own, the no-totals shape is legitimate and must still pass.
+        $control = $this->runScript($this->fixtureFile('nototals-alone.log', $alone));
+        self::assertSame(0, $control['exit'], $control['stderr']);
+
+        // A second run in the same log declaring 2 while its summary says 1 is real drift,
+        // and the first run's missing totals line does not explain it.
+        $over = "PHPUnit 10.5.64\n\nThere were 2 skipped tests:\n\n"
+            . "1) Phlix\Tests\Unit\Alpha\AlphaTest::testGamma\nreason\n\n"
+            . "2) Phlix\Tests\Unit\Beta\BogusTest::testBogus\nreason\n\n"
+            . "OK, but some tests were skipped!\nTests: 9, Assertions: 12, Skipped: 1.\n";
+
+        $result = $this->runScript($this->fixtureFile('nototals-plus-drift.log', $alone . "\n" . $over));
+
+        self::assertSame(
+            3,
+            $result['exit'],
+            "the `No tests executed!` allowance must be BOUNDED by what those runs declared (1\n"
+            . "here), not switched off for the whole input — otherwise a bogus name rides in on\n"
+            . "exit 0. stderr:\n" . $result['stderr'],
+        );
+        self::assertSame([], $result['lines'], 'no set may be written when the numbers do not add up');
+        self::assertStringContainsString('leaving 1 unexplained', $result['stderr']);
+    }
+
     // ---------------------------------------------------------------------------------
     // helpers
     // ---------------------------------------------------------------------------------
+
+    /**
+     * The premise every real-binary expectation below rests on, asserted with its OWN
+     * message: `REAL_TEST_FILE` still skips exactly one test.
+     *
+     * Round 2 of this step's review found three of those tests failing with "phpunit.xml is
+     * not reaching it" when the likelier cause is that somebody made
+     * `BackupManagerTest::testCreateBackupGeneratesIdAndPath` stop skipping — which has
+     * nothing to do with `phpunit.xml`. `Skipped: N` is printed whatever the config says
+     * (`SummaryPrinter.php`), so this check is independent of the thing under test.
+     */
+    private function assertTheFixtureStillSkipsExactlyOneTest(string $output): void
+    {
+        self::assertStringContainsString(
+            'Skipped: 1',
+            $output,
+            self::REAL_TEST_FILE . ' no longer skips exactly one test, so every expectation '
+            . 'in this test is measuring something else. This is NOT a phpunit.xml problem: '
+            . 'the count is printed whatever the config says. Pick another fixture with one '
+            . "unconditional markTestSkipped(), or restore this one. Output was:\n" . $output,
+        );
+    }
+
+    /**
+     * The script with its comment lines removed, so an assertion about the script's
+     * BEHAVIOUR cannot be satisfied by the script's own prose. Round 2 of this step's
+     * review found the byte-order fallback passing on the header's copy-paste one-liner.
+     */
+    private function scriptCode(): string
+    {
+        $code = [];
+
+        foreach (explode("\n", (string) file_get_contents(self::SCRIPT)) as $line) {
+            if (!str_starts_with(ltrim($line), '#')) {
+                $code[] = $line;
+            }
+        }
+
+        $joined = implode("\n", $code);
+
+        // Anti-vacuity: stripping must leave the script, not empty it.
+        self::assertStringContainsString('set -uo pipefail', $joined, 'comment stripping ate the script');
+        self::assertStringNotContainsString('THE ONE-LINER', $joined, 'the header comment survived stripping');
+
+        return $joined;
+    }
+
+    /**
+     * Every workflow file in a directory. GitHub Actions accepts BOTH `.yml` and `.yaml`,
+     * and a glob that sees only one of them is a guard with a hole in it.
+     *
+     * @return list<string>
+     */
+    private function workflowFiles(string $dir): array
+    {
+        $files = [
+            ...(glob($dir . '/*.yml') ?: []),
+            ...(glob($dir . '/*.yaml') ?: []),
+        ];
+
+        sort($files);
+
+        return array_values($files);
+    }
+
+    /**
+     * Every `run:` scalar of every step of every job in one workflow's SOURCE.
+     *
+     * Parsed, not grepped: a parse drops YAML comments (so the S345 prose that explains
+     * why `--testdox` is banned cannot be mistaken for a command) and keeps a `run: |`
+     * block whole, which is what makes folding its continuations possible.
+     *
+     * @return list<string>
+     */
+    private function runScalars(string $yaml): array
+    {
+        $parsed = Yaml::parse($yaml);
+        self::assertIsArray($parsed, 'workflow does not parse as YAML');
+
+        $out = [];
+
+        foreach ((is_array($parsed['jobs'] ?? null) ? $parsed['jobs'] : []) as $job) {
+            if (!is_array($job) || !is_array($job['steps'] ?? null)) {
+                continue;
+            }
+
+            foreach ($job['steps'] as $step) {
+                if (is_array($step) && is_string($step['run'] ?? null)) {
+                    $out[] = $step['run'];
+                }
+            }
+        }
+
+        return $out;
+    }
+
+    /**
+     * A shell body split into LOGICAL command lines: `\`-continuations folded into one
+     * line, and any unquoted `#` comment removed.
+     *
+     * Both halves are load-bearing. Without the folding, `--testdox` on its own
+     * continuation line is invisible to a per-line check. Stripping at the FIRST `#`
+     * regardless of quoting (the previous version) hides the rest of a command that
+     * legitimately contains one, e.g. `--filter '#[Group]'`.
+     *
+     * @return list<string>
+     */
+    private function logicalCommandLines(string $shell): array
+    {
+        // Fold `\` + newline (plus the continuation's leading indent) into a single space.
+        $folded = preg_replace('/\\\\\n\s*/', ' ', $shell) ?? $shell;
+
+        $out = [];
+
+        foreach (explode("\n", $folded) as $line) {
+            $quote = '';
+            $code = '';
+
+            foreach (str_split($line === '' ? ' ' : $line) as $index => $char) {
+                if ($quote !== '') {
+                    $quote = $char === $quote ? '' : $quote;
+                } elseif ($char === '"' || $char === "'") {
+                    $quote = $char;
+                } elseif ($char === '#' && ($index === 0 || preg_match('/\s/', $line[$index - 1]) === 1)) {
+                    break;
+                }
+
+                $code .= $char;
+            }
+
+            $out[] = trim($code);
+        }
+
+        return $out;
+    }
+
+    /**
+     * Every place in one workflow's source where PHPUnit is invoked with `--testdox`.
+     *
+     * `--testdox` is matched as a whitespace-delimited TOKEN, so `--testdox-html` and
+     * `--testdox-text` — logging targets that do not put PHPUnit into testdox output mode
+     * (Cli/Builder.php:851-862) — are not false positives.
+     *
+     * @return list<string>
+     */
+    private function testdoxOffenders(string $yaml, string $label): array
+    {
+        $out = [];
+
+        foreach ($this->runScalars($yaml) as $run) {
+            foreach ($this->logicalCommandLines($run) as $line) {
+                if (!str_contains($line, 'phpunit')) {
+                    continue;
+                }
+
+                foreach (preg_split('/\s+/', $line) ?: [] as $token) {
+                    if (trim($token, "'\"") === '--testdox') {
+                        $out[] = $label . ': ' . $line;
+
+                        continue 2;
+                    }
+                }
+            }
+        }
+
+        return $out;
+    }
 
     private function fixtureFile(string $name, ?string $contents = null): string
     {

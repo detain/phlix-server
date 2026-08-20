@@ -186,21 +186,23 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   "unproven" for exactly this reason.
 
   The **config attribute** was chosen over the `--display-skipped` CLI flag deliberately: PHPUnit is
-  invoked from five places in this repo (`.github/workflows/phpunit.yml:173,329`,
-  `.github/workflows/syncplay-e2e.yml:90,96` and `scripts/assertion-escape-audit.php:504`) plus
+  invoked from five places in this repo — twice in `.github/workflows/phpunit.yml`, twice in
+  `.github/workflows/syncplay-e2e.yml` and once in `scripts/assertion-escape-audit.php` — plus
   every developer's shell, and a flag would have to be re-added to each of them and to every job
   added later. The attribute is read by every invocation that loads `phpunit.xml`, so a new job
-  cannot silently ship without it.
+  cannot silently ship without it. Those sites are named by FILE and their count is RE-DERIVED by
+  `SkippedTestNameReportingTest::test_the_documented_invocation_sites_are_still_the_real_ones`;
+  the first revision of this entry cited line numbers and its own commit moved them.
 
   ⚠ **It is not universal, and two exceptions are real.** A `--testdox` run can never name its
   skips: PHPUnit builds the default result printer for testdox with its
   `$displayDetailsOnSkippedTests` argument hardcoded `false`
   (`vendor/phpunit/phpunit/src/TextUI/Output/Facade.php:204-221`), so it counts them in
-  `Skipped: N` and prints no list, with or without `--display-skipped`. `syncplay-e2e.yml:90`
+  `Skipped: N` and prints no list, with or without `--display-skipped`. `syncplay-e2e.yml`
   passed `--testdox`; **it no longer does** — the prettified list was cosmetic and it also broke a
   whole-run-log comparison by adding to the count while contributing no name. The
   `assertion-escape-probe` job captures PHPUnit's output into a PHP variable and never echoes it
-  (`scripts/assertion-escape-audit.php:504-534`), so no name set is obtainable from that job either;
+  (`scripts/assertion-escape-audit.php`), so no name set is obtainable from that job either;
   its config is not at fault. The script reports the testdox case as exit **5** with that
   explanation rather than blaming `phpunit.xml`.
 

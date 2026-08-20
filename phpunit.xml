@@ -15,12 +15,18 @@
     Why the CONFIG ATTRIBUTE and not the `display-skipped` CLI flag (CLI flags are
     spelled here without their two leading hyphens, because an XML comment may not
     contain them): the flag is per-invocation, and PHPUnit is invoked from five
-    places in this repo (.github/workflows/phpunit.yml:173,329,
-    .github/workflows/syncplay-e2e.yml:90,96, scripts/assertion-escape-audit.php:504)
+    places in this repo — twice in .github/workflows/phpunit.yml, twice in
+    .github/workflows/syncplay-e2e.yml, once in scripts/assertion-escape-audit.php —
     plus every developer's shell. A flag would have to be re-added to each of them
     and to every job added later — a hand-written list that never re-derives. This
     attribute is read by every invocation that loads this file, so a new job cannot
     silently ship without it.
+
+    Those sites are cited by FILE, not by line: the revision of this comment that
+    cited lines was made stale by its own commit. The count and the per-file
+    multiplicity are RE-DERIVED from the repo by
+    SkippedTestNameReportingTest::test_the_documented_invocation_sites_are_still_the_real_ones,
+    which fails if an invocation is added, moved or removed.
 
     ⚠ It is NOT universal, and the two exceptions are real rather than theoretical:
 
@@ -29,10 +35,11 @@
         (vendor/phpunit/phpunit/src/TextUI/Output/Facade.php:204-221; the
         configuration value is not consulted on that path), so such a run counts its
         skips in "Skipped: N" and can never name them, whatever this attribute or a
-        `display-skipped` flag say. syncplay-e2e.yml:90 used to pass it and no longer
-        does. scripts/skipped-test-names.sh detects testdox output and exits 5 saying
+        `display-skipped` flag say. syncplay-e2e.yml used to pass it and no longer
+        does, and SkippedTestNameReportingTest re-derives that ban from every .yml and
+        .yaml workflow, folding shell continuations first. scripts/skipped-test-names.sh detects testdox output and exits 5 saying
         so, instead of blaming this file.
-      * the assertion-escape prober (scripts/assertion-escape-audit.php:504) captures
+      * the assertion-escape prober (scripts/assertion-escape-audit.php) captures
         PHPUnit's output into a PHP variable and never echoes it, so no name set is
         obtainable from that job. Its config is fine; its output never leaves the
         process.

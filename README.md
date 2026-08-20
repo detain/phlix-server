@@ -635,7 +635,16 @@ value is not consulted there), so a `--testdox` run adds to `Skipped: N` and can
 name those skips, with or without `--display-skipped`. No workflow passes `--testdox`
 any more (`syncplay-e2e.yml` dropped it in S345 for exactly this reason). If you add it
 back, or use it locally, the script exits **5** and says so — do **not** "fix"
-`phpunit.xml` in response; re-run without `--testdox`.
+`phpunit.xml` in response; re-run without `--testdox`. It exits 5 only when testdox
+skips account for **every** unnamed skip in the input; when they account for some of
+them, both causes are named and `phpunit.xml` is not exonerated.
+
+⚠ **The second exception is the `assertion-escape-probe` job.** It runs PHPUnit from
+`scripts/assertion-escape-audit.php`, which captures the output into a PHP variable and
+only tests it for a marker — it never echoes it. So no log line and no name set is
+obtainable from that job, whatever `phpunit.xml` says. Nothing is wrong with its config;
+its output simply never leaves the process. Those are the only two exceptions: PHPUnit's
+`--teamcity` printer still emits the skipped-details list, and was checked.
 
 Skipped test **suites** (a class-level `#[Requires*]`, or `markTestSkipped()` in
 `setUpBeforeClass()`) are counted in the same `Skipped: N` but named under a different
@@ -652,11 +661,13 @@ over the name set separates them; the count cannot. `scripts/skipped-test-names.
 writes only the sorted set to stdout (so `comm`/`diff` can eat it directly), puts its
 denominators on stderr, and **fails loudly** rather than printing an empty set when
 the input is not a PHPUnit run (exit 2), when the run skipped tests but printed no
-names (exit 4), when the names are unobtainable because the input is `--testdox` output
-(exit 5), when the numbers do not add up (exit 3) or when the set could not be written
-in full (exit 6). Every one of those codes names a cause that is true for the input that
-triggered it — a wrong diagnosis would send the next reader to fix the wrong thing. See
-the header of that script for the full contract.
+names and testdox does not explain them (exit 4), when every unnamed skip **is** a
+testdox skip (exit 5), when the numbers do not add up (exit 3) or when the set could not
+be written in full (exit 6). Every one of those codes names a cause that is true for the
+input that triggered it — a wrong diagnosis would send the next reader to fix the wrong
+thing, and the round-2 review of S345 caught exit 5 doing exactly that before it
+shipped. The script's header enumerates every exit path, the input class that reaches it
+and why its message holds for all of them.
 
 **Keep the suite hermetic w.r.t. the environment.** `PHLIX_DOMAIN` changes real
 behaviour (it is the OAuth callback-URL allowlist — see

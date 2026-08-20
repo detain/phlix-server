@@ -7,6 +7,20 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Changed
+
+- **The PHPStan `src/` gate now carries zero suppressions, and a test asserts it stays that way
+  (S343).** `phpstan.neon` held three stale suppressions — two `excludePaths` entries
+  (`src/Server/WebSocket/Events.php`, `src/Server/Arr/WorkermanArrTransport.php`) and one
+  `reportUnmatched: false` `ignoreErrors` rule for a `RadarrClient` constructor call — that
+  excused nothing (`src/` measured `[OK]` at level 9 with and without `ext-swoole`), and the
+  ignore rule's `reportUnmatched: false` meant PHPStan could never flag it as dead: an ignore
+  list that cannot self-clear is a baseline by another name. All three are deleted,
+  `phpstan.neon.dist` is brought back into line (its own stale `excludePaths` entry too), and
+  `StaticAnalysisScopeTest` now asserts `ignoreErrors: []` and an empty `excludePaths`
+  allow-list on the effective `src/` config — the full invariant set the test's name and
+  docblock always claimed.
+
 ### Security
 
 - **The admin gate on four more controllers is now a construction-time requirement, not an optional

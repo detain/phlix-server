@@ -142,6 +142,14 @@ final class AccessSchedule
         // seconds component is not a multiple of 60 (e.g. "00:10:30") made `/`
         // yield a float and the `: int` return type raise a TypeError at runtime.
         // Truncating to whole minutes is what the declared 0-1440 range means.
+        //
+        // Prevention note (S119/S336, answered in S120 2026-07-27, execution-verified):
+        // PHPStan level 9 does NOT flag this /-into-:int shape. It reports
+        // "should return int but returns float" for an explicit float literal, but
+        // reports nothing for the division form, because PHPStan types `$int / 60`
+        // as a benevolent (float|int) union — it never concludes the expression IS
+        // a float. So a static-analysis gate cannot pin this; only a test that
+        // reaches this line with a non-multiple-of-60 seconds component can.
         return intdiv($hours * 3600 + $minutes * 60 + $seconds, 60);
     }
 

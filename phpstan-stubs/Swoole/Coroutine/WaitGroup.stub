@@ -70,14 +70,16 @@ namespace Swoole\Coroutine;
  *    with and without the extension. If production ever wants `WaitGroup`, adding this
  *    same file to `phpstan.neon`'s `scanFiles` is what makes MediaScanner's workaround
  *    optional — that is the forward path, recorded here rather than guessed at later.
- * 2. **`phpstan.neon` uses `excludePaths`** for two Swoole-using `src/` files. Excluding
- *    the test file would drop a whole real-DB pool-concurrency integration test from the
- *    gate S128 just built — the single file in that set most worth type-checking — and
- *    that is precisely the silent narrowing `StaticAnalysisScopeTest` exists to notice.
- *    Measured aside that weakens the precedent anyway: `Swoole\Coroutine\Http\Client`
- *    (the class the `Arr/WorkermanArrTransport.php` exclusion is about) DOES resolve
- *    with no extension loaded, so that exclusion is not evidence that exclusion is the
- *    right tool for a missing-stub problem.
+ * 2. **`phpstan.neon` used to use `excludePaths`** for two Swoole-using `src/` files and
+ *    no longer does. S343 deleted both entries after measuring that the files need no
+ *    exclusion at all (`src/` at level 9 is `[OK]` with and without the extension, both
+ *    before and after). The old precedent also measured weak on its own terms:
+ *    `Swoole\Coroutine\Http\Client` (the class the `Arr/WorkermanArrTransport.php`
+ *    exclusion was about) DOES resolve with no extension loaded, so it was never
+ *    evidence that exclusion is the right tool for a missing-stub problem. Excluding a
+ *    whole file also drops it from the gate — the silent narrowing
+ *    `StaticAnalysisScopeTest` exists to notice — which is why excluding this test
+ *    would be exactly wrong.
  * 3. **Installing swoole in the phpstan CI job** (which the psalm job in that same file
  *    already does, per S146) would fix CI and nothing else: a swoole-less box still
  *    reports the 10 errors, the production constraint above stays, and the gate starts

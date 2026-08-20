@@ -13,12 +13,12 @@
   - Bootstrap: `tests/bootstrap.php`; DB credentials via env: `DB_HOST=127.0.0.1`, `DB_DATABASE=phlix_test`, `DB_USER=root`, `DB_PASSWORD=root`
   - Source: `composer.json:L41` (phpunit ^10.0 in require-dev), `phpunit.xml:L3-13` (testsuite definitions), `AGENTS.md`
 
-- **static analysis:** `phpstan analyze -c phpstan.neon.dist`
-  - Runs at level 9 (max); analyzes `src/` only
-  - Bootstrap file: `vendor/autoload.php` (phpstan.neon.dist:L7-8)
-  - Excludes: `src/Server/WebSocket/Events.php` (phpstan.neon.dist:L6)
-  - Note: plan references `phpstan -c phpstan.neon.dist` at L9 — same command
-  - Source: `phpstan.neon.dist:L2` (level 9), `AGENTS.md` (`./vendor/bin/phpstan analyze src/ --level=9`)
+- **static analysis:** `./vendor/bin/phpstan analyze src/ --level=9` (CI: `--no-progress --error-format=github`)
+  - No `-c`: loads `phpstan.neon` (effective config; `.neon` overrides `.dist`)
+  - Tests config: `./vendor/bin/phpstan analyse -c phpstan-tests.neon` (level 2, `tests/` only)
+  - Runs at level 9; analyzes `src/` only; no baseline, no ignoreErrors, no excludePaths
+  - Bootstrap file: `vendor/autoload.php` (phpstan.neon:L6-7)
+  - Source: `phpstan.neon:L2-4` (level/paths), `.github/workflows/coding-standards.yml:142` (src gate), `:155` (tests gate)
 
 - **lint:** `./vendor/bin/phpcs --standard=PSR12 src/`
   - PSR-12 coding standard; targets `src/` directory

@@ -1,8 +1,9 @@
 # S128 — PHPStan for tests/. A SEPARATE config on purpose.
 #
 # ┌───────────────────────────────────────────────────────────────────────────────┐
-# │ src/ KEEPS LEVEL 9 WITH NO BASELINE AND NO ignoreErrors. Nothing in this file  │
-# │ touches that. `phpstan.neon` is the src/ config; do not merge the two.         │
+# │S343 — src/ KEEPS LEVEL 9 WITH NO BASELINE, NO ignoreErrors AND EMPTY           │
+# │excludePaths. StaticAnalysisScopeTest asserts all of it against phpstan.neon.   │
+# │Nothing in this file touches that. Do not merge the two configs.                │
 # └───────────────────────────────────────────────────────────────────────────────┘
 #
 # ⚠ THE TRAP THIS FILE EXISTS BECAUSE OF. Before S128, `phpstan.neon` said

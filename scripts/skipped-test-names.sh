@@ -37,11 +37,17 @@
 # =============================================================================
 # `phpunit.xml` carries `displayDetailsOnSkippedTests="true"` (S345). That is the
 # CONFIG attribute rather than the `--display-skipped` CLI flag on purpose: the flag
-# is per-invocation, and PHPUnit is invoked from five places in this repo
-# (.github/workflows/phpunit.yml:173,329, .github/workflows/syncplay-e2e.yml:90,96,
-# and scripts/assertion-escape-audit.php:504) plus every developer's shell. A flag
-# would have to be re-added to each of them and to every job added later -- the
+# is per-invocation, and PHPUnit is invoked from several places in this repo
+# (.github/workflows/phpunit.yml twice, .github/workflows/syncplay-e2e.yml twice, and
+# scripts/assertion-escape-audit.php once) plus every developer's shell. A flag would
+# have to be re-added to each of them and to every job added later -- the
 # "hand-written list that never re-derives" shape.
+#
+# ⚠ Those sites are named by FILE on purpose: an earlier revision of this comment cited
+# line numbers, and its own commit moved them. The count and the per-file multiplicity
+# are RE-DERIVED from the repo by
+# tests/Unit/Support/SkippedTestNameReportingTest::test_the_documented_invocation_sites_are_still_the_real_ones,
+# which fails if an invocation is added, moved between files or removed.
 #
 # ⚠ The attribute is read by every invocation that loads phpunit.xml, but it only
 # REACHES the output of invocations that use PHPUnit's DEFAULT result printer. It is
@@ -57,8 +63,11 @@
 #     sections, with and without `--display-skipped`. This script detects testdox
 #     output and exits 5 saying so, instead of blaming the config (see below).
 #     `syncplay-e2e.yml` used to pass `--testdox`; S345's fixer removed it for
-#     exactly this reason.
-#   * the assertion-escape prober (scripts/assertion-escape-audit.php:504) captures
+#     exactly this reason, and
+#     tests/Unit/Support/SkippedTestNameReportingTest::test_no_workflow_invokes_phpunit_with_testdox
+#     re-derives the ban from every .yml AND .yaml workflow, folding backslash
+#     continuations first so a wrapped command cannot hide the flag.
+#   * the assertion-escape prober (scripts/assertion-escape-audit.php) captures
 #     PHPUnit's output into a PHP variable and only tests it for a marker; it never
 #     echoes it, so no log and no name set is obtainable from that job. Nothing is
 #     wrong with the config there -- the output simply never leaves the process.
@@ -88,7 +97,9 @@
 # ⚠ A run in which EVERY suite was skipped prints `No tests executed!` and NO
 # `Tests: ...` line at all (SummaryPrinter.php:35-41), so the `Skipped: N`
 # cross-check is simply absent for it; the detail list is then the only source. This
-# script accounts for that instead of reporting drift.
+# script accounts for that instead of reporting drift -- but only up to what THOSE runs
+# declared (`nototals_declared`, computed per run). One `No tests executed!` anywhere in
+# a whole-workflow log does not buy an unbounded excuse for every other run in it.
 #
 # =============================================================================
 # A PARSER THAT MATCHES NOTHING MUST NOT READ AS A PASS
@@ -103,11 +114,20 @@
 #     2  the input is not PHPUnit output at all (no result summary anywhere)
 #     3  parser drift: the numbers in the input do not add up, so the set may be
 #        partial and no better cause can be named
-#     4  the run DID skip tests, printed no names, and is NOT testdox output --
-#        `displayDetailsOnSkippedTests` is off, so the set is unobtainable
-#     5  the input contains `--testdox` output, whose skips can never be named (see
-#        above). NOT a config fault; re-run without `--testdox`.
+#     4  skips were counted, NO detail list was printed at all, and testdox does not
+#        account for all of them -- `displayDetailsOnSkippedTests` is off (or this
+#        invocation did not load phpunit.xml), so the set is unobtainable
+#     5  EVERY unnamed skip in the input is a testdox skip, and those can never be
+#        named (see above). NOT a config fault; re-run without `--testdox`.
 #     6  the sorted set could not be written (sort or the caller's redirect failed)
+#
+# ⚠ 5 is gated on the number of testdox SKIP lines (`↩`), never on the mere presence of
+# testdox-looking output, and it is taken only when those skips account for the WHOLE
+# shortfall. Round 2 of this step's review found the earlier gate (`testdox_lines > 0`)
+# telling the reader "Do NOT change phpunit.xml" about a count-only run that happened to
+# share a log with a zero-skip testdox run -- i.e. exactly the wrong-diagnosis defect
+# this contract exists to prevent, in mirror image. When testdox covers only PART of the
+# shortfall, both causes are named and phpunit.xml is not exonerated.
 #
 # Exit 4 is the one that matters most, and it is why this script cross-checks TWO
 # independent numbers instead of one. On master before S345 the log of run
@@ -120,7 +140,28 @@
 # Every non-zero exit must name a cause that is TRUE for the input that produced it:
 # a wrong diagnosis is worse than none, because it sends the next reader to fix the
 # wrong thing. That is why 4 and 5 are separate codes, and why 3's message no longer
-# claims "fix this parser" when a missing list is the likelier cause.
+# claims "fix this parser" when a missing list is the likelier cause. Enumerated, with
+# the input class that reaches each exit and the claim its message makes:
+#
+#   2  summary == 0. NOTHING in the input matches any of PHPUnit's seven terminating
+#      summary lines. Claim: "not a PHPUnit run, an empty set proves nothing" -- true by
+#      construction; every terminating run prints one of those lines.
+#   5  summarised > declared AND testdox_skips >= (summarised - declared) > 0. Claim:
+#      every unnamed skip is a testdox skip, so the config cannot name them. True
+#      because testdox skip lines are counted directly and never over-attributed.
+#   4  summarised > declared, declared == 0, and testdox_skips < the shortfall. Claim:
+#      the residual (shortfall minus testdox's share) was counted, not named and not
+#      testdox's, and no list was printed at all -- so either the attribute is off or
+#      phpunit.xml was not loaded. Those are the only two ways the default printer
+#      publishes a count with no list.
+#   3  three disjoint shapes, each stating its own arithmetic: (a) shortfall remains
+#      with a NON-empty list, so some run in the input printed no list -- partial set,
+#      not written; (b) declared > summarised beyond what the `No tests executed!` runs
+#      themselves declared -- unexplained over-count; (c) extracted != declared -- the
+#      ENTRY format drifted. Each message prints the numbers it derived its claim from.
+#   6  the `sort` pipeline (or the caller's redirect) failed. Claim: stdout is truncated.
+#      True: the pipeline is the only writer of stdout and pipefail is on.
+#   0  none of the above: the two denominators agree and every declared name parsed.
 #
 # KNOWN LIMIT, recorded rather than hidden: a data-set label containing a literal
 # NEWLINE is emitted truncated at that newline (the entry spans two lines and the
@@ -214,6 +255,18 @@ summarised="$(printf '%s\n' "$normalised" \
     | sed -nE 's/^Tests: [0-9]+,.*[^A-Za-z]Skipped: ([0-9]+).*/\1/p' \
     | awk '{ t += $1 } END { print t + 0 }')"
 
+# How much of `declared` belongs to runs that published NO totals line. PHPUnit prints
+# each run's lists BEFORE its summary, so anything declared since the last summary and
+# then followed by `No tests executed!` has no `Skipped: N` term to match, legitimately.
+# This BOUNDS the allowance: an input-wide switch-off would excuse real drift in every
+# other run sharing the same log.
+nototals_declared="$(printf '%s\n' "$normalised" | awk '
+    /^There (was|were) [0-9]+ skipped (tests?|test suites?):$/ { pending += $3; next }
+    /^No tests executed!$/                                     { allowed += pending; pending = 0; next }
+    /^Tests: /                                                 { pending = 0 }
+    END { print allowed + 0 }
+')"
+
 names="$(printf '%s\n' "$normalised" | awk '
     /^There (was|were) [0-9]+ skipped test suites?:$/ { mode = "suite"; next }
     /^There (was|were) [0-9]+ skipped tests?:$/       { mode = "test";  next }
@@ -229,41 +282,71 @@ else
     extracted=0
 fi
 
-printf 'skipped-test-names: %s lines read, %s PHPUnit result summary line(s) seen, %s skipped test(s) in the run summaries (%s run(s) printed no totals line), %s declared by the detail lists, %s testdox result line(s) (%s skipped), %s name(s) extracted.\n' \
-    "$lines_read" "$summary" "$summarised" "$no_totals" "$declared" "$testdox_lines" "$testdox_skips" "$extracted" >&2
+printf 'skipped-test-names: %s lines read, %s PHPUnit result summary line(s) seen, %s skipped test(s) in the run summaries (%s run(s) printed no totals line, declaring %s between them), %s declared by the detail lists, %s testdox result line(s) (%s skipped), %s name(s) extracted.\n' \
+    "$lines_read" "$summary" "$summarised" "$no_totals" "$nototals_declared" "$declared" "$testdox_lines" "$testdox_skips" "$extracted" >&2
 
 if [ "$summary" -eq 0 ]; then
     printf 'skipped-test-names: FATAL -- no PHPUnit result summary in the input, so this is not a PHPUnit run and an empty name set proves nothing. Feed it `./vendor/bin/phpunit 2>&1` or `gh run view <id> --log`.\n' >&2
     exit 2
 fi
 
-# The input under-reports names. Name the cause that is actually true for it.
+# The input under-reports names: skips were counted that no list named. Name the cause
+# that is TRUE for this input, and never attribute more to a cause than it can carry --
+# a wrong diagnosis is worse than none, because it sends the reader somewhere else.
 if [ "$summarised" -gt "$declared" ]; then
     missing=$((summarised - declared))
 
-    if [ "$testdox_lines" -gt 0 ]; then
-        printf 'skipped-test-names: FATAL -- %s skipped test(s) in this input can never be named, because it contains `--testdox` output (%s testdox result line(s), %s of them skipped). PHPUnit constructs the default result printer with displayDetailsOnSkippedTests hardcoded FALSE when --testdox is in effect (vendor/phpunit/phpunit/src/TextUI/Output/Facade.php:204-221); the configuration value is not consulted, so neither phpunit.xml nor --display-skipped can fix it. Do NOT change phpunit.xml -- it is not the cause. Re-run the invocation WITHOUT --testdox, or feed this script only the non-testdox step of the log.\n' \
+    # `--testdox` can only explain the skips IT counted, and none at all when it skipped
+    # nothing. Gating on `testdox_lines` instead would blame testdox for a plain run that
+    # merely shares a log with one -- or for any other tool that prints those glyphs --
+    # and then tell the reader to leave phpunit.xml alone when phpunit.xml IS the cause.
+    if [ "$testdox_skips" -gt "$missing" ]; then
+        testdox_covers="$missing"
+    else
+        testdox_covers="$testdox_skips"
+    fi
+    residual=$((missing - testdox_covers))
+
+    # residual == 0 implies testdox_covers == missing > 0: testdox accounts for EVERY
+    # unnamed skip, and only then is phpunit.xml provably not the cause.
+    if [ "$residual" -eq 0 ]; then
+        printf 'skipped-test-names: FATAL -- all %s skipped test(s) that this input counts but does not name are accounted for by testdox output: it carries %s line(s) in --testdox result format, %s of them skips. PHPUnit constructs the default result printer with displayDetailsOnSkippedTests hardcoded FALSE when --testdox is in effect (vendor/phpunit/phpunit/src/TextUI/Output/Facade.php:204-221), so the configuration value is not consulted and neither phpunit.xml nor --display-skipped can name those skips. Do NOT change phpunit.xml -- for a testdox run it is not the cause. Re-run WITHOUT --testdox, or feed this script only the non-testdox steps of the log.\n' \
             "$missing" "$testdox_lines" "$testdox_skips" >&2
         exit 5
     fi
 
+    # Testdox cannot carry the whole shortfall, so from here it is reported as EVIDENCE
+    # only, and the reader is NOT told that phpunit.xml is innocent.
+    if [ "$testdox_covers" -gt 0 ]; then
+        also=" Testdox accounts for $testdox_covers of the unnamed skip(s) ($testdox_skips testdox skip line(s), unnamable by design -- Facade.php:204-221); the remaining $residual it does not, so BOTH causes are in play and phpunit.xml may be one of them."
+    elif [ "$testdox_lines" -gt 0 ]; then
+        also=" (Evidence, not a cause: this input carries $testdox_lines line(s) in --testdox result format, of which $testdox_skips are skips, so testdox explains none of the shortfall.)"
+    else
+        also=""
+    fi
+
     if [ "$declared" -eq 0 ]; then
-        printf 'skipped-test-names: FATAL -- the run summaries report %s skipped test(s) but printed NO names, and this is not testdox output. phpunit.xml has lost displayDetailsOnSkippedTests="true" (S345), or this invocation did not load phpunit.xml (a `-c`/`--configuration` pointing elsewhere, or `--no-configuration`). The name set cannot be recovered from this output; fix the config and re-run rather than reading the empty set as "nothing skipped".\n' \
-            "$summarised" >&2
+        printf 'skipped-test-names: FATAL -- %s skipped test(s) in this input are counted, NOT named, and not explained by testdox, and no skipped-details list was printed at all. phpunit.xml has lost displayDetailsOnSkippedTests="true" (S345), or the invocation did not load phpunit.xml (a `-c`/`--configuration` pointing elsewhere, or `--no-configuration`). The name set cannot be recovered from this output; fix the config and re-run rather than reading the empty set as "nothing skipped".%s\n' \
+            "$residual" "$also" >&2
         exit 4
     fi
 
-    printf 'skipped-test-names: FATAL -- the run summaries report %s skipped test(s) but the detail lists declared only %s, so %s name(s) are missing. Some run in this input printed no skipped list: check that every invocation loads phpunit.xml (displayDetailsOnSkippedTests="true") and that none of them uses --testdox. The set below would be PARTIAL, so it is not written.\n' \
-        "$summarised" "$declared" "$missing" >&2
+    printf 'skipped-test-names: FATAL -- the run summaries report %s skipped test(s) but the detail lists declared only %s, so %s name(s) are missing. Some run in this input printed no skipped list: check that every invocation loads phpunit.xml (displayDetailsOnSkippedTests="true") and that none of them uses --testdox. The set below would be PARTIAL, so it is not written.%s\n' \
+        "$summarised" "$declared" "$missing" "$also" >&2
     exit 3
 fi
 
-# More declared than summarised is legitimate ONLY for a run that printed no totals
-# line at all (`No tests executed!`); otherwise the parser has over-counted.
-if [ "$declared" -gt "$summarised" ] && [ "$no_totals" -eq 0 ]; then
-    printf 'skipped-test-names: FATAL -- the detail lists declared %s skipped test(s) but the run summaries report only %s, and no run reported `No tests executed!` (the one shape that legitimately publishes a list without a totals line). The output format has drifted; fix this parser rather than trusting the set.\n' \
-        "$declared" "$summarised" >&2
-    exit 3
+# More declared than summarised is legitimate only for the runs that printed no totals
+# line at all (`No tests executed!`), and only up to what THOSE runs declared -- an
+# input-wide switch-off would excuse real drift anywhere else in the same log.
+if [ "$declared" -gt "$summarised" ]; then
+    over=$((declared - summarised))
+
+    if [ "$over" -gt "$nototals_declared" ]; then
+        printf 'skipped-test-names: FATAL -- the detail lists declared %s skipped test(s)/suite(s) but the run summaries report only %s. At most %s of that difference is explained by the %s run(s) that reported `No tests executed!` (the one shape that legitimately publishes a list with no totals line), leaving %s unexplained. The output format has drifted; fix this parser rather than trusting the set.\n' \
+            "$declared" "$summarised" "$nototals_declared" "$no_totals" $((over - nototals_declared)) >&2
+        exit 3
+    fi
 fi
 
 if [ "$extracted" -ne "$declared" ]; then

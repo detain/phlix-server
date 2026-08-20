@@ -171,6 +171,107 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Added
 
+- **Skipped tests are now reported BY NAME, so a skip set can be compared with `comm` instead of by
+  count (S345).** `phpunit.xml` gains `displayDetailsOnSkippedTests="true"`, and
+  `scripts/skipped-test-names.sh` turns any run's output — local, or a `gh run view <id> --log` —
+  into a sorted, `comm`-ready set of `Class::method` names.
+
+  **Why a count was never enough.** Measured on master run `32027697809`: the log says
+  `Skipped: 3` and contains **zero** `There were N skipped tests:` sections, so the only published
+  fact about the skip set was its size. A size cannot distinguish *a test started skipping* from *a
+  conditionally-skipped test turned into a failure* from *a test disappeared* — all three move it
+  identically, and any two of them together can leave it **unmoved**. It also drifts on its own:
+  this repo has legitimate environment-dependent skips, and a box with no MySQL, Chromium or
+  mysqldump reports **259** where CI reports **3**. Two audits had to record skip movement as
+  "unproven" for exactly this reason.
+
+  The **config attribute** was chosen over the `--display-skipped` CLI flag deliberately: PHPUnit is
+  invoked from five places in this repo — twice in `.github/workflows/phpunit.yml`, twice in
+  `.github/workflows/syncplay-e2e.yml` and once in `scripts/assertion-escape-audit.php` — plus
+  every developer's shell, and a flag would have to be re-added to each of them and to every job
+  added later. The attribute is read by every invocation that loads `phpunit.xml`, so a new job
+  cannot silently ship without it. Those sites are named by FILE and their count is RE-DERIVED by
+  `SkippedTestNameReportingTest::test_the_documented_invocation_sites_are_still_the_real_ones`;
+  the first revision of this entry cited line numbers and its own commit moved them.
+
+  ⚠ **It is not universal, and two exceptions are real.** A `--testdox` run can never name its
+  skips: PHPUnit builds the default result printer for testdox with its
+  `$displayDetailsOnSkippedTests` argument hardcoded `false` — the `outputIsTestDox()` branch of
+  `Facade::createResultPrinter()`, `vendor/phpunit/phpunit/src/TextUI/Output/Facade.php:204-221` in
+  the pinned PHPUnit 10.5.64 — so it counts them in
+  `Skipped: N` and prints no list, with or without `--display-skipped`. `syncplay-e2e.yml`
+  passed `--testdox`; **it no longer does** — the prettified list was cosmetic and it also broke a
+  whole-run-log comparison by adding to the count while contributing no name. The
+  `assertion-escape-probe` job captures PHPUnit's output into a PHP variable and never echoes it
+  (`scripts/assertion-escape-audit.php`), so no name set is obtainable from that job either;
+  its config is not at fault. The script reports the testdox case as exit **5** with that
+  explanation rather than blaming `phpunit.xml`.
+
+  The attribute enables **two** lists, not one — `printSkippedTestSuites()` as well as
+  `printSkippedTests()`, because `Skipped: N` is the sum of both event kinds
+  (`SummaryPrinter.php:106`). A skipped SUITE is named under `There were N skipped test suites:`
+  with no `::` in its entries, and a run in which every suite skipped prints `No tests executed!`
+  with no `Tests:` line at all. The script parses both, emitting a suite as `SUITE:<name>`, and
+  accounts for the missing totals line instead of reporting drift. Verified against the real binary,
+  not a hand-written fixture.
+
+  It is **purely additive** — verified by running the full suite either side of the change on one
+  seed: identical exit status (`1` both times, from a pre-existing environment-dependent failure on
+  the measuring box), identical `Tests: 10249, Assertions: 67983, Failures: 1, Skipped: 259.`, and a
+  diff of the two outputs that is empty apart from the new list and the `--` separator PHPUnit puts
+  between lists. `failOnSkipped` is a separate setting and is not set here.
+
+  The script refuses to be quietly empty, because a parser that matches nothing reads as a pass: it
+  prints its denominators on stderr and exits **2** when the input is not a PHPUnit run at all,
+  **4** when skips were counted, no detail list was printed and testdox does not account for them
+  (i.e. the attribute went missing, or that invocation did not load `phpunit.xml` — the first of
+  those reproduced against master's own CI log), **5** when the unnamed skips are matched one-for-one
+  by testdox skip glyphs, **3** when the numbers do not add up and **6** when the sorted set could not
+  be written in full. Each code names the cause its own arithmetic supports and never attributes more
+  to a cause than that cause can carry; a wrong diagnosis is worse than none, so 5 is gated on the
+  number of testdox SKIP lines (` ↩ `) and taken only when that number **equals** the shortfall —
+  never on the mere presence of testdox-looking output, which would exonerate `phpunit.xml` about a
+  run whose only fault is `phpunit.xml`. When testdox covers part of the shortfall both causes are
+  named. When there are **more** skip glyphs than unnamed skips nothing is attributed to testdox at
+  all: a real testdox run cannot produce a surplus (PHPUnit counts every glyph it prints in the same
+  run's `Skipped: N`), so a surplus is evidence of foreign output in the log — `gh run view --log`
+  carries every tool's — and it is reported as unattributable while both candidate causes stay in
+  play. The clamp that used to trim such a surplus down to the shortfall, and so printed "Do NOT
+  change phpunit.xml" about a config that was the cause, is **removed**: it had no legitimate input.
+  Entries declared by a `No tests executed!` run are subtracted out before the shortfall is computed,
+  because they have no skip count of their own to match.
+
+  ⚠ It is **not** claimed that every exit is right for every input. All of the denominators are
+  **input-wide sums**, so in a multi-run log (`gh run view <id> --log`) one run's shortfall can be
+  paid for by another run's surplus and net out to a code that is right for the sum and wrong for
+  both runs — measured on the shipped version: a run declaring two names but summarising one, followed
+  by a count-only run summarising one, exits **0** with a two-name set. Two such inputs were measured
+  in round 3 of this step's review and are closed with fixtures, and the testdox-glyph surplus is
+  closed by deleting the branch that read it; a `--testdox` run that also skips a whole test SUITE is
+  not closed, because a skipped suite produces no testdox glyph, and neither is exit 5's reliance on
+  an equality of two whole-input totals (N stray glyphs beside a run that lost N names look the same
+  as one testdox run that skipped N). The durable fix is **per-run segmentation** of the parser, which is
+  filed as a follow-up rather than done here. Two smaller limits complete the list: a data-set label
+  containing a literal **newline** is emitted truncated at that newline (the only shape that escapes
+  the denominator cross-check — no provider here produces one, and the truncation is stable, so `comm`
+  is not corrupted), and a drift in PHPUnit's list HEADER text refuses loudly but as exit **4** blaming
+  `phpunit.xml` rather than exit 3 blaming the parser — the right refusal with the wrong cause, since a
+  vanished header and a missing attribute are arithmetically identical. The script's header is the
+  canonical statement: it enumerates every exit path, the input class that reaches it, and all five
+  known limits by number, each with the input measured to reach it.
+
+  `tests/Unit/Support/SkippedTestNameReportingTest.php` fails if the attribute is removed from
+  `phpunit.xml`, if the script loses its executable bit, or if the README stops documenting the
+  `comm` comparison — and it drives the **real** `phpunit` binary for the plain, `--testdox` and
+  skipped-suite shapes, so a hand-written fixture can no longer diverge from what PHPUnit actually
+  prints. It also re-derives the `--testdox` ban from every `.yml` **and** `.yaml` workflow, parsing
+  each one and folding shell continuations first (a `.yaml` file and a wrapped command both defeated
+  the first version of that guard), and re-derives the invocation-site count the paragraphs above
+  claim. Both testdox glyphs have their own stray-line fixture: `✔` (attributes nothing, reported as
+  evidence) and ` ↩ ` (attributed at most once, never exonerating), plus the surplus case — two stray
+  ` ↩ ` lines beside a count-only run — which is RED against the removed clamp. The `✔`-only fixture
+  is why the surplus defect survived three review rounds.
+
 - **Admin maintenance endpoints — the backend for the admin Tasks page (S77).** Eight routes on
   `/api/v1/admin/maintenance/*`, inside `AdminRoutes`' `AdminMiddleware` group, with an explicit
   in-body admin re-check in every handler (two of the five tasks are destructive, and a group's

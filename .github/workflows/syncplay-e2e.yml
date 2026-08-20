@@ -87,7 +87,20 @@ jobs:
         run: php scripts/run-migrations.php
 
       - name: Run SyncPlay E2E tests
-        run: ./vendor/bin/phpunit tests/E2E/Session/SyncPlay/SyncPlayE2ETest.php --testdox --colors=never
+        # S345 — `--testdox` is deliberately NOT passed here any more. PHPUnit builds
+        # the default result printer for a testdox run with its
+        # `$displayDetailsOnSkippedTests` constructor argument hardcoded `false`
+        # (vendor/phpunit/phpunit/src/TextUI/Output/Facade.php:204-221 — the
+        # configuration value is not consulted on that path), so a `--testdox` run
+        # counts its skips in `Skipped: N` and can NEVER name them, whatever
+        # `phpunit.xml`'s `displayDetailsOnSkippedTests="true"` or a
+        # `--display-skipped` flag say. Measured: `--testdox` on a file with one
+        # unconditional skip printed `Skipped: 1` and zero `There was 1 skipped test:`
+        # sections, with and without `--display-skipped`. It also broke
+        # `scripts/skipped-test-names.sh` on a whole-run log, because this step added
+        # to `Skipped: N` while contributing no name. The prettified list was
+        # cosmetic; the skip NAMES are not.
+        run: ./vendor/bin/phpunit tests/E2E/Session/SyncPlay/SyncPlayE2ETest.php --colors=never
 
       - name: Run E2E tests 3x consecutively (flakiness check)
         run: |

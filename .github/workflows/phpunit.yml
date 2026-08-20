@@ -162,9 +162,17 @@ jobs:
         #
         # S345 — if you came here grepping for `--display-skipped`, it is deliberately NOT
         # here. Skipped-test NAMES are turned on by `displayDetailsOnSkippedTests="true"`
-        # on phpunit.xml's root element instead, so every invocation gets them (this step,
-        # `Run Server-specific tests` below, the prober job, both syncplay-e2e.yml runs and
-        # every developer's shell) rather than only the ones somebody remembered to edit.
+        # on phpunit.xml's root element instead, so every invocation that loads that file
+        # AND uses PHPUnit's default result printer gets them — this step,
+        # `Run Server-specific tests` below, both syncplay-e2e.yml runs and every
+        # developer's shell — rather than only the ones somebody remembered to edit.
+        # ⚠ NOT universal, and the exceptions are real: a `--testdox` run can never name
+        # its skips (PHPUnit hardcodes the printer's `displayDetailsOnSkippedTests` to
+        # `false` for testdox — vendor/phpunit/phpunit/src/TextUI/Output/Facade.php:204-221),
+        # which is why syncplay-e2e.yml no longer passes it; and the
+        # `assertion-escape-probe` job's PHPUnit output is captured into a PHP variable
+        # and never echoed (scripts/assertion-escape-audit.php:504-534), so no name set is
+        # obtainable from it whatever the config says.
         # `scripts/skipped-test-names.sh` turns this step's output into a sorted,
         # `comm`-ready name set — feed it `gh run view <run-id> --log`. Compare NAME SETS,
         # never the `Skipped: N` count: the count cannot tell "a test started skipping"

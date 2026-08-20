@@ -186,9 +186,31 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   "unproven" for exactly this reason.
 
   The **config attribute** was chosen over the `--display-skipped` CLI flag deliberately: PHPUnit is
-  invoked from four places across `.github/workflows/` plus every developer's shell, and a flag
-  would have to be re-added to each of them and to every job added later. The attribute is read by
-  every invocation that loads `phpunit.xml`, so a new job cannot silently ship without it.
+  invoked from five places in this repo (`.github/workflows/phpunit.yml:173,329`,
+  `.github/workflows/syncplay-e2e.yml:90,96` and `scripts/assertion-escape-audit.php:504`) plus
+  every developer's shell, and a flag would have to be re-added to each of them and to every job
+  added later. The attribute is read by every invocation that loads `phpunit.xml`, so a new job
+  cannot silently ship without it.
+
+  ⚠ **It is not universal, and two exceptions are real.** A `--testdox` run can never name its
+  skips: PHPUnit builds the default result printer for testdox with its
+  `$displayDetailsOnSkippedTests` argument hardcoded `false`
+  (`vendor/phpunit/phpunit/src/TextUI/Output/Facade.php:204-221`), so it counts them in
+  `Skipped: N` and prints no list, with or without `--display-skipped`. `syncplay-e2e.yml:90`
+  passed `--testdox`; **it no longer does** — the prettified list was cosmetic and it also broke a
+  whole-run-log comparison by adding to the count while contributing no name. The
+  `assertion-escape-probe` job captures PHPUnit's output into a PHP variable and never echoes it
+  (`scripts/assertion-escape-audit.php:504-534`), so no name set is obtainable from that job either;
+  its config is not at fault. The script reports the testdox case as exit **5** with that
+  explanation rather than blaming `phpunit.xml`.
+
+  The attribute enables **two** lists, not one — `printSkippedTestSuites()` as well as
+  `printSkippedTests()`, because `Skipped: N` is the sum of both event kinds
+  (`SummaryPrinter.php:106`). A skipped SUITE is named under `There were N skipped test suites:`
+  with no `::` in its entries, and a run in which every suite skipped prints `No tests executed!`
+  with no `Tests:` line at all. The script parses both, emitting a suite as `SUITE:<name>`, and
+  accounts for the missing totals line instead of reporting drift. Verified against the real binary,
+  not a hand-written fixture.
 
   It is **purely additive** — verified by running the full suite either side of the change on one
   seed: identical exit status (`1` both times, from a pre-existing environment-dependent failure on
@@ -197,11 +219,16 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   between lists. `failOnSkipped` is a separate setting and is not set here.
 
   The script refuses to be quietly empty, because a parser that matches nothing reads as a pass: it
-  prints its denominators on stderr and exits **2** when the input is not a PHPUnit run at all and
-  **4** when the run skipped tests but printed no names (i.e. the attribute went missing) — the
-  latter reproduced against master's own CI log. `tests/Unit/Support/SkippedTestNameReportingTest.php`
-  fails if the attribute is removed from `phpunit.xml`, if the script loses its executable bit, or if
-  the README stops documenting the `comm` comparison.
+  prints its denominators on stderr and exits **2** when the input is not a PHPUnit run at all,
+  **4** when the run skipped tests but printed no names (i.e. the attribute went missing — this one
+  reproduced against master's own CI log), **5** for testdox output, **3** when the two
+  denominators disagree and **6** when the sorted set could not be written in full. Each code names
+  a cause that is TRUE for the input that produced it; a wrong diagnosis is worse than none.
+  `tests/Unit/Support/SkippedTestNameReportingTest.php` fails if the attribute is removed from
+  `phpunit.xml`, if the script loses its executable bit, or if the README stops documenting the
+  `comm` comparison — and it drives the **real** `phpunit` binary for the plain, `--testdox` and
+  skipped-suite shapes, so a hand-written fixture can no longer diverge from what PHPUnit actually
+  prints.
 
 - **Admin maintenance endpoints — the backend for the admin Tasks page (S77).** Eight routes on
   `/api/v1/admin/maintenance/*`, inside `AdminRoutes`' `AdminMiddleware` group, with an explicit

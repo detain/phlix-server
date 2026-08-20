@@ -609,9 +609,10 @@ that gap needs a live HTTP fixture.
 
 #### Comparing skip sets between two runs — never compare the COUNT
 
-`phpunit.xml` sets `displayDetailsOnSkippedTests="true"`, so **every** run of this
-suite — CI, local, `--testsuite Unit`, `syncplay-e2e.yml` — prints each skipped test
-BY NAME. Use the names, not the number:
+`phpunit.xml` sets `displayDetailsOnSkippedTests="true"`, so every run of this suite
+that loads that file **and uses PHPUnit's default result printer** — CI, local,
+`--testsuite Unit`, `syncplay-e2e.yml` — prints each skipped test BY NAME. Use the
+names, not the number:
 
 ```bash
 ./vendor/bin/phpunit 2>&1 | scripts/skipped-test-names.sh > /tmp/before.txt
@@ -626,6 +627,22 @@ Against a CI run (the script strips `gh`'s `job<TAB>step<TAB>timestamp ` prefix 
 gh run view <run-id> --log | scripts/skipped-test-names.sh > /tmp/ci.txt
 ```
 
+⚠ **`--testdox` is the one invocation this cannot cover, and it is a PHPUnit
+limitation, not a config mistake.** PHPUnit constructs the default result printer for
+a testdox run with its `$displayDetailsOnSkippedTests` argument hardcoded `false`
+(`vendor/phpunit/phpunit/src/TextUI/Output/Facade.php:204-221` — the configuration
+value is not consulted there), so a `--testdox` run adds to `Skipped: N` and can never
+name those skips, with or without `--display-skipped`. No workflow passes `--testdox`
+any more (`syncplay-e2e.yml` dropped it in S345 for exactly this reason). If you add it
+back, or use it locally, the script exits **5** and says so — do **not** "fix"
+`phpunit.xml` in response; re-run without `--testdox`.
+
+Skipped test **suites** (a class-level `#[Requires*]`, or `markTestSkipped()` in
+`setUpBeforeClass()`) are counted in the same `Skipped: N` but named under a different
+header, and a run in which every suite skipped prints `No tests executed!` with no
+`Tests:` line at all. The script parses that shape too and emits such an entry as
+`SUITE:<name>`.
+
 **Why names and not `Skipped: N`.** The number drifts between runs on its own — this
 repo has legitimate environment-dependent skips, and this box reports ~259 where CI
 reports 3 — and a moved count cannot distinguish *"a test started skipping"* from
@@ -634,8 +651,12 @@ All three move it identically, and two of the three can leave it **unmoved**. `c
 over the name set separates them; the count cannot. `scripts/skipped-test-names.sh`
 writes only the sorted set to stdout (so `comm`/`diff` can eat it directly), puts its
 denominators on stderr, and **fails loudly** rather than printing an empty set when
-the input is not a PHPUnit run (exit 2) or when the run skipped tests but printed no
-names (exit 4). See the header of that script for the full contract.
+the input is not a PHPUnit run (exit 2), when the run skipped tests but printed no
+names (exit 4), when the names are unobtainable because the input is `--testdox` output
+(exit 5), when the numbers do not add up (exit 3) or when the set could not be written
+in full (exit 6). Every one of those codes names a cause that is true for the input that
+triggered it — a wrong diagnosis would send the next reader to fix the wrong thing. See
+the header of that script for the full contract.
 
 **Keep the suite hermetic w.r.t. the environment.** `PHLIX_DOMAIN` changes real
 behaviour (it is the OAuth callback-URL allowlist — see

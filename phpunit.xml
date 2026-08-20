@@ -12,18 +12,42 @@
     a developer box with no MySQL/Chromium/FFI reports ~259). Two audits were
     forced to record skip movement as "unproven" for exactly that reason.
 
-    Why the CONFIG ATTRIBUTE and not the `display-skipped` CLI flag (spelled
-    without its two leading hyphens because XML comments may not contain them): the flag is
-    per-invocation, and PHPUnit is invoked from four places in .github/workflows
-    (phpunit.yml x2, syncplay-e2e.yml x2) plus every developer's shell. A flag
-    would have to be re-added to each of them and to every job added later — a
-    hand-written list that never re-derives. This attribute is read once by every
-    invocation that loads this file, so a new job cannot silently ship without it.
+    Why the CONFIG ATTRIBUTE and not the `display-skipped` CLI flag (CLI flags are
+    spelled here without their two leading hyphens, because an XML comment may not
+    contain them): the flag is per-invocation, and PHPUnit is invoked from five
+    places in this repo (.github/workflows/phpunit.yml:173,329,
+    .github/workflows/syncplay-e2e.yml:90,96, scripts/assertion-escape-audit.php:504)
+    plus every developer's shell. A flag would have to be re-added to each of them
+    and to every job added later — a hand-written list that never re-derives. This
+    attribute is read by every invocation that loads this file, so a new job cannot
+    silently ship without it.
 
-    It is purely additive: PHPUnit's ResultPrinter::printSkippedTests() is guarded
-    by this setting alone and only APPENDS a list. It does not change the process
-    exit status (that is `failOnSkipped`, a separate setting this repo does not
-    set) and it suppresses nothing.
+    ⚠ It is NOT universal, and the two exceptions are real rather than theoretical:
+
+      * `testdox`. PHPUnit builds the default result printer for a testdox run with
+        its displayDetailsOnSkippedTests constructor argument hardcoded false
+        (vendor/phpunit/phpunit/src/TextUI/Output/Facade.php:204-221; the
+        configuration value is not consulted on that path), so such a run counts its
+        skips in "Skipped: N" and can never name them, whatever this attribute or a
+        `display-skipped` flag say. syncplay-e2e.yml:90 used to pass it and no longer
+        does. scripts/skipped-test-names.sh detects testdox output and exits 5 saying
+        so, instead of blaming this file.
+      * the assertion-escape prober (scripts/assertion-escape-audit.php:504) captures
+        PHPUnit's output into a PHP variable and never echoes it, so no name set is
+        obtainable from that job. Its config is fine; its output never leaves the
+        process.
+
+    It is purely additive: this setting gates only two printList calls in
+    ResultPrinter::print() (lines 125-128), which APPEND lists. It does not change
+    the process exit status (that is `failOnSkipped`, a separate setting this repo
+    does not set) and it suppresses nothing.
+
+    It enables TWO lists, not one: printSkippedTestSuites() as well as
+    printSkippedTests(), because "Skipped: N" is the SUM of both event kinds
+    (SummaryPrinter.php:106). A skipped SUITE (class-level Requires attribute, or
+    markTestSkipped() in setUpBeforeClass()) is named under a different header and its
+    entries carry no "::"; scripts/skipped-test-names.sh parses both and emits a suite
+    as "SUITE:name".
 
     scripts/skipped-test-names.sh turns the resulting output into a sorted,
     `comm`-ready name set, and exits 4 rather than printing an empty set if this

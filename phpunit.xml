@@ -1,5 +1,35 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<phpunit xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="https://schema.phpunit.de/10.5/phpunit.xsd" bootstrap="tests/bootstrap.php" colors="true" cacheDirectory=".phpunit.cache" executionOrder="random" failOnRisky="true" failOnWarning="true" beStrictAboutOutputDuringTests="true" displayDetailsOnTestsThatTriggerDeprecations="true" displayDetailsOnTestsThatTriggerWarnings="true" displayDetailsOnTestsThatTriggerErrors="true">
+<phpunit xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="https://schema.phpunit.de/10.5/phpunit.xsd" bootstrap="tests/bootstrap.php" colors="true" cacheDirectory=".phpunit.cache" executionOrder="random" failOnRisky="true" failOnWarning="true" beStrictAboutOutputDuringTests="true" displayDetailsOnTestsThatTriggerDeprecations="true" displayDetailsOnTestsThatTriggerWarnings="true" displayDetailsOnTestsThatTriggerErrors="true" displayDetailsOnSkippedTests="true">
+  <!--
+    ============================================================================
+    S345 — displayDetailsOnSkippedTests="true" (on the root element above).
+    ============================================================================
+    Before this, the only thing a run published about its skips was the COUNT in
+    "Tests: N, ..., Skipped: M." A count cannot distinguish the three things that
+    move it — a test STARTED skipping, a conditionally-skipped test became a
+    FAILURE, or a test DISAPPEARED — and it drifts on its own between runs because
+    this repo has legitimate environment-dependent skips (this repo's CI reports 3;
+    a developer box with no MySQL/Chromium/FFI reports ~259). Two audits were
+    forced to record skip movement as "unproven" for exactly that reason.
+
+    Why the CONFIG ATTRIBUTE and not the `display-skipped` CLI flag (spelled
+    without its two leading hyphens because XML comments may not contain them): the flag is
+    per-invocation, and PHPUnit is invoked from four places in .github/workflows
+    (phpunit.yml x2, syncplay-e2e.yml x2) plus every developer's shell. A flag
+    would have to be re-added to each of them and to every job added later — a
+    hand-written list that never re-derives. This attribute is read once by every
+    invocation that loads this file, so a new job cannot silently ship without it.
+
+    It is purely additive: PHPUnit's ResultPrinter::printSkippedTests() is guarded
+    by this setting alone and only APPENDS a list. It does not change the process
+    exit status (that is `failOnSkipped`, a separate setting this repo does not
+    set) and it suppresses nothing.
+
+    scripts/skipped-test-names.sh turns the resulting output into a sorted,
+    `comm`-ready name set, and exits 4 rather than printing an empty set if this
+    attribute ever goes missing. tests/Unit/Support/SkippedTestNameReportingTest.php
+    fails if it is removed from this file.
+  -->
   <testsuites>
     <testsuite name="Unit">
       <directory suffix="Test.php">tests/Unit</directory>

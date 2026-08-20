@@ -171,6 +171,38 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Added
 
+- **Skipped tests are now reported BY NAME, so a skip set can be compared with `comm` instead of by
+  count (S345).** `phpunit.xml` gains `displayDetailsOnSkippedTests="true"`, and
+  `scripts/skipped-test-names.sh` turns any run's output — local, or a `gh run view <id> --log` —
+  into a sorted, `comm`-ready set of `Class::method` names.
+
+  **Why a count was never enough.** Measured on master run `32027697809`: the log says
+  `Skipped: 3` and contains **zero** `There were N skipped tests:` sections, so the only published
+  fact about the skip set was its size. A size cannot distinguish *a test started skipping* from *a
+  conditionally-skipped test turned into a failure* from *a test disappeared* — all three move it
+  identically, and any two of them together can leave it **unmoved**. It also drifts on its own:
+  this repo has legitimate environment-dependent skips, and a box with no MySQL, Chromium or
+  mysqldump reports **259** where CI reports **3**. Two audits had to record skip movement as
+  "unproven" for exactly this reason.
+
+  The **config attribute** was chosen over the `--display-skipped` CLI flag deliberately: PHPUnit is
+  invoked from four places across `.github/workflows/` plus every developer's shell, and a flag
+  would have to be re-added to each of them and to every job added later. The attribute is read by
+  every invocation that loads `phpunit.xml`, so a new job cannot silently ship without it.
+
+  It is **purely additive** — verified by running the full suite either side of the change on one
+  seed: identical exit status (`1` both times, from a pre-existing environment-dependent failure on
+  the measuring box), identical `Tests: 10249, Assertions: 67983, Failures: 1, Skipped: 259.`, and a
+  diff of the two outputs that is empty apart from the new list and the `--` separator PHPUnit puts
+  between lists. `failOnSkipped` is a separate setting and is not set here.
+
+  The script refuses to be quietly empty, because a parser that matches nothing reads as a pass: it
+  prints its denominators on stderr and exits **2** when the input is not a PHPUnit run at all and
+  **4** when the run skipped tests but printed no names (i.e. the attribute went missing) — the
+  latter reproduced against master's own CI log. `tests/Unit/Support/SkippedTestNameReportingTest.php`
+  fails if the attribute is removed from `phpunit.xml`, if the script loses its executable bit, or if
+  the README stops documenting the `comm` comparison.
+
 - **Admin maintenance endpoints — the backend for the admin Tasks page (S77).** Eight routes on
   `/api/v1/admin/maintenance/*`, inside `AdminRoutes`' `AdminMiddleware` group, with an explicit
   in-body admin re-check in every handler (two of the five tasks are destructive, and a group's

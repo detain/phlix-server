@@ -607,6 +607,36 @@ on purpose: `Phlix\Plugins\OAuth2\OAuth2HttpClient` (the live OAuth2 transport)
 is driven by a fake in every provider test and is effectively uncovered — closing
 that gap needs a live HTTP fixture.
 
+#### Comparing skip sets between two runs — never compare the COUNT
+
+`phpunit.xml` sets `displayDetailsOnSkippedTests="true"`, so **every** run of this
+suite — CI, local, `--testsuite Unit`, `syncplay-e2e.yml` — prints each skipped test
+BY NAME. Use the names, not the number:
+
+```bash
+./vendor/bin/phpunit 2>&1 | scripts/skipped-test-names.sh > /tmp/before.txt
+# ...make your change...
+./vendor/bin/phpunit 2>&1 | scripts/skipped-test-names.sh > /tmp/after.txt
+comm -3 /tmp/before.txt /tmp/after.txt   # left column: left the skip set. right: joined it.
+```
+
+Against a CI run (the script strips `gh`'s `job<TAB>step<TAB>timestamp ` prefix for you):
+
+```bash
+gh run view <run-id> --log | scripts/skipped-test-names.sh > /tmp/ci.txt
+```
+
+**Why names and not `Skipped: N`.** The number drifts between runs on its own — this
+repo has legitimate environment-dependent skips, and this box reports ~259 where CI
+reports 3 — and a moved count cannot distinguish *"a test started skipping"* from
+*"a conditionally-skipped test turned into a failure"* from *"a test disappeared"*.
+All three move it identically, and two of the three can leave it **unmoved**. `comm`
+over the name set separates them; the count cannot. `scripts/skipped-test-names.sh`
+writes only the sorted set to stdout (so `comm`/`diff` can eat it directly), puts its
+denominators on stderr, and **fails loudly** rather than printing an empty set when
+the input is not a PHPUnit run (exit 2) or when the run skipped tests but printed no
+names (exit 4). See the header of that script for the full contract.
+
 **Keep the suite hermetic w.r.t. the environment.** `PHLIX_DOMAIN` changes real
 behaviour (it is the OAuth callback-URL allowlist — see
 [Environment variables](#environment-variables)), so every test that depends on

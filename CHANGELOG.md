@@ -222,15 +222,25 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
   The script refuses to be quietly empty, because a parser that matches nothing reads as a pass: it
   prints its denominators on stderr and exits **2** when the input is not a PHPUnit run at all,
-  **4** when the run skipped tests but printed no names (i.e. the attribute went missing — this one
-  reproduced against master's own CI log), **5** for testdox output, **3** when the two
-  denominators disagree and **6** when the sorted set could not be written in full. Each code names
-  a cause that is TRUE for the input that produced it; a wrong diagnosis is worse than none.
+  **4** when skips were counted, no detail list was printed and testdox does not account for them
+  (i.e. the attribute went missing, or that invocation did not load `phpunit.xml` — the first of
+  those reproduced against master's own CI log), **5** when EVERY unnamed skip is a testdox skip,
+  **3** when the numbers do not add up and **6** when the sorted set could not be written in full.
+  Each code names a cause that is TRUE for the input that produced it; a wrong diagnosis is worse
+  than none, so 5 is gated on the number of testdox SKIP lines and taken only when they cover the
+  whole shortfall — never on the mere presence of testdox-looking output, which would exonerate
+  `phpunit.xml` about a run whose only fault is `phpunit.xml`. When testdox covers part of the
+  shortfall both causes are named. The script's header enumerates every exit path, the input class
+  that reaches it and why its message holds for all of them.
+
   `tests/Unit/Support/SkippedTestNameReportingTest.php` fails if the attribute is removed from
   `phpunit.xml`, if the script loses its executable bit, or if the README stops documenting the
   `comm` comparison — and it drives the **real** `phpunit` binary for the plain, `--testdox` and
   skipped-suite shapes, so a hand-written fixture can no longer diverge from what PHPUnit actually
-  prints.
+  prints. It also re-derives the `--testdox` ban from every `.yml` **and** `.yaml` workflow, parsing
+  each one and folding shell continuations first (a `.yaml` file and a wrapped command both defeated
+  the first version of that guard), and re-derives the invocation-site count the paragraphs above
+  claim.
 
 - **Admin maintenance endpoints — the backend for the admin Tasks page (S77).** Eight routes on
   `/api/v1/admin/maintenance/*`, inside `AdminRoutes`' `AdminMiddleware` group, with an explicit

@@ -196,8 +196,9 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
   ⚠ **It is not universal, and two exceptions are real.** A `--testdox` run can never name its
   skips: PHPUnit builds the default result printer for testdox with its
-  `$displayDetailsOnSkippedTests` argument hardcoded `false`
-  (`vendor/phpunit/phpunit/src/TextUI/Output/Facade.php:204-221`), so it counts them in
+  `$displayDetailsOnSkippedTests` argument hardcoded `false` — the `outputIsTestDox()` branch of
+  `Facade::createResultPrinter()`, `vendor/phpunit/phpunit/src/TextUI/Output/Facade.php:204-221` in
+  the pinned PHPUnit 10.5.64 — so it counts them in
   `Skipped: N` and prints no list, with or without `--display-skipped`. `syncplay-e2e.yml`
   passed `--testdox`; **it no longer does** — the prettified list was cosmetic and it also broke a
   whole-run-log comparison by adding to the count while contributing no name. The
@@ -250,8 +251,14 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   not closed, because a skipped suite produces no testdox glyph, and neither is exit 5's reliance on
   an equality of two whole-input totals (N stray glyphs beside a run that lost N names look the same
   as one testdox run that skipped N). The durable fix is **per-run segmentation** of the parser, which is
-  filed as a follow-up rather than done here. The script's header enumerates every exit path, the
-  input class that reaches it, and its known limits by name.
+  filed as a follow-up rather than done here. Two smaller limits complete the list: a data-set label
+  containing a literal **newline** is emitted truncated at that newline (the only shape that escapes
+  the denominator cross-check — no provider here produces one, and the truncation is stable, so `comm`
+  is not corrupted), and a drift in PHPUnit's list HEADER text refuses loudly but as exit **4** blaming
+  `phpunit.xml` rather than exit 3 blaming the parser — the right refusal with the wrong cause, since a
+  vanished header and a missing attribute are arithmetically identical. The script's header is the
+  canonical statement: it enumerates every exit path, the input class that reaches it, and all five
+  known limits by number, each with the input measured to reach it.
 
   `tests/Unit/Support/SkippedTestNameReportingTest.php` fails if the attribute is removed from
   `phpunit.xml`, if the script loses its executable bit, or if the README stops documenting the

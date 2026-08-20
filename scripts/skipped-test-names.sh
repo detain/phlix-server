@@ -54,9 +54,12 @@
 # NOT universal, and two exceptions are real:
 #
 #   * `--testdox`. PHPUnit builds the default result printer for a testdox run with
-#     the `$displayDetailsOnSkippedTests` constructor argument hardcoded `false`
-#     (vendor/phpunit/phpunit/src/TextUI/Output/Facade.php:204-221 -- the
-#     configuration value is not consulted on that path). A `--testdox` run therefore
+#     the `$displayDetailsOnSkippedTests` constructor argument hardcoded `false` -- the
+#     `outputIsTestDox()` branch of `Facade::createResultPrinter()`, which is
+#     vendor/phpunit/phpunit/src/TextUI/Output/Facade.php:204-221 in the pinned PHPUnit
+#     10.5.64 (the configuration value is not consulted on that path). Every vendor line
+#     number in this file was re-verified against that version; the SYMBOL is the durable
+#     citation, the line number is the convenience. A `--testdox` run therefore
 #     counts its skips in `Skipped: N` and can NEVER name them, whatever phpunit.xml
 #     or `--display-skipped` say. Measured: `--testdox` on a file with one
 #     unconditional skip prints `Skipped: 1` and zero `There was 1 skipped test:`
@@ -175,7 +178,9 @@
 #      the residual was counted, not named and not testdox's, and no run that published a
 #      totals line printed a list at all -- so either the attribute is off or phpunit.xml
 #      was not loaded. Those are the only two ways the default printer publishes a count
-#      with no list. Testdox's share is 0 in two cases -- no skip glyphs at all, and MORE
+#      with no list THAT THIS PARSER CAN SEE; a third input reads identically, namely a
+#      list that WAS printed under a header this parser does not recognise (KNOWN LIMIT 5).
+#      Testdox's share is 0 in two cases -- no skip glyphs at all, and MORE
 #      skip glyphs than unnamed skips (unattributable, see above) -- and in both the
 #      message reports the glyphs as evidence while leaving phpunit.xml in play.
 #   3  three disjoint shapes, each stating its own arithmetic: (a) shortfall remains
@@ -236,6 +241,18 @@
 #      escapes the cross-check). No data provider in this repo produces one, and the
 #      truncation is stable across runs, so `comm` is not corrupted by it -- but the
 #      denominator argument above does not cover it, so do not claim that it does.
+#   5. a drift in the list HEADER text refuses correctly but names the wrong cause. The
+#      three parsers are anchored on three independent shapes -- the list header, the
+#      `Tests: ...` totals line, and the `N) ` entry -- and S345's test engineer measured
+#      all three: a drifted totals line and a drifted ENTRY both exit 3 and say "fix this
+#      parser", but a drifted HEADER (e.g. a future PHPUnit printing `Skipped tests (1):`)
+#      makes `declared` 0 while `summarised` stays right, which is arithmetically identical
+#      to the attribute being off -- so it exits 4 and blames phpunit.xml. Re-measured on
+#      THIS version, so it is not a stale note. The refusal is the RIGHT one (loud, nothing
+#      written, no set to mis-compare) and only the CAUSE is wrong; if exit 4 ever fires on
+#      output whose config you have checked, compare the list header text against this
+#      parser before touching phpunit.xml. Per-run segmentation does not settle this one
+#      either: a header the parser cannot see is invisible however the input is split.
 #
 # stdout carries ONLY the name set, so `comm` and `diff` can consume it directly.
 #

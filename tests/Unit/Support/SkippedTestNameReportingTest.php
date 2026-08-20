@@ -92,9 +92,17 @@ final class SkippedTestNameReportingTest extends TestCase
     private const CONFIG = self::REPO . '/phpunit.xml';
 
     /**
-     * A test file with exactly ONE skip, taken unconditionally in the method body
-     * (`BackupManagerTest.php:30`), so the real-binary expectations below do not depend
-     * on MySQL, Chromium, FFI or anything else about the box.
+     * A test file with exactly ONE skip, taken unconditionally in the body of
+     * `testCreateBackupGeneratesIdAndPath()` (the name in {@see self::REAL_SKIPPED_NAME}),
+     * so the real-binary expectations below do not depend on MySQL, Chromium, FFI or
+     * anything else about the box.
+     *
+     * Cited by METHOD, never by line: S345 shipped a line citation here that its own
+     * commit could have moved, and the whole step is about hand-written references that
+     * never re-derive. The premise is not taken on trust either —
+     * {@see self::assertTheFixtureStillSkipsExactlyOneTest()} re-derives it from the real
+     * binary before every expectation that depends on it, and blames the fixture rather
+     * than `phpunit.xml` when it stops holding.
      */
     private const REAL_TEST_FILE = 'tests/Unit/Admin/BackupManagerTest.php';
 
@@ -860,6 +868,17 @@ final class SkippedTestNameReportingTest extends TestCase
      * input for testdox's glyphs, and the documented recipe is `gh run view --log`, which
      * carries every tool's output. One unrelated line used to flip a correct exit 4 into a
      * false exit 5.
+     *
+     * ⚠ Do NOT delete this as redundant against its ` ↩ ` siblings below. It is the only
+     * fixture on the path where `testdox_skips` stays 0, so the script must report the
+     * glyphs as "Evidence, not a cause" and attribute nothing; the ` ↩ ` fixtures raise
+     * `testdox_skips` and therefore exercise the ATTRIBUTION arithmetic instead. The three
+     * assert three different messages on three different branches. The reverse deletion is
+     * what actually happened: for three review rounds this `✔` fixture was the ONLY
+     * stray-glyph guard, and because it can never reach the attribution arithmetic it could
+     * not see the surplus defect that
+     * {@see self::test_a_surplus_of_stray_skip_glyphs_does_not_exonerate_phpunit_xml()}
+     * now pins.
      */
     public function test_one_stray_line_in_testdox_glyph_format_does_not_hijack_the_diagnosis(): void
     {

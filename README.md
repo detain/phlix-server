@@ -627,11 +627,31 @@ Against a CI run (the script strips `gh`'s `job<TAB>step<TAB>timestamp ` prefix 
 gh run view <run-id> --log | scripts/skipped-test-names.sh > /tmp/ci.txt
 ```
 
+That is also how the mechanism is checked after a merge: master's own pre-S345 log exits
+**4** on this command (measured on run `32027697809`), so an exit of **0** with a non-empty
+file is the before/after demonstration. The exit code is the whole contract — an empty set
+is never handed over silently:
+
+| exit | meaning | what to do |
+| --- | --- | --- |
+| **0** | parsed a real PHPUnit run; stdout is the sorted set (zero lines is a valid answer) | compare it |
+| **2** | the input is not PHPUnit output at all — no result summary line anywhere | check what you piped in |
+| **3** | the numbers do not add up: a run printed no list, or PHPUnit's list/entry format drifted | do **not** compare; read the denominators on stderr |
+| **4** | skips were counted, no detail list was printed, and testdox does not explain them | restore `displayDetailsOnSkippedTests="true"`, or find the invocation that did not load `phpunit.xml` |
+| **5** | the unnamed skips are matched one-for-one by testdox skip glyphs (` ↩ `) | re-run without `--testdox`; **not** a `phpunit.xml` fault |
+| **6** | the sorted set could not be written in full (`sort`, or your redirect, failed) | stdout is truncated; do **not** compare |
+
+Denominators always go to stderr, on every exit, so a set can be checked against the count
+PHPUnit itself printed. The script's header enumerates the same six codes with the exact
+input class that reaches each one.
+
 ⚠ **`--testdox` is the one invocation this cannot cover, and it is a PHPUnit
 limitation, not a config mistake.** PHPUnit constructs the default result printer for
 a testdox run with its `$displayDetailsOnSkippedTests` argument hardcoded `false`
-(`vendor/phpunit/phpunit/src/TextUI/Output/Facade.php:204-221` — the configuration
-value is not consulted there), so a `--testdox` run adds to `Skipped: N` and can never
+(the `outputIsTestDox()` branch of `Facade::createResultPrinter()` — the configuration
+value is not consulted there; `vendor/phpunit/phpunit/src/TextUI/Output/Facade.php:204-221`
+in the pinned PHPUnit 10.5.64, which is the citation the script's own error message
+prints), so a `--testdox` run adds to `Skipped: N` and can never
 name those skips, with or without `--display-skipped`. No workflow passes `--testdox`
 any more (`syncplay-e2e.yml` dropped it in S345 for exactly this reason). If you add it
 back, or use it locally, the script exits **5** and says so — do **not** "fix"
@@ -666,11 +686,8 @@ reports 3 — and a moved count cannot distinguish *"a test started skipping"* f
 All three move it identically, and two of the three can leave it **unmoved**. `comm`
 over the name set separates them; the count cannot. `scripts/skipped-test-names.sh`
 writes only the sorted set to stdout (so `comm`/`diff` can eat it directly), puts its
-denominators on stderr, and **fails loudly** rather than printing an empty set when
-the input is not a PHPUnit run (exit 2), when the run skipped tests but printed no
-names and testdox does not explain them (exit 4), when the unnamed skips are matched
-one-for-one by testdox skip glyphs (exit 5), when the numbers do not add up (exit 3) or
-when the set could not be written in full (exit 6). Each code names the cause its own
+denominators on stderr, and **fails loudly** rather than printing an empty set — with
+one of the exit codes in the table above. Each code names the cause its own
 arithmetic supports, and never attributes more to a cause than that cause can carry — a
 wrong diagnosis would send the next reader to fix the wrong thing, and rounds 2 and 3 of
 the S345 review plus its test engineer each caught one doing exactly that before it
@@ -692,9 +709,19 @@ to attribute it to, and neither is exit 5's reliance on an equality of two whole
 totals. The durable fix is **per-run segmentation**
 — evaluate the contract inside each run rather than over the whole input — which is filed
 as a follow-up and deliberately not done here. Until then, read a non-zero exit as "this
-input must not be compared", not always as "this named run is at fault". The script's
-header enumerates every exit path, the input class that reaches it, and its known limits
-by name.
+input must not be compared", not always as "this named run is at fault".
+
+Two smaller limits complete the list, both measured on the shipped version. A data-set
+label containing a literal **newline** is emitted truncated at that newline: the entry
+spans two lines, the denominators still agree, and this is the one shape that escapes the
+cross-check. No data provider here produces one and the truncation is stable across runs,
+so `comm` is not corrupted by it — but the denominator argument does not cover it. And if a
+future PHPUnit renames the list header itself (`There was 1 skipped test:`), the refusal is
+still loud and nothing is written, but it arrives as exit **4** blaming `phpunit.xml`
+rather than as exit 3 blaming the parser — the right refusal with the wrong cause. The
+script's header carries all five limits, numbered, each with the input that reaches it, and
+enumerates every exit path with its input class; that header is the canonical statement of
+this contract, and this section is its summary.
 
 **Keep the suite hermetic w.r.t. the environment.** `PHLIX_DOMAIN` changes real
 behaviour (it is the OAuth callback-URL allowlist — see

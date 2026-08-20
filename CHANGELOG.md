@@ -224,22 +224,32 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   prints its denominators on stderr and exits **2** when the input is not a PHPUnit run at all,
   **4** when skips were counted, no detail list was printed and testdox does not account for them
   (i.e. the attribute went missing, or that invocation did not load `phpunit.xml` — the first of
-  those reproduced against master's own CI log), **5** when EVERY unnamed skip is a testdox skip,
-  **3** when the numbers do not add up and **6** when the sorted set could not be written in full.
-  Each code names the cause its own arithmetic supports and never attributes more to a cause than
-  that cause can carry; a wrong diagnosis is worse than none, so 5 is gated on the number of testdox
-  SKIP lines and taken only when they cover the whole shortfall — never on the mere presence of
-  testdox-looking output, which would exonerate `phpunit.xml` about a run whose only fault is
-  `phpunit.xml`. When testdox covers part of the shortfall both causes are named, and entries
-  declared by a `No tests executed!` run are subtracted out before the shortfall is computed,
+  those reproduced against master's own CI log), **5** when the unnamed skips are matched one-for-one
+  by testdox skip glyphs, **3** when the numbers do not add up and **6** when the sorted set could not
+  be written in full. Each code names the cause its own arithmetic supports and never attributes more
+  to a cause than that cause can carry; a wrong diagnosis is worse than none, so 5 is gated on the
+  number of testdox SKIP lines (` ↩ `) and taken only when that number **equals** the shortfall —
+  never on the mere presence of testdox-looking output, which would exonerate `phpunit.xml` about a
+  run whose only fault is `phpunit.xml`. When testdox covers part of the shortfall both causes are
+  named. When there are **more** skip glyphs than unnamed skips nothing is attributed to testdox at
+  all: a real testdox run cannot produce a surplus (PHPUnit counts every glyph it prints in the same
+  run's `Skipped: N`), so a surplus is evidence of foreign output in the log — `gh run view --log`
+  carries every tool's — and it is reported as unattributable while both candidate causes stay in
+  play. The clamp that used to trim such a surplus down to the shortfall, and so printed "Do NOT
+  change phpunit.xml" about a config that was the cause, is **removed**: it had no legitimate input.
+  Entries declared by a `No tests executed!` run are subtracted out before the shortfall is computed,
   because they have no skip count of their own to match.
 
   ⚠ It is **not** claimed that every exit is right for every input. All of the denominators are
   **input-wide sums**, so in a multi-run log (`gh run view <id> --log`) one run's shortfall can be
   paid for by another run's surplus and net out to a code that is right for the sum and wrong for
-  both runs. Two such inputs were measured in round 3 of this step's review and are closed, with
-  fixtures; a `--testdox` run that also skips a whole test SUITE is not, because a skipped suite
-  produces no testdox glyph. The durable fix is **per-run segmentation** of the parser, which is
+  both runs — measured on the shipped version: a run declaring two names but summarising one, followed
+  by a count-only run summarising one, exits **0** with a two-name set. Two such inputs were measured
+  in round 3 of this step's review and are closed with fixtures, and the testdox-glyph surplus is
+  closed by deleting the branch that read it; a `--testdox` run that also skips a whole test SUITE is
+  not closed, because a skipped suite produces no testdox glyph, and neither is exit 5's reliance on
+  an equality of two whole-input totals (N stray glyphs beside a run that lost N names look the same
+  as one testdox run that skipped N). The durable fix is **per-run segmentation** of the parser, which is
   filed as a follow-up rather than done here. The script's header enumerates every exit path, the
   input class that reaches it, and its known limits by name.
 
@@ -250,7 +260,10 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   prints. It also re-derives the `--testdox` ban from every `.yml` **and** `.yaml` workflow, parsing
   each one and folding shell continuations first (a `.yaml` file and a wrapped command both defeated
   the first version of that guard), and re-derives the invocation-site count the paragraphs above
-  claim.
+  claim. Both testdox glyphs have their own stray-line fixture: `✔` (attributes nothing, reported as
+  evidence) and ` ↩ ` (attributed at most once, never exonerating), plus the surplus case — two stray
+  ` ↩ ` lines beside a count-only run — which is RED against the removed clamp. The `✔`-only fixture
+  is why the surplus defect survived three review rounds.
 
 - **Admin maintenance endpoints — the backend for the admin Tasks page (S77).** Eight routes on
   `/api/v1/admin/maintenance/*`, inside `AdminRoutes`' `AdminMiddleware` group, with an explicit

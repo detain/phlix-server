@@ -70,7 +70,14 @@ use Symfony\Component\Yaml\Yaml;
  *     pinned inputs, NOT a proof over all inputs: the script's denominators are
  *     input-wide sums, so a multi-run log can still net one run's shortfall against
  *     another's surplus (see KNOWN LIMITS in `scripts/skipped-test-names.sh`, and the
- *     per-run-segmentation follow-up it points at).
+ *     per-run-segmentation follow-up it points at). One member of that family — a
+ *     SURPLUS of testdox skip glyphs, which no real testdox run can produce because
+ *     PHPUnit counts every glyph it prints in the same run's `Skipped: N` — was closed
+ *     by DELETING the branch that read it rather than by another clamp, since it had no
+ *     legitimate input and could only ever print a false cause. Its fixture uses ` ↩ `
+ *     specifically: the earlier stray-glyph fixture used `✔`, which never reaches the
+ *     attribution arithmetic at all, and that is why the defect survived three rounds of
+ *     review. Both glyphs are fixtured now.
  *
  * It does NOT try to defend the script against being rewritten, and it does not assert
  * a skip COUNT anywhere. Asserting a count here would reintroduce the exact measure the
@@ -873,6 +880,113 @@ final class SkippedTestNameReportingTest extends TestCase
             $result['stderr'],
             'the glyph lines should still be REPORTED — suppressing them would trade a false '
             . 'diagnosis for a missing one',
+        );
+    }
+
+    /**
+     * The sibling of the test above, with testdox's SKIP glyph rather than its pass glyph —
+     * kept alongside it, not instead of it, because the two take different paths: `✔`
+     * leaves `testdox_skips` at 0 (evidence only), `↩` raises it (a partial attribution).
+     * The `✔` fixture is precisely why the surplus defect below stayed invisible for three
+     * rounds, so the glyph that actually feeds the attribution needs its own fixture.
+     *
+     * One stray skip glyph against a shortfall of four: testdox may be credited with at
+     * most the one, never with the rest, and `phpunit.xml` stays named.
+     */
+    public function test_one_stray_SKIP_glyph_is_credited_at_most_once_and_never_exonerates(): void
+    {
+        $result = $this->runScript($this->fixtureFile(
+            'stray-skip-glyph.log',
+            " \u{21A9} some other tool says it skipped something\n" . self::COUNT_ONLY,
+        ));
+
+        self::assertSame(
+            4,
+            $result['exit'],
+            "one stray ↩ line cannot account for four lost names, so the run that lost its\n"
+            . "detail list is still the diagnosis. stderr:\n" . $result['stderr'],
+        );
+        self::assertSame([], $result['lines'], 'nothing was named, so nothing may be written');
+        self::assertStringNotContainsString('Do NOT change phpunit.xml', $result['stderr']);
+        self::assertStringContainsString(
+            'BOTH causes are in play',
+            $result['stderr'],
+            'the glyph is reported and bounded at one, and phpunit.xml is not exonerated',
+        );
+    }
+
+    /**
+     * S345's test engineer proved at RUNTIME that the last surviving member of the
+     * false-exoneration family had a live input, and that every input reaching it got a
+     * false cause. `testdox_covers` used to be CLAMPED to the shortfall when there were
+     * more ` ↩ ` skip glyphs than unnamed skips, which forced `residual` to 0 and printed
+     * "Do NOT change phpunit.xml — it is not the cause" about a config that WAS the cause.
+     *
+     * That branch had no legitimate input at all. A real testdox run cannot produce a
+     * surplus: PHPUnit prints one glyph per test result AND counts that same skip in the
+     * run's own `Skipped: N` (`SummaryPrinter.php:106`), so genuine testdox output always
+     * satisfies `testdox_skips <= missing`. The only inputs that could reach the clamp were
+     * therefore FOREIGN glyphs — and the documented recipe is `gh run view <run-id> --log`,
+     * a whole-workflow log in which another tool's output is squarely in scope.
+     *
+     * The input is the test engineer's verbatim reproduction: two stray glyph lines from
+     * something else, plus a count-only run that genuinely lost its detail list. The clamp
+     * is gone, so the surplus now attributes NOTHING and both candidate causes are named.
+     */
+    public function test_a_surplus_of_stray_skip_glyphs_does_not_exonerate_phpunit_xml(): void
+    {
+        $result = $this->runScript($this->fixtureFile(
+            'glyph-surplus.log',
+            " \u{21A9} something else says skipped\n \u{21A9} and again\n"
+            . "PHPUnit 10.5.64\n\nOK, but there were issues!\nTests: 9, Assertions: 12, Skipped: 1.\n",
+        ));
+
+        // The premise, asserted separately so a change to the glyph detector cannot turn
+        // this test into a measurement of some other input class.
+        self::assertStringContainsString(
+            '1 skipped test(s) in the run summaries',
+            $result['stderr'],
+            'this fixture must present exactly ONE unnamed skip, or it is not the surplus class',
+        );
+        self::assertStringContainsString(
+            '2 testdox result line(s) (2 skipped)',
+            $result['stderr'],
+            'this fixture must present TWO skip glyphs — more than the shortfall — or the '
+            . 'surplus branch is not the one under test',
+        );
+
+        self::assertSame(
+            4,
+            $result['exit'],
+            "more skip glyphs than unnamed skips is not something a real testdox run can\n"
+            . "produce, so the glyph count is unattributable and explains nothing. Exit 5\n"
+            . "here is the clamp back: it tells the reader to leave phpunit.xml alone about\n"
+            . "an input whose only candidate causes are phpunit.xml and a testdox run that\n"
+            . "cannot be located. stderr:\n" . $result['stderr'],
+        );
+        self::assertSame([], $result['lines'], 'no name was recovered, so nothing may be written');
+        self::assertStringNotContainsString(
+            'Do NOT change phpunit.xml',
+            $result['stderr'],
+            'the exoneration sentence may only appear when the skip glyphs match the '
+            . 'shortfall exactly. A surplus is evidence of foreign output, not of innocence.',
+        );
+        self::assertStringContainsString(
+            'displayDetailsOnSkippedTests',
+            $result['stderr'],
+            'phpunit.xml must still be named as a candidate cause — it is the one this '
+            . 'input actually supports',
+        );
+        self::assertStringContainsString(
+            'NOT attributable',
+            $result['stderr'],
+            'the surplus must be REPORTED as unattributable, not silently dropped: '
+            . 'suppressing it would trade a false diagnosis for a missing one',
+        );
+        self::assertStringContainsString(
+            'BOTH causes remain in play',
+            $result['stderr'],
+            'both candidate causes must be named; neither may be ruled out',
         );
     }
 

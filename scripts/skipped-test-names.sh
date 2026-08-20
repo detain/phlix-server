@@ -120,17 +120,26 @@
 #     4  skips were counted, NO detail list was printed at all, and testdox does not
 #        account for all of them -- `displayDetailsOnSkippedTests` is off (or this
 #        invocation did not load phpunit.xml), so the set is unobtainable
-#     5  EVERY unnamed skip in the input is a testdox skip, and those can never be
-#        named (see above). NOT a config fault; re-run without `--testdox`.
+#     5  the unnamed skips are matched ONE-FOR-ONE by testdox skip glyphs, and a testdox
+#        skip can never be named (see above). NOT a config fault; re-run without
+#        `--testdox`.
 #     6  the sorted set could not be written (sort or the caller's redirect failed)
 #
 # ⚠ 5 is gated on the number of testdox SKIP lines (`↩`), never on the mere presence of
-# testdox-looking output, and it is taken only when those skips account for the WHOLE
-# shortfall. Round 2 of this step's review found the earlier gate (`testdox_lines > 0`)
-# telling the reader "Do NOT change phpunit.xml" about a count-only run that happened to
-# share a log with a zero-skip testdox run -- i.e. exactly the wrong-diagnosis defect
-# this contract exists to prevent, in mirror image. When testdox covers only PART of the
-# shortfall, both causes are named and phpunit.xml is not exonerated.
+# testdox-looking output, and it is taken ONLY when that number EQUALS the shortfall.
+# Round 2 of this step's review found the earlier gate (`testdox_lines > 0`) telling the
+# reader "Do NOT change phpunit.xml" about a count-only run that happened to share a log
+# with a zero-skip testdox run -- i.e. exactly the wrong-diagnosis defect this contract
+# exists to prevent, in mirror image. Two more attributions were removed since:
+#   * testdox covering only PART of the shortfall -> both causes are named and phpunit.xml
+#     is not exonerated;
+#   * MORE skip glyphs than unnamed skips -> nothing is attributed to testdox at all. Real
+#     testdox output cannot produce a surplus (each glyph is also counted in that run's own
+#     `Skipped: N`), so a surplus proves the glyph count is not attributable to this input's
+#     shortfall. The clamp that used to trim it to the shortfall turned every such input --
+#     e.g. two stray ` ↩ ` lines from another tool beside a run that really had lost its
+#     list -- into "Do NOT change phpunit.xml" about a config that WAS the cause.
+# What remains, and is not claimed away: see KNOWN LIMITS 3.
 #
 # Exit 4 is the one that matters most, and it is why this script cross-checks TWO
 # independent numbers instead of one. On master before S345 the log of run
@@ -151,9 +160,13 @@
 #   2  summary == 0. NOTHING in the input matches any of PHPUnit's seven terminating
 #      summary lines. Claim: "not a PHPUnit run, an empty set proves nothing" -- true by
 #      construction; every terminating run prints one of those lines.
-#   5  summarised > summarisable_declared AND testdox_skips >= the shortfall > 0. Claim:
-#      every unnamed skip is a testdox skip, so the config cannot name them. Supported
-#      because testdox skip lines are counted directly and never over-attributed.
+#   5  summarised > summarisable_declared AND testdox_skips == the shortfall > 0. Claim:
+#      every unnamed skip is matched by a testdox skip glyph, so the config cannot name
+#      them. Supported as far as an input-wide sum can support it: skip glyphs are counted
+#      directly, never over-attributed (a surplus attributes NOTHING -- see above) and
+#      never under-attributed except for the glyph-less suite skip of KNOWN LIMIT 2. It is
+#      an equality of two totals, not a proof that they came from the same run -- KNOWN
+#      LIMIT 3.
 #      ⚠ `summarisable_declared` is `declared` MINUS what the `No tests executed!` runs
 #      declared: those entries have no `Skipped: N` term of their own, and counting them
 #      here let them cancel a different run's lost names, at which point this branch
@@ -162,7 +175,9 @@
 #      the residual was counted, not named and not testdox's, and no run that published a
 #      totals line printed a list at all -- so either the attribute is off or phpunit.xml
 #      was not loaded. Those are the only two ways the default printer publishes a count
-#      with no list.
+#      with no list. Testdox's share is 0 in two cases -- no skip glyphs at all, and MORE
+#      skip glyphs than unnamed skips (unattributable, see above) -- and in both the
+#      message reports the glyphs as evidence while leaving phpunit.xml in play.
 #   3  three disjoint shapes, each stating its own arithmetic: (a) shortfall remains
 #      with a NON-empty summarisable list, so some run in the input printed no list --
 #      partial set, not written; (b) declared > summarised beyond what the
@@ -191,7 +206,13 @@
 #      (outside this repo; its S-number is pending allocation), because a deferral left in
 #      a worklog is not a contract -- that is the S126 lesson S345 exists to enforce.
 #      Until it is: a non-zero exit tells you the input as a whole must not be compared;
-#      it does not always tell you which run in it is at fault.
+#      it does not always tell you which run in it is at fault. Measured on THIS version,
+#      so it is not a stale note: a run declaring 2 names but summarising 1, followed by a
+#      count-only run summarising 1, exits **0** with a 2-name set and no sign that the
+#      second run lost a name.
+#      One member of the family was removed rather than clamped -- see the surplus-glyph
+#      paragraph above and limit 3 -- because that branch had no legitimate input at all.
+#      The rest of the family is untouched.
 #   2. `--testdox` together with a skipped SUITE. `testdox_skips` is counted from ` ↩ `
 #      glyph lines, and TextUI/Output/TestDox/ResultPrinter emits a glyph per TEST result,
 #      so a testSuiteSkipped event under `--testdox` lands in `Skipped: N` with no glyph to
@@ -200,7 +221,17 @@
 #      that skip either; `--testdox <suite-skip probe>` alone exits 0 with an EMPTY set,
 #      where the plain run on the same input correctly emits `SUITE:...`. `tests/`
 #      currently contains no skipped suite, so this is latent here. Same follow-up.
-#   3. a data-set label containing a literal NEWLINE is emitted truncated at that newline
+#   3. exit 5 rests on an EQUALITY of two input-wide totals, so N stray ` ↩ ` lines beside
+#      a run that lost N names are arithmetically indistinguishable from one testdox run
+#      that skipped N. Measured: one ` ↩ ` line plus a count-only `Skipped: 1.` still exits
+#      5 with "Do NOT change phpunit.xml". A SURPLUS of glyphs is no longer read that way
+#      (it attributes nothing, and the input falls through to 4/3 naming both causes),
+#      which is what removes the shape that had NO legitimate input; an exact match still
+#      does, because a genuine testdox run produces exactly that arithmetic and nothing in
+#      the input-wide totals tells the two apart. Per-run segmentation (limit 1) is what
+#      settles it -- attribute glyphs only to the run that printed them. Do not read exit 5
+#      as more than "the totals are consistent with testdox and with nothing else".
+#   4. a data-set label containing a literal NEWLINE is emitted truncated at that newline
 #      (the entry spans two lines and the denominators still agree, so this one shape
 #      escapes the cross-check). No data provider in this repo produces one, and the
 #      truncation is stable across runs, so `comm` is not corrupted by it -- but the
@@ -351,24 +382,47 @@ if [ "$summarised" -gt "$summarisable_declared" ]; then
     # nothing. Gating on `testdox_lines` instead would blame testdox for a plain run that
     # merely shares a log with one -- or for any other tool that prints those glyphs --
     # and then tell the reader to leave phpunit.xml alone when phpunit.xml IS the cause.
+    #
+    # A SURPLUS of skip glyphs is NOT clamped down to the shortfall, deliberately. A real
+    # testdox run cannot produce one: PHPUnit prints a ` ↩ ` glyph per skipped test AND
+    # counts that same test in the run's `Skipped: N`, so genuine testdox output always
+    # satisfies `testdox_skips <= missing`. When the input has MORE skip glyphs than
+    # unnamed skips, at least some of those glyphs are not testdox skips belonging to this
+    # input's shortfall -- another tool's output sharing the log, which the documented
+    # `gh run view <id> --log` recipe makes routine. The glyph count is then not
+    # ATTRIBUTABLE at all, so it buys nothing: the whole shortfall stays unexplained and
+    # both candidate causes are reported below. The earlier code clamped `testdox_covers`
+    # to `missing` here, which manufactured `residual == 0` and printed "Do NOT change
+    # phpunit.xml" -- measured on two stray ` ↩ ` lines plus one count-only run whose list
+    # really was lost (S345 test engineer), i.e. a branch with no legitimate input that
+    # could only ever lie.
     if [ "$testdox_skips" -gt "$missing" ]; then
-        testdox_covers="$missing"
+        testdox_covers=0
+        testdox_unattributable=1
     else
         testdox_covers="$testdox_skips"
+        testdox_unattributable=0
     fi
     residual=$((missing - testdox_covers))
 
-    # residual == 0 implies testdox_covers == missing > 0: testdox accounts for EVERY
-    # unnamed skip, and only then is phpunit.xml provably not the cause.
+    # residual == 0 now implies `testdox_skips == missing > 0`: every unnamed skip is
+    # matched one-for-one by a testdox skip glyph, which is the arithmetic a real testdox
+    # run produces and the only one under which testdox alone can account for the whole
+    # shortfall. It is NOT proof that the glyphs and the unnamed skips come from the SAME
+    # run -- N foreign glyphs beside a count-only run that lost N names look identical to
+    # an input-wide sum. See KNOWN LIMITS 3 in the header; per-run segmentation is what
+    # settles it.
     if [ "$residual" -eq 0 ]; then
-        printf 'skipped-test-names: FATAL -- all %s skipped test(s) that this input counts but does not name are accounted for by testdox output: it carries %s line(s) in --testdox result format, %s of them skips. PHPUnit constructs the default result printer with displayDetailsOnSkippedTests hardcoded FALSE when --testdox is in effect (vendor/phpunit/phpunit/src/TextUI/Output/Facade.php:204-221), so the configuration value is not consulted and neither phpunit.xml nor --display-skipped can name those skips. Do NOT change phpunit.xml -- for a testdox run it is not the cause. Re-run WITHOUT --testdox, or feed this script only the non-testdox steps of the log.\n' \
+        printf 'skipped-test-names: FATAL -- all %s skipped test(s) that this input counts but does not name are matched one-for-one by testdox skip glyphs: it carries %s line(s) in --testdox result format, %s of them skips. PHPUnit constructs the default result printer with displayDetailsOnSkippedTests hardcoded FALSE when --testdox is in effect (vendor/phpunit/phpunit/src/TextUI/Output/Facade.php:204-221), so the configuration value is not consulted and neither phpunit.xml nor --display-skipped can name those skips. Do NOT change phpunit.xml -- for a testdox run it is not the cause. Re-run WITHOUT --testdox, or feed this script only the non-testdox steps of the log.\n' \
             "$missing" "$testdox_lines" "$testdox_skips" >&2
         exit 5
     fi
 
     # Testdox cannot carry the whole shortfall, so from here it is reported as EVIDENCE
     # only, and the reader is NOT told that phpunit.xml is innocent.
-    if [ "$testdox_covers" -gt 0 ]; then
+    if [ "$testdox_unattributable" -eq 1 ]; then
+        also=" (Evidence, not a cause: this input carries $testdox_lines line(s) in --testdox result format, of which $testdox_skips are skips -- MORE skip glyphs than the $missing unnamed skip(s). A real testdox run cannot do that, because every glyph it prints is also counted in its own \`Skipped: N\`, so some of those glyphs belong to output that is not a testdox skip of this input: they are NOT attributable and they explain none of the shortfall. BOTH causes remain in play -- testdox somewhere in this input, AND phpunit.xml -- and neither is ruled out.)"
+    elif [ "$testdox_covers" -gt 0 ]; then
         also=" Testdox accounts for $testdox_covers of the unnamed skip(s) ($testdox_skips testdox skip line(s), unnamable by design -- Facade.php:204-221); the remaining $residual it does not, so BOTH causes are in play and phpunit.xml may be one of them."
     elif [ "$testdox_lines" -gt 0 ]; then
         also=" (Evidence, not a cause: this input carries $testdox_lines line(s) in --testdox result format, of which $testdox_skips are skips, so testdox explains none of the shortfall.)"

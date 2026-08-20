@@ -635,9 +635,16 @@ value is not consulted there), so a `--testdox` run adds to `Skipped: N` and can
 name those skips, with or without `--display-skipped`. No workflow passes `--testdox`
 any more (`syncplay-e2e.yml` dropped it in S345 for exactly this reason). If you add it
 back, or use it locally, the script exits **5** and says so — do **not** "fix"
-`phpunit.xml` in response; re-run without `--testdox`. It exits 5 only when testdox
-skips account for **every** unnamed skip in the input; when they account for some of
-them, both causes are named and `phpunit.xml` is not exonerated.
+`phpunit.xml` in response; re-run without `--testdox`. It exits 5 only when the number of
+testdox skip glyphs (` ↩ `) **equals** the number of unnamed skips in the input: when they
+account for only some of them, both causes are named and `phpunit.xml` is not exonerated,
+and when there are **more** glyphs than unnamed skips the glyph count is treated as
+unattributable and buys nothing at all. That last case is not a real testdox run — PHPUnit
+counts every glyph it prints in the same run's `Skipped: N`, so a surplus can only come
+from other output sharing the log, which `gh run view --log` makes routine. ⚠ The equality
+is still an equality of two whole-input totals, so N stray glyphs beside a run that lost N
+names read the same as one testdox run that skipped N; the script's header records that as
+a known limit rather than claiming otherwise.
 
 ⚠ **The second exception is the `assertion-escape-probe` job.** It runs PHPUnit from
 `scripts/assertion-escape-audit.php`, which captures the output into a PHP variable and
@@ -661,21 +668,28 @@ over the name set separates them; the count cannot. `scripts/skipped-test-names.
 writes only the sorted set to stdout (so `comm`/`diff` can eat it directly), puts its
 denominators on stderr, and **fails loudly** rather than printing an empty set when
 the input is not a PHPUnit run (exit 2), when the run skipped tests but printed no
-names and testdox does not explain them (exit 4), when every unnamed skip **is** a
-testdox skip (exit 5), when the numbers do not add up (exit 3) or when the set could not
-be written in full (exit 6). Each code names the cause its own arithmetic supports, and
-never attributes more to a cause than that cause can carry — a wrong diagnosis would send
-the next reader to fix the wrong thing, and rounds 2 and 3 of the S345 review each caught
-one doing exactly that before it shipped.
+names and testdox does not explain them (exit 4), when the unnamed skips are matched
+one-for-one by testdox skip glyphs (exit 5), when the numbers do not add up (exit 3) or
+when the set could not be written in full (exit 6). Each code names the cause its own
+arithmetic supports, and never attributes more to a cause than that cause can carry — a
+wrong diagnosis would send the next reader to fix the wrong thing, and rounds 2 and 3 of
+the S345 review plus its test engineer each caught one doing exactly that before it
+shipped (the last was a clamp that trimmed a surplus of testdox glyphs down to the
+shortfall; it is removed rather than re-tuned, because a surplus cannot come from a real
+testdox run at all).
 
 ⚠ That is **not** a guarantee that the code is right for every input, and the limit is
 worth knowing before you trust a diagnosis: all of the script's denominators are
 **input-wide sums**, so in a multi-run log — which is exactly what
 `gh run view <id> --log` gives you — a shortfall in one run can be paid for by a surplus
 in another, and the pair can net out to a code that is right for the sum and wrong for
-both runs. Two such inputs were measured in round 3 and are closed (and fixtured); a
-`--testdox` run that also skips a whole test SUITE is not, because a skipped suite
-produces no testdox glyph to attribute it to. The durable fix is **per-run segmentation**
+both runs. Measured on the current version: a run declaring two names but summarising one,
+followed by a count-only run summarising one, exits **0** with a two-name set. Two such
+inputs were measured in round 3 and are closed (and fixtured), and one more — a surplus of
+testdox glyphs — is closed by deleting the branch that read it; a `--testdox` run that also
+skips a whole test SUITE is not closed, because a skipped suite produces no testdox glyph
+to attribute it to, and neither is exit 5's reliance on an equality of two whole-input
+totals. The durable fix is **per-run segmentation**
 — evaluate the contract inside each run rather than over the whole input — which is filed
 as a follow-up and deliberately not done here. Until then, read a non-zero exit as "this
 input must not be compared", not always as "this named run is at fault". The script's

@@ -11,6 +11,7 @@ use Symfony\Component\Yaml\Yaml;
 
 /**
  * S128 — `tests/` is analysed and style-gated, and CI is what proves it.
+ * S343 — completed the src/ assertion set this class's name and docblock always claimed.
  *
  * ## The defect, and the trap inside the defect
  *
@@ -41,10 +42,14 @@ use Symfony\Component\Yaml\Yaml;
  * | PHPStan level 2 (chosen)    |     51 -> all fixed, 0 |
  * | PHPCS PSR-12                |   2155 -> 25 fixed + 2 carved out, 0 |
  *
- * One uniform level was never available. `src/` keeps level 9 with no baseline and no
- * `ignoreErrors`; `tests/` gets its own config at level 2. Both of those invariants are
- * asserted below, because "src/ keeps level 9" is the load-bearing half of S128's
- * acceptance criteria and a second config is exactly the shape that could erode it.
+ * One uniform level was never available. `src/` keeps level 9 with no baseline, no
+ * `ignoreErrors` and an empty `excludePaths`; `tests/` gets its own config at level 2.
+ * S128's test asserted only part of the src/ invariant (level, paths, no baseline file,
+ * no `includes:`) while its name and docblock claimed the whole conjunction; S343
+ * deleted the three stale suppressions in `phpstan.neon` (two excludePaths entries and
+ * one `reportUnmatched: false` ignore) and extended this test to assert `ignoreErrors: []`
+ * and an empty excludePaths allow-list on the src config, so the guard now asserts
+ * everything its name claims.
  */
 final class StaticAnalysisScopeTest extends TestCase
 {
@@ -217,6 +222,39 @@ final class StaticAnalysisScopeTest extends TestCase
             $src,
             'phpstan.neon must not include another config — that is how a baseline '
             . 'gets in without a file named "baseline"',
+        );
+
+        // S343: the method name and the class docblock always claimed "no ignore list",
+        // but the assertions stopped at the baseline file and `includes:`. The three
+        // suppressions S343 deleted excused nothing — src/ measured [OK] at level 9 with
+        // and without ext-swoole — and the ignore entry carried `reportUnmatched: false`,
+        // which means PHPStan could never flag it as dead, so it could never self-clear.
+        self::assertMatchesRegularExpression(
+            '/^\s*ignoreErrors:\s*\[\s*\]\s*$/m',
+            $src,
+            'phpstan.neon must keep an EMPTY ignoreErrors list. The entry S343 deleted '
+            . 'excused nothing (measured [OK] with and without swoole) and carried '
+            . 'reportUnmatched: false, so it could never self-clear — an ignore list '
+            . 'that cannot self-clear is a baseline by another name. Fix errors at the '
+            . 'source instead.',
+        );
+
+        // An exclusion list is an ignore list in disguise: a path added here silently
+        // disappears from analysis. Same assertSame treatment as the scanFiles and
+        // phpcs-tests.xml allow-lists above, plus an anti-vacuity guard so a deleted
+        // key fails rather than passing.
+        preg_match('/^\s*excludePaths:\s*\[\s*\](?<body>(?:\n\s*-\s*\S+)*)/m', $src, $m);
+        self::assertArrayHasKey('body', $m, 'phpstan.neon must declare excludePaths as the '
+            . 'EMPTY inline list `excludePaths: []` — S343 deleted the two stale entries. '
+            . 'A path added here, in any form, silently disappears from analysis.');
+        preg_match_all('/^\s*-\s*(\S+)\s*$/m', $m['body'], $entries);
+        self::assertSame(
+            [],
+            $entries[1],
+            'phpstan.neon must keep an EMPTY excludePaths allow-list. A path added here '
+            . 'silently disappears from analysis; the two entries S343 deleted excused '
+            . 'nothing. To exclude a path, fix the errors at the source and justify the '
+            . 'exclusion in review.',
         );
     }
 

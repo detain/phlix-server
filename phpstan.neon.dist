@@ -2,8 +2,7 @@ parameters:
     level: 9
     paths:
         - src
-    excludePaths:
-        - src/Server/WebSocket/Events.php
+    excludePaths: []
     bootstrapFiles:
         - vendor/autoload.php
     treatPhpDocTypesAsCertain: false

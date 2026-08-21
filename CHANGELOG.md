@@ -197,6 +197,20 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Added
 
+- **The scan-job type allowlist is pinned to the migration ENUM, and the failure message names
+  phlix-ui's mirror (S341).** New `ScanJobsEnumMigrationTest` parses migration
+  `101_library_scan_jobs_media_assets_type.sql` — the real file, through
+  `MigrationRunner::splitStatements()` itself, never a hand-written fixture — and asserts
+  `ScanJobRepository::ALLOWED_TYPES` equals the 9-member ENUM in value AND ordinal order (MySQL
+  stores ENUMs by index; an insertion in the middle re-numbers every stored row). It also fails
+  loudly when 101 stops being the latest declarer, when the runner sees more than one statement, or
+  when the parse yields zero members. The equality failure message names `phlix-ui`'s `SCAN_JOB_TYPES`
+  in `src/api/admin/libraries.ts` as the mirror to update — the step exists because that UI array
+  drifted to 8 while the DB had 9 (migration 101's ship note claimed "zero client change") and no
+  server-side gate noticed. Demonstrated red: adding a 10th member to a scratch copy of migration 101
+  turns `test_allowed_types_equals_the_enum_parsed_from_the_migration` red; restoring the file
+  returns it to green.
+
 - **Skipped tests are now reported BY NAME, so a skip set can be compared with `comm` instead of by
   count (S345).** `phpunit.xml` gains `displayDetailsOnSkippedTests="true"`, and
   `scripts/skipped-test-names.sh` turns any run's output — local, or a `gh run view <id> --log` —

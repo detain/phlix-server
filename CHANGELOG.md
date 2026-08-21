@@ -347,6 +347,20 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   `MediaDedupePathsCommand` into `Phlix\Media\Library\PathDedupeRunner` so the CLI and the task
   share ONE copy rather than two that drift.
 
+- **The AccessSchedule `timeToMinutes()` `intdiv` fix is now pinned by a regression test (S336).**
+  `tests/Unit/Access/AccessScheduleTest.php` (11 tests, 80 assertions) drives the REAL call graph
+  `timeToMinutes()` → `isActiveAt()` → `AccessScheduleService::getActiveScheduleForProfile()` line 69
+  against a mocked `Workerman\MySQL\Connection`, and names the boundary cases the fix was introduced
+  for individually: the `"00:10:30"` non-multiple-of-60 example, the `fromRow()` default
+  `end_time "23:59:59"`, second-granularity across a full minute, exact start/end inclusivity, one
+  second before start / after end denial, and the inclusive overnight window. Red-on-revert is
+  demonstrated, not asserted: mutating `intdiv` back to `/ 60` makes **7 of the 11 tests fail with
+  `TypeError: Return value must be of type int, float returned`** under `strict_types=1` (the four
+  that stay green are the `:00`-seconds boundary-pinning probes, documented as such). The
+  prevention question — why PHPStan level 9 cannot pin this shape (it types `$int / 60` as a
+  benevolent `(float|int)` union; verified against PHPStan 2.2.5) — is written into the
+  `AccessSchedule.php` docblock.
+
 ### Fixed
 
 - **DLNA Browse now advertises a stream URL that actually resolves, and a `protocolInfo` that

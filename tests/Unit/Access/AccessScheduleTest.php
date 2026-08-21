@@ -26,15 +26,19 @@ use Workerman\MySQL\Connection;
  * the isActiveAt() cases pin every second of the clock and the boundary
  * semantics so the intdiv fix cannot regress unnoticed.
  *
- * Red-on-revert vs boundary-pinning: the tests that exercise a non-`:00`
- * seconds component (Test A, Test B, the one-second probes, the midnight
- * default, the "00:10:30" case, and the overnight "05:59:59" probe) go RED on
- * the pre-fix token `/ 60` because it yields a float under strict_types. The
- * exact-bound probes (testExactStartSecondIsAllowed, testExactEndSecondIsAllowed,
- * testOneSecondBeforeStartIsDenied, testOvernightScheduleWindowIsInclusiveAtBothBounds)
- * and testServiceAllowsAccessWhenTheProfileHasNoSchedules / testInactiveScheduleNeverAllowsAccess
- * pin boundary SEMANTICS with `:00` seconds only and stay green pre-fix — that is
- * deliberate: they protect the allow/deny comparisons, not the intdiv token.
+ * Red-on-revert vs boundary-pinning: every test where timeToMinutes() receives
+ * a time with a non-`:00` seconds component (as a probe OR as a schedule bound)
+ * goes RED on the pre-fix token `/ 60`, because the division yields a float and
+ * the `: int` return type raises TypeError under strict_types. That set is
+ * Test A (end bound "23:59:59"), Test B (seconds 01..59), the two one-second
+ * tests (probe "09:59:59" in testOneSecondBeforeStartIsDenied, and end bound
+ * "11:59:59" in testOneSecondAfterEndIsDenied), the midnight default
+ * ("23:59:59"), the "00:10:30" case, and the overnight test (its "05:59:59"
+ * probe). The remaining tests — the two exact-bound probes (all `:00` seconds),
+ * testServiceAllowsAccessWhenTheProfileHasNoSchedules (never reaches
+ * timeToMinutes), and testInactiveScheduleNeverAllowsAccess (exits at the
+ * isActive gate) — stay green pre-fix by design: they pin boundary SEMANTICS,
+ * not the intdiv token.
  */
 class AccessScheduleTest extends TestCase
 {

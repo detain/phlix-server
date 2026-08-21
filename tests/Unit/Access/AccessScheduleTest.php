@@ -25,6 +25,16 @@ use Workerman\MySQL\Connection;
  * graph enters AccessScheduleService::getActiveScheduleForProfile() line 69, and
  * the isActiveAt() cases pin every second of the clock and the boundary
  * semantics so the intdiv fix cannot regress unnoticed.
+ *
+ * Red-on-revert vs boundary-pinning: the tests that exercise a non-`:00`
+ * seconds component (Test A, Test B, the one-second probes, the midnight
+ * default, the "00:10:30" case, and the overnight "05:59:59" probe) go RED on
+ * the pre-fix token `/ 60` because it yields a float under strict_types. The
+ * exact-bound probes (testExactStartSecondIsAllowed, testExactEndSecondIsAllowed,
+ * testOneSecondBeforeStartIsDenied, testOvernightScheduleWindowIsInclusiveAtBothBounds)
+ * and testServiceAllowsAccessWhenTheProfileHasNoSchedules / testInactiveScheduleNeverAllowsAccess
+ * pin boundary SEMANTICS with `:00` seconds only and stay green pre-fix — that is
+ * deliberate: they protect the allow/deny comparisons, not the intdiv token.
  */
 class AccessScheduleTest extends TestCase
 {
@@ -120,6 +130,12 @@ class AccessScheduleTest extends TestCase
         }
     }
 
+    /**
+     * Test C1 — the start bound of a same-day window is INCLUSIVE
+     * (`>= $startMinutes`, AccessSchedule.php:120). A mutation to strict `>`
+     * flips this probe. Uses `:00` seconds deliberately: this test pins the
+     * boundary SEMANTICS, not the intdiv token, so it stays green pre-fix.
+     */
     public function testExactStartSecondIsAllowed(): void
     {
         $schedule = $this->schedule('10:00:00', '12:00:00');
@@ -127,6 +143,12 @@ class AccessScheduleTest extends TestCase
         $this->assertTrue($schedule->isActiveAt($this->at('10:00:00')));
     }
 
+    /**
+     * Test C2 — the end bound of a same-day window is INCLUSIVE
+     * (`<= $endMinutes`, AccessSchedule.php:120). A mutation to strict `<`
+     * flips this probe. Uses `:00` seconds deliberately: this test pins the
+     * boundary SEMANTICS, not the intdiv token, so it stays green pre-fix.
+     */
     public function testExactEndSecondIsAllowed(): void
     {
         $schedule = $this->schedule('10:00:00', '12:00:00');
@@ -134,6 +156,10 @@ class AccessScheduleTest extends TestCase
         $this->assertTrue($schedule->isActiveAt($this->at('12:00:00')));
     }
 
+    /**
+     * Test C3 — one second before the start bound is DENIED (the start
+     * comparison is `>=`, so 09:59:59 truncates to minute 599 < 600).
+     */
     public function testOneSecondBeforeStartIsDenied(): void
     {
         $schedule = $this->schedule('10:00:00', '12:00:00');
@@ -212,6 +238,12 @@ class AccessScheduleTest extends TestCase
         $this->assertFalse($schedule->isActiveAt($this->at('12:00:00')));
     }
 
+    /**
+     * Test C8 — an inactive schedule never allows access: isActiveAt() exits at
+     * the `isActive` gate (AccessSchedule.php:103-105) before timeToMinutes()
+     * is reached, so this test pins the gate, not the intdiv token, and stays
+     * green pre-fix.
+     */
     public function testInactiveScheduleNeverAllowsAccess(): void
     {
         $schedule = $this->schedule('00:00:00', '23:59:59', false);

@@ -375,6 +375,21 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   benevolent `(float|int)` union; verified against PHPStan 2.2.5) — is written into the
   `AccessSchedule.php` docblock.
 
+- **The S111 fixture-id uniqueness pin is now provable from its CSPRNG half, and the last
+  `mt_rand()`-based test id generators are gone (S334).** `BrowseIndexUsageTest`'s S111 pin ("a
+  pinned mt_rand seed must not reproduce a fixture id") was satisfiable by the generator's
+  monotonic counter ALONE: freezing `bin2hex(random_bytes(9))` to a constant would have kept every
+  assertion green while reinstating the cross-run collisions S111 removed. The generator now lives
+  in `tests/Support/FixtureIdGenerator` so a unit-level test (`FixtureIdGeneratorTest`, 3 tests)
+  can probe the REAL generator without MySQL; the new guard compares only the random half
+  (positions 0-23, the 12-hex counter field at position 24 excluded), and the mutation is
+  demonstrated red — frozen prefix → `Failed asserting that two strings are not identical` — with
+  the counter left intact. The S111 pin in `BrowseIndexUsageTest` gains the same (2b) prefix
+  assertion for the CI/MySQL path. `PooledConnectionConcurrencyTest::uuid()`'s 8 executable
+  `mt_rand()` calls are converted to the same CSPRNG pattern (`random_bytes(16)` with v4/variant
+  nibbles), so a pinned `--random-order-seed` can no longer regenerate identical PK ids across
+  same-seed runs.
+
 ### Fixed
 
 - **DLNA Browse now advertises a stream URL that actually resolves, and a `protocolInfo` that

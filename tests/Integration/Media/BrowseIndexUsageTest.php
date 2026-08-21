@@ -370,13 +370,14 @@ final class BrowseIndexUsageTest extends TestCase
         //      prefix regressed to a constant, a pinned-seed re-run would
         //      reinstate the cross-run collisions S111 removed while every
         //      existing assertion stayed green. Compare only the random half
-        //      (positions 0-17 = the 18 CSPRNG hex chars; the '-' separators and
-        //      v4 '4' nibble are constants), so the counter field cannot mask a
-        //      regression. Mirrors the unit-level guard in
+        //      (positions 0-23 carry all 18 CSPRNG hex chars; the '-'
+        //      separators and v4/variant nibbles are constants), so the counter
+        //      field at position 24 cannot mask a regression. Mirrors the
+        //      unit-level guard in
         //      {@see \Phlix\Tests\Unit\Support\FixtureIdGeneratorTest}.
         $this->assertNotSame(
-            substr($first, 0, 18),
-            substr($second, 0, 18),
+            substr($first, 0, 24),
+            substr($second, 0, 24),
             'the CSPRNG half of a fixture id must vary even under a pinned mt_rand seed (S334)',
         );
 

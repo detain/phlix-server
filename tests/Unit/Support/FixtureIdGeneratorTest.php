@@ -27,17 +27,17 @@ final class FixtureIdGeneratorTest extends TestCase
         // Two calls under the SAME pinned mt_rand seed. The monotonic counter
         // still increments between them, so comparing whole ids would prove
         // nothing about the CSPRNG half (that is the S334 half-blind defect).
-        // Compare only the random prefix: positions 0-17 are the 18 CSPRNG hex
-        // chars (the '-' separators and the v4 '4' nibble are constants), and
-        // the 12-hex counter field starts at position 24.
+        // Compare only the random half: positions 0-23 carry all 18 CSPRNG hex
+        // chars (the '-' separators and the v4/variant nibbles are constants),
+        // while the 12-hex counter field starts at position 24.
         mt_srand(4242);
         $first = FixtureIdGenerator::generate();
         mt_srand(4242);
         $second = FixtureIdGenerator::generate();
 
         $this->assertNotSame(
-            substr($first, 0, 18),
-            substr($second, 0, 18),
+            substr($first, 0, 24),
+            substr($second, 0, 24),
             'the CSPRNG half of a fixture id must vary even under a pinned mt_rand seed (S334)',
         );
     }

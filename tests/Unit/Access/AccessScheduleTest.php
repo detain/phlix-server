@@ -195,10 +195,18 @@ class AccessScheduleTest extends TestCase
         $this->assertTrue($schedule->isActiveAt($this->at('00:10:30')));
     }
 
-    public function testOvernightScheduleAllowsAfterStartAndBeforeEnd(): void
+    /**
+     * Test C7 — the overnight branch (src/Access/AccessSchedule.php:124) is
+     * INCLUSIVE at both bounds: `>= $startMinutes` and `<= $endMinutes`. The
+     * exact-bound probes (22:00:00 -> 1320 = startMinutes, 06:00:00 -> 360 =
+     * endMinutes) pin those comparisons; a mutation to strict `<`/`>` flips them.
+     */
+    public function testOvernightScheduleWindowIsInclusiveAtBothBounds(): void
     {
         $schedule = $this->schedule('22:00:00', '06:00:00');
 
+        $this->assertTrue($schedule->isActiveAt($this->at('22:00:00'))); // exact start bound — inclusive
+        $this->assertTrue($schedule->isActiveAt($this->at('06:00:00'))); // exact end bound — inclusive
         $this->assertTrue($schedule->isActiveAt($this->at('23:00:00')));
         $this->assertTrue($schedule->isActiveAt($this->at('05:59:59')));
         $this->assertFalse($schedule->isActiveAt($this->at('12:00:00')));

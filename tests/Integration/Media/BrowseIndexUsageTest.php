@@ -6,6 +6,7 @@ namespace Phlix\Tests\Integration\Media;
 
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Tests\Support\Database\RequiresRealDatabase;
+use Phlix\Tests\Support\FixtureIdGenerator;
 use PHPUnit\Framework\TestCase;
 use Throwable;
 use Workerman\MySQL\Connection;
@@ -93,12 +94,6 @@ final class BrowseIndexUsageTest extends TestCase
     private ?Connection $db = null;
 
     private string $libraryId = '';
-
-    /**
-     * Monotonic per-row counter feeding {@see fixtureId()} (S111). Static so it keeps
-     * counting across every `setUp()` in the process, not just within one test.
-     */
-    private static int $fixtureSeq = 0;
 
     protected function setUp(): void
     {
@@ -371,6 +366,20 @@ final class BrowseIndexUsageTest extends TestCase
             'a pinned mt_rand seed must not reproduce a fixture id (S111)',
         );
 
+        // (2b) S334 — (2) is satisfiable by the counter alone: if the CSPRNG
+        //      prefix regressed to a constant, a pinned-seed re-run would
+        //      reinstate the cross-run collisions S111 removed while every
+        //      existing assertion stayed green. Compare only the random half
+        //      (positions 0-17 = the 18 CSPRNG hex chars; the '-' separators and
+        //      v4 '4' nibble are constants), so the counter field cannot mask a
+        //      regression. Mirrors the unit-level guard in
+        //      {@see \Phlix\Tests\Unit\Support\FixtureIdGeneratorTest}.
+        $this->assertNotSame(
+            substr($first, 0, 18),
+            substr($second, 0, 18),
+            'the CSPRNG half of a fixture id must vary even under a pinned mt_rand seed (S334)',
+        );
+
         // (3) Still a well-formed CHAR(36) v4-shaped UUID.
         $this->assertSame(36, strlen($first));
         $this->assertMatchesRegularExpression(
@@ -481,19 +490,13 @@ final class BrowseIndexUsageTest extends TestCase
      *
      * The output keeps the v4/variant-8 nibbles so it is shaped like every other id
      * in the schema.
+     *
+     * S334 — the implementation now lives in {@see FixtureIdGenerator} so a
+     * unit-level test can probe the real generator without a MySQL server (the
+     * S111 pin's CSPRNG half is asserted there and in (2b) above).
      */
     private function fixtureId(): string
     {
-        $prefix = bin2hex(random_bytes(9));
-        $seq = sprintf('%012x', ++self::$fixtureSeq);
-
-        return sprintf(
-            '%s-%s-4%s-8%s-%s',
-            substr($prefix, 0, 8),
-            substr($prefix, 8, 4),
-            substr($prefix, 12, 3),
-            substr($prefix, 15, 3),
-            $seq
-        );
+        return FixtureIdGenerator::generate();
     }
 }

@@ -109,11 +109,15 @@ final class ScanJobsEnumMigrationTest extends TestCase
             $raw = file_get_contents($file);
             self::assertIsString($raw, basename($file) . ' must be readable');
             // Full-line comments stripped: a migration header may *discuss* the
-            // ENUM (101's does, at length) without declaring it.
+            // ENUM (101's does, at length) without declaring it. Tolerant of
+            // `MODIFY` with/without `COLUMN` and of unquoted identifiers, so a
+            // future widening that deviates from today's exact spelling still
+            // counts as a declarer instead of silently slipping past the
+            // "latest declarer" guard (review finding 1).
             $executable = preg_replace('/^\s*(--|#).*$/m', '', $raw) ?? $raw;
             if (
                 preg_match(
-                    '/ALTER\s+TABLE\s+`library_scan_jobs`\s+MODIFY\s+COLUMN\s+`type`\s+ENUM\(/i',
+                    '/ALTER\s+TABLE\s+`?library_scan_jobs`?\s+MODIFY(?:\s+COLUMN)?\s+`?type`?\s+ENUM\(/i',
                     $executable,
                 ) === 1
             ) {
@@ -132,9 +136,16 @@ final class ScanJobsEnumMigrationTest extends TestCase
      */
     private static function enumMembers(): array
     {
-        $statement = self::statements()[0];
+        $statements = self::statements();
+        self::assertNotSame(
+            [],
+            $statements,
+            'Migration ' . self::MIGRATION . ' produced NO statements through the runner — '
+            . 'there is no ENUM declaration to parse (review finding 2)'
+        );
+        $statement = $statements[0];
 
-        $matched = preg_match('/`type`\s+ENUM\s*\((.*?)\)/s', $statement, $m);
+        $matched = preg_match('/`type`\s+ENUM\s*\((.*?)\)/is', $statement, $m);
         self::assertSame(
             1,
             $matched,

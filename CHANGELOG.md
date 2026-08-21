@@ -23,6 +23,18 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Security
 
+- **The LDAP operation-timeout bound is now asserted to FIRE, not just declared (S328).** The
+  `LDAP_OPT_TIMEOUT` option in `LdapConnection::connectionConfig()` had only config-presence
+  coverage — no test opened a real LDAP socket, so a regression that kept the config literal
+  present but rendered the bound ineffective at runtime passed silently. `LdapConnectionTimeoutTest`
+  now carries two real-timing cases against a controlled dead dependency on loopback: a peer that
+  accepts the TCP handshake and never answers consumes the 5-second operation bound (measured
+  ~5.0 s, asserted `>= 0.5` and `< 8.0`), while a refused peer fails fast (measured < 0.5 s) —
+  both fail with the identical `success:false, error:'ldap_error'` shape, so elapsed time is the
+  only discriminator. Mutations prove the guard: removing the option turns the config assertions
+  red and makes the real-timing case hang; bloating `OPERATION_TIMEOUT_SECONDS` to 15 turns the
+  upper-bound assertion red at ~15.0 s.
+
 - **The admin gate on four more controllers is now a construction-time requirement, not an optional
   one (S323, phase 2 of 2 — S323 is complete).** `WebhookAdminController`, `MediaMatchController`,
   `MediaPosterController` and the TRaSH-Guides `Arr\SyncController` each held their `AdminMiddleware`

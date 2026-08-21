@@ -33,8 +33,10 @@ namespace Phlix\Tests\Support;
  */
 final class FixtureIdGenerator
 {
-    /** Monotonic per-row counter (S111) — static so it keeps counting across
-     *  every `setUp()` in the process, not just within one test. */
+    /**
+     * Monotonic per-row counter (S111) — static so it keeps counting across
+     * every `setUp()` in the process, not just within one test.
+     */
     private static int $seq = 0;
 
     public static function generate(): string

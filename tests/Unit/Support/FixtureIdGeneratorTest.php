@@ -17,8 +17,9 @@ use PHPUnit\Framework\TestCase;
  * existing assertion would stay green while the cross-run collisions S111
  * existed to remove were reinstated. This class probes the generator directly
  * (no MySQL, no `RequiresRealDatabase` gate) and compares only the random
- * half — the first 18 hex chars before the 12-hex counter field — so the
- * counter cannot mask a regression.
+ * half — positions 0-23 carry all 18 CSPRNG hex chars (the '-' separators
+ * and the v4/variant nibbles are constants), while the 12-hex counter field
+ * starts at position 24 — so the counter cannot mask a regression.
  */
 final class FixtureIdGeneratorTest extends TestCase
 {

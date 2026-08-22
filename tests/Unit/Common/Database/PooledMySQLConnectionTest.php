@@ -6,6 +6,7 @@ namespace Phlix\Tests\Unit\Common\Database;
 
 use Phlix\Common\Database\PooledMySQLConnection;
 use PHPUnit\Framework\TestCase;
+use Throwable;
 use Workerman\MySQL\Connection;
 
 /**
@@ -228,5 +229,155 @@ final class PooledMySQLConnectionTest extends TestCase
             'the evicted dead connection must be closeConnection()\'d, not merely dropped (FD-churn fix)'
         );
         self::assertSame(0, $created[1]->closes, 'the fresh connection must not itself be closed');
+    }
+
+    /**
+     * S339 — connection-pool exhaustion under oversubscription is STRUCTURAL,
+     * and the fix is per-query borrow outside transactions.
+     *
+     * Pre-fix, a coroutine held its lease for its WHOLE lifetime
+     * ({@see PooledMySQLConnection::lease()} returned it to the idle pool only
+     * via `Coroutine::defer()`, i.e. on coroutine exit). Under oversubscription
+     * (more coroutines than pool slots) a waiter therefore had to survive a
+     * holder's ENTIRE query loop; when the loop was slow enough — or the box
+     * slow enough — the acquire timeout fired
+     * ("pool exhausted: no idle connection available after N s") even though
+     * only `maxSize` queries were ever in flight. Post-fix the connection is
+     * returned to the pool on the coroutine's NEXT DB call whenever no
+     * transaction is open (lazy return), so a waiter waits for ONE query.
+     *
+     * This test drives that distinction deterministically with fake
+     * connections: poolSize=2, 6 coroutines × 4 queries, each query sleeping
+     * 100 ms, acquire timeout 0.5 s. Pre-fix, a holder's loop is 4×0.1 = 0.4 s
+     * and the tail waiter must survive ~2 holder loops (0.8 s) > 0.5 s → the
+     * timeout fires. Post-fix, waiters wait ≤ 1 query (0.1 s) and all 6
+     * complete. The pool's own counters ({@see PooledMySQLConnection::poolStats()})
+     * stay bounded in both shapes — proving the failure is the lease LIFETIME,
+     * not the accounting.
+     *
+     * @requires extension swoole
+     */
+    public function testOversubscribedCoroutinesDoNotExhaustThePoolWhenLoopsAreSlow(): void
+    {
+        if (!extension_loaded('swoole')) {
+            $this->markTestSkipped('Swoole extension required');
+        }
+
+        $querySleep = 0.1;      // per-query duration on the fake connection
+        $acquireTimeout = 0.5;  // must exceed one query (post-fix) but not two holder loops (pre-fix)
+        $coros = 6;
+        $queriesPer = 4;
+        $poolSize = 2;
+
+        /** @var list<object{queries: int}> $created */
+        $created = [];
+        $factory = static function () use ($querySleep, &$created): Connection {
+            $conn = new class ($querySleep) extends Connection {
+                public int $queries = 0;
+
+                public function __construct(public float $querySleep)
+                {
+                    // Deliberately NOT calling parent::__construct() — no real
+                    // socket, mirroring PooledMySQLConnection itself.
+                }
+
+                /**
+                 * @param string                        $query
+                 * @param array<int|string, mixed>|null  $params
+                 * @param int                            $fetchmode
+                 * @return mixed
+                 */
+                public function query($query = '', $params = null, $fetchmode = \PDO::FETCH_ASSOC)
+                {
+                    $this->queries++;
+                    if ($query === 'SELECT 1') {
+                        return [['1' => 1]]; // liveness probe — not a real query
+                    }
+                    \Swoole\Coroutine::sleep($this->querySleep);
+                    return [];
+                }
+
+                public function closeConnection(): void
+                {
+                }
+
+                public function beginTrans(): bool
+                {
+                    return true;
+                }
+
+                public function commitTrans(): bool
+                {
+                    return true;
+                }
+
+                public function rollBackTrans(): bool
+                {
+                    return true;
+                }
+
+                public function lastInsertId()
+                {
+                    return '1';
+                }
+            };
+            $created[] = $conn;
+            return $conn;
+        };
+
+        $pool = new PooledMySQLConnection('h', 3306, 'u', 'p', 'db', $poolSize, 'utf8mb4', $factory, $acquireTimeout);
+
+        $errors = [];
+        $maxCreated = 0;
+        $completed = 0;
+        \Swoole\Coroutine\run(static function () use (
+            $pool,
+            $coros,
+            $queriesPer,
+            &$errors,
+            &$maxCreated,
+            &$completed
+        ): void {
+            $wg = new \Swoole\Coroutine\WaitGroup();
+            for ($i = 0; $i < $coros; $i++) {
+                $wg->add();
+                \Swoole\Coroutine::create(static function () use (
+                    $pool,
+                    $queriesPer,
+                    &$errors,
+                    &$maxCreated,
+                    &$completed,
+                    $wg
+                ): void {
+                    try {
+                        for ($q = 0; $q < $queriesPer; $q++) {
+                            $pool->query('SELECT 42');
+                            $stats = $pool->poolStats();
+                            $maxCreated = max($maxCreated, $stats['created']);
+                        }
+                        $completed++;
+                    } catch (Throwable $e) {
+                        $errors[] = $e->getMessage();
+                    } finally {
+                        $wg->done();
+                    }
+                });
+            }
+            $wg->wait();
+            $pool->closeConnection();
+        });
+
+        $this->assertSame(
+            [],
+            $errors,
+            'oversubscribed slow loops must not exhaust the pool: ' . implode(' | ', $errors)
+        );
+        $this->assertSame($coros, $completed, 'every coroutine must complete all its queries');
+        $this->assertLessThanOrEqual(
+            $poolSize,
+            $maxCreated,
+            'the pool must never exceed its ceiling (no accounting leak)'
+        );
+        $this->assertCount($poolSize, $created, 'the pool must open at most maxSize connections');
     }
 }

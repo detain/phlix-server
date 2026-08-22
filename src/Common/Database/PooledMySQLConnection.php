@@ -22,17 +22,28 @@ use Workerman\MySQL\Connection;
  * OWN leased connection drawn from a bounded pool, so up to `maxSize` queries
  * run truly in parallel within a single worker — true async DB.
  *
- * Design — per-coroutine lease (NOT per-query borrow):
- *  - A coroutine leases a raw {@see PhlixMySQLConnection} on its first DB call
- *    and keeps it for the coroutine's whole lifetime, so a multi-statement
- *    transaction (`beginTrans … commitTrans`) is automatically affine to one
- *    connection. The lease is returned to the idle pool via
- *    {@see \Swoole\Coroutine::defer()} when the coroutine finishes.
+ * Design — per-query borrow, with per-coroutine lease only inside a transaction:
+ *  - A coroutine's connection is returned to the idle pool on its next DB call
+ *    (lazy return) whenever no transaction is open, so a coroutine doing
+ *    unrelated work between queries does not pin a pool slot. A multi-statement
+ *    transaction (`beginTrans … commitTrans`) keeps the lease for its whole
+ *    duration, so the transaction stays affine to one connection — the design
+ *    invariant that made the original per-coroutine lease desirable. Any lease
+ *    still held when the coroutine finishes is returned via
+ *    {@see \Swoole\Coroutine::defer()}.
  *  - Acquire creates a new connection on demand up to `maxSize`, then blocks
  *    (channel pop) until another coroutine releases one. `maxSize = 1`
  *    therefore degrades to fully-serialised single-connection behaviour.
  *  - Outside a coroutine (CLI migrations, cron) there is no concurrency, so a
  *    single dedicated connection is reused directly.
+ *
+ * NOTE (S339): the lease was originally held for the coroutine's WHOLE
+ * lifetime, which made the pool's ceiling structural: under oversubscription
+ * (more concurrent coroutines than slots) a waiter had to survive a holder's
+ * entire query loop, and a slow enough holder — or slow enough box — made the
+ * acquire timeout fire "pool exhausted" even though only `maxSize` queries were
+ * ever in flight. Per-query borrow outside transactions removes that coupling;
+ * the acquire timeout is configurable ({@see __construct()}, `$acquireTimeout`).
  *
  * This front never opens its own socket: it deliberately does NOT call the
  * parent constructor (which would `connect()`); it only ever delegates the
@@ -60,6 +71,14 @@ final class PooledMySQLConnection extends Connection
     /** @var int Maximum number of raw connections the pool may open. */
     private int $maxSize;
 
+    /**
+     * How long {@see acquire()} waits for a connection before throwing
+     * "pool exhausted" (seconds). 0 = fail immediately on exhaustion.
+     *
+     * @var float
+     */
+    private float $acquireTimeout;
+
     /** @var \Swoole\Coroutine\Channel|null Idle (released) connections, lazily created in-coroutine. */
     private ?\Swoole\Coroutine\Channel $idle = null;
 
@@ -82,6 +101,16 @@ final class PooledMySQLConnection extends Connection
     private array $txPending = [];
 
     /**
+     * Coroutine ids whose exit-return defer has already been registered. The
+     * defer is armed exactly once per coroutine (on its first acquisition);
+     * re-arming it on every lazy re-acquire would push the same connection
+     * once per arm when the coroutine finally exits.
+     *
+     * @var array<int, true>
+     */
+    private array $deferArmed = [];
+
+    /**
      * @param string                              $host
      * @param int                                 $port
      * @param string                              $user
@@ -91,6 +120,9 @@ final class PooledMySQLConnection extends Connection
      * @param string                              $charset
      * @param (callable():Connection)|null $rawFactory Override for tests; defaults
      *        to opening a real {@see PhlixMySQLConnection}.
+     * @param float                               $acquireTimeout Seconds to wait for a
+     *        connection before throwing "pool exhausted" (clamped to ≥ 0; 0 = fail
+     *        immediately). Default 10.0 preserves the historic behaviour.
      *
      * @psalm-suppress MissingParentConstructorCall Intentional: the front must
      *        not open a socket of its own; every query is delegated to a lease.
@@ -103,10 +135,12 @@ final class PooledMySQLConnection extends Connection
         string $database,
         int $maxSize = 8,
         string $charset = 'utf8mb4',
-        ?callable $rawFactory = null
+        ?callable $rawFactory = null,
+        float $acquireTimeout = 10.0
     ) {
         // Deliberately NOT calling parent::__construct() — see class docblock.
         $this->maxSize = max(1, $maxSize);
+        $this->acquireTimeout = max(0.0, $acquireTimeout);
         $this->rawFactory = $rawFactory ?? static function () use (
             $host,
             $port,
@@ -273,29 +307,67 @@ final class PooledMySQLConnection extends Connection
             return $this->cliConn ??= ($this->rawFactory)();
         }
 
+        // S339 — per-query borrow outside transactions. A coroutine only pins a
+        // pool slot while it is actively using a connection: during a single
+        // query, or for the whole of an open transaction (transaction affinity,
+        // the design invariant). Between consecutive DB calls the connection
+        // goes back to the idle pool, so unrelated work (I/O, waits) cannot
+        // hold a slot hostage and oversubscribed waiters wait for ONE query
+        // instead of a holder's whole coroutine lifetime. The return is LAZY —
+        // on this coroutine's NEXT pool call, not immediately after the query —
+        // so the INSERT → lastInsertId() pattern still resolves on the
+        // connection that performed the INSERT.
+        if (isset($this->leases[$cid]) && !$this->hasPendingTransaction($cid)) {
+            $returned = $this->leases[$cid];
+            unset($this->leases[$cid]);
+            if ($this->idle === null) {
+                // Unreachable: a lease only exists after acquire(), which
+                // initialises the idle channel. Closed rather than stranded so
+                // the pool can never leak a connection if that invariant
+                // ever changes.
+                $returned->closeConnection();
+                $this->created = max(0, $this->created - 1);
+            } else {
+                $this->idle->push($returned);
+            }
+        }
+
         if (isset($this->leases[$cid])) {
             return $this->leases[$cid];
         }
 
         $conn = $this->acquire();
         $this->leases[$cid] = $conn;
-        \Swoole\Coroutine::defer(function () use ($cid): void {
-            $released = $this->leases[$cid] ?? null;
-            $hadPendingTx = isset($this->txPending[$cid]) && $this->txPending[$cid];
-            unset($this->leases[$cid], $this->txPending[$cid]);
-            if ($released === null || $this->idle === null) {
-                return;
-            }
-            // Never return a dirty (open-transaction) connection to the pool.
-            // Rollback any uncommitted transaction before reuse — an interrupted
-            // coroutine must not poison the next lessee.
-            if ($hadPendingTx) {
-                $released->rollBackTrans();
-            }
-            $this->idle->push($released);
-        });
+        if (!isset($this->deferArmed[$cid])) {
+            $this->deferArmed[$cid] = true;
+            \Swoole\Coroutine::defer(function () use ($cid): void {
+                unset($this->deferArmed[$cid]);
+                $released = $this->leases[$cid] ?? null;
+                $hadPendingTx = isset($this->txPending[$cid]) && $this->txPending[$cid];
+                unset($this->leases[$cid], $this->txPending[$cid]);
+                if ($released === null || $this->idle === null) {
+                    return;
+                }
+                // Never return a dirty (open-transaction) connection to the pool.
+                // Rollback any uncommitted transaction before reuse — an interrupted
+                // coroutine must not poison the next lessee.
+                if ($hadPendingTx) {
+                    $released->rollBackTrans();
+                }
+                $this->idle->push($released);
+            });
+        }
 
         return $conn;
+    }
+
+    /**
+     * Whether the given coroutine currently has an open transaction, i.e. must
+     * keep its lease (transaction affinity) instead of returning it lazily.
+     */
+    private function hasPendingTransaction(int $cid): bool
+    {
+        return isset($this->txPending[$cid]) && $this->txPending[$cid];
     }
 
     /**
@@ -310,7 +382,7 @@ final class PooledMySQLConnection extends Connection
         if ($this->currentCoroutineId() < 0) {
             // Non-coroutine path: bounded poll loop (no recursion, no stack growth).
             // CLI/cron never has true parallelism, so polling is acceptable.
-            $deadline = hrtime(true) + 10_000_000_000; // 10 s ns
+            $deadline = hrtime(true) + (int) ($this->acquireTimeout * 1_000_000_000);
             while (hrtime(true) < $deadline) {
                 if ($this->created < $this->maxSize) {
                     $this->created++;
@@ -323,7 +395,10 @@ final class PooledMySQLConnection extends Connection
                 }
                 usleep(100_000); // 100 ms between polls
             }
-            throw new \RuntimeException('pool exhausted: could not acquire a connection within 10 s');
+            throw new \RuntimeException(sprintf(
+                'pool exhausted: could not acquire a connection within %g s',
+                $this->acquireTimeout
+            ));
         }
 
         if (!$this->idle->isEmpty()) {
@@ -357,11 +432,39 @@ final class PooledMySQLConnection extends Connection
         // scheduler while waiting, so other coroutines remain runnable.
         // pop() returns false on timeout (Swoole 4.x) or throws (Swoole 5+).
         /** @var Connection|false $conn */
-        $conn = $this->idle->pop(10.0);
+        $conn = $this->idle->pop($this->acquireTimeout);
         if ($conn === false) {
-            throw new \RuntimeException('pool exhausted: no idle connection available after 10 s');
+            throw new \RuntimeException(sprintf(
+                'pool exhausted: no idle connection available after %g s',
+                $this->acquireTimeout
+            ));
         }
         return $conn;
+    }
+
+    /**
+     * Snapshot of the pool's own counters, for observability and the S339
+     * exhaustion reproduction. Best-effort: the coroutine scheduler can
+     * interleave between the individual reads, so treat the values as a
+     * point-in-time sample, not a lock.
+     *
+     * `idle` is derived as `created − leased` rather than read from the Swoole
+     * Channel, because every created connection is either leased, sitting in
+     * the idle channel, or transiently being liveness-probed by acquire() —
+     * so the arithmetic (clamped at 0) is the channel contents plus the probe,
+     * and it is readable outside a coroutine too (Channel methods are not).
+     *
+     * @return array{maxSize: int, created: int, leased: int, idle: int}
+     */
+    public function poolStats(): array
+    {
+        $leased = count($this->leases);
+        return [
+            'maxSize' => $this->maxSize,
+            'created' => $this->created,
+            'leased' => $leased,
+            'idle' => max(0, $this->created - $leased),
+        ];
     }
 
     /**

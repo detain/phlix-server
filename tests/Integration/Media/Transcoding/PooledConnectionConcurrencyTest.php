@@ -337,6 +337,12 @@ final class PooledConnectionConcurrencyTest extends TestCase
         $errors = [];             // any exception message from any coroutine
         $inFlight = 0;
         $peak = 0;
+        // S339 — the pool's OWN counters sampled through the churn: created must
+        // never exceed the pool ceiling, whatever the oversubscription. This is
+        // the "no accounting leak" half of the exhaustion proof (the lease-LIFETIME
+        // half is the unit regression test); the reported flake showed a pool that
+        // LOOKED exhausted while only maxSize connections existed.
+        $maxCreated = 0;
 
         \Swoole\Coroutine\run(function () use (
             $pool,
@@ -354,7 +360,8 @@ final class PooledConnectionConcurrencyTest extends TestCase
             &$badValues,
             &$errors,
             &$inFlight,
-            &$peak
+            &$peak,
+            &$maxCreated
         ): void {
             \Swoole\Runtime::enableCoroutine(SWOOLE_HOOK_ALL);
             $wg = new \Swoole\Coroutine\WaitGroup();
@@ -373,6 +380,7 @@ final class PooledConnectionConcurrencyTest extends TestCase
                     &$errors,
                     &$inFlight,
                     &$peak,
+                    &$maxCreated,
                     $wg
                 ): void {
                     try {
@@ -386,6 +394,7 @@ final class PooledConnectionConcurrencyTest extends TestCase
                                 [$value, $jobId]
                             );
                             $inFlight--;
+                            $maxCreated = max($maxCreated, $pool->poolStats()['created']);
                             $invalidate->invoke($manager, $jobId);
                         }
                     } catch (Throwable $e) {
@@ -401,6 +410,7 @@ final class PooledConnectionConcurrencyTest extends TestCase
             for ($r = 0; $r < $readerCoros; $r++) {
                 $wg->add();
                 \Swoole\Coroutine::create(function () use (
+                    $pool,
                     $entry,
                     $manager,
                     $jobId,
@@ -411,6 +421,7 @@ final class PooledConnectionConcurrencyTest extends TestCase
                     &$errors,
                     &$inFlight,
                     &$peak,
+                    &$maxCreated,
                     $wg
                 ): void {
                     try {
@@ -420,6 +431,7 @@ final class PooledConnectionConcurrencyTest extends TestCase
                             /** @var array{row: array<string,mixed>}|null $e */
                             $e = $entry->invoke($manager, $jobId);
                             $inFlight--;
+                            $maxCreated = max($maxCreated, $pool->poolStats()['created']);
                             $this->assertIsArray($e);
                             $raw = $e['row']['duration_seconds'] ?? null;
                             $val = is_numeric($raw) ? (int) $raw : -1;
@@ -467,6 +479,20 @@ final class PooledConnectionConcurrencyTest extends TestCase
         $this->assertGreaterThan(1, $peak, 'expected concurrent in-flight queries during the churn');
 
         $this->assertGreaterThan(0, $maxWritten, 'writers must have written at least once');
+
+        // S339 — the pool's own counters: created must stay at or under the
+        // ceiling throughout the whole oversubscribed churn. A leak (the
+        // accounting hypothesis S137's first reading floated) would push it
+        // past maxSize; the exhaustion this step fixes is structural instead.
+        $this->assertLessThanOrEqual(
+            $poolSize,
+            $maxCreated,
+            sprintf(
+                'the pool must never exceed its ceiling: created peaked at %d with maxSize=%d',
+                $maxCreated,
+                $poolSize
+            )
+        );
 
         // CONVERGENCE — the epoch guard's payoff. Writers have stopped; do a
         // final authoritative write via the (now-idle) pool, invalidate, then

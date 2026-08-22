@@ -12,6 +12,7 @@ declare(strict_types=1);
 namespace Phlix\Media\Library;
 
 use InvalidArgumentException;
+use Phlix\Common\Database\WriteResult;
 use Phlix\Common\Uuid;
 use Workerman\MySQL\Connection;
 
@@ -266,8 +267,14 @@ class ScanJobRepository
      * ⚠ **`Connection::query()` returns `lastInsertId()` for an INSERT that
      * affected rows, and `null` when it affected none.** `library_scan_jobs.id` is
      * a CHAR(36) UUID with no AUTO_INCREMENT, so a SUCCESSFUL insert returns the
-     * string `'0'` — which is FALSY. This tests `!== null`; `if (!$result)` would
-     * read every successful insert as a refusal.
+     * string `'0'` — which is FALSY. The refusal test is therefore
+     * {@see \Phlix\Common\Database\WriteResult::wroteNothing()}, never truthiness:
+     * `if (!$result)` would read every successful insert as a refusal, and `false`
+     * — which this client never produces — is a refusal too (defensive breadth,
+     * same as the helper). Beware {@see \Phlix\Common\Database\WriteResult} trap 3:
+     * the statement is built in `$sql` above, so reformatting it so `INSERT` stops
+     * being the first space-delimited token makes the client answer `null` for a
+     * write that SUCCEEDED — and this method then reports a refusal.
      *
      * @param string $libraryId Target library UUID.
      * @param string $type      Job type; must be one of {@see self::ALLOWED_TYPES}.
@@ -305,7 +312,7 @@ class ScanJobRepository
             $result = $this->db->query($sql, $params);
         }
 
-        if ($result !== null) {
+        if (!WriteResult::wroteNothing($result)) {
             return ['job_id' => $id, 'created' => true];
         }
 
@@ -445,8 +452,14 @@ class ScanJobRepository
      * ⚠ **`Connection::query()` returns `lastInsertId()` for an INSERT that affected
      * rows, and `null` when it affected none.** `library_scan_jobs.id` is a CHAR(36)
      * UUID with no AUTO_INCREMENT, so a SUCCESSFUL insert here returns the string
-     * `'0'` — which is FALSY. Test `!== null`, never truthiness; `if (!$result)` reads
-     * a successful insert as a refusal.
+     * `'0'` — which is FALSY. The refusal test is therefore
+     * {@see \Phlix\Common\Database\WriteResult::wroteNothing()}, never truthiness:
+     * `if (!$result)` reads a successful insert as a refusal, and `false` — which
+     * this client never produces — is a refusal too (defensive breadth, same as the
+     * helper). Beware {@see \Phlix\Common\Database\WriteResult} trap 3: the statement
+     * is built in `$sql` above, so reformatting it so `INSERT` stops being the first
+     * space-delimited token makes the client answer `null` for a write that
+     * SUCCEEDED — and this method then reports a refusal.
      *
      * @param string      $libraryId Target library UUID.
      * @param string      $type      Job type; must be one of {@see self::ALLOWED_TYPES}.
@@ -485,7 +498,7 @@ class ScanJobRepository
             $result = $this->db->query($sql, $params);
         }
 
-        return $result === null ? null : $id;
+        return WriteResult::wroteNothing($result) ? null : $id;
     }
 
     /**

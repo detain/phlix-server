@@ -74,9 +74,11 @@ namespace Phlix\Common\Database;
  *
  *  - {@see \Phlix\Media\Music\MusicLibraryScanner} treats it as a LOSS and
  *    charges the file as failed.
- *  - {@see \Phlix\Media\Library\ScanJobRepository::startRunningIfIdle()} treats
- *    it as a deliberate REFUSAL (`INSERT … WHERE NOT EXISTS` wrote nothing
- *    because a scan is already running) and returns `null` to the caller.
+ *  - {@see \Phlix\Media\Library\ScanJobRepository::startRunningIfIdle()} and
+ *    {@see \Phlix\Media\Library\ScanJobRepository::enqueueIfNoneActiveOfType()}
+ *    adopt this predicate as their decision rule: a "wrote nothing" answer is a
+ *    deliberate REFUSAL (`INSERT … WHERE NOT EXISTS` wrote nothing because a
+ *    job is already active), and both hand "no job created" back to the caller.
  *  - {@see \Phlix\Access\StreamSessionService::updateStreamLimit()} treats it
  *    as SUCCESS: an `INSERT … ON DUPLICATE KEY UPDATE` whose values are
  *    already current returns `null` (measured against real MySQL 8), and

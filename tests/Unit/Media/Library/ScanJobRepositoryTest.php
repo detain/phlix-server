@@ -583,4 +583,113 @@ final class ScanJobRepositoryTest extends TestCase
         $repo = new ScanJobRepository($db);
         $this->assertSame(0, $repo->reapStaleJobs('x'));
     }
+
+    public function testEnqueueIfNoneActiveOfTypeReportsCreatedWhenInsertSucceeded(): void
+    {
+        // '0' is what the client answers for a SUCCESSFUL INSERT into a
+        // CHAR(36)-PK table (library_scan_jobs.id has no AUTO_INCREMENT) — and
+        // '0' is FALSY. The site must read it through
+        // WriteResult::wroteNothing(), never truthiness (S342).
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturn('0');
+
+        $repo = new ScanJobRepository($db);
+        $result = $repo->enqueueIfNoneActiveOfType('lib-1', 'media_assets');
+
+        $this->assertTrue($result['created']);
+        // The minted job id is a real UUID, not a placeholder.
+        $this->assertMatchesRegularExpression(
+            '/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/',
+            $result['job_id'],
+        );
+    }
+
+    public function testEnqueueIfNoneActiveOfTypeReportsRefusedWhenInsertWroteNothing(): void
+    {
+        // null is what the client answers for a zero-row INSERT
+        // (INSERT ... SELECT ... WHERE NOT EXISTS refused because a job of the
+        // same type is already queued/running).
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturn(null);
+
+        $repo = new ScanJobRepository($db);
+        $result = $repo->enqueueIfNoneActiveOfType('lib-1', 'media_assets');
+
+        $this->assertFalse($result['created']);
+    }
+
+    public function testEnqueueIfNoneActiveOfTypeRetriesOnceOnDeadlockAndConsumesTheRetryResult(): void
+    {
+        // The first query deadlocks (1213); the retry answers '0' — a
+        // SUCCESSFUL insert that is FALSY, so the retried result must also be
+        // read through WriteResult::wroteNothing(), not truthiness (S342).
+        $calls = 0;
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(
+            static function (string $sql, ?array $params = null, $fetchmode = \PDO::FETCH_ASSOC) use (&$calls) {
+                $calls++;
+                if ($calls === 1) {
+                    throw new \RuntimeException(
+                        'SQLSTATE[40001]: 1213 Deadlock found when trying to get lock; try restarting transaction',
+                    );
+                }
+
+                return '0';
+            },
+        );
+
+        $repo = new ScanJobRepository($db);
+        $result = $repo->enqueueIfNoneActiveOfType('lib-1', 'media_assets');
+
+        $this->assertSame(2, $calls);
+        $this->assertTrue($result['created']);
+    }
+
+    public function testStartRunningIfIdleReturnsTheJobIdWhenInsertSucceeded(): void
+    {
+        // '0' is a SUCCESSFUL insert into a CHAR(36)-PK table (falsy!) — the
+        // site must read it through WriteResult::wroteNothing(), never
+        // truthiness (S342).
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturn('0');
+
+        $repo = new ScanJobRepository($db);
+        $this->assertSame('job-pre-minted', $repo->startRunningIfIdle('lib-1', 'scan', 'job-pre-minted'));
+    }
+
+    public function testStartRunningIfIdleReturnsNullWhenInsertWroteNothing(): void
+    {
+        // null is what the client answers for a zero-row INSERT: the library
+        // already had a queued/running job, so nothing was inserted.
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturn(null);
+
+        $repo = new ScanJobRepository($db);
+        $this->assertNull($repo->startRunningIfIdle('lib-1', 'scan'));
+    }
+
+    public function testStartRunningIfIdleRetriesOnceOnDeadlockAndConsumesTheRetryResult(): void
+    {
+        // The first query deadlocks (1213); the retry answers null — a refusal
+        // — so the retried result must be consumed by the SAME predicate as
+        // the first attempt (S342).
+        $calls = 0;
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(
+            static function (string $sql, ?array $params = null, $fetchmode = \PDO::FETCH_ASSOC) use (&$calls) {
+                $calls++;
+                if ($calls === 1) {
+                    throw new \RuntimeException(
+                        'SQLSTATE[40001]: 1213 Deadlock found when trying to get lock; try restarting transaction',
+                    );
+                }
+
+                return null;
+            },
+        );
+
+        $repo = new ScanJobRepository($db);
+        $this->assertNull($repo->startRunningIfIdle('lib-1', 'scan'));
+        $this->assertSame(2, $calls);
+    }
 }

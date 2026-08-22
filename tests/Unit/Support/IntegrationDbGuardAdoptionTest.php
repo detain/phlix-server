@@ -281,7 +281,7 @@ final class IntegrationDbGuardAdoptionTest extends TestCase
      * broken one. It also proves migration 101 applied: without it the `type`
      * ENUM rejects `media_assets` outright, a failure a double never surfaces.
      */
-    private const EXPECTED_ADOPTERS = 43;
+    private const EXPECTED_ADOPTERS = 44;
 
     /**
      * Bare function calls that are a MySQL reachability probe under any

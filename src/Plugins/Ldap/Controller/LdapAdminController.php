@@ -122,20 +122,9 @@ final class LdapAdminController
 
         $host = is_string($body['host'] ?? null) ? trim($body['host']) : '';
         $baseDn = is_string($body['base_dn'] ?? null) ? trim($body['base_dn']) : '';
-        $bindPw = is_string($body['bind_pw'] ?? null) ? $body['bind_pw'] : '';
 
         $port = self::defaultedPort(
             array_key_exists('port', $body) ? $body['port'] : ($existing['port'] ?? null),
-        );
-        $ssl = (bool) (array_key_exists('ssl', $body) ? $body['ssl'] : ($existing['ssl'] ?? false));
-        $bindDn = self::trimmedString(
-            array_key_exists('bind_dn', $body) ? $body['bind_dn'] : ($existing['bind_dn'] ?? null),
-        );
-        $userFilter = self::defaultedUserFilter(
-            array_key_exists('user_filter', $body) ? $body['user_filter'] : ($existing['user_filter'] ?? null),
-        );
-        $adminGroup = self::trimmedString(
-            array_key_exists('admin_group', $body) ? $body['admin_group'] : ($existing['admin_group'] ?? null),
         );
 
         if ($host === '') {
@@ -159,26 +148,14 @@ final class LdapAdminController
             ]);
         }
 
-        $settings = [
-            'host' => $host,
-            'port' => $port,
-            'ssl' => $ssl,
-            'base_dn' => $baseDn,
-            'bind_dn' => $bindDn,
-            'user_filter' => $userFilter,
-            'admin_group' => $adminGroup,
-        ];
-
-        if ($bindPw !== '') {
-            $settings['bind_pw'] = $bindPw;
-        }
-
-        // Keep the existing bind password when the operator saves without
-        // re-entering it (the admin SPA never echoes it back — maskSecrets()
-        // strips it from the read response).
-        if ($bindPw === '' && isset($existing['bind_pw'])) {
-            $settings['bind_pw'] = $existing['bind_pw'];
-        }
+        // S337 — the replacement document is DERIVED from the schema's `properties`
+        // list ({@see self::settingsSchemaProperties()}), not a hand-enumerated
+        // literal. A property added to the schema without a normalizer in
+        // {@see self::normalizeSavedValue()} throws loudly instead of being
+        // silently dropped on every save; one added WITH a normalizer survives the
+        // round-trip automatically. `bind_pw` is the schema's writeOnly property:
+        // a blank value keeps the stored password (see the class docblock).
+        $settings = self::buildSettingsDocument($body, $existing);
 
         $this->plugin->saveSettings($settings);
 
@@ -218,6 +195,113 @@ final class LdapAdminController
     private static function trimmedString(mixed $value): string
     {
         return is_string($value) ? trim($value) : '';
+    }
+
+    /**
+     * The schema's `properties` map — the single enumeration of settable keys,
+     * shared by {@see self::getSchema()} (the API surface) and
+     * {@see self::saveSettings()} (the writer). S337 removed the hand-enumerated
+     * save literal; a key can only be saved if it exists here.
+     *
+     * @return array<string, array<string, mixed>>
+     */
+    private static function settingsSchemaProperties(): array
+    {
+        return [
+            'host' => [
+                'type' => 'string',
+                'description' => 'LDAP server hostname or IP address',
+            ],
+            'port' => [
+                'type' => 'int',
+                'description' => 'LDAP server port (389 for plain, 636 for SSL)',
+                'default' => self::DEFAULT_PORT,
+            ],
+            'ssl' => [
+                'type' => 'bool',
+                'description' => 'Use SSL/TLS encryption',
+                'default' => false,
+            ],
+            'base_dn' => [
+                'type' => 'string',
+                'description' => 'Base Distinguished Name for LDAP searches',
+            ],
+            'bind_dn' => [
+                'type' => 'string',
+                'description' => 'Bind DN for initial connection (optional)',
+            ],
+            'bind_pw' => [
+                'type' => 'string',
+                'description' => 'Bind password for initial connection (optional)',
+                'writeOnly' => true,
+            ],
+            'user_filter' => [
+                'type' => 'string',
+                'description' => 'LDAP filter for user search (use {{username}} as placeholder)',
+                'default' => self::DEFAULT_USER_FILTER,
+            ],
+            'admin_group' => [
+                'type' => 'string',
+                'description' => 'LDAP group DN whose members get admin privileges (optional)',
+            ],
+        ];
+    }
+
+    /**
+     * Build the full replacement settings document from the schema's property
+     * list (S337). This is the single source of truth for what a save writes:
+     * every non-writeOnly property is normalised from the request body or the
+     * stored map (the absent-key contract), and the writeOnly secret follows the
+     * documented blank-keeps-existing rule.
+     *
+     * @param array<string, mixed> $body     The request body.
+     * @param array<string, mixed> $existing The currently stored map.
+     * @return array<string, mixed>
+     */
+    private static function buildSettingsDocument(array $body, array $existing): array
+    {
+        $settings = [];
+
+        foreach (self::settingsSchemaProperties() as $key => $definition) {
+            if (($definition['writeOnly'] ?? false) === true) {
+                // Write-only secret: a non-blank body value replaces it, a blank
+                // body value keeps the stored secret, and with neither the key is
+                // simply absent (a first-ever save with no password stores none).
+                $value = is_string($body[$key] ?? null) ? $body[$key] : '';
+                if ($value !== '') {
+                    $settings[$key] = $value;
+                } elseif (isset($existing[$key])) {
+                    $settings[$key] = $existing[$key];
+                }
+                continue;
+            }
+
+            $raw = array_key_exists($key, $body) ? $body[$key] : ($existing[$key] ?? null);
+            $settings[$key] = self::normalizeSavedValue($key, $raw);
+        }
+
+        return $settings;
+    }
+
+    /**
+     * Normalise one non-writeOnly schema property into its stored value.
+     *
+     * Fails fast when a schema property has no normalizer here — silently
+     * dropping a key on every save is exactly the defect S337 removes, so a
+     * missing case must be loud, not quiet.
+     */
+    private static function normalizeSavedValue(string $key, mixed $value): mixed
+    {
+        return match ($key) {
+            'host', 'base_dn', 'bind_dn', 'admin_group' => self::trimmedString($value),
+            'port' => self::defaultedPort($value),
+            'ssl' => (bool) $value,
+            'user_filter' => self::defaultedUserFilter($value),
+            default => throw new \LogicException(
+                "LDAP saveSettings has no normalizer for schema property '{$key}' — "
+                . 'add one to LdapAdminController::normalizeSavedValue().',
+            ),
+        };
     }
 
     /**
@@ -287,44 +371,7 @@ final class LdapAdminController
             'title' => 'LDAP Provider Configuration',
             'description' => 'Configuration for the LDAP authentication provider',
             'type' => 'object',
-            'properties' => [
-                'host' => [
-                    'type' => 'string',
-                    'description' => 'LDAP server hostname or IP address',
-                ],
-                'port' => [
-                    'type' => 'int',
-                    'description' => 'LDAP server port (389 for plain, 636 for SSL)',
-                    'default' => self::DEFAULT_PORT,
-                ],
-                'ssl' => [
-                    'type' => 'bool',
-                    'description' => 'Use SSL/TLS encryption',
-                    'default' => false,
-                ],
-                'base_dn' => [
-                    'type' => 'string',
-                    'description' => 'Base Distinguished Name for LDAP searches',
-                ],
-                'bind_dn' => [
-                    'type' => 'string',
-                    'description' => 'Bind DN for initial connection (optional)',
-                ],
-                'bind_pw' => [
-                    'type' => 'string',
-                    'description' => 'Bind password for initial connection (optional)',
-                    'writeOnly' => true,
-                ],
-                'user_filter' => [
-                    'type' => 'string',
-                    'description' => 'LDAP filter for user search (use {{username}} as placeholder)',
-                    'default' => self::DEFAULT_USER_FILTER,
-                ],
-                'admin_group' => [
-                    'type' => 'string',
-                    'description' => 'LDAP group DN whose members get admin privileges (optional)',
-                ],
-            ],
+            'properties' => self::settingsSchemaProperties(),
             'required' => ['host', 'base_dn'],
         ];
 

@@ -8,6 +8,8 @@ use Phlix\Admin\SettingsRepository;
 use Phlix\Server\Integrations\Trakt\TraktSyncBoot;
 use Phlix\Tests\Support\Database\RequiresRealDatabase;
 use PHPUnit\Framework\TestCase;
+use ReflectionProperty;
+use Workerman\Events\EventInterface;
 use Workerman\Events\Select;
 use Workerman\MySQL\Connection;
 use Workerman\Timer;
@@ -46,6 +48,11 @@ final class TraktSyncBootRealDbTest extends TestCase
 
     private ?Connection $db = null;
 
+    /** @var mixed Workerman's global event loop before this test ran. */
+    private mixed $savedGlobalEvent = null;
+
+    private ?EventInterface $savedTimerEvent = null;
+
     protected function setUp(): void
     {
         parent::setUp();
@@ -57,10 +64,25 @@ final class TraktSyncBootRealDbTest extends TestCase
             'DELETE FROM server_settings WHERE setting_key = ?',
             [TraktSyncBoot::STATE_LAST_RUN_AT],
         );
+
+        // The event-loop harness below installs a REAL Select loop as
+        // Worker::$globalEvent and hands it to Timer::init(), and Workerman's
+        // Timer::add() routes every subsequent call through Timer::$event while
+        // it is set. Save both so tearDown can restore them: the suite's
+        // Timer-inspection tests (CoreUpdateCheckWorkerTest et al.) read the
+        // in-process `self::$tasks` table, which Timer::add() only fills when
+        // Timer::$event is null (mirrors
+        // {@see \Phlix\Tests\Unit\Dlna\SsdpMSearchListenerTest}).
+        $this->savedGlobalEvent = Worker::$globalEvent;
+        $this->savedTimerEvent = $this->timerEvent();
     }
 
     protected function tearDown(): void
     {
+        Timer::delAll();
+        $this->setTimerEvent($this->savedTimerEvent);
+        Worker::$globalEvent = $this->savedGlobalEvent;
+
         $db = $this->db;
         if ($db !== null) {
             $db->query(
@@ -68,8 +90,6 @@ final class TraktSyncBootRealDbTest extends TestCase
                 [TraktSyncBoot::STATE_LAST_RUN_AT],
             );
         }
-
-        Timer::delAll();
 
         parent::tearDown();
     }
@@ -225,5 +245,22 @@ final class TraktSyncBootRealDbTest extends TestCase
 
         $select->run();
         Timer::delAll();
+    }
+
+    private function timerEvent(): ?EventInterface
+    {
+        $prop = new ReflectionProperty(Timer::class, 'event');
+        $prop->setAccessible(true);
+        /** @var EventInterface|null $value */
+        $value = $prop->getValue();
+
+        return $value;
+    }
+
+    private function setTimerEvent(?EventInterface $event): void
+    {
+        $prop = new ReflectionProperty(Timer::class, 'event');
+        $prop->setAccessible(true);
+        $prop->setValue(null, $event);
     }
 }

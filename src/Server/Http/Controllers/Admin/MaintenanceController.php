@@ -55,13 +55,13 @@ use Throwable;
  * items): the group's middleware is one edit away from being lost, and this
  * repo has already shipped a route group whose middleware silently did not
  * apply. A defence that only exists in the registration is a defence that a
-     * refactor can delete without a single test noticing. Since S338 the guard
-     * is a REQUIRED constructor parameter, so there is no construction path on
-     * which the in-body check silently does nothing.
-     *
-     * @package Phlix\Server\Http\Controllers\Admin
-     * @since 1.9
-     */
+ * refactor can delete without a single test noticing. Since S338 the guard
+ * is a REQUIRED constructor parameter, so there is no construction path on
+ * which the in-body check silently does nothing.
+ *
+ * @package Phlix\Server\Http\Controllers\Admin
+ * @since 1.9
+ */
 class MaintenanceController
 {
     /**

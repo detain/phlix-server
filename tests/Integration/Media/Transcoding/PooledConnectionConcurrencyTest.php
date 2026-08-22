@@ -517,18 +517,32 @@ final class PooledConnectionConcurrencyTest extends TestCase
         );
     }
 
+    /**
+     * A `CHAR(36)` v4 UUID for the three rows this test seeds ($jobId,
+     * $libraryId, $mediaItemId). S334 — converted from the mt_rand()-based
+     * generator (8 executable `mt_rand(` calls): under PHPUnit's
+     * `--random-order-seed` the mt_rand() stream is pinned, so two same-seed
+     * runs could regenerate identical ids and collide on a PK row left behind
+     * by an interrupted run — the same class of failure S111 removed from
+     * BrowseIndexUsageTest. Uses the same CSPRNG pattern as fixtureId()
+     * (`bin2hex(random_bytes(...))`), which `mt_srand()` cannot steer. No
+     * counter field: these ids are plain unique keys (3 per run), not
+     * run-provable fixtures, so 122 random bits suffice.
+     */
     private function uuid(): string
     {
+        $bytes = random_bytes(16);
+        $bytes[6] = chr((ord($bytes[6]) & 0x0f) | 0x40); // version 4
+        $bytes[8] = chr((ord($bytes[8]) & 0x3f) | 0x80); // variant 10xx
+        $hex = bin2hex($bytes);
+
         return sprintf(
-            '%04x%04x-%04x-%04x-%04x-%04x%04x%04x',
-            mt_rand(0, 0xffff),
-            mt_rand(0, 0xffff),
-            mt_rand(0, 0xffff),
-            mt_rand(0, 0x0fff) | 0x4000,
-            mt_rand(0, 0x3fff) | 0x8000,
-            mt_rand(0, 0xffff),
-            mt_rand(0, 0xffff),
-            mt_rand(0, 0xffff)
+            '%s-%s-%s-%s-%s',
+            substr($hex, 0, 8),
+            substr($hex, 8, 4),
+            substr($hex, 12, 4),
+            substr($hex, 16, 4),
+            substr($hex, 20, 12)
         );
     }
 

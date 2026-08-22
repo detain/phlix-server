@@ -144,8 +144,16 @@ final class AssertionEscapeProbeGateTest extends TestCase
      * it at runtime in both directions, which is a stronger check than a number copied
      * into a test, and duplicating the count here would make every legitimate baseline
      * edit a two-file change for no extra safety.
+     *
+     * S339 resolved the list's only member: the PooledConnectionConcurrencyTest::runChurn
+     * exclusion existed because pool exhaustion made the site's probe verdict flip
+     * between GATES and NOT-REACHED; the per-query-borrow fix made it deterministically
+     * GATES (measured 5/5 on 2026-08-22), so the exclusion was deleted. The list is now
+     * pinned at ZERO — re-adding ANY site is a real decision and must break this
+     * assertion, because an exclusion list that grows quietly is how a gate becomes a
+     * permanent hole — see phpcs-tests.xml's <description> for the same rule.
      */
-    public function testTheExclusionListIsExactlyTheOneMeasuredFlake(): void
+    public function testTheExclusionListIsPinnedAtZero(): void
     {
         $baseline = $this->baseline();
 
@@ -155,13 +163,14 @@ final class AssertionEscapeProbeGateTest extends TestCase
         );
 
         $this->assertSame(
-            ['tests/Integration/Media/Transcoding/PooledConnectionConcurrencyTest.php::runChurn'],
+            [],
             $excluded,
-            'Exactly ONE site is excluded from the prober, and its measurement lives in the '
-            . '"reason" field next to it (19 valid probe runs against a live MySQL: 18 GATES, '
-            . '1 NOT-REACHED). Adding a second exclusion is a real decision and must break this '
-            . 'assertion, because an exclusion list that grows quietly is how a gate becomes a '
-            . 'permanent hole — see phpcs-tests.xml\'s <description> for the same rule.',
+            'S339 resolved the only excluded site (PooledConnectionConcurrencyTest::runChurn): '
+            . 'the per-query-borrow fix made its probe verdict deterministically GATES (measured '
+            . '5/5 on 2026-08-22), so the exclusion was deleted. The exclusion list is pinned at '
+            . 'ZERO — re-adding any site is a real decision and must break this assertion, '
+            . 'because an exclusion list that grows quietly is how a gate becomes a permanent '
+            . 'hole — see phpcs-tests.xml\'s <description> for the same rule.',
         );
     }
 
@@ -302,21 +311,54 @@ final class AssertionEscapeProbeGateTest extends TestCase
         );
     }
 
-    public function testTheRealBaselineReportsTheExclusionReasonForTheExcludedSite(): void
+    /**
+     * S339 removed the exclusion that this test used to assert against: the site is no
+     * longer hidden from the prober, so its reason must no longer resolve. The
+     * file+method matching semantics of {@see ProbeBaseline::exclusionReason()} are kept
+     * honest by the synthetic baseline below, which DOES have an exclusion and must still
+     * resolve it on file AND method together.
+     */
+    public function testTheRealBaselineNoLongerExcludesTheS339ResolvedSite(): void
     {
         $baseline = $this->baseline();
 
-        $reason = $baseline->exclusionReason(
-            'tests/Integration/Media/Transcoding/PooledConnectionConcurrencyTest.php',
-            'runChurn',
+        $this->assertNull(
+            $baseline->exclusionReason(
+                'tests/Integration/Media/Transcoding/PooledConnectionConcurrencyTest.php',
+                'runChurn',
+            ),
+            'S339 resolved the pool-exhaustion flake that forced this exclusion; the site is '
+            . 'now probed for real and gates its test (measured 5/5 on 2026-08-22). If this '
+            . 'assertion reds, the exclusion has been re-added — that is a real decision that '
+            . 'needs its own measurement.',
         );
-
-        $this->assertIsString($reason, 'the prober prints this reason in its output, so it must resolve');
-        $this->assertStringContainsString('S137', $reason);
 
         $this->assertNull(
             $baseline->exclusionReason('tests/Unit/Auth/UserIdentityRepositoryTest.php', 'whatever'),
             'exclusion must match on file AND method, not on either alone',
+        );
+    }
+
+    public function testExclusionReasonMatchesOnFileAndMethodTogether(): void
+    {
+        $baseline = $this->syntheticBaseline(
+            [['file' => 'tests/Unit/FlakyTest.php', 'method' => 'helper']],
+            [],
+        );
+
+        $this->assertSame(
+            'synthetic fixture for the reconciliation unit test, long enough to satisfy '
+            . 'the substantive-reason assertion in this same file',
+            $baseline->exclusionReason('tests/Unit/FlakyTest.php', 'helper'),
+            'a matching file AND method must resolve the exclusion reason',
+        );
+        $this->assertNull(
+            $baseline->exclusionReason('tests/Unit/FlakyTest.php', 'otherMethod'),
+            'same file, different method: must NOT match',
+        );
+        $this->assertNull(
+            $baseline->exclusionReason('tests/Unit/OtherTest.php', 'helper'),
+            'same method, different file: must NOT match',
         );
     }
 

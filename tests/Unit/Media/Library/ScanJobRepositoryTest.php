@@ -597,7 +597,11 @@ final class ScanJobRepositoryTest extends TestCase
         $result = $repo->enqueueIfNoneActiveOfType('lib-1', 'media_assets');
 
         $this->assertTrue($result['created']);
-        $this->assertNotSame('', $result['job_id']);
+        // The minted job id is a real UUID, not a placeholder.
+        $this->assertMatchesRegularExpression(
+            '/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/',
+            $result['job_id'],
+        );
     }
 
     public function testEnqueueIfNoneActiveOfTypeReportsRefusedWhenInsertWroteNothing(): void

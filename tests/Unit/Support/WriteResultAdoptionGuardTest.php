@@ -69,8 +69,8 @@ use RecursiveIteratorIterator;
  * client has no silent failure return).
  *
  * The denominator the guard prints is the exact count it examined:
- * **94 `INSERT`/`REPLACE` `->query()` call tokens** (87 with a literal first
- * argument, 7 resolved through a `$sql` variable — including the try/catch
+ * **94 `INSERT`/`REPLACE` `->query()` call tokens** (86 with a literal first
+ * argument, 8 resolved through a `$sql` variable — including the try/catch
  * retry arms of the two ScanJobRepository sites), of which **14 consume the
  * result** (12 logical sites: the retry arms share one consumption). The plan
  * recorded 86/11; this scan is what a faithful token walk of the tree actually
@@ -120,6 +120,12 @@ final class WriteResultAdoptionGuardTest extends TestCase
      * entry exists to document why the guard is silent about the site — not to
      * excuse a hand-rolled consumer that happens to share its file.
      *
+     * ⚠ By construction this mechanism can only carry NON-consumers: a site
+     * that legitimately consumes an INSERT result for a purpose other than
+     * "wrote nothing" cannot be exempted without reddening both the offender
+     * check and the non-consumer assertion. That is correct for the one site
+     * the AC names (`updateStreamLimit`), whose correct shape is to discard.
+     *
      * @var array<string, string>
      */
     private const EXCEPTIONS = [
@@ -136,7 +142,7 @@ final class WriteResultAdoptionGuardTest extends TestCase
      * The denominator, part 1: every `->query()` call token in `src/` whose
      * statement literal begins `INSERT`/`REPLACE` (literal first argument, or
      * resolved one hop through a `$sql` variable). Measured on master
-     * `0ad7a080` + S342: 87 literal-first-argument sites + 7 resolved through
+     * `0ad7a080` + S342: 86 literal-first-argument sites + 8 resolved through
      * `$sql` (`Admin/SettingsRepository.php:194`, `Auth/UserRepository.php:689`,
      * `Media/Metadata/Imdb/ImdbDatasetImporter.php:573,616`, and the four
      * ScanJobRepository try/catch retry arms) = 94. The plan recorded 86; the
@@ -148,7 +154,7 @@ final class WriteResultAdoptionGuardTest extends TestCase
     private const EXPECTED_TOTAL_INSERT_CALLS = 94;
 
     /**
-     * The denominator, part 2: how many of those 93 consume their result.
+     * The denominator, part 2: how many of those 94 consume their result.
      * 14 tokens = 12 logical sites (the two ScanJobRepository sites each
      * contribute a try arm and a retry arm; both arms feed one consumption).
      * All 14 must be consumed through `WriteResult::wroteNothing()` /
@@ -224,7 +230,7 @@ final class WriteResultAdoptionGuardTest extends TestCase
 
     /**
      * The denominator is pinned so a scan that examined nothing cannot pass
-     * silently: 93 `INSERT`/`REPLACE` `->query()` call tokens, 14 of which
+     * silently: 94 `INSERT`/`REPLACE` `->query()` call tokens, 14 of which
      * consume the result.
      */
     public function testTheInsertConsumerInventoryDenominatorIsPinned(): void
@@ -374,7 +380,7 @@ final class WriteResultAdoptionGuardTest extends TestCase
                 continue;
             }
 
-            $inlineConsumer = self::inlineHelperConsumer($tokens, $close);
+            $inlineConsumer = self::inlineConsumer($tokens, $close);
             $consumedBy = null;
             $adopted = false;
 
@@ -460,7 +466,10 @@ final class WriteResultAdoptionGuardTest extends TestCase
         $var = $tokens[$first][1];
         $count = count($tokens);
 
-        for ($i = $bodyOpen + 1; $i < $paren; $i++) {
+        // Walk BACKWARD from the call so the NEAREST assignment wins — a method
+        // that reassigns `$sql` before the call is classified by the last write,
+        // which is the one the call actually sees.
+        for ($i = $paren - 1; $i > $bodyOpen; $i--) {
             $t = $tokens[$i];
             if (!is_array($t) || $t[0] !== T_VARIABLE || $t[1] !== $var) {
                 continue;
@@ -666,49 +675,83 @@ final class WriteResultAdoptionGuardTest extends TestCase
     }
 
     /**
-     * When the call is nested directly inside another call's argument list,
-     * the name of that enclosing call (e.g. `WriteResult::wroteNothing`), else
-     * null.
+     * When the call's result is consumed WITHOUT an assigned variable, a label
+     * naming the consumption shape, else null.
+     *
+     *  - nested directly inside another call's argument list → that call's
+     *    name (e.g. `WriteResult::wroteNothing` for the helper-inline shape);
+     *  - followed by an identity/loose comparison, a negation, a ternary or a
+     *    logical operator → a marker label. These are the S151/S284 accident
+     *    family written inline (`if ($this->db->query('INSERT …') === null)`),
+     *    and they must redden like an assigned-then-bare-compared consumer.
+     *
+     * A `;` or `,` after the call means the result is discarded and is not a
+     * consumer.
      *
      * @param list<array{0: int, 1: string, 2: int}|string> $tokens
      */
-    private static function inlineHelperConsumer(array $tokens, int $close): ?string
+    private static function inlineConsumer(array $tokens, int $close): ?string
     {
         $after = self::significantIndex($tokens, $close + 1);
-        if ($after === null || $tokens[$after] !== ')') {
+        if ($after === null) {
             return null;
         }
 
-        $depth = 0;
-        $openParen = null;
-        for ($i = $close; $i >= 0; $i--) {
-            if ($tokens[$i] === ')') {
-                $depth++;
-            } elseif ($tokens[$i] === '(') {
-                $depth--;
-                if ($depth === 0) {
-                    $openParen = $i;
-                    break;
+        $next = $tokens[$after];
+
+        // Discarded: end of the statement, or end of an enclosing argument list.
+        if ($next === ';' || $next === ',') {
+            return null;
+        }
+
+        if ($next === ')') {
+            $depth = 0;
+            $openParen = null;
+            for ($i = $close; $i >= 0; $i--) {
+                if ($tokens[$i] === ')') {
+                    $depth++;
+                } elseif ($tokens[$i] === '(') {
+                    $depth--;
+                    if ($depth === 0) {
+                        $openParen = $i;
+                        break;
+                    }
                 }
             }
-        }
-        if ($openParen === null) {
-            return null;
+            if ($openParen === null) {
+                return null;
+            }
+
+            $name = self::significantToken($tokens, $openParen, -1);
+            if (!is_array($name) || $name[0] !== T_STRING) {
+                return null;
+            }
+
+            $beforeName = self::significantToken($tokens, $openParen, -2);
+            if (is_array($beforeName) && $beforeName[0] === T_DOUBLE_COLON) {
+                $class = self::significantToken($tokens, $openParen, -3);
+
+                return (is_array($class) ? $class[1] : '?') . '::' . $name[1];
+            }
+
+            return $name[1];
         }
 
-        $name = self::significantToken($tokens, $openParen, -1);
-        if (!is_array($name) || $name[0] !== T_STRING) {
-            return null;
+        // Any other continuation consumes the result inline.
+        if (is_array($next)) {
+            if (in_array($next[0], [T_IS_IDENTICAL, T_IS_NOT_IDENTICAL, T_IS_EQUAL, T_IS_NOT_EQUAL], true)) {
+                return 'inline comparison';
+            }
+            if (in_array($next[0], [T_BOOLEAN_AND, T_BOOLEAN_OR, T_LOGICAL_AND, T_LOGICAL_OR, T_LOGICAL_XOR], true)) {
+                return 'inline logical';
+            }
+        } elseif ($next === '!') {
+            return 'inline negation';
+        } elseif ($next === '?') {
+            return 'inline ternary';
         }
 
-        $beforeName = self::significantToken($tokens, $openParen, -2);
-        if (is_array($beforeName) && $beforeName[0] === T_DOUBLE_COLON) {
-            $class = self::significantToken($tokens, $openParen, -3);
-
-            return (is_array($class) ? $class[1] : '?') . '::' . $name[1];
-        }
-
-        return $name[1];
+        return null;
     }
 
     /**

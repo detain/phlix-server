@@ -44,7 +44,6 @@ use Phlix\Server\Http\Controllers\Admin\FsBrowseController;
 use Phlix\Server\Http\Controllers\Admin\LogController;
 use Phlix\Server\Http\Controllers\Admin\MaintenanceController;
 use Phlix\Server\Http\Controllers\Admin\WatchHistoryController;
-use Phlix\Server\Http\Middleware\AdminMiddleware;
 use Phlix\Server\Http\Controllers\MostWatchedController;
 use Phlix\Server\Http\Controllers\Stats\MetricsController;
 use Phlix\Server\Http\Controllers\Stats\StatsController;
@@ -181,13 +180,13 @@ final class AdminServicesProvider implements ServiceProviderInterface
                 }
             ),
 
-            // `adminGuard` is named explicitly for the same reason: it is the
-            // in-body second admin check on five endpoints, two of which are
-            // destructive, and an autowire() would silently leave it null —
-            // turning the belt-and-braces defence into a no-op that no
-            // hand-wired test could see.
-            MaintenanceController::class => autowire()
-                ->constructorParameter('adminGuard', get(AdminMiddleware::class)),
+            // `adminGuard` is REQUIRED since S338, so PHP-DI's autowire() supplies
+            // it by type and no explicit constructorParameter() binding is needed.
+            // The S282/S323 trap this comment used to warn about — an OPTIONAL
+            // guard silently left null because autowire() skips optional params —
+            // is structurally impossible now: the controller cannot be built
+            // without the middleware.
+            MaintenanceController::class => autowire(),
 
             // Drained by a timer inside the `phlix-background-timers` fork; see
             // Application::startMaintenanceQueueTimer().

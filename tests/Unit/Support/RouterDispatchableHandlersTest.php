@@ -489,9 +489,9 @@ final class RouterDispatchableHandlersTest extends TestCase
 
         // (2) DENOMINATOR — a walk matching nothing would make the loop vacuous.
         self::assertCount(
-            6,
+            7,
             $files,
-            'expected 6 admin-gate structural pins under ' . $root . '; found ' . count($files)
+            'expected 7 admin-gate structural pins under ' . $root . '; found ' . count($files)
             . ': [' . implode(', ', array_keys($files)) . ']. A NEW pin is welcome — add it to '
             . 'this count in the same change, which is the review moment.'
         );

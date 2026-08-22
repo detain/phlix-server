@@ -99,6 +99,16 @@ use RecursiveIteratorIterator;
  *    the same method" or "inline in the helper". A consumption that reassigns
  *    the variable before the helper call, or passes it through a second local
  *    function, escapes.
+ *  - An inline consumer as a NON-FINAL argument of a multi-argument enclosing
+ *    call (`foo($this->db->query('INSERT …'), $x)`) is not tracked: the `,`
+ *    after the call is treated as "not an inline consumer". No such shape
+ *    exists in `src/` today, and the only legitimate inline consumers are the
+ *    single-argument helpers.
+ *  - A PREFIX operator on the call — `(bool) $this->db->query('INSERT …')`,
+ *    `(int) …` — escapes: the next token after the call is `;`, so the call
+ *    reads as discarded. The postfix accident family (comparisons, `!`,
+ *    bare-truthiness in a statement paren group) is covered; a prefix cast is
+ *    a shape no site in `src/` uses and is accepted here.
  *  - `src/` only. Test doubles and `tests/Support` deliberately mock
  *    `query()` with canned shapes and are not part of the production contract.
  *
@@ -685,8 +695,10 @@ final class WriteResultAdoptionGuardTest extends TestCase
      *    family written inline (`if ($this->db->query('INSERT …') === null)`),
      *    and they must redden like an assigned-then-bare-compared consumer.
      *
-     * A `;` or `,` after the call means the result is discarded and is not a
-     * consumer.
+     * A `;` after the call means the result is discarded and is not a consumer.
+     * A `,` — the call as a NON-FINAL argument of an enclosing call — is also
+     * not tracked as an inline consumer (see the multi-arg case in Known
+     * limits).
      *
      * @param list<array{0: int, 1: string, 2: int}|string> $tokens
      */
@@ -705,9 +717,12 @@ final class WriteResultAdoptionGuardTest extends TestCase
         }
 
         if ($next === ')') {
+            // `$after` IS the enclosing close paren: walking from the query's
+            // own close paren would pair it with the query's own open paren and
+            // resolve the consumer to the query method itself.
             $depth = 0;
             $openParen = null;
-            for ($i = $close; $i >= 0; $i--) {
+            for ($i = $after; $i >= 0; $i--) {
                 if ($tokens[$i] === ')') {
                     $depth++;
                 } elseif ($tokens[$i] === '(') {
@@ -723,6 +738,14 @@ final class WriteResultAdoptionGuardTest extends TestCase
             }
 
             $name = self::significantToken($tokens, $openParen, -1);
+
+            // A statement keyword (`if (...)`, `return ...`, ...) means the
+            // result is tested bare / passed on — the `!$result` accident
+            // family written inline.
+            if (is_array($name) && in_array($name[0], [T_IF, T_WHILE, T_FOR, T_FOREACH, T_SWITCH, T_RETURN, T_ECHO, T_PRINT, T_ISSET, T_EMPTY], true)) {
+                return 'inline bare-truthiness';
+            }
+
             if (!is_array($name) || $name[0] !== T_STRING) {
                 return null;
             }
@@ -913,12 +936,14 @@ final class WriteResultAdoptionGuardTest extends TestCase
     }
 
     /**
-     * Last segment of a possibly-qualified name token.
+     * Last segment of a possibly-qualified name token — after either a
+     * namespace backslash (`\Phlix\Common\Database\WriteResult`) or a
+     * `::` method qualifier (`WriteResult::wroteNothing`).
      */
     private static function lastNameSegment(string $name): string
     {
-        $pos = strrpos($name, '\\');
+        $pos = max(strrpos($name, '\\') ?: -1, strrpos($name, '::') ?: -1);
 
-        return $pos === false ? $name : substr($name, $pos + 1);
+        return $pos < 0 ? $name : substr($name, $pos + (strpos($name, '::', $pos) === $pos ? 2 : 1));
     }
 }

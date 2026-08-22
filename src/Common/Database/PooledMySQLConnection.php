@@ -344,7 +344,8 @@ final class PooledMySQLConnection extends Connection
      * query) still pins its slot across that gap; only transactions are exempt
      * by design, and a per-query EAGER return would break lastInsertId().
      *
-     * @param int  $cid        Coroutine id (≥ 0 on this path).
+     * @param int  $cid        Coroutine id, or -1 when not in a coroutine (CLI
+     *                         path — a single dedicated connection is reused).
      * @param bool $lazyReturn Whether to return the previous non-transactional
      *                         lease before acquiring.
      */
@@ -441,6 +442,13 @@ final class PooledMySQLConnection extends Connection
         if (!$this->idle->isEmpty()) {
             /** @var Connection $conn */
             $conn = $this->idle->pop();
+            // Cancellation safety (S339 r1 #4): the popped connection is in
+            // limbo here — not in the channel, not yet a lease. A coroutine
+            // cancelled mid-probe cannot strand it because isConnectionAlive()
+            // catches ALL Throwables (including Swoole's cancellation-surface
+            // exception) and the false path below closes the connection and
+            // decrements created, restoring the accounting. Do NOT narrow that
+            // catch to dead-connection error types.
             if (!$this->isConnectionAlive($conn)) {
                 // Dead connection removed from pool — not added back. Close it
                 // first so its (possibly not-fully-dead) socket FD is released

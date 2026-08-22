@@ -629,7 +629,9 @@ final class ScanJobRepositoryTest extends TestCase
             static function (string $sql, ?array $params = null, $fetchmode = \PDO::FETCH_ASSOC) use (&$calls) {
                 $calls++;
                 if ($calls === 1) {
-                    throw new \RuntimeException('SQLSTATE[40001]: 1213 Deadlock found when trying to get lock; try restarting transaction');
+                    throw new \RuntimeException(
+                        'SQLSTATE[40001]: 1213 Deadlock found when trying to get lock; try restarting transaction',
+                    );
                 }
 
                 return '0';
@@ -677,7 +679,9 @@ final class ScanJobRepositoryTest extends TestCase
             static function (string $sql, ?array $params = null, $fetchmode = \PDO::FETCH_ASSOC) use (&$calls) {
                 $calls++;
                 if ($calls === 1) {
-                    throw new \RuntimeException('SQLSTATE[40001]: 1213 Deadlock found when trying to get lock; try restarting transaction');
+                    throw new \RuntimeException(
+                        'SQLSTATE[40001]: 1213 Deadlock found when trying to get lock; try restarting transaction',
+                    );
                 }
 
                 return null;

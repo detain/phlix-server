@@ -380,4 +380,198 @@ final class PooledMySQLConnectionTest extends TestCase
         );
         $this->assertCount($poolSize, $created, 'the pool must open at most maxSize connections');
     }
+
+    /**
+     * S339 review round 1 #1 — the lazy return must NOT fire from
+     * {@see PooledMySQLConnection::lastInsertId()}.
+     *
+     * The id resolves on the connection that performed the preceding INSERT,
+     * which is still this coroutine's current lease. If the lazy return fired
+     * on the lastInsertId() call itself, a waiter parked on the idle channel
+     * would be handed the INSERT's connection (Channel::push resumes a waiter
+     * synchronously) and lastInsertId() would read a FOREIGN connection's id.
+     *
+     * Deterministic shape: poolSize=2, three coroutines. A INSERTs then sleeps
+     * (holding its lease), B holds the second connection, C parks as a waiter.
+     * With the bug, A's lastInsertId() releases its connection to C, C INSERTs
+     * on it, and A's id resolves to C's INSERT — wrong. With the fix, A's
+     * lastInsertId() keeps the lease and resolves on its own INSERT.
+     *
+     * @requires extension swoole
+     */
+    public function testLastInsertIdResolvesOnTheInsertingConnectionEvenUnderContention(): void
+    {
+        if (!extension_loaded('swoole')) {
+            $this->markTestSkipped('Swoole extension required');
+        }
+
+        /** @var list<object{lastId: string}> $created */
+        $created = [];
+        $factory = static function () use (&$created): Connection {
+            $conn = new class extends Connection {
+                public string $lastId = '';
+
+                public function __construct()
+                {
+                    // Deliberately NOT calling parent::__construct() — no real
+                    // socket, mirroring PooledMySQLConnection itself.
+                }
+
+                /**
+                 * @param string                        $query
+                 * @param array<int|string, mixed>|null  $params
+                 * @param int                            $fetchmode
+                 * @return mixed
+                 */
+                public function query($query = '', $params = null, $fetchmode = \PDO::FETCH_ASSOC)
+                {
+                    if ($query === 'SELECT 1') {
+                        return [['1' => 1]]; // liveness probe — not a real query
+                    }
+                    if (str_starts_with($query, 'INSERT ')) {
+                        $this->lastId = 'id-' . trim(substr($query, 7));
+                    }
+                    return [];
+                }
+
+                public function lastInsertId()
+                {
+                    return $this->lastId;
+                }
+
+                public function closeConnection(): void
+                {
+                }
+
+                public function beginTrans(): bool
+                {
+                    return true;
+                }
+
+                public function commitTrans(): bool
+                {
+                    return true;
+                }
+
+                public function rollBackTrans(): bool
+                {
+                    return true;
+                }
+            };
+            $created[] = $conn;
+            return $conn;
+        };
+
+        $pool = new PooledMySQLConnection('h', 3306, 'u', 'p', 'db', 2, 'utf8mb4', $factory);
+
+        $aId = null;
+        $errors = [];
+        \Swoole\Coroutine\run(static function () use ($pool, &$aId, &$errors): void {
+            $wg = new \Swoole\Coroutine\WaitGroup();
+
+            $wg->add();
+            \Swoole\Coroutine::create(static function () use ($pool, &$aId, &$errors, $wg): void {
+                try {
+                    $pool->query('INSERT A');
+                    \Swoole\Coroutine::sleep(0.2); // let B hold the 2nd connection and C park
+                    $aId = $pool->lastInsertId();
+                } catch (Throwable $e) {
+                    $errors[] = 'A: ' . $e->getMessage();
+                } finally {
+                    $wg->done();
+                }
+            });
+
+            $wg->add();
+            \Swoole\Coroutine::create(static function () use ($pool, &$errors, $wg): void {
+                try {
+                    $pool->query('SELECT B');
+                    \Swoole\Coroutine::sleep(0.5); // hold the 2nd connection so C parks
+                    $pool->query('SELECT B2'); // lazy release
+                } catch (Throwable $e) {
+                    $errors[] = 'B: ' . $e->getMessage();
+                } finally {
+                    $wg->done();
+                }
+            });
+
+            $wg->add();
+            \Swoole\Coroutine::create(static function () use ($pool, &$errors, $wg): void {
+                try {
+                    // Parks until a connection is released; with the pre-fix
+                    // lazy return this coroutine INSERTs on A's connection.
+                    $pool->query('INSERT C');
+                } catch (Throwable $e) {
+                    $errors[] = 'C: ' . $e->getMessage();
+                } finally {
+                    $wg->done();
+                }
+            });
+
+            $wg->wait();
+            $pool->closeConnection();
+        });
+
+        $this->assertSame([], $errors, 'no coroutine may error: ' . implode(' | ', $errors));
+        $this->assertSame(
+            'id-A',
+            $aId,
+            'lastInsertId must resolve on the INSERTing connection even when a waiter is parked'
+        );
+        $this->assertCount(2, $created, 'the pool must stay within its ceiling');
+    }
+
+    /**
+     * S339 — the refused-vs-hung distinction, dead-dependency control.
+     *
+     * The exhaustion message ("pool exhausted: no idle connection available
+     * after N s") is a REFUSED acquisition: the pop timeout fired. It must be
+     * distinguishable from a dead dependency, which must surface immediately
+     * as the connect error instead of making every caller burn the full
+     * acquireTimeout and then blame the pool.
+     *
+     * @requires extension swoole
+     */
+    public function testADeadDependencySurfacesImmediatelyNotAsPoolExhaustion(): void
+    {
+        if (!extension_loaded('swoole')) {
+            $this->markTestSkipped('Swoole extension required');
+        }
+
+        $pool = new PooledMySQLConnection(
+            'h',
+            3306,
+            'u',
+            'p',
+            'db',
+            2,
+            'utf8mb4',
+            static function (): Connection {
+                throw new \RuntimeException('Connection refused: 127.0.0.1:9');
+            },
+            10.0
+        );
+
+        $elapsed = null;
+        $message = null;
+        \Swoole\Coroutine\run(static function () use ($pool, &$elapsed, &$message): void {
+            $t0 = hrtime(true);
+            try {
+                $pool->query('SELECT 1');
+            } catch (Throwable $e) {
+                $elapsed = (hrtime(true) - $t0) / 1e9;
+                $message = $e->getMessage();
+            } finally {
+                $pool->closeConnection();
+            }
+        });
+
+        $this->assertNotNull($message, 'a dead dependency must throw, not hang');
+        $this->assertStringContainsString('Connection refused', (string) $message);
+        $this->assertLessThan(
+            1.0,
+            (float) $elapsed,
+            'a dead dependency must fail immediately, not burn the acquire timeout and report pool exhaustion'
+        );
+    }
 }

@@ -153,7 +153,7 @@ final class AssertionEscapeProbeGateTest extends TestCase
      * assertion, because an exclusion list that grows quietly is how a gate becomes a
      * permanent hole — see phpcs-tests.xml's <description> for the same rule.
      */
-    public function testTheExclusionListIsExactlyTheOneMeasuredFlake(): void
+    public function testTheExclusionListIsPinnedAtZero(): void
     {
         $baseline = $this->baseline();
 

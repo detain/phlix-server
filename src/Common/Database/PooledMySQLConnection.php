@@ -23,14 +23,15 @@ use Workerman\MySQL\Connection;
  * run truly in parallel within a single worker — true async DB.
  *
  * Design — per-query borrow, with per-coroutine lease only inside a transaction:
- *  - A coroutine's connection is returned to the idle pool on its next DB call
- *    (lazy return) whenever no transaction is open, so a coroutine doing
- *    unrelated work between queries does not pin a pool slot. A multi-statement
- *    transaction (`beginTrans … commitTrans`) keeps the lease for its whole
- *    duration, so the transaction stays affine to one connection — the design
- *    invariant that made the original per-coroutine lease desirable. Any lease
- *    still held when the coroutine finishes is returned via
- *    {@see \Swoole\Coroutine::defer()}.
+ *  - A coroutine's connection is returned to the idle pool at the START of its
+ *    next DB call (lazy return) whenever no transaction is open, so the hold
+ *    window is the gap between consecutive DB calls rather than the coroutine's
+ *    whole lifetime — a tight query loop holds nothing between iterations. A
+ *    multi-statement transaction (`beginTrans … commitTrans`) keeps the lease
+ *    for its whole duration, so the transaction stays affine to one connection
+ *    — the design invariant that made the original per-coroutine lease
+ *    desirable. Any lease still held when the coroutine finishes is returned
+ *    via {@see \Swoole\Coroutine::defer()}.
  *  - Acquire creates a new connection on demand up to `maxSize`, then blocks
  *    (channel pop) until another coroutine releases one. `maxSize = 1`
  *    therefore degrades to fully-serialised single-connection behaviour.
@@ -42,8 +43,11 @@ use Workerman\MySQL\Connection;
  * (more concurrent coroutines than slots) a waiter had to survive a holder's
  * entire query loop, and a slow enough holder — or slow enough box — made the
  * acquire timeout fire "pool exhausted" even though only `maxSize` queries were
- * ever in flight. Per-query borrow outside transactions removes that coupling;
- * the acquire timeout is configurable ({@see __construct()}, `$acquireTimeout`).
+ * ever in flight. Per-query borrow outside transactions removes that coupling
+ * for the measured flake shape (many coroutines in tight query loops); a
+ * coroutine with a long gap between DB calls still pins a slot across that gap
+ * (an eager per-query return would break `INSERT → lastInsertId()`). The
+ * acquire timeout is configurable ({@see __construct()}, `$acquireTimeout`).
  *
  * This front never opens its own socket: it deliberately does NOT call the
  * parent constructor (which would `connect()`); it only ever delegates the
@@ -260,7 +264,13 @@ final class PooledMySQLConnection extends Connection
      */
     public function lastInsertId()
     {
-        return $this->lease()->lastInsertId();
+        // Must NOT trigger the lazy return: the id resolves on the connection
+        // that performed the preceding INSERT, which is still this coroutine's
+        // current lease. If the lazy return fired here, a parked waiter would
+        // take the INSERT's connection (Channel::push resumes a waiter
+        // synchronously) and this call would read a FOREIGN connection's id.
+        // The connection is released by the coroutine's NEXT normal DB call.
+        return $this->leaseWithoutLazyReturn()->lastInsertId();
     }
 
     /**
@@ -302,22 +312,49 @@ final class PooledMySQLConnection extends Connection
      */
     private function lease(): Connection
     {
-        $cid = $this->currentCoroutineId();
+        return $this->leaseFor($this->currentCoroutineId(), true);
+    }
+
+    /**
+     * Like {@see lease()}, but never triggers the lazy return: the coroutine's
+     * current lease is kept (only acquired if absent). Used by
+     * {@see lastInsertId()}, which must resolve on the connection that
+     * performed the preceding INSERT even when waiters are parked.
+     */
+    private function leaseWithoutLazyReturn(): Connection
+    {
+        return $this->leaseFor($this->currentCoroutineId(), false);
+    }
+
+    /**
+     * Resolve the connection this caller should use: the coroutine's existing
+     * lease, a freshly-acquired one (registered for return on coroutine end),
+     * or the shared CLI connection when not inside a coroutine.
+     *
+     * When `$lazyReturn` is true (every normal DB call), a coroutine's previous
+     * non-transactional lease is returned to the idle pool BEFORE a fresh one
+     * is taken. S339 — per-query borrow outside transactions: the hold window
+     * becomes the gap between consecutive DB calls (a tight query loop holds
+     * nothing between iterations) instead of the coroutine's whole lifetime.
+     * The return is LAZY — at the START of the next DB call, not immediately
+     * after the query — so the INSERT → lastInsertId() pattern still resolves
+     * on the INSERT's connection ({@see lastInsertId()} also skips the return
+     * for the same reason). Residual limitation, stated honestly: a coroutine
+     * with a LONG gap between DB calls (query → minutes of unrelated work →
+     * query) still pins its slot across that gap; only transactions are exempt
+     * by design, and a per-query EAGER return would break lastInsertId().
+     *
+     * @param int  $cid        Coroutine id (≥ 0 on this path).
+     * @param bool $lazyReturn Whether to return the previous non-transactional
+     *                         lease before acquiring.
+     */
+    private function leaseFor(int $cid, bool $lazyReturn): Connection
+    {
         if ($cid < 0) {
             return $this->cliConn ??= ($this->rawFactory)();
         }
 
-        // S339 — per-query borrow outside transactions. A coroutine only pins a
-        // pool slot while it is actively using a connection: during a single
-        // query, or for the whole of an open transaction (transaction affinity,
-        // the design invariant). Between consecutive DB calls the connection
-        // goes back to the idle pool, so unrelated work (I/O, waits) cannot
-        // hold a slot hostage and oversubscribed waiters wait for ONE query
-        // instead of a holder's whole coroutine lifetime. The return is LAZY —
-        // on this coroutine's NEXT pool call, not immediately after the query —
-        // so the INSERT → lastInsertId() pattern still resolves on the
-        // connection that performed the INSERT.
-        if (isset($this->leases[$cid]) && !$this->hasPendingTransaction($cid)) {
+        if ($lazyReturn && isset($this->leases[$cid]) && !$this->hasPendingTransaction($cid)) {
             $returned = $this->leases[$cid];
             unset($this->leases[$cid]);
             if ($this->idle === null) {

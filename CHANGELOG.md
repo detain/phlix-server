@@ -211,6 +211,26 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   turns `test_allowed_types_equals_the_enum_parsed_from_the_migration` red; restoring the file
   returns it to green.
 
+- **The library-maintenance POST-route set is pinned to phlix-ui's `AdminLibrariesApi` mirror, in
+  both directions (S348).** S284 shipped `POST /api/v1/libraries/{id}/regenerate-assets` and the
+  admin UI never gained a `regenerateAssets` method — the S332 class again: a hand-written method
+  list that grows with the LIST, not the ROUTES. New `LibraryMaintenanceRoutesUiMirrorGuardTest`
+  reflects the PRODUCTION route table off an `Application` built from
+  `ContainerFactory::defaultProviders()` (MySQL doubled, exactly as the S239 wire-path guard),
+  extracts the maintenance POST-route set (`POST /api/v1/libraries/{id}/<suffix>` handled by
+  `LibraryController` — the nine async actions the UI mirrors), and asserts it equals the mirror
+  list in BOTH directions: `missing` (a UI method with no server route) and `extra` (a server route
+  with no UI method) are each asserted empty, with the full expected/actual suffix denominator
+  printed in every failure. The mirror is spelled as the phlix-ui method NAMES (`scan`,
+  `matchMetadata`, `regenerateAssets`, …) with the kebab-case URL suffix derived mechanically; the
+  failure message names `src/api/admin/libraries.ts` as the mirror to update, and an anti-tamper
+  identity test stops a "fix" that deletes a mirror member from silencing the guard. Demonstrated
+  red: planting `POST /api/v1/libraries/{id}/regenerate-thumbnails` in a scratch copy of
+  `Application.php` turns the both-directions test red naming the extra suffix; restoring the file
+  returns it to green. Registration-only — response envelopes, status codes and the in-handler
+  admin gate stay pinned by S284's `LibraryRegenerateAssetsAdminGateTest` and the S272
+  destructive-actions gate test.
+
 - **Skipped tests are now reported BY NAME, so a skip set can be compared with `comm` instead of by
   count (S345).** `phpunit.xml` gains `displayDetailsOnSkippedTests="true"`, and
   `scripts/skipped-test-names.sh` turns any run's output — local, or a `gh run view <id> --log` —

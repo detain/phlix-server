@@ -349,7 +349,9 @@ final class LibraryMaintenanceRoutesUiMirrorGuardTest extends TestCase
             $missing,
             'phlix-ui AdminLibrariesApi declares a maintenance method whose POST route is NOT '
             . 'registered on the server (' . implode(', ', $missing) . '). The phlix-ui method '
-            . 'list must not outrun the server surface — remove the method or register the route.'
+            . 'list must not outrun the server surface — remove the method or register the route. '
+            . 'Denominator — expected maintenance suffixes: [' . implode(', ', $expected)
+            . ']; actual registered: [' . implode(', ', $actual) . '].'
         );
 
         $this->assertSame(
@@ -359,7 +361,8 @@ final class LibraryMaintenanceRoutesUiMirrorGuardTest extends TestCase
             . 'AdminLibrariesApi method (' . implode(', ', $extra) . '). Add the matching method '
             . 'to src/api/admin/libraries.ts AND to PHLIX_UI_MAINTENANCE_METHODS in this file, '
             . 'in the same PR (the S348 mirror-pin: the admin UI cannot trigger a route it has '
-            . 'no method for).'
+            . 'no method for). Denominator — expected maintenance suffixes: ['
+            . implode(', ', $expected) . ']; actual registered: [' . implode(', ', $actual) . '].'
         );
     }
 

@@ -21,8 +21,10 @@ use Phlix\Server\Http\Controllers\Admin\MaintenanceController;
 use Phlix\Server\Http\Middleware\AdminMiddleware;
 use Phlix\Server\Http\RequestContext;
 use Phlix\Server\Http\Router;
+use ArgumentCountError;
 use PHPUnit\Framework\TestCase;
 use Psr\Container\ContainerInterface;
+use ReflectionClass;
 use ReflectionProperty;
 use Workerman\MySQL\Connection;
 
@@ -36,14 +38,21 @@ use function DI\factory;
  *
  * PHP-DI's `autowire()` silently SKIPS optional constructor parameters, so any
  * dependency with a default ends up `null` in production while every
- * hand-wired unit test passes. Two of this step's collaborators are optional
- * and both matter:
+ * hand-wired unit test passes. One of this step's collaborators is still
+ * optional and it matters:
  *
- *  - {@see MaintenanceController}'s `$adminGuard` — the in-body second admin
- *    check on five endpoints, two of them destructive. A null guard makes that
- *    defence a no-op that only the anonymous 401 still catches.
  *  - {@see MaintenanceTaskRunner}'s `$transcodeManager` — a null one makes
  *    `reap-transcode-jobs` answer "TranscodeManager is unavailable" forever.
+ *
+ * {@see MaintenanceController}'s `$adminGuard` used to be the second member of
+ * that class — an optional `?AdminMiddleware $adminGuard = null` whose
+ * null-state made the in-body second admin check a no-op. S338 made it a
+ * REQUIRED, non-nullable constructor parameter, so PHP-DI's autowire() must
+ * supply it (a controller built without it is an `ArgumentCountError`, proven
+ * below); the wiring test below now pins the NEW contract and the structural
+ * pin at
+ * `tests/Unit/Server/Http/Controllers/Admin/MaintenanceControllerAdminGateIsStructuralTest.php`
+ * pins the shape.
  *
  * S219 had to add a guard for exactly this class of bug on the DLNA admin
  * controller. This file follows its shape: build the container from
@@ -200,14 +209,19 @@ final class MaintenanceContainerWiringTest extends TestCase
     }
 
     /**
-     * 🚨 THE OPTIONAL-PARAMETER TRAP, half one: the controller's admin guard.
+     * 🚨 THE REQUIRED-PARAMETER CONTRACT, half one: the controller's admin guard.
      *
-     * RED ON REVERT: dropping the explicit
-     * `->constructorParameter('adminGuard', get(AdminMiddleware::class))` in
-     * `AdminServicesProvider` leaves this null, and the in-body check on
-     * `cleanup-orphaned-stats` and `dedupe-paths` degrades to "any authenticated
-     * user" — invisible to every hand-wired controller test, all of which pass
-     * a guard explicitly.
+     * The guard is a REQUIRED constructor parameter since S338, so the container
+     * cannot produce a controller without one — PHP-DI's autowire() must resolve
+     * `AdminMiddleware` by type or `get()` throws. This test reads the resolved
+     * controller and asserts the guard really is there.
+     *
+     * RED ON REVERT: making the parameter optional again lets autowire() skip it
+     * (that is exactly what PHP-DI does with optional params), the container
+     * then produces a null guard, and this assertion fails — while the in-body
+     * check on `cleanup-orphaned-stats` and `dedupe-paths` degrades to "any
+     * authenticated user", invisible to every hand-wired controller test, all
+     * of which pass a guard explicitly.
      */
     public function test_the_container_built_controller_carries_its_admin_guard(): void
     {
@@ -217,35 +231,89 @@ final class MaintenanceContainerWiringTest extends TestCase
         self::assertInstanceOf(
             AdminMiddleware::class,
             $this->collaborator($controller, 'adminGuard'),
-            'AdminServicesProvider must bind $adminGuard explicitly. PHP-DI SKIPS optional ctor '
-            . 'params, so an autowire() leaves the in-body admin check on two DESTRUCTIVE '
-            . 'endpoints doing nothing.'
+            'MaintenanceController::__construct() must take a REQUIRED AdminMiddleware. PHP-DI '
+            . 'SKIPS optional ctor params, so an optional guard is one a real container leaves '
+            . 'null and the in-body admin check on two DESTRUCTIVE endpoints does nothing.'
         );
     }
 
     /**
-     * THE CONTROL for the assertion above: the field genuinely CAN be null, and
-     * when it is, a non-admin gets through the in-body check.
+     * THE CONTROL for the assertion above, inverted by S338: the guard is now a
+     * REQUIRED constructor parameter, so "an unwired controller" no longer
+     * exists — a two-argument construction is an `ArgumentCountError` before an
+     * object exists, and a non-admin is refused by a properly-built one.
      *
-     * Without this, "the field is an AdminMiddleware" would not establish that
-     * a null one is a real hazard.
+     * The S282-era counterpart of this test demonstrated the old hazard (2-arg
+     * construction → null guard → non-admin gets 200); that construction path
+     * is exactly what this step removes, so the demonstration has to become the
+     * new contract.
      */
-    public function test_an_unwired_controller_really_does_lose_the_in_body_admin_check(): void
+    public function test_an_unwired_controller_cannot_be_constructed(): void
     {
-        $unwired = new MaintenanceController(
-            $this->createMock(MaintenanceJobRepository::class),
-            $this->createMock(MaintenanceTaskRunner::class),
+        $class = new ReflectionClass(MaintenanceController::class);
+
+        // POSITIVE CONTROL — three arguments, i.e. WITH the guard, must construct.
+        $controlError = null;
+        try {
+            $class->newInstanceArgs([
+                $this->createMock(MaintenanceJobRepository::class),
+                $this->createMock(MaintenanceTaskRunner::class),
+                new AdminMiddleware(
+                    $this->createMock(\Phlix\Auth\UserRepository::class),
+                    $this->createMock(\Phlix\Common\Logger\AuditLogger::class),
+                ),
+            ]);
+        } catch (ArgumentCountError $e) {
+            $controlError = $e->getMessage();
+        }
+        self::assertNull(
+            $controlError,
+            'positive control: reflective construction WITH the middleware must succeed — if it '
+            . 'does not, the ArgumentCountError below is an artefact of reflection, not proof of '
+            . 'a required dependency'
         );
 
-        self::assertNull($this->collaborator($unwired, 'adminGuard'));
+        // THE EXPERIMENT — the two-argument construction must be fatal.
+        // Reflection rather than a literal `new MaintenanceController($a, $b)`:
+        // that spelling is a STATIC arity error under phpstan-tests (level 2)
+        // once the parameter is required, so the runtime-equivalent reflective
+        // call is used — same ArgumentCountError, same place.
+        $this->expectException(ArgumentCountError::class);
+        $this->expectExceptionMessage('Too few arguments');
+
+        $class->newInstanceArgs([
+            $this->createMock(MaintenanceJobRepository::class),
+            $this->createMock(MaintenanceTaskRunner::class),
+        ]);
+    }
+
+    /**
+     * The behavioural arm of the S338 contract: a NON-ADMIN is refused by a
+     * properly-built controller.
+     *
+     * This replaces the old test's final act (non-admin reaching `tasks()` and
+     * getting a 200). The refusal must come from the ADMIN branch
+     * (`auth.not_admin`), not from the anonymous 401.
+     */
+    public function test_a_non_admin_is_refused_by_a_wired_controller(): void
+    {
+        $users = $this->createMock(\Phlix\Auth\UserRepository::class);
+        $users->method('findAdminById')->willReturn(null);
+
+        $wired = new MaintenanceController(
+            $this->createMock(MaintenanceJobRepository::class),
+            $this->createMock(MaintenanceTaskRunner::class),
+            new AdminMiddleware($users, $this->createMock(\Phlix\Common\Logger\AuditLogger::class)),
+        );
 
         $request = new \Phlix\Server\Http\Request();
         $request->method = 'GET';
         $request->userId = 'a-plain-non-admin-user';
 
-        // A non-admin reaches the handler and gets a 200 — which is precisely
-        // the degradation the explicit binding prevents.
-        self::assertSame(200, $unwired->tasks($request, [])->statusCode);
+        $response = $wired->tasks($request, []);
+
+        self::assertSame(403, $response->statusCode);
+        self::assertSame('auth.not_admin', json_decode($response->body, true)['code'] ?? null);
     }
 
     /**

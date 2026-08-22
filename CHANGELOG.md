@@ -25,6 +25,67 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Security
 
+- **The last nullable admin middleware is gone — the family is closed (S338).**
+  `MaintenanceController` was the S323-phase-2 note's "one instance survives",
+  the sixth controller holding `private readonly ?AdminMiddleware $adminGuard = null`
+  whose `requireAdmin()` returned "authorised" when the guard was absent. Its
+  eight `/api/v1/admin/maintenance/*` handlers (three reads; five actions, two
+  of them destructive: `cleanup-orphaned-stats` deletes rows and
+  `dedupe-paths --apply` merges media items) are now all behind a **required,
+  non-nullable, `readonly`** `AdminMiddleware` constructor parameter; the
+  `=== null → return null` fail-open inside `requireAdmin()` is deleted and
+  `checkAccess()` is called unconditionally. Constructing the controller
+  without a gate is now an `ArgumentCountError` at the `new` — demonstrated in
+  both the rewritten wiring test and the new structural pin, each with a
+  three-argument positive control.
+
+  **The exposure class is the logged-in NON-ADMIN, not the anonymous caller.**
+  `requireAdmin()` refuses a null/empty `$request->userId` with a 401
+  `auth.required` BEFORE consulting the guard, so a gate-less construction
+  would have degraded these routes to "any authenticated user" — the same class
+  as S323 phase 2, lower than phase 1's anonymous exposure. Latent, as in every
+  prior phase: production wiring always supplied the guard, and no exploitation
+  is claimed.
+
+  **Wiring simplified because the trap is structurally impossible.** The explicit
+  `constructorParameter('adminGuard', get(AdminMiddleware::class))` binding in
+  `AdminServicesProvider` is now a plain `autowire()` — PHP-DI skips OPTIONAL
+  parameters, and there is no optional parameter left to skip. The two
+  construction sites are enumerated: the provider's autowire and
+  `AdminRoutes::register()`'s `$container->get()` (which resolves eagerly at
+  bind time, so an un-suppliable gate fails loudly at boot, not silently per
+  request). There was no live `$container->has()` guard for this controller.
+
+  **The fail-open pin is inverted.** `MaintenanceContainerWiringTest`'s
+  `test_an_unwired_controller_really_does_lose_the_in_body_admin_check()`
+  demonstrated the old hazard (2-arg construction → null guard → non-admin gets
+  200). That construction path no longer exists; the test now proves the new
+  contract — reflective two-argument construction throws `ArgumentCountError`
+  (positive control included), and a wired controller refuses a non-admin with
+  403 `auth.not_admin`.
+
+  **The seventh structural pin lands where the walker can see it.**
+  `MaintenanceControllerAdminGateIsStructuralTest.php` lives at
+  `tests/Unit/Server/Http/Controllers/Admin/` — inside the recursively-walked
+  `PIN_DIRECTORY`, NOT beside the controller's other tests in
+  `tests/Unit/Admin/Maintenance/` (which the S323-phase-2 recursion fix
+  deliberately does not reach) — and `RouterDispatchableHandlersTest`'s pin
+  count is bumped 6 → 7 in the same change. The pin uses the shared
+  `RouterDispatchableHandlers` trait (never a copied helper), asserts its
+  denominator (8 handlers, all gated — `UNGATED_REQUEST_HANDLERS` is empty),
+  drives every handler anon/non-admin/admin, and carries two secondary nets: a
+  per-handler source check that each gated handler reaches `requireAdmin()`
+  (directly or via `runTask()`) and a global call-site count of 4 (`tasks`,
+  `jobs`, `job`, and the single `runTask()` call that gates all five actions).
+  All three regression shapes were demonstrated to fail it on scratch copies:
+  a restored nullable/defaulted gate, a re-added `setAdminGuard()` setter, and
+  newly added ungated handlers in BOTH escaping spellings (`mixed $request`
+  native, and `Request|Response` union) — the drift detector enumerates 10 vs
+  the asserted 8. A tokenized `?AdminMiddleware` scan over all of `src/`
+  (comments stripped) now returns **zero** hits; the other eight raw hits are
+  the S282/S323 conversion-comment docblock prose, which the tokenizer
+  correctly ignores.
+
 - **The LDAP operation-timeout bound is now asserted to FIRE, not just declared (S328).** The
   `LDAP_OPT_TIMEOUT` option in `LdapConnection::connectionConfig()` had only config-presence
   coverage — no test opened a real LDAP socket, so a regression that kept the config literal

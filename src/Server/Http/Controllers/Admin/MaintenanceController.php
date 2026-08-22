@@ -55,7 +55,9 @@ use Throwable;
  * items): the group's middleware is one edit away from being lost, and this
  * repo has already shipped a route group whose middleware silently did not
  * apply. A defence that only exists in the registration is a defence that a
- * refactor can delete without a single test noticing.
+ * refactor can delete without a single test noticing. Since S338 the guard
+ * is a REQUIRED constructor parameter, so there is no construction path on
+ * which the in-body check silently does nothing.
  *
  * @package Phlix\Server\Http\Controllers\Admin
  * @since 1.9
@@ -65,16 +67,16 @@ class MaintenanceController
     /**
      * @param MaintenanceJobRepository $jobs       Queue store for the async tasks.
      * @param MaintenanceTaskRunner    $runner     Executes a synchronous task inline.
-     * @param AdminMiddleware|null     $adminGuard Second admin check, run in each
-     *        handler body. Null only in a hand-wired test; the container always
-     *        supplies it, which {@see \Phlix\Tests\Unit\Admin\Maintenance\MaintenanceContainerWiringTest}
-     *        asserts — PHP-DI's `autowire()` SKIPS optional parameters, so an
-     *        optional guard is exactly the kind that ends up null in production.
+     * @param AdminMiddleware          $adminGuard Second admin check, run in each
+     *        handler body. REQUIRED since S338: an optional guard is exactly the
+     *        shape that ends up null in production (PHP-DI's `autowire()` SKIPS
+     *        optional parameters), silently turning the in-body check into a
+     *        no-op that lets any logged-in user reach the destructive tasks.
      */
     public function __construct(
         private readonly MaintenanceJobRepository $jobs,
         private readonly MaintenanceTaskRunner $runner,
-        private readonly ?AdminMiddleware $adminGuard = null,
+        private readonly AdminMiddleware $adminGuard,
     ) {
     }
 
@@ -326,10 +328,6 @@ class MaintenanceController
                 'error' => 'Unauthorized',
                 'code' => 'auth.required',
             ]);
-        }
-
-        if ($this->adminGuard === null) {
-            return null;
         }
 
         $status = $this->adminGuard->checkAccess($request);

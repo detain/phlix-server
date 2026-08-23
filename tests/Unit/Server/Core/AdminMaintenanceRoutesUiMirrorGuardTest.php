@@ -90,7 +90,8 @@ use function DI\factory;
  * deleted, re-verbed, re-pointed away from `MaintenanceController`, or added
  * without a mirror update reds it. It does NOT dispatch the routes — response
  * envelopes, status codes and the in-handler admin gate are pinned by S338's
- * `MaintenanceControllerAdminGateTest` family and the S77 controller tests.
+ * {@see \Phlix\Tests\Unit\Server\Http\Controllers\Admin\MaintenanceControllerAdminGateIsStructuralTest}
+ * / `MaintenanceContainerWiringTest` and the S77 `MaintenanceControllerTest`.
  *
  * @see \Phlix\Tests\Unit\Server\Core\LibraryMaintenanceRoutesUiMirrorGuardTest S348, whose
  *      route-table reflection this file reuses and whose no-substring rule it follows.
@@ -139,7 +140,7 @@ final class AdminMaintenanceRoutesUiMirrorGuardTest extends TestCase
     private const PHLIX_UI_MAINTENANCE_ENDPOINT_PATHS = [
         '/api/v1/admin/maintenance/tasks',
         '/api/v1/admin/maintenance/jobs',
-        // Derived: `getJob()` POSTs `${MAINTENANCE_ENDPOINTS.jobs}/${encodeURIComponent(id)}`.
+        // Derived: `getJob()` GETs `${MAINTENANCE_ENDPOINTS.jobs}/${encodeURIComponent(id)}`.
         '/api/v1/admin/maintenance/jobs/{id}',
         '/api/v1/admin/maintenance/storage-snapshot',
         '/api/v1/admin/maintenance/reap-scan-jobs',

@@ -75,12 +75,13 @@ final class TraktSyncBootWiringTest extends TestCase
 
         // The full arm gate must be preserved, so a disabled plugin / master
         // switch / sync toggle still arms NOTHING (S345 lesson 1: every branch).
-        foreach ([
+        $gateClauses = [
             '$installedTrakt->enabled',
             '$traktMasterEnabled',
             '$traktSettings->syncEnabled',
             '$traktIntervalMinutes > 0',
-        ] as $clause) {
+        ];
+        foreach ($gateClauses as $clause) {
             self::assertStringContainsString(
                 $clause,
                 $code,

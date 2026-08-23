@@ -1045,7 +1045,7 @@ class MusicLibraryScanner
         //                       tells the operator how many files that was — so
         //                       there is no policy-skip level left to warn about.
         if ($result->failed > 0) {
-            $this->logger->error('Music directory scan complete with skipped files', $summary);
+            $this->logger->error('Music directory scan complete with failed files', $summary);
         } else {
             $this->logger->info('Music directory scan complete', $summary);
         }
@@ -1286,6 +1286,13 @@ class MusicLibraryScanner
          */
         $vacatedAlbums = [];
 
+        // The DISPLAY label for the downstream failure logs. Initialised BEFORE the
+        // try so the outer catch always has a defined value even when an exception
+        // fires inside the branch above: the placeholder token for the untagged
+        // path (review r1 INFO-9 — the raw marker `''`/`'Unknown Artist'` would be
+        // unhelpful), the real tag otherwise.
+        $artistLabel = $artistName === '' ? self::PLACEHOLDER_ARTIST_NAME : $artistName;
+
         try {
             $year = $albumData['year'];
 
@@ -1297,7 +1304,6 @@ class MusicLibraryScanner
             // '[Unknown Artist]' resolves to its OWN is_placeholder = 0 artist row
             // via upsertArtist() below and can never merge with the untagged bucket.
             if (in_array($artistName, self::NO_ARTIST_MARKERS, true)) {
-                $placeholderArtistFiles += count($files);
                 $this->logger->debug('Ingesting album under placeholder artist', [
                     'album' => $albumTitle,
                     'files' => count($files),
@@ -1317,6 +1323,11 @@ class MusicLibraryScanner
                     return;
                 }
 
+                // Counted only after the ingest SUCCEEDED: `placeholder_artist_files`
+                // means "files actually indexed under the placeholder", and files
+                // that failed with their artist are charged to `failed` above, never
+                // to both counters (review r1 finding 2).
+                $placeholderArtistFiles += count($files);
                 $artistId = $artistResult['id'];
             } else {
                 // Upsert artist and get media_item_id
@@ -1375,7 +1386,7 @@ class MusicLibraryScanner
                 // loses the entire album, so it must reach `.logs/error.log`.
                 $this->logger->error('Failed to upsert album', [
                     'album' => $albumTitle,
-                    'artist' => $artistName,
+                    'artist' => $artistLabel,
                     'files_lost' => count($files),
                 ]);
                 return;
@@ -1423,7 +1434,7 @@ class MusicLibraryScanner
                         $result->failed++;
                         $this->logger->error('Skipping track after error during indexing', [
                             'album' => $albumTitle,
-                            'artist' => $artistName,
+                            'artist' => $artistLabel,
                             'path' => $fileInfo['file']->getPathname(),
                             'error' => $trackError->getMessage(),
                         ]);
@@ -1452,7 +1463,7 @@ class MusicLibraryScanner
                         $result->failed++;
                         $this->logger->error('Track was not indexed', [
                             'album' => $albumTitle,
-                            'artist' => $artistName,
+                            'artist' => $artistLabel,
                             'path' => $fileInfo['file']->getPathname(),
                             'reason' => 'the media_item or music_tracks row was not written',
                         ]);
@@ -1526,7 +1537,7 @@ class MusicLibraryScanner
             $result->failed += $lost;
             $this->logger->error('Skipping album after error during indexing', [
                 'album' => $albumTitle,
-                'artist' => $artistName,
+                'artist' => $artistLabel,
                 'files_lost' => $lost,
                 'error' => $e->getMessage(),
             ]);

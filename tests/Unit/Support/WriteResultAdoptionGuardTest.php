@@ -69,14 +69,14 @@ use RecursiveIteratorIterator;
  * client has no silent failure return).
  *
 * The denominator the guard prints is the exact count it examined:
-     * **95 `INSERT`/`REPLACE` `->query()` call tokens** (87 with a literal first
-     * argument, 8 resolved through a `$sql` variable — including the try/catch
-     * retry arms of the two ScanJobRepository sites), of which **15 consume the
-     * result** (13 logical sites: the retry arms share one consumption; S331's
-     * `ensurePlaceholderArtist()` adds the fifteenth). The plan
-     * recorded 86/11; this scan is what a faithful token walk of the tree actually
-     * finds, and it is pinned below so a change to the landscape reddens here
-     * rather than silently drifting the inventory.
+ * **95 `INSERT`/`REPLACE` `->query()` call tokens** (87 with a literal first
+ * argument, 8 resolved through a `$sql` variable — including the try/catch
+ * retry arms of the two ScanJobRepository sites), of which **15 consume the
+ * result** (13 logical sites: the retry arms share one consumption; S331's
+ * `ensurePlaceholderArtist()` adds the fifteenth). The plan
+ * recorded 86/11; this scan is what a faithful token walk of the tree actually
+ * finds, and it is pinned below so a change to the landscape reddens here
+ * rather than silently drifting the inventory.
  *
  * ## The named exception — and why the exception is a NON-consumer
  *

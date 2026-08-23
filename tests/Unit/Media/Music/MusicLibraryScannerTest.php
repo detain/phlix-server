@@ -1994,7 +1994,7 @@ final class MusicLibraryScannerTest extends TestCase
         // A schema-aware double, not a bare Connection mock: since review r2 F1 an INSERT
         // that reports writing nothing is correctly treated as a LOST file, so a mock whose
         // query() returns null would make this fixture take the failure path and close with
-        // the "…with skipped files" summary. This test is about the logger, so the scan
+        // the "…with failed files" summary. This test is about the logger, so the scan
         // itself must succeed.
         $scanner = new TaggedScanner(
             new MusicSchemaConnection(),
@@ -2111,7 +2111,7 @@ final class MusicLibraryScannerTest extends TestCase
      * ```
      *
      * `items_failed` is migration 095's entire reason to exist and the step's acceptance
-     * criterion is that a scan which skipped files reports a non-zero count somewhere an
+     * criterion is that a scan which LOST files reports a non-zero count somewhere an
      * operator can see. For this shape the count was zero everywhere. This test asserts
      * the two scenarios and then asserts they DIFFER — the discrimination is the point,
      * so a fix that merely made both louder would not satisfy it.
@@ -2140,7 +2140,7 @@ final class MusicLibraryScannerTest extends TestCase
         );
         $this->assertSame(
             1,
-            $lossyLog->countAtLevel('error', 'Music directory scan complete with skipped files'),
+            $lossyLog->countAtLevel('error', 'Music directory scan complete with failed files'),
             'the summary must say the scan lost files, at ERROR so it reaches .logs/error.log',
         );
 
@@ -2230,7 +2230,7 @@ final class MusicLibraryScannerTest extends TestCase
             'exactly one lost file, named at ERROR. createMediaItem()\'s own line has no path in it, '
             . 'so this is the only line that tells an operator WHICH file was dropped',
         );
-        $this->assertSame(1, $logger->countAtLevel('error', 'Music directory scan complete with skipped files'));
+        $this->assertSame(1, $logger->countAtLevel('error', 'Music directory scan complete with failed files'));
     }
 
     /**
@@ -2279,7 +2279,7 @@ final class MusicLibraryScannerTest extends TestCase
         // pinned by testEveryPathThatLosesFilesLogsAtErrorLevel().
         $this->assertSame(
             1,
-            $logger->countMessages('Music directory scan complete with skipped files'),
+            $logger->countMessages('Music directory scan complete with failed files'),
             'a scan that lost files must not log the same clean "scan complete" line as one that did not',
         );
         $this->assertSame(0, $logger->countMessages('Music directory scan complete', true));
@@ -2338,7 +2338,7 @@ final class MusicLibraryScannerTest extends TestCase
         $this->assertSame($total, $clean->added);
         $this->assertSame(0, $clean->failed, 'nothing failed, so the counter must be 0');
         $this->assertSame(1, $cleanLogger->countMessages('Music directory scan complete', true));
-        $this->assertSame(0, $cleanLogger->countMessages('Music directory scan complete with skipped files'));
+        $this->assertSame(0, $cleanLogger->countMessages('Music directory scan complete with failed files'));
     }
 
     /**
@@ -2374,9 +2374,9 @@ final class MusicLibraryScannerTest extends TestCase
         $this->assertSame(
             1,
             $logger->countMessages('Music directory scan complete', true),
-            'the scan is a normal INFO completion, not a "skipped files" warning',
+            'the scan is a normal INFO completion, not a "failed files" error',
         );
-        $this->assertSame(0, $logger->countMessages('Music directory scan complete with skipped files'));
+        $this->assertSame(0, $logger->countMessages('Music directory scan complete with failed files'));
         // Two, not one: with no album tag either, the album title falls back to the
         // FILENAME, so each untagged file is its own album group. That is also why the
         // per-album line stays at `debug` and the operator-facing tally is the
@@ -2426,7 +2426,7 @@ final class MusicLibraryScannerTest extends TestCase
         $this->assertSame(0, $loggerA->countAtLevel('warning', 'Failed to upsert artist'));
         $this->assertSame(
             1,
-            $loggerA->countAtLevel('error', 'Music directory scan complete with skipped files'),
+            $loggerA->countAtLevel('error', 'Music directory scan complete with failed files'),
             'and so must the summary line, which is the one an operator greps first',
         );
 
@@ -2451,7 +2451,7 @@ final class MusicLibraryScannerTest extends TestCase
 
         $this->assertSame(1, $resultC->failed);
         $this->assertSame(1, $loggerC->countAtLevel('error', 'Skipping track after error during indexing'));
-        $this->assertSame(1, $loggerC->countAtLevel('error', 'Music directory scan complete with skipped files'));
+        $this->assertSame(1, $loggerC->countAtLevel('error', 'Music directory scan complete with failed files'));
 
         // (4) The outer catch (the artist INSERT throws rather than returning false).
         [$dirD, $taggerD] = $this->oneAlbumFixture(3);

@@ -168,6 +168,38 @@ class LibraryScanCommandTest extends TestCase
         $this->assertStringContainsString('Scan failed: Library not found: missing', $tester->getDisplay());
     }
 
+    /**
+     * S347 — the exit-code contract must be readable from `--help`, not only from the
+     * class docblock. Every code the command can return is named: 0 (clean), 1
+     * (did-not-run), 3 (completed-with-loss) plus the reserved-2 note that explains why
+     * 3 exists.
+     *
+     * `CommandTester` calls `Command::run()` directly, so `--help` on the command itself
+     * would hit the missing-`libraryId` validation instead of the help command — drive the
+     * real `HelpCommand` instead, which is the exact path `php bin/phlix library:scan
+     * --help` takes.
+     */
+    public function testHelpNamesEveryExitCode(): void
+    {
+        $application = new Application();
+        $application->add(new LibraryScanCommand(
+            fn(): LibraryManager => $this->createMock(LibraryManager::class),
+        ));
+
+        $help = $application->find('help');
+        $help->setCommand($application->find('library:scan'));
+        $tester = new CommandTester($help);
+        $tester->execute([]);
+        $display = $tester->getDisplay();
+
+        $this->assertStringContainsString('Exit codes:', $display);
+        $this->assertStringContainsString('0  scan (or rescan) completed; every file was indexed', $display);
+        $this->assertStringContainsString('1  scan did not run', $display);
+        $this->assertStringContainsString('3  scan completed but', $display);
+        $this->assertStringContainsString("2  Symfony's INVALID", $display);
+        $this->assertStringContainsString('deliberately NOT used', $display);
+    }
+
     // ---------------------------------------------------------------------
     // S150 — a CLI scan must be visible in the admin Libraries page.
     //

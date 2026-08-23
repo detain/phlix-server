@@ -822,6 +822,20 @@ Everything else fails the run, **including several shapes a re-run can legitimat
 
 `1826`/`3822` were **considered for the idempotent set and rejected** — do not add them. Foreign-key and CHECK-constraint names are unique **per schema**, not per table, so the object that already holds the name can belong to a *completely different* table, and the statement that failed can be a `CREATE TABLE` that consequently created **nothing**. Squelching them let such a file exit 0 *and* enter `schema_migrations`, so it was never retried — worse than no squelch at all.
 
+**Exit codes: `library:scan` (S347).** `php bin/phlix library:scan <libraryId>` (with or
+without `--rescan`) returns one of:
+
+| exit | meaning |
+| --- | --- |
+| **0** | scan (or rescan) completed; every file was indexed |
+| **1** | scan did not run — unknown library id, the manager threw, or an already-queued/running job refused the scan |
+| **3** | scan completed but N file(s) could not be indexed (the lossy warning is on stderr; each file is named in `.logs/error.log`) |
+| **2** | Symfony's `INVALID` (invalid input/usage) — deliberately **NOT** used, so "you typed the arguments wrong" and "your library lost files" never share a number |
+
+The same table is printed by `php bin/phlix library:scan --help`. `3` (not `2`) is the
+"completed but lost files" code because `2` is Symfony's reserved invalid-input code — a
+wrapper must be able to tell a scan that never ran from one that lost files.
+
 ### Admin SPA (admin-ui)
 
 The admin console is a **React + TypeScript + Vite** single-page app. Its source lives in

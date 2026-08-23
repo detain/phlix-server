@@ -192,6 +192,19 @@ final class LibraryScanCommand extends Command
             . 'scan over the same library makes two scanners race on every per-file lookup and makes the '
             . 'admin badge report one scan\'s progress under the other\'s counters.'
         );
+        // S347 — the exit-code contract used to live ONLY in the docblocks above, which an
+        // operator or wrapper script never reads. `--help` is where they look; state each
+        // code and its meaning here, and keep the README table in lock-step with it.
+        $this->setHelp(
+            "Exit codes:\n"
+            . "  0  scan (or rescan) completed; every file was indexed\n"
+            . "  1  scan did not run — unknown library id, the manager threw, or an already-queued/running "
+            . "job refused the scan\n"
+            . "  3  scan completed but N file(s) could not be indexed (the lossy warning is on stderr; each "
+            . "file is named in .logs/error.log)\n"
+            . "  2  Symfony's INVALID (invalid input/usage) — deliberately NOT used, so \"you typed the "
+            . "arguments wrong\" and \"your library lost files\" never share a number\n"
+        );
     }
 
     /**

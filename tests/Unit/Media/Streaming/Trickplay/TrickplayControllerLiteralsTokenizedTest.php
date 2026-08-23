@@ -129,6 +129,11 @@ final class TrickplayControllerLiteralsTokenizedTest extends TestCase
      */
     public function testEachOfTheFiveSitesConsumesItsConstant(): void
     {
+        // The two distinct constant references, so each site can be pinned to
+        // exactly ONE of them (review finding 1: a site that splices BOTH
+        // constants together would otherwise pass every layer).
+        $distinctReferences = array_values(array_unique(self::SITES));
+
         foreach (self::SITES as $method => $reference) {
             $body = self::methodBody($method);
 
@@ -139,6 +144,18 @@ final class TrickplayControllerLiteralsTokenizedTest extends TestCase
                 . 'Per-site inventory: this is one of the five re-spelled sites the S344 '
                 . 'sweep found — consume the constant.'
             );
+            foreach ($distinctReferences as $otherReference) {
+                if ($otherReference === $reference) {
+                    continue;
+                }
+                self::assertStringNotContainsString(
+                    $otherReference,
+                    $body,
+                    "S349: site `{$method}()` references {$otherReference}, but its single "
+                    . "source is {$reference}. Each of the five sites must consume exactly "
+                    . 'one constant.'
+                );
+            }
             self::assertStringNotContainsString(
                 'sprite.jpg',
                 $body,
@@ -282,8 +299,6 @@ final class TrickplayControllerLiteralsTokenizedTest extends TestCase
         }
 
         self::fail("S349: no method named `{$method}` found in the controller source.");
-
-        return '';
     }
 
     /**

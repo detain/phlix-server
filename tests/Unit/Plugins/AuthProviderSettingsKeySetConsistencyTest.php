@@ -149,6 +149,29 @@ final class AuthProviderSettingsKeySetConsistencyTest extends TestCase
     }
 
     /**
+     * The fail-fast half of the derive, pinned directly: a schema property with
+     * no normalizer must throw loudly (naming the exact fix site) instead of
+     * being silently dropped on every save.
+     */
+    public function testLdapNormalizerFailsFastOnAnUnknownSchemaProperty(): void
+    {
+        $this->expectException(\LogicException::class);
+        $this->expectExceptionMessage('LdapAdminController::normalizeSavedValue');
+
+        (new \ReflectionMethod(LdapAdminController::class, 'normalizeSavedValue'))
+            ->invoke(null, 'no_such_property', 'x');
+    }
+
+    public function testOidcNormalizerFailsFastOnAnUnknownSchemaProperty(): void
+    {
+        $this->expectException(\LogicException::class);
+        $this->expectExceptionMessage('OidcAdminController::normalizeSavedValue');
+
+        (new \ReflectionMethod(OidcAdminController::class, 'normalizeSavedValue'))
+            ->invoke(null, 'no_such_property', 'x');
+    }
+
+    /**
      * Both directions of the guard, with the compared key sets printed when it
      * fails (S345 lesson 3 — a set guard must name its denominators).
      *

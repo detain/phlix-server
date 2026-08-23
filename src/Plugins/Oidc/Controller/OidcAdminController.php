@@ -166,14 +166,18 @@ final class OidcAdminController
      * Fails fast when a schema property has no normalizer here — silently
      * dropping a key on every save is exactly the defect S337 removes, so a
      * missing case must be loud, not quiet.
+     *
+     * @return string
      */
-    private static function normalizeSavedValue(string $key, mixed $value): mixed
+    private static function normalizeSavedValue(string $key, mixed $value): string
     {
         return match ($key) {
             'provider_url' => rtrim(is_string($value) ? $value : '', '/'),
             'client_id' => is_string($value) ? $value : '',
             'scopes' => self::defaultedScopes($value),
-            'redirect_uri' => is_string($value) ? trim($value) : '',
+            // The body value is already trimmed in saveSettings(); a PRESERVED
+            // stored value must come through verbatim (the absent-key contract).
+            'redirect_uri' => is_string($value) ? $value : '',
             default => throw new \LogicException(
                 "OIDC saveSettings has no normalizer for schema property '{$key}' — "
                 . 'add one to OidcAdminController::normalizeSavedValue().',
@@ -249,6 +253,14 @@ final class OidcAdminController
         }
 
         $existingSettings = $this->plugin->getSettings();
+
+        // S48 review r1 Finding 1 — the body's `redirect_uri` is trimmed HERE, at
+        // the input boundary, so the schema normalizer can preserve a STORED
+        // redirect_uri verbatim on the absent-key path (byte-for-byte the
+        // pre-S337 behaviour): only what is POSTED is normalised.
+        if (array_key_exists('redirect_uri', $body) && is_string($body['redirect_uri'])) {
+            $body['redirect_uri'] = trim($body['redirect_uri']);
+        }
 
         // S337 — the replacement document is DERIVED from the schema's `properties`
         // list ({@see self::settingsSchemaProperties()}), not a hand-enumerated

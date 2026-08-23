@@ -289,8 +289,10 @@ final class LdapAdminController
      * Fails fast when a schema property has no normalizer here — silently
      * dropping a key on every save is exactly the defect S337 removes, so a
      * missing case must be loud, not quiet.
+     *
+     * @return string|int|bool
      */
-    private static function normalizeSavedValue(string $key, mixed $value): mixed
+    private static function normalizeSavedValue(string $key, mixed $value): string|int|bool
     {
         return match ($key) {
             'host', 'base_dn', 'bind_dn', 'admin_group' => self::trimmedString($value),

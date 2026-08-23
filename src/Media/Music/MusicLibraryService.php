@@ -578,6 +578,15 @@ class MusicLibraryService
      * ```php
      * $artist = $service->findArtistByName('Pink Floyd');
      * ```
+     *
+     * ⚠ **S331: when the display name is the placeholder token, TWO rows can
+     * match** — the structural placeholder (`is_placeholder = 1`, the untagged
+     * bucket) and a REAL artist of the same name (`is_placeholder = 0`). Since
+     * migration 102, `uk_name (name, is_placeholder)` lets both coexist, so the
+     * `LIMIT 1` needs a deterministic winner: the placeholder is ordered FIRST
+     * (`is_placeholder DESC`) because it is the common case — the whole reason
+     * this name exists — and a real token-tagged artist's albums remain visible
+     * in the artists LIST (which embeds each artist's albums by id).
      */
     public function findArtistByName(string $name): ?array
     {
@@ -590,6 +599,7 @@ class MusicLibraryService
              LEFT JOIN music_tracks t ON t.album_id = al.id
              WHERE a.name = ?
              GROUP BY a.id, a.name, a.image_url
+             ORDER BY a.is_placeholder DESC, a.id ASC
              LIMIT 1",
             [$name]
         );
@@ -785,6 +795,17 @@ class MusicLibraryService
      * sorts NULLs first). `al.id` is appended as a tiebreaker so paging is stable:
      * 2,622 of production's 5,091 albums share a title with another album, and an
      * ambiguous sort key can otherwise show the same row on two pages.
+     *
+     * ⚠ **S331 name-key nuance:** when `$artistName` is the placeholder display
+     * token (`[Unknown Artist]`), the `ar.name = ?` filter matches BOTH the
+     * structural placeholder row (`is_placeholder = 1`, the untagged bucket) AND
+     * a REAL artist of the same name (`is_placeholder = 0`) — the composite
+     * `uk_name (name, is_placeholder)` from migration 102 lets them coexist. The
+     * two artists' albums therefore appear in ONE name-filtered listing. They are
+     * still distinct ROWS (different `artist_id`, distinct albums/tracks — proven
+     * at the data level by the S331 real-scan proof); this is the same
+     * name-as-identity union the API has always had for shared album titles, and
+     * the per-artist detail routes (id-keyed or name+ORDER-BY) stay exact.
      *
      * @param int $limit Maximum number of albums to return (clamped by {@see PageLimit}).
      * @param int $offset Number of albums to skip.

@@ -218,7 +218,7 @@ final class MusicLibraryScannerTest extends TestCase
         $this->assertSame(['artist', 'album', 'track'], $mediaItemTypes);
     }
 
-    public function testUnknownArtistAlbumIsSkipped(): void
+    public function testUnknownArtistAlbumIsIngestedUnderPlaceholder(): void
     {
         $dir = $this->tempDir();
         $this->touchFile($dir, 'mystery.mp3');
@@ -229,8 +229,244 @@ final class MusicLibraryScannerTest extends TestCase
         $scanner = new MusicLibraryScanner($db, $ffmpeg);
 
         $result = $scanner->scanDirectory($dir);
+        // S331: an unknown-artist album is INGESTED under the placeholder artist,
+        // not discarded whole — the old policy wrote nothing at all.
+        $this->assertSame(1, $result->added);
+        $this->assertSame(['artist', 'album', 'track'], $mediaItemTypes);
+        $this->assertSame(0, $result->failed, 'an untagged album is not a failure');
+    }
+
+    /**
+     * S331 — the discard-whole-album shape, shown RED first.
+     *
+     * Two tracks share an ALBUM tag but carry NO artist tag. The pre-fix policy
+     * discarded the ENTIRE album group — every one of the files — and wrote
+     * nothing. The new policy ingests the album under the structural placeholder
+     * artist: both tracks, one album, one placeholder artist row.
+     */
+    public function testAnUntaggedAlbumIsIngestedUnderThePlaceholderArtistInsteadOfDiscarded(): void
+    {
+        $dir = $this->tempDir();
+        $this->touchFile($dir, '01-ghosts.mp3');
+        $this->touchFile($dir, '02-echoes.mp3');
+
+        $db = new MusicSchemaConnection();
+        // Tags carry an album + title but no artist → flushAlbum() must NOT drop
+        // the whole group; it must route it to the placeholder artist instead.
+        $scanner = $this->taggedScanner(
+            $db,
+            static fn (string $path): array => [
+                'artist' => null,
+                'album' => 'Untitled Sessions',
+                'title' => basename($path, '.mp3'),
+                'track_number' => (int) substr(basename($path), 0, 2),
+                'disc_number' => 1,
+                'duration_secs' => 180,
+                'year' => null,
+                'genre' => null,
+            ],
+            new LogWriteFailureLogger(),
+        );
+
+        $result = $scanner->scanDirectory($dir, null, 'lib-s331');
+
+        // Not discarded: every track of the untagged album is ingested.
+        $this->assertSame(2, $result->added, 'both tracks are ingested, not discarded');
+        $this->assertSame(0, $result->failed, 'an untagged album is not a failure');
+        $this->assertCount(2, $db->tracks, 'both track rows exist');
+        $this->assertCount(1, $db->albums, 'the two files share ONE album group');
+        $placeholder = $db->artistRow(MusicLibraryScanner::PLACEHOLDER_ARTIST_NAME, true);
+        $this->assertNotNull($placeholder, 'a placeholder artist row exists');
+        $this->assertSame(1, $placeholder['is_placeholder'], 'the row is the structural placeholder');
+    }
+
+    /**
+     * S331 — a REAL album tagged with the placeholder token stays distinct from
+     * the untagged bucket.
+     *
+     * The token is the DISPLAY label only. The scanner detects untagged-ness by
+     * the ABSENCE of an artist tag and routes those albums to the structural
+     * placeholder row BY ID (`is_placeholder = 1`); a real album whose artist tag
+     * is literally `[Unknown Artist]` is detected as a real tag and routed through
+     * the normal upsert, whose natural-key lookup filters `is_placeholder = 0`.
+     * The two resolve to DIFFERENT `music_artists` rows — the composite
+     * `uk_name (name, is_placeholder)` from migration 102 lets them coexist — so
+     * the real album can never be silently merged into the untagged bucket.
+     */
+    public function testARealAlbumTaggedWithThePlaceholderTokenStaysDistinctFromUntaggedOnes(): void
+    {
+        $db = new MusicSchemaConnection();
+
+        // Untagged album → placeholder artist (is_placeholder = 1).
+        $untaggedDir = $this->tempDir();
+        $this->touchFile($untaggedDir, '01-secret.mp3');
+        $untagged = $this->taggedScanner(
+            $db,
+            static fn (string $path): array => [
+                'artist' => null,
+                'album' => 'Untitled Sessions',
+                'title' => basename($path, '.mp3'),
+                'track_number' => 1,
+                'disc_number' => 1,
+                'duration_secs' => 180,
+                'year' => null,
+                'genre' => null,
+            ],
+            new LogWriteFailureLogger(),
+        );
+        $untagged->scanDirectory($untaggedDir, null, 'lib-s331');
+
+        $placeholder = $db->artistRow(MusicLibraryScanner::PLACEHOLDER_ARTIST_NAME, true);
+        $this->assertNotNull($placeholder, 'the untagged album created the placeholder artist');
+
+        // Real album whose ARTIST TAG is literally the token → its OWN artist row.
+        $taggedDir = $this->tempDir();
+        $this->touchFile($taggedDir, '01-truth.mp3');
+        $tagged = $this->taggedScanner(
+            $db,
+            static fn (string $path): array => [
+                'artist' => MusicLibraryScanner::PLACEHOLDER_ARTIST_NAME,
+                'album' => 'Genuinely Tagged',
+                'title' => basename($path, '.mp3'),
+                'track_number' => 1,
+                'disc_number' => 1,
+                'duration_secs' => 200,
+                'year' => 1999,
+                'genre' => null,
+            ],
+            new LogWriteFailureLogger(),
+        );
+        $tagged->scanDirectory($taggedDir, null, 'lib-s331');
+
+        $real = $db->artistRow(MusicLibraryScanner::PLACEHOLDER_ARTIST_NAME, false);
+        $this->assertNotNull($real, 'the real album created its own is_placeholder=0 artist row');
+        $this->assertSame(0, $real['is_placeholder']);
+        $this->assertNotSame(
+            $placeholder['id'],
+            $real['id'],
+            'the real token-tagged album must resolve to a DIFFERENT artist row than the untagged bucket',
+        );
+
+        // And the real album's track is parented to the REAL artist, never the
+        // placeholder. (The untagged album's track is parented to the placeholder
+        // by design, so only the token-tagged album's track is asserted here.)
+        $taggedTrack = null;
+        foreach ($db->tracks as $track) {
+            if ($track['title'] === '01-truth') {
+                $taggedTrack = $track;
+            }
+        }
+        $this->assertNotNull($taggedTrack, 'the token-tagged album has a track row');
+        $this->assertSame($real['id'], $taggedTrack['artist_id'], 'track artist_id is the real row');
+        // And the untagged album's track stayed on the placeholder — the two did
+        // not merge.
+        $untaggedTrack = null;
+        foreach ($db->tracks as $track) {
+            if ($track['title'] === '01-secret') {
+                $untaggedTrack = $track;
+            }
+        }
+        $this->assertNotNull($untaggedTrack);
+        $this->assertSame($placeholder['id'], $untaggedTrack['artist_id'], 'untagged track stays on the placeholder');
+    }
+
+    /**
+     * S331 — the placeholder artist row is stable across scans.
+     *
+     * A second scan of the same untagged album must resolve the placeholder BY ID
+     * (`is_placeholder = 1`), reusing the row the first scan created — never
+     * minting a duplicate.
+     */
+    public function testThePlaceholderArtistIsReusedAcrossScans(): void
+    {
+        $dir = $this->tempDir();
+        $this->touchFile($dir, '01-again.mp3');
+
+        $db = new MusicSchemaConnection();
+        $tagger = static fn (string $path): array => [
+            'artist' => null,
+            'album' => 'Repeated Sessions',
+            'title' => basename($path, '.mp3'),
+            'track_number' => 1,
+            'disc_number' => 1,
+            'duration_secs' => 120,
+            'year' => null,
+            'genre' => null,
+        ];
+
+        $first = $this->taggedScanner($db, $tagger, new LogWriteFailureLogger());
+        $firstResult = $first->scanDirectory($dir, null, 'lib-s331');
+        $this->assertSame(1, $firstResult->added);
+        $placeholderId = $db->artistRow(MusicLibraryScanner::PLACEHOLDER_ARTIST_NAME, true)['id'] ?? null;
+        $this->assertNotNull($placeholderId);
+
+        $second = $this->taggedScanner($db, $tagger, new LogWriteFailureLogger());
+        $second->scanDirectory($dir, null, 'lib-s331');
+
+        $this->assertSame(
+            $placeholderId,
+            $db->artistRow(MusicLibraryScanner::PLACEHOLDER_ARTIST_NAME, true)['id'] ?? null,
+            'the second scan reuses the same placeholder row by id',
+        );
+        $this->assertSame(
+            1,
+            $db->countStatements('INSERT INTO music_artists'),
+            'the placeholder row is inserted exactly once across two scans',
+        );
+    }
+
+    /**
+     * S331 — when the placeholder artist row itself cannot be written, the album's
+     * files are charged to `failed` and the `placeholder_artist_files` tally stays
+     * at 0 — never to both counters (review r2 LOW-1 / INFO).
+     *
+     * The counter means "files whose album was actually ingested under the
+     * placeholder"; a whole-album loss is a failure, not an ingestion.
+     */
+    public function testAPlaceholderArtistWriteFailureIsChargedToFailedNotToThePlaceholderTally(): void
+    {
+        $dir = $this->tempDir();
+        $this->touchFile($dir, '01-lost.mp3');
+
+        $db = new MusicSchemaConnection();
+        // The placeholder artist INSERT is the only music_artists insert an
+        // untagged one-file scan issues. Model the client's "wrote nothing" answer
+        // (INSERT → null) so ensurePlaceholderArtist() returns null and flushAlbum()
+        // charges the whole album to `failed` — the branch this test pins.
+        $db->returnNullFor('INSERT INTO music_artists');
+
+        $logger = new LogWriteFailureLogger();
+        $scanner = $this->taggedScanner(
+            $db,
+            static fn (string $path): array => [
+                'artist' => null,
+                'album' => 'Lost Sessions',
+                'title' => basename($path, '.mp3'),
+                'track_number' => 1,
+                'disc_number' => 1,
+                'duration_secs' => 120,
+                'year' => null,
+                'genre' => null,
+            ],
+            $logger,
+        );
+
+        $result = $scanner->scanDirectory($dir, null, 'lib-s331');
+
+        $this->assertSame(1, $result->failed, 'the file was lost with its placeholder artist');
         $this->assertSame(0, $result->added);
-        $this->assertSame([], $mediaItemTypes, 'No media_items should be written for an unknown-artist album');
+        $this->assertSame(1, $logger->countMessages('Failed to upsert placeholder artist'));
+
+        // The summary is the one place the tally is observable; assert its value.
+        $summaryContext = null;
+        foreach ($logger->contexts as $context) {
+            if (($context['path'] ?? null) === $dir && array_key_exists('placeholder_artist_files', $context)) {
+                $summaryContext = $context;
+            }
+        }
+        $this->assertNotNull($summaryContext, 'the completion summary was logged with context');
+        $this->assertSame(0, $summaryContext['placeholder_artist_files'] ?? -1, 'a lost album is not an ingestion');
+        $this->assertSame(1, $summaryContext['failed'] ?? -1, 'the summary reflects the loss');
     }
 
     public function testTrackTitleFallsBackToFilenameWhenTitleTagMissing(): void
@@ -464,7 +700,11 @@ final class MusicLibraryScannerTest extends TestCase
 
                 if (str_starts_with($t, 'SELECT')) {
                     if (str_contains($t, 'FROM music_artists WHERE name')) {
-                        $name = strtolower((string) ($p[0] ?? ''));
+                        // S331: `AND is_placeholder = ?` discriminates the
+                        // structural placeholder (#1) from a real artist of the
+                        // same display name (#0) — mirror migration 102.
+                        $suffix = str_contains($t, 'is_placeholder = 1') ? '#1' : '';
+                        $name = strtolower((string) ($p[0] ?? '')) . $suffix;
                         return isset($artists[$name]) ? [$artists[$name]] : [];
                     }
                     if (str_contains($t, 'FROM music_albums WHERE artist_id')) {
@@ -515,7 +755,8 @@ final class MusicLibraryScannerTest extends TestCase
                 }
                 if (str_starts_with($t, 'INSERT INTO music_artists')) {
                     $autoInt++;
-                    $artists[strtolower((string) ($p[0] ?? ''))] =
+                    $suffix = ($p[3] ?? 0) == 1 ? '#1' : '';
+                    $artists[strtolower((string) ($p[0] ?? '')) . $suffix] =
                         ['id' => $autoInt, 'media_item_id' => $p[2] ?? null];
                     return (string) $autoInt;
                 }
@@ -1807,7 +2048,7 @@ final class MusicLibraryScannerTest extends TestCase
         // A schema-aware double, not a bare Connection mock: since review r2 F1 an INSERT
         // that reports writing nothing is correctly treated as a LOST file, so a mock whose
         // query() returns null would make this fixture take the failure path and close with
-        // the "…with skipped files" summary. This test is about the logger, so the scan
+        // the "…with failed files" summary. This test is about the logger, so the scan
         // itself must succeed.
         $scanner = new TaggedScanner(
             new MusicSchemaConnection(),
@@ -1837,7 +2078,7 @@ final class MusicLibraryScannerTest extends TestCase
             'Music directory scan complete',
             $messages,
             'the CLEAN summary, exactly: this fixture indexes its one file successfully, so the lossy '
-            . '"…with skipped files" variant here would mean the scan silently failed',
+            . '"…with failed files" variant here would mean the scan silently failed',
         );
     }
 
@@ -1924,7 +2165,7 @@ final class MusicLibraryScannerTest extends TestCase
      * ```
      *
      * `items_failed` is migration 095's entire reason to exist and the step's acceptance
-     * criterion is that a scan which skipped files reports a non-zero count somewhere an
+     * criterion is that a scan which LOST files reports a non-zero count somewhere an
      * operator can see. For this shape the count was zero everywhere. This test asserts
      * the two scenarios and then asserts they DIFFER — the discrimination is the point,
      * so a fix that merely made both louder would not satisfy it.
@@ -1953,7 +2194,7 @@ final class MusicLibraryScannerTest extends TestCase
         );
         $this->assertSame(
             1,
-            $lossyLog->countAtLevel('error', 'Music directory scan complete with skipped files'),
+            $lossyLog->countAtLevel('error', 'Music directory scan complete with failed files'),
             'the summary must say the scan lost files, at ERROR so it reaches .logs/error.log',
         );
 
@@ -2043,7 +2284,7 @@ final class MusicLibraryScannerTest extends TestCase
             'exactly one lost file, named at ERROR. createMediaItem()\'s own line has no path in it, '
             . 'so this is the only line that tells an operator WHICH file was dropped',
         );
-        $this->assertSame(1, $logger->countAtLevel('error', 'Music directory scan complete with skipped files'));
+        $this->assertSame(1, $logger->countAtLevel('error', 'Music directory scan complete with failed files'));
     }
 
     /**
@@ -2092,7 +2333,7 @@ final class MusicLibraryScannerTest extends TestCase
         // pinned by testEveryPathThatLosesFilesLogsAtErrorLevel().
         $this->assertSame(
             1,
-            $logger->countMessages('Music directory scan complete with skipped files'),
+            $logger->countMessages('Music directory scan complete with failed files'),
             'a scan that lost files must not log the same clean "scan complete" line as one that did not',
         );
         $this->assertSame(0, $logger->countMessages('Music directory scan complete', true));
@@ -2151,20 +2392,21 @@ final class MusicLibraryScannerTest extends TestCase
         $this->assertSame($total, $clean->added);
         $this->assertSame(0, $clean->failed, 'nothing failed, so the counter must be 0');
         $this->assertSame(1, $cleanLogger->countMessages('Music directory scan complete', true));
-        $this->assertSame(0, $cleanLogger->countMessages('Music directory scan complete with skipped files'));
+        $this->assertSame(0, $cleanLogger->countMessages('Music directory scan complete with failed files'));
     }
 
     /**
-     * Files dropped by the "unknown artist" rule are NOT failures.
+     * Files of albums with no artist tag are INGESTED under the structural
+     * placeholder artist (S331) — never dropped, so they are NOT failures either.
      *
-     * That rule is a documented scan POLICY (a whole album group is discarded when its
-     * artist tag is missing) with its own follow-up step, and a rescan drops the same
-     * files again. Folding it into `items_failed` would make every untagged library
-     * look like it is erroring. It is still reported — as `skipped_no_artist` in the
-     * completion line, once per scan rather than once per album, so an untagged
+     * The old "unknown artist" POLICY discarded the whole album group; this is
+     * the re-purposed counter that used to report it. Folding these files into
+     * `items_failed` would still be wrong: nothing failed, the files were
+     * indexed. They are reported once per scan as `placeholder_artist_files` in
+     * the completion line (S96(f) shape), not once per album, so an untagged
      * library costs one log line and not thousands.
      */
-    public function testUnknownArtistFilesAreReportedAsSkippedNotFailed(): void
+    public function testUnknownArtistFilesAreIngestedNotFailed(): void
     {
         $dir = $this->tempDir();
         $this->touchFile($dir, 'mystery-a.mp3');
@@ -2177,26 +2419,27 @@ final class MusicLibraryScannerTest extends TestCase
 
         $result = $scanner->scanDirectory($dir, null, 'lib-s96');
 
-        $this->assertSame(0, $result->added);
-        $this->assertSame(0, $result->failed, 'a policy skip is not an error and must not alarm items_failed');
+        $this->assertSame(2, $result->added, 'both untagged files are ingested, not discarded');
+        $this->assertSame(
+            0,
+            $result->failed,
+            'an ingested untagged album is not an error and must not alarm items_failed',
+        );
         $this->assertSame(
             1,
-            $logger->countMessages('Music directory scan complete with skipped files'),
-            'but the operator must still be told: two files were read and none indexed',
+            $logger->countMessages('Music directory scan complete', true),
+            'the scan is a normal INFO completion, not a "failed files" error',
         );
+        $this->assertSame(0, $logger->countMessages('Music directory scan complete with failed files'));
         // Two, not one: with no album tag either, the album title falls back to the
         // FILENAME, so each untagged file is its own album group. That is also why the
         // per-album line stays at `debug` and the operator-facing tally is the
-        // once-per-scan `skipped_no_artist` in the summary above.
-        $this->assertSame(2, $logger->countMessages('Skipping album with unknown artist'));
-        // MED-2: a POLICY skip is a WARNING, never an error — nothing malfunctioned and
-        // a rescan discards the same files again. Routing an untagged library into
-        // `.logs/error.log` would train the operator to ignore that file.
-        $this->assertSame(
-            1,
-            $logger->countAtLevel('warning', 'Music directory scan complete with skipped files'),
-            'a policy-only skip must summarise at WARNING',
-        );
+        // once-per-scan `placeholder_artist_files` in the summary above.
+        $this->assertSame(2, $logger->countMessages('Ingesting album under placeholder artist'));
+        // S331: the placeholder artist row exists with the structural flag.
+        $placeholder = $db->artistRow(MusicLibraryScanner::PLACEHOLDER_ARTIST_NAME, true);
+        $this->assertNotNull($placeholder, 'the placeholder artist row must exist');
+        $this->assertSame(1, $placeholder['is_placeholder']);
         $this->assertSame([], array_filter(
             $logger->records,
             static fn (array $r): bool => $r['level'] === 'error',
@@ -2237,7 +2480,7 @@ final class MusicLibraryScannerTest extends TestCase
         $this->assertSame(0, $loggerA->countAtLevel('warning', 'Failed to upsert artist'));
         $this->assertSame(
             1,
-            $loggerA->countAtLevel('error', 'Music directory scan complete with skipped files'),
+            $loggerA->countAtLevel('error', 'Music directory scan complete with failed files'),
             'and so must the summary line, which is the one an operator greps first',
         );
 
@@ -2262,7 +2505,7 @@ final class MusicLibraryScannerTest extends TestCase
 
         $this->assertSame(1, $resultC->failed);
         $this->assertSame(1, $loggerC->countAtLevel('error', 'Skipping track after error during indexing'));
-        $this->assertSame(1, $loggerC->countAtLevel('error', 'Music directory scan complete with skipped files'));
+        $this->assertSame(1, $loggerC->countAtLevel('error', 'Music directory scan complete with failed files'));
 
         // (4) The outer catch (the artist INSERT throws rather than returning false).
         [$dirD, $taggerD] = $this->oneAlbumFixture(3);
@@ -3754,7 +3997,15 @@ final class MusicSchemaConnection extends Connection
      */
     public array $mediaItems = [];
 
-    /** @var array<string, array{id:int, name:string, media_item_id:?string}> `music_artists` by lower-case name. */
+    /**
+     * @var array<string, array{id:int, name:string, media_item_id:?string, is_placeholder:int}>
+     *     `music_artists` keyed by lower-case name, suffixed with `#1` for the
+     *     structural placeholder row (S331). The suffix models migration 102's
+     *     composite `uk_name (name, is_placeholder)`: a REAL artist named
+     *     `[Unknown Artist]` (`#0`) and the placeholder (`#1`) coexist, exactly as
+     *     they do in MySQL. `#0` rows keep the bare lower-case key so the many
+     *     existing tests that read `$db->artists['poisoned artist']` keep working.
+     */
     public array $artists = [];
 
     /**
@@ -3975,9 +4226,38 @@ final class MusicSchemaConnection extends Connection
             'id' => $this->autoInc,
             'name' => $name,
             'media_item_id' => null,
+            'is_placeholder' => 0,
         ];
 
         return $this->autoInc;
+    }
+
+    /**
+     * The structural placeholder artist row (S331), keyed like MySQL's
+     * composite-unique `('[Unknown Artist]', 1)` — never the bare lower-case key,
+     * so a real artist of the same display name cannot be returned by accident.
+     */
+    public function plantPlaceholderArtist(): int
+    {
+        $this->autoInc++;
+        $this->artists[strtolower(MusicLibraryScanner::PLACEHOLDER_ARTIST_NAME) . '#1'] = [
+            'id' => $this->autoInc,
+            'name' => MusicLibraryScanner::PLACEHOLDER_ARTIST_NAME,
+            'media_item_id' => null,
+            'is_placeholder' => 1,
+        ];
+
+        return $this->autoInc;
+    }
+
+    /**
+     * @return array{id:int, name:string, media_item_id:?string, is_placeholder:int}|null
+     */
+    public function artistRow(string $name, bool $placeholder = false): ?array
+    {
+        $key = strtolower($name) . ($placeholder ? '#1' : '');
+
+        return $this->artists[$key] ?? null;
     }
 
     /** The album twin of {@see self::plantArtistWithNullMediaItem()}. */
@@ -4409,8 +4689,16 @@ final class MusicSchemaConnection extends Connection
             return [];
         }
 
+        // S331: the natural-key lookup now carries `AND is_placeholder = ?`
+        // (0 = real artist, 1 = structural placeholder). The key is derived from
+        // the FILTER, not from a bare `strtolower(name)`, so a real
+        // `[Unknown Artist]` (#0) and the placeholder (#1) resolve to different
+        // rows exactly as they do under migration 102's composite unique key. A
+        // statement WITHOUT the filter (pre-S331 callers) still resolves the #0
+        // row, which is the default.
         if (str_contains($sql, 'FROM music_artists WHERE name')) {
-            $key = strtolower((string) ($p[0] ?? ''));
+            $placeholder = str_contains($sql, 'is_placeholder = 1');
+            $key = strtolower((string) ($p[0] ?? '')) . ($placeholder ? '#1' : '');
 
             return isset($this->artists[$key])
                 ? [['id' => $this->artists[$key]['id'], 'media_item_id' => $this->artists[$key]['media_item_id']]]
@@ -4497,10 +4785,17 @@ final class MusicSchemaConnection extends Connection
         if (str_starts_with($sql, 'INSERT INTO music_artists')) {
             $this->autoInc++;
             $name = (string) ($p[0] ?? '');
-            $this->artists[strtolower($name)] = [
+            // S331: the placeholder INSERT binds a literal `1` as the fourth
+            // parameter (`is_placeholder`); the ordinary upsert binds three and
+            // the column defaults to 0. The `#1` suffix keys the placeholder
+            // apart from a real artist of the same display name, mirroring
+            // migration 102's composite uk_name.
+            $placeholder = ($p[3] ?? 0) == 1 ? '#1' : '';
+            $this->artists[strtolower($name) . $placeholder] = [
                 'id' => $this->autoInc,
                 'name' => $name,
                 'media_item_id' => is_string($p[2] ?? null) ? $p[2] : null,
+                'is_placeholder' => $placeholder === '#1' ? 1 : 0,
             ];
 
             return (string) $this->autoInc;
@@ -4657,6 +4952,13 @@ final class LogWriteFailureLogger extends StructuredLogger
      */
     public array $records = [];
 
+    /**
+     * @var list<array<string, mixed>> Every record's CONTEXT, in order (S331 review
+     *      r2 INFO: the summary context — e.g. `placeholder_artist_files` — is part
+     *      of the scan contract and was previously unassertable).
+     */
+    public array $contexts = [];
+
     /** Substring whose log write throws; '' never throws. */
     public string $throwOn = '';
 
@@ -4671,11 +4973,10 @@ final class LogWriteFailureLogger extends StructuredLogger
      */
     public function log($level, string|\Stringable $message, array $context = []): void
     {
-        unset($context);
-
         $text = (string) $message;
         $this->messages[] = $text;
         $this->records[] = ['level' => self::levelName($level), 'message' => $text];
+        $this->contexts[] = $context;
 
         if ($this->throwOn !== '' && str_contains($text, $this->throwOn)) {
             throw new \RuntimeException('LOG WRITE FAILED: ' . $this->throwOn);

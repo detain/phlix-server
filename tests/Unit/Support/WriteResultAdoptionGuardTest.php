@@ -67,12 +67,13 @@ use RecursiveIteratorIterator;
  * Every other shape — the result discarded outright, or assigned and never
  * read — is not a consumer and is out of scope (a genuine error throws; the
  * client has no silent failure return).
- *
+*
  * The denominator the guard prints is the exact count it examined:
- * **94 `INSERT`/`REPLACE` `->query()` call tokens** (86 with a literal first
+ * **95 `INSERT`/`REPLACE` `->query()` call tokens** (87 with a literal first
  * argument, 8 resolved through a `$sql` variable — including the try/catch
- * retry arms of the two ScanJobRepository sites), of which **14 consume the
- * result** (12 logical sites: the retry arms share one consumption). The plan
+ * retry arms of the two ScanJobRepository sites), of which **15 consume the
+ * result** (13 logical sites: the retry arms share one consumption; S331's
+ * `ensurePlaceholderArtist()` adds the fifteenth). The plan
  * recorded 86/11; this scan is what a faithful token walk of the tree actually
  * finds, and it is pinned below so a change to the landscape reddens here
  * rather than silently drifting the inventory.
@@ -155,22 +156,24 @@ final class WriteResultAdoptionGuardTest extends TestCase
      * `0ad7a080` + S342: 86 literal-first-argument sites + 8 resolved through
      * `$sql` (`Admin/SettingsRepository.php:194`, `Auth/UserRepository.php:689`,
      * `Media/Metadata/Imdb/ImdbDatasetImporter.php:573,616`, and the four
-     * ScanJobRepository try/catch retry arms) = 94. The plan recorded 86; the
+     * ScanJobRepository try/catch retry arms) = 94. S331 adds the placeholder
+     * artist INSERT in `MusicLibraryScanner::ensurePlaceholderArtist()` (a
+     * literal-first-argument site) = 95. The plan recorded 86; the
      * delta is sites its script did not classify. A change to the insert
      * landscape — new or removed `->query()` INSERT/REPLACE call — updates this
      * number in the same commit; that is the point (S126's EXPECTED_ADOPTERS
      * precedent).
      */
-    private const EXPECTED_TOTAL_INSERT_CALLS = 94;
+    private const EXPECTED_TOTAL_INSERT_CALLS = 95;
 
     /**
-     * The denominator, part 2: how many of those 94 consume their result.
-     * 14 tokens = 12 logical sites (the two ScanJobRepository sites each
+     * The denominator, part 2: how many of those 95 consume their result.
+     * 15 tokens = 13 logical sites (the two ScanJobRepository sites each
      * contribute a try arm and a retry arm; both arms feed one consumption).
-     * All 14 must be consumed through `WriteResult::wroteNothing()` /
+     * All 15 must be consumed through `WriteResult::wroteNothing()` /
      * `statementWroteNothing()`.
      */
-    private const EXPECTED_CONSUMED_INSERT_RESULTS = 14;
+    private const EXPECTED_CONSUMED_INSERT_RESULTS = 15;
 
     /**
      * Helper call names whose first argument is the consumed result, plus the
@@ -240,7 +243,7 @@ final class WriteResultAdoptionGuardTest extends TestCase
 
     /**
      * The denominator is pinned so a scan that examined nothing cannot pass
-     * silently: 94 `INSERT`/`REPLACE` `->query()` call tokens, 14 of which
+     * silently: 95 `INSERT`/`REPLACE` `->query()` call tokens, 15 of which
      * consume the result.
      */
     public function testTheInsertConsumerInventoryDenominatorIsPinned(): void

@@ -168,11 +168,11 @@ final readonly class MusicAlbum
      * S121** — r8 rated it non-blocking INFO. A data set asserting today's behaviour
      * (`' '` → `' '`) is what would kill both mutants if it is ever worth pinning.
      *
-     * ⚠ **The sweep is FIVE sites, not three — one grep is a false all-clear.**
+     * ⚠ **The sweep is SIX sites, not three — one grep is a false all-clear.**
      * `grep -rn mediaItemIdFromRow src/` finds only these three DTO helpers. The
-     * same predicate is ALSO inlined twice in `MusicLibraryScanner`, inside
-     * `upsertArtist()` and `upsertAlbum()`; find those with
-     * `grep -rn "media_item_id'\] !== ''" src/`, which matches exactly those two and
+     * same predicate is ALSO inlined three times in `MusicLibraryScanner`, inside
+     * `ensurePlaceholderArtist()`, `upsertArtist()` and `upsertAlbum()`; find those with
+     * `grep -rn "media_item_id'\] !== ''" src/`, which matches exactly those three and
      * none of these three. (No line numbers on purpose — that file is being
      * rewritten.) A reader who runs only the first grep, counts three and calls the
      * sweep complete has repeated the mistake that CREATED S121: the defect was
@@ -182,15 +182,15 @@ final readonly class MusicAlbum
      * `src/Media/Music/` and reflects EVERY class declaring a `mediaItemId`
      * property, so a fourth DTO cannot land with the old coercion unnoticed.
      *
-     * 🔴 **That backstop covers 3 of the 5 sites and structurally CANNOT cover the
-     * other 2.** It only sees classes that declare a `mediaItemId` **property**; the
-     * scanner's two copies are inline **local variables**, which is precisely the
-     * shape that produced two of the five sites. ✅ **S127 closed that gap
+     * 🔴 **That backstop covers 3 of the 6 sites and structurally CANNOT cover the
+     * other 3.** It only sees classes that declare a `mediaItemId` **property**; the
+     * scanner's three copies are inline **local variables**, which is precisely the
+     * shape that produced three of the six sites. ✅ **S127 closed that gap
      * (2026-08-05) with a second, differently-shaped guard:**
      * {@see \Phlix\Tests\Unit\Media\Music\MusicScannerInlineMediaItemIdCoercionTest}
      * reads `MusicLibraryScanner` through `PhpToken`, discards comments and
-     * whitespace, treats the row variable as a wildcard, and pins both inline sites
-     * with a failure message that names the METHOD and states the fix. **So all five
+     * whitespace, treats the row variable as a wildcard, and pins all three inline sites
+     * with a failure message that names the METHOD and states the fix. **So all six
      * sites are now guarded** — by two mechanisms, because one code shape is a
      * property and the other is a local. Neither guard covers the other's sites; read
      * the pair, not either alone.

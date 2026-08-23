@@ -304,10 +304,23 @@ final class AdminMaintenanceRoutesUiMirrorGuardTest extends TestCase
         $routes = $router->getRoutes();
 
         $out = [];
+        $unmatched = [];
         foreach ($routes as $method => $entries) {
             foreach ($entries as $entry) {
                 $path = $entry['path'] ?? null;
-                if (!is_string($path) || preg_match(self::ADMIN_MAINTENANCE_PATH_PATTERN, $path) !== 1) {
+                if (!is_string($path) || !str_starts_with($path, '/api/v1/admin/maintenance/')) {
+                    continue;
+                }
+
+                // A maintenance-prefixed path that does not match the pattern is
+                // NOT silently skipped: a future deeper-nested route (e.g.
+                // `/api/v1/admin/maintenance/foo/bar`) would otherwise sit in
+                // neither `actual` set and never red the mirror — a hole in the
+                // "fails if either side adds one" promise. Collected here and
+                // asserted empty below, so it surfaces as a loud failure naming
+                // the path instead.
+                if (preg_match(self::ADMIN_MAINTENANCE_PATH_PATTERN, $path) !== 1) {
+                    $unmatched[] = $path;
                     continue;
                 }
 
@@ -335,6 +348,17 @@ final class AdminMaintenanceRoutesUiMirrorGuardTest extends TestCase
                 ];
             }
         }
+
+        $this->assertSame(
+            [],
+            $unmatched,
+            'ANTI-VACUITY: an admin-maintenance route path does not match '
+            . 'ADMIN_MAINTENANCE_PATH_PATTERN (' . implode(', ', $unmatched) . '). A route under '
+            . '/api/v1/admin/maintenance/ that this extractor cannot see would be absent from '
+            . 'both `actual` sets and the mirror would never red. Either extend the pattern to '
+            . 'cover the new shape or name it in the phlix-ui mirror lists — do not let it pass '
+            . 'silently.'
+        );
 
         return $out;
     }

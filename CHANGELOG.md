@@ -312,8 +312,6 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   covers only the library-maintenance surface (`/api/v1/libraries/{id}/<suffix>` →
   `LibraryController`); this one covers `/api/v1/admin/maintenance/*` → `MaintenanceController`.
 
-### Added
-
 - **The scan-job type allowlist is pinned to the migration ENUM, and the failure message names
   phlix-ui's mirror (S341).** New `ScanJobsEnumMigrationTest` parses migration
   `101_library_scan_jobs_media_assets_type.sql` — the real file, through

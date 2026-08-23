@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Media\Streaming\Trickplay;
 
+use Phlix\Media\Transcoding\FfmpegRunner;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
 
@@ -141,7 +142,7 @@ class TrickplayController
      */
     public function getSpriteUrl(string $jobId): string
     {
-        return $this->baseUrl . '/trickplay/' . $jobId . '/sprite.jpg';
+        return $this->baseUrl . '/trickplay/' . $jobId . '/' . FfmpegRunner::SPRITE_FILENAME;
     }
 
     /**
@@ -153,7 +154,7 @@ class TrickplayController
      */
     public function getTimelineUrl(string $jobId): string
     {
-        return $this->baseUrl . '/trickplay/' . $jobId . '/timeline.json';
+        return $this->baseUrl . '/trickplay/' . $jobId . '/' . FfmpegRunner::TIMELINE_FILENAME;
     }
 
     /**
@@ -201,7 +202,7 @@ class TrickplayController
             return null;
         }
         $jobDir = $this->trickplayDir . '/trickplay/' . $jobId;
-        $spritePath = $jobDir . '/sprite.jpg';
+        $spritePath = $jobDir . '/' . FfmpegRunner::SPRITE_FILENAME;
 
         // Defense-in-depth: resolve real path and verify it's within trickplay directory
         $realPath = realpath($spritePath);
@@ -239,7 +240,7 @@ class TrickplayController
         if (!$this->isValidJobId($jobId)) {
             return null;
         }
-        $timelinePath = $this->trickplayDir . '/trickplay/' . $jobId . '/timeline.json';
+        $timelinePath = $this->trickplayDir . '/trickplay/' . $jobId . '/' . FfmpegRunner::TIMELINE_FILENAME;
 
         // Defense-in-depth: resolve real path and verify it's within trickplay directory
         $realPath = realpath($timelinePath);
@@ -332,7 +333,7 @@ class TrickplayController
         $jobDir = $this->trickplayDir . '/trickplay/' . $jobId;
         if (file_exists($jobDir . '/sprite.png')) {
             $contentType = 'image/png';
-        } elseif (!file_exists($jobDir . '/sprite.jpg')) {
+        } elseif (!file_exists($jobDir . '/' . FfmpegRunner::SPRITE_FILENAME)) {
             return (new Response())
                 ->status(404)
                 ->json([

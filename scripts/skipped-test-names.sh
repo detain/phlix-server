@@ -207,7 +207,7 @@
 #      a closure of the class. The DURABLE fix is per-RUN segmentation: split the input at
 #      the terminating summary lines and evaluate the contract inside each segment. That
 #      is deliberately NOT done here: it is FILED, with the measured inputs, as
-#      `S346-followup-perrun-segmentation.md` in the build program's step directory
+#      `S352-followup-perrun-segmentation.md` in the build program's step directory
 #      (outside this repo; its S-number is pending allocation), because a deferral left in
 #      a worklog is not a contract -- that is the S126 lesson S345 exists to enforce.
 #      Until it is: a non-zero exit tells you the input as a whole must not be compared;

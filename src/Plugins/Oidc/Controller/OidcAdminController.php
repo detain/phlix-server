@@ -85,6 +85,107 @@ final class OidcAdminController
     }
 
     /**
+     * The schema's `properties` map — the single enumeration of settable keys,
+     * shared by {@see self::getSchema()} (the API surface) and
+     * {@see self::saveSettings()} (the writer). S337 removed the hand-enumerated
+     * save literal; a key can only be saved if it exists here.
+     *
+     * @return array<string, array<string, mixed>>
+     */
+    private static function settingsSchemaProperties(): array
+    {
+        return [
+            'provider_url' => [
+                'type' => 'string',
+                'description' => 'The base URL of your OIDC provider (e.g., https://your-provider.com)',
+                'format' => 'uri',
+            ],
+            'client_id' => [
+                'type' => 'string',
+                'description' => 'The client ID from your OIDC provider',
+            ],
+            'client_secret' => [
+                'type' => 'string',
+                'description' => 'The client secret from your OIDC provider (leave empty to keep existing)',
+                'writeOnly' => true,
+            ],
+            'scopes' => [
+                'type' => 'string',
+                'description' => 'OAuth scopes to request',
+                'default' => self::DEFAULT_SCOPES,
+            ],
+            'redirect_uri' => [
+                'type' => 'string',
+                'description' => 'Absolute callback URL registered with the IdP '
+                    . '(e.g. https://phlix.example/auth/oidc/callback). '
+                    . 'Leave empty to derive it from the request host.',
+                'format' => 'uri',
+            ],
+        ];
+    }
+
+    /**
+     * Build the full replacement settings document from the schema's property
+     * list (S337). This is the single source of truth for what a save writes:
+     * every non-writeOnly property is normalised from the request body or the
+     * stored map (the absent-key contract), and the writeOnly secret follows the
+     * documented blank-keeps-existing rule.
+     *
+     * @param array<string, mixed> $body     The request body.
+     * @param array<string, mixed> $existing The currently stored map.
+     * @return array<string, mixed>
+     */
+    private static function buildSettingsDocument(array $body, array $existing): array
+    {
+        $settings = [];
+
+        foreach (self::settingsSchemaProperties() as $key => $definition) {
+            if (($definition['writeOnly'] ?? false) === true) {
+                // Write-only secret: a non-blank body value replaces it, a blank
+                // body value keeps the stored secret, and with neither the key is
+                // simply absent (a first-ever save with no secret stores none).
+                $value = is_string($body[$key] ?? null) ? $body[$key] : '';
+                if ($value !== '') {
+                    $settings[$key] = $value;
+                } elseif (isset($existing[$key])) {
+                    $settings[$key] = $existing[$key];
+                }
+                continue;
+            }
+
+            $raw = array_key_exists($key, $body) ? $body[$key] : ($existing[$key] ?? null);
+            $settings[$key] = self::normalizeSavedValue($key, $raw);
+        }
+
+        return $settings;
+    }
+
+    /**
+     * Normalise one non-writeOnly schema property into its stored value.
+     *
+     * Fails fast when a schema property has no normalizer here — silently
+     * dropping a key on every save is exactly the defect S337 removes, so a
+     * missing case must be loud, not quiet.
+     *
+     * @return string
+     */
+    private static function normalizeSavedValue(string $key, mixed $value): string
+    {
+        return match ($key) {
+            'provider_url' => rtrim(is_string($value) ? $value : '', '/'),
+            'client_id' => is_string($value) ? $value : '',
+            'scopes' => self::defaultedScopes($value),
+            // The body value is already trimmed in saveSettings(); a PRESERVED
+            // stored value must come through verbatim (the absent-key contract).
+            'redirect_uri' => is_string($value) ? $value : '',
+            default => throw new \LogicException(
+                "OIDC saveSettings has no normalizer for schema property '{$key}' — "
+                . 'add one to OidcAdminController::normalizeSavedValue().',
+            ),
+        };
+    }
+
+    /**
      * Get the current OIDC settings.
      *
      * @param Request $request
@@ -129,7 +230,6 @@ final class OidcAdminController
 
         $providerUrl = is_string($body['provider_url'] ?? null) ? $body['provider_url'] : '';
         $clientId = is_string($body['client_id'] ?? null) ? $body['client_id'] : '';
-        $clientSecret = is_string($body['client_secret'] ?? null) ? $body['client_secret'] : '';
 
         if ($providerUrl === '') {
             return (new Response())->status(400)->json([
@@ -154,49 +254,36 @@ final class OidcAdminController
 
         $existingSettings = $this->plugin->getSettings();
 
-        // Review r2 NEW-3 — same wholesale-replace trap as `redirect_uri` below: an
-        // ABSENT `scopes` key must PRESERVE the operator's custom scopes rather than
-        // reset them to the default (an older/partial client would otherwise wipe
-        // them). Explicitly empty (or non-string) = reset to the default.
-        $scopes = self::defaultedScopes(
-            array_key_exists('scopes', $body) ? $body['scopes'] : ($existingSettings['scopes'] ?? null),
-        );
+        // S48 review r1 Finding 1 — the body's `redirect_uri` is trimmed HERE, at
+        // the input boundary, so the schema normalizer can preserve a STORED
+        // redirect_uri verbatim on the absent-key path (byte-for-byte the
+        // pre-S337 behaviour): only what is POSTED is normalised.
+        if (array_key_exists('redirect_uri', $body) && is_string($body['redirect_uri'])) {
+            $body['redirect_uri'] = trim($body['redirect_uri']);
+        }
+
+        // S337 — the replacement document is DERIVED from the schema's `properties`
+        // list ({@see self::settingsSchemaProperties()}), not a hand-enumerated
+        // literal. A property added to the schema without a normalizer in
+        // {@see self::normalizeSavedValue()} throws loudly instead of being
+        // silently dropped on every save; one added WITH a normalizer survives the
+        // round-trip automatically. `client_secret` is the schema's writeOnly
+        // property: a blank value keeps the stored secret (class docblock), and an
+        // absent `scopes`/`redirect_uri` PRESERVES the stored value rather than
+        // resetting it (review r2 NEW-3 / S48 review r1 Finding 1).
+        $settings = self::buildSettingsDocument($body, $existingSettings);
 
         // S48 review r1 Finding 1 — optional operator-configured ABSOLUTE
         // redirect_uri. It must exactly match a redirect URI registered with the
         // IdP, so a relative path is refused outright rather than silently
         // producing a `redirect_uri_mismatch` at the authorize page.
-        //
-        // A save is a wholesale replace, so an ABSENT key PRESERVES the stored
-        // value (a client that predates this field must not wipe it); an
-        // explicitly EMPTY value clears it back to host-derivation.
-        $redirectUri = is_string($existingSettings['redirect_uri'] ?? null)
-            ? $existingSettings['redirect_uri']
-            : '';
-        if (array_key_exists('redirect_uri', $body)) {
-            $redirectUri = is_string($body['redirect_uri']) ? trim($body['redirect_uri']) : '';
-        }
+        $redirectUri = is_string($settings['redirect_uri'] ?? null) ? $settings['redirect_uri'] : '';
         if ($redirectUri !== '' && !CallbackUrl::isAbsolute($redirectUri)) {
             return (new Response())->status(400)->json([
                 'error' => 'invalid_redirect_uri',
                 'message' => 'redirect_uri must be an absolute http(s) URL, '
                     . 'e.g. https://phlix.example/auth/oidc/callback',
             ]);
-        }
-
-        $settings = [
-            'provider_url' => rtrim($providerUrl, '/'),
-            'client_id' => $clientId,
-            'scopes' => $scopes,
-            'redirect_uri' => $redirectUri,
-        ];
-
-        if ($clientSecret !== '') {
-            $settings['client_secret'] = $clientSecret;
-        }
-
-        if (isset($existingSettings['client_secret']) && $clientSecret === '') {
-            $settings['client_secret'] = $existingSettings['client_secret'];
         }
 
         $this->plugin->saveSettings($settings);
@@ -221,34 +308,7 @@ final class OidcAdminController
             'title' => 'OIDC Provider Configuration',
             'description' => 'Configuration for the OIDC/OAuth2 authentication provider',
             'type' => 'object',
-            'properties' => [
-                'provider_url' => [
-                    'type' => 'string',
-                    'description' => 'The base URL of your OIDC provider (e.g., https://your-provider.com)',
-                    'format' => 'uri',
-                ],
-                'client_id' => [
-                    'type' => 'string',
-                    'description' => 'The client ID from your OIDC provider',
-                ],
-                'client_secret' => [
-                    'type' => 'string',
-                    'description' => 'The client secret from your OIDC provider (leave empty to keep existing)',
-                    'writeOnly' => true,
-                ],
-                'scopes' => [
-                    'type' => 'string',
-                    'description' => 'OAuth scopes to request',
-                    'default' => self::DEFAULT_SCOPES,
-                ],
-                'redirect_uri' => [
-                    'type' => 'string',
-                    'description' => 'Absolute callback URL registered with the IdP '
-                        . '(e.g. https://phlix.example/auth/oidc/callback). '
-                        . 'Leave empty to derive it from the request host.',
-                    'format' => 'uri',
-                ],
-            ],
+            'properties' => self::settingsSchemaProperties(),
             'required' => ['provider_url', 'client_id'],
         ];
 

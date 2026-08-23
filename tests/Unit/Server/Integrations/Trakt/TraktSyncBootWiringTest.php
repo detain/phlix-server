@@ -72,6 +72,18 @@ final class TraktSyncBootWiringTest extends TestCase
             $code,
             'the arm gate must keep requiring a positive interval — an interval <= 0 must not sync',
         );
+
+        // The full arm gate must be preserved, so a disabled plugin / master
+        // switch / sync toggle still arms NOTHING (S345 lesson 1: every branch).
+        foreach (
+            ['$installedTrakt->enabled', '$traktMasterEnabled', '$traktSettings->syncEnabled', '$traktIntervalMinutes > 0'] as $clause
+        ) {
+            self::assertStringContainsString(
+                $clause,
+                $code,
+                "the arm gate must keep requiring {$clause} — a disabled plugin must not sync",
+            );
+        }
     }
 
     /** start.php source with all comments removed. */

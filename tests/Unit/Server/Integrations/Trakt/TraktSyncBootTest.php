@@ -134,7 +134,7 @@ final class TraktSyncBootTest extends TestCase
     {
         $repo = $this->repository();
         $runs = 0;
-        $now = 1_700_000_000;
+        $now = time();
 
         $ran = TraktSyncBoot::runIfDue(
             $repo,
@@ -150,17 +150,23 @@ final class TraktSyncBootTest extends TestCase
 
         $row = $repo->getOverride(TraktSyncBoot::STATE_LAST_RUN_AT);
         self::assertIsArray($row, 'The last-run must be persisted after a run.');
-        self::assertSame(
+        self::assertIsInt($row['value']);
+        self::assertGreaterThanOrEqual(
             $now,
             $row['value'],
-            'The persisted last-run must be the timestamp the decision was made on.',
+            'The persisted last-run must be the completion time, no earlier than the decision time.',
+        );
+        self::assertLessThan(
+            $now + 60,
+            $row['value'],
+            'The persisted last-run must be stamped within a minute of the decision.',
         );
     }
 
     public function testRunIfDueSkipsWhenNotDueAndWritesNothing(): void
     {
         $repo = $this->repository();
-        $now = 1_700_000_000;
+        $now = time();
         $repo->set(TraktSyncBoot::STATE_LAST_RUN_AT, $now - 60, 'int');
 
         $runs = 0;
@@ -189,7 +195,7 @@ final class TraktSyncBootTest extends TestCase
     public function testPersistedLastRunSurvivesARestart(): void
     {
         $store = new InMemoryServerSettingsConnection();
-        $now = 1_700_000_000;
+        $now = time();
 
         // "Boot 1": a fresh store, the pull runs and persists.
         TraktSyncBoot::runIfDue(
@@ -206,7 +212,17 @@ final class TraktSyncBootTest extends TestCase
         $row = $afterRestart->getOverride(TraktSyncBoot::STATE_LAST_RUN_AT);
 
         self::assertIsArray($row, 'The last-run must still be readable after a restart.');
-        self::assertSame($now, $row['value'], 'The last-run must be read back unchanged.');
+        self::assertIsInt($row['value']);
+        self::assertGreaterThanOrEqual(
+            $now,
+            $row['value'],
+            'The last-run must be read back as the completion time, no earlier than the decision.',
+        );
+        self::assertLessThan(
+            $now + 60,
+            $row['value'],
+            'The last-run must be read back within a minute of the decision.',
+        );
     }
 
     /**

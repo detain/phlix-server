@@ -28,21 +28,21 @@ use Phlix\Admin\SettingsRepository;
  *
  * ## The shape (S308's, not the one-shot sibling's)
  *
- * Following the hub's core update check
- * ({@see \Phlix\Hub\Hub\Updates\CoreUpdateCheckWorker}), the timer in
- * `start.php` is now a SHORT SWEEP at {@see DEFAULT_SWEEP_SECONDS} (60s) and
- * this class holds the due-decision: each sweep asks {@see runIfDue()}, which
- * reads the persisted last-run, runs the pull only when the configured
- * interval has genuinely elapsed, and persists the new last-run. That keeps
- * the property the boot catch-up existed for — a bare `Timer::add(86400, …)`
- * fires its FIRST tick 86400 seconds after the process starts, so on a box
- * restarted more often than the interval it fires NEVER. A 60-second sweep
- * plus a persisted last-run makes the catch-up STRUCTURAL rather than a
- * special case: the first sweep is a minute after every boot, and it runs the
- * pull exactly when a poll was actually missed. It is also strictly better
- * than the one-shot boot-catch-up shape the server's other three timers carry:
- * that shape fetches once per PROCESS START (every ten minutes on a flapping
- * host), this one runs the pull once per INTERVAL.
+ * Following the hub's core update check — the S308 structural due-check, whose
+ * rationale this class borrows verbatim — the timer in `start.php` is now a
+ * SHORT SWEEP at {@see DEFAULT_SWEEP_SECONDS} (60s) and this class holds the
+ * due-decision: each sweep asks {@see runIfDue()}, which reads the persisted
+ * last-run, runs the pull only when the configured interval has genuinely
+ * elapsed, and persists the new last-run. That keeps the property the boot
+ * catch-up existed for — a bare `Timer::add(86400, …)` fires its FIRST tick
+ * 86400 seconds after the process starts, so on a box restarted more often
+ * than the interval it fires NEVER. A 60-second sweep plus a persisted last-run
+ * makes the catch-up STRUCTURAL rather than a special case: the first sweep is
+ * a minute after every boot, and it runs the pull exactly when a poll was
+ * actually missed. It is also strictly better than the one-shot boot-catch-up
+ * shape the server's other three timers carry: that shape fetches once per
+ * PROCESS START (every ten minutes on a flapping host), this one runs the pull
+ * once per INTERVAL.
  *
  * ## Persistence
  *
@@ -70,9 +70,9 @@ final class TraktSyncBoot
     /**
      * Sweep cadence: how often the daemon ASKS whether a pull is due.
      *
-     * 60s, matching the hub's {@see \Phlix\Hub\Hub\Updates\CoreUpdateCheckWorker::DEFAULT_SWEEP_SECONDS}.
-     * A sweep is a single `server_settings` read; the pull (outbound HTTP) is
-     * touched only when the configured interval has elapsed.
+     * 60s, the same cadence the hub's S308 structural due-check chose for its
+     * sweep. A sweep is a single `server_settings` read; the pull (outbound
+     * HTTP) is touched only when the configured interval has elapsed.
      */
     public const DEFAULT_SWEEP_SECONDS = 60;
 
@@ -130,6 +130,12 @@ final class TraktSyncBoot
      * preserves the steady-state behaviour: a failing pull is retried after a
      * full interval, not on every 60-second sweep.
      *
+     * The persisted timestamp is the COMPLETION time — `time()` taken after
+     * the callback returns — not the decision time: a pull that takes longer
+     * than the interval (a large first history sync, say) must not be due
+     * again on the very next sweep, so the interval measures
+     * completion-to-completion exactly as the hub's S308 due-check does.
+     *
      * @param SettingsRepository $settings        Server settings store (read + persist the last-run).
      * @param int                $intervalSeconds Steady-state pull interval, seconds.
      * @param callable           $sync            The pull to run when due.
@@ -153,7 +159,7 @@ final class TraktSyncBoot
         }
 
         $sync();
-        $settings->set(self::STATE_LAST_RUN_AT, $now, 'int');
+        $settings->set(self::STATE_LAST_RUN_AT, time(), 'int');
 
         return true;
     }

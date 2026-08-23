@@ -48,8 +48,7 @@ final class TraktSyncBootRealDbTest extends TestCase
 
     private ?Connection $db = null;
 
-    /** @var mixed Workerman's global event loop before this test ran. */
-    private mixed $savedGlobalEvent = null;
+    private ?EventInterface $savedGlobalEvent = null;
 
     private ?EventInterface $savedTimerEvent = null;
 
@@ -120,7 +119,17 @@ final class TraktSyncBootRealDbTest extends TestCase
         $afterRestart = $this->repository();
         $row = $afterRestart->getOverride(TraktSyncBoot::STATE_LAST_RUN_AT);
         self::assertIsArray($row, 'the last-run must survive the restart (real DB read-back)');
-        self::assertSame($bootTime, $row['value']);
+        self::assertIsInt($row['value']);
+        self::assertGreaterThanOrEqual(
+            $bootTime,
+            $row['value'],
+            'the last-run must be the completion time of boot 1, no earlier than the decision',
+        );
+        self::assertLessThan(
+            $bootTime + 60,
+            $row['value'],
+            'the last-run must have been stamped at boot 1',
+        );
 
         // Boot 2 — uptime (60s) SHORTER than the interval (3600s), fresh
         // last-run: the sync must NOT re-run.

@@ -67,8 +67,8 @@ use RecursiveIteratorIterator;
  * Every other shape — the result discarded outright, or assigned and never
  * read — is not a consumer and is out of scope (a genuine error throws; the
  * client has no silent failure return).
- *
-* The denominator the guard prints is the exact count it examined:
+*
+ * The denominator the guard prints is the exact count it examined:
  * **95 `INSERT`/`REPLACE` `->query()` call tokens** (87 with a literal first
  * argument, 8 resolved through a `$sql` variable — including the try/catch
  * retry arms of the two ScanJobRepository sites), of which **15 consume the

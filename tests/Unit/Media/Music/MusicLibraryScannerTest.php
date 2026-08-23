@@ -415,6 +415,60 @@ final class MusicLibraryScannerTest extends TestCase
         );
     }
 
+    /**
+     * S331 — when the placeholder artist row itself cannot be written, the album's
+     * files are charged to `failed` and the `placeholder_artist_files` tally stays
+     * at 0 — never to both counters (review r2 LOW-1 / INFO).
+     *
+     * The counter means "files whose album was actually ingested under the
+     * placeholder"; a whole-album loss is a failure, not an ingestion.
+     */
+    public function testAPlaceholderArtistWriteFailureIsChargedToFailedNotToThePlaceholderTally(): void
+    {
+        $dir = $this->tempDir();
+        $this->touchFile($dir, '01-lost.mp3');
+
+        $db = new MusicSchemaConnection();
+        // The placeholder artist INSERT is the only music_artists insert an
+        // untagged one-file scan issues. Model the client's "wrote nothing" answer
+        // (INSERT → null) so ensurePlaceholderArtist() returns null and flushAlbum()
+        // charges the whole album to `failed` — the branch this test pins.
+        $db->returnNullFor('INSERT INTO music_artists');
+
+        $logger = new LogWriteFailureLogger();
+        $scanner = $this->taggedScanner(
+            $db,
+            static fn (string $path): array => [
+                'artist' => null,
+                'album' => 'Lost Sessions',
+                'title' => basename($path, '.mp3'),
+                'track_number' => 1,
+                'disc_number' => 1,
+                'duration_secs' => 120,
+                'year' => null,
+                'genre' => null,
+            ],
+            $logger,
+        );
+
+        $result = $scanner->scanDirectory($dir, null, 'lib-s331');
+
+        $this->assertSame(1, $result->failed, 'the file was lost with its placeholder artist');
+        $this->assertSame(0, $result->added);
+        $this->assertSame(1, $logger->countMessages('Failed to upsert placeholder artist'));
+
+        // The summary is the one place the tally is observable; assert its value.
+        $summaryContext = null;
+        foreach ($logger->contexts as $context) {
+            if (($context['path'] ?? null) === $dir && array_key_exists('placeholder_artist_files', $context)) {
+                $summaryContext = $context;
+            }
+        }
+        $this->assertNotNull($summaryContext, 'the completion summary was logged with context');
+        $this->assertSame(0, $summaryContext['placeholder_artist_files'] ?? -1, 'a lost album is not an ingestion');
+        $this->assertSame(1, $summaryContext['failed'] ?? -1, 'the summary reflects the loss');
+    }
+
     public function testTrackTitleFallsBackToFilenameWhenTitleTagMissing(): void
     {
         $dir = $this->tempDir();
@@ -2024,7 +2078,7 @@ final class MusicLibraryScannerTest extends TestCase
             'Music directory scan complete',
             $messages,
             'the CLEAN summary, exactly: this fixture indexes its one file successfully, so the lossy '
-            . '"…with skipped files" variant here would mean the scan silently failed',
+            . '"…with failed files" variant here would mean the scan silently failed',
         );
     }
 
@@ -4898,6 +4952,13 @@ final class LogWriteFailureLogger extends StructuredLogger
      */
     public array $records = [];
 
+    /**
+     * @var list<array<string, mixed>> Every record's CONTEXT, in order (S331 review
+     *      r2 INFO: the summary context — e.g. `placeholder_artist_files` — is part
+     *      of the scan contract and was previously unassertable).
+     */
+    public array $contexts = [];
+
     /** Substring whose log write throws; '' never throws. */
     public string $throwOn = '';
 
@@ -4912,11 +4973,10 @@ final class LogWriteFailureLogger extends StructuredLogger
      */
     public function log($level, string|\Stringable $message, array $context = []): void
     {
-        unset($context);
-
         $text = (string) $message;
         $this->messages[] = $text;
         $this->records[] = ['level' => self::levelName($level), 'message' => $text];
+        $this->contexts[] = $context;
 
         if ($this->throwOn !== '' && str_contains($text, $this->throwOn)) {
             throw new \RuntimeException('LOG WRITE FAILED: ' . $this->throwOn);

@@ -1290,8 +1290,16 @@ class MusicLibraryScanner
         // try so the outer catch always has a defined value even when an exception
         // fires inside the branch above: the placeholder token for the untagged
         // path (review r1 INFO-9 — the raw marker `''`/`'Unknown Artist'` would be
-        // unhelpful), the real tag otherwise.
-        $artistLabel = $artistName === '' ? self::PLACEHOLDER_ARTIST_NAME : $artistName;
+        // unhelpful), the real tag otherwise. Both no-artist markers map to the
+        // placeholder label (review r2 LOW-2 — the walk normalises a MISSING tag
+        // to the literal 'Unknown Artist', so that is the common untagged case).
+        $artistLabel = in_array($artistName, self::NO_ARTIST_MARKERS, true)
+            ? self::PLACEHOLDER_ARTIST_NAME
+            : $artistName;
+
+        // Which route this album took, so the placeholder tally can be incremented
+        // ONLY once the album row actually landed (review r2 LOW-1).
+        $viaPlaceholder = in_array($artistName, self::NO_ARTIST_MARKERS, true);
 
         try {
             $year = $albumData['year'];
@@ -1323,11 +1331,6 @@ class MusicLibraryScanner
                     return;
                 }
 
-                // Counted only after the ingest SUCCEEDED: `placeholder_artist_files`
-                // means "files actually indexed under the placeholder", and files
-                // that failed with their artist are charged to `failed` above, never
-                // to both counters (review r1 finding 2).
-                $placeholderArtistFiles += count($files);
                 $artistId = $artistResult['id'];
             } else {
                 // Upsert artist and get media_item_id
@@ -1393,6 +1396,16 @@ class MusicLibraryScanner
             }
 
             $albumId = $albumResult['id'];
+
+            // `placeholder_artist_files` counts only files whose ALBUM was actually
+            // written under the placeholder (review r2 LOW-1): a whole-album loss —
+            // artist upsert failed or album upsert failed — is charged to `failed`
+            // alone, never to both tallies. Per-track failures inside a written
+            // album are BOTH counted here and charged to `failed` — the same
+            // overlap the real-artist path has between `added` and `failed`.
+            if ($viaPlaceholder) {
+                $placeholderArtistFiles += count($files);
+            }
 
             // Upsert tracks (metadata already read during the walk — no re-probe).
             // S97: `$albumResult['media_item_id']` is NOT forwarded — a track's

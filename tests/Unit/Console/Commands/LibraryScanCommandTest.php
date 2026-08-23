@@ -175,9 +175,9 @@ class LibraryScanCommandTest extends TestCase
      * 3 exists.
      *
      * `CommandTester` calls `Command::run()` directly, so `--help` on the command itself
-     * would hit the missing-`libraryId` validation instead of the help command — drive the
-     * real `HelpCommand` instead, which is the exact path `php bin/phlix library:scan
-     * --help` takes.
+     * would hit the missing-`libraryId` validation instead of the help command — drive
+     * the real `HelpCommand` (via its `command_name` argument) instead, which is the
+     * exact path `php bin/phlix library:scan --help` takes.
      */
     public function testHelpNamesEveryExitCode(): void
     {
@@ -186,10 +186,8 @@ class LibraryScanCommandTest extends TestCase
             fn(): LibraryManager => $this->createMock(LibraryManager::class),
         ));
 
-        $help = $application->find('help');
-        $help->setCommand($application->find('library:scan'));
-        $tester = new CommandTester($help);
-        $tester->execute([]);
+        $tester = new CommandTester($application->find('help'));
+        $tester->execute(['command_name' => 'library:scan']);
         $display = $tester->getDisplay();
 
         $this->assertStringContainsString('Exit codes:', $display);

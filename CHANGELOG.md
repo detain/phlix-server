@@ -269,6 +269,51 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Added
 
+- **The admin-maintenance route surface is now mirrored against phlix-ui in BOTH directions
+  (S330).** S78's In-scope list named eight Tasks-page sections and only four shipped; an AC
+  narrower than its own In-scope list is a mis-specified step, and three of the four missing
+  sections (scan-all, recompute-similarity, newsletter send-now) were owned by no step. This
+  entry records the three-way decision for each, then closes the drift class with a guard.
+
+  **The decision, per action by name — all three CLOSED, not silently dropped:**
+  - **scan-all — CLOSED.** No server-wide scan service exists. Per-library scan
+    (`POST /api/v1/libraries/{id}/scan`, the Libraries page) is the bounded, safe path; a
+    server-wide scan would be an unbounded whole-vault filesystem walk (the S116
+    filesystem-work-on-the-request-path concern; even a single music library scan runs
+    4 h 09 m before its first durable write, the measured 21600 s floor) and would monopolise
+    the count=1 maintenance queue worker for the duration. The admin Tasks page keeps its
+    honest note explaining the absence.
+  - **recompute-similarity — CLOSED.** Similarity is already computed per-item on scan by the
+    live `SimilarityWorker` managed worker (`config/managed_workers.php` → `'similarity'`,
+    SV-2.9 enqueues one job per new item, candidate set bounded per library). A server-wide
+    recompute would enqueue the entire catalogue into an O(N²)-per-library background pipeline —
+    unbounded, redundant with the per-scan compute, and not wanted. The admin Tasks page gains
+    an honest note explaining the absence.
+  - **newsletter send-now — CLOSED.** The newsletter is a deliberately scheduled weekly blast
+    (`Application::startBackgroundTimers()` → `startNewsletterTimerIfEnabled()`, day/hour from
+    config); a send-now would fire an unscheduled email to every user, and `NewsletterSender`
+    is not DI-wired (constructed manually in `Application.php`), so a maintenance-queue path
+    would duplicate its construction for an action the schedule already provides. Not wanted.
+    The admin Tasks page gains an honest note explaining the absence.
+
+  No task name, route or `MaintenanceTask` vocabulary entry changes — the existing
+  queued/sync tasks stay the five-task catalogue and `MaintenanceTaskCoverageTest`'s count is
+  unchanged. What ships instead is `AdminMaintenanceRoutesUiMirrorGuardTest`, the S348-shaped
+  cross-repo pin for the ADMIN maintenance surface: it parses the production route table
+  (reflected `Application`, MySQL doubled, `ContainerFactory::defaultProviders()`), extracts the
+  eight `/api/v1/admin/maintenance/*` routes (three GET reads incl. the two-segment
+  `jobs/{id}` + five POST actions) and the five POST action suffixes, and asserts each equals
+  its phlix-ui `AdminMaintenanceApi` mirror (`MAINTENANCE_TASK_NAMES` for the suffixes,
+  `MAINTENANCE_ENDPOINTS` plus the derived `jobs/{id}` template for the full path set) in BOTH
+  directions — `missing` (UI declares, server does not register) and `extra` (server registers,
+  UI has no entry) each asserted empty with the compared denominators printed and an
+  anti-vacuity floor. Both planted mutations were shown red and removed (a dummy
+  `/maintenance/scan-all` route and a dummy UI `scan-all` name). No S348 collision: that guard
+  covers only the library-maintenance surface (`/api/v1/libraries/{id}/<suffix>` →
+  `LibraryController`); this one covers `/api/v1/admin/maintenance/*` → `MaintenanceController`.
+
+### Added
+
 - **The scan-job type allowlist is pinned to the migration ENUM, and the failure message names
   phlix-ui's mirror (S341).** New `ScanJobsEnumMigrationTest` parses migration
   `101_library_scan_jobs_media_assets_type.sql` — the real file, through

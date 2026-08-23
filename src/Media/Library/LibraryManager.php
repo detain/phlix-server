@@ -778,6 +778,13 @@ class LibraryManager
     {
         $added = 0;
 
+        // S33: honor the per-library auto-collections toggle on this scan path
+        // too. The photo route reaches MediaScanner::scan() (with the 'image'
+        // scanner label) exactly like the main movie/series/video route, so the
+        // stored flag must be passed explicitly — otherwise the scanner's
+        // default (true) silently ignores an admin's stored `false`.
+        $autoCollectionsEnabled = $library->autoCollectionsEnabled();
+
         foreach ($library->paths as $path) {
             if (!is_dir($path)) {
                 $this->logger->warning('Photo library path does not exist', ['path' => $path]);
@@ -788,7 +795,7 @@ class LibraryManager
             // For now, fall back to basic scanning.
             // NB: 'image' is the SCANNER's library-type label; the media_items.type
             // ENUM member is `photo` (see the type-ENUM landmine).
-            $added += $this->scanner->scan($libraryId, $path, 'image');
+            $added += $this->scanner->scan($libraryId, $path, 'image', false, null, $autoCollectionsEnabled);
         }
 
         $this->logger->info('Photo library scan complete', ['library_id' => $libraryId, 'added' => $added]);
@@ -809,6 +816,11 @@ class LibraryManager
     {
         $added = 0;
 
+        // S33: honor the per-library auto-collections toggle on this scan path
+        // too (see scanPhotoLibrary() — same rationale: the stored flag must be
+        // passed explicitly or the scanner's default true wins).
+        $autoCollectionsEnabled = $library->autoCollectionsEnabled();
+
         // Book scanning is handled by BookScanner for EPUB content.opf,
         // PDF metadata, and CBZ ComicInfo.xml extraction.
         foreach ($library->paths as $path) {
@@ -817,7 +829,7 @@ class LibraryManager
                 continue;
             }
             // Use book type for scanner
-            $added += $this->scanner->scan($libraryId, $path, 'book');
+            $added += $this->scanner->scan($libraryId, $path, 'book', false, null, $autoCollectionsEnabled);
         }
 
         $this->logger->info('Book library scan complete', ['library_id' => $libraryId, 'added' => $added]);
@@ -838,6 +850,11 @@ class LibraryManager
     {
         $added = 0;
 
+        // S33: honor the per-library auto-collections toggle on this scan path
+        // too (see scanPhotoLibrary() — same rationale: the stored flag must be
+        // passed explicitly or the scanner's default true wins).
+        $autoCollectionsEnabled = $library->autoCollectionsEnabled();
+
         // Audiobook scanning is handled by AudiobookScanner for M4B chpl atom
         // chapter extraction and metadata harvesting.
         foreach ($library->paths as $path) {
@@ -846,7 +863,7 @@ class LibraryManager
                 continue;
             }
             // Use audiobook type for scanner
-            $added += $this->scanner->scan($libraryId, $path, 'audiobook');
+            $added += $this->scanner->scan($libraryId, $path, 'audiobook', false, null, $autoCollectionsEnabled);
         }
 
         $this->logger->info('Audiobook library scan complete', ['library_id' => $libraryId, 'added' => $added]);

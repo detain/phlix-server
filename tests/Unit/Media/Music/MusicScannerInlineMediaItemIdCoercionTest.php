@@ -15,12 +15,13 @@ use ReflectionMethod;
  * local variables inside `MusicLibraryScanner` (S127).
  *
  * **What this closes, and why it is not "more of S121".** S121 fixed one predicate
- * that exists in FIVE places: three DTO helpers (`MusicArtist`, `MusicAlbum`,
- * `MusicTrack`, each a `private static mediaItemIdFromRow()`) and two inline locals
- * (`MusicLibraryScanner::upsertArtist()` and `::upsertAlbum()`). S121's mechanical
+ * that exists in SIX places: three DTO helpers (`MusicArtist`, `MusicAlbum`,
+ * `MusicTrack`, each a `private static mediaItemIdFromRow()`) and three inline locals
+ * (`MusicLibraryScanner::upsertArtist()`, `::upsertAlbum()`, and — since S331 —
+ * `::ensurePlaceholderArtist()`). S121's mechanical
  * backstop, {@see MusicDtoMediaItemIdTest}, reflects every class DECLARING a
  * `mediaItemId` **property**, so it structurally cannot see a local variable. Three
- * of five sites were guarded; two were not.
+ * of six sites were guarded; three were not.
  *
  * 🔴 **The gap was UNATTRIBUTABLE, not unpinned — and that distinction is this
  * file's entire deliverable.** Measured on `origin/master` `f701b40c` (2026-08-05):
@@ -38,7 +39,7 @@ use ReflectionMethod;
  * **Why a source-text guard rather than a behavioural one.** The behavioural route
  * would mean driving a real scan through a DB double until a UUID survives to a
  * caller — which is what already happens, and which produced exactly the orphan
- * messages above. The defect shape here is *drift between five copies of one
+ * messages above. The defect shape here is *drift between six copies of one
  * predicate*, and drift in a copy is a property of the source, not of one execution.
  *
  * **How it avoids being the kind of guard people delete.** Per the step's own design
@@ -53,7 +54,7 @@ use ReflectionMethod;
  *
  * **Anti-vacuity.** {@see self::testTheTokenScanIsNotVacuous()} asserts the scanner
  * tokenizes to a floor of significant tokens and that the scan discovers EXACTLY the
- * two known sites, each inside its expected method. Blinding the discovery (an empty
+ * three known sites, each inside its expected method. Blinding the discovery (an empty
  * file, a deleted method, a hollowed body) fails there with an explicit
  * `ANTI-VACUITY:` message rather than passing on an empty set.
  *
@@ -78,15 +79,18 @@ final class MusicScannerInlineMediaItemIdCoercionTest extends TestCase
     private const COLUMN = 'media_item_id';
 
     /**
-     * The two methods that inline the predicate, and nothing else in the file does.
+     * The three methods that inline the predicate, and nothing else in the file does.
      * Asserted as a SET by testTheTokenScanIsNotVacuous(), not merely iterated — a
-     * third inline site appearing, or one of these two disappearing, must both fail.
+     * fourth inline site appearing, or one of these three disappearing, must both fail.
+     * (S331 added `ensurePlaceholderArtist`, which mirrors the upsert's natural-key
+     * branch; the count moved from two inline sites to three.)
      *
      * @return array<string, array{string}>
      */
     public static function inlineSiteProvider(): array
     {
         return [
+            'MusicLibraryScanner::ensurePlaceholderArtist()' => ['ensurePlaceholderArtist'],
             'MusicLibraryScanner::upsertArtist()' => ['upsertArtist'],
             'MusicLibraryScanner::upsertAlbum()' => ['upsertAlbum'],
         ];
@@ -110,13 +114,13 @@ final class MusicScannerInlineMediaItemIdCoercionTest extends TestCase
             . " with is_string(). That column is a CHAR(36) UUID (migration 070), so any\n"
             . "numeric predicate — is_numeric(), is_int(), ctype_digit() — is FALSE for every\n"
             . "real id and the coercion silently yields null on every row, with no error\n"
-            . "anywhere. This is one of the FIVE copies of that predicate: two inline locals\n"
-            . "here (upsertArtist, upsertAlbum) and three DTO helpers\n"
+            . "anywhere. This is one of the SIX copies of that predicate: three inline locals\n"
+            . "here (ensurePlaceholderArtist, upsertArtist, upsertAlbum) and three DTO helpers\n"
             . "(MusicArtist/MusicAlbum/MusicTrack::mediaItemIdFromRow(), guarded by\n"
             . "MusicDtoMediaItemIdTest). FIX: restore\n"
             . "    isset(\$row['" . self::COLUMN . "']) && is_string(\$row['" . self::COLUMN . "'])\n"
             . "        && \$row['" . self::COLUMN . "'] !== '' ? \$row['" . self::COLUMN . "'] : null\n"
-            . 'in MusicLibraryScanner::' . $method . '(), or change all five sites together.'
+            . 'in MusicLibraryScanner::' . $method . '(), or change all six sites together.'
         );
     }
 
@@ -172,10 +176,10 @@ final class MusicScannerInlineMediaItemIdCoercionTest extends TestCase
 
     /**
      * File-wide sweep: no method ANYWHERE in the scanner may coerce this column with
-     * a numeric predicate. The two data-driven tests above name the two known sites;
-     * this one catches a THIRD site being added with the old shape, which is exactly
-     * how the original five-site drift happened (the defect was written down for one
-     * class and the siblings were missed).
+     * a numeric predicate. The three data-driven tests above name the three known
+     * sites; this one catches a FOURTH site being added with the old shape, which is
+     * exactly how the original five-site drift happened (the defect was written down
+     * for one class and the siblings were missed).
      */
     public function testNoMethodInTheScannerCoercesThisColumnNumerically(): void
     {
@@ -206,8 +210,8 @@ final class MusicScannerInlineMediaItemIdCoercionTest extends TestCase
      *
      * Three independent floors:
      *  1. the scanner source tokenizes to a large number of significant tokens;
-     *  2. both named methods still exist on the class;
-     *  3. the scan discovers EXACTLY the two known sites, in exactly those methods —
+     *  2. all three named methods still exist on the class;
+     *  3. the scan discovers EXACTLY the three known sites, in exactly those methods —
      *     a strict set comparison, never a substring or a count alone.
      */
     public function testTheTokenScanIsNotVacuous(): void
@@ -241,15 +245,15 @@ final class MusicScannerInlineMediaItemIdCoercionTest extends TestCase
         sort($discovered);
 
         $this->assertSame(
-            ['upsertAlbum', 'upsertArtist'],
+            ['ensurePlaceholderArtist', 'upsertAlbum', 'upsertArtist'],
             $discovered,
             "ANTI-VACUITY: the token scan for `\$row['" . self::COLUMN . "']` inside a\n"
-            . "type-predicate call did not find exactly the two known inline sites. Found: "
+            . "type-predicate call did not find exactly the three known inline sites. Found: "
             . ($discovered === [] ? '(none)' : implode(', ', $discovered)) . ".\n"
-            . "Zero found means the guard is hollow and proves nothing. More than two means a\n"
-            . "THIRD inline copy of the predicate has appeared — that is the drift this step\n"
+            . "Zero found means the guard is hollow and proves nothing. More than three means a\n"
+            . "FOURTH inline copy of the predicate has appeared — that is the drift this step\n"
             . "exists to catch: add it to inlineSiteProvider() so it is pinned too, and update\n"
-            . 'the "five sites" wording in the three DTO docblocks to match the new count.'
+            . 'the "six sites" wording in the three DTO docblocks to match the new count.'
         );
     }
 

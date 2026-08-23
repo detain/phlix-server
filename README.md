@@ -478,6 +478,21 @@ the streaming and auth-hardening features and all have safe defaults.
 > script now owns **de-duplication only** — it is needed only on an existing install that
 > accumulated duplicate rows while the key was missing, never on a fresh one.
 
+> **Migration AND rescan required on deploy (S331).** Music albums with no artist
+> tag are no longer discarded whole — they are ingested under a structural
+> placeholder artist whose display label is `[Unknown Artist]`.
+> `migrations/102_music_artists_placeholder_flag.sql` adds
+> `music_artists.is_placeholder` and widens `uk_name` to `(name, is_placeholder)`,
+> so a REAL album genuinely tagged `[Unknown Artist]` stays a distinct artist
+> (`is_placeholder = 0`) from the untagged bucket (`is_placeholder = 1`). Run
+> `php bin/phlix migrate` (or `php scripts/run-migrations.php`) after pulling —
+> migrations are idempotent, so re-running is safe. ⚠ **A scan (or rescan) of each
+> music library is ALSO required**: albums the old policy discarded were never
+> written to the database, and no backfill can reconstruct them without re-reading
+> the audio files — the migration itself only adds the column and touches no rows.
+> The scan summary key `skipped_no_artist` is renamed `placeholder_artist_files`
+> (untagged albums are now indexed, not skipped).
+
 ## API Reference
 
 ### HTTP Endpoints

@@ -87,6 +87,34 @@ class MusicLibraryScanner
     private const AUDIO_EXTENSIONS = ['mp3', 'flac', 'm4a', 'ogg', 'wav'];
 
     /**
+     * Display label of the structural placeholder artist that untagged albums are
+     * ingested under (S331).
+     *
+     * 🔴 **THE TOKEN IS THE DISPLAY LABEL ONLY — it is NEVER the detection
+     * mechanism.** An album is routed to the placeholder by the ABSENCE of an
+     * artist tag ({@see self::NO_ARTIST_MARKERS}) in {@see self::flushAlbum()},
+     * and the placeholder row itself is resolved BY ID through
+     * {@see self::ensurePlaceholderArtist()}, which filters on the structural
+     * `music_artists.is_placeholder` flag — never by name-matching this token.
+     * A real album genuinely tagged `[Unknown Artist]` therefore resolves to its
+     * OWN `is_placeholder = 0` artist row via {@see self::upsertArtist()} (whose
+     * natural-key lookup filters `is_placeholder = 0`), so it can never be merged
+     * with the untagged bucket: `music_artists.uk_name` is the composite
+     * `(name, is_placeholder)` since migration 102.
+     */
+    public const PLACEHOLDER_ARTIST_NAME = '[Unknown Artist]';
+
+    /**
+     * Tag values {@see self::flushAlbum()} treats as "no artist" — the empty
+     * string and the legacy filename-fallback marker. Exact comparison only; the
+     * placeholder token above deliberately differs from both so a real tag can
+     * never impersonate the untagged bucket.
+     *
+     * @var list<string>
+     */
+    private const NO_ARTIST_MARKERS = ['', 'Unknown Artist'];
+
+    /**
      * How many albums may be accumulating tracks at the same time.
      *
      * THE FLUSH TRIGGER. An album is buffered under its *tag* identity
@@ -727,18 +755,21 @@ class MusicLibraryScanner
         $processed = 0;
 
         /**
-         * Audio files discarded by {@see self::flushAlbum()}'s "unknown artist"
-         * rule, reported in the completion summary below (S96(f)).
+         * Audio files of albums {@see self::flushAlbum()} ingested under the
+         * structural placeholder artist ({@see self::PLACEHOLDER_ARTIST_NAME})
+         * because they carried no artist tag, reported in the completion summary
+         * below (S96(f) shape; S331 re-purposes the counter that used to count the
+         * files the old "unknown artist" POLICY discarded — nothing is discarded
+         * any more, so a key named `skipped_no_artist` would lie).
          *
          * Deliberately NOT folded into {@see ScanResult::$failed}: nothing failed,
-         * a documented scan POLICY dropped those files, and a rescan drops them
-         * again (the fix for THAT is its own step). Conflating the two would make
-         * `items_failed` alarm on an untagged library. Counted here rather than
-         * logged per album so an untagged library costs one line, not thousands.
+         * an album without an artist tag is now ingested rather than dropped.
+         * Counted here rather than logged per album so an untagged library costs
+         * one line, not thousands.
          *
-         * @var int $skippedNoArtist
+         * @var int $placeholderArtistFiles
          */
-        $skippedNoArtist = 0;
+        $placeholderArtistFiles = 0;
 
         /**
          * Files the S122(a) fast path recognised as unchanged and did not open.
@@ -751,7 +782,7 @@ class MusicLibraryScanner
          *
          * Deliberately NOT folded into {@see ScanResult::$failed} or `$updated`:
          * nothing failed and nothing changed. It is the same accounting choice
-         * S96(f) made for `$skippedNoArtist`, for the same reason.
+         * S96(f) made for `$placeholderArtistFiles`, for the same reason.
          *
          * @var int $skippedUnchanged
          */
@@ -908,7 +939,7 @@ class MusicLibraryScanner
                         $libraryId,
                         $result,
                         $mayAdopt,
-                        $skippedNoArtist,
+                        $placeholderArtistFiles,
                         $skipIndex,
                         $reparented
                     );
@@ -930,7 +961,7 @@ class MusicLibraryScanner
                         $libraryId,
                         $result,
                         $mayAdopt,
-                        $skippedNoArtist,
+                        $placeholderArtistFiles,
                         $skipIndex,
                         $reparented
                     );
@@ -947,7 +978,7 @@ class MusicLibraryScanner
                     $libraryId,
                     $result,
                     $mayAdopt,
-                    $skippedNoArtist,
+                    $placeholderArtistFiles,
                     $skipIndex,
                     $reparented
                 );
@@ -962,10 +993,12 @@ class MusicLibraryScanner
 
         $result->durationMs = (int)((hrtime(true) - $startTime) / 1_000_000.0);
 
-        // S96(f): `failed` and `skipped_no_artist` are ALWAYS in the summary, even
-        // at 0, so "this scan lost nothing" is a positive statement in the log
-        // rather than the absence of one. A partial scan used to be indistinguishable
-        // from a clean one from out here.
+        // S96(f): `failed` and `placeholder_artist_files` are ALWAYS in the
+        // summary, even at 0, so "this scan lost nothing" is a positive statement
+        // in the log rather than the absence of one. A partial scan used to be
+        // indistinguishable from a clean one from out here. S331 re-purposes the
+        // old `skipped_no_artist` key: untagged albums are INGESTED under the
+        // placeholder artist, never skipped, so the old name would lie.
         // S122: `skipped_unchanged` is ALWAYS present for the same reason — it is how
         // an operator confirms from one log line that the fast path engaged, and a 0
         // on a rescan of a settled library is the anomaly worth noticing.
@@ -975,7 +1008,7 @@ class MusicLibraryScanner
             'added' => $result->added,
             'updated' => $result->updated,
             'failed' => $result->failed,
-            'skipped_no_artist' => $skippedNoArtist,
+            'placeholder_artist_files' => $placeholderArtistFiles,
             'skipped_unchanged' => $skippedUnchanged,
             // S145: ALWAYS present, for the same reason the two above are. `reparented`
             // is how an operator sees that a healing rescan repaired mis-filed tracks
@@ -997,26 +1030,22 @@ class MusicLibraryScanner
             'duration_ms' => $result->durationMs,
         ];
 
-        // THREE levels, keyed on whether files were LOST or merely skipped by policy
-        // (review r1 MED-2 — this line used to be `warning` for both cases, so the
-        // one summary an operator actually reads never reached `.logs/error.log`,
-        // which `config/logger.php` gates at `error`):
+        // THREE levels, keyed on whether files were LOST (review r1 MED-2 — this
+        // line used to be `warning` for both cases, so the one summary an operator
+        // actually reads never reached `.logs/error.log`, which `config/logger.php`
+        // gates at `error`):
         //
-        //   failed > 0            → ERROR   the scan lost files. Same level as the
-        //                                   per-album/per-track loss lines, so the
-        //                                   summary and its causes land in the same
-        //                                   clean file.
-        //   skipped_no_artist > 0 → WARNING a documented scan POLICY discarded album
-        //                                   groups with no artist tag. Not an error:
-        //                                   nothing malfunctioned, a rescan drops the
-        //                                   same files again, and routing an untagged
-        //                                   library into error.log would train the
-        //                                   operator to ignore it.
-        //   otherwise             → INFO    "this scan lost nothing" stated positively.
+        //   failed > 0 → ERROR  the scan lost files. Same level as the
+        //                       per-album/per-track loss lines, so the
+        //                       summary and its causes land in the same
+        //                       clean file.
+        //   otherwise  → INFO   "this scan lost nothing" stated positively.
+        //                       Untagged albums are now INGESTED under the
+        //                       placeholder artist (S331) — `placeholder_artist_files`
+        //                       tells the operator how many files that was — so
+        //                       there is no policy-skip level left to warn about.
         if ($result->failed > 0) {
             $this->logger->error('Music directory scan complete with skipped files', $summary);
-        } elseif ($skippedNoArtist > 0) {
-            $this->logger->warning('Music directory scan complete with skipped files', $summary);
         } else {
             $this->logger->info('Music directory scan complete', $summary);
         }
@@ -1191,10 +1220,13 @@ class MusicLibraryScanner
      *        back to true in that case and it must reach
      *        {@see self::scanDirectory()}'s local, or the rest of the scan keeps
      *        adoption switched off and leaks the row for good.
-     * @param int $skippedNoArtist BY REFERENCE tally of files dropped by the
-     *        unknown-artist rule below, reported once in
+     * @param int $placeholderArtistFiles BY REFERENCE tally of files ingested under
+     *        the structural placeholder artist ({@see self::PLACEHOLDER_ARTIST_NAME})
+     *        because their album carried no artist tag (S331), reported once in
      *        {@see self::scanDirectory()}'s completion summary. Separate from
-     *        `$result->failed` on purpose — see the declaration there.
+     *        `$result->failed` on purpose — nothing failed, the files were indexed.
+     *        Re-purposes the counter that used to tally files the old "unknown
+     *        artist" POLICY discarded; nothing is discarded any more.
      * @param MusicScanSkipIndex|null $skipIndex S122(a) mtime/size index, passed
      *        through to {@see self::upsertTrack()} so a file that has just been read
      *        records the identity that lets the NEXT scan skip it. NULL only for the
@@ -1203,7 +1235,7 @@ class MusicLibraryScanner
      * @param int $reparented BY REFERENCE tally of tracks moved to a different album or
      *        artist (S145), forwarded to {@see self::upsertTrack()} and reported once in
      *        {@see self::scanDirectory()}'s completion summary. Same accounting shape as
-     *        `$skippedNoArtist`: one summary number rather than 61k log lines.
+     *        `$placeholderArtistFiles`: one summary number rather than 61k log lines.
      * @return void
      */
     private function flushAlbum(
@@ -1213,7 +1245,7 @@ class MusicLibraryScanner
         ?string $libraryId,
         ScanResult $result,
         bool &$mayAdopt,
-        int &$skippedNoArtist,
+        int &$placeholderArtistFiles,
         ?MusicScanSkipIndex $skipIndex = null,
         int &$reparented = 0
     ): void {
@@ -1257,14 +1289,57 @@ class MusicLibraryScanner
         try {
             $year = $albumData['year'];
 
-            // Early exit: skip if no valid artist name
-            if ($artistName === '' || $artistName === 'Unknown Artist') {
-                $skippedNoArtist += count($files);
-                $this->logger->debug('Skipping album with unknown artist', [
+            // S331: an album with no artist tag is INGESTED under the structural
+            // placeholder artist instead of being discarded whole (the old policy
+            // this early-exit used to implement). The placeholder row is resolved
+            // BY ID through ensurePlaceholderArtist() — the display token is never
+            // matched against tag data — so a real album genuinely tagged
+            // '[Unknown Artist]' resolves to its OWN is_placeholder = 0 artist row
+            // via upsertArtist() below and can never merge with the untagged bucket.
+            if (in_array($artistName, self::NO_ARTIST_MARKERS, true)) {
+                $placeholderArtistFiles += count($files);
+                $this->logger->debug('Ingesting album under placeholder artist', [
                     'album' => $albumTitle,
                     'files' => count($files),
                 ]);
-                return;
+
+                $artistResult = $this->ensurePlaceholderArtist($artistCache, $libraryId, $mayAdopt);
+                if ($artistResult === null) {
+                    // The whole album is lost with its artist, so charge every file.
+                    $result->failed += count($files);
+                    // ERROR, not warning — the album's files were lost, and
+                    // `config/logger.php` routes only `error`-and-above to
+                    // `.logs/error.log` (review r1 MED-2).
+                    $this->logger->error('Failed to upsert placeholder artist', [
+                        'album' => $albumTitle,
+                        'files_lost' => count($files),
+                    ]);
+                    return;
+                }
+
+                $artistId = $artistResult['id'];
+            } else {
+                // Upsert artist and get media_item_id
+                $artistResult = $this->upsertArtist($artistName, $artistCache, $libraryId, $mayAdopt);
+                if ($artistResult === null) {
+                    // The whole album is lost with its artist, so charge every file.
+                    $result->failed += count($files);
+                    // ⚠ ERROR, not warning (review r1 MED-2). `config/logger.php` routes
+                    // only `error`-and-above to the dedicated `.logs/error.log`, so at
+                    // `warning` the WHOLE-ALBUM losses were buried in app.log while the
+                    // per-TRACK loss below (one file) got the clean file to itself — the
+                    // severity ladder ran backwards against actual data loss. Level now
+                    // tracks loss: every path that drops files logs at `error`, and
+                    // `files_lost` says how many.
+                    $this->logger->error('Failed to upsert artist', [
+                        'artist' => $artistName,
+                        'album' => $albumTitle,
+                        'files_lost' => count($files),
+                    ]);
+                    return;
+                }
+
+                $artistId = $artistResult['id'];
             }
 
             // Sort this batch by track number using the CACHED metadata, so tracks
@@ -1280,28 +1355,6 @@ class MusicLibraryScanner
 
                 return $trackA - $trackB;
             });
-
-            // Upsert artist and get media_item_id
-            $artistResult = $this->upsertArtist($artistName, $artistCache, $libraryId, $mayAdopt);
-            if ($artistResult === null) {
-                // The whole album is lost with its artist, so charge every file.
-                $result->failed += count($files);
-                // ⚠ ERROR, not warning (review r1 MED-2). `config/logger.php` routes
-                // only `error`-and-above to the dedicated `.logs/error.log`, so at
-                // `warning` the WHOLE-ALBUM losses were buried in app.log while the
-                // per-TRACK loss below (one file) got the clean file to itself — the
-                // severity ladder ran backwards against actual data loss. Level now
-                // tracks loss: every path that drops files logs at `error`, and
-                // `files_lost` says how many.
-                $this->logger->error('Failed to upsert artist', [
-                    'artist' => $artistName,
-                    'album' => $albumTitle,
-                    'files_lost' => count($files),
-                ]);
-                return;
-            }
-
-            $artistId = $artistResult['id'];
 
             // Upsert album. S97: the artist's `media_items` id is deliberately NOT
             // passed down any more — nothing below this line writes or reads
@@ -2017,6 +2070,134 @@ class MusicLibraryScanner
     }
 
     /**
+     * Finds or creates the structural placeholder artist row that untagged albums
+     * are ingested under (S331).
+     *
+     * 🔴 **THE ROW IS REFERENCED BY ID — NEVER BY MATCHING
+     * {@see self::PLACEHOLDER_ARTIST_NAME} AGAINST TAG DATA.** The natural-key
+     * lookup filters `is_placeholder = 1`, so it can only ever return the
+     * structural placeholder — a REAL artist whose name equals the display token
+     * (`is_placeholder = 0`) is invisible to it. That is the exact mirror of
+     * {@see self::upsertArtist()}'s `is_placeholder = 0` filter, and together the
+     * two make a real `[Unknown Artist]`-tagged album land on its own row while
+     * untagged albums land on this one. `music_artists.uk_name` is the composite
+     * `(name, is_placeholder)` since migration 102, so both rows can coexist.
+     *
+     * The cache is keyed under a DEDICATED key — never `strtolower(
+     * PLACEHOLDER_ARTIST_NAME)` — so this row can never occupy the natural-key
+     * cache slot a real artist of the same display name would look up.
+     *
+     * Orphan adoption and the media_items mint mirror {@see self::upsertArtist()}
+     * exactly, including the fail-open `finally`: a mint that reported failure for
+     * a row the server actually committed leaves an adoptable orphan, so the gate
+     * is re-opened for the rest of the scan.
+     *
+     * @param array<string, array{id:int, media_item_id:string|null}> $cache Artist cache to avoid duplicate queries
+     * @param string|null $libraryId Owning library UUID stamped onto a new media_item.
+     * @param bool $mayAdopt Whether the one-per-scan gate found an adoptable
+     *        orphan ({@see self::hasAdoptableMusicMediaItem()}). BY REFERENCE, same
+     *        contract as {@see self::upsertArtist()}.
+     * @return array{id: int, media_item_id: string|null}|null Placeholder artist id
+     *         and media_item_id, or null when the row could not be written.
+     */
+    private function ensurePlaceholderArtist(
+        array &$cache,
+        ?string $libraryId = null,
+        bool &$mayAdopt = true
+    ): ?array {
+        // Dedicated cache slot — see the docblock. Never the natural-key slot.
+        $cacheKey = 'placeholder:' . self::PLACEHOLDER_ARTIST_NAME;
+        if (isset($cache[$cacheKey])) {
+            return $cache[$cacheKey];
+        }
+
+        // The structural lookup: only a row flagged is_placeholder = 1 can answer.
+        $existing = $this->db->query(
+            "SELECT id, media_item_id FROM music_artists WHERE name = ? AND is_placeholder = 1",
+            [self::PLACEHOLDER_ARTIST_NAME]
+        );
+
+        if (is_array($existing) && count($existing) > 0) {
+            $firstRow = $existing[0];
+            if (is_array($firstRow)) {
+                $id = isset($firstRow['id']) && is_numeric($firstRow['id']) ? (int)$firstRow['id'] : 0;
+                $mediaItemId = isset($firstRow['media_item_id']) && is_string($firstRow['media_item_id'])
+                    && $firstRow['media_item_id'] !== '' ? $firstRow['media_item_id'] : null;
+
+                // S96(e), artist twin: heal a NULL left by a scan whose mint failed.
+                if ($mediaItemId === null) {
+                    $mediaItemId = $this->backfillMusicMediaItemId(
+                        'music_artists',
+                        $id,
+                        'artist',
+                        self::PLACEHOLDER_ARTIST_NAME,
+                        $libraryId,
+                        $mayAdopt,
+                        fn(): ?string => $mayAdopt
+                            ? $this->findAdoptableArtistMediaItemId(self::PLACEHOLDER_ARTIST_NAME, $libraryId)
+                            : null
+                    );
+                }
+
+                return $this->cacheRemember(
+                    $cache,
+                    $cacheKey,
+                    ['id' => $id, 'media_item_id' => $mediaItemId],
+                    self::MAX_ARTIST_CACHE
+                );
+            }
+        }
+
+        // Generate sort name
+        $sortName = $this->generateSortName(self::PLACEHOLDER_ARTIST_NAME);
+
+        // Adopt an orphan from an interrupted scan before minting a new
+        // media_item — same window and rationale as upsertArtist().
+        $adopted = $mayAdopt
+            ? $this->findAdoptableArtistMediaItemId(self::PLACEHOLDER_ARTIST_NAME, $libraryId)
+            : null;
+        $mediaItemId = $adopted ?? $this->createMediaItem('artist', self::PLACEHOLDER_ARTIST_NAME, null, $libraryId);
+
+        // Same orphan window as upsertArtist(), same fail-open finally.
+        $referenced = false;
+
+        try {
+            // The bound `1` is the structural flag; migration 102's composite
+            // uk_name (name, is_placeholder) lets this row coexist with a REAL
+            // artist of the same display name.
+            $result = $this->db->query(
+                "INSERT INTO music_artists (name, sort_name, media_item_id, is_placeholder) VALUES (?, ?, ?, ?)",
+                [self::PLACEHOLDER_ARTIST_NAME, $sortName, $mediaItemId !== '' ? $mediaItemId : null, 1]
+            );
+
+            if (self::statementWroteNothing($result)) {
+                return null;
+            }
+
+            $referenced = $mediaItemId !== '';
+
+            $id = (int)$this->db->lastInsertId();
+
+            $this->logger->debug('Upserted placeholder artist', [
+                'id' => $id,
+                'name' => self::PLACEHOLDER_ARTIST_NAME,
+                'media_item_id' => $mediaItemId,
+            ]);
+
+            return $this->cacheRemember(
+                $cache,
+                $cacheKey,
+                ['id' => $id, 'media_item_id' => $mediaItemId !== '' ? $mediaItemId : null],
+                self::MAX_ARTIST_CACHE
+            );
+        } finally {
+            if ($adopted === null && !$referenced) {
+                $mayAdopt = true;
+            }
+        }
+    }
+
+    /**
      * Upserts an artist into the database with a corresponding media_item.
      *
      * @param string $name Artist name
@@ -2042,9 +2223,14 @@ class MusicLibraryScanner
             return $cache[$cacheKey];
         }
 
-        // Check if artist exists
+        // Check if artist exists. S331: the natural-key lookup filters
+        // `is_placeholder = 0` so a REAL artist whose name equals the placeholder
+        // display token (`[Unknown Artist]`) can never resolve to the structural
+        // placeholder row — the impersonation hazard the step block calls out.
+        // The placeholder is resolved exclusively by
+        // {@see self::ensurePlaceholderArtist()}, which filters `is_placeholder = 1`.
         $existing = $this->db->query(
-            "SELECT id, media_item_id FROM music_artists WHERE name = ?",
+            "SELECT id, media_item_id FROM music_artists WHERE name = ? AND is_placeholder = 0",
             [$name]
         );
 

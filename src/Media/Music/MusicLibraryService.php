@@ -578,6 +578,15 @@ class MusicLibraryService
      * ```php
      * $artist = $service->findArtistByName('Pink Floyd');
      * ```
+     *
+     * ⚠ **S331: when the display name is the placeholder token, TWO rows can
+     * match** — the structural placeholder (`is_placeholder = 1`, the untagged
+     * bucket) and a REAL artist of the same name (`is_placeholder = 0`). Since
+     * migration 102, `uk_name (name, is_placeholder)` lets both coexist, so the
+     * `LIMIT 1` needs a deterministic winner: the placeholder is ordered FIRST
+     * (`is_placeholder DESC`) because it is the common case — the whole reason
+     * this name exists — and a real token-tagged artist's albums remain visible
+     * in the artists LIST (which embeds each artist's albums by id).
      */
     public function findArtistByName(string $name): ?array
     {
@@ -590,6 +599,7 @@ class MusicLibraryService
              LEFT JOIN music_tracks t ON t.album_id = al.id
              WHERE a.name = ?
              GROUP BY a.id, a.name, a.image_url
+             ORDER BY a.is_placeholder DESC, a.id ASC
              LIMIT 1",
             [$name]
         );

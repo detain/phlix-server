@@ -479,6 +479,25 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- **The Trakt pull-sync timer has a structural boot catch-up (S340).** `start.php` armed the
+  worker-0 Trakt→Phlix watched-history pull on a bare `Timer::add($intervalMinutes * 60, …)` —
+  first tick a full interval after process start, countdown reset on every boot — so on a box
+  restarted (deploy, reboot, the admin Restart button) more often than the interval the pull
+  never ran, the last live instance of the boot-catch-up defect. The timer is now a 60-second
+  sweep delegating to the new `TraktSyncBoot` (`src/Server/Integrations/Trakt/TraktSyncBoot.php`),
+  which holds the pure due-decision, persists the last completed pull in `server_settings`
+  (`trakt.sync_last_run_at`), and runs the pull only when the configured interval has genuinely
+  elapsed — the S308 structural due-check shape, not the one-shot sibling shape. The first sweep
+  a minute after every boot catches up exactly when a poll was missed; a pull longer than the
+  interval cannot re-trigger (the persisted stamp is the completion time). The plugin (an
+  external, non-vendored package) is injected as the sync callback, so the testable surface is
+  the due-decision itself: unit tests enumerate every branch, the real-MySQL integration test
+  simulates the restart (stale last-run → sync runs on the first sweep, fresh last-run → no
+  re-run, last-run survives restart), and a real event-loop control observes the pre-fix bare
+  interval NOT firing within an uptime shorter than the interval. A comment-stripped structural
+  pin (`TraktSyncBootWiringTest`) keeps `start.php` delegating to the gate, since `start.php`
+  itself runs outside CI.
+
 - **DLNA Browse now advertises a stream URL that actually resolves, and a `protocolInfo` that
   matches the bytes (S53).** `<res>` was built by `LibraryBridge::getStreamUrl()` →
   `HlsStreamer`, which emitted `{hls.base_url}/hls/{mediaItemId}/playlist.m3u8`. That URL is not

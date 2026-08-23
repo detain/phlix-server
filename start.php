@@ -440,21 +440,48 @@ $httpWorker->onWorkerStart = static function (Worker $w) use ($config, $publicRo
                 && $traktSettings->syncEnabled
                 && $traktIntervalMinutes > 0
             ) {
+                // S340 — boot catch-up. A bare `Timer::add($intervalMinutes*60, …)`
+                // fires its FIRST tick a full interval after the process starts, so
+                // on a box restarted (deploy, reboot, admin Restart) more often than
+                // the interval it fires NEVER. Following the S308 shape, the timer
+                // is a SHORT SWEEP and the due-decision lives in TraktSyncBoot:
+                // each sweep reads the persisted last-run (server_settings
+                // `trakt.sync_last_run_at`), runs the pull only when the configured
+                // interval has genuinely elapsed, and persists the new last-run. The
+                // first sweep a minute after every boot therefore catches up exactly
+                // when a poll was missed; no I/O is added to the boot path, and the
+                // plugin (an external, non-vendored package) is injected as the
+                // $sync callback so the testable surface is the due-decision itself.
                 \Workerman\Timer::add(
-                    $traktIntervalMinutes * 60,
-                    static function () use ($pluginLoader, $container, $traktPluginName): void {
+                    \Phlix\Server\Integrations\Trakt\TraktSyncBoot::DEFAULT_SWEEP_SECONDS,
+                    static function () use ($container, $pluginLoader, $traktPluginName, $traktIntervalMinutes): void {
                         try {
-                            $plugin = $pluginLoader->getEntryInstance($traktPluginName);
-                            if ($plugin instanceof \Phlix\Plugins\Scrobbler\Trakt\TraktPlugin) {
-                                $written = $plugin->syncHistoryFromTrakt($container);
-                                LoggerFactory::get(LogChannels::PLUGINS)->info(
-                                    'Trakt pull-sync tick complete',
-                                    ['items_written' => $written],
-                                );
-                            }
+                            \Phlix\Server\Integrations\Trakt\TraktSyncBoot::runIfDue(
+                                $container->get(\Phlix\Admin\SettingsRepository::class),
+                                $traktIntervalMinutes * 60,
+                                static function () use ($pluginLoader, $container, $traktPluginName): void {
+                                    try {
+                                        $plugin = $pluginLoader->getEntryInstance($traktPluginName);
+                                        if ($plugin instanceof \Phlix\Plugins\Scrobbler\Trakt\TraktPlugin) {
+                                            $written = $plugin->syncHistoryFromTrakt($container);
+                                            LoggerFactory::get(LogChannels::PLUGINS)->info(
+                                                'Trakt pull-sync tick complete',
+                                                ['items_written' => $written],
+                                            );
+                                        }
+                                    } catch (\Throwable $e) {
+                                        LoggerFactory::get(LogChannels::PLUGINS)->error(
+                                            'Trakt pull-sync tick failed',
+                                            ['error' => $e->getMessage()],
+                                        );
+                                    }
+                                },
+                            );
                         } catch (\Throwable $e) {
+                            // A sweep-wiring failure (e.g. the settings store is
+                            // unreachable) must never take the worker's tick.
                             LoggerFactory::get(LogChannels::PLUGINS)->error(
-                                'Trakt pull-sync tick failed',
+                                'Trakt pull-sync sweep failed',
                                 ['error' => $e->getMessage()],
                             );
                         }
@@ -463,7 +490,10 @@ $httpWorker->onWorkerStart = static function (Worker $w) use ($config, $publicRo
 
                 LoggerFactory::get(LogChannels::PLUGINS)->info(
                     'Trakt pull-sync timer armed',
-                    ['interval_minutes' => $traktIntervalMinutes],
+                    [
+                        'sweep_seconds'    => \Phlix\Server\Integrations\Trakt\TraktSyncBoot::DEFAULT_SWEEP_SECONDS,
+                        'interval_minutes' => $traktIntervalMinutes,
+                    ],
                 );
             } else {
                 LoggerFactory::get(LogChannels::PLUGINS)->debug(

@@ -281,14 +281,21 @@ final class IntegrationDbGuardAdoptionTest extends TestCase
      * broken one. It also proves migration 101 applied: without it the `type`
      * ENUM rejects `media_assets` outright, a failure a double never surfaces.
      *
-     * 44 since S340's
+     * 44 since S337's
+     * `tests/Integration/Plugins/AuthProviderSettingsSchemaRoundTripRealDbIntegrationTest.php`:
+     * the S337 saveSettings key-set proof must round-trip through the REAL settings schema
+     * (the schema's own `properties` are the derivation source), which a canned-row double
+     * cannot express. It landed on master after the S340 lane forked, so the two 43→44
+     * bumps (S337's and S340's) collide here; the count is the merged reality.
+     *
+     * 45 since S340's
      * `tests/Integration/Server/Integrations/Trakt/TraktSyncBootRealDbTest.php`:
      * the S340 acceptance criteria demand the Trakt pull-sync last-run be written
      * to and read back from the REAL `server_settings` store across a simulated
      * restart, and that the pre-fix bare-interval control be OBSERVED not firing
      * against the real Workerman timer — claims no canned-row double can express.
      */
-    private const EXPECTED_ADOPTERS = 44;
+    private const EXPECTED_ADOPTERS = 45;
 
     /**
      * Bare function calls that are a MySQL reachability probe under any

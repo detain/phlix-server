@@ -229,7 +229,8 @@ final class LibraryManagerAutoCollectionsToggleTest extends TestCase
      * {@see MediaScanner::scan()} call is recorded (arguments + argument count)
      * into `$calls` by reference.
      *
-     * @param string             $type    Library type ('photo' | 'book' | 'audiobook' | 'movie' | 'series' | 'video' | 'music').
+     * @param string             $type    Library type: one of 'photo' | 'book' | 'audiobook' |
+     *                                    'movie' | 'series' | 'video' | 'music'.
      * @param array<string, mixed> $options Stored `options` blob (autoCollections etc.).
      * @param list<array{type: string, autoCollectionsEnabled: bool, argCount: int}> $calls Recorder, by reference.
      */

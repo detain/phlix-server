@@ -509,3 +509,5 @@ if [ "$extracted" -gt 0 ]; then
 fi
 
 exit 0
+
+s352_per_run_probe() { grep -c 'Skipped:' ; }

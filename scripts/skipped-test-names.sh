@@ -206,7 +206,13 @@
 #
 # KNOWN LIMITS, recorded rather than hidden. These are the measured inputs for which the
 # exit code above can be the WRONG one, and they are why this header does not claim that
-# every exit names a true cause:
+# every exit names a true cause. This block is RE-DERIVED for per-run evaluation (S352,
+# filed as `steps/S352-followup-perrun-segmentation.md`): the tool now segments the input
+# at PHPUnit's banners and terminating summary lines, attributes a testdox skip to the run
+# whose OWN `Skipped: N` carries it -- never to stray glyphs, which are attributed to NO
+# run -- and refuses a `No tests executed!` run with nothing named instead of printing an
+# empty set. Limits 1-3 record the members this closed, each stating what remains of it;
+# limits 4-6 are the still-open members:
 #
 #   1. CLOSED (S352): the contract is evaluated PER RUN, not on input-wide sums. A run's
 #      `declared`, `summarised`, `testdox_skips` and `nototals_declared` are accumulated
@@ -226,7 +232,7 @@
 #      (`No tests executed!` with nothing named) is REFUSED with a message naming the
 #      invisible suite skip instead of exiting 0 with an empty set. What remains: a plain
 #      run that genuinely executed nothing (a typo'd `--filter`, an empty directory)
-#      prints the identical `No tests executed!` shape, so it is refused too -- loudly,
+#      prints a BYTE-IDENTICAL `No tests executed!` shape, so it is refused too -- loudly,
 #      with no set written -- and the message says to verify the invocation. `tests/`
 #      still contains no skipped suite, so the testdox half is latent, but the AC2
 #      fixtures drive the real binary.
@@ -260,13 +266,32 @@
 #      output whose config you have checked, compare the list header text against this
 #      parser before touching phpunit.xml. Per-run segmentation does not settle this one
 #      either: a header the parser cannot see is invisible however the input is split.
+#   6. the input is assumed to be CONCATENATED runs: one PHPUnit run's output followed by
+#      the next's, as `./vendor/bin/phpunit 2>&1 | scripts/skipped-test-names.sh` and a
+#      single job's `gh run view --log` both produce. `gh run view --log` prefixes every
+#      line with `job<TAB>step<TAB>timestamp ` and the normalisation strips that prefix,
+#      but it does NOT GROUP the lines by job: when two jobs' PHPUnit runs are INTERLEAVED
+#      in one log (parallel jobs), the banner-delimited segmentation splits at the wrong
+#      boundaries. Measured on THIS version: two banners followed by either run's body
+#      exits 2 naming run 1 ("no PHPUnit terminating summary line was seen... Feed this
+#      script a complete run") about input that IS complete -- the refusal is the RIGHT
+#      outcome (nothing silently merged, no set written) and the CAUSE is wrong. A merged
+#      segment whose arithmetic nets is possible in principle, but the first run's exit 2
+#      always fires first in the measured shape, so a silently-wrong set was not produced.
+#      The documented recipe is safe when a workflow's PHPUnit invocations are sequential
+#      steps of ONE job; for parallel jobs, pipe each job's log separately
+#      (`gh run view --log --job <job-id>`).
 #
 # stdout carries ONLY the name set, so `comm` and `diff` can consume it directly.
 #
 # =============================================================================
 # THE ONE-LINER, for when you do not have this script to hand
 # =============================================================================
-# (identical extraction, without the denominators or the exit contract)
+# (identical extraction, but WITHOUT the per-run segmentation, the denominators and the
+# exit contract of the real script: it cannot attribute a ` ↩ ` glyph to the run that
+# printed it, cannot refuse a `No tests executed!` run, and will NET several PHPUnit runs
+# into one set instead of judging each run separately. Use it only on a SINGLE run's
+# output, or where the real script would exit 0 anyway.)
 #
 #   sed -E 's/\r$//; s/\x1B\[[0-9;]*[A-Za-z]//g; s/^[^\t]*\t[^\t]*\t[^0-9]*[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+Z //' \
 #     | awk '/^There (was|were) [0-9]+ skipped test suites?:$/{m="s";next} \

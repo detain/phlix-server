@@ -18,9 +18,10 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   run's own arithmetic), and the first failing run's exit code wins — so one run's shortfall
   can no longer be paid for by another run's surplus and net to a code right for the sum and
   wrong for both runs (KNOWN LIMIT 1 closed). The input-wide tallies still printed on stderr
-  are audit-only and decide nothing. Two more members of that family close with it: exit 5 now
-  rests on the run's OWN testdox glyphs, so stray ` ↩ ` glyphs from other output in the log
-  are attributed to NO run and can never reach it (AC2a / KNOWN LIMIT 3 closed), and a
+are audit-only and decide nothing. Two more members of that family close with it: exit 5 now
+rests on the run's OWN testdox glyphs, so stray ` ↩ ` glyphs outside every run's segment —
+before any PHPUnit banner, or after a run's terminating summary line — are attributed to NO
+run and can never reach it (AC2a / KNOWN LIMIT 3 closed), and a
   `--testdox` run together with a skipped SUITE is attributed from the run's own `Skipped: N`
   — glyph-less suite skips included — so the mixed shape exits 5 with "Do NOT change
   phpunit.xml" instead of accusing the config, and the suite-skip-only shape (`No tests

@@ -211,8 +211,10 @@
 # every exit names a true cause. This block is RE-DERIVED for per-run evaluation (S352,
 # filed as `steps/S352-followup-perrun-segmentation.md`): the tool now segments the input
 # at PHPUnit's banners and terminating summary lines, attributes a testdox skip to the run
-# whose OWN `Skipped: N` carries it -- never to stray glyphs, which are attributed to NO
-# run -- and refuses a `No tests executed!` run with nothing named instead of printing an
+# whose OWN `Skipped: N` carries it -- never to stray glyphs outside every run's segment
+# (before any PHPUnit banner, or after a run's terminating summary line, since the segment
+# is flushed and closed at that line), which are attributed to NO run -- and refuses a
+# `No tests executed!` run with nothing named instead of printing an
 # empty set. Limits 1-3 record the members this closed, each stating what remains of it;
 # limits 4-6 are the still-open members:
 #

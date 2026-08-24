@@ -681,16 +681,21 @@ name those skips, with or without `--display-skipped`. No workflow passes `--tes
 any more (`syncplay-e2e.yml` dropped it in S345 for exactly this reason). If you add it
 back, or use it locally, the script exits **5** and says so — do **not** "fix"
 `phpunit.xml` in response; re-run without `--testdox`. Exit 5 is decided inside the
-run whose OWN glyphs prove it is a testdox run: any ` ↩ ` glyph marks the run, and
-because the attribution uses the run's own `Skipped: N` rather than the glyph count,
-the glyph-less suite skip (a `testSuiteSkipped` event produces no glyph) is accounted
-for too. When the run's own glyphs cannot carry the whole shortfall — fewer glyphs
-than unnamed skips, or a surplus — nothing is attributed to testdox and both causes
-are named, so `phpunit.xml` is not exonerated. The surplus case is not a real testdox
-run — PHPUnit counts every glyph it prints in the same run's `Skipped: N`, so a
-surplus can only come from other output sharing the log, which `gh run view --log`
-makes routine — and stray glyphs from that other output are attributed to NO run by
-the segmentation, so they can never reach exit 5 whatever their count. Exit 5 is also
+run whose OWN glyphs prove it is a testdox run: any ` ↩ ` glyph that does not surplus
+the run's shortfall marks the run, and because the attribution uses the run's own
+`Skipped: N` rather than the glyph count, a SINGLE glyph is enough to carry the whole
+shortfall to exit 5 — the glyph-less suite skip (a `testSuiteSkipped` event produces
+no glyph) is accounted for exactly this way. Only a SURPLUS — more glyphs than the
+run's shortfall, which no real testdox run can produce because PHPUnit counts every
+glyph it prints in the same run's `Skipped: N` — attributes nothing to testdox: both
+causes are then named and `phpunit.xml` is not exonerated. A surplus can only come
+from other output sharing the log, which `gh run view --log` makes routine. Stray
+glyphs are attributed to NO run only when they fall outside every run's segment —
+before any PHPUnit banner, or after a run's terminating summary line, since the
+segment is flushed and closed at that line — so those can never reach exit 5 whatever
+their count. A stray glyph that lands INSIDE a run's segment is attributed to that
+run and can carry it to exit 5, because it is arithmetically identical to the genuine
+mixed testdox shape above. Exit 5 is also
 taken for a run that ends `No tests executed!` with **nothing named**: a whole-suite
 skip under `--testdox` prints exactly that (the suite skip is invisible), so a
 quietly-empty set would be a lie. The message says to verify the invocation, because

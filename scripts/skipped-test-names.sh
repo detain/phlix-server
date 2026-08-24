@@ -658,3 +658,205 @@ segment_runs() {
         }
     '
 }
+
+# =============================================================================
+# S352 — AC1 step 2: per-run verdict + aggregation (DEAD CODE until step 3 wires it in)
+# =============================================================================
+# evaluate_segment() applies the SAME decision tree as the main flow to ONE
+# run's fields as accumulated by segment_runs(): idx, banner, declared,
+# summarised, nototals_declared, testdox_skips, extracted, has_summary. It
+# echoes ONE verdict line to stdout --
+#
+#   RUN\t<idx>\t<exit>\t<message>
+#
+# -- and returns the exit code, so a caller can do
+# `verdict="$(evaluate_segment "$idx" "$banner" ...)"; code=$?`.
+#
+# The tree mirrors the main flow branch-for-branch. `summarisable_declared` is
+# declared minus what the `No tests executed!` runs declared (the same baseline
+# the main flow computes at the end of its preamble), and the checks run in the
+# same order and with the same gating:
+#   * has_summary == 0       -> exit 2  (a banner-opened run that never reached
+#     a terminating summary has no trustworthy arithmetic; the per-run mirror
+#     of the main flow's input-wide "not a PHPUnit run" guard)
+#   * summarised > summarisable_declared -> exit 5 when testdox_skips EXACTLY
+#     covers the missing names (a surplus attributes NOTHING, exactly as in the
+#     main flow), else exit 4 when no detail list was printed at all, else
+#     exit 3 (partial set, not written)
+#   * declared > summarised with over > nototals_declared -> exit 3
+#   * extracted != declared  -> exit 3
+#   * otherwise              -> exit 0
+# The last three checks are SEQUENTIAL ifs, not an elif chain, because the main
+# flow's over-count branch does not always exit (the over-count can be fully
+# explained by `No tests executed!` runs) and the extracted check must still
+# run in that case.
+evaluate_segment() {
+    local idx="$1"
+    local banner="$2"
+    local declared="$3"
+    local summarised="$4"
+    local nototals_declared="$5"
+    local testdox_skips="$6"
+    local extracted="$7"
+    local has_summary="$8"
+
+    local summarisable_declared=$((declared - nototals_declared))
+
+    # A run that never completed has no trustworthy arithmetic: its set proves
+    # nothing, exactly as the main flow's exit 2 says of an input with no
+    # terminating summary line anywhere.
+    if [ "$has_summary" -eq 0 ]; then
+        printf 'RUN\t%s\t%s\t%s\n' "$idx" 2 "run $idx: no PHPUnit terminating summary line was seen, so this run's set proves nothing (it was opened by a banner and never completed). Feed this script a complete run: ./vendor/bin/phpunit 2>&1 or gh run view <id> --log."
+        return 2
+    fi
+
+    # The run under-reports names: skips were counted that no list named.
+    if [ "$summarised" -gt "$summarisable_declared" ]; then
+        missing=$((summarised - summarisable_declared))
+
+        # Testdox gate -- identical to the main flow: a SURPLUS of ` ↩ ` glyphs
+        # attributes NOTHING (a real testdox run cannot produce one, because
+        # every glyph it prints is also counted in its own `Skipped: N`), an
+        # exact match is the one arithmetic under which testdox alone can
+        # account for the whole shortfall.
+        if [ "$testdox_skips" -gt "$missing" ]; then
+            testdox_covers=0
+            testdox_note=" $testdox_skips testdox skip glyph(s) are present but MORE than the $missing missing name(s), so they attribute NOTHING (a real testdox run cannot produce a surplus);"
+        else
+            testdox_covers="$testdox_skips"
+            testdox_note=" testdox accounts for $testdox_covers of the missing name(s);"
+        fi
+        residual=$((missing - testdox_covers))
+
+        # residual == 0 now implies testdox_skips == missing > 0: every unnamed
+        # skip is matched one-for-one by a testdox skip glyph -- the arithmetic
+        # of a genuine testdox run, and the only one under which testdox alone
+        # can account for the whole shortfall.
+        if [ "$residual" -eq 0 ]; then
+            printf 'RUN\t%s\t%s\t%s\n' "$idx" 5 "run $idx: all $missing skipped test(s) counted but not named are matched one-for-one by testdox skip glyphs ($testdox_skips of them). PHPUnit hardcodes displayDetailsOnSkippedTests FALSE when --testdox is in effect (vendor/phpunit/phpunit/src/TextUI/Output/Facade.php:204-221), so neither phpunit.xml nor --display-skipped can name those skips. Do NOT change phpunit.xml; re-run WITHOUT --testdox."
+            return 5
+        fi
+
+        # The shortfall survives testdox's share, and this run printed NO
+        # detail list at all: the only causes that can carry it are the config
+        # attribute being off or the invocation not loading phpunit.xml.
+        if [ "$summarisable_declared" -eq 0 ]; then
+            printf 'RUN\t%s\t%s\t%s\n' "$idx" 4 "run $idx: $residual skipped test(s) counted, NOT named, not explained by testdox, and this run printed NO skipped-details list at all ($testdox_skips testdox skip glyph(s) present). phpunit.xml has lost displayDetailsOnSkippedTests=true (S345), or the invocation did not load phpunit.xml (a -c/--configuration pointing elsewhere, or --no-configuration). The name set cannot be recovered from this run; fix the config and re-run."
+            return 4
+        fi
+
+        # A NON-empty list exists but still does not cover the count: some run
+        # printed no skipped list, so the set would be PARTIAL.
+        printf 'RUN\t%s\t%s\t%s\n' "$idx" 3 "run $idx: the run summary reports $summarised skipped test(s) but the detail lists declared only $summarisable_declared, so $missing name(s) are missing.$testdox_note some run printed no skipped list: check that every invocation loads phpunit.xml (displayDetailsOnSkippedTests=true) and that none of them uses --testdox. The set would be PARTIAL, so it is not written."
+        return 3
+    fi
+
+    # More declared than summarised is legitimate only up to what the
+    # `No tests executed!` runs declared (the one shape that publishes a list
+    # with no totals line). This must NOT be an elif of the branch above: it is
+    # reached with `over <= nototals_declared` too, and the extracted check
+    # below must still run then (mirror of the main flow's sequential ifs).
+    if [ "$declared" -gt "$summarised" ]; then
+        over=$((declared - summarised))
+        if [ "$over" -gt "$nototals_declared" ]; then
+            printf 'RUN\t%s\t%s\t%s\n' "$idx" 3 "run $idx: the detail lists declared $declared skipped test(s)/suite(s) but the run summary reports only $summarised. At most $nototals_declared of that difference is explained by the No tests executed! shape, leaving $((over - nototals_declared)) unexplained. The output format has drifted; fix this parser rather than trusting the set."
+            return 3
+        fi
+    fi
+
+    # The extracted entries no longer match the declared headers.
+    if [ "$extracted" -ne "$declared" ]; then
+        printf 'RUN\t%s\t%s\t%s\n' "$idx" 3 "run $idx: PHPUnit declared $declared skipped test(s)/suite(s) but $extracted name(s) were extracted. The entry format has drifted; fix this parser rather than trusting the set."
+        return 3
+    fi
+
+    printf 'RUN\t%s\t%s\t%s\n' "$idx" 0 "run $idx: ok -- summarised $summarised, declared $declared (of which $nototals_declared by No tests executed! runs), extracted $extracted, $testdox_skips testdox skip glyph(s)."
+    return 0
+}
+
+# evaluate_all_runs() consumes segment_runs()'s stdout on stdin: it parses each
+# run's RUN\t metadata records, accumulates the run's buffered names, and calls
+# evaluate_segment() once per run. If ANY run fails the contract, ALL names are
+# discarded, stderr enumerates EVERY failing run (ordinal, banner, the run's
+# own arithmetic via its verdict line), and the function returns the FIRST
+# failing run's exit code. If every run passes, the buffered names are emitted
+# on stdout for the existing `LC_ALL=C sort -u` guard to consume.
+evaluate_all_runs() {
+    local current_idx=""
+    local banner="" declared="" summarised="" nototals_declared="" testdox_skips="" extracted="" has_summary=""
+    local all_names=""
+    local ordinal=0
+    local fail_count=0
+    local first_fail_code=0
+    local -a fail_detail=()
+
+    # Evaluate the run whose fields currently sit in the accumulators. Bash's
+    # dynamic scoping lets this helper read and write the caller's locals, so
+    # it stays inside evaluate_all_runs and is never called from anywhere else.
+    evaluate_accumulated_run() {
+        local verdict_line
+        verdict_line="$(evaluate_segment "$current_idx" "$banner" "$declared" "$summarised" "$nototals_declared" "$testdox_skips" "$extracted" "$has_summary")"
+        local code=$?
+        if [ "$code" -ne 0 ]; then
+            fail_count=$((fail_count + 1))
+            if [ "$first_fail_code" -eq 0 ]; then
+                first_fail_code="$code"
+            fi
+            local banner_label="$banner"
+            if [ -z "$banner_label" ]; then
+                banner_label="<no banner>"
+            fi
+            fail_detail+=("skipped-test-names:   failing run #$current_idx (ordinal $ordinal): banner \"$banner_label\"")
+            fail_detail+=("skipped-test-names:   $verdict_line")
+        fi
+    }
+
+    while IFS= read -r line; do
+        if [[ "$line" =~ ^RUN$'\t'([0-9]+)$'\t'([a-z_]+)$'\t'(.*)$ ]]; then
+            local ridx="${BASH_REMATCH[1]}"
+            local field="${BASH_REMATCH[2]}"
+            local value="${BASH_REMATCH[3]}"
+
+            if [ "$ridx" != "$current_idx" ]; then
+                if [ -n "$current_idx" ]; then
+                    evaluate_accumulated_run
+                fi
+                current_idx="$ridx"
+                ordinal=$((ordinal + 1))
+                banner=""; declared=""; summarised=""; nototals_declared=""; testdox_skips=""; extracted=""; has_summary=""
+            fi
+
+            case "$field" in
+                banner)            banner="$value" ;;
+                declared)          declared="$value" ;;
+                summarised)        summarised="$value" ;;
+                nototals_declared) nototals_declared="$value" ;;
+                testdox_skips)     testdox_skips="$value" ;;
+                extracted)         extracted="$value" ;;
+                has_summary)       has_summary="$value" ;;
+            esac
+        else
+            # A bare line is one of the current run's buffered names.
+            if [ -n "$current_idx" ]; then
+                all_names="${all_names:+$all_names$'\n'}$line"
+            fi
+        fi
+    done
+
+    if [ -n "$current_idx" ]; then
+        evaluate_accumulated_run
+    fi
+
+    if [ "$fail_count" -gt 0 ]; then
+        printf 'skipped-test-names: FATAL -- per-run accounting: %s of %s run(s) failed the skipped-test contract; first failing exit %s. The name set would be PARTIAL, so it is NOT written. Failing run(s):\n' \
+            "$fail_count" "$ordinal" "$first_fail_code" >&2
+        printf '%s\n' "${fail_detail[@]}" >&2
+        return "$first_fail_code"
+    fi
+
+    # ALL OK: emit the buffered names for the existing sort -u guard.
+    if [ -n "$all_names" ]; then
+        printf '%s\n' "$all_names"
+    fi
+    return 0
+}

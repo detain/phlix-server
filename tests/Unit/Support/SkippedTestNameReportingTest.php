@@ -1010,11 +1010,14 @@ final class SkippedTestNameReportingTest extends TestCase
     }
 
     /**
-     * The middle case: testdox explains SOME of the shortfall. Neither "it is testdox, leave
-     * the config alone" nor "the config is the only cause" is true, so both are named and the
-     * config is not exonerated.
+     * The middle case RE-DERIVED for per-run accounting (S352). The input-wide "testdox
+     * explains SOME of the shortfall" shape is unreachable: each run is judged on its own
+     * arithmetic, so the testdox run's shortfall is fully explained by ITS OWN glyphs
+     * (exit 5, and "Do NOT change phpunit.xml" is correct for IT) while the count-only
+     * run's lost list is a separate exit-4 diagnosis naming phpunit.xml. The first failing
+     * run — the testdox run — sets the exit code, and every failing run is named.
      */
-    public function test_testdox_that_explains_only_part_of_the_shortfall_names_both_causes(): void
+    public function test_a_testdox_run_and_a_count_only_run_get_separate_per_run_diagnoses(): void
     {
         $testdox = $this->runRealPhpunit([self::REAL_TEST_FILE, '--testdox']);
         $this->assertTheFixtureStillSkipsExactlyOneTest($testdox);
@@ -1024,14 +1027,93 @@ final class SkippedTestNameReportingTest extends TestCase
             $testdox . "\n" . self::COUNT_ONLY,
         ));
 
-        self::assertSame(4, $result['exit'], $result['stderr']);
-        self::assertStringContainsString(
-            'BOTH causes are in play',
-            $result['stderr'],
-            'one testdox skip cannot account for five missing names; the message must name the '
-            . 'residual as well',
+        self::assertSame(
+            5,
+            $result['exit'],
+            "per-run accounting: the testdox run's own shortfall is matched one-for-one by its\n"
+            . "own glyphs (exit 5), and the count-only run's lost list is diagnosed separately\n"
+            . "(exit 4). The input-wide 'explains only part of the shortfall' shape no longer\n"
+            . "exists. stderr:\n" . $result['stderr'],
         );
-        self::assertStringNotContainsString('Do NOT change phpunit.xml', $result['stderr']);
+        self::assertSame([], $result['lines'], 'no set may be written while any run is missing names');
+        self::assertStringContainsString('per-run accounting', $result['stderr']);
+        self::assertStringContainsString('failing run #1', $result['stderr']);
+        self::assertStringContainsString(
+            'Do NOT change phpunit.xml',
+            $result['stderr'],
+            'run 1 is a genuine testdox run, so for IT the exoneration is correct — the false '
+            . 'input-wide exoneration is what per-run accounting removed',
+        );
+        self::assertStringContainsString('failing run #2', $result['stderr']);
+        self::assertStringContainsString(
+            'displayDetailsOnSkippedTests',
+            $result['stderr'],
+            'run 2 is a genuine count-only run, so for IT phpunit.xml IS the cause',
+        );
+    }
+
+    /**
+     * AC1 (S352): the per-run proof built from TWO REAL runs. Run A over-declares — a
+     * suite-skip probe publishes 1 detail-list entry and NO `Skipped: N` term of its own
+     * (`No tests executed!`, so declared 1 > summarised 0). Run B under-declares — a real
+     * `--testdox` run counts its skip in `Skipped: N` and can never name it (declared 0 <
+     * summarised 1). Input-wide sums could net the pair to a code that is right for the sum
+     * and wrong for both runs; per-run accounting refuses and NAMES the failing run (run B,
+     * the testdox run, exit 5 — never exit 0). Deleting the `run_count >= 2` segmentation
+     * branch makes this input fall back to input-wide sums, where no run is named at all.
+     */
+    public function test_ac1_a_multi_run_input_where_run_a_over_declares_and_run_b_under_declares_names_run_b(): void
+    {
+        // Run A over-declares: a suite-skip probe declares 1 entry and prints no totals
+        // line, so its declared count has no `Skipped: N` term to match.
+        $runA = $this->runRealPhpunit([$this->writeSuiteSkipProbe()]);
+        self::assertStringContainsString(
+            'No tests executed!',
+            $runA,
+            'run A must be the no-totals shape (declared > summarised with no Skipped: N term), '
+            . 'or this fixture is not the over-declaring half of the AC1 pair',
+        );
+        self::assertStringNotContainsString('Tests: ', $runA, 'run A must publish no totals line');
+
+        // Run B under-declares: a real testdox run counts its skip in `Skipped: N` and can
+        // never name it, so declared (0) < summarised (1).
+        $runB = $this->runRealPhpunit([self::REAL_TEST_FILE, '--testdox']);
+        $this->assertTheFixtureStillSkipsExactlyOneTest($runB);
+        self::assertStringNotContainsString(
+            'skipped test:',
+            $runB,
+            'premise: testdox never names a skipped test (Facade.php:204-221), so run B really '
+            . 'under-declares',
+        );
+
+        $result = $this->runScript($this->fixtureFile('ac1-over-under.log', $runA . "\n" . $runB));
+
+        self::assertNotSame(
+            0,
+            $result['exit'],
+            "run A over-declares and run B under-declares, so the pair must NEVER net to exit 0\n"
+            . "(that would hand comm a set short by run B's name). stderr:\n" . $result['stderr'],
+        );
+        self::assertSame(
+            5,
+            $result['exit'],
+            "run B (the testdox run) is the first failing run and must set the exit code.\n"
+            . "stderr:\n" . $result['stderr'],
+        );
+        self::assertSame([], $result['lines'], 'no partial set may be written');
+        self::assertStringContainsString('per-run accounting', $result['stderr']);
+        self::assertStringContainsString(
+            'failing run #2',
+            $result['stderr'],
+            'the failing run must be NAMED (run B, the testdox run) — the input-wide sums name '
+            . 'no run at all, which is the shape deleting the segmentation would restore',
+        );
+        self::assertStringNotContainsString(
+            'failing run #1',
+            $result['stderr'],
+            'run A (the no-totals run) is legitimate on its own and must not be blamed',
+        );
+        self::assertStringContainsString('Do NOT change phpunit.xml', $result['stderr']);
     }
 
     /**
@@ -1069,22 +1151,22 @@ final class SkippedTestNameReportingTest extends TestCase
     }
 
     /**
-     * Round-3 finding 1, measured verbatim. `declared` is an input-wide SUM, so the entries a
-     * `No tests executed!` run declares — which have no `Skipped: N` term of their own — used to
-     * cancel a DIFFERENT run's lost names. The shortfall then shrank to what testdox could
-     * carry, so exit 5 fired and told the reader "Do NOT change phpunit.xml" about a log
-     * containing a run whose list phpunit.xml had genuinely lost. That is round-2's HIGH,
-     * verbatim, one layer down.
+     * Round-3 finding 1, measured verbatim — RE-DERIVED for per-run accounting (S352).
+     * The input-wide sums used to let the `No tests executed!` run's declared entries
+     * cancel a DIFFERENT run's lost names, shrinking the shortfall to what testdox could
+     * carry and printing "Do NOT change phpunit.xml" about a log that also contained a
+     * count-only run whose list phpunit.xml HAD genuinely lost. Per-run accounting makes
+     * that family unreachable: the suite-skip run is judged alone (its 2 declared entries
+     * have no `Skipped: N` term of their own and can no longer pay for anything) and each
+     * failing run gets its own diagnosis. The first failing run is the testdox run (exit 5
+     * — for IT the exoneration is correct, because its own glyphs match its own shortfall);
+     * the count-only run fails on its own (exit 4) and phpunit.xml stays named for IT.
      *
-     * Two of the three halves are the real binary: two suite-skipping probe classes (declared 2,
-     * summarised 0) and a real `--testdox` run over a two-skip class (summarised 2, `↩`×2). The
-     * third is master's own pre-S345 count-only shape, i.e. `phpunit.xml` really broken for that
-     * run.
-     *
-     * Measured on the pristine script: exit 5, "all 2 skipped test(s) ... are accounted for by
-     * testdox output ... Do NOT change phpunit.xml".
+     * All three halves are real: two suite-skipping probe classes (declared 2,
+     * summarised 0), a real `--testdox` run over a two-skip class (summarised 2, `↩`×2),
+     * and master's own pre-S345 count-only shape for the third.
      */
-    public function test_a_no_totals_runs_entries_cannot_pay_for_another_runs_lost_names(): void
+    public function test_per_run_accounting_judges_a_no_totals_run_alone_and_names_each_failing_run(): void
     {
         $suites = $this->runRealPhpunit([
             $this->writeSuiteSkipProbe(),
@@ -1120,25 +1202,28 @@ final class SkippedTestNameReportingTest extends TestCase
         ));
 
         self::assertSame(
-            4,
+            5,
             $result['exit'],
-            "the suite-skip run declared 2 entries with NO count of its own, so they cannot offset\n"
-            . "the count-only run's missing list. Exit 5 here is round-2's HIGH resurrected: it\n"
-            . "tells the reader to leave phpunit.xml alone about a log in which phpunit.xml IS a\n"
-            . "cause. stderr:\n" . $result['stderr'],
+            "per-run accounting judges each run independently: the suite-skip run's 2 declared\n"
+            . "entries have no Skipped: N term of their own, so they cannot offset ANY other run\n"
+            . "(that netting family is unreachable). The first failing run is run 2, a GENUINE\n"
+            . "testdox run (exit 5 — its own glyphs match its own shortfall), and run 3's lost\n"
+            . "list is diagnosed on its own (exit 4). stderr:\n" . $result['stderr'],
         );
-        self::assertSame([], $result['lines'], 'no set may be written while names are missing');
-        self::assertStringNotContainsString(
+        self::assertSame([], $result['lines'], 'no set may be written while any run is missing names');
+        self::assertStringContainsString('per-run accounting', $result['stderr']);
+        self::assertStringContainsString('failing run #2', $result['stderr']);
+        self::assertStringContainsString(
             'Do NOT change phpunit.xml',
             $result['stderr'],
-            'the exoneration sentence may only appear when testdox accounts for EVERY unnamed '
-            . 'skip in the input, and here a count-only run has lost its list',
+            'run 2 is a genuine testdox run, so ITS diagnosis is the testdox one — the false '
+            . 'exoneration of an input-wide sum is what per-run accounting removed',
         );
+        self::assertStringContainsString('failing run #3', $result['stderr']);
         self::assertStringContainsString(
-            'BOTH causes are in play',
+            'displayDetailsOnSkippedTests',
             $result['stderr'],
-            'testdox carries part of this shortfall and the missing list carries the rest; both '
-            . 'must be named',
+            'run 3 is a genuine count-only run, so ITS diagnosis must still name phpunit.xml',
         );
     }
 

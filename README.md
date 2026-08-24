@@ -759,10 +759,11 @@ version:
   blaming `phpunit.xml` rather than as exit 3 blaming the parser — the right refusal
   with the wrong cause.
 
-The script's header carries all six limits (three closed by S352, three still open),
-numbered, each with the input that reaches it, and enumerates every exit path with
-its input class; that header is the canonical statement of this contract, and this
-section is its summary.
+The script's header carries all six limits (three closed by S352, three still open,
+plus the refusal side-effect of limit 2 — the genuinely-empty run shape, listed
+first above), numbered, each with the input that reaches it, and enumerates every
+exit path with its input class; that header is the canonical statement of this
+contract, and this section is its summary.
 
 **Keep the suite hermetic w.r.t. the environment.** `PHLIX_DOMAIN` changes real
 behaviour (it is the OAuth callback-URL allowlist — see

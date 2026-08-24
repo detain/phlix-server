@@ -346,12 +346,16 @@ esac
 # A run is delimited by PHPUnit's banner (`PHPUnit N.N ...`): each banner flushes
 # the previous run and opens the next. A terminating summary line
 # (`OK (`, `OK, but `, `FAILURES!`, `ERRORS!`, `WARNINGS!`, `No tests executed!`,
-# `Tests: `) with no open run implicitly opens one, so a banner-less log fragment
-# still yields a run. The run is flushed and CLOSED at its LAST terminating line --
+# `Tests: `) or a detail-list header (`There was/were N skipped test(s)/suite(s):`)
+# with no open run implicitly opens one, so a banner-less log fragment still yields
+# a run. The run is flushed and CLOSED at its LAST terminating line --
 # the `Tests: ...` totals line, or `No tests executed!` -- so nothing after it is
 # attributed to it (real testdox glyphs always precede the summary). Everything else
 # that is not inside an opened run is ignored (e.g. stray ` ↩ ` glyphs before any
-# banner, or after a run's terminating summary, are not attributed to any run).
+# banner, or after a run's terminating summary, are not attributed to any run); a
+# detail-list header after a closed segment is NOT ignored -- it opens a fresh
+# implicit run, which the per-run verdict then refuses for lacking a summary, so
+# post-flush list content is never silently dropped (round 2, finding 1).
 #
 # Each run accumulates the same fields the main flow sums across the whole input
 # — `declared` (detail-list headers, both kinds), `summarised` (the `Skipped: N`
@@ -445,7 +449,13 @@ segment_runs() {
             next
         }
 
+        # A detail-list header with no open run is content after a closed segment
+        # (the run is flushed and CLOSED at its terminating summary line) or before
+        # any banner: open an implicit run for it exactly like the summary branch
+        # does, so post-flush list content is attributed to a fresh run and REFUSED
+        # loudly (no summary) instead of being silently dropped (round 2, finding 1).
         /^There (was|were) [0-9]+ skipped test suites?:$/ {
+            if (!open) open_run("")
             declared += $3
             pending += $3
             mode = "suite"
@@ -453,6 +463,7 @@ segment_runs() {
         }
 
         /^There (was|were) [0-9]+ skipped tests?:$/ {
+            if (!open) open_run("")
             declared += $3
             pending += $3
             mode = "test"
@@ -547,7 +558,7 @@ evaluate_segment() {
     # nothing, exactly as the main flow's exit 2 says of an input with no
     # terminating summary line anywhere.
     if [ "$has_summary" -eq 0 ]; then
-        printf 'RUN\t%s\t%s\t%s\n' "$idx" 2 "run $idx: no PHPUnit terminating summary line was seen, so this run's set proves nothing (it was opened by a banner and never completed). Feed this script a complete run: ./vendor/bin/phpunit 2>&1 or gh run view <id> --log."
+        printf 'RUN\t%s\t%s\t%s\n' "$idx" 2 "run $idx: no PHPUnit terminating summary line was seen, so this run's set proves nothing (it was opened but never completed). Feed this script a complete run: ./vendor/bin/phpunit 2>&1 or gh run view <id> --log."
         return 2
     fi
 

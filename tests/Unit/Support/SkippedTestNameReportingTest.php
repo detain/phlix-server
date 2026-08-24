@@ -1430,6 +1430,46 @@ final class SkippedTestNameReportingTest extends TestCase
     }
 
     /**
+     * Round-2 review finding 1 (S352 fix round 2): the round-1 flush closes the segment
+     * AT the terminating summary line, but the detail-list header branches did not get
+     * the same `if (!open) open_run("")` guard the summary branch has — so a list header
+     * + entry AFTER a closed segment accumulated into the closed run's already-flushed
+     * `declared`/`extracted` and was silently dropped, with the run's verdict already
+     * passed: exit 0, a set missing the post-flush names. Pre-segmentation the same
+     * shape stayed open and hit `declared > summarised` → exit 3; the round-1 flush
+     * traded that loud refusal for a silent one. The guard re-opens an implicit run for
+     * the post-close list, which then has no terminating summary and is REFUSED
+     * (exit 2). Mutation-proof: reverting the guard makes this input exit 0 again.
+     */
+    public function test_list_content_after_a_closed_run_is_refused_not_quietly_dropped(): void
+    {
+        $result = $this->runScript($this->fixtureFile(
+            'post-summary-list.log',
+            "PHPUnit 10.5.64\n\nThere was 1 skipped test:\n\n"
+            . "1) Phlix\Tests\Unit\Alpha\AlphaTest::testGamma\nreason\n\n"
+            . "OK, but there were issues!\nTests: 9, Assertions: 12, Skipped: 1.\n\n"
+            . "There was 1 skipped test:\n\n"
+            . "1) Phlix\Tests\Unit\Beta\BetaTest::testDelta\nreason\n",
+        ));
+
+        self::assertSame(
+            2,
+            $result['exit'],
+            "a list header + entry after a run's terminating summary is foreign output,\n"
+            . "not part of the closed run: it must open a fresh implicit run that fails\n"
+            . "loudly (no summary) instead of silently exiting 0 with a set missing the\n"
+            . "post-flush names. stderr:\n" . $result['stderr'],
+        );
+        self::assertSame([], $result['lines'], 'the set would be PARTIAL, so nothing may be written');
+        self::assertStringContainsString(
+            'run 2: no PHPUnit terminating summary line was seen',
+            $result['stderr'],
+            'the post-close list must be attributed to a fresh run and refused for having no '
+            . 'summary, not silently dropped into the closed run',
+        );
+    }
+
+    /**
      * The middle case RE-DERIVED for per-run accounting (S352). The input-wide "testdox
      * explains SOME of the shortfall" shape is unreachable: each run is judged on its own
      * arithmetic, so the testdox run's shortfall is fully explained by ITS OWN glyphs

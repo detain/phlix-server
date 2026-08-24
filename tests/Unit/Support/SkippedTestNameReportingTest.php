@@ -72,7 +72,7 @@ use Symfony\Component\Yaml\Yaml;
  *     on its own declared/summarised/extracted/testdox arithmetic; the first failing
  *     run's exit code wins and every failing run is named), so a multi-run log can no
  *     longer net one run's shortfall against another's surplus, and a stray ` ↩ ` from
- *     another tool is attributed to no run and can never reach the exit-5 equality
+ *     another tool is attributed to no run and can never reach the exit-5 branch
  *     (AC2a — see KNOWN LIMITS in `scripts/skipped-test-names.sh` for what remains).
  *     One member of that family — a SURPLUS of testdox skip glyphs, which no real testdox
  *     run can produce because PHPUnit counts every glyph it prints in the same run's
@@ -556,6 +556,140 @@ final class SkippedTestNameReportingTest extends TestCase
         );
     }
 
+    /**
+     * AC2 (S352): the mixed `--testdox` + skipped-SUITE shape. A testdox run emits a glyph
+     * per TEST result (TextUI/Output/TestDox/ResultPrinter::symbolFor), so the suite skip
+     * lands in `Skipped: N` with no glyph to attribute it to — before AC2 the attribution
+     * was the glyph count, this shape's shortfall came out one short of the glyphs, and the
+     * script accused `phpunit.xml` of a config that was correct and that testdox could not
+     * have named the residual skip either. The attribution is now the run's OWN `Skipped: N`
+     * once its glyphs prove it is a testdox run: the glyph-less suite skip is accounted for,
+     * and the run takes the testdox verdict (exit 5, "Do NOT change phpunit.xml").
+     *
+     * Mutation-proof: reverting `testdox_covers` from the run's `Skipped: N` back to the
+     * glyph count makes this exact input exit 4 and redden.
+     */
+    public function test_ac2_the_mixed_testdox_suite_skip_shape_takes_the_testdox_verdict(): void
+    {
+        $probe = $this->writeSuiteSkipProbe();
+
+        // The shape: one suite skip (glyph-less) plus one test skip (one `↩`), a single
+        // `Skipped: 2` and NO detail list — testdox hardcodes the details printer off.
+        $mixed = $this->runRealPhpunit([$probe, self::REAL_TEST_FILE, '--testdox']);
+
+        self::assertStringContainsString(
+            'Skipped: 2',
+            $mixed,
+            'the suite skip must count towards Skipped: N under --testdox, or this input is '
+            . 'not the mixed shape',
+        );
+        self::assertSame(
+            1,
+            preg_match_all('/^ \x{21A9} /mu', $mixed),
+            'testdox must print exactly ONE ↩ glyph — the test skip — and none for the '
+            . 'suite skip, or the glyph-less gap this AC exists for is not being measured',
+        );
+        self::assertStringNotContainsString(
+            'skipped test suite:',
+            $mixed,
+            'testdox never prints the skipped-suite details list (Facade.php:204-221), so '
+            . 'this run really does under-declare by the suite skip',
+        );
+
+        $result = $this->runScript($this->fixtureFile('ac2-testdox-suite-mixed.log', $mixed));
+
+        self::assertSame(
+            5,
+            $result['exit'],
+            "the mixed testdox+suite-skip run is a testdox run whose suite skip has no glyph,\n"
+            . "so testdox accounts for the WHOLE Skipped: N. Exit 4 here is the pre-AC2 false\n"
+            . "accusation -- it blames phpunit.xml, which is correct, for a skip testdox could\n"
+            . "not have named either. stderr:\n" . $result['stderr'],
+        );
+        self::assertSame([], $result['lines'], 'no partial set may be written');
+        self::assertStringContainsString('--testdox', $result['stderr']);
+        self::assertStringContainsString('Facade.php:204-221', $result['stderr']);
+        self::assertStringContainsString(
+            'Do NOT change phpunit.xml',
+            $result['stderr'],
+            'the mixed shape is a testdox shape: the config is exonerated, not accused',
+        );
+        self::assertStringNotContainsString(
+            'has lost displayDetailsOnSkippedTests',
+            $result['stderr'],
+            'phpunit.xml must NOT be named as the cause — that is the exact false diagnosis '
+            . 'AC2 removes',
+        );
+    }
+
+    /**
+     * AC2 (S352): the suite-skip-ONLY `--testdox` shape. Every suite skipped → `No tests
+     * executed!`, no totals line, no detail list, and a testSuiteSkipped event produces no
+     * glyph at all — so the run publishes NOTHING about the suite it skipped. Before AC2
+     * this exited 0 with an EMPTY set, reporting "nothing skipped" about an input that DID
+     * skip — the one outcome the exit contract exists to prevent. It is now REFUSED with a
+     * message naming the invisible suite skip.
+     *
+     * The message deliberately does not over-claim a cause: a plain run that genuinely
+     * executed nothing (a typo'd `--filter`, an empty directory) prints the identical
+     * shape, so it is refused too — loudly, with no set written (recorded in KNOWN LIMIT 2).
+     */
+    public function test_ac2_the_suite_skip_only_testdox_shape_is_refused_not_reported_as_empty(): void
+    {
+        $probe = $this->writeSuiteSkipProbe();
+
+        $alone = $this->runRealPhpunit([$probe, '--testdox']);
+
+        // The shape's premises, each with its own message: a whole-suite skip under testdox
+        // publishes no list, no totals and no glyph — the exact "quietly empty" input class.
+        self::assertStringContainsString(
+            'No tests executed!',
+            $alone,
+            'the probe class no longer skips its whole suite under --testdox, so this input '
+            . 'is not the suite-skip-only shape — regenerate the probe, do not touch phpunit.xml',
+        );
+        self::assertStringNotContainsString('Tests: ', $alone, 'this shape publishes no totals line');
+        self::assertSame(
+            0,
+            preg_match_all('/^ \x{21A9} /mu', $alone),
+            'a skipped SUITE emits no testdox glyph (symbolFor() emits one per TEST result), '
+            . 'so this shape really has zero glyphs for the script to attribute',
+        );
+
+        $result = $this->runScript($this->fixtureFile('ac2-testdox-suite-only.log', $alone));
+
+        self::assertSame(
+            5,
+            $result['exit'],
+            "a whole-suite skip under --testdox must NOT exit 0 with an empty set — that\n"
+            . "reports 'nothing skipped' about a run that skipped its suite. It is refused\n"
+            . "instead, naming the invisible suite skip. stderr:\n" . $result['stderr'],
+        );
+        self::assertSame([], $result['lines'], 'no set may be written for an unnameable skip');
+        self::assertStringContainsString(
+            'No tests executed!',
+            $result['stderr'],
+            'the refusal must quote the summary it is refusing about',
+        );
+        self::assertStringContainsString(
+            'INVISIBLE',
+            $result['stderr'],
+            'the refusal must NAME the invisible suite skip — the whole point of AC2\'s '
+            . 'second shape',
+        );
+        self::assertStringContainsString('--testdox', $result['stderr']);
+        self::assertStringContainsString(
+            'Do NOT change phpunit.xml',
+            $result['stderr'],
+            'the testdox shape is not a config fault: the config is exonerated, not accused',
+        );
+        self::assertStringNotContainsString(
+            'has lost displayDetailsOnSkippedTests',
+            $result['stderr'],
+            'phpunit.xml must NOT be named as the cause — the config is correct on this path',
+        );
+    }
+
     public function test_a_real_colorized_run_is_parsed_rather_than_refused(): void
     {
         // `colors="true"` in phpunit.xml means COLOR_AUTO, so a pipe is never colorized in
@@ -1025,8 +1159,8 @@ final class SkippedTestNameReportingTest extends TestCase
      *
      * Per-run segmentation closes it: segment_runs() attributes a glyph only to the run
      * that printed it, and a glyph before any PHPUnit banner is attributed to NO run — so
-     * this single count-only run's shortfall has no same-run glyphs to match, and the
-     * exit-5 one-for-one equality cannot be taken. The input falls to exit 4 naming
+     * this single count-only run's shortfall has no same-run glyphs to mark it as testdox,
+     * and the exit-5 branch cannot be reached. The input falls to exit 4 naming
      * phpunit.xml, with the stray glyph reported as evidence only (never exoneration).
      */
     public function test_ac2a_one_stray_skip_glyph_beside_a_count_only_run_cannot_reach_exit_5(): void
@@ -1040,7 +1174,7 @@ final class SkippedTestNameReportingTest extends TestCase
             4,
             $result['exit'],
             "one stray ↩ beside a count-only Skipped: 1 is NOT a testdox run: the glyph is\n"
-            . "attributed to no run, so exit 5 (the one-for-one testdox equality) must not be\n"
+            . "attributed to no run, so exit 5 (the testdox verdict) must not be\n"
             . "taken. This exact input exited 5 under input-wide sums (KNOWN LIMIT 3); per-run\n"
             . "attribution is what AC2a closes. stderr:\n" . $result['stderr'],
         );
@@ -1061,7 +1195,7 @@ final class SkippedTestNameReportingTest extends TestCase
             'attributed to this run',
             $result['stderr'],
             'the message must state that the stray glyph is not attributed to this run, or '
-            . 'the fixture cannot tell per-run attribution from the input-wide equality it '
+            . 'the fixture cannot tell per-run attribution from the input-wide sums it '
             . 'replaced',
         );
     }

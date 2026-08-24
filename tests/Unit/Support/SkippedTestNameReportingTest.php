@@ -67,17 +67,20 @@ use Symfony\Component\Yaml\Yaml;
  *     `comm`-ready set — and each refusal path names the cause its own arithmetic
  *     supports, for every input measured here, because a parser that quietly matches
  *     NOTHING reads as a pass and a WRONG diagnosis is worse than none. That is a set of
- *     pinned inputs, NOT a proof over all inputs: the script's denominators are
- *     input-wide sums, so a multi-run log can still net one run's shortfall against
- *     another's surplus (see KNOWN LIMITS in `scripts/skipped-test-names.sh`, and the
- *     per-run-segmentation follow-up it points at). One member of that family — a
- *     SURPLUS of testdox skip glyphs, which no real testdox run can produce because
- *     PHPUnit counts every glyph it prints in the same run's `Skipped: N` — was closed
- *     by DELETING the branch that read it rather than by another clamp, since it had no
- *     legitimate input and could only ever print a false cause. Its fixture uses ` ↩ `
- *     specifically: the earlier stray-glyph fixture used `✔`, which never reaches the
- *     attribution arithmetic at all, and that is why the defect survived three rounds of
- *     review. Both glyphs are fixtured now.
+ *     pinned inputs, NOT a proof over all inputs. Since S352 the contract is evaluated
+ *     PER RUN (segment_runs() splits the input at PHPUnit banners and each run is judged
+ *     on its own declared/summarised/extracted/testdox arithmetic; the first failing
+ *     run's exit code wins and every failing run is named), so a multi-run log can no
+ *     longer net one run's shortfall against another's surplus, and a stray ` ↩ ` from
+ *     another tool is attributed to no run and can never reach the exit-5 equality
+ *     (AC2a — see KNOWN LIMITS in `scripts/skipped-test-names.sh` for what remains).
+ *     One member of that family — a SURPLUS of testdox skip glyphs, which no real testdox
+ *     run can produce because PHPUnit counts every glyph it prints in the same run's
+ *     `Skipped: N` — was closed by DELETING the branch that read it rather than by
+ *     another clamp, since it had no legitimate input and could only ever print a false
+ *     cause. Its fixture uses ` ↩ ` specifically: the earlier stray-glyph fixture used
+ *     `✔`, which never reaches the attribution arithmetic at all, and that is why the
+ *     defect survived three rounds of review. Both glyphs are fixtured now.
  *
  * It does NOT try to defend the script against being rewritten, and it does not assert
  * a skip COUNT anywhere. Asserting a count here would reintroduce the exact measure the
@@ -869,14 +872,16 @@ final class SkippedTestNameReportingTest extends TestCase
      * carries every tool's output. One unrelated line used to flip a correct exit 4 into a
      * false exit 5.
      *
-     * ⚠ Do NOT delete this as redundant against its ` ↩ ` siblings below. It is the only
-     * fixture on the path where `testdox_skips` stays 0, so the script must report the
-     * glyphs as "Evidence, not a cause" and attribute nothing; the ` ↩ ` fixtures raise
-     * `testdox_skips` and therefore exercise the ATTRIBUTION arithmetic instead. The three
-     * assert three different messages on three different branches. The reverse deletion is
-     * what actually happened: for three review rounds this `✔` fixture was the ONLY
-     * stray-glyph guard, and because it can never reach the attribution arithmetic it could
-     * not see the surplus defect that
+     * ⚠ Do NOT delete this as redundant against its ` ↩ ` siblings below. RE-DERIVED for
+     * per-run accounting (S352): under per-run attribution the stray glyph (before the
+     * banner) is attributed to NO run, so `testdox_skips` stays 0 for the run and the
+     * script reports the glyph as "Evidence, not a cause"; the ` ↩ ` siblings differ in
+     * the INPUT-WIDE tally that feeds that evidence note — a `✔` leaves it at 0 skips
+     * (evidence-only message), a ` ↩ ` raises it and selects the "BOTH causes are in
+     * play" note instead. The three assert three different messages on three different
+     * branches. The reverse deletion is what actually happened: for three review rounds
+     * this `✔` fixture was the ONLY stray-glyph guard, and because it can never reach
+     * the attribution arithmetic it could not see the surplus defect that
      * {@see self::test_a_surplus_of_stray_skip_glyphs_does_not_exonerate_phpunit_xml()}
      * now pins.
      */
@@ -905,12 +910,14 @@ final class SkippedTestNameReportingTest extends TestCase
     /**
      * The sibling of the test above, with testdox's SKIP glyph rather than its pass glyph —
      * kept alongside it, not instead of it, because the two take different paths: `✔`
-     * leaves `testdox_skips` at 0 (evidence only), `↩` raises it (a partial attribution).
-     * The `✔` fixture is precisely why the surplus defect below stayed invisible for three
-     * rounds, so the glyph that actually feeds the attribution needs its own fixture.
+     * leaves the input-wide skip tally at 0 (evidence-only note), ` ↩ ` raises it and
+     * selects the "BOTH causes are in play" note. The `✔` fixture is precisely why the
+     * surplus defect below stayed invisible for three rounds, so the glyph that actually
+     * feeds the attribution needs its own fixture.
      *
-     * One stray skip glyph against a shortfall of four: testdox may be credited with at
-     * most the one, never with the rest, and `phpunit.xml` stays named.
+     * RE-DERIVED for per-run accounting (S352): the stray glyph (before the banner) is
+     * attributed to NO run, so testdox is credited with NONE of the four missing names —
+     * the message says so, names BOTH candidate causes, and `phpunit.xml` stays in play.
      */
     public function test_one_stray_SKIP_glyph_is_credited_at_most_once_and_never_exonerates(): void
     {
@@ -1006,6 +1013,56 @@ final class SkippedTestNameReportingTest extends TestCase
             'BOTH causes remain in play',
             $result['stderr'],
             'both candidate causes must be named; neither may be ruled out',
+        );
+    }
+
+    /**
+     * AC2a (S352): the last member of the false-exoneration family, the one the clamp
+     * removal could not close. Exit 5 used to rest on an EQUALITY of two INPUT-WIDE totals
+     * (KNOWN LIMIT 3): one stray ` ↩ ` line beside a count-only `Skipped: 1.` was
+     * arithmetically indistinguishable from a genuine testdox run that skipped one, and the
+     * script printed "Do NOT change phpunit.xml" about a config that WAS the cause.
+     *
+     * Per-run segmentation closes it: segment_runs() attributes a glyph only to the run
+     * that printed it, and a glyph before any PHPUnit banner is attributed to NO run — so
+     * this single count-only run's shortfall has no same-run glyphs to match, and the
+     * exit-5 one-for-one equality cannot be taken. The input falls to exit 4 naming
+     * phpunit.xml, with the stray glyph reported as evidence only (never exoneration).
+     */
+    public function test_ac2a_one_stray_skip_glyph_beside_a_count_only_run_cannot_reach_exit_5(): void
+    {
+        $result = $this->runScript($this->fixtureFile(
+            'ac2a-stray-glyph-countonly.log',
+            " \u{21A9} some other tool says skipped\n" . $this->countOnlyRun(1),
+        ));
+
+        self::assertSame(
+            4,
+            $result['exit'],
+            "one stray ↩ beside a count-only Skipped: 1 is NOT a testdox run: the glyph is\n"
+            . "attributed to no run, so exit 5 (the one-for-one testdox equality) must not be\n"
+            . "taken. This exact input exited 5 under input-wide sums (KNOWN LIMIT 3); per-run\n"
+            . "attribution is what AC2a closes. stderr:\n" . $result['stderr'],
+        );
+        self::assertSame([], $result['lines'], 'no name was recovered, so nothing may be written');
+        self::assertStringNotContainsString(
+            'Do NOT change phpunit.xml',
+            $result['stderr'],
+            'the exoneration sentence may only appear when the skip glyphs belong to the SAME '
+            . 'run as the shortfall. A foreign glyph is evidence, never exoneration.',
+        );
+        self::assertStringContainsString(
+            'displayDetailsOnSkippedTests',
+            $result['stderr'],
+            'phpunit.xml must still be named as a candidate cause — it is the one this input '
+            . 'actually supports',
+        );
+        self::assertStringContainsString(
+            'attributed to this run',
+            $result['stderr'],
+            'the message must state that the stray glyph is not attributed to this run, or '
+            . 'the fixture cannot tell per-run attribution from the input-wide equality it '
+            . 'replaced',
         );
     }
 

@@ -128,8 +128,11 @@
 #        `--testdox`.
 #     6  the sorted set could not be written (sort or the caller's redirect failed)
 #
-# ⚠ 5 is gated on the number of testdox SKIP lines (`↩`), never on the mere presence of
-# testdox-looking output, and it is taken ONLY when that number EQUALS the shortfall.
+# ⚠ 5 is gated on the number of testdox SKIP lines (`↩`) attributed to the SAME run as
+# the shortfall, never on the mere presence of testdox-looking output, and it is taken
+# ONLY when that number EQUALS that run's shortfall. Stray glyphs before any PHPUnit
+# banner are attributed to NO run (S352 per-run segmentation), so they can never reach
+# this equality.
 # Round 2 of this step's review found the earlier gate (`testdox_lines > 0`) telling the
 # reader "Do NOT change phpunit.xml" about a count-only run that happened to share a log
 # with a zero-skip testdox run -- i.e. exactly the wrong-diagnosis defect this contract
@@ -142,7 +145,7 @@
 #     shortfall. The clamp that used to trim it to the shortfall turned every such input --
 #     e.g. two stray ` ↩ ` lines from another tool beside a run that really had lost its
 #     list -- into "Do NOT change phpunit.xml" about a config that WAS the cause.
-# What remains, and is not claimed away: see KNOWN LIMITS 3.
+# What remains, and is not claimed away: see KNOWN LIMITS 2-5.
 #
 # Exit 4 is the one that matters most, and it is why this script cross-checks TWO
 # independent numbers instead of one. On master before S345 the log of run
@@ -163,26 +166,26 @@
 #   2  summary == 0. NOTHING in the input matches any of PHPUnit's seven terminating
 #      summary lines. Claim: "not a PHPUnit run, an empty set proves nothing" -- true by
 #      construction; every terminating run prints one of those lines.
-#   5  summarised > summarisable_declared AND testdox_skips == the shortfall > 0. Claim:
-#      every unnamed skip is matched by a testdox skip glyph, so the config cannot name
-#      them. Supported as far as an input-wide sum can support it: skip glyphs are counted
-#      directly, never over-attributed (a surplus attributes NOTHING -- see above) and
-#      never under-attributed except for the glyph-less suite skip of KNOWN LIMIT 2. It is
-#      an equality of two totals, not a proof that they came from the same run -- KNOWN
-#      LIMIT 3.
-#      ⚠ `summarisable_declared` is `declared` MINUS what the `No tests executed!` runs
-#      declared: those entries have no `Skipped: N` term of their own, and counting them
-#      here let them cancel a different run's lost names, at which point this branch
+#   5  summarised > summarisable_declared AND the run's OWN testdox_skips == its
+#      shortfall > 0. Claim: every unnamed skip in THAT RUN is matched by a testdox skip
+#      glyph attributed to the same run, so the config cannot name them. Skip glyphs are
+#      counted directly, never over-attributed (a surplus attributes NOTHING -- see above)
+#      and never under-attributed except for the glyph-less suite skip of KNOWN LIMIT 2.
+#      Stray glyphs that segment_runs() attributed to no run (preamble/foreign output) can
+#      never reach this equality -- AC2a closed KNOWN LIMIT 3.
+#      ⚠ `summarisable_declared` is `declared` MINUS what this run's `No tests executed!`
+#      entries declared: those entries have no `Skipped: N` term of their own, and counting
+#      them here let them cancel a DIFFERENT run's lost names, at which point this branch
 #      exonerated a phpunit.xml that WAS at fault (round 3, finding 1 -- fixtured).
-#   4  the shortfall remains after testdox's share AND summarisable_declared == 0. Claim:
-#      the residual was counted, not named and not testdox's, and no run that published a
-#      totals line printed a list at all -- so either the attribute is off or phpunit.xml
+#   4  the shortfall remains after the run's OWN testdox share AND summarisable_declared
+#      == 0. Claim: the residual was counted, not named and not this run's testdox, and
+#      this run printed no list at all -- so either the attribute is off or phpunit.xml
 #      was not loaded. Those are the only two ways the default printer publishes a count
 #      with no list THAT THIS PARSER CAN SEE; a third input reads identically, namely a
 #      list that WAS printed under a header this parser does not recognise (KNOWN LIMIT 5).
-#      Testdox's share is 0 in two cases -- no skip glyphs at all, and MORE
-#      skip glyphs than unnamed skips (unattributable, see above) -- and in both the
-#      message reports the glyphs as evidence while leaving phpunit.xml in play.
+#      Testdox-looking output elsewhere in the input is reported as EVIDENCE (never as
+#      exoneration) -- stray glyphs attributed to no run, or more glyphs than this run's
+#      shortfall, both leave phpunit.xml in play.
 #   3  three disjoint shapes, each stating its own arithmetic: (a) shortfall remains
 #      with a NON-empty summarisable list, so some run in the input printed no list --
 #      partial set, not written; (b) declared > summarised beyond what the
@@ -197,27 +200,14 @@
 # exit code above can be the WRONG one, and they are why this header does not claim that
 # every exit names a true cause:
 #
-#   1. EVERY denominator here is an INPUT-WIDE SUM. `declared`, `summarised`,
-#      `testdox_skips` and `nototals_declared` are totals over the whole input, so in a
-#      MULTI-RUN log -- which is exactly what the documented `gh run view <id> --log`
-#      recipe produces -- a shortfall in one run can be paid for by a surplus in another,
-#      and the pair can net out to a code that is right for the sum and wrong for both
-#      runs. The `declared - nototals_declared` split closes the two inputs round 3 of
-#      S345's review measured (both are fixtures now), but it is a bounded correction, not
-#      a closure of the class. The DURABLE fix is per-RUN segmentation: split the input at
-#      the terminating summary lines and evaluate the contract inside each segment. That
-#      is deliberately NOT done here: it is FILED, with the measured inputs, as
-#      `S352-followup-perrun-segmentation.md` in the build program's step directory
-#      (outside this repo; its S-number is pending allocation), because a deferral left in
-#      a worklog is not a contract -- that is the S126 lesson S345 exists to enforce.
-#      Until it is: a non-zero exit tells you the input as a whole must not be compared;
-#      it does not always tell you which run in it is at fault. Measured on THIS version,
-#      so it is not a stale note: a run declaring 2 names but summarising 1, followed by a
-#      count-only run summarising 1, exits **0** with a 2-name set and no sign that the
-#      second run lost a name.
-#      One member of the family was removed rather than clamped -- see the surplus-glyph
-#      paragraph above and limit 3 -- because that branch had no legitimate input at all.
-#      The rest of the family is untouched.
+#   1. CLOSED (S352): the contract is evaluated PER RUN, not on input-wide sums. A run's
+#      `declared`, `summarised`, `testdox_skips` and `nototals_declared` are accumulated
+#      inside each segment by segment_runs(), so in a MULTI-RUN log -- which is exactly
+#      what the documented `gh run view <id> --log` recipe produces -- one run's shortfall
+#      can no longer be paid for by another run's surplus. A multi-run input is refused
+#      with a message naming EVERY failing run (ordinal, banner, that run's own
+#      arithmetic), and the first failing run's exit code wins. The input-wide tallies
+#      still printed to stderr are AUDIT ONLY: they no longer decide any exit.
 #   2. `--testdox` together with a skipped SUITE. `testdox_skips` is counted from ` ↩ `
 #      glyph lines, and TextUI/Output/TestDox/ResultPrinter emits a glyph per TEST result,
 #      so a testSuiteSkipped event under `--testdox` lands in `Skipped: N` with no glyph to
@@ -226,16 +216,17 @@
 #      that skip either; `--testdox <suite-skip probe>` alone exits 0 with an EMPTY set,
 #      where the plain run on the same input correctly emits `SUITE:...`. `tests/`
 #      currently contains no skipped suite, so this is latent here. Same follow-up.
-#   3. exit 5 rests on an EQUALITY of two input-wide totals, so N stray ` ↩ ` lines beside
-#      a run that lost N names are arithmetically indistinguishable from one testdox run
-#      that skipped N. Measured: one ` ↩ ` line plus a count-only `Skipped: 1.` still exits
-#      5 with "Do NOT change phpunit.xml". A SURPLUS of glyphs is no longer read that way
-#      (it attributes nothing, and the input falls through to 4/3 naming both causes),
-#      which is what removes the shape that had NO legitimate input; an exact match still
-#      does, because a genuine testdox run produces exactly that arithmetic and nothing in
-#      the input-wide totals tells the two apart. Per-run segmentation (limit 1) is what
-#      settles it -- attribute glyphs only to the run that printed them. Do not read exit 5
-#      as more than "the totals are consistent with testdox and with nothing else".
+#   3. CLOSED (S352, AC2a): exit 5 used to rest on an EQUALITY of two input-wide totals,
+#      so N stray ` ↩ ` lines beside a run that lost N names were arithmetically
+#      indistinguishable from one testdox run that skipped N. Measured: one ` ↩ ` line plus
+#      a count-only `Skipped: 1.` exited 5 with "Do NOT change phpunit.xml". Per-run
+#      segmentation settles it: segment_runs() attributes a glyph only to the run that
+#      printed it, and a glyph before any PHPUnit banner is attributed to NO run, so a
+#      count-only run's shortfall can never be matched by a foreign glyph -- that input now
+#      exits 4 naming phpunit.xml, with the stray glyphs reported as evidence only. A
+#      genuine testdox run (its own glyphs inside its own segment) still exits 5, and that
+#      is the ONLY arithmetic under which exit 5 is taken. Do not read exit 5 as more than
+#      "this run's totals are consistent with testdox and with nothing else".
 #   4. a data-set label containing a literal NEWLINE is emitted truncated at that newline
 #      (the entry spans two lines and the denominators still agree, so this one shape
 #      escapes the cross-check). No data provider in this repo produces one, and the
@@ -292,13 +283,12 @@ case "${1:-}" in
 esac
 
 # =============================================================================
-# S352 — AC1 step 1: per-run segmentation pass (DEAD CODE until step 2 wires it in)
+# S352 — per-run segmentation pass (wired in at the bottom of this file)
 # =============================================================================
-# The main flow below evaluates the exit contract on INPUT-WIDE sums (KNOWN LIMIT 1
-# in the header): in a multi-run log one run's shortfall can be paid for by
+# The exit contract is now evaluated PER RUN (see the wiring at the bottom), not on
+# input-wide sums: in a multi-run log one run's shortfall can be paid for by
 # another run's surplus, and the pair nets out to a code that is right for the
-# sum and wrong for both runs. The durable close is per-run accounting, and this
-# is the segmentation pass that will feed it.
+# sum and wrong for both runs. This is the segmentation pass that feeds it.
 #
 # segment_runs() reads the NORMALISED input (the same `normalised=` text the main
 # flow builds: CRLF and ANSI escapes stripped, `gh run view --log` prefixes
@@ -439,36 +429,37 @@ segment_runs() {
 }
 
 # =============================================================================
-# S352 — AC1 step 2: per-run verdict + aggregation (DEAD CODE until step 3 wires it in)
+# S352 — per-run verdict + aggregation (wired in at the bottom of this file)
 # =============================================================================
-# evaluate_segment() applies the SAME decision tree as the main flow to ONE
-# run's fields as accumulated by segment_runs(): idx, banner, declared,
-# summarised, nototals_declared, testdox_skips, extracted, has_summary. It
-# echoes ONE verdict line to stdout --
+# evaluate_segment() applies the contract to ONE run's fields as accumulated by
+# segment_runs(): idx, banner, declared, summarised, nototals_declared,
+# testdox_skips, extracted, has_summary, plus the input-wide testdox tallies
+# (input_testdox_lines, input_testdox_skips) used only for the stray-glyph
+# EVIDENCE note. It echoes ONE verdict line to stdout --
 #
 #   RUN\t<idx>\t<exit>\t<message>
 #
 # -- and returns the exit code, so a caller can do
 # `verdict="$(evaluate_segment "$idx" "$banner" ...)"; code=$?`.
 #
-# The tree mirrors the main flow branch-for-branch. `summarisable_declared` is
-# declared minus what the `No tests executed!` runs declared (the same baseline
-# the main flow computes at the end of its preamble), and the checks run in the
-# same order and with the same gating:
+# `summarisable_declared` is declared minus what this run's `No tests executed!`
+# entries declared, and the checks run in this order:
 #   * has_summary == 0       -> exit 2  (a banner-opened run that never reached
 #     a terminating summary has no trustworthy arithmetic; the per-run mirror
-#     of the main flow's input-wide "not a PHPUnit run" guard)
-#   * summarised > summarisable_declared -> exit 5 when testdox_skips EXACTLY
-#     covers the missing names (a surplus attributes NOTHING, exactly as in the
-#     main flow), else exit 4 when no detail list was printed at all, else
-#     exit 3 (partial set, not written)
+#     of the input-wide "not a PHPUnit run" guard)
+#   * summarised > summarisable_declared -> exit 5 when the run's OWN testdox
+#     skips EXACTLY cover the missing names (a surplus attributes NOTHING;
+#     glyphs attributed to no run can never reach this equality -- AC2a), else
+#     exit 4 when no detail list was printed at all, else exit 3 (partial set,
+#     not written). The exit 4/3 messages carry the input-wide stray-glyph
+#     EVIDENCE note when the wider input has testdox-looking output.
 #   * declared > summarised with over > nototals_declared -> exit 3
 #   * extracted != declared  -> exit 3
 #   * otherwise              -> exit 0
-# The last three checks are SEQUENTIAL ifs, not an elif chain, because the main
-# flow's over-count branch does not always exit (the over-count can be fully
-# explained by `No tests executed!` runs) and the extracted check must still
-# run in that case.
+# The last three checks are SEQUENTIAL ifs, not an elif chain, because the
+# over-count branch does not always exit (the over-count can be fully explained
+# by `No tests executed!` runs) and the extracted check must still run in that
+# case.
 evaluate_segment() {
     local idx="$1"
     local banner="$2"
@@ -478,6 +469,8 @@ evaluate_segment() {
     local testdox_skips="$6"
     local extracted="$7"
     local has_summary="$8"
+    local input_testdox_lines="$9"
+    local input_testdox_skips="${10}"
 
     local summarisable_declared=$((declared - nototals_declared))
 
@@ -516,17 +509,36 @@ evaluate_segment() {
             return 5
         fi
 
+        # The run's OWN glyphs cannot carry the shortfall (we are past exit 5), so any
+        # testdox-looking output in the WIDER input is reported as EVIDENCE only. Stray
+        # glyphs from another tool sharing the log are attributed to NO run by
+        # segment_runs(), so they never reach the exit-5 equality above (AC2a) and they
+        # never exonerate phpunit.xml -- but they are still NAMED, because suppressing
+        # them would trade a false diagnosis for a missing one. The phrasing mirrors the
+        # input-wide `also` notes of S345 (a surplus attributes NOTHING; an under-count
+        # leaves both causes in play; a glyph-less run reports the testdox-looking lines).
+        evidence_note=""
+        if [ "$input_testdox_lines" -gt 0 ]; then
+            if [ "$input_testdox_skips" -gt "$missing" ]; then
+                evidence_note=" (Evidence, not a cause: this input carries $input_testdox_lines line(s) in --testdox result format, of which $input_testdox_skips are skips, and none of them are attributed to this run -- MORE skip glyphs than the $missing unnamed skip(s) this run reports. A real testdox run cannot produce a surplus, because every glyph it prints is also counted in its own \`Skipped: N\`, so these glyphs belong to output that is not a testdox skip of this run: they are NOT attributable and they explain none of the shortfall. BOTH causes remain in play -- testdox somewhere in this input, AND phpunit.xml -- and neither is ruled out.)"
+            elif [ "$input_testdox_skips" -gt 0 ]; then
+                evidence_note=" (Evidence, not a cause: this input carries $input_testdox_lines line(s) in --testdox result format, of which $input_testdox_skips are skips, but none of them are attributed to this run, so testdox explains none of this run's shortfall. BOTH causes are in play -- testdox somewhere in this input, AND phpunit.xml -- and neither is ruled out.)"
+            else
+                evidence_note=" (Evidence, not a cause: this input carries $input_testdox_lines line(s) in --testdox result format, of which $input_testdox_skips are skips, but none of them are attributed to this run, so testdox explains none of this run's shortfall.)"
+            fi
+        fi
+
         # The shortfall survives testdox's share, and this run printed NO
         # detail list at all: the only causes that can carry it are the config
         # attribute being off or the invocation not loading phpunit.xml.
         if [ "$summarisable_declared" -eq 0 ]; then
-            printf 'RUN\t%s\t%s\t%s\n' "$idx" 4 "run $idx: $residual skipped test(s) counted, NOT named, not explained by testdox, and this run printed NO skipped-details list at all ($testdox_skips testdox skip glyph(s) present). phpunit.xml has lost displayDetailsOnSkippedTests=true (S345), or the invocation did not load phpunit.xml (a -c/--configuration pointing elsewhere, or --no-configuration). The name set cannot be recovered from this run; fix the config and re-run."
+            printf 'RUN\t%s\t%s\t%s\n' "$idx" 4 "run $idx: $residual skipped test(s) counted, NOT named, not explained by testdox, and this run printed NO skipped-details list at all ($testdox_skips testdox skip glyph(s) present).$evidence_note phpunit.xml has lost displayDetailsOnSkippedTests=true (S345), or the invocation did not load phpunit.xml (a -c/--configuration pointing elsewhere, or --no-configuration). The name set cannot be recovered from this run; fix the config and re-run."
             return 4
         fi
 
         # A NON-empty list exists but still does not cover the count: some run
         # printed no skipped list, so the set would be PARTIAL.
-        printf 'RUN\t%s\t%s\t%s\n' "$idx" 3 "run $idx: the run summary reports $summarised skipped test(s) but the detail lists declared only $summarisable_declared, so $missing name(s) are missing.$testdox_note some run printed no skipped list: check that every invocation loads phpunit.xml (displayDetailsOnSkippedTests=true) and that none of them uses --testdox. The set would be PARTIAL, so it is not written."
+        printf 'RUN\t%s\t%s\t%s\n' "$idx" 3 "run $idx: the run summary reports $summarised skipped test(s) but the detail lists declared only $summarisable_declared, so $missing name(s) are missing.$testdox_note some run printed no skipped list: check that every invocation loads phpunit.xml (displayDetailsOnSkippedTests=true) and that none of them uses --testdox. The set would be PARTIAL, so it is not written.$evidence_note"
         return 3
     fi
 
@@ -560,7 +572,15 @@ evaluate_segment() {
 # own arithmetic via its verdict line), and the function returns the FIRST
 # failing run's exit code. If every run passes, the buffered names are emitted
 # on stdout for the existing `LC_ALL=C sort -u` guard to consume.
+#
+# The two arguments are the INPUT-WIDE testdox tallies the main flow computed
+# (result lines, and skip glyphs among them). They are passed to
+# evaluate_segment() so that stray glyphs in the wider log are reported as
+# EVIDENCE in a failing run's message even though segment_runs() attributed
+# them to no run (AC2a).
 evaluate_all_runs() {
+    local input_testdox_lines="${1:-0}"
+    local input_testdox_skips="${2:-0}"
     local current_idx=""
     local banner="" declared="" summarised="" nototals_declared="" testdox_skips="" extracted="" has_summary=""
     local all_names=""
@@ -574,7 +594,7 @@ evaluate_all_runs() {
     # it stays inside evaluate_all_runs and is never called from anywhere else.
     evaluate_accumulated_run() {
         local verdict_line
-        verdict_line="$(evaluate_segment "$current_idx" "$banner" "$declared" "$summarised" "$nototals_declared" "$testdox_skips" "$extracted" "$has_summary")"
+        verdict_line="$(evaluate_segment "$current_idx" "$banner" "$declared" "$summarised" "$nototals_declared" "$testdox_skips" "$extracted" "$has_summary" "$input_testdox_lines" "$input_testdox_skips")"
         local code=$?
         if [ "$code" -ne 0 ]; then
             fail_count=$((fail_count + 1))
@@ -723,153 +743,41 @@ if [ "$summary" -eq 0 ]; then
     exit 2
 fi
 
-# S352 — AC1 step 3: a multi-run log (the documented `gh run view --log` recipe) is
-# evaluated PER RUN -- KNOWN LIMIT 1's durable close, because the input-wide sums below
-# can net one run's shortfall against another run's surplus. The per-run path exits with
-# the first failing run's code; a single-run input falls through to the input-wide
-# evaluation untouched, byte for byte.
+# S352 — AC2a: EVERY input (one run or many, the documented `gh run view --log` recipe
+# included) is evaluated PER RUN -- KNOWN LIMIT 1's durable close, because input-wide
+# sums can net one run's shortfall against another run's surplus and exit with a code
+# that is right for the sum and wrong for both runs. The contract is decided inside each
+# segment_runs() run, and the FIRST failing run's exit code wins. Preamble/foreign
+# ` ↩ ` glyphs (before any PHPUnit banner) are attributed to NO run by segment_runs(),
+# so only same-run testdox glyphs can reach the exit-5 equality (AC2a closes KNOWN
+# LIMIT 3). The input-wide tallies computed above are passed along so stray glyphs in
+# the wider log still show up as EVIDENCE in a failing run's message.
 segmented="$(printf '%s\n' "$normalised" | segment_runs)"
-run_count="$(printf '%s\n' "$segmented" | awk -F'\t' '$1 == "RUN" && $3 == "banner" { n++ } END { print n + 0 }')"
+per_run_output="$(printf '%s\n' "$segmented" | evaluate_all_runs "$testdox_lines" "$testdox_skips")"
+per_run_status=$?
 
-if [ "$run_count" -ge 2 ]; then
-    printf '%s\n' "$segmented" | evaluate_all_runs | LC_ALL=C sort -u
-    exit $?
-fi
-
-# Only the part of `declared` that belongs to runs which PUBLISHED a totals line can
-# offset `summarised`. Entries declared by a `No tests executed!` run have no `Skipped: N`
-# term of their own, so counting them here let them cancel a DIFFERENT run's lost names:
-# round 3 of this step's review measured a suite-skip run + a testdox run + a count-only
-# run netting out to exit 5 ("Do NOT change phpunit.xml") while the count-only run had
-# genuinely lost its list, and a suite-skip run + a count-only run netting out to exit 0
-# with a set short by one name. Both are pinned by fixtures in
-# tests/Unit/Support/SkippedTestNameReportingTest.php.
-#
-# ⚠ This is a BOUNDED correction, not a closure of the class: every denominator in this
-# script is an input-wide SUM, so a multi-run log can still net one run's shortfall against
-# another run's surplus. See KNOWN LIMITS in the header. The durable fix is per-run
-# segmentation, not another clamp.
-summarisable_declared=$((declared - nototals_declared))
-
-# The input under-reports names: skips were counted that no list named. Name the cause
-# that is TRUE for this input, and never attribute more to a cause than it can carry --
-# a wrong diagnosis is worse than none, because it sends the reader somewhere else.
-if [ "$summarised" -gt "$summarisable_declared" ]; then
-    missing=$((summarised - summarisable_declared))
-
-    # `--testdox` can only explain the skips IT counted, and none at all when it skipped
-    # nothing. Gating on `testdox_lines` instead would blame testdox for a plain run that
-    # merely shares a log with one -- or for any other tool that prints those glyphs --
-    # and then tell the reader to leave phpunit.xml alone when phpunit.xml IS the cause.
-    #
-    # A SURPLUS of skip glyphs is NOT clamped down to the shortfall, deliberately. A real
-    # testdox run cannot produce one: PHPUnit prints a ` ↩ ` glyph per skipped test AND
-    # counts that same test in the run's `Skipped: N`, so genuine testdox output always
-    # satisfies `testdox_skips <= missing`. When the input has MORE skip glyphs than
-    # unnamed skips, at least some of those glyphs are not testdox skips belonging to this
-    # input's shortfall -- another tool's output sharing the log, which the documented
-    # `gh run view <id> --log` recipe makes routine. The glyph count is then not
-    # ATTRIBUTABLE at all, so it buys nothing: the whole shortfall stays unexplained and
-    # both candidate causes are reported below. The earlier code clamped `testdox_covers`
-    # to `missing` here, which manufactured `residual == 0` and printed "Do NOT change
-    # phpunit.xml" -- measured on two stray ` ↩ ` lines plus one count-only run whose list
-    # really was lost (S345 test engineer), i.e. a branch with no legitimate input that
-    # could only ever lie.
-    if [ "$testdox_skips" -gt "$missing" ]; then
-        testdox_covers=0
-        testdox_unattributable=1
-    else
-        testdox_covers="$testdox_skips"
-        testdox_unattributable=0
-    fi
-    residual=$((missing - testdox_covers))
-
-    # residual == 0 now implies `testdox_skips == missing > 0`: every unnamed skip is
-    # matched one-for-one by a testdox skip glyph, which is the arithmetic a real testdox
-    # run produces and the only one under which testdox alone can account for the whole
-    # shortfall. It is NOT proof that the glyphs and the unnamed skips come from the SAME
-    # run -- N foreign glyphs beside a count-only run that lost N names look identical to
-    # an input-wide sum. See KNOWN LIMITS 3 in the header; per-run segmentation is what
-    # settles it.
-    if [ "$residual" -eq 0 ]; then
-        printf 'skipped-test-names: FATAL -- all %s skipped test(s) that this input counts but does not name are matched one-for-one by testdox skip glyphs: it carries %s line(s) in --testdox result format, %s of them skips. PHPUnit constructs the default result printer with displayDetailsOnSkippedTests hardcoded FALSE when --testdox is in effect (vendor/phpunit/phpunit/src/TextUI/Output/Facade.php:204-221), so the configuration value is not consulted and neither phpunit.xml nor --display-skipped can name those skips. Do NOT change phpunit.xml -- for a testdox run it is not the cause. Re-run WITHOUT --testdox, or feed this script only the non-testdox steps of the log.\n' \
-            "$missing" "$testdox_lines" "$testdox_skips" >&2
-        exit 5
-    fi
-
-    # Testdox cannot carry the whole shortfall, so from here it is reported as EVIDENCE
-    # only, and the reader is NOT told that phpunit.xml is innocent.
-    if [ "$testdox_unattributable" -eq 1 ]; then
-        also=" (Evidence, not a cause: this input carries $testdox_lines line(s) in --testdox result format, of which $testdox_skips are skips -- MORE skip glyphs than the $missing unnamed skip(s). A real testdox run cannot do that, because every glyph it prints is also counted in its own \`Skipped: N\`, so some of those glyphs belong to output that is not a testdox skip of this input: they are NOT attributable and they explain none of the shortfall. BOTH causes remain in play -- testdox somewhere in this input, AND phpunit.xml -- and neither is ruled out.)"
-    elif [ "$testdox_covers" -gt 0 ]; then
-        also=" Testdox accounts for $testdox_covers of the unnamed skip(s) ($testdox_skips testdox skip line(s), unnamable by design -- Facade.php:204-221); the remaining $residual it does not, so BOTH causes are in play and phpunit.xml may be one of them."
-    elif [ "$testdox_lines" -gt 0 ]; then
-        also=" (Evidence, not a cause: this input carries $testdox_lines line(s) in --testdox result format, of which $testdox_skips are skips, so testdox explains none of the shortfall.)"
-    else
-        also=""
-    fi
-
-    # `summarisable_declared`, not `declared`: a list printed by a `No tests executed!` run
-    # is not evidence that the runs which DID publish a count printed one. Attributing it
-    # to them is what let exit 5 exonerate phpunit.xml in round 3's finding 1.
-    if [ "$nototals_declared" -gt 0 ]; then
-        aside=" ($nototals_declared entry/entries WERE declared, by $no_totals run(s) reporting \`No tests executed!\`, but those have no count of their own to match and so cannot stand in for a run that published one.)"
-    else
-        aside=""
-    fi
-
-    if [ "$summarisable_declared" -eq 0 ]; then
-        printf 'skipped-test-names: FATAL -- %s skipped test(s) in this input are counted, NOT named, and not explained by testdox, and NO run that published a `Tests: ...` totals line printed a skipped-details list at all.%s phpunit.xml has lost displayDetailsOnSkippedTests="true" (S345), or the invocation did not load phpunit.xml (a `-c`/`--configuration` pointing elsewhere, or `--no-configuration`). The name set cannot be recovered from this output; fix the config and re-run rather than reading the empty set as "nothing skipped".%s\n' \
-            "$residual" "$aside" "$also" >&2
-        exit 4
-    fi
-
-    printf 'skipped-test-names: FATAL -- the run summaries report %s skipped test(s) but the runs that published a totals line declared only %s in their detail lists, so %s name(s) are missing.%s Some run in this input printed no skipped list: check that every invocation loads phpunit.xml (displayDetailsOnSkippedTests="true") and that none of them uses --testdox. The set below would be PARTIAL, so it is not written.%s\n' \
-        "$summarised" "$summarisable_declared" "$missing" "$aside" "$also" >&2
-    exit 3
-fi
-
-# More declared than summarised is legitimate only for the runs that printed no totals
-# line at all (`No tests executed!`), and only up to what THOSE runs declared -- an
-# input-wide switch-off would excuse real drift anywhere else in the same log.
-# (`over > nototals_declared` below is the same comparison as the branch above, mirrored:
-# it is true exactly when `summarisable_declared > summarised`. The two branches therefore
-# cover the same arithmetic from both sides and cannot both fire.)
-if [ "$declared" -gt "$summarised" ]; then
-    over=$((declared - summarised))
-
-    if [ "$over" -gt "$nototals_declared" ]; then
-        printf 'skipped-test-names: FATAL -- the detail lists declared %s skipped test(s)/suite(s) but the run summaries report only %s. At most %s of that difference is explained by the %s run(s) that reported `No tests executed!` (the one shape that legitimately publishes a list with no totals line), leaving %s unexplained. The output format has drifted; fix this parser rather than trusting the set.\n' \
-            "$declared" "$summarised" "$nototals_declared" "$no_totals" $((over - nototals_declared)) >&2
-        exit 3
-    fi
-fi
-
-if [ "$extracted" -ne "$declared" ]; then
-    printf 'skipped-test-names: FATAL -- PHPUnit declared %s skipped test(s)/suite(s) but %s name(s) were extracted. The entry format has drifted; fix this parser rather than trusting the set.\n' \
-        "$declared" "$extracted" >&2
-    exit 3
-fi
-
-if [ "$extracted" -gt 0 ]; then
-    # `LC_ALL=C` is load-bearing, not decoration: GNU `comm` compares BYTE-wise, and a
-    # locale-aware sort orders `Phlix\Tests\Unit\Admin\ZTest::a` against
-    # `Phlix\Tests\UnitB\ATest::a` the other way round, at which point `comm` refuses
-    # the file as "not in sorted order". `-u` matters for a whole-workflow log, where
-    # tests/Unit/Server/ skips appear in two jobs.
-    printf '%s\n' "$names" | LC_ALL=C sort -u
+# The name set (emitted only when EVERY run passed) goes through the same `LC_ALL=C
+# sort -u` guard the input-wide path used. `LC_ALL=C` is load-bearing, not decoration:
+# GNU `comm` compares BYTE-wise, and a locale-aware sort orders
+# `Phlix\Tests\Unit\Admin\ZTest::a` against `Phlix\Tests\UnitB\ATest::a` the other way
+# round, at which point `comm` refuses the file as "not in sorted order". `-u` matters
+# for a whole-workflow log, where tests/Unit/Server/ skips appear in two jobs.
+if [ -n "$per_run_output" ]; then
+    printf '%s\n' "$per_run_output" | LC_ALL=C sort -u
     write_status=$?
-
-    if [ "$write_status" -ne 0 ]; then
-        # `pipefail` is on, so this catches sort itself AND a failing write to the
-        # caller's redirect (ENOSPC, SIGPIPE) -- the exact "quietly truncated set
-        # handed to comm" outcome the whole exit contract exists to prevent.
-        printf 'skipped-test-names: FATAL -- the sorted name set could not be written (exit %s from `sort`/the output stream). stdout is TRUNCATED and must not be compared.\n' \
-            "$write_status" >&2
-        exit 6
-    fi
+else
+    write_status=0
 fi
 
-exit 0
+if [ "$write_status" -ne 0 ]; then
+    # `pipefail` is on, so this catches sort itself AND a failing write to the
+    # caller's redirect (ENOSPC, SIGPIPE) -- the exact "quietly truncated set
+    # handed to comm" outcome the whole exit contract exists to prevent.
+    printf 'skipped-test-names: FATAL -- the sorted name set could not be written (exit %s from `sort`/the output stream). stdout is TRUNCATED and must not be compared.\n' \
+        "$write_status" >&2
+    exit 6
+fi
+
+exit "$per_run_status"
 
 s352_per_run_probe() { grep -c 'Skipped:' ; }

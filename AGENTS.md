@@ -12,6 +12,7 @@ php public/index.php
 ./vendor/bin/phpunit --testsuite Unit
 ./vendor/bin/phpunit --testsuite Integration
 ./vendor/bin/phpunit tests/Unit/Auth/JwtHandlerTest.php --testdox
+# --testdox cannot name a skipped test — a skip-name set needs a plain run
 ./vendor/bin/phpcs --standard=PSR12 src/
 ./vendor/bin/phpstan analyze src/ --level=9
 find src -name '*.php' -exec php -l {} \;

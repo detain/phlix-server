@@ -67,17 +67,20 @@ use Symfony\Component\Yaml\Yaml;
  *     `comm`-ready set — and each refusal path names the cause its own arithmetic
  *     supports, for every input measured here, because a parser that quietly matches
  *     NOTHING reads as a pass and a WRONG diagnosis is worse than none. That is a set of
- *     pinned inputs, NOT a proof over all inputs: the script's denominators are
- *     input-wide sums, so a multi-run log can still net one run's shortfall against
- *     another's surplus (see KNOWN LIMITS in `scripts/skipped-test-names.sh`, and the
- *     per-run-segmentation follow-up it points at). One member of that family — a
- *     SURPLUS of testdox skip glyphs, which no real testdox run can produce because
- *     PHPUnit counts every glyph it prints in the same run's `Skipped: N` — was closed
- *     by DELETING the branch that read it rather than by another clamp, since it had no
- *     legitimate input and could only ever print a false cause. Its fixture uses ` ↩ `
- *     specifically: the earlier stray-glyph fixture used `✔`, which never reaches the
- *     attribution arithmetic at all, and that is why the defect survived three rounds of
- *     review. Both glyphs are fixtured now.
+ *     pinned inputs, NOT a proof over all inputs. Since S352 the contract is evaluated
+ *     PER RUN (segment_runs() splits the input at PHPUnit banners and each run is judged
+ *     on its own declared/summarised/extracted/testdox arithmetic; the first failing
+ *     run's exit code wins and every failing run is named), so a multi-run log can no
+ *     longer net one run's shortfall against another's surplus, and a stray ` ↩ ` from
+ *     another tool is attributed to no run and can never reach the exit-5 branch
+ *     (AC2a — see KNOWN LIMITS in `scripts/skipped-test-names.sh` for what remains).
+ *     One member of that family — a SURPLUS of testdox skip glyphs, which no real testdox
+ *     run can produce because PHPUnit counts every glyph it prints in the same run's
+ *     `Skipped: N` — was closed by DELETING the branch that read it rather than by
+ *     another clamp, since it had no legitimate input and could only ever print a false
+ *     cause. Its fixture uses ` ↩ ` specifically: the earlier stray-glyph fixture used
+ *     `✔`, which never reaches the attribution arithmetic at all, and that is why the
+ *     defect survived three rounds of review. Both glyphs are fixtured now.
  *
  * It does NOT try to defend the script against being rewritten, and it does not assert
  * a skip COUNT anywhere. Asserting a count here would reintroduce the exact measure the
@@ -379,6 +382,172 @@ final class SkippedTestNameReportingTest extends TestCase
     }
 
     /**
+     * AC3 mutant (a): the flag hides in a shell VARIABLE inside the `run: |` block.
+     * `DOX=--testdox` is one logical line and the phpunit invocation that expands it
+     * is another, so the pre-AC3 same-line ban — which needed `phpunit` AND
+     * `--testdox` on ONE folded command line — measured this green end-to-end
+     * (S352-followup item 3). The whole-file scan must see the assignment.
+     */
+    public function test_the_testdox_ban_catches_the_flag_smuggled_through_a_shell_variable(): void
+    {
+        $content = $this->writeMutantWorkflow('mutant-shell-var.yml', <<<'YAML'
+            on: push
+            jobs:
+              e2e:
+                steps:
+                  - name: Run E2E tests
+                    run: |
+                      DOX=--testdox
+                      ./vendor/bin/phpunit tests/E2E/Foo.php $DOX --colors=never
+            YAML);
+
+        self::assertSame(
+            [],
+            $this->sameLineTestdoxOffenders($content, 'mutant-shell-var.yml'),
+            'the pre-AC3 same-line ban must NOT see a flag assigned on its own line — that is '
+            . 'exactly the evasion round-3 finding 5 measured green',
+        );
+        self::assertNotSame(
+            [],
+            $this->testdoxOffenders($content, 'mutant-shell-var.yml'),
+            'the widened ban must flag --testdox on ANY non-comment line of a phpunit-invoking '
+            . 'workflow, including the `DOX=--testdox` assignment (AC3)',
+        );
+    }
+
+    /**
+     * AC3 mutant (b): the flag is injected through an `env:` VALUE. The phpunit
+     * invocation expands `$DOX`, so the same-line ban reads a phpunit line without
+     * the token and stays green; the token lives on the `DOX:` line above it.
+     */
+    public function test_the_testdox_ban_catches_the_flag_injected_via_an_env_value(): void
+    {
+        $content = $this->writeMutantWorkflow('mutant-env.yml', <<<'YAML'
+            on: push
+            jobs:
+              e2e:
+                env:
+                  DOX: --testdox
+                steps:
+                  - name: Run E2E tests
+                    run: ./vendor/bin/phpunit tests/E2E/Foo.php $DOX --colors=never
+            YAML);
+
+        self::assertSame(
+            [],
+            $this->sameLineTestdoxOffenders($content, 'mutant-env.yml'),
+            'the pre-AC3 same-line ban must NOT see a flag injected via env: — the phpunit '
+            . 'line itself is clean, which is the whole point of the indirection',
+        );
+        self::assertNotSame(
+            [],
+            $this->testdoxOffenders($content, 'mutant-env.yml'),
+            'the widened ban must flag --testdox in an env: value of a phpunit-invoking '
+            . 'workflow (AC3)',
+        );
+    }
+
+    /**
+     * AC3 mutant (c): the flag is injected through a `matrix` EXPANSION. The phpunit
+     * line expands `${{ matrix.dox }}` and carries no literal token; the token sits
+     * in the matrix definition, where the old ban never looked.
+     */
+    public function test_the_testdox_ban_catches_the_flag_injected_via_a_matrix_expansion(): void
+    {
+        $content = $this->writeMutantWorkflow('mutant-matrix.yml', <<<'YAML'
+            on: push
+            jobs:
+              e2e:
+                strategy:
+                  matrix:
+                    dox: [--testdox]
+                steps:
+                  - name: Run E2E tests
+                    run: ./vendor/bin/phpunit tests/E2E/Foo.php ${{ matrix.dox }} --colors=never
+            YAML);
+
+        self::assertSame(
+            [],
+            $this->sameLineTestdoxOffenders($content, 'mutant-matrix.yml'),
+            'the pre-AC3 same-line ban must NOT see a flag injected via matrix: — the token '
+            . 'is inside the flow list, not on the phpunit line',
+        );
+        self::assertNotSame(
+            [],
+            $this->testdoxOffenders($content, 'mutant-matrix.yml'),
+            'the widened ban must flag --testdox in a matrix expansion of a phpunit-invoking '
+            . 'workflow (AC3)',
+        );
+    }
+
+    /**
+     * AC3 mutant (d): the flag lives in a COMPOSITE ACTION's own `action.yml`. The
+     * old ban's parser only descends into `jobs:` (`{@see self::runScalars()}`) and
+     * an action.yml has none, so a composite action was a free corridor for
+     * `--testdox` even with the token on the SAME line as phpunit. The widened ban
+     * reads the composite `runs:` block as a phpunit invocation and then scans the
+     * file.
+     */
+    public function test_the_testdox_ban_catches_the_flag_inside_a_composite_action(): void
+    {
+        $content = $this->writeMutantWorkflow('mutant-composite-action.yml', <<<'YAML'
+            name: Run E2E tests
+            description: A composite action that invokes PHPUnit
+            runs:
+              using: composite
+              steps:
+                - name: Run E2E tests
+                  run: ./vendor/bin/phpunit tests/E2E/Foo.php --testdox --colors=never
+                  shell: bash
+            YAML);
+
+        self::assertSame(
+            [],
+            $this->sameLineTestdoxOffenders($content, 'mutant-composite-action.yml'),
+            'the pre-AC3 ban must NOT see a composite action file at all — it has no `jobs:` '
+            . 'for the parser to descend into',
+        );
+        self::assertNotSame(
+            [],
+            $this->testdoxOffenders($content, 'mutant-composite-action.yml'),
+            'the widened ban must flag --testdox inside a composite action\'s own runs: block '
+            . '(AC3)',
+        );
+    }
+
+    /**
+     * AC3 mutant (e): the flag is smuggled through a REUSABLE-WORKFLOW `uses:`. The
+     * job has no steps and therefore no `run:` scalar, so the old ban read nothing;
+     * PHPUnit runs in the referenced workflow file, and the `--testdox` token
+     * arrives here as a `with:` input on a non-comment line. The widened ban treats
+     * a `.github/workflows/` `uses:` as a phpunit invocation and flags the token.
+     */
+    public function test_the_testdox_ban_catches_the_flag_smuggled_through_a_reusable_workflow_uses(): void
+    {
+        $content = $this->writeMutantWorkflow('mutant-reusable-uses.yml', <<<'YAML'
+            on: push
+            jobs:
+              e2e:
+                uses: owner/repo/.github/workflows/reusable-tests.yml@v1
+                with:
+                  args: --testdox
+            YAML);
+
+        self::assertSame(
+            [],
+            $this->sameLineTestdoxOffenders($content, 'mutant-reusable-uses.yml'),
+            'the pre-AC3 ban must NOT see a reusable-workflow job — there is no run: scalar '
+            . 'for it to read',
+        );
+        self::assertNotSame(
+            [],
+            $this->testdoxOffenders($content, 'mutant-reusable-uses.yml'),
+            'the widened ban must flag --testdox on a non-comment line of a workflow that '
+            . 'delegates to a reusable workflow (AC3)',
+        );
+    }
+
+    /**
      * The invocation-site claim made by `phpunit.xml`, this script's header, `README.md`
      * and `CHANGELOG.md` — "five places" — RE-DERIVED, because round-1 found the number
      * wrong and round-2 found the line numbers it cited stale by the same commit that
@@ -553,6 +722,140 @@ final class SkippedTestNameReportingTest extends TestCase
         );
     }
 
+    /**
+     * AC2 (S352): the mixed `--testdox` + skipped-SUITE shape. A testdox run emits a glyph
+     * per TEST result (TextUI/Output/TestDox/ResultPrinter::symbolFor), so the suite skip
+     * lands in `Skipped: N` with no glyph to attribute it to — before AC2 the attribution
+     * was the glyph count, this shape's shortfall came out one short of the glyphs, and the
+     * script accused `phpunit.xml` of a config that was correct and that testdox could not
+     * have named the residual skip either. The attribution is now the run's OWN `Skipped: N`
+     * once its glyphs prove it is a testdox run: the glyph-less suite skip is accounted for,
+     * and the run takes the testdox verdict (exit 5, "Do NOT change phpunit.xml").
+     *
+     * Mutation-proof: reverting `testdox_covers` from the run's `Skipped: N` back to the
+     * glyph count makes this exact input exit 4 and redden.
+     */
+    public function test_ac2_the_mixed_testdox_suite_skip_shape_takes_the_testdox_verdict(): void
+    {
+        $probe = $this->writeSuiteSkipProbe();
+
+        // The shape: one suite skip (glyph-less) plus one test skip (one `↩`), a single
+        // `Skipped: 2` and NO detail list — testdox hardcodes the details printer off.
+        $mixed = $this->runRealPhpunit([$probe, self::REAL_TEST_FILE, '--testdox']);
+
+        self::assertStringContainsString(
+            'Skipped: 2',
+            $mixed,
+            'the suite skip must count towards Skipped: N under --testdox, or this input is '
+            . 'not the mixed shape',
+        );
+        self::assertSame(
+            1,
+            preg_match_all('/^ \x{21A9} /mu', $mixed),
+            'testdox must print exactly ONE ↩ glyph — the test skip — and none for the '
+            . 'suite skip, or the glyph-less gap this AC exists for is not being measured',
+        );
+        self::assertStringNotContainsString(
+            'skipped test suite:',
+            $mixed,
+            'testdox never prints the skipped-suite details list (Facade.php:204-221), so '
+            . 'this run really does under-declare by the suite skip',
+        );
+
+        $result = $this->runScript($this->fixtureFile('ac2-testdox-suite-mixed.log', $mixed));
+
+        self::assertSame(
+            5,
+            $result['exit'],
+            "the mixed testdox+suite-skip run is a testdox run whose suite skip has no glyph,\n"
+            . "so testdox accounts for the WHOLE Skipped: N. Exit 4 here is the pre-AC2 false\n"
+            . "accusation -- it blames phpunit.xml, which is correct, for a skip testdox could\n"
+            . "not have named either. stderr:\n" . $result['stderr'],
+        );
+        self::assertSame([], $result['lines'], 'no partial set may be written');
+        self::assertStringContainsString('--testdox', $result['stderr']);
+        self::assertStringContainsString('Facade.php:204-221', $result['stderr']);
+        self::assertStringContainsString(
+            'Do NOT change phpunit.xml',
+            $result['stderr'],
+            'the mixed shape is a testdox shape: the config is exonerated, not accused',
+        );
+        self::assertStringNotContainsString(
+            'has lost displayDetailsOnSkippedTests',
+            $result['stderr'],
+            'phpunit.xml must NOT be named as the cause — that is the exact false diagnosis '
+            . 'AC2 removes',
+        );
+    }
+
+    /**
+     * AC2 (S352): the suite-skip-ONLY `--testdox` shape. Every suite skipped → `No tests
+     * executed!`, no totals line, no detail list, and a testSuiteSkipped event produces no
+     * glyph at all — so the run publishes NOTHING about the suite it skipped. Before AC2
+     * this exited 0 with an EMPTY set, reporting "nothing skipped" about an input that DID
+     * skip — the one outcome the exit contract exists to prevent. It is now REFUSED with a
+     * message naming the invisible suite skip.
+     *
+     * The message deliberately does not over-claim a cause: a plain run that genuinely
+     * executed nothing (a typo'd `--filter`, an empty directory) prints the identical
+     * shape, so it is refused too — loudly, with no set written (recorded in KNOWN LIMIT 2).
+     */
+    public function test_ac2_the_suite_skip_only_testdox_shape_is_refused_not_reported_as_empty(): void
+    {
+        $probe = $this->writeSuiteSkipProbe();
+
+        $alone = $this->runRealPhpunit([$probe, '--testdox']);
+
+        // The shape's premises, each with its own message: a whole-suite skip under testdox
+        // publishes no list, no totals and no glyph — the exact "quietly empty" input class.
+        self::assertStringContainsString(
+            'No tests executed!',
+            $alone,
+            'the probe class no longer skips its whole suite under --testdox, so this input '
+            . 'is not the suite-skip-only shape — regenerate the probe, do not touch phpunit.xml',
+        );
+        self::assertStringNotContainsString('Tests: ', $alone, 'this shape publishes no totals line');
+        self::assertSame(
+            0,
+            preg_match_all('/^ \x{21A9} /mu', $alone),
+            'a skipped SUITE emits no testdox glyph (symbolFor() emits one per TEST result), '
+            . 'so this shape really has zero glyphs for the script to attribute',
+        );
+
+        $result = $this->runScript($this->fixtureFile('ac2-testdox-suite-only.log', $alone));
+
+        self::assertSame(
+            5,
+            $result['exit'],
+            "a whole-suite skip under --testdox must NOT exit 0 with an empty set — that\n"
+            . "reports 'nothing skipped' about a run that skipped its suite. It is refused\n"
+            . "instead, naming the invisible suite skip. stderr:\n" . $result['stderr'],
+        );
+        self::assertSame([], $result['lines'], 'no set may be written for an unnameable skip');
+        self::assertStringContainsString(
+            'No tests executed!',
+            $result['stderr'],
+            'the refusal must quote the summary it is refusing about',
+        );
+        self::assertStringContainsString(
+            'INVISIBLE',
+            $result['stderr'],
+            'the refusal must NAME the invisible suite skip — the whole point of AC2\'s '
+            . 'second shape',
+        );
+        self::assertStringContainsString('--testdox', $result['stderr']);
+        self::assertStringContainsString(
+            'Do NOT change phpunit.xml',
+            $result['stderr'],
+            'the testdox shape is not a config fault: the config is exonerated, not accused',
+        );
+        self::assertStringNotContainsString(
+            'has lost displayDetailsOnSkippedTests',
+            $result['stderr'],
+            'phpunit.xml must NOT be named as the cause — the config is correct on this path',
+        );
+    }
+
     public function test_a_real_colorized_run_is_parsed_rather_than_refused(): void
     {
         // `colors="true"` in phpunit.xml means COLOR_AUTO, so a pipe is never colorized in
@@ -592,12 +895,16 @@ final class SkippedTestNameReportingTest extends TestCase
             // No always-full device on this box, so the failure cannot be provoked; pin the
             // mechanism textually rather than reporting a pass that measured nothing.
             self::assertStringContainsString(
-                'write_status',
-                // CODE only: a header comment must not be able to satisfy a fallback that
-                // stands in for a measurement (S345 round-2 finding 4, same shape).
+                '[ "$write_status" -ne 0 ]',
+                // CODE only, and the CHECK, not the variable name: a header comment must not
+                // satisfy a fallback that stands in for a measurement (S345 round-2 finding 4,
+                // same shape), and neither may a surviving `write_status=$?` assignment alone --
+                // deleting the guard while keeping the assignment is the AC4 mutation this pins
+                // (S352-followup item 4).
                 $this->scriptCode(),
                 '/dev/full is unavailable, so the truncated-write path cannot be exercised here; '
-                . "the script must still check the status of its `sort` pipeline",
+                . 'the script must still check the status of its `sort` pipeline '
+                . '(`[ "$write_status" -ne 0 ]` is the guard the fallback pins)',
             );
 
             return;
@@ -869,14 +1176,16 @@ final class SkippedTestNameReportingTest extends TestCase
      * carries every tool's output. One unrelated line used to flip a correct exit 4 into a
      * false exit 5.
      *
-     * ⚠ Do NOT delete this as redundant against its ` ↩ ` siblings below. It is the only
-     * fixture on the path where `testdox_skips` stays 0, so the script must report the
-     * glyphs as "Evidence, not a cause" and attribute nothing; the ` ↩ ` fixtures raise
-     * `testdox_skips` and therefore exercise the ATTRIBUTION arithmetic instead. The three
-     * assert three different messages on three different branches. The reverse deletion is
-     * what actually happened: for three review rounds this `✔` fixture was the ONLY
-     * stray-glyph guard, and because it can never reach the attribution arithmetic it could
-     * not see the surplus defect that
+     * ⚠ Do NOT delete this as redundant against its ` ↩ ` siblings below. RE-DERIVED for
+     * per-run accounting (S352): under per-run attribution the stray glyph (before the
+     * banner) is attributed to NO run, so `testdox_skips` stays 0 for the run and the
+     * script reports the glyph as "Evidence, not a cause"; the ` ↩ ` siblings differ in
+     * the INPUT-WIDE tally that feeds that evidence note — a `✔` leaves it at 0 skips
+     * (evidence-only message), a ` ↩ ` raises it and selects the "BOTH causes are in
+     * play" note instead. The three assert three different messages on three different
+     * branches. The reverse deletion is what actually happened: for three review rounds
+     * this `✔` fixture was the ONLY stray-glyph guard, and because it can never reach
+     * the attribution arithmetic it could not see the surplus defect that
      * {@see self::test_a_surplus_of_stray_skip_glyphs_does_not_exonerate_phpunit_xml()}
      * now pins.
      */
@@ -905,12 +1214,14 @@ final class SkippedTestNameReportingTest extends TestCase
     /**
      * The sibling of the test above, with testdox's SKIP glyph rather than its pass glyph —
      * kept alongside it, not instead of it, because the two take different paths: `✔`
-     * leaves `testdox_skips` at 0 (evidence only), `↩` raises it (a partial attribution).
-     * The `✔` fixture is precisely why the surplus defect below stayed invisible for three
-     * rounds, so the glyph that actually feeds the attribution needs its own fixture.
+     * leaves the input-wide skip tally at 0 (evidence-only note), ` ↩ ` raises it and
+     * selects the "BOTH causes are in play" note. The `✔` fixture is precisely why the
+     * surplus defect below stayed invisible for three rounds, so the glyph that actually
+     * feeds the attribution needs its own fixture.
      *
-     * One stray skip glyph against a shortfall of four: testdox may be credited with at
-     * most the one, never with the rest, and `phpunit.xml` stays named.
+     * RE-DERIVED for per-run accounting (S352): the stray glyph (before the banner) is
+     * attributed to NO run, so testdox is credited with NONE of the four missing names —
+     * the message says so, names BOTH candidate causes, and `phpunit.xml` stays in play.
      */
     public function test_one_stray_SKIP_glyph_is_credited_at_most_once_and_never_exonerates(): void
     {
@@ -1010,11 +1321,163 @@ final class SkippedTestNameReportingTest extends TestCase
     }
 
     /**
-     * The middle case: testdox explains SOME of the shortfall. Neither "it is testdox, leave
-     * the config alone" nor "the config is the only cause" is true, so both are named and the
-     * config is not exonerated.
+     * AC2a (S352): the last member of the false-exoneration family, the one the clamp
+     * removal could not close. Exit 5 used to rest on an EQUALITY of two INPUT-WIDE totals
+     * (KNOWN LIMIT 3): one stray ` ↩ ` line beside a count-only `Skipped: 1.` was
+     * arithmetically indistinguishable from a genuine testdox run that skipped one, and the
+     * script printed "Do NOT change phpunit.xml" about a config that WAS the cause.
+     *
+     * Per-run segmentation closes it: segment_runs() attributes a glyph only to the run
+     * that printed it, and a glyph before any PHPUnit banner is attributed to NO run — so
+     * this single count-only run's shortfall has no same-run glyphs to mark it as testdox,
+     * and the exit-5 branch cannot be reached. The input falls to exit 4 naming
+     * phpunit.xml, with the stray glyph reported as evidence only (never exoneration).
+     * A glyph AFTER a run's terminating summary line is attributed to NO run the same
+     * way, because the segment is flushed and closed AT the totals line or
+     * `No tests executed!` — {@see
+     * self::test_a_stray_skip_glyph_after_a_runs_terminating_summary_is_attributed_to_no_run()}
+     * (round-1 review finding 1).
      */
-    public function test_testdox_that_explains_only_part_of_the_shortfall_names_both_causes(): void
+    public function test_ac2a_one_stray_skip_glyph_beside_a_count_only_run_cannot_reach_exit_5(): void
+    {
+        $result = $this->runScript($this->fixtureFile(
+            'ac2a-stray-glyph-countonly.log',
+            " \u{21A9} some other tool says skipped\n" . $this->countOnlyRun(1),
+        ));
+
+        self::assertSame(
+            4,
+            $result['exit'],
+            "one stray ↩ beside a count-only Skipped: 1 is NOT a testdox run: the glyph is\n"
+            . "attributed to no run, so exit 5 (the testdox verdict) must not be\n"
+            . "taken. This exact input exited 5 under input-wide sums (KNOWN LIMIT 3); per-run\n"
+            . "attribution is what AC2a closes. stderr:\n" . $result['stderr'],
+        );
+        self::assertSame([], $result['lines'], 'no name was recovered, so nothing may be written');
+        self::assertStringNotContainsString(
+            'Do NOT change phpunit.xml',
+            $result['stderr'],
+            'the exoneration sentence may only appear when the skip glyphs belong to the SAME '
+            . 'run as the shortfall. A foreign glyph is evidence, never exoneration.',
+        );
+        self::assertStringContainsString(
+            'displayDetailsOnSkippedTests',
+            $result['stderr'],
+            'phpunit.xml must still be named as a candidate cause — it is the one this input '
+            . 'actually supports',
+        );
+        self::assertStringContainsString(
+            'attributed to this run',
+            $result['stderr'],
+            'the message must state that the stray glyph is not attributed to this run, or '
+            . 'the fixture cannot tell per-run attribution from the input-wide sums it '
+            . 'replaced',
+        );
+    }
+
+    /**
+     * Round-1 review finding 1 (S352 fix round 1): the AC2a claim "stray glyphs cannot
+     * reach exit 5 whatever their count" held only for glyphs BEFORE any banner. A glyph
+     * AFTER a run's terminating summary line was still attributed to that run — the
+     * segment stayed open past the `Tests: ...` totals line, so `testdox_skips` picked
+     * the glyph up and the run's own arithmetic said testdox, printing "Do NOT change
+     * phpunit.xml" about a count-only run whose list phpunit.xml HAD lost. Real testdox
+     * glyphs always precede the summary (a glyph is printed per test result, the
+     * summary comes last), so a post-summary glyph is foreign by construction.
+     *
+     * The segment is now flushed and CLOSED at its last terminating line (the totals
+     * line or `No tests executed!`), so this exact input exits 4 with a truthful
+     * message: the run has zero attributed glyphs and phpunit.xml stays in play.
+     * Mutation-proof: reverting the flush means the post-summary glyph is attributed to
+     * the run again and this input exits 5 with the false exoneration.
+     */
+    public function test_a_stray_skip_glyph_after_a_runs_terminating_summary_is_attributed_to_no_run(): void
+    {
+        $result = $this->runScript($this->fixtureFile(
+            'post-summary-stray-glyph.log',
+            "PHPUnit 10.5.64\n\nOK, but there were issues!\n"
+            . "Tests: 9, Assertions: 12, Skipped: 1.\n"
+            . " \u{21A9} some other tool says skipped\n",
+        ));
+
+        self::assertSame(
+            4,
+            $result['exit'],
+            "a ↩ after the run's terminating summary is foreign output, not a testdox\n"
+            . "verdict: the segment is closed AT the totals line, so the run has no\n"
+            . "attributed glyphs and the missing list is phpunit.xml's fault. Exit 5 here\n"
+            . "is the pre-fix false exoneration. stderr:\n" . $result['stderr'],
+        );
+        self::assertSame([], $result['lines'], 'no name was recovered, so nothing may be written');
+        self::assertStringContainsString(
+            '0 testdox skip glyph(s) present',
+            $result['stderr'],
+            'the run must report ZERO attributed glyphs — the post-summary glyph is '
+            . 'attributed to no run, exactly like a pre-banner one',
+        );
+        self::assertStringNotContainsString('Do NOT change phpunit.xml', $result['stderr']);
+        self::assertStringContainsString(
+            'displayDetailsOnSkippedTests',
+            $result['stderr'],
+            'phpunit.xml must still be named as the candidate cause — the one this input '
+            . 'actually supports',
+        );
+        self::assertStringContainsString(
+            'attributed to this run',
+            $result['stderr'],
+            'the evidence note must state that the stray glyph is not attributed to this run',
+        );
+    }
+
+    /**
+     * Round-2 review finding 1 (S352 fix round 2): the round-1 flush closes the segment
+     * AT the terminating summary line, but the detail-list header branches did not get
+     * the same `if (!open) open_run("")` guard the summary branch has — so a list header
+     * + entry AFTER a closed segment accumulated into the closed run's already-flushed
+     * `declared`/`extracted` and was silently dropped, with the run's verdict already
+     * passed: exit 0, a set missing the post-flush names. Pre-segmentation the same
+     * shape stayed open and hit `declared > summarised` → exit 3; the round-1 flush
+     * traded that loud refusal for a silent one. The guard re-opens an implicit run for
+     * the post-close list, which then has no terminating summary and is REFUSED
+     * (exit 2). Mutation-proof: reverting the guard makes this input exit 0 again.
+     */
+    public function test_list_content_after_a_closed_run_is_refused_not_quietly_dropped(): void
+    {
+        $result = $this->runScript($this->fixtureFile(
+            'post-summary-list.log',
+            "PHPUnit 10.5.64\n\nThere was 1 skipped test:\n\n"
+            . "1) Phlix\Tests\Unit\Alpha\AlphaTest::testGamma\nreason\n\n"
+            . "OK, but there were issues!\nTests: 9, Assertions: 12, Skipped: 1.\n\n"
+            . "There was 1 skipped test:\n\n"
+            . "1) Phlix\Tests\Unit\Beta\BetaTest::testDelta\nreason\n",
+        ));
+
+        self::assertSame(
+            2,
+            $result['exit'],
+            "a list header + entry after a run's terminating summary is foreign output,\n"
+            . "not part of the closed run: it must open a fresh implicit run that fails\n"
+            . "loudly (no summary) instead of silently exiting 0 with a set missing the\n"
+            . "post-flush names. stderr:\n" . $result['stderr'],
+        );
+        self::assertSame([], $result['lines'], 'the set would be PARTIAL, so nothing may be written');
+        self::assertStringContainsString(
+            'run 2: no PHPUnit terminating summary line was seen',
+            $result['stderr'],
+            'the post-close list must be attributed to a fresh run and refused for having no '
+            . 'summary, not silently dropped into the closed run',
+        );
+    }
+
+    /**
+     * The middle case RE-DERIVED for per-run accounting (S352). The input-wide "testdox
+     * explains SOME of the shortfall" shape is unreachable: each run is judged on its own
+     * arithmetic, so the testdox run's shortfall is fully explained by ITS OWN glyphs
+     * (exit 5, and "Do NOT change phpunit.xml" is correct for IT) while the count-only
+     * run's lost list is a separate exit-4 diagnosis naming phpunit.xml. The first failing
+     * run — the testdox run — sets the exit code, and every failing run is named.
+     */
+    public function test_a_testdox_run_and_a_count_only_run_get_separate_per_run_diagnoses(): void
     {
         $testdox = $this->runRealPhpunit([self::REAL_TEST_FILE, '--testdox']);
         $this->assertTheFixtureStillSkipsExactlyOneTest($testdox);
@@ -1024,14 +1487,93 @@ final class SkippedTestNameReportingTest extends TestCase
             $testdox . "\n" . self::COUNT_ONLY,
         ));
 
-        self::assertSame(4, $result['exit'], $result['stderr']);
-        self::assertStringContainsString(
-            'BOTH causes are in play',
-            $result['stderr'],
-            'one testdox skip cannot account for five missing names; the message must name the '
-            . 'residual as well',
+        self::assertSame(
+            5,
+            $result['exit'],
+            "per-run accounting: the testdox run's own shortfall is matched one-for-one by its\n"
+            . "own glyphs (exit 5), and the count-only run's lost list is diagnosed separately\n"
+            . "(exit 4). The input-wide 'explains only part of the shortfall' shape no longer\n"
+            . "exists. stderr:\n" . $result['stderr'],
         );
-        self::assertStringNotContainsString('Do NOT change phpunit.xml', $result['stderr']);
+        self::assertSame([], $result['lines'], 'no set may be written while any run is missing names');
+        self::assertStringContainsString('per-run accounting', $result['stderr']);
+        self::assertStringContainsString('failing run #1', $result['stderr']);
+        self::assertStringContainsString(
+            'Do NOT change phpunit.xml',
+            $result['stderr'],
+            'run 1 is a genuine testdox run, so for IT the exoneration is correct — the false '
+            . 'input-wide exoneration is what per-run accounting removed',
+        );
+        self::assertStringContainsString('failing run #2', $result['stderr']);
+        self::assertStringContainsString(
+            'displayDetailsOnSkippedTests',
+            $result['stderr'],
+            'run 2 is a genuine count-only run, so for IT phpunit.xml IS the cause',
+        );
+    }
+
+    /**
+     * AC1 (S352): the per-run proof built from TWO REAL runs. Run A over-declares — a
+     * suite-skip probe publishes 1 detail-list entry and NO `Skipped: N` term of its own
+     * (`No tests executed!`, so declared 1 > summarised 0). Run B under-declares — a real
+     * `--testdox` run counts its skip in `Skipped: N` and can never name it (declared 0 <
+     * summarised 1). Input-wide sums could net the pair to a code that is right for the sum
+     * and wrong for both runs; per-run accounting refuses and NAMES the failing run (run B,
+     * the testdox run, exit 5 — never exit 0). Deleting the `run_count >= 2` segmentation
+     * branch makes this input fall back to input-wide sums, where no run is named at all.
+     */
+    public function test_ac1_a_multi_run_input_where_run_a_over_declares_and_run_b_under_declares_names_run_b(): void
+    {
+        // Run A over-declares: a suite-skip probe declares 1 entry and prints no totals
+        // line, so its declared count has no `Skipped: N` term to match.
+        $runA = $this->runRealPhpunit([$this->writeSuiteSkipProbe()]);
+        self::assertStringContainsString(
+            'No tests executed!',
+            $runA,
+            'run A must be the no-totals shape (declared > summarised with no Skipped: N term), '
+            . 'or this fixture is not the over-declaring half of the AC1 pair',
+        );
+        self::assertStringNotContainsString('Tests: ', $runA, 'run A must publish no totals line');
+
+        // Run B under-declares: a real testdox run counts its skip in `Skipped: N` and can
+        // never name it, so declared (0) < summarised (1).
+        $runB = $this->runRealPhpunit([self::REAL_TEST_FILE, '--testdox']);
+        $this->assertTheFixtureStillSkipsExactlyOneTest($runB);
+        self::assertStringNotContainsString(
+            'skipped test:',
+            $runB,
+            'premise: testdox never names a skipped test (Facade.php:204-221), so run B really '
+            . 'under-declares',
+        );
+
+        $result = $this->runScript($this->fixtureFile('ac1-over-under.log', $runA . "\n" . $runB));
+
+        self::assertNotSame(
+            0,
+            $result['exit'],
+            "run A over-declares and run B under-declares, so the pair must NEVER net to exit 0\n"
+            . "(that would hand comm a set short by run B's name). stderr:\n" . $result['stderr'],
+        );
+        self::assertSame(
+            5,
+            $result['exit'],
+            "run B (the testdox run) is the first failing run and must set the exit code.\n"
+            . "stderr:\n" . $result['stderr'],
+        );
+        self::assertSame([], $result['lines'], 'no partial set may be written');
+        self::assertStringContainsString('per-run accounting', $result['stderr']);
+        self::assertStringContainsString(
+            'failing run #2',
+            $result['stderr'],
+            'the failing run must be NAMED (run B, the testdox run) — the input-wide sums name '
+            . 'no run at all, which is the shape deleting the segmentation would restore',
+        );
+        self::assertStringNotContainsString(
+            'failing run #1',
+            $result['stderr'],
+            'run A (the no-totals run) is legitimate on its own and must not be blamed',
+        );
+        self::assertStringContainsString('Do NOT change phpunit.xml', $result['stderr']);
     }
 
     /**
@@ -1069,22 +1611,22 @@ final class SkippedTestNameReportingTest extends TestCase
     }
 
     /**
-     * Round-3 finding 1, measured verbatim. `declared` is an input-wide SUM, so the entries a
-     * `No tests executed!` run declares — which have no `Skipped: N` term of their own — used to
-     * cancel a DIFFERENT run's lost names. The shortfall then shrank to what testdox could
-     * carry, so exit 5 fired and told the reader "Do NOT change phpunit.xml" about a log
-     * containing a run whose list phpunit.xml had genuinely lost. That is round-2's HIGH,
-     * verbatim, one layer down.
+     * Round-3 finding 1, measured verbatim — RE-DERIVED for per-run accounting (S352).
+     * The input-wide sums used to let the `No tests executed!` run's declared entries
+     * cancel a DIFFERENT run's lost names, shrinking the shortfall to what testdox could
+     * carry and printing "Do NOT change phpunit.xml" about a log that also contained a
+     * count-only run whose list phpunit.xml HAD genuinely lost. Per-run accounting makes
+     * that family unreachable: the suite-skip run is judged alone (its 2 declared entries
+     * have no `Skipped: N` term of their own and can no longer pay for anything) and each
+     * failing run gets its own diagnosis. The first failing run is the testdox run (exit 5
+     * — for IT the exoneration is correct, because its own glyphs match its own shortfall);
+     * the count-only run fails on its own (exit 4) and phpunit.xml stays named for IT.
      *
-     * Two of the three halves are the real binary: two suite-skipping probe classes (declared 2,
-     * summarised 0) and a real `--testdox` run over a two-skip class (summarised 2, `↩`×2). The
-     * third is master's own pre-S345 count-only shape, i.e. `phpunit.xml` really broken for that
-     * run.
-     *
-     * Measured on the pristine script: exit 5, "all 2 skipped test(s) ... are accounted for by
-     * testdox output ... Do NOT change phpunit.xml".
+     * All three halves are real: two suite-skipping probe classes (declared 2,
+     * summarised 0), a real `--testdox` run over a two-skip class (summarised 2, `↩`×2),
+     * and master's own pre-S345 count-only shape for the third.
      */
-    public function test_a_no_totals_runs_entries_cannot_pay_for_another_runs_lost_names(): void
+    public function test_per_run_accounting_judges_a_no_totals_run_alone_and_names_each_failing_run(): void
     {
         $suites = $this->runRealPhpunit([
             $this->writeSuiteSkipProbe(),
@@ -1120,25 +1662,28 @@ final class SkippedTestNameReportingTest extends TestCase
         ));
 
         self::assertSame(
-            4,
+            5,
             $result['exit'],
-            "the suite-skip run declared 2 entries with NO count of its own, so they cannot offset\n"
-            . "the count-only run's missing list. Exit 5 here is round-2's HIGH resurrected: it\n"
-            . "tells the reader to leave phpunit.xml alone about a log in which phpunit.xml IS a\n"
-            . "cause. stderr:\n" . $result['stderr'],
+            "per-run accounting judges each run independently: the suite-skip run's 2 declared\n"
+            . "entries have no Skipped: N term of their own, so they cannot offset ANY other run\n"
+            . "(that netting family is unreachable). The first failing run is run 2, a GENUINE\n"
+            . "testdox run (exit 5 — its own glyphs match its own shortfall), and run 3's lost\n"
+            . "list is diagnosed on its own (exit 4). stderr:\n" . $result['stderr'],
         );
-        self::assertSame([], $result['lines'], 'no set may be written while names are missing');
-        self::assertStringNotContainsString(
+        self::assertSame([], $result['lines'], 'no set may be written while any run is missing names');
+        self::assertStringContainsString('per-run accounting', $result['stderr']);
+        self::assertStringContainsString('failing run #2', $result['stderr']);
+        self::assertStringContainsString(
             'Do NOT change phpunit.xml',
             $result['stderr'],
-            'the exoneration sentence may only appear when testdox accounts for EVERY unnamed '
-            . 'skip in the input, and here a count-only run has lost its list',
+            'run 2 is a genuine testdox run, so ITS diagnosis is the testdox one — the false '
+            . 'exoneration of an input-wide sum is what per-run accounting removed',
         );
+        self::assertStringContainsString('failing run #3', $result['stderr']);
         self::assertStringContainsString(
-            'BOTH causes are in play',
+            'displayDetailsOnSkippedTests',
             $result['stderr'],
-            'testdox carries part of this shortfall and the missing list carries the rest; both '
-            . 'must be named',
+            'run 3 is a genuine count-only run, so ITS diagnosis must still name phpunit.xml',
         );
     }
 
@@ -1479,37 +2024,188 @@ final class SkippedTestNameReportingTest extends TestCase
         $out = [];
 
         foreach (explode("\n", $folded) as $line) {
-            $quote = '';
-            $code = '';
-
-            foreach (str_split($line === '' ? ' ' : $line) as $index => $char) {
-                if ($quote !== '') {
-                    $quote = $char === $quote ? '' : $quote;
-                } elseif ($char === '"' || $char === "'") {
-                    $quote = $char;
-                } elseif ($char === '#' && ($index === 0 || preg_match('/\s/', $line[$index - 1]) === 1)) {
-                    break;
-                }
-
-                $code .= $char;
-            }
-
-            $out[] = trim($code);
+            $out[] = $this->commentStripped($line);
         }
 
         return $out;
     }
 
     /**
-     * Every place in one workflow's source where PHPUnit is invoked with `--testdox`.
+     * One line with any unquoted `#` comment removed. Load-bearing on both sides:
+     * the shell-body splitter uses it so a `#` inside a quoted argument survives,
+     * and the whole-file AC3 scan uses it so YAML comment lines carrying the word
+     * `--testdox` (which the real workflows do, explaining why the flag is banned)
+     * cannot satisfy the ban. Stripping at the FIRST `#` regardless of quoting
+     * would hide the rest of a command that legitimately contains one, e.g.
+     * `--filter '#[Group]'`.
+     */
+    private function commentStripped(string $line): string
+    {
+        $quote = '';
+        $code = '';
+
+        foreach (str_split($line === '' ? ' ' : $line) as $index => $char) {
+            if ($quote !== '') {
+                $quote = $char === $quote ? '' : $quote;
+            } elseif ($char === '"' || $char === "'") {
+                $quote = $char;
+            } elseif ($char === '#' && ($index === 0 || preg_match('/\s/', $line[$index - 1]) === 1)) {
+                break;
+            }
+
+            $code .= $char;
+        }
+
+        return trim($code);
+    }
+
+    /**
+     * Every place in one workflow file's source where `--testdox` appears on a
+     * non-comment line, PROVIDED the file invokes PHPUnit at all (AC3, S352).
      *
-     * `--testdox` is matched as a whitespace-delimited TOKEN, so `--testdox-html` and
-     * `--testdox-text` — logging targets that do not put PHPUnit into testdox output mode
-     * (Cli/Builder.php:851-862) — are not false positives.
+     * The pre-AC3 ban needed `phpunit` and the `--testdox` token on the SAME
+     * folded command line, and round-3 finding 5 measured five ways around that: a
+     * shell variable (`DOX=--testdox`), an `env:` value, a `matrix` expansion, a
+     * composite action file (which has no `jobs:` for the old parser to descend
+     * into) and a reusable-workflow `uses:`. The ban is now whole-file: once
+     * {@see self::workflowInvokesPhpunit()} decides the file can run PHPUnit, every
+     * non-comment line is searched, so the flag is caught wherever it is smuggled,
+     * not only where the command is assembled.
+     *
+     * `--testdox` is matched as a whitespace-delimited TOKEN, so `--testdox-html`
+     * and `--testdox-text` — logging targets that do not put PHPUnit into testdox
+     * output mode (Cli/Builder.php:851-862) — are not false positives.
      *
      * @return list<string>
      */
     private function testdoxOffenders(string $yaml, string $label): array
+    {
+        if (!$this->workflowInvokesPhpunit($yaml)) {
+            return [];
+        }
+
+        $out = [];
+
+        foreach (explode("\n", $yaml) as $line) {
+            if ($this->lineCarriesTestdoxToken($line)) {
+                $out[] = $label . ': ' . trim($line);
+            }
+        }
+
+        return $out;
+    }
+
+    /**
+     * Whether a workflow file can invoke PHPUnit at all — the AC3 gate for the
+     * whole-file scan. Direct `run:` scalars (job steps and composite-action
+     * steps) that mention phpunit, or a reusable-workflow `uses:` — the only
+     * `uses:` form that provably delegates to another workflow FILE, which is how
+     * PHPUnit reaches the run in that file. Plain action references
+     * (`actions/checkout@v4`) do not gate, so a workflow that never runs PHPUnit
+     * is not searched.
+     */
+    private function workflowInvokesPhpunit(string $yaml): bool
+    {
+        foreach ([...$this->runScalars($yaml), ...$this->compositeRunScalars($yaml)] as $run) {
+            if (str_contains($run, 'phpunit')) {
+                return true;
+            }
+        }
+
+        foreach ($this->usesScalars($yaml) as $uses) {
+            if (str_contains($uses, '.github/workflows/')) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Whether one raw workflow line carries the `--testdox` TOKEN after comment
+     * stripping. The regex is a token match, not a substring match: `--testdox`
+     * must be bounded on the left by anything except a word char or `-`, and on
+     * the right by anything except a word char, `-` or `=`. That keeps
+     * `--testdox-html` and `--testdox-text` (logging targets —
+     * Cli/Builder.php:851-862 does not set testdox OUTPUT mode for them) and
+     * `--testdox=1` (rejected by PHPUnit itself) out, while still seeing the token
+     * after `=` (`DOX=--testdox`), inside a YAML flow list (`dox: [--testdox]`)
+     * and quoted.
+     */
+    private function lineCarriesTestdoxToken(string $line): bool
+    {
+        return preg_match('/(?<![\w-])--testdox(?![-\w=])/', $this->commentStripped($line)) === 1;
+    }
+
+    /**
+     * Every `run:` scalar of a composite action's own `runs:` block. The OLD ban
+     * never saw these files at all: {@see self::runScalars()} only descends into
+     * `jobs:`, and an action.yml has none — so a composite action was a free
+     * corridor for `--testdox` (S352 round-3 finding 5).
+     *
+     * @return list<string>
+     */
+    private function compositeRunScalars(string $yaml): array
+    {
+        $parsed = Yaml::parse($yaml);
+        self::assertIsArray($parsed, 'workflow does not parse as YAML');
+
+        $runs = is_array($parsed['runs'] ?? null) ? $parsed['runs'] : [];
+        $out = [];
+
+        foreach ((is_array($runs['steps'] ?? null) ? $runs['steps'] : []) as $step) {
+            if (is_array($step) && is_string($step['run'] ?? null)) {
+                $out[] = $step['run'];
+            }
+        }
+
+        return $out;
+    }
+
+    /**
+     * Every `uses:` reference in a workflow — at the JOB level (a reusable
+     * workflow) or in a step (a composite action). A file whose only PHPUnit
+     * "invocation" is a reusable-workflow `uses:` has no `run:` scalar for the old
+     * ban to read (S352 round-3 finding 5), so the widened ban needs these to
+     * decide the file invokes PHPUnit at all.
+     *
+     * @return list<string>
+     */
+    private function usesScalars(string $yaml): array
+    {
+        $parsed = Yaml::parse($yaml);
+        self::assertIsArray($parsed, 'workflow does not parse as YAML');
+
+        $out = [];
+
+        foreach ((is_array($parsed['jobs'] ?? null) ? $parsed['jobs'] : []) as $job) {
+            if (!is_array($job)) {
+                continue;
+            }
+
+            if (is_string($job['uses'] ?? null)) {
+                $out[] = $job['uses'];
+            }
+
+            foreach ((is_array($job['steps'] ?? null) ? $job['steps'] : []) as $step) {
+                if (is_array($step) && is_string($step['uses'] ?? null)) {
+                    $out[] = $step['uses'];
+                }
+            }
+        }
+
+        return $out;
+    }
+
+    /**
+     * The PRE-AC3 ban, kept so every AC3 mutant stays provably evasive: this is
+     * the same-line logic round-3 finding 5 was measured against
+     * (S352-followup item 3), and each mutant test below asserts BOTH sides — this
+     * returns [] for the mutant, {@see self::testdoxOffenders()} does not.
+     *
+     * @return list<string>
+     */
+    private function sameLineTestdoxOffenders(string $yaml, string $label): array
     {
         $out = [];
 
@@ -1538,6 +2234,18 @@ final class SkippedTestNameReportingTest extends TestCase
         file_put_contents($path, ($contents ?? self::FIXTURE) . "\n");
 
         return $path;
+    }
+
+    /**
+     * Writes a mutant workflow into the fixture directory and returns its contents,
+     * so every AC3 mutant proves against a FILE the way the real-directory scan
+     * does — and never against a committed fixture. The tmpDir-only rule is
+     * load-bearing: the real `.github/workflows/` directory must stay untouched by
+     * mutants, and the guard that scans it is what the mutation must not fire on.
+     */
+    private function writeMutantWorkflow(string $name, string $yaml): string
+    {
+        return (string) file_get_contents($this->fixtureFile($name, $yaml));
     }
 
     /**

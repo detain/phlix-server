@@ -649,16 +649,26 @@ is never handed over silently:
 
 | exit | meaning | what to do |
 | --- | --- | --- |
-| **0** | parsed a real PHPUnit run; stdout is the sorted set (zero lines is a valid answer) | compare it |
-| **2** | the input is not PHPUnit output at all — no result summary line anywhere | check what you piped in |
-| **3** | the numbers do not add up: a run printed no list, or PHPUnit's list/entry format drifted | do **not** compare; read the denominators on stderr |
-| **4** | skips were counted, no detail list was printed, and testdox does not explain them | restore `displayDetailsOnSkippedTests="true"`, or find the invocation that did not load `phpunit.xml` |
-| **5** | the unnamed skips are matched one-for-one by testdox skip glyphs (` ↩ `) | re-run without `--testdox`; **not** a `phpunit.xml` fault |
+| **0** | every run in the input passed the contract; stdout is the sorted set (zero lines is a valid answer for a run that skipped nothing) | compare it |
+| **2** | the input is not PHPUnit output at all — no result summary line anywhere — or a run opened by a banner never completed | check what you piped in |
+| **3** | some run's numbers do not add up: a run printed no list, or PHPUnit's list/entry format drifted | do **not** compare; read the denominators on stderr |
+| **4** | some run counted skips, printed no detail list, and testdox does not explain them | restore `displayDetailsOnSkippedTests="true"`, or find the invocation that did not load `phpunit.xml` |
+| **5** | some run's OWN testdox skip glyphs (` ↩ `) prove it is a `--testdox` run and account for all its unnamed skips (the glyph-less suite skip included), or a run ended `No tests executed!` with nothing named | re-run without `--testdox`; **not** a `phpunit.xml` fault |
 | **6** | the sorted set could not be written in full (`sort`, or your redirect, failed) | stdout is truncated; do **not** compare |
 
 Denominators always go to stderr, on every exit, so a set can be checked against the count
 PHPUnit itself printed. The script's header enumerates the same six codes with the exact
 input class that reaches each one.
+
+The evaluation is **per run**, not per input: a multi-run log — the normal
+`gh run view <id> --log` shape — is segmented at PHPUnit's banners and terminating
+summary lines, and each run's arithmetic is judged on its own denominators. When any
+run fails, every failing run is named on stderr (ordinal, banner, that run's own
+numbers), no set is written, and the first failing run's exit code wins; the
+input-wide tallies still printed on stderr are audit-only and decide nothing. The old
+failure mode — one run's shortfall paid for by another run's surplus, netting to a
+code right for the sum and wrong for both runs — is closed, so a refusal now points
+at a specific run instead of the input as a whole.
 
 ⚠ **`--testdox` is the one invocation this cannot cover, and it is a PHPUnit
 limitation, not a config mistake.** PHPUnit constructs the default result printer for
@@ -670,16 +680,27 @@ prints), so a `--testdox` run adds to `Skipped: N` and can never
 name those skips, with or without `--display-skipped`. No workflow passes `--testdox`
 any more (`syncplay-e2e.yml` dropped it in S345 for exactly this reason). If you add it
 back, or use it locally, the script exits **5** and says so — do **not** "fix"
-`phpunit.xml` in response; re-run without `--testdox`. It exits 5 only when the number of
-testdox skip glyphs (` ↩ `) **equals** the number of unnamed skips in the input: when they
-account for only some of them, both causes are named and `phpunit.xml` is not exonerated,
-and when there are **more** glyphs than unnamed skips the glyph count is treated as
-unattributable and buys nothing at all. That last case is not a real testdox run — PHPUnit
-counts every glyph it prints in the same run's `Skipped: N`, so a surplus can only come
-from other output sharing the log, which `gh run view --log` makes routine. ⚠ The equality
-is still an equality of two whole-input totals, so N stray glyphs beside a run that lost N
-names read the same as one testdox run that skipped N; the script's header records that as
-a known limit rather than claiming otherwise.
+`phpunit.xml` in response; re-run without `--testdox`. Exit 5 is decided inside the
+run whose OWN glyphs prove it is a testdox run: any ` ↩ ` glyph that does not surplus
+the run's shortfall marks the run, and because the attribution uses the run's own
+`Skipped: N` rather than the glyph count, a SINGLE glyph is enough to carry the whole
+shortfall to exit 5 — the glyph-less suite skip (a `testSuiteSkipped` event produces
+no glyph) is accounted for exactly this way. Only a SURPLUS — more glyphs than the
+run's shortfall, which no real testdox run can produce because PHPUnit counts every
+glyph it prints in the same run's `Skipped: N` — attributes nothing to testdox: both
+causes are then named and `phpunit.xml` is not exonerated. A surplus can only come
+from other output sharing the log, which `gh run view --log` makes routine. Stray
+glyphs are attributed to NO run only when they fall outside every run's segment —
+before any PHPUnit banner, or after a run's terminating summary line, since the
+segment is flushed and closed at that line — so those can never reach exit 5 whatever
+their count. A stray glyph that lands INSIDE a run's segment is attributed to that
+run and can carry it to exit 5, because it is arithmetically identical to the genuine
+mixed testdox shape above. Exit 5 is also
+taken for a run that ends `No tests executed!` with **nothing named**: a whole-suite
+skip under `--testdox` prints exactly that (the suite skip is invisible), so a
+quietly-empty set would be a lie. The message says to verify the invocation, because
+a genuinely empty run (a typo'd `--filter`, an empty directory) prints a
+byte-identical shape and is refused the same way — see the KNOWN LIMITS note below.
 
 ⚠ **The second exception is the `assertion-escape-probe` job.** It runs PHPUnit from
 `scripts/assertion-escape-audit.php`, which captures the output into a PHP variable and
@@ -710,33 +731,44 @@ shipped (the last was a clamp that trimmed a surplus of testdox glyphs down to t
 shortfall; it is removed rather than re-tuned, because a surplus cannot come from a real
 testdox run at all).
 
-⚠ That is **not** a guarantee that the code is right for every input, and the limit is
-worth knowing before you trust a diagnosis: all of the script's denominators are
-**input-wide sums**, so in a multi-run log — which is exactly what
-`gh run view <id> --log` gives you — a shortfall in one run can be paid for by a surplus
-in another, and the pair can net out to a code that is right for the sum and wrong for
-both runs. Measured on the current version: a run declaring two names but summarising one,
-followed by a count-only run summarising one, exits **0** with a two-name set. Two such
-inputs were measured in round 3 and are closed (and fixtured), and one more — a surplus of
-testdox glyphs — is closed by deleting the branch that read it; a `--testdox` run that also
-skips a whole test SUITE is not closed, because a skipped suite produces no testdox glyph
-to attribute it to, and neither is exit 5's reliance on an equality of two whole-input
-totals. The durable fix is **per-run segmentation**
-— evaluate the contract inside each run rather than over the whole input — which is filed
-as a follow-up and deliberately not done here. Until then, read a non-zero exit as "this
-input must not be compared", not always as "this named run is at fault".
+⚠ That is **not** a guarantee that the code is right for every input — the script's
+header carries a numbered KNOWN LIMITS block, re-derived for per-run evaluation, and
+this section is its summary. Two of the old input-wide limits are closed by the
+segmentation and are no longer true: a shortfall in one run can no longer be paid for
+by another run's surplus (the multi-run refusal above replaces the netting), and N
+stray glyphs beside a run that lost N names no longer read as one testdox run that
+skipped N (exit 5 needs the run's OWN glyphs). What remains, all measured on this
+version:
 
-Two smaller limits complete the list, both measured on the shipped version. A data-set
-label containing a literal **newline** is emitted truncated at that newline: the entry
-spans two lines, the denominators still agree, and this is the one shape that escapes the
-cross-check. No data provider here produces one and the truncation is stable across runs,
-so `comm` is not corrupted by it — but the denominator argument does not cover it. And if a
-future PHPUnit renames the list header itself (`There was 1 skipped test:`), the refusal is
-still loud and nothing is written, but it arrives as exit **4** blaming `phpunit.xml`
-rather than as exit 3 blaming the parser — the right refusal with the wrong cause. The
-script's header carries all five limits, numbered, each with the input that reaches it, and
-enumerates every exit path with its input class; that header is the canonical statement of
-this contract, and this section is its summary.
+- **A run that genuinely executed nothing is refused too.** A typo'd `--filter` or an
+  empty directory prints a byte-identical `No tests executed!` to the invisible
+  suite-skip shape, so it exits **5** with no set written and a message that says to
+  verify the invocation — the right refusal for a shape that could otherwise hand
+  over a silently-empty set.
+- **The input is assumed to be CONCATENATED runs**, as `./vendor/bin/phpunit 2>&1` and
+  a single job's `gh run view --log` produce. `gh run view --log` strips its
+  `job<TAB>step<TAB>timestamp ` prefix but does **not** group the lines by job: when
+  two jobs' PHPUnit runs are INTERLEAVED in one log (parallel jobs), the
+  banner-delimited segmentation splits at the wrong boundaries and exits **2** naming
+  run 1 about input that is complete — the right refusal, wrong cause. The documented
+  recipe is safe when a workflow's PHPUnit invocations are sequential steps of ONE
+  job; for parallel jobs, pipe each job's log separately
+  (`gh run view --log --job <job-id>`).
+- **A data-set label containing a literal newline** is emitted truncated at that
+  newline: the entry spans two lines, the denominators still agree, and this is the
+  one shape that escapes the cross-check. No data provider here produces one and the
+  truncation is stable across runs, so `comm` is not corrupted by it — but the
+  denominator argument does not cover it.
+- **If a future PHPUnit renames the list header itself** (`There was 1 skipped test:`),
+  the refusal is still loud and nothing is written, but it arrives as exit **4**
+  blaming `phpunit.xml` rather than as exit 3 blaming the parser — the right refusal
+  with the wrong cause.
+
+The script's header carries all six limits (three closed by S352, three still open,
+plus the refusal side-effect of limit 2 — the genuinely-empty run shape, listed
+first above), numbered, each with the input that reaches it, and enumerates every
+exit path with its input class; that header is the canonical statement of this
+contract, and this section is its summary.
 
 **Keep the suite hermetic w.r.t. the environment.** `PHLIX_DOMAIN` changes real
 behaviour (it is the OAuth callback-URL allowlist — see

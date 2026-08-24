@@ -9,6 +9,37 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Changed
 
+- **`scripts/skipped-test-names.sh` now evaluates its contract PER RUN, and a multi-run input
+  is refused with every failing run named (S352).** S345's durable-close follow-up replaces
+  the input-wide sums with per-run accounting: the normalised input is segmented at PHPUnit's
+  banners and terminating summary lines, each run's `declared` / `summarised` / testdox /
+  `No tests executed!` fields are judged inside its own segment, and when ANY run fails the
+  contract the name set is NOT written, stderr names EVERY failing run (ordinal, banner, that
+  run's own arithmetic), and the first failing run's exit code wins — so one run's shortfall
+  can no longer be paid for by another run's surplus and net to a code right for the sum and
+  wrong for both runs (KNOWN LIMIT 1 closed). The input-wide tallies still printed on stderr
+are audit-only and decide nothing. Two more members of that family close with it: exit 5 now
+rests on the run's OWN testdox glyphs, so stray ` ↩ ` glyphs outside every run's segment —
+before any PHPUnit banner, or after a run's terminating summary line — are attributed to NO
+run and can never reach it (AC2a / KNOWN LIMIT 3 closed), and a
+  `--testdox` run together with a skipped SUITE is attributed from the run's own `Skipped: N`
+  — glyph-less suite skips included — so the mixed shape exits 5 with "Do NOT change
+  phpunit.xml" instead of accusing the config, and the suite-skip-only shape (`No tests
+  executed!` with nothing named) is REFUSED instead of exiting 0 with an empty set (AC2 /
+  KNOWN LIMIT 2 closed; a genuinely empty run prints the identical shape and is refused too,
+  with a verify-the-invocation message). The `--testdox` ban is widened to flag the token on
+  any non-comment command line of a workflow that invokes PHPUnit at all — shell-variable,
+  `env:`, `matrix`, composite-action and reusable-workflow `uses:` shapes included (AC3) — and
+  the `/dev/full` fallback asserts the `write_status` CHECK, not the variable name (AC4). The
+  KNOWN LIMITS block in the script header, the README exit-code table and the README
+  `--testdox` paragraph are re-derived to match what the tool now does (AC5); what remains
+  open is a data-set label containing a literal newline (truncated, denominators still agree),
+  a list-HEADER drift (refused as exit 4 blaming `phpunit.xml` rather than exit 3), and the
+  concatenated-run assumption (interleaved parallel jobs split at the wrong boundaries and
+  refuse as exit 2 — pipe each job's log separately with `gh run view --log --job <job-id>`).
+  Guard: `tests/Unit/Support/SkippedTestNameReportingTest.php` (fixtures for every shape
+  above, driving the real `vendor/bin/phpunit`). No migration (next-free stays 103).
+
 - **`library:scan`'s exit-code contract is now operator-facing: `setHelp()` and a README table (S347).** The contract (`0` clean scan, `1` did-not-run, `3` completed-with-loss, `2` deliberately unused) used to live only in the class docblock — `configure()` called no `setHelp()`, and no README/docs/CHANGELOG mention stated the codes — so an operator or wrapper script that read `--help` or the README never saw them. `php bin/phlix library:scan --help` now prints the full table under `Help: Exit codes:`, the README `### CLI` section carries the same table, and a new `testHelpNamesEveryExitCode` pins that every code the command can return — 0/1/3 plus the reserved-2 note — is named in the help text. No exit-code renumbering: `3` remains the deliberate choice that avoids Symfony's `Command::INVALID = 2`; the existing 3-way pin (`testScanRendersTheCountersIncludingFailed`, `testTheLossyExitCodeIsDistinctFromTheFailureExitCode`, `testALossyButCompletedScanStillMarksTheJobCompleted`) was re-verified red on a 3→2 mutation and green on restore. No migration.
 
 - **A music album with no artist tag is no longer discarded whole — it is ingested under a structural placeholder artist (S331).** `MusicLibraryScanner::flushAlbum()`'s early exit (`if ($artistName === '' || $artistName === 'Unknown Artist') { skip; return; }`) used to drop the ENTIRE album group and count the files as `skipped_no_artist`. That policy is reversed: the album is now ingested under a placeholder artist whose display label is `[Unknown Artist]`. 🔴 **The placeholder is STRUCTURAL, not a bare magic string** — migration `102_music_artists_placeholder_flag.sql` adds `music_artists.is_placeholder` (TINYINT(1) NOT NULL DEFAULT 0) and widens `uk_name` to the composite `(name, is_placeholder)`. Untagged-ness is detected by the ABSENCE of an artist tag (exact comparison against `''` / `'Unknown Artist'`, never `LIKE`); the placeholder row is resolved BY ID through the new `ensurePlaceholderArtist()` (lookup filtered `is_placeholder = 1`); and `upsertArtist()`'s natural-key lookup filters `is_placeholder = 0`. A REAL album genuinely tagged `[Unknown Artist]` therefore resolves to its OWN `is_placeholder = 0` artist row and can never be silently merged into the untagged bucket — proven on a real library (9 real ffmpeg-generated files, real MySQL 8.0.46, `phlix_s331` scratch DB): placeholder `[Unknown Artist]` (is_placeholder=1, 3 albums / 5 tracks) vs real token-tagged artist (is_placeholder=0, 1 album / 2 tracks), distinct ids, both reachable through `MusicLibraryService`'s artist→album→track browse walk with the track resolvable via `findTrackByMediaItemId()` (the `/media/{id}/stream` play path). The summary counter is re-purposed HONESTLY: `skipped_no_artist` is renamed `placeholder_artist_files` (always present, S96(f) shape) and the completion line is INFO again (nothing is skipped; an untagged album is now indexed, and `failed` stays 0 — measured `placeholder_artist_files: 5` for the 3 untitled + 2 tagless files). The discard-whole-album shape is pinned by `testAnUntaggedAlbumIsIngestedUnderThePlaceholderArtistInsteadOfDiscarded` (shown RED on the pre-fix code first), plus real-token-distinctness and placeholder-reuse-across-scans tests; `MusicScannerInlineMediaItemIdCoercionTest`'s inline-site set grew from two to three (`ensurePlaceholderArtist`); `WriteResultAdoptionGuardTest`'s insert-consumer denominator moved 94→95 / 14→15 (the new INSERT adopts `statementWroteNothing()`); `findArtistByName()` gained `ORDER BY is_placeholder DESC, id ASC` so the name-keyed artist detail is deterministic when both rows exist. 🚨 **MIGRATION ANSWER — USED 102 (a column AND a composite unique key); a RESCAN IS REQUIRED**: previously-discarded albums were never written to the database and no backfill can reconstruct them without re-reading the audio files — run `php bin/phlix migrate`, then scan (or rescan) each music library. S240 is a separate music-metadata item and was not touched.

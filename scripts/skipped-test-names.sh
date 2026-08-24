@@ -511,3 +511,150 @@ fi
 exit 0
 
 s352_per_run_probe() { grep -c 'Skipped:' ; }
+
+# =============================================================================
+# S352 — AC1 step 1: per-run segmentation pass (DEAD CODE until step 2 wires it in)
+# =============================================================================
+# Everything above evaluates the exit contract on INPUT-WIDE sums (KNOWN LIMIT 1
+# in the header): in a multi-run log one run's shortfall can be paid for by
+# another run's surplus, and the pair nets out to a code that is right for the
+# sum and wrong for both runs. The durable close is per-run accounting, and this
+# is the segmentation pass that will feed it.
+#
+# segment_runs() reads the NORMALISED input (the same `normalised=` text the main
+# flow builds: CRLF and ANSI escapes stripped, `gh run view --log` prefixes
+# removed) on stdin and emits, per PHPUnit run:
+#
+#   RUN\t<idx>\t<field>\t<value>     one metadata record per accumulated field
+#   <name>                           the run's extracted names, one per line,
+#                                    printed after its metadata records
+#
+# A run is delimited by PHPUnit's banner (`PHPUnit N.N ...`): each banner flushes
+# the previous run and opens the next. A terminating summary line
+# (`OK (`, `OK, but `, `FAILURES!`, `ERRORS!`, `WARNINGS!`, `No tests executed!`,
+# `Tests: `) with no open run implicitly opens one, so a banner-less log fragment
+# still yields a run. Everything else that is not inside an opened run is ignored
+# (e.g. stray ` ↩ ` glyphs before any banner are not attributed to any run).
+#
+# Each run accumulates the same fields the main flow sums across the whole input
+# — `declared` (detail-list headers, both kinds), `summarised` (the `Skipped: N`
+# term of `Tests: ...` lines), `nototals_declared` (declared entries matched by a
+# `No tests executed!` run), `testdox_skips` (` ↩ ` glyphs), `extracted` (names
+# buffered), `has_summary` (a terminating summary line was seen) — plus `banner`.
+# The names are buffered exactly as the main pass extracts them (`SUITE:` prefix
+# for a skipped test suite) and printed with the run that produced them.
+segment_runs() {
+    awk '
+        function flush_run() {
+            printf "RUN\t%d\tbanner\t%s\n", idx, banner
+            printf "RUN\t%d\tdeclared\t%d\n", idx, declared
+            printf "RUN\t%d\tsummarised\t%d\n", idx, summarised
+            printf "RUN\t%d\tnototals_declared\t%d\n", idx, nototals_declared
+            printf "RUN\t%d\ttestdox_skips\t%d\n", idx, testdox_skips
+            printf "RUN\t%d\textracted\t%d\n", idx, extracted
+            printf "RUN\t%d\thas_summary\t%d\n", idx, has_summary
+            if (names != "") {
+                printf "%s\n", names
+            }
+        }
+
+        function open_run(b) {
+            idx++
+            open = 1
+            declared = 0
+            summarised = 0
+            nototals_declared = 0
+            testdox_skips = 0
+            extracted = 0
+            has_summary = 0
+            pending = 0
+            mode = ""
+            names = ""
+            banner = b
+        }
+
+        function add_summarised(line,   i, n, f, v) {
+            n = split(line, f, " ")
+            for (i = 1; i <= n; i++) {
+                if (f[i] == "Skipped:") {
+                    v = f[i + 1]
+                    sub(/\.$/, "", v)
+                    if (v ~ /^[0-9]+$/) {
+                        summarised += v
+                    }
+                    break
+                }
+            }
+        }
+
+        BEGIN {
+            idx = 0
+            open = 0
+            names = ""
+        }
+
+        # A PHPUnit run banner flushes the previous run and opens the next.
+        /^PHPUnit [0-9]+\.[0-9]+/ {
+            if (open) flush_run()
+            open_run($0)
+            next
+        }
+
+        # A terminating summary line with no open run implicitly opens one.
+        /^(OK \(|OK, but |FAILURES!|ERRORS!|WARNINGS!|No tests executed!|Tests: )/ {
+            if (!open) open_run("")
+            has_summary = 1
+            mode = ""
+            if ($0 ~ /^No tests executed!$/) {
+                nototals_declared += pending
+                pending = 0
+            } else if ($0 ~ /^Tests: /) {
+                pending = 0
+                add_summarised($0)
+            }
+            next
+        }
+
+        /^There (was|were) [0-9]+ skipped test suites?:$/ {
+            declared += $3
+            pending += $3
+            mode = "suite"
+            next
+        }
+
+        /^There (was|were) [0-9]+ skipped tests?:$/ {
+            declared += $3
+            pending += $3
+            mode = "test"
+            next
+        }
+
+        /^ ↩ / {
+            testdox_skips++
+            next
+        }
+
+        /^--$/ {
+            mode = ""
+            next
+        }
+
+        mode == "test" && /^[0-9]+\) [A-Za-z_\\][A-Za-z0-9_\\]*::/ {
+            sub(/^[0-9]+\) /, "")
+            names = (names == "" ? $0 : names "\n" $0)
+            extracted++
+            next
+        }
+
+        mode == "suite" && /^[0-9]+\) [A-Za-z_\\][A-Za-z0-9_:\\]*$/ {
+            sub(/^[0-9]+\) /, "")
+            names = (names == "" ? "SUITE:" $0 : names "\nSUITE:" $0)
+            extracted++
+            next
+        }
+
+        END {
+            if (open) flush_run()
+        }
+    '
+}

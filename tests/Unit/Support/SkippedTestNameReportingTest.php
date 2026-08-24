@@ -382,6 +382,172 @@ final class SkippedTestNameReportingTest extends TestCase
     }
 
     /**
+     * AC3 mutant (a): the flag hides in a shell VARIABLE inside the `run: |` block.
+     * `DOX=--testdox` is one logical line and the phpunit invocation that expands it
+     * is another, so the pre-AC3 same-line ban — which needed `phpunit` AND
+     * `--testdox` on ONE folded command line — measured this green end-to-end
+     * (S352-followup item 3). The whole-file scan must see the assignment.
+     */
+    public function test_the_testdox_ban_catches_the_flag_smuggled_through_a_shell_variable(): void
+    {
+        $content = $this->writeMutantWorkflow('mutant-shell-var.yml', <<<'YAML'
+            on: push
+            jobs:
+              e2e:
+                steps:
+                  - name: Run E2E tests
+                    run: |
+                      DOX=--testdox
+                      ./vendor/bin/phpunit tests/E2E/Foo.php $DOX --colors=never
+            YAML);
+
+        self::assertSame(
+            [],
+            $this->sameLineTestdoxOffenders($content, 'mutant-shell-var.yml'),
+            'the pre-AC3 same-line ban must NOT see a flag assigned on its own line — that is '
+            . 'exactly the evasion round-3 finding 5 measured green',
+        );
+        self::assertNotSame(
+            [],
+            $this->testdoxOffenders($content, 'mutant-shell-var.yml'),
+            'the widened ban must flag --testdox on ANY non-comment line of a phpunit-invoking '
+            . 'workflow, including the `DOX=--testdox` assignment (AC3)',
+        );
+    }
+
+    /**
+     * AC3 mutant (b): the flag is injected through an `env:` VALUE. The phpunit
+     * invocation expands `$DOX`, so the same-line ban reads a phpunit line without
+     * the token and stays green; the token lives on the `DOX:` line above it.
+     */
+    public function test_the_testdox_ban_catches_the_flag_injected_via_an_env_value(): void
+    {
+        $content = $this->writeMutantWorkflow('mutant-env.yml', <<<'YAML'
+            on: push
+            jobs:
+              e2e:
+                env:
+                  DOX: --testdox
+                steps:
+                  - name: Run E2E tests
+                    run: ./vendor/bin/phpunit tests/E2E/Foo.php $DOX --colors=never
+            YAML);
+
+        self::assertSame(
+            [],
+            $this->sameLineTestdoxOffenders($content, 'mutant-env.yml'),
+            'the pre-AC3 same-line ban must NOT see a flag injected via env: — the phpunit '
+            . 'line itself is clean, which is the whole point of the indirection',
+        );
+        self::assertNotSame(
+            [],
+            $this->testdoxOffenders($content, 'mutant-env.yml'),
+            'the widened ban must flag --testdox in an env: value of a phpunit-invoking '
+            . 'workflow (AC3)',
+        );
+    }
+
+    /**
+     * AC3 mutant (c): the flag is injected through a `matrix` EXPANSION. The phpunit
+     * line expands `${{ matrix.dox }}` and carries no literal token; the token sits
+     * in the matrix definition, where the old ban never looked.
+     */
+    public function test_the_testdox_ban_catches_the_flag_injected_via_a_matrix_expansion(): void
+    {
+        $content = $this->writeMutantWorkflow('mutant-matrix.yml', <<<'YAML'
+            on: push
+            jobs:
+              e2e:
+                strategy:
+                  matrix:
+                    dox: [--testdox]
+                steps:
+                  - name: Run E2E tests
+                    run: ./vendor/bin/phpunit tests/E2E/Foo.php ${{ matrix.dox }} --colors=never
+            YAML);
+
+        self::assertSame(
+            [],
+            $this->sameLineTestdoxOffenders($content, 'mutant-matrix.yml'),
+            'the pre-AC3 same-line ban must NOT see a flag injected via matrix: — the token '
+            . 'is inside the flow list, not on the phpunit line',
+        );
+        self::assertNotSame(
+            [],
+            $this->testdoxOffenders($content, 'mutant-matrix.yml'),
+            'the widened ban must flag --testdox in a matrix expansion of a phpunit-invoking '
+            . 'workflow (AC3)',
+        );
+    }
+
+    /**
+     * AC3 mutant (d): the flag lives in a COMPOSITE ACTION's own `action.yml`. The
+     * old ban's parser only descends into `jobs:` (`{@see self::runScalars()}`) and
+     * an action.yml has none, so a composite action was a free corridor for
+     * `--testdox` even with the token on the SAME line as phpunit. The widened ban
+     * reads the composite `runs:` block as a phpunit invocation and then scans the
+     * file.
+     */
+    public function test_the_testdox_ban_catches_the_flag_inside_a_composite_action(): void
+    {
+        $content = $this->writeMutantWorkflow('mutant-composite-action.yml', <<<'YAML'
+            name: Run E2E tests
+            description: A composite action that invokes PHPUnit
+            runs:
+              using: composite
+              steps:
+                - name: Run E2E tests
+                  run: ./vendor/bin/phpunit tests/E2E/Foo.php --testdox --colors=never
+                  shell: bash
+            YAML);
+
+        self::assertSame(
+            [],
+            $this->sameLineTestdoxOffenders($content, 'mutant-composite-action.yml'),
+            'the pre-AC3 ban must NOT see a composite action file at all — it has no `jobs:` '
+            . 'for the parser to descend into',
+        );
+        self::assertNotSame(
+            [],
+            $this->testdoxOffenders($content, 'mutant-composite-action.yml'),
+            'the widened ban must flag --testdox inside a composite action\'s own runs: block '
+            . '(AC3)',
+        );
+    }
+
+    /**
+     * AC3 mutant (e): the flag is smuggled through a REUSABLE-WORKFLOW `uses:`. The
+     * job has no steps and therefore no `run:` scalar, so the old ban read nothing;
+     * PHPUnit runs in the referenced workflow file, and the `--testdox` token
+     * arrives here as a `with:` input on a non-comment line. The widened ban treats
+     * a `.github/workflows/` `uses:` as a phpunit invocation and flags the token.
+     */
+    public function test_the_testdox_ban_catches_the_flag_smuggled_through_a_reusable_workflow_uses(): void
+    {
+        $content = $this->writeMutantWorkflow('mutant-reusable-uses.yml', <<<'YAML'
+            on: push
+            jobs:
+              e2e:
+                uses: owner/repo/.github/workflows/reusable-tests.yml@v1
+                with:
+                  args: --testdox
+            YAML);
+
+        self::assertSame(
+            [],
+            $this->sameLineTestdoxOffenders($content, 'mutant-reusable-uses.yml'),
+            'the pre-AC3 ban must NOT see a reusable-workflow job — there is no run: scalar '
+            . 'for it to read',
+        );
+        self::assertNotSame(
+            [],
+            $this->testdoxOffenders($content, 'mutant-reusable-uses.yml'),
+            'the widened ban must flag --testdox on a non-comment line of a workflow that '
+            . 'delegates to a reusable workflow (AC3)',
+        );
+    }
+
+    /**
      * The invocation-site claim made by `phpunit.xml`, this script's header, `README.md`
      * and `CHANGELOG.md` — "five places" — RE-DERIVED, because round-1 found the number
      * wrong and round-2 found the line numbers it cited stale by the same commit that
@@ -1755,37 +1921,188 @@ final class SkippedTestNameReportingTest extends TestCase
         $out = [];
 
         foreach (explode("\n", $folded) as $line) {
-            $quote = '';
-            $code = '';
-
-            foreach (str_split($line === '' ? ' ' : $line) as $index => $char) {
-                if ($quote !== '') {
-                    $quote = $char === $quote ? '' : $quote;
-                } elseif ($char === '"' || $char === "'") {
-                    $quote = $char;
-                } elseif ($char === '#' && ($index === 0 || preg_match('/\s/', $line[$index - 1]) === 1)) {
-                    break;
-                }
-
-                $code .= $char;
-            }
-
-            $out[] = trim($code);
+            $out[] = $this->commentStripped($line);
         }
 
         return $out;
     }
 
     /**
-     * Every place in one workflow's source where PHPUnit is invoked with `--testdox`.
+     * One line with any unquoted `#` comment removed. Load-bearing on both sides:
+     * the shell-body splitter uses it so a `#` inside a quoted argument survives,
+     * and the whole-file AC3 scan uses it so YAML comment lines carrying the word
+     * `--testdox` (which the real workflows do, explaining why the flag is banned)
+     * cannot satisfy the ban. Stripping at the FIRST `#` regardless of quoting
+     * would hide the rest of a command that legitimately contains one, e.g.
+     * `--filter '#[Group]'`.
+     */
+    private function commentStripped(string $line): string
+    {
+        $quote = '';
+        $code = '';
+
+        foreach (str_split($line === '' ? ' ' : $line) as $index => $char) {
+            if ($quote !== '') {
+                $quote = $char === $quote ? '' : $quote;
+            } elseif ($char === '"' || $char === "'") {
+                $quote = $char;
+            } elseif ($char === '#' && ($index === 0 || preg_match('/\s/', $line[$index - 1]) === 1)) {
+                break;
+            }
+
+            $code .= $char;
+        }
+
+        return trim($code);
+    }
+
+    /**
+     * Every place in one workflow file's source where `--testdox` appears on a
+     * non-comment line, PROVIDED the file invokes PHPUnit at all (AC3, S352).
      *
-     * `--testdox` is matched as a whitespace-delimited TOKEN, so `--testdox-html` and
-     * `--testdox-text` — logging targets that do not put PHPUnit into testdox output mode
-     * (Cli/Builder.php:851-862) — are not false positives.
+     * The pre-AC3 ban needed `phpunit` and the `--testdox` token on the SAME
+     * folded command line, and round-3 finding 5 measured five ways around that: a
+     * shell variable (`DOX=--testdox`), an `env:` value, a `matrix` expansion, a
+     * composite action file (which has no `jobs:` for the old parser to descend
+     * into) and a reusable-workflow `uses:`. The ban is now whole-file: once
+     * {@see self::workflowInvokesPhpunit()} decides the file can run PHPUnit, every
+     * non-comment line is searched, so the flag is caught wherever it is smuggled,
+     * not only where the command is assembled.
+     *
+     * `--testdox` is matched as a whitespace-delimited TOKEN, so `--testdox-html`
+     * and `--testdox-text` — logging targets that do not put PHPUnit into testdox
+     * output mode (Cli/Builder.php:851-862) — are not false positives.
      *
      * @return list<string>
      */
     private function testdoxOffenders(string $yaml, string $label): array
+    {
+        if (!$this->workflowInvokesPhpunit($yaml)) {
+            return [];
+        }
+
+        $out = [];
+
+        foreach (explode("\n", $yaml) as $line) {
+            if ($this->lineCarriesTestdoxToken($line)) {
+                $out[] = $label . ': ' . trim($line);
+            }
+        }
+
+        return $out;
+    }
+
+    /**
+     * Whether a workflow file can invoke PHPUnit at all — the AC3 gate for the
+     * whole-file scan. Direct `run:` scalars (job steps and composite-action
+     * steps) that mention phpunit, or a reusable-workflow `uses:` — the only
+     * `uses:` form that provably delegates to another workflow FILE, which is how
+     * PHPUnit reaches the run in that file. Plain action references
+     * (`actions/checkout@v4`) do not gate, so a workflow that never runs PHPUnit
+     * is not searched.
+     */
+    private function workflowInvokesPhpunit(string $yaml): bool
+    {
+        foreach ([...$this->runScalars($yaml), ...$this->compositeRunScalars($yaml)] as $run) {
+            if (str_contains($run, 'phpunit')) {
+                return true;
+            }
+        }
+
+        foreach ($this->usesScalars($yaml) as $uses) {
+            if (str_contains($uses, '.github/workflows/')) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Whether one raw workflow line carries the `--testdox` TOKEN after comment
+     * stripping. The regex is a token match, not a substring match: `--testdox`
+     * must be bounded on the left by anything except a word char or `-`, and on
+     * the right by anything except a word char, `-` or `=`. That keeps
+     * `--testdox-html` and `--testdox-text` (logging targets —
+     * Cli/Builder.php:851-862 does not set testdox OUTPUT mode for them) and
+     * `--testdox=1` (rejected by PHPUnit itself) out, while still seeing the token
+     * after `=` (`DOX=--testdox`), inside a YAML flow list (`dox: [--testdox]`)
+     * and quoted.
+     */
+    private function lineCarriesTestdoxToken(string $line): bool
+    {
+        return preg_match('/(?<![\w-])--testdox(?![-\w=])/', $this->commentStripped($line)) === 1;
+    }
+
+    /**
+     * Every `run:` scalar of a composite action's own `runs:` block. The OLD ban
+     * never saw these files at all: {@see self::runScalars()} only descends into
+     * `jobs:`, and an action.yml has none — so a composite action was a free
+     * corridor for `--testdox` (S352 round-3 finding 5).
+     *
+     * @return list<string>
+     */
+    private function compositeRunScalars(string $yaml): array
+    {
+        $parsed = Yaml::parse($yaml);
+        self::assertIsArray($parsed, 'workflow does not parse as YAML');
+
+        $runs = is_array($parsed['runs'] ?? null) ? $parsed['runs'] : [];
+        $out = [];
+
+        foreach ((is_array($runs['steps'] ?? null) ? $runs['steps'] : []) as $step) {
+            if (is_array($step) && is_string($step['run'] ?? null)) {
+                $out[] = $step['run'];
+            }
+        }
+
+        return $out;
+    }
+
+    /**
+     * Every `uses:` reference in a workflow — at the JOB level (a reusable
+     * workflow) or in a step (a composite action). A file whose only PHPUnit
+     * "invocation" is a reusable-workflow `uses:` has no `run:` scalar for the old
+     * ban to read (S352 round-3 finding 5), so the widened ban needs these to
+     * decide the file invokes PHPUnit at all.
+     *
+     * @return list<string>
+     */
+    private function usesScalars(string $yaml): array
+    {
+        $parsed = Yaml::parse($yaml);
+        self::assertIsArray($parsed, 'workflow does not parse as YAML');
+
+        $out = [];
+
+        foreach ((is_array($parsed['jobs'] ?? null) ? $parsed['jobs'] : []) as $job) {
+            if (!is_array($job)) {
+                continue;
+            }
+
+            if (is_string($job['uses'] ?? null)) {
+                $out[] = $job['uses'];
+            }
+
+            foreach ((is_array($job['steps'] ?? null) ? $job['steps'] : []) as $step) {
+                if (is_array($step) && is_string($step['uses'] ?? null)) {
+                    $out[] = $step['uses'];
+                }
+            }
+        }
+
+        return $out;
+    }
+
+    /**
+     * The PRE-AC3 ban, kept so every AC3 mutant stays provably evasive: this is
+     * the same-line logic round-3 finding 5 was measured against
+     * (S352-followup item 3), and each mutant test below asserts BOTH sides — this
+     * returns [] for the mutant, {@see self::testdoxOffenders()} does not.
+     *
+     * @return list<string>
+     */
+    private function sameLineTestdoxOffenders(string $yaml, string $label): array
     {
         $out = [];
 
@@ -1814,6 +2131,18 @@ final class SkippedTestNameReportingTest extends TestCase
         file_put_contents($path, ($contents ?? self::FIXTURE) . "\n");
 
         return $path;
+    }
+
+    /**
+     * Writes a mutant workflow into the fixture directory and returns its contents,
+     * so every AC3 mutant proves against a FILE the way the real-directory scan
+     * does — and never against a committed fixture. The tmpDir-only rule is
+     * load-bearing: the real `.github/workflows/` directory must stay untouched by
+     * mutants, and the guard that scans it is what the mutation must not fire on.
+     */
+    private function writeMutantWorkflow(string $name, string $yaml): string
+    {
+        return (string) file_get_contents($this->fixtureFile($name, $yaml));
     }
 
     /**

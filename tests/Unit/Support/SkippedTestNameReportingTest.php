@@ -895,12 +895,16 @@ final class SkippedTestNameReportingTest extends TestCase
             // No always-full device on this box, so the failure cannot be provoked; pin the
             // mechanism textually rather than reporting a pass that measured nothing.
             self::assertStringContainsString(
-                'write_status',
-                // CODE only: a header comment must not be able to satisfy a fallback that
-                // stands in for a measurement (S345 round-2 finding 4, same shape).
+                '[ "$write_status" -ne 0 ]',
+                // CODE only, and the CHECK, not the variable name: a header comment must not
+                // satisfy a fallback that stands in for a measurement (S345 round-2 finding 4,
+                // same shape), and neither may a surviving `write_status=$?` assignment alone --
+                // deleting the guard while keeping the assignment is the AC4 mutation this pins
+                // (S352-followup item 4).
                 $this->scriptCode(),
                 '/dev/full is unavailable, so the truncated-write path cannot be exercised here; '
-                . "the script must still check the status of its `sort` pipeline",
+                . 'the script must still check the status of its `sort` pipeline '
+                . '(`[ "$write_status" -ne 0 ]` is the guard the fallback pins)',
             );
 
             return;

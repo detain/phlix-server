@@ -1332,6 +1332,11 @@ final class SkippedTestNameReportingTest extends TestCase
      * this single count-only run's shortfall has no same-run glyphs to mark it as testdox,
      * and the exit-5 branch cannot be reached. The input falls to exit 4 naming
      * phpunit.xml, with the stray glyph reported as evidence only (never exoneration).
+     * A glyph AFTER a run's terminating summary line is attributed to NO run the same
+     * way, because the segment is flushed and closed AT the totals line or
+     * `No tests executed!` — {@see
+     * self::test_a_stray_skip_glyph_after_a_runs_terminating_summary_is_attributed_to_no_run()}
+     * (round-1 review finding 1).
      */
     public function test_ac2a_one_stray_skip_glyph_beside_a_count_only_run_cannot_reach_exit_5(): void
     {
@@ -1367,6 +1372,60 @@ final class SkippedTestNameReportingTest extends TestCase
             'the message must state that the stray glyph is not attributed to this run, or '
             . 'the fixture cannot tell per-run attribution from the input-wide sums it '
             . 'replaced',
+        );
+    }
+
+    /**
+     * Round-1 review finding 1 (S352 fix round 1): the AC2a claim "stray glyphs cannot
+     * reach exit 5 whatever their count" held only for glyphs BEFORE any banner. A glyph
+     * AFTER a run's terminating summary line was still attributed to that run — the
+     * segment stayed open past the `Tests: ...` totals line, so `testdox_skips` picked
+     * the glyph up and the run's own arithmetic said testdox, printing "Do NOT change
+     * phpunit.xml" about a count-only run whose list phpunit.xml HAD lost. Real testdox
+     * glyphs always precede the summary (a glyph is printed per test result, the
+     * summary comes last), so a post-summary glyph is foreign by construction.
+     *
+     * The segment is now flushed and CLOSED at its last terminating line (the totals
+     * line or `No tests executed!`), so this exact input exits 4 with a truthful
+     * message: the run has zero attributed glyphs and phpunit.xml stays in play.
+     * Mutation-proof: reverting the flush means the post-summary glyph is attributed to
+     * the run again and this input exits 5 with the false exoneration.
+     */
+    public function test_a_stray_skip_glyph_after_a_runs_terminating_summary_is_attributed_to_no_run(): void
+    {
+        $result = $this->runScript($this->fixtureFile(
+            'post-summary-stray-glyph.log',
+            "PHPUnit 10.5.64\n\nOK, but there were issues!\n"
+            . "Tests: 9, Assertions: 12, Skipped: 1.\n"
+            . " \u{21A9} some other tool says skipped\n",
+        ));
+
+        self::assertSame(
+            4,
+            $result['exit'],
+            "a ↩ after the run's terminating summary is foreign output, not a testdox\n"
+            . "verdict: the segment is closed AT the totals line, so the run has no\n"
+            . "attributed glyphs and the missing list is phpunit.xml's fault. Exit 5 here\n"
+            . "is the pre-fix false exoneration. stderr:\n" . $result['stderr'],
+        );
+        self::assertSame([], $result['lines'], 'no name was recovered, so nothing may be written');
+        self::assertStringContainsString(
+            '0 testdox skip glyph(s) present',
+            $result['stderr'],
+            'the run must report ZERO attributed glyphs — the post-summary glyph is '
+            . 'attributed to no run, exactly like a pre-banner one',
+        );
+        self::assertStringNotContainsString('Do NOT change phpunit.xml', $result['stderr']);
+        self::assertStringContainsString(
+            'displayDetailsOnSkippedTests',
+            $result['stderr'],
+            'phpunit.xml must still be named as the candidate cause — the one this input '
+            . 'actually supports',
+        );
+        self::assertStringContainsString(
+            'attributed to this run',
+            $result['stderr'],
+            'the evidence note must state that the stray glyph is not attributed to this run',
         );
     }
 

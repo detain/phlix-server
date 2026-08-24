@@ -139,8 +139,9 @@
 # never name ANY of its skips, the glyph-less suite skip(s) included (ResultPrinter
 # emits one glyph per TEST result), so the glyphs merely PROVE the run is testdox and
 # the count that decides the verdict is the summary's. Stray glyphs before any PHPUnit
-# banner are attributed to NO run (S352 per-run segmentation), so they can never reach
-# this branch at all.
+# banner -- or after a run's terminating summary line, since the segment is flushed and
+# closed AT the totals line or `No tests executed!` -- are attributed to NO run (S352
+# per-run segmentation), so they can never reach this branch at all.
 # Round 2 of this step's review found the earlier gate (`testdox_lines > 0`) telling the
 # reader "Do NOT change phpunit.xml" about a count-only run that happened to share a log
 # with a zero-skip testdox run -- i.e. exactly the wrong-diagnosis defect this contract
@@ -152,7 +153,7 @@
 #     shortfall turned every such input -- e.g. two stray ` ↩ ` lines from another tool
 #     beside a run that really had lost its list -- into "Do NOT change phpunit.xml"
 #     about a config that WAS the cause.
-# What remains, and is not claimed away: see KNOWN LIMITS 2-5.
+# What remains, and is not claimed away: see KNOWN LIMITS 4-6.
 #
 # Exit 4 is the one that matters most, and it is why this script cross-checks TWO
 # independent numbers instead of one. On master before S345 the log of run
@@ -179,8 +180,9 @@
 #      included), or because the run ended `No tests executed!` with nothing named (the
 #      invisible suite skip). Claim: every unnamed skip in THAT RUN belongs to a testdox
 #      run, so the config cannot name them. A surplus attributes NOTHING -- see above.
-#      Stray glyphs that segment_runs() attributed to no run (preamble/foreign output)
-#      can never reach this branch -- AC2a closed KNOWN LIMIT 3, AC2 closed KNOWN LIMIT 2.
+#      Stray glyphs that segment_runs() attributed to no run (preamble/foreign output
+#      before any banner, or after a run's terminating summary line) can never reach
+#      this branch -- AC2a closed KNOWN LIMIT 3, AC2 closed KNOWN LIMIT 2.
 #      ⚠ `summarisable_declared` is `declared` MINUS what this run's `No tests executed!`
 #      entries declared: those entries have no `Skipped: N` term of their own, and counting
 #      them here let them cancel a DIFFERENT run's lost names, at which point this branch
@@ -241,7 +243,9 @@
 #      indistinguishable from one testdox run that skipped N. Measured: one ` ↩ ` line plus
 #      a count-only `Skipped: 1.` exited 5 with "Do NOT change phpunit.xml". Per-run
 #      segmentation settles it: segment_runs() attributes a glyph only to the run that
-#      printed it, and a glyph before any PHPUnit banner is attributed to NO run, so a
+#      printed it, and a glyph before any PHPUnit banner -- or after a run's
+#      terminating summary line, since the segment is flushed and closed AT that line
+#      (the totals line or `No tests executed!`) -- is attributed to NO run, so a
 #      count-only run's shortfall can never be matched by a foreign glyph -- that input now
 #      exits 4 naming phpunit.xml, with the stray glyphs reported as evidence only. A
 #      genuine testdox run (its own glyphs inside its own segment) still exits 5, now with
@@ -343,8 +347,11 @@ esac
 # the previous run and opens the next. A terminating summary line
 # (`OK (`, `OK, but `, `FAILURES!`, `ERRORS!`, `WARNINGS!`, `No tests executed!`,
 # `Tests: `) with no open run implicitly opens one, so a banner-less log fragment
-# still yields a run. Everything else that is not inside an opened run is ignored
-# (e.g. stray ` ↩ ` glyphs before any banner are not attributed to any run).
+# still yields a run. The run is flushed and CLOSED at its LAST terminating line --
+# the `Tests: ...` totals line, or `No tests executed!` -- so nothing after it is
+# attributed to it (real testdox glyphs always precede the summary). Everything else
+# that is not inside an opened run is ignored (e.g. stray ` ↩ ` glyphs before any
+# banner, or after a run's terminating summary, are not attributed to any run).
 #
 # Each run accumulates the same fields the main flow sums across the whole input
 # — `declared` (detail-list headers, both kinds), `summarised` (the `Skipped: N`
@@ -413,7 +420,12 @@ segment_runs() {
             next
         }
 
-        # A terminating summary line with no open run implicitly opens one.
+        # A terminating summary line with no open run implicitly opens one. The run is
+        # FLUSHED and CLOSED at its LAST terminating line -- the `Tests: ...` totals
+        # line, or `No tests executed!` -- so nothing after it (a stray ` ↩ ` from
+        # another tool sharing the log) is attributed to the run. The `OK (` /
+        # `OK, but ` / `FAILURES!` / `ERRORS!` / `WARNINGS!` lines precede the totals
+        # line within the same run and only mark that a summary exists.
         /^(OK \(|OK, but |FAILURES!|ERRORS!|WARNINGS!|No tests executed!|Tests: )/ {
             if (!open) open_run("")
             has_summary = 1
@@ -422,9 +434,13 @@ segment_runs() {
                 nototals_declared += pending
                 no_totals++
                 pending = 0
+                flush_run()
+                open = 0
             } else if ($0 ~ /^Tests: /) {
                 pending = 0
                 add_summarised($0)
+                flush_run()
+                open = 0
             }
             next
         }
@@ -444,7 +460,7 @@ segment_runs() {
         }
 
         /^ ↩ / {
-            testdox_skips++
+            if (open) testdox_skips++
             next
         }
 
@@ -827,7 +843,9 @@ fi
 # sums can net one run's shortfall against another run's surplus and exit with a code
 # that is right for the sum and wrong for both runs. The contract is decided inside each
 # segment_runs() run, and the FIRST failing run's exit code wins. Preamble/foreign
-# ` ↩ ` glyphs (before any PHPUnit banner) are attributed to NO run by segment_runs(),
+# ` ↩ ` glyphs (before any PHPUnit banner, or after a run's terminating summary line --
+# the segment is flushed and closed AT the totals line or `No tests executed!`) are
+# attributed to NO run by segment_runs(),
 # so only same-run testdox glyphs can reach the exit-5 branch (AC2a closes KNOWN
 # LIMIT 3; AC2 closes KNOWN LIMIT 2). The input-wide tallies computed above are passed
 # along so stray glyphs in the wider log still show up as EVIDENCE in a failing run's
@@ -859,5 +877,3 @@ if [ "$write_status" -ne 0 ]; then
 fi
 
 exit "$per_run_status"
-
-s352_per_run_probe() { grep -c 'Skipped:' ; }

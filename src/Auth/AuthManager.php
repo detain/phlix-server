@@ -379,36 +379,21 @@ class AuthManager
     }
 
     /**
-     * Create a default logger for authentication events.
+     * The shared AUTH-channel logger — not a private one in a temp directory.
      *
-     * @return StructuredLogger A configured logger instance
+     * The old body `mkdir()`ed a `sys_get_temp_dir()/phlix_auth_<uniqid>`
+     * directory on every construction and pointed a private `StructuredLogger`
+     * at a log file inside it — a per-instance leak that survived for the life
+     * of the worker. `LoggerFactory::get()` returns one cached instance per
+     * channel, so the whole family shares a single logger.
      *
-     * @example
-     * ```php
-     * $logger = $this->createDefaultLogger();
-     * ```
+     * @return StructuredLogger The shared AUTH channel logger, routed by
+     *         `config/logger.php` to `.logs/app.log` and `.logs/error.log` —
+     *         an install-dir destination that creates no directory.
      */
     private function createDefaultLogger(): StructuredLogger
     {
-        $tempDir = sys_get_temp_dir() . '/phlix_auth_' . uniqid();
-        mkdir($tempDir, 0755, true);
-
-        $config = [
-            'handlers' => [
-                'stream' => [
-                    'type' => 'stream',
-                    'path' => $tempDir . '/auth.log',
-                    'level' => 'debug',
-                ],
-            ],
-            'processors' => [
-                'context' => true,
-                'request_id' => false,
-                'user_id' => false,
-            ],
-        ];
-
-        return new StructuredLogger(LogChannels::AUTH, $config);
+        return LoggerFactory::get(LogChannels::AUTH);
     }
 
     /**

@@ -9,6 +9,29 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Changed
 
+- **The per-construction `/tmp/phlix_*_<uniqid>` logger-dir mint is gone — every one of the 23
+  `createDefaultLogger()` bodies now returns the shared channel logger (S167).** The 23 `src/`
+  classes that `mkdir()`ed a fresh `sys_get_temp_dir()/phlix_<prefix>_<uniqid>` directory on
+  every construction — `AirPlayManager`/`AirPlaySession`, `CastManager`/`CastSession`,
+  `AuthManager`, `SessionManager`, `PlaybackController`, the eight DLNA classes
+  (`ContentDirectory`, `DeviceRegistry`, `RendererDiscovery`, `PlayToManager`,
+  `RendererControlClient`, `AvTransport`, `PlayToSession`, `DlnaServer`),
+  `MediaScanner`/`BookScanner`/`LibraryManager`/`FolderWatcher`, `AudiobookScanner`,
+  `PhotoLibraryManager`, `RokuSession`/`RokuManager` — now route through the shared
+  `LoggerFactory::get(LogChannels::...)` static cache, one cached `StructuredLogger` per
+  channel. That retires 20 distinct logger prefixes (`phlix_media_` was minted by all four
+  media classes), extending the S96-fixed `MusicLibraryManager` shape to the whole family and
+  removing the per-instance inode/directory-entry leak that survived for the life of the
+  worker. A prefix-agnostic guard, `tests/Unit/Media/TempDirMintGuardTest.php`, snapshots the
+  ENTIRE `/tmp/phlix_*` entry set, re-invokes `createDefaultLogger()` on all 23 converted
+  classes, and asserts the set is unchanged — it goes RED if any new `phlix_*` mint appears on
+  a construction path, known prefix or not. The per-op bucket is deliberately left:
+  `phlix_cover_`/`phlix_audiobook_cover_` (BookScanner/AudiobookScanner) and the pre-existing
+  `phlix_backup_`/`phlix_restore_`/`phlix_plugin_` (BackupManager/HttpInstaller) mints fire
+  only when their operation runs and are not on the construction path; of the cover mints only
+  `AudiobookScanner::saveCoverImage()` mints a directory, dormant in the suite — the accepted
+  residual risk, documented in the guard. No migration (next-free stays 103).
+
 - **`scripts/skipped-test-names.sh` now evaluates its contract PER RUN, and a multi-run input
   is refused with every failing run named (S352).** S345's durable-close follow-up replaces
   the input-wide sums with per-run accounting: the normalised input is segmented at PHPUnit's

@@ -12,6 +12,7 @@ declare(strict_types=1);
 namespace Phlix\Media\Library;
 
 use Phlix\Common\Logger\LogChannels;
+use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Common\Logger\StructuredLogger;
 use Phlix\Playlists\LibraryUpdated;
 use Psr\EventDispatcher\EventDispatcherInterface;
@@ -65,31 +66,21 @@ class FolderWatcher
     }
 
     /**
-     * Creates a default structured logger for the watcher subsystem.
+     * The shared MEDIA-channel logger — not a private one in a temp directory.
      *
-     * @return StructuredLogger A configured logger instance writing to temp directory
+     * The old body `mkdir()`ed a `sys_get_temp_dir()/phlix_media_<uniqid>`
+     * directory on every construction and pointed a private `StructuredLogger`
+     * at a log file inside it — a per-instance leak that survived for the life
+     * of the worker. `LoggerFactory::get()` returns one cached instance per
+     * channel, so the whole family shares a single logger.
+     *
+     * @return StructuredLogger The shared MEDIA channel logger, routed by
+     *         `config/logger.php` to `.logs/app.log` and `.logs/error.log` —
+     *         an install-dir destination that creates no directory.
      */
     private function createDefaultLogger(): StructuredLogger
     {
-        $tempDir = sys_get_temp_dir() . '/phlix_media_' . uniqid();
-        mkdir($tempDir, 0755, true);
-
-        $config = [
-            'handlers' => [
-                'stream' => [
-                    'type' => 'stream',
-                    'path' => $tempDir . '/watcher.log',
-                    'level' => 'debug',
-                ],
-            ],
-            'processors' => [
-                'context' => true,
-                'request_id' => false,
-                'user_id' => false,
-            ],
-        ];
-
-        return new StructuredLogger(LogChannels::MEDIA, $config);
+        return LoggerFactory::get(LogChannels::MEDIA);
     }
 
     /**

@@ -2200,9 +2200,11 @@ class Application
      * therefore shipped the 403 envelope as a body — the recoverable RFC 9110
      * §9.3.2 shape (one self-consistent `Content-Length`), but still a
      * keep-alive desync for a header-only client. This is the seam where the
-     * global chain returns; flagging here sends every current AND future global
+     * global chain returns; flagging here sends every CURRENT global
      * short-circuit through {@see Response::asHeadReply()}, with the router
-     * never involved.
+     * never involved — today exactly one: `AccessScheduleMiddleware`, count-pinned
+     * by `ApplicationHeadOnlyBoundaryTest`. A FUTURE registration is
+     * test-guarded, not seam-covered (see {@see self::dispatch()}).
      *
      * A non-`HEAD` reply is returned untouched, so a `GET` still carries its
      * whole body — the discriminating control for this gate.

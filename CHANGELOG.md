@@ -20,9 +20,13 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   stream-level encoder identity (h264_nvenc on this box: profile Main / level 3.0 / yuv420p) and
   init++fragment demuxer readback. The SOFTWARE-fallback control runs the same builder with the
   registry seeded software-only (libx264, profile High / level 4.1) — the two arms are told apart
-  by their outputs, not their command text. A pure guard names its skip when /dev/dri is absent,
-  so CI (no GPU) cannot silently skip this proof — named KNOWN LIMIT: the local GPU run is the
-  record. KNOWN LIMIT (measured 2026-08-25): h264_vaapi cannot init on this box — `No VA display
+  by their outputs, not their command text. A pure guard names its skip when
+  /dev/dri is absent OR when the real probe resolves no usable hardware encoder
+  (measured 2026-08-25: GitHub Actions runners carry /dev/dri yet resolve none —
+  the CI branch; fail-loud is reserved for the probe itself malfunctioning), so
+  CI (no GPU) cannot silently skip this proof and cannot red on it either —
+  named KNOWN LIMIT: the local GPU run is the record. KNOWN LIMIT (measured
+  2026-08-25): h264_vaapi cannot init on this box — `No VA display
   found for device /dev/dri/renderD128` (the NVIDIA GPUs carry no VAAPI driver) — so the proof
   runs the builder's real nvenc resolution; a future VAAPI-capable box must re-tune the
   stream-signature assertions. The W11 "Hwaccel env flake" is re-baselined with the measured

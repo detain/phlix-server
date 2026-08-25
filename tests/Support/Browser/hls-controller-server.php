@@ -93,7 +93,14 @@
  *   php tests/Support/Browser/hls-controller-server.php \
  *       --root=<segment dir> --job=<job id> --row=<row.json> --port=<n> \
  *       --log=<requests.jsonl> --pid=<pidfile> [--workers=4] [--max-wait-ms=90000] \
- *       [--hold-release=<file>] [--hold-max-ms=30000] start
+ *       [--hold-release=<file>] [--hold-max-ms=30000] \
+ *       [--hwaccel=1] [--hwaccel-seed=software] start
+ *
+ * S354: `--hwaccel=1` wires the real {@see HwAccelConfig::get()} into the runner so
+ * segments are produced by the hwaccel builder; `--hwaccel-seed=software` seeds the
+ * per-process registry with a software-only capability (the hwaccel builder's
+ * SOFTWARE-fallback branch — the S354 control). Both default off, so pre-existing
+ * callers get byte-identical behaviour.
  *
  * The trailing `start` is Workerman's own command word ({@see Worker::runAll()} exits
  * with a usage banner without it). It is passed by the caller rather than injected
@@ -104,9 +111,12 @@
 
 declare(strict_types=1);
 
+use Phlix\Config\HwAccelConfig;
 use Phlix\Media\Streaming\HlsStreamer;
 use Phlix\Media\Streaming\QualitySelector;
 use Phlix\Media\Transcoding\FfmpegRunner;
+use Phlix\Media\Transcoding\Hwaccel\HwaccelCapability;
+use Phlix\Media\Transcoding\Hwaccel\HwaccelRegistry;
 use Phlix\Media\Transcoding\TranscodeManager;
 use Phlix\Server\Http\Controllers\HlsController;
 use Phlix\Server\Http\Request;
@@ -159,6 +169,18 @@ $segmentSeconds = max(1, (int) $option('segment-seconds', '6'));
 $holdRelease = $option('hold-release', $logFile . '.release');
 $holdMaxMs = max(1000, (int) $option('hold-max-ms', '30000'));
 
+// S354. Off by default so every pre-existing S315/S317 caller gets byte-identical
+// behaviour. `--hwaccel=1` wires the REAL merged hardware-acceleration config
+// (HwAccelConfig::get() — the same effective source production uses) into the
+// runner, so `startSegmentEncode()` takes the hwaccel branch and the segments are
+// produced by `buildHwaccelSegmentCommand()`. `--hwaccel-seed=software` additionally
+// seeds the per-process registry with a software-only capability (the same
+// reflection-seeding shape the unit tests use), which makes the hwaccel builder
+// resolve the SOFTWARE-fallback branch — its `browserSafeVideoFlags()` arm — so the
+// control's encode is real libx264 through the REAL builder.
+$hwaccel = $option('hwaccel', '0') === '1';
+$hwaccelSeed = $option('hwaccel-seed', '');
+
 // S317. Appended to the instant a request is DISPATCHED. The request log below is
 // written after the response, so it can only ever say "a request finished" — which is
 // useless to a barrier that has to wait for "a request has begun".
@@ -204,7 +226,9 @@ $worker->onWorkerStart = static function () use (
     $rowFile,
     $maxWaitMs,
     $segmentSeconds,
-    $logFile
+    $logFile,
+    $hwaccel,
+    $hwaccelSeed
 ): void {
     // S317 — every child announces itself. `/__ready` proves ONE worker is accepting,
     // which is all the browser cases need; the barrier needs to know that ALL of them
@@ -216,9 +240,47 @@ $worker->onWorkerStart = static function () use (
 
     // Built per worker, after the fork — the same rule `start.php` follows for the
     // container, and the reason ffmpeg process bookkeeping stays per-process.
+    $runner = new FfmpegRunner(
+        BrowserProbeEnvironment::FFMPEG,
+        BrowserProbeEnvironment::FFPROBE,
+        $root
+    );
+
+    // S354 — see the flag definitions above. The config is the REAL merged source
+    // (production wires the same array via setConfig in Application/DI), and the seed
+    // is applied to the singleton BEFORE the runner first consults it, so the
+    // hwaccel builder's capability lookup resolves exactly what the seed declares.
+    if ($hwaccel) {
+        $runner->setConfig(HwAccelConfig::get());
+    }
+    if ($hwaccelSeed === 'software') {
+        HwaccelRegistry::reset();
+        $registry = HwaccelRegistry::getInstance();
+        $ref = new \ReflectionObject($registry);
+        $capabilities = $ref->getProperty('capabilities');
+        $capabilities->setAccessible(true);
+        $capabilities->setValue($registry, [
+            'software' => new HwaccelCapability(
+                vendor: 'software',
+                encoder: 'libx264',
+                decoder: 'libx264',
+                supports_hdr_tone_mapping: false,
+                supported_codecs: ['h264', 'hevc'],
+                supported_profiles: ['baseline', 'main', 'high'],
+                max_resolution_w: 7680,
+                max_resolution_h: 4320,
+                max_bitrate: 100000000,
+            ),
+        ]);
+        $initialized = $ref->getProperty('initialized');
+        $initialized->setAccessible(true);
+        $initialized->setValue($registry, true);
+        $runner->probeHardwareAcceleration($registry);
+    }
+
     $manager = new TranscodeManager(
         StubJobRowConnection::fromJsonFile($rowFile),
-        new FfmpegRunner(BrowserProbeEnvironment::FFMPEG, BrowserProbeEnvironment::FFPROBE, $root),
+        $runner,
         $root,
         null,
         $segmentSeconds,

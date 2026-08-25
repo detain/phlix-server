@@ -33,12 +33,20 @@ class SyncPlayE2ETest extends TestCase
     private SyncPlayManager $manager;
     private ConnectionPool $pool;
 
+    /**
+     * Sent frames per connection id, captured by createMockConnection for assertions.
+     *
+     * @var array<string, list<array<string, mixed>>>
+     */
+    private array $sentMessagesByConnectionId = [];
+
     protected function setUp(): void
     {
         parent::setUp();
         $this->manager = new SyncPlayManager();
         $this->pool = ConnectionPool::getInstance();
         $this->pool->clear();
+        $this->sentMessagesByConnectionId = [];
     }
 
     protected function tearDown(): void
@@ -58,24 +66,33 @@ class SyncPlayE2ETest extends TestCase
         $mock->method('isAuthenticated')->willReturn($authenticated);
         $mock->method('getSessionId')->willReturn(null);
 
-        // Track sent messages
-        $sentMessages = [];
-        $mock->method('send')->willReturnCallback(function ($data) use (&$sentMessages): bool {
+        // Track sent messages per connection so tests can assert broadcasts.
+        $mock->method('send')->willReturnCallback(function ($data) use ($id): bool {
             if (is_string($data)) {
                 $data = json_decode($data, true);
             }
-            $sentMessages[] = $data;
+            $this->sentMessagesByConnectionId[$id][] = $data;
             return true;
         });
-        $mock->method('sendFlat')->willReturnCallback(function ($type, $payload) use (&$sentMessages) {
-            $sentMessages[] = array_merge(['type' => $type], $payload, ['timestamp' => time()]);
+        $mock->method('sendFlat')->willReturnCallback(function ($type, $payload) use ($id) {
+            $this->sentMessagesByConnectionId[$id][] = array_merge(['type' => $type], $payload, ['timestamp' => time()]);
         });
-        $mock->method('sendMessage')->willReturnCallback(function ($type, $data) use (&$sentMessages) {
-            $sentMessages[] = ['type' => $type, 'data' => $data, 'timestamp' => time()];
+        $mock->method('sendMessage')->willReturnCallback(function ($type, $data) use ($id) {
+            $this->sentMessagesByConnectionId[$id][] = ['type' => $type, 'data' => $data, 'timestamp' => time()];
         });
 
         $this->pool->add($mock);
         return $mock;
+    }
+
+    /**
+     * All frames a mock connection "sent" (broadcasts, echoes, errors), in order.
+     *
+     * @return list<array<string, mixed>>
+     */
+    private function getSentMessages(string $connectionId): array
+    {
+        return $this->sentMessagesByConnectionId[$connectionId] ?? [];
     }
 
     /**
@@ -519,6 +536,62 @@ class SyncPlayE2ETest extends TestCase
         $state = $this->manager->getGroupState($groupId);
         /** @var array<string, mixed> $state */
         $this->assertEquals('host_user', $state['host_id']);
+    }
+
+    /**
+     * Test 12 (S294): a one-member room's playback_sync request reaches the host
+     * back as its own authoritative frame — the server half of the host re-anchor
+     * proof. The server stamps `member_id` with the HOST id (not the requester's
+     * self-asserted id) and excludes NOBODY from the broadcast, so the solo host
+     * receives the frame that @phlix/syncplay's handlePlaybackSync must consume.
+     */
+    public function testOneMemberRoomPlaybackSyncReachesHost(): void
+    {
+        $hostConn = $this->createMockConnection('conn-solo-host', 'solo_host_user', true);
+        $createResult = $this->manager->createGroup('Solo Room', null, 'solo_host_user', 'Host', 'conn-solo-host');
+        /** @var array{group: array{group_id: string}} $createResult */
+        $groupId = $createResult['group']['group_id'];
+
+        // Host plays at 5000ms so the sync broadcast carries a real re-anchor value.
+        $playMethod = new ReflectionMethod($this->manager, 'handlePlaybackPlay');
+        $playMethod->setAccessible(true);
+        $playMethod->invoke($this->manager, $hostConn, [
+            'position' => 5000,
+            'server_time' => time(),
+        ]);
+
+        $state = $this->manager->getGroupState($groupId);
+        /** @var array<string, mixed> $state */
+        $this->assertEquals(5000, $state['playback_position']);
+        $this->assertEquals('playing', $state['playback_state']);
+
+        // The solo host requests a playback sync (requester == host == only member).
+        $syncMethod = new ReflectionMethod($this->manager, 'handlePlaybackSync');
+        $syncMethod->setAccessible(true);
+        $syncMethod->invoke($this->manager, $hostConn, ['member_id' => 'solo_host_user']);
+
+        $syncFrames = array_values(array_filter(
+            $this->getSentMessages('conn-solo-host'),
+            static fn (array $frame): bool => ($frame['type'] ?? null) === Messages::TYPE_PLAYBACK_SYNC
+        ));
+
+        $this->assertCount(
+            1,
+            $syncFrames,
+            'In a one-member room the host must receive exactly one playback_sync broadcast back'
+        );
+        $this->assertSame(
+            'solo_host_user',
+            $syncFrames[0]['member_id'] ?? null,
+            'member_id must be server-stamped with the HOST id, not the requester-supplied value'
+        );
+        $this->assertSame(
+            5000,
+            $syncFrames[0]['position'] ?? null,
+            'the broadcast must carry the authoritative group playback position (ms) the host re-anchors to'
+        );
+        $this->assertTrue($syncFrames[0]['is_playing'] ?? false, 'is_playing must reflect the group playback state');
+        $this->assertSame($groupId, $syncFrames[0]['group_id'] ?? null, 'the broadcast must carry the group id');
     }
 
     /**

@@ -296,4 +296,79 @@ final class DlnaEnabledGateTest extends TestCase
         $this->bootstrapWith(['enabled' => true, 'cds_enabled' => true], ['dlna.enabled' => ['', 'string']]);
         self::assertTrue(SsdpAdvertiser::isEnabled(), 'An empty override must not disable advertising.');
     }
+
+    /**
+     * S297 AC: the `start.php` spawn gate's decision rule, as a pure function.
+     *
+     * ## Why this is the gate that covers `start.php` (S340 question, named)
+     *
+     * `start.php` itself is OUTSIDE CI — nothing runs it, which is why its
+     * spawn gate survived while `SsdpAdvertiser::isEnabled()` was fixed in
+     * 1.3.0. Since S297 the gate is a single call to
+     * {@see SsdpAdvertiser::isEnabledForConfig()} on the FILE config, so the
+     * decision logic — the part that can drift — is this pure function, and
+     * the `start.php` wiring is a two-line `if` that cannot do anything but
+     * fork or not fork. THIS test is the gate that covers the spawn decision;
+     * the wiring is demonstrated by the real `start.php` boot proof (cds_enabled
+     * false → no fork, :1900 free; true → fork — S297 report).
+     *
+     * The table is the two-switch rule S51 shipped in `isEnabled()`, asserted
+     * as a pure function so the spawn gate cannot regress to checking only
+     * `enabled` again. Mutation-verified: reverting the `cds_enabled` check
+     * (or the `?? false` / `?? true` defaults) reddens a row.
+     */
+    public function test_isEnabledForConfig_is_the_two_switch_spawn_rule(): void
+    {
+        $cases = [
+            'absent file defaults: silent'                        => [[], false],
+            'cds only: server on, announcement follows'           => [['cds_enabled' => true], true],
+            'enabled only: announce a server that is not running' => [['enabled' => true], false],
+            'both off'                                            => [['cds_enabled' => false, 'enabled' => false], false],
+            'server off, announcement on'                         => [['cds_enabled' => false, 'enabled' => true], false],
+            'server on, announcement off'                         => [['cds_enabled' => true, 'enabled' => false], false],
+            'both on'                                             => [['cds_enabled' => true, 'enabled' => true], true],
+        ];
+
+        foreach ($cases as $label => [$dlna, $expected]) {
+            self::assertSame(
+                $expected,
+                SsdpAdvertiser::isEnabledForConfig($dlna),
+                "isEnabledForConfig() — {$label}: " . var_export($dlna, true)
+            );
+        }
+    }
+
+    /**
+     * CONSEQUENCE: the spawn-gate rule and the runtime gate agree on the file
+     * defaults — they are the same function.
+     *
+     * With no persisted overrides, `isEnabled()` (which the advertiser's
+     * `onWorkerStart` consults) and `isEnabledForConfig()` on the raw file
+     * array (which `start.php`'s spawn gate consults) MUST agree, or an
+     * install would fork a worker that idles, or fail to fork one that would
+     * run. The two call sites share the rule by construction since S297; this
+     * test pins that sharing at the observable level.
+     */
+    public function test_spawn_gate_and_runtime_gate_agree_without_overrides(): void
+    {
+        $this->bootstrapWith(['cds_enabled' => true, 'enabled' => true]);
+        $rawFile = ['cds_enabled' => true, 'enabled' => true];
+
+        self::assertSame(
+            SsdpAdvertiser::isEnabled(),
+            SsdpAdvertiser::isEnabledForConfig($rawFile),
+            'With no overrides, the runtime gate and the spawn gate must agree.'
+        );
+
+        EffectiveConfig::reset();
+
+        $this->bootstrapWith(['cds_enabled' => false, 'enabled' => true]);
+        $rawFile = ['cds_enabled' => false, 'enabled' => true];
+
+        self::assertSame(
+            SsdpAdvertiser::isEnabled(),
+            SsdpAdvertiser::isEnabledForConfig($rawFile),
+            'With no overrides, the runtime gate and the spawn gate must agree.'
+        );
+    }
 }

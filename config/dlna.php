@@ -123,6 +123,14 @@ return [
      * cannot present one.
      *
      * Read per worker start, so it applies on a graceful reload.
+     *
+     * Since S297 the FILE value additionally participates in the master-process
+     * spawn decision in `start.php`, exactly like `enabled`: an advertiser is
+     * forked only when BOTH this and `enabled` are on, and the master cannot
+     * consult the settings store — so setting this to false on disk (the
+     * shipped default) means no advertiser process exists at all, and an admin
+     * override can no longer switch it back on without a full service restart.
+     * It also means a CDS-disabled install no longer holds `udp://0.0.0.0:1900`.
      */
     'cds_enabled' => false,
 

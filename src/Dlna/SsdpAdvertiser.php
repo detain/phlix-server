@@ -514,16 +514,19 @@ class SsdpAdvertiser extends Worker
      *
      * It gates the SSDP advertiser — the broadcast that makes this server
      * appear in a smart TV's source list — and nothing else. It deliberately
-     * does not claim to gate DLNA *browsing*, because the ContentDirectory
-     * service is not currently registered at all: `Application::loadCdsRoutes()`
-     * resolves {@see CdsServer} inside a bare `catch (\Throwable)`, and that
-     * resolution always throws because {@see DlnaServer} has no DI registration
-     * and un-autowirable `string` constructor parameters. See `config/dlna.php`
-     * for the production evidence. If that is ever fixed, extend the gate to
-     * the CDS routes and widen the schema `helpText` in the same change.
+     * does not claim to gate DLNA *browsing*: the ContentDirectory routes
+     * (`/dlna/description.xml`, `/dlna/content_directory`, `/cds/control`,
+     * `/scpd/{service}.xml`, `/dlna/stream/{id}`) are gated separately by the
+     * `dlna.cds_enabled` switch in `Application::loadCdsRoutes()` — the same
+     * switch this gate requires, so announcing and serving cannot disagree
+     * (see `config/dlna.php` for the history of that pairing).
      *
      * Defaults to TRUE when the key is absent, so existing installs keep
      * advertising exactly as they did before `config/dlna.php` existed.
+     *
+     * The two-switch rule itself lives in {@see self::isEnabledForConfig()},
+     * shared with `start.php`'s master-process spawn gate so the fork decision
+     * and the runtime decision cannot drift apart again.
      *
      * @return bool
      *
@@ -531,20 +534,39 @@ class SsdpAdvertiser extends Worker
      */
     public static function isEnabled(): bool
     {
-        $dlna = EffectiveConfig::file('dlna');
+        return self::isEnabledForConfig(EffectiveConfig::file('dlna'));
+    }
 
-        // Requires BOTH switches. Announcing is meaningless — actively harmful,
-        // in fact — when the ContentDirectory is not being served: a control
-        // point that sees the advertisement fetches the LOCATION URL and then
-        // fails, so the server shows up in every TV's source list as a device
-        // that cannot be opened. That was the real production state for months,
-        // and it is exactly what this gate now prevents.
-        //
-        // `cds_enabled` therefore behaves as the master "run a DLNA server"
-        // switch (default FALSE — DLNA has no authentication), while `enabled`
-        // chooses whether a running server also announces itself. Turning the
-        // server on with announcement off is a legitimate combination: clients
-        // that are given the address directly still work.
+    /**
+     * The two-switch DLNA enable rule, as a pure function of a config array.
+     *
+     * Both switches must be on: `cds_enabled` is the master "run a DLNA server"
+     * switch (default FALSE — DLNA has no authentication, see `config/dlna.php`),
+     * while `enabled` chooses whether a running server also announces itself
+     * over SSDP (default TRUE). Announcing a server whose ContentDirectory is
+     * off puts Phlix in every TV's source list as a device that cannot be
+     * opened — the real production state this conjunction exists to prevent.
+     *
+     * ## Why it is shared with `start.php`
+     *
+     * `start.php`'s spawn gate runs in the Workerman MASTER, which cannot
+     * consult the persisted `server_settings` overrides (a blocking DB read in
+     * the master would leave its connection inherited by every fork), so it
+     * evaluates this same rule against the FILE config alone. Before S297 it
+     * checked only `enabled`, so a CDS-disabled install still forked an idle
+     * advertiser whose listen socket held `udp://0.0.0.0:1900`. One rule, in
+     * one place, consulted by both gates.
+     *
+     * @param array<array-key, mixed> $dlna A `config/dlna.php`-shaped array;
+     *        absent keys take the shipped defaults.
+     *
+     * @return bool True when the advertiser should run (and announce).
+     *
+     * @since 1.7.0
+     */
+    public static function isEnabledForConfig(array $dlna): bool
+    {
+        // Requires BOTH switches; see the docblock pair above for why.
         if (($dlna['cds_enabled'] ?? false) !== true) {
             return false;
         }
@@ -609,7 +631,7 @@ class SsdpAdvertiser extends Worker
     }
 
     /**
-     * Send an SSDP NOTIFY message.
+     * Send an SSDP NOTIFY message, one datagram per advertised target.
      *
      * ## `CACHE-CONTROL` and `SERVER` are not decoration
      *
@@ -625,9 +647,22 @@ class SsdpAdvertiser extends Worker
      * so a control point cannot be told two different lifetimes for one device
      * depending on how it found us.
      *
-     * `byebye` carries them too. The spec says `CACHE-CONTROL` and `LOCATION`
-     * are "not used" on a byebye rather than forbidden, and every field being
-     * identical bar `NTS` keeps the two messages from drifting apart.
+     * ## One datagram per target, from the ONE enumeration (S297)
+     *
+     * The search responder answers five targets
+     * ({@see SsdpSearchResponder::advertisedTargets()}); until S297 the NOTIFY
+     * announced only `uuid:…`. A passive control point therefore saw one
+     * target while an active one saw five — two hand-maintained lists disagreeing
+     * about what this device is. This loop emits one `ssdp:alive`/`ssdp:byebye`
+     * per target from that SAME enumeration, with `USN` paired per target via
+     * {@see SsdpSearchResponder::usnFor()} exactly as the response pairs `ST`
+     * with `USN`. A control point that hears an announcement for a target can
+     * search for that target and get the same answer.
+     *
+     * `byebye` is per-target too, mirroring the alive set. The spec says
+     * `CACHE-CONTROL` and `LOCATION` are "not used" on a byebye rather than
+     * forbidden, and every field being identical bar `NTS` keeps the two
+     * messages from drifting apart.
      *
      * @param string $nts Notification subtype (ssdp:alive or ssdp:byebye)
      * @return void
@@ -640,30 +675,31 @@ class SsdpAdvertiser extends Worker
             return;
         }
 
-        $ipAddress = $this->getIpAddress();
-        $location = sprintf('http://%s:%d/dlna/description.xml', $ipAddress, $this->port);
+        $location = $this->getLocationUrl();
 
-        $message = sprintf(
-            "NOTIFY * HTTP/1.1\r\n" .
-            "HOST: %s:%d\r\n" .
-            "CACHE-CONTROL: max-age=%d\r\n" .
-            "NT: %s\r\n" .
-            "NTS: %s\r\n" .
-            "LOCATION: %s\r\n" .
-            "SERVER: %s\r\n" .
-            "USN: %s\r\n" .
-            "\r\n",
-            self::SSDP_MULTICAST_ADDRESS,
-            self::SSDP_PORT,
-            SsdpSearchResponder::MAX_AGE_SECONDS,
-            self::USN,
-            $nts,
-            $location,
-            SsdpSearchResponder::serverHeader(),
-            self::USN
-        );
+        foreach (SsdpSearchResponder::advertisedTargets(self::USN) as $target) {
+            $message = sprintf(
+                "NOTIFY * HTTP/1.1\r\n" .
+                "HOST: %s:%d\r\n" .
+                "CACHE-CONTROL: max-age=%d\r\n" .
+                "NT: %s\r\n" .
+                "NTS: %s\r\n" .
+                "LOCATION: %s\r\n" .
+                "SERVER: %s\r\n" .
+                "USN: %s\r\n" .
+                "\r\n",
+                self::SSDP_MULTICAST_ADDRESS,
+                self::SSDP_PORT,
+                SsdpSearchResponder::MAX_AGE_SECONDS,
+                $target,
+                $nts,
+                $location,
+                SsdpSearchResponder::serverHeader(),
+                SsdpSearchResponder::usnFor(self::USN, $target)
+            );
 
-        $this->sendUdpMessage($message);
+            $this->sendUdpMessage($message);
+        }
     }
 
     /**

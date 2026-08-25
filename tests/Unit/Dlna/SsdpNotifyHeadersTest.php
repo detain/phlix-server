@@ -18,7 +18,7 @@ use Workerman\Worker;
 /**
  * The periodic SSDP NOTIFY: its bytes, and that it still fires.
  *
- * ## Two jobs
+ * ## Three jobs
  *
  * 1. **The header gap S51 closed.** The alive NOTIFY emitted only
  *    `HOST/NT/NTS/LOCATION/USN`. `CACHE-CONTROL` and `SERVER` are REQUIRED by
@@ -28,14 +28,21 @@ use Workerman\Worker;
  *    cannot pass.
  * 2. **The explicit "do not break the existing NOTIFY" acceptance criterion.**
  *    Every header the message carried BEFORE is re-asserted with its original
- *    value, and the 30-second re-announce timer is shown to still be armed at
- *    its original interval and to still emit a NOTIFY when it fires.
+ *    value on the `uuid:…` target datagram, and the 30-second re-announce
+ *    timer is shown to still be armed at its original interval and to still
+ *    emit NOTIFYs when it fires.
+ * 3. **The S297 target-set unification.** Since S297 the NOTIFY emits ONE
+ *    datagram per advertised target, from the SAME enumeration the search
+ *    responder matches against ({@see SsdpSearchResponder::advertisedTargets()}).
+ *    {@see self::test_the_notify_enumerates_the_same_target_set_as_the_search_responder()}
+ *    is the divergence-proof: a target added to one path but not the other
+ *    reddens it, because the two sets are compared element for element.
  *
  * ## How the bytes are captured
  *
  * The advertiser writes with `fwrite()` to whatever stream is in its `socket`
  * property, so the property is pointed at a `php://temp` handle by reflection
- * and the message is read straight back. That is the real `sendNotify()`
+ * and the messages are read straight back. That is the real `sendNotify()`
  * producing real bytes — no formatter is re-implemented here.
  */
 final class SsdpNotifyHeadersTest extends TestCase
@@ -78,25 +85,30 @@ final class SsdpNotifyHeadersTest extends TestCase
 
     /**
      * REGRESSION GUARD: every header the NOTIFY carried before S51 is still
-     * there, with its original value.
+     * there, with its original value, on the `uuid:…` target datagram.
      *
      * This is the "existing periodic NOTIFY unaffected" acceptance criterion,
-     * asserted field by field rather than by eyeballing a diff.
+     * asserted field by field rather than by eyeballing a diff. Since S297 the
+     * NOTIFY is one datagram per advertised target, so the assertions target
+     * the datagram whose `NT` is the device UUID — the one whose bytes S51's
+     * acceptance criterion was written against.
      */
     public function test_the_alive_notify_keeps_every_header_it_already_had(): void
     {
-        $message = $this->captureNotify('sendAlive');
+        $usnDatagram = $this->usnTargetDatagram($this->captureNotify('sendAlive'));
 
-        self::assertStringStartsWith("NOTIFY * HTTP/1.1\r\n", $message);
+        self::assertStringStartsWith("NOTIFY * HTTP/1.1\r\n", $usnDatagram);
 
-        $headers = $this->parseHeaders($message);
+        $headers = $this->parseHeaders($usnDatagram);
 
         self::assertSame('239.255.255.250:1900', $headers['HOST'] ?? null);
         self::assertSame('uuid:PHLIXSERVER', $headers['NT'] ?? null);
         self::assertSame('ssdp:alive', $headers['NTS'] ?? null);
         self::assertSame('http://10.0.0.1:8096/dlna/description.xml', $headers['LOCATION'] ?? null);
         self::assertSame('uuid:PHLIXSERVER', $headers['USN'] ?? null);
-        self::assertStringEndsWith("\r\n\r\n", $message);
+        // The datagram is a complete message: the USN header is its last line
+        // (the trailing \r\n\r\n terminator is stripped by the capture split).
+        self::assertStringEndsWith('USN: uuid:PHLIXSERVER', $usnDatagram);
     }
 
     /**
@@ -109,7 +121,7 @@ final class SsdpNotifyHeadersTest extends TestCase
      */
     public function test_the_alive_notify_carries_cache_control(): void
     {
-        $headers = $this->parseHeaders($this->captureNotify('sendAlive'));
+        $headers = $this->parseHeaders($this->captureNotify('sendAlive')[0]);
 
         self::assertSame(
             'max-age=1800',
@@ -126,7 +138,7 @@ final class SsdpNotifyHeadersTest extends TestCase
      */
     public function test_the_alive_notify_carries_server(): void
     {
-        $headers = $this->parseHeaders($this->captureNotify('sendAlive'));
+        $headers = $this->parseHeaders($this->captureNotify('sendAlive')[0]);
 
         self::assertMatchesRegularExpression(
             '#^\S+/\S+ UPnP/1\.0 Phlix/' . preg_quote(Version::STRING, '#') . '$#',
@@ -146,7 +158,7 @@ final class SsdpNotifyHeadersTest extends TestCase
      */
     public function test_the_notify_and_the_search_response_agree(): void
     {
-        $notify = $this->parseHeaders($this->captureNotify('sendAlive'));
+        $notify = $this->parseHeaders($this->captureNotify('sendAlive')[0]);
         $search = $this->parseHeaders(SsdpSearchResponder::buildResponse(
             SsdpSearchResponder::ST_ROOT_DEVICE,
             SsdpAdvertiser::USN,
@@ -159,15 +171,94 @@ final class SsdpNotifyHeadersTest extends TestCase
     }
 
     /**
-     * The byebye keeps its own subtype and gains the same headers.
+     * S297 AC: NOTIFY and the search responder enumerate the SAME target set,
+     * from a SINGLE source.
+     *
+     * ## Why this test exists (S345 rule 3 — the "nothing matched" defence
+     * needs its own guard)
+     *
+     * The defect was two hand-maintained lists: the responder answered five
+     * targets, the NOTIFY announced one. A fix that only closes one path reads
+     * as a pass, so this test compares the two paths element for element:
+     *
+     *  - every NOTIFY datagram's `NT` must be one of the responder's
+     *    advertised targets, and the SET of them must equal that enumeration
+     *    exactly — a target added to `advertisedTargets()` without a NOTIFY
+     *    datagram reddens (set mismatch), and a hand-edited NOTIFY list that
+     *    drifts from the enumeration reddens (unknown `NT`).
+     *  - each datagram's `USN` must be the USN the RESPONDER would pair with
+     *    that target (`usnFor()`), so a control point that M-SEARCHes a target
+     *    after hearing it announced gets the same identity back.
+     *  - the datagrams appear in the responder's reply order (root device
+     *    first), which is also the order a control point conventionally expects.
+     *
+     * Mutation-verified: reverting sendNotify() to a single `uuid:…` NOTIFY
+     * fails this test on the set comparison.
+     */
+    public function test_the_notify_enumerates_the_same_target_set_as_the_search_responder(): void
+    {
+        $datagrams = $this->captureNotify('sendAlive');
+        $expectedTargets = SsdpSearchResponder::advertisedTargets(SsdpAdvertiser::USN);
+
+        self::assertSame(
+            count($expectedTargets),
+            count($datagrams),
+            'One NOTIFY datagram per advertised target — the passive and active halves must agree '
+            . 'about how many things this device is.'
+        );
+
+        $announcedTargets = [];
+        foreach ($datagrams as $index => $datagram) {
+            self::assertStringStartsWith("NOTIFY * HTTP/1.1\r\n", $datagram);
+
+            $headers = $this->parseHeaders($datagram);
+            $nt = $headers['NT'] ?? null;
+            self::assertIsString($nt, "Datagram {$index} must carry an NT header.");
+            $announcedTargets[] = $nt;
+
+            self::assertSame(
+                SsdpSearchResponder::usnFor(SsdpAdvertiser::USN, $nt),
+                $headers['USN'] ?? null,
+                "Datagram {$index} (NT: {$nt}) must pair the USN exactly as the search responder does."
+            );
+
+            self::assertSame(
+                $expectedTargets[$index],
+                $nt,
+                "Datagram {$index} must announce target {$expectedTargets[$index]} in the responder's reply order."
+            );
+        }
+
+        self::assertSame(
+            $expectedTargets,
+            $announcedTargets,
+            'The NOTIFY target set must EQUAL the responder target set, not merely overlap.'
+        );
+    }
+
+    /**
+     * The byebye keeps its own subtype on every target and gains the same
+     * headers.
      */
     public function test_the_byebye_notify_is_still_a_byebye(): void
     {
-        $headers = $this->parseHeaders($this->captureNotify('sendByebye'));
+        $datagrams = $this->captureNotify('sendByebye');
 
-        self::assertSame('ssdp:byebye', $headers['NTS'] ?? null);
+        self::assertSame(
+            count(SsdpSearchResponder::advertisedTargets(SsdpAdvertiser::USN)),
+            count($datagrams),
+            'Byebye must mirror the alive set: every target announced alive is announced gone.'
+        );
+
+        foreach ($datagrams as $datagram) {
+            $headers = $this->parseHeaders($datagram);
+            self::assertSame('ssdp:byebye', $headers['NTS'] ?? null);
+            self::assertSame('max-age=1800', $headers['CACHE-CONTROL'] ?? null);
+        }
+
+        $usnDatagram = $this->usnTargetDatagram($datagrams);
+        $headers = $this->parseHeaders($usnDatagram);
         self::assertSame('uuid:PHLIXSERVER', $headers['USN'] ?? null);
-        self::assertSame('max-age=1800', $headers['CACHE-CONTROL'] ?? null);
     }
 
     // ------------------------------------------------------------------
@@ -238,9 +329,15 @@ final class SsdpNotifyHeadersTest extends TestCase
 
     /**
      * Run one of the private send methods against a capture stream and return
-     * the exact bytes it wrote.
+     * the exact bytes it wrote, split into individual datagrams.
+     *
+     * Since S297 a NOTIFY pass is one datagram per advertised target
+     * (`fwrite()` per target), so the capture stream holds several
+     * `\r\n\r\n`-terminated messages concatenated.
+     *
+     * @return list<string>
      */
-    private function captureNotify(string $method): string
+    private function captureNotify(string $method): array
     {
         $worker = new SsdpAdvertiser('10.0.0.1', 8096);
         $capture = $this->attachCaptureSocket($worker);
@@ -249,7 +346,31 @@ final class SsdpNotifyHeadersTest extends TestCase
         $send->setAccessible(true);
         $send->invoke($worker);
 
-        return $this->readCapture($capture);
+        $written = $this->readCapture($capture);
+        $datagrams = explode("\r\n\r\n", $written);
+
+        // The final explode element is the empty string after the last
+        // terminator; drop it. A datagram is never empty.
+        return array_values(array_filter($datagrams, static fn (string $d): bool => $d !== ''));
+    }
+
+    /**
+     * The datagram whose `NT` is the device UUID — the target the NOTIFY
+     * announced before S297, whose bytes S51's acceptance criterion was
+     * written against.
+     *
+     * @param list<string> $datagrams
+     */
+    private function usnTargetDatagram(array $datagrams): string
+    {
+        foreach ($datagrams as $datagram) {
+            $headers = $this->parseHeaders($datagram);
+            if (($headers['NT'] ?? null) === SsdpAdvertiser::USN) {
+                return $datagram;
+            }
+        }
+
+        self::fail('No NOTIFY datagram announces the device UUID target ' . SsdpAdvertiser::USN . '.');
     }
 
     /**

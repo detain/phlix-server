@@ -637,7 +637,7 @@ class SyncPlayE2ETest extends TestCase
         $this->assertSame(
             5000,
             $memberFrames[0]['position'] ?? null,
-            'the broadcast carries the host authority position (ms)'
+            'the broadcast carries the host-authoritative position (ms)'
         );
     }
 

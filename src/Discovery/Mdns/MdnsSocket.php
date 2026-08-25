@@ -216,14 +216,16 @@ class MdnsSocket
      * `inet_pton($group) . inet_pton($iface)` hands a binary string where an
      * int is expected. That call **returns TRUE** and joins nothing.
      *
-     * That is not a hypothetical: it is what this class did at its own join
-     * site, and a three-arm experiment on a real socket confirmed it — no-join
-     * received nothing, the raw-12 spelling returned TRUE and received
-     * nothing, and only the array form below received the datagram. The array
-     * spelling is the one `Dlna\SsdpAdvertiser` ships (S51), measured working.
-     * A silently failed join is indistinguishable from "nobody answered",
-     * which is exactly why the failure here is logged rather than `@`-swallowed
-     * into a quiet TRUE.
+     * That is not a hypothetical: this class's own join site made the raw-12
+     * call, passing `inet_pton($group)` alone as the optval (S51's control
+     * measured the 8-byte group+iface variant of the same spelling with the
+     * identical outcome), and a three-arm experiment on a real socket
+     * confirmed it — no-join received nothing, the raw-12 spelling returned
+     * TRUE and received nothing, and only the array form below received the
+     * datagram. The array spelling is the one `Dlna\SsdpAdvertiser` ships
+     * (S51), measured working. A silently failed join is indistinguishable
+     * from "nobody answered", which is exactly why the failure here is logged
+     * rather than `@`-swallowed into a quiet TRUE.
      *
      * `interface => 0` means "let the kernel pick, by route" — correct for the
      * single-homed common case and the same default the outbound half already
@@ -241,7 +243,8 @@ class MdnsSocket
      * NOT covered by the three-arm test (PHPUnit CLI runs without a coroutine
      * runtime, so the test exercises a native socket).
      *
-     * @param \Socket $socket The bound, non-blocking UDP socket to join on.
+     * @param \Socket $socket The bound UDP socket (blocking, with a receive
+     *        timeout) to join on.
      * @param int $interfaceIndex Interface index to join on; 0 = let the
      *        kernel route. Production never passes anything else. It is a
      *        parameter only so a test can run THIS method — rather than a copy

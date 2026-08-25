@@ -514,13 +514,12 @@ class SsdpAdvertiser extends Worker
      *
      * It gates the SSDP advertiser — the broadcast that makes this server
      * appear in a smart TV's source list — and nothing else. It deliberately
-     * does not claim to gate DLNA *browsing*, because the ContentDirectory
-     * service is not currently registered at all: `Application::loadCdsRoutes()`
-     * resolves {@see CdsServer} inside a bare `catch (\Throwable)`, and that
-     * resolution always throws because {@see DlnaServer} has no DI registration
-     * and un-autowirable `string` constructor parameters. See `config/dlna.php`
-     * for the production evidence. If that is ever fixed, extend the gate to
-     * the CDS routes and widen the schema `helpText` in the same change.
+     * does not claim to gate DLNA *browsing*: the ContentDirectory routes
+     * (`/dlna/description.xml`, `/dlna/content_directory`, `/cds/control`,
+     * `/scpd/{service}.xml`, `/dlna/stream/{id}`) are gated separately by the
+     * `dlna.cds_enabled` switch in `Application::loadCdsRoutes()` — the same
+     * switch this gate requires, so announcing and serving cannot disagree
+     * (see `config/dlna.php` for the history of that pairing).
      *
      * Defaults to TRUE when the key is absent, so existing installs keep
      * advertising exactly as they did before `config/dlna.php` existed.

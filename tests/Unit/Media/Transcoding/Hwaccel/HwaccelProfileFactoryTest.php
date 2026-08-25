@@ -10,7 +10,6 @@ use Phlix\Media\Transcoding\Hwaccel\HwaccelProfileFactory;
 use Phlix\Media\Transcoding\Hwaccel\HwaccelRegistry;
 use Phlix\Media\Transcoding\Hwaccel\Profiles\NvencProfile;
 use Phlix\Media\Transcoding\Hwaccel\Profiles\SoftwareProfile;
-use Phlix\Media\Transcoding\Hwaccel\Profiles\VaapiProfile;
 
 class HwaccelProfileFactoryTest extends TestCase
 {

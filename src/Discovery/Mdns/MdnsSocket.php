@@ -229,6 +229,18 @@ class MdnsSocket
      * single-homed common case and the same default the outbound half already
      * relies on.
      *
+     * ## Swoole coroutine runtime
+     *
+     * Under the daemon's default hook mask (`SWOOLE_HOOK_SOCKETS` is in the
+     * `SwooleRuntime` allowlist), `socket_create()` hands back a
+     * `Swoole\Coroutine\Socket`, not a native `\Socket` — see the `close()`
+     * docblock for the same phenomenon. The parameter is therefore deliberately
+     * untyped: a native `\Socket` type would TypeError at the call boundary
+     * before the method body runs. On the Swoole runtime the join is routed
+     * through Swoole's hooked `setOption()`, whose multicast-join support is
+     * NOT covered by the three-arm test (PHPUnit CLI runs without a coroutine
+     * runtime, so the test exercises a native socket).
+     *
      * @param \Socket $socket The bound, non-blocking UDP socket to join on.
      * @param int $interfaceIndex Interface index to join on; 0 = let the
      *        kernel route. Production never passes anything else. It is a
@@ -243,18 +255,31 @@ class MdnsSocket
      *        experiment in `tests/Unit/Discovery/Mdns/MdnsMulticastJoinTest`
      *        asserts.
      */
-    private function joinMulticastGroup(\Socket $socket, int $interfaceIndex = 0): bool
+    private function joinMulticastGroup(mixed $socket, int $interfaceIndex = 0): bool
     {
         if (!defined('MCAST_JOIN_GROUP')) {
+            $this->logger->warning('mDNS: MCAST_JOIN_GROUP is not defined; cannot join multicast group');
             return false;
         }
 
-        $joined = @socket_set_option(
-            $socket,
-            IPPROTO_IP,
-            MCAST_JOIN_GROUP,
-            ['group' => self::MULTICAST_ADDR, 'interface' => $interfaceIndex]
-        );
+        try {
+            $joined = @socket_set_option(
+                $socket,
+                IPPROTO_IP,
+                MCAST_JOIN_GROUP,
+                ['group' => self::MULTICAST_ADDR, 'interface' => $interfaceIndex]
+            );
+        } catch (\Throwable $e) {
+            // Defensive: under the Swoole coroutine runtime the socket is a
+            // Swoole\Coroutine\Socket and the hooked setOption() may throw for
+            // an option it does not implement — the same class of runtime
+            // variance `close()` guards against. The join must never fatal a
+            // worker; it degrades to "discovery hears nothing".
+            $this->logger->warning('mDNS: Failed to join multicast group ' . self::MULTICAST_ADDR, [
+                'error' => $e->getMessage(),
+            ]);
+            return false;
+        }
 
         if ($joined !== true) {
             // Deliberately LOUD. The whole hazard of this call is that its

@@ -27,16 +27,31 @@ use Phlix\Discovery\Mdns\MdnsSocket;
  *
  *   A. no join at all
  *                              → receives NOTHING (non-vacuity control)
- *   B. the old MdnsSocket spelling (raw option `12` + binary string optval,
- *      because PHP does not define `IP_ADD_MEMBERSHIP`)
+ *   B. the old MdnsSocket spelling, replayed verbatim from the pre-fix class
+ *      (raw option `12` + `inet_pton($group)` alone as optval, because PHP
+ *      does not define `IP_ADD_MEMBERSHIP`)
  *                              → `socket_set_option()` returns TRUE and
- *                                receives NOTHING (the failing control)
+ *                                receives NOTHING (the failing control;
+ *                                measured on PHP 8.3.6). S51's SSDP control
+ *                                measured the 8-byte group+iface variant of
+ *                                the same spelling with the identical outcome.
  *   C. `MdnsSocket::joinMulticastGroup()`, the production method, invoked on a
  *      real socket → receives the datagram
  *
  * Arm B is the pre-fix code, replayed verbatim. Arm C runs the production
  * METHOD — not a copy of it — so deleting the join line or regressing the
  * spelling reddens this test.
+ *
+ * ## STATED BLIND SPOT
+ *
+ * The call-site wiring in `createSocket()` (the `$this->joinMulticastGroup($socket)`
+ * call after the bind) is NOT pinned by this test: `createSocket()` binds the
+ * fixed port 5353, which risks an avahi/system-mDNS conflict, and its join
+ * runs with the production `interface => 0` default — which on this host
+ * (multicast loops back only on `lo`) cannot deliver, so a receipt assertion
+ * through `createSocket()` would be a false red by construction. What IS
+ * pinned is the join method itself: its option spelling, its failure
+ * behaviour, and the fact that it actually causes multicast delivery.
  *
  * ## STATED LIMIT
  *
@@ -71,14 +86,15 @@ class MdnsMulticastJoinTest extends TestCase
         $armA = $this->multicastRoundTrip($noJoin, $group, $portA, $ifIndex);
         socket_close($noJoin);
 
-        // ---- Arm B: the OLD MdnsSocket spelling (raw option 12, binary optval).
+        // ---- Arm B: the OLD MdnsSocket spelling, replayed verbatim from the
+        // pre-fix class (raw option 12, inet_pton($group) alone as optval).
         [$oldStyle, $portB] = $this->bindEphemeral();
         $oldOption = defined('IP_ADD_MEMBERSHIP') ? IP_ADD_MEMBERSHIP : 12;
         $armBReturn = @socket_set_option(
             $oldStyle,
             IPPROTO_IP,
             $oldOption,
-            inet_pton($group) . inet_pton('0.0.0.0')
+            inet_pton($group)
         );
         $armB = $this->multicastRoundTrip($oldStyle, $group, $portB, $ifIndex);
         socket_close($oldStyle);

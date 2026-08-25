@@ -75,7 +75,8 @@ class SyncPlayE2ETest extends TestCase
             return true;
         });
         $mock->method('sendFlat')->willReturnCallback(function ($type, $payload) use ($id) {
-            $this->sentMessagesByConnectionId[$id][] = array_merge(['type' => $type], $payload, ['timestamp' => time()]);
+            $frame = array_merge(['type' => $type], $payload, ['timestamp' => time()]);
+            $this->sentMessagesByConnectionId[$id][] = $frame;
         });
         $mock->method('sendMessage')->willReturnCallback(function ($type, $data) use ($id) {
             $this->sentMessagesByConnectionId[$id][] = ['type' => $type, 'data' => $data, 'timestamp' => time()];
@@ -583,7 +584,7 @@ class SyncPlayE2ETest extends TestCase
         $this->assertSame(
             'solo_host_user',
             $syncFrames[0]['member_id'] ?? null,
-            'member_id must be server-stamped with the HOST id, not the requester-supplied value'
+            'member_id must be the host id — in a solo room the host is the only member'
         );
         $this->assertSame(
             5000,
@@ -592,6 +593,52 @@ class SyncPlayE2ETest extends TestCase
         );
         $this->assertTrue($syncFrames[0]['is_playing'] ?? false, 'is_playing must reflect the group playback state');
         $this->assertSame($groupId, $syncFrames[0]['group_id'] ?? null, 'the broadcast must carry the group id');
+    }
+
+    /**
+     * Test 13 (S294): a NON-host member's playback_sync request is answered with
+     * a frame stamped with the HOST id, not the requester's id. This is the
+     * property @phlix/syncplay's self-frame consumption relies on: the client
+     * only ever sees member_id === own id when it IS the host.
+     */
+    public function testPlaybackSyncRequestByMemberIsStampedWithHostId(): void
+    {
+        $hostConn = $this->createMockConnection('conn-host', 'host_user', true);
+        $createResult = $this->manager->createGroup('Movie Night', null, 'host_user', 'Host', 'conn-host');
+        /** @var array{group: array{group_id: string}} $createResult */
+        $groupId = $createResult['group']['group_id'];
+
+        $memberConn = $this->createMockConnection('conn-member', 'member_user', true);
+        $this->manager->joinGroup($groupId, 'member_user', 'Guest', null, 'conn-member');
+
+        $playMethod = new ReflectionMethod($this->manager, 'handlePlaybackPlay');
+        $playMethod->setAccessible(true);
+        $playMethod->invoke($this->manager, $hostConn, [
+            'position' => 5000,
+            'server_time' => time(),
+        ]);
+
+        // The NON-host member requests a playback sync.
+        $syncMethod = new ReflectionMethod($this->manager, 'handlePlaybackSync');
+        $syncMethod->setAccessible(true);
+        $syncMethod->invoke($this->manager, $memberConn, ['member_id' => 'member_user']);
+
+        $memberFrames = array_values(array_filter(
+            $this->getSentMessages('conn-member'),
+            static fn (array $frame): bool => ($frame['type'] ?? null) === Messages::TYPE_PLAYBACK_SYNC
+        ));
+
+        $this->assertCount(1, $memberFrames, 'The requesting member must receive exactly one playback_sync broadcast');
+        $this->assertSame(
+            'host_user',
+            $memberFrames[0]['member_id'] ?? null,
+            'member_id must be server-stamped with the HOST id, not the requester-supplied value'
+        );
+        $this->assertSame(
+            5000,
+            $memberFrames[0]['position'] ?? null,
+            'the broadcast carries the host authority position (ms)'
+        );
     }
 
     /**

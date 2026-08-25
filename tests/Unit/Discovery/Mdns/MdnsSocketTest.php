@@ -13,10 +13,21 @@ class MdnsSocketTest extends TestCase
     {
         $socket = new MdnsSocket(null, 1);
 
-        // Without actual network, this returns empty array
+        // With no responder on the segment the result is empty — EXCEPT on a
+        // host that loops multicast back to a joined socket, where the query
+        // socket hears its own query echo (S296 fixed the join, so the socket
+        // now genuinely joins 224.0.0.251 and IP_MULTICAST_LOOP delivers the
+        // echo). "No responder answered" is therefore: every received datagram
+        // is a DNS QUERY (flags 0, zero answer records) — never a response.
         $result = $socket->query('_googlecast._tcp.local.');
 
-        $this->assertSame([], $result);
+        $this->assertIsArray($result);
+        foreach ($result as $datagram) {
+            $parsed = $socket->parseResponse($datagram);
+            $this->assertIsArray($parsed, 'Received datagram is not a DNS query echo: ' . bin2hex($datagram));
+            $this->assertSame(0, $parsed['flags'], 'A responder answered the query');
+            $this->assertSame([], $parsed['records'], 'A responder answered the query');
+        }
 
         $socket->close();
     }

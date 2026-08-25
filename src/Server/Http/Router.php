@@ -469,15 +469,19 @@ class Router
      * (`Application::middleware()`) runs *outside* the router: when it
      * short-circuits, its response is returned from `Application::dispatch()` /
      * `Application::run()` without this method ever being reached, so it is NOT
-     * flagged. Today the only global middleware that can short-circuit is
-     * {@see \Phlix\Server\Http\Middleware\AccessScheduleMiddleware}, whose three
+     * flagged HERE. **S295 closed that hole where the global chain returns instead**:
+     * `Application::flagHeadShortCircuitReply()` sends every global short-circuit
+     * reply through {@see Response::asHeadReply()} on a `HEAD` — the same
+     * {@see Response::headOnly} flag this method sets, reached through a different
+     * seam — so a `HEAD` refused by the only global middleware
+     * ({@see \Phlix\Server\Http\Middleware\AccessScheduleMiddleware}, whose three
      * refusals are `->status(403)->json([...])` and therefore declare **no**
-     * `Content-Length` — so that path cannot produce the two-`Content-Length`
-     * framing defect this method exists to prevent; it produces the weaker,
-     * recoverable "body on a HEAD" shape (RFC 9110 §9.3.2).
+     * `Content-Length` of their own) now ships head-only with the real entity size,
+     * never the RFC 9110 §9.3.2 body-on-a-HEAD shape and never the RFC 9110 §8.6
+     * two-`Content-Length` framing defect this method exists to prevent.
      *
      * ⚠ **This sentence used to say that shape "is fixed in the same follow-up
-     * change". S113 was that change, and it did NOT close this one — the claim is
+     * change". S113 was that change, and it did NOT close this one — the claim was
      * struck rather than left standing, because a stale promise reads as a
      * guarantee.** S113 fixed the six sites it enumerated: `notFound()` here and
      * five in {@see \Phlix\Server\Workerman\HttpHandler} (`serveStatic()`, the
@@ -485,20 +489,20 @@ class Router
      * A global short-circuit is none of those: it is returned by
      * `Application::dispatch()` and sent by HttpHandler's *matched-route* branch,
      * which is correct precisely because the router has already flagged everything
-     * that reaches it. `AccessScheduleMiddleware` has no method gate (its `__invoke`
-     * tests only `RequestContext::hasUserId()`), so a `HEAD` from an authenticated
-     * user inside a blocked schedule window still receives the 403 envelope as a
-     * body. Closing it means flagging the reply where the global chain returns, and
-     * that is its own change with its own blast radius — not something to fold in
-     * silently under this comment.
+     * that reaches it. **S295 then closed the global seam itself** — see the
+     * paragraph above — so the sentence's promise is now kept, at the seam S113
+     * deliberately did not widen into: the constructor's AccessScheduleMiddleware
+     * wrapper flags every global short-circuit reply head-only on a `HEAD` before
+     * it is returned from the chain, exactly where the struck sentence said the
+     * flag had to be set.
      *
      * ⚠ Pinned by `ApplicationHeadOnlyBoundaryTest` — but read what it pins, because
      * this sentence used to claim more than was true and the S105 AC audit proved it:
      * adding a THIRD global middleware that short-circuits with its own
      * `Content-Length` left the whole Unit suite green. The alarm asserts (a) that
      * `AccessScheduleMiddleware`'s refusals declare no `Content-Length`, (b) that the
-     * global stack is still exactly the two registrations this boundary was measured
-     * against — asserted on the COUNT, so a third fires it whatever it is — and (c)
+     * global stack is still exactly the one registration this boundary was measured
+     * against — asserted on the COUNT, so a second fires it whatever it is — and (c)
      * that nothing registers one from outside via `Application::getInstance()`. Any of
      * those firing means re-doing this analysis, and a short-circuit that DOES declare
      * a `Content-Length` must be fixed at once rather than deferred.

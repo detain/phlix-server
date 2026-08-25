@@ -107,7 +107,11 @@ class Application
             $this->middleware(function (Request $request, callable $next) use ($accessScheduleMiddleware): Response {
                 $result = $accessScheduleMiddleware($request);
                 if ($result !== null) {
-                    return $result;
+                    // S295: a global middleware short-circuit returns BEFORE
+                    // Router::markHeadOnly() runs, so a HEAD refused here used to
+                    // ship the refusal body. Flag the reply exactly where this
+                    // chain returns (see dispatch()'s docblock).
+                    return self::flagHeadShortCircuitReply($request, $result);
                 }
                 return $next($request);
             });
@@ -2187,6 +2191,39 @@ class Application
     }
 
     /**
+     * Flag a GLOBAL middleware short-circuit reply head-only on a `HEAD`.
+     *
+     * `Application::dispatch()` runs the global chain BEFORE the router, so a
+     * global middleware that short-circuits (returns a {@see Response} instead
+     * of calling `$next`) never reaches {@see Router::markHeadOnly()}. Before
+     * S295, a `HEAD` refused by {@see \Phlix\Server\Http\Middleware\AccessScheduleMiddleware}
+     * therefore shipped the 403 envelope as a body — the recoverable RFC 9110
+     * §9.3.2 shape (one self-consistent `Content-Length`), but still a
+     * keep-alive desync for a header-only client. This is the seam where the
+     * global chain returns; flagging here sends every CURRENT global
+     * short-circuit through {@see Response::asHeadReply()}, with the router
+     * never involved — today exactly one: `AccessScheduleMiddleware`, count-pinned
+     * by `ApplicationHeadOnlyBoundaryTest`. A FUTURE registration is
+     * test-guarded, not seam-covered (see {@see self::dispatch()}).
+     *
+     * A non-`HEAD` reply is returned untouched, so a `GET` still carries its
+     * whole body — the discriminating control for this gate.
+     *
+     * @param Request  $request  The live request (only its method is read).
+     * @param Response $response The short-circuit reply about to be returned.
+     *
+     * @return Response The same instance, for use in a `return` expression.
+     */
+    private static function flagHeadShortCircuitReply(Request $request, Response $response): Response
+    {
+        if ($request->method === 'HEAD') {
+            return $response->asHeadReply();
+        }
+
+        return $response;
+    }
+
+    /**
      * Dispatch a Request through the registered middleware chain and
      * router, returning the resulting Response.
      *
@@ -2202,30 +2239,36 @@ class Application
      * into a {@see Request} (via {@see Request::fromWorkerman()}) and
      * sending the response back over the connection.
      *
-     * ## `HEAD` replies: this layer is OUTSIDE the router's guarantee
+     * ## `HEAD` replies: this layer is OUTSIDE the router's guarantee, and the
+     * return seam is now flagged
      *
      * {@see Router::markHeadOnly()} flags every `HEAD` reply the router returns from
      * a matched route, which is what keeps a single `Content-Length` on the wire
      * (RFC 9110 §8.6). The middleware chain built here runs *before* the router, so a
      * global middleware that SHORT-CIRCUITS (returns a {@see Response} instead of
-     * calling `$next`) never reaches that flag and its reply therefore still ships
-     * its body on a `HEAD`. That is bounded, not unnoticed: the only global
-     * middleware that can short-circuit today is
-     * {@see \Phlix\Server\Http\Middleware\AccessScheduleMiddleware}, whose three
-     * refusals declare no `Content-Length` of their own, so Workerman's generated one
-     * is the only one on the wire — the recoverable "body on a HEAD" shape
-     * (RFC 9110 §9.3.2), not the unrecoverable two-length one. A global middleware
-     * that declares its own `Content-Length` on a short-circuit WOULD ship two.
+     * calling `$next`) never reaches that flag. **S295 closed the seam where this
+     * chain returns**: the constructor's AccessScheduleMiddleware wrapper routes
+     * every global short-circuit reply through {@see self::flagHeadShortCircuitReply()}
+     * — {@see Response::asHeadReply()} on a `HEAD`, the reply untouched otherwise — so
+     * the refusal body no longer ships on a `HEAD` (RFC 9110 §9.3.2) and the
+     * `Content-Length` is the entity the equivalent `GET` would have returned, never
+     * two fields (RFC 9110 §8.6: a caller-set length is authoritative in
+     * {@see Response::asHeadReply()} and {@see \Phlix\Server\Workerman\BodylessResponse}
+     * renders that single field). Because the flag lives at the chain-return seam
+     * rather than inside any one middleware — and that seam is the constructor's
+     * AccessSchedule wrapper, not the chain composed in this method — a FUTURE
+     * global middleware registered anywhere else would not pass through this gate
+     * on its own. What actually guards a future registration is the boundary
+     * test's registration-count pin (`ApplicationHeadOnlyBoundaryTest`), which
+     * fires on any count change: test-guarded, not by construction.
      *
-     * ⚠ **This used to say the shape "moves together with the other sites of that
-     * shape". It did not.** S113 closed those six — {@see Router::notFound()} and
-     * five in {@see \Phlix\Server\Workerman\HttpHandler} — and left this one open,
-     * so the sentence is struck rather than left standing as a promise nothing
-     * keeps. `AccessScheduleMiddleware::__invoke()` has no method gate, so a `HEAD`
-     * from an authenticated user inside a blocked schedule window still gets the 403
-     * envelope as a body. It is reachable, it is bounded (one middleware, one
-     * shape), and it needs its own change: the flag has to be set where this chain
-     * returns, which is a different seam from anything S113 touched.
+     * The only global middleware that can short-circuit today is
+     * {@see \Phlix\Server\Http\Middleware\AccessScheduleMiddleware}, whose three
+     * refusals declare no `Content-Length` of their own — the recoverable "body on
+     * a HEAD" shape that S295 just closed, never the unrecoverable two-length one
+     * (a global middleware that declares its own `Content-Length` on a short-circuit
+     * would still ship two on a GET, which is pre-existing and outside this HEAD
+     * boundary).
      *
      * ⚠ **What `ApplicationHeadOnlyBoundaryTest` actually pins** — the earlier wording
      * here ("pins both halves so neither can drift silently") overstated it, and the
@@ -2235,12 +2278,15 @@ class Application
      * a `Content-Length`; the `$this->middleware(...)` registration COUNT below changing
      * at all (so it fires whatever the middleware is, and on a removal too); and a
      * registration smuggled in from another `src/` file via
-     * {@see self::getInstance()}. It does NOT cover the remaining middleware changing
-     * *shape* other than that.
+     * {@see self::getInstance()}. Since S295 the two-length framing defect itself is
+     * additionally unreachable on the global chain for a `HEAD` (the wrapper flags it
+     * before the encoder runs), so the boundary test's alarm now pins that closure.
      *
      * S84 lowered that count from two to one: `ThemeMiddleware` — the pass-through half
      * of the original measurement — was retired along with the Smarty placeholders it
      * substituted, leaving `AccessScheduleMiddleware` as the only global middleware.
+     * S295 re-measured the count at one; the wrapper gained the HEAD gate, the
+     * registration count did not change.
      *
      * @param Request $request The HTTP request to dispatch.
      *

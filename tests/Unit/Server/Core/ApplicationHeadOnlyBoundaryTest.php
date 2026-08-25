@@ -14,8 +14,8 @@ use Phlix\Server\Http\RequestContext;
 use Phlix\Server\Http\Response;
 use Phlix\Server\Http\Router;
 use ReflectionClass;
+use ReflectionMethod;
 use Workerman\MySQL\Connection;
-use Workerman\Protocols\Http\Response as WorkermanResponse;
 
 /**
  * The BOUNDARY of `Router::markHeadOnly()`'s head-only guarantee (S105 review r1,
@@ -25,24 +25,28 @@ use Workerman\Protocols\Http\Response as WorkermanResponse;
  * exactly one `Content-Length` reaches the wire (RFC 9110 §8.6 makes two
  * conflicting ones unrecoverable). The chain in `Application::dispatch()` runs
  * BEFORE the router, so a **global** middleware that short-circuits — returns a
- * `Response` instead of calling `$next` — returns without the flag ever being
- * applied. These tests pin both halves of that boundary:
+ * `Response` instead of calling `$next` — returns without the router's flag ever
+ * being applied. **S295 closed that seam where the global chain returns**
+ * (`Application::flagHeadShortCircuitReply()`), so these tests pin the SHIPPED
+ * state of both halves of the boundary:
  *
  *  1. a `HEAD` that passes THROUGH the global chain still gets the guarantee, i.e.
  *     the chain does not undo it;
- *  2. a `HEAD` short-circuited by a global middleware does NOT get it, and what
- *     that costs today is the *recoverable* shape only: the refusal body ships with
- *     ONE self-consistent `Content-Length` (RFC 9110 §9.3.2), because the only
- *     global middleware that can short-circuit declares no length of its own;
- *  3. a global short-circuit that DID declare a `Content-Length` would ship TWO —
- *     the unrecoverable defect. Test 3 exists as the drift alarm: it asserts that
- *     `AccessScheduleMiddleware`'s three refusals declare no `Content-Length`, so
- *     the hole stays latent. If one ever does, that must be fixed immediately
- *     rather than deferred with the body-on-a-HEAD group.
+ *  2. a `HEAD` short-circuited by a global middleware now gets it at the
+ *     chain-return seam: the reply is flagged head-only (via the real
+ *     `flagHeadShortCircuitReply()` method), so no body ships and the
+ *     `Content-Length` is the entity the equivalent `GET` would have returned;
+ *  3. even a global short-circuit that DID declare its own `Content-Length`
+ *     ships exactly ONE of them on a `HEAD` — the RFC 9110 §8.6 two-length
+ *     framing defect is now unreachable on the global chain for a `HEAD`,
+ *     because the seam flag runs before the encoder. Test 3 pins that closure,
+ *     and test 4 asserts that `AccessScheduleMiddleware`'s three refusals
+ *     declare no `Content-Length` (so a `GET` short-circuit keeps the framework
+ *     encoder's single field, exactly as before).
  *
- * The deliberate decision recorded here is that the body-on-a-HEAD shape is fixed
- * for ALL of its sites at once (`Router::notFound()`, `HttpHandler`'s SPA shell /
- * `serveStatic()` / 404 / 500 / 429, and this one) rather than one site at a time.
+ * The body-on-a-HEAD shape is fixed for ALL of its sites: `Router::notFound()`,
+ * `HttpHandler`'s SPA shell / `serveStatic()` / 404 / 500 / 429 (S113), and the
+ * global middleware short-circuit (S295).
  *
  * No database: `Application` is built with `newInstanceWithoutConstructor()` and
  * only its `$router` / `$middleware` are populated, which is all `dispatch()` reads.
@@ -93,74 +97,94 @@ final class ApplicationHeadOnlyBoundaryTest extends TestCase
     }
 
     /**
-     * The boundary itself, asserted on the bytes: a global middleware short-circuit
-     * on a `HEAD` is NOT flagged, so the refusal body reaches the wire.
+     * The boundary, asserted on the bytes: a global middleware short-circuit on a
+     * `HEAD` is NOW flagged at the chain-return seam (S295), so the refusal body
+     * does NOT reach the wire and the `Content-Length` is the real entity size.
      *
-     * This is the CURRENT, deliberately-bounded behaviour. It is the recoverable
-     * shape — Workerman's generated `Content-Length` is the only one present and it
-     * matches the body it ships — which is why it waits for the change that fixes
-     * every body-on-a-HEAD site together. If this test goes red because the hole was
-     * closed, that is a deliberate improvement: update the expectation.
+     * The middleware below models the wrapper `Application::__construct()`
+     * registers for `AccessScheduleMiddleware` — S295 shape: every short-circuit
+     * reply is routed through the REAL `Application::flagHeadShortCircuitReply()`
+     * seam (reached via reflection), never `$next`. The discriminating control is
+     * the same `GET`: it must still carry its whole body, so this suite can never
+     * be passed by suppressing bodies generally.
      */
-    public function testAGlobalMiddlewareShortCircuitIsOutsideTheGuaranteeAndStillShipsItsBody(): void
+    public function testAGlobalMiddlewareShortCircuitIsNowFlaggedHeadOnlyAtTheChainReturnSeam(): void
     {
         $payload = ['error' => 'AccessScheduled', 'message' => 'Access denied during scheduled window'];
         $json = (string) json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
 
-        // Exactly the wrapper Application::__construct() registers for
-        // AccessScheduleMiddleware: return the middleware's Response, never $next.
-        $shortCircuit = static fn(Request $request, callable $next): Response
-            => (new Response())->status(403)->json($payload);
+        $shortCircuit = function (Request $request, callable $next): Response {
+            $result = (new Response())->status(403)->json([
+                'error' => 'AccessScheduled',
+                'message' => 'Access denied during scheduled window',
+            ]);
+
+            return $this->flagHeadShortCircuitReply($request, $result);
+        };
 
         $app = $this->applicationWith($this->routerWithGatedStream(), [$shortCircuit]);
 
-        $response = $app->dispatch($this->makeRequest('HEAD', '/dlna/stream/abc123'));
-        $wire = (string) $response->toWorkermanResponse();
+        $headResponse = $app->dispatch($this->makeRequest('HEAD', '/dlna/stream/abc123'));
+        $headWire = (string) $headResponse->toWorkermanResponse();
 
-        $this->assertFalse(
-            $response->headOnly,
-            'DOCUMENTED BOUNDARY: the router flag is not reached by a global short-circuit',
+        $this->assertTrue(
+            $headResponse->headOnly,
+            'S295: the chain-return seam must flag a HEAD short-circuit head-only',
         );
         $this->assertSame(
-            (string) new WorkermanResponse(403, ['Content-Type' => 'application/json'], $json),
-            $wire,
-            'a global short-circuit is byte-identical to the framework encoder, body included',
+            1,
+            substr_count($headWire, 'Content-Length:'),
+            "exactly ONE Content-Length on the wire:\n" . $headWire,
         );
-        $this->assertStringEndsWith($json, $wire, 'the refusal body still ships on a HEAD (RFC 9110 §9.3.2)');
+        $this->assertStringContainsString('Content-Length: ' . strlen($json) . "\r\n", $headWire);
+        $this->assertSame('', explode("\r\n\r\n", $headWire, 2)[1] ?? 'TERMINATOR MISSING', 'a HEAD carries no body');
+        $this->assertStringNotContainsString('Access denied during scheduled window', $headWire);
 
-        // …but it is the RECOVERABLE shape: one length, and it matches the body.
-        $this->assertSame(1, substr_count($wire, 'Content-Length:'), "not the two-length defect:\n" . $wire);
-        $this->assertStringContainsString('Content-Length: ' . strlen($json) . "\r\n", $wire);
+        // The discriminating control: the same short-circuit on a GET must still
+        // ship the refusal body, byte for byte.
+        $getResponse = $app->dispatch($this->makeRequest('GET', '/dlna/stream/abc123'));
+        $getWire = (string) $getResponse->toWorkermanResponse();
+
+        $this->assertFalse($getResponse->headOnly, 'a GET short-circuit is never flagged head-only');
+        $this->assertStringEndsWith($json, $getWire, 'a GET still ships the refusal body');
     }
 
     /**
-     * The drift alarm for the boundary: a global middleware that declares its OWN
-     * `Content-Length` on a `HEAD` short-circuit ships TWO of them — the
-     * unrecoverable RFC 9110 §8.6 defect — precisely because the flag is out of
-     * reach here. Nothing in `src/` does this today (test 3 pins that), and this
-     * test is what makes the consequence explicit rather than prose.
+     * The drift alarm, re-pointed at the SHIPPED state: because the chain-return
+     * seam flags every global short-circuit head-only on a `HEAD`, a global
+     * middleware that declares its OWN `Content-Length` now ships exactly ONE of
+     * them — the unrecoverable RFC 9110 §8.6 two-length framing defect is
+     * unreachable on the global chain for a `HEAD`. (A GET short-circuit that
+     * declares its own length still ships the framework's generated field over
+     * it, which is the pre-existing, non-HEAD behaviour nothing here claims to
+     * change.)
      */
-    public function testAGlobalShortCircuitDeclaringItsOwnContentLengthWouldShipTwo(): void
+    public function testAGlobalShortCircuitDeclaringItsOwnContentLengthNowShipsOneOnAHead(): void
     {
-        $shortCircuit = static fn(Request $request, callable $next): Response => (new Response())
-            ->status(403)
-            ->header('Content-Type', 'application/json')
-            ->header('Content-Length', '4242');
+        $shortCircuit = function (Request $request, callable $next): Response {
+            $result = (new Response())
+                ->status(403)
+                ->header('Content-Type', 'application/json')
+                ->header('Content-Length', '4242');
+
+            return $this->flagHeadShortCircuitReply($request, $result);
+        };
 
         $app = $this->applicationWith($this->routerWithGatedStream(), [$shortCircuit]);
 
         $response = $app->dispatch($this->makeRequest('HEAD', '/dlna/stream/abc123'));
         $wire = (string) $response->toWorkermanResponse();
 
-        $this->assertFalse($response->headOnly);
+        $this->assertTrue($response->headOnly, 'the seam flag must win even when the caller set a length');
         $this->assertSame(
-            2,
+            1,
             substr_count($wire, 'Content-Length:'),
-            "KNOWN HOLE (bounded, see Application::dispatch()'s docblock): a global short-circuit that "
-            . "declares a Content-Length ships two. If this ever fires in reverse, the hole was closed.\n" . $wire,
+            "S295: a caller-set Content-Length is authoritative in asHeadReply(), so the "
+            . "two-length framing defect is closed on the global chain for a HEAD.\n" . $wire,
         );
         $this->assertStringContainsString("Content-Length: 4242\r\n", $wire);
-        $this->assertStringContainsString("Content-Length: 0\r\n", $wire);
+        $this->assertStringNotContainsString("Content-Length: 0\r\n", $wire);
+        $this->assertSame('', explode("\r\n\r\n", $wire, 2)[1] ?? 'TERMINATOR MISSING', 'a HEAD carries no body');
     }
 
     /**
@@ -169,15 +193,15 @@ final class ApplicationHeadOnlyBoundaryTest extends TestCase
      * declares a `Content-Length`. Two of its three branches are exercised here —
      * no profile for an authenticated user, and a profile row with no usable id.
      *
-     * The third (denied inside an active schedule window) is **not reachable from a
-     * unit test today**: `AccessSchedule::isActiveAt()` feeds the CURRENT clock
-     * through `AccessSchedule::timeToMinutes()`, which divides by 60 while being
-     * typed `: int`, so under `strict_types` it throws
-     * `TypeError: … must be of type int, float returned` for every wall-clock second
-     * that is not a multiple of 60. That is a pre-existing defect in the access
-     * schedule feature, entirely unrelated to this HEAD boundary, reported for its
-     * own step; its refusal is the same `->status(403)->json([...])` shape as the two
-     * asserted here, so the property below covers it by construction.
+     * The third (denied inside an active schedule window) is exercised at the WIRE
+     * level by this commit's own `AccessScheduleHeadNoBodyWireTest` — its test
+     * server blocks "now" (today 00:00:00 → 23:59:59), so a HEAD refused in that
+     * window walks exactly this branch. Unit-level reachability is not in question
+     * either: since S336 `AccessSchedule::timeToMinutes()` truncates with
+     * `intdiv()` (src/Access/AccessSchedule.php:134-155), so the old `TypeError`
+     * on non-multiple-of-60 wall-clock seconds is gone. Its refusal is the same
+     * `->status(403)->json([...])` shape as the two asserted here, so the property
+     * below covers it too.
      *
      * If a future edit adds a `Content-Length` to one of these (or a new global
      * middleware short-circuits with one), this test fails and the two-length defect
@@ -253,6 +277,11 @@ final class ApplicationHeadOnlyBoundaryTest extends TestCase
      *    wire. `AccessScheduleMiddleware` — still the only middleware that can
      *    short-circuit, still declaring no `Content-Length` (test 4) — is now the only
      *    global middleware at all.
+     *  - **S295 re-measured at 1**: the registration COUNT did not change — the
+     *    constructor's wrapper gained the `flagHeadShortCircuitReply()` HEAD gate
+     *    (a shape change to the existing registration, not a new registration), so
+     *    the denominator of global short-circuit paths stays one middleware with its
+     *    three refusal branches, each now flagged head-only on a `HEAD`.
      */
     public function testNoThirdGlobalMiddlewareHasAppearedSinceThisBoundaryWasMeasured(): void
     {
@@ -391,6 +420,19 @@ final class ApplicationHeadOnlyBoundaryTest extends TestCase
         $middlewareProperty->setValue($app, $middleware);
 
         return $app;
+    }
+
+    /**
+     * The seam `Application::__construct()` routes every global short-circuit
+     * reply through — S295. Invoked via reflection so the tests below exercise
+     * the REAL shipped method, never a hand-written mirror of it.
+     */
+    private function flagHeadShortCircuitReply(Request $request, Response $response): Response
+    {
+        $method = new ReflectionMethod(Application::class, 'flagHeadShortCircuitReply');
+
+        /** @var Response */
+        return $method->invoke(null, $request, $response);
     }
 
     /**

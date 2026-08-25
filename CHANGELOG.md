@@ -1882,6 +1882,23 @@ run and can never reach it (AC2a / KNOWN LIMIT 3 closed), and a
 
 ### Fixed
 
+- **A `HEAD` refused by a global middleware short-circuit no longer receives the
+  refusal body (S295).** `Application::dispatch()` runs the global chain before
+  `Router::markHeadOnly()`, so the `AccessScheduleMiddleware` wrapper's short-circuit
+  reply used to return unflagged and `HttpHandler`'s matched-route branch shipped the
+  403 envelope as a body on a `HEAD` — the recoverable RFC 9110 §9.3.2 shape, but a
+  keep-alive desync for a header-only client. The reply is now flagged where the global
+  chain returns: the constructor's wrapper routes every global short-circuit through the
+  new `Application::flagHeadShortCircuitReply()` → `Response::asHeadReply()` on a `HEAD`
+  (a `GET` is returned untouched), so all three refusal branches (unprofiled user,
+  unresolvable profile, blocked schedule window) ship head-only with the real
+  `Content-Length`. Proved on a live Workerman worker beside a desyncing control
+  (`AccessScheduleHeadNoBodyWireTest` + `tests/Support/Browser/s295-head-body-server.php`).
+  The denominator is one global middleware — the registration count re-measured at 1 by
+  `ApplicationHeadOnlyBoundaryTest` (count-history line added); route-group middleware
+  was already inside the router's guarantee and no global CSRF middleware exists.
+  No migration (next-free stays 103).
+
 - **DLNA advertised far more children than it could deliver on EVERY root, and none
   of them could be paged** (S147). `LibraryBridge::getLibraryChildCount()` counted
   with the unbounded `ItemRepository::countAllByType()` while

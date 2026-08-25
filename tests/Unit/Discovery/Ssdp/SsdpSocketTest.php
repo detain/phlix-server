@@ -9,6 +9,45 @@ use Phlix\Discovery\Ssdp\SsdpSocket;
 
 class SsdpSocketTest extends TestCase
 {
+    /**
+     * S297: the multicast join is real, so `search()`'s socket now receives
+     * EVERYTHING on the segment — NOTIFYs, M-SEARCHs, the server's own
+     * announcements (loopback). Only HTTP response-shaped datagrams may be
+     * collected as search results, or a NOTIFY (which carries USN/NT/LOCATION)
+     * would parse as a "discovered device", including self-discovery.
+     *
+     * Mutation-verified: removing the isResponseDatagram() filter from
+     * receiveResponses() does not redden this test directly (it tests the
+     * predicate), but the predicate is the ONLY gate between the socket and
+     * SsdpDiscovery's device list, and its shape table is what a regression
+     * would have to walk through.
+     */
+    public function test_only_http_response_shaped_datagrams_are_search_results(): void
+    {
+        $isResponse = new \ReflectionMethod(SsdpSocket::class, 'isResponseDatagram');
+        $isResponse->setAccessible(true);
+
+        $cases = [
+            "HTTP/1.1 200 OK\r\nCACHE-CONTROL: max-age=1800\r\n"
+                . "ST: urn:schemas-upnp-org:device:MediaServer:1\r\n\r\n"      => true,
+            "HTTP/1.0 200 OK\r\nLOCATION: http://192.168.1.100:8200/device.xml\r\n\r\n" => true,
+            "NOTIFY * HTTP/1.1\r\nNT: urn:schemas-upnp-org:device:MediaServer:1\r\n"
+                . "USN: uuid:x\r\n\r\n"                                        => false,
+            "M-SEARCH * HTTP/1.1\r\nMAN: \"ssdp:discover\"\r\nST: ssdp:all\r\n\r\n" => false,
+            "HTTP/1.1 404 Not Found\r\n\r\n"                                   => true,
+            "garbage without a status line"                                    => false,
+            ""                                                                 => false,
+        ];
+
+        foreach ($cases as $datagram => $expected) {
+            self::assertSame(
+                $expected,
+                $isResponse->invoke(null, $datagram),
+                'isResponseDatagram(' . var_export(substr($datagram, 0, 30), true) . '…)'
+            );
+        }
+    }
+
     public function testSearchSendsMsearchAndReturnsResponses(): void
     {
         $socket = new SsdpSocket(null, 1);
@@ -18,18 +57,23 @@ class SsdpSocketTest extends TestCase
         // the S297 real group join, on hosts whose interface-0 route loops
         // multicast back (measured on the CI runner via PR #699 for the mDNS
         // twin), the socket genuinely joins 239.255.255.250 and IP_MULTICAST_LOOP
-        // delivers its OWN M-SEARCH echo. So the assertion is the test's real
-        // intent: with no responder on the segment, no received datagram is a
-        // search RESPONSE (HTTP/1.1 200 OK). Empty array still passes (hosts
-        // with no loopback).
+        // delivers its own M-SEARCH echo plus every neighbor NOTIFY on the segment.
+        // receiveResponses() filters those out (isResponseDatagram() accepts only
+        // HTTP response status lines), so search() returns responses or nothing —
+        // never request-shaped noise. Empty array still passes (hosts with no
+        // loopback, segments with no responder).
         $result = $socket->search('urn:schemas-upnp-org:device:*', 1);
 
+        self::assertLessThanOrEqual(
+            10,
+            count($result),
+            'receiveResponses() caps collection at its attempt budget — unbounded growth is not possible.'
+        );
         foreach ($result as $datagram) {
-            self::assertStringStartsNotWith(
-                'HTTP/1.1 200 OK',
+            self::assertStringStartsWith(
+                'HTTP/',
                 $datagram,
-                'With no responder on the segment, every received datagram must be the M-SEARCH '
-                . 'echo, never a response.'
+                'Only HTTP response-shaped datagrams may surface as search results.'
             );
         }
 
@@ -113,10 +157,13 @@ class SsdpSocketTest extends TestCase
         $result1 = $socket->search('urn:schemas-upnp-org:device:MediaServer:1', 1);
         $result2 = $socket->search('urn:schemas-upnp-org:device:MediaRenderer:1', 1);
 
-        // Same tolerance as testSearchSendsMsearchAndReturnsResponses: only the
-        // socket's own M-SEARCH echo may arrive on a segment with no responder.
+        // Only HTTP response-shaped datagrams may surface (see the sibling
+        // search test's comment — the S297 group join makes the socket hear
+        // the whole segment's SSDP traffic, and receiveResponses() filters it).
+        self::assertLessThanOrEqual(10, count($result1));
+        self::assertLessThanOrEqual(10, count($result2));
         foreach (array_merge($result1, $result2) as $datagram) {
-            self::assertStringStartsNotWith('HTTP/1.1 200 OK', $datagram);
+            self::assertStringStartsWith('HTTP/', $datagram);
         }
 
         $socket->close();

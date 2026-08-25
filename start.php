@@ -1257,6 +1257,15 @@ try {
     $dlnaFileConfig = require __DIR__ . '/config/dlna.php';
     // Same two-switch rule the advertiser's runtime gate uses, evaluated on
     // the FILE config (the master cannot read the settings store — see above).
+    // A file that does not return an array yields no advertiser at all —
+    // deliberately fail-CLOSED (pre-S297 it failed OPEN and forked an idle
+    // worker holding :1900), and loud, so a malformed file is not silent.
+    if (!is_array($dlnaFileConfig)) {
+        trigger_error(
+            'config/dlna.php did not return an array; DLNA SSDP advertiser will not be spawned.',
+            E_USER_WARNING
+        );
+    }
     $dlnaSpawnEnabled = is_array($dlnaFileConfig)
         && \Phlix\Dlna\SsdpAdvertiser::isEnabledForConfig($dlnaFileConfig);
     if ($dlnaSpawnEnabled) {

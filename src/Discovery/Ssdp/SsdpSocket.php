@@ -349,6 +349,26 @@ class SsdpSocket
     /**
      * Receive responses from the socket.
      *
+     * Only HTTP response-shaped datagrams are collected. Since S297 this
+     * socket genuinely joins the SSDP multicast group ({@see self::joinMulticastGroup()}),
+     * so it receives EVERYTHING on the segment — other devices' NOTIFYs, their
+     * M-SEARCHs, the server's own announcements (multicast loopback) — and
+     * `search()` must return only what answers the M-SEARCH that was sent. A
+     * NOTIFY carries `USN`/`NT`/`LOCATION` and would otherwise parse as a
+     * "discovered device" ({@see \Phlix\Discovery\Ssdp\SsdpDiscovery::createDeviceFromParsed()}),
+     * polluting renderer/server lists — including self-discovery. The first
+     * line discriminates: responses are status lines (`HTTP/1.1 200 OK` per
+     * UPnP DA 1.0 §1.3.3), everything else is a request-shaped datagram.
+     *
+     * ## The attempt budget and filtered noise
+     *
+     * The 10-attempt budget counts EVERY received datagram, filtered or not, so
+     * on a busy segment a burst of NOTIFY/M-SEARCH traffic can consume it
+     * before a responder's reply arrives. That is the same budget behaviour as
+     * before the S297 join (the socket then heard less, but of the same shape);
+     * the filter removes the worse failure — request-shaped noise surfacing as
+     * discovered devices — and `SO_RCVTIMEO` still bounds each wait.
+     *
      * @param \Socket $socket Socket instance
      *
      * @return array<string> Collected responses
@@ -375,11 +395,31 @@ class SsdpSocket
                 break;
             }
 
-            $responses[] = $data;
+            if (self::isResponseDatagram($data)) {
+                $responses[] = $data;
+            }
             $attempts++;
         }
 
         return $responses;
+    }
+
+    /**
+     * Is this datagram an HTTP response (a reply to our M-SEARCH)?
+     *
+     * The first line of an SSDP search response is a status line; NOTIFY and
+     * M-SEARCH datagrams start with their method/type token. Everything else
+     * on the multicast group — which this socket now actually receives, see
+     * {@see self::receiveResponses()} — is not an answer to our search.
+     *
+     * @param string $datagram Raw inbound UDP payload.
+     */
+    private static function isResponseDatagram(string $datagram): bool
+    {
+        $end = strcspn($datagram, "\r\n");
+        $firstLine = trim(substr($datagram, 0, $end));
+
+        return str_starts_with($firstLine, 'HTTP/');
     }
 
     public function __destruct()

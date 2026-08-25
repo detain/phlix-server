@@ -13,11 +13,25 @@ class SsdpSocketTest extends TestCase
     {
         $socket = new SsdpSocket(null, 1);
 
-        // The search method should return an array
-        // Note: Without actual network, this will return empty array
+        // The search method should return an array.
+        // Note: without actual network, this returns an empty array — and with
+        // the S297 real group join, on hosts whose interface-0 route loops
+        // multicast back (measured on the CI runner via PR #699 for the mDNS
+        // twin), the socket genuinely joins 239.255.255.250 and IP_MULTICAST_LOOP
+        // delivers its OWN M-SEARCH echo. So the assertion is the test's real
+        // intent: with no responder on the segment, no received datagram is a
+        // search RESPONSE (HTTP/1.1 200 OK). Empty array still passes (hosts
+        // with no loopback).
         $result = $socket->search('urn:schemas-upnp-org:device:*', 1);
 
-        $this->assertSame([], $result);
+        foreach ($result as $datagram) {
+            self::assertStringStartsNotWith(
+                'HTTP/1.1 200 OK',
+                $datagram,
+                'With no responder on the segment, every received datagram must be the M-SEARCH '
+                . 'echo, never a response.'
+            );
+        }
 
         $socket->close();
     }
@@ -99,8 +113,11 @@ class SsdpSocketTest extends TestCase
         $result1 = $socket->search('urn:schemas-upnp-org:device:MediaServer:1', 1);
         $result2 = $socket->search('urn:schemas-upnp-org:device:MediaRenderer:1', 1);
 
-        $this->assertSame([], $result1);
-        $this->assertSame([], $result2);
+        // Same tolerance as testSearchSendsMsearchAndReturnsResponses: only the
+        // socket's own M-SEARCH echo may arrive on a segment with no responder.
+        foreach (array_merge($result1, $result2) as $datagram) {
+            self::assertStringStartsNotWith('HTTP/1.1 200 OK', $datagram);
+        }
 
         $socket->close();
     }

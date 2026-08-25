@@ -1226,28 +1226,40 @@ try {
 // announcements are broadcast network messages that don't need redundancy.
 // -----------------------------------------------------------------------------
 
-// WHERE `dlna.enabled` IS HONOURED — and why it is split across two places.
+// WHERE `dlna.cds_enabled` AND `dlna.enabled` ARE HONOURED — and why the
+// spawn decision is split from the runtime decision.
 // Exactly the same reasoning as the `process.<key>.enabled` gate above: this
 // runs in the MASTER, before Worker::runAll(), so it cannot consult the
 // `server_settings` overrides without (a) a blocking DB read whose connection
 // every fork would then inherit, and (b) still not being re-evaluated by the
 // admin "Restart server" button, which sends SIGUSR2 — a GRACEFUL RELOAD that
 // re-forks children from this same, already-executed master. So the spawn
-// decision below stays on the config-file default (which ships `true`), and the
-// EFFECTIVE value is applied inside SsdpAdvertiser::onWorkerStart, where it IS
-// re-read on every reload: an advertiser disabled by an admin override starts
-// and idles without opening its multicast socket. The one case this cannot
-// cover is ENABLING an advertiser that `config/dlna.php` itself disables — no
-// Worker was ever spawned to re-check — which is an operator editing the file
-// on disk, not a UI action. That asymmetry, and the "one idle process" cost,
-// are stated in the key's admin-facing helpText, so the admin sees it at the
-// switch rather than only here.
+// decision below stays on the config-file values, and the EFFECTIVE value is
+// applied inside SsdpAdvertiser::onWorkerStart, where it IS re-read on every
+// reload: an advertiser disabled by an admin override starts and idles without
+// opening its multicast socket.
+//
+// S297 made the file gate consult BOTH switches via the same rule the worker's
+// own runtime gate uses ({@see \Phlix\Dlna\SsdpAdvertiser::isEnabledForConfig()}).
+// Before that only `enabled` was checked, so an install with the CDS disabled
+// (the SHIPPED default) still forked an advertiser that idled for its whole
+// life — while its Workerman listen socket held udp://0.0.0.0:1900 and squatted
+// the port against anything else that wanted it. Now the file's `cds_enabled`
+// (default FALSE) participates in the fork decision, with the same asymmetry
+// as `enabled`: a file-disabled switch cannot be turned back on by an admin
+// override without a full service restart, because no Worker was ever spawned
+// to re-check. That asymmetry is stated in the settings helpText, so the admin
+// sees it at the switch rather than only here.
 try {
     $serverConfig = is_array($config['server'] ?? null) ? $config['server'] : [];
     $dlnaPort = is_int($serverConfig['port'] ?? null) ? $serverConfig['port'] : 8096;
-    /** @var array{enabled?: bool} $dlnaFileConfig */
+    /** @var array{enabled?: bool, cds_enabled?: bool} $dlnaFileConfig */
     $dlnaFileConfig = require __DIR__ . '/config/dlna.php';
-    if (!is_array($dlnaFileConfig) || ($dlnaFileConfig['enabled'] ?? true) !== false) {
+    // Same two-switch rule the advertiser's runtime gate uses, evaluated on
+    // the FILE config (the master cannot read the settings store — see above).
+    $dlnaSpawnEnabled = is_array($dlnaFileConfig)
+        && \Phlix\Dlna\SsdpAdvertiser::isEnabledForConfig($dlnaFileConfig);
+    if ($dlnaSpawnEnabled) {
         $dbConfigPath = is_string($config['db_config_path'] ?? null) ? $config['db_config_path'] : null;
         $dlnaSsdpWorker = new \Phlix\Dlna\SsdpAdvertiser(null, $dlnaPort, $dbConfigPath);
         $dlnaSsdpWorker->count = 1;

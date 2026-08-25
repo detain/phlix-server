@@ -2253,8 +2253,12 @@ class Application
      * two fields (RFC 9110 §8.6: a caller-set length is authoritative in
      * {@see Response::asHeadReply()} and {@see \Phlix\Server\Workerman\BodylessResponse}
      * renders that single field). Because the flag lives at the chain-return seam
-     * rather than inside any one middleware, a FUTURE global middleware that
-     * short-circuits gets the same gate by construction.
+     * rather than inside any one middleware — and that seam is the constructor's
+     * AccessSchedule wrapper, not the chain composed in this method — a FUTURE
+     * global middleware registered anywhere else would not pass through this gate
+     * on its own. What actually guards a future registration is the boundary
+     * test's registration-count pin (`ApplicationHeadOnlyBoundaryTest`), which
+     * fires on any count change: test-guarded, not by construction.
      *
      * The only global middleware that can short-circuit today is
      * {@see \Phlix\Server\Http\Middleware\AccessScheduleMiddleware}, whose three

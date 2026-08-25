@@ -110,13 +110,13 @@ final class AccessScheduleHeadNoBodyWireTest extends TestCase
         $expectedEntity = $this->entity();
 
         // ── control: a GET in the same blocked window still carries its body ──
-        $getWire = $this->request($server['port'], "GET /api/v1/anything HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n", readBody: true);
+        $getWire = $this->request($server['port'], "GET /api/v1/anything HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
         self::assertStringStartsWith("HTTP/1.1 403 Forbidden\r\n", $getWire, "premise: the GET is refused:\n" . $getWire);
         self::assertStringContainsString('Content-Length: ' . strlen($expectedEntity) . "\r\n", $getWire);
         self::assertSame($expectedEntity, $this->bodyBytes($getWire), 'the GET control must still ship the refusal body');
 
         // ── the HEAD refused by the same branch, on the same worker ──
-        $headWire = $this->request($server['port'], "HEAD /api/v1/anything HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n", readBody: true);
+        $headWire = $this->request($server['port'], "HEAD /api/v1/anything HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
         self::assertStringStartsWith("HTTP/1.1 403 Forbidden\r\n", $headWire);
         self::assertSame(
             1,
@@ -414,7 +414,7 @@ final class AccessScheduleHeadNoBodyWireTest extends TestCase
      * Send one request over a fresh connection and read the reply to EOF
      * (`Connection: close`). Returns the full wire bytes (head + body).
      */
-    private function request(int $port, string $raw, bool $readBody): string
+    private function request(int $port, string $raw): string
     {
         $sock = $this->connect($port);
         try {

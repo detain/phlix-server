@@ -193,15 +193,15 @@ final class ApplicationHeadOnlyBoundaryTest extends TestCase
      * declares a `Content-Length`. Two of its three branches are exercised here —
      * no profile for an authenticated user, and a profile row with no usable id.
      *
-     * The third (denied inside an active schedule window) is **not reachable from a
-     * unit test today**: `AccessSchedule::isActiveAt()` feeds the CURRENT clock
-     * through `AccessSchedule::timeToMinutes()`, which divides by 60 while being
-     * typed `: int`, so under `strict_types` it throws
-     * `TypeError: … must be of type int, float returned` for every wall-clock second
-     * that is not a multiple of 60. That is a pre-existing defect in the access
-     * schedule feature, entirely unrelated to this HEAD boundary, reported for its
-     * own step; its refusal is the same `->status(403)->json([...])` shape as the two
-     * asserted here, so the property below covers it by construction.
+     * The third (denied inside an active schedule window) is exercised at the WIRE
+     * level by this commit's own `AccessScheduleHeadNoBodyWireTest` — its test
+     * server blocks "now" (today 00:00:00 → 23:59:59), so a HEAD refused in that
+     * window walks exactly this branch. Unit-level reachability is not in question
+     * either: since S336 `AccessSchedule::timeToMinutes()` truncates with
+     * `intdiv()` (src/Access/AccessSchedule.php:134-155), so the old `TypeError`
+     * on non-multiple-of-60 wall-clock seconds is gone. Its refusal is the same
+     * `->status(403)->json([...])` shape as the two asserted here, so the property
+     * below covers it too.
      *
      * If a future edit adds a `Content-Length` to one of these (or a new global
      * middleware short-circuits with one), this test fails and the two-length defect

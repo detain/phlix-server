@@ -501,8 +501,8 @@ class Router
      * adding a THIRD global middleware that short-circuits with its own
      * `Content-Length` left the whole Unit suite green. The alarm asserts (a) that
      * `AccessScheduleMiddleware`'s refusals declare no `Content-Length`, (b) that the
-     * global stack is still exactly the two registrations this boundary was measured
-     * against — asserted on the COUNT, so a third fires it whatever it is — and (c)
+     * global stack is still exactly the one registration this boundary was measured
+     * against — asserted on the COUNT, so a second fires it whatever it is — and (c)
      * that nothing registers one from outside via `Application::getInstance()`. Any of
      * those firing means re-doing this analysis, and a short-circuit that DOES declare
      * a `Content-Length` must be fixed at once rather than deferred.

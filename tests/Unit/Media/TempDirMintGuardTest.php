@@ -54,8 +54,15 @@ use ReflectionMethod;
  * per-operation path (the deliberate per-op bucket — `phlix_cover_`,
  * `phlix_audiobook_cover_`, `phlix_backup_`, `phlix_restore_`, `phlix_plugin_` —
  * is intentionally excluded; those mints fire only when the operation itself
- * runs, are documented in the S167 sweep commit, and are not the per-construction
- * pattern this guard exists to kill).
+ * runs and are not on the `createDefaultLogger()` construction path this guard
+ * exists to kill. Only the three cover mints are documented in the sweep
+ * commit cd16171e; `phlix_backup_`/`phlix_restore_`/`phlix_plugin_` are
+ * pre-existing src/ per-op mints (BackupManager, HttpInstaller) that S167 did
+ * not touch, and the guard's prefix-agnostic snapshot covers them regardless.
+ * NOTE: of the three cover mints, only `AudiobookScanner::saveCoverImage()`
+ * (AudiobookScanner.php:852) mints a DIRECTORY; it is dormant in the suite (no
+ * test exercises it), so a future saveCoverImage test would mint untripped —
+ * the accepted residual risk of the deliberate per-op bucket.)
  *
  * The classes are exercised via {@see ReflectionClass::newInstanceWithoutConstructor()}
  * + {@see ReflectionMethod::invoke()} so no constructor dependencies (DB

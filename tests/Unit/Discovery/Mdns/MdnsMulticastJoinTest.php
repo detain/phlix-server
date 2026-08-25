@@ -6,6 +6,7 @@ namespace Phlix\Tests\Unit\Discovery\Mdns;
 
 use PHPUnit\Framework\TestCase;
 use Phlix\Discovery\Mdns\MdnsSocket;
+use Psr\Log\LoggerInterface;
 
 /**
  * Three-arm multicast experiment for `MdnsSocket`'s group join (S296).
@@ -123,6 +124,61 @@ class MdnsMulticastJoinTest extends TestCase
             $armC,
             'The production join must actually deliver multicast to the socket — this is the assertion '
             . 'that separates a real join from a silent no-op.'
+        );
+    }
+
+    /**
+     * The failure paths of `joinMulticastGroup()` must be LOUD and contained,
+     * never the silent `@`-swallowed TRUE that shipped before S296.
+     *
+     * Two failure modes, both on real calls into ext-sockets (measured on
+     * PHP 8.3.6):
+     *
+     *  1. The join call FAILS — `socket_set_option()` returns false (here:
+     *     interface index 9999 does not exist on any host → ENODEV). The
+     *     method must return false and log a warning. The old code's contract
+     *     was a quiet TRUE that joined nothing.
+     *  2. The runtime THROWS — under the Swoole coroutine runtime a
+     *     `Swoole\Coroutine\Socket` can make the hooked `setOption()` throw
+     *     for an option it does not implement; the closest CLI analogue is a
+     *     TypeError from a non-Socket value, which is exactly what the
+     *     `catch (\Throwable)` exists to contain. It must log and return
+     *     false, never fatal a worker.
+     *
+     * The mock logger's `exactly(2)` warning expectation is the guard that
+     * BOTH failures are reported: remove either warning and the test reddens
+     * even though every return value still looks right.
+     */
+    public function test_join_failure_paths_are_loud_and_contained(): void
+    {
+        if (!defined('MCAST_JOIN_GROUP')) {
+            self::markTestSkipped('ext-sockets multicast support is not available.');
+        }
+
+        $logger = $this->createMock(LoggerInterface::class);
+        $logger->expects(self::exactly(2))->method('warning');
+
+        $mdns = new MdnsSocket($logger, 1);
+        $join = new \ReflectionMethod(MdnsSocket::class, 'joinMulticastGroup');
+        $join->setAccessible(true);
+
+        // Failure mode 1: setsockopt returns false (nonexistent interface
+        // index → ENODEV, measured). The method must say so, loudly.
+        [$socket] = $this->bindEphemeral();
+        $joined = $join->invoke($mdns, $socket, 9999);
+        self::assertFalse(
+            $joined,
+            'A join that fails must report false — the old spelling returned TRUE and joined nothing.'
+        );
+        socket_close($socket);
+
+        // Failure mode 2: the socket layer throws (Swoole coroutine variance,
+        // exercised here as a TypeError from a non-Socket value). The method
+        // must contain it, not fatal.
+        $joined = $join->invoke($mdns, 'not-a-socket');
+        self::assertFalse(
+            $joined,
+            'A throwing setOption must be contained and reported, never fatal.'
         );
     }
 

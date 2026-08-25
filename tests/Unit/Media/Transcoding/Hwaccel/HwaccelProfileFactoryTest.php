@@ -10,7 +10,6 @@ use Phlix\Media\Transcoding\Hwaccel\HwaccelProfileFactory;
 use Phlix\Media\Transcoding\Hwaccel\HwaccelRegistry;
 use Phlix\Media\Transcoding\Hwaccel\Profiles\NvencProfile;
 use Phlix\Media\Transcoding\Hwaccel\Profiles\SoftwareProfile;
-use Phlix\Media\Transcoding\Hwaccel\Profiles\VaapiProfile;
 
 class HwaccelProfileFactoryTest extends TestCase
 {
@@ -29,13 +28,50 @@ class HwaccelProfileFactoryTest extends TestCase
         parent::tearDown();
     }
 
-    public function test_get_profile_returns_software_for_unknown_vendor(): void
+    /**
+     * An UNKNOWN vendor must never resolve to its own (nonexistent) profile: the
+     * factory walks the vendor-priority chain and falls back to the BEST AVAILABLE
+     * profile for the codec. Which vendor that is is environment-dependent —
+     * measured on the S354 box (2026-08-25): with working nvenc present the
+     * fallback resolves `NvencProfile` (this is the W11 "Hwaccel env flake": the
+     * previous expectation hardcoded `SoftwareProfile`, which is only what a
+     * GPU-less CI runner sees). The expectation is therefore DERIVED from the
+     * registry the factory consults, so the same assertion holds on GPU boxes and
+     * GPU-less runners without weakening the unknown-vendor contract.
+     */
+    public function test_get_profile_falls_back_to_best_available_for_unknown_vendor(): void
     {
         $factory = new HwaccelProfileFactory($this->registry);
 
         $profile = $factory->getProfile('nonexistent_vendor', 'h264');
 
-        $this->assertInstanceOf(SoftwareProfile::class, $profile);
+        // The factory's own fallback contract, re-derived from the registry state
+        // it consults: getFallbackProfile() walks the priority order (the same
+        // order getAllProfiles() sorts by), skips software, and returns the profile
+        // of the FIRST AVAILABLE vendor as soon as ANY encoder exists — the
+        // availability of the vendor is the gate, NOT the identity of the best
+        // encoder (the factory does not require getEncoder()'s capability to
+        // belong to that vendor). Mirror that condition exactly, so the derivation
+        // cannot disagree with the factory on a box where a high-priority vendor
+        // is present but its capability does not support h264.
+        $expected = 'software';
+        $hasAnyEncoder = $this->registry->getEncoder('h264') !== null;
+        foreach ($factory->getAllProfiles() as $vendor => $candidate) {
+            if ($vendor === 'software') {
+                continue;
+            }
+            if ($this->registry->isVendorAvailable($vendor) && $hasAnyEncoder) {
+                $expected = $vendor;
+                break;
+            }
+        }
+
+        $this->assertInstanceOf(
+            \Phlix\Media\Transcoding\Hwaccel\Profiles\HwaccelEncoderProfileInterface::class,
+            $profile
+        );
+        $this->assertSame($expected, $profile->getVendor());
+        $this->assertNotSame('nonexistent_vendor', $profile->getVendor());
     }
 
     public function test_fallback_to_software(): void

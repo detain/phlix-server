@@ -9,6 +9,32 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Changed
 
+- **The hwaccel segment-builder branch is proven end-to-end with a REAL hardware encode (S354).**
+  `FfmpegRunner::buildHwaccelSegmentCommand()` — shipped by S56/S60 and verified only at the
+  command-string level (no GPU available) — now executes for real, through the REAL
+  `HlsController::serveFile()` route, in `tests/E2E/Media/Transcoding/HwaccelSegmentBuilderE2ETest.php`:
+  the S315 real-Worker harness (`tests/Support/Browser/hls-controller-server.php`, new
+  `--hwaccel=1` / `--hwaccel-seed=software` flags, both off by default so every pre-existing
+  caller is byte-identical) wired to the REAL merged `HwAccelConfig::get()`, producing CMAF fMP4
+  segments on demand from a real input, served with 200s and correct bytes, with ffprobe
+  stream-level encoder identity (h264_nvenc on this box: profile Main / level 3.0 / yuv420p) and
+  init++fragment demuxer readback. The SOFTWARE-fallback control runs the same builder with the
+  registry seeded software-only (libx264, profile High / level 4.1) — the two arms are told apart
+  by their outputs, not their command text. A pure guard names its skip when
+  /dev/dri is absent OR when the real probe resolves no usable hardware encoder
+  (measured 2026-08-25: GitHub Actions runners carry /dev/dri yet resolve none —
+  the CI branch; fail-loud is reserved for the probe itself malfunctioning), so
+  CI (no GPU) cannot silently skip this proof and cannot red on it either —
+  named KNOWN LIMIT: the local GPU run is the record. KNOWN LIMIT (measured
+  2026-08-25): h264_vaapi cannot init on this box — `No VA display
+  found for device /dev/dri/renderD128` (the NVIDIA GPUs carry no VAAPI driver) — so the proof
+  runs the builder's real nvenc resolution; a future VAAPI-capable box must re-tune the
+  stream-signature assertions. The W11 "Hwaccel env flake" is re-baselined with the measured
+  profile: the unknown-vendor fallback assertion in `HwaccelProfileFactoryTest` is now derived
+  from the registry it consults (nvenc on this box, software on a GPU-less runner) — the
+  unknown-vendor contract (never resolve to its own nonexistent profile) is unchanged. No
+  behaviour change, zero `src/` edits; no migration (next-free server migration stays 103).
+
 - **The per-construction `/tmp/phlix_*_<uniqid>` logger-dir mint is gone — every one of the 23
   `createDefaultLogger()` bodies now returns the shared channel logger (S167).** The 23 `src/`
   classes that `mkdir()`ed a fresh `sys_get_temp_dir()/phlix_<prefix>_<uniqid>` directory on

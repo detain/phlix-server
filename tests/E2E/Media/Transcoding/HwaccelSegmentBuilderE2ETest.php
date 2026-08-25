@@ -204,7 +204,15 @@ final class HwaccelSegmentBuilderE2ETest extends TestCase
         $this->assertNull($stub['skipReason']);
         $this->assertNotNull($stub['failReason']);
 
-        // A real hardware vendor → run.
+        // A real hardware vendor → run. This is the GUARD's contract — generic
+        // across vendors, because the guard's only job is "is there a real
+        // hardware encoder". The encode case's BODY below is nvenc-tuned (its
+        // command assertions and its stream signature Main/level-30 are this
+        // box's measured nvenc output): on a vaapi/qsv-only box the guard still
+        // lets the proof run and the nvenc-tuned assertions red LOUDLY — a
+        // named KNOWN LIMIT (a future vaapi box must re-tune the body, not
+        // read the red as a regression; h264_vaapi itself cannot init on this
+        // box — see the class header).
         foreach (['nvenc', 'vaapi', 'qsv'] as $vendor) {
             $run = self::hwaccelProofDecision(true, $vendor);
             $this->assertTrue($run['run'], "vendor {$vendor} must run the proof");
@@ -421,7 +429,13 @@ final class HwaccelSegmentBuilderE2ETest extends TestCase
 
     private function applyProofGuard(): void
     {
-        $decision = self::hwaccelProofDecision(is_dir('/dev/dri'), $this->resolvedHwEncoderVendor());
+        // /dev/dri checked FIRST, without probing: a GPU-less runner must not
+        // pay for the full vendor probe (several ffmpeg invocations) before it
+        // skips by name.
+        $hasDri = is_dir('/dev/dri');
+        $decision = $hasDri
+            ? self::hwaccelProofDecision(true, $this->resolvedHwEncoderVendor())
+            : self::hwaccelProofDecision(false, null);
         if ($decision['skipReason'] !== null) {
             $this->markTestSkipped($decision['skipReason']);
         }
@@ -756,11 +770,13 @@ final class HwaccelSegmentBuilderE2ETest extends TestCase
     /**
      * A client's fetch through the REAL route, with the status line and headers.
      *
-     * Segments get ONE bounded retry: a transient CUDA-init failure under heavy
-     * GPU load makes the first launch fail without publishing, the controller
-     * answers 404 after its poll ceiling, and the SECOND request launches a
-     * FRESH encode through the same real path — exactly what hls.js does with a
-     * failed fragment. A persistent failure still reds after the retry.
+     * ONE attempt, deliberately NO retry: a transient first-launch failure
+     * (e.g. a GPU-init hiccup) leaves a non-200 entry in the server census,
+     * and the census assertions below reject ANY non-200 — a retry that then
+     * succeeded would still red the run, because the census is the record of
+     * what the controller actually answered. A transient failure therefore
+     * fails the case LOUDLY, which is the fail-fast contract: better a red
+     * re-run than a pass that hides a 404 from the evidence.
      *
      * @param ServerHandle $server
      *
@@ -769,25 +785,8 @@ final class HwaccelSegmentBuilderE2ETest extends TestCase
     private function fetch(array $server, string $jobId, string $name): array
     {
         $url = "http://127.0.0.1:{$server['port']}/hls/{$jobId}/{$name}";
-        $attempts = str_ends_with($name, '.m4s') ? 2 : 1;
-        $last = null;
-        for ($attempt = 0; $attempt < $attempts; $attempt++) {
-            $last = $this->httpGet($url, $name);
-            if ($last['status'] === 200) {
-                return $last;
-            }
-            if ($attempt + 1 < $attempts) {
-                $this->report(sprintf(
-                    'segment %s answered %d on attempt %d — retrying (transient GPU-init)',
-                    $name,
-                    $last['status'],
-                    $attempt + 1
-                ));
-                usleep(2_000_000);
-            }
-        }
 
-        return $last;
+        return $this->httpGet($url, $name);
     }
 
     /**

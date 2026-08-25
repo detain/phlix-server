@@ -46,20 +46,22 @@ class HwaccelProfileFactoryTest extends TestCase
 
         $profile = $factory->getProfile('nonexistent_vendor', 'h264');
 
-        // The factory's own fallback contract, re-derived from the registry state:
-        // walk the priority order, skip software, take the first AVAILABLE vendor
-        // that can encode h264 — exactly what getFallbackProfile() does.
+        // The factory's own fallback contract, re-derived from the registry state
+        // it consults: getFallbackProfile() walks the priority order (the same
+        // order getAllProfiles() sorts by), skips software, and returns the profile
+        // of the FIRST AVAILABLE vendor as soon as ANY encoder exists — the
+        // availability of the vendor is the gate, NOT the identity of the best
+        // encoder (the factory does not require getEncoder()'s capability to
+        // belong to that vendor). Mirror that condition exactly, so the derivation
+        // cannot disagree with the factory on a box where a high-priority vendor
+        // is present but its capability does not support h264.
         $expected = 'software';
-        $h264Encoder = $this->registry->getEncoder('h264');
+        $hasAnyEncoder = $this->registry->getEncoder('h264') !== null;
         foreach ($factory->getAllProfiles() as $vendor => $candidate) {
             if ($vendor === 'software') {
                 continue;
             }
-            if (
-                $this->registry->isVendorAvailable($vendor)
-                && $h264Encoder !== null
-                && $h264Encoder->vendor === $vendor
-            ) {
+            if ($this->registry->isVendorAvailable($vendor) && $hasAnyEncoder) {
                 $expected = $vendor;
                 break;
             }

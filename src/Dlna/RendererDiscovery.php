@@ -12,6 +12,7 @@ declare(strict_types=1);
 namespace Phlix\Dlna;
 
 use Phlix\Common\Logger\LogChannels;
+use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Common\Logger\StructuredLogger;
 use Phlix\Discovery\Ssdp\SsdpDiscovery;
 
@@ -47,33 +48,22 @@ class RendererDiscovery
     }
 
     /**
-     * Create a default logger for standalone/test operation.
+     * The shared DLNA-channel logger — not a private one in a temp directory.
      *
-     * @return StructuredLogger Configured logger instance
+     * The old body `mkdir()`ed a
+     * `sys_get_temp_dir()/phlix_dlna_renderer_discovery_<uniqid>` directory on
+     * every construction and pointed a private `StructuredLogger` at a log
+     * file inside it — a per-instance leak that survived for the life of the
+     * worker. `LoggerFactory::get()` returns one cached instance per channel,
+     * so the whole family shares a single logger.
+     *
+     * @return StructuredLogger The shared DLNA channel logger, routed by
+     *         `config/logger.php` to `.logs/app.log` and `.logs/error.log` —
+     *         an install-dir destination that creates no directory.
      */
     private function createDefaultLogger(): StructuredLogger
     {
-        $tempDir = sys_get_temp_dir() . '/phlix_dlna_renderer_discovery_' . uniqid();
-        if (!is_dir($tempDir)) {
-            mkdir($tempDir, 0755, true);
-        }
-
-        $config = [
-            'handlers' => [
-                'stream' => [
-                    'type' => 'stream',
-                    'path' => $tempDir . '/renderer_discovery.log',
-                    'level' => 'debug',
-                ],
-            ],
-            'processors' => [
-                'context' => true,
-                'request_id' => false,
-                'user_id' => false,
-            ],
-        ];
-
-        return new StructuredLogger(LogChannels::DLNA, $config);
+        return LoggerFactory::get(LogChannels::DLNA);
     }
 
     /**

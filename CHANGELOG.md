@@ -3188,6 +3188,27 @@ run and can never reach it (AC2a / KNOWN LIMIT 3 closed), and a
 - **Test-coverage hardening.** Added missing behavioral tests across SV-0.6 (TMDB collections UUID handling), SV-0.7 (marker/intro-detection worker supervision), SV-1.8 (CSRF Origin exact-match), SV-1.9 (ENOSPC guard), SV-4.8 (Router static-map fast path + DI string-handler resolution), and SV-4.12 (stale-job reaper glob), plus the SV-3.3 and SV-4.15 features above — closing "green-but-untested" gaps found during re-audit. No behavior change beyond the fixes listed above.
 - **Plugin catalog pinned to v2.1.8.** Bumped `OFFICIAL_PINNED_REF` (the tag of `detain/phlix-plugins` the admin **Plugins** catalog resolves against) to **v2.1.8**, shipping the trakt/musicbrainz/anilist PHP-8.5 `curl_close()` fixes to the catalog listing.
 
+- **The mDNS multicast join in `MdnsSocket` was a silent no-op; it now joins 224.0.0.251 with the
+  `MCAST_JOIN_GROUP` spelling and logs failure (S296).** The join used the BSD `IP_ADD_MEMBERSHIP`
+  spelling, a constant PHP 8.3 does not define (measured `defined()` === false), so the call fell
+  back to raw option 12 with `inet_pton($group)` (a 4-byte binary string) as optval;
+  `socket_set_option()` returned `TRUE` and joined NOTHING — zero multicast datagrams reached
+  mDNS/Bonjour discovery while every caller believed the join succeeded (a `TRUE` return is
+  exactly why it went unnoticed). The join now uses `MCAST_JOIN_GROUP` + array optval
+  (`['group' => '224.0.0.251', 'interface' => 0]`) — the exact spelling S51 shipped and measured
+  in `Dlna\SsdpAdvertiser` — extracted into `joinMulticastGroup()`, with failure now logged
+  (fail-loud: this hazard class is silent failure). The Swoole coroutine-runtime socket variance
+  is guarded: the parameter is deliberately untyped because `SWOOLE_HOOK_SOCKETS` hands
+  `socket_create()` back a `Swoole\Coroutine\Socket`, not a `\Socket`, and the call is wrapped in
+  `try/catch(\Throwable)` so the daemon can never TypeError/fatal on this path. Proven by
+  `tests/Unit/Discovery/Mdns/MdnsMulticastJoinTest.php`, a three-arm experiment on real sockets:
+  (A) no join receives nothing (control); (B) the pre-fix spelling replayed verbatim returns
+  `TRUE` and receives NOTHING (failing control, measured on PHP 8.3.6); (C) the production join
+  method receives the datagram; both mutations (join line deleted, spelling regressed) redden the
+  test. KNOWN LIMIT: this box/dev-VM loops IPv4 multicast back only on `lo`, so `interface => 0`
+  kernel route selection is NOT validated — the option spelling is what is proven, not the
+  interface pick. No migration (next-free server migration stays 103).
+
 ## [1.2.3] — 2026-07-12
 
 ### Fixed

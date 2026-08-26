@@ -38,6 +38,20 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   `['code' => 127, 'output' => '']` while `shell_exec` yields `null` — benign for every current
   caller, filed rather than patched.
 
+- **The S196 divergence is resolved as PINNED — the three-arm shape on an unexecutable command is
+  now a contract (S403).** Measured on PHP 8.3.6 / swoole 6.2.1: `Swoole\Coroutine\System::exec`
+  returns `['code' => 127, 'output' => '']` inside a coroutine, `shell_exec` returns `null`, and the
+  three wrappers (`FfmpegRunner::runCoroutineAwareShellExec`, `FfmpegRunner::runProbeCommand`,
+  `ChapterMarkerService::runCommand`) return `''` inside a coroutine vs `null` on the main stack.
+  `tests/Unit/Support/Coroutine/CoroutineShellExecDivergenceContractTest.php` pins these shapes —
+  invariants and outcome sets only, never the exact exit code (S169/S170 errCode lesson) — and is
+  mutation-proven (flip an arm's expected shape → the named test reds; byte-identical restore →
+  green). Benign for all callers; pinned rather than patched because no code-based rule can align
+  the arms for every input without inventing a new contract (a real command may legitimately exit
+  127, and `shell_exec` returns output even for non-zero exits). Both divergence records
+  (`ForkInventoryGuardTest`, `ChapterMarkerServiceCoroutineForkTest`) now reference the contract
+  test by name. No behaviour change, zero `src/` edits; no migration.
+
 - **The hwaccel segment-builder branch is proven end-to-end with a REAL hardware encode (S354).**
   `FfmpegRunner::buildHwaccelSegmentCommand()` — shipped by S56/S60 and verified only at the
   command-string level (no GPU available) — now executes for real, through the REAL

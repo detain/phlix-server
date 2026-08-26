@@ -36,7 +36,10 @@ final class LibraryMetadataMatcherCoroutineForkTest extends TestCase
      * unambiguously — array-by-reference returns do NOT survive list()
      * destructuring; measured S196 lesson).
      *
-     * @return array{0: LibraryMetadataMatcher, 1: object{calls: list<array{message: string, context: array<string, mixed>}>}}
+     * @return array{
+     *     0: LibraryMetadataMatcher,
+     *     1: object{calls: list<array{message: string, context: array<string, mixed>}>}
+     * }
      */
     private function buildMatcher(): array
     {

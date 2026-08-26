@@ -23,10 +23,11 @@ use PHPUnit\Framework\TestCase;
  * 2026-08-25 on swoole 6.2.1/PHP 8.3.6), which runCommand maps to `''`,
  * while `shell_exec()` yields `null`. That divergence is benign for the only
  * caller (`extractFromFile()` treats `null` and `''` identically) and is
- * FILED as S403 in the fork inventory rather than patched, because no
- * code-based rule can make the arms identical for every input without
- * inventing a new contract (a real command may legitimately exit 127, and
- * `shell_exec` returns output even for non-zero exit codes).
+ * FILED as S403 (allocation requested with this PR) in the fork inventory
+ * rather than patched, because no code-based rule can make the arms identical
+ * for every input without inventing a new contract (a real command may
+ * legitimately exit 127, and `shell_exec` returns output even for non-zero
+ * exit codes).
  */
 final class ChapterMarkerServiceCoroutineForkTest extends TestCase
 {

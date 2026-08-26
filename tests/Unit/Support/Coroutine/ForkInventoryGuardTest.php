@@ -49,9 +49,9 @@ use PHPUnit\Framework\TestCase;
  *    mutation-discriminating (a guard flip to a never-true condition would
  *    not red it) — recorded as the weakest evidence in the set.
  *
- * ⚠ Divergence filed S403: `Coroutine\System::exec` maps an unexecutable
- * command to `['code' => 127, 'output' => '']` while `shell_exec` yields
- * `null` — ChapterMarkerService::runCommand and FfmpegRunner::runProbeCommand
+ * ⚠ Divergence filed S403 (allocation requested with this PR): `Coroutine\System::exec`
+ * maps an unexecutable command to `['code' => 127, 'output' => '']` while `shell_exec`
+ * yields `null` — ChapterMarkerService::runCommand and FfmpegRunner::runProbeCommand
  * / runCoroutineAwareShellExec return '' vs null across arms. Benign for all
  * current callers; filed rather than patched (no code-based rule aligns the
  * arms for every input without inventing a new contract).

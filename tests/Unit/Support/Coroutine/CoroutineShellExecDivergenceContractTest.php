@@ -23,6 +23,7 @@ use PHPUnit\Framework\TestCase;
  *                                          code=127, output=''
  *   shell_exec                             (not used)           null
  *   FfmpegRunner::runCoroutineAwareShellExec   ''               null
+ *   FfmpegRunner::runProbeCommand              ''               null
  *   ChapterMarkerService::runCommand           ''               null
  *
  * The three arms therefore disagree in SHAPE: the coroutine exec arm surfaces
@@ -42,7 +43,8 @@ use PHPUnit\Framework\TestCase;
  *   - exec arm  → array carrying `code` (int, non-zero) and `output`
  *     (string, '' under the `2>/dev/null` redirect) keys;
  *   - shell_exec arm → null;
- *   - both wrappers → '' inside a coroutine, null on the main stack.
+ *   - the three wrapper arms (runCoroutineAwareShellExec, runProbeCommand,
+ *     runCommand) → '' inside a coroutine, null on the main stack.
  *
  * Any of those drifting (exec returning false, output becoming null, the
  * wrapper normalising '' to null, ...) turns the named test red.

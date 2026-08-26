@@ -10,6 +10,7 @@ use Phlix\Media\Metadata\LibraryMetadataMatcher;
 use Phlix\Media\Metadata\MovieMetadataResolver;
 use Phlix\Tests\Support\Coroutine\RunsInCoroutine;
 use PHPUnit\Framework\TestCase;
+use Stringable;
 
 /**
  * S196 — the `LibraryMetadataMatcher` coroutine fork on both arms.

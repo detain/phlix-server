@@ -9,6 +9,35 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Changed
 
+- **Every coroutine-fork site in `src/` is now inventoried and its arms exercised (S196).**
+  The fork inventory is a machine-checked record in `tests/Unit/Support/Coroutine/ForkInventoryGuardTest.php`:
+  a TOKENIZED scan (`php_strip_whitespace`, temp-file form — docblocks can never count) over `src/` for the
+  two guarded idioms (`WorkerContext::inCoroutine()` calls and inline `\Swoole\Coroutine::getCid() > 0`
+  conditions) must EXACTLY equal the pinned map of **26 fork files / 32 arm-fork sites** — a new guarded
+  fork without a covering coroutine-entering test FAILS the guard (S345 rule 3), and a removed fork fails
+  it too, so the map cannot rot in either direction. Coverage state: **14 files newly covered** by S196
+  fork tests (HTTP-client family: Hub, Metadata, Trakt, Webhook, OAuth2, S3 — driven through the REAL
+  fork decision inside `Swoole\Coroutine\run` with the Workerman event loop reporting running via the
+  new `WithWorkerEventLoop` trait and only the workerman/http-client faked; `ComskipRunner` and
+  `Recorder` sleep forks and `SegmentProcessRegistry::cooperativeSleep()` proven by sibling-coroutine
+  interleave; `MediaAssetWorker` / `SimilarityWorker` fan-out arms and `LibraryMetadataMatcher`'s
+  bounded fan-out proven by their own arm-distinct log lines; `ChapterMarkerService::runCommand`'s
+  `Coroutine\System::exec` vs `shell_exec` arms proven by their measured outcome difference;
+  `RelayConsumer::dispatchWithDeadlineInner`'s deadline-sentinel arm proven by the 504→null vs
+  raw-504 outcome pair), each mutation-proven (arm-flip mutant → named test red → byte-verbatim
+  restore → green; the Hub/HttpClient proof re-run live in the tester pass); **4 files** covered by
+  earlier steps (StunClient S169/170, NatPmpClient/PortForwardService/UpnpIgdClient S197); **8
+  pre-existing coroutine tests re-measured** with execution evidence (the "possibly covered" 10 minus
+  the 2 DB context-read classes `PhlixMySQLConnection`/`PooledMySQLConnection`, which read `getCid()`
+  as a mutex-ownership assignment — their own tests carry cid-capture evidence): 7 with direct
+  behavioral evidence (sibling-interleave, in-flight counters, fake-client consultation, timer
+  deadline sentinel), 1 (`FfmpegRunner`) with coroutine-execution + result evidence whose arm is
+  NOT mutation-discriminating — recorded as the weakest evidence in the set. No behaviour change,
+  zero `src/` edits; no migration (next-free server migration stays 103). Divergence filed as S403
+  (allocation requested with this PR): `Coroutine\System::exec` maps an unexecutable command to
+  `['code' => 127, 'output' => '']` while `shell_exec` yields `null` — benign for every current
+  caller, filed rather than patched.
+
 - **The hwaccel segment-builder branch is proven end-to-end with a REAL hardware encode (S354).**
   `FfmpegRunner::buildHwaccelSegmentCommand()` — shipped by S56/S60 and verified only at the
   command-string level (no GPU available) — now executes for real, through the REAL

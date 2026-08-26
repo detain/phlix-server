@@ -153,4 +153,36 @@ final class CoroutineShellExecDivergenceContractTest extends TestCase
 
         $this->assertNull($output, 'the main-stack runCommand arm must report null');
     }
+
+    /**
+     * FfmpegRunner::runProbeCommand, inside a coroutine: '' — the fork
+     * inventory docblock records it alongside the wrapper, so the contract
+     * pins it too (same exec-arm mapping).
+     */
+    public function testRunProbeCommandReturnsEmptyStringInsideCoroutine(): void
+    {
+        $runner = new FfmpegRunner('/usr/bin/ffmpeg', '/usr/bin/ffprobe', '/tmp');
+        $method = new \ReflectionMethod(FfmpegRunner::class, 'runProbeCommand');
+        $method->setAccessible(true);
+
+        $output = $this->runInCoroutine(
+            static fn (): mixed => $method->invoke($runner, self::UNEXECUTABLE)
+        );
+
+        $this->assertSame('', $output, 'the coroutine probe arm must report the empty exec output');
+    }
+
+    /**
+     * FfmpegRunner::runProbeCommand, main stack: null via shell_exec.
+     */
+    public function testRunProbeCommandReturnsNullOnMainStack(): void
+    {
+        $runner = new FfmpegRunner('/usr/bin/ffmpeg', '/usr/bin/ffprobe', '/tmp');
+        $method = new \ReflectionMethod(FfmpegRunner::class, 'runProbeCommand');
+        $method->setAccessible(true);
+
+        $output = $method->invoke($runner, self::UNEXECUTABLE);
+
+        $this->assertNull($output, 'the main-stack probe arm must report null');
+    }
 }

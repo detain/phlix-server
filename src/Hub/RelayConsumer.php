@@ -830,6 +830,7 @@ final class RelayConsumer
         $this->logger->debug('RelayConsumer::openHubConnection() creating new AsyncTcpConnection', [
             'address' => $transport['address'],
             'use_tls' => $transport['useTls'],
+            'protocol' => $transport['protocol'],
         ]);
 
         $connection = new AsyncTcpConnection($transport['address'], $transport['context']);
@@ -859,7 +860,7 @@ final class RelayConsumer
      * without opening a live connection (38.1 acceptance).
      *
      * Workerman's {@see AsyncTcpConnection} needs the `ws://` scheme (its
-     * Websocket application protocol) with `transport='ssl'` for a wss tunnel —
+     * client `Ws` application protocol) with `transport='ssl'` for a wss tunnel —
      * `wss://` is NOT a registered transport, so the scheme is rewritten to
      * `ws://` for the ADDRESS and TLS is switched on via transport + context.
      * A `ws://` URL yields no SSL context and no ssl transport (plain tcp).

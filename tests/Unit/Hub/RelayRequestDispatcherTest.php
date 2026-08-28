@@ -67,14 +67,16 @@ final class RelayRequestDispatcherTest extends TestCase
     }
 
     /**
-     * The S238 pre-router image stage, wired with storages that resolve nothing.
+     * The S238/S301 pre-router byte stage, wired with storages that resolve
+     * nothing (and a container whose item lookup finds nothing).
      *
-     * None of the paths in THIS file are image paths, so the stage must decline
-     * every one of them and the dispatcher's behaviour below is unchanged. The
-     * doubles are here so a future edit that made the stage swallow an unrelated
-     * path would fail loudly rather than reach a real filesystem.
+     * None of the paths in THIS file are image/stream paths that the stage can
+     * serve, so the stage must decline or refuse them and the dispatcher's
+     * behaviour below is unchanged. The doubles are here so a future edit that
+     * made the stage swallow an unrelated path would fail loudly rather than
+     * reach a real filesystem.
      */
-    private function fastPaths(): PreRouterFastPaths
+    private function fastPaths(?ContainerInterface $container = null): PreRouterFastPaths
     {
         $artwork = $this->createMock(ArtworkStorage::class);
         $artwork->method('variantPath')->willReturn(null);
@@ -82,7 +84,7 @@ final class RelayRequestDispatcherTest extends TestCase
         $avatar = $this->createMock(AvatarStorage::class);
         $avatar->method('path')->willReturn(null);
 
-        return new PreRouterFastPaths($artwork, $avatar);
+        return new PreRouterFastPaths($artwork, $avatar, $container);
     }
 
     private function request(string $path, string $method = 'GET'): Request
@@ -177,13 +179,51 @@ final class RelayRequestDispatcherTest extends TestCase
     public static function allowedPaths(): iterable
     {
         yield 'the browse API'       => ['/api/v1/media'];
-        yield 'a media byte stream'  => ['/media/aaaaaaaa-bbbb/stream'];
         yield 'an HLS playlist'      => ['/hls/job-1/master.m3u8'];
         yield 'health'               => ['/health'];
         // Prefix-collision controls: a deny keyed on a loose `str_contains` would
         // wrongly kill these.
         yield 'a path merely containing dlna' => ['/api/v1/settings/dlna'];
         yield 'a sibling of /cds/'            => ['/cdsomething'];
+    }
+
+    /**
+     * S301 — the direct-play byte stream's relay expectation MOVED here.
+     *
+     * The stream path is now served by the pre-router stage (like the two image
+     * endpoints before it), so it must NOT reach the application router: an
+     * anonymous relayed stream request is refused 401 by the fast stage's own
+     * inline auth, and the router is never asked. RED ON REVERT: moving the
+     * stream path back out of {@see PreRouterFastPaths} makes the router answer
+     * (or 404) and this fails.
+     *
+     * @dataProvider streamPaths
+     */
+    public function test_the_stream_path_is_served_by_the_fast_stage_not_the_router(string $path, string $method): void
+    {
+        $app = $this->createMock(Application::class);
+        $app->expects(self::never())->method('dispatch');
+
+        $itemRepo = $this->createMock(\Phlix\Media\Library\ItemRepository::class);
+        $itemRepo->method('findById')->willReturn(null);
+        $container = $this->createMock(ContainerInterface::class);
+        $container->method('get')->willReturn($itemRepo);
+
+        $dispatcher = new RelayRequestDispatcher($app, $this->container(), $this->fastPaths($container));
+        $response = $dispatcher->dispatch($this->request($path, $method));
+
+        // Anonymous, no signature → the fast stage's own 401, never the router.
+        self::assertSame(401, $response->statusCode, $method . ' ' . $path . ' must be refused by the fast stage.');
+        self::assertSame('Unauthorized', $response->body);
+    }
+
+    /**
+     * @return iterable<string, array{0: string, 1: string}>
+     */
+    public static function streamPaths(): iterable
+    {
+        yield 'the direct-play byte stream (GET)'  => ['/media/aaaaaaaa-bbbb/stream', 'GET'];
+        yield 'the direct-play byte stream (HEAD)' => ['/media/aaaaaaaa-bbbb/stream', 'HEAD'];
     }
 
     /**

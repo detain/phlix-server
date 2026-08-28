@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlix\Tests\Unit\Server\Workerman;
+namespace Phlix\Tests\Unit\Server\Http\FastPath;
 
 use Phlix\Auth\AuthManager;
 use Phlix\Auth\SignedUrl;
@@ -10,21 +10,24 @@ use Phlix\Auth\UserProfileManager;
 use Phlix\Auth\UserRepository;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Library\RatingGate;
-use Phlix\Server\Core\Application;
-use Phlix\Server\Http\RequestAuthenticator;
-use Phlix\Server\Workerman\HttpHandler;
+use Phlix\Media\Storage\ArtworkStorage;
+use Phlix\Media\Storage\AvatarStorage;
+use Phlix\Server\Http\FastPath\PreRouterFastPaths;
+use Phlix\Server\Http\Request;
 use PHPUnit\Framework\TestCase;
 use Psr\Container\ContainerInterface;
-use Workerman\Protocols\Http\Request as WorkermanRequest;
-use Workerman\Protocols\Http\Response as WorkermanResponse;
 
 /**
- * Finding 1: the direct-play byte-serving route enforces the active profile's
- * parental cap BEFORE serving. A capped session requesting an over-cap item is
- * denied with a 404 (existence not confirmed, no bytes); a within-cap item and
- * the owner path proceed.
+ * S301 — the direct-play parental ACCESS gate, moved verbatim from
+ * `HttpHandler::serveMediaStream()` (Finding 1) into {@see PreRouterFastPaths}.
+ *
+ * A capped session requesting an over-cap item is denied with a 404 (existence
+ * not confirmed, no bytes); a within-cap item and the owner path proceed. Over
+ * the relay this is what finally FIRES for a mapped hub user: the hub UUID
+ * resolves to a server user (RelayIdentityResolver), and the gate resolves the
+ * filter from THAT user's own rows.
  */
-final class HttpHandlerStreamRatingGateTest extends TestCase
+final class PreRouterFastPathsRatingGateTest extends TestCase
 {
     private string $mediaPath = '';
 
@@ -59,12 +62,12 @@ final class HttpHandlerStreamRatingGateTest extends TestCase
      * @param array{allowedRatings: list<string>, allowUnrated: bool}|null $filter
      * @param array<string, string|null> $effective id => effective rating stub
      */
-    private function makeHandler(
+    private function makeFastPaths(
         ?array $item,
         ?array $filter,
         bool $isAdmin = false,
         array $effective = []
-    ): HttpHandler {
+    ): PreRouterFastPaths {
         $repo = $this->createMock(ItemRepository::class);
         $repo->method('findById')->willReturn($item);
         $repo->method('effectiveContentRatingsForIds')->willReturnCallback(
@@ -99,55 +102,53 @@ final class HttpHandlerStreamRatingGateTest extends TestCase
             }
         );
 
-        return new HttpHandler(
+        return new PreRouterFastPaths(
+            $this->createMock(ArtworkStorage::class),
+            $this->createMock(AvatarStorage::class),
             $container,
-            new RequestAuthenticator($this->createMock(AuthManager::class)),
-            sys_get_temp_dir(),
-            $this->createMock(Application::class),
-            null,
         );
     }
 
-    private function invokeAsUser(HttpHandler $handler, string $id, string $userId): ?WorkermanResponse
+    private function request(string $id, string $userId): Request
     {
-        $wr = new WorkermanRequest("GET /media/{$id}/stream HTTP/1.1\r\nHost: localhost\r\n\r\n");
-        $m = new \ReflectionMethod(HttpHandler::class, 'serveMediaStream');
-        $m->setAccessible(true);
-        /** @var WorkermanResponse|null $result */
-        $result = $m->invoke($handler, $wr, $userId);
-        return $result;
+        $request = new Request();
+        $request->method = 'GET';
+        $request->path = '/media/' . $id . '/stream';
+        $request->userId = $userId;
+
+        return $request;
     }
 
     public function testCappedSessionDeniedOverCapItem(): void
     {
-        $handler = $this->makeHandler(
+        $fastPaths = $this->makeFastPaths(
             ['id' => 'm1', 'type' => 'movie', 'content_rating' => 'R', 'path' => $this->mediaPath],
             $this->pg13Filter()
         );
 
-        $resp = $this->invokeAsUser($handler, 'm1', 'u1');
+        $resp = $fastPaths->dispatch($this->request('m1', 'u1'));
 
-        self::assertInstanceOf(WorkermanResponse::class, $resp);
-        self::assertSame(404, $resp->getStatusCode());
-        self::assertSame('Media not found', $resp->rawBody());
+        self::assertNotNull($resp);
+        self::assertSame(404, $resp->statusCode);
+        self::assertSame('Media not found', $resp->body);
     }
 
     public function testCappedSessionAllowedWithinCapItem(): void
     {
-        $handler = $this->makeHandler(
+        $fastPaths = $this->makeFastPaths(
             ['id' => 'm1', 'type' => 'movie', 'content_rating' => 'PG', 'path' => $this->mediaPath],
             $this->pg13Filter()
         );
 
-        $resp = $this->invokeAsUser($handler, 'm1', 'u1');
+        $resp = $fastPaths->dispatch($this->request('m1', 'u1'));
 
-        self::assertInstanceOf(WorkermanResponse::class, $resp);
-        self::assertSame(200, $resp->getStatusCode());
+        self::assertNotNull($resp);
+        self::assertSame(200, $resp->statusCode);
     }
 
     public function testCappedSessionDeniedEpisodeOfBlockedSeries(): void
     {
-        $handler = $this->makeHandler(
+        $fastPaths = $this->makeFastPaths(
             ['id' => 'ep1', 'type' => 'episode', 'content_rating' => null,
                 'parent_id' => 'show-1', 'path' => $this->mediaPath],
             $this->pg13Filter(),
@@ -155,13 +156,13 @@ final class HttpHandlerStreamRatingGateTest extends TestCase
             ['show-1' => 'R']
         );
 
-        $resp = $this->invokeAsUser($handler, 'ep1', 'u1');
-        self::assertSame(404, $resp?->getStatusCode());
+        $resp = $fastPaths->dispatch($this->request('ep1', 'u1'));
+        self::assertSame(404, $resp?->statusCode);
     }
 
     public function testCappedSessionAllowedEpisodeOfAllowedSeries(): void
     {
-        $handler = $this->makeHandler(
+        $fastPaths = $this->makeFastPaths(
             ['id' => 'ep1', 'type' => 'episode', 'content_rating' => null,
                 'parent_id' => 'show-1', 'path' => $this->mediaPath],
             $this->pg13Filter(),
@@ -169,19 +170,19 @@ final class HttpHandlerStreamRatingGateTest extends TestCase
             ['show-1' => 'PG']
         );
 
-        $resp = $this->invokeAsUser($handler, 'ep1', 'u1');
-        self::assertSame(200, $resp?->getStatusCode());
+        $resp = $fastPaths->dispatch($this->request('ep1', 'u1'));
+        self::assertSame(200, $resp?->statusCode);
     }
 
     public function testOwnerAdminNotGated(): void
     {
-        $handler = $this->makeHandler(
+        $fastPaths = $this->makeFastPaths(
             ['id' => 'm1', 'type' => 'movie', 'content_rating' => 'NC-17', 'path' => $this->mediaPath],
             $this->pg13Filter(),
             true
         );
 
-        $resp = $this->invokeAsUser($handler, 'm1', 'u1');
-        self::assertSame(200, $resp?->getStatusCode());
+        $resp = $fastPaths->dispatch($this->request('m1', 'u1'));
+        self::assertSame(200, $resp?->statusCode);
     }
 }

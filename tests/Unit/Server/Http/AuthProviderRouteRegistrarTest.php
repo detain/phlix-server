@@ -36,6 +36,7 @@ final class AuthProviderRouteRegistrarTest extends TestCase
             'unlink identity'  => ['DELETE', '/auth/identities/some-id'],
             'link oidc'        => ['GET', '/auth/identities/link/oidc'],
             'link ldap'        => ['POST', '/auth/identities/link/ldap'],
+            'link hub'         => ['POST', '/auth/identities/link/hub'],
             'link github'      => ['GET', '/auth/identities/link/github'],
         ];
     }

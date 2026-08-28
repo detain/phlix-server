@@ -952,6 +952,11 @@ try {
             static fn (\Phlix\Server\Http\Request $req): \Phlix\Server\Http\Response
                 => $relayDispatcher->dispatch($req),
             $relayStateStore,
+            // S301: server-side hub-user → server-user resolution. Resolved
+            // eagerly here (both deps are just a DB handle) so a wiring miss
+            // fails the fork boot rather than silently keeping every relayed
+            // request un-mapped.
+            $container->get(\Phlix\Hub\RelayIdentityResolver::class),
         );
 
         // SV-4.2 ([S-F23], X1): wire the segment-process registry so HTTP_CANCEL

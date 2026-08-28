@@ -292,7 +292,7 @@ final class AccountLinkControllerTest extends TestCase
         $identities = $this->createMock(UserIdentityRepository::class);
         $identities->expects($this->never())->method('create');
 
-        $controller = new AccountLinkController($identities, new AuthProviderRegistry());
+        $controller = new AccountLinkController($identities, new AuthProviderRegistry(), null, $this->existingUser());
 
         $request = new Request();
         $request->body = ['username' => 'alice', 'password' => 'pw'];
@@ -307,7 +307,7 @@ final class AccountLinkControllerTest extends TestCase
         $identities = $this->createMock(UserIdentityRepository::class);
         $identities->expects($this->never())->method('create');
 
-        $controller = new AccountLinkController($identities, new AuthProviderRegistry());
+        $controller = new AccountLinkController($identities, new AuthProviderRegistry(), null, $this->existingUser());
 
         $request = new Request();
         $request->userId = 'user-1';
@@ -327,7 +327,7 @@ final class AccountLinkControllerTest extends TestCase
         $identities->expects($this->never())->method('create');
 
         // Empty registry — LDAP not enabled/registered.
-        $controller = new AccountLinkController($identities, new AuthProviderRegistry());
+        $controller = new AccountLinkController($identities, new AuthProviderRegistry(), null, $this->existingUser());
 
         $request = new Request();
         $request->userId = 'user-1';
@@ -361,7 +361,7 @@ final class AccountLinkControllerTest extends TestCase
         $registry = new AuthProviderRegistry();
         $registry->registerProvider($this->ldapProviderWithSuccessfulBind());
 
-        $controller = new AccountLinkController($identities, $registry);
+        $controller = new AccountLinkController($identities, $registry, null, $this->existingUser());
 
         $request = new Request();
         $request->userId = 'user-1';
@@ -385,7 +385,7 @@ final class AccountLinkControllerTest extends TestCase
         $registry = new AuthProviderRegistry();
         $registry->registerProvider($this->ldapProviderWithFailedBind());
 
-        $controller = new AccountLinkController($identities, $registry);
+        $controller = new AccountLinkController($identities, $registry, null, $this->existingUser());
 
         $request = new Request();
         $request->userId = 'user-1';
@@ -416,7 +416,7 @@ final class AccountLinkControllerTest extends TestCase
         $registry = new AuthProviderRegistry();
         $registry->registerProvider($this->ldapProviderWithSuccessfulBind());
 
-        $controller = new AccountLinkController($identities, $registry);
+        $controller = new AccountLinkController($identities, $registry, null, $this->existingUser());
 
         $request = new Request();
         $request->userId = 'user-1';
@@ -445,7 +445,7 @@ final class AccountLinkControllerTest extends TestCase
         $registry = new AuthProviderRegistry();
         $registry->registerProvider($this->ldapProviderWithSuccessfulBind());
 
-        $controller = new AccountLinkController($identities, $registry);
+        $controller = new AccountLinkController($identities, $registry, null, $this->existingUser());
 
         $request = new Request();
         $request->userId = 'user-1';
@@ -484,7 +484,7 @@ final class AccountLinkControllerTest extends TestCase
         $registry = new AuthProviderRegistry();
         $registry->registerProvider($this->ldapProviderWithSuccessfulBind());
 
-        $controller = new AccountLinkController($identities, $registry);
+        $controller = new AccountLinkController($identities, $registry, null, $this->existingUser());
 
         $request = new Request();
         $request->userId = 'user-1';
@@ -523,7 +523,7 @@ final class AccountLinkControllerTest extends TestCase
         $registry = new AuthProviderRegistry();
         $registry->registerProvider($this->ldapProviderWithSuccessfulBind());
 
-        $controller = new AccountLinkController($identities, $registry);
+        $controller = new AccountLinkController($identities, $registry, null, $this->existingUser());
 
         $request = new Request();
         $request->userId = 'user-1';
@@ -561,7 +561,7 @@ final class AccountLinkControllerTest extends TestCase
         $registry = new AuthProviderRegistry();
         $registry->registerProvider($this->ldapProviderWithSuccessfulBind());
 
-        $controller = new AccountLinkController($identities, $registry);
+        $controller = new AccountLinkController($identities, $registry, null, $this->existingUser());
 
         $request = new Request();
         $request->userId = 'user-1';
@@ -634,15 +634,29 @@ final class AccountLinkControllerTest extends TestCase
         return $validator;
     }
 
+    /**
+     * A UserRepository whose findById resolves the test's 'user-1' account —
+     * the link endpoints require the principal to be a REAL server account
+     * (S301 review r1 Finding 2).
+     */
+    private function existingUser(): UserRepository
+    {
+        $repo = $this->createMock(UserRepository::class);
+        $repo->method('findById')->willReturn(['id' => 'user-1', 'username' => 'user-1']);
+
+        return $repo;
+    }
+
     private function hubLinkController(
         UserIdentityRepository $identities,
-        ?HubJwtValidatorInterface $validator = null
+        ?HubJwtValidatorInterface $validator = null,
+        ?UserRepository $userRepository = null
     ): AccountLinkController {
         return new AccountLinkController(
             $identities,
             new AuthProviderRegistry(),
             null,
-            null,
+            $userRepository ?? $this->existingUser(),
             $validator,
         );
     }
@@ -667,6 +681,35 @@ final class AccountLinkControllerTest extends TestCase
         $request->body = ['hub_token' => 'eyJ...'];
 
         $response = $controller->linkHub($request, []);
+
+        $this->assertSame(401, $response->statusCode);
+    }
+
+    /**
+     * S301 review r1 Finding 2 (the relayed-unmapped case): a principal that is
+     * NOT a real server account (a relayed hub UUID with no linkage) must be
+     * refused before anything links — the user_identities FK would otherwise
+     * turn the attempt into a 500.
+     */
+    public function test_link_hub_refuses_principal_that_is_not_a_real_server_account(): void
+    {
+        $identities = $this->createMock(UserIdentityRepository::class);
+        $identities->expects($this->never())->method('create');
+        $identities->expects($this->never())->method('findByProviderExternalId');
+
+        $missing = $this->createMock(UserRepository::class);
+        $missing->method('findById')->willReturn(null);
+
+        $claims = new HubUserClaims(
+            userId: 'hub-uuid-1',
+            serverId: 'srv-1',
+            subject: 'hub-uuid-1',
+            issuer: 'phlix-hub',
+            expiresAt: time() + 3600,
+        );
+        $controller = $this->hubLinkController($identities, $this->hubValidator($claims), $missing);
+
+        $response = $controller->linkHub($this->hubLinkRequest('verified-jwt'), []);
 
         $this->assertSame(401, $response->statusCode);
     }

@@ -1017,6 +1017,44 @@ class RelayConsumerTest extends TestCase
         $this->assertSame('hub-relay', $captured->userId);
     }
 
+    /**
+     * S301 review r1 Finding 1: a relayed 206 window carries its Content-Range.
+     *
+     * On the direct transport Workerman's encoder derives `Content-Range` from
+     * `withFile()`'s offset/length at encode time; the tunnel head is built
+     * from `$response->headers` verbatim (no encoder), so without this arm a
+     * ranged direct-play seek over the relay would reach the client as a 206
+     * with no range information. The hub PRESERVES `Content-Range` — it does
+     * not synthesize it.
+     */
+    public function test_relayed_range_response_carries_content_range_in_the_head(): void
+    {
+        $file = sys_get_temp_dir() . '/phlix-relay-range-' . bin2hex(random_bytes(6)) . '.mp4';
+        file_put_contents($file, 'ABCDEFGHIJKLMNOP');
+
+        try {
+            $dispatcher = static fn (\Phlix\Server\Http\Request $req): \Phlix\Server\Http\Response
+                => (new \Phlix\Server\Http\Response())
+                    ->status(206)
+                    ->header('Content-Type', 'video/mp4')
+                    ->withFile($file, 4, 8);
+
+            $consumer = $this->createConsumer(null, $dispatcher);
+            $this->activate($consumer);
+
+            $envelope = new \Phlix\Shared\Relay\RelayHttpRequest('GET', '/media/m1/stream', '', ['Range' => 'bytes=4-11'], '');
+            $this->hub->fireMessage($this->codec->encode(RelayFrameType::HTTP_REQUEST, 0x80000005, $envelope->toJson()));
+
+            $result = $this->collectHttpResponse();
+
+            $this->assertSame(206, $result['status']);
+            $this->assertSame('bytes 4-11/16', $result['headers']['Content-Range'] ?? null);
+            $this->assertSame('EFGHIJKL', $result['body']);
+        } finally {
+            @unlink($file);
+        }
+    }
+
     // -----------------------------------------------------------------------
     // S301 — the re-derived S247 identity pin: the server resolves the
     // authenticated relay principal to a server user ENTIRELY from its own
@@ -1072,9 +1110,11 @@ class RelayConsumerTest extends TestCase
     /**
      * RED ON A PROFILE IDENTITY STARTING TO CROSS (the S247 pin, re-derived):
      * the tunnel carries ONLY the authenticated relay principal. A profile
-     * marker smuggled into the envelope changes nothing — it is neither used
-     * as the identity nor forwarded. Mutating `buildRequest()` to read a
-     * profile claim (or letting one survive into the headers) reddens this.
+     * marker smuggled into the envelope is not just ignored — it REFUSES the
+     * identity mapping entirely (with a warning), so an unexplained
+     * `x-phlix-relay-*` marker can never influence identity, and it is never
+     * forwarded. Mutating `buildRequest()` to read a profile claim (or letting
+     * one survive into the headers) reddens this.
      */
     public function test_a_profile_identity_never_crosses_the_tunnel(): void
     {
@@ -1086,6 +1126,7 @@ class RelayConsumerTest extends TestCase
         };
 
         $identities = $this->createMock(\Phlix\Auth\UserIdentityRepository::class);
+        // The mapping EXISTS — the tripwire must refuse it anyway.
         $identities->method('findByProviderExternalId')
             ->with('hub', '', 'user-42')
             ->willReturn(['user_id' => 'server-user-9']);
@@ -1115,10 +1156,10 @@ class RelayConsumerTest extends TestCase
 
         $this->assertNotNull($captured);
         $this->assertSame(
-            'server-user-9',
+            'user-42',
             $captured->userId,
-            'the userId must come from the SERVER-side mapping of the authenticated principal — '
-            . 'a profile claim must never become the identity',
+            'an unexpected relay marker must REFUSE the identity mapping — no server identity may '
+            . 'be granted while a profile claim is anywhere on the tunnel',
         );
         foreach ($captured->headers as $name => $_value) {
             $this->assertStringNotContainsStringIgnoringCase(

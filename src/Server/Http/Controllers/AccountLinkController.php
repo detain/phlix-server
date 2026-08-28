@@ -278,6 +278,13 @@ final class AccountLinkController
             return $this->unauthorized();
         }
 
+        // S301 review r1 Finding 2: the principal must be a REAL server account
+        // (same exposure as linkHub — a relayed principal is not a `users` row
+        // and linking to it would 500 on the user_identities FK).
+        if (!$this->currentUserIsRealAccount($userId)) {
+            return $this->unauthorized();
+        }
+
         $body = $request->body;
         $username = is_string($body['username'] ?? null) ? $body['username'] : '';
         $password = is_string($body['password'] ?? null) ? $body['password'] : '';
@@ -337,6 +344,26 @@ final class AccountLinkController
     }
 
     /**
+     * S301 review r1 Finding 2: the current user must be a REAL server account
+     * before any identity row can be linked to it. AuthMiddleware trusts the
+     * presence of a resolved principal — and a RELAYED principal that maps to
+     * no server user (a hub UUID, or the literal 'hub-relay') passes that
+     * presence check while not being a `users` row. Linking to it would trip
+     * the `user_identities` FK (migration 092) as a 500 instead of a clean
+     * refusal. Fails SAFE (refuses) when the repository is unavailable.
+     *
+     * @param string $userId The trusted current-user id.
+     */
+    private function currentUserIsRealAccount(string $userId): bool
+    {
+        if ($this->userRepository === null) {
+            return false;
+        }
+
+        return $this->userRepository->findById($userId) !== null;
+    }
+
+    /**
      * POST /auth/identities/link/hub (AUTHENTICATED — S301).
      *
      * Body: `{hub_token}` — a hub-issued JWT. On cryptographic verification
@@ -367,6 +394,13 @@ final class AccountLinkController
     {
         $userId = $this->currentUserId($request);
         if ($userId === null) {
+            return $this->unauthorized();
+        }
+
+        // S301 review r1 Finding 2: the principal must be a REAL server account
+        // — a relayed principal with no server-side linkage is not a `users`
+        // row, and linking to it would 500 on the FK instead of refusing.
+        if (!$this->currentUserIsRealAccount($userId)) {
             return $this->unauthorized();
         }
 

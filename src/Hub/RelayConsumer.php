@@ -33,6 +33,7 @@ use function is_array;
 use function is_string;
 use function json_decode;
 use function parse_str;
+use function sprintf;
 use function str_starts_with;
 use function strcasecmp;
 use function stripos;
@@ -1710,7 +1711,7 @@ final class RelayConsumer
         // never crosses the tunnel and is never read here — pinned by the
         // re-derived S247 crossing test.
         $relayUser = $this->headerValue($envelope->headers, 'x-phlix-relay-user');
-        $serverUserId = $this->identityResolver?->resolve($relayUser);
+        $serverUserId = $this->resolveRelayIdentity($envelope, $relayUser);
         $request->userId = $serverUserId ?? ($relayUser !== '' ? $relayUser : 'hub-relay');
 
         // Client IP comes from the relay session, never from the producer-
@@ -1741,6 +1742,49 @@ final class RelayConsumer
         }
 
         return $out;
+    }
+
+    /**
+     * Resolve the authenticated relay principal to a server user id (S301).
+     *
+     * The mapping is applied ONLY when the envelope carries exactly the two
+     * known hub-stamped trust markers (`x-phlix-relay` + `x-phlix-relay-user`).
+     * An UNKNOWN relay marker (e.g. a `x-phlix-relay-profile` claim — which
+     * the identity direction forbids ever crossing the tunnel) trips a
+     * warning and REFUSES the mapping: the request keeps its raw principal and
+     * no server identity is granted. That is the production side of the
+     * re-derived S247 pin — a hub-side strip regression or a second tunnel
+     * producer becomes visible in the logs AND cannot silently widen identity.
+     *
+     * @param RelayHttpRequest $envelope The raw relay envelope.
+     * @param string           $relayUser The `x-phlix-relay-user` value ('' when absent).
+     *
+     * @return string|null The linked server user id, or null when unmapped /
+     *                     when an unknown trust marker refuses the mapping.
+     */
+    private function resolveRelayIdentity(RelayHttpRequest $envelope, string $relayUser): ?string
+    {
+        $unexpected = [];
+        foreach ($envelope->headers as $name => $_value) {
+            $lower = strtolower((string) $name);
+            if (
+                str_starts_with($lower, 'x-phlix-relay')
+                && $lower !== 'x-phlix-relay'
+                && $lower !== 'x-phlix-relay-user'
+            ) {
+                $unexpected[] = $lower;
+            }
+        }
+
+        if ($unexpected !== []) {
+            $this->logger->warning('RelayConsumer: unexpected relay trust marker refused the identity mapping', [
+                'markers' => $unexpected,
+                'relay_user' => $relayUser,
+            ]);
+            return null;
+        }
+
+        return $this->identityResolver?->resolve($relayUser);
     }
 
     /**
@@ -1797,6 +1841,39 @@ final class RelayConsumer
     private function sendHttpResponse(int $requestId, ServerResponse $response): void
     {
         $headers = $response->headers;
+
+        // S301: a relayed 206 window must carry its Content-Range. On the direct
+        // transport Workerman's encoder derives it from withFile()'s offset/length
+        // at encode time; the tunnel head is built from $response->headers
+        // VERBATIM (no encoder), so a ranged direct-play seek over the relay
+        // would otherwise reach the client as a bodyless 206 with no range
+        // information. Mirror Response::finalizeFileHeaders() here — computed
+        // into the LOCAL copy only, so the response object stays untouched and
+        // the direct transport's own emission cannot duplicate the field.
+        if ($response->filePath !== null && ($response->fileOffset > 0 || $response->fileLength > 0)) {
+            $hasContentRange = false;
+            foreach ($headers as $name => $_value) {
+                if (strcasecmp($name, 'Content-Range') === 0) {
+                    $hasContentRange = true;
+                    break;
+                }
+            }
+            if (!$hasContentRange) {
+                $fileSize = (int) @filesize($response->filePath);
+                $bodyLen = $response->fileLength > 0
+                    ? $response->fileLength
+                    : $fileSize - $response->fileOffset;
+                if ($fileSize > 0 && $bodyLen > 0) {
+                    $headers['Content-Range'] = sprintf(
+                        'bytes %d-%d/%d',
+                        $response->fileOffset,
+                        $response->fileOffset + $bodyLen - 1,
+                        $fileSize,
+                    );
+                }
+            }
+        }
+
         $bodyLength = $this->computeBodyLength($response);
 
         $head = new RelayHttpResponseHead($response->statusCode, $headers, $bodyLength);

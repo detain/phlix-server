@@ -16,7 +16,7 @@ namespace Phlix\Server\Http\Controllers;
  *
  * Extracted from {@see TranscodeFileServer} so it can be invoked directly by
  * callers that are not themselves consumers of the trait (notably
- * {@see \Phlix\Server\Workerman\HttpHandler::serveMediaStream()}). Calling a
+ * {@see \Phlix\Server\Http\FastPath\PreRouterFastPaths::serveMediaStream()}). Calling a
  * static method on a trait (`Trait::method()`) is deprecated as of PHP 8.1;
  * a standalone final class is the correct home for a stateless utility.
  */

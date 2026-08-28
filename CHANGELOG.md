@@ -9,6 +9,20 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Changed
 
+- **Parental-controls creates now accept the shipped mobile/roku camelCase spellings additively (S234).**
+  `ProfileTagController::createForProfile` accepts a third tag-type spelling — `tagType` — alongside the
+  S233 pair (`tag_type` from the admin SPA, `type` from the console client); `AccessScheduleController::createForProfile`
+  accepts `startTime`/`endTime`/`daysOfWeek`/`isActive` alongside `start_time`/`end_time`/`days_of_week`/`is_active`.
+  Both handlers were 400-ing every mobile/roku parental-controls create because those clients ship camelCase
+  bodies. The snake_case spelling wins when both are present (an explicitly invalid snake_case value is rejected,
+  never shadowed — the S233 precedence property). The canonical declared shape is snake_case (@phlix/contracts
+  v0.4.4); the camelCase acceptance exists so shipped client builds keep working against new servers. Every
+  camelCase spelling is pinned separately in `ParentalControlsCreateContractTest` (S234 section) — dropping
+  that spelling alone reddens (mutation-verified per key, incl. `isActive: false` not defaulting to true).
+  No migration; no authz change; response shapes unchanged.
+
+### Changed
+
 - **Every coroutine-fork site in `src/` is now inventoried and its arms exercised (S196).**
   The fork inventory is a machine-checked record in `tests/Unit/Support/Coroutine/ForkInventoryGuardTest.php`:
   a TOKENIZED scan (`php_strip_whitespace`, temp-file form — docblocks can never count) over `src/` for the

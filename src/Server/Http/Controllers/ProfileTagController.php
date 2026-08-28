@@ -90,9 +90,11 @@ final class ProfileTagController
      *
      * @param Request               $request The HTTP request with body:
      *                                       - tag: string (required)
-     *                                       - tag_type | type: string (required,
-     *                                         'blocked' or 'allowed'; see the
-     *                                         two-spelling note below)
+     *                                       - tag_type | type | tagType: string
+     *                                         (required, 'blocked' or 'allowed';
+     *                                         three-spelling note in the handler:
+     *                                         SPA posts `tag_type`, console posts
+     *                                         `type`, mobile/roku post `tagType`)
      * @param array<string, string> $params  Path parameters:
      *                                       - profileId: The profile ID.
      *
@@ -124,11 +126,24 @@ final class ProfileTagController
         // "tidy" this back to a single key. `tag_type` is preferred when present
         // so an explicitly invalid `tag_type` is rejected rather than silently
         // falling through to a stale `type`.
-        $type = $this->validateTagType($data['tag_type'] ?? $data['type'] ?? null);
+        //
+        // S234 defect (a): the shipped mobile + roku clients post `{tag, tagType}`
+        // — the camelCase spelling of the same field — so this handler now accepts
+        // THREE spellings, additively: `tag_type` (SPA), `type` (console), and
+        // `tagType` (mobile/roku). `tagType` is the LAST fallback, after `type`,
+        // so the S233 precedence property is preserved: an explicitly invalid
+        // higher-precedence value is rejected, never shadowed by a stale lower one.
+        // The canonical declared shape is `tag_type` (see @phlix/contracts v0.4.4);
+        // the camelCase acceptance exists so shipped client builds keep working
+        // against a new server, and is pinned by the S234 section of
+        // ParentalControlsCreateContractTest.
+        $type = $this->validateTagType(
+            $data['tag_type'] ?? $data['type'] ?? $data['tagType'] ?? null,
+        );
 
         if ($tag === null || $type === null) {
             return (new Response())->status(400)->json([
-                'error' => 'Missing or invalid required fields: tag, tag_type (or type)',
+                'error' => 'Missing or invalid required fields: tag, tag_type (or type, or tagType)',
             ]);
         }
 

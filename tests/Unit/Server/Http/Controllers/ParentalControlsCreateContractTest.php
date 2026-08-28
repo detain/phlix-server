@@ -44,6 +44,24 @@ use Workerman\MySQL\Connection;
  * brand-new console `ParentalControlsScreen` calls the same method. Both
  * directions are pinned below, so a later "tidy-up" to a single key reddens.
  *
+ * ## S234 — the camelCase spellings the shipped native clients post
+ *
+ * S234 extends the same additive principle to the mobile + roku clients, which
+ * post camelCase bodies that 400'd under the S233 spellings:
+ *
+ *  - **mobile** (`phlix-mobile-client/src/api/ParentalControlsManager.ts`:
+ *    `addTag` posts `{ tag, tagType }`; `createSchedule` posts
+ *    `{ name, startTime, endTime, daysOfWeek, isActive }`).
+ *  - **roku** (`phlix-roku-client/components/ParentalControlsScene.brs`:
+ *    `OnAddTag` posts `{ tag, tagType }`; `OnAddSchedule` posts the same
+ *    camelCase schedule keys).
+ *
+ * Every camelCase spelling is pinned separately so that dropping THAT spelling
+ * alone reddens (an all-camelCase fixture would also redden, but would not say
+ * WHICH key was dropped). Precedence pins mirror S233's: the snake_case
+ * spelling wins when both are present, so an explicitly invalid snake_case
+ * value is rejected rather than silently shadowed by a stale camelCase one.
+ *
  * ## Disjoint pins
  *
  * - **(a) body field** — the `type` / `tag_type` spelling. Asserted on the status
@@ -387,6 +405,267 @@ final class ParentalControlsCreateContractTest extends TestCase
         // Spelt out because `(int) '7318a4c2-…'` is 7318, not 0 — a value that
         // looks far more like a plausible id than 0 does.
         $this->assertNotSame(7318, $profileId);
+    }
+
+    // ------------------------------------------------------------------
+    // S234 — the camelCase spellings the shipped mobile/roku clients post
+    // ------------------------------------------------------------------
+
+    /**
+     * The exact body `phlix-mobile-client`'s `addTag` and
+     * `phlix-roku-client`'s `OnAddTag` put on the wire (both transcribe to
+     * `{ tag, tagType }`). This is the pin for the `tagType` spelling: if the
+     * handler ever drops it, THIS test reddens while the S233 pins stay green.
+     */
+    public function testTheMobileAndRokuTagPayloadCreatesATag(): void
+    {
+        $response = $this->tags()->createForProfile(
+            $this->request(self::USER_A, ['tag' => 'violence', 'tagType' => 'blocked']),
+            ['profileId' => self::PROFILE_A1],
+        );
+
+        $this->assertSame(201, $response->statusCode);
+        $this->assertSame(1, $this->decode($response)['tag_id']);
+
+        $inserts = $this->statementsMatching('INSERT INTO profile_tags');
+        $this->assertCount(1, $inserts);
+        $this->assertSame([self::PROFILE_A1, 'violence', 'blocked'], $inserts[0]['params']);
+    }
+
+    /**
+     * The exact body `phlix-mobile-client`'s `createSchedule` and
+     * `phlix-roku-client`'s `OnAddSchedule` put on the wire — every schedule
+     * key camelCase. This is the pin for the camelCase schedule surface as a
+     * whole (the four per-key pins below attribute a red to the dropped key).
+     */
+    public function testTheMobileAndRokuSchedulePayloadCreatesASchedule(): void
+    {
+        $response = $this->schedules()->createForProfile(
+            $this->request(self::USER_A, [
+                'name' => 'Bedtime',
+                'startTime' => '20:00',
+                'endTime' => '22:00',
+                'daysOfWeek' => ['mon', 'tue'],
+                'isActive' => true,
+            ]),
+            ['profileId' => self::PROFILE_A1],
+        );
+
+        $this->assertSame(201, $response->statusCode);
+        $this->assertSame(1, $this->decode($response)['schedule_id']);
+
+        $inserts = $this->statementsMatching('INSERT INTO access_schedules');
+        $this->assertCount(1, $inserts);
+        // The service receives the raw bool (the in-memory fixture's `answer()`
+        // normalises it to 1 for its own row; the recorded statement keeps it).
+        $this->assertSame(
+            [self::PROFILE_A1, 'Bedtime', '20:00:00', '22:00:00', 'mon,tue', true],
+            $inserts[0]['params'],
+        );
+    }
+
+    /**
+     * Per-spelling pins: each camelCase schedule key alone (with the rest
+     * snake_case) must be accepted, so dropping ONE key's acceptance reddens
+     * exactly one test.
+     */
+    public function testTheCamelCaseStartTimeSpellingIsAccepted(): void
+    {
+        $response = $this->schedules()->createForProfile(
+            $this->request(self::USER_A, [
+                'name' => 'Bedtime',
+                'startTime' => '20:00',
+                'end_time' => '22:00',
+                'days_of_week' => ['mon', 'tue'],
+                'is_active' => true,
+            ]),
+            ['profileId' => self::PROFILE_A1],
+        );
+
+        $this->assertSame(201, $response->statusCode);
+        $this->assertSame(1, $this->decode($response)['schedule_id']);
+    }
+
+    public function testTheCamelCaseEndTimeSpellingIsAccepted(): void
+    {
+        $response = $this->schedules()->createForProfile(
+            $this->request(self::USER_A, [
+                'name' => 'Bedtime',
+                'start_time' => '20:00',
+                'endTime' => '22:00',
+                'days_of_week' => ['mon', 'tue'],
+                'is_active' => true,
+            ]),
+            ['profileId' => self::PROFILE_A1],
+        );
+
+        $this->assertSame(201, $response->statusCode);
+        $this->assertSame(1, $this->decode($response)['schedule_id']);
+    }
+
+    public function testTheCamelCaseDaysOfWeekSpellingIsAccepted(): void
+    {
+        $response = $this->schedules()->createForProfile(
+            $this->request(self::USER_A, [
+                'name' => 'Bedtime',
+                'start_time' => '20:00',
+                'end_time' => '22:00',
+                'daysOfWeek' => ['mon', 'tue'],
+                'is_active' => true,
+            ]),
+            ['profileId' => self::PROFILE_A1],
+        );
+
+        $this->assertSame(201, $response->statusCode);
+        $this->assertSame(1, $this->decode($response)['schedule_id']);
+    }
+
+    public function testTheCamelCaseIsActiveSpellingIsAccepted(): void
+    {
+        $response = $this->schedules()->createForProfile(
+            $this->request(self::USER_A, [
+                'name' => 'Bedtime',
+                'start_time' => '20:00',
+                'end_time' => '22:00',
+                'days_of_week' => ['mon', 'tue'],
+                'isActive' => false,
+            ]),
+            ['profileId' => self::PROFILE_A1],
+        );
+
+        $this->assertSame(201, $response->statusCode);
+        $this->assertSame(1, $this->decode($response)['schedule_id']);
+
+        // `false` (not `true`) is the load-bearing part: the handler defaults
+        // `is_active` to true, so a `true` fixture would stay green if the
+        // `?? $data['isActive']` fallback were dropped. Asserting the recorded
+        // param pins the camelCase `false` is HONOURED rather than defaulted.
+        $inserts = $this->statementsMatching('INSERT INTO access_schedules');
+        $this->assertCount(1, $inserts);
+        $this->assertSame(
+            [self::PROFILE_A1, 'Bedtime', '20:00:00', '22:00:00', 'mon,tue', false],
+            $inserts[0]['params'],
+        );
+    }
+
+    /**
+     * The camelCase spellings must not widen the VALUE vocabulary: an invalid
+     * value is refused under the camelCase spelling just as under snake_case.
+     */
+    public function testAnInvalidTagTypeIsRefusedUnderTheCamelCaseSpelling(): void
+    {
+        $response = $this->tags()->createForProfile(
+            $this->request(self::USER_A, ['tag' => 'violence', 'tagType' => 'bogus']),
+            ['profileId' => self::PROFILE_A1],
+        );
+
+        $this->assertSame(400, $response->statusCode);
+        $this->assertSame([], $this->statementsMatching('INSERT INTO profile_tags'));
+    }
+
+    public function testAnInvalidStartTimeIsRefusedUnderTheCamelCaseSpelling(): void
+    {
+        $response = $this->schedules()->createForProfile(
+            $this->request(self::USER_A, [
+                'name' => 'Bedtime',
+                'startTime' => '25:99',
+                'end_time' => '22:00',
+                'days_of_week' => ['mon', 'tue'],
+                'is_active' => true,
+            ]),
+            ['profileId' => self::PROFILE_A1],
+        );
+
+        $this->assertSame(400, $response->statusCode);
+        $this->assertSame([], $this->statementsMatching('INSERT INTO access_schedules'));
+    }
+
+    public function testAnInvalidDaysOfWeekIsRefusedUnderTheCamelCaseSpelling(): void
+    {
+        $response = $this->schedules()->createForProfile(
+            $this->request(self::USER_A, [
+                'name' => 'Bedtime',
+                'start_time' => '20:00',
+                'end_time' => '22:00',
+                'daysOfWeek' => ['bogus'],
+                'is_active' => true,
+            ]),
+            ['profileId' => self::PROFILE_A1],
+        );
+
+        $this->assertSame(400, $response->statusCode);
+        $this->assertSame([], $this->statementsMatching('INSERT INTO access_schedules'));
+    }
+
+    /**
+     * Precedence (mirrors the S233 tag precedence pin): snake_case wins when
+     * both spellings are present, so an explicitly invalid snake_case value is
+     * rejected rather than silently shadowed by a stale camelCase one.
+     */
+    public function testAnInvalidTagTypeDoesNotFallThroughToACamelCaseTagTypeKey(): void
+    {
+        $response = $this->tags()->createForProfile(
+            $this->request(self::USER_A, [
+                'tag' => 'violence',
+                'tag_type' => 'bogus',
+                'tagType' => 'blocked',
+            ]),
+            ['profileId' => self::PROFILE_A1],
+        );
+
+        $this->assertSame(400, $response->statusCode);
+        $this->assertSame([], $this->statementsMatching('INSERT INTO profile_tags'));
+    }
+
+    public function testAValidTagTypeWinsOverAnInvalidCamelCaseTagTypeKey(): void
+    {
+        $response = $this->tags()->createForProfile(
+            $this->request(self::USER_A, [
+                'tag' => 'violence',
+                'tag_type' => 'blocked',
+                'tagType' => 'bogus',
+            ]),
+            ['profileId' => self::PROFILE_A1],
+        );
+
+        $this->assertSame(201, $response->statusCode);
+        $this->assertSame(1, $this->decode($response)['tag_id']);
+    }
+
+    public function testAnInvalidSnakeStartTimeDoesNotFallThroughToACamelCaseStartTime(): void
+    {
+        $response = $this->schedules()->createForProfile(
+            $this->request(self::USER_A, [
+                'name' => 'Bedtime',
+                'start_time' => '25:99',
+                'startTime' => '20:00',
+                'end_time' => '22:00',
+                'days_of_week' => ['mon', 'tue'],
+                'is_active' => true,
+            ]),
+            ['profileId' => self::PROFILE_A1],
+        );
+
+        $this->assertSame(400, $response->statusCode);
+        $this->assertSame([], $this->statementsMatching('INSERT INTO access_schedules'));
+    }
+
+    public function testAValidSnakeStartTimeWinsOverAnInvalidCamelCaseStartTime(): void
+    {
+        $response = $this->schedules()->createForProfile(
+            $this->request(self::USER_A, [
+                'name' => 'Bedtime',
+                'start_time' => '20:00',
+                'startTime' => '25:99',
+                'end_time' => '22:00',
+                'days_of_week' => ['mon', 'tue'],
+                'is_active' => true,
+            ]),
+            ['profileId' => self::PROFILE_A1],
+        );
+
+        $this->assertSame(201, $response->statusCode);
+        $this->assertSame(1, $this->decode($response)['schedule_id']);
     }
 
     // ------------------------------------------------------------------

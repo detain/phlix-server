@@ -105,10 +105,15 @@ final class AccessScheduleController
      *
      * @param Request               $request The HTTP request with body:
      *                                       - name: string (required)
-     *                                       - start_time: string (required, HH:MM:SS)
-     *                                       - end_time: string (required, HH:MM:SS)
-     *                                       - days_of_week: array<string> (required)
-     *                                       - is_active: bool (optional, default true)
+     *                                       - start_time | startTime: string
+     *                                         (required, HH:MM:SS; mobile/roku
+     *                                         post the camelCase spelling)
+     *                                       - end_time | endTime: string
+     *                                         (required, HH:MM:SS)
+     *                                       - days_of_week | daysOfWeek:
+     *                                         array<string> (required)
+     *                                       - is_active | isActive: bool
+     *                                         (optional, default true)
      * @param array<string, string> $params  Path parameters:
      *                                       - profileId: The profile ID.
      *
@@ -130,9 +135,19 @@ final class AccessScheduleController
 
         // Validate required fields
         $name = is_string($data['name'] ?? null) && $data['name'] !== '' ? $data['name'] : null;
-        $startTime = $this->validateTime($data['start_time'] ?? null);
-        $endTime = $this->validateTime($data['end_time'] ?? null);
-        $daysOfWeek = $this->validateDaysOfWeek($data['days_of_week'] ?? null);
+        // S234: the shipped mobile + roku clients post camelCase schedule bodies
+        // ({startTime, endTime, daysOfWeek, isActive}) while the SPA/console post
+        // snake_case ({start_time, end_time, days_of_week, is_active} — the column
+        // names). The snake_case spelling is preferred when present, mirroring the
+        // S233 tag precedence: an explicitly invalid snake_case value is rejected
+        // rather than silently falling through to a stale camelCase one. The
+        // canonical declared shape is snake_case (see @phlix/contracts v0.4.4);
+        // the camelCase acceptance exists so shipped client builds keep working
+        // against a new server, and is pinned by the S234 section of
+        // ParentalControlsCreateContractTest.
+        $startTime = $this->validateTime($data['start_time'] ?? $data['startTime'] ?? null);
+        $endTime = $this->validateTime($data['end_time'] ?? $data['endTime'] ?? null);
+        $daysOfWeek = $this->validateDaysOfWeek($data['days_of_week'] ?? $data['daysOfWeek'] ?? null);
 
         if ($name === null || $startTime === null || $endTime === null || $daysOfWeek === null) {
             return (new Response())->status(400)->json([
@@ -140,7 +155,7 @@ final class AccessScheduleController
             ]);
         }
 
-        $isActive = (bool) ($data['is_active'] ?? true);
+        $isActive = (bool) ($data['is_active'] ?? $data['isActive'] ?? true);
 
         $scheduleId = $this->accessScheduleService->createSchedule(
             $profileId,

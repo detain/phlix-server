@@ -833,7 +833,9 @@ final class RelayConsumer
         ]);
 
         $connection = new AsyncTcpConnection($transport['address'], $transport['context']);
-        $connection->protocol = \Workerman\Protocols\Websocket::class;
+        // S301 live-proof finding: the CLIENT-side protocol is Ws, never
+        // Websocket (see {@see resolveHubTransport()} for the measured proof).
+        $connection->protocol = $transport['protocol'];
         if ($transport['useTls']) {
             $connection->transport = 'ssl';
         }
@@ -850,7 +852,8 @@ final class RelayConsumer
 
     /**
      * Pure transport decision for the hub tunnel: map the resolved WS URL to the
-     * Workerman connection address, whether TLS is used, and the SSL context.
+     * Workerman connection address, whether TLS is used, the SSL context, and
+     * the application protocol class.
      *
      * Extracted so the TLS-vs-scheme choice can be asserted in a unit test
      * without opening a live connection (38.1 acceptance).
@@ -861,9 +864,19 @@ final class RelayConsumer
      * `ws://` for the ADDRESS and TLS is switched on via transport + context.
      * A `ws://` URL yields no SSL context and no ssl transport (plain tcp).
      *
+     * ⚠ The protocol class is {@see \Workerman\Protocols\Ws} — the CLIENT-side
+     * WebSocket protocol that performs the upgrade handshake — NEVER
+     * {@see \Workerman\Protocols\Websocket}, which is the SERVER-side protocol
+     * with no client `onConnect`, so the upgrade request is never sent and the
+     * HELLO sits buffered in `tmpWebsocketData` forever (measured live against
+     * a real hub: `Websocket` timed out with zero bytes exchanged; `Ws`
+     * completed the handshake and received `hello_ack`). The constructor
+     * auto-detects `Ws` from the `ws://` scheme; this entry is the single,
+     * pinned source of that choice.
+     *
      * @param string $wsUrl Resolved hub relay WS URL (ws:// or wss://).
      *
-     * @return array{address: string, useTls: bool, context: array<string, mixed>}
+     * @return array{address: string, useTls: bool, context: array<string, mixed>, protocol: class-string}
      *
      * @since 0.20.0
      */
@@ -877,6 +890,8 @@ final class RelayConsumer
             'address' => $address,
             'useTls' => $useTls,
             'context' => $context,
+            // S301 live-proof finding: Ws (client), never Websocket (server).
+            'protocol' => \Workerman\Protocols\Ws::class,
         ];
     }
 

@@ -1786,15 +1786,33 @@ class RelayConsumerTest extends TestCase
     }
 
     /**
-     * @return array{address: string, useTls: bool, context: array<string, mixed>}
+     * @return array{address: string, useTls: bool, context: array<string, mixed>, protocol: class-string}
      */
     private function resolveTransport(RelayConfig $config, string $wsUrl): array
     {
         $m = new \ReflectionMethod(RelayConsumer::class, 'resolveHubTransport');
         $m->setAccessible(true);
-        /** @var array{address: string, useTls: bool, context: array<string, mixed>} $result */
+        /** @var array{address: string, useTls: bool, context: array<string, mixed>, protocol: class-string} $result */
         $result = $m->invoke($this->bareConsumer($config), $wsUrl);
         return $result;
+    }
+
+    /**
+     * S301 live-proof finding: the client protocol class must be Ws (which
+     * performs the upgrade handshake), never Websocket (the server-side
+     * protocol — with it the handshake never starts, the HELLO sits buffered,
+     * and the tunnel can never connect; measured live against a real hub).
+     */
+    public function test_transport_uses_the_client_ws_protocol(): void
+    {
+        foreach (['ws://hub.example.com:8802', 'wss://hub.example.com:8802'] as $wsUrl) {
+            $t = $this->resolveTransport(new RelayConfig(), $wsUrl);
+            $this->assertSame(
+                \Workerman\Protocols\Ws::class,
+                $t['protocol'],
+                "{$wsUrl} must use the CLIENT-side Ws protocol, not the server-side Websocket",
+            );
+        }
     }
 
     public function test_transport_plaintext_for_ws_scheme(): void

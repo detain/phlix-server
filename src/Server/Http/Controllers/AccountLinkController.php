@@ -18,6 +18,7 @@ use Phlix\Auth\UserRepository;
 use Phlix\Common\Logger\LogChannels;
 use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Hub\HubJwtValidatorInterface;
+use Phlix\Hub\RelayIdentityResolver;
 use Phlix\Plugins\Ldap\LdapProvider;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
@@ -69,11 +70,12 @@ final class AccountLinkController
 
     /**
      * Provider family for HUB links (S301): the hub user UUID the hub stamps as
-     * the authenticated relay principal. Must match
+     * the authenticated relay principal. SINGLE SOURCE OF TRUTH is
      * {@see \Phlix\Hub\RelayIdentityResolver::PROVIDER_FAMILY} — the resolver
-     * reads exactly the rows this links.
+     * reads exactly the rows this links, so a rename in one class must not be
+     * able to drift from the other (final-review nit, S301).
      */
-    private const string HUB_PROVIDER = 'hub';
+    private const string HUB_PROVIDER = RelayIdentityResolver::PROVIDER_FAMILY;
 
     /** Default single-instance sentinel (S47 multi-instance uses non-empty). */
     private const string DEFAULT_INSTANCE = '';

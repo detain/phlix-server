@@ -23,6 +23,46 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Changed
 
+- **Relayed direct play works end-to-end for the first time (S301 — finish S247).**
+  Three measured items landed together. (1) The direct-play byte stream
+  (`GET /media/{id}/stream`) moved into the transport-neutral pre-router stage
+  (`PreRouterFastPaths::serveMediaStream()`, `couldHandle()` widened to HEAD):
+  a relayed direct-play request previously 404'd because 0 of 353 composed
+  routes matched the stream path, and the relay dispatcher's `/api/`-only
+  second chance could not rescue it. Range/206/416, the per-profile concurrent
+  stream limit and the parental `RatingGate` all moved verbatim with it, and
+  the `profile_not_found` branch — which had ZERO test coverage and would have
+  403'd every relayed stream while only the hub UUID crossed the tunnel — is
+  now the honest named refusal, pinned by two new tests. (2) The relayed 206
+  now carries its `Content-Range` (previously only Workerman's encoder
+  synthesized it, which the tunnel never invokes; the hub only PRESERVES the
+  field). (3) An authenticated hub→server identity mapping: the hub's
+  `X-Phlix-Relay-User` principal (stamped after the hub authenticated the
+  relay user and verified server ownership, carried over the
+  enrollment-JWT-authenticated tunnel) is resolved ENTIRELY from the server's
+  own `user_identities` rows (provider `hub`), written only by the new
+  `POST /auth/identities/link/hub` endpoint, which proves the hub identity by
+  cryptographically verifying the hub JWT (Ed25519 + iss/aud/server_id/exp —
+  the same validator as the legacy hub-token exchange). The parental rating
+  gate therefore finally fires for relayed playback; an unmapped principal
+  keeps its hub UUID (auth presence only) and an unknown `x-phlix-relay-*`
+  marker refuses the mapping entirely with a warning. S247's pinned test is
+  re-derived: a profile identity never crosses the tunnel (the whole
+  `x-phlix-relay` family is stripped from forwarding server-side too).
+  Live hub→server round-trip proof: `206` with a correct `Content-Range` and
+  bytes md5-identical to disk; `HEAD` with no body and a single real
+  `Content-Length`; the rating gate firing (404 `Media not found` for an
+  over-cap item) with a succeeding 206 control beside the refusal. Two
+  production defects were found by that live proof and fixed: the relay
+  tunnel's outbound WebSocket used the SERVER-side protocol class
+  (`Workerman\Protocols\Websocket`), which has no client handshake, so the
+  tunnel could never connect (now `Ws`, the client protocol, pinned by test);
+  and the container-built `PreRouterFastPaths` resolved with a null container
+  because PHP-DI skips optional ctor params (now bound explicitly). No
+  migration (next-free server migration stays 103); no version bump. S81
+  (profiles self-service) is unblocked by the identity mapping per the
+  coordinator's identity-direction decision (2026-08-27).
+
 - **Every coroutine-fork site in `src/` is now inventoried and its arms exercised (S196).**
   The fork inventory is a machine-checked record in `tests/Unit/Support/Coroutine/ForkInventoryGuardTest.php`:
   a TOKENIZED scan (`php_strip_whitespace`, temp-file form — docblocks can never count) over `src/` for the

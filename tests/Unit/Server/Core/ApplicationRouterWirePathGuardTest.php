@@ -549,6 +549,7 @@ final class ApplicationRouterWirePathGuardTest extends TestCase
         'POST /api/v1/syncplay/groups -> SyncPlayController::createGroup [AuthMiddleware]',
         'POST /api/v1/syncplay/groups/{id}/join -> SyncPlayController::joinGroup [AuthMiddleware]',
         'POST /api/v1/syncplay/groups/{id}/leave -> SyncPlayController::leaveGroup [AuthMiddleware]',
+        'POST /auth/identities/link/hub -> AccountLinkController::linkHub [AuthMiddleware]',
         'POST /auth/identities/link/ldap -> AccountLinkController::linkLdap [AuthMiddleware]',
         'POST /auth/login -> AuthController::login []',
         'POST /auth/logout -> AuthController::logout []',

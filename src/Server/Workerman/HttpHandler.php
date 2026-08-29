@@ -17,11 +17,8 @@ use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Server\Core\Application;
 use Phlix\Server\Http\Controllers\AuthController;
 use Phlix\Server\Http\Controllers\BookController;
-use Phlix\Server\Http\Controllers\ByteRangeParser;
 use Phlix\Server\Http\Controllers\PhotoController;
 use Phlix\Server\Http\Controllers\TranscodeFileServer;
-use Phlix\Media\Library\ItemRepository;
-use Phlix\Media\Library\RatingGate;
 use Phlix\Media\Storage\ArtworkStorage;
 use Phlix\Media\Storage\AvatarStorage;
 use Phlix\Media\Transcoding\SegmentProcessRegistry;
@@ -190,40 +187,26 @@ final class HttpHandler
                 }
             }
 
-            // Media direct-play byte stream (the web player's <video> source).
-            // Handled with Workerman's native withFile() before the router so
-            // large files stream via the event loop instead of being read into
-            // worker memory. It bypasses the router (and its middleware), so it
-            // authorises inline — a resolved session OR a signed-URL token,
-            // mirroring SignedUrlMiddleware.
-            $mediaStream = $this->serveMediaStream($wr, $request->userId);
-            if ($mediaStream !== null) {
-                $responseStatus = $mediaStream->getStatusCode();
-                $connection->send($mediaStream);
-                return;
-            }
-
-            // Avatar + artwork byte serving (signed URL or authed session).
-            //
-            // S238: these two used to be private methods here, which made them
-            // invisible to Hub\RelayRequestDispatcher — it consults only the two
-            // route tables, and neither endpoint is registered in either, so a
-            // relayed browse rendered no posters and no avatars. They now live in
-            // the transport-neutral PreRouterFastPaths, which the relay dispatcher
-            // consults at this same pipeline position. $request->userId is the
-            // authenticator's verdict from above, exactly as it was when the
-            // methods took it as an argument; Response::toWorkermanResponse()
-            // forwards the file to Workerman's event-loop withFile(), so the bytes
-            // still never enter worker memory.
-            // couldHandle() first so the storages are resolved from the container
-            // only for a request that IS one of these — the deleted private
-            // methods resolved theirs inside the matched branch, and every other
-            // HttpHandler caller must stay free of a dependency on them.
+            // Pre-router byte serving: the direct-play media stream, avatars and
+            // artwork (S238 + S301). All three are in NO route table, so the
+            // RelayRequestDispatcher — which consults only the two route tables —
+            // 404'd them until they moved into the transport-neutral
+            // PreRouterFastPaths, which the relay dispatcher consults at this same
+            // pipeline position. $request->userId is the authenticator's verdict
+            // from above, exactly as it was when the methods took it as an
+            // argument; Response::toWorkermanResponse() forwards the file to
+            // Workerman's event-loop withFile(), so the bytes still never enter
+            // worker memory.
+            // couldHandle() first so the storages (and, for the stream, the
+            // container) are resolved only for a request that IS one of these —
+            // the deleted private methods resolved theirs inside the matched
+            // branch, and every other HttpHandler caller must stay free of a
+            // dependency on them.
             if (PreRouterFastPaths::couldHandle($request)) {
-                $imageResp = $this->fastPaths()->dispatch($request);
-                if ($imageResp !== null) {
-                    $responseStatus = $imageResp->statusCode;
-                    $connection->send($imageResp->toWorkermanResponse());
+                $fastResp = $this->fastPaths()->dispatch($request);
+                if ($fastResp !== null) {
+                    $responseStatus = $fastResp->statusCode;
+                    $connection->send($fastResp->toWorkermanResponse());
                     return;
                 }
             }
@@ -846,342 +829,11 @@ final class HttpHandler
             );
         }
 
-        return $this->fastPaths = new PreRouterFastPaths($artworkStorage, $avatarStorage);
-    }
-
-    /**
-     * Byte-serve a media item's source file for browser direct play.
-     *
-     * Backs `GET /media/{id}/stream` — the URL the web player's `<video>`
-     * source points at (and what {@see \Phlix\Media\Streaming\StreamManager::buildDirectStreamUrl()}
-     * builds). Returns null when the path is not a media-stream request so the
-     * caller falls through to the normal router.
-     *
-     * Uses Workerman's native {@see WorkermanResponse::withFile()} so the file
-     * streams through the event loop (chunked for anything over 2 MB) rather
-     * than being read into worker memory — essential for multi-GB videos. HTTP
-     * `Range` requests are honoured (206 + `Content-Range`) so the browser can
-     * seek; an unsatisfiable range yields 416.
-     */
-    /**
-     * Resolve the shared parental-control {@see RatingGate} from the container,
-     * or null when it cannot be built (never blocks the stream on wiring error —
-     * a null gate is a strict no-op, owner-safe).
-     */
-    private function ratingGate(): ?RatingGate
-    {
-        try {
-            $gate = $this->container->get(RatingGate::class);
-            return $gate instanceof RatingGate ? $gate : null;
-        } catch (Throwable) {
-            return null;
-        }
-    }
-
-    private function serveMediaStream(WorkermanRequest $wr, ?string $userId = null): ?WorkermanResponse
-    {
-        $method = $wr->method();
-        // Accept both GET and HEAD — HEAD is used by clients to check media
-        // availability without downloading the full body.
-        if (!in_array($method, ['GET', 'HEAD'], true)) {
-            return null;
-        }
-        $isHead = $method === 'HEAD';
-
-        if (preg_match('#^/media/(?P<id>[^/]+)/stream$#', $wr->path(), $m) !== 1) {
-            return null;
-        }
-
-        // Authorise before touching the filesystem: a resolved session
-        // (Bearer/cookie) OR a valid signed-URL token. Returning a 401 here
-        // (rather than null) stops the request — a null would fall through to the
-        // router and 404, masking the auth failure.
-        if (!$this->isMediaStreamAuthorized($wr, $userId)) {
-            return new WorkermanResponse(
-                401,
-                ['Content-Type' => 'text/plain; charset=utf-8'],
-                'Unauthorized',
-            );
-        }
-
-        // P5-S3: Enforce per-profile concurrent stream limits (direct-play path).
-        // StreamLimitMiddleware can't be applied as router middleware here because
-        // this route bypasses the router to use Workerman's native withFile()
-        // streaming (essential for multi-GB videos). The check is inlined instead.
-        // Signed-URL access (userId=null) skips the stream limit — the signed URL
-        // itself is the access control; stream limits only apply to authenticated
-        // sessions where we have a profileId to enforce against.
-        if ($userId !== null) {
-            $streamLimitResponse = $this->checkStreamLimit($wr, $userId);
-            if ($streamLimitResponse !== null) {
-                return $streamLimitResponse;
-            }
-        }
-
-        /** @var ItemRepository $repo */
-        $repo = $this->container->get(ItemRepository::class);
-        $item = $repo->findById($m['id']);
-
-        // Parental-control ACCESS gate (Finding 1). For an authenticated session
-        // (userId set) whose ACTIVE profile is capped, deny an over-cap item (by
-        // EFFECTIVE rating — own content_rating, else the inherited series
-        // rating) with the SAME 404 used for "not found" below, so existence is
-        // never confirmed and no bytes are served. Signed-URL access (userId
-        // null) is governed by the signed URL itself — and the mint paths
-        // (detail/download) are already gated — so it is intentionally not
-        // re-checked here. Owner / no-profile / un-capped → null filter → no-op.
-        if ($userId !== null && $userId !== '' && is_array($item)) {
-            $gate = $this->ratingGate();
-            $filter = $gate?->resolveFilterForUser($userId);
-            if ($filter !== null && $gate !== null && !$gate->isAllowed($item, $filter)) {
-                return new WorkermanResponse(
-                    404,
-                    ['Content-Type' => 'text/plain; charset=utf-8'],
-                    'Media not found',
-                );
-            }
-        }
-
-        $path = is_array($item) && is_string($item['path'] ?? null) ? $item['path'] : '';
-        if ($path === '' || !is_file($path) || !is_readable($path)) {
-            return new WorkermanResponse(404, ['Content-Type' => 'text/plain; charset=utf-8'], 'Media not found');
-        }
-
-        $fileSize = (int) filesize($path);
-        $mime = self::streamMimeFor($path);
-
-        // HEAD requests: return headers only (no Range support, no body).
-        //
-        // BodylessResponse, not WorkermanResponse: Workerman's encoder appends its
-        // own `Content-Length: strlen($body)` unconditionally, so a plain
-        // WorkermanResponse with a real Content-Length and an empty body puts TWO
-        // conflicting Content-Length fields on the wire (the bogus `0` LAST) —
-        // invalid per RFC 9110 §8.6. See {@see BodylessResponse}.
-        //
-        // Named explicitly rather than selected by a `headOnly` flag, because this
-        // method returns WORKERMAN responses (it runs before Application::dispatch()
-        // and never builds a Phlix Response), so `Response::$headOnly` — the flag
-        // that selects this encoder for router-dispatched HEAD replies — does not
-        // exist on this path.
-        if ($isHead) {
-            $resp = new BodylessResponse(200, ['Content-Type' => $mime]);
-            $resp->header('Content-Length', (string) $fileSize);
-            return $resp;
-        }
-
-        $rangeHeader = $wr->header('range');
-        $range = ByteRangeParser::parse(is_string($rangeHeader) ? $rangeHeader : null, $fileSize);
-        if ($range !== null) {
-            if (!$range['satisfiable']) {
-                return new WorkermanResponse(416, [
-                    'Content-Type' => $mime,
-                    'Content-Range' => "bytes */{$fileSize}",
-                ]);
-            }
-            $resp = new WorkermanResponse(206, ['Content-Type' => $mime]);
-            // withFile() with a non-zero offset/length makes Workerman emit
-            // 206 + Content-Range automatically.
-            $resp->withFile($path, $range['start'], $range['end'] - $range['start'] + 1);
-            return $resp;
-        }
-
-        $resp = new WorkermanResponse(200, ['Content-Type' => $mime]);
-        $resp->withFile($path);
-        return $resp;
-    }
-
-    /**
-     * Whether a `/media/{id}/stream` request is allowed to proceed.
-     *
-     * Accepts an already-resolved session user id (from the Bearer/cookie block
-     * in {@see self::__invoke()}) OR a valid `?exp&sig` signed-URL token. This is
-     * the inline equivalent of {@see \Phlix\Server\Http\Middleware\SignedUrlMiddleware}
-     * for the one byte-serving route that bypasses the router.
-     */
-    private function isMediaStreamAuthorized(WorkermanRequest $wr, ?string $userId): bool
-    {
-        if ($userId !== null && $userId !== '') {
-            return true;
-        }
-
-        $exp = $wr->get('exp');
-        $sig = $wr->get('sig');
-
-        return \Phlix\Auth\SignedUrl::fromEnv()->verify(
-            $wr->path(),
-            is_string($exp) ? $exp : null,
-            is_string($sig) ? $sig : null,
-        );
-    }
-
-    /**
-     * Enforce per-profile concurrent stream limits for direct-play requests.
-     *
-     * P5-S3: This is the direct-play analogue of StreamLimitMiddleware, inlined
-     * here because the /media/{id}/stream route bypasses the router (and its
-     * middleware chain) to use Workerman's native withFile() streaming.
-     *
-     * @param WorkermanRequest $wr    The Workerman request.
-     * @param string           $userId The authenticated user's ID.
-     *
-     * @return WorkermanResponse|null 429 with StreamLimitExceeded body on limit
-     *                                exceeded; null to continue serving.
-     */
-    private function checkStreamLimit(WorkermanRequest $wr, string $userId): ?WorkermanResponse
-    {
-        // S80: prefer the profile THIS SESSION is running as. This direct-play
-        // path bypasses the router entirely, so it never sees StreamLimitMiddleware
-        // and has to make the same choice for itself.
-        $profileId = RequestContext::getProfileId();
-
-        if ($profileId === null || $profileId === '') {
-            /** @var \Phlix\Auth\UserProfileManager $profileManager */
-            $profileManager = $this->container->get(\Phlix\Auth\UserProfileManager::class);
-            $profile = $profileManager->getActiveProfile($userId);
-            if ($profile === null) {
-                // No profile — fail closed (deny) rather than letting an unprofiled
-                // user through without stream tracking.
-                return new WorkermanResponse(
-                    403,
-                    ['Content-Type' => 'application/json; charset=utf-8'],
-                    json_encode([
-                        'error' => 'StreamLimitExceeded',
-                        'denial_type' => 'profile_not_found',
-                        'message' => 'Profile not found; access denied',
-                    ], JSON_THROW_ON_ERROR),
-                );
-            }
-
-            $profileId = $this->resolveStreamProfileId($profile);
-            if ($profileId === null) {
-                return new WorkermanResponse(
-                    403,
-                    ['Content-Type' => 'application/json; charset=utf-8'],
-                    json_encode([
-                        'error' => 'StreamLimitExceeded',
-                        'denial_type' => 'profile_not_found',
-                        'message' => 'Profile not found; access denied',
-                    ], JSON_THROW_ON_ERROR),
-                );
-            }
-        }
-
-        $deviceId = $this->getStreamDeviceId($wr);
-        $sessionId = $this->getStreamSessionId($wr);
-        if ($sessionId === null || $deviceId === null) {
-            // Missing session/device info — skip stream limit enforcement and let
-            // the request proceed (stream won't be tracked, but we don't block).
-            return null;
-        }
-
-        /** @var \Phlix\Access\StreamSessionService $streamSessionService */
-        $streamSessionService = $this->container->get(\Phlix\Access\StreamSessionService::class);
-        $registered = $streamSessionService->registerStream($profileId, $deviceId, $sessionId);
-        if (!$registered) {
-            return new WorkermanResponse(
-                429,
-                ['Content-Type' => 'application/json; charset=utf-8'],
-                json_encode([
-                    'error' => 'StreamLimitExceeded',
-                    'denial_type' => 'stream_limit_exceeded',
-                    'message' => 'Maximum concurrent streams reached for this profile',
-                    'profile_id' => $profileId,
-                ], JSON_THROW_ON_ERROR),
-            );
-        }
-
-        // Register (or refresh) the heartbeat timer for this streaming session.
-        // Keyed + deduped per session inside the service, so repeated requests
-        // (incl. every HLS segment) never accumulate timers; the timer is torn
-        // down on stream release.
-        $streamSessionService->registerHeartbeatTimer($sessionId);
-
-        return null;
-    }
-
-    /**
-     * Resolve the profile ID from a profile array (inline helper for stream limiting).
-     *
-     * @param array<string, mixed> $profile Profile array from UserProfileManager.
-     *
-     * @return string|null Profile ID as string, or null if cannot resolve.
-     */
-    private function resolveStreamProfileId(array $profile): ?string
-    {
-        $id = $profile['id'] ?? null;
-        return is_string($id) && $id !== '' ? $id : null;
-    }
-
-    /**
-     * Extract the device ID from a Workerman request for stream tracking.
-     */
-    private function getStreamDeviceId(WorkermanRequest $wr): ?string
-    {
-        $deviceId = $wr->header('x-device-id');
-        if (is_string($deviceId) && $deviceId !== '') {
-            return $deviceId;
-        }
-
-        $userAgent = $wr->header('user-agent');
-        if (is_string($userAgent) && $userAgent !== '') {
-            return hash('sha256', $userAgent);
-        }
-
-        return null;
-    }
-
-    /**
-     * Extract the session ID from a Workerman request for stream tracking.
-     */
-    private function getStreamSessionId(WorkermanRequest $wr): ?string
-    {
-        // Query param first (used by HLS clients)
-        $sessionId = $wr->get('session_id');
-        if (is_string($sessionId) && $sessionId !== '') {
-            return $sessionId;
-        }
-
-        // X-Session-ID header
-        $sessionId = $wr->header('x-session-id');
-        if (is_string($sessionId) && $sessionId !== '') {
-            return $sessionId;
-        }
-
-        return null;
-    }
-
-    /**
-     * Content-Type for a media file we're about to direct-play.
-     *
-     * Extension-first so the browser gets a deterministic, playable MIME for
-     * the video/audio formats `<video>`/`<audio>` understand; unknown
-     * extensions fall back to a binary default. Audio mappings unblock music
-     * track direct-play over GET /media/{id}/stream (X8) — without them audio
-     * files were served as application/octet-stream and would not play.
-     */
-    private static function streamMimeFor(string $path): string
-    {
-        $ext = strtolower((string) pathinfo($path, PATHINFO_EXTENSION));
-        return [
-            // Video
-            'mp4'  => 'video/mp4',
-            'm4v'  => 'video/mp4',
-            'mov'  => 'video/mp4',
-            'webm' => 'video/webm',
-            'ogv'  => 'video/ogg',
-            'mkv'  => 'video/x-matroska',
-            'avi'  => 'video/x-msvideo',
-            'ts'   => 'video/mp2t',
-            // Audio
-            'mp3'  => 'audio/mpeg',
-            'm4a'  => 'audio/mp4',
-            'aac'  => 'audio/aac',
-            'flac' => 'audio/flac',
-            'ogg'  => 'audio/ogg',
-            'oga'  => 'audio/ogg',
-            'opus' => 'audio/opus',
-            'wav'  => 'audio/wav',
-        ][$ext] ?? 'application/octet-stream';
+        // S301: the container goes along so the stream branch can resolve its
+        // heavier collaborators (ItemRepository, RatingGate, stream-limit
+        // services) lazily — exactly as the deleted private serveMediaStream()
+        // did — instead of every request paying for them.
+        return $this->fastPaths = new PreRouterFastPaths($artworkStorage, $avatarStorage, $this->container);
     }
 
     /**

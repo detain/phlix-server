@@ -83,6 +83,7 @@ final class AuthProviderRouteRegistrar
         //      DELETE /auth/identities/{id}       UNLINK one identity            (S47)
         //      GET    /auth/identities/link/oidc  START an OIDC link             (S45)
         //      POST   /auth/identities/link/ldap  link via a real LDAP bind      (S45)
+        //      POST   /auth/identities/link/hub   link via a verified hub JWT    (S301)
         //    The OIDC *callback* stays on the unauthenticated oidcAuth path above
         //    (the IdP redirect carries no session; the link intent is recovered
         //    from the server-side OIDC state store).
@@ -93,6 +94,11 @@ final class AuthProviderRouteRegistrar
                 $r->delete('/auth/identities/{id}', [AccountLinkController::class, 'unlink']);
                 $r->get('/auth/identities/link/oidc', [OidcCallbackController::class, 'authorizeLink']);
                 $r->post('/auth/identities/link/ldap', [AccountLinkController::class, 'linkLdap']);
+                // S301: link the authenticated relay principal (hub user UUID)
+                // to THIS server account — the row RelayIdentityResolver resolves
+                // relayed requests against. The hub identity is proven by the
+                // Ed25519-verified hub JWT in the body, never client-claimed.
+                $r->post('/auth/identities/link/hub', [AccountLinkController::class, 'linkHub']);
                 // S48: start a GitHub link (the callback stays on the unauthenticated
                 // /auth/github/callback path; the link intent is recovered from the
                 // server-side OAuth2 state store). Unlink is provider-generic via the

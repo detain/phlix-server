@@ -159,7 +159,7 @@ class BodylessResponse extends WorkermanResponse
      * This is the INNER of two guards. The outer one is the `headOnly` selector in
      * {@see \Phlix\Server\Http\Response::toWorkermanResponse()}; this one keeps the
      * class a safe drop-in even when it is constructed directly, as
-     * {@see \Phlix\Server\Workerman\HttpHandler::serveMediaStream()} does — it
+     * {@see \Phlix\Server\Http\FastPath\PreRouterFastPaths::serveMediaStream()} does — it
      * returns Workerman responses rather than Phlix ones, so it has no `headOnly`
      * flag to set and names this class explicitly instead.
      */

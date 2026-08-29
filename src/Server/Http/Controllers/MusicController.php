@@ -710,7 +710,7 @@ class MusicController
     {
         // A music track row IS a media_items row, so its id is directly
         // servable by the generic Range-safe GET /media/{id}/stream endpoint
-        // (HttpHandler::serveMediaStream). Mint a signed URL for direct-play,
+        // (PreRouterFastPaths::serveMediaStream). Mint a signed URL for direct-play,
         // mirroring the AudiobookController convention.
         $trackId = $this->toString($track['media_item_id'] ?? '');
         $streamUrl = null;

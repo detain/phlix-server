@@ -31,6 +31,7 @@ use Phlix\Common\Container\ServiceProviderInterface;
 use Phlix\Common\RateLimit\DbRateLimiter;
 use Phlix\Common\RateLimit\RateLimiter;
 use Phlix\Common\RateLimit\RateLimitProfiles;
+use Phlix\Hub\HubJwtValidatorInterface;
 use Phlix\Media\RecommendationService;
 use Phlix\Server\Http\Controllers\AuthController;
 use Phlix\Server\Http\Controllers\AuthProviderController;
@@ -332,9 +333,13 @@ final class AuthServicesProvider implements ServiceProviderInterface
             // last-sign-in-method safety guard (without it that guard fails safe
             // and would refuse removing the last identity). `identities` +
             // `registry` autowire.
+            // S301: `hubJwtValidator` (optional) binds the hub-link endpoint's
+            // cryptographic proof of the hub identity — without it linkHub
+            // refuses 503 like an un-enrolled server.
             \Phlix\Server\Http\Controllers\AccountLinkController::class => autowire()
                 ->constructorParameter('bootstrapper', get(AuthProviderBootstrapper::class))
-                ->constructorParameter('userRepository', get(UserRepository::class)),
+                ->constructorParameter('userRepository', get(UserRepository::class))
+                ->constructorParameter('hubJwtValidator', get(HubJwtValidatorInterface::class)),
 
             // `statsCollector` is wired so successful logins/logouts land in
             // stats_user_activity (the admin dashboard activity feed). PHP-DI

@@ -26,21 +26,24 @@ use function str_starts_with;
  * same local routers the Workerman HTTP daemon uses, returning a {@see Response}.
  *
  * This mirrors {@see \Phlix\Server\Workerman\HttpHandler} steps 0, 1 and 1b:
- *   0. {@see PreRouterFastPaths} — the image endpoints (`/api/v1/artwork/{id}`,
- *      `/api/v1/users/{id}/avatar`) that run BEFORE the route table and are in
- *      NO route table. S238: without this step a relayed browse rendered no
- *      posters and no avatars, because `dispatch()` consulted only the two route
- *      tables and both endpoints 404'd in both of them.
+ *   0. {@see PreRouterFastPaths} — the pre-router byte endpoints
+ *      (`/api/v1/artwork/{id}`, `/api/v1/users/{id}/avatar`, and since S301 the
+ *      direct-play byte stream `/media/{id}/stream`) that run BEFORE the route
+ *      table and are in NO route table. S238: without this step a relayed
+ *      browse rendered no posters and no avatars, because `dispatch()`
+ *      consulted only the two route tables and both endpoints 404'd in both of
+ *      them. S301: the same move carried the media stream — without it a
+ *      relayed direct-play request 404'd exactly the same way (and would 403
+ *      on its stream-limit profile_not_found branch, because only the hub UUID
+ *      crossed the tunnel).
  *   1. The fully-populated {@see Application} router (owns every `/api/*`,
  *      `/health`, `/.well-known`, streaming, and auth routes).
  *   1b. {@see WebPortalRouter} for any `/api/` path the Application router 404s
  *       on (`/api/v1/libraries`, `/api/v1/media/{id}`, `/api/v1/users/me/*`).
  *
- * Static-file serving, the `/media/{id}/stream` direct-play fast path, and the
- * SSR page-rendering fall-through are intentionally NOT mirrored here: Phase 1 of
- * the hub proxy carries JSON/browse traffic (and now the small images that browse
- * needs) only. Whether whole video files should travel the tunnel is S164's open
- * question — see {@see PreRouterFastPaths} for why that one path stayed behind.
+ * Static-file serving and the SSR page-rendering fall-through are intentionally
+ * NOT mirrored here: the hub proxy carries JSON/browse traffic, the small
+ * images browse needs (S238) and — since S301 — the direct-play byte stream.
  *
  * The DLNA surface is HARD-DENIED before dispatch — see
  * {@see self::RELAY_DENIED_PREFIXES} for why the IP allowlist cannot be trusted

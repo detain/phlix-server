@@ -9,6 +9,7 @@ use Phlix\Common\Logger\StructuredLogger;
 use Phlix\Hub\HubClient;
 use Phlix\Hub\RelayConfig;
 use Phlix\Hub\RelayConsumer;
+use Phlix\Hub\RelayIdentityResolver;
 use Phlix\Hub\RelayMessageFramer;
 use Phlix\Hub\RelayStateStore;
 use Phlix\Hub\StoredEnrollment;
@@ -174,6 +175,7 @@ class RelayConsumerTest extends TestCase
         ?RelayConfig $config = null,
         ?callable $httpDispatcher = null,
         ?RelayStateStore $stateStore = null,
+        ?RelayIdentityResolver $identityResolver = null,
     ): RelayConsumer {
         $config = $config ?? new RelayConfig(
             enabled: true,
@@ -187,6 +189,13 @@ class RelayConsumerTest extends TestCase
         $this->locals = $locals;
 
         $hub = $this->hub;
+
+        // S301 default: a resolver over a store that maps NOTHING, so every
+        // pre-existing test keeps the pre-S301 identity behaviour (the raw hub
+        // UUID stays the userId) unless the test supplies a mapping.
+        $identityResolver ??= new RelayIdentityResolver(
+            $this->createMock(\Phlix\Auth\UserIdentityRepository::class),
+        );
 
         return new RelayConsumer(
             $config,
@@ -203,6 +212,7 @@ class RelayConsumerTest extends TestCase
             },
             httpDispatcher: $httpDispatcher,
             stateStore: $stateStore,
+            identityResolver: $identityResolver,
         );
     }
 
@@ -1007,6 +1017,210 @@ class RelayConsumerTest extends TestCase
         $this->assertSame('hub-relay', $captured->userId);
     }
 
+    /**
+     * S301 review r1 Finding 1: a relayed 206 window carries its Content-Range.
+     *
+     * On the direct transport Workerman's encoder derives `Content-Range` from
+     * `withFile()`'s offset/length at encode time; the tunnel head is built
+     * from `$response->headers` verbatim (no encoder), so without this arm a
+     * ranged direct-play seek over the relay would reach the client as a 206
+     * with no range information. The hub PRESERVES `Content-Range` — it does
+     * not synthesize it.
+     */
+    public function test_relayed_range_response_carries_content_range_in_the_head(): void
+    {
+        $file = sys_get_temp_dir() . '/phlix-relay-range-' . bin2hex(random_bytes(6)) . '.mp4';
+        file_put_contents($file, 'ABCDEFGHIJKLMNOP');
+
+        try {
+            $dispatcher = static fn (\Phlix\Server\Http\Request $req): \Phlix\Server\Http\Response
+                => (new \Phlix\Server\Http\Response())
+                    ->status(206)
+                    ->header('Content-Type', 'video/mp4')
+                    ->withFile($file, 4, 8);
+
+            $consumer = $this->createConsumer(null, $dispatcher);
+            $this->activate($consumer);
+
+            $envelope = new \Phlix\Shared\Relay\RelayHttpRequest('GET', '/media/m1/stream', '', ['Range' => 'bytes=4-11'], '');
+            $this->hub->fireMessage($this->codec->encode(RelayFrameType::HTTP_REQUEST, 0x80000005, $envelope->toJson()));
+
+            $result = $this->collectHttpResponse();
+
+            $this->assertSame(206, $result['status']);
+            $this->assertSame('bytes 4-11/16', $result['headers']['Content-Range'] ?? null);
+            $this->assertSame('EFGHIJKL', $result['body']);
+        } finally {
+            @unlink($file);
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // S301 — the re-derived S247 identity pin: the server resolves the
+    // authenticated relay principal to a server user ENTIRELY from its own
+    // rows. A mapped principal runs as the server user (the rating gate and
+    // per-profile limits finally fire); an unmapped principal gets NO server
+    // identity; a PROFILE identity never crosses the tunnel and is never read.
+    // -----------------------------------------------------------------------
+
+    /**
+     * GREEN FOR THE AUTHENTICATED PRINCIPAL: a hub UUID that the server's own
+     * `user_identities` (provider `hub`) maps to a server user makes the
+     * relayed request run as THAT server user.
+     */
+    public function test_mapped_relay_principal_runs_as_the_server_user(): void
+    {
+        /** @var \Phlix\Server\Http\Request|null $captured */
+        $captured = null;
+        $dispatcher = static function (\Phlix\Server\Http\Request $req) use (&$captured): \Phlix\Server\Http\Response {
+            $captured = $req;
+            return (new \Phlix\Server\Http\Response())->json(['ok' => true]);
+        };
+
+        $identities = $this->createMock(\Phlix\Auth\UserIdentityRepository::class);
+        $identities->method('findByProviderExternalId')
+            ->with('hub', '', 'user-42')
+            ->willReturn(['user_id' => 'server-user-9']);
+
+        $consumer = $this->createConsumer(
+            null,
+            $dispatcher,
+            null,
+            new RelayIdentityResolver($identities),
+        );
+        $this->activate($consumer);
+
+        $envelope = new \Phlix\Shared\Relay\RelayHttpRequest(
+            'GET',
+            '/api/v1/libraries',
+            '',
+            ['X-Phlix-Relay-User' => 'user-42'],
+            '',
+        );
+        $this->hub->fireMessage($this->codec->encode(RelayFrameType::HTTP_REQUEST, 0x80000002, $envelope->toJson()));
+
+        $this->assertNotNull($captured);
+        $this->assertSame(
+            'server-user-9',
+            $captured->userId,
+            'the authenticated relay principal must resolve to the linked server user',
+        );
+    }
+
+    /**
+     * RED ON A PROFILE IDENTITY STARTING TO CROSS (the S247 pin, re-derived):
+     * the tunnel carries ONLY the authenticated relay principal. A profile
+     * marker smuggled into the envelope is not just ignored — it REFUSES the
+     * identity mapping entirely (with a warning), so an unexplained
+     * `x-phlix-relay-*` marker can never influence identity, and it is never
+     * forwarded. Mutating `buildRequest()` to read a profile claim (or letting
+     * one survive into the headers) reddens this.
+     */
+    public function test_a_profile_identity_never_crosses_the_tunnel(): void
+    {
+        /** @var \Phlix\Server\Http\Request|null $captured */
+        $captured = null;
+        $dispatcher = static function (\Phlix\Server\Http\Request $req) use (&$captured): \Phlix\Server\Http\Response {
+            $captured = $req;
+            return (new \Phlix\Server\Http\Response())->json(['ok' => true]);
+        };
+
+        $identities = $this->createMock(\Phlix\Auth\UserIdentityRepository::class);
+        // The mapping EXISTS — the tripwire must refuse it anyway.
+        $identities->method('findByProviderExternalId')
+            ->with('hub', '', 'user-42')
+            ->willReturn(['user_id' => 'server-user-9']);
+
+        $consumer = $this->createConsumer(
+            null,
+            $dispatcher,
+            null,
+            new RelayIdentityResolver($identities),
+        );
+        $this->activate($consumer);
+
+        // A malicious/broken producer smugglES a profile marker next to the
+        // hub-stamped principal (the hub strips client copies on the way in;
+        // this is the hypothetical where it did not).
+        $envelope = new \Phlix\Shared\Relay\RelayHttpRequest(
+            'GET',
+            '/api/v1/libraries',
+            '',
+            [
+                'X-Phlix-Relay-User' => 'user-42',
+                'X-Phlix-Relay-Profile' => 'profile-1',
+            ],
+            '',
+        );
+        $this->hub->fireMessage($this->codec->encode(RelayFrameType::HTTP_REQUEST, 0x80000003, $envelope->toJson()));
+
+        $this->assertNotNull($captured);
+        $this->assertSame(
+            'user-42',
+            $captured->userId,
+            'an unexpected relay marker must REFUSE the identity mapping — no server identity may '
+            . 'be granted while a profile claim is anywhere on the tunnel',
+        );
+        foreach ($captured->headers as $name => $_value) {
+            $this->assertStringNotContainsStringIgnoringCase(
+                'profile',
+                (string) $name,
+                'no PROFILE marker may survive as a forwardable header — a profile identity '
+                . 'must never cross the tunnel',
+            );
+        }
+    }
+
+    /**
+     * NO SERVER IDENTITY WITHOUT A LINKAGE ROW: the resolver is the ONLY door
+     * to a server identity. A principal that maps to nothing keeps the raw
+     * hub-stamped UUID (auth-presence + log attribution — the pre-S301
+     * behaviour) but grants NO server identity, so the server-side protections
+     * that resolve against own user rows (RatingGate, per-profile stream
+     * limits) stay inert for it. The resolver's null is what the stream path's
+     * honest `profile_not_found` refusal reports.
+     */
+    public function test_unmapped_principal_grants_no_server_identity(): void
+    {
+        /** @var \Phlix\Server\Http\Request|null $captured */
+        $captured = null;
+        $dispatcher = static function (\Phlix\Server\Http\Request $req) use (&$captured): \Phlix\Server\Http\Response {
+            $captured = $req;
+            return (new \Phlix\Server\Http\Response())->json(['ok' => true]);
+        };
+
+        // The store maps NOTHING — no linkage row exists.
+        $identities = $this->createMock(\Phlix\Auth\UserIdentityRepository::class);
+        $identities->method('findByProviderExternalId')->willReturn(null);
+
+        $consumer = $this->createConsumer(
+            null,
+            $dispatcher,
+            null,
+            new RelayIdentityResolver($identities),
+        );
+        $this->activate($consumer);
+
+        $envelope = new \Phlix\Shared\Relay\RelayHttpRequest(
+            'GET',
+            '/api/v1/libraries',
+            '',
+            // A value that no `user_identities` row backs: whatever it names, the
+            // resolver must refuse to turn it into a server identity.
+            ['X-Phlix-Relay-User' => 'user-42'],
+            '',
+        );
+        $this->hub->fireMessage($this->codec->encode(RelayFrameType::HTTP_REQUEST, 0x80000004, $envelope->toJson()));
+
+        $this->assertNotNull($captured);
+        $this->assertSame(
+            'user-42',
+            $captured->userId,
+            'the hub-stamped UUID is kept for auth-presence, but NO server identity may be '
+            . 'granted without a server-side linkage row',
+        );
+    }
+
     public function test_http_request_strips_smuggled_auth_and_cookie_headers(): void
     {
         /** @var \Phlix\Server\Http\Request|null $captured */
@@ -1572,15 +1786,33 @@ class RelayConsumerTest extends TestCase
     }
 
     /**
-     * @return array{address: string, useTls: bool, context: array<string, mixed>}
+     * @return array{address: string, useTls: bool, context: array<string, mixed>, protocol: class-string}
      */
     private function resolveTransport(RelayConfig $config, string $wsUrl): array
     {
         $m = new \ReflectionMethod(RelayConsumer::class, 'resolveHubTransport');
         $m->setAccessible(true);
-        /** @var array{address: string, useTls: bool, context: array<string, mixed>} $result */
+        /** @var array{address: string, useTls: bool, context: array<string, mixed>, protocol: class-string} $result */
         $result = $m->invoke($this->bareConsumer($config), $wsUrl);
         return $result;
+    }
+
+    /**
+     * S301 live-proof finding: the client protocol class must be Ws (which
+     * performs the upgrade handshake), never Websocket (the server-side
+     * protocol — with it the handshake never starts, the HELLO sits buffered,
+     * and the tunnel can never connect; measured live against a real hub).
+     */
+    public function test_transport_uses_the_client_ws_protocol(): void
+    {
+        foreach (['ws://hub.example.com:8802', 'wss://hub.example.com:8802'] as $wsUrl) {
+            $t = $this->resolveTransport(new RelayConfig(), $wsUrl);
+            $this->assertSame(
+                \Workerman\Protocols\Ws::class,
+                $t['protocol'],
+                "{$wsUrl} must use the CLIENT-side Ws protocol, not the server-side Websocket",
+            );
+        }
     }
 
     public function test_transport_plaintext_for_ws_scheme(): void

@@ -17,10 +17,14 @@ use Phlix\Auth\UserIdentityRepository;
 use Phlix\Auth\UserRepository;
 use Phlix\Common\Logger\LogChannels;
 use Phlix\Common\Logger\LoggerFactory;
+use Phlix\Hub\HubJwtValidatorInterface;
+use Phlix\Hub\RelayIdentityResolver;
 use Phlix\Plugins\Ldap\LdapProvider;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
 use Phlix\Shared\Auth\AuthResult;
+
+use function is_string;
 
 /**
  * S45 account-linking endpoints (the authenticated half).
@@ -64,6 +68,15 @@ final class AccountLinkController
     /** Provider family for LDAP links. */
     private const string LDAP_PROVIDER = 'ldap';
 
+    /**
+     * Provider family for HUB links (S301): the hub user UUID the hub stamps as
+     * the authenticated relay principal. SINGLE SOURCE OF TRUTH is
+     * {@see \Phlix\Hub\RelayIdentityResolver::PROVIDER_FAMILY} — the resolver
+     * reads exactly the rows this links, so a rename in one class must not be
+     * able to drift from the other (final-review nit, S301).
+     */
+    private const string HUB_PROVIDER = RelayIdentityResolver::PROVIDER_FAMILY;
+
     /** Default single-instance sentinel (S47 multi-instance uses non-empty). */
     private const string DEFAULT_INSTANCE = '';
 
@@ -98,14 +111,25 @@ final class AccountLinkController
      */
     private ?UserRepository $userRepository;
 
+    /**
+     * S301 hub-link verifier: cryptographically validates the hub JWT that
+     * PROVES control of the hub identity being linked. Optional so existing
+     * direct-construction / unit call sites keep working; the DI factory binds
+     * it explicitly. When null the hub link refuses with 503 (the server is not
+     * enrolled with a hub — same disposition as HubTokenController).
+     */
+    private ?HubJwtValidatorInterface $hubJwtValidator;
+
     public function __construct(
         private readonly UserIdentityRepository $identities,
         private readonly AuthProviderRegistry $registry,
         ?AuthProviderBootstrapper $bootstrapper = null,
         ?UserRepository $userRepository = null,
+        ?HubJwtValidatorInterface $hubJwtValidator = null,
     ) {
         $this->bootstrapper = $bootstrapper;
         $this->userRepository = $userRepository;
+        $this->hubJwtValidator = $hubJwtValidator;
     }
 
     /**
@@ -256,6 +280,13 @@ final class AccountLinkController
             return $this->unauthorized();
         }
 
+        // S301 review r1 Finding 2: the principal must be a REAL server account
+        // (same exposure as linkHub — a relayed principal is not a `users` row
+        // and linking to it would 500 on the user_identities FK).
+        if (!$this->currentUserIsRealAccount($userId)) {
+            return $this->unauthorized();
+        }
+
         $body = $request->body;
         $username = is_string($body['username'] ?? null) ? $body['username'] : '';
         $password = is_string($body['password'] ?? null) ? $body['password'] : '';
@@ -315,20 +346,127 @@ final class AccountLinkController
     }
 
     /**
+     * S301 review r1 Finding 2: the current user must be a REAL server account
+     * before any identity row can be linked to it. AuthMiddleware trusts the
+     * presence of a resolved principal — and a RELAYED principal that maps to
+     * no server user (a hub UUID, or the literal 'hub-relay') passes that
+     * presence check while not being a `users` row. Linking to it would trip
+     * the `user_identities` FK (migration 092) as a 500 instead of a clean
+     * refusal. Fails SAFE (refuses) when the repository is unavailable.
+     *
+     * @param string $userId The trusted current-user id.
+     */
+    private function currentUserIsRealAccount(string $userId): bool
+    {
+        if ($this->userRepository === null) {
+            return false;
+        }
+
+        return $this->userRepository->findById($userId) !== null;
+    }
+
+    /**
+     * POST /auth/identities/link/hub (AUTHENTICATED — S301).
+     *
+     * Body: `{hub_token}` — a hub-issued JWT. On cryptographic verification
+     * (Ed25519 signature, `iss`/`aud`/`server_id`/`exp` — the SAME validator
+     * the legacy hub-token exchange uses), links the hub user UUID from the
+     * VERIFIED CLAIMS to the current server account as a `user_identities`
+     * row under the `hub` provider family. This row is what
+     * {@see \Phlix\Hub\RelayIdentityResolver} later resolves the authenticated
+     * relay principal against, so relayed requests run as this server user and
+     * the parental RatingGate / per-profile stream limits finally fire for
+     * them.
+     *
+     * ## Security — the identity is VERIFIED, never client-supplied (the
+     * ## linchpin, mirroring linkLdap)
+     *
+     * A client-claimed hub id is NEVER trusted. The linked external_id comes
+     * ONLY from the cryptographically verified JWT claims
+     * ({@see \Phlix\Hub\HubJwtValidator}), which also bind the token to THIS
+     * server (`aud = phlix-server`, `server_id` = this server's id) and to a
+     * live expiry. An invalid/expired/foreign token links NOTHING and returns a
+     * single generic 401 — no user-enumeration oracle.
+     *
+     * @param Request $request
+     * @param array<string, string> $params
+     * @return Response
+     */
+    public function linkHub(Request $request, array $params): Response
+    {
+        $userId = $this->currentUserId($request);
+        if ($userId === null) {
+            return $this->unauthorized();
+        }
+
+        // S301 review r1 Finding 2: the principal must be a REAL server account
+        // — a relayed principal with no server-side linkage is not a `users`
+        // row, and linking to it would 500 on the FK instead of refusing.
+        if (!$this->currentUserIsRealAccount($userId)) {
+            return $this->unauthorized();
+        }
+
+        if ($this->hubJwtValidator === null) {
+            return (new Response())->status(503)->json([
+                'error' => 'hub_not_enrolled',
+                'code' => 'hub.not_enrolled',
+                'message' => 'Server is not enrolled with a hub',
+            ]);
+        }
+
+        $body = $request->body;
+        $hubToken = is_string($body['hub_token'] ?? null) ? $body['hub_token'] : '';
+        if ($hubToken === '') {
+            return (new Response())->status(400)->json([
+                'error' => 'hub_token_required',
+                'code' => 'hub.token_required',
+                'message' => 'hub_token is required in request body',
+            ]);
+        }
+
+        $claims = $this->hubJwtValidator->validate($hubToken);
+        if ($claims === null) {
+            // One generic 401 for every failure mode — no oracle.
+            return (new Response())->status(401)->json([
+                'error' => 'hub_jwt_invalid',
+                'code' => 'hub.jwt_invalid',
+                'message' => 'Invalid or expired hub token',
+            ]);
+        }
+
+        // The identity to link is the VERIFIED hub user UUID from the claims —
+        // NEVER a client-supplied value.
+        $externalId = $claims->userId;
+        if ($externalId === '') {
+            LoggerFactory::get(LogChannels::AUTH)->error('Hub JWT validated without a hub_user_id claim');
+            return (new Response())->status(401)->json([
+                'error' => 'hub_jwt_invalid',
+                'code' => 'hub.jwt_invalid',
+                'message' => 'Invalid or expired hub token',
+            ]);
+        }
+
+        return $this->linkVerifiedIdentity($userId, self::HUB_PROVIDER, $externalId, null);
+    }
+
+    /**
      * Persist a provider-verified identity as a link on the current user, with
      * the already-linked / conflict guards. JSON responses (this is an API POST).
      *
      * @param string $userId Trusted current-user id (from the validated session).
-     * @param string $provider Provider family (e.g. "ldap").
+     * @param string $provider Provider family (e.g. "ldap", "hub").
      * @param string $externalId Provider-verified external identity — never client input.
-     * @param AuthResult $result The verified auth result (for non-secret metadata).
+     * @param AuthResult|null $result The verified auth result (for non-secret metadata),
+     *                                or null when the provider verification yields no
+     *                                AuthResult (S301 hub link — the claims carry no
+     *                                email/display-name).
      * @return Response
      */
     private function linkVerifiedIdentity(
         string $userId,
         string $provider,
         string $externalId,
-        AuthResult $result,
+        ?AuthResult $result,
     ): Response {
         $existing = $this->identities->findByProviderExternalId(
             $provider,
@@ -393,11 +531,16 @@ final class AccountLinkController
      * email + display name (for the settings UI). No tokens/secrets — and the
      * listing never returns provider_data anyway.
      *
-     * @param AuthResult $result The verified auth result.
+     * @param AuthResult|null $result The verified auth result; null yields no
+     *                                metadata (S301 hub link).
      * @return array<string, string>|null
      */
-    private function buildProviderData(AuthResult $result): ?array
+    private function buildProviderData(?AuthResult $result): ?array
     {
+        if ($result === null) {
+            return null;
+        }
+
         $data = [];
         $email = $result->getEmail();
         if (is_string($email) && $email !== '') {

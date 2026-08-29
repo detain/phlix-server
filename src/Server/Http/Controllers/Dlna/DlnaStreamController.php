@@ -32,7 +32,7 @@ use Phlix\Server\Http\Response;
  *
  * ## Why this is a ROUTER route and not an HttpHandler bypass
  *
- * The obvious template — {@see \Phlix\Server\Workerman\HttpHandler::serveMediaStream()},
+ * The obvious template — {@see \Phlix\Server\Http\FastPath\PreRouterFastPaths::serveMediaStream()},
  * which serves `/media/{id}/stream` — is the WRONG one to copy. It runs before
  * `Application::dispatch()`, so router middleware cannot reach it, which is
  * precisely why it re-implements auth and stream limits inline. Copying that

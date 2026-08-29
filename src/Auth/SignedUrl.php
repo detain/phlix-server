@@ -24,7 +24,7 @@ namespace Phlix\Auth;
  * anyone who knew the (UUID) id. A signed URL closes that gap: the now-gated
  * JSON detail endpoints — which DO require a signed-in user — mint a URL carrying
  * `?exp=<unix-seconds>&sig=<base64url-hmac>`; {@see \Phlix\Server\Http\Middleware\SignedUrlMiddleware}
- * (and the inline guard in {@see \Phlix\Server\Workerman\HttpHandler::serveMediaStream()})
+ * (and the inline guard in {@see \Phlix\Server\Http\FastPath\PreRouterFastPaths::serveMediaStream()})
  * recompute the HMAC and reject anything missing, tampered, or expired.
  *
  * The signature covers a *canonical resource* (see {@see self::canonicalResource()})

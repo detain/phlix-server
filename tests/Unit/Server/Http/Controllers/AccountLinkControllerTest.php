@@ -8,6 +8,8 @@ use PHPUnit\Framework\TestCase;
 use Phlix\Auth\AuthProviderRegistry;
 use Phlix\Auth\UserIdentityRepository;
 use Phlix\Auth\UserRepository;
+use Phlix\Hub\HubJwtValidatorInterface;
+use Phlix\Hub\HubUserClaims;
 use Phlix\Plugins\Ldap\LdapConnection;
 use Phlix\Plugins\Ldap\LdapProvider;
 use Phlix\Server\Http\Controllers\AccountLinkController;
@@ -290,7 +292,7 @@ final class AccountLinkControllerTest extends TestCase
         $identities = $this->createMock(UserIdentityRepository::class);
         $identities->expects($this->never())->method('create');
 
-        $controller = new AccountLinkController($identities, new AuthProviderRegistry());
+        $controller = new AccountLinkController($identities, new AuthProviderRegistry(), null, $this->existingUser());
 
         $request = new Request();
         $request->body = ['username' => 'alice', 'password' => 'pw'];
@@ -305,7 +307,7 @@ final class AccountLinkControllerTest extends TestCase
         $identities = $this->createMock(UserIdentityRepository::class);
         $identities->expects($this->never())->method('create');
 
-        $controller = new AccountLinkController($identities, new AuthProviderRegistry());
+        $controller = new AccountLinkController($identities, new AuthProviderRegistry(), null, $this->existingUser());
 
         $request = new Request();
         $request->userId = 'user-1';
@@ -325,7 +327,7 @@ final class AccountLinkControllerTest extends TestCase
         $identities->expects($this->never())->method('create');
 
         // Empty registry — LDAP not enabled/registered.
-        $controller = new AccountLinkController($identities, new AuthProviderRegistry());
+        $controller = new AccountLinkController($identities, new AuthProviderRegistry(), null, $this->existingUser());
 
         $request = new Request();
         $request->userId = 'user-1';
@@ -359,7 +361,7 @@ final class AccountLinkControllerTest extends TestCase
         $registry = new AuthProviderRegistry();
         $registry->registerProvider($this->ldapProviderWithSuccessfulBind());
 
-        $controller = new AccountLinkController($identities, $registry);
+        $controller = new AccountLinkController($identities, $registry, null, $this->existingUser());
 
         $request = new Request();
         $request->userId = 'user-1';
@@ -383,7 +385,7 @@ final class AccountLinkControllerTest extends TestCase
         $registry = new AuthProviderRegistry();
         $registry->registerProvider($this->ldapProviderWithFailedBind());
 
-        $controller = new AccountLinkController($identities, $registry);
+        $controller = new AccountLinkController($identities, $registry, null, $this->existingUser());
 
         $request = new Request();
         $request->userId = 'user-1';
@@ -414,7 +416,7 @@ final class AccountLinkControllerTest extends TestCase
         $registry = new AuthProviderRegistry();
         $registry->registerProvider($this->ldapProviderWithSuccessfulBind());
 
-        $controller = new AccountLinkController($identities, $registry);
+        $controller = new AccountLinkController($identities, $registry, null, $this->existingUser());
 
         $request = new Request();
         $request->userId = 'user-1';
@@ -443,7 +445,7 @@ final class AccountLinkControllerTest extends TestCase
         $registry = new AuthProviderRegistry();
         $registry->registerProvider($this->ldapProviderWithSuccessfulBind());
 
-        $controller = new AccountLinkController($identities, $registry);
+        $controller = new AccountLinkController($identities, $registry, null, $this->existingUser());
 
         $request = new Request();
         $request->userId = 'user-1';
@@ -482,7 +484,7 @@ final class AccountLinkControllerTest extends TestCase
         $registry = new AuthProviderRegistry();
         $registry->registerProvider($this->ldapProviderWithSuccessfulBind());
 
-        $controller = new AccountLinkController($identities, $registry);
+        $controller = new AccountLinkController($identities, $registry, null, $this->existingUser());
 
         $request = new Request();
         $request->userId = 'user-1';
@@ -521,7 +523,7 @@ final class AccountLinkControllerTest extends TestCase
         $registry = new AuthProviderRegistry();
         $registry->registerProvider($this->ldapProviderWithSuccessfulBind());
 
-        $controller = new AccountLinkController($identities, $registry);
+        $controller = new AccountLinkController($identities, $registry, null, $this->existingUser());
 
         $request = new Request();
         $request->userId = 'user-1';
@@ -559,7 +561,7 @@ final class AccountLinkControllerTest extends TestCase
         $registry = new AuthProviderRegistry();
         $registry->registerProvider($this->ldapProviderWithSuccessfulBind());
 
-        $controller = new AccountLinkController($identities, $registry);
+        $controller = new AccountLinkController($identities, $registry, null, $this->existingUser());
 
         $request = new Request();
         $request->userId = 'user-1';
@@ -617,5 +619,237 @@ final class AccountLinkControllerTest extends TestCase
             userFilter: '(uid={{username}})',
             adminGroup: null,
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // S301: POST /auth/identities/link/hub — link the authenticated relay
+    // principal (hub user UUID) to this server account via a VERIFIED hub JWT.
+    // -----------------------------------------------------------------------
+
+    private function hubValidator(?HubUserClaims $claims): HubJwtValidatorInterface
+    {
+        $validator = $this->createMock(HubJwtValidatorInterface::class);
+        $validator->method('validate')->willReturn($claims);
+
+        return $validator;
+    }
+
+    /**
+     * A UserRepository whose findById resolves the test's 'user-1' account —
+     * the link endpoints require the principal to be a REAL server account
+     * (S301 review r1 Finding 2).
+     */
+    private function existingUser(): UserRepository
+    {
+        $repo = $this->createMock(UserRepository::class);
+        $repo->method('findById')->willReturn(['id' => 'user-1', 'username' => 'user-1']);
+
+        return $repo;
+    }
+
+    private function hubLinkController(
+        UserIdentityRepository $identities,
+        ?HubJwtValidatorInterface $validator = null,
+        ?UserRepository $userRepository = null
+    ): AccountLinkController {
+        return new AccountLinkController(
+            $identities,
+            new AuthProviderRegistry(),
+            null,
+            $userRepository ?? $this->existingUser(),
+            $validator,
+        );
+    }
+
+    private function hubLinkRequest(string $hubToken, array $extraBody = []): Request
+    {
+        $request = new Request();
+        $request->userId = 'user-1';
+        $request->body = ['hub_token' => $hubToken] + $extraBody;
+
+        return $request;
+    }
+
+    public function test_link_hub_requires_authentication(): void
+    {
+        $identities = $this->createMock(UserIdentityRepository::class);
+        $identities->expects($this->never())->method('create');
+
+        $controller = $this->hubLinkController($identities, $this->hubValidator(null));
+
+        $request = new Request();
+        $request->body = ['hub_token' => 'eyJ...'];
+
+        $response = $controller->linkHub($request, []);
+
+        $this->assertSame(401, $response->statusCode);
+    }
+
+    /**
+     * S301 review r1 Finding 2 (the relayed-unmapped case): a principal that is
+     * NOT a real server account (a relayed hub UUID with no linkage) must be
+     * refused before anything links — the user_identities FK would otherwise
+     * turn the attempt into a 500.
+     */
+    public function test_link_hub_refuses_principal_that_is_not_a_real_server_account(): void
+    {
+        $identities = $this->createMock(UserIdentityRepository::class);
+        $identities->expects($this->never())->method('create');
+        $identities->expects($this->never())->method('findByProviderExternalId');
+
+        $missing = $this->createMock(UserRepository::class);
+        $missing->method('findById')->willReturn(null);
+
+        $claims = new HubUserClaims(
+            userId: 'hub-uuid-1',
+            serverId: 'srv-1',
+            subject: 'hub-uuid-1',
+            issuer: 'phlix-hub',
+            expiresAt: time() + 3600,
+        );
+        $controller = $this->hubLinkController($identities, $this->hubValidator($claims), $missing);
+
+        $response = $controller->linkHub($this->hubLinkRequest('verified-jwt'), []);
+
+        $this->assertSame(401, $response->statusCode);
+    }
+
+    public function test_link_hub_missing_token_returns_400(): void
+    {
+        $identities = $this->createMock(UserIdentityRepository::class);
+        $identities->expects($this->never())->method('create');
+
+        $controller = $this->hubLinkController($identities, $this->hubValidator(null));
+
+        $request = new Request();
+        $request->userId = 'user-1';
+        $request->body = [];
+
+        $response = $controller->linkHub($request, []);
+
+        $this->assertSame(400, $response->statusCode);
+        /** @var array<string, mixed> $body */
+        $body = json_decode($response->body, true);
+        $this->assertSame('hub.token_required', $body['code']);
+    }
+
+    public function test_link_hub_unenrolled_server_returns_503(): void
+    {
+        $identities = $this->createMock(UserIdentityRepository::class);
+        $identities->expects($this->never())->method('create');
+
+        // No validator wired → the server cannot verify any hub JWT.
+        $controller = $this->hubLinkController($identities);
+
+        $response = $controller->linkHub($this->hubLinkRequest('eyJ...'), []);
+
+        $this->assertSame(503, $response->statusCode);
+        /** @var array<string, mixed> $body */
+        $body = json_decode($response->body, true);
+        $this->assertSame('hub.not_enrolled', $body['code']);
+    }
+
+    public function test_link_hub_invalid_token_returns_401_and_links_nothing(): void
+    {
+        $identities = $this->createMock(UserIdentityRepository::class);
+        $identities->expects($this->never())->method('findByProviderExternalId');
+        $identities->expects($this->never())->method('create');
+
+        $controller = $this->hubLinkController($identities, $this->hubValidator(null));
+
+        $response = $controller->linkHub($this->hubLinkRequest('forged-token'), []);
+
+        $this->assertSame(401, $response->statusCode);
+        /** @var array<string, mixed> $body */
+        $body = json_decode($response->body, true);
+        $this->assertSame('hub.jwt_invalid', $body['code']);
+    }
+
+    /**
+     * THE LINCHPIN: the linked identity is the VERIFIED hub user UUID from the
+     * claims — a client-supplied external_id in the body is NEVER trusted (no
+     * route ever reads one).
+     */
+    public function test_link_hub_links_the_verified_hub_uuid_and_never_client_input(): void
+    {
+        $identities = $this->createMock(UserIdentityRepository::class);
+        $identities->method('findByProviderExternalId')->willReturn(null);
+        $identities->expects($this->once())
+            ->method('create')
+            ->with('user-1', 'hub', '', 'hub-uuid-1', null);
+
+        $claims = new HubUserClaims(
+            userId: 'hub-uuid-1',
+            serverId: 'srv-1',
+            subject: 'hub-uuid-1',
+            issuer: 'phlix-hub',
+            expiresAt: time() + 3600,
+        );
+        $controller = $this->hubLinkController($identities, $this->hubValidator($claims));
+
+        // The body carries a bogus external_id the flow must ignore entirely.
+        $response = $controller->linkHub(
+            $this->hubLinkRequest('verified-jwt', ['external_id' => 'client-claimed-id']),
+            [],
+        );
+
+        $this->assertSame(200, $response->statusCode);
+        /** @var array<string, mixed> $body */
+        $body = json_decode($response->body, true);
+        $this->assertSame(true, $body['created']);
+        $this->assertSame('hub', $body['provider']);
+    }
+
+    public function test_link_hub_idempotent_when_already_linked_to_same_user(): void
+    {
+        $identities = $this->createMock(UserIdentityRepository::class);
+        $identities->method('findByProviderExternalId')->willReturn([
+            'id' => 'identity-1',
+            'user_id' => 'user-1',
+            'provider' => 'hub',
+            'external_id' => 'hub-uuid-1',
+        ]);
+        $identities->expects($this->never())->method('create');
+
+        $claims = new HubUserClaims(
+            userId: 'hub-uuid-1',
+            serverId: 'srv-1',
+            subject: 'hub-uuid-1',
+            issuer: 'phlix-hub',
+            expiresAt: time() + 3600,
+        );
+        $controller = $this->hubLinkController($identities, $this->hubValidator($claims));
+
+        $response = $controller->linkHub($this->hubLinkRequest('verified-jwt'), []);
+
+        $this->assertSame(200, $response->statusCode);
+        /** @var array<string, mixed> $body */
+        $body = json_decode($response->body, true);
+        $this->assertSame(false, $body['created']);
+    }
+
+    public function test_link_hub_conflict_when_identity_owned_by_another_user(): void
+    {
+        $identities = $this->createMock(UserIdentityRepository::class);
+        $identities->method('findByProviderExternalId')->willReturn([
+            'id' => 'identity-1',
+            'user_id' => 'other-user',
+            'provider' => 'hub',
+            'external_id' => 'hub-uuid-1',
+        ]);
+        $identities->expects($this->never())->method('create');
+
+        $claims = new HubUserClaims(
+            userId: 'hub-uuid-1',
+            serverId: 'srv-1',
+            subject: 'hub-uuid-1',
+            issuer: 'phlix-hub',
+            expiresAt: time() + 3600,
+        );
+        $controller = $this->hubLinkController($identities, $this->hubValidator($claims));
+
+        $response = $controller->linkHub($this->hubLinkRequest('verified-jwt'), []);
+
+        $this->assertSame(409, $response->statusCode);
     }
 }

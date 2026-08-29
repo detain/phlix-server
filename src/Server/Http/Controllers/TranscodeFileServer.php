@@ -31,7 +31,7 @@ use Phlix\Server\Http\Response;
  * the resident worker, driving memory and GC pressure. Streaming also gives us real
  * HTTP `Range` support (single range → 206 + `Content-Range`, unsatisfiable → 416)
  * and `Last-Modified` / conditional-GET handling for free, mirroring the direct-play
- * `serveMediaStream()` path.
+ * `PreRouterFastPaths::serveMediaStream()` path.
  */
 trait TranscodeFileServer
 {

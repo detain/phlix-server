@@ -1072,6 +1072,16 @@ final class MediaServicesProvider implements ServiceProviderInterface
             ArtworkStorage::class => autowire()
                 ->constructorParameter('storageDir', get('artwork.storage_path')),
 
+            // S301: the transport-neutral pre-router byte stage. `container` is
+            // an OPTIONAL ctor param (PHP-DI skips those during autowiring),
+            // and the stream branch NEEDS it — without the explicit binding the
+            // relay fork's container-built instance would resolve with
+            // container=null and the fail-loud guard would refuse every
+            // relayed direct-play request (measured live in the S301 proof:
+            // HTTP_REQUEST dispatch failed with "no container was provided").
+            \Phlix\Server\Http\FastPath\PreRouterFastPaths::class => autowire()
+                ->constructorParameter('container', get(ContainerInterface::class)),
+
             // F3: root directory for DOWNLOADED external subtitles
             // (config/subtitles.php `storage_path`, operator-overridable via
             // SUBTITLE_STORAGE_PATH), with a defensive @include fallback + the

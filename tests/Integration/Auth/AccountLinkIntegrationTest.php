@@ -6,6 +6,7 @@ namespace Phlix\Tests\Integration\Auth;
 
 use Phlix\Auth\AuthProviderRegistry;
 use Phlix\Auth\UserIdentityRepository;
+use Phlix\Auth\UserRepository;
 use Phlix\Common\Uuid;
 use Phlix\Plugins\Ldap\LdapConnection;
 use Phlix\Plugins\Ldap\LdapProvider;
@@ -62,9 +63,12 @@ use Workerman\MySQL\Connection;
  *  2. The genuine duplicate-key error is a real DB error (repository level):
  *     a second `create()` for the same triple throws with a SQLSTATE
  *     23000 / 1062 / "Duplicate" signature, and one row remains owned by A.
- *  3. Finding #1 boundary: a NON-duplicate `create()` failure (FK violation —
- *     link for a user_id absent from `users`) is RE-THROWN (a 5xx), NOT a 409,
- *     and persists no row.
+ *  3. Finding #1 boundary: a NON-duplicate `create()` failure (a real
+ *     constraint violation that is not a duplicate key — re-vehicled for S301
+ *     from the FK case, which the real-account guard now refuses earlier with
+ *     401 — to an over-long VARCHAR(255) `external_id`) is RE-THROWN (a 5xx),
+ *     NOT a 409, and persists no row. The S301 guard's ghost-principal 401 is
+ *     asserted in the same test.
  *  4. Same-user idempotency: A re-links the same identity → 200 `created:false`,
  *     still exactly one row.
  *  5. Listing: `GET /auth/identities` shaping returns A's identity with the
@@ -160,9 +164,14 @@ final class AccountLinkIntegrationTest extends TestCase
         $beforeB = $this->userProviderCols($idB);
 
         // --- A links the identity through the controller (real repo). ---
+        // S301: the link endpoints require the principal to be a REAL server
+        // account (a relayed pseudo-principal must not reach the FK), so the
+        // controller gets the real UserRepository on the same connection.
         $controllerA = new AccountLinkController(
             new UserIdentityRepository($this->conn()),
             $this->registryVerifying($dn),
+            null,
+            new UserRepository($this->conn()),
         );
         $respA = $controllerA->linkLdap($this->ldapLinkRequest($idA), []);
         $this->assertSame(200, $respA->statusCode, 'A must successfully link the verified identity');
@@ -180,7 +189,12 @@ final class AccountLinkIntegrationTest extends TestCase
         // the controller proceeds to create() and the REAL DB UNIQUE index is the
         // conflict authority (the race backstop). ---
         $raceRepo = $this->raceRepositoryMissingFirstPrecheck();
-        $controllerB = new AccountLinkController($raceRepo, $this->registryVerifying($dn));
+        $controllerB = new AccountLinkController(
+            $raceRepo,
+            $this->registryVerifying($dn),
+            null,
+            new UserRepository($this->conn()),
+        );
 
         $respB = $controllerB->linkLdap($this->ldapLinkRequest($idB), []);
 
@@ -282,39 +296,86 @@ final class AccountLinkIntegrationTest extends TestCase
      * driver error codes — the exact distinction finding #1 turned on, against a
      * real (non-duplicate) constraint failure.
      */
+    /**
+     * Finding #1 boundary, re-vehicled for S301: a NON-duplicate `create()`
+     * failure (a real constraint violation that is NOT a duplicate key) must be
+     * RE-THROWN (a 5xx), NOT a 409, and persists no row.
+     *
+     * The original vehicle — a GHOST principal (a user_id absent from `users`,
+     * so the identity INSERT's FK fails) — is now unreachable by design: the
+     * S301 real-account guard refuses a non-existent principal with 401 BEFORE
+     * any link can run (asserted in the first half). The re-throw contract is
+     * still live for a REAL principal whose create fails for a non-duplicate
+     * reason: `external_id` is VARCHAR(255) (migration 092), so a provider-
+     * VERIFIED identity longer than 255 chars is rejected by MySQL (1406, not
+     * 23000) — the controller's catch re-reads (row absent) and re-throws.
+     */
     public function testNonDuplicateCreateFailureIsRethrownNotMappedTo409(): void
     {
+        // --- Half 1: a ghost principal is REFUSED 401 by the real-account
+        // guard — it can never reach create() and 500 on the FK (S301). ---
         $dn = 'uid=fk-' . $this->token . ',ou=users,dc=example,dc=com';
         $externalId = 'ldap.' . $dn;
         $this->externalIds[] = $externalId;
 
-        // A user id that is NEVER inserted into `users` → the identity FK fails.
+        // A user id that is NEVER inserted into `users`.
         $ghostUserId = Uuid::v4();
 
         $controller = new AccountLinkController(
             new UserIdentityRepository($this->conn()),
             $this->registryVerifying($dn),
+            null,
+            new UserRepository($this->conn()),
         );
 
-        $request = $this->ldapLinkRequest($ghostUserId);
+        $response = $controller->linkLdap($this->ldapLinkRequest($ghostUserId), []);
+
+        $this->assertSame(
+            401,
+            $response->statusCode,
+            'a principal that is not a REAL server account must be refused before any link — '
+            . 'never a 500 on the user_identities FK',
+        );
+        $this->assertSame(
+            0,
+            $this->countIdentities('ldap', '', $externalId),
+            'the refused ghost principal must persist no identity row',
+        );
+
+        // --- Half 2: a REAL principal whose create() fails NON-duplicately is
+        // still re-thrown (5xx), not masked as 409 (the finding #1 boundary). ---
+        // `external_id` is VARCHAR(255); a provider-VERIFIED identity longer
+        // than that is rejected by MySQL as data-too-long (1406) — a genuine
+        // non-duplicate constraint failure.
+        $idA = $this->seedLocalUser('A');
+        $longDn = 'uid=overlong-' . str_repeat('x', 280) . ',ou=users,dc=example,dc=com';
+        $longExternalId = 'ldap.' . $longDn;
+        $this->externalIds[] = $longExternalId;
+
+        $controller = new AccountLinkController(
+            new UserIdentityRepository($this->conn()),
+            $this->registryVerifying($longDn),
+            null,
+            new UserRepository($this->conn()),
+        );
 
         $threw = false;
         try {
-            $controller->linkLdap($request, []);
+            $controller->linkLdap($this->ldapLinkRequest($idA), []);
         } catch (Throwable $e) {
             $threw = true;
         }
 
         $this->assertTrue(
             $threw,
-            'a non-duplicate (FK) create() failure must be RE-THROWN (a 5xx), not masked as a 409',
+            'a non-duplicate create() failure must be RE-THROWN (a 5xx), not masked as a 409',
         );
 
-        // Nothing persisted (the FK rejected the insert; no row exists for anyone).
+        // Nothing persisted (the constraint rejected the insert; no row exists).
         $this->assertSame(
             0,
-            $this->countIdentities('ldap', '', $externalId),
-            'a rejected FK insert must persist no identity row',
+            $this->countIdentities('ldap', '', $longExternalId),
+            'a rejected non-duplicate insert must persist no identity row',
         );
     }
 
@@ -334,6 +395,8 @@ final class AccountLinkIntegrationTest extends TestCase
         $controller = new AccountLinkController(
             new UserIdentityRepository($this->conn()),
             $this->registryVerifying($dn),
+            null,
+            new UserRepository($this->conn()),
         );
 
         $first = $controller->linkLdap($this->ldapLinkRequest($idA), []);

@@ -33,9 +33,12 @@ use function is_array;
 use function is_string;
 use function json_decode;
 use function parse_str;
+use function sprintf;
+use function str_starts_with;
 use function strcasecmp;
 use function stripos;
 use function strlen;
+use function strtolower;
 use function substr;
 
 /**
@@ -188,6 +191,14 @@ final class RelayConsumer
     private ?\DateTimeImmutable $lastConnectErrorAt = null;
 
     /**
+     * @var RelayIdentityResolver|null Server-side hub-user → server-user
+     *      resolution (S301). Optional so pre-S301 construction sites and the
+     *      identity tests keep working; null means every relayed request keeps
+     *      its raw hub-stamped principal (the pre-S301 behaviour).
+     */
+    private ?RelayIdentityResolver $identityResolver = null;
+
+    /**
      * @var bool Whether the likely-plaintext-port TLS-mismatch warning has been
      *      logged this process, so a reconnect loop does not spam the log.
      */
@@ -333,6 +344,7 @@ final class RelayConsumer
         ?callable $localConnectionFactory = null,
         ?callable $httpDispatcher = null,
         ?RelayStateStore $stateStore = null,
+        ?RelayIdentityResolver $identityResolver = null,
     ) {
         $this->config = $config;
         $this->hubClient = $hubClient;
@@ -343,6 +355,7 @@ final class RelayConsumer
         $this->localConnectionFactory = $localConnectionFactory;
         $this->httpDispatcher = $httpDispatcher;
         $this->stateStore = $stateStore;
+        $this->identityResolver = $identityResolver;
     }
 
     /**
@@ -817,10 +830,13 @@ final class RelayConsumer
         $this->logger->debug('RelayConsumer::openHubConnection() creating new AsyncTcpConnection', [
             'address' => $transport['address'],
             'use_tls' => $transport['useTls'],
+            'protocol' => $transport['protocol'],
         ]);
 
         $connection = new AsyncTcpConnection($transport['address'], $transport['context']);
-        $connection->protocol = \Workerman\Protocols\Websocket::class;
+        // S301 live-proof finding: the CLIENT-side protocol is Ws, never
+        // Websocket (see {@see resolveHubTransport()} for the measured proof).
+        $connection->protocol = $transport['protocol'];
         if ($transport['useTls']) {
             $connection->transport = 'ssl';
         }
@@ -837,20 +853,31 @@ final class RelayConsumer
 
     /**
      * Pure transport decision for the hub tunnel: map the resolved WS URL to the
-     * Workerman connection address, whether TLS is used, and the SSL context.
+     * Workerman connection address, whether TLS is used, the SSL context, and
+     * the application protocol class.
      *
      * Extracted so the TLS-vs-scheme choice can be asserted in a unit test
      * without opening a live connection (38.1 acceptance).
      *
      * Workerman's {@see AsyncTcpConnection} needs the `ws://` scheme (its
-     * Websocket application protocol) with `transport='ssl'` for a wss tunnel —
+     * client `Ws` application protocol) with `transport='ssl'` for a wss tunnel —
      * `wss://` is NOT a registered transport, so the scheme is rewritten to
      * `ws://` for the ADDRESS and TLS is switched on via transport + context.
      * A `ws://` URL yields no SSL context and no ssl transport (plain tcp).
      *
+     * ⚠ The protocol class is {@see \Workerman\Protocols\Ws} — the CLIENT-side
+     * WebSocket protocol that performs the upgrade handshake — NEVER
+     * {@see \Workerman\Protocols\Websocket}, which is the SERVER-side protocol
+     * with no client `onConnect`, so the upgrade request is never sent and the
+     * HELLO sits buffered in `tmpWebsocketData` forever (measured live against
+     * a real hub: `Websocket` timed out with zero bytes exchanged; `Ws`
+     * completed the handshake and received `hello_ack`). The constructor
+     * auto-detects `Ws` from the `ws://` scheme; this entry is the single,
+     * pinned source of that choice.
+     *
      * @param string $wsUrl Resolved hub relay WS URL (ws:// or wss://).
      *
-     * @return array{address: string, useTls: bool, context: array<string, mixed>}
+     * @return array{address: string, useTls: bool, context: array<string, mixed>, protocol: class-string}
      *
      * @since 0.20.0
      */
@@ -864,6 +891,8 @@ final class RelayConsumer
             'address' => $address,
             'useTls' => $useTls,
             'context' => $context,
+            // S301 live-proof finding: Ws (client), never Websocket (server).
+            'protocol' => \Workerman\Protocols\Ws::class,
         ];
     }
 
@@ -1637,11 +1666,26 @@ final class RelayConsumer
         // ensuring those values never survive as forwardable headers.
         $safeEnvelope = $envelope->withoutForbiddenHeaders();
 
+        // S301 defense-in-depth: the DTO's denylist names the CURRENT markers,
+        // but the whole `x-phlix-relay` family is trust-bearing — the hub strips
+        // the prefix family on ITS side (ServerProxyController::
+        // STRIPPED_REQUEST_HEADER_PREFIXES) and the server must not depend on
+        // that. A marker that ever survives on the wire (e.g. a future PROFILE
+        // identity added hub-side) is dropped here before it can be
+        // re-forwarded downstream. Pinned by the re-derived S247 crossing test
+        // (test_a_profile_identity_never_crosses_the_tunnel).
+        $forwardHeaders = [];
+        foreach ($safeEnvelope->headers as $name => $value) {
+            if (!self::isRelayTrustMarker($name)) {
+                $forwardHeaders[$name] = $value;
+            }
+        }
+
         $request = new ServerRequest();
         $request->method = $envelope->method;
         $request->path = $envelope->path;
         $request->queryString = $envelope->query;
-        $request->headers = $safeEnvelope->headers;
+        $request->headers = $forwardHeaders;
         $request->rawBody = $envelope->body;
 
         if ($envelope->query !== '') {
@@ -1667,12 +1711,24 @@ final class RelayConsumer
         // authenticates the WS relay session and stamps the validated owner on
         // the inbound x-phlix-relay-user header (and strips any client-supplied
         // copy on the way in), so reading it from the RAW envelope here is the
-        // one legitimate trust basis. We apply it as $request->userId so auth
-        // gates pass, but because that header is in STRIPPED_HEADERS it was
-        // already removed from $request->headers above — it can never be
-        // re-forwarded downstream. Absent → 'hub-relay' fallback as before.
+        // one legitimate trust basis.
+        //
+        // S301 (identity mapping): that stamped value is the AUTHENTICATED
+        // RELAY PRINCIPAL. It is resolved to a SERVER user id ENTIRELY from
+        // this server's own rows via {@see RelayIdentityResolver} (user_identities
+        // provider='hub' — a row only ever written from a cryptographically
+        // verified hub JWT; see AccountLinkController::linkHub()). A mapped
+        // principal becomes the real server user, so the parental RatingGate,
+        // per-profile stream limits and per-user lookups all resolve. An
+        // unmapped principal keeps its hub UUID (auth presence + log
+        // attribution only — the rating gate stays a strict no-op for it,
+        // which is the honest state, and checkStreamLimit()'s
+        // profile_not_found names it). A client-supplied PROFILE identity
+        // never crosses the tunnel and is never read here — pinned by the
+        // re-derived S247 crossing test.
         $relayUser = $this->headerValue($envelope->headers, 'x-phlix-relay-user');
-        $request->userId = $relayUser !== '' ? $relayUser : 'hub-relay';
+        $serverUserId = $this->resolveRelayIdentity($envelope, $relayUser);
+        $request->userId = $serverUserId ?? ($relayUser !== '' ? $relayUser : 'hub-relay');
 
         // Client IP comes from the relay session, never from the producer-
         // suppliable x-forwarded-for header (now stripped): an untrusted relay
@@ -1702,6 +1758,60 @@ final class RelayConsumer
         }
 
         return $out;
+    }
+
+    /**
+     * Resolve the authenticated relay principal to a server user id (S301).
+     *
+     * The mapping is applied ONLY when the envelope carries exactly the two
+     * known hub-stamped trust markers (`x-phlix-relay` + `x-phlix-relay-user`).
+     * An UNKNOWN relay marker (e.g. a `x-phlix-relay-profile` claim — which
+     * the identity direction forbids ever crossing the tunnel) trips a
+     * warning and REFUSES the mapping: the request keeps its raw principal and
+     * no server identity is granted. That is the production side of the
+     * re-derived S247 pin — a hub-side strip regression or a second tunnel
+     * producer becomes visible in the logs AND cannot silently widen identity.
+     *
+     * @param RelayHttpRequest $envelope The raw relay envelope.
+     * @param string           $relayUser The `x-phlix-relay-user` value ('' when absent).
+     *
+     * @return string|null The linked server user id, or null when unmapped /
+     *                     when an unknown trust marker refuses the mapping.
+     */
+    private function resolveRelayIdentity(RelayHttpRequest $envelope, string $relayUser): ?string
+    {
+        $unexpected = [];
+        foreach ($envelope->headers as $name => $_value) {
+            $lower = strtolower((string) $name);
+            if (
+                str_starts_with($lower, 'x-phlix-relay')
+                && $lower !== 'x-phlix-relay'
+                && $lower !== 'x-phlix-relay-user'
+            ) {
+                $unexpected[] = $lower;
+            }
+        }
+
+        if ($unexpected !== []) {
+            $this->logger->warning('RelayConsumer: unexpected relay trust marker refused the identity mapping', [
+                'markers' => $unexpected,
+                'relay_user' => $relayUser,
+            ]);
+            return null;
+        }
+
+        return $this->identityResolver?->resolve($relayUser);
+    }
+
+    /**
+     * Whether a header name is part of the relay trust-marker family
+     * (`x-phlix-relay*`), which must never be re-forwarded downstream (S301).
+     *
+     * @param string $name Header name.
+     */
+    private static function isRelayTrustMarker(string $name): bool
+    {
+        return str_starts_with(strtolower($name), 'x-phlix-relay');
     }
 
     /**
@@ -1747,6 +1857,39 @@ final class RelayConsumer
     private function sendHttpResponse(int $requestId, ServerResponse $response): void
     {
         $headers = $response->headers;
+
+        // S301: a relayed 206 window must carry its Content-Range. On the direct
+        // transport Workerman's encoder derives it from withFile()'s offset/length
+        // at encode time; the tunnel head is built from $response->headers
+        // VERBATIM (no encoder), so a ranged direct-play seek over the relay
+        // would otherwise reach the client as a bodyless 206 with no range
+        // information. Mirror Response::finalizeFileHeaders() here — computed
+        // into the LOCAL copy only, so the response object stays untouched and
+        // the direct transport's own emission cannot duplicate the field.
+        if ($response->filePath !== null && ($response->fileOffset > 0 || $response->fileLength > 0)) {
+            $hasContentRange = false;
+            foreach ($headers as $name => $_value) {
+                if (strcasecmp($name, 'Content-Range') === 0) {
+                    $hasContentRange = true;
+                    break;
+                }
+            }
+            if (!$hasContentRange) {
+                $fileSize = (int) @filesize($response->filePath);
+                $bodyLen = $response->fileLength > 0
+                    ? $response->fileLength
+                    : $fileSize - $response->fileOffset;
+                if ($fileSize > 0 && $bodyLen > 0) {
+                    $headers['Content-Range'] = sprintf(
+                        'bytes %d-%d/%d',
+                        $response->fileOffset,
+                        $response->fileOffset + $bodyLen - 1,
+                        $fileSize,
+                    );
+                }
+            }
+        }
+
         $bodyLength = $this->computeBodyLength($response);
 
         $head = new RelayHttpResponseHead($response->statusCode, $headers, $bodyLength);

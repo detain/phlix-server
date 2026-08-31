@@ -391,5 +391,5 @@ jobs:
   # to the triggering PR: it published an image nothing booted and attributed
   # hub failures to phlix-server contributors. The hub has owned its own build
   # AND its own boot gate in its own workflow since S300 (detain/phlix-hub
-  # #233, b1d5948) — the TODO above ("the next PR in the phlix-hub repo should
-  # add a Dockerfile") was met there, which is what made this job redundant.
+  # #233, b1d5948) — the TODO that lived here ("the next PR (in the phlix-hub
+  # repo) should add it") was met there, which is what made this job redundant.

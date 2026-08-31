@@ -1889,11 +1889,15 @@ class DockerEntrypointTest extends TestCase
             . 'building against a stale base'
         );
         // The digest check is the part that makes the reference trustworthy —
-        // a tag is mutable, a digest is not.
+        // a tag is mutable, a digest is not. S307 deleted the second consumer
+        // of the registry base (`docker-hub`): phlix-hub has built its own
+        // image behind its own digest guard in its own workflow since S300
+        // (detain/phlix-hub #233, b1d5948). If this count ever rises again,
+        // the new job must pin the base digest exactly like `docker` does.
         self::assertSame(
-            2,
+            1,
             substr_count($workflow, 'Verify the base image is the one built from this commit'),
-            'both dependent jobs (docker, docker-hub) must verify the base digest before building'
+            'every job building FROM the registry base (docker) must verify the base digest before building'
         );
     }
 

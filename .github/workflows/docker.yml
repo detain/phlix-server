@@ -59,7 +59,8 @@ jobs:
       #
       # This job used to be `push: github.event_name != 'pull_request'`, i.e. a
       # PR built the new base and threw it away — while the `docker` and
-      # `docker-hub` jobs below went on building FROM
+      # `docker-hub` jobs (the latter deleted by S307, once the hub repo
+      # started building its own image) went on building FROM
       # `ghcr.io/detain/phlix-base:latest`, the base published by some earlier
       # commit. So every PR compiled this branch's code against last week's
       # base, and the failure mode was exactly the one this whole step exists
@@ -78,9 +79,9 @@ jobs:
       # `:<full-sha>`, which is immutable and names the commit it came from,
       # and the dependent jobs consume THAT and verify its digest.
       # ----------------------------------------------------------------------
-      # Built as an explicit list (same shape as the hub job's `hubmeta`) rather
-      # than a conditional line inside `tags: |`, so there is never an empty
-      # entry whose handling depends on the action's input parsing.
+      # Built as an explicit list rather than a conditional line inside
+      # `tags: |`, so there is never an empty entry whose handling depends on
+      # the action's input parsing.
       - name: Compute base image tags
         id: basetags
         run: |
@@ -276,8 +277,7 @@ jobs:
           # self-contained legs now RUN on a fork PR, where the read-only token
           # cannot write `:buildcache-*` and an unignored cache-export failure
           # would fail the build step — trading the old wrong skip for a new
-          # wrong red. The hub job below keeps its job-level guard (its
-          # Dockerfile DOES consume the base), so it needs no such flag.
+          # wrong red.
           cache-from: type=gha,type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache-${{ matrix.tag }}
           cache-to: type=gha,type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache-${{ matrix.tag }},mode=max,image-manifest=true,oci-mediatypes=true,ignore-error=true
           build-args: |
@@ -386,89 +386,10 @@ jobs:
           chmod +x scripts/docker-boot-smoke.sh
           ./scripts/docker-boot-smoke.sh "${{ matrix.dockerfile }}" "${{ matrix.tag }}"
 
-  # TODO: hub Dockerfile lives in detain/phlix-hub; ensure the workflow picks it up
-  # via the hub repo's release event. For now, this job clones the hub repo and
-  # builds from its Dockerfile so the structure exists. If detain/phlix-hub does
-  # not yet contain a Dockerfile, this job will fail loudly — that is intentional
-  # and the next PR (in the phlix-hub repo) should add it.
-  docker-hub:
-    name: Build and Push phlix-hub
-    runs-on: ubuntu-latest
-    needs: docker-base
-    # Same exposure as the server job: this built FROM `…phlix-base:latest`,
-    # i.e. a base from some other commit, on every PR.
-    if: needs.docker-base.outputs.base_ref != ''
-
-    permissions:
-      contents: read
-      packages: write
-
-    steps:
-      - name: Checkout phlix-hub repository
-        uses: actions/checkout@v6
-        with:
-          repository: detain/phlix-hub
-          ref: master
-          path: phlix-hub
-
-      - name: Verify hub Dockerfile exists
-        run: |
-          if [ ! -f phlix-hub/Dockerfile ]; then
-            echo "::error::phlix-hub/Dockerfile not found in detain/phlix-hub@master."
-            echo "Add a Dockerfile to the phlix-hub repo before this workflow can succeed."
-            exit 1
-          fi
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
-
-      - name: Log in to Container Registry
-        uses: docker/login-action@v4
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Compute hub image tags
-        id: hubmeta
-        run: |
-          SHA="${GITHUB_SHA::12}"
-          echo "tags=${{ env.REGISTRY }}/detain/phlix-hub:latest,${{ env.REGISTRY }}/detain/phlix-hub:${SHA}" >> "$GITHUB_OUTPUT"
-
-      - name: Verify the base image is the one built from this commit
-        env:
-          BASE_REF: ${{ needs.docker-base.outputs.base_ref }}
-          BASE_DIGEST: ${{ needs.docker-base.outputs.base_digest }}
-        run: |
-          set -euo pipefail
-          if [ -z "$BASE_DIGEST" ]; then
-            echo "::error::docker-base published no digest; refusing to build against an unverified base."
-            exit 1
-          fi
-          echo "expected: ${BASE_REF} @ ${BASE_DIGEST}"
-          INSPECT="$(docker buildx imagetools inspect "$BASE_REF")"
-          printf '%s\n' "$INSPECT" | head -20
-          case "$INSPECT" in
-            *"$BASE_DIGEST"*)
-              echo "OK: ${BASE_REF} resolves to the base built in this run." ;;
-            *)
-              echo "::error::${BASE_REF} does NOT resolve to ${BASE_DIGEST} — the hub image would be built against a different base than this commit produced."
-              exit 1 ;;
-          esac
-
-      - name: Build and push phlix-hub
-        uses: docker/build-push-action@v7
-        with:
-          context: phlix-hub
-          file: phlix-hub/Dockerfile
-          platforms: linux/amd64,linux/arm64
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.hubmeta.outputs.tags }}
-          # Dedicated cache tag (not the image tag) — see the base job's note.
-          cache-from: type=gha,type=registry,ref=${{ env.REGISTRY }}/detain/phlix-hub:buildcache
-          cache-to: type=gha,type=registry,ref=${{ env.REGISTRY }}/detain/phlix-hub:buildcache,mode=max,image-manifest=true,oci-mediatypes=true
-          build-args: |
-            PHLIX_BASE_IMAGE=${{ needs.docker-base.outputs.base_ref }}
+  # S307 — the `docker-hub` job ("Build and Push phlix-hub") that lived here
+  # built detain/phlix-hub's image from THIS repo at a hardcoded ref unrelated
+  # to the triggering PR: it published an image nothing booted and attributed
+  # hub failures to phlix-server contributors. The hub has owned its own build
+  # AND its own boot gate in its own workflow since S300 (detain/phlix-hub
+  # #233, b1d5948) — the TODO above ("the next PR in the phlix-hub repo should
+  # add a Dockerfile") was met there, which is what made this job redundant.

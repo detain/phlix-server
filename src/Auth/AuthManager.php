@@ -42,6 +42,13 @@ use Workerman\MySQL\Connection;
  */
 class AuthManager
 {
+    /**
+     * Display name given to the first profile created automatically at
+     * signup (S81: `AuthManager::register()` and the external-provider
+     * create path both call `UserProfileManager::create()` with this name).
+     */
+    public const FIRST_PROFILE_NAME = 'Main';
+
     private const RATE_LIMIT_MAX_ATTEMPTS = 5;
     private const RATE_LIMIT_WINDOW_SECONDS = 900; // 15 minutes
 
@@ -702,6 +709,19 @@ class AuthManager
                 ]);
             }
 
+            // S81: a signup creates the account's FIRST profile automatically
+            // (the AC "signup creates a first profile automatically").
+            // Inside the same transaction as the user row: a failure rolls
+            // back the account too, so no user can exist profile-less by
+            // construction. Skipped for 'pending' accounts (no session yet;
+            // resolveProfileIdForUser() heals lazily on their first
+            // profile-scoped write after approval).
+            if ($this->profileManager !== null && $status === 'active') {
+                $this->profileManager->create($userId, [
+                    'name' => self::FIRST_PROFILE_NAME,
+                ]);
+            }
+
             if ($db !== null) {
                 $db->commitTrans();
             }
@@ -942,12 +962,25 @@ class AuthManager
                 ? $result->attributes['provider']
                 : 'external';
 
+            $created = null;
             $userId = $this->userRepository->findOrCreateByExternalId(
                 $provider,
                 $externalId,
                 $email,
                 $displayName,
+                $created,
             );
+
+            // S81: a NEW external-provider account (OIDC/GitHub/LDAP) starts
+            // with its first profile, exactly like a local signup — wiring
+            // register() alone would leave every external signup profile-less
+            // (the S81 blocker record). Only the create path reports
+            // `$created === true`; a pre-existing owner keeps their profiles.
+            if ($created === true && $this->profileManager !== null) {
+                $this->profileManager->create($userId, [
+                    'name' => self::FIRST_PROFILE_NAME,
+                ]);
+            }
         }
 
         $this->userRepository->updateLastLogin($userId);

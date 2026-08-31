@@ -962,7 +962,8 @@ class UserRepository
         string $provider,
         string $externalId,
         ?string $email = null,
-        ?string $displayName = null
+        ?string $displayName = null,
+        ?bool &$created = null
     ): string {
         // S47 LOGIN-READ REPOINT (the riskiest change): resolve the owning user
         // via the forward-looking `user_identities` join table (migration 092)
@@ -1098,6 +1099,13 @@ class UserRepository
             }
 
             throw $e;
+        }
+
+        // S81: only the create path reports "created" — the two pre-existing
+        // resolutions above (user_identities join, users fallback) return an
+        // existing owner and must NOT trigger first-profile creation.
+        if ($created !== null) {
+            $created = true;
         }
 
         return $id;

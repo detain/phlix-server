@@ -35,6 +35,7 @@ use Phlix\Hub\HubJwtValidatorInterface;
 use Phlix\Media\RecommendationService;
 use Phlix\Server\Http\Controllers\AuthController;
 use Phlix\Server\Http\Controllers\AuthProviderController;
+use Phlix\Server\Http\Controllers\ProfilesController;
 use Phlix\Server\Http\Controllers\WebAuthnController;
 use Phlix\Stats\StatsCollector;
 use Psr\Container\ContainerInterface;
@@ -425,6 +426,14 @@ final class AuthServicesProvider implements ServiceProviderInterface
             WebAuthnController::class => autowire()
                 ->constructorParameter('startAuthLimiter', get(RateLimitProfiles::WEBAUTHN_START))
                 ->constructorParameter('finishAuthLimiter', get(RateLimitProfiles::WEBAUTHN_FINISH)),
+
+            // S81: the self-service profile PIN-verify endpoint is a
+            // brute-force oracle unless throttled, so the controller's limiter
+            // param is REQUIRED and bound explicitly to its RateLimitProfiles
+            // container id — the same optional-param reason as the auth
+            // limiters above (PHP-DI skips optional params during autowiring).
+            ProfilesController::class => autowire()
+                ->constructorParameter('pinVerifyLimiter', get(RateLimitProfiles::PIN_VERIFY)),
         ]);
 
         $this->registerRateLimiters($builder, $appConfig);

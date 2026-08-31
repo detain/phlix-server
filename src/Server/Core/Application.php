@@ -881,6 +881,9 @@ class Application
         // Profile tag management routes (P5-S2)
         $this->loadProfileTagRoutes();
 
+        // Self-service profiles routes (S81) — end-user CRUD/PIN/switch/avatar
+        $this->loadSelfServiceProfileRoutes();
+
         // Stream limit management routes (P5-S3)
         $this->loadStreamLimitRoutes();
 
@@ -1382,6 +1385,74 @@ class Application
             },
             [new \Phlix\Server\Http\Middleware\AuthMiddleware()]
         );
+    }
+
+    /**
+     * S81 — self-service profiles endpoints (end-user CRUD / PIN / switch /
+     * avatar). Deliberately NOT under `/api/v1/admin` (AdminRoutes): the
+     * caller is the authenticated account holder, ownership-checked inside
+     * ProfilesController via ProfileAccessPolicy (404 for "not yours", never
+     * a 403 existence oracle). Same self-service group shape as
+     * loadProfileTagRoutes()/loadAccessScheduleRoutes().
+     */
+    private function loadSelfServiceProfileRoutes(): void
+    {
+        $controller = $this->getProfilesController();
+
+        $this->router->group(
+            '',
+            function (Router $r) use ($controller): void {
+                $r->get('/api/v1/profiles', [$controller, 'list']);
+                $r->post('/api/v1/profiles', [$controller, 'create']);
+                $r->get('/api/v1/profiles/{profileId}', [$controller, 'get']);
+                $r->put('/api/v1/profiles/{profileId}', [$controller, 'update']);
+                $r->delete('/api/v1/profiles/{profileId}', [$controller, 'delete']);
+                $r->post('/api/v1/profiles/{profileId}/pin', [$controller, 'setPin']);
+                $r->delete('/api/v1/profiles/{profileId}/pin', [$controller, 'removePin']);
+                $r->post('/api/v1/profiles/{profileId}/pin/verify', [$controller, 'verifyPin']);
+                $r->post('/api/v1/profiles/{profileId}/switch', [$controller, 'switchProfile']);
+                $r->post('/api/v1/profiles/{profileId}/avatar', [$controller, 'uploadAvatar']);
+            },
+            [new \Phlix\Server\Http\Middleware\AuthMiddleware()]
+        );
+    }
+
+    /**
+     * Returns a ProfilesController instance.
+     *
+     * S81 — container path autowires all five required dependencies; the
+     * pin-verify limiter is bound EXPLICITLY to `rate_limiter.pin_verify` in
+     * AuthServicesProvider (required param, never silently skipped). The
+     * no-container fallback mirrors getAuthController()'s legacy construction.
+     *
+     * @return \Phlix\Server\Http\Controllers\ProfilesController The controller instance.
+     */
+    private function getProfilesController(): \Phlix\Server\Http\Controllers\ProfilesController
+    {
+        if ($this->container === null) {
+            // Fallback: create with direct DB connection
+            $db = $this->connectionPool->getPooledConnection('mysql');
+            $profileManager = new \Phlix\Auth\UserProfileManager($db);
+            return new \Phlix\Server\Http\Controllers\ProfilesController(
+                $profileManager,
+                $this->profileAccessPolicy($db),
+                new \Phlix\Auth\AuthManager(
+                    new \Phlix\Auth\UserRepository($db),
+                    new \Phlix\Auth\JwtHandler('fallback-secret-for-tests'),
+                    new \Phlix\Common\Logger\AuditLogger(
+                        new \Phlix\Common\Logger\StructuredLogger('audit', [])
+                    ),
+                ),
+                new \Phlix\Media\Storage\AvatarStorage(),
+                // In-memory fallback limiter with the pin_verify defaults;
+                // production wires the shared DB-backed instance per
+                // container id.
+                new \Phlix\Common\RateLimit\RateLimiter(300, 5),
+            );
+        }
+
+        /** @var \Phlix\Server\Http\Controllers\ProfilesController */
+        return $this->container->get(\Phlix\Server\Http\Controllers\ProfilesController::class);
     }
 
     /**

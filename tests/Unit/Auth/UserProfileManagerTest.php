@@ -351,13 +351,39 @@ class UserProfileManagerTest extends TestCase
         $this->manager->delete('non-existent');
     }
 
-    public function testVerifyPinReturnsTrueWhenNoPinSet(): void
+    public function testVerifyPinFailsClosedWhenNoPinSet(): void
     {
+        // S81: the old contract returned TRUE for a PIN-less profile — a
+        // self-service verify endpoint over that is an oracle that answers
+        // "true" for every attempt, and a wrong-PIN attempt and a no-PIN
+        // profile were indistinguishable. Fail-closed: no PIN set is NOT a
+        // pass; hasPin() carries the distinction the endpoint needs.
         $this->db->method('query')->willReturn([['pin_hash' => null]]);
 
         $result = $this->manager->verifyPin('profile-1', '1234');
 
-        $this->assertTrue($result);
+        $this->assertFalse($result);
+    }
+
+    public function testHasPinFalseWhenNoPinSet(): void
+    {
+        $this->db->method('query')->willReturn([['pin_hash' => null]]);
+
+        $this->assertFalse($this->manager->hasPin('profile-1'));
+    }
+
+    public function testHasPinFalseWhenEmptyPinHash(): void
+    {
+        $this->db->method('query')->willReturn([['pin_hash' => '']]);
+
+        $this->assertFalse($this->manager->hasPin('profile-1'));
+    }
+
+    public function testHasPinTrueWhenPinConfigured(): void
+    {
+        $this->db->method('query')->willReturn([['pin_hash' => 'not-a-real-hash']]);
+
+        $this->assertTrue($this->manager->hasPin('profile-1'));
     }
 
     public function testVerifyPinReturnsTrueForCorrectPin(): void

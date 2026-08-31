@@ -294,8 +294,16 @@ final class IntegrationDbGuardAdoptionTest extends TestCase
      * to and read back from the REAL `server_settings` store across a simulated
      * restart, and that the pre-fix bare-interval control be OBSERVED not firing
      * against the real Workerman timer — claims no canned-row double can express.
+     *
+     * 46 since S81's
+     * `tests/Integration/Auth/ProfilesSwitchAndRatingIntegrationTest.php`:
+     * the S81 blocker fixes (session-profile rating cap, switchProfile's
+     * one-active invariant, verifyPin's fail-closed contract, signup's first
+     * profile through the real transaction) all turn on row states —
+     * `user_profiles`/`profile_settings` — that a mock would have to invent;
+     * they are proven against the real database.
      */
-    private const EXPECTED_ADOPTERS = 45;
+    private const EXPECTED_ADOPTERS = 46;
 
     /**
      * Bare function calls that are a MySQL reachability probe under any

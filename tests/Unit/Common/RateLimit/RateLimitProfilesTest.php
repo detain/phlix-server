@@ -9,20 +9,21 @@ use PHPUnit\Framework\TestCase;
 
 /**
  * SV-4.15(d): the per-surface rate-limit catalogue is a fixed, stable set of
- * exactly the six previously-UNLIMITED server auth surfaces, with the documented
+ * exactly the previously-UNLIMITED server auth surfaces, with the documented
  * container ids, config keys, defaults, and backend classification. `login` is
- * DELIBERATELY absent (it keeps DbLoginRateLimitStore).
+ * DELIBERATELY absent (it keeps DbLoginRateLimitStore). S81 added the seventh
+ * surface, `pin_verify` (the self-service PIN oracle closure).
  */
 final class RateLimitProfilesTest extends TestCase
 {
     /**
-     * Exactly six surfaces, no more, no fewer — and NO `login` profile.
+     * Exactly seven surfaces, no more, no fewer — and NO `login` profile.
      */
-    public function testCatalogueHasExactlySixSurfaces(): void
+    public function testCatalogueHasExactlySevenSurfaces(): void
     {
         $defaults = RateLimitProfiles::defaults();
 
-        self::assertCount(6, $defaults);
+        self::assertCount(7, $defaults);
 
         $ids = array_keys($defaults);
         self::assertContains(RateLimitProfiles::REGISTER, $ids);
@@ -31,6 +32,7 @@ final class RateLimitProfilesTest extends TestCase
         self::assertContains(RateLimitProfiles::WEBAUTHN_FINISH, $ids);
         self::assertContains(RateLimitProfiles::JWKS, $ids);
         self::assertContains(RateLimitProfiles::WS_CONNECT, $ids);
+        self::assertContains(RateLimitProfiles::PIN_VERIFY, $ids);
 
         self::assertNotContains('rate_limiter.login', $ids);
     }
@@ -46,6 +48,7 @@ final class RateLimitProfilesTest extends TestCase
         self::assertSame('rate_limiter.webauthn_finish', RateLimitProfiles::WEBAUTHN_FINISH);
         self::assertSame('rate_limiter.jwks', RateLimitProfiles::JWKS);
         self::assertSame('rate_limiter.ws_connect', RateLimitProfiles::WS_CONNECT);
+        self::assertSame('rate_limiter.pin_verify', RateLimitProfiles::PIN_VERIFY);
     }
 
     /**
@@ -59,6 +62,8 @@ final class RateLimitProfilesTest extends TestCase
             RateLimitProfiles::REFRESH         => ['key' => 'refresh',         'max' => 30,  'window' => 60],
             RateLimitProfiles::WEBAUTHN_START  => ['key' => 'webauthn_start',  'max' => 10,  'window' => 60],
             RateLimitProfiles::WEBAUTHN_FINISH => ['key' => 'webauthn_finish', 'max' => 10,  'window' => 60],
+            // S81: a 4-6 digit PIN is a small keyspace — deliberately tight.
+            RateLimitProfiles::PIN_VERIFY      => ['key' => 'pin_verify',      'max' => 5,   'window' => 300],
             RateLimitProfiles::JWKS            => ['key' => 'jwks',            'max' => 120, 'window' => 60],
             RateLimitProfiles::WS_CONNECT      => ['key' => 'ws_connect',      'max' => 30,  'window' => 60],
         ];
@@ -82,10 +87,10 @@ final class RateLimitProfilesTest extends TestCase
     }
 
     /**
-     * The DB-backed subset is exactly the four brute-force / enumeration
+     * The DB-backed subset is exactly the five brute-force / enumeration
      * surfaces; jwks and ws_connect are NOT DB-backed.
      */
-    public function testDbBackedSubsetIsTheFourBruteForceSurfaces(): void
+    public function testDbBackedSubsetIsTheFiveBruteForceSurfaces(): void
     {
         $dbBacked = RateLimitProfiles::dbBacked();
 
@@ -95,6 +100,7 @@ final class RateLimitProfilesTest extends TestCase
                 RateLimitProfiles::REFRESH,
                 RateLimitProfiles::WEBAUTHN_START,
                 RateLimitProfiles::WEBAUTHN_FINISH,
+                RateLimitProfiles::PIN_VERIFY,
             ],
             $dbBacked
         );
@@ -115,6 +121,7 @@ final class RateLimitProfilesTest extends TestCase
         self::assertTrue(RateLimitProfiles::isDbBacked(RateLimitProfiles::REFRESH));
         self::assertTrue(RateLimitProfiles::isDbBacked(RateLimitProfiles::WEBAUTHN_START));
         self::assertTrue(RateLimitProfiles::isDbBacked(RateLimitProfiles::WEBAUTHN_FINISH));
+        self::assertTrue(RateLimitProfiles::isDbBacked(RateLimitProfiles::PIN_VERIFY));
 
         self::assertFalse(RateLimitProfiles::isDbBacked(RateLimitProfiles::JWKS));
         self::assertFalse(RateLimitProfiles::isDbBacked(RateLimitProfiles::WS_CONNECT));

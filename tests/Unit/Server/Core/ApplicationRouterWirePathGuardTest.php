@@ -211,6 +211,8 @@ final class ApplicationRouterWirePathGuardTest extends TestCase
         'DELETE /api/v1/me/webauthn/credentials/{id} -> WebAuthnController::deleteCredential []',
         'DELETE /api/v1/media/{id} -> MediaItemController::delete [AdminMiddleware]',
         'DELETE /api/v1/media/{id}/markers/{markerId} -> MediaMarkerController::deleteMarker [AuthMiddleware]',
+        'DELETE /api/v1/profiles/{profileId} -> ProfilesController::delete [AuthMiddleware]',
+        'DELETE /api/v1/profiles/{profileId}/pin -> ProfilesController::removePin [AuthMiddleware]',
         'DELETE /api/v1/profiles/{profileId}/schedules/{scheduleId}'
             . ' -> AccessScheduleController::deleteSchedule [AuthMiddleware]',
         'DELETE /api/v1/profiles/{profileId}/tags/{tagId} -> ProfileTagController::deleteTag [AuthMiddleware]',
@@ -376,6 +378,8 @@ final class ApplicationRouterWirePathGuardTest extends TestCase
         'GET /api/v1/photo/photos/{id}/full -> PhotoController::getFull [SignedUrlMiddleware]',
         'GET /api/v1/photo/photos/{id}/thumbnail -> PhotoController::getThumbnail [SignedUrlMiddleware]',
         'GET /api/v1/photo/slideshow -> PhotoController::slideshow [AuthMiddleware]',
+        'GET /api/v1/profiles -> ProfilesController::list [AuthMiddleware]',
+        'GET /api/v1/profiles/{profileId} -> ProfilesController::get [AuthMiddleware]',
         'GET /api/v1/profiles/{profileId}/active-streams -> StreamLimitController::getActiveStreams [AuthMiddleware]',
         'GET /api/v1/profiles/{profileId}/schedules -> AccessScheduleController::listForProfile [AuthMiddleware]',
         'GET /api/v1/profiles/{profileId}/schedules/{scheduleId}'
@@ -535,6 +539,11 @@ final class ApplicationRouterWirePathGuardTest extends TestCase
         'POST /api/v1/media/{id}/unwatched -> MediaUserDataController::markUnwatched [AuthMiddleware]',
         'POST /api/v1/media/{id}/watched -> MediaUserDataController::markWatched [AuthMiddleware]',
         'POST /api/v1/playlists -> CollectionController::create [AuthMiddleware]',
+        'POST /api/v1/profiles -> ProfilesController::create [AuthMiddleware]',
+        'POST /api/v1/profiles/{profileId}/avatar -> ProfilesController::uploadAvatar [AuthMiddleware]',
+        'POST /api/v1/profiles/{profileId}/pin -> ProfilesController::setPin [AuthMiddleware]',
+        'POST /api/v1/profiles/{profileId}/pin/verify -> ProfilesController::verifyPin [AuthMiddleware]',
+        'POST /api/v1/profiles/{profileId}/switch -> ProfilesController::switchProfile [AuthMiddleware]',
         'POST /api/v1/profiles/{profileId}/schedules -> AccessScheduleController::createForProfile [AuthMiddleware]',
         'POST /api/v1/profiles/{profileId}/tags -> ProfileTagController::createForProfile [AuthMiddleware]',
         'POST /api/v1/roku/devices/{id}/key/{keyName}'
@@ -576,6 +585,7 @@ final class ApplicationRouterWirePathGuardTest extends TestCase
         'PUT /api/v1/collections/{id} -> CollectionController::update [AuthMiddleware]',
         'PUT /api/v1/libraries/{id} -> LibraryController::update []',
         'PUT /api/v1/media/{id}/poster -> MediaPosterController::setPoster []',
+        'PUT /api/v1/profiles/{profileId} -> ProfilesController::update [AuthMiddleware]',
         'PUT /api/v1/profiles/{profileId}/schedules/{scheduleId}'
             . ' -> AccessScheduleController::updateSchedule [AuthMiddleware]',
         'PUT /api/v1/profiles/{profileId}/stream-limits -> StreamLimitController::updateStreamLimits [AuthMiddleware]',

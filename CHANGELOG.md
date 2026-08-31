@@ -7,6 +7,35 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- **Self-service profiles: end-user CRUD / PIN / switch / avatar (S81).** A logged-in
+  user can now manage their own profiles through `ProfilesController` (auth-only group,
+  never `/api/v1/admin`): `GET|POST /api/v1/profiles`, `GET|PUT|DELETE /api/v1/profiles/{id}`,
+  `POST|DELETE /api/v1/profiles/{id}/pin`, `POST /api/v1/profiles/{id}/pin/verify`,
+  `POST /api/v1/profiles/{id}/switch`, `POST /api/v1/profiles/{id}/avatar`. Ownership runs
+  through `ProfileAccessPolicy::canManageProfile()` and refusals answer **404, never 403**
+  (no existence oracle). All five S81 blockers closed, each pinned: (1) the rating cap is no
+  longer account-scoped — `getActiveProfile()`/`getActiveRatingFilter()` take an optional
+  session `profileId` (ownership re-derived; `null` keeps today's behaviour) and
+  `RatingGate::resolveFilterForUser()` defaults it from `RequestContext::getProfileId()`
+  (the S80 claim) — a Kid session on a switched profile now gets the Kid's cap, pinned on
+  real rows incl. the foreign-claim refusal beside its succeeding control; (2) `verifyPin()`
+  **fails closed** (a PIN-less profile is not a pass) with a new `hasPin()` distinction
+  (409 `profile.no_pin` vs 403 `profile.pin_mismatch`), behind a new DB-backed
+  `rate_limiter.pin_verify` profile (5 / 300 s, per-profile key) — the unlimited-attempt
+  oracle is gone; (3) the switch endpoint calls `switchProfile()` (its first caller) and the
+  clear-then-set is now transactional, leaving exactly one active row (`COUNT = 1` asserted
+  on the real table); (4) the switch RE-MINTS tokens via `AuthManager::buildAuthResponse()`
+  so the session moves immediately, not at token expiry; (5) signup creates a first profile
+  ('Main') on BOTH entry points — `AuthManager::register()` inside the existing transaction
+  (active accounts only; pending heals via `resolveProfileIdForUser()`) and the external-provider
+  create path (`UserRepository::findOrCreateByExternalId()` gained a `created` out-param so only
+  the INSERT path mints a profile). `PUT` refuses `is_active` (400 `profile.use_switch` —
+  activation is switch-only, closing the two-active hole `update()` could otherwise re-open) and
+  `DELETE` refuses the last profile (409). No DB migration (`user_profiles.avatar_url` already
+  exists); no tag; new routes registered in `ROUTE_MANIFEST` (364 entries) and pinned.
+
 ### Changed
 
 - **Parental-controls creates now accept the shipped mobile/roku camelCase spellings additively (S234).**

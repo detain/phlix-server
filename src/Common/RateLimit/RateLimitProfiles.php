@@ -65,6 +65,9 @@ final class RateLimitProfiles
     /** Container id for the WebAuthn finish-ceremony limiter (10 / 60s; DB-backed). */
     public const string WEBAUTHN_FINISH = 'rate_limiter.webauthn_finish';
 
+    /** Container id for the profile-PIN verification limiter (5 / 300s; DB-backed). */
+    public const string PIN_VERIFY = 'rate_limiter.pin_verify';
+
     /** Container id for the public JWKS-endpoint limiter (120 / 60s; in-memory). */
     public const string JWKS = 'rate_limiter.jwks';
 
@@ -88,6 +91,13 @@ final class RateLimitProfiles
             self::REFRESH         => ['key' => 'refresh',         'max' => 30,  'window' => 60],
             self::WEBAUTHN_START  => ['key' => 'webauthn_start',  'max' => 10,  'window' => 60],
             self::WEBAUTHN_FINISH => ['key' => 'webauthn_finish', 'max' => 10,  'window' => 60],
+            // S81: a self-service verify endpoint over verifyPin() is a PIN
+            // oracle with unlimited attempts unless throttled (the S81 blocker
+            // record: "no rate limiter anywhere near it"). 4-6 digit PINs are a
+            // small keyspace, so the budget is deliberately tight and shared
+            // DB-backed across ALL HTTP workers — a worker-local limiter would
+            // hand out max × workers attempts (~14×).
+            self::PIN_VERIFY      => ['key' => 'pin_verify',      'max' => 5,   'window' => 300],
             self::JWKS            => ['key' => 'jwks',            'max' => 120, 'window' => 60],
             self::WS_CONNECT      => ['key' => 'ws_connect',      'max' => 30,  'window' => 60],
         ];
@@ -161,6 +171,7 @@ final class RateLimitProfiles
             self::REFRESH,
             self::WEBAUTHN_START,
             self::WEBAUTHN_FINISH,
+            self::PIN_VERIFY,
         ];
     }
 

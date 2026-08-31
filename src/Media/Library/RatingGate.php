@@ -13,6 +13,7 @@ namespace Phlix\Media\Library;
 
 use Phlix\Auth\UserProfileManager;
 use Phlix\Auth\UserRepository;
+use Phlix\Server\Http\RequestContext;
 
 /**
  * The single parental-control ACCESS gate shared by every user-facing read and
@@ -127,7 +128,7 @@ final class RatingGate
      *
      * @return array{allowedRatings: list<string>, allowUnrated: bool}|null
      */
-    public function resolveFilterForUser(string $userId): ?array
+    public function resolveFilterForUser(string $userId, ?string $profileId = null): ?array
     {
         if ($userId === '') {
             return self::denyAll();
@@ -141,7 +142,16 @@ final class RatingGate
             }
         }
 
-        return $this->profiles->getActiveRatingFilter($userId);
+        // S81: a switched session rides a non-default profile; the rating cap
+        // must follow the SESSION's profile, not the account-wide active one.
+        // RequestContext carries the verified profile_id claim (S80) on every
+        // request path; outside a request (CLI, tests) it is null and the
+        // account-wide active profile applies exactly as before. A profile id
+        // that is not owned resolves to null inside getActiveRatingFilter(),
+        // so an unverifiable claim can never widen the filter.
+        $profileId ??= RequestContext::getProfileId();
+
+        return $this->profiles->getActiveRatingFilter($userId, $profileId);
     }
 
     /**

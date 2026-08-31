@@ -320,15 +320,43 @@ class UserProfileManager
      * Returns the profile marked as active (only one active profile per user).
      * Used for determining which profile's settings to apply for media filtering.
      *
-     * @param string $userId The unique user identifier (UUID format)
+     * When `$profileId` is supplied (S81), the lookup is scoped to THAT profile
+     * instead of the account-wide active one — but only if it belongs to
+     * `$userId` (ownership re-derived, mirroring `resolveProfileIdForUser()`'s
+     * rule 1). This is the horizontal-privilege boundary for the switched
+     * session: a Kid session riding a switched profile must resolve the Kid's
+     * rating filter, never the Owner's. An id that is not owned resolves to
+     * null (uniform "no such profile"), never to another account's profile.
+     *
+     * @param string      $userId    The unique user identifier (UUID format)
+     * @param string|null $profileId Optional profile to resolve instead of the
+     *                               account-wide active one (must be owned).
      *
      * @return array<string, mixed>|null Profile array with settings, or null if no active
      *                   profile exists. See findByIdWithSettings() return format.
      *
      * @see findByUserId() To get all profiles for a user
      */
-    public function getActiveProfile(string $userId): ?array
+    public function getActiveProfile(string $userId, ?string $profileId = null): ?array
     {
+        if ($profileId !== null) {
+            $profile = $this->findById($profileId);
+            if ($profile === null || $profile['user_id'] !== $userId) {
+                return null;
+            }
+
+            $settings = UserRow::firstFromMixed($this->db->query(
+                "SELECT content_rating FROM profile_settings WHERE profile_id = ?",
+                [$profileId]
+            ));
+            $row = $profile;
+            if ($settings !== null && isset($settings['content_rating'])) {
+                $row['content_rating'] = $settings['content_rating'];
+            }
+
+            return $this->hydrateProfile($row);
+        }
+
         $result = $this->db->query(
             "SELECT p.*, ps.content_rating
              FROM user_profiles p
@@ -707,15 +735,27 @@ class UserProfileManager
             return false;
         }
 
-        $this->db->query(
-            "UPDATE user_profiles SET is_active = FALSE WHERE user_id = ?",
-            [$userId]
-        );
+        // S81: the two updates are one invariant — exactly one active profile.
+        // Without a transaction, a crash between them leaves the account with
+        // ZERO active profiles (getActiveProfile()'s LIMIT 1 then picks
+        // arbitrarily across the whole account, and the "one active" guarantee
+        // of the estate's profile model silently decays).
+        $this->db->beginTrans();
+        try {
+            $this->db->query(
+                "UPDATE user_profiles SET is_active = FALSE WHERE user_id = ?",
+                [$userId]
+            );
 
-        $this->db->query(
-            "UPDATE user_profiles SET is_active = TRUE WHERE id = ?",
-            [$profileId]
-        );
+            $this->db->query(
+                "UPDATE user_profiles SET is_active = TRUE WHERE id = ?",
+                [$profileId]
+            );
+        } catch (\Throwable $e) {
+            $this->db->rollBackTrans();
+            throw $e;
+        }
+        $this->db->commitTrans();
 
         return true;
     }
@@ -751,13 +791,22 @@ class UserProfileManager
      * Used for parental control verification before allowing access to
      * restricted content or administrative profile actions.
      *
+     * S81: **fails CLOSED.** A profile with no PIN set returns false — the
+     * previous fail-open ("no PIN set, allow access") would turn a self-service
+     * verify endpoint into an oracle that answers "true" for every attempt
+     * against every PIN-less profile, and it gave a wrong-PIN attempt and a
+     * no-PIN profile the same indistinguishable `true`. Callers that need to
+     * distinguish "no PIN configured" from "PIN wrong" use {@see hasPin()}
+     * first (the self-service endpoint answers 409 `profile.no_pin`).
+     *
      * @param string $profileId The unique profile identifier (UUID format)
      * @param string $pin The PIN to verify (4 or 6 digits)
      *
-     * @return bool True if PIN matches or no PIN is set, false if incorrect
+     * @return bool True if the PIN matches, false if incorrect OR no PIN is set
      *
      * @see setPin() To set or change a profile PIN
      * @see removePin() To remove the PIN requirement
+     * @see hasPin() To distinguish "no PIN configured" from "PIN wrong"
      */
     public function verifyPin(string $profileId, string $pin): bool
     {
@@ -768,10 +817,34 @@ class UserProfileManager
 
         $pinHash = UserRow::string($row, 'pin_hash');
         if ($pinHash === null || $pinHash === '') {
-            return true; // No PIN set, allow access
+            return false; // Fail closed: no PIN set is NOT a pass.
         }
 
         return password_verify($pin, $pinHash);
+    }
+
+    /**
+     * Whether the profile has a PIN configured at all.
+     *
+     * S81: the self-service verify endpoint needs to distinguish "no PIN
+     * configured" (409 `profile.no_pin`) from "PIN wrong" (403
+     * `profile.pin_mismatch`) — verifyPin() alone cannot, now that it fails
+     * closed. A missing profile_settings row and an empty pin_hash both read
+     * as "no PIN".
+     *
+     * @param string $profileId The unique profile identifier (UUID format)
+     *
+     * @return bool True when a PIN is configured on the profile
+     */
+    public function hasPin(string $profileId): bool
+    {
+        $row = UserRow::firstFromMixed($this->db->query(
+            "SELECT pin_hash FROM profile_settings WHERE profile_id = ?",
+            [$profileId]
+        ));
+
+        $pinHash = UserRow::string($row, 'pin_hash');
+        return $pinHash !== null && $pinHash !== '';
     }
 
     /**
@@ -813,7 +886,9 @@ class UserProfileManager
      * Remove the PIN requirement from a profile.
      *
      * Disables PIN protection for the profile. After calling this method,
-     * verifyPin() will return true for any PIN value.
+     * verifyPin() returns false for any PIN value (S81: it fails closed when
+     * no PIN is set) and hasPin() returns false — the distinction the
+     * self-service verify endpoint relies on.
      *
      * @param string $profileId The unique profile identifier (UUID format)
      *
@@ -953,9 +1028,9 @@ class UserProfileManager
      * @return array{allowedRatings: list<string>, allowUnrated: bool}|null
      *         The parental allow-list, or null when no filtering should apply.
      */
-    public function getActiveRatingFilter(string $userId): ?array
+    public function getActiveRatingFilter(string $userId, ?string $profileId = null): ?array
     {
-        $profile = $this->getActiveProfile($userId);
+        $profile = $this->getActiveProfile($userId, $profileId);
         if ($profile === null) {
             return null;
         }

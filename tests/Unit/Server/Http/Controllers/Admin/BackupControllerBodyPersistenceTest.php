@@ -237,6 +237,16 @@ final class BackupControllerBodyPersistenceTest extends TestCase
         self::assertCount(2, $afterControl);
         self::assertSame('', $afterControl[0]['label'], 'an omitted label persists as empty — distinct from the supplied one');
         self::assertNotSame($afterControl[0]['label'], $persisted[0]['label'], 'the two drives differ ⇒ the asserted label came from the request body');
+
+        // (4) A non-string label is refused 400 and creates NO backup — this
+        // branch is only reachable when the body is actually read (the old
+        // dead property read saw nothing but null).
+        $garbage = new Request();
+        $garbage->method = 'POST';
+        $garbage->body = ['label' => ['not', 'a', 'string']];
+        $refusal = $controller->create($garbage, []);
+        self::assertSame(400, $refusal->statusCode, 'the type guard fired ⇒ the body demonstrably reached the handler');
+        self::assertCount(2, $manager->listBackups(), 'the refused request must not have persisted a backup');
     }
 
     /**

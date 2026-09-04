@@ -54,6 +54,14 @@ class BackupController
             $body = $request->body;
             $label = $body['label'] ?? null;
 
+            if ($label !== null && !is_string($label)) {
+                return (new Response())->status(400)->json([
+                    'success' => false,
+                    'error' => 'Invalid label',
+                    'message' => 'label must be a string',
+                ]);
+            }
+
             $result = $this->backupManager->createBackup($label);
 
             return (new Response())->json([
@@ -285,6 +293,26 @@ class BackupController
 
             $intervalDays = $body['auto_backup_interval_days'] ?? null;
             $retentionCount = $body['retention_count'] ?? null;
+
+            // `Request::$body` is array<string, mixed>: a JSON client can send
+            // any shape here, so parse to numeric before the (int) casts below
+            // (this same method used to see only `null` because of the dead
+            // property read — these guards are what "live" actually means).
+            if ($intervalDays !== null && !is_numeric($intervalDays)) {
+                return (new Response())->status(400)->json([
+                    'success' => false,
+                    'error' => 'Invalid interval',
+                    'message' => 'auto_backup_interval_days must be numeric',
+                ]);
+            }
+
+            if ($retentionCount !== null && !is_numeric($retentionCount)) {
+                return (new Response())->status(400)->json([
+                    'success' => false,
+                    'error' => 'Invalid retention count',
+                    'message' => 'retention_count must be numeric',
+                ]);
+            }
 
             if ($intervalDays !== null) {
                 $intervalDays = (int) $intervalDays;

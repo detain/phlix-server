@@ -269,13 +269,15 @@ class MaintenanceController
             return $denied;
         }
 
-        // `$request->body`, NOT `$request->jsonBody`. The latter does not exist
-        // on Phlix\Server\Http\Request — reading it yields null with an
-        // "undefined property" warning, so a handler that used it would silently
-        // ignore every parameter a client sent. {@see BackupController::create()}
-        // and `::restore()` do exactly that today (their `label` option is
-        // permanently null); the decoded body lives in `Request::$body`, filled
-        // by both `fromGlobals()` and `fromWorkerman()`.
+        // The decoded body is `$request->body` — filled by both `fromGlobals()`
+        // and `fromWorkerman()`. `Phlix\Server\Http\Request` has no `jsonBody`
+        // property; reading a non-existent one yields null with an "undefined
+        // property" warning, so a handler that used it would silently ignore
+        // every parameter a client sent — and PHPStan L9 does not flag it.
+        // {@see BackupController::create()} and `::updateSchedule()` carried
+        // exactly that dead read until S271 fixed them (`label`,
+        // `auto_backup_interval_days` and `retention_count` were permanently
+        // null for every caller). `::restore()` never read a body at all.
         $body = $request->body;
 
         if (MaintenanceTask::isSynchronous($task)) {

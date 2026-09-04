@@ -35,11 +35,13 @@ use Phlix\Server\Http\RequestContext;
  * 🚨 S235 — "no user" is NOT "no cap". Until S235 a `null` filter meant BOTH
  * "the owner/an un-capped profile: do not gate" AND "there is no user at all",
  * and every one of the ~26 `if ($filter !== null && …)` guards across the server
- * therefore skipped the check entirely for an anonymous caller. On the one
- * deliberately-public route that mints a signed URL
- * (`GET /api/v1/media/{id}/download`) that was a live parental bypass: a
- * restricted profile got a playable URL for ANY item simply by not sending its
- * Bearer token. The two states now have DIFFERENT representations —
+ * therefore skipped the check entirely for an anonymous caller. The one route
+ * that mints a signed URL (`GET /api/v1/media/{id}/download`) was deliberately
+ * public then — a live parental bypass: a restricted profile got a playable
+ * URL for ANY item simply by not sending its Bearer token. (S423 later moved
+ * the route behind AuthMiddleware; this handler-side deny-all remains as
+ * defence-in-depth behind it.) The two states now have DIFFERENT
+ * representations —
  * {@see resolveFilterForUser()} answers {@see denyAll()} (a real, non-null cap
  * that allows nothing) for an empty account id, so every existing guard fails
  * CLOSED without being touched. The handful of paths where an unidentified

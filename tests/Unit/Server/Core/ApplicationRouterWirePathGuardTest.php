@@ -343,7 +343,7 @@ final class ApplicationRouterWirePathGuardTest extends TestCase
         'GET /api/v1/media/index -> Closure@Application.php [AuthMiddleware]',
         'GET /api/v1/media/most-watched -> MostWatchedController::mostWatched [AuthMiddleware]',
         'GET /api/v1/media/{id}/chapters/{index}/thumbnail -> MediaItemController::getChapterThumbnail []',
-        'GET /api/v1/media/{id}/download -> MediaItemController::getDownload []',
+        'GET /api/v1/media/{id}/download -> MediaItemController::getDownload [AuthMiddleware]',
         'GET /api/v1/media/{id}/extras -> ExtrasController::getExtras [AuthMiddleware]',
         'GET /api/v1/media/{id}/extras/other -> ExtrasController::getOtherExtras [AuthMiddleware]',
         'GET /api/v1/media/{id}/markers -> MarkerController::getMarkers [AuthMiddleware]',

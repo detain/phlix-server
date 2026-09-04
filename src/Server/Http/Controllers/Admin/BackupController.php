@@ -51,7 +51,7 @@ class BackupController
     public function create(Request $request, array $params): Response
     {
         try {
-            $body = $request->jsonBody ?? [];
+            $body = $request->body;
             $label = $body['label'] ?? null;
 
             $result = $this->backupManager->createBackup($label);
@@ -281,7 +281,7 @@ class BackupController
     public function updateSchedule(Request $request, array $params): Response
     {
         try {
-            $body = $request->jsonBody ?? [];
+            $body = $request->body;
 
             $intervalDays = $body['auto_backup_interval_days'] ?? null;
             $retentionCount = $body['retention_count'] ?? null;

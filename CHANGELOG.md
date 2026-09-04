@@ -3365,6 +3365,25 @@ run and can never reach it (AC2a / KNOWN LIMIT 3 closed), and a
   kernel route selection is NOT validated — the option spelling is what is proven, not the
   interface pick. No migration (next-free server migration stays 103).
 
+### Fixed
+
+- **The backup `label` option and the schedule body parameters are LIVE (S271).**
+  `BackupController::create()` and `::updateSchedule()` read `$request->jsonBody` — a property
+  that does not exist on `Phlix\Server\Http\Request` (the decoded body is `Request::$body`) —
+  and the `?? []` swallowed the undefined-property null, so those handlers silently ignored
+  every parameter a client sent: created backups always carried an empty `label`, and
+  `auto_backup_interval_days` / `retention_count` never reached the config file they rewrite.
+  A repo-wide sweep (git grep over `src/`+`scripts/` AND a filesystem sweep of the gitignored
+  vendor tree — 10k+ files, with a `function __get` positive control so the zero is a measured
+  zero, not an unsearched one) confirmed exactly these two sites read the name and nothing ever
+  defined it. Both now read `->body`. Pinned by `BackupControllerBodyPersistenceTest`: a label
+  driven through the real `BackupManager` write path is read back from the persisted `backups`
+  row (plus the on-disk archive name), and schedule values are read back from the rewritten
+  config file; reverting either property name reddens exactly one named test (mutation-verified).
+  `MaintenanceController::runTask()`'s warning comment — which documented this defect as present
+  and misattributed it to `::restore()` (which never read a body) — moved in the same commit.
+  No migration.
+
 ## [1.2.3] — 2026-07-12
 
 ### Fixed

@@ -229,9 +229,11 @@ class MediaItemControllerParentalTest extends TestCase
     }
 
     /**
-     * A request with NO user at all — exactly what an attacker sends by dropping
-     * the Bearer token. `/api/v1/media/{id}/download` is registered PUBLIC
-     * (Application.php, `loadMediaRoutes()`), so this reaches the handler.
+     * A request with NO user at all — exactly what an attacker sent by dropping
+     * the Bearer token before S423 gated `/api/v1/media/{id}/download` behind
+     * AuthMiddleware. Since S423 the ROUTER refuses such a caller with 401
+     * (ApplicationPlaybackAuthGateTest), so this fixture pins the SECOND layer
+     * it reaches only when called directly: the handler-side deny-all.
      *
      * @return Request
      */

@@ -310,4 +310,61 @@ final class BackupControllerBodyPersistenceTest extends TestCase
         $stillWritten = include $configPath;
         self::assertSame(9, $stillWritten['auto_backup_interval_days'], 'the refused request must not alter the persisted file');
     }
+
+    /**
+     * The numeric-parse guards added when the body values became real: a
+     * non-numeric interval or retention is refused 400 and the persisted
+     * config file keeps the seeded values untouched. The OLD dead property
+     * read could not take these branches at all — it only ever saw null —
+     * so each refusal doubles as a live-read control.
+     *
+     * @runInSeparateProcess
+     * @preserveGlobalState disabled
+     */
+    public function test_non_numeric_schedule_values_are_refused_and_nothing_is_persisted(): void
+    {
+        $backupDir = $this->tmpdir('phlix_s271_backups_');
+        $configDir = $this->scratchConfigDir($backupDir, [
+            'enabled' => true,
+            'local_path' => $backupDir,
+            'retention_count' => 5,
+            'auto_backup_interval_days' => 7,
+        ]);
+        $configPath = $configDir . '/backup.php';
+
+        $db = $this->createMock(Connection::class);
+        $db->expects(self::never())->method('query');
+        $controller = new BackupController(new BackupManager($db));
+
+        // Non-numeric interval → 400, file untouched.
+        $badInterval = new Request();
+        $badInterval->method = 'PUT';
+        $badInterval->body = ['auto_backup_interval_days' => 'seven'];
+        $refusal = $controller->updateSchedule($badInterval, []);
+        self::assertSame(400, $refusal->statusCode, 'a non-numeric interval must be refused, not cast');
+
+        // Non-numeric retention → 400, file still untouched.
+        $badRetention = new Request();
+        $badRetention->method = 'PUT';
+        $badRetention->body = ['retention_count' => true];
+        $refusal2 = $controller->updateSchedule($badRetention, []);
+        self::assertSame(400, $refusal2->statusCode, 'a boolean retention must be refused, not cast');
+
+        /** @var array<string, mixed> $written */
+        $written = include $configPath;
+        self::assertSame(7, $written['auto_backup_interval_days'], 'a refused request must not alter the persisted file');
+        self::assertSame(5, $written['retention_count'], 'a refused request must not alter the persisted file');
+
+        // Succeeding control on the SAME handler: a well-formed numeric body
+        // persists — so the two 400s above are the guard refusing, not the
+        // handler being broken overall.
+        $good = new Request();
+        $good->method = 'PUT';
+        $good->body = ['auto_backup_interval_days' => '12', 'retention_count' => '6'];
+        self::assertSame(200, $controller->updateSchedule($good, [])->statusCode, 'numeric STRINGS are accepted (JSON clients legitimately send them)');
+        /** @var array<string, mixed> $afterGood */
+        $afterGood = include $configPath;
+        self::assertSame(12, $afterGood['auto_backup_interval_days'], 'the accepted numeric-string landed in the persisted file');
+        self::assertSame(6, $afterGood['retention_count'], 'the accepted numeric-string landed in the persisted file');
+    }
 }

@@ -156,7 +156,11 @@ final class BackupControllerBodyPersistenceTest extends TestCase
                     return $rows;
                 }
 
-                self::fail('Unexpected SQL reached the simulated backups store: ' . $sql);
+                // throw, not self::fail(): an assertion that can never execute is
+                // exactly the shape the S180 escape prober hunts. The store
+                // signals the anomaly and the test dies with a clear message
+                // either way.
+                throw new \RuntimeException('Unexpected SQL reached the simulated backups store: ' . $sql);
             }
         );
 

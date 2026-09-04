@@ -546,9 +546,9 @@ class Application
             );
         }
 
-        // Media item playback-info endpoint — REQUIRES a signed-in user.
+        // Media item playback-info + download endpoints — REQUIRE a signed-in user.
         //
-        // It was registered ungated. {@see \Phlix\Server\Workerman\HttpHandler} —
+        // Playback-info was registered ungated. {@see \Phlix\Server\Workerman\HttpHandler} —
         // the Workerman daemon, and the ONLY entry point that dispatches THIS
         // router — runs it first and falls through to WebPortalRouter only when it
         // answers 404 (HttpHandler.php:241-269), so an anonymous caller got a 200
@@ -564,11 +564,29 @@ class Application
         // one narrows what an AUTHENTICATED user may see (and deliberately answers
         // 404, never 403, so a refusal cannot confirm the item exists). This group
         // only establishes that there IS a user.
+        //
+        // Download URL/info endpoint — REQUIRES a signed-in user (S423).
+        //
+        // It used to be registered PUBLIC because it only mints a signed URL,
+        // never bytes. That posture was load-bearing for nothing: the route has
+        // no SignedUrlMiddleware (no signature is checked on it), so after S235
+        // made the anonymous RatingGate case a deny-all cap, EVERY anonymous
+        // request already got a 404 from the handler — a de-facto-authenticated
+        // route whose posture lived only inside the gate, three layers away
+        // from where a reader looks. The estate census at S423 confirmed no
+        // client ever called it without a Bearer token (ui goes through the
+        // shared authed ApiClient; console's `downloadMedia()` is `authed()`
+        // in source and in the shipped phar; tizen/roku/windows/mobile never
+        // call it — mobile's offline path resolves `stream_url` from the
+        // authenticated item detail instead), so the deny now happens where it
+        // should: at the middleware, before the handler. The handler-side
+        // fail-closed gate stays as defence-in-depth for any other caller.
         $mediaItemController = $this->getMediaItemController();
         $this->router->group(
             '',
             function (Router $r) use ($mediaItemController): void {
                 $r->get('/api/v1/media/{id}/playback-info', [$mediaItemController, 'getPlaybackInfo']);
+                $r->get('/api/v1/media/{id}/download', [$mediaItemController, 'getDownload']);
             },
             [new \Phlix\Server\Http\Middleware\AuthMiddleware()]
         );
@@ -581,9 +599,6 @@ class Application
         // Returns the thumbnail image for a specific chapter.
         $this->router->get('/api/v1/media/{id}/chapters/{index}/thumbnail', [$mediaItemController,
             'getChapterThumbnail']);
-
-        // Download URL/info endpoint (public, returns a signed URL).
-        $this->router->get('/api/v1/media/{id}/download', [$mediaItemController, 'getDownload']);
 
         // Interactive per-item metadata match (S5). Admin-gated inside the
         // controller (same protection as the whole-library match endpoint).

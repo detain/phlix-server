@@ -21,10 +21,12 @@ use Workerman\MySQL\Connection;
 use function DI\factory;
 
 /**
- * `GET /api/v1/media/{id}/playback-info`, `POST /api/v1/media/{id}/transcode` and
- * `GET /api/v1/transcode/{jobId}/status` must not answer an ANONYMOUS caller.
+ * `GET /api/v1/media/{id}/playback-info`, `POST /api/v1/media/{id}/transcode`,
+ * `GET /api/v1/transcode/{jobId}/status` and — since S423 —
+ * `GET /api/v1/media/{id}/download` must not answer an ANONYMOUS caller.
  *
- * All three were registered ungated on {@see Application}'s router.
+ * All of them were registered ungated on {@see Application}'s router
+ * (`download` registered PUBLIC, the others overlooked).
  * {@see \Phlix\Server\Workerman\HttpHandler} (the Workerman daemon) is the ONLY
  * entry point that dispatches this router: it runs this router first and falls
  * through to {@see \Phlix\Server\WebPortal\WebPortalRouter} only when this router
@@ -104,7 +106,7 @@ final class ApplicationPlaybackAuthGateTest extends TestCase
     }
 
     /**
-     * The two routes that must refuse an anonymous caller.
+     * The routes that must refuse an anonymous caller.
      *
      * @return array<string, array{0: string, 1: string}>
      */
@@ -113,6 +115,7 @@ final class ApplicationPlaybackAuthGateTest extends TestCase
         return [
             'GET playback-info' => ['GET', '/api/v1/media/item-1/playback-info'],
             'POST transcode' => ['POST', '/api/v1/media/item-1/transcode'],
+            'GET download' => ['GET', '/api/v1/media/item-1/download'],
         ];
     }
 
@@ -127,7 +130,8 @@ final class ApplicationPlaybackAuthGateTest extends TestCase
             401,
             $response->statusCode,
             "{$method} {$path} must answer 401 to a request with no user — ungated it disclosed the "
-            . 'playback plan / spawned an FFmpeg encode for anyone who could reach the port.'
+            . 'playback plan / spawned an FFmpeg encode / minted a signed download URL for anyone who '
+            . 'could reach the port.'
         );
         $this->assertStringContainsString('auth.required', $response->body);
     }
@@ -152,11 +156,13 @@ final class ApplicationPlaybackAuthGateTest extends TestCase
     }
 
     /**
-     * The deliberately-PUBLIC media routes registered beside `playback-info` stay
-     * public. Their comments in `Application::loadApiRoutes()` mark them as such
-     * (trickplay + chapter thumbnails are fetched by elements that cannot attach a
-     * Bearer header; `download` returns a signed URL), so over-gating them while
-     * closing the two above would be its own regression.
+     * The deliberately-PUBLIC media routes stay public. Their comments in
+     * `Application::loadApiRoutes()` mark them as such (trickplay + chapter
+     * thumbnails are fetched by elements that cannot attach a Bearer header),
+     * so over-gating them while closing the gated set would be its own
+     * regression. `download` was the third member of this set until S423 moved
+     * it behind `AuthMiddleware` — it now lives in {@see gatedRegisteredPaths()}
+     * and {@see testAnonymousMediaDownloadIsRefusedByAuthMiddleware()}.
      *
      * @return array<string, array{0: string}>
      */
@@ -165,7 +171,6 @@ final class ApplicationPlaybackAuthGateTest extends TestCase
         return [
             'trickplay' => ['/api/v1/media/{id}/trickplay'],
             'chapter thumbnail' => ['/api/v1/media/{id}/chapters/{index}/thumbnail'],
-            'download' => ['/api/v1/media/{id}/download'],
         ];
     }
 
@@ -200,6 +205,7 @@ final class ApplicationPlaybackAuthGateTest extends TestCase
             'playback-info' => ['GET', '/api/v1/media/{id}/playback-info'],
             'transcode start' => ['POST', '/api/v1/media/{id}/transcode'],
             'transcode status' => ['GET', '/api/v1/transcode/{jobId}/status'],
+            'download' => ['GET', '/api/v1/media/{id}/download'],
         ];
     }
 
@@ -248,6 +254,54 @@ final class ApplicationPlaybackAuthGateTest extends TestCase
             . 'handed a real job id\'s signed HLS master/variant/subtitle URLs to anyone who could reach the port.'
         );
         $this->assertStringContainsString('auth.required', $response->body);
+    }
+
+    /**
+     * S423 — `GET /api/v1/media/{id}/download` is refused by the ROUTER, before
+     * the handler runs.
+     *
+     * The route was historically registered PUBLIC: since S235 an anonymous
+     * refusal existed, but only as the handler's downstream fail-closed
+     * RatingGate 404 ("Item not found") — a posture discoverable only by
+     * reading the gate, and indistinguishable from a genuine item miss to any
+     * caller who did not know the secret. The estate census of EVERY
+     * /download consumer (ui / tizen / mobile / roku / console incl. the
+     * shipped phar, plus hub, windows and contracts) found no anonymous
+     * caller: ui routes through the shared authed ApiClient, console's
+     * `downloadMedia()` is `authed()` in source and in the bundled phar, and
+     * tizen/roku/windows/mobile never call it (mobile's offline path uses the
+     * authenticated item-detail `stream_url`). So the deny moved to the
+     * front. This is the planted-red proof: revert the route to the ungated
+     * public registration and the middleware layer passes the request
+     * through — this test turns red on the 401 assert (the caller then gets
+     * the downstream gate's 404 instead, which is precisely the
+     * filter-late posture this step replaced).
+     */
+    public function testAnonymousMediaDownloadIsRefusedByAuthMiddleware(): void
+    {
+        $router = $this->routerFromRealRegistration();
+
+        $response = $router->dispatch($this->request('GET', '/api/v1/media/item-1/download'));
+
+        $this->assertSame(
+            401,
+            $response->statusCode,
+            'GET /api/v1/media/{id}/download must answer 401 from the auth middleware, not a '
+            . 'downstream handler 404 — the deny is declared at the route, not hidden in the gate (S423).'
+        );
+        $this->assertStringContainsString('auth.required', $response->body);
+
+        // Authenticated control: a request carrying a user id must pass the
+        // gate (the handler 404s the fake item id on the mocked DB — out of
+        // scope here; the point is the middleware did NOT reject it).
+        $request = $this->request('GET', '/api/v1/media/item-1/download');
+        $request->userId = 'owner-1';
+
+        $this->assertNotSame(
+            401,
+            $router->dispatch($request)->statusCode,
+            'The download gate must pass a request that carries a user id through to the handler.'
+        );
     }
 
     /**

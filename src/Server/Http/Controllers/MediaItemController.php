@@ -126,12 +126,15 @@ class MediaItemController
      *
      * 🚨 S235 — an UNIDENTIFIED request is NOT permissive here. It resolves
      * {@see RatingGate::denyAll()}, so every guard below fails closed. That is
-     * load-bearing on THIS controller specifically: `getDownload()` is the one
+     * load-bearing on THIS controller specifically: `getDownload()` was the one
      * gate-carrying handler registered on a PUBLIC route
-     * (`Application::loadMediaRoutes()`), and while the filter was null for an
-     * anonymous caller the cap was skipped and a signed `/media/{id}/stream` URL
-     * was minted for any item id — a parental bypass reachable by simply
-     * dropping the Bearer token.
+     * (`Application::loadMediaRoutes()`) until S423 moved that route behind
+     * AuthMiddleware, and while the filter was null for an anonymous caller the
+     * cap was skipped and a signed `/media/{id}/stream` URL was minted for any
+     * item id — a parental bypass reachable by simply dropping the Bearer
+     * token. The handler-side deny-all stays as defence-in-depth: it refuses
+     * any caller that reaches the handler without a user, whatever the route
+     * table says.
      *
      * @return array{allowedRatings: list<string>, allowUnrated: bool}|null
      */
@@ -668,15 +671,15 @@ class MediaItemController
         // item (by effective rating) when a capped profile is active — 404 so no
         // URL is disclosed. No-op for the owner / un-capped profile.
         //
-        // 🚨 S235: this route is registered PUBLIC, so `$request->userId` may be
-        // absent — and an unidentified caller now resolves a deny-all cap rather
-        // than a null one, which 404s it here. The route registration is
-        // deliberately left public (asserted intentional by
-        // ApplicationPlaybackAuthGateTest); it is the GATE, not the router, that
-        // refuses. Practical consequence, stated plainly: an anonymous caller no
-        // longer gets a signed URL for ANY item, because the server cannot know
-        // which profile is asking and therefore cannot prove the item is under
-        // that profile's cap.
+        // 🚨 S235: an unidentified caller that reaches THIS handler resolves a
+        // deny-all cap rather than a null one, which 404s it here. Since S423
+        // the route itself sits behind AuthMiddleware (401 before the handler —
+        // asserted by ApplicationPlaybackAuthGateTest), so in production this
+        // branch is defence-in-depth for any caller that arrives without a
+        // user by another path. Its shape is deliberate and unchanged: an
+        // anonymous caller gets no signed URL for ANY item, because the server
+        // cannot know which profile is asking and therefore cannot prove the
+        // item is under that profile's cap.
         $filter = $this->resolveRatingFilter($request);
         if ($filter !== null && $this->ratingGate !== null && !$this->ratingGate->isAllowed($item, $filter)) {
             return (new Response())->status(404)->json(['error' => 'Item not found']);

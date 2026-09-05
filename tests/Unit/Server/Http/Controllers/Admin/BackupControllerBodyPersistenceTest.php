@@ -16,7 +16,15 @@
  * real `listBackups()` reader from the simulated `backups` store (and checked
  * against the archive actually on disk), and schedule values are read back
  * from the config file the handler rewrites. Reverting either property name
- * reddens exactly one named test (mutation-verified).
+ * reddens tests, but NOT symmetrically (mutation arms re-run at the S427 tip;
+ * the S271 shape `$request->jsonBody ?? []` stays non-throwing there because
+ * `??` consults Request::__isset(), which answers false without reaching the
+ * S427 __get guard): the create() arm reddens exactly the one named label
+ * test (a string-diff assertion, `-'nightly-pre-fix' +''`, not a status
+ * class), while the updateSchedule() arm reddens TWO — the named schedule
+ * test (`7 is identical to 9`) plus a collateral non-numeric-validation test
+ * (`200 is identical to 400`), because the dead read also disarms that
+ * handler's 400 guards.
  *
  * End-to-end style follows the suite's own conventions: the stateful
  * query-callback store mirrors `ServerSettingsRoundTripTest`, and the

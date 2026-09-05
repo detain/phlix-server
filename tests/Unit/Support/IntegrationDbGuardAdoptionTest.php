@@ -300,8 +300,15 @@ final class IntegrationDbGuardAdoptionTest extends TestCase
      * the S436 fix proves the corrected getCollectionMembers() projection and
      * metadata_json artwork shaping against a real migrated schema — a mock
      * cannot exhibit the MySQL 1054 the old dead-column SELECT raised.
+     *
+     * 48 since S435's
+     * `tests/Integration/Server/Http/MusicEncodedRouteParamE2eTest.php`:
+     * the boundary decode of percent-encoded route params must be observed
+     * against the REAL composed route table and REAL name lookups —
+     * `WHERE a.name = ?` matching a decoded library row is the exact claim
+     * the defect killed, and no canned-row double can express it.
      */
-    private const EXPECTED_ADOPTERS = 47;
+    private const EXPECTED_ADOPTERS = 48;
 
     /**
      * Bare function calls that are a MySQL reachability probe under any

@@ -169,8 +169,11 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * files (CoroutineSocketGuard, CoroutineSocketFault, the refused exception,
      * the guard test); same reasoning — none of them names Request.
      * Re-pinned 1768→1769 by S436: adds the real-DB collection-members integration test.
+     * Re-pinned 1769→1771 by S435: the boundary-decode path adds two first-party
+     * files (RouterPathParamDecodingTest, MusicEncodedRouteParamE2eTest); the fix
+     * itself lives in the existing Router.php, which never joined or left the tree.
      */
-    private const EXPECTED_PHP_FILES = 1769;
+    private const EXPECTED_PHP_FILES = 1771;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on
@@ -183,8 +186,11 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * Census number 5 — property WRITES (name directly assigned) on Request
      * roots. S427 prose said 1,037 (drift −97 — the 97 offset-write sites; unreachable under either
      * bracket convention — see header).
+     * Re-pinned 940→949 by S435: the two new test classes assign nine declared
+     * Request members directly (method/path ×4 unit sites, userId in the e2e
+     * dispatch helper — every one on a DECLARED property, the S427 license intact).
      */
-    private const EXPECTED_DECLARED_WRITES = 940;
+    private const EXPECTED_DECLARED_WRITES = 949;
 
     /** Census numbers 3 and 4 — the posture claims; never re-pin, fix source. */
     private const EXPECTED_DYNAMIC_READS = 0;

@@ -352,6 +352,8 @@ class Router
             if (preg_match($pattern, $path, $matches)) {
                 // Extract path parameters (named capture groups only)
                 $params = array_filter($matches, 'is_string', ARRAY_FILTER_USE_KEY);
+                // S435: percent-decode once, here at the routing boundary.
+                $params = $this->decodePathParams($params);
                 $request->pathParams = $params;
 
                 // Apply route middleware
@@ -412,6 +414,9 @@ class Router
         foreach (($this->routes['GET'] ?? []) as $pattern => $route) {
             if (preg_match($pattern, $path, $matches)) {
                 $params = array_filter($matches, 'is_string', ARRAY_FILTER_USE_KEY);
+                // S435: same boundary decode as dispatch() — HEAD must see the
+                // exact params its GET twin would have received.
+                $params = $this->decodePathParams($params);
                 $request->pathParams = $params;
 
                 $middlewareResponse = $this->runMiddleware($route['middleware'], $request);
@@ -570,6 +575,47 @@ class Router
             throw new \BadMethodCallException('Route handler must return a Response');
         }
         return $result;
+    }
+
+    /**
+     * Percent-decodes extracted route parameters ONCE, at the routing boundary.
+     *
+     * S435 — the wire form of a path segment is percent-encoded (a client asks
+     * for `/api/v1/music/albums/Abbey%20Road`), but handlers consume NAMES:
+     * `MusicController::getArtist()`/`getAlbum()` passed the still-encoded
+     * segment straight into `MusicLibraryService::findArtistByName()`'s
+     * `WHERE a.name = ?`, so every artist/album with a space, accent or unicode
+     * character 404'd library-wide.
+     *
+     * Decoding happens HERE — after pattern matching, before the handler sees a
+     * value — and nowhere else, because:
+     *  - routing itself must keep matching the RAW path: decoding earlier would
+     *    turn an encoded `%2F` into a segment separator (forging routes) and
+     *    would hand upstream traversal guards decoded `..` they never vetted;
+     *  - handlers that decoded again after this boundary would double-decode —
+     *    a literal `%20` inside a real name (`%2520` on the wire) would collapse
+     *    into a space and resolve the WRONG row. One decode, exactly here.
+     *
+     * Policy decisions, pinned by `RouterPathParamDecodingTest`:
+     *  - `rawurldecode()`, NOT `urldecode()`: in a PATH segment `+` is a literal
+     *    plus (RFC 3986 sub-delim); `+`-means-space is the legacy
+     *    `application/x-www-form-urlencoded` form of QUERY strings only. Using
+     *    `urldecode()` here would silently rewrite a name like `Black+Sabbath`.
+     *  - Malformed sequences (`%ZZ`, a trailing `%`) are left verbatim:
+     *    `rawurldecode()` never throws and never corrupts them, so the handler
+     *    receives the closest faithful reading and answers 404 — the honest
+     *    outcome for a name nobody can have registered.
+     *
+     * @param array<string, string> $params Raw captured segments, keyed by placeholder name
+     * @return array<string, string> The same params, each value decoded exactly once
+     */
+    private function decodePathParams(array $params): array
+    {
+        $decoded = [];
+        foreach ($params as $name => $value) {
+            $decoded[$name] = rawurldecode($value);
+        }
+        return $decoded;
     }
 
     /**

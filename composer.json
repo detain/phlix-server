@@ -54,6 +54,7 @@
     "require-dev": {
         "codeception/codeception": "^5.3",
         "codeception/module-asserts": "^3.2",
+        "detain/phlix-tokens": "v0.2.0",
         "mockery/mockery": "^1.6",
         "phpstan/phpstan": "^2.0",
         "phpunit/phpunit": "^10.0",
@@ -114,5 +115,19 @@
             "maxHubVersion": "1.9.9",
             "minPhpVersion": "8.3"
         }
-    }
+    },
+    "repositories": [
+        {
+            "type": "package",
+            "package": {
+                "name": "detain/phlix-tokens",
+                "version": "v0.2.0",
+                "description": "Phlix design tokens (@phlix/tokens) \u2014 vendored ONLY so tests can diff BuiltInThemes against the real colors.css (S228).",
+                "dist": {
+                    "type": "tar",
+                    "url": "https://github.com/detain/phlix-tokens/archive/5500d70b142d46ed8d382087ea542b1047cc803f.tar.gz"
+                }
+            }
+        }
+    ]
 }

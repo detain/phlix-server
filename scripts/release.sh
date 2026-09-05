@@ -103,7 +103,15 @@ check_source "$VERSION_MARKER" "$(read_marker)"
 check_source "$CHART (version:)" "$(read_chart_version)"
 check_source "$CHART (appVersion:)" "$(read_chart_app_version)"
 
-if grep -Eq '^[[:space:]]*"version"[[:space:]]*:' "$COMPOSER_JSON"; then
+# The field this rejects is the ROOT package's `"version"` key (the one
+# composer validate --strict fails on). A textual match on any indentation
+# false-positives on nested occurrences — S228 added a dev-only composer
+# `repositories` block whose inline package definition legitimately carries
+# its own `"version"`. Parse the JSON and ask the top level instead. The
+# regression in both directions is pinned by tests/Unit/Scripts/
+# ReleaseScriptTest (driftProvider's root-injection case, and every happy-path
+# case running against the real composer.json that now contains the nested one).
+if php -r 'exit(array_key_exists("version", json_decode(file_get_contents($argv[1]), true) ?? []) ? 0 : 1);' "$COMPOSER_JSON"; then
     echo "  DRIFT: $COMPOSER_JSON declares a \"version\" field; composer validate --strict fails on it" >&2
     DRIFT=1
 fi

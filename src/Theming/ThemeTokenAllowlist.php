@@ -23,6 +23,12 @@ namespace Phlix\Theming;
  * doubles as the `:root` default), `daylight` and `midnight`. Every custom
  * property those three blocks declare is here; nothing else is.
  *
+ * Since S228 the transcription is not folklore: the stylesheet ships into the
+ * test checkout as the dev-only, commit-pinned `detain/phlix-tokens` composer
+ * package, and `ThemeTokenAllowlistTest` / `ColorsCssParityTest` diff this
+ * list against the PARSED delivered file — name set, order and per-block
+ * consistency included — on every CI run.
+ *
  * ## What is deliberately NOT here
  *
  *  - **The `--amber-*` accent ramp and `--accent-contrast`.** They live in the
@@ -132,9 +138,38 @@ final class ThemeTokenAllowlist
     ];
 
     /**
-     * Legacy `--color-*` aliases. colors.css re-declares these inside every
-     * theme block for un-migrated components, so a plugin theme that omits
-     * them would leave those components on the previous theme's colours.
+     * Legacy `--color-*` aliases. The "un-migrated components" justification
+     * S84 wrote here no longer holds, and this replaces it with a measured
+     * census (2026-09-05, each repo at its origin/master tip):
+     *
+     *  - READERS. Of the 13 tokens S228 named dead here, 12 have ZERO
+     *    `var()` consumers in phlix-server `src/` and `web-ui/` (incl. the
+     *    bundled `web-ui/node_modules/@phlix/` copies), phlix-ui,
+     *    phlix-windows-client, phlix-tizen-client, phlix-mobile-client,
+     *    phlix-roku-client, phlix-console-client and phlix-hub. The 13th,
+     *    `--color-primary`, has exactly one reader: the dev-only preview page
+     *    `phlix-ui/src/dev/swatches.html`. (phlix-website reads `--color-*`
+     *    names heavily but declares its OWN `:root` palettes per marketing
+     *    site — a disjoint namespace, not a consumer of this surface.)
+     *
+     *  - WHY THEY STAY ANYWAY. Two measured, mechanical reasons — this is a
+     *    deprecation cycle, not a server-side edit:
+     *      1. `detain/phlix-tokens` `src/css/colors.css` still declares every
+     *         one inside all three theme blocks — {@see
+     *         \Phlix\Tests\Unit\Theming\ColorsCssParityTest} asserts the
+     *         stylesheet's declared set IS this allowlist at the vendored pin,
+     *         so dropping an entry here reddens that guard until tokens
+     *         catches up.
+     *      2. The published `detain/phlix-plugin-sample-theme` sets all 13
+     *         today, and {@see ThemeSourceRegistry::register()} validates
+     *         every plugin payload against exactly this list — removal would
+     *         reject shipped themes. It would also change the built-in token
+     *         maps in `GET /api/v1/themes`, whose wire body is md5-pinned
+     *         byte-for-byte against a copy in phlix-ui
+     *         (`tests/Unit/Plugins/SampleThemePluginTest::GOLDEN_MD5`).
+     *      3. phlix-ui mirrors the full set in its own `THEME_TOKEN_ALLOWLIST`
+     *         (`src/composables/themeTokens.ts`); the two advertised surfaces
+     *         move together or not at all.
      *
      * @var list<string>
      */

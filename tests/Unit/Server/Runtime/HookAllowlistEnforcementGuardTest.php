@@ -105,8 +105,10 @@ final class HookAllowlistEnforcementGuardTest extends TestCase
 
         foreach (
             [
-                'HookDelivery::enforceAndVerify' => 'the only call site that both physically installs and behaviourally proves the mask',
-                'SwooleRuntime::runtimeHookMask'  => 'the configured mask (incl. the coroutine.hook_flags escape hatch) must flow into the probe',
+                'HookDelivery::enforceAndVerify' =>
+                    'the only call site that both installs physically and behaviourally proves the mask',
+                'SwooleRuntime::runtimeHookMask' =>
+                    'the configured mask (incl. the coroutine.hook_flags escape hatch) must reach the probe',
                 'Worker::log'                     => 'per-worker DELIVERY ACK: every worker that starts says so',
             ] as $needle => $why
         ) {
@@ -119,8 +121,10 @@ final class HookAllowlistEnforcementGuardTest extends TestCase
 
         foreach (
             [
-                'Coroutine::set' => 'inside a coroutine this only updates the REPORTED mask — the measured silent-success shape',
-                'getOptions'     => 'the reported option reads the curated mask in the working AND the broken state — the exact trap',
+                'Coroutine::set' =>
+                    'inside a coroutine this only updates the REPORTED mask — the measured silent-success shape',
+                'getOptions' =>
+                    'the reported option reads curated in BOTH the working and the broken state — the exact trap',
             ] as $forbidden => $why
         ) {
             self::assertStringNotContainsString(
@@ -143,10 +147,11 @@ final class HookAllowlistEnforcementGuardTest extends TestCase
         );
         foreach (
             [
-                'Runtime::enableCoroutine' => 'the full-mask replacement API — the only one that physically un-swaps handlers',
-                'Coroutine::create'        => 'the sibling ticker that counts yields',
-                'Coroutine::sleep'         => 'the ticker cadence',
-                'YIELD_TICK_FLOOR'         => 'the behavioural threshold the verdict is taken against',
+                'Runtime::enableCoroutine' =>
+                    'the full-mask replacement API — the only one that physically un-swaps handlers',
+                'Coroutine::create' => 'the sibling ticker that counts yields',
+                'Coroutine::sleep' => 'the ticker cadence',
+                'YIELD_TICK_FLOOR' => 'the behavioural threshold the verdict is taken against',
                 'new HookDeliveryException' => 'an inconclusive or no-delivery verdict must be a THROWN failure',
             ] as $needle => $why
         ) {

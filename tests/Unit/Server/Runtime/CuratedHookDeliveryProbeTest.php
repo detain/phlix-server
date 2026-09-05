@@ -132,7 +132,14 @@ final class CuratedHookDeliveryProbeTest extends TestCase
         $reportedMask = -1;
         $verifyThrew = false;
         $verifyMessage = '';
-        \Swoole\Coroutine\run(static function () use ($curated, &$sample, &$thrown, &$reportedMask, &$verifyThrew, &$verifyMessage): void {
+        $flow = static function () use (
+            $curated,
+            &$sample,
+            &$thrown,
+            &$reportedMask,
+            &$verifyThrew,
+            &$verifyMessage
+        ): void {
             try {
                 // The EXACT pre-S433 remedy line from start.php:150 (at filing).
                 \Swoole\Coroutine::set(['hook_flags' => $curated]);
@@ -158,7 +165,8 @@ final class CuratedHookDeliveryProbeTest extends TestCase
             } catch (\Throwable $e) {
                 $thrown = $e;
             }
-        });
+        };
+        \Swoole\Coroutine\run($flow);
 
         self::assertNull($thrown, 'the harness must run clean: ' . ($thrown?->getMessage() ?? ''));
         self::assertSame(
@@ -234,7 +242,13 @@ final class CuratedHookDeliveryProbeTest extends TestCase
         $thrown = null;
         $hatchSample = null;
         $mismatchThrew = false;
-        \Swoole\Coroutine\run(static function () use ($curated, $withCurl, &$hatchSample, &$mismatchThrew, &$thrown): void {
+        $flow = static function () use (
+            $curated,
+            $withCurl,
+            &$hatchSample,
+            &$mismatchThrew,
+            &$thrown
+        ): void {
             try {
                 // An operator mask that WANTS curl hooked must verify green —
                 // delivery is asserted against the CONFIGURED mask, not a
@@ -252,7 +266,8 @@ final class CuratedHookDeliveryProbeTest extends TestCase
             } catch (\Throwable $e) {
                 $thrown = $e;
             }
-        });
+        };
+        \Swoole\Coroutine\run($flow);
 
         self::assertNull($thrown, 'the hatch enforce must run clean: ' . ($thrown?->getMessage() ?? ''));
         self::assertIsArray($hatchSample);

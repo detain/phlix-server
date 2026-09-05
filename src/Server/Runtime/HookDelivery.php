@@ -87,6 +87,15 @@ final class HookDelivery
      */
     public const YIELD_TICK_FLOOR = 5;
 
+    /**
+     * Absolute ceiling on sibling-ticker iterations, independent of the stop
+     * flag. The caller clears the flag the instant curl_exec returns (the
+     * probe's timeout guarantees that is bounded), so this cap never binds a
+     * correct run — it only guarantees a stopped-up scheduler cannot burn a
+     * worker forever inside a probe that was always meant to be transient.
+     */
+    public const TICK_HARD_CAP = 25_000;
+
     /** Sibling ticker wake-up period, seconds. */
     private const TICK_INTERVAL_S = 0.002;
 
@@ -204,10 +213,15 @@ final class HookDelivery
     public static function probeAgainst(string $url, int $blockMs = self::BLOCK_MS): array
     {
         $ticks = 0;
-        $sampling = true;
+        // Stop signal lives in a by-ref array, not a bare bool: the ticker
+        // coroutine reads it while the caller's coroutine writes it, and a
+        // plain `$sampling = true` looks provably-constant to level-9 flow
+        // analysis ("while loop always true") even though the write is real.
+        /** @var array{sampling: bool} $stop Cross-coroutine stop flag. */
+        $stop = ['sampling' => true];
 
-        Coroutine::create(static function () use (&$ticks, &$sampling): void {
-            while ($sampling) {
+        Coroutine::create(static function () use (&$ticks, &$stop): void {
+            while ($stop['sampling'] && $ticks < self::TICK_HARD_CAP) {
                 $ticks++;
                 Coroutine::sleep(self::TICK_INTERVAL_S);
             }
@@ -215,7 +229,7 @@ final class HookDelivery
 
         $handle = curl_init($url);
         if ($handle === false) {
-            $sampling = false;
+            $stop['sampling'] = false;
             throw new HookDeliveryException(
                 "hook-delivery probe could not init a cURL handle for {$url} — refusing to "
                 . 'report delivery it did not measure'
@@ -223,7 +237,7 @@ final class HookDelivery
         }
         curl_setopt_array($handle, [
             CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_NOSIGNAL => 1,
+            CURLOPT_NOSIGNAL => true,
             CURLOPT_CONNECTTIMEOUT_MS => $blockMs,
             CURLOPT_TIMEOUT_MS => $blockMs,
             // A configured proxy would answer instantly and poison the sample.
@@ -239,7 +253,7 @@ final class HookDelivery
         // its own loop test, so one tick already counted post-block cannot be
         // added to the snapshot, and one missed cannot remove it.
         $observed = $ticks;
-        $sampling = false;
+        $stop['sampling'] = false;
         curl_close($handle);
 
         $inconclusive = $blockedMs < $blockMs * self::MIN_BLOCKED_FRACTION;

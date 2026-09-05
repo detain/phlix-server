@@ -247,8 +247,11 @@ final class CoroutineSocketGuard
     /**
      * @param array<string, mixed> $context
      */
-    private static function refusal(CoroutineSocketFault $fault, string $message, array $context): CoroutineSocketConstructionRefused
-    {
+    private static function refusal(
+        CoroutineSocketFault $fault,
+        string $message,
+        array $context
+    ): CoroutineSocketConstructionRefused {
         return new CoroutineSocketConstructionRefused($fault, $message, $context);
     }
 
@@ -278,13 +281,15 @@ final class CoroutineSocketGuard
         if (function_exists('posix_getrlimit')) {
             $limits = @posix_getrlimit();
             // Measured 2026-09-05: both this box (PHP 8.3.6/Debian) and the prod
-            // base image (PHP 8.3.33/alpine) expose RLIMIT_NOFILE as "soft openfiles";
-            // older PHP builds spelled it "soft nofile", so both keys are read.
-            $raw = is_array($limits)
-                ? ($limits['soft openfiles'] ?? $limits['soft nofile'] ?? null)
-                : null;
-            if (is_string($raw)) {
-                $soft = trim($raw);
+            // base image (PHP 8.3.33/alpine) expose RLIMIT_NOFILE as "soft openfiles" —
+            // posix_getrlimit() returns a fixed key set and "soft nofile" is not in it
+            // (Psalm InvalidArrayOffset). Builds without the key fall through to the
+            // /proc/self/limits parse below.
+            $raw = is_array($limits) ? ($limits['soft openfiles'] ?? null) : null;
+            // Measured string("unlimited"|"1048576") on both platforms; Psalm's stub
+            // types the shape as int, so both scalars are admitted and normalized.
+            if (is_int($raw) || is_string($raw)) {
+                $soft = trim((string) $raw);
                 if (strcasecmp($soft, 'unlimited') === 0) {
                     return PHP_INT_MAX;
                 }

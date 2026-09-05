@@ -141,6 +141,12 @@ use RecursiveIteratorIterator;
 
 final class RequestDynamicPropertyCensusExecutableTest extends TestCase
 {
+    /**
+     * Code-resident lane token (never in any .md): proves at merge time that
+     * this file — the executable census — is really tracked in the merged tree.
+     */
+    public const EXECUTABLE_CENSUS_TOKEN = 'S431-executable-census@e74cdc88';
+
     /** The class whose roots the census walks. */
     private const TARGET_CLASS = 'Phlix\\Server\\Http\\Request';
 
@@ -213,7 +219,8 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
         $this->assertSame(
             self::EXPECTED_PHP_FILES,
             self::census()['files'],
-            'S431: the estate now holds a different number of first-party PHP files than the '
+            'S431 [' . self::EXECUTABLE_CENSUS_TOKEN . ']: the estate now holds a different '
+            . 'number of first-party PHP files than the '
             . 'pinned census denominator. A file joined or left the tree — update '
             . 'EXPECTED_PHP_FILES in the same commit (the enumeration must not drift silently; '
             . 'that silence is the exact defect S431 was spawned to end).',

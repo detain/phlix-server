@@ -375,6 +375,27 @@ run and can never reach it (AC2a / KNOWN LIMIT 3 closed), and a
 
 ### Security
 
+- **`/api/v1/health/relay` and `/api/v1/health/network` are now authenticated (S437).**
+  Both routes were registered with `$router->get(path, closure)` and no middleware, while
+  every sibling `/api/v1/*` telemetry route is `AuthMiddleware`-gated. `relayHealth()`
+  returns `relay.lastConnectError` / `lastConnectErrorAt`, whose raw text is recorded by
+  `RelayConsumer::recordConnectError()` as `': ' . $e->getMessage()` — a socket-error string
+  that embeds the hub host:port. Any anonymous caller could therefore read internal relay
+  connection failures and hub network topology; S40 widened the surface by adding the
+  latency snapshot. Both registrations now sit inside a nested `''`-prefix group carrying
+  `[new AuthMiddleware()]`, so the METHOD+PATH tuples are byte-for-byte unchanged (only the
+  route-level middleware column moves — the wire-path manifest records `[]` → `[AuthMiddleware]`
+  for the two lines and nothing else). The sole consumer is the authenticated admin UI, so
+  parity is preserved. Deliberate open liveness is untouched: the separate bare `/health`
+  route (status/timestamp/version only) — the target of the Docker `HEALTHCHECK`, k8s probes
+  and `scripts/docker-boot-smoke.sh` — stays unauthenticated, so no infra probe breaks. Pinned
+  by `tests/Unit/Server/Core/HealthRoutesAuthGuardTest.php`: the production route table shows
+  both gated, anonymous dispatch to each returns 401 `auth.required` with the health payload
+  keys absent and the hub host/port/socket-error substrings absent, `/health` still answers 200,
+  and the controller still returns the documented shapes when reached. (Census re-pinned
+  1771→1772 files and 949→952 declared Request writes in the same commit — the guard test names
+  `Request` directly.)
+
 - **The last nullable admin middleware is gone — the family is closed (S338).**
   `MaintenanceController` was the S323-phase-2 note's "one instance survives",
   the sixth controller holding `private readonly ?AdminMiddleware $adminGuard = null`

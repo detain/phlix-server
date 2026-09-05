@@ -282,16 +282,42 @@ class Application
             $configDir,
         );
 
-        // Relay health: returns tunnel status, hub heartbeat status, and active sessions
-        $this->router->get(
-            '/api/v1/health/relay',
-            fn(Request $request, array $params): Response => $healthController->relayHealth($request, $params)
-        );
+        // Relay + network health: S437 — auth-gated to match every sibling
+        // `/api/v1/*` telemetry route. These two endpoints were the only health
+        // routes registered WITHOUT AuthMiddleware while `relayHealth` returns
+        // `relay.lastConnectError` / `lastConnectErrorAt`, whose raw text is
+        // recorded by {@see \Phlix\Hub\RelayConsumer::recordConnectError()} as
+        // `': ' . $e->getMessage()` — that leaks the hub host:port and socket
+        // error string to any anonymous caller (info disclosure, widened by S40).
+        // The sole consumers are the authenticated admin UI
+        // (`@phlix/ui` `api/admin/networkHealth`), so gating behind the same
+        // AuthMiddleware the siblings use (`:545`/`:591`) preserves parity and
+        // needs no client change.
+        //
+        // Deliberate open liveness stays on the SEPARATE bare `/health` route
+        // (status/timestamp/version only, Application.php:215). Docker
+        // HEALTHCHECK, k8s probes and scripts/docker-boot-smoke.sh all target
+        // `/health` — never `/api/v1/health/relay|network` — so this gate breaks
+        // no infra probe. Registered inside a nested `''`-prefix group with the
+        // full path so the METHOD+PATH tuples are byte-for-byte unchanged
+        // (Router::addRoute keeps `$path` verbatim when the prefix is empty);
+        // only middleware attachment moves.
+        $this->router->group(
+            '',
+            function (Router $r) use ($healthController): void {
+                // Relay health: tunnel status, hub heartbeat status, active sessions.
+                $r->get(
+                    '/api/v1/health/relay',
+                    fn(Request $request, array $params): Response => $healthController->relayHealth($request, $params)
+                );
 
-        // Network health: measures hub heartbeat round-trip latency
-        $this->router->get(
-            '/api/v1/health/network',
-            fn(Request $request, array $params): Response => $healthController->networkHealth($request, $params)
+                // Network health: hub heartbeat round-trip latency snapshot.
+                $r->get(
+                    '/api/v1/health/network',
+                    fn(Request $request, array $params): Response => $healthController->networkHealth($request, $params)
+                );
+            },
+            [new \Phlix\Server\Http\Middleware\AuthMiddleware()]
         );
 
         // JWKS endpoint for hub-to-server JWT verification

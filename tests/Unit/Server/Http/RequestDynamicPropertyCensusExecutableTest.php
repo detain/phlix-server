@@ -172,8 +172,12 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * Re-pinned 1769→1771 by S435: the boundary-decode path adds two first-party
      * files (RouterPathParamDecodingTest, MusicEncodedRouteParamE2eTest); the fix
      * itself lives in the existing Router.php, which never joined or left the tree.
+     * Re-pinned 1771→1772 by S437: adds the health-route auth guard test. Unlike
+     * the S433/S434/S435 additions, this one DOES name Request (its dispatch helper
+     * assigns declared members), so it moves both this denominator and the
+     * declared-write count — both re-pinned here in the same commit.
      */
-    private const EXPECTED_PHP_FILES = 1771;
+    private const EXPECTED_PHP_FILES = 1772;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on
@@ -189,8 +193,10 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * Re-pinned 940→949 by S435: the two new test classes assign nine declared
      * Request members directly (method/path ×4 unit sites, userId in the e2e
      * dispatch helper — every one on a DECLARED property, the S427 license intact).
+     * Re-pinned 949→952 by S437: HealthRoutesAuthGuardTest's request() helper
+     * assigns three declared Request members directly (method/path/remoteIp).
      */
-    private const EXPECTED_DECLARED_WRITES = 949;
+    private const EXPECTED_DECLARED_WRITES = 952;
 
     /** Census numbers 3 and 4 — the posture claims; never re-pin, fix source. */
     private const EXPECTED_DYNAMIC_READS = 0;

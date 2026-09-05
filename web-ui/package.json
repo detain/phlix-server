@@ -11,7 +11,7 @@
     "typecheck": "vue-tsc --noEmit"
   },
   "dependencies": {
-    "@phlix/ui": "https://github.com/detain/phlix-ui/archive/refs/tags/v0.99.0.tar.gz"
+    "@phlix/ui": "https://github.com/detain/phlix-ui/archive/refs/tags/v0.99.1.tar.gz"
   },
   "devDependencies": {
     "@types/node": "^25.9.1",

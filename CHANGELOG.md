@@ -21,6 +21,19 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   this tip). Census and static-analysis blindness documented in the `Request::__get` docblock;
   every pinned shape in `tests/Unit/Server/Http/RequestDynamicPropertyGuardTest.php`.
 
+- **Executable S427 census (S431).** `tests/Unit/Server/Http/RequestDynamicPropertyCensusExecutableTest.php`
+  re-tokenizes the whole estate at run time and pins the five census numbers as class constants
+  (per the S342 `WriteResultAdoptionGuardTest` denominator pattern) instead of leaving them as
+  prose: file count, declared-read and declared-write denominators, and the two posture zeros
+  (dynamic-name reads/writes on Request roots) — a planted dynamic read now reddens naming its
+  `file:line`. Runtime re-measurement drifts against the S427 prose (1,756→1,760 files as the
+  estate grew; 331→391 reads and 1,037→940 writes because the lane's unpublished scan rules are
+  arithmetically unreproducible — its write number matches plain writes plus the 97 offset-write
+  sites while its read number does not reconcile with the same split); every qualitative claim
+  holds — all counted sites are on declared members and all three zeros measure zero. The pinned
+  numbers govern from here; legitimate landscape changes re-pin the two denominators in the same
+  commit, the zeros are posture and are fixed in source.
+
 - **Self-service profiles: end-user CRUD / PIN / switch / avatar (S81).** A logged-in
   user can now manage their own profiles through `ProfilesController` (auth-only group,
   never `/api/v1/admin`): `GET|POST /api/v1/profiles`, `GET|PUT|DELETE /api/v1/profiles/{id}`,

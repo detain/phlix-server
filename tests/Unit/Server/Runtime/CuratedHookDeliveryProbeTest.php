@@ -346,9 +346,12 @@ final class CuratedHookDeliveryProbeTest extends TestCase
                 $thrown = $e;
             }
         };
-        \Swoole\Coroutine\run($flow);
+                \Swoole\Coroutine\run($flow);
 
-        self::assertFalse($cleanThrew, 'the delivered-curated baseline must be green: ' . ($thrown?->getMessage() ?? ''));
+        self::assertFalse(
+            $cleanThrew,
+            'the delivered-curated baseline must be green: ' . ($thrown?->getMessage() ?? '')
+        );
         self::assertNull($thrown, 'the harness must run clean: ' . ($thrown?->getMessage() ?? ''));
         self::assertTrue(
             $mismatchThrew,

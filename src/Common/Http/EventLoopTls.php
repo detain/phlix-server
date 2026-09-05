@@ -63,6 +63,14 @@ use Workerman\Worker;
  * this call becomes a genuine 10 s freeze. The exception is written to be true
  * either way: bounded, never unbounded. Do not build on the yield.
  *
+ * S433 has since closed that gap: the per-worker remedy now re-asserts via
+ * `Swoole\Runtime::enableCoroutine()` — the full-mask replacement API that
+ * physically un-swaps installed handlers, unlike the `Coroutine::set()` the
+ * old remedy used — and proves delivery with a behavioural sibling-tick probe
+ * before the container is built ({@see \Phlix\Server\Runtime\HookDelivery}).
+ * On a delivered worker the yield above is gone and this call is exactly what
+ * its registered exception says it is: a genuine, bounded stall.
+ *
  * @package Phlix\Common\Http
  * @since 0.15.0
  */

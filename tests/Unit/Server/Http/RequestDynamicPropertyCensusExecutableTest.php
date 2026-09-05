@@ -161,8 +161,12 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * Census number 1 — every `*.php` in the estate (excluding vendor/ and
      * node_modules/ segments), measured at this tip. S427 prose said 1,756 —
      * the count at its BASE `4b620f59`, never re-taken at its own merge tip.
+     * Re-pinned 1760→1764 by S433: the delivery path adds four first-party
+     * files (HookDelivery, HookDeliveryException, the probe test, the guard
+     * test); the other four pins — both denominators and both posture zeros —
+     * are untouched, as they must be for files that never name Request.
      */
-    private const EXPECTED_PHP_FILES = 1760;
+    private const EXPECTED_PHP_FILES = 1764;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

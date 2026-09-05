@@ -124,4 +124,55 @@ final class SwooleRuntimeTest extends TestCase
         self::assertSame($flags, $flags & (int) constant('SWOOLE_HOOK_ALL'));
         self::assertNotSame((int) constant('SWOOLE_HOOK_ALL'), $flags);
     }
+
+    public function test_runtime_hook_mask_is_zero_when_coroutines_disabled(): void
+    {
+        // The adapter ctor installs SWOOLE_HOOK_ALL regardless; a bare
+        // resolveHookFlags() call is therefore NOT the worker-safe value —
+        // runtimeHookMask() must answer 0 so enforcement unhooks everything.
+        self::assertSame(0, SwooleRuntime::runtimeHookMask(['coroutine' => ['enabled' => false]]));
+        // The escape hatch must not resurrect hooks the operator disabled.
+        self::assertSame(
+            0,
+            SwooleRuntime::runtimeHookMask(['coroutine' => ['enabled' => false, 'hook_flags' => 0x2]])
+        );
+    }
+
+    public function test_runtime_hook_mask_resolves_both_enabled_paths(): void
+    {
+        self::assertSame(SwooleRuntime::safeHookFlags(), SwooleRuntime::runtimeHookMask([]));
+        self::assertSame(
+            0x2,
+            SwooleRuntime::runtimeHookMask(['coroutine' => ['hook_flags' => 0x2]])
+        );
+        self::assertSame(
+            SwooleRuntime::safeHookFlags(),
+            SwooleRuntime::runtimeHookMask(['coroutine' => ['enabled' => true]])
+        );
+    }
+
+    public function test_curl_hook_flags_cover_the_spells_and_never_intersect_the_allowlist(): void
+    {
+        if (!defined('SWOOLE_HOOK_NATIVE_CURL')) {
+            self::markTestSkipped('ext-swoole not loaded — no cURL hook constants to resolve.');
+        }
+
+        $curl = SwooleRuntime::curlHookFlags();
+        self::assertGreaterThan(0, $curl);
+        if (defined('SWOOLE_HOOK_NATIVE_CURL')) {
+            self::assertSame((int) SWOOLE_HOOK_NATIVE_CURL, $curl & (int) SWOOLE_HOOK_NATIVE_CURL);
+        }
+        if (defined('SWOOLE_HOOK_CURL')) {
+            self::assertSame((int) SWOOLE_HOOK_CURL, $curl & (int) SWOOLE_HOOK_CURL);
+        }
+
+        // The delivery probe keys on exactly these bits — the curated allowlist
+        // must exclude ALL of them (this is what makes "did the mask land?"
+        // behaviourally observable).
+        self::assertSame(
+            0,
+            SwooleRuntime::safeHookFlags() & $curl,
+            'a cURL hook inside the safe mask would blind the behavioural delivery probe'
+        );
+    }
 }

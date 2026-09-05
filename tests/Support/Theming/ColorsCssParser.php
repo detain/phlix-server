@@ -35,6 +35,33 @@ final class ColorsCssParser
     public const THEME_IDS = ['nocturne', 'daylight', 'midnight'];
 
     /**
+     * Where the dev-only composer pin delivers the canonical stylesheet,
+     * relative to the repository root. One spelling on purpose: this step
+     * exists to end hand-duplicated transcriptions, so the path to the real
+     * artifact gets exactly one home too.
+     */
+    public const VENDORED_RELATIVE_PATH = 'vendor/detain/phlix-tokens/src/css/colors.css';
+
+    /**
+     * Absolute path of the vendored colors.css inside THIS checkout.
+     */
+    public static function vendoredPath(): string
+    {
+        return dirname(__DIR__, 3) . '/' . self::VENDORED_RELATIVE_PATH;
+    }
+
+    /**
+     * Parse the vendored colors.css from this checkout.
+     *
+     * @throws \RuntimeException When the package is absent (composer install
+     *         not run, or the pin broken) — never a silent skip.
+     */
+    public static function vendored(): self
+    {
+        return self::fromFile(self::vendoredPath());
+    }
+
+    /**
      * Raw (unresolved) declarations per theme, keyed in declaration order.
      * `color-scheme` is held separately — see {@see self::$colorSchemes}.
      *

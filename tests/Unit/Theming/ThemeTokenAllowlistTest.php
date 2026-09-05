@@ -32,7 +32,7 @@ final class ThemeTokenAllowlistTest extends TestCase
      */
     private function expected(): array
     {
-        $colors = ColorsCssParser::fromFile(__DIR__ . '/../../../vendor/detain/phlix-tokens/src/css/colors.css');
+        $colors = ColorsCssParser::vendored();
 
         return $colors->tokenOrder('nocturne');
     }

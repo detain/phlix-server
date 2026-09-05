@@ -48,7 +48,7 @@ final class BuiltInThemesTest extends TestCase
      */
     private function expectedTokens(): array
     {
-        $colors = ColorsCssParser::fromFile(__DIR__ . '/../../../vendor/detain/phlix-tokens/src/css/colors.css');
+        $colors = ColorsCssParser::vendored();
 
         $expected = [];
         foreach (ColorsCssParser::THEME_IDS as $id) {
@@ -92,7 +92,7 @@ final class BuiltInThemesTest extends TestCase
      */
     public function testDarkFlagsMatchColorsCss(): void
     {
-        $colors = ColorsCssParser::fromFile(__DIR__ . '/../../../vendor/detain/phlix-tokens/src/css/colors.css');
+        $colors = ColorsCssParser::vendored();
         $themes = BuiltInThemes::all();
 
         foreach (ColorsCssParser::THEME_IDS as $id) {

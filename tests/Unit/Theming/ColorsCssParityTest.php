@@ -64,9 +64,6 @@ final class ColorsCssParityTest extends TestCase
      */
     private const COLORS_CSS_SHA256 = '495d7b481a6774313e73fd0a143c1a02b12f70a7a66c2295cf3ea37d82beb8a0';
 
-    /** The vendored canonical stylesheet, relative to the repository root. */
-    private const COLORS_CSS = __DIR__ . '/../../../vendor/detain/phlix-tokens/src/css/colors.css';
-
     /**
      * The artifact under test exists and is the exact pinned bytes — the
      * provenance half of the guard. A wrong-sha vendor copy (hand edit, torn
@@ -74,14 +71,16 @@ final class ColorsCssParityTest extends TestCase
      */
     public function testTheVendoredColorsCssIsThePinnedBytes(): void
     {
+        $path = ColorsCssParser::vendoredPath();
+
         self::assertFileExists(
-            self::COLORS_CSS,
+            $path,
             'detain/phlix-tokens did not install. The S228 guard must read the REAL colors.css: the pin is '
             . self::TOKENS_COMMIT . ' (' . self::TOKENS_TAG . ') in composer.json/composer.lock. '
             . 'Run `composer install`; if that fails, fix the pin — never skip this test.'
         );
 
-        $sha = hash_file('sha256', self::COLORS_CSS);
+        $sha = hash_file('sha256', $path);
 
         self::assertSame(
             self::COLORS_CSS_SHA256,
@@ -101,7 +100,7 @@ final class ColorsCssParityTest extends TestCase
      */
     public function testTheParsedStylesheetHasTheShapeTheParityChecksRequire(): void
     {
-        $colors = ColorsCssParser::fromFile(self::COLORS_CSS);
+        $colors = ColorsCssParser::vendored();
 
         self::assertSame(
             ColorsCssParser::THEME_IDS,
@@ -130,7 +129,7 @@ final class ColorsCssParityTest extends TestCase
      */
     public function testTheAllowlistEqualsTheTokensColorsCssDeclaresInOrder(): void
     {
-        $colors = ColorsCssParser::fromFile(self::COLORS_CSS);
+        $colors = ColorsCssParser::vendored();
 
         $declared = [];
         foreach (ColorsCssParser::THEME_IDS as $id) {
@@ -161,7 +160,7 @@ final class ColorsCssParityTest extends TestCase
      */
     public function testColorSchemeFlagsComeFromTheParsedStylesheet(): void
     {
-        $colors = ColorsCssParser::fromFile(self::COLORS_CSS);
+        $colors = ColorsCssParser::vendored();
 
         self::assertSame('dark', $colors->colorScheme('nocturne'));
         self::assertSame('light', $colors->colorScheme('daylight'));

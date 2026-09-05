@@ -230,9 +230,18 @@ final class ReleaseScriptTest extends TestCase
         self::assertSame(0, $result['exit'], $result['stdout'] . $result['stderr']);
 
         self::assertSame($before, md5_file($this->sandbox . '/composer.json'));
-        self::assertStringNotContainsString(
-            '"version"',
-            (string) file_get_contents($this->sandbox . '/composer.json'),
+
+        // The forbidden thing is the ROOT `"version"` key (what composer
+        // validate --strict rejects) — not the literal substring anywhere:
+        // S228's inline composer `repositories` block legitimately carries a
+        // nested `"version"` for the pinned phlix-tokens package definition.
+        $decoded = json_decode((string) file_get_contents($this->sandbox . '/composer.json'), true);
+        self::assertIsArray($decoded);
+        self::assertArrayNotHasKey(
+            'version',
+            $decoded,
+            'composer.json must not declare a root version key — the md5 pin above already proves the '
+            . 'whole file survived the bump byte-for-byte; this names WHY the key is forbidden.',
         );
     }
 

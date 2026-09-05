@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Phlix\Tests\Unit\Theming;
 
+use Phlix\Tests\Support\Theming\ColorsCssParser;
 use Phlix\Theming\ThemeTokenAllowlist;
 use PHPUnit\Framework\TestCase;
 
@@ -11,51 +12,29 @@ use PHPUnit\Framework\TestCase;
  * Pins the S84 token allowlist to the theme blocks of
  * `@phlix/tokens/src/css/colors.css`.
  *
- * ⚠ The canonical source lives in a DIFFERENT repository (`phlix-tokens`), so
- * nothing in this repo can diff the two automatically — re-syncing after a
- * colors.css change is a manual step. What this test can do, and does, is make
- * every edit to the list DELIBERATE: the expected set is spelled out in full
- * below, so adding, removing or renaming a token here fails until the
- * expectation is updated too, and the diff shows a reviewer exactly which
- * property became settable by a plugin.
+ * Since S228 the canonical stylesheet ships into the test checkout as the
+ * dev-only, commit-pinned `detain/phlix-tokens` composer package, and the
+ * expected list below is PARSED from that delivered file (byte-pinned by
+ * {@see ColorsCssParityTest}) — not restated from a transcription. A rename,
+ * insertion or removal inside a colors.css theme block reddens this test on
+ * CI; so does editing this list without moving the stylesheet. What the parse
+ * cannot decide for you is the POLICY of which properties a plugin may set —
+ * the group partition and well-formedness checks below keep that deliberate.
  */
 final class ThemeTokenAllowlistTest extends TestCase
 {
     /**
      * Every custom property declared inside `:root, [data-theme='nocturne']`,
-     * `[data-theme='daylight']` and `[data-theme='midnight']` in colors.css.
+     * `[data-theme='daylight']` and `[data-theme='midnight']` in colors.css,
+     * parsed from the vendored artifact (S228).
      *
      * @return list<string>
      */
     private function expected(): array
     {
-        return [
-            // Accent (semantic; the --amber-* ramp behind it is invariant).
-            '--accent', '--accent-hover', '--accent-active',
-            '--accent-soft', '--accent-ring', '--accent-text',
-            // Background + surface elevation stack.
-            '--bg', '--surface', '--surface-2', '--surface-3',
-            '--surface-glass', '--surface-glass-strong',
-            // Text ramp.
-            '--text', '--text-muted', '--text-subtle', '--text-faint', '--text-on-accent',
-            // Borders.
-            '--border', '--border-subtle', '--border-strong',
-            // Status colours + tinted backgrounds.
-            '--error', '--error-bg', '--success', '--success-bg',
-            '--warning', '--warning-bg', '--info', '--info-bg',
-            // Atmosphere hooks.
-            '--grain-opacity', '--vignette', '--ambient',
-            // Legacy --color-* aliases, re-declared per theme block.
-            '--color-bg', '--color-surface', '--color-surface-hover',
-            '--color-surface-elevated', '--color-surface-active',
-            '--color-text', '--color-text-secondary', '--color-text-muted', '--color-text-subtle',
-            '--color-primary', '--color-primary-hover', '--color-primary-active',
-            '--color-border', '--color-border-subtle',
-            '--color-error', '--color-error-bg',
-            '--color-success', '--color-success-bg',
-            '--color-warning', '--color-warning-bg',
-            '--color-info', '--color-info-bg',
-        ];
+        $colors = ColorsCssParser::fromFile(__DIR__ . '/../../../vendor/detain/phlix-tokens/src/css/colors.css');
+
+        return $colors->tokenOrder('nocturne');
     }
 
     public function testTheAllowlistIsExactlyTheColorsCssThemeBlockTokens(): void

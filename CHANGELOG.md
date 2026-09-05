@@ -3407,6 +3407,35 @@ run and can never reach it (AC2a / KNOWN LIMIT 3 closed), and a
   and misattributed it to `::restore()` (which never read a body) — moved in the same commit.
   No migration.
 
+### Added
+
+- **colors.css ⇄ the server transcription are now diffed mechanically, and the legacy-alias
+  justification is a measured census (S228).** `@phlix/tokens/src/css/colors.css` — the canonical
+  stylesheet behind `BuiltInThemes::PAYLOADS` and `ThemeTokenAllowlist` — lived in another repo
+  that nothing in CI could read, so both were pinned against hand transcriptions (the test file
+  restated 159 values; the allowlist test restated 53 names) and a hex edit upstream was invisible
+  estate-wide. The fix: a dev-only composer package `detain/phlix-tokens`, fetched by the `composer
+  install` CI already runs, delivered from the immutable commit SHA `5500d70b…` (tag v0.2.0; its
+  `colors.css` is byte-identical to master tip today), plus a guard that pins the delivered bytes
+  by sha256, parses the stylesheet, resolves its `var()` chains, and diffs name set + order +
+  every value against the allowlist and the transcription. Both hand transcriptions are deleted —
+  the expectation now comes from the delivered artifact. Mutating one hex on either side reddens
+  a named test (both directions mutation-proven in this run: transcription-side edit → 1 red;
+  vendor-stylesheet hex edit → 2 reds incl. the byte pin; one-block rename → 3 reds). The 13
+  legacy `--color-*` aliases S228 measured dead stay, and `LEGACY_ALIAS`'s docblock now states
+  why with a 2026-09-05 estate-wide reader census (12 of 13 have zero `var()` consumers across
+  server `src/`+`web-ui/`, ui, windows, tizen, mobile, roku, console and hub at their origin tips;
+  `--color-primary`'s only reader is the ui's dev-only swatch page; phlix-website's same-named
+  vars are its own per-site palettes, a disjoint namespace): removal is a coordinated cross-repo
+  deprecation — it would fight the new name-parity guard, make `ThemeSourceRegistry::register()`
+  reject the published sample plugin (which sets all 13 today), byte-change the
+  `GET /api/v1/themes` body that is md5-pinned against a copy in phlix-ui, and desync phlix-ui's
+  mirrored `THEME_TOKEN_ALLOWLIST`. The S84 "un-migrated components" folklore is gone. Collateral,
+  disclosed: `scripts/release.sh`'s root-`version`-field detector matched `"version"` at ANY
+  indentation, so the legitimate nested one inside the new inline composer `repositories` entry
+  false-reddened 11 `ReleaseScriptTest` cases; both the script and one test now ask the decoded
+  JSON root instead of the raw text. No migration.
+
 ## [1.2.3] — 2026-07-12
 
 ### Fixed

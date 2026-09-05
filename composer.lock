@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "295e5c235bdb52485c139e707517e1af",
+    "content-hash": "683f80dfa277fd85d294d05a9f5429b3",
     "packages": [
         {
             "name": "brick/math",
@@ -7237,6 +7237,16 @@
             "time": "2024-04-12T12:12:48+00:00"
         },
         {
+            "name": "detain/phlix-tokens",
+            "version": "v0.2.0",
+            "dist": {
+                "type": "tar",
+                "url": "https://github.com/detain/phlix-tokens/archive/5500d70b142d46ed8d382087ea542b1047cc803f.tar.gz"
+            },
+            "type": "library",
+            "description": "Phlix design tokens (@phlix/tokens) — vendored ONLY so tests can diff BuiltInThemes against the real colors.css (S228)."
+        },
+        {
             "name": "dnoegel/php-xdg-base-dir",
             "version": "v0.1.1",
             "source": {
@@ -10466,7 +10476,7 @@
     ],
     "aliases": [],
     "minimum-stability": "stable",
-    "stability-flags": {},
+    "stability-flags": [],
     "prefer-stable": false,
     "prefer-lowest": false,
     "platform": {
@@ -10496,7 +10506,7 @@
         "ext-zip": "*",
         "ext-zlib": "*"
     },
-    "platform-dev": {},
+    "platform-dev": [],
     "platform-overrides": {
         "php": "8.3.0",
         "ext-ctype": "8.3.0",
@@ -10524,5 +10534,5 @@
         "ext-zip": "8.3.0",
         "ext-zlib": "8.3.0"
     },
-    "plugin-api-version": "2.9.0"
+    "plugin-api-version": "2.6.0"
 }

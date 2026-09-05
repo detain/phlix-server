@@ -36,14 +36,17 @@ namespace Phlix\Theming;
  * allowlisted properties, so each theme here has exactly 53 tokens. `dark` is
  * read from each block's `color-scheme`.
  *
- * ⚠ colors.css lives in a **different repository** (`phlix-tokens`), so nothing
- * here can diff the two automatically — re-syncing after a colors.css change is
- * a manual step, exactly as it already is for {@see ThemeTokenAllowlist}.
- * `BuiltInThemesTest` compensates by spelling every value out in full, so an
- * edit is always deliberate and a reviewer sees precisely which colour moved.
- * The blast radius is small by construction: the SPA renders a built-in from
- * its OWN CSS (it sets `data-theme` on `<html>`), never from this endpoint, so
- * a stale value here shows a wrong preview swatch — it cannot render a theme
+ * colors.css lives in a **different repository** (`phlix-tokens`). Since S228
+ * that no longer means "undiffable": the stylesheet ships into the test
+ * checkout as the dev-only, commit-SHA-pinned `detain/phlix-tokens` composer
+ * package, and `BuiltInThemesTest` diffs every value below against the PARSED
+ * delivered file (`ColorsCssParser` resolves the `var()` chains the same way
+ * this file does by hand), with `ColorsCssParityTest` pinning the delivered
+ * bytes by sha256. A hex edit on either side reddens CI; re-syncing is
+ * deliberate, reviewable and no longer trust-me-bro. The blast radius of
+ * staleness stays small by construction: the SPA renders a built-in from its
+ * OWN CSS (it sets `data-theme` on `<html>`), never from this endpoint, so a
+ * stale value here shows a wrong preview swatch — it cannot render a theme
  * wrongly.
  *
  * ## `var()` chains are resolved, on purpose

@@ -110,8 +110,8 @@ final class CoroutineSocketGuardTest extends TestCase
         $dgram = $this->runInCoroutine(fn () => CoroutineSocketGuard::preflight(AF_INET, SOCK_DGRAM, 0));
         $stream = $this->runInCoroutine(fn () => CoroutineSocketGuard::preflight(AF_INET, SOCK_STREAM, 0));
 
-        $this->assertNull($dgram, 'S434 [' . self::TOKEN . ']: AF_INET/SOCK_DGRAM is what four seams construct — it must pass.');
-        $this->assertNull($stream, 'S434 [' . self::TOKEN . ']: AF_INET/SOCK_STREAM is what the STUN probe constructs — it must pass.');
+        $this->assertNull($dgram, 'S434 [' . self::TOKEN . ']: AF_INET/SOCK_DGRAM (the seam shape) must pass.');
+        $this->assertNull($stream, 'S434 [' . self::TOKEN . ']: AF_INET/SOCK_STREAM (STUN probe) must pass.');
     }
 
     public function testPreflightRefusesTheInvalidSocketTypeThatS207MeasuredFaulting(): void
@@ -245,13 +245,20 @@ final class CoroutineSocketGuardTest extends TestCase
         $soft = strcasecmp($m[1], 'unlimited') === 0 ? PHP_INT_MAX : (int) $m[1];
 
         $headroom = CoroutineSocketGuard::headroom();
-        $this->assertIsInt($headroom, 'S434 [' . self::TOKEN . ']: /proc-based measurement must work on Linux (prod + CI + this box).');
+        $this->assertIsInt($headroom, 'S434 [' . self::TOKEN . ']: /proc-based measurement must work on Linux.');
 
         $open = count(glob('/proc/self/fd/*') ?: []);
-        $this->assertEqualsWithDelta($soft - $open, $headroom, 8,
-            'The guard must agree with an independent re-measurement within a couple of transient descriptors.');
-        $this->assertGreaterThanOrEqual(CoroutineSocketGuard::MIN_FREE_DESCRIPTORS, $headroom,
-            'A healthy test worker must not be refused — if this fails, the machine, not the guard, changed.');
+        $this->assertEqualsWithDelta(
+            $soft - $open,
+            $headroom,
+            8,
+            'The guard must agree with an independent re-measurement within a couple of transient descriptors.'
+        );
+        $this->assertGreaterThanOrEqual(
+            CoroutineSocketGuard::MIN_FREE_DESCRIPTORS,
+            $headroom,
+            'A healthy test worker must not be refused — if this fails, the machine, not the guard, changed.'
+        );
     }
 
     public function testCreateInsideACoroutineStillConstructsARealSocketOnHealthyState(): void
@@ -276,9 +283,12 @@ final class CoroutineSocketGuardTest extends TestCase
     public function testTheFaultEnumIsTotalAndPinned(): void
     {
         $cases = CoroutineSocketFault::cases();
-        $this->assertCount(4, $cases,
+        $this->assertCount(
+            4,
+            $cases,
             'S434 [' . self::TOKEN . ']: the fault taxonomy is pinned. A new refusal reason must be added HERE '
-            . 'deliberately, and every test that expects a specific fault reviews itself against it.');
+            . 'deliberately, and every test that expects a specific fault reviews itself against it.'
+        );
         $this->assertTrue(CoroutineSocketFault::InvalidArguments->isRuntimeCondition() === false);
         $this->assertTrue(CoroutineSocketFault::DescriptorExhaustion->isRuntimeCondition());
     }
@@ -316,14 +326,20 @@ final class CoroutineSocketGuardTest extends TestCase
             static fn (string $site): bool => str_contains($site, self::GUARD_FILE . ':')
         ));
 
-        $this->assertSame([], $outside,
+        $this->assertSame(
+            [],
+            $outside,
             'S434 [' . self::TOKEN . ']: raw `new \Swoole\Coroutine\Socket(...)` found in src/ OUTSIDE the guard '
             . 'chokepoint. S207 measured this construction faulting the worker uncatchably; every construction '
-            . 'must route through CoroutineSocketGuard::create(). Sites: ' . implode(', ', $outside));
+            . 'must route through CoroutineSocketGuard::create(). Sites: ' . implode(', ', $outside)
+        );
 
-        $this->assertCount(1, $inside,
+        $this->assertCount(
+            1,
+            $inside,
             'S434 [' . self::TOKEN . ']: the guard must own EXACTLY ONE raw construction — the chokepoint itself. '
-            . 'Found: ' . implode(', ', $inside));
+            . 'Found: ' . implode(', ', $inside)
+        );
 
         $grouped = [];
         foreach ($routed as $site) {
@@ -334,17 +350,23 @@ final class CoroutineSocketGuardTest extends TestCase
         $expected = self::EXPECTED_GUARDED_SITES;
         ksort($expected);
 
-        $this->assertSame($expected, $grouped,
+        $this->assertSame(
+            $expected,
+            $grouped,
             'S434 [' . self::TOKEN . ']: the guarded-site denominator moved. Sites now: '
-            . implode(', ', $routed) . '. Update EXPECTED_GUARDED_SITES ONLY if the change is intended.');
+            . implode(', ', $routed) . '. Update EXPECTED_GUARDED_SITES ONLY if the change is intended.'
+        );
     }
 
     public function testEveryNetworkSeamStillDelegatesToTheGuard(): void
     {
         $routed = self::scanSrcForGuardCallSitesPerFile();
         foreach (array_keys(self::EXPECTED_GUARDED_SITES) as $file) {
-            $this->assertArrayHasKey($file, $routed,
-                'S434 [' . self::TOKEN . ']: ' . $file . ' lost its CoroutineSocketGuard::create() call site.');
+            $this->assertArrayHasKey(
+                $file,
+                $routed,
+                'S434 [' . self::TOKEN . ']: ' . $file . ' lost its CoroutineSocketGuard::create() call site.'
+            );
         }
         // And the four classes still expose the S197 override seam the containment
         // tests plant failures through — the guard did not remove the seam.

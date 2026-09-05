@@ -168,8 +168,9 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * Re-pinned 1764→1768 by S434: the socket-guard path adds four first-party
      * files (CoroutineSocketGuard, CoroutineSocketFault, the refused exception,
      * the guard test); same reasoning — none of them names Request.
+     * Re-pinned 1768→1769 by S436: adds the real-DB collection-members integration test.
      */
-    private const EXPECTED_PHP_FILES = 1768;
+    private const EXPECTED_PHP_FILES = 1769;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

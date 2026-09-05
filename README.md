@@ -386,8 +386,8 @@ composer install
 # Run database migrations (reads config/database.php; password from DB_PASSWORD env var)
 DB_PASSWORD=your_strong_password php bin/phlix migrate    # or: php scripts/run-migrations.php
 
-# Start the server (HTTP + WebSocket on port 8096 from config/server.php)
-php public/index.php start
+# Start the server (HTTP :8096 + WebSocket :8097 workers; ports from config/server.php)
+php start.php start
 ```
 
 ## Configuration

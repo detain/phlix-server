@@ -290,6 +290,68 @@ class PlaybackController
     }
 
     /**
+     * Finalize EVERY playback_state row a user holds for one media item (S438 ruling).
+     *
+     * S30 left an either/or for how the detail-page "mark watched" should clear the
+     * Continue Watching rail: (a) drive the FINALIZE path from
+     * {@see \Phlix\Server\Http\Controllers\MediaUserDataController::markWatched()}, or
+     * (b) add `LEFT JOIN user_item_data … AND uid.watched = 0` to the rail SQL.
+     * (a) is the recorded design: the estate rule (WebPortalRouter, quoted in the S30
+     * block) states outright that "The watched / in-progress signal is `playback_state`
+     * (never `user_item_data.watched`)" — the rail is deliberately single-sourced, so a
+     * JOIN would bolt on the second truth-source it was built to ignore, would leave the
+     * item's row `playing` with a stale position (its stats never finalize), and would
+     * pay a join on every render. Finalize reuses the mechanism
+     * `POST /sessions/{id}/complete` already proves: row → `stopped`/`position_ticks = 0`
+     * and `PlaybackStopped`/stats finalize (feeding S31/S32). No schema change, so no
+     * migration 103.
+     *
+     * Session-scoped {@see self::markAsWatched()} cannot serve this caller: the rail is
+     * USER-scoped (`getContinueWatching()` keys on `s_session.user_id`), so a title
+     * paused on the TV must leave the rail when the user marks it watched on the phone —
+     * hence per-user convergence over all of the user's sessions, with exactly
+     * `markAsWatched()`'s semantics applied to every row it touches.
+     *
+     * @param string $userId      Account whose playback rows converge.
+     * @param string $mediaItemId Media item just marked watched.
+     *
+     * @return int Number of playback_state rows finalized (0 when the user has no
+     *             playback history for the item — a deliberate no-op, never an error).
+     */
+    public function finalizeWatchedForUser(string $userId, string $mediaItemId): int
+    {
+        $rows = RowMap::listFromMixed($this->db->query(
+            "SELECT ps.session_id, ps.position_ticks
+             FROM playback_state ps
+             INNER JOIN sessions s ON ps.session_id = s.id
+             WHERE s.user_id = ? AND ps.media_item_id = ?",
+            [$userId, $mediaItemId]
+        ));
+
+        $this->db->query(
+            "UPDATE playback_state ps
+             INNER JOIN sessions s ON ps.session_id = s.id
+             SET ps.playback_status = 'stopped', ps.position_ticks = 0
+             WHERE s.user_id = ? AND ps.media_item_id = ?",
+            [$userId, $mediaItemId]
+        );
+
+        if ($this->eventDispatcher === null) {
+            return count($rows);
+        }
+
+        foreach ($rows as $row) {
+            $sessionId = is_string($row['session_id'] ?? null) ? $row['session_id'] : '';
+            if ($sessionId === '') {
+                continue;
+            }
+            $this->dispatchPlaybackStopped($sessionId, $mediaItemId, self::positionFromRow($row), reachedEnd: true);
+        }
+
+        return count($rows);
+    }
+
+    /**
      * Clear playback progress for a session and media item.
      *
      * @param string $sessionId Session UUID to clear progress for
@@ -362,6 +424,11 @@ class PlaybackController
         // is not appropriate for the CW card — we need the series poster.
         // We join the parent (season for episodes) and the grandparent series
         // to resolve the correct poster before shaping.
+        //
+        // S438 ruling: watched-completion converges the rows THIS SQL reads, via
+        // the finalize path ({@see self::finalizeWatchedForUser()} / markAsWatched)
+        // — deliberately NOT a `user_item_data.watched = 0` JOIN here. The rail's
+        // watched/in-progress signal is `playback_state`, never `user_item_data`.
         $result = $this->db->query(
             "SELECT ranked.id, ranked.session_id, ranked.media_item_id,
                     ranked.position_ticks, ranked.duration_ticks,

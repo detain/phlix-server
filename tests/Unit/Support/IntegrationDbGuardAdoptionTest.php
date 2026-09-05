@@ -307,8 +307,14 @@ final class IntegrationDbGuardAdoptionTest extends TestCase
      * against the REAL composed route table and REAL name lookups —
      * `WHERE a.name = ?` matching a decoded library row is the exact claim
      * the defect killed, and no canned-row double can express it.
+     *
+     * 49 since S438's
+     * `tests/Integration/Session/PlaybackFinishIntegrationTest.php`:
+     * the finish signal's AC demands a SEEDED ROW LEAVING THE RAIL — mock-only
+     * coverage asserted "the mock's markAsWatched was called", never that real
+     * playback_state rows converged; only live MySQL can falsify that.
      */
-    private const EXPECTED_ADOPTERS = 48;
+    private const EXPECTED_ADOPTERS = 49;
 
     /**
      * Bare function calls that are a MySQL reachability probe under any

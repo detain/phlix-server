@@ -277,6 +277,37 @@ run and can never reach it (AC2a / KNOWN LIMIT 3 closed), and a
 
 ### Fixed
 
+- **The curated coroutine-hook allowlist is now enforced and DELIVERY-PROVEN at worker
+  start (S433, was S255).** Workerman's `Events\Swoole` constructor re-installs
+  `SWOOLE_HOOK_ALL` per worker, and `start.php`'s remedy — `Coroutine::set(['hook_flags'
+  => …])` from inside the `onWorkerStart` coroutine — measured on this estate's stack,
+  updates only the REPORTED mask: `getOptions()` reads the curated `0x42fe` while the
+  `NATIVE_CURL`/`FILE`/`PROC` handlers stay physically installed, so the SIGSEGV mitigation
+  could reach no worker and the standard check reported success either way (the
+  `EventLoopTls.php:44-64` docblock testifies). Per-worker enforcement now goes through the
+  full-mask replacement API and a behavioural verdict: new `Phlix\Server\Runtime\HookDelivery`
+  calls `Swoole\Runtime::enableCoroutine()` (the only API measured to un-swap handlers, and —
+  narrowing S255's fix-direction note — from inside the worker coroutine too; the API, not the
+  calling context, is the variable) and then proves the configured mask is the mask in force
+  with a sibling-tick probe (a cURL to a never-answered local listener that either blocks the
+  worker or yields dozens of ticks; `getOptions()` is never consulted). Non-delivery and
+  inconclusive samples throw `HookDeliveryException` — startup fails LOUD, and the
+  background-timer worker's best-effort `catch (\Throwable)` now rethrows exactly that
+  exception instead of warning past it. The `coroutine.enabled=false` and
+  `coroutine.hook_flags` config paths are now true: mask `0` is enforced (the shipped default
+  left `ALL` installed even with the hook disabled) and an operator mask that re-enables a cURL
+  hook verifies green — the check is two-sided. New `CuratedHookDeliveryProbeTest` (6 tests,
+  real Swoole 6.2.1, reproduces the vendor adapter constructor's `ALL`-installed
+  state order-independently via the authoritative API; skips without ext-swoole/
+  ext-curl) + `HookAllowlistEnforcementGuardTest` (5 tokenized guards incl. the six-worker
+  census); `SwooleRuntimeTest` gains 3 pure tests for `runtimeHookMask()`/`curlHookFlags()`.
+  Planted-drift proof: replacing `verify()`'s tick comparison with the `getOptions()` equality
+  reddens `CuratedHookDeliveryProbeTest::test_the_old_in_coroutine_set_lies_and_the_probe_catches_it`
+  and the guard's no-`getOptions` rule; restore → green. `EventLoopTls`'s registered
+  blocking-I/O exception note updated: with the allowlist enforced the documented bounded
+  stall — not the accidental yield — is the live behavior. No `SAFE_HOOK_NAMES` change;
+  no migration.
+
 - **S271 mutation-arm description corrected (S428, server leg).** The
   `BackupControllerBodyPersistenceTest` header claimed reverting either dead-property arm
   "reddens exactly one named test (mutation-verified)". Both arms re-run at the S427 tip prove the

@@ -138,17 +138,38 @@ if (extension_loaded('swoole')) {
     );
 }
 
-// Re-assert the curated coroutine hook mask inside every worker. Workerman's
-// Swoole event adapter constructor resets hook_flags back to SWOOLE_HOOK_ALL once
-// per worker (right before onWorkerStart), which would silently re-enable the
-// FILE(io_uring)/PROC/CURL/blocking-function hooks the allowlist exists to avoid
-// (those reintroduce the swoole.so SIGSEGV on this PHP 8.5 / Swoole 6.2.1 / kernel-7
-// io_uring stack). Re-applying via the same Coroutine::set() API at the top of each
-// worker keeps it on the safe hook set. {@see SwooleRuntime}
+// Enforce the CURATED coroutine hook allowlist inside every worker — and PROVE
+// it landed. Workerman's Swoole event adapter constructor re-installs
+// SWOOLE_HOOK_ALL once per worker (right before onWorkerStart), silently
+// re-enabling the FILE(io_uring)/PROC/CURL/blocking-function hooks the allowlist
+// exists to keep off the PHP 8.5 / Swoole 6.2.1 / kernel-7 io_uring stack (they
+// produced 200+ worker SIGSEGVs a day; exit status 139).
+//
+// The pre-S433 remedy here called Coroutine::set(['hook_flags' => …]) from
+// INSIDE the worker coroutine — measured on this estate's stack, that API
+// updates only the REPORTED mask: getOptions() showed the curated 0x42fe while
+// every handler stayed physically installed, so the mitigation could reach no
+// worker and the standard check reported SUCCESS either way. The S433 remedy is
+// behavioural: HookDelivery re-installs via Runtime::enableCoroutine() (the
+// full-mask replacement API that physically un-swaps handlers) and proves
+// delivery with a sibling-tick probe around a blocking cURL — never a
+// getOptions() read. A worker whose configured mask did not land throws at
+// startup: the loud crash-loop IS the feature — running without the allowlist
+// is the site-down state this whole mitigation exists to prevent.
+// {@see \Phlix\Server\Runtime\HookDelivery} {@see SwooleRuntime}
 $applyCuratedCoroutineHooks = static function () use ($config): void {
-    if (extension_loaded('swoole') && \Phlix\Server\Runtime\SwooleRuntime::coroutineEnabled($config)) {
-        \Swoole\Coroutine::set(['hook_flags' => \Phlix\Server\Runtime\SwooleRuntime::resolveHookFlags($config)]);
+    if (!extension_loaded('swoole')) {
+        return;
     }
+    $mask = \Phlix\Server\Runtime\SwooleRuntime::runtimeHookMask($config);
+    $sample = \Phlix\Server\Runtime\HookDelivery::enforceAndVerify($mask);
+    Worker::log(sprintf(
+        '[phlix] worker #%d coroutine hook allowlist DELIVERED: mask=0x%04x, probe %d ticks / %.0f ms',
+        (int) (getmypid() ?: -1),
+        $mask,
+        $sample['ticks'],
+        $sample['blocked_ms']
+    ));
 };
 
 // -----------------------------------------------------------------------------
@@ -817,6 +838,13 @@ try {
             $timerApp = new Application($container, $config, $pool);
             $timerApp->startBackgroundTimers();
         } catch (\Throwable $e) {
+            // S433: an undelivered hook allowlist is NOT best-effort. It means
+            // this worker would run with the crash-prone SWOOLE_HOOK_ALL mask,
+            // so let it out — the child dies loudly (Workerman logs the
+            // non-zero exit) instead of trigger_error-ing past the mitigation.
+            if ($e instanceof \Phlix\Server\Runtime\HookDeliveryException) {
+                throw $e;
+            }
             trigger_error(
                 'Background timer worker failed to start: ' . $e->getMessage(),
                 E_USER_WARNING

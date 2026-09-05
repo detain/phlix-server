@@ -109,6 +109,57 @@ final class SwooleRuntime
     }
 
     /**
+     * The mask a WORKER must physically install — the worker-safe sibling of
+     * {@see self::resolveHookFlags()}.
+     *
+     * `Workerman\Events\Swoole::__construct()` installs `SWOOLE_HOOK_ALL` in
+     * every worker regardless of config, so when `coroutine.enabled` is false
+     * the operative per-worker mask is ZERO (un-install everything the
+     * constructor hooked) — not "call nothing", which is what left
+     * `enabled => false` silently running the crash-prone full hook set
+     * (S433: the config path must land, in BOTH directions). With the runtime
+     * enabled this is exactly {@see self::resolveHookFlags()}, so the
+     * `coroutine.hook_flags` escape hatch keeps working.
+     *
+     * @param mixed $config The full server config array.
+     *
+     * @since 1.2.4
+     */
+    public static function runtimeHookMask(mixed $config): int
+    {
+        if (!self::coroutineEnabled($config)) {
+            return 0;
+        }
+
+        return self::resolveHookFlags($config);
+    }
+
+    /**
+     * The OR of the libcurl hook bits this Swoole build exposes
+     * (`SWOOLE_HOOK_CURL`, `SWOOLE_HOOK_NATIVE_CURL`); 0 when neither exists.
+     *
+     * These are the bits the curated mask always excludes and
+     * `SWOOLE_HOOK_ALL` always includes, which makes them what
+     * {@see HookDelivery::verify()} senses behaviourally to decide whether a
+     * mask physically landed. The curated mask intersecting these MUST be 0 —
+     * otherwise the delivery probe would be blind (asserted in
+     * `SwooleRuntimeTest`).
+     *
+     * @since 1.2.4
+     */
+    public static function curlHookFlags(): int
+    {
+        $flags = 0;
+        foreach (['SWOOLE_HOOK_CURL', 'SWOOLE_HOOK_NATIVE_CURL'] as $name) {
+            if (defined($name)) {
+                $flags |= (int) constant($name);
+            }
+        }
+
+        return $flags;
+    }
+
+    /**
      * The OR of the {@see self::SAFE_HOOK_NAMES} allowlist (network + sleep
      * hooks only).
      *

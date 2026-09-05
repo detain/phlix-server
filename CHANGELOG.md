@@ -79,6 +79,14 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Changed
 
+- **`getCollectionMembers()` stops selecting non-existent `media_items` artwork columns (S436).**
+  The projection carried `m.poster_url`/`m.backdrop_url` — columns that do not exist on `media_items`
+  (they live on `media_collections`, added by migration 064) — so every call raised MySQL 1054. Artwork
+  is now sourced from the row's `metadata_json`, the same source `MediaItemShaper` uses, through the
+  existing S104 `SignedUrl` re-mint and `BackdropSrcset` row-width path. Executed against real MySQL —
+  1054 before, green after (PR #718; the S431 executable census re-pins 1768→1769 in the same landing).
+  No migration.
+
 - **web-ui dependency re-pin: `@phlix/ui` v0.99.0 → v0.99.1.** The `web-ui/` package tarball URL and its
   lockfile entry move to the v0.99.1 tag; the lockfile's nested `@phlix/contracts`/`@phlix/syncplay`
   declaration strings follow v0.99.1's own pins. Zero server-side change: no PHP, no route files touched —
@@ -314,7 +322,7 @@ run and can never reach it (AC2a / KNOWN LIMIT 3 closed), and a
   the composed `Application::loadMusicRoutes()` table direct AND over the real
   `RelayConsumer::buildRequest()` relay path,
   `tests/Integration/Server/Http/MusicEncodedRouteParamE2eTest.php` (S431 census re-pinned
-  1768→1770, declared-write denominator 940→949 — all writes on declared members).
+  1769→1771, declared-write denominator 940→949 — all writes on declared members).
 
 - **The curated coroutine-hook allowlist is now enforced and DELIVERY-PROVEN at worker
   start (S433, was S255).** Workerman's `Events\Swoole` constructor re-installs

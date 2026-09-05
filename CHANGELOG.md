@@ -63,6 +63,12 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Changed
 
+- **web-ui dependency re-pin: `@phlix/ui` v0.99.0 → v0.99.1.** The `web-ui/` package tarball URL and its
+  lockfile entry move to the v0.99.1 tag; the lockfile's nested `@phlix/contracts`/`@phlix/syncplay`
+  declaration strings follow v0.99.1's own pins. Zero server-side change: no PHP, no route files touched —
+  the generated route manifest is byte-identical across this delta, so every downstream currency
+  regeneration remains provenance-only. `npm ci` in `web-ui/` passes (mirrors the Web UI Build CI job).
+
 - **Parental-controls creates now accept the shipped mobile/roku camelCase spellings additively (S234).**
   `ProfileTagController::createForProfile` accepts a third tag-type spelling — `tagType` — alongside the
   S233 pair (`tag_type` from the admin SPA, `type` from the console client); `AccessScheduleController::createForProfile`

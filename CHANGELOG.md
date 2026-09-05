@@ -305,7 +305,9 @@ run and can never reach it (AC2a / KNOWN LIMIT 3 closed), and a
   reddens `CuratedHookDeliveryProbeTest::test_the_old_in_coroutine_set_lies_and_the_probe_catches_it`
   and the guard's no-`getOptions` rule; restore → green. `EventLoopTls`'s registered
   blocking-I/O exception note updated: with the allowlist enforced the documented bounded
-  stall — not the accidental yield — is the live behavior. No `SAFE_HOOK_NAMES` change;
+  stall — not the accidental yield — is the live behavior. The S431 executable census
+  denominator re-pins 1,760→1,764 in this same commit (four new first-party files; every
+  other pin untouched, exactly as the re-pin protocol demands). No `SAFE_HOOK_NAMES` change;
   no migration.
 
 - **S271 mutation-arm description corrected (S428, server leg).** The

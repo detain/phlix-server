@@ -95,6 +95,7 @@ final class ForkInventoryGuardTest extends TestCase
             'tests/Unit/Media/Transcoding/SegmentProcessRegistryCoroutineForkTest.php',
         ],
         'src/Media/Transcoding/TranscodeManager.php' => ['tests/Unit/Media/Transcoding/TranscodeManagerTest.php'],
+        'src/Network/CoroutineSocketGuard.php' => ['tests/Unit/Network/CoroutineSocketGuardTest.php'],
         'src/Network/NatPmpClient.php' => ['tests/Unit/Network/CoroutineSocketFailureContainmentTest.php'],
         'src/Network/PortForwardService.php' => ['tests/Unit/Network/CoroutineSocketFailureContainmentTest.php'],
         'src/Network/StunClient.php' => ['tests/Unit/Network/StunClientTest.php'],

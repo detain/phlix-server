@@ -165,8 +165,11 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * files (HookDelivery, HookDeliveryException, the probe test, the guard
      * test); the other four pins — both denominators and both posture zeros —
      * are untouched, as they must be for files that never name Request.
+     * Re-pinned 1764→1768 by S434: the socket-guard path adds four first-party
+     * files (CoroutineSocketGuard, CoroutineSocketFault, the refused exception,
+     * the guard test); same reasoning — none of them names Request.
      */
-    private const EXPECTED_PHP_FILES = 1764;
+    private const EXPECTED_PHP_FILES = 1768;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

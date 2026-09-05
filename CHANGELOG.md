@@ -9,6 +9,22 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Added
 
+- **Coroutine-socket construction guards (S434).** S207 measured `new \Swoole\Coroutine\Socket(...)`
+  SIGSEGVing the worker INSIDE the constructor — through `catch (\Throwable)` — on an invalid socket
+  type and on a genuine `socket(2)` EMFILE; a signal is not throwable, so the fix is prevention.
+  Every construction in `src/Network/` (5 sites, 4 classes) now routes through
+  `Phlix\Network\CoroutineSocketGuard::create()`, the only raw construction allowed in `src/`,
+  which refuses those two entry states beforehand as a typed `CoroutineSocketConstructionRefused`
+  carrying a `CoroutineSocketFault` (S169 `PortProbeOutcome` shape) — domains/types are membership-
+  checked, and soft-`RLIMIT_NOFILE` headroom below the margin fails closed; each site's existing
+  S197 `catch (\Throwable)` turns the refusal into its documented blocking-fallback degradation,
+  so healthy paths are behaviour-unchanged. Re-measured on the actual prod base image
+  (ghcr.io/detain/phlix-base, PHP 8.3.33-alpine, swoole 6.2.1): both S207 arms now throw catchable
+  `Swoole\Coroutine\Socket\Exception` instead of faulting — honest non-reproduction on the current
+  prod build, recorded in the test; the guard stands because the fault lived in the vendor binary.
+  Census, refusal taxonomy and the never-catches law are pinned by runtime tokenization in
+  `tests/Unit/Network/CoroutineSocketGuardTest.php` (S431 denominator re-pinned 1764→1768).
+
 - **Request dynamic-property reachability guard (S427).** `Phlix\Server\Http\Request` now pairs
   `__get()`/`__isset()` so an UNGUARDED read of an undeclared property throws a named
   `LogicException` instead of silently answering a PHP-warning null. The posture was chosen from a

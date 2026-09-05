@@ -183,7 +183,12 @@ class StunClient
     private function probeViaCoroutineSocket(string $ip, int $port, float $timeout): PortProbeOutcome
     {
         try {
-            $sock = new \Swoole\Coroutine\Socket(AF_INET, SOCK_STREAM, 0);
+            // S434: this was the one construction on this surface that bypassed the
+            // seam — it now goes through CoroutineSocketGuard too, so the states
+            // S207 measured faulting inside `new` are refused as the typed
+            // exception this very catch already contains (→ warning + Failed),
+            // and no raw `new \Swoole\Coroutine\Socket` survives outside the guard.
+            $sock = CoroutineSocketGuard::create(AF_INET, SOCK_STREAM, 0);
             // S146: Swoole\Coroutine\Socket has NO setTimeout() — verified
             // absent from the class in swoole 6.2.2. The old call raised an
             // \Error, which catch (RuntimeException) does not catch. The
@@ -499,6 +504,11 @@ class StunClient
      */
     protected function createCoroutineSocket(int $type): \Swoole\Coroutine\Socket
     {
-        return new \Swoole\Coroutine\Socket(AF_INET, $type, 0);
+        // S434: routed through the construction guard — the two entry states S207
+        // measured faulting inside `new` (invalid arguments, socket(2) EMFILE) are
+        // refused as a typed CoroutineSocketConstructionRefused BEFORE any `new`.
+        // Overriding this method remains the test seam: an override never reaches
+        // the guard, exactly as it never reached the old bare construction.
+        return CoroutineSocketGuard::create(AF_INET, $type, 0);
     }
 }

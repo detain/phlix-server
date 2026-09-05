@@ -517,7 +517,12 @@ TEXT;
      */
     protected function createCoroutineSocket(int $type): \Swoole\Coroutine\Socket
     {
-        return new \Swoole\Coroutine\Socket(AF_INET, $type, 0);
+        // S434: routed through the construction guard — the two entry states S207
+        // measured faulting inside `new` (invalid arguments, socket(2) EMFILE) are
+        // refused as a typed CoroutineSocketConstructionRefused BEFORE any `new`.
+        // Overriding this method remains the test seam: an override never reaches
+        // the guard, exactly as it never reached the old bare construction.
+        return CoroutineSocketGuard::create(AF_INET, $type, 0);
     }
 
     /**

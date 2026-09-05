@@ -293,6 +293,29 @@ run and can never reach it (AC2a / KNOWN LIMIT 3 closed), and a
 
 ### Fixed
 
+- **Route parameters are percent-decoded ONCE at the routing boundary (S435).** The Router
+  compiled `{param}` to `(?P<$1>[^/]+)` and handed handlers the RAW encoded segment, so
+  `GET /api/v1/music/albums/Abbey%20Road` looked up an album literally named `Abbey%20Road` —
+  `MusicController::getArtist()`/`getAlbum()` passed the still-encoded value into
+  `MusicLibraryService::findArtistByName()`'s `WHERE a.name = ?`, and every artist/album with
+  a space, accent or unicode name 404'd library-wide. `Router::dispatch()` and
+  `Router::dispatchAsHead()` (the estate's only two param-extraction sites — `pathParams` is
+  written nowhere else) now decode through one private `decodePathParams()` **after** pattern
+  matching: the raw path keeps its routing meaning (`%2F` cannot split segments or forge
+  routes, and upstream traversal guards keep vetting the exact bytes they saw), handlers get
+  parsed names, and no handler decodes again — the `%2520` fixture resolves the artist whose
+  name literally contains `%20`, never the space-named one. Policy: `rawurldecode()`, not
+  `urldecode()` — a `+` in a path segment is a literal plus (RFC 3986); `+`-means-space is
+  the query-string form encoding; malformed sequences (`%ZZ`, trailing `%`) pass through
+  verbatim without throwing. Additive: every existing route path still matches; the
+  console-client pin asserting the encoded wire form (`/api/v1/music/albums/Abbey%20Road`)
+  stays correct — the server now decodes on receipt. Pinned by
+  `tests/Unit/Server/Http/RouterPathParamDecodingTest.php` and, against real MySQL through
+  the composed `Application::loadMusicRoutes()` table direct AND over the real
+  `RelayConsumer::buildRequest()` relay path,
+  `tests/Integration/Server/Http/MusicEncodedRouteParamE2eTest.php` (S431 census re-pinned
+  1768→1770, declared-write denominator 940→949 — all writes on declared members).
+
 - **The curated coroutine-hook allowlist is now enforced and DELIVERY-PROVEN at worker
   start (S433, was S255).** Workerman's `Events\Swoole` constructor re-installs
   `SWOOLE_HOOK_ALL` per worker, and `start.php`'s remedy — `Coroutine::set(['hook_flags'

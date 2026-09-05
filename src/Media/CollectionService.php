@@ -286,7 +286,7 @@ final class CollectionService
     public function getCollectionMembers(int $collectionId): array
     {
         $rows = $this->db->query(
-            'SELECT m.id, m.name, m.type, m.metadata_json, m.poster_url, m.backdrop_url,
+            'SELECT m.id, m.name, m.type, m.metadata_json,
                     mcm.tmdb_part_order
              FROM media_collection_members mcm
              JOIN media_items m ON m.id = mcm.media_item_id
@@ -305,8 +305,16 @@ final class CollectionService
             if (!is_array($row)) {
                 continue;
             }
-            $storedPoster = is_string($row['poster_url'] ?? null) ? $row['poster_url'] : null;
-            $storedBackdrop = is_string($row['backdrop_url'] ?? null) ? $row['backdrop_url'] : null;
+
+            // S436: media_items has no poster_url/backdrop_url columns; artwork
+            // lives inside metadata_json as decoded keys (same source MediaItemShaper uses).
+            $metadata = self::decodeMetadata($row['metadata_json'] ?? null);
+            $storedPoster = is_string($metadata['poster_url'] ?? null) && $metadata['poster_url'] !== ''
+                ? $metadata['poster_url']
+                : null;
+            $storedBackdrop = is_string($metadata['backdrop_url'] ?? null) && $metadata['backdrop_url'] !== ''
+                ? $metadata['backdrop_url']
+                : null;
 
             $members[] = [
                 'id' => is_string($row['id'] ?? null) ? $row['id'] : '',
@@ -412,5 +420,27 @@ final class CollectionService
                 BackdropSrcset::largeUrl($storedBackdrop) ?? $storedBackdrop
             ),
         ];
+    }
+
+    /**
+     * Decode a metadata_json value (string|null|array) into a trusted array.
+     *
+     * @return array<string, mixed>
+     */
+    private static function decodeMetadata(mixed $raw): array
+    {
+        if (is_array($raw)) {
+            /** @var array<string, mixed> */
+            return array_filter($raw, 'is_string', ARRAY_FILTER_USE_KEY);
+        }
+        if (!is_string($raw)) {
+            return [];
+        }
+        $decoded = json_decode($raw, true);
+        if (!is_array($decoded)) {
+            return [];
+        }
+        /** @var array<string, mixed> */
+        return array_filter($decoded, 'is_string', ARRAY_FILTER_USE_KEY);
     }
 }

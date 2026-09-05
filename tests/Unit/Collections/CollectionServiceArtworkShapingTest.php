@@ -38,19 +38,6 @@ use Workerman\MySQL\Connection;
  *
  * Every method is covered for BOTH fields independently — eight sites, eight
  * re-mint assertions — so a fix applied to seven of the eight cannot pass.
- *
- * ⚠ SCOPE CAVEAT on the two `getCollectionMembers()` sites: that method's SELECT
- * asks for `m.poster_url, m.backdrop_url` from `media_items`, and NO migration ever
- * adds either column to that table — `poster_url`/`backdrop_url` appear exactly ONCE
- * across all of `migrations/`, on `media_collections` in `064_media_collections.sql`
- * (control: `metadata_json` 44 hits, `path_hash` 34, so the grep is live). Against a
- * real schema that query is a MySQL 1054, and the member rows carry the artwork in
- * `metadata_json` instead. `memberRow()` below therefore feeds a shape the current
- * query CANNOT produce in production. These two tests pin the SHAPING contract for
- * when that separate defect is fixed; they are not evidence that the member path
- * works end to end. Reported, deliberately not fixed here (it is a query/shape
- * defect, and repairing it means shaping from `metadata_json` — i.e. widening this
- * step into MediaItemShaper, which S104 explicitly kept out).
  */
 final class CollectionServiceArtworkShapingTest extends TestCase
 {
@@ -467,19 +454,27 @@ final class CollectionServiceArtworkShapingTest extends TestCase
     }
 
     /**
-     * A member row as `getCollectionMembers()`'s join returns it.
+     * A member row as `getCollectionMembers()`'s join actually returns it from
+     * a real `media_items` table: artwork lives inside metadata_json (the DB has
+     * no poster_url/backdrop_url columns on media_items — S436).
      *
      * @return array<string, mixed>
      */
     private function memberRow(?string $poster, ?string $backdrop): array
     {
+        $metadata = [];
+        if ($poster !== null) {
+            $metadata['poster_url'] = $poster;
+        }
+        if ($backdrop !== null) {
+            $metadata['backdrop_url'] = $backdrop;
+        }
+
         return [
             'id' => self::MEMBER_UUID,
             'name' => 'The Fellowship of the Ring',
             'type' => 'movie',
-            'metadata_json' => null,
-            'poster_url' => $poster,
-            'backdrop_url' => $backdrop,
+            'metadata_json' => $metadata !== [] ? json_encode($metadata) : null,
             'tmdb_part_order' => 1,
         ];
     }

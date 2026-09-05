@@ -99,30 +99,6 @@ final class HookDelivery
     /** Sibling ticker wake-up period, seconds. */
     private const TICK_INTERVAL_S = 0.002;
 
-    /**
-     * The bit that decides whether {@see probe()} sees `curl_exec` yield.
-     *
-     * Measured on Swoole 6.2.1 (this box; masks run through the same probe
-     * this class ships): `SWOOLE_HOOK_CURL` (0x800) intercepts blocking
-     * `curl_exec` (≈59 ticks / 120 ms window); `SWOOLE_HOOK_NATIVE_CURL`
-     * (0x1000) alone does NOT (1 tick); `SWOOLE_HOOK_ALL` with only 0x800
-     * cleared stops yielding (1 tick). The probe therefore senses THIS bit —
-     * keying on the curl-class OR would false-red an operator mask holding
-     * only the inert one. Older builds exposing only NATIVE_CURL fall back to
-     * it; a build with neither returns 0, which makes every verdict
-     * "expects blocking" — the safe direction, since the curated allowlist
-     * excludes both bits by construction.
-     */
-    public static function curlExecBit(): int
-    {
-        foreach (['SWOOLE_HOOK_CURL', 'SWOOLE_HOOK_NATIVE_CURL'] as $name) {
-            if (defined($name)) {
-                return (int) constant($name);
-            }
-        }
-
-        return 0;
-    }
 
     /**
      * The fraction of the window the cURL must demonstrably spend blocked
@@ -284,19 +260,24 @@ final class HookDelivery
 
     /**
      * Verify the mask physically in force RIGHT NOW matches `$mask` — by
-     * behaviour only. The observable is whether `curl_exec` yields, and the
-     * bit that governs that on this Swoole is the emulated cURL hook.
+     * behaviour only. The observable is whether `curl_exec` yields; the
+     * expectation is the curl-CLASS of the configured mask
+     * ({@see SwooleRuntime::curlHookFlags()}), and the two ways that can
+     * disagree are both true failures, stated loudly:
      *
-     * Measured on Swoole 6.2.1 (the box + CI build): a mask containing
-     * `SWOOLE_HOOK_CURL` (0x800) intercepts `curl_exec` and the probe sees the
-     * sibling ticker run (≈60 ticks); `SWOOLE_HOOK_NATIVE_CURL` alone does NOT
-     * (it rewrites only the multi-handle `curl_setopt`/`curl_exec` fast path,
-     * not this blocking call), and `SWOOLE_HOOK_ALL` with just the 0x800 bit
-     * cleared stops yielding. So the probe keys on {@see self::curlExecBit()}
-     * — the single bit the observed yield actually tracks — while
-     * `SWOOLE_HOOK_ALL` (constructor state) and every curated escape hatch are
-     * still decided correctly because ALL includes the 0x800 bit and the
-     * default curated mask (0x42fe) excludes it.
+     *  - the worker yields although the mask holds no curl bit → the allowlist
+     *    did not land (the S433 defect itself);
+     *  - the mask holds a curl bit yet the worker blocks → the accepted mask
+     *    is INERT on this build (measured on the source-built box:
+     *    `SWOOLE_HOOK_NATIVE_CURL` alone leaves `curl_exec` blocking; only the
+     *    emulated `SWOOLE_HOOK_CURL` yields, ~59 ticks/120 ms) — an operator
+     *    who "enabled curl hooks" that are not in force must hear about it,
+     *    not run a green-configured worker that is not what they configured.
+     *
+     * A build that cannot install the requested handler at all (the CI PECL
+     * swoole throws `Swoole\Exception` code 600 "curl_init func not exists"
+     * from `enableCoroutine()` itself when asked for the emulated hook) fails
+     * even earlier — inside {@see enforce()}, still loudly.
      *
      * @param int $mask The mask the configuration says is in force.
      *
@@ -308,7 +289,7 @@ final class HookDelivery
     {
         $sample = self::probe($blockMs);
         $yielded = $sample['ticks'] >= self::YIELD_TICK_FLOOR;
-        $expectsYield = ($mask & self::curlExecBit()) !== 0;
+        $expectsYield = ($mask & SwooleRuntime::curlHookFlags()) !== 0;
 
         if ($yielded !== $expectsYield) {
             throw new HookDeliveryException(sprintf(

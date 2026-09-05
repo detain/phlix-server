@@ -296,14 +296,21 @@ run and can never reach it (AC2a / KNOWN LIMIT 3 closed), and a
   exception instead of warning past it. The `coroutine.enabled=false` and
   `coroutine.hook_flags` config paths are now true: mask `0` is enforced (the shipped default
   left `ALL` installed even with the hook disabled) and an operator mask that re-enables a cURL
-  hook verifies green — the check is two-sided. New `CuratedHookDeliveryProbeTest` (6 tests,
-  real Swoole 6.2.1, reproduces the vendor adapter constructor's `ALL`-installed
+  hook verifies green — the check is two-sided, and its negative half (config claims a yielding
+  cURL over a physically blocking worker → throw) runs on every Swoole build, while the
+  positive half measures which cURL bit the build actually delivers before asserting
+  (the CI PECL build refuses runtime emulated-cURL installation outright — measured, S433).
+  New `CuratedHookDeliveryProbeTest` (7 tests, real Swoole 6.2.1, reproduces the vendor adapter
+  constructor's `ALL`-installed
   state order-independently via the authoritative API; skips without ext-swoole/
   ext-curl) + `HookAllowlistEnforcementGuardTest` (5 tokenized guards incl. the six-worker
   census); `SwooleRuntimeTest` gains 3 pure tests for `runtimeHookMask()`/`curlHookFlags()`.
   Planted-drift proof: replacing `verify()`'s tick comparison with the `getOptions()` equality
   reddens `CuratedHookDeliveryProbeTest::test_the_old_in_coroutine_set_lies_and_the_probe_catches_it`
-  and the guard's no-`getOptions` rule; restore → green. `EventLoopTls`'s registered
+  and the guard's no-`getOptions` rule; restore → green. The probe class's own teardown zeroes
+  the PHYSICAL hook state rather than restoring the reported option baseline — the same lie-API
+  trap, re-encountered in CI's random order as cross-test `proc_open` contamination and
+  measured away (`AccessScheduleHeadNoBodyWireTest` now co-scheduled green in `tests/Unit/Server`). `EventLoopTls`'s registered
   blocking-I/O exception note updated: with the allowlist enforced the documented bounded
   stall — not the accidental yield — is the live behavior. The S431 executable census
   denominator re-pins 1,760→1,764 in this same commit (four new first-party files; every

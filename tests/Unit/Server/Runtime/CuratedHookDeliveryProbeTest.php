@@ -43,20 +43,19 @@ use PHPUnit\Framework\TestCase;
 
 final class CuratedHookDeliveryProbeTest extends TestCase
 {
-    /** The mask the worker process had before this class touched it. */
-    private static int $initialMask = 0;
-
-    public static function setUpBeforeClass(): void
-    {
-        if (extension_loaded('swoole')) {
-            self::$initialMask = (int) (\Swoole\Coroutine::getOptions()['hook_flags'] ?? 0);
-        }
-    }
-
     public static function tearDownAfterClass(): void
     {
+        // Process-wide contamination guard (measured the hard way in CI): leave the
+        // PHYSICAL hook set as a virgin process is actually born with — nothing
+        // installed. Restoring the value `getOptions()['hook_flags']` reported at
+        // class entry is the trap this whole step exists to teach: a fresh process
+        // REPORTS SWOOLE_HOOK_ALL as the option default while no handlers are
+        // installed, so restoring that number would physically enable
+        // FILE/PROC/CURL for every later test in the randomised order (CI observed:
+        // proc_open in AccessScheduleHeadNoBodyWireTest fataling "API must be
+        // called in the coroutine").
         if (extension_loaded('swoole')) {
-            \Swoole\Runtime::enableCoroutine(self::$initialMask);
+            \Swoole\Runtime::enableCoroutine(0);
         }
     }
 
@@ -224,20 +223,54 @@ final class CuratedHookDeliveryProbeTest extends TestCase
         );
     }
 
+    /**
+     * Which cURL bit — if any — does THIS Swoole build let the probe observe?
+     * Measured (S433): the source-built box honours the emulated
+     * `SWOOLE_HOOK_CURL` (0x800, ~59 ticks) and treats `NATIVE_CURL` alone as
+     * inert (1 tick); the CI PECL build refuses to install the emulated hook
+     * at runtime altogether (`Swoole\Exception` 600 from enableCoroutine).
+     * Candidates are therefore MEASURED, not assumed: accepted by
+     * `enableCoroutine()` AND observed yielding. Leaves hooks in whatever state
+     * the winning measurement ended in; the class teardown zeroes them.
+     */
+    private static function observableCurlBit(int $curated): int
+    {
+        $candidates = array_values(array_unique(array_filter([
+            defined('SWOOLE_HOOK_CURL') ? (int) SWOOLE_HOOK_CURL : 0,
+            defined('SWOOLE_HOOK_NATIVE_CURL') ? (int) SWOOLE_HOOK_NATIVE_CURL : 0,
+        ])));
+
+        foreach ($candidates as $bit) {
+            $ticks = -1;
+            \Swoole\Runtime::enableCoroutine(0);
+            \Swoole\Coroutine\run(static function () use ($curated, $bit, &$ticks): void {
+                try {
+                    \Swoole\Runtime::enableCoroutine($curated | $bit);
+                    $ticks = HookDelivery::probe(120)['ticks'];
+                } catch (\Throwable) {
+                    $ticks = -1;
+                }
+            });
+            if ($ticks >= HookDelivery::YIELD_TICK_FLOOR) {
+                return $bit;
+            }
+        }
+
+        return 0;
+    }
+
     public function test_the_escape_hatch_mask_lands_and_mismatches_fail_loud_both_ways(): void
     {
         $curated = self::curated();
-        $curlBit = HookDelivery::curlExecBit();
+        $curlBit = self::observableCurlBit($curated);
         if ($curlBit === 0) {
-            self::markTestSkipped('this Swoole build exposes no cURL hook bit to test the escape hatch with');
+            self::markTestSkipped(
+                'this Swoole build cannot deliver a probe-observable cURL hook (measured, not '
+                . 'assumed — see observableCurlBit); the negative side of the two-sided check '
+                . 'still runs in test_a_config_claiming_a_curl_hook_over_a_blocking_worker_fails_loud'
+            );
         }
         $withCurl = $curated | $curlBit;
-
-        // Start from a neutral physical state; the enforce below must ADD the
-        // observable cURL bit physically (enableCoroutine installs newly-set
-        // bits as well as un-setting dropped ones — measured in both
-        // directions, `rehook-check` in the S433 record).
-        \Swoole\Runtime::enableCoroutine(0);
 
         $thrown = null;
         $hatchSample = null;
@@ -280,6 +313,46 @@ final class CuratedHookDeliveryProbeTest extends TestCase
             $mismatchThrew,
             'verify(curated) over a physically curl-hooked worker must throw — a mask that '
             . 'reports one thing and does another is the defect, in either direction.'
+        );
+    }
+
+    public function test_a_config_claiming_a_curl_hook_over_a_blocking_worker_fails_loud(): void
+    {
+        // The build-independent half of the escape-hatch proof: no cURL handler
+        // is ever INSTALLED here — the config merely CLAIMS one while the worker
+        // physically blocks. That mismatch must throw on every Swoole (the CI
+        // PECL build, which refuses runtime cURL-hook installation, included).
+        $curated = self::curated();
+        $claimed = $curated | SwooleRuntime::curlHookFlags();
+        if (($claimed & ~$curated) === 0) {
+            self::markTestSkipped('this build exposes no cURL-class bits to mis-claim');
+        }
+
+        $cleanThrew = false;
+        $mismatchThrew = false;
+        $thrown = null;
+        $flow = static function () use ($curated, $claimed, &$cleanThrew, &$mismatchThrew, &$thrown): void {
+            try {
+                HookDelivery::enforceAndVerify($curated);
+                try {
+                    HookDelivery::verify($claimed);
+                } catch (HookDeliveryException $e) {
+                    $mismatchThrew = true;
+                }
+            } catch (HookDeliveryException $e) {
+                $cleanThrew = true;
+                $thrown = $e;
+            } catch (\Throwable $e) {
+                $thrown = $e;
+            }
+        };
+        \Swoole\Coroutine\run($flow);
+
+        self::assertFalse($cleanThrew, 'the delivered-curated baseline must be green: ' . ($thrown?->getMessage() ?? ''));
+        self::assertNull($thrown, 'the harness must run clean: ' . ($thrown?->getMessage() ?? ''));
+        self::assertTrue(
+            $mismatchThrew,
+            'config claims a yielding cURL, the worker blocks — the check must refuse that pair.'
         );
     }
 

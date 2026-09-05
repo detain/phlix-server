@@ -329,8 +329,11 @@ final class ApplicationRouterWirePathGuardTest extends TestCase
         'GET /api/v1/collections/{id} -> CollectionController::show [AuthMiddleware]',
         'GET /api/v1/dlna/renderers -> RendererListController::listRenderers [AuthMiddleware]',
         'GET /api/v1/dlna/renderers/{id}/status -> RendererListController::getStatus [AuthMiddleware]',
-        'GET /api/v1/health/network -> Closure@Application.php []',
-        'GET /api/v1/health/relay -> Closure@Application.php []',
+        // S437: both health routes moved from ungated `[]` to `[AuthMiddleware]`.
+        // METHOD + PATH tuples are byte-for-byte unchanged (nested `''`-prefix group,
+        // full path); only the ROUTE-level middleware column tracks the new posture.
+        'GET /api/v1/health/network -> Closure@Application.php [AuthMiddleware]',
+        'GET /api/v1/health/relay -> Closure@Application.php [AuthMiddleware]',
         'GET /api/v1/libraries -> LibraryController::index []',
         'GET /api/v1/libraries/{id} -> LibraryController::show []',
         'GET /api/v1/libraries/{id}/scan-history -> LibraryController::scanHistory []',

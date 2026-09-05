@@ -9,6 +9,18 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Added
 
+- **Request dynamic-property reachability guard (S427).** `Phlix\Server\Http\Request` now pairs
+  `__get()`/`__isset()` so an UNGUARDED read of an undeclared property throws a named
+  `LogicException` instead of silently answering a PHP-warning null. The posture was chosen from a
+  tokenized census of the whole repo (1,756 PHP files): 331 property reads on typed Request roots,
+  every one on a declared member; zero dynamic writes; zero dynamic-name accesses — so the throw
+  can only ever fire on a would-be S271 bug shape. Guarded reads (`$request->jsonBody ?? []`,
+  `isset()`, `empty()`) keep their exact pre-guard empty-default semantics because PHP consults
+  `__isset()` before `__get()` — which is also why both S271 mutation arms in
+  `BackupControllerBodyPersistenceTest` fail identically before and after this change (re-run on
+  this tip). Census and static-analysis blindness documented in the `Request::__get` docblock;
+  every pinned shape in `tests/Unit/Server/Http/RequestDynamicPropertyGuardTest.php`.
+
 - **Self-service profiles: end-user CRUD / PIN / switch / avatar (S81).** A logged-in
   user can now manage their own profiles through `ProfilesController` (auth-only group,
   never `/api/v1/admin`): `GET|POST /api/v1/profiles`, `GET|PUT|DELETE /api/v1/profiles/{id}`,
@@ -243,6 +255,17 @@ run and can never reach it (AC2a / KNOWN LIMIT 3 closed), and a
 - **The one-member-room `playback_sync` round-trip is now proven in the SyncPlay E2E suite (S294).** `testOneMemberRoomPlaybackSyncReachesHost` shows the solo host receiving its OWN host-stamped `syncplay_playback_sync` broadcast back, carrying the authoritative group position (ms) and playback state; `testPlaybackSyncRequestByMemberIsStampedWithHostId` shows a non-host member's request answered with exactly one frame stamped with the HOST id, not the requester's self-asserted id — the property `@phlix/syncplay`'s self-frame consumption relies on. The client half (phlix-syncplay, S294) consumes the host's own frame, so a one-member room re-anchors. Test-only change: zero `src/` edits, no migration (next-free stays 103).
 
 - **The three SSDP residue defects S51 deliberately left are closed (S297).** (1) *Target-set single source*: the periodic `NOTIFY` now emits one datagram per advertised target from the responder's single target enumeration, with `USN` paired per target exactly as search responses pair `ST` with `USN` — a passive control point and an active one now see the same device, where previously one saw a single target and the other saw five. (2) *Real multicast join*: `SsdpSocket` was "joining" 239.255.255.250 with an outbound-interface selector under a comment claiming to join; it now uses the S296-proven multicast-join option spelling, proven by a three-arm real-datagram test in which the pre-fix spelling receives ZERO datagrams while the production join receives. (3) *Spawn gate*: `start.php` now forks the SSDP advertiser only when BOTH `dlna.cds_enabled` and `dlna.enabled` are on — the same two-switch rule the runtime gate uses — so a CDS-disabled install (the shipped default) no longer forks an idle worker whose listen socket squats `udp://0.0.0.0:1900`. The gate decision is unit-tested; the real-boot proof (cds_enabled off → :1900 free, on → worker binds) is in the S297 record. Alongside the join, `search()` now collects only HTTP response-shaped datagrams, so NOTIFY/M-SEARCH noise on the now-heard multicast group cannot surface as discovered devices (including self-discovery). No migration (next-free stays 103).
+
+### Fixed
+
+- **S271 mutation-arm description corrected (S428, server leg).** The
+  `BackupControllerBodyPersistenceTest` header claimed reverting either dead-property arm
+  "reddens exactly one named test (mutation-verified)". Both arms re-run at the S427 tip prove the
+  claim asymmetric: the `create()` arm reddens exactly the one named label test (string-diff
+  `-'nightly-pre-fix' +''`), while the `updateSchedule()` arm reddens TWO — the named schedule test
+  (`7 is identical to 9`) plus the collateral non-numeric-validation test (`200 is identical to 400`),
+  because the dead read also disarms that handler's 400 guards. Comment-only; no test or product
+  code changed.
 
 ### Security
 

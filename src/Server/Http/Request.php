@@ -128,6 +128,66 @@ class Request
     public array $pathParams = [];
 
     /**
+     * Provenance marker appended to every {@see __get()} rejection so a caught
+     * exception names its guard and the sha the census was taken at.
+     */
+    private const REACHABILITY_GUARD_PROVENANCE = 'S427-reachability-guard@4b620f59';
+
+    /**
+     * Reachability guard: dynamic READS of undeclared properties are rejected (S427).
+     *
+     * Provenance. S271 removed two dead `$request->jsonBody ?? []` reads in
+     * BackupController — reads of a property that never existed here, whose coalesce
+     * silently fed `[]` where the populated `->body` belongs. S271 declined a
+     * throwing `__get` in its own commit for fear of turning hot-path
+     * null-coalesced reads into catch-fed 500s. S427 re-opened that call with a
+     * tokenized census of all 1,756 tracked PHP files: 331 property reads on typed
+     * Request roots, EVERY one on a declared member; 1,037 dynamic writes, none;
+     * dynamic-name accesses (`->$k`/`->{$expr}`), none; guarded (`??`/isset/empty)
+     * reads of undeclared names outside the two S271 sites, none. With a zero
+     * live-read denominator the throw can only ever fire on a would-be S271 bug.
+     *
+     * Semantics this guard deliberately preserves. PHP consults `__isset()` (below)
+     * before `__get()` for `isset()`, `empty()`, AND null-coalescing reads, so the
+     * S271 shape itself — `$request->jsonBody ?? []` — still answers `[]` without
+     * ever reaching the throw. Only UNguarded reads of names that are not declared
+     * members fail, loudly, converting today's silent-null bug class into a
+     * LogicException at its exact call site. (A bare-`?:` elvis read DOES evaluate
+     * the property and therefore throws; the census found zero elvis sites.)
+     *
+     * What static analysis could not do: PHPStan level 9 flags a DIRECT undefined
+     * read (`property.notFound`) but is provably blind to the `?? $default` and
+     * `isset()` shapes and to dynamic-name reads it cannot constant-fold — exactly
+     * the shapes that let `jsonBody` survive to production. A runtime guard is the
+     * only enforcement point for the whole class.
+     *
+     * @throws \LogicException Always, naming the offending property.
+     */
+    public function __get(string $name): mixed
+    {
+        throw new \LogicException(
+            "Dynamic read of undefined property Phlix\\Server\\Http\\Request::\${$name} — Request declares no magic"
+            . ' properties (S427 reachability guard, closing the S271 silent-null bug class).'
+            . ' Declared members: method, path, queryString, headers, query, body, rawBody, files,'
+            . ' remoteIp, remotePort, protocol, bearerToken, cookies, userId, profileId, hubUser, pathParams.'
+            . ' Use ->body for the decoded request body, input()/has() for body+query lookups, and'
+            . ' getHeader()/getCookie() for headers and cookies. [' . self::REACHABILITY_GUARD_PROVENANCE . ']'
+        );
+    }
+
+    /**
+     * Pairs with {@see __get()} so existence tests on undeclared names answer false
+     * without ever calling `__get()` — the mechanism that keeps every
+     * `?? $default` / `isset()` / `empty()` site (including both S271 mutation
+     * arms in BackupController) behaviorally identical to before the guard.
+     * Declared members never reach here: they are public and always initialized.
+     */
+    public function __isset(string $name): bool
+    {
+        return false;
+    }
+
+    /**
      * Creates a Request instance from PHP global variables.
      *
      * This is the primary method for creating a Request object from

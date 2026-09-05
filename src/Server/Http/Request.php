@@ -128,6 +128,12 @@ class Request
     public array $pathParams = [];
 
     /**
+     * Provenance marker appended to every {@see __get()} rejection so a caught
+     * exception names its guard and the sha the census was taken at.
+     */
+    private const REACHABILITY_GUARD_PROVENANCE = 'S427-reachability-guard@4b620f59';
+
+    /**
      * Reachability guard: dynamic READS of undeclared properties are rejected (S427).
      *
      * Provenance. S271 removed two dead `$request->jsonBody ?? []` reads in
@@ -153,7 +159,7 @@ class Request
      * read (`property.notFound`) but is provably blind to the `?? $default` and
      * `isset()` shapes and to dynamic-name reads it cannot constant-fold — exactly
      * the shapes that let `jsonBody` survive to production. A runtime guard is the
-     * only enforcement point for the whole class. (S427-reachability-guard@4b620f59)
+     * only enforcement point for the whole class.
      *
      * @throws \LogicException Always, naming the offending property.
      */
@@ -165,7 +171,7 @@ class Request
             . ' Declared members: method, path, queryString, headers, query, body, rawBody, files,'
             . ' remoteIp, remotePort, protocol, bearerToken, cookies, userId, profileId, hubUser, pathParams.'
             . ' Use ->body for the decoded request body, input()/has() for body+query lookups, and'
-            . ' getHeader()/getCookie() for headers and cookies.'
+            . ' getHeader()/getCookie() for headers and cookies. [' . self::REACHABILITY_GUARD_PROVENANCE . ']'
         );
     }
 

@@ -46,7 +46,7 @@ final class RequestDynamicPropertyGuardTest extends TestCase
         $request = new Request();
 
         $this->expectException(\LogicException::class);
-        $this->expectExceptionMessageMatches('/jsonBody/');
+        $this->expectExceptionMessageMatches('/jsonBody.*S427-reachability-guard@4b620f59/s');
 
         /** @phpstan-ignore-next-line intentional dynamic-property read under test */
         $value = $request->jsonBody;

@@ -90,4 +90,17 @@ return [
         'count'        => 1,
         'poll_seconds' => 30,   // matches config/similarity_jobs.php worker_interval
     ],
+
+    // S215: TMDB box-set collection sync worker. Drains the file-based job
+    // queue (collection_jobs.job_queue_dir) of media items awaiting collection
+    // membership sync. The scanner only ENQUEUES — the sync's TMDB HTTPS calls
+    // are blocking cURL on this transport and must never stall the scan loop.
+    // Without this consumer the queue would accumulate undrained in /tmp
+    // (disk leak). max_concurrent (config/collection_jobs.php) bounds parallel
+    // TMDB request volume (the API rate-limits per key).
+    'collection' => [
+        'enabled'      => true,
+        'count'        => 1,
+        'poll_seconds' => 30,   // matches config/collection_jobs.php worker_interval
+    ],
 ];

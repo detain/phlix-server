@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Phlix\Tests\Integration\Media;
 
+use Phlix\Common\Uuid;
 use Phlix\Media\Library\ScanJobRepository;
 use Phlix\Tests\Support\Database\RequiresRealDatabase;
 use PHPUnit\Framework\TestCase;
@@ -233,18 +234,18 @@ final class ScanJobRoundTripTest extends TestCase
         $this->assertSame(99, $raised['items_added']);
     }
 
+    /**
+     * S443 — delegates to the CSPRNG-backed {@see Uuid::v4()}. This copy used
+     * to re-implement the old `sprintf(mt_rand(...))` format LOCALLY, which
+     * kept its minted CHAR(36) primary keys steerable by PHPUnit's
+     * `mt_srand(randomOrderSeed)` (and by mid-run re-pins): two same-seed runs
+     * replayed identical ids and collided on `Duplicate entry ... for key
+     * 'PRIMARY'` — the Music 1062 class S111/S334 removed from the fixture
+     * side and S443 removes from the source. The local copy is now the single
+     * shared generator, which no order seed can steer.
+     */
     private function uuid(): string
     {
-        return sprintf(
-            '%04x%04x-%04x-%04x-%04x-%04x%04x%04x',
-            mt_rand(0, 0xffff),
-            mt_rand(0, 0xffff),
-            mt_rand(0, 0xffff),
-            mt_rand(0, 0x0fff) | 0x4000,
-            mt_rand(0, 0x3fff) | 0x8000,
-            mt_rand(0, 0xffff),
-            mt_rand(0, 0xffff),
-            mt_rand(0, 0xffff)
-        );
+        return Uuid::v4();
     }
 }

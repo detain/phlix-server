@@ -329,8 +329,16 @@ final class IntegrationDbGuardAdoptionTest extends TestCase
      * second manager's membership table. A doubled connection returning canned rows
      * cannot falsify "no live worker re-hydrates its authoritative table from the
      * snapshot," so the boundary is pinned against real MySQL with two real managers.
+     *
+     * 52 since S443's
+     * `tests/Integration/Media/Music/UuidSeedReplayPkCollisionIntegrationTest.php`:
+     * the claim it pins is that re-pinning `mt_srand()` cannot replay a minted
+     * CHAR(36) primary key into a colliding INSERT — the Music 1062 dup-PK hazard.
+     * "Duplicate entry for key 'PRIMARY'" is raised by MySQL and by nothing else;
+     * a canned-row double cannot falsify it, so the entropy-source fix is proven
+     * against the real `media_items` PK.
      */
-    private const EXPECTED_ADOPTERS = 51;
+    private const EXPECTED_ADOPTERS = 52;
 
     /**
      * Bare function calls that are a MySQL reachability probe under any

@@ -188,6 +188,15 @@
       document rather than the file's text.
     -->
     <bootstrap class="Phlix\Tests\Support\AssertionEscape\AssertionEscapeGuardExtension"/>
+    <!--
+      S439 (finish-S167) — zero-residue census: snapshots /tmp/phlix_* before execution
+      and fails the run (named STDERR report + thrown subscriber warning, exit 1 via
+      failOnPhpunitWarning's true default) if the suite leaves any behind. Complements
+      TempDirMintGuardTest, which guards only the src-side logger mint sites and is
+      blind to test fixtures by construction. DO NOT DELETE THE LINE BELOW — its removal
+      would be silent; tests/Unit/Media/ZeroResidueCensusTest.php pins this wiring.
+    -->
+    <bootstrap class="Phlix\Tests\Support\ResidueCensus\ZeroResidueCensusExtension"/>
   </extensions>
   <php>
     <env name="APP_ENV" value="testing"/>

@@ -287,7 +287,10 @@ class MusicLibraryManagerTest extends TestCase
     public function testUpsertTrackStoresTags(): void
     {
         $libraryId = 'test-lib-789';
-        $tempFile = tempnam(sys_get_temp_dir(), 'phlix_test_') . '.mp3';
+        // S439: tempnam()'s own file is orphaned by the '.mp3' suffix — drop it.
+        $rawTrack = tempnam(sys_get_temp_dir(), 'phlix_test_');
+        @unlink($rawTrack);
+        $tempFile = $rawTrack . '.mp3';
 
         // Write minimal MP3 data
         file_put_contents($tempFile, $this->createMinimalMp3());
@@ -325,7 +328,10 @@ class MusicLibraryManagerTest extends TestCase
     public function testUpsertTrackEnrichesViaMetadataManager(): void
     {
         $libraryId = 'test-lib-enrich';
-        $tempFile = tempnam(sys_get_temp_dir(), 'phlix_test_') . '.mp3';
+        // S439: tempnam()'s own file is orphaned by the '.mp3' suffix — drop it.
+        $rawTrack = tempnam(sys_get_temp_dir(), 'phlix_test_');
+        @unlink($rawTrack);
+        $tempFile = $rawTrack . '.mp3';
 
         // Write minimal MP3 data
         file_put_contents($tempFile, $this->createMinimalMp3());

@@ -43,15 +43,26 @@ final class ProfilesFirstProfileOnSignupTest extends TestCase
     {
         parent::tearDown();
         AuthManager::resetRateLimitStore();
+        // S439: sweep every stream path minted by silentLogger().
+        foreach ($this->mintedLogPaths as $path) {
+            @unlink($path);
+        }
+        $this->mintedLogPaths = [];
     }
+
+    /** @var list<string> log files minted by silentLogger(), removed in tearDown(). */
+    private array $mintedLogPaths = [];
 
     private function silentLogger(): StructuredLogger
     {
+        $path = sys_get_temp_dir() . '/phlix_s81_signup_' . uniqid() . '.log';
+        $this->mintedLogPaths[] = $path;
+
         return new StructuredLogger('test', [
             'handlers' => [
                 'stream' => [
                     'type' => 'stream',
-                    'path' => sys_get_temp_dir() . '/phlix_s81_signup_' . uniqid() . '.log',
+                    'path' => $path,
                     'level' => 'debug',
                 ],
             ],

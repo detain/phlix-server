@@ -10,20 +10,32 @@ use Phlix\Plugins\Oidc\DiscoveryDocument;
 use Phlix\Plugins\Oidc\IdTokenClaims;
 use Phlix\Plugins\Oidc\IdTokenValidator;
 use Phlix\Plugins\Oidc\OidcValidationException;
+use Phlix\Plugins\Util\RecursiveDelete;
 
 final class IdTokenValidatorTest extends TestCase
 {
+    /** S439: per-test discovery cache dir instead of the shared /tmp/phlix_oidc_cache. */
+    private string $cacheDir = '';
+
     protected function setUp(): void
     {
         parent::setUp();
         IdTokenValidator::clearJwksCache();
         DiscoveryDocument::clearMemoryCache();
+        $this->cacheDir = sys_get_temp_dir() . '/phlix_idtok_validator_' . uniqid('', true) . '/cache';
+        mkdir($this->cacheDir, 0775, true);
+    }
+
+    protected function tearDown(): void
+    {
+        parent::tearDown();
+        RecursiveDelete::remove(dirname($this->cacheDir));
     }
 
     public function test_expired_token_throws(): void
     {
         $providerUrl = 'https://expired-token-test.com';
-        $discovery = new DiscoveryDocument($providerUrl);
+        $discovery = new DiscoveryDocument($providerUrl, $this->cacheDir);
 
         $expiredClaims = [
             'iss' => $providerUrl,
@@ -41,7 +53,7 @@ final class IdTokenValidatorTest extends TestCase
     public function test_wrong_audience_throws(): void
     {
         $providerUrl = 'https://audience-test.com';
-        $discovery = new DiscoveryDocument($providerUrl);
+        $discovery = new DiscoveryDocument($providerUrl, $this->cacheDir);
 
         $wrongAudienceClaims = [
             'iss' => $providerUrl,
@@ -102,7 +114,7 @@ final class IdTokenValidatorTest extends TestCase
     public function test_rejects_token_whose_protected_header_uses_hs256(): void
     {
         $providerUrl = 'https://alg-confusion.test';
-        $validator = new IdTokenValidator(new DiscoveryDocument($providerUrl), new JWKSet([]));
+        $validator = new IdTokenValidator(new DiscoveryDocument($providerUrl, $this->cacheDir), new JWKSet([]));
 
         $token = $this->compactJws(
             ['alg' => 'HS256', 'typ' => 'JWT'],
@@ -117,7 +129,7 @@ final class IdTokenValidatorTest extends TestCase
     public function test_rejects_token_with_alg_none(): void
     {
         $providerUrl = 'https://alg-none.test';
-        $validator = new IdTokenValidator(new DiscoveryDocument($providerUrl), new JWKSet([]));
+        $validator = new IdTokenValidator(new DiscoveryDocument($providerUrl, $this->cacheDir), new JWKSet([]));
 
         $token = $this->compactJws(
             ['alg' => 'none'],

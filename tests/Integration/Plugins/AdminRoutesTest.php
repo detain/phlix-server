@@ -31,6 +31,7 @@ use Phlix\Plugins\Manifest;
 use Phlix\Plugins\Oidc\Controller\OidcAdminController;
 use Phlix\Plugins\Oidc\Plugin;
 use Phlix\Plugins\PluginLoader;
+use Phlix\Plugins\Util\RecursiveDelete;
 use Phlix\Webhooks\WebhookService;
 use Phlix\Admin\BackupManager;
 use Phlix\Admin\DashboardService;
@@ -90,6 +91,23 @@ final class AdminRoutesTest extends TestCase
     private FakePluginLoader $loader;
     private FakeUserRepository $users;
     private FakeAuditLogger $audit;
+
+    /**
+     * S439: every /tmp/phlix_* plugin dir minted by the PSR-11 stub below.
+     * The stub is constructed per test, so the list is drained in tearDown().
+     *
+     * @var list<string>
+     */
+    public static array $mintedPluginDirs = [];
+
+    protected function tearDown(): void
+    {
+        parent::tearDown();
+        foreach (self::$mintedPluginDirs as $dir) {
+            RecursiveDelete::remove($dir);
+        }
+        self::$mintedPluginDirs = [];
+    }
 
     protected function setUp(): void
     {
@@ -297,16 +315,19 @@ final class AdminRoutesTest extends TestCase
             ) {
                 $tempDir = sys_get_temp_dir() . '/phlix_oidc_test_' . uniqid('', true);
                 mkdir($tempDir, 0775, true);
+                AdminRoutesTest::$mintedPluginDirs[] = $tempDir;
                 Plugin::setPluginDirectory($tempDir);
                 $this->oidcPlugin = new Plugin();
 
                 $ldapTempDir = sys_get_temp_dir() . '/phlix_ldap_test_' . uniqid('', true);
                 mkdir($ldapTempDir, 0775, true);
+                AdminRoutesTest::$mintedPluginDirs[] = $ldapTempDir;
                 LdapPlugin::setPluginDirectory($ldapTempDir);
                 $this->ldapPlugin = new LdapPlugin();
 
                 $githubTempDir = sys_get_temp_dir() . '/phlix_github_test_' . uniqid('', true);
                 mkdir($githubTempDir, 0775, true);
+                AdminRoutesTest::$mintedPluginDirs[] = $githubTempDir;
                 GithubPlugin::setPluginDirectory($githubTempDir);
                 $this->githubPlugin = new GithubPlugin();
             }

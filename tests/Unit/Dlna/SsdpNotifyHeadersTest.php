@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Phlix\Tests\Unit\Dlna;
 
+use Phlix\Plugins\Util\RecursiveDelete;
 use PHPUnit\Framework\TestCase;
 use Phlix\Common\Version;
 use Phlix\Config\EffectiveConfig;
@@ -47,6 +48,9 @@ use Workerman\Worker;
  */
 final class SsdpNotifyHeadersTest extends TestCase
 {
+    /** @var list<string> minted config roots removed in tearDown (S439 zero-residue). */
+    private array $mintedConfigRoots = [];
+
     /** @var array<int, Worker> */
     private array $savedWorkers = [];
 
@@ -76,6 +80,10 @@ final class SsdpNotifyHeadersTest extends TestCase
         $workers->setValue(null, $this->savedWorkers);
 
         EffectiveConfig::reset();
+        foreach ($this->mintedConfigRoots as $root) {
+            RecursiveDelete::remove($root);
+        }
+        $this->mintedConfigRoots = [];
         parent::tearDown();
     }
 
@@ -407,6 +415,7 @@ final class SsdpNotifyHeadersTest extends TestCase
     {
         $dir = sys_get_temp_dir() . '/phlix_s51_notify_' . uniqid('', true) . '/config';
         mkdir($dir, 0o777, true);
+        $this->mintedConfigRoots[] = dirname($dir);
         file_put_contents($dir . '/dlna.php', '<?php return ' . var_export($dlna, true) . ";\n");
         EffectiveConfig::bootstrap(null, null, $dir);
     }

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Phlix\Tests\Unit\Webhooks;
 
+use Phlix\Plugins\Util\RecursiveDelete;
 use PHPUnit\Framework\TestCase;
 use Phlix\Config\EffectiveConfig;
 use Phlix\Webhooks\WebhookEvent;
@@ -30,6 +31,9 @@ use Workerman\MySQL\Connection;
  */
 final class WebhookEnabledGateTest extends TestCase
 {
+    /** @var list<string> minted config roots removed in tearDown (S439 zero-residue). */
+    private array $mintedConfigRoots = [];
+
     protected function setUp(): void
     {
         parent::setUp();
@@ -39,6 +43,10 @@ final class WebhookEnabledGateTest extends TestCase
     protected function tearDown(): void
     {
         EffectiveConfig::reset();
+        foreach ($this->mintedConfigRoots as $root) {
+            RecursiveDelete::remove($root);
+        }
+        $this->mintedConfigRoots = [];
         parent::tearDown();
     }
 
@@ -81,6 +89,7 @@ final class WebhookEnabledGateTest extends TestCase
         $dir = sys_get_temp_dir() . '/phlix_wh_' . uniqid('', true) . '/config';
         mkdir($dir, 0o777, true);
         file_put_contents($dir . '/webhooks.php', '<?php return ' . var_export($webhooks, true) . ";\n");
+        $this->mintedConfigRoots[] = dirname($dir);
         return $dir;
     }
 

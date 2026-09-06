@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Phlix\Tests\Unit\Stats;
 
+use Phlix\Plugins\Util\RecursiveDelete;
 use PHPUnit\Framework\TestCase;
 use Phlix\Config\EffectiveConfig;
 use Phlix\Stats\StatsCollector;
@@ -34,6 +35,9 @@ use Workerman\MySQL\Connection;
  */
 final class StatsEnabledGateTest extends TestCase
 {
+    /** @var list<string> minted config roots removed in tearDown (S439 zero-residue). */
+    private array $mintedConfigRoots = [];
+
     protected function setUp(): void
     {
         parent::setUp();
@@ -43,6 +47,10 @@ final class StatsEnabledGateTest extends TestCase
     protected function tearDown(): void
     {
         EffectiveConfig::reset();
+        foreach ($this->mintedConfigRoots as $root) {
+            RecursiveDelete::remove($root);
+        }
+        $this->mintedConfigRoots = [];
         parent::tearDown();
     }
 
@@ -79,6 +87,7 @@ final class StatsEnabledGateTest extends TestCase
     {
         $dir = sys_get_temp_dir() . '/phlix_stats_' . uniqid('', true) . '/config';
         mkdir($dir, 0o777, true);
+        $this->mintedConfigRoots[] = dirname($dir);
         file_put_contents($dir . '/stats.php', '<?php return ' . var_export($stats, true) . ";\n");
         EffectiveConfig::bootstrap($this->fakeSettingsDb($overrides), null, $dir);
     }

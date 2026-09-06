@@ -234,11 +234,26 @@ final class AuthManagerFirstUserAdminTest extends TestCase
         $this->assertSame('user-1', $result['user']['id']);
     }
 
+    /** @var list<string> log dirs minted by silentLogger(), removed in tearDown(). */
+    private array $mintedLogDirs = [];
+
+    protected function tearDown(): void
+    {
+        parent::tearDown();
+        // S439: silentLogger() mints a fresh dir per call — sweep them all.
+        foreach ($this->mintedLogDirs as $dir) {
+            @unlink($dir . '/test.log');
+            @rmdir($dir);
+        }
+        $this->mintedLogDirs = [];
+    }
+
     private function silentLogger(): StructuredLogger
     {
         // Build a no-op StructuredLogger that swallows messages.
         $tmp = sys_get_temp_dir() . '/phlix_admin_test_' . uniqid('', true);
         @mkdir($tmp, 0775, true);
+        $this->mintedLogDirs[] = $tmp;
         return new StructuredLogger('test', [
             'handlers' => [
                 'stream' => ['type' => 'stream', 'path' => $tmp . '/test.log', 'level' => 'debug'],

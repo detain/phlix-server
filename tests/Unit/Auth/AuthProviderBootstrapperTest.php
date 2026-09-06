@@ -43,6 +43,16 @@ final class AuthProviderBootstrapperTest extends TestCase
         // Reset the shared static dir so later tests re-read from the default.
         OidcPlugin::setPluginDirectory(\dirname(__DIR__, 3) . '/src/Plugins/Oidc');
         LdapPlugin::setPluginDirectory(\dirname(__DIR__, 3) . '/src/Plugins/Ldap');
+        // S439: exercising the bootstrap path constructs a default DiscoveryDocument,
+        // which mints the shared /tmp/phlix_oidc_cache (src/Plugins/Oidc/DiscoveryDocument).
+        // Sweep it when empty so the suite leaves zero residue.
+        $sharedCache = sys_get_temp_dir() . '/phlix_oidc_cache';
+        if (is_dir($sharedCache)) {
+            foreach (glob($sharedCache . '/*') ?: [] as $file) {
+                @unlink($file);
+            }
+            @rmdir($sharedCache);
+        }
     }
 
     /**

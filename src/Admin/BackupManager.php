@@ -150,10 +150,11 @@ class BackupManager
                 'file_path' => $archivePath,
                 'size_bytes' => $sizeBytes,
             ];
-        } catch (Throwable $e) {
-            // Cleanup on failure
+        } finally {
+            // S439: the staging dir only needs to outlive the tarball, so sweep it on
+            // EVERY path — the old catch-only cleanup left each successful backup
+            // leaking /tmp/phlix_backup_<uuid>.
             $this->cleanupTempDir($tempDir);
-            throw $e;
         }
     }
 

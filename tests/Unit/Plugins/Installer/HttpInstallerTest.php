@@ -15,12 +15,14 @@ final class HttpInstallerTest extends TestCase
 {
     private string $base = '';
     private string $work = '';
+    private string $root = '';
     private StructuredLogger&MockObject $logger;
 
     protected function setUp(): void
     {
         parent::setUp();
-        $root = sys_get_temp_dir() . '/phlix_http_inst_' . uniqid('', true);
+        $this->root = sys_get_temp_dir() . '/phlix_http_inst_' . uniqid('', true);
+        $root = $this->root;
         mkdir($root, 0775, true);
         $this->base = $root . '/var/plugins';
         $this->work = $root . '/work';
@@ -31,7 +33,11 @@ final class HttpInstallerTest extends TestCase
     protected function tearDown(): void
     {
         parent::tearDown();
-        @system('rm -rf ' . escapeshellarg(dirname($this->base)));
+        // S439: remove the WHOLE minted root (the old dirname($this->base) sweep left
+        // $root itself behind — 40 leaked /tmp/phlix_http_inst_* dirs per full suite).
+        if ($this->root !== '') {
+            RecursiveDelete::remove($this->root);
+        }
     }
 
     private function installer(): HttpInstaller

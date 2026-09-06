@@ -9,6 +9,14 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Added
 
+- **Test-suite zero-residue census (S439, finish-S167).** audit31 measured 212 leftover
+  `/tmp/phlix_*` entries after an isolated full-suite run at `3bd64b84`; every offender site
+  now carries a teardown, `BackupManager::createBackup()` cleans its temp dir on the success
+  path too (moved to `finally`), and a new `ZeroResidueCensusExtension` registered from
+  `phpunit.xml` snapshots the temp dir before execution and fails the run — by name — if the
+  suite leaves any `phlix_*` entry behind. Wiring pinned by `tests/Unit/Media/ZeroResidueCensusTest.php`
+  (S431 denominator re-pinned 1773→1775).
+
 - **Coroutine-socket construction guards (S434).** S207 measured `new \Swoole\Coroutine\Socket(...)`
   SIGSEGVing the worker INSIDE the constructor — through `catch (\Throwable)` — on an invalid socket
   type and on a genuine `socket(2)` EMFILE; a signal is not throwable, so the fix is prevention.

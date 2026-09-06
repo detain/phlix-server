@@ -17,9 +17,15 @@ use Workerman\MySQL\Connection;
  * Connection:
  *   - findByPath()/findPathsMap()/findTopLevelByCanonical() → "brand new file";
  *   - create() → store the row and return its id;
- *   - findById() → return the created row WITH a `tmdb_id` injected, which is the
- *     precondition the scanner's per-item collection-sync block checks before it
- *     would ever call {@see \Phlix\Media\CollectionService::syncCollectionForMovie()}.
+ *   - findById() → return the created row WITH a `tmdb_id` injected (when one is
+ *     configured), which is the precondition the scanner's per-item
+ *     collection-JOB-ENQUEUE block (S215) checks before it enqueues a
+ *     {@see \Phlix\Media\CollectionJob}. Pass null as $tmdbId to simulate an
+ *     UNMATCHED item — the enqueue precondition must then keep the queue empty.
+ *
+ * S215: also counts findById() invocations so the gate test can prove a
+ * disabled library skips the whole block — including the item lookup — exactly
+ * as the S33 gate contract states.
  *
  * In its OWN PSR-4 file (rather than inline in the test) so it is autoloadable
  * independently and each file holds a single class (PSR-12).
@@ -31,12 +37,20 @@ final class CollectionGateScannerRepo extends ItemRepository
 
     private int $seq = 0;
 
-    private int $tmdbId;
+    private ?int $tmdbId;
 
-    public function __construct(Connection $db, int $tmdbId)
+    /** Number of findById() calls made by the scan (gate-skip proof, S215). */
+    private int $findByIdCalls = 0;
+
+    public function __construct(Connection $db, ?int $tmdbId)
     {
         parent::__construct($db);
         $this->tmdbId = $tmdbId;
+    }
+
+    public function findByIdCalls(): int
+    {
+        return $this->findByIdCalls;
     }
 
     public function findByPath(string $path, ?string $libraryId = null): ?array
@@ -78,12 +92,15 @@ final class CollectionGateScannerRepo extends ItemRepository
 
     public function findById(string $id): ?array
     {
+        $this->findByIdCalls++;
         foreach ($this->store as $item) {
             if (($item['id'] ?? null) === $id) {
                 $meta = is_array($item['metadata_json'] ?? null) ? $item['metadata_json'] : [];
-                // Inject the tmdb_id the scanner's collection-sync gate requires.
-                $meta['tmdb_id'] = $this->tmdbId;
-                $item['metadata_json'] = $meta;
+                if ($this->tmdbId !== null) {
+                    // Inject the tmdb_id the scanner's collection-enqueue precondition requires.
+                    $meta['tmdb_id'] = $this->tmdbId;
+                    $item['metadata_json'] = $meta;
+                }
                 return $item;
             }
         }

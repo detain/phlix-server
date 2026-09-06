@@ -151,6 +151,49 @@ final class ManagedWorkersConfigTest extends TestCase
         $this->assertSame(\Phlix\Media\SimilarityWorker::class, $map['similarity']);
     }
 
+    public function test_process_config_registers_the_collection_worker(): void
+    {
+        // S215: the scanner now only ENQUEUEs collection syncs; if this spawner
+        // entry ever disappears, the queue accumulates undrained in /tmp and no
+        // movie is ever assigned to its box set.
+        $proc = $this->processConfig();
+
+        $this->assertArrayHasKey('collection', $proc, 'config/process.php must register a collection worker.');
+        $this->assertTrue($proc['collection']['enabled'] ?? false, 'The collection worker must be enabled.');
+        $this->assertArrayHasKey('count', $proc['collection']);
+        $this->assertArrayHasKey('poll_seconds', $proc['collection']);
+    }
+
+    public function test_collection_worker_is_in_the_managed_worker_map(): void
+    {
+        $map = $this->managedWorkers();
+
+        $this->assertArrayHasKey('collection', $map);
+        $this->assertSame(\Phlix\Media\CollectionWorker::class, $map['collection']);
+    }
+
+    public function test_collection_jobs_config_has_expected_shape(): void
+    {
+        /** @var array<string, mixed> $cfg */
+        $cfg = require dirname(__DIR__, 3) . '/config/collection_jobs.php';
+
+        $this->assertArrayHasKey('job_queue_dir', $cfg);
+        $this->assertIsString($cfg['job_queue_dir']);
+        $this->assertNotSame('', $cfg['job_queue_dir']);
+        $this->assertArrayHasKey('worker_interval', $cfg);
+        $this->assertIsInt($cfg['worker_interval']);
+        $this->assertGreaterThan(0, $cfg['worker_interval']);
+        $this->assertSame(
+            $cfg['worker_interval'],
+            $this->processConfig()['collection']['poll_seconds'] ?? null,
+            'process.php collection poll_seconds must equal collection_jobs.php '
+            . 'worker_interval (the config comment pins this invariant).'
+        );
+        $this->assertArrayHasKey('max_concurrent', $cfg);
+        $this->assertIsInt($cfg['max_concurrent']);
+        $this->assertGreaterThan(0, $cfg['max_concurrent']);
+    }
+
     public function test_every_enabled_process_entry_has_a_managed_worker_class(): void
     {
         $proc = $this->processConfig();

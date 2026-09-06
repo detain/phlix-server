@@ -3321,7 +3321,7 @@ class MediaScannerTest extends TestCase
             null,   // noiseSuffixes
             null,   // maxConcurrentScanProbes
             null,   // similarityService
-            null,   // collectionService
+            null,   // collectionJobStore
             $assetStore,
             $simStore
         );

@@ -123,7 +123,11 @@ while (true) {
             echo "[DRY-RUN] Would sync collection for item {$itemId} (TMDB ID: {$tmdbId})\n";
         } else {
             try {
-                $collectionService->syncCollectionForMovie((int) $itemId, $tmdbApiKey);
+                // S215: the method takes the UUID string and resolves the TMDB
+                // key from its injected provider — the old `(int) $itemId,
+                // $tmdbApiKey` shape matched neither parameter and would fatal
+                // (TypeError under strict_types + ArgumentCountError) on --execute.
+                $collectionService->syncCollectionForMovie($itemId);
                 echo "Synced collection for item {$itemId} (TMDB ID: {$tmdbId})\n";
             } catch (\Throwable $e) {
                 echo "FAILED for item {$itemId}: {$e->getMessage()}\n";

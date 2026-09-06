@@ -17,7 +17,8 @@ use Phlix\Shared\Events\Library\MediaItemAdded;
 use Phlix\Common\Logger\LogChannels;
 use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Common\Logger\StructuredLogger;
-use Phlix\Media\CollectionService;
+use Phlix\Media\CollectionJob;
+use Phlix\Media\CollectionJobStore;
 use Phlix\Media\Extras\TrailerFinder;
 use Phlix\Media\MarkerService;
 use Phlix\Media\MarkerType;
@@ -72,8 +73,17 @@ class MediaScanner
     /** @var SimilarityService|null Computes item similarity after scan; null when not wired */
     private ?SimilarityService $similarityService = null;
 
-    /** @var CollectionService|null Syncs TMDB box-set collections after scan; null when not wired */
-    private ?CollectionService $collectionService = null;
+    /**
+     * S215: queue the scanner enqueues per-item TMDB box-set collection syncs
+     * into; null when not wired. The scan path NEVER calls
+     * {@see \Phlix\Media\CollectionService::syncCollectionForMovie()} inline —
+     * that sync makes blocking HTTPS calls to TMDB on this transport and would
+     * stall the scan loop; {@see \Phlix\Media\CollectionWorker} drains this
+     * queue after the scan.
+     *
+     * @var CollectionJobStore|null
+     */
+    private ?CollectionJobStore $collectionJobStore = null;
 
     /**
      * S33: per-scan gate for TMDB box-set auto-collection generation, set once at
@@ -83,7 +93,7 @@ class MediaScanner
      *
      * Defaults to true so the historical unconditional behaviour is preserved for
      * any caller/library that does not set it; only an explicit `false` skips the
-     * per-item {@see CollectionService::syncCollectionForMovie()} block. This is
+     * per-item collection-job enqueue block. This is
      * per-scan mutable instance state, exactly like {@see $containerCache} — a
      * single {@see scan()} call runs to completion for one library before the
      * next, so it is never shared across concurrent libraries.
@@ -421,11 +431,16 @@ class MediaScanner
      *                           is called (best-effort) after each newly scanned
      *                           item is indexed so its similarity scores are
      *                           populated without an explicit backfill run.
-     * @param CollectionService|null $collectionService P4-S3: optional collection
-     *                           sync; when supplied, {@see syncCollectionForMovie()}
-     *                           is called (best-effort) after each newly scanned
-     *                           movie is indexed so its TMDB box-set membership
-     *                           is synced without an explicit backfill run.
+     * @param CollectionJobStore|null $collectionJobStore P4-S3/S215: optional job
+     *                           store for TMDB box-set collection sync. When
+     *                           supplied, a {@see CollectionJob} is ENQUEUED
+     *                           (never synced inline) after each newly scanned
+     *                           movie that already carries a tmdb_id, and the
+     *                           background {@see \Phlix\Media\CollectionWorker}
+     *                           performs the blocking-HTTPS sync later. S215
+     *                           replaced the former `CollectionService`
+     *                           parameter here: the scan loop must hold no
+     *                           HTTP-capable collection dependency at all.
      * @param \Phlix\Media\MediaAsset\MediaAssetJobStore|null $mediaAssetJobStore SV-1.3:
      *                           optional job store for async chapter-thumbnail +
      *                           trickplay generation. When supplied, the inline
@@ -462,6 +477,8 @@ class MediaScanner
      * @since 0.36.0 CollectionService parameter added for P4-S3
      * @since 0.36.0 MediaAssetJobStore parameter added for SV-1.3
      * @since 0.38.0 SimilarityJobStore parameter added for SV-2.9
+     * @since 0.38.0 S215: CollectionService parameter REPLACED by CollectionJobStore —
+     *               collection sync is enqueued, never inline in the scan loop.
      */
     public function __construct(
         Connection $db,
@@ -473,7 +490,7 @@ class MediaScanner
         ?array $noiseSuffixes = null,
         ?int $maxConcurrentScanProbes = null,
         ?SimilarityService $similarityService = null,
-        ?CollectionService $collectionService = null,
+        ?CollectionJobStore $collectionJobStore = null,
         ?\Phlix\Media\MediaAsset\MediaAssetJobStore $mediaAssetJobStore = null,
         ?SimilarityJobStore $similarityJobStore = null,
         ?ScanIgnorePatterns $ignorePatterns = null,
@@ -499,7 +516,7 @@ class MediaScanner
             ? $maxConcurrentScanProbes
             : self::DEFAULT_MAX_CONCURRENT_SCAN_PROBES;
         $this->similarityService = $similarityService;
-        $this->collectionService = $collectionService;
+        $this->collectionJobStore = $collectionJobStore;
         $this->mediaAssetJobStore = $mediaAssetJobStore;
         $this->similarityJobStore = $similarityJobStore;
         // `>= 0`, not `> 0`: zero is a meaningful setting for both (never adopt /
@@ -680,8 +697,8 @@ class MediaScanner
      *               auto-collection generation runs for this library, from its
      *               `options.autoCollections.enabled` flag. Defaults to true (the
      *               historical unconditional behaviour); pass false to skip the
-     *               per-item {@see CollectionService::syncCollectionForMovie()}
-     *               block entirely for this scan.
+     *               per-item collection-job enqueue block entirely for this scan
+     *               (S215: a disabled library enqueues NOTHING).
      * @return int Number of items this scan ADDED (S96(b)). Already computed for
      *             {@see self::dispatchScanCompleted()}'s `itemsAdded`; returning it
      *             is what lets {@see LibraryManager::scanLibrary()} put a truthful
@@ -1685,16 +1702,24 @@ class MediaScanner
             }
         }
 
-        // P4-S3: best-effort TMDB collection sync after a new item is indexed.
-        // Only runs when the item has a tmdb_id in metadata_json (populated by
-        // LibraryMetadataMatcher in a separate metadata scan job, not at scan time).
-        // This path handles items that were already matched before this scan.
+        // P4-S3 / S215: enqueue the TMDB collection sync after a new item is
+        // indexed — NEVER run it inline. S33's AC ("TMDB calls remain queued/async,
+        // never inline in a scan") is now enforced structurally: the scanner holds a
+        // CollectionJobStore instead of the HTTP-capable CollectionService, and the
+        // background CollectionWorker performs the sync. https is forced through
+        // blocking cURL on this transport (MetadataHttpClient::requestCurl via
+        // EventLoopTls::requiresBlockingCurl), so an inline call would stall the
+        // scan for the duration of every TMDB request.
+        //
+        // Only enqueues when the item already carries a numeric tmdb_id in
+        // metadata_json (populated by LibraryMetadataMatcher in a separate metadata
+        // scan job, not at scan time) — a DB read, no HTTP, same scoping as before.
         //
         // S33: gated on the per-library auto-collections toggle (latched at the
         // top of scan()). When the library's options.autoCollections.enabled is
-        // false the whole block — including the findById() lookup — is skipped;
-        // the default (flag absent) is true, preserving today's behaviour.
-        if ($this->collectionService !== null && $this->autoCollectionsEnabled) {
+        // false the whole block — including the findById() lookup — is skipped; a
+        // disabled library enqueues NOTHING; the default (flag absent) is true.
+        if ($this->collectionJobStore !== null && $this->autoCollectionsEnabled) {
             try {
                 $item = $this->itemRepository->findById((string) $itemId);
                 if ($item !== null) {
@@ -1706,11 +1731,11 @@ class MediaScanner
                         $meta = is_array($metaRaw) ? $metaRaw : null;
                     }
                     if ($meta !== null && isset($meta['tmdb_id']) && is_numeric($meta['tmdb_id'])) {
-                        $this->collectionService->syncCollectionForMovie((string) $itemId);
+                        $this->collectionJobStore->enqueue(new CollectionJob((string) $itemId));
                     }
                 }
             } catch (\Throwable $e) {
-                $this->logger->debug('Collection sync failed for item', [
+                $this->logger->debug('Collection sync enqueue failed for item', [
                     'item_id' => $itemId,
                     'error' => $e->getMessage(),
                 ]);

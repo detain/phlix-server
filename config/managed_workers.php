@@ -32,4 +32,8 @@ return [
     // SV-2.9: similarity computation worker — drains the scanner's per-item
     // similarity enqueue so it does not accumulate undrained on disk.
     'similarity'         => \Phlix\Media\SimilarityWorker::class,
+    // S215: TMDB box-set collection sync worker — drains the scanner's per-item
+    // collection enqueue (blocking-HTTPS sync must never run in the scan loop)
+    // so it does not accumulate undrained on disk.
+    'collection'         => \Phlix\Media\CollectionWorker::class,
 ];

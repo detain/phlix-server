@@ -35,7 +35,8 @@ use PHPUnit\Framework\TestCase;
  *
  * ## COVERAGE STATE (measured 2026-08-25 on master d198f9e0 + this branch)
  *
- * 26 fork files / 32 arm-fork sites, of which:
+ * 26 fork files / 32 arm-fork sites (26/32 measured 2026-08-25; S215 adds a 27th —
+ * `src/Media/CollectionWorker.php`, covered by `CollectionWorkerCoroutineForkTest`), of which:
  *  - 14 files newly covered by S196 fork tests (each driven through the REAL
  *    fork decision inside `RunsInCoroutine` with observed branch identity;
  *    each mutation-proven — see the S196 PR body);
@@ -75,6 +76,7 @@ final class ForkInventoryGuardTest extends TestCase
         'src/LiveTv/Tuners/HdHomeRun/HdHomeRunTunerDriver.php' => [
             'tests/Unit/LiveTv/Tuners/HdHomeRun/HdHomeRunTunerDriverTest.php',
         ],
+        'src/Media/CollectionWorker.php' => ['tests/Unit/Media/CollectionWorkerCoroutineForkTest.php'],
         'src/Media/Library/MediaScanner.php' => ['tests/Unit/Media/Library/MediaScannerTest.php'],
         'src/Media/Markers/ChapterMarkerService.php' => [
             'tests/Unit/Media/Markers/ChapterMarkerServiceCoroutineForkTest.php',

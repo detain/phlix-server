@@ -108,6 +108,31 @@ final class CollectionService
             return null;
         }
 
+        return $this->storeCollectionRecord($collectionId, $tmdbCollection);
+    }
+
+    /**
+     * Upsert the local record from an ALREADY-FETCHED TMDB collection payload
+     * and return the persisted row.
+     *
+     * S215: extracted verbatim from {@see self::getOrCreateCollection()} so
+     * {@see self::syncCollectionForMovie()} can persist the collection from the
+     * single `/collection/{id}` response it also uses for the part order —
+     * collapsing the former double fetch of the same endpoint to at most one
+     * call per collection per sync.
+     *
+     * @param int                       $collectionId    TMDB collection ID
+     * @param array{name: string, overview: string|null, poster_path: string|null,
+     *     backdrop_path: string|null, parts: array<int, array{id: int, title: string,
+     *     overview: string|null, poster_path: string|null, backdrop_path: string|null,
+     *     release_date: string, vote_average: float}>} $tmdbCollection
+     *     Parsed TMDB /collection/{id} payload — the exact shape
+     *     {@see \Phlix\Media\Metadata\TmdbProvider::getCollection()} returns
+     * @return array{id: int, tmdb_collection_id: int, name: string, overview: string|null,
+     *     poster_url: string|null, backdrop_url: string|null}|null Persisted collection or null
+     */
+    private function storeCollectionRecord(int $collectionId, array $tmdbCollection): ?array
+    {
         // Build poster/backdrop URLs
         $posterUrl = $tmdbCollection['poster_path'] !== null
             ? 'https://image.tmdb.org/t/p/w500' . $tmdbCollection['poster_path']
@@ -228,16 +253,23 @@ final class CollectionService
             return true;
         }
 
-        // Fetch/create the collection
-        $collection = $this->getOrCreateCollection($collectionId);
+        // S215: fetch `/collection/{id}` EXACTLY ONCE. The single response feeds
+        // both the local upsert (storeCollectionRecord) and the part-order scan
+        // below — the pre-S215 path fetched the same endpoint twice per sync
+        // (getOrCreateCollection internally, then again here for the parts).
+        $tmdbCollection = $this->tmdbProvider->getCollection($collectionId);
+        if ($tmdbCollection === null) {
+            return false;
+        }
+
+        $collection = $this->storeCollectionRecord($collectionId, $tmdbCollection);
         if ($collection === null) {
             return false;
         }
 
-        // Find the part order from TMDB's collection data
-        $tmdbCollection = $this->tmdbProvider->getCollection($collectionId);
+        // Find the part order from the SAME TMDB collection payload
         $partOrder = 0;
-        if ($tmdbCollection !== null && is_array($tmdbCollection['parts'])) {
+        if (is_array($tmdbCollection['parts'] ?? null)) {
             foreach ($tmdbCollection['parts'] as $index => $part) {
                 if (isset($part['id']) && (int) $part['id'] === $tmdbId) {
                     $partOrder = $index + 1;

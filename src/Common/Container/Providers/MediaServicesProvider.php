@@ -31,7 +31,9 @@ use Phlix\Media\Library\ScanJobRepository;
 use Phlix\Media\Music\MusicLibraryScanner;
 use Phlix\Media\Music\MusicLibraryService;
 use Phlix\Media\ChapterSearchService;
+use Phlix\Media\CollectionJobStore;
 use Phlix\Media\CollectionService;
+use Phlix\Media\CollectionWorker;
 use Phlix\Media\Markers\Detection\BackgroundDetectorWorker;
 use Phlix\Media\Markers\Detection\IntroDetectionJob;
 use Phlix\Media\Markers\Detection\MarkerCandidateRepository;
@@ -446,8 +448,13 @@ final class MediaServicesProvider implements ServiceProviderInterface
                 // S8: bounded concurrent-ffprobe cap for scanFlat(); named for
                 // the same reason (PHP-DI skips defaulted optional params).
                 ->constructorParameter('maxConcurrentScanProbes', $maxConcurrentScanProbes)
-                // P4-S3: TMDB box-set collection sync
-                ->constructorParameter('collectionService', get(CollectionService::class))
+                // P4-S3/S215: TMDB box-set collection sync job store. Named for
+                // the same PHP-DI reason as every entry above. S215 replaced the
+                // former `collectionService` parameter here with the QUEUE: the
+                // sync makes blocking-HTTPS TMDB calls, which must never run
+                // inside the scan loop; the CollectionWorker (factory below)
+                // drains this queue after the scan.
+                ->constructorParameter('collectionJobStore', get(CollectionJobStore::class))
                 // SV-1.3: chapter-thumbnail + trickplay generation job store. Named
                 // because PHP-DI skips defaulted optional ctor params during
                 // autowiring — without it the store stays null, the enqueue guard
@@ -1035,6 +1042,56 @@ final class MediaServicesProvider implements ServiceProviderInterface
                 /** @var \Phlix\Media\SimilarityService */
                 $service = $c->get(\Phlix\Media\SimilarityService::class);
                 return new \Phlix\Media\SimilarityWorker($store, $service, null, $maxConcurrent);
+            }),
+
+            // S215: file-based collection-sync job queue (keyed by media item ID).
+            // Config-driven (collection_jobs.job_queue_dir) via a factory mirroring
+            // the SimilarityJobStore idiom, so the scanner (producer) and the
+            // CollectionWorker (consumer) resolve the SAME queue directory even
+            // when an operator overrides it. Unlike SimilarityJobStore the queue
+            // directory is minted lazily on first enqueue, never at construction,
+            // so resolving this factory leaves zero /tmp residue (S439 census).
+            CollectionJobStore::class => factory(static function (ContainerInterface $c): CollectionJobStore {
+                $appConfig = $c->get('app.config');
+                if (!is_array($appConfig)) {
+                    $appConfig = [];
+                }
+                $colCfg = $appConfig['collection_jobs'] ?? null;
+                if (!is_array($colCfg)) {
+                    /** @var mixed $inc */
+                    $inc = @include __DIR__ . '/../../../../config/collection_jobs.php';
+                    $colCfg = is_array($inc) ? $inc : [];
+                }
+                $queueDir = is_string(($colCfg['job_queue_dir'] ?? null))
+                    ? $colCfg['job_queue_dir']
+                    : '/tmp/phlix_collection_jobs';
+                return new \Phlix\Media\CollectionJobStore($queueDir);
+            }),
+
+            // S215: collection worker — the CONSUMER that drains the collection
+            // queue the scanner enqueues into. Without it the enqueued jobs
+            // accumulate undrained on disk (leak). Resolves the CollectionJobStore
+            // + the CollectionService above; max_concurrent is read from config.
+            // Spawned as a managed worker by start.php (config/managed_workers.php).
+            CollectionWorker::class => factory(static function (ContainerInterface $c): CollectionWorker {
+                $appConfig = $c->get('app.config');
+                if (!is_array($appConfig)) {
+                    $appConfig = [];
+                }
+                $colCfg = $appConfig['collection_jobs'] ?? null;
+                if (!is_array($colCfg)) {
+                    /** @var mixed $inc */
+                    $inc = @include __DIR__ . '/../../../../config/collection_jobs.php';
+                    $colCfg = is_array($inc) ? $inc : [];
+                }
+                $maxConcurrent = is_int(($colCfg['max_concurrent'] ?? null))
+                    ? $colCfg['max_concurrent']
+                    : 1;
+                /** @var \Phlix\Media\CollectionJobStore */
+                $store = $c->get(\Phlix\Media\CollectionJobStore::class);
+                /** @var \Phlix\Media\CollectionService */
+                $service = $c->get(\Phlix\Media\CollectionService::class);
+                return new \Phlix\Media\CollectionWorker($store, $service, null, $maxConcurrent);
             }),
 
             // P4-S2: because-you-watched recommendations engine

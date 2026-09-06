@@ -332,6 +332,49 @@ final class CollectionServiceTest extends TestCase
     }
 
     /**
+     * S215 AC(3): the sync hits TMDB `/collection/{id}` AT MOST ONCE per
+     * collection. The pre-S215 path fetched it twice on the happy path —
+     * once inside getOrCreateCollection(), once again in syncCollectionForMovie()
+     * for the part-order scan. Both now share a single fetch.
+     */
+    public function testSyncFetchesCollectionEndpointAtMostOncePerCollection(): void
+    {
+        $itemRepo = $this->createMock(ItemRepository::class);
+        $itemRepo->method('findById')->with(self::MOVIE_UUID)->willReturn([
+            'id' => self::MOVIE_UUID,
+            'metadata_json' => json_encode(['tmdb_id' => self::TMDB_MOVIE_ID]),
+        ]);
+
+        $tmdb = $this->createMock(TmdbProvider::class);
+        $tmdb->method('hasApiKey')->willReturn(true);
+        $tmdb->method('getCollectionIdForMovie')
+            ->with(self::TMDB_MOVIE_ID)
+            ->willReturn(self::TMDB_COLLECTION_ID);
+        $tmdb->expects($this->once())
+            ->method('getCollection')
+            ->with(self::TMDB_COLLECTION_ID)
+            ->willReturn([
+                'name' => 'The Saga Collection',
+                'overview' => null,
+                'poster_path' => null,
+                'backdrop_path' => null,
+                'parts' => [['id' => self::TMDB_MOVIE_ID]],
+            ]);
+
+        $calls = [];
+        $db = $this->recordingDb($calls, $this->collectionRow());
+
+        $service = new CollectionService($db, $itemRepo, $tmdb);
+
+        $this->assertTrue($service->syncCollectionForMovie(self::MOVIE_UUID));
+
+        // And the single response still drives the correct part order (index 0 → 1).
+        $inserts = $this->callsMatching($calls, 'INSERT INTO media_collection_members');
+        $this->assertCount(1, $inserts);
+        $this->assertSame([self::LOCAL_COLLECTION_ID, self::MOVIE_UUID, 1], $inserts[0]['params']);
+    }
+
+    /**
      * Builds a mock Connection whose query() records every (sql, params) pair into
      * $calls and returns the given collection row for the media_collections SELECT.
      *

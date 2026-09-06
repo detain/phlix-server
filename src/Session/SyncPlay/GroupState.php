@@ -642,25 +642,6 @@ class GroupState
     }
 
     /**
-     * Check if a member's position is in sync with the group.
-     *
-     * When playback is active, compares the member's position against
-     * the host's position within the tolerance threshold. Always returns
-     * true when not playing (paused/stopped positions don't need sync).
-     *
-     * @param int $memberPosition The member's playback position in milliseconds
-     * @return bool True if in sync or not playing, false if out of sync
-     */
-    public function isInSync(int $memberPosition): bool
-    {
-        if ($this->playbackState !== self::STATE_PLAYING) {
-            return true;
-        }
-
-        return abs($memberPosition - $this->playbackPosition) <= $this->positionTolerance;
-    }
-
-    /**
      * Get the full group state for broadcasting to clients.
      *
      * Returns a comprehensive state array including members dictionary,

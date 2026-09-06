@@ -341,6 +341,14 @@ run and can never reach it (AC2a / KNOWN LIMIT 3 closed), and a
 
 ### Fixed
 
+- **Auth-provider list emits `live`/`enabled` badge signals over the TOGGLEABLE universe (S252).**
+  `AuthProviderController::listProviders()` iterated the registry — by construction only enabled+configured
+  providers — so a configured-but-disabled provider was absent entirely and `enabled: false` was
+  unrepresentable, while the S44-a UI's strict `p?.live === true` read everything as Disabled. The list is
+  now `AuthProviderBootstrapper::TOGGLEABLE` (oidc, ldap, github) with two computed booleans per row:
+  `live` ← `AuthProviderRegistry::hasProvider()`, `enabled` ← `AuthProviderBootstrapper::isEnabled()`.
+  Pinned by `tests/Unit/Auth/AuthProviderBadgeSignalsTest.php`.
+
 - **Route parameters are percent-decoded ONCE at the routing boundary (S435).** The Router
   compiled `{param}` to `(?P<$1>[^/]+)` and handed handlers the RAW encoded segment, so
   `GET /api/v1/music/albums/Abbey%20Road` looked up an album literally named `Abbey%20Road` —

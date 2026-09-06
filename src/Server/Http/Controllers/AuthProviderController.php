@@ -55,7 +55,25 @@ final class AuthProviderController
     }
 
     /**
-     * List all registered auth providers.
+     * List every toggleable auth provider with its badge signals (S252).
+     *
+     * Iterates {@see AuthProviderBootstrapper::TOGGLEABLE} — the fixed universe of
+     * governable providers — NOT the registry's contents. A registered provider is
+     * only ever one that is enabled AND configured, so iterating the registry made
+     * `enabled: false` unrepresentable: a configured-but-disabled provider vanished
+     * from the payload entirely, and the admin UI (S44-a, which reads `live`
+     * strictly) could never render its Disabled state.
+     *
+     * Two independent signals per row, both real, never hardcoded:
+     *  - `live`    — registered in THIS worker right now ({@see AuthProviderRegistry::hasProvider()}).
+     *  - `enabled` — the persisted toggle flag ({@see AuthProviderBootstrapper::isEnabled()}).
+     *
+     * The legacy `supports_authentication` key keeps its exact old value: it was a
+     * `method_exists()` probe over the registry, and every registry member is a
+     * {@see \Phlix\Shared\Auth\ProviderInterface}, which DECLARES
+     * `supportsAuthentication()` — so the probe was tautologically true for every
+     * listed row and no row existed otherwise. `live` is therefore the honest,
+     * equivalent encoding (true ⇔ a registered provider answers the call).
      *
      * @param Request $request
      * @param array<string, string> $params
@@ -63,13 +81,16 @@ final class AuthProviderController
      */
     public function listProviders(Request $request, array $params): Response
     {
-        $providers = $this->registry->getProviders();
-
         $list = [];
-        foreach ($providers as $name => $provider) {
+
+        foreach (AuthProviderBootstrapper::TOGGLEABLE as $name) {
+            $live = $this->registry->hasProvider($name);
+
             $list[] = [
-                'name' => $provider->name(),
-                'supports_authentication' => method_exists($provider, 'supportsAuthentication'),
+                'name' => $name,
+                'supports_authentication' => $live,
+                'live' => $live,
+                'enabled' => $this->bootstrapper->isEnabled($name),
             ];
         }
 

@@ -28,14 +28,19 @@ final class AuthProviderControllerTest extends TestCase
         $this->controller = new AuthProviderController($this->registry, $this->bootstrapper);
     }
 
+    /**
+     * S252: the list is the fixed TOGGLEABLE universe, not the registry contents.
+     * A registered (live) provider reports live:true alongside its persisted flag.
+     */
     public function test_list_providers(): void
     {
-        $provider = $this->createMock(ProviderInterface::class);
-        $provider->method('name')->willReturn('oidc');
-        $provider->method('supportsAuthentication')->willReturn(true);
-
-        $this->registry->method('getProviders')->willReturn([
-            'oidc' => $provider,
+        $this->registry->method('hasProvider')->willReturnCallback(
+            static fn (string $key): bool => $key === 'oidc'
+        );
+        $this->bootstrapper->method('isEnabled')->willReturnMap([
+            ['oidc', true],
+            ['ldap', false],
+            ['github', false],
         ]);
 
         $request = $this->createMock(Request::class);
@@ -46,13 +51,23 @@ final class AuthProviderControllerTest extends TestCase
         $body = json_decode($response->body, true);
         $this->assertIsArray($body);
         $this->assertArrayHasKey('providers', $body);
-        $this->assertCount(1, $body['providers']);
-        $this->assertSame('oidc', $body['providers'][0]['name']);
+        $this->assertSame(['oidc', 'ldap', 'github'], array_column($body['providers'], 'name'));
+
+        $oidc = $body['providers'][0];
+        $this->assertTrue($oidc['live']);
+        $this->assertTrue($oidc['enabled']);
+        $this->assertTrue($oidc['supports_authentication']);
     }
 
-    public function test_list_providers_empty(): void
+    /**
+     * S252: even with nothing registered and no flag persisted, every toggleable
+     * provider is enumerated with honest false signals — the shape that makes
+     * `enabled: false` representable at all.
+     */
+    public function test_list_providers_enumerates_toggleable_universe_when_nothing_registered(): void
     {
-        $this->registry->method('getProviders')->willReturn([]);
+        $this->registry->method('hasProvider')->willReturn(false);
+        $this->bootstrapper->method('isEnabled')->willReturn(false);
 
         $request = $this->createMock(Request::class);
 
@@ -61,7 +76,12 @@ final class AuthProviderControllerTest extends TestCase
         $this->assertSame(200, $response->statusCode);
         /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
-        $this->assertSame([], $body['providers']);
+        $this->assertCount(3, $body['providers']);
+        foreach ($body['providers'] as $entry) {
+            $this->assertFalse($entry['live']);
+            $this->assertFalse($entry['enabled']);
+            $this->assertFalse($entry['supports_authentication']);
+        }
     }
 
     /**

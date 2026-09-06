@@ -320,8 +320,17 @@ final class IntegrationDbGuardAdoptionTest extends TestCase
      * (LEFT JOIN + COALESCE → INNER JOIN) and in hydrate-to-null across tables —
      * a canned-row double cannot exhibit "the row was deleted after the event",
      * so both surfaces are pinned against real seeded, really-deleted MySQL rows.
+     *
+     * 51 since S289's
+     * `tests/Integration/Session/SyncPlay/SyncPlayIdentitySharedStoreIntegrationTest.php`:
+     * the REST-vs-WS phantom-write split is a CROSS-PROCESS claim about the shared
+     * syncplay_snapshots store — that a create published by one worker's manager is
+     * readable through another's snapshot service yet still "Group not found" to a
+     * second manager's membership table. A doubled connection returning canned rows
+     * cannot falsify "no live worker re-hydrates its authoritative table from the
+     * snapshot," so the boundary is pinned against real MySQL with two real managers.
      */
-    private const EXPECTED_ADOPTERS = 50;
+    private const EXPECTED_ADOPTERS = 51;
 
     /**
      * Bare function calls that are a MySQL reachability probe under any

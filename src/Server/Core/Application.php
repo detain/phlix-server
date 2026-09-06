@@ -1320,10 +1320,22 @@ class Application
     /**
      * Returns a SyncPlayController instance.
      *
-     * SP5: Both SyncPlayManager and SyncPlaySnapshotService are now resolved from
-     * the container (singleton within this worker process). The controller reads
-     * from the snapshot service (WS-published state) and writes through the
-     * manager (mutations delegated to WS worker in SP6).
+     * SP5/S289 — the truth of the two transports (the previous wording implied
+     * REST mutations were "delegated to the WS worker in SP6"; no such delegation
+     * exists and this is recorded honestly now):
+     *  - The container's `SyncPlayManager` is NOT given a snapshot service on the
+     *    HTTP path (only the single WebSocket worker calls `setSnapshotService()`,
+     *    in start.php). So the create/join/leave mutations this controller makes
+     *    mutate THIS HTTP worker's per-process tables and are neither published to
+     *    the shared `syncplay_snapshots` store nor re-hydrated by the WS worker.
+     *  - The read rails (`listGroups`, `getGroup`) DO come from the shared snapshot
+     *    the WS worker publishes.
+     * Cross-worker forwarding of membership mutations is the unwritten SP6 bridge,
+     * tracked as residual work; it is deliberately not half-built here (a snapshot
+     * the live WS worker never re-hydrates would only relocate the phantom). What
+     * S289 does fix — deriving the member identity from the authenticated JWT
+     * subject on BOTH transports — is the precondition that makes that bridge,
+     * once built, converge on one member rather than two.
      *
      * @return SyncPlayController The controller instance.
      *

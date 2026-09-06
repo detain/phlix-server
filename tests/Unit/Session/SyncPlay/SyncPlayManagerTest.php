@@ -244,7 +244,12 @@ class SyncPlayManagerTest extends TestCase
         $this->assertEquals(4, $state['member_count']); // host + 3 members
     }
 
-    public function testCannotJoinGroupAsDuplicateMember(): void
+    /**
+     * S289 — the same identity re-joining is IDEMPOTENT, not a second member and
+     * not an error. This is the property that makes one human over two transports,
+     * a reconnect, or two tabs of one account collapse to exactly one member.
+     */
+    public function testJoinIsIdempotentForExistingMember(): void
     {
         $createResult = $this->manager->createGroup('Test Group', null, 'member_1', 'User 1');
         /** @var array{group: array{group_id: string}} $createResult */
@@ -252,8 +257,57 @@ class SyncPlayManagerTest extends TestCase
 
         $result = $this->manager->joinGroup($groupId, 'member_1', 'User 1 Again');
 
-        $this->assertFalse($result['success']);
-        $this->assertEquals('Already a member of this group', $result['error']);
+        $this->assertTrue($result['success'], 're-joining as an existing identity must succeed, not error');
+        $this->assertSame(
+            1,
+            $result['group']['member_count'],
+            'an existing identity re-joining must NOT create a second member'
+        );
+        $this->assertSame(
+            ['member_1'],
+            array_keys($result['group']['members']),
+            'the member dict stays keyed by the one identity'
+        );
+        $this->assertSame(
+            'User 1 Again',
+            $result['group']['members']['member_1']['name'],
+            'the display name is refreshed on an idempotent re-join'
+        );
+    }
+
+    /**
+     * S289 — on an idempotent re-join the member's connection is re-pointed to the
+     * newest socket and the stale reverse-map entry is dropped, so broadcasts follow
+     * the most-recent connection (two-tabs / reconnect semantics).
+     */
+    public function testIdempotentJoinRepointsToNewestConnection(): void
+    {
+        $createResult = $this->manager->createGroup(
+            'Test Group',
+            null,
+            'member_1',
+            'User 1',
+            'conn-old'
+        );
+        /** @var array{group: array{group_id: string}} $createResult */
+        $groupId = $createResult['group']['group_id'];
+
+        $result = $this->manager->joinGroup($groupId, 'member_1', 'User 1', null, 'conn-new');
+
+        $this->assertTrue($result['success']);
+        $this->assertSame(1, $result['group']['member_count']);
+
+        $this->assertSame($groupId, $this->manager->getMemberGroup('member_1'));
+
+        // The connection->member reverse map must now resolve the NEW socket and no
+        // longer the old one, else a broadcast on close of the old socket would strand.
+        $connMap = new \ReflectionProperty($this->manager, 'connectionToMember');
+        $connMap->setAccessible(true);
+        /** @var array<string, string> $map */
+        $map = $connMap->getValue($this->manager);
+        $this->assertArrayHasKey('conn-new', $map);
+        $this->assertSame('member_1', $map['conn-new']);
+        $this->assertArrayNotHasKey('conn-old', $map, 'the stale connection entry must be dropped');
     }
 
     public function testHostTransferOnHostLeave(): void

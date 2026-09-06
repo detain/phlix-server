@@ -443,4 +443,162 @@ class WsAuthenticationTest extends TestCase
         $this->assertArrayHasKey('member-user', $members, 'Should use server-derived userId as member');
         $this->assertArrayNotHasKey('spoofed-member-id', $members, 'Should NOT use client-supplied member_id');
     }
+
+    // -----------------------------------------------------------------
+    // S289 — the residual handlers that still read a payload member_id (chat,
+    // typing, leave, playback_sync, time_sync) are now server-derived like
+    // create/join/playback-control. Each test below reddens if identity reverts
+    // to the client-trusted payload field.
+    // -----------------------------------------------------------------
+
+    public function testChatMessageUsesServerIdentityNotSpoofedMemberId(): void
+    {
+        $manager = $this->createTestableSyncPlayManager();
+        [$a, $b] = $this->seedTwoMemberRoom($manager);
+
+        $manager->publicHandleMessage($a, [
+            'type' => Messages::TYPE_CHAT_MESSAGE,
+            'member_id' => 'evil-spoof', // must be IGNORED
+            'message' => 'hello',
+        ]);
+
+        $chat = $this->framesOfType($b, Messages::TYPE_CHAT_MESSAGE);
+        $this->assertNotEmpty($chat, 'the listener must receive the chat broadcast');
+        $this->assertSame('user-a', $this->frameData($chat[0])['member_id'] ?? null);
+    }
+
+    public function testChatTypingUsesServerIdentityNotSpoofedMemberId(): void
+    {
+        $manager = $this->createTestableSyncPlayManager();
+        [$a, $b] = $this->seedTwoMemberRoom($manager);
+
+        $manager->publicHandleMessage($a, [
+            'type' => Messages::TYPE_CHAT_TYPING,
+            'member_id' => 'evil-spoof', // must be IGNORED
+            'is_typing' => true,
+        ]);
+
+        $typing = $this->framesOfType($b, Messages::TYPE_CHAT_TYPING);
+        $this->assertNotEmpty($typing);
+        $this->assertSame('user-a', $this->frameData($typing[0])['member_id'] ?? null);
+    }
+
+    public function testGroupLeaveActsOnServerIdentityNotSpoofedMemberId(): void
+    {
+        $manager = $this->createTestableSyncPlayManager();
+        [, $b, $groupId] = $this->seedTwoMemberRoom($manager);
+
+        // $b is user-b but the body tries to evict user-a (the host).
+        $manager->publicHandleMessage($b, [
+            'type' => Messages::TYPE_GROUP_LEAVE,
+            'member_id' => 'user-a',
+        ]);
+
+        $state = $manager->getGroupState($groupId);
+        $this->assertNotNull($state);
+        $this->assertArrayNotHasKey('user-b', $state['members'], 'the SERVER identity must be the one that left');
+        $this->assertArrayHasKey('user-a', $state['members'], 'the spoofed target must remain a member');
+    }
+
+    public function testPlaybackSyncResolvesGroupByServerIdentityNotSpoofedId(): void
+    {
+        $manager = $this->createTestableSyncPlayManager();
+        [, $b] = $this->seedTwoMemberRoom($manager);
+
+        // A spoofed id that maps to NO group would (pre-fix) answer NOT_IN_GROUP;
+        // with server identity, user-b is really in the group and gets the sync.
+        $manager->publicHandleMessage($b, [
+            'type' => Messages::TYPE_PLAYBACK_SYNC,
+            'member_id' => 'ghost-id',
+        ]);
+
+        $this->assertSame([], $this->framesOfType($b, Messages::TYPE_ERROR), 'a spoofed id must not force NOT_IN_GROUP');
+        $sync = $this->framesOfType($b, Messages::TYPE_PLAYBACK_SYNC);
+        $this->assertNotEmpty($sync);
+        $this->assertSame('user-a', $this->frameData($sync[0])['member_id'] ?? null, 'stamped with the host id');
+    }
+
+    public function testTimeSyncRepliesToServerIdentityNotSpoofedId(): void
+    {
+        $manager = $this->createTestableSyncPlayManager();
+        [, $b] = $this->seedTwoMemberRoom($manager);
+
+        $manager->publicHandleMessage($b, [
+            'type' => Messages::TYPE_TIME_SYNC,
+            'member_id' => 'ghost-id',
+        ]);
+
+        $this->assertSame([], $this->framesOfType($b, Messages::TYPE_ERROR));
+        $ts = $this->framesOfType($b, Messages::TYPE_TIME_SYNC);
+        $this->assertNotEmpty($ts, 'server identity (user-b) resolves the group');
+        $this->assertSame('user-b', $this->frameData($ts[0])['member_id'] ?? null, 'reply carries the server id');
+    }
+
+    /**
+     * Create a room owned by user-a (conn-a) with user-b (conn-b) joined, both
+     * registered in the connection pool so broadcasts resolve.
+     *
+     * @return array{0: TestConnection, 1: TestConnection, 2: string}
+     */
+    private function seedTwoMemberRoom(TestableSyncPlayManager $manager): array
+    {
+        $pool = ConnectionPool::getInstance();
+
+        $a = new TestConnection('conn-a');
+        $a->setAuthenticated(true, 'user-a');
+        $pool->add($a);
+
+        $b = new TestConnection('conn-b');
+        $b->setAuthenticated(true, 'user-b');
+        $pool->add($b);
+
+        $manager->publicHandleMessage($a, [
+            'type' => Messages::TYPE_GROUP_CREATE,
+            'member_name' => 'A',
+            'group_name' => 'S289 Room',
+        ]);
+        $groups = $manager->listGroups();
+        $this->assertNotEmpty($groups, 'precondition: the group exists');
+        /** @var string $groupId */
+        $groupId = $groups[0]['id'];
+
+        $manager->publicHandleMessage($b, [
+            'type' => Messages::TYPE_GROUP_JOIN,
+            'group_id' => $groupId,
+            'member_name' => 'B',
+        ]);
+
+        return [$a, $b, $groupId];
+    }
+
+    /**
+     * Frames sent to a connection whose top-level `type` matches.
+     *
+     * @return list<array<array-key, mixed>>
+     */
+    private function framesOfType(TestConnection $connection, string $type): array
+    {
+        return array_values(array_filter(
+            $connection->getSentMessages(),
+            static fn (array $frame): bool => ($frame['type'] ?? null) === $type
+        ));
+    }
+
+    /**
+     * A `sendFlat` frame nests its fields under `payload`; a `send()` broadcast frame
+     * is already flat. Normalise both to the field map.
+     *
+     * @param array<array-key, mixed> $frame
+     * @return array<array-key, mixed>
+     */
+    private function frameData(array $frame): array
+    {
+        if (isset($frame['payload']) && is_array($frame['payload'])) {
+            /** @var array<array-key, mixed> $payload */
+            $payload = $frame['payload'];
+            return $payload;
+        }
+
+        return $frame;
+    }
 }

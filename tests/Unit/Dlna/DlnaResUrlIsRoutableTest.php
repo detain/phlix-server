@@ -129,6 +129,19 @@ final class DlnaResUrlIsRoutableTest extends TestCase
 
     protected function tearDown(): void
     {
+        // S439: the container graph this test resolves constructs MediaAssetJobStore
+        // and SimilarityJobStore through MediaServicesProvider's factories at the
+        // production default queue paths, and their constructors mint the shared
+        // /tmp directories. Sweep them so the suite leaves zero residue.
+        foreach (['phlix_media_asset_jobs', 'phlix_similarity_jobs'] as $sharedQueue) {
+            $sharedDir = sys_get_temp_dir() . '/' . $sharedQueue;
+            if (is_dir($sharedDir)) {
+                foreach (glob($sharedDir . '/*') ?: [] as $queued) {
+                    @unlink($queued);
+                }
+                @rmdir($sharedDir);
+            }
+        }
         EffectiveConfig::reset();
         RequestContext::setUserId(null);
         RequestContext::setProfileId(null);

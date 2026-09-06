@@ -501,6 +501,13 @@ class DashboardServiceTest extends TestCase
                         ],
                     ];
                 }
+                if (strpos($sql, 'FROM users') !== false) {
+                    // S220: getRecentPlaybackEvents() now applies the S14 HIDE
+                    // decision — a playback row is surfaced only while its user
+                    // resolves. Mirror the resolvable-user mock the S14 Top-Users
+                    // orphan test uses, so this feed's survivor stays listed.
+                    return [['username' => 'alice']];
+                }
                 return [];
             });
 
@@ -542,5 +549,8 @@ class DashboardServiceTest extends TestCase
         $this->assertEquals('user-123', $playbackEvent['user_id']);
         $this->assertArrayHasKey('details', $playbackEvent);
         $this->assertEquals(3600, $playbackEvent['details']['duration_seconds']);
+        // S220: a surfaced row carries a resolved identity on both axes.
+        $this->assertSame('alice', $playbackEvent['username']);
+        $this->assertSame('Test Movie', $playbackEvent['details']['media_title']);
     }
 }

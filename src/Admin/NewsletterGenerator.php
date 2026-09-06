@@ -249,15 +249,22 @@ class NewsletterGenerator
     ): array {
         $limit = $this->config['top_media_limit'] ?? 5;
 
+        // S220 — the S14 HIDE decision, finished on this missed surface. This
+        // query used `LEFT JOIN media_items` + `COALESCE(m.name, 'Unknown')`, so a
+        // deleted item's historical plays rendered as a literal "Unknown" row in
+        // the newsletter — the exact placeholder S14 rejected for the dashboard
+        // cards. INNER JOIN drops orphaned events at the query level; the
+        // consumer-side null-skip below is the same TOCTOU defense-in-depth the
+        // S14 guards use (a row cannot appear between JOIN and map either way).
         /** @var array<array<string, mixed>> $rows */
         $rows = $this->db->query(
             "SELECT
                  p.media_item_id,
-                 COALESCE(m.name, 'Unknown') AS name,
+                 m.name AS name,
                  COALESCE(JSON_UNQUOTE(JSON_EXTRACT(m.metadata_json, '$.poster')), NULL) AS poster_url,
                  COUNT(*) AS play_count
              FROM stats_playback_events p
-             LEFT JOIN media_items m ON m.id = p.media_item_id
+             INNER JOIN media_items m ON m.id = p.media_item_id
              WHERE p.user_id = ?
                AND p.started_at >= ?
                AND p.started_at <= ?
@@ -266,6 +273,11 @@ class NewsletterGenerator
              LIMIT ?",
             [$userId, $from->format('Y-m-d H:i:s'), $to->format('Y-m-d H:i:s'), $limit]
         );
+
+        $named = array_values(array_filter(
+            $rows,
+            static fn (array $row): bool => is_string($row['name'] ?? null) && $row['name'] !== ''
+        ));
 
         return array_map(function (array $row): array {
             $posterUrl = $row['poster_url'] ?? null;
@@ -276,11 +288,11 @@ class NewsletterGenerator
 
             return [
                 'media_item_id' => is_string($row['media_item_id']) ? $row['media_item_id'] : '',
-                'name' => is_string($row['name']) ? $row['name'] : 'Unknown',
+                'name' => (string) $row['name'],
                 'poster_url' => is_string($posterUrl) ? $posterUrl : null,
                 'play_count' => is_numeric($row['play_count']) ? (int) $row['play_count'] : 0,
             ];
-        }, $rows);
+        }, $named);
     }
 
     /**

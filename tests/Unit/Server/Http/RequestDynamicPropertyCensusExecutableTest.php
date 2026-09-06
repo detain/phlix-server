@@ -186,8 +186,11 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * files (CollectionJob, CollectionJobStore, CollectionWorker, config/collection_jobs.php,
      * run-collection-worker.php, the store test, the worker test, the worker fork test);
      * none names Request — the S433/S434 pattern again, only this denominator moves.
+     * Re-pinned 1783→1785 by S252/S220: two test files (AuthProviderBadgeSignalsTest,
+     * BlankRowHideRealDbIntegrationTest); neither names a Request property — the
+     * S433/S434/S215 pattern again, only this denominator moves.
      */
-    private const EXPECTED_PHP_FILES = 1783;
+    private const EXPECTED_PHP_FILES = 1785;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

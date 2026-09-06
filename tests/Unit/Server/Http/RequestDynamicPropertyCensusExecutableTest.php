@@ -182,12 +182,12 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * Re-pinned 1773→1775 by S439: the zero-residue census path adds two first-party
      * files (ZeroResidueCensusExtension, ZeroResidueCensusTest); neither names
      * Request, so every other pin here stays untouched — the S433/S434 pattern again.
-     * Re-pinned 1775→1782 by S215: the collection-queue path adds seven first-party
+     * Re-pinned 1775→1783 by S215: the collection-queue path adds eight first-party
      * files (CollectionJob, CollectionJobStore, CollectionWorker, config/collection_jobs.php,
-     * run-collection-worker.php, the store test, the worker test); none names Request —
-     * the S433/S434 pattern again, only this denominator moves.
+     * run-collection-worker.php, the store test, the worker test, the worker fork test);
+     * none names Request — the S433/S434 pattern again, only this denominator moves.
      */
-    private const EXPECTED_PHP_FILES = 1782;
+    private const EXPECTED_PHP_FILES = 1783;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

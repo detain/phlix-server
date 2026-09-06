@@ -107,7 +107,7 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   `/collection/{id}` fetch to a single response feeding both the local upsert and the part order.
   Pins: `tests/Unit/Media/Library/MediaScannerAutoCollectionsTest.php` (rewritten),
   `tests/Unit/Collections/CollectionServiceTest.php`, `tests/Unit/Media/CollectionWorkerTest.php`
-  (S431 denominator re-pinned 1775→1782).
+  (S431 denominator re-pinned 1775→1783).
 
 - **`markWatched` now drives the playback finalize path (S438 — the recorded branch of S30's
   either/or).** The detail-page "Mark watched" wrote only `user_item_data.watched`, while the

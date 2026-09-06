@@ -137,9 +137,12 @@ final class BrowseIndexUsageTest extends TestCase
 
             $repo->create([
                 // Supply the id explicitly (S111). Without it ItemRepository falls
-                // back to Uuid::v4(), which is mt_rand()-based — that fallback, not
-                // this class's own helper, is what produced the colliding
+                // back to Uuid::v4() — CSPRNG-based since S443, mt_rand()-based
+                // when this defect was filed — and that old steerable fallback,
+                // not this class's own helper, is what produced the colliding
                 // `media_items.PRIMARY` values under a pinned --random-order-seed.
+                // The explicit id stays: assertion (1) below reads the counter in
+                // the final field, which Uuid::v4() cannot provide.
                 'id' => $this->fixtureId(),
                 'library_id' => $this->libraryId,
                 'name' => $name,

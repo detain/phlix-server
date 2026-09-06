@@ -341,6 +341,24 @@ run and can never reach it (AC2a / KNOWN LIMIT 3 closed), and a
 
 ### Fixed
 
+- **`Uuid::v4()` entropy moved from `mt_rand()` to the CSPRNG (S443).** The shared UUID mint — every
+  `CHAR(36)` primary key on the Music scan path (`MusicLibraryScanner::createMediaItem()`) and the
+  `ItemRepository::create()` fallback — drew all 122 random bits from the process-global Mersenne
+  Twister. PHPUnit's runner re-seeds that same engine for `executionOrder="random"`
+  (`mt_srand(randomOrderSeed)`), the order `shuffle()` consumes it, and tests re-pin it mid-run
+  (jitter/fixture determinism) — so a pinned `--random-order-seed` rerun, or one seeding test between
+  two minting consumers, replayed byte-identical PKs and the second INSERT died with MySQL 1062
+  `Duplicate entry … for key 'PRIMARY'` (the intermittent Music red from the s252 suite run). `v4()`
+  now draws 16 bytes from `random_bytes()` and sets the RFC 4122 version/variant nibbles — the same
+  S111/S334 conversion the test-side `FixtureIdGenerator` got, applied to the production source. Nine
+  test-local `sprintf(mt_rand(...))` uuid copies were swept to the single shared generator in the same
+  commit. No test relied on seeded-uuid reproducibility (the seeded consumers — webhook retry jitter —
+  draw `mt_rand()` at their own call sites and are unaffected). Pinned by
+  `tests/Unit/Common/UuidOrderSeedFuzzTest.php` (named order-seed fuzz: reddens element-for-element on
+  any revert to `mt_rand`, greens deterministically after) and
+  `tests/Integration/Media/Music/UuidSeedReplayPkCollisionIntegrationTest.php` (the same replay against
+  a real `media_items.PRIMARY`; S431 census re-pinned 1787→1789, S126 adopters 51→52).
+
 - **Auth-provider list emits `live`/`enabled` badge signals over the TOGGLEABLE universe (S252).**
   `AuthProviderController::listProviders()` iterated the registry — by construction only enabled+configured
   providers — so a configured-but-disabled provider was absent entirely and `enabled: false` was

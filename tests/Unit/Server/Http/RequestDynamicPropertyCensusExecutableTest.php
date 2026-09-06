@@ -193,8 +193,12 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * test files (SyncPlayIdentityRestTest, SyncPlayIdentitySharedStoreIntegrationTest);
      * the first names Request in its dispatch helper (so the declared-write count
      * moves with it below), the second does not name Request at all.
+     * Re-pinned 1787→1789 by S443: the UUID-entropy arc adds two test files
+     * (UuidOrderSeedFuzzTest, UuidSeedReplayPkCollisionIntegrationTest); neither
+     * names Request — the S433/S434/S215/S252/S289 pattern again, only this
+     * denominator moves.
      */
-    private const EXPECTED_PHP_FILES = 1787;
+    private const EXPECTED_PHP_FILES = 1789;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

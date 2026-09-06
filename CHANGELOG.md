@@ -9,6 +9,14 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Added
 
+- **TMDB collection-sync job queue (S215).** `CollectionJob` + `CollectionJobStore` +
+  `CollectionWorker` (`src/Media/`) mirror the SV-2.9 similarity trio: a file-based queue the scan
+  path enqueues into and a supervised consumer that drains it (`config/collection_jobs.php`,
+  `config/managed_workers.php` + `config/process.php` 'collection' entry,
+  `scripts/run-collection-worker.php`). The store mints its queue directory lazily on first
+  enqueue — never at construction — so resolving the DI factory leaves zero `/tmp/phlix_*`
+  residue (S439 census).
+
 - **Test-suite zero-residue census (S439, finish-S167).** audit31 measured 212 leftover
   `/tmp/phlix_*` entries after an isolated full-suite run at `3bd64b84`; every offender site
   now carries a teardown, `BackupManager::createBackup()` cleans its temp dir on the success
@@ -86,6 +94,20 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   exists); no tag; new routes registered in `ROUTE_MANIFEST` (364 entries) and pinned.
 
 ### Changed
+
+- **Auto-collection TMDB sync is enqueued, never inline in the scan loop (S215 — the S33 promise,
+  finally true).** `MediaScanner` held the HTTP-capable `CollectionService` and called
+  `syncCollectionForMovie()` per file inside `processFile()` — blocking cURL on this transport
+  (`MetadataHttpClient::requestCurl` via `EventLoopTls::requiresBlockingCurl`), stalling the scan
+  for every TMDB round-trip. The scanner now takes a `CollectionJobStore` in that constructor slot
+  and enqueues a `CollectionJob` per newly indexed, already-tmdb-matched item (per-library
+  auto-collections gate kept: disabled library enqueues NOTHING); `CollectionWorker` performs the
+  sync after the scan. The inline path is gone structurally — the scanner holds no HTTP-capable
+  collection dependency (reflection-pinned). `syncCollectionForMovie()` also collapsed its double
+  `/collection/{id}` fetch to a single response feeding both the local upsert and the part order.
+  Pins: `tests/Unit/Media/Library/MediaScannerAutoCollectionsTest.php` (rewritten),
+  `tests/Unit/Collections/CollectionServiceTest.php`, `tests/Unit/Media/CollectionWorkerTest.php`
+  (S431 denominator re-pinned 1775→1782).
 
 - **`markWatched` now drives the playback finalize path (S438 — the recorded branch of S30's
   either/or).** The detail-page "Mark watched" wrote only `user_item_data.watched`, while the

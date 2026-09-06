@@ -189,15 +189,23 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * Re-pinned 1783→1785 by S252/S220: two test files (AuthProviderBadgeSignalsTest,
      * BlankRowHideRealDbIntegrationTest); neither names a Request property — the
      * S433/S434/S215 pattern again, only this denominator moves.
+     * Re-pinned 1785→1787 by S289: the SyncPlay identity arc adds two first-party
+     * test files (SyncPlayIdentityRestTest, SyncPlayIdentitySharedStoreIntegrationTest);
+     * the first names Request in its dispatch helper (so the declared-write count
+     * moves with it below), the second does not name Request at all.
      */
-    private const EXPECTED_PHP_FILES = 1785;
+    private const EXPECTED_PHP_FILES = 1787;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on
      * declared members. S427 prose said 331 (drift +60 here; the prose's own
      * 332-minus-hand-ruled-1 arithmetic was not executable — see header).
+     * Re-pinned 391→390 by S289: SyncPlayController::leaveGroup no longer copies
+     * `$request->body` (a declared-member read) — identity is now the JWT subject
+     * `$request->userId` (already read for the empty-guard), so the mutation reads
+     * one fewer Request member. The other four rails are unchanged.
      */
-    private const EXPECTED_DECLARED_READS = 391;
+    private const EXPECTED_DECLARED_READS = 390;
 
     /**
      * Census number 5 — property WRITES (name directly assigned) on Request
@@ -211,8 +219,12 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * Re-pinned 952→956 by S438: PlaybackFinishIntegrationTest's postRequest()
      * helper assigns four declared Request members directly
      * (method/path/userId/body) — S427 license intact.
+     * Re-pinned 956→960 by S289: SyncPlayIdentityRestTest's request() helper assigns
+     * four declared Request members directly (method/path/userId/body) — the same
+     * S438 shape, S427 license intact. The SyncPlayController identity change itself
+     * adds no write sites (it reads $request->userId, already a declared read).
      */
-    private const EXPECTED_DECLARED_WRITES = 956;
+    private const EXPECTED_DECLARED_WRITES = 960;
 
     /** Census numbers 3 and 4 — the posture claims; never re-pin, fix source. */
     private const EXPECTED_DYNAMIC_READS = 0;

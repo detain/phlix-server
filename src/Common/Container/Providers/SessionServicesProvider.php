@@ -83,6 +83,16 @@ final class SessionServicesProvider implements ServiceProviderInterface
             // process. The WS worker (count=1) owns the authoritative state
             // and publishes snapshots after each mutation. HTTP workers use
             // this for local state only (mutations are deprecated in REST).
+            //
+            // S289 — deliberately NO `setSnapshotService()` call here. The HTTP
+            // worker's manager stays snapshot-less, so a REST create/join mutates
+            // only this process (its writes are per-process, NOT published). That is
+            // the documented phantom-write boundary the S415 envelope pin deliberately
+            // guards ("HTTP create/join/leave touch no DB"); routing these mutations
+            // to the shared store is the SP6 bridge (residual). What S289 unifies is
+            // the IDENTITY — the member id is the authenticated JWT subject on both
+            // transports — so one human is one member wherever SP6 eventually
+            // converges the tables.
             SyncPlayManager::class => autowire()
                 ->constructorParameter('logger', get('logger.session')),
         ]);

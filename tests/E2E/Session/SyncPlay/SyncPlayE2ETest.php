@@ -642,6 +642,144 @@ class SyncPlayE2ETest extends TestCase
     }
 
     /**
+     * S289 AC — the SAME human reaching the SAME group over BOTH transports is
+     * EXACTLY ONE member. The REST path joins with the authenticated JWT subject
+     * (no WS socket → connection_id null); the WebSocket path then joins the same
+     * subject and must collapse onto that one member, re-pointing its connection.
+     */
+    public function testSameHumanOverRestAndWsIsExactlyOneMember(): void
+    {
+        $hostConn = $this->createMockConnection('conn-host', 'sam', true);
+        $createResult = $this->manager->createGroup('Movie Night', null, 'sam', 'Sam', 'conn-host');
+        /** @var array{group: array{group_id: string}} $createResult */
+        $groupId = $createResult['group']['group_id'];
+
+        // REST join of 'jane' — mirrors SyncPlayController::joinGroup (identity = JWT
+        // subject; HTTP carries no WS socket, so connection_id is null).
+        $restJoin = $this->manager->joinGroup($groupId, 'jane', 'Jane', null, null);
+        $this->assertTrue($restJoin['success']);
+
+        // The SAME human now joins over WebSocket with the identical JWT subject.
+        $wsConn = $this->createMockConnection('conn-jane', 'jane', true);
+        $this->invokeHandler('handleGroupJoin', $wsConn, [
+            'group_id' => $groupId,
+            'member_name' => 'Jane',
+        ]);
+
+        $state = $this->manager->getGroupState($groupId);
+        /** @var array<string, mixed> $state */
+        $this->assertSame(2, $state['member_count'], 'one human over two transports must not add a third member');
+        $this->assertSame(
+            ['sam', 'jane'],
+            array_keys($state['members']),
+            'the member list is keyed by identity — jane appears exactly once'
+        );
+
+        // The idempotent WS join re-pointed jane to the live socket: a host play now
+        // reaches conn-jane (proving the phantom REST-null connection became the WS one).
+        $this->invokeHandler('handlePlaybackPlay', $hostConn, ['position' => 4000, 'server_time' => time()]);
+        $this->assertTrue(
+            $this->connectionReceivedType('conn-jane', Messages::TYPE_PLAYBACK_PLAY),
+            'jane must be delivered to via her most-recent (WS) connection'
+        );
+    }
+
+    /**
+     * S289 AC — a reconnect (fresh connection id, same JWT subject) must NOT
+     * duplicate the member: the socket-close removes the member, the re-join
+     * re-adds exactly one.
+     */
+    public function testReconnectDoesNotDuplicateMember(): void
+    {
+        $hostConn = $this->createMockConnection('conn-host', 'sam', true);
+        $createResult = $this->manager->createGroup('Movie Night', null, 'sam', 'Sam', 'conn-host');
+        /** @var array{group: array{group_id: string}} $createResult */
+        $groupId = $createResult['group']['group_id'];
+
+        // First session joins over WS.
+        $conn1 = $this->createMockConnection('conn-jane-1', 'jane', true);
+        $this->invokeHandler('handleGroupJoin', $conn1, ['group_id' => $groupId, 'member_name' => 'Jane']);
+        $this->assertGroupMemberCount($groupId, 2);
+
+        // The socket drops — S283 backoff will reconnect on a NEW connection id.
+        $this->manager->onConnectionClose('conn-jane-1');
+
+        // Reconnect on the new socket, SAME JWT subject.
+        $conn2 = $this->createMockConnection('conn-jane-2', 'jane', true);
+        $this->invokeHandler('handleGroupJoin', $conn2, ['group_id' => $groupId, 'member_name' => 'Jane']);
+
+        $this->assertGroupMemberCount($groupId, 2);
+        $state = $this->manager->getGroupState($groupId);
+        /** @var array<string, mixed> $state */
+        $this->assertSame(['sam', 'jane'], array_keys($state['members']), 'a reconnect must not fork the identity');
+    }
+
+    /**
+     * S289 two-tabs model — two OPEN connections of ONE account (same JWT subject)
+     * are ONE member; the most-recent connection receives broadcasts and the earlier
+     * tab is silently demoted (no error, no second seat). This is the WRITTEN model
+     * the AC requires: a seat is an identity, not a browser tab.
+     */
+    public function testTwoTabsSameAccountAreOneMemberAndMostRecentConnectionWinsDelivery(): void
+    {
+        $hostConn = $this->createMockConnection('conn-host', 'sam', true);
+        $createResult = $this->manager->createGroup('Movie Night', null, 'sam', 'Sam', 'conn-host');
+        /** @var array{group: array{group_id: string}} $createResult */
+        $groupId = $createResult['group']['group_id'];
+
+        // Tab A opens and joins.
+        $tabA = $this->createMockConnection('conn-jane-a', 'jane', true);
+        $this->invokeHandler('handleGroupJoin', $tabA, ['group_id' => $groupId, 'member_name' => 'Jane']);
+
+        // Tab B (SAME account, new socket) joins — must stay idempotent (one member).
+        $tabB = $this->createMockConnection('conn-jane-b', 'jane', true);
+        $this->invokeHandler('handleGroupJoin', $tabB, ['group_id' => $groupId, 'member_name' => 'Jane']);
+
+        $state = $this->manager->getGroupState($groupId);
+        /** @var array<string, mixed> $state */
+        $this->assertSame(2, $state['member_count'], 'two tabs of one account are ONE member, not two');
+        $this->assertSame(['sam', 'jane'], array_keys($state['members']));
+
+        // Delivery follows the most-recent socket: host play reaches tab B, not tab A.
+        $this->invokeHandler('handlePlaybackPlay', $hostConn, ['position' => 7000, 'server_time' => time()]);
+        $this->assertTrue(
+            $this->connectionReceivedType('conn-jane-b', Messages::TYPE_PLAYBACK_PLAY),
+            'the most-recent connection must receive the broadcast'
+        );
+        $this->assertFalse(
+            $this->connectionReceivedType('conn-jane-a', Messages::TYPE_PLAYBACK_PLAY),
+            'the demoted (earlier) tab must not still be a delivery target'
+        );
+    }
+
+    /**
+     * Invoke a private SyncPlayManager WS handler by name on a mock connection — the
+     * E2E venue (a raw SyncPlayManager, so handlers are not exposed publicly).
+     *
+     * @param array<string, mixed> $payload
+     */
+    private function invokeHandler(string $handler, ConnectionInterface $connection, array $payload): void
+    {
+        $method = new ReflectionMethod($this->manager, $handler);
+        $method->setAccessible(true);
+        $method->invoke($this->manager, $connection, $payload);
+    }
+
+    /**
+     * Did the given mock connection receive at least one frame of $type?
+     */
+    private function connectionReceivedType(string $connectionId, string $type): bool
+    {
+        foreach ($this->getSentMessages($connectionId) as $frame) {
+            if (($frame['type'] ?? null) === $type) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
      * Helper: Assert group member count.
      */
     private function assertGroupMemberCount(string $groupId, int $expected): void

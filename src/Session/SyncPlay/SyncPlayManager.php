@@ -378,6 +378,13 @@ class SyncPlayManager
      * Adds a member to the specified group. If the group requires a password,
      * it must be provided and verified before joining succeeds.
      *
+     * S289 — the join is IDEMPOTENT for an identity that is already a member: it
+     * refreshes that member's display name, re-points its connection to the calling
+     * socket, and returns success instead of an "already a member" error. One human
+     * therefore never becomes two members — across the REST and WS transports, on a
+     * reconnect, or across two tabs of one account (the most-recent connection
+     * receives broadcasts).
+     *
      * @param string $groupId The group ID to join (format: sp_*)
      * @param string $memberId Unique identifier for the member joining
      * @param string $memberName Display name for the member
@@ -406,16 +413,47 @@ class SyncPlayManager
             return ['success' => false, 'error' => 'Group not found'];
         }
 
+        if ($group->hasMember($memberId)) {
+            // S289 — a member whose (JWT-subject) identity is ALREADY in this group
+            // re-joins IDEMPOTENTLY instead of erroring: keep the single member,
+            // refresh the display name, and re-point that member's connection to the
+            // CURRENT socket. This is what makes the same human over REST and WS, a
+            // reconnect (S283 backoff opens a fresh connection id), or two tabs of one
+            // account all collapse to EXACTLY ONE member — and, because
+            // broadcastToGroup() resolves the one stored connection_id per member, the
+            // most-recent connection is the one that receives broadcasts. No re-entry
+            // password/capacity gate applies: they are already a member.
+            if ($connectionId !== null) {
+                $previousConn = $group->getMember($memberId)['connection_id'] ?? null;
+                if (is_string($previousConn) && $previousConn !== $connectionId) {
+                    unset($this->connectionToMember[$previousConn]);
+                }
+                $this->connectionToMember[$connectionId] = $memberId;
+            }
+
+            $updates = ['name' => $memberName, 'is_active' => true];
+            if ($connectionId !== null) {
+                $updates['connection_id'] = $connectionId;
+            }
+            $group->updateMember($memberId, $updates);
+
+            $this->memberToGroup[$memberId] = $groupId;
+
+            $this->publishSnapshot($groupId);
+
+            return [
+                'success' => true,
+                'group' => $group->getState(),
+            ];
+        }
+
+        // New member: verify entry conditions before admitting.
         if ($group->hasPassword() && !$group->verifyPassword($password ?? '')) {
             return ['success' => false, 'error' => 'Invalid password'];
         }
 
         if ($group->getMemberCount() >= GroupState::MAX_MEMBERS) {
             return ['success' => false, 'error' => 'Group is full'];
-        }
-
-        if ($group->hasMember($memberId)) {
-            return ['success' => false, 'error' => 'Already a member of this group'];
         }
 
         $memberData = [
@@ -817,16 +855,18 @@ class SyncPlayManager
      * the sender's name and timestamp.
      *
      * @param ConnectionInterface $connection The WebSocket connection
-     * @param array<string, mixed> $payload Payload containing member_id, message
+     * @param array<string, mixed> $payload Payload containing message (member_id is IGNORED — S289)
      * @return void
      *
      * @fires Messages::TYPE_CHAT_MESSAGE Broadcast to group members (excluding sender)
      */
     private function handleChatMessage(ConnectionInterface $connection, array $payload): void
     {
-        $memberId = self::stringFromMixed($payload['member_id'] ?? null);
-        if ($memberId === '') {
-            $this->sendError($connection, 'NOT_IN_GROUP', 'You are not in a group');
+        // S289 — identity is the authenticated JWT subject, never the payload's
+        // self-asserted member_id (mirrors handleGroupCreate()/handleGroupJoin()).
+        $memberId = $connection->getUserId();
+        if ($memberId === null) {
+            $this->sendError($connection, 'NOT_AUTHENTICATED', 'Authentication required');
             return;
         }
         $groupId = $this->memberToGroup[$memberId] ?? null;
@@ -881,15 +921,16 @@ class SyncPlayManager
      * that a member is composing a message.
      *
      * @param ConnectionInterface $connection The WebSocket connection
-     * @param array<string, mixed> $payload Payload containing member_id, is_typing
+     * @param array<string, mixed> $payload Payload containing is_typing (member_id is IGNORED — S289)
      * @return void
      *
      * @fires Messages::TYPE_CHAT_TYPING Broadcast to group members (excluding sender)
      */
     private function handleChatTyping(ConnectionInterface $connection, array $payload): void
     {
-        $memberId = self::stringFromMixed($payload['member_id'] ?? null);
-        if ($memberId === '') {
+        // S289 — server-derived identity; payload member_id is not trusted.
+        $memberId = $connection->getUserId();
+        if ($memberId === null) {
             return;
         }
         $groupId = $this->memberToGroup[$memberId] ?? null;
@@ -980,17 +1021,17 @@ class SyncPlayManager
      * current playback state so the member can synchronize their position.
      *
      * @param ConnectionInterface $connection The WebSocket connection
-     * @param array<string, mixed> $payload Payload containing member_id
+     * @param array<string, mixed> $payload Payload (member_id is IGNORED — S289)
      * @return void
      *
      * @fires Messages::TYPE_PLAYBACK_SYNC Sent directly to the requesting member
      */
     private function handlePlaybackSync(ConnectionInterface $connection, array $payload): void
     {
-        $memberId = self::stringFromMixed($payload['member_id'] ?? null);
-        if ($memberId === '') {
-            $memberId = $connection->getUserId();
-        }
+        // S289 — server-derived identity only. A payload member_id no longer
+        // overrides the authenticated subject, so a spoofed id cannot request a sync
+        // for a group the caller is not actually in.
+        $memberId = $connection->getUserId();
         if ($memberId === null) {
             $this->sendError($connection, 'NOT_AUTHENTICATED', 'Authentication required');
             return;
@@ -1028,17 +1069,15 @@ class SyncPlayManager
      * information for accurate playback position calculation.
      *
      * @param ConnectionInterface $connection The WebSocket connection
-     * @param array<string, mixed> $payload Payload containing member_id
+     * @param array<string, mixed> $payload Payload (member_id is IGNORED — S289)
      * @return void
      *
      * @see TimeSync::getStatus() For the structure of the time sync status
      */
     private function handleTimeSync(ConnectionInterface $connection, array $payload): void
     {
-        $memberId = self::stringFromMixed($payload['member_id'] ?? null);
-        if ($memberId === '') {
-            $memberId = $connection->getUserId();
-        }
+        // S289 — server-derived identity only; payload member_id is not trusted.
+        $memberId = $connection->getUserId();
         if ($memberId === null) {
             $this->sendError($connection, 'NOT_AUTHENTICATED', 'Authentication required');
             return;
@@ -1170,7 +1209,7 @@ class SyncPlayManager
      * Handle group leave request via WebSocket.
      *
      * @param ConnectionInterface $connection The WebSocket connection
-     * @param array<string, mixed> $payload Payload containing member_id
+     * @param array<string, mixed> $payload Payload (member_id is IGNORED — S289)
      * @return void
      *
      * @fires Messages::TYPE_INFO Sent on success
@@ -1178,9 +1217,10 @@ class SyncPlayManager
      */
     private function handleGroupLeave(ConnectionInterface $connection, array $payload): void
     {
-        $memberId = self::stringFromMixed($payload['member_id'] ?? null);
-        if ($memberId === '') {
-            $this->sendError($connection, 'LEAVE_FAILED', 'Not in any group');
+        // S289 — server-derived identity; payload member_id is not trusted.
+        $memberId = $connection->getUserId();
+        if ($memberId === null) {
+            $this->sendError($connection, 'NOT_AUTHENTICATED', 'Authentication required');
             return;
         }
 

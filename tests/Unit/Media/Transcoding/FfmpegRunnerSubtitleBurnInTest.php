@@ -30,7 +30,10 @@ final class FfmpegRunnerSubtitleBurnInTest extends TestCase
     {
         parent::setUp();
         HwaccelRegistry::reset();
-        $this->vttPath = tempnam(sys_get_temp_dir(), 'phlix_sub_') . '.vtt';
+        // S439: tempnam()'s own file is orphaned by the '.vtt' suffix — drop it.
+        $rawPath = tempnam(sys_get_temp_dir(), 'phlix_sub_');
+        @unlink($rawPath);
+        $this->vttPath = $rawPath . '.vtt';
         file_put_contents($this->vttPath, "WEBVTT\n\n00:00:00.000 --> 00:00:02.000\nHello\n");
     }
 

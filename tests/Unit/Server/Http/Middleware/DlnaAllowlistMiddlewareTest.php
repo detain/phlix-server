@@ -10,6 +10,7 @@ use Phlix\Server\Http\Middleware\DlnaAllowlistMiddleware;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
 use Phlix\Server\Http\Router;
+use Phlix\Plugins\Util\RecursiveDelete;
 use PHPUnit\Framework\TestCase;
 use Workerman\MySQL\Connection;
 
@@ -29,6 +30,9 @@ use Workerman\MySQL\Connection;
  */
 final class DlnaAllowlistMiddlewareTest extends TestCase
 {
+    /** @var list<string> minted config roots removed in tearDown (S439 zero-residue). */
+    private array $mintedConfigRoots = [];
+
     protected function setUp(): void
     {
         parent::setUp();
@@ -38,6 +42,10 @@ final class DlnaAllowlistMiddlewareTest extends TestCase
     protected function tearDown(): void
     {
         EffectiveConfig::reset();
+        foreach ($this->mintedConfigRoots as $root) {
+            RecursiveDelete::remove($root);
+        }
+        $this->mintedConfigRoots = [];
         parent::tearDown();
     }
 
@@ -445,6 +453,7 @@ final class DlnaAllowlistMiddlewareTest extends TestCase
     {
         $dir = sys_get_temp_dir() . '/phlix_dlna_' . uniqid('', true) . '/config';
         mkdir($dir, 0o777, true);
+        $this->mintedConfigRoots[] = dirname($dir);
         file_put_contents($dir . '/dlna.php', '<?php return ' . var_export($dlna, true) . ";\n");
 
         $db = $this->createMock(Connection::class);

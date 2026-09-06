@@ -7,6 +7,7 @@ namespace Phlix\Tests\Unit\Dlna;
 use PHPUnit\Framework\TestCase;
 use Phlix\Config\EffectiveConfig;
 use Phlix\Dlna\SsdpAdvertiser;
+use Phlix\Plugins\Util\RecursiveDelete;
 use ReflectionProperty;
 use Workerman\Timer;
 use Workerman\Worker;
@@ -48,6 +49,8 @@ use Workerman\Worker;
  */
 final class DlnaEnabledGateTest extends TestCase
 {
+    /** @var list<string> minted config roots removed in tearDown (S439 zero-residue). */
+    private array $mintedConfigRoots = [];
     /** @var array<int, Worker> */
     private array $savedWorkers = [];
 
@@ -62,6 +65,10 @@ final class DlnaEnabledGateTest extends TestCase
     {
         $this->restoreWorkermanRuntime();
         EffectiveConfig::reset();
+        foreach ($this->mintedConfigRoots as $root) {
+            RecursiveDelete::remove($root);
+        }
+        $this->mintedConfigRoots = [];
         parent::tearDown();
     }
 
@@ -123,6 +130,7 @@ final class DlnaEnabledGateTest extends TestCase
     {
         $dir = sys_get_temp_dir() . '/phlix_dlna_' . uniqid('', true) . '/config';
         mkdir($dir, 0o777, true);
+        $this->mintedConfigRoots[] = dirname($dir);
         file_put_contents($dir . '/dlna.php', '<?php return ' . var_export($dlna, true) . ";\n");
         EffectiveConfig::bootstrap($this->fakeSettingsDb($overrides), null, $dir);
     }

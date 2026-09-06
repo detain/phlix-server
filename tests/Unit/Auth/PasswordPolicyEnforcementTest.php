@@ -43,6 +43,19 @@ use Phlix\Server\Http\Request;
  */
 class PasswordPolicyEnforcementTest extends TestCase
 {
+    /** @var list<string> log files minted by silentLogger(), removed in tearDown(). */
+    private array $mintedLogPaths = [];
+
+    protected function tearDown(): void
+    {
+        parent::tearDown();
+        // S439: sweep every stream path minted by silentLogger().
+        foreach ($this->mintedLogPaths as $path) {
+            @unlink($path);
+        }
+        $this->mintedLogPaths = [];
+    }
+
     /**
      * A password that is fine under the shipped default (8) but violates the
      * raised minimum (20) these tests configure.
@@ -63,11 +76,14 @@ class PasswordPolicyEnforcementTest extends TestCase
 
     private function silentLogger(): StructuredLogger
     {
+        $path = sys_get_temp_dir() . '/phlix_pwpolicy_' . uniqid('', true) . '.log';
+        $this->mintedLogPaths[] = $path;
+
         return new StructuredLogger('test', [
             'handlers' => [
                 'stream' => [
                     'type' => 'stream',
-                    'path' => sys_get_temp_dir() . '/phlix_pwpolicy_' . uniqid('', true) . '.log',
+                    'path' => $path,
                     'level' => 'debug',
                 ],
             ],

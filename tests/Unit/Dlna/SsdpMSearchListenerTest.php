@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Phlix\Tests\Unit\Dlna;
 
+use Phlix\Plugins\Util\RecursiveDelete;
 use PHPUnit\Framework\TestCase;
 use Phlix\Config\EffectiveConfig;
 use Phlix\Dlna\SsdpAdvertiser;
@@ -56,6 +57,9 @@ use Workerman\Worker;
  */
 final class SsdpMSearchListenerTest extends TestCase
 {
+    /** @var list<string> minted config roots removed in tearDown (S439 zero-residue). */
+    private array $mintedConfigRoots = [];
+
     /** How long a loop may run before it is stopped and the test decides. */
     private const LOOP_BUDGET_SECONDS = 3.0;
 
@@ -117,6 +121,10 @@ final class SsdpMSearchListenerTest extends TestCase
         $workers->setValue(null, $this->savedWorkers);
 
         EffectiveConfig::reset();
+        foreach ($this->mintedConfigRoots as $root) {
+            RecursiveDelete::remove($root);
+        }
+        $this->mintedConfigRoots = [];
         parent::tearDown();
     }
 
@@ -772,6 +780,7 @@ final class SsdpMSearchListenerTest extends TestCase
     {
         $dir = sys_get_temp_dir() . '/phlix_s51_' . uniqid('', true) . '/config';
         mkdir($dir, 0o777, true);
+        $this->mintedConfigRoots[] = dirname($dir);
         file_put_contents($dir . '/dlna.php', '<?php return ' . var_export($dlna, true) . ";\n");
         EffectiveConfig::bootstrap(null, null, $dir);
     }

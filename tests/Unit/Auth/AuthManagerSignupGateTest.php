@@ -48,16 +48,27 @@ final class AuthManagerSignupGateTest extends TestCase
     protected function tearDown(): void
     {
         unset($_SERVER['REMOTE_ADDR']);
+        // S439: every silentLogger() mints a fresh stream path — sweep them all.
+        foreach ($this->mintedLogPaths as $path) {
+            @unlink($path);
+        }
+        $this->mintedLogPaths = [];
         parent::tearDown();
     }
 
+    /** @var list<string> log files minted by silentLogger(), removed in tearDown(). */
+    private array $mintedLogPaths = [];
+
     private function silentLogger(): StructuredLogger
     {
+        $path = sys_get_temp_dir() . '/phlix_signupgate_' . uniqid('', true) . '.log';
+        $this->mintedLogPaths[] = $path;
+
         return new StructuredLogger('test', [
             'handlers' => [
                 'stream' => [
                     'type' => 'stream',
-                    'path' => sys_get_temp_dir() . '/phlix_signupgate_' . uniqid('', true) . '.log',
+                    'path' => $path,
                     'level' => 'debug',
                 ],
             ],

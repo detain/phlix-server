@@ -13,6 +13,7 @@ use Phlix\Server\Core\Application;
 use Phlix\Server\Http\Middleware\DlnaAllowlistMiddleware;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Router;
+use Phlix\Plugins\Util\RecursiveDelete;
 use PHPUnit\Framework\TestCase;
 use Psr\Container\ContainerInterface;
 use Psr\Container\NotFoundExceptionInterface;
@@ -61,6 +62,8 @@ final class DlnaStreamRouteTest extends TestCase
 
     private string $tmp = '';
     private string $mediaPath = '';
+    /** @var list<string> minted config roots removed in tearDown (S439 zero-residue). */
+    private array $mintedConfigRoots = [];
 
     protected function setUp(): void
     {
@@ -78,6 +81,10 @@ final class DlnaStreamRouteTest extends TestCase
     protected function tearDown(): void
     {
         EffectiveConfig::reset();
+        foreach ($this->mintedConfigRoots as $root) {
+            RecursiveDelete::remove($root);
+        }
+        $this->mintedConfigRoots = [];
         if (is_file($this->mediaPath)) {
             unlink($this->mediaPath);
         }
@@ -99,6 +106,7 @@ final class DlnaStreamRouteTest extends TestCase
     {
         $dir = sys_get_temp_dir() . '/phlix_dlnaroutecfg_' . uniqid('', true) . '/config';
         mkdir($dir, 0o777, true);
+        $this->mintedConfigRoots[] = dirname($dir);
         file_put_contents($dir . '/dlna.php', '<?php return ' . var_export($dlna, true) . ";\n");
 
         $db = $this->createMock(Connection::class);

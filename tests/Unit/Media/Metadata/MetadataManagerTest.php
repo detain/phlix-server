@@ -195,7 +195,11 @@ class MetadataManagerTest extends TestCase
      */
     public function testDefaultProviderPriorityTracksArbitraryConfigFileContent(): void
     {
-        $fixturePath = tempnam(sys_get_temp_dir(), 'phlix_metadata_config_test_') . '.php';
+        // S439 zero-residue: tempnam's original file is dropped before the
+        // '.php' rename, or the orphan would outlive the fixture's own cleanup.
+        $rawFixture = tempnam(sys_get_temp_dir(), 'phlix_metadata_config_test_');
+        @unlink($rawFixture);
+        $fixturePath = $rawFixture . '.php';
         $fixtureContent = <<<'PHP'
 <?php
 return [

@@ -38,19 +38,30 @@ final class AuthManagerProviderRateLimitTest extends TestCase
         AuthManager::resetRateLimitStore();
     }
 
+    /** @var list<string> log files minted by silentLogger(), removed in tearDown(). */
+    private array $mintedLogPaths = [];
+
     protected function tearDown(): void
     {
         parent::tearDown();
         AuthManager::resetRateLimitStore();
+        // S439: sweep every stream path minted by silentLogger().
+        foreach ($this->mintedLogPaths as $path) {
+            @unlink($path);
+        }
+        $this->mintedLogPaths = [];
     }
 
     private function silentLogger(): StructuredLogger
     {
+        $path = sys_get_temp_dir() . '/phlix_provider_ratelimit_' . uniqid() . '.log';
+        $this->mintedLogPaths[] = $path;
+
         return new StructuredLogger('test', [
             'handlers' => [
                 'stream' => [
                     'type' => 'stream',
-                    'path' => sys_get_temp_dir() . '/phlix_provider_ratelimit_' . uniqid() . '.log',
+                    'path' => $path,
                     'level' => 'debug',
                 ],
             ],

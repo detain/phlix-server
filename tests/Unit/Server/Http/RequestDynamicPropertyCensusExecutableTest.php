@@ -179,8 +179,11 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * Re-pinned 1772→1773 by S438: adds the real-DB playback-finish integration
      * test; its request() helper assigns four declared Request members, so the
      * declared-write denominator moves with it in this same commit.
+     * Re-pinned 1773→1775 by S439: the zero-residue census path adds two first-party
+     * files (ZeroResidueCensusExtension, ZeroResidueCensusTest); neither names
+     * Request, so every other pin here stays untouched — the S433/S434 pattern again.
      */
-    private const EXPECTED_PHP_FILES = 1773;
+    private const EXPECTED_PHP_FILES = 1775;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

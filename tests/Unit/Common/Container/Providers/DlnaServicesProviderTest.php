@@ -12,6 +12,7 @@ use Phlix\Dlna\ContentDirectory;
 use Phlix\Dlna\DlnaServer;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Streaming\HlsStreamer;
+use Phlix\Plugins\Util\RecursiveDelete;
 use PHPUnit\Framework\TestCase;
 use Psr\Container\ContainerInterface;
 
@@ -34,6 +35,9 @@ use Psr\Container\ContainerInterface;
  */
 final class DlnaServicesProviderTest extends TestCase
 {
+    /** @var list<string> minted config roots removed in tearDown (S439 zero-residue). */
+    private array $mintedConfigRoots = [];
+
     protected function setUp(): void
     {
         parent::setUp();
@@ -43,6 +47,10 @@ final class DlnaServicesProviderTest extends TestCase
     protected function tearDown(): void
     {
         EffectiveConfig::reset();
+        foreach ($this->mintedConfigRoots as $root) {
+            RecursiveDelete::remove($root);
+        }
+        $this->mintedConfigRoots = [];
         parent::tearDown();
     }
 
@@ -55,6 +63,7 @@ final class DlnaServicesProviderTest extends TestCase
     {
         $dir = sys_get_temp_dir() . '/phlix_dlnaprov_' . uniqid('', true) . '/config';
         mkdir($dir, 0o777, true);
+        $this->mintedConfigRoots[] = dirname($dir);
         file_put_contents($dir . '/dlna.php', '<?php return ' . var_export($dlnaConfig, true) . ";\n");
 
         $db = $this->createMock(\Workerman\MySQL\Connection::class);

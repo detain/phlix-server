@@ -120,7 +120,12 @@ class BookScannerTest extends TestCase
         // Should have page_count
         $this->assertArrayHasKey('page_count', $metadata);
 
-        // Clean up
+        // Clean up — S439 zero-residue: harvestCbz() mints the extracted cover
+        // directly under the OS temp dir (BookScanner::harvest*: `phlix_cover_<uniqid>.<ext>`)
+        // and hands it back in metadata['cover_path']; the test owned that removal.
+        if (isset($metadata['cover_path']) && is_string($metadata['cover_path'])) {
+            @unlink($metadata['cover_path']);
+        }
         unlink($cbzPath);
         rmdir($tempDir);
     }

@@ -9,6 +9,7 @@ use Phlix\Config\EffectiveConfig;
 use Phlix\Server\Http\Middleware\CastingEnabledMiddleware;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
+use Phlix\Plugins\Util\RecursiveDelete;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -39,6 +40,9 @@ use PHPUnit\Framework\TestCase;
  */
 final class CastingEnabledMiddlewareTest extends TestCase
 {
+    /** @var list<string> minted config roots removed in tearDown (S439 zero-residue). */
+    private array $mintedConfigRoots = [];
+
     protected function setUp(): void
     {
         parent::setUp();
@@ -48,6 +52,10 @@ final class CastingEnabledMiddlewareTest extends TestCase
     protected function tearDown(): void
     {
         EffectiveConfig::reset();
+        foreach ($this->mintedConfigRoots as $root) {
+            RecursiveDelete::remove($root);
+        }
+        $this->mintedConfigRoots = [];
         parent::tearDown();
     }
 
@@ -259,6 +267,7 @@ final class CastingEnabledMiddlewareTest extends TestCase
     {
         $dir = sys_get_temp_dir() . '/phlix_casting_' . uniqid('', true) . '/config';
         mkdir($dir, 0o777, true);
+        $this->mintedConfigRoots[] = dirname($dir);
         file_put_contents($dir . '/casting.php', '<?php return ' . var_export($casting, true) . ";\n");
 
         $db = $this->createMock(\Workerman\MySQL\Connection::class);

@@ -340,8 +340,14 @@ final class MediaServicesProvider implements ServiceProviderInterface
             // plus the `$this->ratingGate !== null && !isAllowed(...)` guard)
             // were skipped ENTIRELY — a rating-capped profile could favorite,
             // rate, like and mark-watched items above its cap.
+            // `playbackController` (S438 ruling: markWatched drives the finalize
+            // path so a marked-watched item leaves Continue Watching) is named
+            // for the identical reason — left implicit it would arrive null
+            // and the finalize would silently never run, the exact silent-null
+            // landmine this provider's comments keep recording.
             \Phlix\Server\Http\Controllers\MediaUserDataController::class => autowire()
-                ->constructorParameter('ratingGate', get(RatingGate::class)),
+                ->constructorParameter('ratingGate', get(RatingGate::class))
+                ->constructorParameter('playbackController', get(\Phlix\Session\PlaybackController::class)),
 
             // Book reading progress tracking (SV-3.2). Autowires with
             // Workerman MySQL Connection (globally registered in CoreServicesProvider).

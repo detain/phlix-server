@@ -17,6 +17,7 @@ use Phlix\Media\Library\RatingGate;
 use Phlix\Media\UserItemDataRepository;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
+use Phlix\Session\PlaybackController;
 
 /**
  * Per-user favorites + ratings endpoints for media items (E10).
@@ -47,18 +48,31 @@ class MediaUserDataController
     private ?RatingGate $ratingGate;
 
     /**
-     * @param ItemRepository         $itemRepository Resolves/validates the media item.
-     * @param UserItemDataRepository $userItemData   Per-user favorite/rating store.
-     * @param RatingGate|null        $ratingGate     Parental-control access gate.
+     * S438 ruling (finish-S30): the detail-page "mark watched" drives the finalize
+     * path so the Continue Watching rail — whose only watched/in-progress signal is
+     * `playback_state` — converges. Null only in legacy/test contexts that never read
+     * the rail; production wires it explicitly via `->constructorParameter()` in
+     * MediaServicesProvider, because PHP-DI `autowire()` does NOT resolve optional
+     * constructor params (same documented pitfall as `$ratingGate` above).
+     */
+    private ?PlaybackController $playbackController;
+
+    /**
+     * @param ItemRepository          $itemRepository     Resolves/validates the media item.
+     * @param UserItemDataRepository  $userItemData       Per-user favorite/rating store.
+     * @param RatingGate|null         $ratingGate         Parental-control access gate.
+     * @param PlaybackController|null $playbackController Finalize path for watched-completion (S438).
      */
     public function __construct(
         ItemRepository $itemRepository,
         UserItemDataRepository $userItemData,
-        ?RatingGate $ratingGate = null
+        ?RatingGate $ratingGate = null,
+        ?PlaybackController $playbackController = null
     ) {
         $this->itemRepository = $itemRepository;
         $this->userItemData = $userItemData;
         $this->ratingGate = $ratingGate;
+        $this->playbackController = $playbackController;
     }
 
     /**
@@ -213,6 +227,21 @@ class MediaUserDataController
     /**
      * Mark a media item as watched for the authenticated user (Step 11.6).
      *
+     * S438 ruling (finish-S30, closing AC1's either/or): the watched flag alone does
+     * NOT clear the Continue Watching rail, because the rail reads `playback_state`
+     * exclusively — the estate rule WebPortalRouter quotes outright: "The watched /
+     * in-progress signal is `playback_state` (never `user_item_data.watched`)". So of
+     * the two branches S30 recorded (finalize-from-markWatched vs a
+     * `LEFT JOIN user_item_data … AND uid.watched = 0` in the rail SQL), the DESIGN
+     * is finalize: every `playback_state` row this user holds for the item converges
+     * to `stopped`/position 0 via
+     * {@see PlaybackController::finalizeWatchedForUser()}, the same mechanism the
+     * session-side finish signal (`POST /sessions/{id}/complete`) already proves.
+     * The JOIN branch was rejected: a second watched-source-of-truth the rail was
+     * built to ignore, no stats finalization, stale resume rows, per-render join cost.
+     * Real-DB proof: `PlaybackFinishIntegrationTest` (removing the finalize call
+     * below reddens it by name).
+     *
      * @param array<string, string> $params Route params including 'id'.
      *
      * @api_endpoint POST /api/v1/media/{id}/watched
@@ -226,12 +255,19 @@ class MediaUserDataController
         [$userId, $itemId, $profileId] = $ctx;
 
         $this->userItemData->setWatched($userId, $itemId, true, $profileId);
+        $this->playbackController?->finalizeWatchedForUser($userId, $itemId);
 
         return (new Response())->json(['message' => 'Item marked as watched']);
     }
 
     /**
      * Clear the "watched" flag for the authenticated user (Step 11.6).
+     *
+     * Deliberate asymmetry with markWatched (S438 ruling): un-marking cannot resurrect
+     * resume positions the finalize path consumed, and the rail never consulted the
+     * watched flag — so nothing converges back. The item re-enters Continue Watching
+     * only when something genuinely reports progress again, exactly like the
+     * session-side finish signal's one-way semantics.
      *
      * @param array<string, string> $params Route params including 'id'.
      *

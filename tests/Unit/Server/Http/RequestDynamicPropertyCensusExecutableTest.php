@@ -176,8 +176,11 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * the S433/S434/S435 additions, this one DOES name Request (its dispatch helper
      * assigns declared members), so it moves both this denominator and the
      * declared-write count — both re-pinned here in the same commit.
+     * Re-pinned 1772→1773 by S438: adds the real-DB playback-finish integration
+     * test; its request() helper assigns four declared Request members, so the
+     * declared-write denominator moves with it in this same commit.
      */
-    private const EXPECTED_PHP_FILES = 1772;
+    private const EXPECTED_PHP_FILES = 1773;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on
@@ -195,8 +198,11 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * dispatch helper — every one on a DECLARED property, the S427 license intact).
      * Re-pinned 949→952 by S437: HealthRoutesAuthGuardTest's request() helper
      * assigns three declared Request members directly (method/path/remoteIp).
+     * Re-pinned 952→956 by S438: PlaybackFinishIntegrationTest's postRequest()
+     * helper assigns four declared Request members directly
+     * (method/path/userId/body) — S427 license intact.
      */
-    private const EXPECTED_DECLARED_WRITES = 952;
+    private const EXPECTED_DECLARED_WRITES = 956;
 
     /** Census numbers 3 and 4 — the posture claims; never re-pin, fix source. */
     private const EXPECTED_DYNAMIC_READS = 0;

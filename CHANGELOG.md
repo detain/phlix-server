@@ -79,6 +79,16 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Changed
 
+- **`markWatched` now drives the playback finalize path (S438 — the recorded branch of S30's
+  either/or).** The detail-page "Mark watched" wrote only `user_item_data.watched`, while the
+  Continue Watching rail reads `playback_state` exclusively (the estate rule), so the item stayed
+  on the rail. `MediaUserDataController::markWatched()` now converges every `playback_state` row
+  the user holds for the item to `stopped`/position 0 via
+  `PlaybackController::finalizeWatchedForUser()` — the same finalize mechanism the session-side
+  finish signal ships; no rail JOIN on `user_item_data`, no schema change. Pinned by three
+  real-MySQL tests (`tests/Integration/Session/PlaybackFinishIntegrationTest.php`): the verdict's
+  two finish tests plus the ruling pin; each reddens by name under planted drift.
+
 - **`getCollectionMembers()` stops selecting non-existent `media_items` artwork columns (S436).**
   The projection carried `m.poster_url`/`m.backdrop_url` — columns that do not exist on `media_items`
   (they live on `media_collections`, added by migration 064) — so every call raised MySQL 1054. Artwork

@@ -122,7 +122,12 @@ final class CollectionService
      * call per collection per sync.
      *
      * @param int                       $collectionId    TMDB collection ID
-     * @param array<string, mixed>      $tmdbCollection  Parsed TMDB /collection/{id} payload
+     * @param array{name: string, overview: string|null, poster_path: string|null,
+     *     backdrop_path: string|null, parts: array<int, array{id: int, title: string,
+     *     overview: string|null, poster_path: string|null, backdrop_path: string|null,
+     *     release_date: string, vote_average: float}>} $tmdbCollection
+     *     Parsed TMDB /collection/{id} payload — the exact shape
+     *     {@see \Phlix\Media\Metadata\TmdbProvider::getCollection()} returns
      * @return array{id: int, tmdb_collection_id: int, name: string, overview: string|null,
      *     poster_url: string|null, backdrop_url: string|null}|null Persisted collection or null
      */

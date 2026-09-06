@@ -420,10 +420,12 @@ class DashboardService
      *     event_type: string,
      *     category: string,
      *     user_id: string,
-     *     username: string|null,
+     *     username: string,
      *     details: array<string, mixed>,
      *     occurred_at: string
-     * }> Playback events
+     * }> Playback events — S220: rows whose user or media item no longer resolves
+     * are hidden (never a null username / null media_title), mirroring the S14
+     * orphan guard on the Top Users / Top Media cards.
      */
     private function getRecentPlaybackEvents(int $limit): array
     {
@@ -450,6 +452,17 @@ class DashboardService
         foreach ($rows as $row) {
             $mediaItem = $this->items->findById($this->toString($row['media_item_id']));
             $mediaTitle = is_array($mediaItem) ? $this->toString($mediaItem['name'] ?? null) : null;
+            $username = $this->getUsernameById($this->toString($row['user_id']));
+
+            // S220 — the S14 HIDE decision, finished on this missed surface.
+            // A playback event whose media item or user account has since been
+            // deleted must not surface as a blank-identity activity row: skip it
+            // rather than emit a null username or a null media_title, exactly as
+            // getTopUsers()/getTopMedia() skip their orphaned rows (S14).
+            if ($username === null || $mediaTitle === null) {
+                continue;
+            }
+
             $durationSecs = isset($row['duration_seconds'])
                 && is_numeric($row['duration_seconds']) ? (int)$row['duration_seconds'] : 0;
             $completed = isset($row['completed']) && $row['completed'];
@@ -459,7 +472,7 @@ class DashboardService
                 'event_type' => 'playback_completed',
                 'category' => 'playback',
                 'user_id' => $this->toString($row['user_id']),
-                'username' => $this->getUsernameById($this->toString($row['user_id'])),
+                'username' => $username,
                 'details' => [
                     'media_title' => $mediaTitle,
                     'duration_seconds' => $durationSecs,

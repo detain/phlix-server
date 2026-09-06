@@ -313,8 +313,15 @@ final class IntegrationDbGuardAdoptionTest extends TestCase
      * the finish signal's AC demands a SEEDED ROW LEAVING THE RAIL — mock-only
      * coverage asserted "the mock's markAsWatched was called", never that real
      * playback_state rows converged; only live MySQL can falsify that.
+     *
+     * 50 since S220's
+     * `tests/Integration/Admin/BlankRowHideRealDbIntegrationTest.php`:
+     * the S14 HIDE decision on the two missed surfaces lives in SQL shape
+     * (LEFT JOIN + COALESCE → INNER JOIN) and in hydrate-to-null across tables —
+     * a canned-row double cannot exhibit "the row was deleted after the event",
+     * so both surfaces are pinned against real seeded, really-deleted MySQL rows.
      */
-    private const EXPECTED_ADOPTERS = 49;
+    private const EXPECTED_ADOPTERS = 50;
 
     /**
      * Bare function calls that are a MySQL reachability probe under any

@@ -349,6 +349,14 @@ run and can never reach it (AC2a / KNOWN LIMIT 3 closed), and a
   `live` ← `AuthProviderRegistry::hasProvider()`, `enabled` ← `AuthProviderBootstrapper::isEnabled()`.
   Pinned by `tests/Unit/Auth/AuthProviderBadgeSignalsTest.php`.
 
+- **S14 HIDE finished on the two missed blank-row surfaces (S220).** `DashboardService::getRecentPlaybackEvents()`
+  emitted `username => null` / `details.media_title => null` activity rows after user/item deletion, and
+  `NewsletterGenerator::getTopMedia()` rendered deleted items as the literal `'Unknown'` row (`LEFT JOIN` +
+  `COALESCE`) — the exact placeholder S14's decision rejected. Both now hide orphaned rows (null-skip / INNER
+  JOIN), matching the S14-fixed Top Users / Top Media cards. Pinned against real MySQL by
+  `tests/Integration/Admin/BlankRowHideRealDbIntegrationTest.php`; sibling auth/library feeds' nullable
+  usernames are enumerated out of scope.
+
 - **Route parameters are percent-decoded ONCE at the routing boundary (S435).** The Router
   compiled `{param}` to `(?P<$1>[^/]+)` and handed handlers the RAW encoded segment, so
   `GET /api/v1/music/albums/Abbey%20Road` looked up an album literally named `Abbey%20Road` —

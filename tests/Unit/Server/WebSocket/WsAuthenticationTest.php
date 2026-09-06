@@ -534,6 +534,44 @@ class WsAuthenticationTest extends TestCase
         $this->assertSame('user-b', $this->frameData($ts[0])['member_id'] ?? null, 'reply carries the server id');
     }
 
+    // -----------------------------------------------------------------
+    // S291 — handlePlaybackSync's docblock once claimed the frame goes
+    // "directly to the requesting member", but the body broadcasts it to the
+    // whole group via broadcastToGroup(). This case pins the REAL semantics:
+    // a sync requested by user-b must ALSO reach the host (user-a). If the send
+    // is ever narrowed back to a reply aimed only at the caller, the host frame
+    // disappears and this test reddens.
+    // -----------------------------------------------------------------
+
+    public function testPlaybackSyncBroadcastsToWholeGroupNotJustRequester(): void
+    {
+        $manager = $this->createTestableSyncPlayManager();
+        [$a, $b] = $this->seedTwoMemberRoom($manager);
+
+        $manager->publicHandleMessage($b, [
+            'type' => Messages::TYPE_PLAYBACK_SYNC,
+            'member_id' => 'user-b',
+        ]);
+
+        // The requester receives it...
+        $this->assertNotEmpty(
+            $this->framesOfType($b, Messages::TYPE_PLAYBACK_SYNC),
+            'the requesting member must receive the sync broadcast'
+        );
+        // ...AND so does the *other* member. This is the assertion that a
+        // revert to a direct reply (send only to $connection) would break.
+        $this->assertNotEmpty(
+            $this->framesOfType($a, Messages::TYPE_PLAYBACK_SYNC),
+            'S291: playback_sync is a group broadcast — a non-requesting member (the host) '
+                . 'must also receive it; if this reddens, the send was narrowed to a direct reply'
+        );
+        $this->assertSame(
+            'user-a',
+            $this->frameData($this->framesOfType($a, Messages::TYPE_PLAYBACK_SYNC)[0])['member_id'] ?? null,
+            'the host frame is stamped with the host id, matching the requester response'
+        );
+    }
+
     /**
      * Create a room owned by user-a (conn-a) with user-b (conn-b) joined, both
      * registered in the connection pool so broadcasts resolve.

@@ -1017,14 +1017,21 @@ class SyncPlayManager
     /**
      * Handle periodic playback sync request from a group member.
      *
-     * Any member can request a playback sync. The host responds with the
-     * current playback state so the member can synchronize their position.
+     * Any member can request a playback sync. The group's current playback
+     * state is answered so the requester (and every other member) can align
+     * their position.
+     *
+     * S291 — the docblock previously promised this frame went "directly to the
+     * requesting member", but the body has always broadcast it to the WHOLE
+     * group via broadcastToGroup() (no exclude list). The wording is now pinned
+     * to that behaviour; WsAuthenticationTest carries a case that reddens if the
+     * send is ever narrowed back to a reply aimed only at the caller.
      *
      * @param ConnectionInterface $connection The WebSocket connection
      * @param array<string, mixed> $payload Payload (member_id is IGNORED — S289)
      * @return void
      *
-     * @fires Messages::TYPE_PLAYBACK_SYNC Sent directly to the requesting member
+     * @fires Messages::TYPE_PLAYBACK_SYNC Broadcast to every group member (not only the requester)
      */
     private function handlePlaybackSync(ConnectionInterface $connection, array $payload): void
     {

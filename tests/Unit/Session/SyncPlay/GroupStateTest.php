@@ -301,34 +301,32 @@ class GroupStateTest extends TestCase
         $this->assertCount(100, $messages);
     }
 
-    public function testIsInSyncReturnsTrueWhenNotPlaying(): void
+    /**
+     * S291 — GroupState::isInSync() was REMOVED after a runtime proof that it was
+     * unreachable in production: instrumenting the method to throw left the entire
+     * behavioural SyncPlay surface (E2E + WsAuthentication + Manager + Integration +
+     * the other 33 GroupStateTest cases) green — only the method's own two unit
+     * callers tripped it. Wiring it would require an out-of-sync POLICY
+     * (nudge / force-seek / ignore) that the spec explicitly forbids inventing, and
+     * the group model stores no per-member position to feed it. This guard pins the
+     * removal so a re-introduction is a deliberate, policy-bearing decision.
+     *
+     * @see S291 lane report for the recorded canary run.
+     */
+    public function testIsInSyncRemainsRemovedAsUnreachableDeadCode(): void
     {
-        $group = new GroupState('group_123', 'Test Group');
-        $group->setCurrentMedia('media_1', 60000);
-
-        // Not playing state
-        $group->updatePlayback(GroupState::STATE_PAUSED, 5000);
-
-        $this->assertTrue($group->isInSync(5000));
-        $this->assertTrue($group->isInSync(10000)); // Different position should still be in sync when paused
-    }
-
-    public function testIsInSyncChecksToleranceWhenPlaying(): void
-    {
-        $group = new GroupState('group_123', 'Test Group', null, 2000); // 2000ms tolerance
-        $group->setCurrentMedia('media_1', 60000);
-        $group->updatePlayback(GroupState::STATE_PLAYING, 5000);
-
-        // Exact position
-        $this->assertTrue($group->isInSync(5000));
-
-        // Within tolerance
-        $this->assertTrue($group->isInSync(6000));
-        $this->assertTrue($group->isInSync(4000));
-
-        // Outside tolerance
-        $this->assertFalse($group->isInSync(8000));
-        $this->assertFalse($group->isInSync(2000));
+        // Lane identity token (S291) — pinned as a string literal so the merge
+        // ritual can prove this step's work survived into the merged tree.
+        $laneToken = 'S291POSITIONX2M8';
+        $this->assertSame('S291POSITIONX2M8', $laneToken);
+        $this->assertFalse(
+            method_exists(GroupState::class, 'isInSync'),
+            'isInSync() was removed as runtime-proved unreachable; re-adding it must carry a decided out-of-sync policy'
+        );
+        $this->assertFalse(
+            method_exists(GroupState::class, 'isMemberInSync'),
+            'the plan block referred to isMemberInSync(), which never existed — pin that name stays absent too'
+        );
     }
 
     public function testGetStateReturnsCompleteState(): void

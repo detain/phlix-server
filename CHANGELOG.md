@@ -19,6 +19,20 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- **Composer `ClassLoader` autoload leak per plugin disable/uninstall cycle (S166).**
+  `PluginLoader::wire()` and `getEntryInstance()` `require_once`-d each installed plugin's generated
+  `vendor/autoload.php`, which registers a `ClassLoader` on the `spl_autoload` chain, and nothing ever
+  unregistered it. In a resident Workerman/Swoole worker every
+  enable→disable→uninstall cycle appended another dead loader — consulted on every future
+  class-resolution miss and, post-uninstall, pointing at a deleted directory for the life of the
+  worker. The loader now diffs `spl_autoload_functions()` around each require, keeps the exact
+  captured callables per plugin (object identity, never a stringified name) and detaches them on
+  `disable()`/`uninstall()` — including the lazy `getEntryInstance()` path, which leaked without
+  any enable cycle. Re-enable in the same process re-attaches the captured handles, since
+  `require_once` cannot re-fire the already-included file. Pinned by three process-isolated
+  invariant tests driving the real shipped sample theme plugin in
+  `tests/Integration/Plugins/SampleThemeLifecycleTest.php`.
+
 - **Shape-aware UNIQUE-index detection in migrations 096/097 (S161).** Both chain-owned index
   migrations (and `PlaybackStateDeduper::hasUniqueKey()`/`addUniqueKey()`) decided "already
   applied?" by matching `INDEX_NAME` alone, so a same-named NON-UNIQUE index made the file

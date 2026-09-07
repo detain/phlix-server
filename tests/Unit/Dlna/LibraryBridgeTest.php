@@ -20,7 +20,9 @@ use Phlix\Media\Streaming\QualitySelector;
 class LibraryBridgeTest extends TestCase
 {
     private LibraryBridge $bridge;
+    /** @var ItemRepository&MockObject */
     private MockObject $itemRepositoryMock;
+    /** @var HlsStreamer&MockObject */
     private MockObject $hlsStreamerMock;
 
     protected function setUp(): void

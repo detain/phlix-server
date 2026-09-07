@@ -958,6 +958,7 @@ final class MusicApiReadPathIntegrationTest extends TestCase
         $this->assertNotNull($db);
 
         // Batched inserts (100 rows per statement) — never one query per row.
+        /** @var list<mixed> $chunk */
         $chunk = [];
         $flush = function () use ($db, &$chunk): void {
             if (count($chunk) === 0) {
@@ -968,6 +969,7 @@ final class MusicApiReadPathIntegrationTest extends TestCase
                 "INSERT INTO media_items (id, library_id, name, type, path, metadata_json) VALUES " . $values,
                 $chunk,
             );
+            /** @var list<mixed> $chunk */
             $chunk = [];
         };
 
@@ -1053,7 +1055,9 @@ final class MusicApiReadPathIntegrationTest extends TestCase
         $this->assertCount($albums, $albumIds);
 
         // media_items + music_tracks, 50 rows per statement each.
+        /** @var list<mixed> $mediaBatch */
         $mediaBatch = [];
+        /** @var list<mixed> $trackBatch */
         $trackBatch = [];
         $flush = function () use ($db, &$mediaBatch, &$trackBatch): void {
             if (count($mediaBatch) > 0) {
@@ -1062,6 +1066,7 @@ final class MusicApiReadPathIntegrationTest extends TestCase
                     . implode(',', array_fill(0, intdiv(count($mediaBatch), 5), "(?, ?, ?, 'track', ?, ?)")),
                     $mediaBatch,
                 );
+                /** @var list<mixed> $mediaBatch */
                 $mediaBatch = [];
             }
             if (count($trackBatch) > 0) {
@@ -1071,6 +1076,7 @@ final class MusicApiReadPathIntegrationTest extends TestCase
                      VALUES " . implode(',', array_fill(0, intdiv(count($trackBatch), 7), '(?, ?, ?, ?, ?, ?, ?)')),
                     $trackBatch,
                 );
+                /** @var list<mixed> $trackBatch */
                 $trackBatch = [];
             }
         };
@@ -1152,7 +1158,9 @@ final class MusicApiReadPathIntegrationTest extends TestCase
         // The discriminating property: longest album => lowest id.
         $this->assertSame(min($albumIds), $albumIds[0], 'The 125-track album must hold the LOWEST album id');
 
+        /** @var list<mixed> $media */
         $media = [];
+        /** @var list<mixed> $tracks */
         $tracks = [];
         $flush = function () use ($db, &$media, &$tracks): void {
             if (count($media) > 0) {
@@ -1161,6 +1169,7 @@ final class MusicApiReadPathIntegrationTest extends TestCase
                     . implode(',', array_fill(0, intdiv(count($media), 5), "(?, ?, ?, 'track', ?, ?)")),
                     $media,
                 );
+                /** @var list<mixed> $media */
                 $media = [];
             }
             if (count($tracks) > 0) {
@@ -1170,6 +1179,7 @@ final class MusicApiReadPathIntegrationTest extends TestCase
                      VALUES " . implode(',', array_fill(0, intdiv(count($tracks), 7), '(?, ?, ?, ?, ?, ?, ?)')),
                     $tracks,
                 );
+                /** @var list<mixed> $tracks */
                 $tracks = [];
             }
         };

@@ -1,0 +1,79 @@
+<?xml version="1.0"?>
+<psalm
+    errorLevel="5"
+    phpVersion="8.3"
+    resolveFromConfigFile="true"
+    findUnusedCode="false"
+    findUnusedBaselineEntry="false"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xmlns="https://getpsalm.org/schema/config"
+    xsi:schemaLocation="https://getpsalm.org/schema/config vendor/vimeo/psalm/config.xsd"
+>
+    <!-- S306 (server half) — tests/ under Psalm, mirroring the hub's S444 precedent
+         (#274). Psalm 6 admits exactly ONE errorLevel per config file, so tests/
+         gets its own config while psalm.xml stays at errorLevel 5 over src/ and is
+         untouched by this step. CI runs both, each command line pinned verbatim by
+         tests/Unit/Support/StaticAnalysisScopeTest.php.
+
+         errorLevel="5" is a MEASURED choice, not a baseline. Psalm 6.5.0 over
+         tests/ only (branch tree, CI's psalm-job extension set with swoole 6.2.2,
+         no php-ast, matching CI's command incl. show-info=false; 2026-09-07):
+
+             level 1: 4236  level 2: 2532  level 3: 963   level 4: 552
+             level 5:  290  level 6:  252  level 7:  84   level 8:  79
+
+         Same level as the hub tests config and as this repo's src config; the
+         level 4/5 cliff is 262 findings dominated by RedundantCondition x87,
+         TypeDoesNotContainType x50, RedundantCast x38, InternalMethod x26 and
+         NoInterfaceProperties x19 — deliberate runtime guards on decoded/mixed
+         payloads and PHPUnit's counting API, i.e. findings that argue with test
+         idiom rather than report defects — and
+         every one of the 290 level-5 findings was addressed honestly: 232 by
+         fixing test code, 22 by loading the existing drift-tested WaitGroup
+         stub (see STUBS below), 36 by the single justified EXCLUSION below.
+         There is no ignoreErrors block and no baseline: a finding is either
+         fixed or excluded with a written why, never muted. Do NOT add a
+         psalm-baseline.xml or an IssueHandler here.
+
+         EXCLUSION (exactly one, allow-listed by the scope gate):
+         tests/codeception/acceptance/SyncPlayCest.php. Every one of its 36
+         findings is UndefinedMethod on SyncPlayTester assert* calls. That actor
+         is hand-rolled: its assert* methods exist ONLY as @method docblocks.
+         Psalm 6.5.0 honours @method only when the class also declares __call
+         (measured with a minimal repro); PHPStan honours @method unconditionally,
+         which is why phpstan-tests.neon has always been green over this file
+         while psalm reports it. At runtime Codeception assembles actor/module
+         methods from its module container, but the suite is not executable as
+         committed and no CI job runs codecept at all (the SyncPlay E2E job runs
+         tests/E2E/Session/SyncPlay/SyncPlayE2ETest.php via phpunit), so none of
+         the generated symbols exist for any file-based analyzer to resolve.
+         A committed exclusion with this why is honest scope bookkeeping;
+         silently muting 36 findings would not be. If a later lane actually runs
+         Codeception here, delete this exclusion and fix whatever remains.
+
+         STUBS: Swoole\Coroutine\WaitGroup is a USERLAND PHP class the swoole
+         extension compiles into its binary (reflection: isUserDefined()=true,
+         getFileName()=@swoole/library/...), invisible to file-based analysis in
+         CI and locally alike. Instead of a second declaration, psalm loads the
+         single source of truth the phpstan side maintains and the scope gate
+         drift-tests against the real extension
+         (testTheWaitGroupDeclarationStillMatchesTheRealExtension).
+
+         Findings inside src/ are NOT reported by this config even though psalm
+         reads them for cross-boundary type inference: projectFiles is the report
+         corpus; production reports in psalm.xml. Asserting scope, level,
+         commands, exclusions and the absence of muting machinery is what makes
+         a config that silently stops covering tests/ fail the gate. -->
+    <projectFiles>
+        <directory name="tests" />
+        <ignoreFiles>
+            <directory name="vendor" />
+            <!-- written why: EXCLUSION paragraph in the header comment -->
+            <file name="tests/codeception/acceptance/SyncPlayCest.php" />
+        </ignoreFiles>
+    </projectFiles>
+
+    <stubs>
+        <file name="phpstan-stubs/Swoole/Coroutine/WaitGroup.stub" />
+    </stubs>
+</psalm>

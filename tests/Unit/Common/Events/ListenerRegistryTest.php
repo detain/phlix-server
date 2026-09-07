@@ -139,17 +139,18 @@ final class ListenerRegistryTest extends TestCase
         $registry = new ListenerRegistry();
         $dispatcher = new Dispatcher($registry->provider());
 
-        $invokable = new class () {
-            public int $hits = 0;
-            public function __invoke(SampleEvent $_e): void
-            {
-                $this->hits++;
+        // S306: an invokable-object local once forced an object-shape dance for
+        // property reads. A by-ref counter over a closure listener is the plain
+        // idiom and survives every analyser's callable-narrowing.
+        $hits = 0;
+        $registry->subscribe(
+            SampleEvent::class,
+            static function (SampleEvent $_e) use (&$hits): void {
+                $hits++;
             }
-        };
-
-        $registry->subscribe(SampleEvent::class, $invokable);
+        );
         $dispatcher->dispatch(new SampleEvent('b'));
-        $this->assertSame(1, $invokable->hits);
+        $this->assertSame(1, $hits);
     }
 
     public function test_subscribe_with_string_function_name(): void

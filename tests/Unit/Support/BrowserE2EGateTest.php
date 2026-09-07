@@ -384,6 +384,7 @@ final class BrowserE2EGateTest extends TestCase
         // The LAST required case, so this exercises the second class in the map too.
         $pairs = $this->requiredPairs();
         $last = count($pairs) - 1;
+        assert($last >= 0, 'the required-pairs map is non-empty by construction');
 
         $cases = $this->executedCases();
         $cases[$last]['assertions'] = 0;

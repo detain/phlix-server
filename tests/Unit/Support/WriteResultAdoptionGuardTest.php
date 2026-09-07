@@ -913,7 +913,7 @@ final class WriteResultAdoptionGuardTest extends TestCase
                 return $t;
             }
         } else {
-            for ($i = $from + $direction; $i < $count; $i++) {
+            for ($i = $from + $direction; $i >= 0 && $i < $count; $i++) {
                 $t = $tokens[$i];
                 if (is_array($t) && in_array($t[0], self::IGNORED_TOKENS, true)) {
                     continue;

@@ -270,11 +270,13 @@ final class ThemeSourceRegistryTest extends TestCase
         $registry = new ThemeSourceRegistry();
 
         // 12 distinct allowlisted tokens, one per link — more links than the cap.
-        $perLink = [
+        // array_values() keeps the type an open list: the bare literal is a closed
+        // shape, which Psalm 6.5 rightly refuses int<0,max> offsets into (S306).
+        $perLink = array_values([
             '--bg', '--surface', '--surface-2', '--surface-3',
             '--text', '--text-muted', '--text-subtle', '--text-faint',
             '--border', '--border-subtle', '--border-strong', '--accent',
-        ];
+        ]);
         $links = count($perLink);
         $this->assertGreaterThan(ThemeSourceRegistry::MAX_EXTENDS_DEPTH, $links, 'the chain must overrun the cap');
 

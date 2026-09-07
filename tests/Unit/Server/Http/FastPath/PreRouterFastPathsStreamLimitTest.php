@@ -99,10 +99,15 @@ final class PreRouterFastPathsStreamLimitTest extends TestCase
         $container = $this->createMock(ContainerInterface::class);
         $container->method('get')->willReturnCallback(
             static fn (string $class): object => match ($class) {
-                RatingGate::class          => $gate,
-                UserProfileManager::class  => $profiles,
-                StreamSessionService::class => $streams,
-                default                    => $repo,
+                RatingGate::class => $gate,
+                UserProfileManager::class => $profiles,
+                // $streams stays null exactly when registerOk is null, i.e. the
+                // scenario never reaches the service — now enforced loudly
+                // instead of relying on the script (Psalm: object is non-nullable).
+                StreamSessionService::class => $streams ?? throw new \LogicException(
+                    'StreamSessionService must not be resolved when registerOk is null'
+                ),
+                default => $repo,
             },
         );
 

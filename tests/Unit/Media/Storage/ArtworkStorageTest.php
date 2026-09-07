@@ -375,16 +375,16 @@ final class ArtworkStorageTest extends TestCase
      * Build a fake Workerman HTTP client whose request() resolves the given
      * handler synchronously (no network, no event loop).
      *
-     * @param callable(string, array<string, mixed>): void $handler
+     * @param callable(string, array<array-key, mixed>): void $handler
      */
     private function makeFakeClient(callable $handler): Client
     {
         return new class ($handler) extends Client {
-            /** @var callable(string, array<string, mixed>): void */
+            /** @var callable(string, array<array-key, mixed>): void */
             private $handler;
 
             /**
-             * @param callable(string, array<string, mixed>): void $handler
+             * @param callable(string, array<array-key, mixed>): void $handler
              */
             public function __construct(callable $handler)
             {
@@ -393,7 +393,7 @@ final class ArtworkStorageTest extends TestCase
             }
 
             /**
-             * @param array<string, mixed> $options
+             * @param array<array-key, mixed> $options
              */
             public function request(string $url, array $options = []): mixed
             {

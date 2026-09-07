@@ -21,13 +21,13 @@ final class StructuredLoggerPsrAdapterTest extends TestCase
                 'null' => ['type' => 'stream', 'path' => 'php://memory', 'level' => 'debug'],
             ],
         ]) extends StructuredLogger {
-            /** @var array<int, array{level: Level, message: string, context: array<string, mixed>}> */
+            /** @var array<int, array{level: Level, message: string, context: array<array-key, mixed>}> */
             public array $records = [];
 
             /**
              * @param mixed              $level
              * @param string|Stringable  $message
-             * @param array<string,mixed> $context
+             * @param array<array-key,mixed> $context
              */
             public function log($level, string|Stringable $message, array $context = []): void
             {
@@ -67,7 +67,7 @@ final class StructuredLoggerPsrAdapterTest extends TestCase
             /**
              * @param mixed              $level
              * @param string|Stringable  $message
-             * @param array<string,mixed> $context
+             * @param array<array-key,mixed> $context
              */
             public function log($level, string|Stringable $message, array $context = []): void
             {
@@ -97,7 +97,7 @@ final class StructuredLoggerPsrAdapterTest extends TestCase
             /**
              * @param mixed              $level
              * @param string|Stringable  $message
-             * @param array<string,mixed> $context
+             * @param array<array-key,mixed> $context
              */
             public function log($level, string|Stringable $message, array $context = []): void
             {
@@ -127,7 +127,7 @@ final class StructuredLoggerPsrAdapterTest extends TestCase
             /**
              * @param mixed              $level
              * @param string|Stringable  $message
-             * @param array<string,mixed> $context
+             * @param array<array-key,mixed> $context
              */
             public function log($level, string|Stringable $message, array $context = []): void
             {

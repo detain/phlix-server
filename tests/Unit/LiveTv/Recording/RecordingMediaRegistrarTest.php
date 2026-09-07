@@ -81,6 +81,7 @@ final class RecordingMediaRegistrarTest extends TestCase
         $path = $this->tempTs(64);
         $row = $this->recordingRow();
 
+        /** @var array<string, mixed> $captured */
         $captured = [];
         $db = $this->createMock(Connection::class);
         $db->method('query')->willReturnCallback(
@@ -334,6 +335,8 @@ final class RecordingMediaRegistrarTest extends TestCase
     {
         $path = $this->tempTs(64);
         $row = $this->recordingRow();
+
+        /** @var ?string $selectSql */
 
         $selectSql = null;
         $insertedId = null;

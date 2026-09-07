@@ -379,7 +379,7 @@ final class AuthProviderBootstrapperTest extends TestCase
         $racyRegistry = new class extends AuthProviderRegistry {
             private int $hasProviderCalls = 0;
 
-            public function hasProvider(string $name): bool
+            public function hasProvider(string $key): bool
             {
                 // First call = the pre-build fast-path (race not yet lost → a
                 // miss); every later call reflects the winner having committed.
@@ -418,7 +418,7 @@ final class AuthProviderBootstrapperTest extends TestCase
         // instance is never actually registered, so hasProvider() stays false
         // even after registerProvider() throws — the throw MUST propagate.
         $brokenRegistry = new class extends AuthProviderRegistry {
-            public function hasProvider(string $name): bool
+            public function hasProvider(string $key): bool
             {
                 return false;
             }
@@ -738,7 +738,7 @@ final class AuthProviderBootstrapperTest extends TestCase
         $racyRegistry = new class extends AuthProviderRegistry {
             private int $hasProviderCalls = 0;
 
-            public function hasProvider(string $name): bool
+            public function hasProvider(string $key): bool
             {
                 return $this->hasProviderCalls++ > 0;
             }

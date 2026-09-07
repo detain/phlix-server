@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Phlix\Tests\Unit\Common\Container\Providers;
 
+use DI\Container;
 use DI\ContainerBuilder;
 use Phlix\Admin\SettingsRepository;
 use Phlix\Common\Container\Providers\MediaServicesProvider;
@@ -130,21 +131,7 @@ final class MediaServicesProviderSettingsWiringTest extends TestCase
      */
     private function registeredDefinitions(): array
     {
-        $spy = new class extends ContainerBuilder {
-            /** @var list<array<string, mixed>> */
-            public array $seen = [];
-
-            public function addDefinitions(string|array|\DI\Definition\Source\DefinitionSource ...$definitions): ContainerBuilder
-            {
-                foreach ($definitions as $definition) {
-                    if (is_array($definition)) {
-                        $this->seen[] = $definition;
-                    }
-                }
-
-                return parent::addDefinitions(...$definitions);
-            }
-        };
+        $spy = new CapturingContainerBuilder();
 
         (new MediaServicesProvider())->register($spy, []);
 
@@ -225,5 +212,33 @@ final class MediaServicesProviderSettingsWiringTest extends TestCase
             'artworkDownloadPolicy',
             ArtworkDownloadPolicy::class,
         );
+    }
+}
+
+/**
+ * ContainerBuilder spy capturing every array definition passed to
+ * addDefinitions(), so the wiring can be asserted directly (built by
+ * {@see MediaServicesProviderSettingsWiringTest::registeredDefinitions()}).
+ *
+ * S306: named class with the template argument spelled out — psalm requires
+ * `@extends ContainerBuilder<T>` on any subclass of the templated builder,
+ * which an anonymous class cannot carry.
+ *
+ * @extends ContainerBuilder<Container>
+ */
+final class CapturingContainerBuilder extends ContainerBuilder
+{
+    /** @var list<array<string, mixed>> */
+    public array $seen = [];
+
+    public function addDefinitions(string|array|\DI\Definition\Source\DefinitionSource ...$definitions): ContainerBuilder
+    {
+        foreach ($definitions as $definition) {
+            if (is_array($definition)) {
+                $this->seen[] = $definition;
+            }
+        }
+
+        return parent::addDefinitions(...$definitions);
     }
 }

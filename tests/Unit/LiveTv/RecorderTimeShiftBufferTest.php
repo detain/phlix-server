@@ -105,6 +105,7 @@ final class RecorderTimeShiftBufferTest extends TestCase
      */
     private function roundTripDb(array &$state): Connection
     {
+        /** @var array{insert: ?array<int, mixed>, pid_update: mixed, deleted: bool} $state */
         $state = ['insert' => null, 'pid_update' => null, 'deleted' => false];
 
         /** @var Connection&MockObject $db */
@@ -465,8 +466,11 @@ final class RecorderTimeShiftBufferTest extends TestCase
      */
     public function testCapturePidRecordedOnSessionIdKeyedRow(): void
     {
+        /** @var ?array<int, mixed> $insertParams */
         $insertParams = null;
+        /** @var ?string $pidUpdateSql */
         $pidUpdateSql = null;
+        /** @var ?array<int, mixed> $pidUpdateParams */
         $pidUpdateParams = null;
 
         /** @var Connection&MockObject $db */

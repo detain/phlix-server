@@ -877,7 +877,9 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
             }
 
             $doc = null;
-            for ($j = $i - 1; $j >= max(0, $i - 60); $j--) {
+            // $j >= max(0, $i - 60) restated conjunctively: same predicate, and Psalm
+            // narrows $j to int<0, max> through the explicit >= 0 guard.
+            for ($j = $i - 1; $j >= 0 && $j >= $i - 60; $j--) {
                 $q = $tokens[$j];
                 if (is_array($q) && $q[0] === T_DOC_COMMENT) {
                     $doc = $q[1];

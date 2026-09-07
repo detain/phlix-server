@@ -78,6 +78,10 @@ class ThemeRegistry
      * without instantiating the plugin's entry class. It reads the 'theme'
      * key from the manifest array.
      *
+     * (Both shapes are unsealed: a parsed plugin.json carries many more keys
+     * than the theme wiring reads — S306 proved it by passing a realistic
+     * manifest through, so the closed shape was a lie about the input contract.)
+     *
      * @param array{
      *     type: string,
      *     theme: array{
@@ -87,8 +91,10 @@ class ThemeRegistry
      *         js?: string,
      *         thumbnail?: string,
      *         version?: string,
-     *         dark?: bool
-     *     }
+     *         dark?: bool,
+     *         ...
+     *     },
+     *     ...
      * } $pluginManifest The parsed plugin manifest array
      * @param string $pluginName The name of the plugin providing this theme
      * @return void

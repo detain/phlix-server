@@ -114,7 +114,7 @@ final class SkipSchemaConnection extends Connection
      * $fetchmode)`), which is why it is untyped here.
      *
      * @param string $query
-     * @param array<int, mixed>|null $params
+     * @param array<array-key, mixed>|null $params
      * @param int $fetchmode
      * @return array<int, mixed>|int|string|null
      */

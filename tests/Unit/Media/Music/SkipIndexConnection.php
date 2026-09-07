@@ -40,7 +40,7 @@ final class SkipIndexConnection extends Connection
 
     /**
      * @param string $query
-     * @param array<int, mixed>|null $params
+     * @param array<array-key, mixed>|null $params
      * @param int $fetchmode
      * @return list<array<string, mixed>>
      */

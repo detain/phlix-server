@@ -194,6 +194,7 @@ class ApplicationTest extends TestCase
     private function writeTempDbConfig(): string
     {
         $path = tempnam(sys_get_temp_dir(), 'phlix-db-test-');
+        $this->assertIsString($path, 'tempnam must yield a path for the temp db config');
         // Honour the env credentials phpunit.xml exports so the CI workflow
         // (which uses a non-root DB user) can connect.
         //

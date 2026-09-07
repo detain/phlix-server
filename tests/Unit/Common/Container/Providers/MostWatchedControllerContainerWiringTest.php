@@ -102,7 +102,7 @@ final class MostWatchedControllerContainerWiringTest extends TestCase
         $controller = $this->container(null)->get(MostWatchedController::class);
         self::assertInstanceOf(MostWatchedController::class, $controller);
 
-        $gate = (fn () => $this->ratingGate)->call($controller);
+        $gate = (fn (string $name): mixed => $this->$name)->call($controller, 'ratingGate');
 
         self::assertInstanceOf(
             RatingGate::class,
@@ -179,7 +179,7 @@ final class MostWatchedControllerContainerWiringTest extends TestCase
         self::assertInstanceOf(MostWatchedController::class, $controller);
         self::assertInstanceOf(
             RatingGate::class,
-            (fn () => $this->ratingGate)->call($controller),
+            (fn (string $name): mixed => $this->$name)->call($controller, 'ratingGate'),
             'The shipped RatingGate definition could not be built here, so in production '
             . 'Application::loadApiRoutes() would swallow the failure and the Most Watched '
             . 'route would silently not be registered at all.'

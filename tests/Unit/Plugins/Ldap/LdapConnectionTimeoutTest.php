@@ -67,7 +67,7 @@ use ReflectionMethod;
  */
 final class LdapConnectionTimeoutTest extends TestCase
 {
-    /** @var resource|null */
+    /** @var resource|closed-resource|null */
     private $silentServer = null;
 
     private int $silentPort = 0;

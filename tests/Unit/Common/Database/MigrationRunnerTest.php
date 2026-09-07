@@ -835,6 +835,7 @@ class MigrationRunnerTest extends TestCase
         $this->writeMigration('001.sql', $sql);
         $checksum = md5($sql);
 
+        /** @var list<array<int, mixed>> $ledgerWrites */
         $ledgerWrites = [];
         $conn = $this->createMock(Connection::class);
         $conn->method('query')->willReturnCallback(
@@ -872,6 +873,7 @@ class MigrationRunnerTest extends TestCase
         $checksum = md5($sql);
 
         $executed = [];
+        /** @var list<array<int, mixed>> $ledgerWrites */
         $ledgerWrites = [];
         $conn = $this->createMock(Connection::class);
         $conn->method('query')->willReturnCallback(
@@ -916,6 +918,7 @@ class MigrationRunnerTest extends TestCase
         $currentChecksum = md5($sql);
 
         $executed = [];
+        /** @var list<array<int, mixed>> $ledgerWrites */
         $ledgerWrites = [];
         $conn = $this->createMock(Connection::class);
         $conn->method('query')->willReturnCallback(
@@ -962,6 +965,7 @@ class MigrationRunnerTest extends TestCase
         $this->writeMigration('001.sql', $sql);
         $checksum = md5($sql);
 
+        /** @var list<array<int, mixed>> $ledgerWrites */
         $ledgerWrites = [];
         $conn = $this->createMock(Connection::class);
         $conn->method('query')->willReturnCallback(
@@ -1036,6 +1040,7 @@ class MigrationRunnerTest extends TestCase
     {
         $this->writeMigration('001.sql', 'CREATE TABLE a (id INT);');
 
+        /** @var list<array<int, mixed>> $ledgerWrites */
         $ledgerWrites = [];
         $conn = $this->createMock(Connection::class);
         $conn->method('query')->willReturnCallback(

@@ -511,7 +511,7 @@ class RecordingComskipLogger extends \Psr\Log\AbstractLogger
     /**
      * @param mixed $level Log level
      * @param string|\Stringable $message Log message
-     * @param array<string, mixed> $context Log context
+     * @param array<array-key, mixed> $context Log context
      */
     public function log($level, string|\Stringable $message, array $context = []): void
     {

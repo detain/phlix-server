@@ -334,7 +334,11 @@ final class MusicScanReparentTest extends TestCase
             $db->tracks[$mid]['album_id'] = self::WRONG_ALBUM_ID;
             $db->tracks[$mid]['artist_id'] = self::WRONG_ARTIST_ID;
         }
-        $db->albums[self::WRONG_ALBUM_ID]['total_tracks'] = 3;
+        // S306: written through a local so Psalm models the whole row shape;
+        // a nested in-place write made it infer the row as {total_tracks: 3}.
+        $wrongAlbum = $db->albums[self::WRONG_ALBUM_ID];
+        $wrongAlbum['total_tracks'] = 3;
+        $db->albums[self::WRONG_ALBUM_ID] = $wrongAlbum;
 
         $db->statements = [];
         $result = $scanner->scanDirectory($dir, null, 'lib-1', true);

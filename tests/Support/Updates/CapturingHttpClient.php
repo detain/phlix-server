@@ -37,7 +37,7 @@ final class CapturingHttpClient extends Client
 
     /**
      * @param string               $url     Request URL.
-     * @param array<string, mixed> $options Request options.
+     * @param array<array-key, mixed> $options Request options.
      *
      * @return mixed Always null; nothing is sent.
      */

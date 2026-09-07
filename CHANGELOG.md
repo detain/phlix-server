@@ -7,6 +7,16 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Removed
+
+- **The pre-S84 `ThemeRegistry` theming island (S227).** `ThemeRegistry`, `Theme`,
+  `ThemePluginInterface`, `config/themes.php` and their unit test had zero implementors and zero
+  resolvers estate-wide — only `ThemingServicesProvider` still constructed the registry, and nobody
+  resolved it. With S84–S86 complete they were a second, fake theming subsystem beside the real
+  token-map one, carrying the name a reader reaches for first. The container binding is gone, two
+  historical `{@see}` pointers were reworded, and `tests/Unit/Theming/ThemingIslandRemovedTest.php`
+  now fails if any of it returns. `ThemeSourceRegistry` and the real subsystem are untouched.
+
 ### Fixed
 
 - **Shape-aware UNIQUE-index detection in migrations 096/097 (S161).** Both chain-owned index
@@ -18,6 +28,15 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   second, redundant index), and a same-named wrong-shape imposter is dropped and replaced in
   one atomic ALTER. Pinned in both directions against real MySQL by
   `tests/Integration/Common/Database/UniqueIndexShapeGuardTest.php`.
+
+- **S439 minter gap surfaced by this lane's CI park (S227).** `AccessScheduleHeadNoBodyWireTest`
+  boots the real `Application` in a spawned worker, which mints the shared
+  `/tmp/phlix_media_asset_jobs` + `/tmp/phlix_similarity_jobs` queue dirs without owning a sweep;
+  under `executionOrder="random"` its residue survived only until a later sweeper test ran — and
+  on an unlucky seed it survived the whole `Server Component Tests` run and tripped the
+  zero-residue census. The minter now owns its sweep (same S439 block the other nine minters
+  carry), and `ApplicationTest` — the suite's other MySQL-dependent minter — gets the identical
+  block. Product untouched; the deeper lazy-mkdir-in-ctor fix stays the documented follow-up.
 
 ### Added
 

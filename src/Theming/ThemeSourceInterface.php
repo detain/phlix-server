@@ -25,7 +25,8 @@ namespace Phlix\Theming;
  *
  * ## Replaces the manifest `theme` key
  *
- * The predecessor path was {@see ThemeRegistry::registerFromPlugin()}: a
+ * The predecessor path was `registerFromPlugin()` on the old pre-S84 theme
+ * registry (deleted in S227): a
  * declarative `"theme": {"css": "..."}` block read straight out of
  * `plugin.json`, shipping a whole CSS FILE that the host injected into a
  * rendered page. It had no production caller, and a plugin-supplied

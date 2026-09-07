@@ -11,6 +11,26 @@ class ApplicationTest extends TestCase
 {
     use RequiresRealDatabase;
 
+    protected function tearDown(): void
+    {
+        // S439: bootApplication() constructs the real Application, whose eager
+        // controller graph builds MediaAssetJobStore and SimilarityJobStore through
+        // MediaServicesProvider's factories at the production default queue paths —
+        // their constructors mint the shared /tmp directories. The minter owns the
+        // sweep; on MySQL-less runners the boot path is skipped and this is a no-op.
+        foreach (['phlix_media_asset_jobs', 'phlix_similarity_jobs'] as $sharedQueue) {
+            $sharedDir = sys_get_temp_dir() . '/' . $sharedQueue;
+            if (is_dir($sharedDir)) {
+                foreach (glob($sharedDir . '/*') ?: [] as $queued) {
+                    @unlink($queued);
+                }
+                @rmdir($sharedDir);
+            }
+        }
+
+        parent::tearDown();
+    }
+
     /**
      * @group integration
      */

@@ -85,9 +85,22 @@ final class DashOnDemandServeTest extends TestCase
 
     protected function tearDown(): void
     {
-        if ($this->root !== '' && is_dir($this->root)) {
-            self::rrmdir($this->root);
+        if ($this->root === '' || !is_dir($this->root)) {
+            return;
         }
+        // S439 hardening (S227 lane): an on-demand encode can land its final
+        // rename while the sweep runs — measured under CPU load: the suite
+        // passed every case, yet a re-created `s59-job` dir survived the single
+        // rrmdir pass and tripped the zero-residue census. The minter owns the
+        // sweep, so retry until the root is gone or the bounded deadline passes.
+        $deadline = hrtime(true) + 5_000_000_000;
+        do {
+            self::rrmdir($this->root);
+            if (!is_dir($this->root)) {
+                return;
+            }
+            usleep(100_000);
+        } while (hrtime(true) < $deadline);
     }
 
     // ─────────────────────────────────────────────────────────────────

@@ -86,6 +86,22 @@ final class AccessScheduleHeadNoBodyWireTest extends TestCase
             $this->stopServer($server);
         }
         $this->servers = [];
+
+        // S439: the child worker this test spawns boots the real Application
+        // constructor, which constructs MediaAssetJobStore and SimilarityJobStore
+        // through MediaServicesProvider's factories at the production default queue
+        // paths, and their constructors mint the shared /tmp directories. The minter
+        // owns the sweep — without it the residue survives only when a later
+        // sweeper test happens to run after this one under executionOrder="random".
+        foreach (['phlix_media_asset_jobs', 'phlix_similarity_jobs'] as $sharedQueue) {
+            $sharedDir = sys_get_temp_dir() . '/' . $sharedQueue;
+            if (is_dir($sharedDir)) {
+                foreach (glob($sharedDir . '/*') ?: [] as $queued) {
+                    @unlink($queued);
+                }
+                @rmdir($sharedDir);
+            }
+        }
     }
 
     // ── the AC: HEAD refused by the global middleware on a LIVE worker ─────────

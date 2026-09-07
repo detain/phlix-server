@@ -489,7 +489,7 @@ class PluginLoader
 
         // First-class THEME-source registration (S84), the third arm of the
         // same pattern. Replaces the never-called manifest `theme` key path
-        // ({@see \Phlix\Theming\ThemeRegistry::registerFromPlugin()}), which
+        // (the pre-S84 registry's registerFromPlugin(), deleted in S227), which
         // took a whole plugin-supplied CSS FILE; this one takes a token map
         // the host validates exhaustively against the @phlix/tokens
         // allowlist. Deregistered in disable() for a leak-free cycle.

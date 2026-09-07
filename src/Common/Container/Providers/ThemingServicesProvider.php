@@ -13,21 +13,19 @@ namespace Phlix\Common\Container\Providers;
 
 use DI\ContainerBuilder;
 use Phlix\Common\Container\ServiceProviderInterface;
-use Phlix\Theming\ThemeRegistry;
 use Phlix\Theming\ThemeSourceRegistry;
-use Workerman\MySQL\Connection;
 
 use function DI\autowire;
-use function DI\factory;
 
 /**
- * Registers the theming subsystem: ThemeRegistry and ThemeSourceRegistry.
+ * Registers the theming subsystem: ThemeSourceRegistry.
  *
- * Built-in CSS themes are registered from config/themes.php during
- * {@see ThemeRegistry} construction. Plugin token-map themes land in
- * {@see ThemeSourceRegistry}, which {@see \Phlix\Plugins\PluginLoader}
- * (de)registers on plugin enable/disable via the
- * {@see \Phlix\Theming\ThemeSourceInterface} capability arm.
+ * Plugin token-map themes land in {@see ThemeSourceRegistry}, which
+ * {@see \Phlix\Plugins\PluginLoader} (de)registers on plugin
+ * enable/disable via the {@see \Phlix\Theming\ThemeSourceInterface}
+ * capability arm; the SPA's built-in token-map themes are host-owned
+ * data ({@see \Phlix\Theming\BuiltInThemes}). The pre-S84 stylesheet-URL
+ * theme registry and its config file were dead code and were deleted in S227.
  *
  * `ThemeMiddleware` used to be registered here too. It was retired in S84:
  * it string-replaced two Smarty placeholders (`{$theme_css|raw}` /
@@ -42,11 +40,6 @@ use function DI\factory;
 final class ThemingServicesProvider implements ServiceProviderInterface
 {
     /**
-     * Default path to runtime themes directory.
-     */
-    public const DEFAULT_THEMES_DIR = 'var/themes';
-
-    /**
      * Register theming bindings.
      *
      * @param ContainerBuilder<\DI\Container> $builder
@@ -58,18 +51,7 @@ final class ThemingServicesProvider implements ServiceProviderInterface
      */
     public function register(ContainerBuilder $builder, array $appConfig): void
     {
-        /** @var string $themesDir */
-        $themesDir = $appConfig['themes_dir'] ?? self::DEFAULT_THEMES_DIR;
-
         $definitions = [
-            ThemeRegistry::class => factory(
-                static function (Connection $db) use ($themesDir): ThemeRegistry {
-                    $registry = new ThemeRegistry($db, $themesDir);
-                    $registry->registerBuiltInThemes();
-                    return $registry;
-                }
-            ),
-
             // S84 capability registry. Plain autowire is safe here precisely
             // because the class declares NO constructor — there is no
             // optional dependency for PHP-DI's autowire() to silently skip.

@@ -225,36 +225,88 @@ final class PlaybackStateDeduper
      * Add the `(session_id, media_item_id)` UNIQUE KEY that makes the
      * `INSERT ... ON DUPLICATE KEY UPDATE` upsert update-not-insert.
      *
-     * Idempotent on replay: an already-present key ("Duplicate key name") is
-     * treated as success. Any other failure — most importantly a lingering
-     * "Duplicate entry" 1062 meaning duplicates were NOT fully merged — is
-     * re-thrown so the caller can surface it and the operator can re-run.
+     * S161 — shape, not name, mirrors `migrations/097_playback_state_unique_key.sql`:
+     * a correctly-shaped UNIQUE already present under ANY name counts as success
+     * (the constraint exists; a second one would be dead weight), and a same-NAMED
+     * index of the wrong shape is an imposter squatting on this key's contractual
+     * name — it is dropped and replaced in ONE atomic ALTER, because treating
+     * "Duplicate key name" as success (the old behavior) would record a healthy
+     * outcome on a table that still holds duplicates and can never upsert.
      *
-     * @return bool True if the key was created, false if it already existed.
+     * Idempotent on replay. Any other failure — most importantly a lingering
+     * "Duplicate entry" 1062 meaning duplicates were NOT fully merged — is
+     * re-thrown so the caller can surface it and the operator can re-run (a 1062
+     * on the replacement ALTER rolls the DROP back with it).
+     *
+     * @return bool True if the key was created (or an imposter was replaced),
+     *              false if a valid constraint already existed.
      *
      * @throws Throwable When the key cannot be created (e.g. duplicates remain).
      */
     public function addUniqueKey(): bool
     {
+        if ($this->hasUniqueKey()) {
+            return false; // a UNIQUE of the right shape exists, under any name
+        }
+
+        $add = 'ALTER TABLE playback_state
+                    ADD UNIQUE KEY ' . self::UNIQUE_KEY_NAME . ' (session_id, media_item_id)';
+
+        if ($this->hasIndexNamed()) {
+            // Impostor (S161): the contractual name exists with the wrong shape.
+            $add = 'ALTER TABLE playback_state
+                    DROP INDEX ' . self::UNIQUE_KEY_NAME . ',
+                    ADD UNIQUE KEY ' . self::UNIQUE_KEY_NAME . ' (session_id, media_item_id)';
+        }
+
         try {
-            $this->db->query(
-                'ALTER TABLE playback_state
-                    ADD UNIQUE KEY ' . self::UNIQUE_KEY_NAME . ' (session_id, media_item_id)'
-            );
+            $this->db->query($add);
 
             return true;
         } catch (Throwable $e) {
             if (str_contains($e->getMessage(), 'Duplicate key name')) {
-                return false; // already present — nothing to do
+                return false; // raced into existence — nothing to do
             }
             throw $e;
         }
     }
 
     /**
-     * Whether the `(session_id, media_item_id)` unique key is already present.
+     * Whether a UNIQUE index covering exactly the `{session_id, media_item_id}`
+     * column set is present — under ANY index name (S161: the old name-only
+     * `SHOW INDEX … WHERE Key_name = ?` check was satisfied by a NON-UNIQUE
+     * imposter with the expected name and blind to an equivalent UNIQUE created
+     * under a different one).
+     *
+     * `information_schema.STATISTICS` stores one row per indexed column, so the
+     * shape is one GROUP whose concatenated column set must match exactly; the
+     * comparison is order-independent because `ON DUPLICATE KEY` conflict
+     * matching depends on the column SET, not on order or name. Functional
+     * key parts carry a NULL `COLUMN_NAME` and can never satisfy the HAVING.
      */
     public function hasUniqueKey(): bool
+    {
+        try {
+            $rows = $this->db->query(
+                "SELECT INDEX_NAME FROM information_schema.STATISTICS
+                 WHERE TABLE_SCHEMA = DATABASE()
+                   AND TABLE_NAME = 'playback_state'
+                   AND NON_UNIQUE = 0
+                 GROUP BY INDEX_NAME
+                 HAVING GROUP_CONCAT(COLUMN_NAME ORDER BY COLUMN_NAME) = 'media_item_id,session_id'"
+            );
+
+            return is_array($rows) && $rows !== [];
+        } catch (Throwable) {
+            return false;
+        }
+    }
+
+    /**
+     * Whether ANY index (of any shape) carries the contractual key name — the
+     * imposter probe behind {@see addUniqueKey()}'s replace branch.
+     */
+    private function hasIndexNamed(): bool
     {
         try {
             $rows = $this->db->query(

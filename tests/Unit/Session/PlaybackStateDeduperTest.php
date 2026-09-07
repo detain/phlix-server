@@ -172,13 +172,84 @@ final class PlaybackStateDeduperTest extends TestCase
 
     public function testAddUniqueKeyReturnsTrueOnSuccessfulAlter(): void
     {
+        // S161: addUniqueKey() now probes shape first (information_schema GROUP
+        // query), then the contractual name (SHOW INDEX). Both empty here → the
+        // plain ADD runs.
+        $captured = [];
         $db = $this->createMock(Connection::class);
-        $db->expects($this->once())
-            ->method('query')
-            ->with($this->stringContains('ADD UNIQUE KEY ' . PlaybackStateDeduper::UNIQUE_KEY_NAME))
-            ->willReturn(null);
+        $db->method('query')
+            ->willReturnCallback(function (string $sql) use (&$captured) {
+                $captured[] = $sql;
+                if (str_contains($sql, 'information_schema.STATISTICS')) {
+                    return []; // no correctly-shaped UNIQUE exists
+                }
+                if (str_contains($sql, 'SHOW INDEX')) {
+                    return []; // the contractual name is free too
+                }
+
+                return null; // the ALTER
+            });
 
         $this->assertTrue((new PlaybackStateDeduper($db))->addUniqueKey());
+        $this->assertCount(1, array_filter($captured, fn ($s) => str_contains($s, 'ADD UNIQUE KEY')));
+        $this->assertMatchesRegularExpression(
+            '/ALTER TABLE playback_state\s+ADD UNIQUE KEY ' . PlaybackStateDeduper::UNIQUE_KEY_NAME
+            . ' \(session_id, media_item_id\)/',
+            $captured[2],
+            'with no index at all the plain ADD must be emitted verbatim (097 parity)',
+        );
+        $this->assertStringNotContainsString('DROP INDEX', $captured[2]);
+    }
+
+    public function testAddUniqueKeyReplacesSameNamedImpostorWithOneAtomicAlter(): void
+    {
+        // S161: NON-UNIQUE index under the contractual name. The old code would
+        // have hit "Duplicate key name" and returned false — declaring success
+        // on a table with no constraint. It must now DROP + ADD in one ALTER.
+        $captured = [];
+        $db = $this->createMock(Connection::class);
+        $db->method('query')
+            ->willReturnCallback(function (string $sql) use (&$captured) {
+                $captured[] = $sql;
+                if (str_contains($sql, 'information_schema.STATISTICS')) {
+                    return []; // shape probe: no UNIQUE of the right columns
+                }
+                if (str_contains($sql, 'SHOW INDEX')) {
+                    return [['Key_name' => PlaybackStateDeduper::UNIQUE_KEY_NAME]]; // imposter present
+                }
+
+                return null; // the replacement ALTER
+            });
+
+        $this->assertTrue((new PlaybackStateDeduper($db))->addUniqueKey());
+        $this->assertMatchesRegularExpression(
+            '/DROP INDEX ' . PlaybackStateDeduper::UNIQUE_KEY_NAME . ',\s*ADD UNIQUE KEY/s',
+            $captured[2],
+            'the imposter must be dropped and replaced in ONE atomic ALTER '
+            . '(a 1062 on the ADD must roll the DROP back with it)',
+        );
+    }
+
+    public function testAddUniqueKeyIsNoOpWhenEquivalentUniqueExistsUnderAnotherName(): void
+    {
+        // S161 converse: an equivalent UNIQUE under a different name already
+        // enforces the constraint. Adding the contractual name on top would be
+        // a second, redundant index — the migration recognises it, so must the
+        // finalizer, and issue no ALTER at all.
+        $captured = [];
+        $db = $this->createMock(Connection::class);
+        $db->method('query')
+            ->willReturnCallback(function (string $sql) use (&$captured) {
+                $captured[] = $sql;
+
+                return str_contains($sql, 'information_schema.STATISTICS')
+                    ? [['INDEX_NAME' => 'zz_other_name']]
+                    : [];
+            });
+
+        $this->assertFalse((new PlaybackStateDeduper($db))->addUniqueKey());
+        $this->assertCount(1, $captured, 'shape present → no name probe, no ALTER');
+        $this->assertSame([], array_filter($captured, fn ($s) => str_contains($s, 'ALTER')));
     }
 
     public function testAddUniqueKeyReturnsFalseWhenKeyAlreadyExists(): void
@@ -208,10 +279,23 @@ final class PlaybackStateDeduperTest extends TestCase
 
     public function testHasUniqueKeyTrueWhenIndexRowPresent(): void
     {
+        $captured = null;
         $db = $this->createMock(Connection::class);
-        $db->method('query')->willReturn([['Key_name' => PlaybackStateDeduper::UNIQUE_KEY_NAME]]);
+        $db->method('query')->willReturnCallback(function (string $sql) use (&$captured) {
+            $captured = $sql;
+
+            return [['INDEX_NAME' => PlaybackStateDeduper::UNIQUE_KEY_NAME]];
+        });
 
         $this->assertTrue((new PlaybackStateDeduper($db))->hasUniqueKey());
+        // S161: the probe must be SHAPE-aware — NON_UNIQUE = 0 plus the exact
+        // column set — never a bare name match again.
+        $this->assertIsString($captured);
+        $this->assertStringContainsString('NON_UNIQUE = 0', $captured);
+        $this->assertStringContainsString(
+            "GROUP_CONCAT(COLUMN_NAME ORDER BY COLUMN_NAME) = 'media_item_id,session_id'",
+            $captured,
+        );
     }
 
     public function testHasUniqueKeyFalseWhenNoIndexRow(): void

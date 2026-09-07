@@ -337,8 +337,16 @@ final class IntegrationDbGuardAdoptionTest extends TestCase
      * "Duplicate entry for key 'PRIMARY'" is raised by MySQL and by nothing else;
      * a canned-row double cannot falsify it, so the entropy-source fix is proven
      * against the real `media_items` PK.
+     *
+     * 53 since S161's
+     * `tests/Integration/Common/Database/UniqueIndexShapeGuardTest.php`:
+     * "an index exists" with the wrong shape is a property of the live
+     * information_schema — a mocked SHOW INDEX / STATISTICS answer is exactly the
+     * name-only blindness this step removes, so both directions of the S156
+     * review finding (same-named NON-UNIQUE imposter, differently-named
+     * equivalent UNIQUE) are pinned against real MySQL, for both 096 and 097.
      */
-    private const EXPECTED_ADOPTERS = 52;
+    private const EXPECTED_ADOPTERS = 53;
 
     /**
      * Bare function calls that are a MySQL reachability probe under any

@@ -197,8 +197,10 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * (UuidOrderSeedFuzzTest, UuidSeedReplayPkCollisionIntegrationTest); neither
      * names Request — the S433/S434/S215/S252/S289 pattern again, only this
      * denominator moves.
+     * Re-pinned 1789→1790 by S161: the index-shape arc adds one test file
+     * (UniqueIndexShapeGuardTest); it does not name Request — same pattern.
      */
-    private const EXPECTED_PHP_FILES = 1789;
+    private const EXPECTED_PHP_FILES = 1790;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

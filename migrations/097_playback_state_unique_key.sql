@@ -121,11 +121,70 @@
 -- implicitly deallocates an existing statement of that name before preparing
 -- the new one, so outcome (b) reports EXACTLY ONE error — the actionable one —
 -- and leaves nothing dangling.
+--
+-- S161 — SHAPE, NOT NAME (measured in the S156 review, 2026-07-27). The
+-- "already there?" probe below used to match `INDEX_NAME` alone. That made the
+-- migration blind to the ONLY property it exists to guarantee:
+--
+--   * A NON-UNIQUE index carrying the exact expected name made the file no-op
+--     AND record itself applied — the table kept its duplicate rows, the upsert
+--     kept inserting one row per tick, and the chain could never retry, because
+--     the ledger now says "done". That is the original S156 defect, made
+--     permanently invisible.
+--   * Conversely, an equivalent UNIQUE key under a DIFFERENT name (functionally
+--     identical: `ON DUPLICATE KEY` does not care about index names) was not
+--     recognised, so the file added a second, redundant unique index.
+--
+-- So "already there?" now means: some index with `NON_UNIQUE = 0` covering
+-- exactly the `{session_id, media_item_id}` column SET (compared order-
+-- independently — the uniqueness constraint that makes the upsert fire does not
+-- depend on column order). A same-NAMED index of the wrong shape is an imposter
+-- squatting on this migration's contractual name: it is DROPPED AND REPLACED in
+-- one atomic ALTER (the ADD failing with 1062 rolls the whole statement back,
+-- so an imposter on a dirty table is never half-removed). If a correctly-shaped
+-- UNIQUE already exists under some other name AND an imposter squats on the
+-- contractual name, the constraint is enforced — the file stays a no-op and
+-- leaves the redundant imposter alone; deleting a possibly query-used index is
+-- not this migration's job.
+--
+-- S161 FINDING 4 — RECORDED, NOT FIXED. When the constraint is missing on a
+-- dirty install, this file deliberately stays UNRECORDED, so every deploy
+-- re-pays `SELECT EXISTS (… GROUP BY session_id, media_item_id HAVING COUNT(*)
+-- > 1)` with no usable index (the very index it is trying to add is what would
+-- make that lookup cheap) — a full-table temp-table scan per deploy. Accepted:
+-- a dirty install is already paying that scan on every write path, the cost
+-- stops the moment the finalizer runs, and any caching that avoided it would
+-- reintroduce the invisibility S161 exists to remove. The TOCTOU window between
+-- the duplicate scan and the ALTER (a concurrent insert may create a duplicate
+-- in between) is inherent to online DDL from a plain .sql file and FAILS SAFE:
+-- the ALTER hits 1062, nothing is altered, the file stays unrecorded, and the
+-- next deploy retries. That is the correct terminal behavior, not a bug —
+-- recorded here so a future reader does not "fix" the re-pay scan into a
+-- second permanently-invisible success path.
 
--- Is the unique key already there? (Production, and any DB whose operator ran
--- the finalizer.) Answering this first also lets the duplicate scan be skipped
--- entirely on such a DB: the constraint itself proves there are none.
-SET @phlix_playback_state_key = (
+-- S161INDEXSHAPEX7R4
+--
+-- Is a UNIQUE key of the right SHAPE already there, under ANY name? (S161: the
+-- old name-only probe let a non-unique imposter satisfy it and record success.)
+-- Answering this first also lets the duplicate scan be skipped entirely on such
+-- a DB: the constraint itself proves there are none. The column set is compared
+-- order-independently because the conflict target `ON DUPLICATE KEY UPDATE`
+-- matches on the key's column SET, not on name or order.
+SET @phlix_playback_state_unique = (
+    SELECT COUNT(*) FROM (
+        SELECT INDEX_NAME
+        FROM information_schema.STATISTICS
+        WHERE TABLE_SCHEMA = DATABASE()
+        AND TABLE_NAME = 'playback_state'
+        AND NON_UNIQUE = 0
+        GROUP BY INDEX_NAME
+        HAVING GROUP_CONCAT(COLUMN_NAME ORDER BY COLUMN_NAME) = 'media_item_id,session_id'
+    ) phlix_unique_key_shapes
+);
+
+-- Does the CONTRACTUAL name exist at all? Only its SHAPE decides whether the
+-- migration acts; this probe names the imposter to replace.
+SET @phlix_playback_state_named = (
     SELECT EXISTS (
         SELECT 1 FROM information_schema.STATISTICS
         WHERE TABLE_SCHEMA = DATABASE()
@@ -134,11 +193,18 @@ SET @phlix_playback_state_key = (
     )
 );
 
--- Duplicates only matter when the key is missing. Both columns are `NOT NULL`
--- (`001_initial_schema.sql:89-90`), so there is no NULL-never-collides carve-out
--- to make here — every row participates in the constraint.
+-- An imposter: the contractual name, wrong shape, and no real constraint.
+SET @phlix_playback_state_imposter = IF(
+    @phlix_playback_state_unique = 0 AND @phlix_playback_state_named = 1,
+    1,
+    0
+);
+
+-- Duplicates only matter when the constraint is missing. Both columns are
+-- `NOT NULL` (`001_initial_schema.sql:89-90`), so there is no NULL-never-collides
+-- carve-out to make here — every row participates in the constraint.
 SET @phlix_playback_state_dupes = IF(
-    @phlix_playback_state_key,
+    @phlix_playback_state_unique,
     0,
     (
         SELECT EXISTS (
@@ -159,15 +225,21 @@ SET @sql = IF(
 
 PREPARE stmt FROM @sql;
 
--- Outcome (a) / (c). Re-preparing `stmt` implicitly frees whatever the guard
--- left behind. `ADD UNIQUE KEY` (not `ADD UNIQUE INDEX`) matches
--- `PlaybackStateDeduper::addUniqueKey()` verbatim so the two ways of arriving
--- at this schema are textually identical; MySQL treats KEY and INDEX as
--- synonyms here.
+-- Outcome (a) / (c), plus the S161 imposter replacement. Re-preparing `stmt`
+-- implicitly frees whatever the guard left behind. `ADD UNIQUE KEY` (not
+-- `ADD UNIQUE INDEX`) matches `PlaybackStateDeduper::addUniqueKey()` verbatim so
+-- the two ways of arriving at this schema are textually identical; MySQL treats
+-- KEY and INDEX as synonyms here. The imposter branch replaces the squatting
+-- index in ONE atomic ALTER: a 1062 on the ADD rolls the DROP back with it, so
+-- a dirty table is never left with the imposter deleted and no constraint.
 SET @sql = IF(
-    @phlix_playback_state_key = 0 AND @phlix_playback_state_dupes = 0,
-    'ALTER TABLE playback_state ADD UNIQUE KEY uq_playback_state_session_media (session_id, media_item_id)',
-    'SELECT 0'
+    @phlix_playback_state_unique > 0 OR @phlix_playback_state_dupes = 1,
+    'SELECT 0',
+    IF(
+        @phlix_playback_state_imposter = 1,
+        'ALTER TABLE playback_state DROP INDEX `uq_playback_state_session_media`, ADD UNIQUE KEY uq_playback_state_session_media (session_id, media_item_id)',
+        'ALTER TABLE playback_state ADD UNIQUE KEY uq_playback_state_session_media (session_id, media_item_id)'
+    )
 );
 
 PREPARE stmt FROM @sql;

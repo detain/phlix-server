@@ -80,6 +80,21 @@
 -- the new one, so outcome (b) reports EXACTLY ONE error — the actionable one —
 -- and leaves nothing dangling.
 --
+-- S161 — SHAPE, NOT NAME. This file was the template migration 097 copied, so
+-- the name-only "already there?" probe is fixed HERE too, identically: a
+-- NON-UNIQUE index carrying `idx_media_items_library_path_hash` used to make
+-- this file no-op and record itself applied while `ItemRepository::upsertByPath()`
+-- kept losing concurrent-insert races (nothing to raise 1062 on) — the S152
+-- defect made permanently invisible. "Already there?" now means some index with
+-- `NON_UNIQUE = 0` covering exactly the `{library_id, path_hash}` column SET
+-- (order-independent: the uniqueness constraint does not depend on name; the
+-- `const` plan documented above does want the prefix, and the ADD below creates
+-- it in that order). A same-NAMED wrong-shape imposter is dropped and replaced
+-- in one atomic ALTER (a 1062 on the ADD rolls the DROP back). The accepted
+-- re-pay of the duplicate scan while a dirty install stays unrecorded, and the
+-- inherent, fail-safe scan↔ALTER TOCTOU, are argued in the 097 header
+-- ("S161 FINDING 4 — RECORDED, NOT FIXED") — the same reasoning applies here.
+--
 -- WHAT `cleanup_072.php` STILL OWNS: de-duplication, and only de-duplication.
 -- Merging a duplicate group means picking a keeper by user data
 -- (`PathDeduper::scoreItem()`) and repointing 20 referencing tables
@@ -90,10 +105,25 @@
 -- script's job (its `ALTER` stays there, idempotent, for operators mid-upgrade
 -- and for anyone who runs the finalizer on its own) — it is this migration's.
 
--- Is the unique index already there? (Production, and any DB whose operator ran
--- the finalizer.) Answering this first also lets the duplicate scan be skipped
+-- Is a UNIQUE index of the right SHAPE already there, under ANY name? (S161:
+-- the old name-only probe let a non-unique imposter satisfy it and record
+-- success.) Answering this first also lets the duplicate scan be skipped
 -- entirely on such a DB: the constraint itself proves there are none.
-SET @phlix_path_hash_index = (
+SET @phlix_path_hash_unique = (
+    SELECT COUNT(*) FROM (
+        SELECT INDEX_NAME
+        FROM information_schema.STATISTICS
+        WHERE TABLE_SCHEMA = DATABASE()
+        AND TABLE_NAME = 'media_items'
+        AND NON_UNIQUE = 0
+        GROUP BY INDEX_NAME
+        HAVING GROUP_CONCAT(COLUMN_NAME ORDER BY COLUMN_NAME) = 'library_id,path_hash'
+    ) phlix_unique_index_shapes
+);
+
+-- Does the CONTRACTUAL name exist at all? Only its SHAPE decides whether the
+-- migration acts; this probe names the imposter to replace.
+SET @phlix_path_hash_named = (
     SELECT EXISTS (
         SELECT 1 FROM information_schema.STATISTICS
         WHERE TABLE_SCHEMA = DATABASE()
@@ -102,12 +132,19 @@ SET @phlix_path_hash_index = (
     )
 );
 
--- Duplicates only matter when the index is missing. `path_hash` is NULL for the
--- 7 ENUM members outside the deduped scope (series, season, album, artist,
+-- An imposter: the contractual name, wrong shape, and no real constraint.
+SET @phlix_path_hash_imposter = IF(
+    @phlix_path_hash_unique = 0 AND @phlix_path_hash_named = 1,
+    1,
+    0
+);
+
+-- Duplicates only matter when the constraint is missing. `path_hash` is NULL for
+-- the 7 ENUM members outside the deduped scope (series, season, album, artist,
 -- music, video, photo) and MySQL never collides NULLs under a UNIQUE index, so
 -- those rows are correctly excluded here exactly as they are by the constraint.
 SET @phlix_path_hash_dupes = IF(
-    @phlix_path_hash_index,
+    @phlix_path_hash_unique,
     0,
     (
         SELECT EXISTS (
@@ -129,12 +166,19 @@ SET @sql = IF(
 
 PREPARE stmt FROM @sql;
 
--- Outcome (a) / (c). Re-preparing `stmt` implicitly frees whatever the guard
--- left behind.
+-- Outcome (a) / (c), plus the S161 imposter replacement. Re-preparing `stmt`
+-- implicitly frees whatever the guard left behind. The imposter branch replaces
+-- the squatting index in ONE atomic ALTER: a 1062 on the ADD rolls the DROP
+-- back with it, so a dirty table is never left with the imposter deleted and no
+-- constraint.
 SET @sql = IF(
-    @phlix_path_hash_index = 0 AND @phlix_path_hash_dupes = 0,
-    'ALTER TABLE media_items ADD UNIQUE INDEX idx_media_items_library_path_hash (library_id, path_hash)',
-    'SELECT 0'
+    @phlix_path_hash_unique > 0 OR @phlix_path_hash_dupes = 1,
+    'SELECT 0',
+    IF(
+        @phlix_path_hash_imposter = 1,
+        'ALTER TABLE media_items DROP INDEX `idx_media_items_library_path_hash`, ADD UNIQUE INDEX idx_media_items_library_path_hash (library_id, path_hash)',
+        'ALTER TABLE media_items ADD UNIQUE INDEX idx_media_items_library_path_hash (library_id, path_hash)'
+    )
 );
 
 PREPARE stmt FROM @sql;

@@ -7,6 +7,18 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Shape-aware UNIQUE-index detection in migrations 096/097 (S161).** Both chain-owned index
+  migrations (and `PlaybackStateDeduper::hasUniqueKey()`/`addUniqueKey()`) decided "already
+  applied?" by matching `INDEX_NAME` alone, so a same-named NON-UNIQUE index made the file
+  no-op and record success forever while duplicates survived and the upsert could never fire —
+  the original S156 defect made permanently invisible. The probe now requires `NON_UNIQUE = 0`
+  plus the exact column set: an equivalent UNIQUE under a different name is recognised (no
+  second, redundant index), and a same-named wrong-shape imposter is dropped and replaced in
+  one atomic ALTER. Pinned in both directions against real MySQL by
+  `tests/Integration/Common/Database/UniqueIndexShapeGuardTest.php`.
+
 ### Added
 
 - **`tests/` under Psalm at the measured level 5 (S306 server half, hub precedent #274).**

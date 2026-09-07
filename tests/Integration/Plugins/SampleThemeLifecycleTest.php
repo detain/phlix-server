@@ -72,6 +72,12 @@ final class SampleThemeLifecycleTest extends TestCase
     /** Ids the sample plugin contributes, in `providedThemes()` order. */
     private const SAMPLE_IDS = ['sample-dusk', 'sample-dusk-high-contrast'];
 
+    /**
+     * Guards the S166 autoload-chain invariant tests below: it reddens when a
+     * composer ClassLoader registration survives disable()/uninstall().
+     */
+    private const AUTOLOAD_LEAK_TOKEN = 'S166LOADERX5K2';
+
     private string $pluginsBaseDir = '';
     private string $loggerConfigPath = '';
     private InMemoryPluginsTable $fakeDb;
@@ -114,12 +120,7 @@ final class SampleThemeLifecycleTest extends TestCase
     #[PreserveGlobalState(false)]
     public function test_sample_theme_plugin_reaches_the_themes_endpoint_and_leaves_cleanly(): void
     {
-        if (trim((string) shell_exec('which composer 2>/dev/null')) === '') {
-            $this->markTestSkipped('composer binary not available on PATH - run in docker-compose for integration testing');
-        }
-
-        $source = realpath(__DIR__ . '/../../../examples/plugins/phlix-plugin-sample-theme');
-        $this->assertIsString($source, 'The shipped sample theme plugin must exist.');
+        $source = $this->requireComposerSource();
 
         $container = $this->buildContainer();
 
@@ -177,6 +178,214 @@ final class SampleThemeLifecycleTest extends TestCase
         // 5. Uninstall.
         $loader->uninstall('phlix-plugin-sample-theme');
         $this->assertDirectoryDoesNotExist($this->pluginsBaseDir . '/phlix-plugin-sample-theme');
+    }
+
+    /**
+     * S166 — the full install → enable → disable → uninstall cycle must return
+     * the `spl_autoload` chain to its exact pre-install state.
+     *
+     * `wire()` requires the installed copy's composer-generated
+     * `vendor/autoload.php`, which registers a `ClassLoader` on the chain. In a
+     * resident Workerman/Swoole worker that registration OUTLIVES the plugin:
+     * after `uninstall()` deletes the directory, the dead loader is still
+     * consulted on every future class-resolution miss, for the life of the
+     * worker. The invariant is asserted on chain COUNT and callable IDENTITY
+     * (per-callable object ids) — never on a stringified name, because
+     * `[$classLoader, 'loadClass']` stringifies identically across generations.
+     *
+     * @group integration
+     */
+    #[RunInSeparateProcess]
+    #[PreserveGlobalState(false)]
+    public function test_autoload_chain_returns_to_baseline_across_full_lifecycle_cycle(): void
+    {
+        $source = $this->requireComposerSource();
+
+        $container = $this->buildContainer();
+        /** @var PluginLoader $loader */
+        $loader = $container->get(PluginLoader::class);
+
+        $baseline = $this->autoloadChainState();
+
+        $loader->installFromDirectory($source);
+        $this->assertSame(
+            $baseline,
+            $this->autoloadChainState(),
+            self::AUTOLOAD_LEAK_TOKEN . ': installing alone must not register anything on the spl_autoload chain.',
+        );
+
+        $loader->enable('phlix-plugin-sample-theme');
+        $afterEnable = $this->autoloadChainState();
+        $this->assertGreaterThan(
+            count($baseline),
+            count($afterEnable),
+            self::AUTOLOAD_LEAK_TOKEN . ': precondition broken - the installed copy\'s composer ClassLoader was never'
+            . ' registered while enabled, so the cycle assertions below would measure nothing.',
+        );
+
+        $loader->disable('phlix-plugin-sample-theme');
+        $this->assertSame(
+            $baseline,
+            $this->autoloadChainState(),
+            self::AUTOLOAD_LEAK_TOKEN . ': disable() left a plugin composer ClassLoader on the spl_autoload chain.',
+        );
+
+        $loader->uninstall('phlix-plugin-sample-theme');
+        $this->assertSame(
+            $baseline,
+            $this->autoloadChainState(),
+            self::AUTOLOAD_LEAK_TOKEN . ': uninstall() left a dead composer ClassLoader on the spl_autoload chain'
+            . ' for the life of the worker - the exact S166 leak.',
+        );
+    }
+
+    /**
+     * S166 — the lazy admin-API path registers the plugin autoloader WITHOUT
+     * any enable cycle, so `uninstall()` must clean it up on its own, not only
+     * via `disable()`.
+     *
+     * @group integration
+     */
+    #[RunInSeparateProcess]
+    #[PreserveGlobalState(false)]
+    public function test_lazy_get_entry_instance_registration_is_removed_by_uninstall(): void
+    {
+        $source = $this->requireComposerSource();
+
+        $container = $this->buildContainer();
+        /** @var PluginLoader $loader */
+        $loader = $container->get(PluginLoader::class);
+
+        $baseline = $this->autoloadChainState();
+
+        $loader->installFromDirectory($source);
+        $instance = $loader->getEntryInstance('phlix-plugin-sample-theme');
+        $this->assertNotNull(
+            $instance,
+            self::AUTOLOAD_LEAK_TOKEN . ': getEntryInstance() must resolve the entry class through the installed'
+            . ' copy\'s autoloader for this test to exercise the lazy path.',
+        );
+        $this->assertGreaterThan(
+            count($baseline),
+            count($this->autoloadChainState()),
+            self::AUTOLOAD_LEAK_TOKEN . ': precondition broken - the lazy getEntryInstance() path registered no'
+            . ' autoloader, so the uninstall assertion below would measure nothing.',
+        );
+
+        $loader->uninstall('phlix-plugin-sample-theme');
+        $this->assertSame(
+            $baseline,
+            $this->autoloadChainState(),
+            self::AUTOLOAD_LEAK_TOKEN . ': uninstall() after a lazy getEntryInstance() (no enable/disable cycle)'
+            . ' left the plugin ClassLoader on the chain.',
+        );
+    }
+
+    /**
+     * S166 — re-enable in the same process must put the IDENTICAL captured
+     * callables back on the chain.
+     *
+     * `require_once` never re-executes an already-included file, so after a
+     * disable() detached the handles, enable() cannot rely on the require to
+     * re-register them; only re-attaching the captured callables keeps plugin
+     * classes that have not yet been autoloaded resolvable.
+     *
+     * @group integration
+     */
+    #[RunInSeparateProcess]
+    #[PreserveGlobalState(false)]
+    public function test_re_enable_reattaches_captured_autoloader_and_uninstall_leaves_chain_clean(): void
+    {
+        $source = $this->requireComposerSource();
+
+        $container = $this->buildContainer();
+        /** @var PluginLoader $loader */
+        $loader = $container->get(PluginLoader::class);
+
+        $baseline = $this->autoloadChainState();
+
+        $loader->installFromDirectory($source);
+        $loader->enable('phlix-plugin-sample-theme');
+        $firstEnable = $this->autoloadChainState();
+        $this->assertGreaterThan(
+            count($baseline),
+            count($firstEnable),
+            self::AUTOLOAD_LEAK_TOKEN . ': enable() registered nothing.',
+        );
+
+        $loader->disable('phlix-plugin-sample-theme');
+        $this->assertSame(
+            $baseline,
+            $this->autoloadChainState(),
+            self::AUTOLOAD_LEAK_TOKEN . ': disable() leaked a loader.',
+        );
+
+        $loader->enable('phlix-plugin-sample-theme');
+        $this->assertSame(
+            $firstEnable,
+            $this->autoloadChainState(),
+            self::AUTOLOAD_LEAK_TOKEN . ': re-enable did not put the identical composer ClassLoader back on the'
+            . ' chain - plugin classes not yet loaded would be unresolvable in a resident worker.',
+        );
+        $this->assertTrue(
+            class_exists('Phlix\\PluginSampleTheme\\SampleThemePlugin'),
+            self::AUTOLOAD_LEAK_TOKEN . ': the entry class must resolve after re-enable.',
+        );
+
+        $loader->uninstall('phlix-plugin-sample-theme');
+        $this->assertSame(
+            $baseline,
+            $this->autoloadChainState(),
+            self::AUTOLOAD_LEAK_TOKEN . ': uninstall() after a re-enable cycle left a ClassLoader on the chain.',
+        );
+    }
+
+    /**
+     * Skip-with-rationale when composer is absent, then return the absolute
+     * path of the shipped sample theme plugin source directory.
+     */
+    private function requireComposerSource(): string
+    {
+        if (trim((string) shell_exec('which composer 2>/dev/null')) === '') {
+            $this->markTestSkipped(
+                'composer binary not available on PATH - run in docker-compose for integration testing'
+            );
+        }
+
+        $source = realpath(__DIR__ . '/../../../examples/plugins/phlix-plugin-sample-theme');
+        $this->assertIsString($source, 'The shipped sample theme plugin must exist.');
+
+        return $source;
+    }
+
+    /**
+     * Snapshot of the `spl_autoload` chain as identity keys, order-normalised.
+     *
+     * Each callable is keyed by object identity (`spl_object_id` of the loader
+     * instance + method), never by a string name that two ClassLoader
+     * generations would share.
+     *
+     * @return list<string>
+     */
+    private function autoloadChainState(): array
+    {
+        $state = [];
+        foreach (spl_autoload_functions() ?: [] as $callable) {
+            if (is_object($callable)) {
+                $state[] = 'object:' . spl_object_id($callable);
+                continue;
+            }
+            if (is_string($callable)) {
+                $state[] = 'function:' . $callable;
+                continue;
+            }
+            $target = $callable[0];
+            $state[] = (is_object($target) ? 'object:' . spl_object_id($target) : 'class:' . $target)
+                . '::' . (string) $callable[1];
+        }
+        sort($state);
+
+        return $state;
     }
 
     /**

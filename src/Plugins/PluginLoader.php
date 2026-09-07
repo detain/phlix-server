@@ -87,6 +87,25 @@ class PluginLoader
      */
     private array $entryInstances = [];
 
+    /**
+     * S166 — per-plugin record of the `spl_autoload` callables that the
+     * plugin's generated `vendor/autoload.php` registered, captured by
+     * diffing {@see spl_autoload_functions()} around each require.
+     *
+     * `registered` says whether those exact callables are CURRENTLY on the
+     * autoload chain. {@see disable()} and {@see uninstall()} take them off
+     * (a dead composer `ClassLoader` left on the chain is consulted on every
+     * future class-resolution miss for the life of the resident worker, and
+     * after an uninstall points at a deleted directory); the handles are kept
+     * so a later `enable()` in the same process can re-attach them — the
+     * plugin path's `require_once` cannot re-fire once the file has been
+     * included, so the diff would come back empty and the plugin would silently
+     * lose autoloading for any class not yet loaded.
+     *
+     * @var array<string, array{loaders: list<callable>, registered: bool}>
+     */
+    private array $pluginAutoloaders = [];
+
     public function __construct(
         private readonly HttpInstaller $installer,
         private readonly ComposerRunner $composer,
@@ -365,10 +384,10 @@ class PluginLoader
     {
         $name = $installed->name();
 
-        $autoload = $installed->directory . DIRECTORY_SEPARATOR . 'vendor' . DIRECTORY_SEPARATOR . 'autoload.php';
-        if (is_file($autoload)) {
-            require_once $autoload;
-        }
+        $this->loadPluginAutoloader(
+            $name,
+            $installed->directory . DIRECTORY_SEPARATOR . 'vendor' . DIRECTORY_SEPARATOR . 'autoload.php',
+        );
 
         $entryFqcn = $installed->manifest->entry;
         if (!class_exists($entryFqcn)) {
@@ -785,6 +804,13 @@ class PluginLoader
         }
         unset($this->entryInstances[$name]);
 
+        // S166: take this plugin's composer ClassLoader off the spl_autoload
+        // chain (kept for re-attach by a later enable() in this process). Done
+        // AFTER onDisable() so plugin code can still autoload while shutting
+        // down. A resident worker that skipped this accumulates one dead loader
+        // per enable/uninstall cycle, each consulted on every future miss.
+        $this->detachPluginAutoloaders($name);
+
         $this->repository->setEnabled($name, false);
 
         $this->auditLogger->logPluginAction(
@@ -814,6 +840,13 @@ class PluginLoader
             $this->disable($name);
         }
 
+        // S166: the enabled path above already detached via disable(); this
+        // catches the uninstall-while-disabled case, where a lazy
+        // getEntryInstance() (or an enable in a previous lifecycle) may still
+        // have the plugin's ClassLoader on the chain about to point at the
+        // directory deleted on the next line.
+        $this->detachPluginAutoloaders($name);
+
         RecursiveDelete::remove($installed->directory);
         $this->repository->delete($name);
 
@@ -827,6 +860,144 @@ class PluginLoader
             'plugin' => $name,
             'directory' => $installed->directory,
         ]);
+    }
+
+    /**
+     * Require a plugin's generated composer autoloader and record exactly
+     * which `spl_autoload` callables that require registered (S166).
+     *
+     * The require is `require_once`-guarded, so in one process a given plugin
+     * path executes at most once: the diff around the require is the only
+     * mechanism that can attribute new chain entries to this plugin (the file
+     * itself returns nothing usable, and composer caches its loader instance
+     * against re-registration). A `require_once` re-entry yields an empty
+     * diff — for a plugin whose handles were taken off the chain by a prior
+     * {@see disable()}/{@see uninstall()}, the exact captured callables are
+     * re-attached instead, since the file cannot fire again here.
+     *
+     * Callables are tracked by object identity, never by string name: the
+     * composer registration is the array callable `[$classLoader, 'loadClass']`
+     * and two ClassLoader generations stringify identically.
+     */
+    private function loadPluginAutoloader(string $pluginName, string $autoloadFile): void
+    {
+        if (!is_file($autoloadFile)) {
+            // Non-composer plugin (no generated vendor/autoload.php): nothing
+            // to capture, nothing to unregister — behaviour unchanged.
+            return;
+        }
+
+        $before = self::autoloadChainIds();
+        require_once $autoloadFile;
+        $fresh = self::newAutoloadCallables($before);
+
+        if ($fresh !== []) {
+            // The file genuinely executed: this generation replaces whatever
+            // was recorded for this plugin (retire it off the chain first).
+            $this->detachPluginAutoloaders($pluginName);
+            $this->pluginAutoloaders[$pluginName] = ['loaders' => $fresh, 'registered' => true];
+
+            return;
+        }
+
+        if (!isset($this->pluginAutoloaders[$pluginName]) || $this->pluginAutoloaders[$pluginName]['registered']) {
+            // Either an autoload file that registers nothing, or a re-entry
+            // whose handles are still attached — nothing to do.
+            return;
+        }
+
+        foreach ($this->pluginAutoloaders[$pluginName]['loaders'] as $callable) {
+            spl_autoload_register($callable);
+        }
+        $this->pluginAutoloaders[$pluginName]['registered'] = true;
+    }
+
+    /**
+     * Take a plugin's captured autoloader callables off the `spl_autoload`
+     * chain, keeping the handles for a later re-attach by
+     * {@see self::loadPluginAutoloader()}. Safe to call repeatedly and safe
+     * to call when nothing was captured or already detached.
+     */
+    private function detachPluginAutoloaders(string $pluginName): void
+    {
+        $captured = $this->pluginAutoloaders[$pluginName] ?? null;
+        if ($captured === null || !$captured['registered']) {
+            return;
+        }
+
+        foreach ($captured['loaders'] as $callable) {
+            // spl_autoload_unregister() returns false for an already-gone
+            // callable instead of raising — a double detach must not abort the
+            // rest of disable()/uninstall().
+            spl_autoload_unregister($callable);
+        }
+        $this->pluginAutoloaders[$pluginName]['registered'] = false;
+    }
+
+    /**
+     * Identity keys of every callable currently on the `spl_autoload` chain,
+     * in chain order.
+     *
+     * @return list<string>
+     */
+    private static function autoloadChainIds(): array
+    {
+        $ids = [];
+        foreach (spl_autoload_functions() ?: [] as $callable) {
+            $ids[] = self::autoloadCallableId($callable);
+        }
+
+        return $ids;
+    }
+
+    /**
+     * Chain entries present now that were absent from `$beforeIds`, by
+     * object identity.
+     *
+     * @param list<string> $beforeIds
+     *
+     * @return list<callable>
+     */
+    private static function newAutoloadCallables(array $beforeIds): array
+    {
+        $seen = array_flip($beforeIds);
+        $fresh = [];
+        foreach (spl_autoload_functions() ?: [] as $callable) {
+            if (!isset($seen[self::autoloadCallableId($callable)])) {
+                $fresh[] = $callable;
+            }
+        }
+
+        return $fresh;
+    }
+
+    /**
+     * Stable identity key for one `spl_autoload` callable: object id for
+     * instance callables (two composer ClassLoader generations over the same
+     * path are distinct objects but stringified-identical), class name for a
+     * static-array callable, plain name otherwise.
+     */
+    private static function autoloadCallableId(mixed $callable): string
+    {
+        if (is_string($callable)) {
+            return 'function:' . $callable;
+        }
+
+        if (is_object($callable)) {
+            return 'object:' . spl_object_id($callable);
+        }
+
+        if (is_array($callable) && is_string($callable[1] ?? null)) {
+            $target = $callable[0] ?? null;
+
+            if (is_object($target)) {
+                return 'object:' . spl_object_id($target) . '::' . $callable[1];
+            }
+
+            return 'class:' . (is_string($target) ? $target : gettype($target)) . '::' . $callable[1];
+        }
+
+        return 'opaque:' . gettype($callable);
     }
 
     /**
@@ -913,10 +1084,10 @@ class PluginLoader
     {
         $installed = $this->repository->findByName($name);
 
-        $autoload = $installed->directory . DIRECTORY_SEPARATOR . 'vendor' . DIRECTORY_SEPARATOR . 'autoload.php';
-        if (is_file($autoload)) {
-            require_once $autoload;
-        }
+        $this->loadPluginAutoloader(
+            $name,
+            $installed->directory . DIRECTORY_SEPARATOR . 'vendor' . DIRECTORY_SEPARATOR . 'autoload.php',
+        );
 
         $entryFqcn = $installed->manifest->entry;
         if (!class_exists($entryFqcn)) {

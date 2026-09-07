@@ -199,8 +199,12 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * denominator moves.
      * Re-pinned 1789→1790 by S161: the index-shape arc adds one test file
      * (UniqueIndexShapeGuardTest); it does not name Request — same pattern.
+     * Re-pinned 1790→1786 by S227: the theming-island deletion removes five
+     * .php files (ThemeRegistry, Theme, ThemePluginInterface, config/themes.php,
+     * ThemeRegistryTest) and adds one guard test (ThemingIslandRemovedTest) —
+     * a net −4; neither names Request — same pattern.
      */
-    private const EXPECTED_PHP_FILES = 1790;
+    private const EXPECTED_PHP_FILES = 1786;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

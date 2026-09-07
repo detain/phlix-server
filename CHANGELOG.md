@@ -7,6 +7,16 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Removed
+
+- **The pre-S84 `ThemeRegistry` theming island (S227).** `ThemeRegistry`, `Theme`,
+  `ThemePluginInterface`, `config/themes.php` and their unit test had zero implementors and zero
+  resolvers estate-wide — only `ThemingServicesProvider` still constructed the registry, and nobody
+  resolved it. With S84–S86 complete they were a second, fake theming subsystem beside the real
+  token-map one, carrying the name a reader reaches for first. The container binding is gone, two
+  historical `{@see}` pointers were reworded, and `tests/Unit/Theming/ThemingIslandRemovedTest.php`
+  now fails if any of it returns. `ThemeSourceRegistry` and the real subsystem are untouched.
+
 ### Fixed
 
 - **Shape-aware UNIQUE-index detection in migrations 096/097 (S161).** Both chain-owned index

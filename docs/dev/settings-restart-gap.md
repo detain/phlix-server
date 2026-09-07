@@ -359,7 +359,7 @@ generation guard turns 6 red; removing the boot fail-safe turns the unreachable-
 - `phlix-hub` has the same class of gap; `EffectiveConfig` has no hub counterpart.
 - Other direct `include`s of config files remain (`Application::loadFfmpegConfig()`,
   `StreamProbeBackfill::resolveFfmpeg()`, the webhook notification plugins, `MetadataManager`,
-  `ThemeRegistry`, …). They were audited and read **no** `restart: true` key — they read binary
+  …). They were audited and read **no** `restart: true` key — they read binary
   paths and unexposed settings — so they were deliberately left alone rather than widening this
   step's blast radius. Route any of them through `EffectiveConfig::file()` if a key they read is
   ever exposed in the schema.

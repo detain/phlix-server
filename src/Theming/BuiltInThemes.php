@@ -20,8 +20,9 @@ namespace Phlix\Theming;
  * "built-in + plugin-registered themes **with their token maps**". That phrase
  * settles which of the two candidate theme systems is meant: these three
  * (`nocturne` / `daylight` / `midnight`), whose whole substance IS a token map,
- * and NOT `config/themes.php`'s four `phlix-*` entries, which carry a URL to a
- * stylesheet FILE and have no tokens at all. Three more signals agree:
+ * and NOT the four legacy `phlix-*` entries of the pre-S84 stylesheet-URL theme
+ * config (deleted in S227), which carried a URL to a
+ * stylesheet FILE and had no tokens at all. Three more signals agree:
  * {@see ThemeTokenValidator::RESERVED_IDS} already reserves exactly these three
  * ids against plugin hijacking; {@see ThemeSourceRegistry::resolveTokens()}
  * calls them "the SPA's built-in ids"; and S86's own criterion names

@@ -373,7 +373,7 @@ final class Fmp4HlsPlaybackE2ETest extends TestCase
      * The probe server's request log, filtered by filename and reduced to
      * `{name, status}` so a comparison reads legibly on failure.
      *
-     * @param array{requests: list<array{name: string, status: int, bytes: int}>} $probe
+     * @param array{requests: list<array{name: string, status: int, bytes: int, ...}>, ...} $probe
      *
      * @return list<array{name: string, status: int}>
      */
@@ -390,7 +390,7 @@ final class Fmp4HlsPlaybackE2ETest extends TestCase
     }
 
     /**
-     * @param array{errors: list<array<string, mixed>>} $probe
+     * @param array{errors: list<array<string, mixed>>, ...} $probe
      *
      * @return list<array<string, mixed>>
      */

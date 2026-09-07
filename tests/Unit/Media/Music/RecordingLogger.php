@@ -30,7 +30,7 @@ final class RecordingLogger extends AbstractLogger
     /**
      * @param mixed $level
      * @param string|\Stringable $message
-     * @param array<string, mixed> $context
+     * @param array<array-key, mixed> $context
      */
     public function log($level, string|\Stringable $message, array $context = []): void
     {

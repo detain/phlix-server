@@ -33,6 +33,12 @@ final class AbstractEventTest extends TestCase
         // report it, re-add a suppression WITH its identifier so the next unmatched one
         // is loud again. (⚠ And do not name the directive in prose: PHPStan parses it
         // out of a `//` comment too, which turns the explanation into a parse error.)
+        //
+        // The tests/ level IS now high enough: Psalm 6 reports this intentional
+        // readonly write as InaccessibleProperty, so the suppression is re-added as
+        // S128 directed — the write is the test (expectException(\Error) above
+        // proves immutability), and the suppression states that, never the finding.
+        /** @psalm-suppress InaccessibleProperty - intentional write; PHP must throw Error */
         $event->timestamp = 0;
     }
 }

@@ -109,7 +109,9 @@ final class MpdSchema
         $dir = __DIR__;
         libxml_set_external_entity_loader(
             /**
-             * @param array{directory?: string|null} $context
+             * @param array{directory: string|null, extSubSystem: string|null, extSubURI: string|null, intSubName: string|null} $context
+             *        The four fields libxml always passes (PSR-12 long line waived: this is
+             *        the stub's array shape, verbatim, and splitting it hurts readability).
              */
             static function (?string $publicId, string $systemId, array $context) use ($dir): ?string {
                 $local = $dir . '/' . basename(parse_url($systemId, PHP_URL_PATH) ?: $systemId);

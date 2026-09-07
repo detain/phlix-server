@@ -174,6 +174,10 @@ final class MusicLibraryScannerTest extends TestCase
             ],
         ]);
 
+        /** @var list<string> $mediaItemTypes */
+        $mediaItemTypes = [];
+        /** @var list<array{sql: string, params: array<int, mixed>}> $inserts */
+        $inserts = [];
         $db = $this->emptyDbMock($mediaItemTypes, $inserts);
         $scanner = new MusicLibraryScanner($db, $ffmpeg);
 
@@ -210,6 +214,10 @@ final class MusicLibraryScannerTest extends TestCase
             'track.mp3' => ['artist' => 'Solo', 'album' => 'Demo', 'title' => 'One', 'track' => '1'],
         ]);
 
+        /** @var list<string> $mediaItemTypes */
+        $mediaItemTypes = [];
+        /** @var list<array{sql: string, params: array<int, mixed>}> $inserts */
+        $inserts = [];
         $db = $this->emptyDbMock($mediaItemTypes, $inserts);
         $scanner = new MusicLibraryScanner($db, $ffmpeg);
 
@@ -225,6 +233,10 @@ final class MusicLibraryScannerTest extends TestCase
         // ffprobe returns null → filename fallback → artist null → 'Unknown Artist'.
         $ffmpeg = $this->ffmpegReturning([]);
 
+        /** @var list<string> $mediaItemTypes */
+        $mediaItemTypes = [];
+        /** @var list<array{sql: string, params: array<int, mixed>}> $inserts */
+        $inserts = [];
         $db = $this->emptyDbMock($mediaItemTypes, $inserts);
         $scanner = new MusicLibraryScanner($db, $ffmpeg);
 
@@ -477,6 +489,10 @@ final class MusicLibraryScannerTest extends TestCase
             'Nice Track.mp3' => ['artist' => 'A', 'album' => 'B'], // no title tag
         ]);
 
+        /** @var list<string> $mediaItemTypes */
+        $mediaItemTypes = [];
+        /** @var list<array{sql: string, params: array<int, mixed>}> $inserts */
+        $inserts = [];
         $db = $this->emptyDbMock($mediaItemTypes, $inserts);
         $scanner = new MusicLibraryScanner($db, $ffmpeg);
         $scanner->scanDirectory($dir);
@@ -603,6 +619,10 @@ final class MusicLibraryScannerTest extends TestCase
             'song.mp3' => ['artist' => 'WRONG', 'album' => 'WRONG', 'title' => 'WRONG'],
         ]);
 
+        /** @var list<string> $mediaItemTypes */
+        $mediaItemTypes = [];
+        /** @var list<array{sql: string, params: array<int, mixed>}> $inserts */
+        $inserts = [];
         $db = $this->emptyDbMock($mediaItemTypes, $inserts);
         $scanner = new FakeGetId3Scanner($db, $ffmpeg);
         $scanner->fakeComments = [
@@ -675,10 +695,14 @@ final class MusicLibraryScannerTest extends TestCase
         $mediaItemInserts = [];
         $trackInserts = [];
 
-        $artists = [];      // nameLower => ['id'=>int, 'media_item_id'=>string]
-        $albums = [];       // "artistId|titleLower" => ['id'=>int, 'media_item_id'=>string]
-        $mediaItems = [];   // list of ['id','library_id','type','name','path']
-        $tracks = [];       // media_item_id => track row
+        /** @var array<string, array{id: int, media_item_id: string}> $artists keyed by nameLower */
+        $artists = [];
+        /** @var array<string, array{id: int, media_item_id: string}> $albums keyed by "artistId|titleLower" */
+        $albums = [];
+        /** @var list<array{id: string, library_id: ?int, type: string, name: string, path: string}> $mediaItems */
+        $mediaItems = [];
+        /** @var array<string, array<string, mixed>> $tracks keyed by media_item_id */
+        $tracks = [];
         $autoInt = 0;
 
         $db = $this->createMock(Connection::class);
@@ -818,6 +842,10 @@ final class MusicLibraryScannerTest extends TestCase
         $dir = $this->tempDir();
         $this->touchFile($dir, 'song.mp3');
 
+        /** @var list<array<int, mixed>> $mediaItemInserts */
+        $mediaItemInserts = [];
+        /** @var list<array<int, mixed>> $trackInserts */
+        $trackInserts = [];
         $db = $this->statefulDbMock($mediaItemInserts, $trackInserts);
         $scanner = new MusicLibraryScanner($db, $this->ffmpegSong());
 
@@ -845,6 +873,10 @@ final class MusicLibraryScannerTest extends TestCase
         $dir = $this->tempDir();
         $this->touchFile($dir, 'song.mp3');
 
+        /** @var list<array<int, mixed>> $mediaItemInserts */
+        $mediaItemInserts = [];
+        /** @var list<array<int, mixed>> $trackInserts */
+        $trackInserts = [];
         $db = $this->statefulDbMock($mediaItemInserts, $trackInserts);
         $dispatcher = new RecordingEventDispatcher();
         $scanner = new MusicLibraryScanner($db, $this->ffmpegSong(), null, $dispatcher);
@@ -875,6 +907,10 @@ final class MusicLibraryScannerTest extends TestCase
         $dir = $this->tempDir();
         $this->touchFile($dir, 'song.mp3');
 
+        /** @var list<array<int, mixed>> $mediaItemInserts */
+        $mediaItemInserts = [];
+        /** @var list<array<int, mixed>> $trackInserts */
+        $trackInserts = [];
         $db = $this->statefulDbMock($mediaItemInserts, $trackInserts);
         $dispatcher = new RecordingEventDispatcher();
         $scanner = new MusicLibraryScanner($db, $this->ffmpegSong(), null, $dispatcher);
@@ -891,6 +927,10 @@ final class MusicLibraryScannerTest extends TestCase
         $dir = $this->tempDir();
         $this->touchFile($dir, 'song.mp3');
 
+        /** @var list<array<int, mixed>> $mediaItemInserts */
+        $mediaItemInserts = [];
+        /** @var list<array<int, mixed>> $trackInserts */
+        $trackInserts = [];
         $db = $this->statefulDbMock($mediaItemInserts, $trackInserts);
         $scanner = new MusicLibraryScanner($db, $this->ffmpegSong());
 
@@ -1196,6 +1236,10 @@ final class MusicLibraryScannerTest extends TestCase
             $this->touchFile($discDir, '02-b.mp3');
         }
 
+        /** @var list<array<int, mixed>> $mediaItemInserts */
+        $mediaItemInserts = [];
+        /** @var list<array<int, mixed>> $trackInserts */
+        $trackInserts = [];
         $db = $this->statefulDbMock($mediaItemInserts, $trackInserts);
         $scanner = $this->taggedScanner($db, static fn(string $path): array => [
             'artist' => 'One Artist',
@@ -1237,6 +1281,10 @@ final class MusicLibraryScannerTest extends TestCase
             $this->touchFile($dir, sprintf('%s-%02d.mp3', $album, $n));
         }
 
+        /** @var list<array<int, mixed>> $mediaItemInserts */
+        $mediaItemInserts = [];
+        /** @var list<array<int, mixed>> $trackInserts */
+        $trackInserts = [];
         $db = $this->statefulDbMock($mediaItemInserts, $trackInserts);
         $scanner = $this->taggedScanner($db, static function (string $path): array {
             $letter = substr(basename($path), 0, 1);
@@ -1277,6 +1325,10 @@ final class MusicLibraryScannerTest extends TestCase
             $this->touchFile($dir, sprintf('%03d-t.mp3', $i));
         }
 
+        /** @var list<array<int, mixed>> $mediaItemInserts */
+        $mediaItemInserts = [];
+        /** @var list<array<int, mixed>> $trackInserts */
+        $trackInserts = [];
         $db = $this->statefulDbMock($mediaItemInserts, $trackInserts);
         $scanner = $this->taggedScanner($db, static fn(string $path): array => [
             'artist' => 'Bulk Artist',
@@ -3940,7 +3992,7 @@ final class CountingConnection extends Connection
 
     /**
      * @param string $query SQL statement.
-     * @param array<int, mixed>|null $params Bound parameters.
+     * @param array<array-key, mixed>|null $params Bound parameters.
      * @param int $fetchmode PDO fetch mode (unused).
      * @return array<int, mixed>|int|string Rows for SELECT, else an affected-row stand-in.
      */
@@ -4367,7 +4419,7 @@ final class MusicSchemaConnection extends Connection
 
     /**
      * @param string $query SQL statement.
-     * @param array<int, mixed>|null $params Bound parameters.
+     * @param array<array-key, mixed>|null $params Bound parameters.
      * @param int $fetchmode PDO fetch mode (unused).
      * @return array<int, mixed>|int|string|false|null Rows for SELECT/SHOW, the insert id as
      *         a STRING for an INSERT (`'0'` for `media_items` — UUID PK, no AUTO_INCREMENT),
@@ -4969,7 +5021,7 @@ final class LogWriteFailureLogger extends StructuredLogger
 
     /**
      * @param mixed $level
-     * @param array<string, mixed> $context
+     * @param array<array-key, mixed> $context
      */
     public function log($level, string|\Stringable $message, array $context = []): void
     {

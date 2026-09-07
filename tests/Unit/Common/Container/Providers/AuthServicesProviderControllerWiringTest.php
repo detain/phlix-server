@@ -90,15 +90,15 @@ final class AuthServicesProviderControllerWiringTest extends TestCase
         $container = $this->buildContainer($this->overLimitDb());
 
         $controller = $container->get(AuthController::class);
-        $registerLimiter = (fn () => $this->registerLimiter)->call($controller);
-        $refreshLimiter = (fn () => $this->refreshLimiter)->call($controller);
+        $registerLimiter = (fn (string $name): mixed => $this->$name)->call($controller, 'registerLimiter');
+        $refreshLimiter = (fn (string $name): mixed => $this->$name)->call($controller, 'refreshLimiter');
 
         self::assertSame($container->get(RateLimitProfiles::REGISTER), $registerLimiter);
         self::assertSame($container->get(RateLimitProfiles::REFRESH), $refreshLimiter);
 
         $webauthn = $container->get(WebAuthnController::class);
-        $startLimiter = (fn () => $this->startAuthLimiter)->call($webauthn);
-        $finishLimiter = (fn () => $this->finishAuthLimiter)->call($webauthn);
+        $startLimiter = (fn (string $name): mixed => $this->$name)->call($webauthn, 'startAuthLimiter');
+        $finishLimiter = (fn (string $name): mixed => $this->$name)->call($webauthn, 'finishAuthLimiter');
 
         self::assertSame($container->get(RateLimitProfiles::WEBAUTHN_START), $startLimiter);
         self::assertSame($container->get(RateLimitProfiles::WEBAUTHN_FINISH), $finishLimiter);

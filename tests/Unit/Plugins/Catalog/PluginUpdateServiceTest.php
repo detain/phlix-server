@@ -232,7 +232,13 @@ final class PluginUpdateServiceTest extends TestCase
         ]);
         $this->expect($loader, 'install')->once()->with(self::ANIDB_REPO, $sha, $ref)->andReturn($manifest);
 
-        $svc = new PluginUpdateService($loader, $catalog, fn (string $u, int $t): string => throw new \RuntimeException('no manifest fetch'));
+        $svc = new PluginUpdateService(
+            $loader,
+            $catalog,
+            static function (string $u, int $t) {
+                throw new \RuntimeException('no manifest fetch');
+            },
+        );
         $result = $svc->update('phlix-plugin-anidb');
         self::assertSame('0.2.0', $result->version);
     }

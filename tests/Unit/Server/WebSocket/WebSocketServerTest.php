@@ -204,9 +204,12 @@ class WebSocketServerTest extends TestCase
         $this->assertSame([$server, 'onWebSocketConnect'], $listener->onWebSocketConnect);
 
         // The load-bearing one: the pong handler must resolve off the accepting
-        // worker, so it must be bound on the injected listener.
-        // @phpstan-ignore-next-line property.notFound
-        $this->assertSame([$server, 'onWebSocketPong'], $listener->onWebSocketPong);
+        // worker, so it must be bound on the injected listener. S306: read via
+        // Reflection because the property is created dynamically at bind time —
+        // neither PHPStan (which needed the old inline ignore) nor Psalm models
+        // it, and reflection both resolves it and fails loudly when missing.
+        $pongProperty = (new \ReflectionObject($listener))->getProperty('onWebSocketPong');
+        $this->assertSame([$server, 'onWebSocketPong'], $pongProperty->getValue($listener));
 
         // The injected caller-owned onWorkerStart must NOT be clobbered — the
         // resident path owns that lifecycle and calls onStart() itself.

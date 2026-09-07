@@ -213,13 +213,9 @@ final class AccountLinkIntegrationTest extends TestCase
         // DB really rejected it — this is the backstop, not the pre-check path.
         $this->assertSame(
             1,
-            // S128: raceRepositoryMissingFirstPrecheck() returns an ANONYMOUS subclass
-            // that declares createAttempts(). A return type can only name
-            // UserIdentityRepository, and unlike a property an extra METHOD cannot be
-            // expressed as an object-shape intersection. Suppressed WITH its identifier,
-            // so the day the method lands on the real repository — or the double stops
-            // declaring it — this line goes red as an unmatched suppression.
-            // @phpstan-ignore method.notFound
+            // S128/S306: the double is a named subclass whose native return type
+            // declares createAttempts(), so both PHPStan and Psalm resolve the call
+            // directly — no suppression needed on either side.
             $raceRepo->createAttempts(),
             'B must have attempted create() (the pre-check was forced to miss)',
         );
@@ -486,44 +482,9 @@ final class AccountLinkIntegrationTest extends TestCase
      * inherited unchanged, so it genuinely exercises the migration-092 UNIQUE
      * index as the conflict authority.
      */
-    private function raceRepositoryMissingFirstPrecheck(): UserIdentityRepository
+    private function raceRepositoryMissingFirstPrecheck(): PrecheckRacingUserIdentityRepository
     {
-        return new class ($this->conn()) extends UserIdentityRepository {
-            private int $precheckCalls = 0;
-
-            private int $createCalls = 0;
-
-            public function findByProviderExternalId(
-                string $provider,
-                ?string $providerInstance,
-                string $externalId
-            ): ?array {
-                $this->precheckCalls++;
-                if ($this->precheckCalls === 1) {
-                    // Race window: pretend the row is not there yet.
-                    return null;
-                }
-
-                return parent::findByProviderExternalId($provider, $providerInstance, $externalId);
-            }
-
-            public function create(
-                string $userId,
-                string $provider,
-                ?string $providerInstance,
-                string $externalId,
-                array|string|null $providerData = null
-            ): string {
-                $this->createCalls++;
-
-                return parent::create($userId, $provider, $providerInstance, $externalId, $providerData);
-            }
-
-            public function createAttempts(): int
-            {
-                return $this->createCalls;
-            }
-        };
+        return new PrecheckRacingUserIdentityRepository($this->conn());
     }
 
     /**
@@ -770,5 +731,53 @@ final class AccountLinkIntegrationTest extends TestCase
         );
 
         return array_values($parts);
+    }
+}
+
+/**
+ * UserIdentityRepository double that forces the find-then-create race: the
+ * FIRST pre-check misses, every create() attempt is counted (built by
+ * {@see AccountLinkIntegrationTest::raceRepositoryMissingFirstPrecheck()}).
+ *
+ * S306: previously an anonymous class hidden behind a UserIdentityRepository
+ * return type, which forced a per-line method.notFound suppression for the
+ * createAttempts() read; naming the double makes the method visible to both
+ * static analysers natively.
+ */
+final class PrecheckRacingUserIdentityRepository extends UserIdentityRepository
+{
+    private int $precheckCalls = 0;
+
+    private int $createCalls = 0;
+
+    public function findByProviderExternalId(
+        string $provider,
+        ?string $providerInstance,
+        string $externalId
+    ): ?array {
+        $this->precheckCalls++;
+        if ($this->precheckCalls === 1) {
+            // Race window: pretend the row is not there yet.
+            return null;
+        }
+
+        return parent::findByProviderExternalId($provider, $providerInstance, $externalId);
+    }
+
+    public function create(
+        string $userId,
+        string $provider,
+        ?string $providerInstance,
+        string $externalId,
+        array|string|null $providerData = null
+    ): string {
+        $this->createCalls++;
+
+        return parent::create($userId, $provider, $providerInstance, $externalId, $providerData);
+    }
+
+    public function createAttempts(): int
+    {
+        return $this->createCalls;
     }
 }

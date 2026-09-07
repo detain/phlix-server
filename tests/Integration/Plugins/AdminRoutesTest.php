@@ -161,8 +161,9 @@ final class AdminRoutesTest extends TestCase
         // and an offline fetcher (the lifecycle tests never hit the network).
         $catalogService = new PluginCatalogService(
             new SettingsRepository($this->createMock(Connection::class)),
-            static fn (string $url, int $timeout): string =>
-                throw new \RuntimeException('catalog fetch disabled in tests'),
+            static function (string $url, int $timeout) {
+                throw new \RuntimeException('catalog fetch disabled in tests');
+            },
         );
         $pluginCatalogController = new PluginCatalogController(
             $catalogService,
@@ -171,8 +172,9 @@ final class AdminRoutesTest extends TestCase
             new PluginUpdateService(
                 $this->loader,
                 $catalogService,
-                static fn (string $url, int $timeout): string =>
-                    throw new \RuntimeException('update fetch disabled in tests'),
+                static function (string $url, int $timeout) {
+                    throw new \RuntimeException('update fetch disabled in tests');
+                },
             ),
         );
 

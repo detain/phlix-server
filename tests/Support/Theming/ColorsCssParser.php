@@ -191,7 +191,7 @@ final class ColorsCssParser
      * detection. Recursion terminates because every chain in the file is a
      * DAG of whole-value references, and any cycle throws.
      *
-     * @param array<string, string> $visiting token => true, on the current path
+     * @param array<string, true> $visiting token => true, on the current path
      */
     private function resolve(string $themeId, string $token, string $value, array $visiting): string
     {

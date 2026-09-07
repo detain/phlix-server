@@ -41,14 +41,12 @@ final class DbLastfmOAuthStateStoreTest extends TestCase
      */
     private function mockConnection(array $byFragment = []): Connection
     {
-        $seenSql = &$this->seenSql;
-        $seenParams = &$this->seenParams;
         $mock = $this->createMock(Connection::class);
 
         $mock->method('query')->willReturnCallback(
-            function (string $sql, array $params = []) use ($byFragment, &$seenSql, &$seenParams): mixed {
-                $seenSql[] = $sql;
-                $seenParams[] = $params;
+            function (string $sql, array $params = []) use ($byFragment): mixed {
+                $this->seenSql[] = $sql;
+                $this->seenParams[] = $params;
                 foreach ($byFragment as $fragment => $rows) {
                     if (str_contains($sql, $fragment)) {
                         return $rows;

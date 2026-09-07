@@ -136,7 +136,7 @@ class StateFileProbingConnection extends FakeRelayConnection
 
     public function close(mixed $data = null, bool $raw = false): void
     {
-        $this->seen[] = file_exists($this->watchPath);
+        $this->seen->append(file_exists($this->watchPath));
         parent::close($data, $raw);
     }
 }
@@ -283,12 +283,18 @@ class RelayConsumerTest extends TestCase
     }
 
     /**
-     * SV-RELAYNULLCONN: connect() must not throw when the factory or the underlying
-     * AsyncTcpConnection factory returns null — it must close any prior connection
-     * and leave the consumer disconnected rather than crashing.
+     * SV-RELAYNULLCONN: connect() must not throw when the hub connection fails to
+     * establish — it must leave the consumer disconnected rather than crashing.
+     * (S306 note: this test previously had the factory return null, which violates
+     * the declared `(callable(string): AsyncTcpConnection)|null` contract and only
+     * "passed" because get_class(null) happened to raise a TypeError that connect()
+     * swallows. The failure now travels the supported path — a connection whose
+     * connect() throws, exactly what Workerman does on a synchronous DNS/socket
+     * error — asserting the same resilience claim without leaning on a crash.)
      */
     public function test_connect_does_not_throw_when_factory_returns_null(): void
     {
+        /** @var list<string> $opened */
         $opened = [];
         $consumer = new RelayConsumer(
             new RelayConfig(
@@ -299,9 +305,14 @@ class RelayConsumerTest extends TestCase
             $this->createMockHubClient(),
             new StructuredLogger('relay', []),
             'server-uuid-null',
-            hubConnectionFactory: static function (string $url) use (&$opened): ?AsyncTcpConnection {
+            hubConnectionFactory: static function (string $url) use (&$opened): AsyncTcpConnection {
                 $opened[] = $url;
-                return null; // simulate connection failure
+                return new class ($url) extends FakeRelayConnection {
+                    public function connect(): void
+                    {
+                        throw new \RuntimeException('simulated connection failure');
+                    }
+                };
             },
             localConnectionFactory: static fn (string $url): AsyncTcpConnection
                 => new FakeRelayConnection($url),
@@ -314,15 +325,22 @@ class RelayConsumerTest extends TestCase
         $connect->invoke($consumer);
 
         $this->assertCount(1, $opened);
-        $this->assertFalse($consumer->isConnected(), 'consumer must remain disconnected when factory returns null');
+        $this->assertFalse($consumer->isConnected(), 'consumer must remain disconnected when the hub connect fails');
     }
 
     /**
      * connect() called twice: first with a real connection (succeeds), second
-     * with null (must close the first, not leak it, and remain disconnected).
+     * with a connection whose connect() throws (must close the first, not leak
+     * it, and remain disconnected).
+     *
+     * S306 note: the second attempt previously returned null — a contract
+     * violation that only "worked" via a TypeError swallowed by connect(). The
+     * failure now uses the supported throw-on-connect path; the resilience
+     * claim under test is unchanged.
      */
     public function test_connect_closes_prior_connection_when_reconnect_factory_returns_null(): void
     {
+        /** @var list<FakeRelayConnection> $opened */
         $opened = [];
         $consumer = new RelayConsumer(
             new RelayConfig(
@@ -333,9 +351,19 @@ class RelayConsumerTest extends TestCase
             $this->createMockHubClient(),
             new StructuredLogger('relay', []),
             'server-uuid-null2',
-            hubConnectionFactory: static function (string $url) use (&$opened): ?AsyncTcpConnection {
-                // First call returns a real connection (succeeds); second returns null.
-                $connection = count($opened) === 0 ? new FakeRelayConnection($url) : null;
+            hubConnectionFactory: static function (string $url) use (&$opened): AsyncTcpConnection {
+                // First call returns a real connection (succeeds); the second a
+                // connection whose connect() throws (synchronous failure).
+                if (count($opened) === 0) {
+                    $connection = new FakeRelayConnection($url);
+                } else {
+                    $connection = new class ($url) extends FakeRelayConnection {
+                        public function connect(): void
+                        {
+                            throw new \RuntimeException('simulated reconnect failure');
+                        }
+                    };
+                }
                 $opened[] = $connection;
                 return $connection;
             },
@@ -350,14 +378,14 @@ class RelayConsumerTest extends TestCase
         $this->assertCount(1, $opened);
         $this->assertTrue($consumer->isConnected(), 'consumer should be connected after first connect');
 
-        $connect->invoke($consumer); // Second: factory returns null, prior must be closed
+        $connect->invoke($consumer); // Second: connect() throws, prior must be closed
         $this->assertCount(2, $opened);
         $this->assertFalse(
             $consumer->isConnected(),
-            'consumer must be disconnected when reconnect factory returns null'
+            'consumer must be disconnected when the reconnect attempt fails'
         );
         // The prior hub connection must have been closed, not leaked.
-        $this->assertTrue($opened[0]->closed, 'the prior hub connection must be closed when reconnect returns null');
+        $this->assertTrue($opened[0]->closed, 'the prior hub connection must be closed when reconnect fails');
     }
 
     /**

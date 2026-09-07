@@ -31,7 +31,7 @@ final class SeriesMetadataResolverIdentityTest extends TestCase
      *
      * @param list<array<string, mixed>>          $yearScoped Results when a year filter is sent.
      * @param list<array<string, mixed>>          $yearLess   Results when no year filter is sent.
-     * @param array<string, array<string, mixed>> $details    tmdb id => getTvDetails() payload.
+     * @param array<int, array<string, mixed>> $details     tmdb id => getTvDetails() payload.
      */
     private function provider(array $yearScoped, array $yearLess, array $details): TmdbProvider
     {
@@ -51,7 +51,8 @@ final class SeriesMetadataResolverIdentityTest extends TestCase
             /** @return array<string, mixed> */
             static function (string $id) use ($details, $log): array {
                 $log->details[] = $id;
-                return $details[$id] ?? [];
+                // PHP casts numeric-string array offsets to int; make that explicit.
+                return $details[(int) $id] ?? [];
             }
         );
 

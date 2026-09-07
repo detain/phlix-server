@@ -3957,6 +3957,7 @@ class ItemRepositoryTest extends TestCase
     {
         // A dotted key resolves a nested path — where the host resolver stamps
         // canonical ids (external_ids.<source>).
+        /** @var ?array{params: array<int, mixed>} $captured */
         $captured = null;
         $db = $this->createMock(Connection::class);
         $db->method('query')->willReturnCallback(function (string $sql, $params = []) use (&$captured) {
@@ -3975,6 +3976,7 @@ class ItemRepositoryTest extends TestCase
 
         $this->assertIsArray($item);
         $this->assertSame('item-imdb', $item['id']);
+        $this->assertIsArray($captured);
         $this->assertSame('$.external_ids.imdb', $captured['params'][0], 'dotted key -> nested JSON path');
         $this->assertSame('tt0213338', $captured['params'][1]);
     }

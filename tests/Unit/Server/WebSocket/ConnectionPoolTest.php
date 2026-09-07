@@ -114,10 +114,10 @@ class ConnectionPoolTestConnection implements ConnectionInterface
     {
         return $this->authenticated;
     }
-    public function setAuthenticated(bool $a, ?string $u = null): void
+    public function setAuthenticated(bool $authenticated, ?string $userId = null): void
     {
-        $this->authenticated = $a;
-        $this->userId = $u;
+        $this->authenticated = $authenticated;
+        $this->userId = $userId;
     }
     public function getLastActivity(): int
     {

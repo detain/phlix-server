@@ -270,7 +270,9 @@ final class PluginCatalogControllerTest extends TestCase
         $updates = new PluginUpdateService(
             $this->loader,
             $service,
-            static fn (string $url, int $timeout): string => throw new \RuntimeException('update fetch disabled'),
+            static function (string $url, int $timeout) {
+                throw new \RuntimeException('update fetch disabled');
+            },
         );
 
         return new PluginCatalogController($service, $this->loader, $this->audit, $updates);

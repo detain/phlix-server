@@ -1545,7 +1545,7 @@ final class Fmp4HlsThroughControllerE2ETest extends TestCase
      * Pairs of requests whose `[startNs, endNs]` windows intersect — i.e. that were
      * genuinely in flight at the same instant.
      *
-     * @param list<array{startNs: int, endNs: int}> $entries
+     * @param list<array{startNs: int, endNs: int, ...}> $entries
      */
     private function overlappingPairs(array $entries): int
     {
@@ -1566,7 +1566,7 @@ final class Fmp4HlsThroughControllerE2ETest extends TestCase
     }
 
     /**
-     * @param list<array{pid: int}> $entries
+     * @param list<array{pid: int, ...}> $entries
      */
     private function distinctPids(array $entries): int
     {
@@ -1580,7 +1580,7 @@ final class Fmp4HlsThroughControllerE2ETest extends TestCase
      * zero-length window `testTheControllerBackedServerIsGenuinelyConcurrent()`
      * explicitly asserts against.
      *
-     * @param list<array{startNs: int, endNs: int}> $entries
+     * @param list<array{startNs: int, endNs: int, ...}> $entries
      */
     private function durationsMs(array $entries): string
     {
@@ -1674,7 +1674,7 @@ final class Fmp4HlsThroughControllerE2ETest extends TestCase
      * The probe server's request log, filtered by filename and reduced to
      * `{name, status}` so a comparison reads legibly on failure.
      *
-     * @param array{requests: list<array{name: string, status: int, bytes: int}>} $probe
+     * @param array{requests: list<array{name: string, status: int, bytes: int, ...}>, ...} $probe
      *
      * @return list<array{name: string, status: int}>
      */
@@ -1691,7 +1691,7 @@ final class Fmp4HlsThroughControllerE2ETest extends TestCase
     }
 
     /**
-     * @param array{errors: list<array<string, mixed>>} $probe
+     * @param array{errors: list<array<string, mixed>>, ...} $probe
      *
      * @return list<array<string, mixed>>
      */

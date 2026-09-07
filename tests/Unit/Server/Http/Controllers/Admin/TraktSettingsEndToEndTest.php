@@ -63,60 +63,17 @@ final class TraktSettingsEndToEndTest extends TestCase
      *
      * @param array<string, mixed> $seed Pre-existing overrides.
      *
-     * S128: the intersection is what lets the assertions below read `->stored` and
-     * `->types`. The native return type can only name the parent class, which has
-     * neither property, so at PHPStan level 2 each read is an error against a
-     * property that demonstrably exists on the returned double.
-     *
-     * @return SettingsRepository&object{stored: array<string, mixed>, types: array<string, string>}
+     * S128/S306: this used to be an anonymous class surfaced through an
+     * `SettingsRepository&object{stored: ..., types: ...}` PHPStan intersection.
+     * Psalm 6 rejects `object{...}` shapes in return position, so the double is now
+     * a named class and the concrete native type carries both properties.
      */
-    private function repository(array $seed = []): SettingsRepository
+    private function repository(array $seed = []): TraktRecordingSettingsRepository
     {
         /** @var Connection $db getDefault() never touches the connection. */
         $db = (new ReflectionClass(Connection::class))->newInstanceWithoutConstructor();
 
-        return new class ($db, dirname(__DIR__, 6) . '/config', $seed) extends SettingsRepository {
-            /** @var array<string, mixed> */
-            public array $stored;
-
-            /** @var array<string, string> */
-            public array $types = [];
-
-            /**
-             * @param array<string, mixed> $seed
-             */
-            public function __construct(Connection $db, string $configDir, array $seed)
-            {
-                parent::__construct($db, $configDir);
-                $this->stored = $seed;
-            }
-
-            public function set(string $key, mixed $value, string $valueType): void
-            {
-                $this->stored[$key] = $value;
-                $this->types[$key] = $valueType;
-            }
-
-            public function getOverride(string $key): ?array
-            {
-                if (!array_key_exists($key, $this->stored)) {
-                    return null;
-                }
-
-                return [
-                    'value'      => $this->stored[$key],
-                    'value_type' => $this->types[$key] ?? 'string',
-                ];
-            }
-
-            /**
-             * @return array<string, mixed>
-             */
-            public function getAllOverrides(): array
-            {
-                return $this->stored;
-            }
-        };
+        return new TraktRecordingSettingsRepository($db, dirname(__DIR__, 6) . '/config', $seed);
     }
 
     /**
@@ -369,5 +326,54 @@ final class TraktSettingsEndToEndTest extends TestCase
             $repo->getDefault('scrobblers.trakt.client_id'),
             $repo->getDefault('trakt.client_id'),
         );
+    }
+}
+
+/**
+ * In-memory SettingsRepository double: overrides live in `$stored`/`$types`
+ * and no database is ever touched (built by
+ * {@see TraktSettingsEndToEndTest::repository()}).
+ */
+final class TraktRecordingSettingsRepository extends SettingsRepository
+{
+    /** @var array<string, mixed> */
+    public array $stored;
+
+    /** @var array<string, string> */
+    public array $types = [];
+
+    /**
+     * @param array<string, mixed> $seed
+     */
+    public function __construct(Connection $db, string $configDir, array $seed)
+    {
+        parent::__construct($db, $configDir);
+        $this->stored = $seed;
+    }
+
+    public function set(string $key, mixed $value, string $valueType): void
+    {
+        $this->stored[$key] = $value;
+        $this->types[$key] = $valueType;
+    }
+
+    public function getOverride(string $key): ?array
+    {
+        if (!array_key_exists($key, $this->stored)) {
+            return null;
+        }
+
+        return [
+            'value'      => $this->stored[$key],
+            'value_type' => $this->types[$key] ?? 'string',
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public function getAllOverrides(): array
+    {
+        return $this->stored;
     }
 }

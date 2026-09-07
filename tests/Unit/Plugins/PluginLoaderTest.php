@@ -1043,18 +1043,20 @@ final class PluginLoaderTest extends TestCase
         $container = Mockery::mock(ContainerInterface::class, FactoryInterface::class);
         // Autowiring the array-settings constructor fails, exactly as PHP-DI does.
         // S128: Mockery::shouldReceive() is declared ExpectationInterface|
-        // HigherOrderMessage, and ->with()/->andThrow() live only on the first arm.
-        // Resolving this properly needs phpstan/phpstan-mockery, which this repo does not
-        // depend on. Suppressed per line with its identifier rather than config-wide, so
-        // it clears itself if that extension is ever added.
-        $container->shouldReceive('get')
-            // @phpstan-ignore method.notFound
+        // HigherOrderMessage, and ->with()/->andThrow() live only on the concrete
+        // Expectation arm. assert() satisfies PHPStan and Psalm alike and keeps the
+        // runtime check, so a future Mockery that returns something else fails loudly
+        // at the arm instead of silently retyping the call site.
+        $expectsGet = $container->shouldReceive('get');
+        assert($expectsGet instanceof \Mockery\Expectation);
+        $expectsGet
             ->with(SettingsCtorFakePlugin::class)
             ->andThrow(new \RuntimeException('Parameter $settings has no value defined or guessable'));
         // The fallback binds the persisted settings to the `settings` parameter.
-        // See above — Mockery's shouldReceive() union.
-        $container->shouldReceive('make')
-            // @phpstan-ignore method.notFound
+        // See above — narrow the shouldReceive() union at the arm.
+        $expectsMake = $container->shouldReceive('make');
+        assert($expectsMake instanceof \Mockery\Expectation);
+        $expectsMake
             ->with(SettingsCtorFakePlugin::class, ['settings' => $settings])
             ->andReturnUsing(function (string $cls, array $params) use (&$built): object {
                 $built = new SettingsCtorFakePlugin($params['settings']);
@@ -1088,9 +1090,10 @@ final class PluginLoaderTest extends TestCase
         // be filled by the array fallback → the clean resolution error is surfaced.
         /** @var ContainerInterface&FactoryInterface&MockInterface $container */
         $container = Mockery::mock(ContainerInterface::class, FactoryInterface::class);
-        // See above — Mockery's shouldReceive() union.
-        $container->shouldReceive('get')
-            // @phpstan-ignore method.notFound
+        // See above — narrow the shouldReceive() union at the arm.
+        $expectsFail = $container->shouldReceive('get');
+        assert($expectsFail instanceof \Mockery\Expectation);
+        $expectsFail
             ->andThrow(new \RuntimeException('Parameter $apiKey has no value defined or guessable'));
         $container->shouldNotReceive('make');
 

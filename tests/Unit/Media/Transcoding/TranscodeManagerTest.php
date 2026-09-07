@@ -116,6 +116,8 @@ class TranscodeManagerTest extends TestCase
      * no-manifest DASH branch) were relying on that coincidence and would
      * silently become fMP4 cases; they use this instead, so what they exercise
      * is stated rather than inherited.
+     *
+     * @param FfmpegRunner&MockObject $ff
      */
     private function managerWithSegmentFormat(
         Connection $db,

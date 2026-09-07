@@ -265,6 +265,26 @@ jobs:
         if: always()
         run: ./vendor/bin/psalm --show-info=false --no-progress
 
+      - name: Assert psalm-tests.xml is not silently emptied of tests/
+        if: always()
+        run: |
+          # S306: the scope gate (tests/Unit/Support/StaticAnalysisScopeTest) pins
+          # the exact paths and this command line from the committed config; this
+          # shell guard is the cheaper pre-flight so the step below cannot be
+          # greened by gutting psalm-tests.xml.
+          if [ ! -f psalm-tests.xml ]; then
+            echo "::error::psalm-tests.xml is missing — tests/ would silently leave Psalm's scope."
+            exit 1
+          fi
+          if ! grep -q '<directory name="tests"' psalm-tests.xml; then
+            echo "::error::psalm-tests.xml no longer declares <directory name=\"tests\"/>."
+            exit 1
+          fi
+
+      - name: Run Psalm on tests/
+        if: always()
+        run: ./vendor/bin/psalm -c psalm-tests.xml --show-info=false --no-progress
+
   composer-validate:
     name: Composer Validation
     runs-on: ubuntu-latest

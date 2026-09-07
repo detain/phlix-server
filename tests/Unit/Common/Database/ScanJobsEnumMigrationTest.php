@@ -175,7 +175,7 @@ final class ScanJobsEnumMigrationTest extends TestCase
     {
         $declarers = self::enumDeclarers();
 
-        $latest = $declarers[count($declarers) - 1] ?? null;
+        $latest = $declarers === [] ? null : $declarers[count($declarers) - 1];
 
         self::assertSame(
             self::MIGRATION,

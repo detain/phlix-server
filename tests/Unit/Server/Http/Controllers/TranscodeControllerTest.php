@@ -165,7 +165,7 @@ class TranscodeControllerTest extends TestCase
     /**
      * @return array{
      *     job_id: string, status: string, master_url: string, hls_url: string,
-     *     reused: bool, subtitles: array<int, array<string, mixed>>
+     *     dash_url: string|null, reused: bool, subtitles: array<int, array<string, mixed>>
      * }
      */
     private function jobFixture(): array

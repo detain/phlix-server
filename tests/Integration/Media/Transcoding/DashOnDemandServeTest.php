@@ -155,7 +155,8 @@ final class DashOnDemandServeTest extends TestCase
         $joined = $this->root . '/joined.mp4';
         file_put_contents($joined, $init . $segment);
         $probe = $this->ffprobeJson($joined);
-        $streams = is_array($probe['streams'] ?? null) ? $probe['streams'] : [];
+        /** @var list<array<string, mixed>> $streams */
+        $streams = is_array($probe['streams'] ?? null) ? array_values($probe['streams']) : [];
 
         $this->assertNotSame([], $streams, 'init+fragment must decode as a real elementary stream');
         $this->assertSame('h264', $streams[0]['codec_name'] ?? null);
@@ -187,7 +188,8 @@ final class DashOnDemandServeTest extends TestCase
         $joined = $this->root . '/joined-audio.mp4';
         file_put_contents($joined, $init . $segment);
         $probe = $this->ffprobeJson($joined);
-        $streams = is_array($probe['streams'] ?? null) ? $probe['streams'] : [];
+        /** @var list<array<string, mixed>> $streams */
+        $streams = is_array($probe['streams'] ?? null) ? array_values($probe['streams']) : [];
 
         $this->assertNotSame([], $streams);
         $this->assertSame('aac', $streams[0]['codec_name'] ?? null);
@@ -244,7 +246,8 @@ final class DashOnDemandServeTest extends TestCase
 
         $this->assertSame(0, $status, "the DASH demuxer refused the SERVED presentation:\n" . implode("\n", $log));
         $probe = $this->ffprobeJson($out);
-        $streams = is_array($probe['streams'] ?? null) ? $probe['streams'] : [];
+        /** @var list<array<string, mixed>> $streams */
+        $streams = is_array($probe['streams'] ?? null) ? array_values($probe['streams']) : [];
         $this->assertCount(4, $streams, 'two video rungs and two audio tracks must all have been served');
         $this->assertSame(
             ['h264', 'h264', 'aac', 'aac'],

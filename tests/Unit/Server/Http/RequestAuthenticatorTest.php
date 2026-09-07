@@ -437,11 +437,10 @@ final class RequestAuthenticatorTest extends TestCase
                 // no services resolved on the 403 path
                 // S128: invokeHandler() hands this closure a PHPUnit MockObject, so
                 // ->method() exists at run time, but the parameter can only be typed as
-                // the interface the production code sees. A docblock on a closure passed
-                // as an argument is not read here, and this repo has no
-                // phpstan/phpstan-phpunit to narrow it. Per-line, with the identifier, so
-                // it self-clears if either of those changes.
-                // @phpstan-ignore method.notFound
+                // the interface the production code sees. The assert() narrows the mock
+                // for PHPStan and Psalm at once (no extension needed) and keeps the
+                // runtime check, so the invariant fails loudly if it ever breaks.
+                assert($container instanceof \PHPUnit\Framework\MockObject\MockObject);
                 $container->method('get')->willReturn(null);
             },
         );
@@ -478,8 +477,9 @@ final class RequestAuthenticatorTest extends TestCase
             $application,
             static function (ContainerInterface $container) use ($registry): void {
                 // armDirectCancelHook resolves the segment registry before dispatch.
-                // See the 403-path closure above — a MockObject typed as the interface.
-                // @phpstan-ignore method.notFound
+                // See the 403-path closure above — assert() narrows the MockObject
+                // for PHPStan and Psalm at once.
+                assert($container instanceof \PHPUnit\Framework\MockObject\MockObject);
                 $container->method('get')->willReturnCallback(
                     static fn (string $id): mixed =>
                         $id === SegmentProcessRegistry::class ? $registry : null

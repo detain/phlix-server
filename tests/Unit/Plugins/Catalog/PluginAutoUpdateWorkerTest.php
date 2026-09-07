@@ -100,7 +100,9 @@ final class PluginAutoUpdateWorkerTest extends TestCase
         $updates = new PluginUpdateService(
             $loader,
             $catalog,
-            static fn (string $u, int $t): string => throw new \RuntimeException('should not fetch'),
+            static function (string $u, int $t) {
+                throw new \RuntimeException('should not fetch');
+            },
         );
         $worker = new PluginAutoUpdateWorker($catalog, $updates, $this->createMock(StructuredLogger::class));
 

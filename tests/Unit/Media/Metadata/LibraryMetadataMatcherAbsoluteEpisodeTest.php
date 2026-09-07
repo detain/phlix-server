@@ -511,7 +511,7 @@ class LibraryMetadataMatcherAbsoluteEpisodeTest extends TestCase
         $seasonCalls = new \ArrayObject();
         $seriesResolver->method('resolveSeasonEpisodes')->willReturnCallback(
             static function (string $tmdbId, int $season) use ($seasonFixtures, $seasonCalls): array {
-                $seasonCalls[] = $season;
+                $seasonCalls->append($season);
                 return $seasonFixtures[$season] ?? ['poster_url' => null, 'overview' => '', 'episodes' => []];
             }
         );

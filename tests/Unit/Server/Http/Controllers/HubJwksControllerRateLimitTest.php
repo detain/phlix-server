@@ -36,45 +36,14 @@ final class HubJwksControllerRateLimitTest extends TestCase
      * to {@see hit()} and reports a fixed limited/not-limited state so tests can
      * assert BOTH the trip behaviour and the exact key that was built.
      *
-     * S128: the intersection is what lets the assertions below read `->hits`. The
-     * native return type can only name the interface, and the interface has no such
-     * property, so at PHPStan level 2 every `$limiter->hits` read is an error against
-     * a property that demonstrably exists.
-     *
-     * @return RateLimiterInterface&object{hits: list<string>}
+     * S128/S306: this used to be an anonymous class surfaced through an
+     * `RateLimiterInterface&object{hits: list<string>}` PHPStan intersection. Psalm 6
+     * rejects `object{...}` shapes in return position, so the double is now a named
+     * class and the concrete native type carries `->hits` for both analyzers.
      */
-    private function makeLimiter(bool $limited): RateLimiterInterface
+    private function makeLimiter(bool $limited): HubJwksRecordingRateLimiter
     {
-        return new class ($limited) implements RateLimiterInterface {
-            /** @var list<string> */
-            public array $hits = [];
-
-            public function __construct(private bool $limited)
-            {
-            }
-
-            public function hit(string $key): RateLimitState
-            {
-                $this->hits[] = $key;
-
-                return new RateLimitState(
-                    count: $this->limited ? 200 : 1,
-                    remaining: 0,
-                    resetAt: time() + 45,
-                    limited: $this->limited,
-                    limit: 120,
-                );
-            }
-
-            public function reset(string $key): void
-            {
-            }
-
-            public function peek(string $key): RateLimitState
-            {
-                return new RateLimitState(0, 120, 0, false, 120);
-            }
-        };
+        return new HubJwksRecordingRateLimiter($limited);
     }
 
     public function testOverLimitThrowsRateLimitExceptionMappingTo429(): void
@@ -157,5 +126,42 @@ final class HubJwksControllerRateLimitTest extends TestCase
 
         $response = $controller->handle($request, []);
         self::assertSame(200, $response->statusCode);
+    }
+}
+
+/**
+ * Recording {@see RateLimiterInterface} double: captures every key passed to
+ * hit() and reports a fixed limited/not-limited state (built by
+ * {@see HubJwksControllerRateLimitTest::makeLimiter()}).
+ */
+final class HubJwksRecordingRateLimiter implements RateLimiterInterface
+{
+    /** @var list<string> */
+    public array $hits = [];
+
+    public function __construct(private bool $limited)
+    {
+    }
+
+    public function hit(string $key): RateLimitState
+    {
+        $this->hits[] = $key;
+
+        return new RateLimitState(
+            count: $this->limited ? 200 : 1,
+            remaining: 0,
+            resetAt: time() + 45,
+            limited: $this->limited,
+            limit: 120,
+        );
+    }
+
+    public function reset(string $key): void
+    {
+    }
+
+    public function peek(string $key): RateLimitState
+    {
+        return new RateLimitState(0, 120, 0, false, 120);
     }
 }

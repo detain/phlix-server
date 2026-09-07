@@ -267,8 +267,6 @@ final class LibraryManagerAutoCollectionsToggleTest extends TestCase
                 ?callable $onFile = null,
                 bool $autoCollectionsEnabled = true
             ) use (&$calls): int {
-                unset($libraryId, $path, $seriesPerDirectory, $onFile);
-
                 $calls[] = [
                     'type' => $type,
                     'autoCollectionsEnabled' => $autoCollectionsEnabled,

@@ -36,7 +36,7 @@ final class HubServicesProviderJwksWiringTest extends TestCase
         $controller = $container->get(HubJwksController::class);
         self::assertInstanceOf(HubJwksController::class, $controller);
 
-        $limiter = (fn () => $this->limiter)->call($controller);
+        $limiter = (fn (string $name): mixed => $this->$name)->call($controller, 'limiter');
 
         self::assertSame($container->get(RateLimitProfiles::JWKS), $limiter);
     }

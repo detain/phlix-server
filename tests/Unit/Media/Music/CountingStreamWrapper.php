@@ -39,7 +39,7 @@ final class CountingStreamWrapper
     /** Calls to `stream_seek()`. */
     public static int $seeks = 0;
 
-    /** @var resource Underlying handle. */
+    /** @var resource|closed-resource Underlying handle. */
     private $handle;
 
     /** @var resource|null Set by PHP for stream contexts. */

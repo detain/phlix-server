@@ -331,7 +331,7 @@ class ItemRepositoryReplaceStreamsTest extends TestCase
         // Both endpoints of the transition really were observed, so the test is not
         // passing merely because nothing ever changed.
         $this->assertSame($before, $observed[0]);
-        $this->assertSame($after, $observed[count($observed) - 1]);
+        $this->assertSame($after, $observed === [] ? null : $observed[count($observed) - 1]);
     }
 
     /**

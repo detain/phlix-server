@@ -57,7 +57,7 @@ use Phlix\Plugins\Oidc\OidcHttpClient;
  */
 final class OAuth2HttpClientTimeoutTest extends TestCase
 {
-    /** @var resource|null */
+    /** @var resource|closed-resource|null */
     private $server = null;
 
     private int $port = 0;

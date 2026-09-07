@@ -9,6 +9,22 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Added
 
+- **`tests/` under Psalm at the measured level 5 (S306 server half, hub precedent #274).**
+  Psalm 6 admits one `errorLevel` per config, so `tests/` gets its own shipped `psalm-tests.xml`
+  (header records the measured ladder L1 4236 → L5 290 → L8 79, all on Psalm 6.5.0) and
+  `coding-standards.yml`'s Psalm job gains an assert-guard plus a second step,
+  `./vendor/bin/psalm -c psalm-tests.xml --show-info=false --no-progress`. `psalm.xml` stays src-only
+  untouched. All 290 L5 findings were fixed at the source — except one written-why exclusion
+  (`tests/codeception/acceptance/SyncPlayCest.php`: Codeception assembles actor methods at
+  codecept-build time, and Psalm — unlike PHPStan — only honours the hand-written `@method` tags when
+  the class declares `__call`, which no committed `SyncPlayTester` does), and the swoole-bundled
+  `Swoole\Coroutine\WaitGroup` now enters Psalm's view through `<stubs>` on the existing drift-tested
+  `phpstan-stubs/Swoole/Coroutine/WaitGroup.stub`, the same file PHPStan scans — one declaration, two
+  analysers. `tests/Unit/Support/StaticAnalysisScopeTest.php` pins both CI command lines verbatim,
+  both configs' directory sets as exact allow-lists, the exclusion union, the stub, the ladder
+  evidence, the absence of `ignoreErrors`/`IssueHandler`/baseline, and a negative fuzz proving each
+  pin bites when `tests/` silently leaves scope. No new `.php` files, so the census stays 1789.
+
 - **TMDB collection-sync job queue (S215).** `CollectionJob` + `CollectionJobStore` +
   `CollectionWorker` (`src/Media/`) mirror the SV-2.9 similarity trio: a file-based queue the scan
   path enqueues into and a supervised consumer that drains it (`config/collection_jobs.php`,

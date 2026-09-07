@@ -29,6 +29,15 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   one atomic ALTER. Pinned in both directions against real MySQL by
   `tests/Integration/Common/Database/UniqueIndexShapeGuardTest.php`.
 
+- **S439 minter gap surfaced by this lane's CI park (S227).** `AccessScheduleHeadNoBodyWireTest`
+  boots the real `Application` in a spawned worker, which mints the shared
+  `/tmp/phlix_media_asset_jobs` + `/tmp/phlix_similarity_jobs` queue dirs without owning a sweep;
+  under `executionOrder="random"` its residue survived only until a later sweeper test ran — and
+  on an unlucky seed it survived the whole `Server Component Tests` run and tripped the
+  zero-residue census. The minter now owns its sweep (same S439 block the other nine minters
+  carry), and `ApplicationTest` — the suite's other MySQL-dependent minter — gets the identical
+  block. Product untouched; the deeper lazy-mkdir-in-ctor fix stays the documented follow-up.
+
 ### Added
 
 - **`tests/` under Psalm at the measured level 5 (S306 server half, hub precedent #274).**

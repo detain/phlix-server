@@ -63,6 +63,21 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   untrimmed-value skip that shipped expired signatures), and a rejected poster candidate falls
   through to the next fallback instead of being echoed.
 
+- **`SignedUrl::refreshArtworkUrl()` re-mints from RAW query bytes only (S449).** The re-mint ran
+  `parse_str()` over the stored query and re-emitted the DECODED size into a freshly signed URL, so
+  a stored `size=%22onmouseover%3D…` — which the S112 emission guards pass because they blacklist
+  literal quote/angle/backtick bytes, absent from the encoded form — came back out as a validly
+  signed link carrying the literal breakout toward every consumer. The benign corruption shared the
+  mechanism: a `+` turned into a space and a double-encoding lost one level per pass, breaking byte
+  identity without any malice. The size is now extracted from the raw query bytes and re-minted
+  only when the capture is byte-identical to its urldecoded form; anything that drifts on decode
+  (hostile, `+`-bearing, double-encoded) passes through untouched, its stale signature inert at the
+  serving gate. Canonical plain sizes keep re-minting byte-identically, `verify()` is untouched
+  (the size was never signed, per the `PreRouterFastPaths` doctrine) and no caller changed. Pinned
+  by a 12-test matrix in `SignedUrlTest` — plain re-mint regression, hostile encoded, `+`,
+  double-encoded, inert-stale-token, byte-no-op encodings and the end-to-end shaper-chain
+  composition — with a mutation proof: reverting the guard turns 10 named tests red.
+
 ### Added
 
 - **`tests/` under Psalm at the measured level 5 (S306 server half, hub precedent #274).**

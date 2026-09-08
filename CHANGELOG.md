@@ -247,6 +247,31 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Changed
 
+- **S130 size-bounded log policy: app.log runs at `info`, and every file log has a real on-disk ceiling.**
+  `config/logger.php`'s `file` (app.log) handler shipped at `level: debug` — never a considered production
+  choice, just the inherited default, and the volume lever behind the music scan S96 had to attack at the
+  caller. It is now deliberately `info`: the scanners' INFO summaries and every WARNING/ERROR/critical record
+  are STILL written (the video scanner's precedent observability and the music scanner's error reporting are
+  preserved verbatim — the config header states exactly what an operator still sees during a six-hour scan);
+  only the verbose per-item debug chatter is dropped, and it is a one-line per-handler change to bring back.
+  The second half of the AC — "a bounded on-disk size is enforced" — could not be met by the old
+  `rotating_file` handler: Monolog's `RotatingFileHandler` rotates by DAY and prunes by COUNT (`max_files`),
+  so the file *count* was bounded but no individual file ever was (the plan's own Problem text refutes
+  `max_files` as a size ceiling). Since Monolog 3 ships no size handler, this adds a compact
+  `Phlix\Common\Logger\SizeRotatingFileHandler` (`StreamHandler` subclass) that rolls to a numbered shard on a
+  byte ceiling with a bounded shard chain, keeping the active file's name stable (so the admin log viewer's
+  `*.log` glob and `^[A-Za-z0-9._-]+\.log$` tail allowlist are unaffected — rolled `.N` shards are invisible
+  to it, no UI blast radius) and using `useLocking` + error-suppressed renames for the same concurrent-worker
+  tolerance Monolog applies to its own `unlink()` cleanup. All four file handlers convert to it with explicit
+  ceilings — app.log (14+1)×16 MB=240 MB, error.log 88 MB, events.log 32 MB, plugins.log 32 MB, an estate
+  worst case of ≈392 MB hard-bounded versus unbounded before. Pinned by `SizeRotatingFileHandlerTest` (rolls,
+  bounded shard count, hard total-bytes bound, level gate, fail-loud on a non-positive ceiling) and
+  `LoggerConfigPolicyTest` (real config read; level is `info` not `debug`; every handler is `size_rotating`
+  with a positive ceiling; app.log footprint pinned to 240 MB); each guard mutation-proven RED (drop the
+  ceiling check → the 240 MB test fails on a single 34 KB unbounded file; flip level back to `debug` → RED;
+  revert a handler off `size_rotating` → RED). Behaviour change is scoped to logging destination policy — no
+  code that *emits* logs changed (out of scope, owned by S96).
+
 - **Auto-collection TMDB sync is enqueued, never inline in the scan loop (S215 — the S33 promise,
   finally true).** `MediaScanner` held the HTTP-capable `CollectionService` and called
   `syncCollectionForMovie()` per file inside `processFile()` — blocking cURL on this transport

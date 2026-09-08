@@ -203,8 +203,11 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * .php files (ThemeRegistry, Theme, ThemePluginInterface, config/themes.php,
      * ThemeRegistryTest) and adds one guard test (ThemingIslandRemovedTest) —
      * a net −4; neither names Request — same pattern.
+     * Re-pinned 1786→1787 by S155: the music-index-collapse arc adds one test
+     * file (MusicMediaItemUniqueIndexGuardTest); it does not name Request —
+     * same pattern.
      */
-    private const EXPECTED_PHP_FILES = 1786;
+    private const EXPECTED_PHP_FILES = 1787;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

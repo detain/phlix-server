@@ -5,11 +5,20 @@ declare(strict_types=1);
 namespace Phlix\Tests\Unit\Auth;
 
 use Phlix\Auth\SignedUrl;
+use Phlix\Media\Library\MediaItemShaper;
 use PHPUnit\Framework\TestCase;
 
 final class SignedUrlTest extends TestCase
 {
     private const SECRET = 'unit-test-signing-secret';
+
+    /**
+     * Merge-gate sentinel: this constant's VALUE must stay resident in the test
+     * file's CODE (it is a live string operand of an executed assertion in
+     * testS449RawBytesGuardRemainsCodeResidentNotJustComments()), never merely
+     * in a comment or a docblock.
+     */
+    private const SURVIVAL_TOKEN = 'S449REMINTX7Q2';
 
     /** @var array<string, string|false> Saved env to restore in tearDown. */
     private array $savedEnv = [];
@@ -356,5 +365,275 @@ final class SignedUrlTest extends TestCase
 
         SignedUrl::resetSharedForTesting();
         $this->assertNotSame($first, SignedUrl::fromEnv());
+    }
+
+    /**
+     * S449 — sizes whose RAW bytes are NOT their own urldecoded form: percent-
+     * encoded breakout characters (`%22` `%27` `%3C` `%3E`), encoded delimiters
+     * (`%26` `%3D`), encoded spaces (`%20`), and the brief's verbatim payload.
+     * Before S449 these were DECODED by parse_str() and the decoded bytes were
+     * re-emitted RAW into a freshly SIGNED URL — the guard-before-decode bypass.
+     *
+     * @return iterable<string, array{string, string}>
+     */
+    public static function decodeDriftSizeProvider(): iterable
+    {
+        yield 'encoded double quote' => [
+            '/api/v1/artwork/v1?size=%22onmouseover%3Dalert(1)',
+            '%22 decodes to a literal " — the shaper guard only ever saw it encoded',
+        ];
+        yield 'encoded single quote pair' => [
+            '/api/v1/artwork/v2?size=%27evil%27',
+            '%27…%27 decodes to a literal \'…\' attribute breakout',
+        ];
+        yield 'encoded angle brackets' => [
+            '/api/v1/artwork/v3?size=%3Cscript%3E',
+            '%3C/%3E decode to <script> angle brackets',
+        ];
+        yield 'encoded ampersand injects a raw pair' => [
+            '/api/v1/artwork/v4?size=a%26b%3Dc&exp=1000000000&sig=stale',
+            '%26b%3Dc decodes to `&b=c` — re-emitted raw it injects a NEW param into the signed URL',
+        ];
+        yield 'brief payload verbatim' => [
+            '/api/v1/artwork/x?size=%22%20onmouseover=%27evil',
+            'the stored breakout from the S449 brief, byte for byte',
+        ];
+    }
+
+    /**
+     * AC (hostile → rejected-as-passthrough): every decode-drift payload leaves
+     * refreshArtworkUrl() EXACTLY as it entered — zero changed bytes, nothing
+     * decoded, nothing re-minted. A stale signature on such a URL is inert and
+     * the serving gate 401s it; a valid payload is never smuggled out signed.
+     *
+     * @dataProvider decodeDriftSizeProvider
+     */
+    public function testS449RefreshPassesHostileEncodedSizesThroughUntouched(string $stored, string $why): void
+    {
+        putenv('PHLIX_SIGNED_URL_SECRET=' . self::SECRET);
+        SignedUrl::resetSharedForTesting();
+
+        $this->assertSame(
+            $stored,
+            SignedUrl::refreshArtworkUrl($stored),
+            $why . ' — the URL must pass through byte-identical'
+        );
+    }
+
+    /**
+     * AC (`+` → passthrough): `+` is a legal URL byte that urldecode() turns into
+     * a SPACE — the pre-S449 code silently corrupted `size=a+b` into `size=a b`
+     * on every re-mint. Byte identity refuses it; the stored bytes survive.
+     */
+    public function testS449RefreshPassesPlusBearingSizeThroughUntouched(): void
+    {
+        putenv('PHLIX_SIGNED_URL_SECRET=' . self::SECRET);
+        SignedUrl::resetSharedForTesting();
+
+        $stale = '/api/v1/artwork/plus?size=a+b&exp=1000000000&sig=stale';
+        $this->assertSame(
+            $stale,
+            SignedUrl::refreshArtworkUrl($stale),
+            'a `+`-bearing raw size decodes to a space — decode drift must refuse the re-mint'
+        );
+    }
+
+    /**
+     * AC (double-encoded → passthrough): `%2522` decodes to `%22`, which decodes
+     * again to `"`. One drift level per re-mint pass is still a decode→re-emit;
+     * the first-level difference alone must trip the identity guard.
+     */
+    public function testS449RefreshPassesDoubleEncodedSizeThroughUntouched(): void
+    {
+        putenv('PHLIX_SIGNED_URL_SECRET=' . self::SECRET);
+        SignedUrl::resetSharedForTesting();
+
+        $stale = '/api/v1/artwork/dbl?size=%2522&exp=1000000000&sig=stale';
+        $this->assertSame(
+            $stale,
+            SignedUrl::refreshArtworkUrl($stale),
+            'double-encoding drifts one level per pass — the URL must pass through byte-identical'
+        );
+    }
+
+    /**
+     * AC (behavioral consequence): a passthrough URL carries NO fresh signature.
+     * Storing a correctly-signed-but-EXPIRED token under a hostile size, the
+     * output keeps exactly the one stale pair — verify() against it still fails,
+     * so the request dies at the gate with 401 instead of shipping signed
+     * attacker-chosen query bytes.
+     */
+    public function testS449PassthroughOfHostileSizeKeepsOnlyTheInertStaleSignature(): void
+    {
+        putenv('PHLIX_SIGNED_URL_SECRET=' . self::SECRET);
+        SignedUrl::resetSharedForTesting();
+        $signer = SignedUrl::fromEnv();
+
+        $staleExp = time() - 3600;
+        $staleSig = $signer->signature('/api/v1/artwork/victim', $staleExp);
+        $stale = '/api/v1/artwork/victim?size=%22x&exp=' . $staleExp . '&sig=' . $staleSig;
+
+        $out = SignedUrl::refreshArtworkUrl($stale);
+        $this->assertSame($stale, $out, 'the whole URL passes through unchanged');
+        $this->assertSame(1, substr_count((string) $out, 'exp='), 'no second (fresh) token pair was minted');
+        $this->assertFalse(
+            $signer->verify('/api/v1/artwork/victim', (string) $staleExp, $staleSig),
+            'and the carried token is expired — serving this URL 401s'
+        );
+    }
+
+    /**
+     * AC (regression pin for legit traffic): plain sizes keep re-minting over the
+     * canonical `{path}?size={size}` with fresh exp/sig, stray params stripped,
+     * and the size bytes in the RAW output identical to the RAW input — verified
+     * both leading and trailing in the query, both without decode round-tripping.
+     */
+    public function testS449RefreshReMintsPlainSizesByteIdenticallyAndVerifies(): void
+    {
+        putenv('PHLIX_SIGNED_URL_SECRET=' . self::SECRET);
+        SignedUrl::resetSharedForTesting();
+        $signer = SignedUrl::fromEnv();
+
+        $expiredExp = time() - 3600;
+        $expiredSig = $signer->signature('/api/v1/artwork/abc-7', $expiredExp);
+        $stale = '/api/v1/artwork/abc-7?size=w342&foo=bar&exp=' . $expiredExp . '&sig=' . $expiredSig;
+
+        $fresh = SignedUrl::refreshArtworkUrl($stale);
+        $this->assertIsString($fresh);
+        // RAW-byte contract on the shipped URL (no parse_str — that decodes).
+        $this->assertMatchesRegularExpression(
+            '#^/api/v1/artwork/abc-7\?size=w342&exp=\d+&sig=[A-Za-z0-9_-]+$#',
+            $fresh,
+            'canonical plain size survives the re-mint verbatim, in first position, strays stripped'
+        );
+        parse_str((string) parse_url($fresh, PHP_URL_QUERY), $q);
+        /** @var array<string, string> $q */
+        $this->assertGreaterThan(time(), (int) $q['exp'], 'the token is fresh');
+        $this->assertTrue($signer->verify('/api/v1/artwork/abc-7', $q['exp'], $q['sig']));
+
+        // Same contract with the size LAST in the stored query.
+        $expiredSig9 = $signer->signature('/api/v1/artwork/abc-9', $expiredExp);
+        $trailing = SignedUrl::refreshArtworkUrl(
+            '/api/v1/artwork/abc-9?exp=' . $expiredExp . '&sig=' . $expiredSig9 . '&size=logo'
+        );
+        $this->assertMatchesRegularExpression(
+            '#^/api/v1/artwork/abc-9\?size=logo&exp=\d+&sig=[A-Za-z0-9_-]+$#',
+            (string) $trailing,
+            'a trailing plain size is extracted from raw bytes and re-minted canonically'
+        );
+    }
+
+    /**
+     * AC (benign encoded-but-decoded==raw): the guard is BYTE IDENTITY, not a
+     * character blacklist — `%` sequences that decode() leaves alone (invalid
+     * escapes, trailing `%`) are the stored bytes already and keep re-minting
+     * with those exact bytes in the output.
+     */
+    public function testS449RefreshReMintsWhenDecodingIsAByteNoOp(): void
+    {
+        putenv('PHLIX_SIGNED_URL_SECRET=' . self::SECRET);
+        SignedUrl::resetSharedForTesting();
+        $signer = SignedUrl::fromEnv();
+
+        foreach (['invalid escape' => 'x%zz', 'trailing percent' => '100%'] as $label => $size) {
+            $expiredExp = time() - 3600;
+            $expiredSig = $signer->signature('/api/v1/artwork/noop', $expiredExp);
+            $stale = '/api/v1/artwork/noop?size=' . $size . '&exp=' . $expiredExp . '&sig=' . $expiredSig;
+
+            $fresh = SignedUrl::refreshArtworkUrl($stale);
+            $this->assertIsString($fresh);
+            $this->assertStringStartsWith(
+                '/api/v1/artwork/noop?size=' . $size . '&exp=',
+                $fresh,
+                $label . ': urldecode() does not change these bytes, so the plain path re-mints them intact'
+            );
+            parse_str((string) parse_url($fresh, PHP_URL_QUERY), $q);
+            /** @var array<string, string> $q */
+            $this->assertTrue($signer->verify('/api/v1/artwork/noop', $q['exp'], $q['sig']));
+        }
+    }
+
+    /**
+     * AC (composition, end to end): the exact stored payload sails through the
+     * REAL chain — MediaItemShaper::safeImageUrl (literal-char blacklist; the
+     * %-encoded bytes pass it) → SignedUrl::refreshArtworkUrl. Before S449 the
+     * re-mint DECODED `%22`/`%20`/`%27` and shipped a validly signed URL with a
+     * literal quote breakout as `poster_url`. Now the emitted bytes are the
+     * stored bytes: the guard is no longer defeated by a decode.
+     */
+    public function testS449ShaperChainLeavesEncodedBreakoutBytesUnchangedEndToEnd(): void
+    {
+        putenv('PHLIX_SIGNED_URL_SECRET=' . self::SECRET);
+        SignedUrl::resetSharedForTesting();
+
+        $stored = '/api/v1/artwork/x?size=%22%20onmouseover=%27evil';
+        $shaped = MediaItemShaper::shape([
+            'id' => 's449', 'name' => 'S449', 'type' => 'movie',
+            'metadata' => ['poster_url' => $stored],
+        ]);
+
+        $this->assertSame(
+            $stored,
+            $shaped['poster_url'],
+            'the shaper-emitted poster_url is the stored URL byte-for-byte — nothing decoded'
+        );
+        $this->assertStringNotContainsString(
+            '"',
+            (string) $shaped['poster_url'],
+            'no literal double quote may leave the factory in a shaped URL'
+        );
+        $this->assertStringNotContainsString(
+            "'",
+            (string) $shaped['poster_url'],
+            'no literal single quote may leave the factory in a shaped URL'
+        );
+    }
+
+    /**
+     * Merge gate: the raw-bytes extraction and the byte-identity refusal must
+     * remain CODE-resident in SignedUrl::refreshArtworkUrl() — verified
+     * structurally on the token stream with comments stripped, so a guard that
+     * survives only inside a docblock cannot pass. The failure message carries
+     * the survival token, making it a live string operand of an executed
+     * assertion on every green run too.
+     */
+    public function testS449RawBytesGuardRemainsCodeResidentNotJustComments(): void
+    {
+        $source = file_get_contents(__DIR__ . '/../../../src/Auth/SignedUrl.php');
+        $this->assertIsString($source, self::SURVIVAL_TOKEN . ': SignedUrl source must be readable');
+
+        $code = '';
+        foreach (token_get_all($source) as $token) {
+            if (is_array($token)) {
+                if ($token[0] === T_COMMENT || $token[0] === T_DOC_COMMENT) {
+                    continue;
+                }
+                $code .= $token[1];
+            } else {
+                $code .= $token;
+            }
+        }
+
+        foreach (
+            [
+                "preg_match('/(?:^|&)size=([^&]*)/'",
+                'urldecode($m[1])',
+            ] as $guardFragment
+        ) {
+            $this->assertStringContainsString(
+                $guardFragment,
+                $code,
+                self::SURVIVAL_TOKEN . ': comment-stripped code lost the raw-bytes guard fragment ' . $guardFragment
+            );
+        }
+
+        // parse_str() re-entering this file would re-open the decode→re-emit bug.
+        $this->assertStringNotContainsString(
+            'parse_str(',
+            $code,
+            self::SURVIVAL_TOKEN . ': parse_str() must stay out of SignedUrl — its decode fed the re-mint breakout'
+        );
+
+        $this->assertSame(self::SURVIVAL_TOKEN, 'S449' . 'REMINT' . 'X7Q2');
     }
 }

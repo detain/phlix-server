@@ -213,6 +213,19 @@ final class SignedUrl
      * …), empty strings and `null` are returned UNCHANGED — external URLs are never
      * signed.
      *
+     * S449: the size is taken from the RAW query bytes and re-minted ONLY when the
+     * captured value is byte-identical to its urldecoded form. A value that decodes
+     * to something else (any `%XX` escape, a `+`, a double-encoding) is NOT a plain
+     * size — it is either hostile payload bytes that survived an encoder upstream or
+     * drift waiting to happen — and the whole URL passes through UNTOUCHED, its
+     * stale signature inert (the serving gate 401s it). That refusal is the fix:
+     * decoding here and re-emitting the result raw would mint a VALIDLY SIGNED URL
+     * around a `"`/`'`/`<`/`>` breakout that the emission guards only ever see in
+     * its encoded (safe) form — a guard-before-decode bypass, and `mint()` signs
+     * the path only, so nothing downstream can tell the difference. Legitimate
+     * traffic is unaffected: real sizes (`original`, `logo`, `w{N}`) are plain
+     * bytes, decode is a no-op on them, and they re-mint exactly as before.
+     *
      * @param string|null $url Candidate poster/artwork URL.
      * @return string|null Re-signed internal artwork URL, or the input unchanged.
      */
@@ -234,18 +247,30 @@ final class SignedUrl
             return $url;
         }
 
-        parse_str($query, $params);
-        $size = isset($params['size']) && is_string($params['size']) && $params['size'] !== ''
-            ? $params['size']
-            : null;
+        // S449: extract the size from the RAW bytes — never through parse_str(),
+        // whose decode would feed `mint()` re-encoded breakouts (see the docblock).
+        // The value cannot contain `&` (the class excludes it), so one match per
+        // pair is well-defined; the FIRST `size=` pair is the one whose bytes the
+        // caller stored first. Empty capture = no descriptor = passthrough.
+        $size = null;
+        if (
+            preg_match('/(?:^|&)size=([^&]*)/', $query, $m) === 1
+            && $m[1] !== ''
+            && $m[1] === urldecode($m[1])
+        ) {
+            $size = $m[1];
+        }
         if ($size === null) {
-            // Not a size-bearing artwork URL — leave it exactly as-is.
+            // Not a size-bearing artwork URL, or its raw bytes are not their own
+            // decoded form — leave the URL exactly as-is, signature and all.
             return $url;
         }
 
         // Strip any stale exp/sig (and other stray params); re-mint over the
         // canonical `{path}?size={size}` so the descriptor the client asked for
-        // survives while the signature is fresh.
+        // survives while the signature is fresh. The guard above guarantees these
+        // bytes pass through `urldecode()` unchanged, so nothing is decoded here
+        // and re-emitted raw — the minted bytes ARE the stored bytes.
         return self::fromEnv()->mint($path . '?size=' . $size);
     }
 

@@ -19,6 +19,15 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- **False historical claims in the `MusicLibraryType::getScanner()` narrowing comment (S132, W42 rescope; comments only).**
+  The docblock cited `MediaScanner.php:290` for a constructor that lives at `src/Media/Library/MediaScanner.php:483`,
+  claimed `createDefaultLogger()` "mints its own `/tmp/phlix_media_*` directory" when since the temp-dir minter was
+  retired (unnumbered S167 arm, 1d505406 + f53c8567; S439, e4853f0f) it returns the shared
+  `LoggerFactory::get(LogChannels::MEDIA)` logger, and deferred to "S132 … the blocker" for a future constructor
+  widening that the W42 rescope retired — the signature was never widened and needs no un-blocker. The prose now
+  matches shipped code: the narrowing is forced by the current `?StructuredLogger $logger = null` parameter. No
+  behavior change; no test pins this prose (`git grep -F 'S132' tests/` is empty by design, and stays so).
+
 - **Composer `ClassLoader` autoload leak per plugin disable/uninstall cycle (S166).**
   `PluginLoader::wire()` and `getEntryInstance()` `require_once`-d each installed plugin's generated
   `vendor/autoload.php`, which registers a `ClassLoader` on the `spl_autoload` chain, and nothing ever

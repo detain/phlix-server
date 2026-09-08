@@ -345,8 +345,17 @@ final class IntegrationDbGuardAdoptionTest extends TestCase
      * name-only blindness this step removes, so both directions of the S156
      * review finding (same-named NON-UNIQUE imposter, differently-named
      * equivalent UNIQUE) are pinned against real MySQL, for both 096 and 097.
+     *
+     * 54 since S155's
+     * `tests/Integration/Common/Database/MusicMediaItemUniqueIndexGuardTest.php`:
+     * duplicate-UNIQUE minting, FK re-association after a multi-drop collapse
+     * and the surviving constraint actually biting (1452/1062 on violating
+     * INSERTs) are properties of live InnoDB index maintenance — an in-memory
+     * double cannot express any of them, so every S155 acceptance-criteria
+     * proof (collapse-to-one, silent replay, self-healing re-mint, imposter
+     * replacement, dirty refusal, column-set scoping) runs against real MySQL.
      */
-    private const EXPECTED_ADOPTERS = 53;
+    private const EXPECTED_ADOPTERS = 54;
 
     /**
      * Bare function calls that are a MySQL reachability probe under any

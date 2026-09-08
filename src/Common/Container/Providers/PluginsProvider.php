@@ -178,6 +178,15 @@ final class PluginsProvider implements ServiceProviderInterface
                     /** @var ThemeSourceRegistry $themeSourceRegistry */
                     $themeSourceRegistry = $c->get(ThemeSourceRegistry::class);
 
+                    // S87: the process-scoped metadata-writer registry the
+                    // loader (de)registers plugin MetadataWriterInterface
+                    // instances into on enable/disable — the fourth arm of
+                    // the same pattern. The container-scoped instance lives
+                    // in MediaServicesProvider so the MetadataWriteWorker
+                    // resolves the SAME registry the loader wires into.
+                    /** @var \Phlix\Media\Metadata\Writer\MetadataWriterRegistry $metadataWriterRegistry */
+                    $metadataWriterRegistry = $c->get(\Phlix\Media\Metadata\Writer\MetadataWriterRegistry::class);
+
                     return new PluginLoader(
                         $installer,
                         $composer,
@@ -190,6 +199,7 @@ final class PluginsProvider implements ServiceProviderInterface
                         $sourceRegistry,
                         $subtitleSourceRegistry,
                         $themeSourceRegistry,
+                        $metadataWriterRegistry,
                     );
                 }
             ),

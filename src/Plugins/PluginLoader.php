@@ -18,6 +18,8 @@ use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Common\Logger\StructuredLogger;
 use Phlix\Common\Version;
 use Phlix\Media\Metadata\Resolution\SourceRegistry;
+use Phlix\Media\Metadata\Writer\MetadataWriterInterface;
+use Phlix\Media\Metadata\Writer\MetadataWriterRegistry;
 use Phlix\Media\Subtitles\SubtitleSourceRegistry;
 use Phlix\Shared\Subtitle\SubtitleSourceInterface;
 use Phlix\Plugins\Exception\PluginEnableException;
@@ -118,6 +120,7 @@ class PluginLoader
         private readonly ?SourceRegistry $sourceRegistry = null,
         private readonly ?SubtitleSourceRegistry $subtitleSourceRegistry = null,
         private readonly ?ThemeSourceRegistry $themeSourceRegistry = null,
+        private readonly ?MetadataWriterRegistry $metadataWriterRegistry = null,
     ) {
     }
 
@@ -532,6 +535,18 @@ class PluginLoader
             }
         }
 
+        // First-class METADATA-WRITER registration (S87), the fourth arm of the
+        // same typed-capability pattern: an enabled plugin whose entry instance
+        // implements MetadataWriterInterface is registered into this worker's
+        // MetadataWriterRegistry, sniff-free. Deregistered in disable() for a
+        // leak-free cycle. Registration itself cannot refuse (unlike the theme
+        // arm above) — deciding whether a write is SAFE is the writer's job at
+        // drain time in the MetadataWriteWorker process (S88 is_writable()
+        // pre-flight, S89 MetadataOverwritePolicy), never the host's at enable.
+        if ($this->metadataWriterRegistry !== null && $instance instanceof MetadataWriterInterface) {
+            $this->metadataWriterRegistry->register($instance);
+        }
+
         return $registeredSource;
     }
 
@@ -559,6 +574,11 @@ class PluginLoader
         }
         if ($this->subtitleSourceRegistry !== null && $instance instanceof SubtitleSourceInterface) {
             $this->subtitleSourceRegistry->deregisterInstance($instance);
+        }
+        // S87: mirror of the metadata-writer arm in wire() — a failed wire must
+        // not leave a half-enabled writer in the registry.
+        if ($this->metadataWriterRegistry !== null && $instance instanceof MetadataWriterInterface) {
+            $this->metadataWriterRegistry->deregisterInstance($instance);
         }
     }
 
@@ -792,6 +812,11 @@ class PluginLoader
             // registry exactly as it started.
             if ($this->themeSourceRegistry !== null && $instance instanceof ThemeSourceInterface) {
                 $this->themeSourceRegistry->deregisterInstance($instance);
+            }
+            // Mirror for metadata writers (S87): truly removes the entry so an
+            // enable → disable cycle leaves the writer registry as it started.
+            if ($this->metadataWriterRegistry !== null && $instance instanceof MetadataWriterInterface) {
+                $this->metadataWriterRegistry->deregisterInstance($instance);
             }
             try {
                 $instance->onDisable();

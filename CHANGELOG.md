@@ -7,6 +7,24 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- **`POST /api/v1/admin/updates/check` — the "check now" trigger the admin UI was missing (S273).**
+  `GET /api/v1/admin/updates/status` only ever serialised the cached marker result, so the S78 button
+  was honestly labelled "Check update status" because nothing could trigger a check. This adds the
+  trigger: the handler calls the new `CoreUpdateCheckService::checkNow()` — which dispatches the
+  marker fetch through the existing non-blocking `VersionMarkerFetcherInterface` (explicit
+  `updates.timeout_seconds` socket timeout, default 10 s) and answers `202` without waiting, because
+  an HTTP handler in a resident Workerman/Swoole worker must never block the event loop on a
+  third-party host. Every failure path leaves the previously cached status INTACT (the service
+  records the error text beside the surviving version, never blanks it); a synchronously-throwing
+  transport becomes a `503` instead of an unhandled error in the worker. Unlike the periodic poll,
+  the explicit trigger ignores the `updates.check_enabled` toggle — that switch governs background
+  cadence, not an operator pressing a button; the response payload still reports the toggle
+  truthfully. Registered in the `[AdminMiddleware]` group with the controller's own defence-in-depth
+  gate; the 365th tuple landed in `ApplicationRouterWirePathGuardTest::ROUTE_MANIFEST` in the same
+  commit. Phlix-ui relabel follows in the same program (cs#26 → ui re-vendor).
+
 ### Removed
 
 - **The pre-S84 `ThemeRegistry` theming island (S227).** `ThemeRegistry`, `Theme`,

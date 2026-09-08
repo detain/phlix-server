@@ -479,6 +479,7 @@ final class ApplicationRouterWirePathGuardTest extends TestCase
         'POST /api/v1/admin/services/lastfm/disconnect -> LastfmController::apiDisconnect [AdminMiddleware]',
         'POST /api/v1/admin/services/trakt/disconnect -> TraktOAuthController::disconnect [AdminMiddleware]',
         'POST /api/v1/admin/sync/trash-guides -> SyncController::triggerSync []',
+        'POST /api/v1/admin/updates/check -> AdminUpdatesController::check [AdminMiddleware]',
         'POST /api/v1/admin/users -> AdminUserController::create [AdminMiddleware]',
         'POST /api/v1/admin/users/{id}/approve -> AdminUserController::approve [AdminMiddleware]',
         'POST /api/v1/admin/users/{id}/disable -> AdminUserController::disable [AdminMiddleware]',

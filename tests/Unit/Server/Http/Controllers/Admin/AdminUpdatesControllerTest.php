@@ -12,7 +12,6 @@ use Phlix\Server\Http\Controllers\Admin\AdminUpdatesController;
 use Phlix\Server\Http\Middleware\AdminMiddleware;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Updates\CoreUpdateCheckService;
-use Phlix\Server\Updates\VersionMarkerFetcherInterface;
 use Phlix\Tests\Support\Database\InMemoryServerSettingsConnection;
 use Phlix\Tests\Support\Updates\RecordingVersionMarkerFetcher;
 use PHPUnit\Framework\TestCase;
@@ -40,16 +39,21 @@ final class AdminUpdatesControllerTest extends TestCase
         $this->db = new InMemoryServerSettingsConnection();
     }
 
-    private function fetcher(?string $body, ?string $error = null): VersionMarkerFetcherInterface
+    private function service(?string $markerBody = null): CoreUpdateCheckService
     {
-        return new RecordingVersionMarkerFetcher($body, $error);
+        return $this->serviceWithFetcher(new RecordingVersionMarkerFetcher($markerBody));
     }
 
-    private function service(?string $markerBody = null): CoreUpdateCheckService
+    /**
+     * The REAL service over the in-memory `server_settings` table, with a
+     * caller-supplied transport double — the shape S273's check() tests need
+     * so they can flip the outcome between two endpoint calls.
+     */
+    private function serviceWithFetcher(RecordingVersionMarkerFetcher $fetcher): CoreUpdateCheckService
     {
         return new CoreUpdateCheckService(
             new SettingsRepository($this->db, dirname(__DIR__, 6) . '/config'),
-            $this->fetcher($markerBody),
+            $fetcher,
             $this->createMock(StructuredLogger::class),
             'https://example.invalid/VERSION',
             'sudo bash install.sh --update -y',
@@ -245,6 +249,129 @@ final class AdminUpdatesControllerTest extends TestCase
     }
 
     // ------------------------------------------------------------------
+    // check() — S273
+    // ------------------------------------------------------------------
+
+    /**
+     * AC ① of S273: a test drives the ENDPOINT with a stubbed transport and
+     * asserts the cached status is REPLACED. Both the seed and the trigger go
+     * through `check()` — the endpoint, not the service — and the assertion
+     * lands on the persisted `server_settings` row plus the response payload,
+     * so "replaced" is proven against storage, not against a mock.
+     */
+    public function testTheCheckEndpointReplacesTheCachedStatus(): void
+    {
+        $fetcher = new RecordingVersionMarkerFetcher('5.5.5');
+        $service = $this->serviceWithFetcher($fetcher);
+        $controller = $this->controller($service);
+
+        // Seed: the first endpoint call caches 5.5.5.
+        self::assertSame(202, $controller->check($this->request('POST', self::ADMIN_ID))->statusCode);
+        self::assertSame('5.5.5', $this->db->storedValue(CoreUpdateCheckService::STATE_LATEST_VERSION));
+
+        // Trigger: a newer marker must REPLACE the cached value.
+        $fetcher->willReturn('8.8.8');
+        $response = $controller->check($this->request('POST', self::ADMIN_ID));
+
+        self::assertSame(202, $response->statusCode);
+        $payload = $this->decode((string) $response->body);
+        self::assertTrue($payload['success']);
+        /** @var array<string, mixed> $data */
+        $data = $payload['data'];
+        self::assertSame('8.8.8', $data['latestVersion']);
+        self::assertTrue($data['updateAvailable']);
+        self::assertSame('8.8.8', $this->db->storedValue(CoreUpdateCheckService::STATE_LATEST_VERSION));
+        self::assertSame(
+            ['https://example.invalid/VERSION', 'https://example.invalid/VERSION'],
+            $fetcher->urls,
+            'Each endpoint call must drive the transport exactly once.',
+        );
+    }
+
+    /**
+     * AC ② of S273: a transport failure leaves the prior cached value
+     * UNTOUCHED. The version row survives the failed check; only the error
+     * text and the check timestamp move, so the operator still sees the last
+     * release the server genuinely observed.
+     */
+    public function testCheckTransportFailureLeavesThePriorCachedStatusUntouched(): void
+    {
+        $fetcher = new RecordingVersionMarkerFetcher('7.7.7');
+        $service = $this->serviceWithFetcher($fetcher);
+        $controller = $this->controller($service);
+
+        // Seed: a successful endpoint-driven check caches 7.7.7.
+        $controller->check($this->request('POST', self::ADMIN_ID));
+        self::assertSame('7.7.7', $this->db->storedValue(CoreUpdateCheckService::STATE_LATEST_VERSION));
+
+        // Fail: the transport errors. The value must survive, not blank out.
+        $fetcher->willReturn(null, 'connect timeout');
+        $response = $controller->check($this->request('POST', self::ADMIN_ID));
+
+        self::assertSame(202, $response->statusCode);
+        self::assertSame(
+            '7.7.7',
+            $this->db->storedValue(CoreUpdateCheckService::STATE_LATEST_VERSION),
+            'A failed check must not blank the last known version.',
+        );
+        /** @var array<string, mixed> $data */
+        $data = $this->decode((string) $response->body)['data'];
+        self::assertSame('7.7.7', $data['latestVersion']);
+        self::assertTrue($data['updateAvailable']);
+        // The failure is still REPORTED beside the surviving value.
+        self::assertSame('connect timeout', $data['lastError']);
+    }
+
+    public function testTheCheckEndpointIsRefusedForAnAnonymousCaller(): void
+    {
+        $fetcher = new RecordingVersionMarkerFetcher('9.9.9');
+        $service = $this->serviceWithFetcher($fetcher);
+
+        $response = $this->controller($service)->check($this->request('POST', null));
+
+        self::assertSame(401, $response->statusCode);
+        self::assertSame('auth.required', $this->decode((string) $response->body)['code']);
+        self::assertSame([], $fetcher->urls, 'A refused check must not touch the transport.');
+    }
+
+    public function testTheCheckEndpointIsRefusedForANonAdmin(): void
+    {
+        $fetcher = new RecordingVersionMarkerFetcher('9.9.9');
+        $service = $this->serviceWithFetcher($fetcher);
+
+        $response = $this->controller($service)->check($this->request('POST', self::PLAIN_ID));
+
+        self::assertSame(403, $response->statusCode);
+        self::assertSame('auth.not_admin', $this->decode((string) $response->body)['code']);
+        self::assertSame([], $fetcher->urls, 'A refused check must not touch the transport.');
+    }
+
+    /**
+     * A transport that THROWS SYNCHRONOUSLY (instead of calling back with an
+     * error) must not become an unhandled 500 inside the resident worker, and
+     * must leave nothing persisted. The S273 survival token lives in the
+     * controller const asserted here — code-resident exactly once.
+     */
+    public function testCheckReportsServiceUnavailableWhenTheTransportThrowsSynchronously(): void
+    {
+        $fetcher = new RecordingVersionMarkerFetcher(null, null, true);
+        $service = $this->serviceWithFetcher($fetcher);
+
+        $response = $this->controller($service)->check($this->request('POST', self::ADMIN_ID));
+
+        self::assertSame(503, $response->statusCode);
+        $payload = $this->decode((string) $response->body);
+        self::assertFalse($payload['success']);
+        self::assertSame(
+            AdminUpdatesController::SURVIVAL_TOKEN . ' core update check could not be dispatched',
+            $payload['error'],
+            'The dispatch-failure message must carry the token const — the literal lives once, in src.',
+        );
+        self::assertSame('update_check_dispatch_failed', $payload['code']);
+        self::assertNull($this->db->storedValue(CoreUpdateCheckService::STATE_LATEST_VERSION));
+    }
+
+    // ------------------------------------------------------------------
     // Structural guarantees
     // ------------------------------------------------------------------
 
@@ -294,5 +421,27 @@ final class AdminUpdatesControllerTest extends TestCase
             method_exists(AdminUpdatesController::class, 'apply'),
             'No inline update-apply action — explicitly out of scope for S74.',
         );
+    }
+
+    /**
+     * S273: the check endpoint dispatches its fetch through the callback-driven
+     * transport, so the HANDLER itself must contain no wait primitive
+     * (`usleep`/`sleep`) and no synchronous fetch (`file_get_contents`/cURL).
+     * Any of those inside a resident Workerman/Swoole HTTP worker stalls every
+     * connection that worker holds — exactly the hazard the step text flags.
+     */
+    public function testTheControllerNeverBlocksTheEventLoop(): void
+    {
+        $source = (string) file_get_contents(
+            dirname(__DIR__, 6) . '/src/Server/Http/Controllers/Admin/AdminUpdatesController.php',
+        );
+
+        foreach (['usleep(', 'sleep(', 'time_nanosleep(', 'file_get_contents(', 'curl_'] as $forbidden) {
+            self::assertStringNotContainsString(
+                $forbidden,
+                $source,
+                sprintf('Handler-level blocking primitive %s found — the outbound fetch must stay on the loop.', $forbidden),
+            );
+        }
     }
 }

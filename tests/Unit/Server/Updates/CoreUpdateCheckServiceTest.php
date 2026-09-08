@@ -248,6 +248,37 @@ final class CoreUpdateCheckServiceTest extends TestCase
         self::assertNull($reported->latestVersion);
     }
 
+    /**
+     * S273: `updates.check_enabled` governs the PERIODIC poll
+     * ({@see testADisabledCheckFetchesNothing}). An operator explicitly asking
+     * for a check goes through `checkNow()` and MUST fetch despite the toggle —
+     * otherwise the admin button would be exactly the dishonest trigger S273
+     * exists to remove. The response still tells the truth about the toggle
+     * (`checkEnabled` false) while the check refreshes the version.
+     */
+    public function testCheckNowFetchesEvenWhenThePeriodicCheckIsDisabled(): void
+    {
+        $service = $this->service($this->fetcher('1.2.2'));
+        $service->setCheckEnabled(false);
+
+        $fetcher = $this->fetcher('9.9.9');
+        $disabled = $this->service($fetcher);
+
+        $reported = null;
+        $disabled->checkNow(static function (CoreUpdateStatus $status) use (&$reported): void {
+            $reported = $status;
+        });
+
+        self::assertSame(
+            [self::MARKER_URL],
+            $fetcher->urls,
+            'An explicit check must be dispatched even while the periodic poll is disabled.',
+        );
+        self::assertInstanceOf(CoreUpdateStatus::class, $reported);
+        self::assertFalse($reported->checkEnabled, 'The toggle state must still be reported truthfully.');
+        self::assertSame('9.9.9', $reported->latestVersion);
+    }
+
     public function testTheToggleRoundTripsThroughPersistedSettings(): void
     {
         $service = $this->service($this->fetcher('1.2.2'));
